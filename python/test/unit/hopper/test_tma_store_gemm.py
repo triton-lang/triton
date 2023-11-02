@@ -84,9 +84,9 @@ def test_tma_load_store(M, N, K, NUM_CTAS, NUM_WARPS, TRANS_A, TRANS_B, OUTPUT_F
                                   stride_bk=b.stride(0), stride_bn=b.stride(1),
                                   stride_cm=c.stride(0), stride_cn=c.stride(1),
                                   BLOCK_M=M, BLOCK_N=N, BLOCK_K=K,
-                                  num_warps=NUM_WARPS,
-                                  num_ctas=NUM_CTAS,
-                                  OUTPUT_F16=OUTPUT_F16)
+                                  OUTPUT_F16=OUTPUT_F16,
+                                  triton_num_warps=NUM_WARPS,
+                                  triton_num_ctas=NUM_CTAS)
     golden = torch.matmul(a, b)
     torch.set_printoptions(profile="full")
     assert_close(c, golden, rtol=1e-2, atol=1e-3, check_dtype=False)

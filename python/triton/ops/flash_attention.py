@@ -405,8 +405,8 @@ class _attention(torch.autograd.Function):
             q.shape[0] * q.shape[1] * q.shape[2],
             BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_DMODEL=Lk,
             IS_CAUSAL=causal,
-            num_warps=num_warps,
-            num_stages=4,
+            triton_num_warps=num_warps,
+            triton_num_stages=4,
             # fmt: on
         )
 
@@ -461,8 +461,8 @@ class _attention(torch.autograd.Function):
             SEQUENCE_PARALLEL=sequence_parallel,
             CAUSAL=ctx.causal,
             MMA_V3=MMA_V3,
-            num_warps=8,
-            num_stages=1,
+            triton_num_warps=8,
+            triton_num_stages=1,
             # fmt: on
         )
 

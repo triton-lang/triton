@@ -109,8 +109,8 @@ def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, widths, out=
         b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),
         c.stride(0), c.stride(1), c.stride(2), c.stride(3),
         Ka, 0, lut,
-        TILE_M=block, TILE_N=block, TILE_K=32, BLOCK=block, num_stages=4,
-        num_warps=4,
+        TILE_M=block, TILE_N=block, TILE_K=32, BLOCK=block,
+        triton_num_stages=4, triton_num_warps=4,
     )
     return c
 
@@ -234,8 +234,8 @@ def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=N
         b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),
         c.stride(0), c.stride(1), c.stride(3 if trans_c else 2), c.stride(2 if trans_c else 3),
         BS3, AS1, lut,
-        TILE_M=block, TILE_N=TILE_N, TILE_K=min(block, 32), BLOCK=block, num_stages=4,
-        num_warps=4, GROUP_SIZE_M=4,
+        TILE_M=block, TILE_N=TILE_N, TILE_K=min(block, 32), BLOCK=block,
+        triton_num_stages=4, triton_num_warps=4, GROUP_SIZE_M=4,
     )
     # exit()
     return c

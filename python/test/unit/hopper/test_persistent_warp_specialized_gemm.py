@@ -144,9 +144,9 @@ def test_user_defined_persistent_non_warp_specialized_gemm(M, N, K, BLOCK_M, BLO
     grid = lambda META: (min(META['NUM_SM'], triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N'])),)
 
     if USE_TMA:
-        static_persistent_tma_matmul_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c, M=M, N=N, K=K, stride_am=a.stride(0), stride_ak=a.stride(1), stride_bk=b.stride(0), stride_bn=b.stride(1), stride_cm=c.stride(0), stride_cn=c.stride(1), BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K, NUM_SM=num_SMs, num_warps=NUM_WARPS, num_ctas=NUM_CTAS)
+        static_persistent_tma_matmul_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c, M=M, N=N, K=K, stride_am=a.stride(0), stride_ak=a.stride(1), stride_bk=b.stride(0), stride_bn=b.stride(1), stride_cm=c.stride(0), stride_cn=c.stride(1), BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K, NUM_SM=num_SMs, triton_num_warps=NUM_WARPS, triton_num_ctas=NUM_CTAS)
     else:
-        static_persistent_matmul_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c, M=M, N=N, K=K, stride_am=a.stride(0), stride_ak=a.stride(1), stride_bk=b.stride(0), stride_bn=b.stride(1), stride_cm=c.stride(0), stride_cn=c.stride(1), BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K, NUM_SM=num_SMs, num_warps=NUM_WARPS, num_ctas=NUM_CTAS)
+        static_persistent_matmul_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c, M=M, N=N, K=K, stride_am=a.stride(0), stride_ak=a.stride(1), stride_bk=b.stride(0), stride_bn=b.stride(1), stride_cm=c.stride(0), stride_cn=c.stride(1), BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K, NUM_SM=num_SMs, triton_num_warps=NUM_WARPS, triton_num_ctas=NUM_CTAS)
 
     th_c = torch.matmul(a, b)
     torch.testing.assert_close(th_c, c, atol=1e-2, rtol=0, check_dtype=False)
@@ -284,9 +284,9 @@ def test_non_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K
             b.stride(0), b.stride(1),
             c.stride(0), c.stride(1),
             BLOCK_M, BLOCK_N, BLOCK_K,
-            num_warps=4,
-            num_ctas=NUM_CTAS,
-            enable_warp_specialization=True)
+            triton_num_warps=4,
+            triton_num_ctas=NUM_CTAS,
+            triton_enable_warp_specialization=True)
     else:
         warp_specialized_matmul_kernel[grid](
             a, b, c,
@@ -295,9 +295,9 @@ def test_non_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K
             b.stride(0), b.stride(1),
             c.stride(0), c.stride(1),
             BLOCK_M, BLOCK_N, BLOCK_K,
-            num_warps=4,
-            num_ctas=NUM_CTAS,
-            enable_warp_specialization=True)
+            triton_num_warps=4,
+            triton_num_ctas=NUM_CTAS,
+            triton_enable_warp_specialization=True)
 
     th_c = torch.matmul(a, b)
     torch.testing.assert_close(th_c, c, atol=1e-2, rtol=0, check_dtype=False)
@@ -442,8 +442,8 @@ def test_user_defined_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N
             b.stride(0), b.stride(1),
             c.stride(0), c.stride(1),
             BLOCK_M, BLOCK_N, BLOCK_K, num_SMs,
-            num_warps=4, num_ctas=NUM_CTAS,
-            enable_warp_specialization=True)
+            triton_num_warps=4, triton_num_ctas=NUM_CTAS,
+            triton_enable_warp_specialization=True)
     else:
         static_persistent_warp_specialized_matmul_kernel[grid](
             a, b, c,
@@ -452,8 +452,8 @@ def test_user_defined_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N
             b.stride(0), b.stride(1),
             c.stride(0), c.stride(1),
             BLOCK_M, BLOCK_N, BLOCK_K, num_SMs,
-            num_warps=4, num_ctas=NUM_CTAS,
-            enable_warp_specialization=True)
+            triton_num_warps=4, triton_num_ctas=NUM_CTAS,
+            triton_enable_warp_specialization=True)
 
     th_c = torch.matmul(a, b)
     torch.testing.assert_close(th_c, c, atol=1e-2, rtol=0, check_dtype=False)
@@ -570,12 +570,12 @@ def test_static_persistent_matmul_no_scf_kernel(M, N, K, NUM_CTAS, NUM_WARPS, TR
                                                        stride_bk=b.stride(0), stride_bn=b.stride(1),
                                                        stride_cm=c.stride(0), stride_cn=c.stride(1),
                                                        BLOCK_M=M if M < 128 else M // 2, BLOCK_N=N if N < 128 else N // 2, BLOCK_K=K, NUM_SM=num_SMs,
-                                                       num_warps=NUM_WARPS,
-                                                       num_ctas=NUM_CTAS,
+                                                       triton_num_warps=NUM_WARPS,
+                                                       triton_num_ctas=NUM_CTAS,
                                                        FLOAT16_OUTPUT=(OUTPUT_TYPE == "float16"),
                                                        USE_TMA_EPILOGUE=USE_TMA_EPILOGUE,
                                                        USE_TMA_LOAD=USE_TMA_LOAD,
-                                                       enable_warp_specialization=True)
+                                                       triton_enable_warp_specialization=True)
     a_f32 = a.to(torch.float32)
     b_f32 = b.to(torch.float32)
     golden = torch.matmul(a_f32, b_f32)
@@ -916,8 +916,9 @@ def test_full_static_persistent_matmul_kernel(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WAR
         CHAIN_DOT=epilogue == 'chain-dot',
         A_ORDER_0=a_order[0], A_ORDER_1=a_order[1],
         B_ORDER_0=b_order[0], B_ORDER_1=b_order[1],
-        num_warps=NUM_WARPS, num_ctas=NUM_CTAS, num_stages=NUM_STAGES,
-        enable_warp_specialization=ENABLE_WS,
+        triton_num_warps=NUM_WARPS, triton_num_ctas=NUM_CTAS,
+        triton_num_stages=NUM_STAGES,
+        triton_enable_warp_specialization=ENABLE_WS,
         NUM_SM=num_SMs)
 
     torch.set_printoptions(profile="full")

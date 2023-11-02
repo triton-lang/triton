@@ -403,12 +403,22 @@ class JITFunction(KernelInterface[T]):
         from ..compiler import CompiledKernel, compile, get_arch_default_num_stages, get_arch_default_num_warps
 
         # Get a compiler-flags arg like `num_warps` and remove it from kwargs.
+        # All of these flags have two names, "foo" and "triton_foo".  We want
+        # people to use "triton_foo" because it is less likely to conflict with
+        # users' parameter names.
         def get_special_arg(name: str, default=None):
-            if name not in kwargs:
-                return default
-            ret = kwargs[name]
-            del kwargs[name]
-            return ret
+            prefixed_name = "triton_" + name
+            if prefixed_name in kwargs and name in kwargs:
+                raise ValueError(f"Cannot specify both {prefixed_name} and {name}")
+            if prefixed_name in kwargs:
+                ret = kwargs[prefixed_name]
+                del kwargs[prefixed_name]
+                return ret
+            if name in kwargs:
+                ret = kwargs[name]
+                del kwargs[name]
+                return ret
+            return default
 
         grid = get_special_arg("grid")
         num_warps = get_special_arg("num_warps")

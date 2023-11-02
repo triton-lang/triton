@@ -64,7 +64,7 @@ print(
 
 output_triton = torch.empty_like(x)
 asin_kernel[grid](x, output_triton, n_elements, BLOCK_SIZE=1024,
-                  extern_libs={'libdevice': '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'})
+                  triton_extern_libs={'libdevice': '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'})
 print(output_torch)
 print(output_triton)
 print(

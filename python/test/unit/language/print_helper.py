@@ -84,9 +84,9 @@ def test_print(func: str, data_type: str):
     elif func == "static_print":
         kernel_static_print[(1,)](x, y, BLOCK=shape[0], PLACEHOLDER=uuid.uuid4())
     elif func == "no_arg_print":
-        kernel_no_arg_print[(1,)](num_warps=4)
+        kernel_no_arg_print[(1,)](triton_num_warps=4)
     elif func == "print_no_arg":
-        kernel_print_no_arg[(1,)](num_warps=4)
+        kernel_print_no_arg[(1,)](triton_num_warps=4)
     else:
         assert f"Unknown kernel: {func}"
 

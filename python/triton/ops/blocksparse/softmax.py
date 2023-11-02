@@ -172,7 +172,7 @@ class _softmax(torch.autograd.Function):
             BLOCK_SIZE=block,
             ROW_SIZE=next_power_of_2(maxlut),
             IS_DENSE=is_dense,
-            num_warps=num_warps(maxlut)
+            triton_num_warps=num_warps(maxlut)
         )
         # save to context
         # ctx.mark_dirty(x)
@@ -211,7 +211,7 @@ class _softmax(torch.autograd.Function):
             BLOCK_SIZE=ctx.block,
             ROW_SIZE=next_power_of_2(ctx.maxlut),
             IS_DENSE=ctx.is_dense,
-            num_warps=num_warps(ctx.maxlut)
+            triton_num_warps=num_warps(ctx.maxlut)
         )
         return (da, None, None, dr, None,
                 None, None, None, None, None,

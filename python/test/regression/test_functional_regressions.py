@@ -127,7 +127,7 @@ def test_vecmat():
 
     batched_vecmat[grid](A_tri, B_tri, M, N, K, C_tri,
                          block_m=block_m, block_n=block_n, block_k=block_k,
-                         num_warps=4, num_stages=1)
+                         triton_num_warps=4, triton_num_stages=1)
 
     A_expanded = A[:, np.newaxis, :]
     A_broadcasted = np.broadcast_to(A_expanded, (M, N, K))
@@ -226,5 +226,5 @@ def test_iv_dependent_matmul(type):
     kernel[grid](a, b, triton_output, M, N, K, a.stride(0), a.stride(1),
                  b.stride(0), b.stride(1), triton_output.stride(0), triton_output.stride(1),
                  BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,
-                 type=type, num_stages=num_stages)
+                 type=type, triton_num_stages=num_stages)
     torch.testing.assert_close(torch_output, triton_output, rtol=1e-2, atol=1e-2)

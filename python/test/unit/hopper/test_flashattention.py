@@ -321,8 +321,8 @@ class _attention(torch.autograd.Function):
             o.stride(0), o.stride(1), o.stride(2), o.stride(3),
             q.shape[0], q.shape[1], q.shape[2], D0,
             BLOCK_M=BLOCK, BLOCK_N=BLOCK,
-            BLOCK_DMODEL=Lk, num_warps=num_warps,
-            num_stages=2,
+            BLOCK_DMODEL=Lk, triton_num_warps=num_warps,
+            triton_num_stages=2,
         )
 
         ctx.save_for_backward(q, k, v, o, L, m)
@@ -359,8 +359,8 @@ class _attention(torch.autograd.Function):
             q.shape[0], q.shape[1], q.shape[2], D0,
             ctx.grid[0],
             BLOCK_M=BLOCK, BLOCK_N=BLOCK,
-            BLOCK_DMODEL=ctx.BLOCK_DMODEL, num_warps=8,
-            num_stages=1,
+            BLOCK_DMODEL=ctx.BLOCK_DMODEL, triton_num_warps=8,
+            triton_num_stages=1,
         )
         return dq, dk, dv, None
 

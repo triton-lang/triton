@@ -172,7 +172,7 @@ def test_scan2d_broadcast(RBLOCK, num_warps):
     XBLOCK = 4
     input = torch.randint(0, 10, (1, RBLOCK), dtype=torch.int64, device='cuda')
     output = torch.empty((XBLOCK, RBLOCK), dtype=torch.int64, device='cuda')
-    fn[(1,)](input, output, XBLOCK, RBLOCK, num_warps=num_warps)
+    fn[(1,)](input, output, XBLOCK, RBLOCK, triton_num_warps=num_warps)
     ref = input.cumsum(1).broadcast_to((XBLOCK, RBLOCK))
     torch.testing.assert_close(output, ref)
 

@@ -113,11 +113,11 @@ class Autotuner(KernelInterface):
             self.pre_hook(args)
             self.fn.run(
                 *args,
-                num_warps=config.num_warps,
-                num_stages=config.num_stages,
-                num_ctas=config.num_ctas,
-                enable_warp_specialization=config.enable_warp_specialization,
-                # enable_persistent=False,
+                triton_num_warps=config.num_warps,
+                triton_num_stages=config.num_stages,
+                triton_num_ctas=config.num_ctas,
+                triton_enable_warp_specialization=config.enable_warp_specialization,
+                # triton_enable_persistent=False,
                 **current,
             )
             self.post_hook(args)
@@ -159,10 +159,10 @@ class Autotuner(KernelInterface):
             config.pre_hook(full_nargs)
         ret = self.fn.run(
             *args,
-            num_warps=config.num_warps,
-            num_stages=config.num_stages,
-            num_ctas=config.num_ctas,
-            enable_warp_specialization=config.enable_warp_specialization,
+            triton_num_warps=config.num_warps,
+            triton_num_stages=config.num_stages,
+            triton_num_ctas=config.num_ctas,
+            triton_enable_warp_specialization=config.enable_warp_specialization,
             **kwargs,
             **config.kwargs,
         )
@@ -183,11 +183,11 @@ class Autotuner(KernelInterface):
                         **self.nargs,
                         **kwargs,
                         **config.kwargs,
-                        num_stages=config.num_stages,
-                        num_warps=config.num_warps,
-                        num_ctas=config.num_ctas,
-                        enable_warp_specialization=config.enable_warp_specialization,
-                        enable_persistent=config.enable_persistent,
+                        triton_num_stages=config.num_stages,
+                        triton_num_warps=config.num_warps,
+                        triton_num_ctas=config.num_ctas,
+                        triton_enable_warp_specialization=config.enable_warp_specialization,
+                        triton_enable_persistent=config.enable_persistent,
                     )
                     for config in pruned_configs
                 }
@@ -199,11 +199,11 @@ class Autotuner(KernelInterface):
         for config in self.prune_configs(kwargs):
             self.fn.warmup(
                 *args,
-                num_warps=config.num_warps,
-                num_ctas=config.num_ctas,
-                num_stages=config.num_stages,
-                enable_warp_specialization=config.enable_warp_specialization,
-                enable_persistent=config.enable_persistent,
+                triton_num_warps=config.num_warps,
+                triton_num_ctas=config.num_ctas,
+                triton_num_stages=config.num_stages,
+                triton_enable_warp_specialization=config.enable_warp_specialization,
+                triton_enable_persistent=config.enable_persistent,
                 **kwargs,
                 **config.kwargs,
             )
@@ -258,8 +258,8 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     .. code-block:: python
 
         @triton.autotune(configs=[
-            triton.Config(meta={'BLOCK_SIZE': 128}, num_warps=4),
-            triton.Config(meta={'BLOCK_SIZE': 1024}, num_warps=8),
+            triton.Config(meta={'BLOCK_SIZE': 128}, triton_num_warps=4),
+            triton.Config(meta={'BLOCK_SIZE': 1024}, triton_num_warps=8),
           ],
           key=['x_size'] # the two above configs will be evaluated anytime
                          # the value of x_size changes

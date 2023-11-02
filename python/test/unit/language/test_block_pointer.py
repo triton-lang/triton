@@ -97,6 +97,6 @@ def test_block_ptr_matmul_no_scf(shape, num_warps):
                                             stride_bk=b.stride(0), stride_bn=b.stride(1),
                                             stride_cm=c.stride(0), stride_cn=c.stride(1),
                                             BLOCK_M=m, BLOCK_N=n, BLOCK_K=k,
-                                            num_warps=num_warps)
+                                            triton_num_warps=num_warps)
     golden = torch.matmul(a, b)
     torch.testing.assert_close(c, golden, check_dtype=False)

@@ -73,7 +73,7 @@ def test_gemm_fusion():
     gemm_fusion_kernel[grid](A, B, C, E, M, N, K,
                              A.stride(0), A.stride(1), B.stride(0), B.stride(
                                  1), C.stride(0), C.stride(1), E.stride(0), E.stride(1),
-                             BLOCK_M, BLOCK_N, BLOCK_K, num_warps=num_warps)
+                             BLOCK_M, BLOCK_N, BLOCK_K, triton_num_warps=num_warps)
 
     torch.testing.assert_close(ref_out, E, atol=1e-2, rtol=0)
 
@@ -161,6 +161,6 @@ def test_batched_gemm_fusion():
                               C.stride(0), C.stride(1), C.stride(2), C.stride(3),
                               E.stride(0), E.stride(1), E.stride(2), E.stride(3),
                               Z, NH, N_CTX,
-                              BLOCK_M, BLOCK_DMODEL, BLOCK_N, num_warps=num_warps)
+                              BLOCK_M, BLOCK_DMODEL, BLOCK_N, triton_num_warps=num_warps)
 
     torch.testing.assert_close(ref_out, E, atol=1e-2, rtol=0)

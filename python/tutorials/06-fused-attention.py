@@ -485,8 +485,8 @@ class _attention(torch.autograd.Function):
             BLOCK_N=BLOCK_N,
             BLOCK_DMODEL=Lk,
             STAGE=stage,
-            num_warps=num_warps,
-            num_stages=num_stages,
+            triton_num_warps=num_warps,
+            triton_num_stages=num_stages,
         )
 
         ctx.save_for_backward(q, k, v, o, M)
@@ -532,8 +532,8 @@ class _attention(torch.autograd.Function):
             BLOCK_M2=BLOCK_M2, BLOCK_N2=BLOCK_N2,
             BLK_SLICE_FACTOR=BLK_SLICE_FACTOR,
             BLOCK_DMODEL=ctx.BLOCK_DMODEL,
-            num_warps=NUM_WARPS,
-            num_stages=NUM_STAGES,
+            triton_num_warps=NUM_WARPS,
+            triton_num_stages=NUM_STAGES,
         )
 
         return dq, dk, dv, None, None

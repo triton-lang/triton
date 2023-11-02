@@ -285,8 +285,8 @@ class _attention(torch.autograd.Function):
             q.shape[0], q.shape[1], q.shape[2],
             ctx.grid[0],
             BLOCK_M=BLOCK, BLOCK_N=BLOCK,
-            BLOCK_DMODEL=ctx.BLOCK_DMODEL, num_warps=8,
-            num_stages=1,
+            BLOCK_DMODEL=ctx.BLOCK_DMODEL, triton_num_warps=8,
+            triton_num_stages=1,
         )
         return dq, dk, dv, None
 

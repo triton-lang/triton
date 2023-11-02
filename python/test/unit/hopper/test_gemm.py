@@ -113,11 +113,11 @@ def test_gemm_no_scf(M, N, K, NUM_CTAS, NUM_WARPS, TRANS_A, TRANS_B, OUTPUT_TYPE
                                  stride_bk=b.stride(0), stride_bn=b.stride(1),
                                  stride_cm=c.stride(0), stride_cn=c.stride(1),
                                  BLOCK_M=M, BLOCK_N=N, BLOCK_K=K,
-                                 num_warps=NUM_WARPS,
-                                 num_ctas=NUM_CTAS,
                                  FLOAT16_OUTPUT=(OUTPUT_TYPE == "float16"),
                                  USE_TMA_EPILOGUE=USE_TMA_EPILOGUE,
-                                 enable_warp_specialization=ENABLE_WS)
+                                 triton_num_warps=NUM_WARPS,
+                                 triton_num_ctas=NUM_CTAS,
+                                 triton_enable_warp_specialization=ENABLE_WS)
     a_f32 = a.to(torch.float32)
     b_f32 = b.to(torch.float32)
     golden = torch.matmul(a_f32, b_f32)
@@ -432,8 +432,10 @@ def test_gemm(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, 
                               B_ORDER_0=b_order[0], B_ORDER_1=b_order[1],
                               W_ORDER_0=w_order[0], W_ORDER_1=w_order[1],
                               Z_ORDER_0=z_order[0], Z_ORDER_1=z_order[1],
-                              num_warps=NUM_WARPS, num_ctas=NUM_CTAS, num_stages=NUM_STAGES,
-                              enable_warp_specialization=ENABLE_WS)
+                              triton_num_warps=NUM_WARPS,
+                              triton_num_ctas=NUM_CTAS,
+                              triton_num_stages=NUM_STAGES,
+                              triton_enable_warp_specialization=ENABLE_WS)
 
     torch.set_printoptions(profile="full")
     golden = torch.nn.functional.normalize(golden)

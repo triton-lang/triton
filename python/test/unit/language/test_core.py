@@ -184,7 +184,7 @@ def test_empty_kernel(dtype_x, device):
         pass
     check_type_supported(dtype_x, device)
     x = to_triton(numpy_random(SIZE, dtype_str=dtype_x), device=device, dst_type=dtype_x)
-    kernel[(1, )](x, SIZE=SIZE, num_warps=4)
+    kernel[(1, )](x, SIZE=SIZE, triton_num_warps=4)
 
 
 # generic test functions
@@ -210,7 +210,7 @@ def _test_unary(dtype_x, expr, numpy_expr=None, device='cuda', num_ctas=1):
     # triton result
     x_tri = to_triton(x, device=device, dst_type=dtype_x)
     z_tri = to_triton(np.empty_like(z_ref), device=device, dst_type=dtype_x)
-    kernel[(1, )](z_tri, x_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
+    kernel[(1, )](z_tri, x_tri, SIZE=SIZE, triton_num_warps=4, triton_num_ctas=num_ctas)
     # compare
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
 
@@ -279,7 +279,7 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
     y_tri = to_triton(y, device=device, dst_type=dtype_y)
     z_tri = to_triton(np.empty(SIZE, dtype=z_ref.dtype), device=device)
     kernel[(1, )](z_tri, x_tri, y_tri, SIZE=SIZE,
-                  num_warps=4, num_ctas=num_ctas)
+                  triton_num_warps=4, triton_num_ctas=num_ctas)
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=expr, rtol=0.01)
 
 
@@ -344,7 +344,7 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
                 expr,
                 numpy_expr,
                 device=device,
-                num_ctas=num_ctas)
+                triton_num_ctas=num_ctas)
     elif (op in ('%', '/')
           and ((dtype_x in int_dtypes and dtype_y in uint_dtypes) or
                (dtype_x in uint_dtypes and dtype_y in int_dtypes))):
@@ -434,7 +434,7 @@ def test_unsigned_name_mangling(device='cuda'):
         to_triton(np.empty_like(e), device=device)
         for e in expect
     )
-    kernel[(1, )](actual[0], actual[1], x_tri, y_tri, SIZE=SIZE, num_warps=4)
+    kernel[(1, )](actual[0], actual[1], x_tri, y_tri, SIZE=SIZE, triton_num_warps=4)
 
     # Bitwise op, so expect exact equality
     assert (expect[0] == to_numpy(actual[0])).all()
@@ -757,7 +757,7 @@ def test_where(dtype, num_ctas, device):
     z_tri = to_triton(np.empty(SIZE, dtype=z.dtype), device=device, dst_type=dtype)
 
     grid = lambda meta: (triton.cdiv(SIZE, meta['BLOCK_SIZE']),)
-    where_kernel[grid](cond_tri, x_tri, y_tri, z_tri, SIZE, BLOCK_SIZE=1024, TEST_POINTERS=select_ptrs, TEST_SCALAR_POINTERS=False, num_ctas=num_ctas)
+    where_kernel[grid](cond_tri, x_tri, y_tri, z_tri, SIZE, BLOCK_SIZE=1024, TEST_POINTERS=select_ptrs, TEST_SCALAR_POINTERS=False, triton_num_ctas=num_ctas)
     assert (z == to_numpy(z_tri)).all()
     if select_ptrs:
         where_kernel[grid](cond_tri, x_tri, y_tri, z_tri, SIZE, BLOCK_SIZE=1024, TEST_POINTERS=select_ptrs, TEST_SCALAR_POINTERS=True)
@@ -797,7 +797,7 @@ def test_where_broadcast(num_ctas, device):
     z_tri = to_triton(np.empty((SIZE, SIZE), dtype=z.dtype), device=device, dst_type=dtype)
     where_kernel[(1,)](cond_tri, x_tri, z_tri, SIZE)
     assert (z == to_numpy(z_tri)).all()
-    where_scalar_condition[(1,)](x_tri, z_tri, SIZE, num_ctas=num_ctas)
+    where_scalar_condition[(1,)](x_tri, z_tri, SIZE, triton_num_ctas=num_ctas)
     z = np.where(0, x, 0)
     assert (z == to_numpy(z_tri)).all()
 
@@ -925,14 +925,13 @@ def test_index1d(expr, dtype_str, num_ctas, device):
     # triton result
     z_tri = to_triton(np.empty_like(z_ref), device=device)
     x_tri = to_triton(x, device=device)
-    kernel_match[(1, )](z_tri, x_tri, num_warps=1, SIZE=shape_x[0])
+    kernel_match[(1, )](z_tri, x_tri, SIZE=shape_x[0], triton_num_warps=1)
     # compare
     assert (z_ref == to_numpy(z_tri)).all()
 
     def catch_compilation_error(kernel):
         try:
-            kernel[(1, )](z_tri, x_tri, num_warps=1,
-                          SIZE=shape_x[0], num_ctas=num_ctas)
+            kernel[(1, )](z_tri, x_tri, SIZE=shape_x[0], triton_num_ctas=num_ctas, triton_num_warps=1)
         except triton.CompilationError as e:
             np.testing.assert_(True)
         except BaseException:
@@ -979,7 +978,7 @@ def test_tuples(device):
     b_tri = torch.tensor([0], device=device, dtype=torch.float32)
     c_tri = torch.tensor([0], device=device, dtype=torch.float32)
     for kernel in [with_fn, without_fn]:
-        kernel[(1, )](x, y, a_tri, b_tri, c_tri, num_warps=1)
+        kernel[(1, )](x, y, a_tri, b_tri, c_tri, triton_num_warps=1)
         a_ref, b_ref, c_ref = x + y, x - y, x * y
         assert a_tri == a_ref
         assert b_tri == b_ref
@@ -1063,7 +1062,7 @@ def test_noinline(mode, device):
         z = torch.ones((16, 16), device=device, dtype=torch.float32)
     else:
         z = torch.tensor([0.0], device=device, dtype=torch.float32)
-    kernel[(1,)](x, y, z, num_warps=1)
+    kernel[(1,)](x, y, z, triton_num_warps=1)
     if mode == "simple":
         assert torch.equal(z, x + y)
     elif mode == "call_graph" or mode == "dynamic" or mode == "multi_values":
@@ -1152,7 +1151,7 @@ def test_atomic_rmw_predicate(num_ctas, device):
         if val < 64:
             tl.atomic_max(X, val)
     x = torch.zeros((1,), device=device, dtype=torch.int32)
-    kernel[(4096,)](x, num_ctas=num_ctas)
+    kernel[(4096,)](x, triton_num_ctas=num_ctas)
     assert x.item() == 63
 
 
@@ -1180,7 +1179,7 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, device):
     x_tri = to_triton(x, device=device)
     z_shape = (shape0, ) if axis == 1 else (shape1, )
     z_tri = to_triton(np.zeros(z_shape, dtype="float32"), device=device)
-    kernel[(1,)](z_tri, x_tri, axis, shape0, shape1, num_ctas=num_ctas)
+    kernel[(1,)](z_tri, x_tri, axis, shape0, shape1, triton_num_ctas=num_ctas)
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=1e-4)
 
 
@@ -1197,7 +1196,7 @@ def test_tensor_atomic_rmw_block(num_ctas, device):
         x = X + offs
         tl.atomic_min(x, val)
     x = torch.ones((8, 8), device=device, dtype=torch.float32)
-    kernel[(2,)](x, shape[0], shape[1], num_ctas=num_ctas)
+    kernel[(2,)](x, shape[0], shape[1], triton_num_ctas=num_ctas)
     assert torch.min(x).item() == 0.0
 
 
@@ -1229,7 +1228,7 @@ def test_atomic_cas(sem, num_ctas, device):
     Lock = torch.zeros((1,), device=device, dtype=torch.int32)
     data = torch.zeros((128,), device=device, dtype=torch.float32)
     ref = torch.full((128,), 64.0)
-    h = serialized_add[(64,)](data, Lock, SEM=sem, num_ctas=num_ctas)
+    h = serialized_add[(64,)](data, Lock, SEM=sem, triton_num_ctas=num_ctas)
     sem_str = "acq_rel" if sem is None else sem
     np.testing.assert_allclose(to_numpy(data), to_numpy(ref))
     if is_hip():
@@ -1329,7 +1328,7 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
         z_tri = torch.empty((size,), dtype=torch.half, device=device).to(dtype=getattr(torch, dtype_z))
     else:
         z_tri = to_triton(np.empty((size, ), dtype=getattr(np, dtype_z_np)), device=device)
-    kernel[(1, )](x_tri, z_tri, BITCAST=bitcast, SIZE=size, num_warps=1, num_ctas=num_ctas)
+    kernel[(1, )](x_tri, z_tri, BITCAST=bitcast, SIZE=size, triton_num_warps=1, triton_num_ctas=num_ctas)
     # torch result
     if dtype_z.startswith('bfloat') or dtype_x.startswith('bfloat') or dtype_z.startswith('float8') or dtype_x.startswith('float8'):
         assert bitcast is False
@@ -1359,7 +1358,7 @@ def test_cat(dtype_str, num_warps, device):
     y = torch.arange(-128, 0, device=device).to(getattr(torch, dtype_str))
     z_ref = torch.cat([x, y], dim=0).sum()
     z = torch.zeros((256,), dtype=getattr(torch, dtype_str), device=device)
-    kernel[(1, )](x, y, z, N=128, num_warps=num_warps)
+    kernel[(1, )](x, y, z, N=128, triton_num_warps=num_warps)
     assert z.sum() == z_ref
     # check if there's no duplicate value in z
     assert z.unique().size(0) == z.size(0)
@@ -1383,7 +1382,7 @@ def test_store_constant(dtype_str, num_ctas, device):
     block_size = 128
     ref = torch.ones([block_size], dtype=getattr(torch, dtype_str), device=device)
     output = torch.zeros([block_size], dtype=getattr(torch, dtype_str), device=device)
-    kernel[(1,)](output, block_size, BLOCK_SIZE=block_size, num_ctas=num_ctas)
+    kernel[(1,)](output, block_size, BLOCK_SIZE=block_size, triton_num_ctas=num_ctas)
 
     assert torch.all(output == ref)
 
@@ -1399,9 +1398,9 @@ def test_load_store_same_ptr(device):
     for _ in range(1000):
         x = torch.ones((65536,), device=device, dtype=torch.float32)
         if is_hip():
-            kernel[(65536,)](x, num_warps=16)  # threads per Warp for ROCM is 64
+            kernel[(65536,)](x, triton_num_warps=16)  # threads per Warp for ROCM is 64
         else:
-            kernel[(65536,)](x, num_warps=32)
+            kernel[(65536,)](x, triton_num_warps=32)
         assert torch.all(x == 2)
 
 
@@ -1602,7 +1601,7 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, device):
     # triton result
     z_tri = to_triton(numpy_random((1,), dtype_str=z_dtype_str, rs=rs),
                       device=device, dst_type=z_tri_dtype_str)
-    kernel[(1,)](x_tri, z_tri, BLOCK=shape, num_ctas=num_ctas)
+    kernel[(1,)](x_tri, z_tri, BLOCK=shape, triton_num_ctas=num_ctas)
     z_tri = to_numpy(z_tri)
     # compare
     if op == 'sum':
@@ -1715,7 +1714,7 @@ def test_reduce(op, dtype_str, shape, axis, num_ctas, device):
     BLOCK_K = 1 if len(shape) == 2 else shape[2]
     IS_3D = bool(len(shape) == 3)
     kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0],
-                 BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis, num_ctas=num_ctas)
+                 BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis, triton_num_ctas=num_ctas)
     z_tri = to_numpy(z_tri)
     # compare
     if op == 'sum':
@@ -1788,7 +1787,7 @@ def test_scan2d(op, dtype_str, shape, axis, num_warps, device):
             z_ref[:, 1:] = x[:, 0:1]
     # triton result
     z_tri = to_triton(z, device=device)
-    kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis, num_warps=num_warps)
+    kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis, triton_num_warps=num_warps)
     z_tri = to_numpy(z_tri)
     # compare
     if dtype_str == 'float32':
@@ -2271,11 +2270,11 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
     pgm = kernel[(1, 1)](x_tri, x_tri.stride(0), x_tri.stride(1),
                          z_tri, z_tri.stride(1), z_tri.stride(0),
                          BLOCK_M=shape[0], BLOCK_N=shape[1],
-                         num_ctas=num_ctas)
+                         triton_num_ctas=num_ctas)
     pgm_contiguous = kernel[(1, 1)](x_tri, x_tri.stride(1), x_tri.stride(0),
                                     z_tri_contiguous, z_tri_contiguous.stride(0), z_tri_contiguous.stride(1),
                                     BLOCK_M=shape[0], BLOCK_N=shape[1],
-                                    num_ctas=num_ctas)
+                                    triton_num_ctas=num_ctas)
     # numpy result
     if dtype_str == 'float8e4b15':
         ty = tl.float8e4b15
@@ -2476,7 +2475,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
                          DO_SOFTMAX=epilogue == 'softmax',
                          CHAIN_DOT=epilogue == 'chain-dot',
                          ALLOW_TF32=allow_tf32,
-                         num_warps=num_warps, num_ctas=num_ctas,
+                         triton_num_warps=num_warps,
+                         triton_num_ctas=num_ctas,
                          out_dtype=out_dtype)
 
     if epilogue == 'softmax' and (in_dtype != 'float32' or allow_tf32):
@@ -2700,7 +2700,7 @@ def test_arange(start, num_ctas, device):
         off = tl.arange(0, BLOCK)
         val = tl.arange(START, END)
         tl.store(z + off, val)
-    _kernel[(1,)](z_tri, START=start, END=start + BLOCK, BLOCK=BLOCK, num_ctas=num_ctas)
+    _kernel[(1,)](z_tri, START=start, END=start + BLOCK, BLOCK=BLOCK, triton_num_ctas=num_ctas)
     z_ref = torch.arange(start, BLOCK + start, dtype=torch.int32, device=device)
     np.testing.assert_allclose(to_numpy(z_tri), to_numpy(z_ref))
 
@@ -2736,7 +2736,7 @@ def test_masked_load(dtype_str, size, size_diff, num_ctas, device):
 
     mask_str = "mask=in_offsets < in_size, other=1" if size_diff > 0 else "None"
     kernel = patch_kernel(_kernel, {'GENERATE_TEST_HERE': f"tl.load(in_ptr + in_offsets, {mask_str})"})
-    kernel[(1,)](input, output, input_size, output_size, num_ctas=num_ctas)
+    kernel[(1,)](input, output, input_size, output_size, triton_num_ctas=num_ctas)
 
     reference_out = torch.cat((input, torch.ones((size_diff,), dtype=dtype, device=device)))
     # print((output - reference_out).nonzero())
@@ -3155,7 +3155,7 @@ def test_call(type, num_ctas, device):
     rand_val_tri = to_triton(rand_val, device=device)
     err_msg = ""
     try:
-        kernel[(size // 128,)](rand_val_tri, size, 3, 5, type, num_ctas=num_ctas)
+        kernel[(size // 128,)](rand_val_tri, size, 3, 5, type, triton_num_ctas=num_ctas)
     except Exception as e:
         err_msg = str(e)
 
@@ -3219,10 +3219,10 @@ def test_num_warps_pow2(device):
         pass
 
     with pytest.raises(AssertionError, match='must be a power of 2'):
-        _kernel[(1,)](dst=dst, num_warps=3)
-    _kernel[(1,)](dst=dst, num_warps=1)
-    _kernel[(1,)](dst=dst, num_warps=2)
-    _kernel[(1,)](dst=dst, num_warps=4)
+        _kernel[(1,)](dst=dst, triton_num_warps=3)
+    _kernel[(1,)](dst=dst, triton_num_warps=1)
+    _kernel[(1,)](dst=dst, triton_num_warps=2)
+    _kernel[(1,)](dst=dst, triton_num_warps=4)
 
 # -------------
 # test extern
@@ -3284,7 +3284,7 @@ def test_math_tensor(dtype_str, expr, lib_path, num_ctas, device):
     x_tri = to_triton(x, device=device)
     # triton result
     y_tri = to_triton(numpy_random((shape[0],), dtype_str=dtype_str, rs=rs), device=device)
-    kernel[(1,)](x_tri, y_tri, BLOCK=shape[0], extern_libs={'libdevice': lib_path}, num_ctas=num_ctas)
+    kernel[(1,)](x_tri, y_tri, BLOCK=shape[0], triton_extern_libs={'libdevice': lib_path}, triton_num_ctas=num_ctas)
     # compare
     if expr == 'math.ffs':
         np.testing.assert_equal(y_ref, to_numpy(y_tri))
@@ -3324,7 +3324,7 @@ def test_math_scalar(dtype_str, expr, lib_path, num_ctas, device):
     # triton result
     x_tri = to_triton(x, device=device)[0].item()
     y_tri = to_triton(numpy_random((shape[0],), dtype_str=dtype_str, rs=rs), device=device)
-    kernel[(1,)](x_tri, y_tri, BLOCK=shape[0], extern_libs={'libdevice': lib_path}, num_ctas=num_ctas)
+    kernel[(1,)](x_tri, y_tri, BLOCK=shape[0], triton_extern_libs={'libdevice': lib_path}, triton_num_ctas=num_ctas)
     # compare
     np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)
 
@@ -3356,7 +3356,7 @@ def test_inline_asm(num_ctas, device):
     y_tri = to_triton(y, device=device)
     n = 17
     z_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
-    kernel[(1,)](x_tri, y_tri, z_tri, n, BLOCK=shape[0], num_ctas=num_ctas)
+    kernel[(1,)](x_tri, y_tri, z_tri, n, BLOCK=shape[0], triton_num_ctas=num_ctas)
     y_ref = (y << n) | (x >> (32 - n))
     # compare
     np.testing.assert_equal(y_ref, to_numpy(z_tri))
@@ -3383,7 +3383,7 @@ def test_inline_asm_packed(num_ctas, device):
     x = numpy_random(shape, dtype_str='uint8', rs=rs)
     x_tri = to_triton(x, device=device)
     y_tri = to_triton(numpy_random(shape, dtype_str='uint8', rs=rs), device=device)
-    kernel[(1,)](x_tri, y_tri, BLOCK=shape[0], num_ctas=num_ctas)
+    kernel[(1,)](x_tri, y_tri, BLOCK=shape[0], triton_num_ctas=num_ctas)
     y_ref = x << 3
     # compare
     np.testing.assert_equal(y_ref, to_numpy(y_tri))
@@ -3683,7 +3683,7 @@ def test_num_threads(device):
 
     num_threads = 256
     out = to_triton(np.zeros((num_threads,), dtype=np.int32), device=device)
-    kernel[(1,)](out, num_warps=num_threads // 32)
+    kernel[(1,)](out, triton_num_warps=num_threads // 32)
     assert torch.sum(out) == 256
 
 
@@ -3874,7 +3874,7 @@ def test_ptx_cast(dtype_str, device):
     s0 = 4
     buf11 = -torch.ones((6 * s0, 197, 197), device=device, dtype=torch_dtype)
     buf14 = -torch.ones((s0, 6, 197, 197), device=device, dtype=torch_dtype)
-    kernel[(4728,)](buf11, buf14, 1182 * s0, 197, triton_dtype, 1, 256, num_warps=2)
+    kernel[(4728,)](buf11, buf14, 1182 * s0, 197, triton_dtype, 1, 256, triton_num_warps=2)
     assert buf14.to(torch.float32).mean() == -2.0
 
 # -----------------------
@@ -3947,7 +3947,8 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
     matmul_kernel[grid](a, b, C, M, N, K,
                         a.stride(0), a.stride(1), b.stride(0), b.stride(
                             1), C.stride(0), C.stride(1),
-                        BLOCK_M, BLOCK_N, BLOCK_K, low_precision_acc, num_warps=num_warps)
+                        BLOCK_M, BLOCK_N, BLOCK_K, low_precision_acc,
+                        triton_num_warps=num_warps)
     torch_a = torch.from_numpy(A)
     th_a = f8_to_f16(torch_a.cuda(), in_type_str)
     torch_b = torch.from_numpy(B)
@@ -3974,7 +3975,7 @@ def test_enable_fp_fusion(enable_fp_fusion):
         tl.store(ptrs, tl.load(ptrs) * 1.5 + 1.0)
 
     data = torch.randn((128,), device='cuda', dtype=torch.float32)
-    h = mul_add[(1,)](data, enable_fp_fusion=enable_fp_fusion)
+    h = mul_add[(1,)](data, triton_enable_fp_fusion=enable_fp_fusion)
 
     found_fma = re.search(r'(mad|fma)\.r[nzmp]\.(ftz\.)?f32', h.asm["ptx"]) is not None
     assert found_fma == enable_fp_fusion
