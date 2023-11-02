@@ -186,7 +186,9 @@ def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -
                 if hint is not None
             ]
         )
-        src += f"  if ({conds})\n" if len(metas) > 1 else "if (1)\n"
+        src += (
+            f"  if ({conds})\n" if len(metas) > 1 else "if (1)\n"
+        )  # Edge case where no specializations hence no dispatching required
         arg_names = [arg for arg, hint in zip(meta.arg_names, meta.sizes) if hint != 1]
         src += f"    return {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(stream, {', '.join(arg_names)});\n"
     src += "\n"

@@ -234,6 +234,7 @@ def _compile_kernel(
     )
 
 
+# Edge case kernel with no specialization
 def compile_aot_kernel_no_specialization(dir, kernel_path, dtype, BM, BN, BK):
     # compile all desired configs
     sig = f"*fp32, *{dtype}, *{dtype}, i32, i32, i32, i32, i32, i32, i32, i32, i32, {BM}, {BN}, {BK}"
@@ -291,6 +292,7 @@ def generate_matmul_test_data(dir, M, N, K):
     return a, b, a_path, b_path, c_path
 
 
+# Test edge case where the provided kernel signature has no specializations
 def test_compile_link_matmul_no_specialization():
     np.random.seed(3)
 
