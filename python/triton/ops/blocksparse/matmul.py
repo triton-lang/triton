@@ -103,6 +103,7 @@ def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, widths, out=
         assert out.shape == (a.shape[0], lut.shape[0], block, block)
         c = out
     grid = [c.shape[1], 1, c.shape[0]]
+    # TODO: Update to new API.
     _sdd_kernel[grid](
         a, b, c,
         a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),

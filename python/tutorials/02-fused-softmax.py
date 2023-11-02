@@ -118,13 +118,12 @@ def softmax(x):
     y = torch.empty_like(x)
     # Enqueue kernel. The 1D launch grid is simple: we have one kernel instance per row o
     # f the input matrix
-    softmax_kernel[(n_rows,)](
+    softmax_kernel.with_flags(num_warps=num_warps)[(n_rows,)](
         y,
         x,
         x.stride(0),
         y.stride(0),
         n_cols,
-        num_warps=num_warps,
         BLOCK_SIZE=BLOCK_SIZE,
     )
     return y

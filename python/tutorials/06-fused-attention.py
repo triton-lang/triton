@@ -473,7 +473,7 @@ class _attention(torch.autograd.Function):
             num_stages = 7 if Lk >= 64 else 3
         grid = (triton.cdiv(q.shape[2], BLOCK_M), q.shape[0] * q.shape[1], 1)
         M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
-        _attn_fwd[grid](
+        _attn_fwd.with_flags(num_warps=num_warps, num_stages=num_stages)[grid](
             q, k, v, sm_scale, M, o,
             q.stride(0), q.stride(1), q.stride(2), q.stride(3),
             k.stride(0), k.stride(1), k.stride(2), k.stride(3),
@@ -485,8 +485,6 @@ class _attention(torch.autograd.Function):
             BLOCK_N=BLOCK_N,
             BLOCK_DMODEL=Lk,
             STAGE=stage,
-            num_warps=num_warps,
-            num_stages=num_stages,
         )
 
         ctx.save_for_backward(q, k, v, o, M)
@@ -523,7 +521,7 @@ class _attention(torch.autograd.Function):
             BLOCK_M=PRE_BLOCK, D_HEAD=ctx.BLOCK_DMODEL,
         )
         grid = (N_CTX // BLOCK_N1, 1, BATCH * N_HEAD)
-        _attn_bwd[grid](
+        _attn_bwd.with_flags(num_warps=NUM_STAGES, num_stages=NUM_STAGES)[grid](
             q, arg_k, v, ctx.sm_scale, do, dq, dk, dv,
             M, delta,
             q.stride(0), q.stride(1), q.stride(2), q.stride(3),
@@ -532,8 +530,6 @@ class _attention(torch.autograd.Function):
             BLOCK_M2=BLOCK_M2, BLOCK_N2=BLOCK_N2,
             BLK_SLICE_FACTOR=BLK_SLICE_FACTOR,
             BLOCK_DMODEL=ctx.BLOCK_DMODEL,
-            num_warps=NUM_WARPS,
-            num_stages=NUM_STAGES,
         )
 
         return dq, dk, dv, None, None
