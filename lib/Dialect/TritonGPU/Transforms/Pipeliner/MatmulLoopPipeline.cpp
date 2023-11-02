@@ -34,8 +34,7 @@ static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
 }
 
 static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
-                            bool insertWait, Value insertIdx,
-                            Value extractIdx) {
+                            Value insertIdx, Value extractIdx) {
   OpBuilder builder(forOp);
   // Replace the load with insert/extract slice.
   builder.setInsertionPoint(loadOp);
@@ -47,8 +46,6 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   auto commmit = builder.create<ttg::AsyncCommitGroupOp>(loc);
 
   // Extract part.
-  if (insertWait)
-    auto wait = builder.create<ttg::AsyncWaitOp>(loc, 0);
   auto allocType = alloc.getType().cast<RankedTensorType>();
   RankedTensorType sliceType = RankedTensorType::get(
       {allocType.getShape()[1], allocType.getShape()[2]},
@@ -72,8 +69,7 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
 }
 
 static void createTMALoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
-                          bool insertWait, Value insertIdx, Value extractIdx,
-                          Value phase) {
+                          Value insertIdx, Value extractIdx, Value phase) {
   OpBuilder builder(forOp);
   Location loc = loadOp.getLoc();
   auto CTALayout = ttg::CTALayoutAttr::get(loadOp.getContext(),
@@ -144,13 +140,11 @@ static void createTMALoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
 
 /// Create an async load equivalent to the given load.
 static void createAsyncLoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
-                            bool insertWait, Value insertIdx, Value extractIdx,
-                            Value phase) {
+                            Value insertIdx, Value extractIdx, Value phase) {
   if (isLoadFromTensorPtr(loadOp)) {
-    createTMALoad(forOp, loadOp, alloc, insertWait, insertIdx, extractIdx,
-                  phase);
+    createTMALoad(forOp, loadOp, alloc, insertIdx, extractIdx, phase);
   } else {
-    createAsyncCopy(forOp, loadOp, alloc, insertWait, insertIdx, extractIdx);
+    createAsyncCopy(forOp, loadOp, alloc, insertIdx, extractIdx);
   }
 }
 
@@ -317,6 +311,7 @@ static void createAsynOps(scf::ForOp &forOp, ArrayRef<LoadDotOperand> loads,
   SmallVector<AsyncLoad> asyncLoads;
   SmallVector<Value> newOperands;
   bool needsMbarrierPhase = false;
+  bool needsAsyncWait = false;
   for (const LoadDotOperand &loadOperand : loads) {
     tt::LoadOp loadOp = loadOperand.load;
     Value dotOperand = loadOperand.dotOperand;
@@ -324,7 +319,10 @@ static void createAsynOps(scf::ForOp &forOp, ArrayRef<LoadDotOperand> loads,
     assert(alloc && "Failed to create alloc for the async load.");
     newOperands.push_back(alloc);
     asyncLoads.emplace_back(loadOp, alloc);
-    needsMbarrierPhase |= isLoadFromTensorPtr(loadOp);
+    if (isLoadFromTensorPtr(loadOp))
+      needsMbarrierPhase = true;
+    else
+      needsAsyncWait = true;
   }
 
   OpBuilder builder(forOp);
@@ -381,9 +379,20 @@ static void createAsynOps(scf::ForOp &forOp, ArrayRef<LoadDotOperand> loads,
 
   bool firstLoad = true;
   for (AsyncLoad &asyncLoad : asyncLoads) {
-    createAsyncLoad(forOp, asyncLoad.loadOp, asyncLoad.alloc, firstLoad,
-                    insertIdx, extractIdx, phase);
+    createAsyncLoad(forOp, asyncLoad.loadOp, asyncLoad.alloc, insertIdx,
+                    extractIdx, phase);
     firstLoad = false;
+  }
+  // Insert a waitOp after the first async copy. This does make the assumption
+  // that the wait will be scheduled in a different stage that all the async
+  // copy but we cannot guarantee that one wait is enough otherwise.
+  for (auto &op : forOp.getBody()->without_terminator()) {
+    if (isa<ttg::InsertSliceAsyncOp>(op)) {
+      OpBuilder builder(op.getContext());
+      builder.setInsertionPointAfter(&op);
+      builder.create<ttg::AsyncWaitOp>(op.getLoc(), 0);
+      break;
+    }
   }
   SmallVector<Value> newYieldOperands = {insertIdx, extractIdx};
   if (needsMbarrierPhase)
@@ -473,7 +482,6 @@ static void addDep(Operation *op, DenseSet<Operation *> &deps,
     return;
   for (Value operand : op->getOperands()) {
     Value v = operand;
-    int distance = 0;
     llvm::SmallDenseSet<Value> seen;
     while (auto arg = v.dyn_cast<BlockArgument>()) {
       if (!includeArg)
@@ -483,7 +491,6 @@ static void addDep(Operation *op, DenseSet<Operation *> &deps,
       if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
         auto yieldOp = op->getBlock()->getTerminator();
         v = yieldOp->getOperand(arg.getArgNumber() - 1);
-        distance++;
         continue;
       }
       break;
@@ -530,7 +537,7 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
   }
 
   // Find depenencies with distance of 1.
-  SmallVector<Operation *> distance1Arith;
+  SmallVector<Operation *> distanceOneUsers;
   for (Operation *op : insertAndDeps) {
     for (Value operand : op->getOperands()) {
       if (auto arg = operand.dyn_cast<BlockArgument>()) {
@@ -539,14 +546,14 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
           Value v = yieldOp->getOperand(arg.getArgNumber() - 1);
           Operation *defOp = v.getDefiningOp();
           if (defOp && insertAndDeps.count(defOp) == 0) {
-            distance1Arith.push_back(defOp);
+            distanceOneUsers.push_back(defOp);
           }
         }
       }
     }
   }
-  // Keep loads at a distance of 1 schedule the rest in stage 0.
-  for (Operation *op : distance1Arith) {
+  // Schedule loads with a distance of 1 in stage 0
+  for (Operation *op : distanceOneUsers) {
     if (isa<tt::LoadOp>(op)) {
       addDep(op, insertAndDeps, true);
     }
@@ -554,7 +561,7 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
   // For the rest of the ops we can move then into stage 1 so that they can be
   // closer to their uses.
   DenseSet<Operation *> stage1deps;
-  for (Operation *op : distance1Arith) {
+  for (Operation *op : distanceOneUsers) {
     if (!isa<tt::LoadOp>(op)) {
       addDep(op, stage1deps, true, &insertAndDeps);
     }
@@ -602,8 +609,8 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   // 2. Convert the loads into async loads and create the allocs.
   createAsynOps(forOp, loads, numStages, hasMMAV3);
 
-  // 3. rewrite the loop using the given schedule, this part of the
-  // transformation doesn't take any decision.
+  // 3. Create the final schedule for the kernel loop. This will dictate the
+  // stages and order of operations to the pipeline expander.
   std::vector<std::pair<Operation *, unsigned>> schedule =
       createSchedule(forOp, numStages, /*prefetchExtract=*/!hasMMAV3);
 

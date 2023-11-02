@@ -576,25 +576,22 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter) {
   for (int64_t i = 0; i < maxStage; i++) {
     Location loc = forOp.getLoc();
     Type t = lb.getType();
+    Value minusOne =
+        rewriter.create<arith::ConstantOp>(loc, rewriter.getIntegerAttr(t, -1));
+    // number of iterations = ((ub - 1) - lb) / step
+    Value totlaNumIteration = rewriter.create<arith::DivUIOp>(
+        loc,
+        rewriter.create<arith::SubIOp>(
+            loc, rewriter.create<arith::AddIOp>(loc, ub, minusOne), lb),
+        step);
     // newLastIter = lb + step * ((((ub - 1) - lb) / step) - i)
+    Value minusI =
+        rewriter.create<arith::ConstantOp>(loc, rewriter.getIntegerAttr(t, -i));
     Value newlastIter = rewriter.create<arith::AddIOp>(
         loc, lb,
         rewriter.create<arith::MulIOp>(
             loc, step,
-            rewriter.create<arith::AddIOp>(
-                loc,
-                rewriter.create<arith::DivUIOp>(
-                    loc,
-                    rewriter.create<arith::SubIOp>(
-                        loc,
-                        rewriter.create<arith::AddIOp>(
-                            loc, ub,
-                            rewriter.create<arith::ConstantOp>(
-                                loc, rewriter.getIntegerAttr(t, -1))),
-                        lb),
-                    step),
-                rewriter.create<arith::ConstantOp>(
-                    loc, rewriter.getIntegerAttr(t, -i)))));
+            rewriter.create<arith::AddIOp>(loc, totlaNumIteration, minusI)));
     setValueMapping(forOp.getInductionVar(), newlastIter, maxStage - i);
   }
   // Emit `maxStage - 1` epilogue part that includes operations from stages
