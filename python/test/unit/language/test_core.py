@@ -3169,12 +3169,9 @@ def test_call(type, num_ctas, device):
 # test if
 # -------------
 
-# TODO(Keren): if_exp_dynamic
 
-
-@pytest.mark.parametrize("if_type", ["if", "if_and_dynamic", "if_exp_static", "if_and_static"])
+@pytest.mark.parametrize("if_type", ["if", "if_and_dynamic", "if_exp_static", "if_exp_dynamic", "if_exp_dynamic_constexpr", "if_exp_dynamic_void", "if_and_static"])
 def test_if(if_type, device):
-
     @triton.jit
     def kernel(Cond, XTrue, XFalse, Ret, IfType: tl.constexpr, BoolVar: tl.constexpr, StaticVaue: tl.constexpr):
         pid = tl.program_id(0)
@@ -3185,6 +3182,12 @@ def test_if(if_type, device):
             elif 1 == pid % 2:  # req
                 tl.store(Ret, tl.load(XFalse))
         elif IfType == "if_exp_dynamic":
+            val = tl.load(XTrue) if pid % 2 == 0 else tl.load(XFalse)
+            tl.store(Ret, val)
+        elif IfType == "if_exp_dynamic_constexpr":
+            val = 3.14 if pid % 2 == 0 else tl.load(XFalse)
+            tl.store(Ret, val)
+        elif IfType == "if_exp_dynamic_void":
             tl.store(Ret, tl.load(XTrue)) if pid % 2 == 0 else tl.store(Ret, tl.load(XFalse))
         elif IfType == "if_exp_static":
             tl.store(Ret, tl.load(XTrue)) if BoolVar else tl.store(Ret, tl.load(XFalse))
