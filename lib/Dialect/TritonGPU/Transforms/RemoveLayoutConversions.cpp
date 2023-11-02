@@ -282,9 +282,6 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       setEncoding({afterArg, result}, info, changed, user);
       continue;
     }
-    // Workaround: don't propagate through truncI
-    if (isa<arith::TruncIOp>(user))
-      continue;
     if (user->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<mlir::OpTrait::Elementwise>() ||
         isa<triton::ReduceOp, triton::ExpandDimsOp,
