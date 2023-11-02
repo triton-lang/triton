@@ -4008,6 +4008,46 @@ def test_new_kernel_api_grid_fn_compiler_flags():
     assert grid_fn_called == 1
 
 
+def test_new_kernel_api_grid_fn_sees_default_kernel_args():
+    @triton.jit
+    def nop_kernel(a=1, b=2):
+        pass
+
+    grid_fn_called = 0
+
+    def grid_fn(kernel_args):
+        nonlocal grid_fn_called
+        grid_fn_called += 1
+        assert kernel_args == {"a": 1, "b": 2}
+        return (1,)
+    nop_kernel.with_flags(num_warps=16)[grid_fn]()
+
+    assert grid_fn_called == 1
+
+# TODO(jlebar): Remove this test once the old API is gone.
+
+
+def test_old_kernel_api_grid_fn_sees_default_kernel_args():
+    @triton.jit
+    def nop_kernel(a=1, b=2):
+        pass
+
+    grid_fn_called = 0
+
+    def grid_fn(args):
+        nonlocal grid_fn_called
+        grid_fn_called += 1
+        assert args == {"a": 1, "b": 2, "num_warps": 16}
+        return (1,)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        nop_kernel[grid_fn](num_warps=16)
+
+    assert grid_fn_called == 1
+
+# TODO(jlebar): Remove this test once the old API is gone.
+
+
 def test_old_kernel_api_grid_fn_compiler_flags():
     @triton.jit
     def nop_kernel(arg1):
@@ -4015,8 +4055,6 @@ def test_old_kernel_api_grid_fn_compiler_flags():
 
     # This grid function gets compiler flags in its first (and only) argument
     # because the launch uses the old API.
-    #
-    # TODO(jlebar): Remove this test once the old API is gone.
     grid_fn_called = 0
 
     def grid_fn(kernel_args):

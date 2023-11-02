@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import builtins
 import time
-from typing import Dict
+from typing import Dict, Any, Sequence, Tuple, Callable
+from dataclasses import dataclass
 
 from ..testing import do_bench
 from .jit import KernelInterface
@@ -32,7 +33,7 @@ class Autotuner(KernelInterface):
             'top_k': number of configs to bench
             'prune_num_stages_by'(optional): a function used to prune num_stages. It takes configs:List[Config] as its input, and returns pruned configs.
         """
-        super().__init__()
+        super().__init__(fn.signature, self.run_with_flags, self.warmup_with_flags)
         if not configs:
             self.configs = [Config({}, num_warps=4, num_stages=2, num_ctas=1)]
         else:
@@ -60,7 +61,6 @@ class Autotuner(KernelInterface):
         self.perf_model, self.configs_top_k = perf_model, top_k
         self.early_config_prune = early_config_prune
         self.fn = fn
-        self.warmup = warmup
         self.rep = rep
 
     def _bench(self, *args, config, **meta):
@@ -80,6 +80,7 @@ class Autotuner(KernelInterface):
             if config.pre_hook:
                 config.pre_hook(full_nargs)
             self.hook(args)
+            # TODO: Fixme
             self.fn.run(
                 *args,
                 num_warps=config.num_warps,
@@ -95,11 +96,10 @@ class Autotuner(KernelInterface):
         except OutOfResources:
             return [float("inf"), float("inf"), float("inf")]
 
-    def run(self, *args, **kwargs):
-        # TODO: Update this API.
-        self.nargs = dict(zip(self.arg_names, args))
+    def run_with_flags(self, grid: Tuple[int, int, int], flags: dict[str, Any], kernel_args: dict[str, Any]):
+        self.nargs = dict(zip(self.arg_names, kernel_args))
         if len(self.configs) > 1:
-            all_args = {**self.nargs, **kwargs}
+            all_args = {**self.nargs, **kernel_args}
             _args = []
             for name in self.arg_names:
                 if name in all_args:
@@ -111,28 +111,29 @@ class Autotuner(KernelInterface):
             key = tuple(key)
             if key not in self.cache:
                 # prune configs
-                pruned_configs = self.prune_configs(kwargs)
+                pruned_configs = self.prune_configs(kernel_args)
                 bench_start = time.time()
-                timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                timings = {config: self._bench(*kernel_args, config=config, **kernel_args) for config in pruned_configs}
                 bench_end = time.time()
                 self.bench_time = bench_end - bench_start
                 self.cache[key] = builtins.min(timings, key=timings.get)
-                self.hook(args)
+                self.hook(kernel_args)
                 self.configs_timings = timings
             config = self.cache[key]
         else:
             config = self.configs[0]
         self.best_config = config
-        full_nargs = {**self.nargs, **kwargs, **self.best_config.kwargs}
+        full_nargs = {**self.nargs, **kernel_args, **self.best_config.meta}
         if config.pre_hook is not None:
             config.pre_hook(full_nargs)
-        ret = self.fn.run(
-            *args,
+        ret = self.fn.run_with_flags(
+            {**kernel_args, **config.meta},
+            {},
             num_warps=config.num_warps,
             num_stages=config.num_stages,
             num_ctas=config.num_ctas,
             enable_warp_specialization=config.enable_warp_specialization,
-            **kwargs,
+            **kernel_kwargs,
             **config.kwargs,
         )
         self.nargs = None
@@ -163,60 +164,58 @@ class Autotuner(KernelInterface):
                 pruned_configs = sorted(est_timing.keys(), key=lambda x: est_timing[x])[:top_k]
         return pruned_configs
 
-    def warmup(self, *args, **kwargs):
+    def warmup_with_flags(self, flags: Dict[str, Any], args: Dict[str, Any]):
         self.nargs = dict(zip(self.arg_names, args))
-        for config in self.prune_configs(kwargs):
-            self.fn.warmup(
-                *args,
-                num_warps=config.num_warps,
-                num_ctas=config.num_ctas,
-                num_stages=config.num_stages,
-                enable_warp_specialization=config.enable_warp_specialization,
-                enable_persistent=config.enable_persistent,
-                **kwargs,
-                **config.kwargs,
+        for config in self.prune_configs(args):
+            self.fn.warmup_with_flags(
+                {**args, **config.meta},
+                flags={**flags, **config.flags()},
             )
         self.nargs = None
 
 
+@dataclass
 class Config:
     """
     An object that represents a possible kernel configuration for the auto-tuner to try.
 
     :ivar meta: a dictionary of meta-parameters to pass to the kernel as keyword arguments.
-    :type meta: dict[Str, Any]
     :ivar num_warps: the number of warps to use for the kernel when compiled for GPUs. For example, if
                       `num_warps=8`, then each kernel instance will be automatically parallelized to
                       cooperatively execute using `8 * 32 = 256` threads.
-    :type num_warps: int
+    :ivar num_ctas: Number of CTAs in a CGA, i.e. number of blocks in a thread-block cluster.
     :ivar num_stages: the number of stages that the compiler should use when software-pipelining loops.
                        Mostly useful for matrix multiplication workloads on SM80+ GPUs.
     :type enable_warp_specialization: bool
     :ivar enable_warp_specialization: enable specialization (spatial partitioning) or not. See https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#spatial-partitioning-also-known-as-warp-specialization
+    :ivar enable_fp_fusion: Whether to allow fp fma instructions to be formed from fp add and mul instructions.
+    :type enable_fp_fusion: bool
     :ivar pre_hook: a function that will be called before the kernel is called. Parameters of this
                     function are args.
     """
 
-    def __init__(self, kwargs, num_warps=4, num_stages=2, num_ctas=1, enable_warp_specialization=False, pre_hook=None):
-        self.kwargs = kwargs
-        self.num_warps = num_warps
-        self.num_ctas = num_ctas
-        self.num_stages = num_stages
-        self.enable_warp_specialization = enable_warp_specialization
-        # TODO[shuhaoj]: May make enable_persistent configurable in future if necessay.
-        self.enable_persistent = False
-        self.pre_hook = pre_hook
+    # TODO: Check what this looks like in the documentation.
+    # TODO(jlebar): Although these are the only flags that are interesting to
+    # autotune, there are other compiler flags the user might still want to set,
+    # and that doesn't work with the new kernel launch API.
+    meta: dict[str, Any]
+    num_warps: int = 4
+    num_stages: int = 2
+    num_ctas: int = 1
+    enable_warp_specialization: bool = False
+    enable_fp_fusion: bool = True
+    # TODO(jlebar): It appears this may be unused, and it's certainly undocumented.
+    enable_persistent: bool = False
+    pre_hook: Callable | None = None
 
-    def __str__(self):
-        res = []
-        for k, v in self.kwargs.items():
-            res.append(f"{k}: {v}")
-        res.append(f"num_warps: {self.num_warps}")
-        res.append(f"num_ctas: {self.num_ctas}")
-        res.append(f"num_stages: {self.num_stages}")
-        res.append(f"enable_warp_specialization: {self.enable_warp_specialization}")
-        res.append(f"enable_persistent: {self.enable_persistent}")
-        return ", ".join(res)
+    def flags(self):
+        return {
+            "num_warps": self.num_warps,
+            "num_stages": self.num_stages,
+            "num_ctas": self.num_ctas,
+            "enable_warp_specialization": self.enable_warp_specialization,
+            "enable_persistent": self.enable_persistent,
+        }
 
 
 def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, warmup=25, rep=100):
@@ -262,16 +261,19 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, warmup=25,
     return decorator
 
 
+# TODO: This does not handle flags separately from args
 class Heuristics(KernelInterface):
     def __init__(self, fn, arg_names, values) -> None:
+        super().__init__(fn.signature, self.run_with_flags, warmup_with_flags=None)
         self.fn = fn
         self.values = values
         self.arg_names = arg_names
 
-    def run(self, *args, **kwargs):
+    def run_with_flags(self, grid: Tuple[int, int, int], flags: Dict[str, Any], kernel_args: Dict[str, Any]):
+        kernel_args = dict(kernel_args)  # copy args so we don't modify the user's version
         for v, heur in self.values.items():
-            kwargs[v] = heur({**dict(zip(self.arg_names, args)), **kwargs})
-        return self.fn.run(*args, **kwargs)
+            kernel_args[v] = heur({**dict(zip(self.arg_names, kernel_args)), **kernel_args})
+        return self.fn.run_with_flags(grid, flags, *args)
 
 
 def heuristics(values):
