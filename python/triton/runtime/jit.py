@@ -247,7 +247,13 @@ class JITFunction(KernelInterface[T]):
         tys = {
             "bool": "i1",
             "float8e4nv": "fp8e4nv",
+            "float8_e4m3fn": "fp8e4nv",
+            "float8e4b8": "fp8e4b8",
+            "float8_e4m3fnuz": "fp8e4b8",
             "float8e5": "fp8e5",
+            "float8_e5m2": "fp8e5",
+            "float8e5b16": "fp8e5b16",
+            "float8_e5m2fnuz": "fp8e5b16",
             "float8e4b15": "fp8e4b15",
             "float8e4b15x4": "fp8e4b15x4",
             "float16": "fp16",

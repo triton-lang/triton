@@ -400,7 +400,7 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
 } // namespace LLVM
 
 bool isF8(Type eType) {
-  return eType.isFloat8E5M2FNUZ() or eType.isFloat8E4M3FNUZ() or
+  return eType.isFloat8E4M3FNUZ() or eType.isFloat8E4M3FN() or
          eType.isFloat8E5M2() or eType.isFloat8E5M2FNUZ();
 }
 

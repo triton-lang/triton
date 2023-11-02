@@ -811,6 +811,10 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self) -> mlir::Type {
              return self.getBuilder().getType<mlir::Float8E4M3FNUZType>();
            })
+      .def("get_fp8e4b8_ty",
+           [](TritonOpBuilder &self) -> mlir::Type {
+             return self.getBuilder().getType<mlir::Float8E4M3FNUZType>();
+           })
       .def("get_fp8e4b15_ty",
            [](TritonOpBuilder &self) -> mlir::Type {
              // TODO: upstream FP8E4B15 into MLIR, or find a way to externally
@@ -826,6 +830,10 @@ void init_triton_ir(py::module &&m) {
       .def("get_fp8e5_ty",
            [](TritonOpBuilder &self) -> mlir::Type {
              return self.getBuilder().getType<mlir::Float8E5M2Type>();
+           })
+      .def("get_fp8e5b16_ty",
+           [](TritonOpBuilder &self) -> mlir::Type {
+             return self.getBuilder().getType<mlir::Float8E5M2FNUZType>();
            })
       .def("get_half_ty",
            [](TritonOpBuilder &self) -> mlir::Type {
