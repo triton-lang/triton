@@ -1701,8 +1701,6 @@ void PipelinePass::asyncLaunchDots(scf::ForOp forOp) {
       auto resTy = dotOp.getResult().getType().dyn_cast<RankedTensorType>();
       if (auto resEnc = resTy.getEncoding().dyn_cast<ttg::MmaEncodingAttr>()) {
         if (resEnc && resEnc.isHopper()) {
-          // Don't pipeline valid dots that depend on ops other than scf.yield
-          // and scf.for
           auto dot = dotOp.getResult();
           bool valid = true;
 
@@ -1713,7 +1711,7 @@ void PipelinePass::asyncLaunchDots(scf::ForOp forOp) {
             valid = false;
 
           Operation *firstUse = nullptr;
-          selfDepend(dotOp, forOp, &firstUse);
+          auto depend = selfDepend(dotOp, forOp, &firstUse);
           bool selfDirectDepend = (dotOp == firstUse);
           for (auto tempInAll : allDots) {
             auto iter = std::find(dots.begin(), dots.end(), tempInAll);
@@ -1726,7 +1724,8 @@ void PipelinePass::asyncLaunchDots(scf::ForOp forOp) {
               hasSyncDot = true;
           }
           auto CArg = dotOp.getOperand(2);
-          if (!(selfDirectDepend || (!selfDirectDepend && hasSyncDot)) ||
+          if (!(selfDirectDepend ||
+                (depend && !selfDirectDepend && hasSyncDot)) ||
               !CArg.hasOneUse())
             valid = false;
 
