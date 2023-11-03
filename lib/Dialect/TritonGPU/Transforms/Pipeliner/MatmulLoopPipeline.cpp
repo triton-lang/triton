@@ -157,8 +157,29 @@ static Value loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3) {
     return Value();
 
   Operation *use = *loadOp.getResult().getUsers().begin();
-  Operation *preUse = nullptr;
-
+  if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
+    auto tensorType =
+        convertLayout.getResult().getType().cast<RankedTensorType>();
+    if (auto sharedEnc =
+            tensorType.getEncoding().dyn_cast<ttg::SharedEncodingAttr>()) {
+      if (sharedEnc.getHasLeadingOffset()) {
+        // MMA V3 case.
+        auto newOrder = sharedEnc.getOrder();
+        auto ty = loadOp.getType().cast<RankedTensorType>();
+        auto oldOrder = ttg::getOrder(ty.getEncoding());
+        if (newOrder[0] == oldOrder[0] || newOrder[1] == oldOrder[1]) {
+          // The operand of MMAv3 is in SharedEncoding and it's order should
+          // not be changed after FuseTranspositions Pass. So we only pipeline
+          // the load if the order of the loaded BlockedEncoding is the same
+          // as the order of the SharedEncoding it is converted to.
+          // TODO: remove this constraint once the LoadOp supports transpose
+          // fusion
+          hasMMAV3 = true;
+          return convertLayout.getResult();
+        }
+      }
+    }
+  }
   // Advance to the first conversion as long as the use resides in shared
   // memory and it has a single use itself
   while (use) {
@@ -167,7 +188,6 @@ static Value loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3) {
     auto tensorType = use->getResult(0).getType().dyn_cast<RankedTensorType>();
     if (!tensorType.getEncoding().isa<ttg::SharedEncodingAttr>())
       break;
-    preUse = use;
     use = *use->getResult(0).getUsers().begin();
   }
 
@@ -178,27 +198,6 @@ static Value loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3) {
                               .dyn_cast<ttg::DotOperandEncodingAttr>()) {
         return convertLayout.getResult();
       }
-    }
-  } else if (preUse && isa<tt::DotOp>(use)) {
-    // for MMAv3 whose dot take SharedEncoding as operands directly
-    Operation *post = *loadOp.getResult().getUsers().begin();
-    auto newOrder = post->getResult(0)
-                        .getType()
-                        .cast<RankedTensorType>()
-                        .getEncoding()
-                        .cast<ttg::SharedEncodingAttr>()
-                        .getOrder();
-    auto ty = loadOp.getType().cast<RankedTensorType>();
-    auto oldOrder = ttg::getOrder(ty.getEncoding());
-    // The operand of MMAv3 is in SharedEncoding and it's order should not
-    // be changed after FuseTranspositions Pass. So we only pipeline the
-    // load if the order of the loaded BlockedEncoding is the same as the
-    // order of the SharedEncoding it is converted to.
-    // TODO: remove this constraint once the LoadOp supports transpose
-    // fusion
-    if (newOrder[0] == oldOrder[0] || newOrder[1] == oldOrder[1]) {
-      hasMMAV3 = true;
-      return preUse->getResult(0);
     }
   }
   return Value();
