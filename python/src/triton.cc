@@ -1870,6 +1870,10 @@ void init_triton_ir(py::module &&m) {
            [](mlir::PassManager &self) {
              self.addPass(mlir::createTritonGPURemoveLayoutConversionsPass());
            })
+      .def("add_tritongpu_optimize_epilogue_pass",
+           [](mlir::PassManager &self) {
+             self.addPass(mlir::createTritonGPUOptimizeEpiloguePass());
+           })
       .def("add_tritongpu_reorder_instructions_pass",
            [](mlir::PassManager &self) {
              self.addPass(mlir::createTritonGPUReorderInstructionsPass());
