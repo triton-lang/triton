@@ -337,8 +337,6 @@ def _attn_bwd(Q, K, V, sm_scale,  #
     # load scales
     offs_k = tl.arange(0, BLOCK_DMODEL)
 
-    # THIS BLOCK DOES DK/DV/DR:
-
     start_n = pid * BLOCK_N1
     start_m = start_n
 
