@@ -9,11 +9,10 @@ from .jit import KernelInterface
 
 
 class OutOfResources(Exception):
+
     def __init__(self, required, limit, name):
-        self.message = (
-            f"out of resource: {name}, Required: {required}, Hardware limit: {limit}. "
-            + "Reducing block sizes or `num_stages` may help."
-        )
+        self.message = (f"out of resource: {name}, Required: {required}, Hardware limit: {limit}. " +
+                        "Reducing block sizes or `num_stages` may help.")
         self.required = required
         self.limit = limit
         self.name = name
@@ -25,6 +24,7 @@ class OutOfResources(Exception):
 
 
 class Autotuner(KernelInterface):
+
     def __init__(
         self,
         fn,
@@ -99,10 +99,8 @@ class Autotuner(KernelInterface):
         # as kwargs and by the autotuner
         conflicts = meta.keys() & config.kwargs.keys()
         if conflicts:
-            raise ValueError(
-                f"Conflicting meta-parameters: {', '.join(conflicts)}."
-                " Make sure that you don't re-define auto-tuned symbols."
-            )
+            raise ValueError(f"Conflicting meta-parameters: {', '.join(conflicts)}."
+                             " Make sure that you don't re-define auto-tuned symbols.")
         # augment meta-parameters with tunable ones
         current = dict(meta, **config.kwargs)
         full_nargs = {**self.nargs, **current}
@@ -179,7 +177,8 @@ class Autotuner(KernelInterface):
                 top_k = int(len(self.configs) * top_k)
             if len(pruned_configs) > top_k:
                 est_timing = {
-                    config: self.perf_model(
+                    config:
+                    self.perf_model(
                         **self.nargs,
                         **kwargs,
                         **config.kwargs,
@@ -296,6 +295,7 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
 
 
 class Heuristics(KernelInterface):
+
     def __init__(self, fn, arg_names, values) -> None:
         self.fn = fn
         self.values = values

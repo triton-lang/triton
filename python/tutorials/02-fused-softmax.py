@@ -71,10 +71,7 @@ def naive_softmax(x):
 
 
 @triton.jit
-def softmax_kernel(
-    output_ptr, input_ptr, input_row_stride, output_row_stride, n_cols,
-    BLOCK_SIZE: tl.constexpr
-):
+def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n_cols, BLOCK_SIZE: tl.constexpr):
     # The rows of the softmax are independent, so we parallelize across those
     row_idx = tl.program_id(0)
     # The stride represents how much we need to increase the pointer to advance 1 row
@@ -118,7 +115,7 @@ def softmax(x):
     y = torch.empty_like(x)
     # Enqueue kernel. The 1D launch grid is simple: we have one kernel instance per row o
     # f the input matrix
-    softmax_kernel[(n_rows,)](
+    softmax_kernel[(n_rows, )](
         y,
         x,
         x.stride(0),
@@ -158,9 +155,7 @@ assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         x_names=['N'],  # argument names to use as an x-axis for the plot
-        x_vals=[
-            128 * i for i in range(2, 100)
-        ],  # different possible values for `x_name`
+        x_vals=[128 * i for i in range(2, 100)],  # different possible values for `x_name`
         line_arg='provider',  # argument name whose value corresponds to a different line in the plot
         line_vals=[
             'triton',
@@ -176,8 +171,7 @@ assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
         ylabel="GB/s",  # label name for the y-axis
         plot_name="softmax-performance",  # name for the plot. Used also as a file name for saving the plot.
         args={'M': 4096},  # values for function arguments not in `x_names` and `y_name`
-    )
-)
+    ))
 def benchmark(M, N, provider):
     x = torch.randn(M, N, device='cuda', dtype=torch.float32)
     quantiles = [0.5, 0.2, 0.8]
