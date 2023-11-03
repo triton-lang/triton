@@ -63,14 +63,64 @@ public:
   }
 
   void runOnOperation() override {
-    SmallVector<mlir::triton::LoadOp> worklists;
-    getOperation()->walk([&](mlir::triton::LoadOp load) -> void {
-      if (isLoadFromTensorPtr(load)) {
-        worklists.push_back(load);
+    Block *entryBlock;
+    getOperation()->walk([&](mlir::triton::FuncOp funcOp) {
+      entryBlock = &funcOp.getBody().front();
+    });
+
+    SmallVector<scf::ForOp> forOpLists;
+    getOperation()->walk<WalkOrder::PreOrder>([&](Operation *subOp) {
+      if (auto forOp = llvm::dyn_cast<scf::ForOp>(subOp)) {
+        forOpLists.push_back(forOp);
       }
     });
-    for (auto load : worklists) {
-      materializeLoadTilePtr(load);
+
+    for (auto &op : forOpLists) {
+      scf::ForOp parentForOp = op->getParentOfType<scf::ForOp>();
+      bool hasLoadOp = false;
+      for (Operation &subOp : *op.getBody()) {
+        if (isa<mlir::triton::LoadOp>(&subOp)) {
+          hasLoadOp = true;
+          break;
+        }
+      }
+      scf::ForOp childForOp;
+      bool hasChildForOp = false;
+      for (Operation &subOp : *op.getBody()) {
+        if (childForOp = llvm::dyn_cast<scf::ForOp>(&subOp)) {
+          hasChildForOp = true;
+          break;
+        }
+      }
+      if (hasLoadOp) {
+        if (hasChildForOp) {
+          createNewParentLoop(op, childForOp);
+        } else {
+          createNewChildLoop(op, parentForOp);
+        }
+      }
+    }
+
+    DenseMap<mlir::triton::LoadOp, bool> loadOpWorkList;
+    getOperation()->walk<WalkOrder::PreOrder>(
+        [&](mlir::triton::LoadOp load) -> void {
+          if (isLoadFromTensorPtr(load)) {
+            if (llvm::dyn_cast<mlir::scf::ForOp>(load->getParentOp())) {
+              loadOpWorkList[load] = true;
+            } else {
+              loadOpWorkList[load] = false;
+            }
+          }
+        });
+
+    SmallVector<Value> barrierLists;
+    barrierLists =
+        immutableMbarrierAlloc(&entryBlock->front(), loadOpWorkList.size());
+
+    unsigned count = 0;
+    for (auto opMap : loadOpWorkList) {
+      unsigned idx = count++;
+      materializeLoadTilePtr(opMap.first, barrierLists[idx], opMap.second);
     }
 
     SmallVector<mlir::triton::StoreOp> storeOpWorklists;
@@ -85,12 +135,18 @@ public:
   }
 
 private:
-  void materializeLoadTilePtr(mlir::triton::LoadOp load);
+  void materializeLoadTilePtr(mlir::triton::LoadOp load, Value mBarrier,
+                              bool hasParentForOp);
   void materializeStoreTilePtr(mlir::triton::StoreOp store);
+  void createNewChildLoop(scf::ForOp forOp, scf::ForOp parentForOp);
+  void createNewParentLoop(scf::ForOp forOp, scf::ForOp childForOp);
+  SmallVector<Value> immutableMbarrierAlloc(Operation *entryOp,
+                                            unsigned loadNum);
 };
 
-void MaterializeLoadStorePass::materializeLoadTilePtr(
-    mlir::triton::LoadOp load) {
+void MaterializeLoadStorePass::materializeLoadTilePtr(mlir::triton::LoadOp load,
+                                                      Value mBarrier,
+                                                      bool hasParentForOp) {
   if (computeCapability < 90)
     return;
   if (!::triton::tools::getBoolEnv("ENABLE_TMA"))
@@ -112,8 +168,6 @@ void MaterializeLoadStorePass::materializeLoadTilePtr(
   unsigned elems = std::accumulate(shapePerSlice.begin(), shapePerSlice.end(),
                                    1, std::multiplies{});
   elems *= (elemTy.getIntOrFloatBitWidth() / 8);
-  auto mBarrierTy = mlir::triton::PointerType::get(b.getIntegerType(64), 3);
-  Value mBarrier = b.create<ttng::AllocMBarrierOp>(loc, mBarrierTy, 1);
   Value _0 = b.create<arith::ConstantIntOp>(loc, 0, 32);
   Value threadId = b.create<ttng::GetThreadIdOp>(loc);
   Value pred =
@@ -135,8 +189,15 @@ void MaterializeLoadStorePass::materializeLoadTilePtr(
                                 b.getI64IntegerAttr(loadShape[1])},
       SmallVector<OpFoldResult>{b.getI64IntegerAttr(1), b.getI64IntegerAttr(1),
                                 b.getI64IntegerAttr(1)});
-
-  Value phase = b.create<arith::ConstantIntOp>(loc, 0, 1);
+  Value phase;
+  if (hasParentForOp) {
+    auto parentForOp = llvm::dyn_cast<mlir::scf::ForOp>(load->getParentOp());
+    Value phase_ = parentForOp.getBody()->getArguments().back();
+    Value one = b.create<arith::ConstantIntOp>(loc, 1, 32);
+    phase = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, phase_, one);
+  } else {
+    phase = b.create<arith::ConstantIntOp>(loc, 0, 1);
+  }
   b.create<ttng::MBarrierWaitOp>(loc, mBarrier, phase);
   Value newValue =
       b.create<ttg::ConvertLayoutOp>(loc, load.getType(), extracted);
@@ -200,6 +261,99 @@ void MaterializeLoadStorePass::materializeStoreTilePtr(
   builder.create<mlir::triton::gpu::AsyncBulkCommitGroupOp>(loc);
   builder.create<mlir::triton::gpu::AsyncBulkWaitOp>(loc, 0);
   store->erase();
+}
+
+void MaterializeLoadStorePass::createNewChildLoop(scf::ForOp forOp,
+                                                  scf::ForOp parentForOp) {
+  auto loc = forOp.getLoc();
+  Block *body = forOp.getBody();
+  OpBuilder builder(forOp.getContext());
+  builder.setInsertionPoint(forOp);
+
+  auto curPhase = body->insertArgument(body->getNumArguments(), builder.getI32Type(), loc);
+
+  SmallVector<Value> newLoopArgs;
+  for (auto operand : forOp.getInitArgs())
+    newLoopArgs.push_back(operand);
+  builder.setInsertionPoint(forOp);
+  Value curInitPhase;
+  if (parentForOp) {
+    unsigned idx = parentForOp.getBody()->getNumArguments();
+    curInitPhase = parentForOp.getBody()->getArgument(idx - 2);
+  } else {
+    curInitPhase = builder.create<arith::ConstantIntOp>(loc, 0, 32);
+  }
+  newLoopArgs.push_back(curInitPhase);
+
+  auto newForOp = builder.create<scf::ForOp>(
+    loc, forOp.getLowerBound(), forOp.getUpperBound(), forOp.getStep(),
+    newLoopArgs);
+  newForOp.getRegion().takeBody(forOp.getRegion());
+
+  for (unsigned i = 0; i < forOp.getNumResults(); ++i)
+    forOp.getResult(i).replaceAllUsesWith(newForOp.getResult(i));
+  forOp.erase();
+
+  // child phase yield
+  auto yieldOp = llvm::cast<scf::YieldOp>(body->getTerminator());
+  builder.setInsertionPoint(yieldOp);
+  Value one = builder.create<arith::ConstantIntOp>(loc, 1, 32);
+  Value curYieldPhase = builder.create<arith::XOrIOp>(loc, curPhase, one);
+  yieldOp->insertOperands(yieldOp.getNumOperands(), {curYieldPhase});
+
+  // parent phase yeild
+  if (parentForOp) {
+    auto pYieldOp = llvm::cast<scf::YieldOp>(parentForOp.getBody()->getTerminator());
+    builder.setInsertionPoint(pYieldOp);
+    Value one_ = builder.create<arith::ConstantIntOp>(loc, 1, 32);
+    Value pYieldPhase = builder.create<arith::XOrIOp>(loc, parentForOp.getBody()->getArguments().back(), one_);
+    Value childYieldPhase = newForOp.getResults().back();
+    pYieldOp->insertOperands(pYieldOp.getNumOperands(), {childYieldPhase, pYieldPhase});
+  }
+}
+
+void MaterializeLoadStorePass::createNewParentLoop(scf::ForOp forOp,
+                                                   scf::ForOp childForOp) {
+  auto loc = forOp.getLoc();
+  Block *body = forOp.getBody();
+  OpBuilder builder(forOp.getContext());
+  builder.setInsertionPoint(forOp);
+
+  auto childPhase = body->insertArgument(body->getNumArguments(), builder.getI32Type(), loc);
+  auto curPhase = body->insertArgument(body->getNumArguments(), builder.getI32Type(), loc);
+
+  SmallVector<Value> newLoopArgs;
+  for (auto operand : forOp.getInitArgs())
+    newLoopArgs.push_back(operand);
+  builder.setInsertionPoint(forOp);
+  Value childInitPhase = builder.create<arith::ConstantIntOp>(loc, 0, 32);
+  Value curInitPhase = builder.create<arith::ConstantIntOp>(loc, 0, 32);
+  newLoopArgs.append({childInitPhase, curInitPhase});
+
+  auto newForOp = builder.create<scf::ForOp>(
+    loc, forOp.getLowerBound(), forOp.getUpperBound(), forOp.getStep(),
+    newLoopArgs);
+  newForOp.getRegion().takeBody(forOp.getRegion());
+
+  for (unsigned i = 0; i < forOp.getNumResults(); ++i)
+    forOp.getResult(i).replaceAllUsesWith(newForOp.getResult(i));
+  forOp.erase();
+}
+
+SmallVector<Value>
+MaterializeLoadStorePass::immutableMbarrierAlloc(Operation *entryOp,
+                                                 unsigned loadNum) {
+  SmallVector<Value> barrierLists;
+  OpBuilder builder(entryOp);
+  Location loc = entryOp->getLoc();
+  builder.setInsertionPoint(entryOp);
+  for (unsigned i = 0; i < loadNum; ++i) {
+    auto mBarrierTy =
+        mlir::triton::PointerType::get(builder.getIntegerType(64), 3);
+    Value mBarrier = builder.create<ttng::AllocMBarrierOp>(loc, mBarrierTy, 1);
+    barrierLists.push_back(mBarrier);
+  }
+  return barrierLists;
 }
 
 } // anonymous namespace

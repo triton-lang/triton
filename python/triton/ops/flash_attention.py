@@ -216,14 +216,14 @@ def _bwd_kernel_one_col_block(
         if not SEQUENCE_PARALLEL:
             dq = tl.load(DQ_block_ptr)
             dq += tl.dot(ds, k, allow_tf32=True)
-            tl.store(DQ_block_ptr, dq.to(Q.dtype.element_ty))
+            tl.store(DQ_block_ptr, dq)
         elif SEQUENCE_PARALLEL:
             if MMA_V3:
                 dq = tl.dot(ds, k, allow_tf32=True)
             else:
                 # not work with mma v3, becuase M % 64 != 0
                 dq = tl.trans(tl.dot(tl.trans(k), tl.trans(ds), allow_tf32=True))
-            tl.store(DQ_block_ptr, dq.to(Q.dtype.element_ty))
+            tl.store(DQ_block_ptr, dq)
 
         # increment pointers
         DQ_block_ptr = tl.advance(DQ_block_ptr, (BLOCK_M, 0))
@@ -430,9 +430,9 @@ class _attention(torch.autograd.Function):
         if sequence_parallel:
             replicas = cdiv(seq_len_kv, BLOCK)
             new_dq_shape = (replicas,) + q.shape
-            dq = torch.zeros(new_dq_shape, device=q.device, dtype=q.dtype)
+            dq = torch.zeros(new_dq_shape, device=q.device, dtype=torch.float32)
         else:
-            dq = torch.zeros_like(q, dtype=q.dtype)
+            dq = torch.zeros_like(q, dtype=torch.float32)
         dk = torch.empty_like(k)
         dv = torch.empty_like(v)
         delta = torch.empty_like(L)
@@ -468,7 +468,7 @@ class _attention(torch.autograd.Function):
 
         if len(dq.shape) == 5:
             dq = dq.sum(dim=0)
-        return dq, dk, dv, None, None, None
+        return dq.to(q.dtype), dk, dv, None, None, None
 
 
 attention = _attention.apply
