@@ -36,6 +36,7 @@ repos:
       - id: yapf
         args: ["-p", "-i"]
         stages: [commit, push, manual]
+        exclude: "python/test/unit/language/test_line_info.py"
 
   - repo: https://github.com/pre-commit/mirrors-clang-format
     rev: v16.0.6
