@@ -792,32 +792,21 @@ void mlir::triton::asyncLaunchDots(scf::ForOp forOp) {
 
   // 2. If there's any outstanding DotAsyncOps, we need to wait for them.
   builder.setInsertionPointAfter(forOp);
-  SmallVector<Type> resultTypes(resultNeedSync.size());
-  SmallVector<Value> yieldThenValues(resultNeedSync.size());
-  SmallVector<Value> yieldElseValues(resultNeedSync.size());
-  for (int i = 0; i < resultNeedSync.size(); ++i) {
-    resultTypes[i] = forOp->getResult(resultNeedSync[i]).getType();
-    yieldThenValues[i] = forOp->getResult(resultNeedSync[i]);
-    yieldElseValues[i] = forOp->getResult(resultNeedSync[i]);
-  }
-  Value loopNotEmpty = builder.create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::slt, forOp.getLowerBound(),
-      forOp.getUpperBound());
-  auto ifOp = builder.create<scf::IfOp>(loc, resultTypes, loopNotEmpty,
-                                        /*hasElse*/ true);
-  builder.setInsertionPointToStart(ifOp.thenBlock());
+  SmallVector<Value> waitOperands;
   for (int i = 0; i < resultNeedSync.size(); ++i) {
     Value result = forOp->getResult(resultNeedSync[i]);
     if (result.use_empty())
       continue;
-    auto dotWait =
-        builder.create<tt::nvidia_gpu::DotWaitOp>(forOp.getLoc(), result, 0);
-    result.replaceAllUsesExcept(ifOp.getResult(i), dotWait);
-    yieldThenValues[i] = dotWait.getResult();
+    waitOperands.push_back(result);
   }
-  auto yieldOpThen = builder.create<scf::YieldOp>(loc, yieldThenValues);
-  builder.setInsertionPointToEnd(ifOp.elseBlock());
-  auto yieldOpElse = builder.create<scf::YieldOp>(loc, yieldElseValues);
+  if (!waitOperands.empty()) {
+    auto dotWait = builder.create<tt::nvidia_gpu::DotWaitOp>(forOp.getLoc(),
+                                                             waitOperands, 0);
+    for (int i = 0; i < resultNeedSync.size(); ++i) {
+      Value result = forOp->getResult(resultNeedSync[i]);
+      result.replaceAllUsesExcept(dotWait.getResult(i), dotWait);
+    }
+  }
 
   // 3. potentially remove redundant dot_wait after dot_async if having mutiple
   // DotOp in the loop

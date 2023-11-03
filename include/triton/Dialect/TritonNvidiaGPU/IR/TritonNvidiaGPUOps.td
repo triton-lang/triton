@@ -270,16 +270,16 @@ def TTNG_DotAsyncOp : TTNG_Op<"dot_async", [Pure,
 }
 
 def TTNG_DotWaitOp : TTNG_Op<"dot_wait", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
-                                          AllTypesMatch<["input", "output"]>]> {
+                                          AllTypesMatch<["inputs", "outputs"]>]> {
   let summary = "dot wait";
-  let arguments = (ins TT_FpIntTensor:$input, I32Attr:$pendings);
-  let results = (outs TT_FpIntTensor:$output);
+  let arguments = (ins Variadic<TT_FpIntTensor>:$inputs, I32Attr:$pendings);
+  let results = (outs Variadic<TT_FpIntTensor>:$outputs);
   let description = [{
     This operation defining the waiting action for a async dot, MMAv3 .e.g.
     The subsequent operations should not execute until this operation completes waiting.
   }];
 
-  let assemblyFormat = "$input attr-dict `:` type($input)";
+  let assemblyFormat = "$inputs attr-dict `:` type($inputs)";
 }
 
 def TTNG_StoreAsyncOp : TTNG_Op<"store_async",
