@@ -22,7 +22,6 @@
 
 # -- General configuration ------------------------------------------------
 
-
 import os
 import shutil
 import sys
@@ -121,12 +120,9 @@ def setup(app):
         return old_documenter(app, obj, parent)
 
     sphinx.ext.autosummary.get_documenter = documenter
-    sphinx.util.inspect.unwrap_all = forward_jit_fn(
-        sphinx.util.inspect.unwrap_all)
-    sphinx.util.inspect.signature = forward_jit_fn(
-        sphinx.util.inspect.signature)
-    sphinx.util.inspect.object_description = forward_jit_fn(
-        sphinx.util.inspect.object_description)
+    sphinx.util.inspect.unwrap_all = forward_jit_fn(sphinx.util.inspect.unwrap_all)
+    sphinx.util.inspect.signature = forward_jit_fn(sphinx.util.inspect.signature)
+    sphinx.util.inspect.object_description = forward_jit_fn(sphinx.util.inspect.object_description)
 
 
 # Auto Doc
@@ -139,7 +135,8 @@ extensions = [
     'sphinx.ext.coverage',
     'sphinx.ext.napoleon',
     'sphinx_multiversion',
-    'myst_parser']
+    'myst_parser',
+]
 autosummary_generate = True
 
 # versioning config
@@ -294,6 +291,6 @@ man_pages = [(master_doc, 'triton', 'Triton Documentation', [author], 1)]
 # (source start file, target name, title, author,
 #  dir menu entry, description, category)
 texinfo_documents = [
-    (master_doc, 'Triton', 'Triton Documentation', author,
-     'Triton', 'One line description of project.', 'Miscellaneous'),
+    (master_doc, 'Triton', 'Triton Documentation', author, 'Triton', 'One line description of project.',
+     'Miscellaneous'),
 ]

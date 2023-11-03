@@ -18,7 +18,6 @@
 # CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 # TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
 """
 Fused Attention
 ===============
@@ -35,18 +34,15 @@ import triton.language as tl
 
 
 @triton.jit
-def _fwd_kernel(
-    Q, K, V, sm_scale,
-    L, M,
-    Out,
-    stride_qz, stride_qh, stride_qm, stride_qk,
-    stride_kz, stride_kh, stride_kn, stride_kk,
-    stride_vz, stride_vh, stride_vk, stride_vn,
-    stride_oz, stride_oh, stride_om, stride_on,
-    Z, H, N_CTX, D0,
-    BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-):
+def _fwd_kernel(Q, K, V, sm_scale,  #
+                L, M,  #
+                Out,  #
+                stride_qz, stride_qh, stride_qm, stride_qk,  #
+                stride_kz, stride_kh, stride_kn, stride_kk,  #
+                stride_vz, stride_vh, stride_vk, stride_vn,  #
+                stride_oz, stride_oh, stride_om, stride_on,  #
+                Z, H, N_CTX, D0,  #
+                BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr):
     start_m = tl.program_id(0)
     off_hz = tl.program_id(1)
 
@@ -61,31 +57,38 @@ def _fwd_kernel(
 
     stride_qh_2d = stride_qh // stride_qm // stride_qk
 
-    q_tile_ptr = tl.make_block_ptr(base=Q,
-                                   shape=(D0, BLOCK_DMODEL),
-                                   strides=(stride_qm, stride_qk),
-                                   offsets=(
-                                       off_hz * stride_qh_2d + start_m * BLOCK_M, 0),
-                                   block_shape=(BLOCK_M, BLOCK_DMODEL),
-                                   order=(1, 0))
-    k_tile_ptr = tl.make_block_ptr(base=K,
-                                   shape=(D0, BLOCK_DMODEL),
-                                   strides=(stride_kn, stride_kk),
-                                   offsets=(off_hz * stride_qh_2d, 0),
-                                   block_shape=(BLOCK_N, BLOCK_DMODEL),
-                                   order=(1, 0))
-    v_tile_ptr = tl.make_block_ptr(base=V,
-                                   shape=(D0, BLOCK_DMODEL),
-                                   strides=(stride_vk, stride_vn),
-                                   offsets=(off_hz * stride_qh_2d, 0),
-                                   block_shape=(BLOCK_N, BLOCK_DMODEL),
-                                   order=(1, 0))
-    out_tile_ptr = tl.make_block_ptr(base=Out,
-                                     shape=(D0, BLOCK_DMODEL),
-                                     strides=(stride_om, stride_on),
-                                     offsets=(off_hz * stride_qh_2d + start_m * BLOCK_M, 0),
-                                     block_shape=(BLOCK_M, BLOCK_DMODEL),
-                                     order=(1, 0))
+    q_tile_ptr = tl.make_block_ptr(
+        base=Q,
+        shape=(D0, BLOCK_DMODEL),
+        strides=(stride_qm, stride_qk),
+        offsets=(off_hz * stride_qh_2d + start_m * BLOCK_M, 0),
+        block_shape=(BLOCK_M, BLOCK_DMODEL),
+        order=(1, 0),
+    )
+    k_tile_ptr = tl.make_block_ptr(
+        base=K,
+        shape=(D0, BLOCK_DMODEL),
+        strides=(stride_kn, stride_kk),
+        offsets=(off_hz * stride_qh_2d, 0),
+        block_shape=(BLOCK_N, BLOCK_DMODEL),
+        order=(1, 0),
+    )
+    v_tile_ptr = tl.make_block_ptr(
+        base=V,
+        shape=(D0, BLOCK_DMODEL),
+        strides=(stride_vk, stride_vn),
+        offsets=(off_hz * stride_qh_2d, 0),
+        block_shape=(BLOCK_N, BLOCK_DMODEL),
+        order=(1, 0),
+    )
+    out_tile_ptr = tl.make_block_ptr(
+        base=Out,
+        shape=(D0, BLOCK_DMODEL),
+        strides=(stride_om, stride_on),
+        offsets=(off_hz * stride_qh_2d + start_m * BLOCK_M, 0),
+        block_shape=(BLOCK_M, BLOCK_DMODEL),
+        order=(1, 0),
+    )
     # load q: it will stay in SRAM throughout
     q = tl.load(q_tile_ptr)
 
@@ -96,8 +99,7 @@ def _fwd_kernel(
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, tl.trans(k))
         qk *= sm_scale
-        qk = tl.where(offs_m[:, None] >= (
-            start_n + offs_n[None, :]), qk, float("-inf"))
+        qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk, float("-inf"))
         # compute new m
         m_curr = tl.maximum(tl.max(qk, 1), m_prev)
         # correct old l
@@ -133,11 +135,9 @@ def _fwd_kernel(
 
 
 @triton.jit
-def _bwd_preprocess(
-    Out, DO, L,
-    NewDO, Delta,
-    BLOCK_M: tl.constexpr, D_HEAD: tl.constexpr,
-):
+def _bwd_preprocess(Out, DO, L,  #
+                    NewDO, Delta,  #
+                    BLOCK_M: tl.constexpr, D_HEAD: tl.constexpr):
     off_m = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
     off_n = tl.arange(0, D_HEAD)
     # load
@@ -153,19 +153,14 @@ def _bwd_preprocess(
 
 
 @triton.jit
-def _bwd_kernel(
-    Q, K, V, sm_scale, Out, DO,
-    DQ, DK, DV,
-    L, M,
-    D,
-    stride_qz, stride_qh, stride_qm, stride_qk,
-    stride_kz, stride_kh, stride_kn, stride_kk,
-    stride_vz, stride_vh, stride_vk, stride_vn,
-    Z, H, N_CTX, D0,
-    num_block,
-    BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-):
+def _bwd_kernel(Q, K, V, sm_scale, Out, DO,  #
+                DQ, DK, DV,  #
+                L, M,  #
+                D, stride_qz, stride_qh, stride_qm, stride_qk,  #
+                stride_kz, stride_kh, stride_kn, stride_kk,  #
+                stride_vz, stride_vh, stride_vk, stride_vn,  #
+                Z, H, N_CTX, D0,  #
+                num_block, BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr):
     off_hz = tl.program_id(0)
     off_z = off_hz // H
     off_h = off_hz % H
@@ -173,55 +168,62 @@ def _bwd_kernel(
     stride_qz_2d = stride_qz // stride_qm // stride_qk
     stride_qh_2d = stride_qh // stride_qm // stride_qk
 
-    q_tile_ptr = tl.make_block_ptr(base=Q,
-                                   shape=(D0, BLOCK_DMODEL),
-                                   strides=(stride_qm, stride_qk),
-                                   offsets=(
-                                       off_z * stride_qz_2d + off_h * stride_qh_2d, 0),
-                                   block_shape=(BLOCK_M, BLOCK_DMODEL),
-                                   order=(1, 0))
-    k_tile_ptr = tl.make_block_ptr(base=K,
-                                   shape=(D0, BLOCK_DMODEL),
-                                   strides=(stride_kn, stride_kk),
-                                   offsets=(
-                                       off_z * stride_qz_2d + off_h * stride_qh_2d, 0),
-                                   block_shape=(BLOCK_M, BLOCK_DMODEL),
-                                   order=(1, 0))
-    v_tile_ptr = tl.make_block_ptr(base=V,
-                                   shape=(D0, BLOCK_DMODEL),
-                                   strides=(stride_vk, stride_vn),
-                                   offsets=(
-                                       off_z * stride_qz_2d + off_h * stride_qh_2d, 0),
-                                   block_shape=(BLOCK_M, BLOCK_DMODEL),
-                                   order=(1, 0))
-    do_tile_ptr = tl.make_block_ptr(base=DO,
-                                    shape=(D0, BLOCK_DMODEL),
-                                    strides=(stride_qm, stride_qk),
-                                    offsets=(
-                                        off_z * stride_qz_2d + off_h * stride_qh_2d, 0),
-                                    block_shape=(BLOCK_M, BLOCK_DMODEL),
-                                    order=(1, 0))
-    dq_tile_ptr = tl.make_block_ptr(base=DQ,
-                                    shape=(D0, BLOCK_DMODEL),
-                                    strides=(stride_qm, stride_qk),
-                                    offsets=(
-                                        off_z * stride_qz_2d + off_h * stride_qh_2d, 0),
-                                    block_shape=(BLOCK_M, BLOCK_DMODEL),
-                                    order=(1, 0))
-    dk_tile_ptr = tl.make_block_ptr(base=DK,
-                                    shape=(D0, BLOCK_DMODEL),
-                                    strides=(stride_qm, stride_qk),
-                                    offsets=(
-                                        off_z * stride_qz_2d + off_h * stride_qh_2d, 0),
-                                    block_shape=(BLOCK_M, BLOCK_DMODEL),
-                                    order=(1, 0))
-    dv_tile_ptr = tl.make_block_ptr(base=DV,
-                                    shape=(D0, BLOCK_DMODEL),
-                                    strides=(stride_qm, stride_qk),
-                                    offsets=(
-                                        off_z * stride_qz_2d + off_h * stride_qh_2d, 0),
-                                    block_shape=(BLOCK_M, BLOCK_DMODEL),
-                                    order=(1, 0))
+    q_tile_ptr = tl.make_block_ptr(
+        base=Q,
+        shape=(D0, BLOCK_DMODEL),
+        strides=(stride_qm, stride_qk),
+        offsets=(off_z * stride_qz_2d + off_h * stride_qh_2d, 0),
+        block_shape=(BLOCK_M, BLOCK_DMODEL),
+        order=(1, 0),
+    )
+    k_tile_ptr = tl.make_block_ptr(
+        base=K,
+        shape=(D0, BLOCK_DMODEL),
+        strides=(stride_kn, stride_kk),
+        offsets=(off_z * stride_qz_2d + off_h * stride_qh_2d, 0),
+        block_shape=(BLOCK_M, BLOCK_DMODEL),
+        order=(1, 0),
+    )
+    v_tile_ptr = tl.make_block_ptr(
+        base=V,
+        shape=(D0, BLOCK_DMODEL),
+        strides=(stride_vk, stride_vn),
+        offsets=(off_z * stride_qz_2d + off_h * stride_qh_2d, 0),
+        block_shape=(BLOCK_M, BLOCK_DMODEL),
+        order=(1, 0),
+    )
+    do_tile_ptr = tl.make_block_ptr(
+        base=DO,
+        shape=(D0, BLOCK_DMODEL),
+        strides=(stride_qm, stride_qk),
+        offsets=(off_z * stride_qz_2d + off_h * stride_qh_2d, 0),
+        block_shape=(BLOCK_M, BLOCK_DMODEL),
+        order=(1, 0),
+    )
+    dq_tile_ptr = tl.make_block_ptr(
+        base=DQ,
+        shape=(D0, BLOCK_DMODEL),
+        strides=(stride_qm, stride_qk),
+        offsets=(off_z * stride_qz_2d + off_h * stride_qh_2d, 0),
+        block_shape=(BLOCK_M, BLOCK_DMODEL),
+        order=(1, 0),
+    )
+    dk_tile_ptr = tl.make_block_ptr(
+        base=DK,
+        shape=(D0, BLOCK_DMODEL),
+        strides=(stride_qm, stride_qk),
+        offsets=(off_z * stride_qz_2d + off_h * stride_qh_2d, 0),
+        block_shape=(BLOCK_M, BLOCK_DMODEL),
+        order=(1, 0),
+    )
+    dv_tile_ptr = tl.make_block_ptr(
+        base=DV,
+        shape=(D0, BLOCK_DMODEL),
+        strides=(stride_qm, stride_qk),
+        offsets=(off_z * stride_qz_2d + off_h * stride_qh_2d, 0),
+        block_shape=(BLOCK_M, BLOCK_DMODEL),
+        order=(1, 0),
+    )
     # offset pointers for batch/head
     DQ += off_z * stride_qz + off_h * stride_qh
     for start_n in range(0, num_block):
@@ -250,8 +252,7 @@ def _bwd_kernel(
             # recompute p = softmax(qk, dim=-1).T
             # NOTE: `do` is pre-divided by `l`; no normalization here
             qk = tl.dot(q, tl.trans(k))
-            qk = tl.where(offs_m_curr[:, None] >= (
-                offs_n[None, :]), qk, float("-inf"))
+            qk = tl.where(offs_m_curr[:, None] >= (offs_n[None, :]), qk, float("-inf"))
             m = tl.load(m_ptrs + offs_m_curr)
             p = tl.exp(qk * sm_scale - m[:, None])
             # compute dv
@@ -301,29 +302,21 @@ class _attention(torch.autograd.Function):
         assert Lk in {16, 32, 64, 128}
         o = torch.empty_like(q)
         grid = (triton.cdiv(q.shape[2], BLOCK), q.shape[0] * q.shape[1], 1)
-        L = torch.empty(
-            (q.shape[0] * q.shape[1], q.shape[2]),
-            device=q.device,
-            dtype=torch.float32)
-        m = torch.empty(
-            (q.shape[0] * q.shape[1], q.shape[2]),
-            device=q.device,
-            dtype=torch.float32)
+        L = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
+        m = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         num_warps = 4 if Lk <= 64 else 8
         D0 = q.shape[0] * q.shape[1] * q.shape[2]
         _fwd_kernel[grid](
-            q, k, v, sm_scale,
-            L, m,
-            o,
-            q.stride(0), q.stride(1), q.stride(2), q.stride(3),
-            k.stride(0), k.stride(1), k.stride(2), k.stride(3),
-            v.stride(0), v.stride(1), v.stride(2), v.stride(3),
-            o.stride(0), o.stride(1), o.stride(2), o.stride(3),
-            q.shape[0], q.shape[1], q.shape[2], D0,
-            BLOCK_M=BLOCK, BLOCK_N=BLOCK,
-            BLOCK_DMODEL=Lk, num_warps=num_warps,
-            num_stages=2,
-        )
+            q, k, v, sm_scale,  #
+            L, m,  #
+            o,  #
+            q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
+            k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
+            v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
+            o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
+            q.shape[0], q.shape[1], q.shape[2], D0,  #
+            BLOCK_M=BLOCK, BLOCK_N=BLOCK, BLOCK_DMODEL=Lk,  #
+            num_warps=num_warps, num_stages=2)
 
         ctx.save_for_backward(q, k, v, o, L, m)
         ctx.grid = grid
@@ -343,25 +336,22 @@ class _attention(torch.autograd.Function):
         delta = torch.empty_like(l)
         D0 = q.shape[0] * q.shape[1] * q.shape[2]
         _bwd_preprocess[(ctx.grid[0] * ctx.grid[1], )](
-            o, do, l,
-            do_scaled, delta,
-            BLOCK_M=BLOCK, D_HEAD=ctx.BLOCK_DMODEL,
-        )
-        _bwd_kernel[(ctx.grid[1],)](
-            q, k, v, ctx.sm_scale,
-            o, do_scaled,
-            dq, dk, dv,
-            l, m,
-            delta,
-            q.stride(0), q.stride(1), q.stride(2), q.stride(3),
-            k.stride(0), k.stride(1), k.stride(2), k.stride(3),
-            v.stride(0), v.stride(1), v.stride(2), v.stride(3),
-            q.shape[0], q.shape[1], q.shape[2], D0,
-            ctx.grid[0],
-            BLOCK_M=BLOCK, BLOCK_N=BLOCK,
-            BLOCK_DMODEL=ctx.BLOCK_DMODEL, num_warps=8,
-            num_stages=1,
-        )
+            o, do, l,  #
+            do_scaled, delta,  #
+            BLOCK_M=BLOCK, D_HEAD=ctx.BLOCK_DMODEL)
+        _bwd_kernel[(ctx.grid[1], )](
+            q, k, v, ctx.sm_scale,  #
+            o, do_scaled,  #
+            dq, dk, dv,  #
+            l, m,  #
+            delta,  #
+            q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
+            k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
+            v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
+            q.shape[0], q.shape[1], q.shape[2], D0,  #
+            ctx.grid[0],  #
+            BLOCK_M=BLOCK, BLOCK_N=BLOCK, BLOCK_DMODEL=ctx.BLOCK_DMODEL,  #
+            num_warps=8, num_stages=1)
         return dq, dk, dv, None
 
 
@@ -380,15 +370,9 @@ attention = _attention.apply
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="requires arch 9+")
 def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     torch.manual_seed(20)
-    q = torch.empty(
-        (Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(
-        mean=0.1, std=0.2).requires_grad_()
-    k = torch.empty(
-        (Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(
-        mean=0.4, std=0.2).requires_grad_()
-    v = torch.empty(
-        (Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(
-        mean=0.3, std=0.2).requires_grad_()
+    q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.1, std=0.2).requires_grad_()
+    k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.4, std=0.2).requires_grad_()
+    v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.3, std=0.2).requires_grad_()
     sm_scale = 0.2
     dout = torch.randn_like(q)
     # reference implementation
@@ -427,22 +411,25 @@ except BaseException:
 
 BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
 # vary seq length for fixed head and batch=4
-configs = [triton.testing.Benchmark(
-    x_names=['N_CTX'],
-    x_vals=[2**i for i in range(10, 14)],
-    line_arg='provider',
-    line_vals=['triton'] + (['flash'] if HAS_FLASH else []),
-    line_names=['Triton'] + (['Flash'] if HAS_FLASH else []),
-    styles=[('red', '-'), ('blue', '-')],
-    ylabel='ms',
-    plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}',
-    args={
-        'H': N_HEADS,
-        'BATCH': BATCH,
-        'D_HEAD': D_HEAD,
-        'dtype': torch.float16,
-        'mode': mode}
-) for mode in ['fwd', 'bwd']]
+configs = [
+    triton.testing.Benchmark(
+        x_names=['N_CTX'],
+        x_vals=[2**i for i in range(10, 14)],
+        line_arg='provider',
+        line_vals=['triton'] + (['flash'] if HAS_FLASH else []),
+        line_names=['Triton'] + (['Flash'] if HAS_FLASH else []),
+        styles=[('red', '-'), ('blue', '-')],
+        ylabel='ms',
+        plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}',
+        args={
+            'H': N_HEADS,
+            'BATCH': BATCH,
+            'D_HEAD': D_HEAD,
+            'dtype': torch.float16,
+            'mode': mode,
+        },
+    ) for mode in ['fwd', 'bwd']
+]
 
 
 @triton.testing.perf_report(configs)
@@ -463,9 +450,8 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.f
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         return ms
     if provider == "flash":
-        lengths = torch.full((BATCH,), fill_value=N_CTX, device=device)
-        cu_seqlens = torch.zeros(
-            (BATCH + 1,), device=device, dtype=torch.int32)
+        lengths = torch.full((BATCH, ), fill_value=N_CTX, device=device)
+        cu_seqlens = torch.zeros((BATCH + 1, ), device=device, dtype=torch.int32)
         cu_seqlens[1:] = lengths.cumsum(0)
         qkv = torch.randn((BATCH * N_CTX, 3, H, D_HEAD), dtype=dtype, device=device, requires_grad=True)
         fn = lambda: flash_attn_func(qkv, cu_seqlens, 0., N_CTX, causal=True)

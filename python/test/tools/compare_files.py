@@ -9,6 +9,7 @@ import yaml
 
 
 class ComparisonResult:
+
     def __init__(self, name: str, numComparisons: int, diffs: List[str] = None, errors: List[str] = None):
         self.name = name
         self.numComparisons = numComparisons
@@ -142,7 +143,8 @@ def doFilesMatch(path1: str, path2: str) -> bool:
     return True
 
 
-def compareMatchingFiles(name: str, nameToHashes1: Dict[str, List[str]], nameToHashes2: Dict[str, List[str]], args) -> ComparisonResult:
+def compareMatchingFiles(name: str, nameToHashes1: Dict[str, List[str]], nameToHashes2: Dict[str, List[str]],
+                         args) -> ComparisonResult:
     """
         Compare files with the given name in all hashes in both paths
         Return the first mismatching files as a tuple (file1, file2), otherwise, return an empty tuple
