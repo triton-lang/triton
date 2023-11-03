@@ -114,6 +114,7 @@ def optimize_ttgir(mod, num_stages, num_warps, num_ctas, target,
     if optimize_epilogue:
         pm.add_tritongpu_optimize_epilogue_pass()
     pm.add_tritongpu_optimize_dot_operands_pass()
+    pm.add_cse_pass()
     ws_enabled = False
     # `num_warps` does not mean the total number of warps of a CTA when
     # warp specialization is enabled.
