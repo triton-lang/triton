@@ -54,17 +54,13 @@ def test_tma_wgmma_64_64_16_f16(TTGIR, TRANS_A, TRANS_B):
 
     ttgir_path = os.path.dirname(__file__) + "/" + TTGIR
     kernel = triton.compile(ttgir_path)
-    kernel[(1, 1, 1)](a.data_ptr(), b.data_ptr(), c.data_ptr(),
-                      SIZE_M, SIZE_N, SIZE_K,
-                      a.stride(0), a.stride(1),
-                      b.stride(0), b.stride(1),
-                      c.stride(0))
+    kernel[(1, 1, 1)](  #
+        a.data_ptr(), b.data_ptr(), c.data_ptr(),  #
+        SIZE_M, SIZE_N, SIZE_K,  #
+        a.stride(0), a.stride(1),  #
+        b.stride(0), b.stride(1),  #
+        c.stride(0))
 
     golden = torch.matmul(a, b)
     torch.set_printoptions(profile="full", sci_mode=False)
-    assert_close(
-        c,
-        golden,
-        rtol=1e-2,
-        atol=1e-3,
-        check_dtype=False)
+    assert_close(c, golden, rtol=1e-2, atol=1e-3, check_dtype=False)
