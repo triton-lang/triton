@@ -683,6 +683,7 @@ class CodeGenerator(ast.NodeVisitor):
                 return language.core.tensor(if_op.get_result(0), ret_type) if ret_type_ir else None
         else:
             cond = _unwrap_if_constexpr(cond)
+
             # not isinstance - we insist the real thing, no subclasses and no ducks
             if type(cond) not in _condition_types:
                 raise UnsupportedLanguageConstruct(
