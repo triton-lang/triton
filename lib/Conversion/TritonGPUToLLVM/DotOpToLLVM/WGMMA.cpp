@@ -170,7 +170,7 @@ DotOpMmaV3SmemLoader loadA(TritonGPUToLLVMTypeConverter *typeConverter,
 
   // The descriptor should be calculated based on the first warp of the
   // warpgroup.
-  Value warp = and_(udiv(thread, i32_val(32)), i32_val(0xFFFFFFFC));
+  Value warp = udiv(thread, i32_val(32));
   Value warpM = urem(warp, i32_val(wpt[0]));
   Value warpId = urem(warpM, i32_val(shapePerCTA[0] / instrShape[0]));
 

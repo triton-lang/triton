@@ -94,14 +94,13 @@ def get_llvm_package_info():
     return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
 
-def get_ftpstream(url):
+def open_url(url):
     user_agent = 'Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0'
     headers = {
         'User-Agent': user_agent,
     }
     request = urllib.request.Request(url, None, headers)
-    ftpstream = urllib.request.urlopen(request)
-    return ftpstream
+    return urllib.request.urlopen(request)
 
 
 def get_thirdparty_packages(triton_cache_path):
@@ -121,7 +120,7 @@ def get_thirdparty_packages(triton_cache_path):
                 pass
             os.makedirs(package_root_dir, exist_ok=True)
             print(f'downloading and extracting {p.url} ...')
-            file = tarfile.open(fileobj=get_ftpstream(p.url), mode="r|*")
+            file = tarfile.open(fileobj=open_url(p.url), mode="r|*")
             file.extractall(path=package_root_dir)
             # write version url to package_dir
             with open(os.path.join(package_dir, "version.txt"), "w") as f:
@@ -157,7 +156,7 @@ def download_and_copy(src_path, variable, version, url_func):
             download = curr_version != version
     if download:
         print(f'downloading and extracting {url} ...')
-        file = tarfile.open(fileobj=get_ftpstream(url), mode="r|*")
+        file = tarfile.open(fileobj=open_url(url), mode="r|*")
         with tempfile.TemporaryDirectory() as temp_dir:
             file.extractall(path=temp_dir)
             src_path = os.path.join(temp_dir, src_path)
