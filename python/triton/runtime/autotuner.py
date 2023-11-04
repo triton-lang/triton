@@ -9,11 +9,10 @@ from .jit import KernelInterface
 
 
 class OutOfResources(Exception):
+
     def __init__(self, required, limit, name):
-        self.message = (
-            f"out of resource: {name}, Required: {required}, Hardware limit: {limit}. "
-            + "Reducing block sizes or `num_stages` may help."
-        )
+        self.message = (f"out of resource: {name}, Required: {required}, Hardware limit: {limit}. " +
+                        "Reducing block sizes or `num_stages` may help.")
         self.required = required
         self.limit = limit
         self.name = name
@@ -25,7 +24,19 @@ class OutOfResources(Exception):
 
 
 class Autotuner(KernelInterface):
-    def __init__(self, fn, arg_names, configs, key, reset_to_zero, prune_configs_by: Dict = None, warmup=25, rep=100):
+
+    def __init__(
+        self,
+        fn,
+        arg_names,
+        configs,
+        key,
+        reset_to_zero,
+        restore_value,
+        prune_configs_by: Dict = None,
+        warmup=25,
+        rep=100,
+    ):
         """
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
             'perf_model': performance model used to predicate running time with different configs, returns running time
@@ -38,18 +49,38 @@ class Autotuner(KernelInterface):
             self.configs = configs
         self.key_idx = [arg_names.index(k) for k in key]
         self.cache = {}
-        # hook to reset all required tensor to zeros before relaunching a kernel
-        self.hook = lambda args: 0
+        self.arg_names = arg_names
+
+        # Reset to zero or restore values
+        self.reset_idx = []
         if reset_to_zero is not None:
             self.reset_idx = [arg_names.index(k) for k in reset_to_zero]
+        self.restore_idx = []
+        if restore_value is not None:
+            self.restore_idx = [arg_names.index(k) for k in restore_value]
 
-            def _hook(args):
+        # Hook to reset or restore for required tensors
+        self.pre_hook = lambda args, reset_only=False: 0
+        self.post_hook = lambda args: 0
+        if len(self.reset_idx) > 0 or len(self.restore_idx) > 0:
+
+            def _pre_hook(args, reset_only=False):
                 for i in self.reset_idx:
                     args[i].zero_()
+                if not reset_only:
+                    self.restore_copies = [args[i].clone() for i in self.restore_idx]
 
-            self.hook = _hook
-        self.arg_names = arg_names
-        # prune configs
+            self.pre_hook = _pre_hook
+        if len(self.restore_idx) > 0:
+
+            def _post_hook(args):
+                for i, j in enumerate(self.restore_idx):
+                    args[j].copy_(self.restore_copies[i])
+                self.restore_copies = []
+
+            self.post_hook = _post_hook
+
+        # Prune configs
         if prune_configs_by:
             perf_model, top_k = prune_configs_by["perf_model"], prune_configs_by["top_k"]
             if "early_config_prune" in prune_configs_by:
@@ -58,6 +89,7 @@ class Autotuner(KernelInterface):
             perf_model, top_k, early_config_prune = None, None, None
         self.perf_model, self.configs_top_k = perf_model, top_k
         self.early_config_prune = early_config_prune
+
         self.fn = fn
         self.warmup = warmup
         self.rep = rep
@@ -67,10 +99,8 @@ class Autotuner(KernelInterface):
         # as kwargs and by the autotuner
         conflicts = meta.keys() & config.kwargs.keys()
         if conflicts:
-            raise ValueError(
-                f"Conflicting meta-parameters: {', '.join(conflicts)}."
-                " Make sure that you don't re-define auto-tuned symbols."
-            )
+            raise ValueError(f"Conflicting meta-parameters: {', '.join(conflicts)}."
+                             " Make sure that you don't re-define auto-tuned symbols.")
         # augment meta-parameters with tunable ones
         current = dict(meta, **config.kwargs)
         full_nargs = {**self.nargs, **current}
@@ -78,7 +108,7 @@ class Autotuner(KernelInterface):
         def kernel_call():
             if config.pre_hook:
                 config.pre_hook(full_nargs)
-            self.hook(args)
+            self.pre_hook(args)
             self.fn.run(
                 *args,
                 num_warps=config.num_warps,
@@ -88,6 +118,7 @@ class Autotuner(KernelInterface):
                 # enable_persistent=False,
                 **current,
             )
+            self.post_hook(args)
 
         try:
             return do_bench(kernel_call, warmup=self.warmup, rep=self.rep, quantiles=(0.5, 0.2, 0.8))
@@ -115,7 +146,7 @@ class Autotuner(KernelInterface):
                 bench_end = time.time()
                 self.bench_time = bench_end - bench_start
                 self.cache[key] = builtins.min(timings, key=timings.get)
-                self.hook(args)
+                self.pre_hook(args, reset_only=True)
                 self.configs_timings = timings
             config = self.cache[key]
         else:
@@ -146,7 +177,8 @@ class Autotuner(KernelInterface):
                 top_k = int(len(self.configs) * top_k)
             if len(pruned_configs) > top_k:
                 est_timing = {
-                    config: self.perf_model(
+                    config:
+                    self.perf_model(
                         **self.nargs,
                         **kwargs,
                         **config.kwargs,
@@ -201,7 +233,7 @@ class Config:
         self.num_ctas = num_ctas
         self.num_stages = num_stages
         self.enable_warp_specialization = enable_warp_specialization
-        # TODO[shuhaoj]: May make enable_persistent configurable in future if necessay.
+        # TODO[shuhaoj]: May make enable_persistent configurable in future if necessary.
         self.enable_persistent = False
         self.pre_hook = pre_hook
 
@@ -217,7 +249,7 @@ class Config:
         return ", ".join(res)
 
 
-def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, warmup=25, rep=100):
+def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_value=None, warmup=25, rep=100):
     """
     Decorator for auto-tuning a :code:`triton.jit`'d function.
 
@@ -248,6 +280,8 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, warmup=25,
         'early_config_prune'(optional): a function used to do early prune (eg, num_stages). It takes configs:List[Config] as its input, and returns pruned configs.
     :param reset_to_zero: a list of argument names whose value will be reset to zero before evaluating any configs.
     :type reset_to_zero: list[str]
+    :param restore_value: a list of argument names whose value will be restored after evaluating any configs.
+    :type restore_value: list[str]
     :param warmup: Warmup time (in ms) to pass to benchmarking, defaults to 25.
     :type warmup: int
     :param rep: Repetition time (in ms) to pass to benchmarking, defaults to 100.
@@ -255,12 +289,13 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, warmup=25,
     """
 
     def decorator(fn):
-        return Autotuner(fn, fn.arg_names, configs, key, reset_to_zero, prune_configs_by, warmup, rep)
+        return Autotuner(fn, fn.arg_names, configs, key, reset_to_zero, restore_value, prune_configs_by, warmup, rep)
 
     return decorator
 
 
 class Heuristics(KernelInterface):
+
     def __init__(self, fn, arg_names, values) -> None:
         self.fn = fn
         self.values = values

@@ -30,20 +30,14 @@ repos:
             ^docs/conf.py$
           )
 
-  - repo: https://github.com/PyCQA/isort
-    rev: 5.12.0
+  - repo: https://github.com/jlebar/yapf
+    rev: bf301f5ef7777e137b97219842629ca78eb5ef2a
     hooks:
-      - id: isort
-        exclude: '^python/triton/runtime/.*'
+      - id: yapf
+        args: ["-p", "-i"]
         stages: [commit, push, manual]
+        exclude: "python/test/unit/language/test_line_info.py"
 
-  - repo: https://github.com/pre-commit/mirrors-autopep8
-    rev: v1.6.0
-    hooks:
-      - id: autopep8
-        exclude: '^python/triton/runtime/.*'
-        args: ["-i"]
-        stages: [commit, push, manual]
   - repo: https://github.com/pre-commit/mirrors-clang-format
     rev: v16.0.6
     hooks:

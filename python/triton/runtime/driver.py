@@ -26,6 +26,7 @@ class DriverBase(metaclass=abc.ABCMeta):
 
 
 class CudaUtils(object):
+
     def __new__(cls):
         if not hasattr(cls, "instance"):
             cls.instance = super(CudaUtils, cls).__new__(cls)
@@ -65,6 +66,7 @@ class CudaUtils(object):
 
 
 class CudaDriver(DriverBase):
+
     def __new__(cls):
         if not hasattr(cls, "instance"):
             cls.instance = super(CudaDriver, cls).__new__(cls)
@@ -81,6 +83,7 @@ class CudaDriver(DriverBase):
 
 
 class HIPUtils(object):
+
     def __new__(cls):
         if not hasattr(cls, "instance"):
             cls.instance = super(HIPUtils, cls).__new__(cls)
@@ -111,6 +114,7 @@ class HIPUtils(object):
 
 
 class HIPDriver(DriverBase):
+
     def __new__(cls):
         if not hasattr(cls, "instance"):
             cls.instance = super(HIPDriver, cls).__new__(cls)
@@ -122,6 +126,7 @@ class HIPDriver(DriverBase):
 
 
 class UnsupportedDriver(DriverBase):
+
     def __new__(cls):
         if not hasattr(cls, "instance"):
             cls.instance = super(UnsupportedDriver, cls).__new__(cls)
@@ -138,6 +143,7 @@ class UnsupportedDriver(DriverBase):
 
 
 class LazyProxy:
+
     def __init__(self, init_fn):
         self._init_fn = init_fn
         self._obj = None

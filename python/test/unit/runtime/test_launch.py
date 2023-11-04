@@ -31,11 +31,11 @@ def test_memory_leak() -> None:
     try:
         inp = torch.randn(10, device='cuda')
         out = torch.randn(10, device='cuda')
-        kernel[(10,)](inp, out, 10, XBLOCK=16)
+        kernel[(10, )](inp, out, 10, XBLOCK=16)
         gc.collect()
         begin, _ = tracemalloc.get_traced_memory()
         for _ in range(100):
-            kernel[(10,)](inp, out, 10, XBLOCK=16)
+            kernel[(10, )](inp, out, 10, XBLOCK=16)
         gc.collect()
         end, _ = tracemalloc.get_traced_memory()
         assert end - begin < 30000

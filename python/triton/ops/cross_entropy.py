@@ -59,6 +59,7 @@ def _backward(PROBS, IDX, DPROBS, N, BLOCK: tl.constexpr):
 
 
 class _cross_entropy(torch.autograd.Function):
+
     @classmethod
     def forward(cls, ctx, logits, indices):
         # make sure we can use triton

@@ -19,6 +19,7 @@ def default_dump_dir():
 
 
 class CacheManager(ABC):
+
     def __init__(self, key):
         pass
 
@@ -44,6 +45,7 @@ class CacheManager(ABC):
 
 
 class FileCacheManager(CacheManager):
+
     def __init__(self, key, override=False, dump=False):
         self.key = key
         self.lock_path = None

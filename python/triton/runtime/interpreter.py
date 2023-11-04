@@ -37,6 +37,7 @@ def str_to_ty(name):
 
 
 class TensorHandle:
+
     def __init__(self, data, dtype):
         self.data = data
         self.dtype = dtype
@@ -46,6 +47,7 @@ class TensorHandle:
 
 
 class BlockPointerHandle:
+
     def __init__(self, base, shape, strides, offsets, tensor_shape, order):
         self.base = base
         self.shape = shape
@@ -72,7 +74,9 @@ class BlockPointerHandle:
 
 
 def wrap_ret(compute_ret_ty):
+
     def wrapper(fn):
+
         def wrapped(*args, **kwargs):
             ret = fn(*args, **kwargs)
             return TensorHandle(ret.data, compute_ret_ty(*args, **kwargs))
@@ -83,6 +87,7 @@ def wrap_ret(compute_ret_ty):
 
 
 class Builder:
+
     def __init__(self) -> None:
         self.arch = None
         # pass
@@ -280,9 +285,8 @@ class Builder:
         dtype_tt = ptr.dtype.element_ty
         return TensorHandle(ptr.data + (dtype_tt.primitive_bitwidth // 8) * offset.data.astype(np.uint64), ptr.dtype)
 
-    def create_tensor_pointer_load(
-        self, ptr, boundary_check, padding_option, cache_modifier, eviction_policy, is_volatile
-    ):
+    def create_tensor_pointer_load(self, ptr, boundary_check, padding_option, cache_modifier, eviction_policy,
+                                   is_volatile):
         ptrs, masks = ptr.materialize_pointers(boundary_check)
         assert padding_option is None
         other = None
@@ -364,9 +368,10 @@ class Builder:
 
 
 def patch_attr(obj, name, member, builder):
-    new_member = lambda *args, member=member, **kwargs: (
-        member(*args, **{k: v for k, v in kwargs.items() if k != "_builder"}, _builder=builder)
-    )
+    new_member = lambda *args, member=member, **kwargs: (member(*args, **
+                                                                {k: v
+                                                                 for k, v in kwargs.items()
+                                                                 if k != "_builder"}, _builder=builder))
     setattr(obj, name, new_member)
 
 
@@ -412,6 +417,7 @@ def _patch_lang_math(lang, builder):
     }
 
     def make_numpy(name):
+
         def impl(*args, **kwargs):
             ret_type = args[0].type  # TODO: incorrect
             ret_dtype = args[0].dtype  # TODO: incorrect
@@ -424,14 +430,13 @@ def _patch_lang_math(lang, builder):
         return impl
 
     def make_fallback(name):
+
         def fallback(*args, **kwargs):
-            raise NotImplementedError(
-                f"""
+            raise NotImplementedError(f"""
 {name} not supported in interpreter mode: no known numpy implementation.
 If you think that {name} in fact does have a numpy implementation, please add it
 to the mapping in python/triton/interpreter/new_interpreter.py:_patch_lang_math.
-"""
-            )
+""")
 
         return fallback
 
@@ -467,6 +472,7 @@ RESERVED_KWS = ["num_warps", "num_stages", "num_ctas", "enable_warp_specializati
 
 
 class GridExecutor:
+
     def __init__(self, fn, arg_names, grid):
         from .jit import _normalize_ty  # TODO: modularize
 
@@ -496,7 +502,7 @@ class GridExecutor:
         # iterate through grid
         grid = self.grid(args) if callable(self.grid) else self.grid
         assert len(grid) <= 3
-        grid = grid + (1,) * (3 - len(grid))
+        grid = grid + (1, ) * (3 - len(grid))
         builder.set_grid_dim(*grid)
         for x in range(grid[0]):
             for y in range(grid[1]):
@@ -510,6 +516,7 @@ class GridExecutor:
 
 
 class InterpretedFunction:
+
     def _patch_lang(self, builder):
         lang = [value for _, value in self.fn.__globals__.items() if value in [tl, tl.core]]
         assert len(lang) == 1, "triton.language must be visible from within jit'd function"

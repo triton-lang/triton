@@ -78,10 +78,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None):
     return torch.mean(torch.tensor(ret)).item()
 
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
-             quantiles=None,
-             fast_flush=True,
-             return_mode="mean"):
+def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean"):
     assert return_mode in ["min", "max", "mean", "median"]
     import torch
     """
@@ -261,6 +258,7 @@ class Benchmark:
 
 
 class Mark:
+
     def __init__(self, fn, benchmarks):
         self.fn = fn
         self.benchmarks = benchmarks
@@ -405,12 +403,15 @@ def get_max_tensorcore_tflops(dtype, clock_rate, backend=None, device=None):
     tflops = num_subcores * clock_rate * ops_per_sub_core * 1e-9
     return tflops
 
+
 # create decorator that wraps test function into
 # a cuda-memcheck system call
 
 
 def cuda_memcheck(**target_kwargs):
+
     def decorator(test_fn):
+
         @functools.wraps(test_fn)
         def wrapper(*args, **kwargs):
             import psutil
@@ -428,7 +429,9 @@ def cuda_memcheck(**target_kwargs):
                 assert "ERROR SUMMARY: 0 errors" in str(out.stdout)
             else:
                 test_fn(*args, **kwargs)
+
         return wrapper
+
     return decorator
 
 
@@ -436,22 +439,18 @@ def cuda_memcheck(**target_kwargs):
 def set_gpu_clock(ref_sm_clock=1350, ref_mem_clock=1215):
     try:
         subprocess.check_output(["nvidia-smi", "-i", "0", "-pm", "1"])
-        subprocess.check_output(
-            [
-                "nvidia-smi",
-                "-i",
-                "0",
-                f"--lock-gpu-clocks={ref_sm_clock},{ref_sm_clock}",
-            ]
-        )
-        subprocess.check_output(
-            [
-                "nvidia-smi",
-                "-i",
-                "0",
-                f"--lock-memory-clocks={ref_mem_clock},{ref_mem_clock}",
-            ]
-        )
+        subprocess.check_output([
+            "nvidia-smi",
+            "-i",
+            "0",
+            f"--lock-gpu-clocks={ref_sm_clock},{ref_sm_clock}",
+        ])
+        subprocess.check_output([
+            "nvidia-smi",
+            "-i",
+            "0",
+            f"--lock-memory-clocks={ref_mem_clock},{ref_mem_clock}",
+        ])
         cur_sm_clock = nvsmi(["clocks.current.sm"])[0]
         cur_mem_clock = nvsmi(["clocks.current.memory"])[0]
         assert abs(cur_sm_clock - ref_sm_clock) < 10, f"GPU SMs must run at {ref_sm_clock} MHz"

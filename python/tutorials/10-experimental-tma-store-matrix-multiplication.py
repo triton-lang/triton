@@ -40,21 +40,21 @@ if torch.cuda.get_device_capability()[0] < 9:
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=7, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=7,
+                      num_warps=4),
         # triton.Config({'BLOCK_SIZE_M': 512, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=7, num_warps=4, num_ctas=4),
     ],
     key=['M', 'N', 'K'],
 )
 @triton.jit
-def matmul_kernel(
-    a_ptr, b_ptr, c_ptr,
-    M, N, K,
-    stride_am, stride_ak,
-    stride_bk, stride_bn,
-    stride_cm, stride_cn,
-    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
-    GROUP_SIZE_M: tl.constexpr,
-):
+def matmul_kernel(a_ptr, b_ptr, c_ptr,  #
+                  M, N, K,  #
+                  stride_am, stride_ak,  #
+                  stride_bk, stride_bn,  #
+                  stride_cm, stride_cn,  #
+                  BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,  #
+                  GROUP_SIZE_M: tl.constexpr  #
+                  ):
     pid = tl.program_id(axis=0)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -67,20 +67,10 @@ def matmul_kernel(
     block_offset_m = pid_m * BLOCK_SIZE_M
     block_offset_n = pid_n * BLOCK_SIZE_N
 
-    a_tile_ptr = tl.make_block_ptr(
-        base=a_ptr, shape=(
-            M, K), strides=(
-            stride_am, stride_ak), offsets=(
-                block_offset_m, 0), block_shape=(
-                    BLOCK_SIZE_M, BLOCK_SIZE_K), order=(
-                        1, 0))
-    b_tile_ptr = tl.make_block_ptr(
-        base=b_ptr, shape=(
-            K, N), strides=(
-            stride_bk, stride_bn), offsets=(
-                0, block_offset_n), block_shape=(
-                    BLOCK_SIZE_K, BLOCK_SIZE_N), order=(
-                        0, 1))
+    a_tile_ptr = tl.make_block_ptr(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
+                                   offsets=(block_offset_m, 0), block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K), order=(1, 0))
+    b_tile_ptr = tl.make_block_ptr(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
+                                   offsets=(0, block_offset_n), block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N), order=(0, 1))
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
     for k in range(0, K, BLOCK_SIZE_K):
@@ -91,7 +81,8 @@ def matmul_kernel(
         b_tile_ptr = tl.advance(b_tile_ptr, [BLOCK_SIZE_K, 0])
 
     c_block_ptr = tl.make_block_ptr(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
-                                    offsets=(block_offset_m, block_offset_n), block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N), order=(1, 0))
+                                    offsets=(block_offset_m, block_offset_n), block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N),
+                                    order=(1, 0))
 
     tl.store(c_block_ptr, accumulator)
 
@@ -101,20 +92,19 @@ def matmul(a, b):
     assert a.shape[1] == b.shape[0], "incompatible dimensions"
     M, K = a.shape
     K, N = b.shape
-    assert (
-        K % 32 == 0
-    ), "We don't check memory-out-of-bounds with K so K must be divisible by BLOCK_SIZE_K"
+    assert (K % 32 == 0), "We don't check memory-out-of-bounds with K so K must be divisible by BLOCK_SIZE_K"
 
     c = torch.empty((M, N), device=a.device, dtype=torch.float32)
 
     def grid(META):
-        return (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),)
+        return (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
 
-    matmul_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c,
-                        M=M, N=N, K=K,
-                        stride_am=a.stride(0), stride_ak=a.stride(1),
-                        stride_bk=b.stride(0), stride_bn=b.stride(1),
-                        stride_cm=c.stride(0), stride_cn=c.stride(1))
+    matmul_kernel[grid](
+        a_ptr=a, b_ptr=b, c_ptr=c,  #
+        M=M, N=N, K=K,  #
+        stride_am=a.stride(0), stride_ak=a.stride(1),  #
+        stride_bk=b.stride(0), stride_bn=b.stride(1),  #
+        stride_cm=c.stride(0), stride_cn=c.stride(1))
     return c
 
 
@@ -126,12 +116,7 @@ c = torch.nn.functional.normalize(c)
 golden = torch.nn.functional.normalize(torch.matmul(a, b))
 
 torch.set_printoptions(profile="full")
-assert_close(
-    c,
-    golden,
-    rtol=1e-2,
-    atol=1e-3,
-    check_dtype=False)
+assert_close(c, golden, rtol=1e-2, atol=1e-3, check_dtype=False)
 
 
 @triton.testing.perf_report(
@@ -143,7 +128,7 @@ assert_close(
             [2048, 1024, 1024],
             [2048, 2048, 2048],
             [2048, 4096, 4096],
-            [2048, 8192, 8192]
+            [2048, 8192, 8192],
         ],  # different possible values for `x_name`
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
@@ -152,27 +137,26 @@ assert_close(
         # label name for the lines
         line_names=["cuBLAS", "Triton"],
         # line styles
-        styles=[('green', '-'), ('green', '--'),
-                ('blue', '-'), ('blue', '--')],
+        styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel="TFLOPS",  # label name for the y-axis
         plot_name="matmul-performance",
         # name for the plot. Used also as a file name for saving the plot.
         args={},
-    )
-)
+    ))
 def benchmark(M, N, K, provider):
     a = torch.randn((M, K), device='cuda', dtype=torch.float16)
     b = torch.randn((N, K), device='cuda', dtype=torch.float16).T
     quantiles = [0.5, 0.2, 0.8]
     if provider == 'cublas':
-        ms, min_ms, max_ms = triton.testing.do_bench(
-            lambda: torch.matmul(a, b), rep=100, quantiles=quantiles, fast_flush=False)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), rep=100, quantiles=quantiles,
+                                                     fast_flush=False)
     if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(
-            lambda: matmul(a, b), rep=100, quantiles=quantiles, fast_flush=False)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), rep=100, quantiles=quantiles,
+                                                     fast_flush=False)
 
     def perf(ms):
         return 2 * M * N * K * 1e-12 / (ms * 1e-3)
+
     return perf(ms), perf(max_ms), perf(min_ms)
 
 
