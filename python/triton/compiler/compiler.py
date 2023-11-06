@@ -94,8 +94,9 @@ def ttir_to_ttgir(mod, num_warps, num_ctas, target):
 def optimize_ttgir(mod, num_stages, num_warps, num_ctas, target, cluster_info, enable_warp_specialization,
                    enable_persistent, optimize_epilogue):
     is_cuda = _is_cuda(target)
-    if is_cuda:
-        capability = target.capability
+    capability = target.capability
+    is_a100_matmul = capability // 10 <= 8 or \
+                     (capability // 10 > 8 and os.environ.get("DISABLE_MMA_V3", False))
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_tritongpu_coalesce_pass()
@@ -134,7 +135,7 @@ def optimize_ttgir(mod, num_stages, num_warps, num_ctas, target, cluster_info, e
     else:
         pm.add_tritongpu_pipeline_pass(num_stages, num_warps, num_ctas, capability)
     pm.add_tritongpu_materialize_load_store_pass(num_warps, capability)
-    if capability // 10 <= 8:
+    if is_a100_matmul:
         pm.add_tritongpu_prefetch_pass()
     pm.add_tritongpu_optimize_dot_operands_pass()
     pm.add_tritongpu_remove_layout_conversions_pass()
