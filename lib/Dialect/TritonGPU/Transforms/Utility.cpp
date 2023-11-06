@@ -451,10 +451,10 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
     Block *block = blockArg.getOwner();
     Operation *parentOp = block->getParentOp();
     if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
-      OpOperand &initOperand = forOp.getOpOperandForRegionIterArg(blockArg);
+      OpOperand *initOperand = forOp.getTiedLoopInit(blockArg);
       Value yieldOperand = forOp.getBody()->getTerminator()->getOperand(
           blockArg.getArgNumber() - forOp.getNumInductionVars());
-      queue.push_back({initOperand.get(), encoding});
+      queue.push_back({initOperand->get(), encoding});
       queue.push_back({yieldOperand, encoding});
       continue;
     }
@@ -566,7 +566,7 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
       Value value = queue.pop_back_val();
       if (auto nestedFor = value.getDefiningOp<scf::ForOp>()) {
         auto result = value.cast<OpResult>();
-        OpOperand &forOperand = nestedFor.getOpOperandForResult(result);
+        OpOperand &forOperand = *nestedFor.getTiedLoopInit(result);
         markLive(forOperand.get());
         auto nestedYieldOp =
             cast<scf::YieldOp>(nestedFor.getBody()->getTerminator());

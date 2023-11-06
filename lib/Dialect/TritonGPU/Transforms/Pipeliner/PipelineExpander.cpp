@@ -218,7 +218,7 @@ cloneAndUpdateOperands(RewriterBase &rewriter, Operation *op,
 void LoopPipelinerInternal::emitPrologue(RewriterBase &rewriter) {
   // Initialize the iteration argument to the loop initiale values.
   for (BlockArgument &arg : forOp.getRegionIterArgs()) {
-    OpOperand &operand = forOp.getOpOperandForRegionIterArg(arg);
+    OpOperand &operand = *forOp.getTiedLoopInit(arg);
     setValueMapping(arg, operand.get(), 0);
   }
   auto yield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());

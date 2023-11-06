@@ -245,8 +245,8 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
   for (OpOperand &use : value.getUses()) {
     Operation *user = use.getOwner();
     if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-      Value arg = forOp.getRegionIterArgForOpOperand(use);
-      Value result = forOp.getResultForOpOperand(use);
+      Value arg = forOp.getTiedLoopRegionIterArg(&use);
+      Value result = forOp.getTiedLoopResult(&use);
       setEncoding({arg, result}, info, changed, user);
       continue;
     }
@@ -736,9 +736,9 @@ static void rewriteSlice(SetVector<Value> &slice,
       SmallVector<Value> newOperands;
       for (auto arg : forOp.getRegionIterArgs()) {
         if (slice.count(arg)) {
-          OpOperand &initVal = forOp.getOpOperandForRegionIterArg(arg);
+          OpOperand &initVal = *forOp.getTiedLoopInit(arg);
           argMapping.push_back(std::make_pair(
-              forOp.getResultForOpOperand(initVal).getResultNumber(),
+              forOp.getTiedLoopResult(&initVal).getResultNumber(),
               forOp.getInitArgs().size() + newOperands.size()));
           newOperands.push_back(mapping.lookup(initVal.get()));
         }

@@ -188,7 +188,7 @@ LogicalResult Prefetcher::initialize() {
   auto getIncomingOp = [this](Value v) -> Value {
     if (auto arg = v.dyn_cast<BlockArgument>())
       if (arg.getOwner()->getParentOp() == forOp.getOperation())
-        return forOp.getOpOperandForRegionIterArg(arg).get();
+        return forOp.getTiedLoopInit(arg)->get();
     return Value();
   };
 
@@ -298,10 +298,10 @@ scf::ForOp Prefetcher::createNewForOp() {
       Operation *firstDot = builder.clone(*dot, mapping);
       if (Value a = operand2headPrefetch.lookup(dot.getA()))
         firstDot->setOperand(
-            0, newForOp.getRegionIterArgForOpOperand(*a.use_begin()));
+            0, newForOp.getTiedLoopRegionIterArg(&*a.use_begin()));
       if (Value b = operand2headPrefetch.lookup(dot.getB()))
         firstDot->setOperand(
-            1, newForOp.getRegionIterArgForOpOperand(*b.use_begin()));
+            1, newForOp.getTiedLoopRegionIterArg(&*b.use_begin()));
 
       // remaining part
       int64_t kOff = prefetchWidth;
