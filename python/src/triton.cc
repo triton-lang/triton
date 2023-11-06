@@ -1576,11 +1576,12 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_print",
            [](TritonOpBuilder &self, const std::string &prefix,
-              const std::vector<mlir::Value> &values) -> void {
+              const std::vector<mlir::Value> &values,
+              const std::vector<int32_t> &elements) -> void {
              self.create<mlir::triton::PrintOp>(
                  mlir::StringAttr::get(self.getBuilder().getContext(),
                                        llvm::StringRef(prefix)),
-                 values);
+                 values, elements);
            })
       .def("create_assert",
            [](TritonOpBuilder &self, mlir::Value &condition,
