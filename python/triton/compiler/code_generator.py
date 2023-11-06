@@ -199,7 +199,7 @@ class ContainsReturnChecker(ast.NodeVisitor):
 
 
 class CodeGenerator(ast.NodeVisitor):
-    def __init__(self, context, prototype, gscope, attributes, constants, function_name, arch,
+    def __init__(self, context, prototype, gscope, attributes, constants, function_name, target,
                  module=None, is_kernel=False, function_types: Optional[Dict] = None,
                  debug=False, noinline=False, file_name: Optional[str] = None, begin_line=0):
         self.context = context
@@ -208,7 +208,7 @@ class CodeGenerator(ast.NodeVisitor):
         # node.lineno starts from 1, so we need to subtract 1
         self.begin_line = begin_line - 1
         self.builder.set_loc(file_name, begin_line, 0)
-        self.builder.arch = arch
+        self.builder.target = target
         self.module = self.builder.create_module() if module is None else module
         self.function_ret_types = {} if function_types is None else function_types
         self.prototype = prototype
@@ -912,7 +912,7 @@ class CodeGenerator(ast.NodeVisitor):
             file_name, begin_line = _get_fn_file_line(fn)
             generator = CodeGenerator(self.context, prototype, gscope, attributes, constants, module=self.module,
                                       function_name=fn_name, function_types=self.function_ret_types, debug=debug, noinline=fn.noinline,
-                                      file_name=file_name, begin_line=begin_line, arch=self.builder.arch)
+                                      file_name=file_name, begin_line=begin_line, target=self.builder.target)
             generator.visit(fn.parse())
             callee_ret_type = generator.last_ret_type
             self.function_ret_types[fn_name] = callee_ret_type
@@ -1108,7 +1108,7 @@ def kernel_suffix(signature, specialization):
     return suffix
 
 
-def ast_to_ttir(fn, signature, specialization, constants, debug, arch):
+def ast_to_ttir(fn, signature, specialization, constants, debug, target):
     # canonicalize signature
     if isinstance(signature, str):
         signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
@@ -1137,7 +1137,7 @@ def ast_to_ttir(fn, signature, specialization, constants, debug, arch):
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants,
                               function_name=function_name, attributes=new_attrs,
                               is_kernel=True, debug=debug, file_name=file_name, begin_line=begin_line,
-                              arch=arch)
+                              target=target)
     try:
         generator.visit(fn.parse())
     except CompilationError as e:

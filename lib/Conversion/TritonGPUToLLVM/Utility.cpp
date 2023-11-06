@@ -1,6 +1,7 @@
 #include "Utility.h"
 #include "TypeConverter.h"
-
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "triton/Dialect/NVGPU/IR/Dialect.h"
 namespace mlir {
 
 namespace LLVM {
@@ -243,7 +244,7 @@ Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
   return val;
 #else
   MLIRContext *ctx = rewriter.getContext();
-  unsigned bits = val.getType().getIntOrFloatBitWidth();
+  unsigned bits = std::max(8u, val.getType().getIntOrFloatBitWidth());
   const char *c = bits == 64 ? "l" : (bits == 16 ? "h" : "r");
 
   PTXBuilder builder;
@@ -255,9 +256,32 @@ Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
 #endif
 }
 
+Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
+                 Value pred) {
+  MLIRContext *ctx = rewriter.getContext();
+  auto ptrTy = ptr.getType().cast<LLVMPointerType>();
+  assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for loadShared");
+  auto elemTy = ptrTy.getElementType();
+  unsigned bitwidth = std::max(8u, elemTy.getIntOrFloatBitWidth());
+
+  const char *c = bitwidth == 64 ? "=l" : (bitwidth == 16 ? "=h" : "=r");
+
+  PTXBuilder builder;
+  auto *dOpr = builder.newOperand(c);
+  auto *ptrOpr = builder.newAddrOperand(ptr, "r");
+  auto &ld = builder.create<>("ld")->shared().b(bitwidth);
+  ld(dOpr, ptrOpr).predicate(pred, "b");
+  return builder.launch(rewriter, loc, elemTy);
+}
+
 static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
+<<<<<<< HEAD
                             Value val, int i, const std::string &shuffleType,
                             const std::string &clamp, Value laneId = Value()) {
+=======
+                            Value val, Value i, NVVM::ShflKind mode,
+                            Value clamp) {
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
 #ifdef USE_ROCM
@@ -275,13 +299,19 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
     Value vec = bitcast(val, vecTy);
     Value val0 = extract_element(f32_ty, vec, i32_val(0));
     Value val1 = extract_element(f32_ty, vec, i32_val(1));
+<<<<<<< HEAD
     val0 = commonShflSync(loc, rewriter, val0, i, shuffleType, clamp, laneId);
     val1 = commonShflSync(loc, rewriter, val1, i, shuffleType, clamp, laneId);
+=======
+    val0 = commonShflSync(loc, rewriter, val0, i, mode, clamp);
+    val1 = commonShflSync(loc, rewriter, val1, i, mode, clamp);
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
     vec = undef(vecTy);
     vec = insert_element(vecTy, vec, val0, i32_val(0));
     vec = insert_element(vecTy, vec, val1, i32_val(1));
     return bitcast(vec, val.getType());
   }
+<<<<<<< HEAD
 
 #ifdef USE_ROCM
   GCNBuilder builder;
@@ -342,17 +372,51 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
   shfl(dOpr, aOpr, bOpr, cOpr, maskOpr);
   return builder.launch(rewriter, loc, val.getType(), false);
 #endif
+=======
+  Type type = val.getType();
+  if (type != i32_ty) {
+    val = bitcast(val, int_ty(bits));
+    val = zext(i32_ty, val);
+  }
+  Value mask = i32_val(0xFFFFFFFF);
+  Value result = rewriter.create<NVVM::ShflOp>(loc, i32_ty, mask, val, i, clamp,
+                                               mode, UnitAttr());
+  if (type != i32_ty) {
+    result = trunc(int_ty(bits), result);
+    result = bitcast(result, type);
+  }
+  return result;
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
 }
 
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i) {
-  return commonShflSync(loc, rewriter, val, i, "bfly", "0x1f");
+  return commonShflSync(loc, rewriter, val, i32_val(i), NVVM::ShflKind::bfly,
+                        i32_val(0x1f));
 }
 
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+<<<<<<< HEAD
                  int i, Value laneId) {
   return commonShflSync(loc, rewriter, val, i, "up", "0x0", laneId);
+=======
+                 int i) {
+  return commonShflSync(loc, rewriter, val, i32_val(i), NVVM::ShflKind::up,
+                        i32_val(0x0));
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
 }
+
+Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                  int i) {
+  return shflIdxSync(loc, rewriter, val, i32_val(i));
+}
+
+Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                  Value i) {
+  return commonShflSync(loc, rewriter, val, i, NVVM::ShflKind::idx,
+                        i32_val(0x1f));
+}
+
 Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr) {
   PTXBuilder builder;
   auto &mov = builder.create("mov")->o("u32");

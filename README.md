@@ -10,32 +10,6 @@ We're hiring! If you are interested in working on Triton at OpenAI, we have role
 ------------------- |
 [![Documentation](https://github.com/openai/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/)
 
-# Triton Developer Conference Registration Open
-The Triton Developer Conference will be held in a hybrid mode at the Microsoft Silicon Valley Campus in Mountain View, California. The conference will be held on September 20th from 10am to 4pm, followed by a reception till 5:30 pm. Please use the link below to register to attend either in-person or virtually online.
-
-Registration Link for Triton Developer Conference is [here](https://forms.office.com/r/m4jQXShDts)
-
-Tentative Agenda for the conference (subject to change):
-
-|Time    |Title  |Speaker
-|--------|-------|-------|
-|10:00 AM|Welcome|Kevin Scott (Microsoft)|
-|10:20 AM|The Triton Compiler: Past, Present and Future|Phil Tillet (OpenAI)|
-|11:00 AM|**Break**||
-|11:20 AM|Hopper support in Triton|Gustav Zhu (Nvidia)|
-|11:40 AM|Bringing Triton to AMD GPUs|Jason Furmanek, Lixun Zhang (AMD)|
-|12:00 PM|Intel XPU Backend for Triton|Eikan Wang (Intel)|
-|12:20 PM|Vectorization of Triton Kernels for Qualcomm Hexagon Backend|Javed Absar (Qualcomm)|
-|12:30 PM|**Lunch**||
-|1:40 PM |Triton for MTIA|Roman Levenstein et al, (Meta)|
-|2:00 PM |Using Triton IR for high-performance fusions in XLA|George Karpenkov (Google)|
-|2:20 PM |Triton for All: Triton as a device-independent language|Ian Bearman (Microsoft)|
-|2:40 PM|**Break**||
-|3:00 PM|PyTorch 2.0 and TorchInductor|Jason Ansel, Horace He (Meta)|
-|3:20 PM|Pallas: A JAX Kernel Language|Sharad Vikram (Google)|
-|3:40 PM|Writing Grouped GEMMs in Triton|Vinod Grover (Nvidia)|
-|4:00 PM|**Reception**||
-
 
 # Triton
 
@@ -86,9 +60,29 @@ lit -v test
 
 ```
 git clone https://github.com/openai/triton.git;
+<<<<<<< HEAD
 cd triton/python;
 pip install ninja cmake; # build-time dependencies
 pip install -e .
+=======
+cd triton;
+
+pip install ninja cmake wheel; # build-time dependencies
+pip install -e python
+```
+
+Or with a virtualenv:
+
+```
+git clone https://github.com/openai/triton.git;
+cd triton;
+
+python -m venv .venv --prompt triton;
+source .venv/bin/activate;
+
+pip install ninja cmake wheel; # build-time dependencies
+pip install -e python
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
 ```
 
 # Building with a custom LLVM
@@ -111,6 +105,7 @@ arbitrary LLVM version.
    modifications to LLVM.
 
 3. [Build LLVM](https://llvm.org/docs/CMake.html).  For example, you might run
+<<<<<<< HEAD
 
        $ cd $HOME/llvm-project  # your clone of LLVM.
        $ mkdir build
@@ -130,6 +125,62 @@ arbitrary LLVM version.
          LLVM_LIBRARY_DIR=$LLVM_BUILD_DIR/lib \
          LLVM_SYSPATH=$LLVM_BUILD_DIR \
          pip install -e .
+=======
+
+       $ cd $HOME/llvm-project  # your clone of LLVM.
+       $ mkdir build
+       $ cd build
+       $ cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON  ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm"
+       $ ninja
+
+4. Grab a snack, this will take a while.
+
+5. Build Triton as above, but set the following environment variables.
+
+       # Modify as appropriate to point to your LLVM build.
+       $ export LLVM_BUILD_DIR=$HOME/llvm-project/build
+
+       $ cd <triton install>
+       $ LLVM_INCLUDE_DIRS=$LLVM_BUILD_DIR/include \
+         LLVM_LIBRARY_DIR=$LLVM_BUILD_DIR/lib \
+         LLVM_SYSPATH=$LLVM_BUILD_DIR \
+         pip install -e python
+
+# Tips for building
+
+- Set `TRITON_BUILD_WITH_CLANG_LLD=true` as an environment variable to use clang
+  and lld.  lld in particular results in faster builds.
+
+- Set `TRITON_BUILD_WITH_CCACHE=true` to build with ccache.
+
+- Pass `--no-build-isolation` to `pip install` to make nop builds faster.
+  Without this, every invocation of `pip install` uses a different symlink to
+  cmake, and this forces ninja to rebuild most of the `.a` files.
+
+# Running tests
+
+There currently isn't a turnkey way to run all the Triton tests, but you can
+follow the following recipe.
+
+```shell
+# One-time setup.  Note we have to reinstall local Triton because torch
+# overwrites it with the public version.
+$ pip install scipy numpy torch pytest lit && pip install -e python
+
+# Run Python tests using your local GPU.
+$ python3 -m pytest python/test/unit
+
+# Move to builddir.  Fill in <...> with the full path, e.g.
+# `cmake.linux-x86_64-cpython-3.11`.
+$ cd python/build/cmake<...>
+
+# Run C++ unit tests.
+$ ninja test
+
+# Run lit tests.
+$ lit test
+```
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
 
 # Changelog
 

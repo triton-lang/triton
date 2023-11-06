@@ -18,6 +18,7 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
+#include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #ifndef USE_ROCM
@@ -398,6 +399,16 @@ struct ConvertTritonGPUToLLVM
   using ConvertTritonGPUToLLVMBase<
       ConvertTritonGPUToLLVM>::ConvertTritonGPUToLLVMBase;
 
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<triton::nvgpu::NVGPUDialect, LLVM::LLVMDialect,
+                    NVVM::NVVMDialect>();
+  }
+
+  ConvertTritonGPUToLLVM(int32_t computeCapability, Target target,
+                         mlir::triton::gpu::TMAMetadataTy *tmaMetadata)
+      : ConvertTritonGPUToLLVMBase({computeCapability, target}),
+        tmaMetadata(tmaMetadata) {}
+
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
@@ -591,6 +602,7 @@ private:
   DenseMap<IndexCacheKeyT, SmallVector<SmallVector<Value>>,
            CacheKeyDenseMapInfo>
       indexCache;
+  mlir::triton::gpu::TMAMetadataTy *tmaMetadata = nullptr;
 
   void initSharedMemory(ModuleAllocation &allocation,
                         TritonGPUToLLVMTypeConverter &typeConverter) {
@@ -1036,7 +1048,7 @@ private:
         bool isNativeHopperFP8 =
             AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
         bool isFP8 = isNativeHopperFP8 || AElType.isFloat8E5M2FNUZ() ||
-                     AElType.isFloat8E4M3FN();
+                     AElType.isFloat8E4M3FN() || AElType.isFloat8E4M3B11FNUZ();
         if (!isFP8 || (isNativeHopperFP8 && mmaLayout.isHopper()))
           return;
         promoteType = builder.getF16Type();
@@ -1090,9 +1102,11 @@ namespace triton {
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass() {
   return std::make_unique<ConvertTritonGPUToLLVM>();
 }
-std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonGPUToLLVMPass(const ConvertTritonGPUToLLVMOptions &options) {
-  return std::make_unique<ConvertTritonGPUToLLVM>(options);
+std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass(
+    int32_t computeCapability, Target target,
+    mlir::triton::gpu::TMAMetadataTy *tmaMetadata) {
+  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability, target,
+                                                  tmaMetadata);
 }
 
 } // namespace triton

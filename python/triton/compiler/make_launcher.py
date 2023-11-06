@@ -63,8 +63,9 @@ def ty_to_cpp(ty):
 
 
 def generate_launcher(constants, signature, ids):
-    start_desc = len(signature)
-    signature = generate_cu_signature(constants, signature, ids)
+    # Record the end of regular arguments;
+    # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
+    signature, desc_start_idx = generate_cu_signature(constants, signature, ids)
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
     def _extracted_type(ty):
@@ -99,7 +100,11 @@ def generate_launcher(constants, signature, ids):
 
     # generate glue code
     folded_without_constexprs = [c for c in ids['ids_of_folded_args'] if c not in ids['ids_of_const_exprs']]
+<<<<<<< HEAD
     params = [i for i in signature.keys() if i >= start_desc or (i not in constants and i not in folded_without_constexprs)]
+=======
+    params = [i for i in signature.keys() if i >= desc_start_idx or (i not in constants and i not in folded_without_constexprs)]
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
     src = f"""
 #include \"cuda.h\"
 #include <stdbool.h>
@@ -116,7 +121,10 @@ static inline void gpuAssert(CUresult code, const char *file, int line)
       char err[1024] = {{0}};
       strcat(err, prefix);
       strcat(err, str);
+      PyGILState_STATE gil_state;
+      gil_state = PyGILState_Ensure();
       PyErr_SetString(PyExc_RuntimeError, err);
+      PyGILState_Release(gil_state);
    }}
 }}
 
@@ -251,6 +259,9 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   Py_BEGIN_ALLOW_THREADS;
   _launch(gridX, gridY, gridZ, num_warps, num_ctas, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (CUstream)_stream, (CUfunction)_function{', ' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items()) if len(signature) > 0 else ''});
   Py_END_ALLOW_THREADS;
+  if (PyErr_Occurred()) {{
+    return NULL;
+  }}
 
   if (launch_exit_hook != Py_None && !PyObject_CallObject(launch_exit_hook, args)) {{
     return NULL;

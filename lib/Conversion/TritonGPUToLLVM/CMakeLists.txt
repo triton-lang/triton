@@ -1,5 +1,14 @@
+<<<<<<< HEAD
 add_library(rocm_libraries SHARED IMPORTED )
 set_target_properties(rocm_libraries PROPERTIES IMPORTED_LOCATION ${ROCM_LIBRARIES})
+=======
+# Separate out PTX/GCN builders to avoid cyclic dependencies as TritonAnalysis
+# depends on it.
+set(LLVM_OPTIONAL_SOURCES
+    GCNAsmFormat.cpp
+    PTXAsmFormat.cpp
+  )
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
 
 add_mlir_conversion_library(TritonGPUToLLVM
     ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
@@ -15,6 +24,7 @@ add_mlir_conversion_library(TritonGPUToLLVM
     LoadStoreOpToLLVM.cpp
     BarrierOpToLLVM.cpp
     TritonGPUToLLVM.cpp
+<<<<<<< HEAD
     GCNAsmFormat.cpp
     PTXAsmFormat.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
@@ -30,9 +40,9 @@ add_mlir_conversion_library(TritonGPUToLLVM
     ElementwiseOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
     TritonGPUToLLVM.cpp
+=======
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
     TritonGPUToLLVMPass.cpp
-    GCNAsmFormat.cpp
-    PTXAsmFormat.cpp
     ReduceOpToLLVM.cpp
     ScanOpToLLVM.cpp
     TypeConverter.cpp
@@ -53,6 +63,7 @@ add_mlir_conversion_library(TritonGPUToLLVM
     Core
 
     LINK_LIBS PUBLIC
+    ASMBuilder
     MLIRIR
     MLIRPass
     MLIRGPUOps
@@ -66,4 +77,16 @@ add_mlir_conversion_library(TritonGPUToLLVM
     TritonNvidiaGPUTransforms
     NVGPUIR
     rocm_libraries
+)
+
+add_mlir_library(ASMBuilder
+  GCNAsmFormat.cpp
+  PTXAsmFormat.cpp
+
+  DEPENDS
+  TritonTableGen
+
+  LINK_LIBS PUBLIC
+  MLIRAnalysis
+  MLIRLLVMDialect
 )

@@ -26,8 +26,27 @@ venv.bak/
 cmake-build-*
 
 # Third-party binaries
+cuobjdump
+nvdisasm
 ptxas
 
+<<<<<<< HEAD
 # HIP
 log*
 python/triton/third_party/cuda/bin/ptxas
+=======
+# Docs
+docs/_build/
+docs/python-api/generated/
+docs/dialects/
+docs/getting-started/tutorials
+!python/tutorials/*.py
+!python/tutorials/*.rst
+
+# clangd index. (".clangd" is a config file now, thus trailing slash)
+.clangd/
+.cache
+/compile_commands.json
+.vscode
+.vs
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33

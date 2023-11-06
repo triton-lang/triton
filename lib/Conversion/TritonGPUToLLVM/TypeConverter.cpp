@@ -179,7 +179,7 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
 #endif
 
   auto mmaParent = dotOpLayout.getParent().dyn_cast<MmaEncodingAttr>();
-  if (!mmaParent)
+  if (!mmaParent || mmaParent.isHopper())
     return elemTy;
   int bitwidth = elemTy.getIntOrFloatBitWidth();
   assert(bitwidth <= 32);

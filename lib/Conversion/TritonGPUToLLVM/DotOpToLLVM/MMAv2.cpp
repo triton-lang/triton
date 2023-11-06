@@ -145,6 +145,9 @@ inline static const std::map<TensorCoreType, std::string> mmaInstrPtxTuring = {
     {TensorCoreType::FP32_FP16_FP16_FP32,
      "mma.sync.aligned.m16n8k8.row.col.f32.f16.f16.f32"},
 
+    {TensorCoreType::INT32_INT8_INT8_INT32,
+     "mma.sync.aligned.m8n8k16.row.col.satfinite.s32.s8.s8.s32"},
+
     {TensorCoreType::FP16_FP16_FP16_FP16,
      "mma.sync.aligned.m16n8k8.row.col.f16.f16.f16.f16"},
 };
@@ -167,6 +170,107 @@ inline static const std::map<TensorCoreType, std::string> mmaInstrPtxAmpere = {
     {TensorCoreType::FP16_FP16_FP16_FP16,
      "mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16"},
 };
+
+static void callMmaTuringInt8(PTXBuilder &builder, unsigned m, unsigned n,
+                              unsigned k, mlir::triton::PTXInstr &mma,
+                              unsigned numMmaRets, unsigned colsPerThread,
+                              int numCPackedElem, ValueTableV2 &ha,
+                              ValueTableV2 &hb, const SmallVector<Value> &fc) {
+  auto retArgs1 = builder.newListOperand(numMmaRets / 2, "=r");
+  auto retArgs2 = builder.newListOperand(numMmaRets / 2, "=r");
+  auto cArgs1 = builder.newListOperand();
+  for (int i = 0; i < numMmaRets / 2; ++i) {
+    cArgs1->listAppend(
+        builder.newOperand(fc[(m * colsPerThread + 4 * n) / numCPackedElem + i],
+                           std::to_string(i)));
+    // reuse the output registers
+  }
+  auto cArgs2 = builder.newListOperand();
+  for (int i = numMmaRets / 2; i < numMmaRets; ++i) {
+    cArgs2->listAppend(
+        builder.newOperand(fc[(m * colsPerThread + 4 * n) / numCPackedElem + i],
+                           std::to_string(i)));
+    // reuse the output registers
+  }
+  auto aArgs1 = builder.newListOperand({
+      {ha[{m, k}], "r"},
+  });
+  auto bArgs1 = builder.newListOperand({
+      {hb[{n, k}], "r"},
+  });
+  auto aArgs2 = builder.newListOperand({
+      {ha[{m, k + 1}], "r"},
+  });
+  auto bArgs2 = builder.newListOperand({{hb[{n, k + 1}], "r"}});
+  auto aArgs3 = builder.newListOperand({
+      {ha[{m + 1, k}], "r"},
+  });
+  auto bArgs3 = builder.newListOperand({
+      {hb[{n, k}], "r"},
+  });
+  auto aArgs4 = builder.newListOperand({
+      {ha[{m + 1, k + 1}], "r"},
+  });
+  auto bArgs4 = builder.newListOperand({{hb[{n, k + 1}], "r"}});
+  mma(retArgs1, aArgs1, bArgs1, cArgs1);
+  mma(retArgs1, aArgs2, bArgs2, cArgs1);
+  mma(retArgs2, aArgs3, bArgs3, cArgs2);
+  mma(retArgs2, aArgs4, bArgs4, cArgs2);
+}
+
+static void callMmaTuringFp16(PTXBuilder &builder, unsigned m, unsigned n,
+                              unsigned k, mlir::triton::PTXInstr &mma,
+                              unsigned numMmaRets, unsigned colsPerThread,
+                              int numCPackedElem, ValueTableV2 &ha,
+                              ValueTableV2 &hb, const SmallVector<Value> &fc,
+                              bool isAccF16) {
+  auto retArgs = builder.newListOperand(numMmaRets, isAccF16 ? "=r" : "=f");
+  auto cArgs = builder.newListOperand();
+  for (int i = 0; i < numMmaRets; ++i) {
+    cArgs->listAppend(
+        builder.newOperand(fc[(m * colsPerThread + 4 * n) / numCPackedElem + i],
+                           std::to_string(i)));
+    // reuse the output registers
+  }
+  auto aArgs1 = builder.newListOperand({
+      {ha[{m, k}], "r"},
+      {ha[{m + 1, k}], "r"},
+  });
+  auto bArgs1 = builder.newListOperand({{hb[{n, k}], "r"}});
+  auto aArgs2 = builder.newListOperand({
+      {ha[{m, k + 1}], "r"},
+      {ha[{m + 1, k + 1}], "r"},
+  });
+  auto bArgs2 = builder.newListOperand({{hb[{n, k + 1}], "r"}});
+  mma(retArgs, aArgs1, bArgs1, cArgs);
+  mma(retArgs, aArgs2, bArgs2, cArgs);
+}
+
+static void callMmaAmpere(PTXBuilder &builder, unsigned m, unsigned n,
+                          unsigned k, mlir::triton::PTXInstr &mma,
+                          unsigned numMmaRets, unsigned colsPerThread,
+                          int numCPackedElem, ValueTableV2 &ha,
+                          ValueTableV2 &hb, const SmallVector<Value> &fc,
+                          bool isAccF16, bool isIntMMA) {
+  auto retArgs =
+      builder.newListOperand(numMmaRets, isIntMMA || isAccF16 ? "=r" : "=f");
+  auto cArgs = builder.newListOperand();
+  for (int i = 0; i < numMmaRets; ++i) {
+    cArgs->listAppend(
+        builder.newOperand(fc[(m * colsPerThread + 4 * n) / numCPackedElem + i],
+                           std::to_string(i)));
+    // reuse the output registers
+  }
+  auto aArgs = builder.newListOperand({
+      {ha[{m, k}], "r"},
+      {ha[{m + 1, k}], "r"},
+      {ha[{m, k + 1}], "r"},
+      {ha[{m + 1, k + 1}], "r"},
+  });
+  auto bArgs =
+      builder.newListOperand({{hb[{n, k}], "r"}, {hb[{n, k + 1}], "r"}});
+  mma(retArgs, aArgs, bArgs, cArgs);
+}
 
 LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, Location loc,
@@ -215,42 +319,19 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
     // using =r for float32 works but leads to less readable ptx.
     bool isIntMMA = dTensorTy.getElementType().isInteger(32);
     bool isAccF16 = dTensorTy.getElementType().isF16();
-    auto retArgs =
-        builder.newListOperand(numMmaRets, isIntMMA || isAccF16 ? "=r" : "=f");
-    auto cArgs = builder.newListOperand();
-    for (int i = 0; i < numMmaRets; ++i) {
-      cArgs->listAppend(builder.newOperand(
-          fc[(m * colsPerThread + 4 * n) / numCPackedElem + i],
-          std::to_string(i)));
-      // reuse the output registers
-    }
 
     if (isTuring) {
-      auto aArgs1 = builder.newListOperand({
-          {ha[{m, k}], "r"},
-          {ha[{m + 1, k}], "r"},
-      });
-      auto bArgs1 = builder.newListOperand({
-          {hb[{n, k}], "r"},
-      });
-      auto aArgs2 = builder.newListOperand({
-          {ha[{m, k + 1}], "r"},
-          {ha[{m + 1, k + 1}], "r"},
-      });
-      auto bArgs2 = builder.newListOperand({{hb[{n, k + 1}], "r"}});
-      mma(retArgs, aArgs1, bArgs1, cArgs);
-      mma(retArgs, aArgs2, bArgs2, cArgs);
-    } else {
-      auto aArgs = builder.newListOperand({
-          {ha[{m, k}], "r"},
-          {ha[{m + 1, k}], "r"},
-          {ha[{m, k + 1}], "r"},
-          {ha[{m + 1, k + 1}], "r"},
-      });
-      auto bArgs =
-          builder.newListOperand({{hb[{n, k}], "r"}, {hb[{n, k + 1}], "r"}});
-      mma(retArgs, aArgs, bArgs, cArgs);
+      if (isIntMMA) // Turing int8
+        callMmaTuringInt8(builder, m, n, k, mma, numMmaRets, colsPerThread,
+                          numCPackedElem, ha, hb, fc);
+      else // Turing fp16
+        callMmaTuringFp16(builder, m, n, k, mma, numMmaRets, colsPerThread,
+                          numCPackedElem, ha, hb, fc, isAccF16);
+    } else { // Ampere
+      callMmaAmpere(builder, m, n, k, mma, numMmaRets, colsPerThread,
+                    numCPackedElem, ha, hb, fc, isAccF16, isIntMMA);
     }
+
     Value mmaOut =
         builder.launch(rewriter, loc, getMmaRetType(mmaType, op.getContext()));
 

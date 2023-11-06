@@ -162,7 +162,7 @@ scf::ForOp appendPipelineIdxToLoopArgs(scf::ForOp forOp, int numStages,
 
   // Copy iter operands of forOp
   SmallVector<Value> newLoopArgs;
-  for (auto operand : forOp.getIterOperands())
+  for (auto operand : llvm::to_vector(forOp.getInitArgs()))
     newLoopArgs.push_back(operand);
 
   // Append initial value of pipelineIdx to newLoopArgs
@@ -302,7 +302,7 @@ DenseMap<AgentId, scf::ForOp> createForOpsForEachAgentId(scf::ForOp forOp) {
     // Prepare newLoopArgs
     SmallVector<Value> newLoopArgs;
     for (unsigned argNumber : usedArgs)
-      newLoopArgs.push_back(forOp.getIterOperands()[argNumber]);
+      newLoopArgs.push_back(forOp.getInitArgs()[argNumber]);
 
     // Create newForOp
     builder.setAgentIdsFromArray({agentId});
@@ -341,7 +341,9 @@ DenseMap<AgentId, scf::ForOp> createForOpsForEachAgentId(scf::ForOp forOp) {
     for (unsigned i = 0; i < usedArgs.size(); ++i) {
       auto oldResult = forOp.getResult(usedArgs[i]);
       auto newResult = newForOp.getResult(i);
-      oldResult.replaceAllUsesWith(newResult);
+      oldResult.replaceUsesWithIf(newResult, [&](OpOperand &operand) -> bool {
+        return hasAgentId(operand.getOwner(), agentId);
+      });
     }
 
     agentsToForOp[agentId] = newForOp;
@@ -642,6 +644,30 @@ void buildAsyncComm(const DenseMap<Operation *, SmallVector<Channel *>> &map,
     agentsPC.insert(agentsPC.end(), agentP.begin(), agentP.end());
     agentsPC.insert(agentsPC.end(), agentC.begin(), agentC.end());
   };
+
+  // Don't pipeline dots that depend on ops other than scf.yield and scf.for.
+  // Because the DotOp will be replaced by a DotAsyncOp, which will be issued in
+  // iter_i but waited in iter_i+1. The use of DotAsyncOp should not be ops
+  // other than scf.for and scf.yield because the result of DotAsyncOp is not
+  // ready in iter_i.
+  auto getValidDot = [&](const SmallVector<Channel *> &block) -> Operation * {
+    Operation *headConsumer = block.front()->dstOp;
+    if (block.size() == 2 &&
+        isa<triton::DotOp>(*headConsumer->getUsers().begin()) &&
+        headConsumer->getParentOfType<scf::ForOp>()) {
+      auto dotOp = cast<triton::DotOp>(*headConsumer->getUsers().begin());
+      auto dot = dotOp.getResult();
+      auto resTy = dot.getType().dyn_cast<RankedTensorType>();
+      auto cArg = dotOp.getOperand(2).dyn_cast<BlockArgument>();
+      if (auto resEnc = resTy.getEncoding().dyn_cast<ttg::MmaEncodingAttr>())
+        if (resEnc.isHopper() && dot.hasOneUse() &&
+            isa<scf::YieldOp>(*dot.getUsers().begin()) && cArg &&
+            cArg.hasOneUse())
+          return dotOp.getOperation();
+    }
+    return nullptr;
+  };
+
   // TODO: try to optimize locations of arriving and waiting token
   // for fused-attention
   for (auto kv : map) {
@@ -694,12 +720,69 @@ void buildAsyncComm(const DenseMap<Operation *, SmallVector<Channel *>> &map,
     builder.createWithAgentIds<ttng::ConsumerWaitOp>(headConsumer->getLoc(),
                                                      token, pipelineIdx);
 
-    // insert ConsumerReleaseOp
-    auto consumerReleasePoint =
-        consumerReleaseHeutistic(tailProducer, tailConsumer);
-    builder.setInsertionPointAfter(consumerReleasePoint);
-    builder.createWithAgentIds<ttng::ConsumerReleaseOp>(
-        consumerReleasePoint->getLoc(), token, pipelineIdx);
+    /// async launch dots
+    if (auto cvg = getValidDot(kv.second)) {
+      auto dotOp = cast<triton::DotOp>(cvg);
+      auto dot = dotOp.getResult();
+      auto loc = dot.getLoc();
+      auto forOp = cvg->getParentOfType<scf::ForOp>();
+
+      auto agentIds = collectAgentIds(dotOp);
+      OpBuilderWithAgentIds builder(dotOp.getContext());
+      builder.setAgentIdsFromArray(agentIds);
+      builder.setInsertionPoint(dotOp);
+
+      // 0. replace Dot with DotAsync
+      auto dotAsync =
+          builder.createWithAgentIds<triton::nvidia_gpu::DotAsyncOp>(
+              loc, dotOp.getA(), dotOp.getB(), dotOp.getC(),
+              dotOp.getAllowTF32(), dotOp.getMaxNumImpreciseAcc());
+      dot.replaceAllUsesWith(dotAsync.getResult());
+      builder.createWithAgentIds<triton::nvidia_gpu::DotWaitOp>(loc, 1);
+
+      // 1. insert ConsumerReleaseOp for DotAsyncOps
+      Value cond = builder.createWithAgentIds<arith::CmpIOp>(
+          loc, arith::CmpIPredicate::sgt, forOp.getInductionVar(),
+          forOp.getLowerBound());
+      auto ifOp =
+          builder.createWithAgentIds<scf::IfOp>(loc, ArrayRef<Type>{}, cond,
+                                                /*hasElse*/ false);
+      builder.setInsertionPointToStart(ifOp.thenBlock());
+      Value one = builder.createWithAgentIds<arith::ConstantIntOp>(
+          headConsumer->getLoc(), 1, 32);
+      auto oriIdx = forOp.getBody()->getArguments().back();
+      Value consumerReleaseIdx =
+          builder.createWithAgentIds<arith::SubIOp>(loc, oriIdx, one);
+      consumerReleaseIdx = builder.createWithAgentIds<arith::RemSIOp>(
+          loc, consumerReleaseIdx, numStagesVal);
+      builder.createWithAgentIds<ttng::ConsumerReleaseOp>(loc, token,
+                                                          consumerReleaseIdx);
+      setAgentIds(ifOp.thenYield().getOperation(), agentIds);
+
+      // 2. If there's any outstanding DotAsyncOps, we need to wait for them.
+      builder.setInsertionPointAfter(forOp);
+      builder.createWithAgentIds<triton::nvidia_gpu::DotWaitOp>(forOp.getLoc(),
+                                                                0);
+
+      // 3. insert ConsumerReleaseOp for outstanding DotAsyncOps
+      Value one_ = builder.createWithAgentIds<arith::ConstantIntOp>(
+          headConsumer->getLoc(), 1, 32);
+      consumerReleaseIdx = forOp.getResults().back();
+      consumerReleaseIdx = builder.createWithAgentIds<arith::SubIOp>(
+          loc, consumerReleaseIdx, one_);
+      consumerReleaseIdx = builder.createWithAgentIds<arith::RemSIOp>(
+          loc, consumerReleaseIdx, numStagesVal);
+      builder.createWithAgentIds<ttng::ConsumerReleaseOp>(loc, token,
+                                                          consumerReleaseIdx);
+      dotOp->erase();
+    } else {
+      // insert ConsumerReleaseOp
+      auto consumerReleasePoint =
+          consumerReleaseHeutistic(tailProducer, tailConsumer);
+      builder.setInsertionPointAfter(consumerReleasePoint);
+      builder.createWithAgentIds<ttng::ConsumerReleaseOp>(
+          consumerReleasePoint->getLoc(), token, pipelineIdx);
+    }
 
     /*****************Buffer related*****************/
     /// splitLoadsInForLoop

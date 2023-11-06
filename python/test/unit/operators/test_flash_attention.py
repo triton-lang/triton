@@ -5,22 +5,22 @@ import triton
 import triton.ops
 
 
-@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(4, 48, 1024, 16),
-                                                 (4, 48, 1024, 32),
-                                                 (4, 48, 1024, 64),
-                                                 (4, 48, 1024, 128)])
+@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(2, 4, 512, 16),
+                                                 (2, 4, 512, 32),
+                                                 (2, 4, 512, 64),
+                                                 (2, 4, 512, 128)])
 @pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize('causal', [True, False])
 @pytest.mark.parametrize('seq_par', [True, False])
 def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par):
-    # with ENABLE_TMA=0 and ENABLE_MMA_V3=0
     import os
-    enable_mmav3 = os.environ.get('ENABLE_MMA_V3', 'not found').lower()
     enable_tma = os.environ.get('ENABLE_TMA', 'not found').lower()
-    if enable_mmav3 in ["on", "true", "1"] and enable_tma in ["on", "true", "1"]:
-        pytest.skip('Segmentation fault')
+    if enable_tma in ["on", "true", "1"]:
+        if dtype == torch.bfloat16:
+            pytest.skip('bfloat16 tma not support currently')
 
     capability = torch.cuda.get_device_capability()
+<<<<<<< HEAD
     if torch.version.hip is not None:
         if dtype != torch.float16:
             pytest.skip("Currently flash attention on AMD gpu is only supported in fp16.")
@@ -31,6 +31,11 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par):
 
     if capability[0] < 8:
         pytest.skip("Flash attention only supported for compute capability < 80")
+=======
+    interpreter = os.environ.get("TRITON_INTERPRET", 'not found') in ["on", "true", "1"]
+    if not interpreter and capability[0] < 8:
+        pytest.skip("Flash attention only supported for compute capability >= 80")
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
     torch.manual_seed(20)
     q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
     k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
@@ -63,8 +68,15 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par):
         tri_dq, q.grad = q.grad.clone(), None
     # compare
     atol = 1e-1 if dtype == torch.bfloat16 else 1e-2
+<<<<<<< HEAD
     torch.testing.assert_allclose(ref_out, tri_out, atol=atol, rtol=0)
     if torch.version.hip is None:
         torch.testing.assert_allclose(ref_dv, tri_dv, atol=atol, rtol=0)
         torch.testing.assert_allclose(ref_dk, tri_dk, atol=atol, rtol=0)
         torch.testing.assert_allclose(ref_dq, tri_dq, atol=atol, rtol=0)
+=======
+    torch.testing.assert_close(ref_out, tri_out, atol=atol, rtol=0)
+    torch.testing.assert_close(ref_dv, tri_dv, atol=atol, rtol=0)
+    torch.testing.assert_close(ref_dk, tri_dk, atol=atol, rtol=0)
+    torch.testing.assert_close(ref_dq, tri_dq, atol=atol, rtol=0)
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33

@@ -1031,6 +1031,11 @@ unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
   if (auto mmaParent = getParent().dyn_cast<MmaEncodingAttr>()) {
     int warpsPerCTAM = mmaParent.getWarpsPerCTA()[0];
     int warpsPerCTAN = mmaParent.getWarpsPerCTA()[1];
+    // H100
+    if (mmaParent.isHopper()) {
+      if (eltTy.isF16())
+        return mmaParent.getTotalElemsPerThread(shape, eltTy);
+    }
     // A100
     if (mmaParent.isAmpere()) {
       auto rep = getMMAv2Rep(shapePerCTA, eltTy.getIntOrFloatBitWidth());
@@ -1718,10 +1723,13 @@ struct TritonGPUInferLayoutInterface
                      std::optional<Location> location) const override {
     auto mmaRetEncoding = retEncoding.dyn_cast<MmaEncodingAttr>();
     if (mmaRetEncoding && mmaRetEncoding.isHopper()) {
-      // TODO: support gmma when A/B does not reside in shared memory
-      if (!operandEncoding.isa<SharedEncodingAttr>())
+      auto dotOpEnc = operandEncoding.dyn_cast<DotOperandEncodingAttr>();
+      if (!operandEncoding.isa<SharedEncodingAttr>() &&
+          !(opIdx == 0 && dotOpEnc && dotOpEnc.getOpIdx() == 0 &&
+            dotOpEnc.getParent().isa<MmaEncodingAttr>())) {
         return emitOptionalError(
             location, "unexpected operand layout for MmaEncodingAttr v3");
+      }
     } else if (auto dotOpEnc =
                    operandEncoding.dyn_cast<DotOperandEncodingAttr>()) {
       if (opIdx != dotOpEnc.getOpIdx())
@@ -1743,6 +1751,10 @@ struct TritonGPUInferLayoutInterface
         operandEncodingB.dyn_cast<triton::gpu::DotOperandEncodingAttr>();
     if (!aEncoding && !bEncoding)
       return mlir::success();
+    auto mmaAEncoding =
+        aEncoding.getParent().dyn_cast_or_null<MmaEncodingAttr>();
+    if (mmaAEncoding && mmaAEncoding.isHopper())
+      return success();
     // Verify that the encodings are valid.
     if (!aEncoding || !bEncoding)
       return op->emitError("mismatching encoding between A and B operands");
@@ -1756,6 +1768,7 @@ struct TritonGPUInferLayoutInterface
 // Canonicalizer
 //===----------------------------------------------------------------------===//
 
+<<<<<<< HEAD
 LogicalResult ConvertLayoutOp::canonicalize(ConvertLayoutOp op,
                                             PatternRewriter &rewriter) {
   // we don't handle conversions to DotOperandEncodingAttr
@@ -1779,136 +1792,196 @@ LogicalResult ConvertLayoutOp::canonicalize(ConvertLayoutOp op,
         return mlir::failure();
     }
   }
+=======
+struct CanonicalizeConvertFromView
+    : public mlir::OpRewritePattern<triton::ViewOp> {
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
 
-  // convert to the same layout -- we can delete
-  if (op->getResultTypes() == op->getOperandTypes()) {
-    rewriter.replaceOp(op, op->getOperands());
-    return mlir::success();
-  }
-  Operation *arg = op->getOperand(0).getDefiningOp();
-  // block argument
-  if (!arg)
-    return mlir::failure();
-  // cvt(view) -> view
-  if (auto view = dyn_cast<triton::ViewOp>(arg)) {
-    rewriter.replaceOpWithNewOp<triton::ViewOp>(op, op->getResult(0).getType(),
-                                                view.getResult());
-    return mlir::success();
-  }
-  // cvt(cat) -> cat
-  if (auto cat = dyn_cast<triton::CatOp>(arg)) {
-    auto encoding =
-        op->getResult(0).getType().cast<RankedTensorType>().getEncoding();
-    if (isExpensiveCat(cat, encoding))
-      return mlir::failure();
-    rewriter.replaceOpWithNewOp<triton::CatOp>(op, op->getResult(0).getType(),
-                                               cat.getOperands());
-    return mlir::success();
-  }
-  // cvt(alloc_tensor(x), type2) -> alloc_tensor(x, type2)
-  auto alloc_tensor = dyn_cast<triton::gpu::AllocTensorOp>(arg);
-  if (alloc_tensor) {
-    if (!triton::gpu::isSharedEncoding(op->getResult(0))) {
-      return mlir::failure();
-    }
-    rewriter.replaceOpWithNewOp<triton::gpu::AllocTensorOp>(
-        op, op->getResult(0).getType());
-    return mlir::success();
-  }
-  // cvt(insert_slice(x), type2) -> insert_slice(cvt(x, type2))
-  auto insert_slice = dyn_cast<triton::gpu::InsertSliceAsyncOp>(arg);
-  if (insert_slice) {
-    if (!triton::gpu::isSharedEncoding(op->getResult(0))) {
-      return mlir::failure();
-    }
-    auto newType = op->getResult(0).getType().cast<RankedTensorType>();
-    // Ensure that the new insert_slice op is placed in the same place as
-    // the old insert_slice op. Otherwise, the new insert_slice op may be
-    // placed after the async_wait op, which is not allowed.
-    OpBuilder::InsertionGuard guard(rewriter);
-    rewriter.setInsertionPoint(insert_slice);
-    auto newArg = rewriter.create<triton::gpu::ConvertLayoutOp>(
-        op->getLoc(), newType, insert_slice.getDst());
-    rewriter.replaceOpWithNewOp<triton::gpu::InsertSliceAsyncOp>(
-        op, newType, insert_slice.getSrc(), newArg.getResult(),
-        insert_slice.getIndex(), insert_slice.getMask(),
-        insert_slice.getOther(), insert_slice.getCache(),
-        insert_slice.getEvict(), insert_slice.getIsVolatile(),
-        insert_slice.getAxis());
-    return mlir::success();
-  }
-  // cvt(extract_slice(x), type2) -> extract_slice(cvt(x, type2))
-  auto extract_slice = dyn_cast<triton::gpu::ExtractSliceOp>(arg);
-  if (extract_slice) {
-    if (!triton::gpu::isSharedEncoding(op->getResult(0))) {
-      return mlir::failure();
-    }
-    auto origType =
-        extract_slice.getSource().getType().cast<RankedTensorType>();
-    auto newType = RankedTensorType::get(
-        origType.getShape(), origType.getElementType(),
-        op->getResult(0).getType().cast<RankedTensorType>().getEncoding());
-    auto origResType = op->getResult(0).getType().cast<RankedTensorType>();
-    auto resType = RankedTensorType::get(
-        origResType.getShape(), origResType.getElementType(),
-        extract_slice.getType().cast<RankedTensorType>().getEncoding());
-    // Ensure that the new extract_slice op is placed in the same place as
-    // the old extract_slice op. Otherwise, the new extract_slice op may be
-    // placed after the async_wait op, which is not allowed.
-    OpBuilder::InsertionGuard guard(rewriter);
-    rewriter.setInsertionPoint(extract_slice);
-    auto newArg = rewriter.create<triton::gpu::ConvertLayoutOp>(
-        op->getLoc(), newType, extract_slice.getSource());
-    rewriter.replaceOpWithNewOp<triton::gpu::ExtractSliceOp>(
-        op, resType, newArg.getResult(), extract_slice.getOffsets(),
-        extract_slice.getSizes(), extract_slice.getStrides(),
-        extract_slice.getStaticOffsets(), extract_slice.getStaticSizes(),
-        extract_slice.getStaticStrides());
-    return mlir::success();
-  }
+  CanonicalizeConvertFromView(MLIRContext *context)
+      : OpRewritePattern<triton::ViewOp>(context, 1) {}
 
-  // cvt(cvt(x, type1), type2) -> cvt(x, type2)
-  if (llvm::isa<triton::gpu::ConvertLayoutOp>(arg)) {
-    if (arg->getOperand(0).getDefiningOp() &&
-        !triton::gpu::isSharedEncoding(arg->getOperand(0)) &&
-        triton::gpu::isSharedEncoding(op.getOperand()) &&
-        !triton::gpu::isSharedEncoding(op.getResult())) {
+  mlir::LogicalResult
+  matchAndRewrite(triton::ViewOp op, PatternRewriter &rewriter) const override {
+    Operation *arg = op->getOperand(0).getDefiningOp();
+    if (!arg)
       return mlir::failure();
-    }
-    if (triton::gpu::isSharedEncoding(op.getOperand()) &&
-        triton::gpu::isSharedEncoding(op.getResult())) {
-      return mlir::failure();
-    }
-    auto srcType = op.getOperand().getType().cast<RankedTensorType>();
-    auto srcShared =
-        srcType.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
-    if (srcShared && srcShared.getVec() > 1)
-      return mlir::failure();
-    rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
-        op, op->getResultTypes().front(), arg->getOperand(0));
-    return mlir::success();
-  }
-  // cvt(type1, splat(type2, x)) -> splat(type1, x)
-  if (auto splat = llvm::dyn_cast<triton::SplatOp>(arg)) {
-    rewriter.replaceOpWithNewOp<triton::SplatOp>(op, op->getResultTypes(),
-                                                 splat.getSrc());
-    return mlir::success();
-  }
-  // cvt(type1, make_range(type2, x)) -> make_range(type1, x)
-  if (auto range = llvm::dyn_cast<triton::MakeRangeOp>(arg)) {
-    rewriter.replaceOpWithNewOp<triton::MakeRangeOp>(
-        op, op->getResultTypes(), range.getStart(), range.getEnd());
-    return mlir::success();
-  }
-  // cvt(type, constant) -> constant
-  if (auto cst = llvm::dyn_cast<arith::ConstantOp>(arg))
-    if (auto ret = cst.getValue().dyn_cast<SplatElementsAttr>()) {
-      auto ty = op->getResultTypes().front().cast<ShapedType>();
-      auto newRet = SplatElementsAttr::get(ty, ret.getSplatValue<Attribute>());
-      rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, newRet);
+    // view(convert) -> view
+    if (auto convert = dyn_cast<ConvertLayoutOp>(arg)) {
+      rewriter.replaceOpWithNewOp<triton::ViewOp>(
+          op, op->getResult(0).getType(), convert.getOperand());
       return mlir::success();
     }
-  return mlir::failure();
+    return mlir::failure();
+  }
+};
+
+struct CanonicalizeConvertFromConvert
+    : public mlir::OpRewritePattern<ConvertLayoutOp> {
+
+  CanonicalizeConvertFromConvert(mlir::MLIRContext *context)
+      : OpRewritePattern<ConvertLayoutOp>(context, 1) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(ConvertLayoutOp op,
+                  mlir::PatternRewriter &rewriter) const override {
+    // we don't handle conversions to DotOperandEncodingAttr
+    // this is a heuristics to accommodate fused attention
+    auto srcType = op.getOperand().getType().cast<RankedTensorType>();
+    auto dstType = op.getType().cast<RankedTensorType>();
+    if (dstType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>() &&
+        srcType.getEncoding().isa<triton::gpu::MmaEncodingAttr>())
+      return mlir::failure();
+    // for hopper MMAv3
+    if (!op.use_empty()) {
+      bool hasDotUser = false;
+      for (Operation *dot : op.getResult().getUsers())
+        if (isa<triton::DotOp>(dot))
+          hasDotUser = true;
+
+      if (hasDotUser) {
+        if (dstType.getEncoding().isa<triton::gpu::SharedEncodingAttr>() &&
+            srcType.getEncoding().isa<triton::gpu::MmaEncodingAttr>())
+          return mlir::failure();
+      }
+    }
+
+    // convert to the same layout -- we can delete
+    if (op->getResultTypes() == op->getOperandTypes()) {
+      rewriter.replaceOp(op, op->getOperands());
+      return mlir::success();
+    }
+    Operation *arg = op->getOperand(0).getDefiningOp();
+    // block argument
+    if (!arg)
+      return mlir::failure();
+    // cvt(view) -> view
+    if (auto view = dyn_cast<triton::ViewOp>(arg)) {
+      rewriter.replaceOpWithNewOp<triton::ViewOp>(
+          op, op->getResult(0).getType(), view.getResult());
+      return mlir::success();
+    }
+    // cvt(cat) -> cat
+    if (auto cat = dyn_cast<triton::CatOp>(arg)) {
+      auto encoding =
+          op->getResult(0).getType().cast<RankedTensorType>().getEncoding();
+      if (isExpensiveCat(cat, encoding))
+        return mlir::failure();
+      rewriter.replaceOpWithNewOp<triton::CatOp>(op, op->getResult(0).getType(),
+                                                 cat.getOperands());
+      return mlir::success();
+    }
+    // cvt(alloc_tensor(x), type2) -> alloc_tensor(x, type2)
+    auto alloc_tensor = dyn_cast<triton::gpu::AllocTensorOp>(arg);
+    if (alloc_tensor) {
+      if (!triton::gpu::isSharedEncoding(op->getResult(0))) {
+        return mlir::failure();
+      }
+      rewriter.replaceOpWithNewOp<triton::gpu::AllocTensorOp>(
+          op, op->getResult(0).getType());
+      return mlir::success();
+    }
+    // cvt(insert_slice(x), type2) -> insert_slice(cvt(x, type2))
+    auto insert_slice = dyn_cast<triton::gpu::InsertSliceAsyncOp>(arg);
+    if (insert_slice) {
+      if (!triton::gpu::isSharedEncoding(op->getResult(0))) {
+        return mlir::failure();
+      }
+      auto newType = op->getResult(0).getType().cast<RankedTensorType>();
+      // Ensure that the new insert_slice op is placed in the same place as
+      // the old insert_slice op. Otherwise, the new insert_slice op may be
+      // placed after the async_wait op, which is not allowed.
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPoint(insert_slice);
+      auto newArg = rewriter.create<triton::gpu::ConvertLayoutOp>(
+          op->getLoc(), newType, insert_slice.getDst());
+      rewriter.replaceOpWithNewOp<triton::gpu::InsertSliceAsyncOp>(
+          op, newType, insert_slice.getSrc(), newArg.getResult(),
+          insert_slice.getIndex(), insert_slice.getMask(),
+          insert_slice.getOther(), insert_slice.getCache(),
+          insert_slice.getEvict(), insert_slice.getIsVolatile(),
+          insert_slice.getAxis());
+      return mlir::success();
+    }
+    // cvt(extract_slice(x), type2) -> extract_slice(cvt(x, type2))
+    auto extract_slice = dyn_cast<triton::gpu::ExtractSliceOp>(arg);
+    if (extract_slice) {
+      if (!triton::gpu::isSharedEncoding(op->getResult(0))) {
+        return mlir::failure();
+      }
+      auto origType =
+          extract_slice.getSource().getType().cast<RankedTensorType>();
+      auto newType = RankedTensorType::get(
+          origType.getShape(), origType.getElementType(),
+          op->getResult(0).getType().cast<RankedTensorType>().getEncoding());
+      auto origResType = op->getResult(0).getType().cast<RankedTensorType>();
+      auto resType = RankedTensorType::get(
+          origResType.getShape(), origResType.getElementType(),
+          extract_slice.getType().cast<RankedTensorType>().getEncoding());
+      // Ensure that the new extract_slice op is placed in the same place as
+      // the old extract_slice op. Otherwise, the new extract_slice op may be
+      // placed after the async_wait op, which is not allowed.
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPoint(extract_slice);
+      auto newArg = rewriter.create<triton::gpu::ConvertLayoutOp>(
+          op->getLoc(), newType, extract_slice.getSource());
+      rewriter.replaceOpWithNewOp<triton::gpu::ExtractSliceOp>(
+          op, resType, newArg.getResult(), extract_slice.getOffsets(),
+          extract_slice.getSizes(), extract_slice.getStrides(),
+          extract_slice.getStaticOffsets(), extract_slice.getStaticSizes(),
+          extract_slice.getStaticStrides());
+      return mlir::success();
+    }
+
+    // cvt(cvt(x, type1), type2) -> cvt(x, type2)
+    if (llvm::isa<triton::gpu::ConvertLayoutOp>(arg)) {
+      if (arg->getOperand(0).getDefiningOp() &&
+          !triton::gpu::isSharedEncoding(arg->getOperand(0)) &&
+          triton::gpu::isSharedEncoding(op.getOperand()) &&
+          !triton::gpu::isSharedEncoding(op.getResult())) {
+        return mlir::failure();
+      }
+      if (triton::gpu::isSharedEncoding(op.getOperand()) &&
+          triton::gpu::isSharedEncoding(op.getResult())) {
+        return mlir::failure();
+      }
+      auto srcType = op.getOperand().getType().cast<RankedTensorType>();
+      auto srcShared =
+          srcType.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
+      if (srcShared && srcShared.getVec() > 1)
+        return mlir::failure();
+      rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
+          op, op->getResultTypes().front(), arg->getOperand(0));
+      return mlir::success();
+    }
+    // cvt(type1, splat(type2, x)) -> splat(type1, x)
+    if (auto splat = llvm::dyn_cast<triton::SplatOp>(arg)) {
+      rewriter.replaceOpWithNewOp<triton::SplatOp>(op, op->getResultTypes(),
+                                                   splat.getSrc());
+      return mlir::success();
+    }
+    // cvt(type1, make_range(type2, x)) -> make_range(type1, x)
+    if (auto range = llvm::dyn_cast<triton::MakeRangeOp>(arg)) {
+      rewriter.replaceOpWithNewOp<triton::MakeRangeOp>(
+          op, op->getResultTypes(), range.getStart(), range.getEnd());
+      return mlir::success();
+    }
+    // cvt(type, constant) -> constant
+    if (auto cst = llvm::dyn_cast<arith::ConstantOp>(arg))
+      if (auto ret = cst.getValue().dyn_cast<SplatElementsAttr>()) {
+        auto ty = op->getResultTypes().front().cast<ShapedType>();
+        auto newRet =
+            SplatElementsAttr::get(ty, ret.getSplatValue<Attribute>());
+        rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, newRet);
+        return mlir::success();
+      }
+    return mlir::failure();
+  }
+};
+
+void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                                  MLIRContext *context) {
+  patterns.add<CanonicalizeConvertFromConvert>(context);
+  patterns.add<CanonicalizeConvertFromView>(context);
 }
 
 //===----------------------------------------------------------------------===//

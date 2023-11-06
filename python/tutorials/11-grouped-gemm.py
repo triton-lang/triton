@@ -1,3 +1,14 @@
+<<<<<<< HEAD
+=======
+
+"""
+Group GEMM
+============================
+This group gemm kernel launches a fixed number of CTA to compute a group
+of gemms. The scheduling is static and we do it on device.
+"""
+
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
 # Copyright (c) 2023 NVIDIA Corporation & Affiliates. All rights reserved.
 #
 # Permission is hereby granted, free of charge, to any person obtaining
@@ -24,10 +35,16 @@ import torch
 import triton
 import triton.language as tl
 
+<<<<<<< HEAD
 # This group gemm kernel launches a fixed number of CTA to compute a group
 # of gemms. The scheduling is static and we do it on device
 @triton.autotune(
     configs= [
+=======
+
+@triton.autotune(
+    configs=[
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
         triton.Config(
             {
                 'BLOCK_SIZE_M': 128,
@@ -60,6 +77,7 @@ import triton.language as tl
                 'NUM_SM': 128,
             }
         ),
+<<<<<<< HEAD
     ] if torch.version.hip is None else [
         triton.Config(
             {
@@ -113,6 +131,10 @@ import triton.language as tl
         ),
     ],
     key=['SUM_M', 'SUM_N', 'SUM_K'],
+=======
+    ],
+    key=['group_size'],
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
 )
 @triton.jit
 def grouped_matmul_kernel(
@@ -128,9 +150,12 @@ def grouped_matmul_kernel(
     g_lds,
     # number of gemms
     group_size,
+<<<<<<< HEAD
     SUM_M: tl.constexpr,
     SUM_N: tl.constexpr,
     SUM_K: tl.constexpr,
+=======
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
     # number of virtual SM
     NUM_SM: tl.constexpr,
     # tile sizes
@@ -211,9 +236,12 @@ def group_gemm_fn(group_A, group_B):
     g_sizes = []
     g_lds = []
     group_C = []
+<<<<<<< HEAD
     SUM_M = 0
     SUM_N = 0
     SUM_K = 0
+=======
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
     for i in range(group_size):
         A = group_A[i]
         B = group_B[i]
@@ -226,9 +254,12 @@ def group_gemm_fn(group_A, group_B):
         B_addrs.append(B.data_ptr())
         C_addrs .append(C.data_ptr())
         g_sizes += [M, N, K]
+<<<<<<< HEAD
         SUM_M += M
         SUM_N += N
         SUM_K += K
+=======
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
         g_lds += [A.stride(0), B.stride(0), C.stride(0)]
 
     # note these are device tensors
@@ -250,9 +281,12 @@ def group_gemm_fn(group_A, group_B):
         d_g_sizes,
         d_g_lds,
         group_size,
+<<<<<<< HEAD
         SUM_M=SUM_M,
         SUM_N=SUM_N,
         SUM_K=SUM_K,
+=======
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
     )
 
     return group_C
@@ -277,6 +311,7 @@ for i in range(group_size):
 
 tri_out = group_gemm_fn(group_A, group_B)
 ref_out = [torch.matmul(a, b) for a, b in zip(group_A, group_B)]
+<<<<<<< HEAD
 rtol = 0 if torch.version.hip is None else 1e-2
 for i in range(group_size):
     assert torch.allclose(ref_out[i], tri_out[i], atol=1e-2, rtol=rtol)
@@ -284,6 +319,14 @@ for i in range(group_size):
 
 # only launch the kernel, no tensor preparation here to remove all overhead
 def triton_perf_fn(a_ptrs, b_ptrs, c_ptrs, sizes, lds, group_size, sum_m, sum_n, sum_k):
+=======
+for i in range(group_size):
+    assert torch.allclose(ref_out[i], tri_out[i], atol=1e-2, rtol=0)
+
+
+# only launch the kernel, no tensor preparation here to remove all overhead
+def triton_perf_fn(a_ptrs, b_ptrs, c_ptrs, sizes, lds, group_size):
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
     grid = lambda META: (META['NUM_SM'],)
     grouped_matmul_kernel[grid](
         a_ptrs,
@@ -292,9 +335,12 @@ def triton_perf_fn(a_ptrs, b_ptrs, c_ptrs, sizes, lds, group_size, sum_m, sum_n,
         sizes,
         lds,
         group_size,
+<<<<<<< HEAD
         sum_m,
         sum_n,
         sum_k,
+=======
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
     )
 
 
@@ -355,7 +401,11 @@ def benchmark(N, provider):
     if provider == 'cublas':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch_perf_fn(group_A, group_B), quantiles=quantiles)
     if provider == 'triton':
+<<<<<<< HEAD
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: triton_perf_fn(d_a_ptrs, d_b_ptrs, d_c_ptrs, d_g_sizes, d_g_lds, group_size, group_size*N, group_size*N, group_size*N), quantiles=quantiles)
+=======
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: triton_perf_fn(d_a_ptrs, d_b_ptrs, d_c_ptrs, d_g_sizes, d_g_lds, group_size), quantiles=quantiles)
+>>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
     return ms, max_ms, min_ms
 
 

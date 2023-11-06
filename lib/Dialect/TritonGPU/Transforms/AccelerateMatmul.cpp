@@ -124,8 +124,7 @@ warpsPerTileV3(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps,
 class BlockedToMMA : public mlir::RewritePattern {
   int computeCapability;
   mutable int mmaV1Counter{}; // used to generate ID for MMAv1 encoding
-  mutable llvm::SmallVector<llvm::SetVector<Operation *>> dotOpSetVector;
-  mutable llvm::SmallVector<unsigned> mmaV3InstrNs;
+  mutable llvm::DenseMap<Operation *, unsigned> dotOpInstNs;
 
   static bool bwdFilter(Operation *op) {
     return op->getNumOperands() == 1 &&
@@ -168,40 +167,11 @@ public:
     }
   }
 
-  unsigned getMmaV3InstrN(tt::DotOp dotOp, unsigned currN) const {
-    auto type = dotOp.getResult().getType().cast<RankedTensorType>();
-    if (type.getEncoding().isa<MmaEncodingAttr>())
-      return currN;
-    for (size_t i = 0; i < dotOpSetVector.size(); ++i) {
-      if (dotOpSetVector[i].count(dotOp.getOperation()) > 0)
-        return mmaV3InstrNs[i];
-    }
-
-    SetVector<Operation *> slices;
-    mlir::getForwardSlice(dotOp.getResult(), &slices);
-    mlir::getBackwardSlice(dotOp.getOperation(), &slices);
-    unsigned N = currN;
-    llvm::SetVector<Operation *> dotOpSet;
-    for (Operation *iter : slices) {
-      if (auto nextDotOp = dyn_cast<tt::DotOp>(iter)) {
-        auto type = nextDotOp.getResult().getType().cast<RankedTensorType>();
-        auto AType = nextDotOp.getOperand(0).getType().cast<RankedTensorType>();
-        auto shapePerCTA = ttg::getShapePerCTA(type);
-        auto instrShape = mmaVersionToInstrShape(3, shapePerCTA, AType);
-        dotOpSet.insert(iter);
-        if (instrShape[1] < N)
-          N = instrShape[1];
-      }
-    }
-    mmaV3InstrNs.push_back(N);
-    dotOpSetVector.push_back(dotOpSet);
-    return N;
-  }
-
   static Value getMMAv3Operand(Value v, mlir::PatternRewriter &rewriter,
                                int opIdx) {
-    auto cvtOp = dyn_cast_or_null<ttg::ConvertLayoutOp>(v.getDefiningOp());
-    auto arg = cvtOp.getSrc();
+    Value arg = v;
+    if (auto cvtOp = v.getDefiningOp<ttg::ConvertLayoutOp>())
+      arg = cvtOp.getSrc();
     auto argType = arg.getType().cast<RankedTensorType>();
     auto eltType = argType.getElementType();
     assert(argType.getEncoding() && "unexpected tensor type");
@@ -255,9 +225,6 @@ public:
 
     auto instrShape =
         mmaVersionToInstrShape(versionMajor, retShapePerCTA, AType);
-    if (versionMajor == 3)
-      instrShape[1] = getMmaV3InstrN(dotOp, instrShape[1]);
-
     // operands
     Value a = dotOp.getA();
     Value b = dotOp.getB();
@@ -338,7 +305,8 @@ public:
     }
     // convert dot instruction
     auto newDot = rewriter.create<tt::DotOp>(dotOp.getLoc(), newRetType, a, b,
-                                             newAcc, dotOp.getAllowTF32());
+                                             newAcc, dotOp.getAllowTF32(),
+                                             dotOp.getMaxNumImpreciseAcc());
 
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(op, oldRetType,
                                                       newDot.getResult());

@@ -18,7 +18,9 @@ namespace ttng = triton::nvidia_gpu;
 namespace {
 
 // Target operations: dot, load, store. Add more when necessary.
-#define KEY_TYPES triton::DotOp, ttg::InsertSliceOp, triton::StoreOp
+#define KEY_TYPES                                                              \
+  triton::DotOp, triton::nvidia_gpu::DotAsyncOp, ttg::InsertSliceOp,           \
+      triton::StoreOp
 
 template <typename Head, typename... Tails>
 void getKeyTypeId(Operation *op, int &id, bool &found) {
@@ -151,7 +153,9 @@ void mutexSync(ModuleOp &mod, scf::IfOp &ifOp, scf::ForOp &persistentForOp,
 
   Value newIdx =
       builder.createWithAgentIds<arith::AddIOp>(loc, pipelineIdx, curRoleId);
-  persistentForOp.setIterArg(persistentForOp.getNumIterOperands() - 1, newIdx);
+  persistentForOp.getInitArgsMutable()
+      .slice(persistentForOp.getInitArgs().size() - 1, 1)
+      .assign(newIdx);
   auto yield =
       llvm::cast<scf::YieldOp>(persistentForOp.getBody()->getTerminator());
   auto idxPlusOneOp =
@@ -207,6 +211,45 @@ void mutexSync(ModuleOp &mod, scf::IfOp &ifOp, scf::ForOp &persistentForOp,
   exit:;
     lockLocs[i] = op;
     unlockLocs[i] = op;
+  }
+
+  // Update unlockLocs
+  // ====================== IR after async launch dots ======================
+  // * %0:2 = scf.for %arg0 = %c0 to %1 step %c1 iter_args(%arg1 = %2, arg2 =
+  // %3) {
+  // *    triton_nvidia_gpu.producer_wait arg2
+  // *    %5 = triton_nvidia_gpu.dot_async %4, %5
+  // *    triton_nvidia_gpu.dot_wait {pendings = 1}
+  // *    %6 = arith.cmpi sgt, arg0, %c0
+  // *    scf.if %6 {
+  // *      %7 = arith.subi arg2, c1
+  // *      triton_nvidia_gpu.consumer_release %7
+  // *    }
+  // *    %8 = arith.addi arg2, c1
+  // *    scf.yield %5, %8
+  // * }
+  // * triton_nvidia_gpu.dot_wait {pendings = 0}
+  // * %9 = arith.subi %0#1, c1
+  // * triton_nvidia_gpu.consumer_release %9
+  // * =======================================================================
+  // after async launch dots, there will be outstanding consumerReleaseOp after
+  // ForOp. we should expend the unlockLocs from ForOp to the outstanding
+  // consumerReleaseOp.
+  for (int i = 0; i < numRoles; ++i) {
+    Operation *unlockOp = unlockLocs[i];
+    auto filter = [&](Operation *op) {
+      return op->getBlock() == unlockOp->getBlock();
+    };
+    if (isa<scf::ForOp>(unlockOp)) {
+      SetVector<Operation *> slices;
+      mlir::getForwardSlice(unlockOp->getResults().back(), &slices, {filter});
+      auto iter = llvm::find_if(slices, [](Operation *op) {
+        return isa<triton::nvidia_gpu::ConsumerReleaseOp>(op);
+      });
+      if (iter != slices.end()) {
+        unlockLocs[i] = *iter;
+      }
+    }
   }
 
   // Only cases where all lock/unlock locations are in same level make sense.

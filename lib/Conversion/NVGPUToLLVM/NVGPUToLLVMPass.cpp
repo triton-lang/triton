@@ -6,6 +6,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "triton/Dialect/NVGPU/IR/Dialect.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
 
@@ -21,11 +22,245 @@ using ::mlir::LLVM::getSRegValue;
 
 namespace {
 
+using OperandsAndConstraints = std::vector<std::pair<mlir::Value, std::string>>;
+typedef std::vector<std::string> Constraints;
+
+const std::string Reg_Alloc_Op = "setmaxnreg.inc.sync.aligned.u32 #regCount;";
+const std::string Wgmma_Fence_Op = "wgmma.fence.sync.aligned;";
+const std::string Cga_Barrier_Sync_op = "barrier.cluster.sync.aligned;";
+const std::string Wgmma_Commit_Group_Op = "wgmma.commit_group.sync.aligned;";
+const std::string Wgmma_Wait_Group_Op =
+    "wgmma.wait_group.sync.aligned #pendings;";
+const std::string Cluster_Wait_Op = "barrier.cluster.wait.aligned;";
+const std::string Fence_Mbarrier_Init_Op =
+    "fence.mbarrier_init.release.cluster;";
+const std::string Cga_Barrier_Arrive_Op = "barrier.cluster.arrive;";
+const std::string Cga_Barrier_Wait_Op = "barrier.cluster.wait;";
+const std::string Reg_Dealloc_Op = "setmaxnreg.dec.sync.aligned.u32 #regCount;";
+const std::string Wgmma_Desc_Create_op =
+    "{\n"
+    ".reg .u64 a<5>;                              \n"
+    "mov.u64 a0, #swizzling;\n"
+    "shl.b64 a1, a0, 3;\n"             // stride dimension
+    "shr.b64 a1, a1, 4;\n"             // stride dimension
+    "mul.lo.u64 a2, $2, #swizzling;\n" // leadingDimension
+    "shr.b64 a2, a2, 4;\n"             // leadingDimension
+    "shl.b64 a3, $1, 46; \n"           // startAddr
+    "shr.b64 a3, a3, 50; \n"           // startAddr
+    "mov.u64 a4, #mode; \n"            // mode
+    "shl.b64 a4, a4, 62; \n"
+    "shl.b64 a1, a1, 32; \n"
+    "or.b64 a1, a4, a1; \n"
+    "shl.b64 a2, a2, 16; \n"
+    "or.b64 a1, a1, a2; \n"
+    "or.b64 $0, a1, a3; \n"
+    "}";
+
+const std::string Mbarrier_Init_Op =
+    "@$1 mbarrier.init.shared.b64 [$0], #count;";
+const std::string Mbarrier_Wait_Op =
+    "{                                                           \n"
+    ".reg .pred P1;                                              \n"
+    "LAB_WAIT:                                                   \n"
+    "mbarrier.try_wait.parity.shared.b64 P1, [$0], $1, 0x989680; \n"
+    "@P1 bra.uni DONE;                                           \n"
+    "bra.uni LAB_WAIT;                                           \n"
+    "DONE:                                                       \n"
+    "}                                                           \n";
+const std::string Named_Barrier_Arrive_Op = "bar.arrive $0, $1;";
+const std::string Named_Barrier_Wait_Op = "bar.sync $0, $1;";
+const std::string Sts64_Op = "st.shared.v2.b32 [$0], {$1, $2};";
+const std::string Cluster_Cta_Id_Op = "{\n"
+                                      ".reg .u32 a<5>;              \n"
+                                      "mov.u32 a0, %cluster_ctaid.x;\n"  // x
+                                      "mov.u32 a1, %cluster_ctaid.y;\n"  // y
+                                      "mov.u32 a2, %cluster_ctaid.z;\n"  // z
+                                      "mov.u32 a3, %cluster_nctaid.x;\n" // nx
+                                      "mov.u32 a4, %cluster_nctaid.y;\n" // ny
+                                      "mad.lo.u32 a1, a2, a4, a1;     \n"
+                                      "mad.lo.u32 $0, a1, a3, a0;     \n"
+                                      "}";
+
+bool isNumber(const std::string &s) {
+  return !s.empty() && std::find_if(s.begin(), s.end(), [](unsigned char c) {
+                         return !std::isdigit(c);
+                       }) == s.end();
+}
+
+Type getTypeFromConstraint(char constraint, mlir::PatternRewriter &rewriter) {
+  Type ty;
+  if (constraint == 'b')
+    ty = IntegerType::get(rewriter.getContext(), 1);
+  else if (constraint == 'h')
+    ty = IntegerType::get(rewriter.getContext(), 16);
+  else if (constraint == 'r')
+    ty = IntegerType::get(rewriter.getContext(), 32);
+  else if (constraint == 'l')
+    ty = IntegerType::get(rewriter.getContext(), 64);
+  else if (constraint == 'f')
+    ty = FloatType::getF32(rewriter.getContext());
+  else if (constraint == 'd')
+    ty = FloatType::getF64(rewriter.getContext());
+  else {
+    assert(false && "Unsupported constraint");
+  }
+  return ty;
+}
+
 template <typename SourceOp, typename ConcreteT>
 class NVGPUOpPatternBase : public mlir::RewritePattern {
 public:
   explicit NVGPUOpPatternBase(mlir::MLIRContext *context)
       : mlir::RewritePattern(SourceOp::getOperationName(), 1, context) {}
+
+  // Converts the given value to the type represented by the constraint
+  // E.g. if val is of type llvmptr and constraint is 'r', then we convert
+  // val to i32 using ptrtoint(i32_ty, val)
+  mlir::Value convertToType(mlir::Value val, std::string constraint,
+                            Location &loc,
+                            mlir::PatternRewriter &rewriter) const {
+    auto isConstraintNumber = isNumber(constraint);
+    if (!isConstraintNumber) {
+      auto ty = getTypeFromConstraint(constraint[0], rewriter);
+      if (val.getType().isa<LLVM::LLVMPointerType>()) {
+        return ptrtoint(ty, val);
+      } else {
+        assert(val.getType().getIntOrFloatBitWidth() <=
+                   ty.getIntOrFloatBitWidth() &&
+               "Cannot convert to a smaller type");
+        if (val.getType().getIntOrFloatBitWidth() < ty.getIntOrFloatBitWidth())
+          return zext(ty, val);
+      }
+    }
+    return val;
+  }
+
+  SmallVector<PTXBuilder::Operand *>
+  getPtxOutputs(std::vector<std::string> &outputConstraints,
+                PTXBuilder &ptxBuilder) const {
+    SmallVector<PTXBuilder::Operand *> ptxOutputs;
+    for (unsigned i = 0; i < outputConstraints.size(); i++) {
+      auto *ptxOutput = ptxBuilder.newOperand(outputConstraints[i]);
+      ptxOutputs.push_back(ptxOutput);
+    }
+    return ptxOutputs;
+  }
+
+  OperandsAndConstraints
+  unpackOperands(OperandsAndConstraints &operandsAndConstraints,
+                 PTXBuilder &ptxBuilder, Location &loc,
+                 mlir::PatternRewriter &rewriter) const {
+    OperandsAndConstraints unpackedOperands;
+    for (auto &[operand, constraint] : operandsAndConstraints) {
+      auto llvmStruct = llvm::dyn_cast<LLVM::LLVMStructType>(operand.getType());
+      // if a constraint is a number, then we are doing input/output tying
+      // if the operand is a struct, then we need to unpack it, and
+      // add the constraint to each of the unpacked operands uses the constraint
+      // as an offset
+      auto isConstraintNumber = isNumber(constraint);
+      if (llvmStruct) {
+        for (unsigned i = 0; i < llvmStruct.getBody().size(); i++) {
+          if (isConstraintNumber) {
+            auto constraintInt = std::stoi(constraint) + i;
+            unpackedOperands.push_back(
+                {extract_val(llvmStruct.getBody()[i], operand, i),
+                 std::to_string(constraintInt)});
+          } else {
+            unpackedOperands.push_back(
+                {extract_val(llvmStruct.getBody()[i], operand, i), constraint});
+          }
+        }
+      } else {
+        unpackedOperands.push_back({operand, constraint});
+      }
+    }
+    return unpackedOperands;
+  }
+
+  SmallVector<PTXBuilder::Operand *>
+  getPtxOperands(OperandsAndConstraints &operandsAndConstraints,
+                 PTXBuilder &ptxBuilder, Location &loc,
+                 mlir::PatternRewriter &rewriter) const {
+    SmallVector<PTXBuilder::Operand *> ptxOperands;
+    auto unpackedOperandsAndConstraints =
+        unpackOperands(operandsAndConstraints, ptxBuilder, loc, rewriter);
+    for (auto &[operand, constraint] : unpackedOperandsAndConstraints) {
+      auto convertedOperand = convertToType(operand, constraint, loc, rewriter);
+      auto *ptxOperand = ptxBuilder.newOperand(convertedOperand, constraint);
+      ptxOperands.push_back(ptxOperand);
+    }
+    return ptxOperands;
+  }
+
+  virtual std::vector<std::string> getOutputConstraints(SourceOp op) const {
+    return {};
+  }
+
+  virtual OperandsAndConstraints getOperandsAndConstraints(SourceOp op) const {
+    return {};
+  }
+
+  Type getReturnType(std::vector<std::string> outputConstraints,
+                     mlir::PatternRewriter &rewriter) const {
+    auto ctx = rewriter.getContext();
+    Type resTy;
+    if (outputConstraints.empty()) {
+      resTy = void_ty(ctx);
+    } else {
+      SmallVector<Type> retTys;
+      for (auto &outputConstraint : outputConstraints) {
+        assert(outputConstraint[0] == '=' &&
+               "Constraint must be for an output");
+        Type retTy = getTypeFromConstraint(outputConstraint[1], rewriter);
+        retTys.push_back(retTy);
+      }
+      if (retTys.size() == 1) {
+        resTy = retTys[0];
+      } else {
+        resTy = struct_ty(retTys);
+      }
+    }
+    return resTy;
+  }
+
+  std::string patchPtxAsm(mlir::Operation *op, std::string ptxAsm) const {
+    std::vector<std::pair<int, int>> patchLocations;
+    std::vector<std::string> patchValues;
+    auto start = ptxAsm.find("#", 0);
+    while (start != std::string::npos) {
+      auto endIterator =
+          std::find_if(ptxAsm.begin() + start + 1, ptxAsm.end(),
+                       [](unsigned char c) { return !std::isalnum(c); });
+
+      assert(endIterator != ptxAsm.end() && "unexpected asm format");
+
+      auto end = std::distance(ptxAsm.begin(), endIterator);
+      auto patchLocation = std::make_pair(start, end);
+      patchLocations.push_back(patchLocation);
+      auto patchValue = ptxAsm.substr(start + 1, end - start - 1);
+      patchValues.push_back(patchValue);
+      start = ptxAsm.find("#", end);
+    }
+    assert(patchLocations.size() == patchValues.size() &&
+           "patchLocations and patchValues should have the same size");
+    if (patchLocations.size() == 0) {
+      return ptxAsm;
+    }
+    std::string res = "";
+    size_t prevStart = 0;
+    unsigned i = 0;
+    for (auto &[start, end] : patchLocations) {
+      res += ptxAsm.substr(prevStart, start - prevStart);
+      auto integerAttr = op->getAttrOfType<IntegerAttr>(patchValues[i]);
+      auto attr = integerAttr.getInt();
+      res += std::to_string(attr);
+      prevStart = end;
+      i++;
+    }
+    if (prevStart < ptxAsm.size())
+      res += ptxAsm.substr(prevStart, ptxAsm.size() - prevStart);
+    return res;
+  }
 
   LogicalResult
   matchAndRewrite(mlir::Operation *op,
@@ -35,30 +270,62 @@ public:
     auto sourceOp = llvm::dyn_cast<SourceOp>(op);
     if (!sourceOp)
       return mlir::failure();
-    auto ptxAsm = static_cast<const ConcreteT *>(this)->getPtxAsm(sourceOp);
+    auto concrete = static_cast<const ConcreteT *>(this);
+    auto ptxAsm = concrete->getPtxAsm(sourceOp);
+    auto ptxAsmPatched = patchPtxAsm(sourceOp, ptxAsm);
     auto hasSideEffects = !isMemoryEffectFree(sourceOp);
+    auto operandsAndConstraints = concrete->getOperandsAndConstraints(sourceOp);
+    auto outputConstraints = concrete->getOutputConstraints(sourceOp);
+
     PTXBuilder ptxBuilder;
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-    ptxInstr({}, /*onlyAttachMLIRArgs=*/true);
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy,
-                      /*hasSideEffects*/ hasSideEffects);
-    rewriter.eraseOp(op);
+    auto ptxOutputs = getPtxOutputs(outputConstraints, ptxBuilder);
+    auto ptxOperands =
+        getPtxOperands(operandsAndConstraints, ptxBuilder, loc, rewriter);
+    SmallVector<PTXBuilder::Operand *> outputsAndOperands = ptxOutputs;
+    outputsAndOperands.append(ptxOperands.begin(), ptxOperands.end());
+    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsmPatched);
+    ptxInstr(outputsAndOperands, /*onlyAttachMLIRArgs=*/true);
+    auto retTy = getReturnType(outputConstraints, rewriter);
+    auto res = ptxBuilder.launch(rewriter, loc, retTy,
+                                 /*hasSideEffects*/ hasSideEffects);
+    if (op->getNumResults() == 0) {
+      rewriter.eraseOp(op);
+    } else {
+      rewriter.replaceOp(op, res);
+    }
+
     return mlir::success();
   }
 };
 
-class CGABarrierSyncOpPattern
-    : public NVGPUOpPatternBase<ttn::CGABarrierSyncOp,
-                                CGABarrierSyncOpPattern> {
+template <typename SourceOp>
+class NVGPUOpGenericPattern
+    : public NVGPUOpPatternBase<SourceOp, NVGPUOpGenericPattern<SourceOp>> {
 public:
-  using Base =
-      NVGPUOpPatternBase<ttn::CGABarrierSyncOp, CGABarrierSyncOpPattern>;
-  using Base::Base;
+  explicit NVGPUOpGenericPattern(mlir::MLIRContext *context, std::string ptxAsm,
+                                 std::vector<std::string> outputConstraints,
+                                 std::vector<std::string> inputConstraints)
+      : NVGPUOpPatternBase<SourceOp, NVGPUOpGenericPattern<SourceOp>>(context),
+        ptxAsm(ptxAsm), outputConstraints(outputConstraints),
+        inputConstraints(inputConstraints) {}
 
-  std::string getPtxAsm(ttn::CGABarrierSyncOp op) const {
-    return "barrier.cluster.sync.aligned;";
+  std::vector<std::string> getOutputConstraints(SourceOp op) const {
+    return outputConstraints;
   }
+  OperandsAndConstraints getOperandsAndConstraints(SourceOp op) const {
+    OperandsAndConstraints operandsAndConstraints;
+    for (unsigned i = 0; i < inputConstraints.size(); i++) {
+      operandsAndConstraints.push_back(
+          {op->getOperand(i), inputConstraints[i]});
+    }
+    return operandsAndConstraints;
+  }
+  std::string getPtxAsm(SourceOp op) const { return ptxAsm; }
+
+private:
+  std::string ptxAsm;
+  std::vector<std::string> outputConstraints;
+  std::vector<std::string> inputConstraints;
 };
 
 class FenceAsyncSharedOpPattern
@@ -78,226 +345,6 @@ public:
   }
 };
 
-class WGMMAFenceOpPattern
-    : public NVGPUOpPatternBase<ttn::WGMMAFenceOp, WGMMAFenceOpPattern> {
-public:
-  using Base = NVGPUOpPatternBase<ttn::WGMMAFenceOp, WGMMAFenceOpPattern>;
-  using Base::Base;
-
-  std::string getPtxAsm(ttn::WGMMAFenceOp op) const {
-    return "wgmma.fence.sync.aligned;";
-  }
-};
-
-class WGMMACommitGroupOpPattern
-    : public NVGPUOpPatternBase<ttn::WGMMACommitGroupOp,
-                                WGMMACommitGroupOpPattern> {
-public:
-  using Base =
-      NVGPUOpPatternBase<ttn::WGMMACommitGroupOp, WGMMACommitGroupOpPattern>;
-  using Base::Base;
-
-  std::string getPtxAsm(ttn::WGMMACommitGroupOp op) const {
-    return "wgmma.commit_group.sync.aligned;";
-  }
-};
-
-class WGMMAWaitGroupOpPattern
-    : public NVGPUOpPatternBase<ttn::WGMMAWaitGroupOp,
-                                WGMMAWaitGroupOpPattern> {
-public:
-  using Base =
-      NVGPUOpPatternBase<ttn::WGMMAWaitGroupOp, WGMMAWaitGroupOpPattern>;
-  using Base::Base;
-
-  std::string getPtxAsm(ttn::WGMMAWaitGroupOp op) const {
-    auto pendings = op.getPendings();
-    return "wgmma.wait_group.sync.aligned " + std::to_string(pendings) + ";";
-  }
-};
-
-class StoreMatrixOpPattern : public mlir::RewritePattern {
-public:
-  StoreMatrixOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::StoreMatrixOp::getOperationName(), 1,
-                             context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto storeMatrixOp = llvm::dyn_cast<ttn::StoreMatrixOp>(op);
-    if (!storeMatrixOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto addr = storeMatrixOp.getAddr();
-    auto datas = storeMatrixOp.getDatas();
-
-    assert(datas.size() == 1 || datas.size() == 2 ||
-           datas.size() == 4 && "Invalid size for StoreMatrixOp");
-    PTXBuilder ptxBuilder;
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(
-        "stmatrix.sync.aligned.m8n8.x" + std::to_string(datas.size()) +
-        ".shared.b16");
-    auto *addrOpr = ptxBuilder.newAddrOperand(ptrtoint(i32_ty, addr), "r");
-
-    SmallVector<std::pair<Value, std::string>> args;
-    for (unsigned i = 0; i < datas.size(); ++i) {
-      args.push_back({datas[i], "r"});
-    }
-    auto *operands = ptxBuilder.newListOperand(args);
-
-    ptxInstr(addrOpr, operands);
-
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy);
-    rewriter.eraseOp(op);
-    return mlir::success();
-  }
-};
-
-class MBarrierInitOpPattern : public mlir::RewritePattern {
-public:
-  MBarrierInitOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::MBarrierInitOp::getOperationName(), 1,
-                             context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto mBarrierInitOp = llvm::dyn_cast<ttn::MBarrierInitOp>(op);
-    if (!mBarrierInitOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    Value mbarrier = mBarrierInitOp.getMbarrier();
-    Value pred = mBarrierInitOp.getPred();
-    uint32_t count = mBarrierInitOp.getCount();
-    PTXBuilder ptxBuilder;
-
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>("mbarrier.init.shared.b64");
-    auto *barOpr =
-        ptxBuilder.newAddrOperand(ptrtoint(i32_ty, mbarrier), "r", 0);
-    auto *expectedOpr = ptxBuilder.newConstantOperand(count);
-
-    ptxInstr(barOpr, expectedOpr).predicate(pred, "b");
-
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy);
-    rewriter.eraseOp(op);
-    return mlir::success();
-  }
-};
-
-class MBarrierArriveOpPattern : public mlir::RewritePattern {
-public:
-  MBarrierArriveOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::MBarrierArriveOp::getOperationName(), 1,
-                             context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto mbarrierArriveOp = llvm::dyn_cast<ttn::MBarrierArriveOp>(op);
-    if (!mbarrierArriveOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    Value mbarrier = mbarrierArriveOp.getMbarrier();
-    Value pred = mbarrierArriveOp.getPred();
-    Value ctaId = mbarrierArriveOp.getCtaId();
-    auto arriveType = mbarrierArriveOp.getArriveType();
-    uint32_t txCount = mbarrierArriveOp.getTxCount();
-
-    PTXBuilder ptxBuilder;
-    if (arriveType == ttn::MBarriveType::normal) {
-      auto &ptxInstr =
-          *ptxBuilder.create<PTXInstr>("mbarrier.arrive.shared.b64 _,");
-      auto *barOpr =
-          ptxBuilder.newAddrOperand(ptrtoint(i32_ty, mbarrier), "r", 0);
-
-      ptxInstr(barOpr).predicate(pred, "b");
-    } else if (arriveType == ttn::MBarriveType::cp_async) {
-      auto &ptxInstr = *ptxBuilder.create<PTXInstr>(
-          "cp.async.mbarrier.arrive.noinc.shared.b64");
-      auto *barOpr =
-          ptxBuilder.newAddrOperand(ptrtoint(i32_ty, mbarrier), "r", 0);
-
-      ptxInstr(barOpr).predicate(pred, "b");
-    } else if (arriveType == ttn::MBarriveType::expect_tx) {
-      assert(txCount > 0 && "txCount should be valid");
-      auto &ptxInstr = *ptxBuilder.create<PTXInstr>(
-          "mbarrier.arrive.expect_tx.shared.b64 _,");
-      auto *barOpr =
-          ptxBuilder.newAddrOperand(ptrtoint(i32_ty, mbarrier), "r", 0);
-      auto *expectedOpr = ptxBuilder.newConstantOperand(txCount);
-
-      ptxInstr(barOpr, expectedOpr).predicate(pred, "b");
-    } else if (arriveType == ttn::MBarriveType::remote) {
-      assert(ctaId && "ctaId should have a valid value");
-      auto ptxAsm =
-          " { .reg .b32 remAddr32;                                       \n"
-          "  @$2 mapa.shared::cluster.u32  remAddr32, $0, $1;            \n"
-          "  @$2 mbarrier.arrive.shared::cluster.b64  _, [remAddr32]; }  \n";
-      auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-      auto *barOpr =
-          ptxBuilder.newAddrOperand(ptrtoint(i32_ty, mbarrier), "r", 0);
-      auto *ctaIdOpr = ptxBuilder.newOperand(ctaId, "r");
-      auto *predOpr = ptxBuilder.newOperand(pred, "b");
-
-      ptxInstr({barOpr, ctaIdOpr, predOpr}, /*onlyAttachMLIRArgs=*/true);
-    } else {
-      assert(false &&
-             "Unsupported mbarrier arrive type"); // TODO: is this the right way
-                                                  // to assert in LLVM pass ?
-    }
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy);
-    rewriter.eraseOp(op);
-    return mlir::success();
-  }
-};
-class MBarrierWaitOpPattern : public mlir::RewritePattern {
-public:
-  MBarrierWaitOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::MBarrierWaitOp::getOperationName(), 1,
-                             context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto mBarrierWaitOp = llvm::dyn_cast<ttn::MBarrierWaitOp>(op);
-    if (!mBarrierWaitOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    Value mbarrier = mBarrierWaitOp.getMbarrier();
-    Value phase = mBarrierWaitOp.getPhase();
-    PTXBuilder ptxBuilder;
-
-    auto ptxAsm =
-        "{\n"
-        ".reg .pred                P1; \n"
-        "LAB_WAIT: \n"
-        "mbarrier.try_wait.parity.shared.b64 P1, [$0], $1, 0x989680; \n"
-        "@P1                       bra.uni DONE; \n"
-        "bra.uni                   LAB_WAIT; \n"
-        "DONE: \n"
-        "}";
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-    auto *barOpr = ptxBuilder.newOperand(ptrtoint(i32_ty, mbarrier), "r");
-    auto *phaseOpr = ptxBuilder.newOperand(zext(i32_ty, phase), "r");
-
-    ptxInstr({barOpr, phaseOpr},
-             /*onlyAttachMLIRArgs=*/true);
-
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy);
-    rewriter.eraseOp(op);
-    return mlir::success();
-  }
-};
-
 class ClusterArriveOpPattern
     : public NVGPUOpPatternBase<ttn::ClusterArriveOp, ClusterArriveOpPattern> {
 public:
@@ -313,202 +360,327 @@ public:
   }
 };
 
-class ClusterWaitOpPattern
-    : public NVGPUOpPatternBase<ttn::ClusterWaitOp, ClusterWaitOpPattern> {
+class StoreMatrixOpPattern
+    : public NVGPUOpPatternBase<ttn::StoreMatrixOp, StoreMatrixOpPattern> {
 public:
-  using Base = NVGPUOpPatternBase<ttn::ClusterWaitOp, ClusterWaitOpPattern>;
+  using Base = NVGPUOpPatternBase<ttn::StoreMatrixOp, StoreMatrixOpPattern>;
   using Base::Base;
-  std::string getPtxAsm(ttn::ClusterWaitOp op) const {
-    return "barrier.cluster.wait.aligned;";
+
+  OperandsAndConstraints
+  getOperandsAndConstraints(ttn::StoreMatrixOp op) const {
+    OperandsAndConstraints operandsAndTypes;
+    auto addr = op.getAddr();
+    auto datas = op.getDatas();
+    operandsAndTypes.push_back({addr, "r"});
+    for (unsigned i = 0; i < datas.size(); i++) {
+      operandsAndTypes.push_back({datas[i], "r"});
+    }
+    return operandsAndTypes;
+  }
+
+  std::string getPtxAsm(ttn::StoreMatrixOp op) const {
+    auto datas = op.getDatas();
+    std::string ptxAsm;
+    switch (datas.size()) {
+    case 1:
+      ptxAsm = "stmatrix.sync.aligned.m8n8.x1.shared.b16 [$0], {$1};";
+      break;
+    case 2:
+      ptxAsm = "stmatrix.sync.aligned.m8n8.x2.shared.b16 [$0], {$1, $2};";
+      break;
+    case 4:
+      ptxAsm =
+          "stmatrix.sync.aligned.m8n8.x4.shared.b16 [$0], {$1, $2, $3, $4};";
+      break;
+    default:
+      assert(false && "Invalid size");
+    }
+    return ptxAsm;
   }
 };
 
-class TMALoadTiledOpPattern : public mlir::RewritePattern {
+class MBarrierArriveOpPattern
+    : public NVGPUOpPatternBase<ttn::MBarrierArriveOp,
+                                MBarrierArriveOpPattern> {
 public:
-  TMALoadTiledOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::TMALoadTiledOp::getOperationName(), 1,
-                             context) {}
+  using Base =
+      NVGPUOpPatternBase<ttn::MBarrierArriveOp, MBarrierArriveOpPattern>;
+  using Base::Base;
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto tmaLoadTiledOp = llvm::dyn_cast<ttn::TMALoadTiledOp>(op);
-    if (!tmaLoadTiledOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto dst = tmaLoadTiledOp.getDst();
-    auto mbarrier = tmaLoadTiledOp.getMbarrier();
-    auto tmaDesc = tmaLoadTiledOp.getTmaDesc();
-    auto l2Desc = tmaLoadTiledOp.getL2Desc();
-    auto pred = tmaLoadTiledOp.getPred();
-    auto coords = tmaLoadTiledOp.getCoords();
-    auto mcastMask = tmaLoadTiledOp.getMcastMask();
+  OperandsAndConstraints
+  getOperandsAndConstraints(ttn::MBarrierArriveOp op) const {
+    OperandsAndConstraints operandsAndTypes;
+    Value mbarrier = op.getMbarrier();
+    Value pred = op.getPred();
+    Value ctaId = op.getCtaId();
+    auto arriveType = op.getArriveType();
+
+    switch (arriveType) {
+    case ttn::MBarriveType::normal:
+    case ttn::MBarriveType::cp_async:
+    case ttn::MBarriveType::expect_tx:
+      operandsAndTypes.push_back({mbarrier, "r"});
+      operandsAndTypes.push_back({pred, "b"});
+      break;
+    case ttn::MBarriveType::remote:
+      operandsAndTypes.push_back({mbarrier, "r"});
+      operandsAndTypes.push_back({ctaId, "r"});
+      operandsAndTypes.push_back({pred, "b"});
+      break;
+    default:
+      llvm::errs() << "Unsupported mbarrier arrive type " << arriveType << "\n";
+      llvm_unreachable("");
+      break;
+    }
+    return operandsAndTypes;
+  }
+
+  std::string getPtxAsm(ttn::MBarrierArriveOp op) const {
+    Value ctaId = op.getCtaId();
+    auto arriveType = op.getArriveType();
+    uint32_t txCount = op.getTxCount();
+    std::string ptxAsm;
+    switch (arriveType) {
+    case ttn::MBarriveType::normal:
+      ptxAsm = "@$1 mbarrier.arrive.shared.b64 _, [$0];";
+      break;
+    case ttn::MBarriveType::cp_async:
+      ptxAsm = "@$1 cp.async.mbarrier.arrive.noinc.shared.b64 [$0];";
+      break;
+    case ttn::MBarriveType::expect_tx:
+      assert(txCount > 0 && "txCount should be valid");
+      ptxAsm = "@$1 mbarrier.arrive.expect_tx.shared.b64 _, [$0], " +
+               std::to_string(txCount) + ";";
+      break;
+    case ttn::MBarriveType::remote:
+      assert(ctaId && "ctaId should have a valid value");
+      ptxAsm =
+          " { .reg .b32 remAddr32;                                       \n"
+          "  @$2 mapa.shared::cluster.u32  remAddr32, $0, $1;            \n"
+          "  @$2 mbarrier.arrive.shared::cluster.b64  _, [remAddr32]; }  \n";
+      break;
+    default:
+      llvm::errs() << "Unsupported mbarrier arrive type " << arriveType << "\n";
+      llvm_unreachable("");
+      break;
+    }
+    return ptxAsm;
+  }
+};
+
+class TMALoadTiledOpPattern
+    : public NVGPUOpPatternBase<ttn::TMALoadTiledOp, TMALoadTiledOpPattern> {
+public:
+  using Base = NVGPUOpPatternBase<ttn::TMALoadTiledOp, TMALoadTiledOpPattern>;
+  using Base::Base;
+
+  OperandsAndConstraints
+  getOperandsAndConstraints(ttn::TMALoadTiledOp op) const {
+    OperandsAndConstraints operandsAndTypes;
+    auto dst = op.getDst();
+    auto mbarrier = op.getMbarrier();
+    auto tmaDesc = op.getTmaDesc();
+    auto l2Desc = op.getL2Desc();
+    auto pred = op.getPred();
+    auto coords = op.getCoords();
+    auto mcastMask = op.getMcastMask();
 
     auto dimSize = coords.size();
+    assert(dimSize == 2 || (dimSize == 4 && mcastMask == nullptr) &&
+                               "Does not support TMA configuration");
 
-    PTXBuilder ptxBuilder;
+    operandsAndTypes.push_back({dst, "r"});
+    operandsAndTypes.push_back({tmaDesc, "l"});
+    for (unsigned i = 0; i < coords.size(); i++) {
+      operandsAndTypes.push_back({coords[i], "r"});
+    }
+    operandsAndTypes.push_back({mbarrier, "l"});
+    if (mcastMask) {
+      operandsAndTypes.push_back({mcastMask, "h"});
+    }
+    operandsAndTypes.push_back({l2Desc, "l"});
+    operandsAndTypes.push_back({pred, "b"});
+
+    return operandsAndTypes;
+  }
+
+  std::string getPtxAsm(ttn::TMALoadTiledOp op) const {
+    auto coords = op.getCoords();
+    auto mcastMask = op.getMcastMask();
+    auto dimSize = coords.size();
+    std::string ptxAsm;
     if (dimSize == 2) {
       if (mcastMask == nullptr) {
-        auto ptxAsm =
-            "@$6 cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier:"
-            ":complete_tx"
-            "::bytes.L2::cache_hint [$0], [$1, {$2, $3}], [$4], $5;";
-        auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-        auto *dstOpr = ptxBuilder.newOperand(ptrtoint(i32_ty, dst), "r");
-        auto *descOpr = ptxBuilder.newOperand(ptrtoint(i64_ty, tmaDesc), "l");
-        auto *c0Opr = ptxBuilder.newOperand(coords[0], "r");
-        auto *c1Opr = ptxBuilder.newOperand(coords[1], "r");
-        auto *barOpr = ptxBuilder.newOperand(ptrtoint(i64_ty, mbarrier), "r");
-        auto *l2DescOpr = ptxBuilder.newOperand(l2Desc, "l");
-        auto *predOpr = ptxBuilder.newOperand(pred, "b");
-
-        ptxInstr({dstOpr, descOpr, c0Opr, c1Opr, barOpr, l2DescOpr, predOpr},
-                 /*onlyAttachMLIRArgs=*/true);
+        ptxAsm = "@$6 cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier:"
+                 ":complete_tx"
+                 "::bytes.L2::cache_hint [$0], [$1, {$2, $3}], [$4], $5;";
       } else {
-        auto ptxAsm =
-            "@$7 cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::"
-            "complete_tx::bytes.multicast::cluster.L2::cache_hint"
-            " [$0], [$1, {$2, $3}], [$4], $5, $6;";
-        auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-        auto *dstOpr = ptxBuilder.newOperand(ptrtoint(i32_ty, dst), "r");
-        auto *descOpr = ptxBuilder.newOperand(ptrtoint(i64_ty, tmaDesc), "l");
-        auto *c0Opr = ptxBuilder.newOperand(coords[0], "r");
-        auto *c1Opr = ptxBuilder.newOperand(coords[1], "r");
-        auto *barOpr = ptxBuilder.newOperand(ptrtoint(i64_ty, mbarrier), "r");
-        auto *maskOpr = ptxBuilder.newOperand(mcastMask, "h");
-        auto *l2DescOpr = ptxBuilder.newOperand(l2Desc, "l");
-        auto *predOpr = ptxBuilder.newOperand(pred, "b");
-        ptxInstr({dstOpr, descOpr, c0Opr, c1Opr, barOpr, maskOpr, l2DescOpr,
-                  predOpr},
-                 /*onlyAttachMLIRArgs=*/true);
+        ptxAsm = "@$7 cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::"
+                 "complete_tx::bytes.multicast::cluster.L2::cache_hint"
+                 " [$0], [$1, {$2, $3}], [$4], $5, $6;";
       }
     } else if (dimSize == 4) {
       assert(mcastMask == nullptr && "Does not support multicast");
-      auto ptxAsm = "@$8 "
-                    "cp.async.bulk.tensor.4d.shared::cluster.global.mbarrier:"
-                    ":complete_tx"
-                    "::bytes.L2::cache_hint [$0], [$1, {$2, $3, $4, $5}], "
-                    "[$6], $7;";
-      auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-      auto *dstOpr = ptxBuilder.newOperand(ptrtoint(i32_ty, dst), "r");
-      auto *descOpr = ptxBuilder.newOperand(ptrtoint(i64_ty, tmaDesc), "l");
-      auto *c0Opr = ptxBuilder.newOperand(coords[0], "r");
-      auto *c1Opr = ptxBuilder.newOperand(coords[1], "r");
-      auto *c2Opr = ptxBuilder.newOperand(coords[2], "r");
-      auto *c3Opr = ptxBuilder.newOperand(coords[3], "r");
-      auto *barOpr = ptxBuilder.newOperand(ptrtoint(i64_ty, mbarrier), "r");
-      auto *l2DescOpr = ptxBuilder.newOperand(l2Desc, "l");
-      auto *predOpr = ptxBuilder.newOperand(pred, "b");
-      ptxInstr({dstOpr, descOpr, c0Opr, c1Opr, c2Opr, c3Opr, barOpr, l2DescOpr,
-                predOpr},
-               /*onlyAttachMLIRArgs=*/true);
+      ptxAsm = "@$8 "
+               "cp.async.bulk.tensor.4d.shared::cluster.global.mbarrier:"
+               ":complete_tx"
+               "::bytes.L2::cache_hint [$0], [$1, {$2, $3, $4, $5}], "
+               "[$6], $7;";
     } else {
-      assert(false && "invalid dim size");
+      llvm::errs() << "Unsupported dimSize " << dimSize << "\n";
+      llvm_unreachable("");
     }
-
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy, /*hasSideEffect*/ true);
-    rewriter.eraseOp(op);
-    return mlir::success();
+    return ptxAsm;
   }
 };
 
-class TMAStoreTiledOpPattern : public mlir::RewritePattern {
+class TMAStoreTiledOpPattern
+    : public NVGPUOpPatternBase<ttn::TMAStoreTiledOp, TMAStoreTiledOpPattern> {
 public:
-  TMAStoreTiledOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::TMAStoreTiledOp::getOperationName(), 1,
-                             context) {}
+  using Base = NVGPUOpPatternBase<ttn::TMAStoreTiledOp, TMAStoreTiledOpPattern>;
+  using Base::Base;
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto tmaStoreTiledOp = llvm::dyn_cast<ttn::TMAStoreTiledOp>(op);
-    if (!tmaStoreTiledOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto src = tmaStoreTiledOp.getSrc();
-    auto tmaDesc = tmaStoreTiledOp.getTmaDesc();
-    auto pred = tmaStoreTiledOp.getPred();
-    auto coords = tmaStoreTiledOp.getCoords();
+  OperandsAndConstraints
+  getOperandsAndConstraints(ttn::TMAStoreTiledOp op) const {
+    OperandsAndConstraints operandsAndTypes;
+    auto src = op.getSrc();
+    auto tmaDesc = op.getTmaDesc();
+    auto pred = op.getPred();
+    auto coords = op.getCoords();
 
     auto dimSize = coords.size();
-
-    PTXBuilder ptxBuilder;
-    if (dimSize == 2) {
-      auto ptxAsm = "cp.async.bulk.tensor.2d.global.shared::cta.bulk_group"
-                    "[$0, {$2, $3}], [$1];";
-      auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-
-      auto *descOpr = ptxBuilder.newOperand(ptrtoint(i64_ty, tmaDesc), "l");
-      auto *srcOpr = ptxBuilder.newOperand(ptrtoint(i32_ty, src), "r");
-      auto *c0Opr = ptxBuilder.newOperand(coords[0], "r");
-      auto *c1Opr = ptxBuilder.newOperand(coords[1], "r");
-      auto *predOpr = ptxBuilder.newOperand(pred, "b");
-      ptxInstr({descOpr, srcOpr, c0Opr, c1Opr, predOpr},
-               /*onlyAttachMLIRArgs=*/true);
-    } else if (dimSize == 3) {
-      auto ptxAsm = "@$5 cp.async.bulk.tensor.3d.global.shared::cta.bulk_group"
-                    "[$0, {$2, $3, $4}], [$1];";
-      auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-
-      auto *descOpr = ptxBuilder.newOperand(ptrtoint(i64_ty, tmaDesc), "l");
-      auto *srcOpr = ptxBuilder.newOperand(ptrtoint(i32_ty, src), "r");
-      auto *c0Opr = ptxBuilder.newOperand(coords[0], "r");
-      auto *c1Opr = ptxBuilder.newOperand(coords[1], "r");
-      auto *c2Opr = ptxBuilder.newOperand(coords[2], "r");
-      auto *predOpr = ptxBuilder.newOperand(pred, "b");
-      ptxInstr({descOpr, srcOpr, c0Opr, c1Opr, c2Opr, predOpr},
-               /*onlyAttachMLIRArgs=*/true);
-    } else if (dimSize == 4) {
-      auto ptxAsm = "@$6 cp.async.bulk.tensor.4d.global.shared::cta.bulk_group"
-                    "[$0, {$2, $3, $4, $5}], [$1];";
-      auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-      auto *descOpr = ptxBuilder.newOperand(ptrtoint(i64_ty, tmaDesc), "l");
-      auto *srcOpr = ptxBuilder.newOperand(ptrtoint(i32_ty, src), "r");
-      auto *c0Opr = ptxBuilder.newOperand(coords[0], "r");
-      auto *c1Opr = ptxBuilder.newOperand(coords[1], "r");
-      auto *c2Opr = ptxBuilder.newOperand(coords[2], "r");
-      auto *c3Opr = ptxBuilder.newOperand(coords[3], "r");
-      auto *predOpr = ptxBuilder.newOperand(pred, "b");
-      ptxInstr({descOpr, srcOpr, c0Opr, c1Opr, c2Opr, c3Opr, predOpr},
-               /*onlyAttachMLIRArgs=*/true);
-    } else {
-      assert(false && "invalid dim size");
+    if (dimSize != 2 && dimSize != 3 && dimSize != 4) {
+      llvm::errs() << "Unsupported dimSize " << dimSize << "\n";
+      llvm_unreachable("");
     }
+    operandsAndTypes.push_back({tmaDesc, "l"});
+    operandsAndTypes.push_back({src, "r"});
+    for (unsigned i = 0; i < dimSize; i++) {
+      operandsAndTypes.push_back({coords[i], "r"});
+    }
+    operandsAndTypes.push_back({pred, "b"});
 
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy, /*hasSideEffect*/ true);
-    rewriter.eraseOp(op);
-    return mlir::success();
+    return operandsAndTypes;
+  }
+
+  std::string getPtxAsm(ttn::TMAStoreTiledOp op) const {
+    auto coords = op.getCoords();
+    auto dimSize = coords.size();
+    std::string ptxAsm;
+    if (dimSize == 2) {
+      ptxAsm = "@$4 cp.async.bulk.tensor.2d.global.shared::cta.bulk_group"
+               "[$0, {$2, $3}], [$1];";
+    } else if (dimSize == 3) {
+      ptxAsm = "@$5 cp.async.bulk.tensor.3d.global.shared::cta.bulk_group"
+               "[$0, {$2, $3, $4}], [$1];";
+    } else if (dimSize == 4) {
+      ptxAsm = "@$6 cp.async.bulk.tensor.4d.global.shared::cta.bulk_group"
+               "[$0, {$2, $3, $4, $5}], [$1];";
+    } else {
+      llvm::errs() << "Unsupported dimSize " << dimSize << "\n";
+      llvm_unreachable("");
+    }
+    return ptxAsm;
   }
 };
 
-class LoadDSmemOpPattern : public mlir::RewritePattern {
+class StoreDSmemOpPattern
+    : public NVGPUOpPatternBase<ttn::StoreDSmemOp, StoreDSmemOpPattern> {
 public:
-  LoadDSmemOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::LoadDSmemOp::getOperationName(), 1, context) {
+  using Base = NVGPUOpPatternBase<ttn::StoreDSmemOp, StoreDSmemOpPattern>;
+  using Base::Base;
+
+  OperandsAndConstraints getOperandsAndConstraints(ttn::StoreDSmemOp op) const {
+    OperandsAndConstraints operandsAndTypes;
+    auto addr = op.getAddr();
+    auto ctaId = op.getCtaId();
+    auto values = op.getValues();
+    auto pred = op.getPred();
+    auto bitwidth = op.getBitwidth();
+    operandsAndTypes.push_back({addr, "r"});
+    operandsAndTypes.push_back({ctaId, "r"});
+    operandsAndTypes.push_back({pred, "b"});
+    std::string c = bitwidth == 16 ? "h" : (bitwidth == 32 ? "r" : "l");
+    for (unsigned i = 0; i < values.size(); i++) {
+      operandsAndTypes.push_back({values[i], c});
+    }
+    return operandsAndTypes;
   }
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto loadDSmemOp = llvm::dyn_cast<ttn::LoadDSmemOp>(op);
-    if (!loadDSmemOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto addr = loadDSmemOp.getAddr();
-    auto ctaId = loadDSmemOp.getCtaId();
-    auto bitwidth = loadDSmemOp.getBitwidth();
-    auto vec = loadDSmemOp.getVec();
+  std::string getPtxAsm(ttn::StoreDSmemOp op) const {
+    auto bitwidth = op.getBitwidth();
+    auto vec = op.getVec();
+    auto values = op.getValues();
+    assert(
+        (bitwidth == 8 || bitwidth == 16 || bitwidth == 32 || bitwidth == 64) &&
+        "invalid bitwidth");
+    assert((vec == 1 || vec == 2 || vec == 4) && vec == values.size() &&
+           "invalid vec size");
+    std::string ptxAsm;
+    if (vec == 1) {
+      ptxAsm = "{                                           \n"
+               ".reg .u32 remoteAddr;                       \n"
+               "mapa.shared::cluster.u32 remoteAddr, $0, $1;\n"
+               ".reg .pred p;                               \n"
+               "mov.pred p, $2;                             \n"
+               "@p st.shared::cluster.u#bitwidth [remoteAddr], $3; \n"
+               "}\n";
+    }
+    if (vec == 2) {
+      ptxAsm = "{                                           \n"
+               ".reg .u32 remoteAddr;                       \n"
+               "mapa.shared::cluster.u32 remoteAddr, $0, $1;\n"
+               ".reg .pred p;                               \n"
+               "mov.pred p, $2;                             \n"
+               "@p st.shared::cluster.v.u#bitwidth [remoteAddr], {$3, $4}; \n"
+               "}\n";
+    }
+    if (vec == 4) {
+      ptxAsm = "{                                           \n"
+               ".reg .u32 remoteAddr;                       \n"
+               "mapa.shared::cluster.u32 remoteAddr, $0, $1;\n"
+               ".reg .pred p;                               \n"
+               "mov.pred p, $2;                             \n"
+               "@p st.shared::cluster.v.u#bitwidth [remoteAddr], {$3, $4, $5, "
+               "$6}; \n"
+               "}\n";
+    }
+    return ptxAsm;
+  }
+};
+
+class LoadDSmemOpPattern
+    : public NVGPUOpPatternBase<ttn::LoadDSmemOp, LoadDSmemOpPattern> {
+public:
+  using Base = NVGPUOpPatternBase<ttn::LoadDSmemOp, LoadDSmemOpPattern>;
+  using Base::Base;
+
+  std::vector<std::string> getOutputConstraints(ttn::LoadDSmemOp op) const {
+    auto bitwidth = op.getBitwidth();
+    std::string c = bitwidth == 16 ? "=h" : (bitwidth == 32 ? "=r" : "=l");
+    auto vec = op.getVec();
+    return std::vector<std::string>(vec, c);
+  }
+  OperandsAndConstraints getOperandsAndConstraints(ttn::LoadDSmemOp op) const {
+    OperandsAndConstraints operandsAndTypes;
+    auto addr = op.getAddr();
+    auto ctaId = op.getCtaId();
+
+    operandsAndTypes.push_back({addr, "r"});
+    operandsAndTypes.push_back({ctaId, "r"});
+    return operandsAndTypes;
+  }
+
+  std::string getPtxAsm(ttn::LoadDSmemOp op) const {
+    auto addr = op.getAddr();
+    auto ctaId = op.getCtaId();
+    auto bitwidth = op.getBitwidth();
+    auto vec = op.getVec();
 
     assert(
         (bitwidth == 8 || bitwidth == 16 || bitwidth == 32 || bitwidth == 64) &&
         "invalid bitwidth");
     assert((vec == 1 || vec == 2 || vec == 4) && "invalid vec size");
-    PTXBuilder ptxBuilder;
 
     std::string o1 = vec > 1 ? ".v.u" : ".u";
     std::string vecStr = vec == 1   ? "$0"
@@ -524,68 +696,74 @@ public:
                   o1 + std::to_string(bitwidth) + " " + vecStr +
                   ", [remoteAddr];\n"
                   "}\n";
-
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-    std::string c = bitwidth == 16 ? "=h" : (bitwidth == 32 ? "=r" : "=l");
-    SmallVector<PTXBuilder::Operand *> oprs;
-    for (unsigned i = 0; i < vec; ++i) {
-      auto *ret = ptxBuilder.newOperand(c);
-      oprs.push_back(ret);
-    }
-    auto *addrOpr = ptxBuilder.newOperand(addr, "r");
-    auto *ctaIdOpr = ptxBuilder.newOperand(ctaId, "r");
-    oprs.push_back(addrOpr);
-    oprs.push_back(ctaIdOpr);
-
-    Type retTy = IntegerType::get(rewriter.getContext(), bitwidth);
-    SmallVector<Type> retTys(vec, retTy);
-    if (vec > 1)
-      retTy = struct_ty(retTys);
-
-    ptxInstr(oprs,
-             /*onlyAttachMLIRArgs=*/true);
-
-    auto res = ptxBuilder.launch(rewriter, loc, retTy);
-    rewriter.replaceOp(op, {res});
-    return mlir::success();
+    return ptxAsm;
   }
 };
 
-class WGMMAOpPattern : public mlir::RewritePattern {
+class WGMMAOpPattern : public NVGPUOpPatternBase<ttn::WGMMAOp, WGMMAOpPattern> {
 public:
-  WGMMAOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::WGMMAOp::getOperationName(), 1, context) {}
+  using Base = NVGPUOpPatternBase<ttn::WGMMAOp, WGMMAOpPattern>;
+  using Base::Base;
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
+  std::vector<std::string> getOutputConstraints(ttn::WGMMAOp op) const {
+    // TODO (zahi): Return type must always be a struct for wgmma, currently
+    // we rely on the size of output constraints vector to determine whether
+    // the output is a struct or not. We should find a way to pass this info
+    auto resultType = op.getType();
+
+    auto outputStructType = resultType.dyn_cast<LLVM::LLVMStructType>();
+    uint32_t numOutputRegs = outputStructType.getBody().size();
+    std::string output =
+        outputStructType.getBody().front().isF32() ? "=f" : "=r";
+    return std::vector<std::string>(numOutputRegs, output);
+  }
+
+  OperandsAndConstraints getOperandsAndConstraints(ttn::WGMMAOp op) const {
+    OperandsAndConstraints operandsAndConstraints;
+    auto opA = op.getOpA();
+    auto opB = op.getOpB();
+    auto opC = op.getOpC();
+    auto typeA = opA.getType();
+
+    auto structTypeA = typeA.dyn_cast<LLVM::LLVMStructType>();
+
+    // TODO (zahi): is this the best way to tie inputs/outputs ?
+    if (opC)
+      operandsAndConstraints.push_back({opC, "0"});
+
+    if (structTypeA) {
+      operandsAndConstraints.push_back({opA, "r"});
+    } else {
+      operandsAndConstraints.push_back({opA, "l"});
+    }
+
+    // Operand B (must be `desc`)
+    operandsAndConstraints.push_back({opB, "l"});
+    return operandsAndConstraints;
+  }
+
+  std::string getPtxAsm(ttn::WGMMAOp op) const {
     using namespace ttn;
-    auto ctx = rewriter.getContext();
-    auto wgmmaOp = llvm::dyn_cast<ttn::WGMMAOp>(op);
-    if (!wgmmaOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto opA = wgmmaOp.getOpA();
-    auto opB = wgmmaOp.getOpB();
-    auto opC = wgmmaOp.getOpC();
-    auto m = wgmmaOp.getM();
-    auto n = wgmmaOp.getN();
-    auto k = wgmmaOp.getK();
-    auto eltTypeC = wgmmaOp.getEltTypeC();
-    auto eltTypeA = wgmmaOp.getEltTypeA();
-    auto eltTypeB = wgmmaOp.getEltTypeB();
-    auto layoutA = wgmmaOp.getLayoutA();
-    auto layoutB = wgmmaOp.getLayoutB();
+    auto opA = op.getOpA();
+    auto opB = op.getOpB();
+    auto m = op.getM();
+    auto n = op.getN();
+    auto k = op.getK();
+    auto eltTypeC = op.getEltTypeC();
+    auto eltTypeA = op.getEltTypeA();
+    auto eltTypeB = op.getEltTypeB();
+    auto layoutA = op.getLayoutA();
+    auto layoutB = op.getLayoutB();
 
     // Register checks
     auto typeA = opA.getType();
     auto typeB = opB.getType();
-    auto typeC = opC.getType();
+    auto typeOutput = op.getType();
     auto structTypeA = typeA.dyn_cast<LLVM::LLVMStructType>();
     auto structTypeB = typeB.dyn_cast<LLVM::LLVMStructType>();
-    auto structTypeC = typeC.dyn_cast<LLVM::LLVMStructType>();
+    auto structTypeOutput = typeOutput.dyn_cast<LLVM::LLVMStructType>();
     assert(!structTypeB && "Operand B can not be registers");
-    assert(structTypeC && "Operand C must be registers");
+    assert(structTypeOutput && "Output and C operand must be registers");
 
     // Element type, MNK shape and transposing support check
     // Reference:
@@ -624,65 +802,41 @@ public:
                    (m == 64 && 8 <= n && n <= 224 && k == 32);
     }
     assert(supported && "WGMMA type or shape is not supported");
-    PTXBuilder ptxBuilder;
-    SmallVector<PTXBuilder::Operand *> oprs;
 
     // Operands
     uint32_t asmOpIdx = 0;
-
-    // Operand C
-    uint32_t numCRegs = structTypeC.getBody().size();
-
     std::string args = "";
+
+    // Output and operand C
+    uint32_t numCRegs = structTypeOutput.getBody().size();
+
     args += "{";
     for (uint32_t i = 0; i < numCRegs; ++i) {
       args += "$" + std::to_string(asmOpIdx++) + (i == numCRegs - 1 ? "" : ",");
-      // LLVM does not support `+` semantic, we must repeat the arguments for
-      // both input and outputs
-      PTXBuilder::Operand *opr;
-      if (structTypeC.getBody().front().isF32())
-        opr = ptxBuilder.newOperand(
-            extract_val(structTypeC.getBody()[i], opC, i), "=f");
-      else
-        opr = ptxBuilder.newOperand(
-            extract_val(structTypeC.getBody()[i], opC, i), "=r");
-      oprs.push_back(opr);
     }
     args += "}, ";
 
-    for (uint32_t i = asmOpIdx - numCRegs; i < asmOpIdx; ++i) {
-      auto *opr = ptxBuilder.newOperand(i);
-      oprs.push_back(opr);
-    }
+    if (op.getOpC())
+      asmOpIdx += numCRegs;
 
-    // Note that LLVM will not skip the indexed repeating placeholders
-    asmOpIdx += numCRegs;
     // Operand A
     if (structTypeA) {
-      uint32_t numARegs = m * k / 128;
-      assert(numARegs == structTypeA.getBody().size());
+      uint32_t numARegs = structTypeA.getBody().size();
       args += "{";
       for (uint32_t i = 0; i < numARegs; ++i) {
         args +=
             "$" + std::to_string(asmOpIdx++) + (i == numARegs - 1 ? "" : ",");
-        auto *opr = ptxBuilder.newOperand(
-            extract_val(structTypeA.getBody()[i], opA, i), "f");
-        oprs.push_back(opr);
       }
       args += "}, ";
     } else {
       args += "$" + std::to_string(asmOpIdx++) + ", ";
-      auto *opr = ptxBuilder.newOperand(opA, "l");
-      oprs.push_back(opr);
     }
 
     // Operand B (must be `desc`)
     args += "$" + std::to_string(asmOpIdx++) + ", ";
-    auto *opr = ptxBuilder.newOperand(opB, "l");
-    oprs.push_back(opr);
 
-    // `scale-d` is 1 by default
-    args += "1";
+    // `scale-d` is 1 if we have a C operand.
+    args += op.getOpC() ? "1" : "0";
 
     // `imm-scale-a`, and `imm-scale-b` are 1 by default only for float-based
     // WGMMA
@@ -690,8 +844,11 @@ public:
       args += ", 1, 1";
 
     // Push `trans-a` and `trans-b` args if needed (determined as constant)
-    if (needTransArgs)
-      args += ", " + std::to_string(transA) + ", " + std::to_string(transB);
+    if (needTransArgs) {
+      if (!structTypeA)
+        args += ", " + std::to_string(transA);
+      args += ", " + std::to_string(transB);
+    }
 
     auto ptxAsm = "wgmma.mma_async.sync.aligned"
                   ".m" +
@@ -699,338 +856,37 @@ public:
                   std::to_string(k) + "." + stringifyEnum(eltTypeC).str() +
                   "." + stringifyEnum(eltTypeA).str() + "." +
                   stringifyEnum(eltTypeB).str() + " " + args + ";";
-
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-    ptxInstr(oprs,
-             /*onlyAttachMLIRArgs=*/true);
-
-    auto res =
-        ptxBuilder.launch(rewriter, loc, structTypeC, /*hasSideEffect*/ true);
-    rewriter.replaceOp(op, {res});
-    return mlir::success();
+    return ptxAsm;
   }
 };
 
-class FenceMBarrierInitOpPattern
-    : public NVGPUOpPatternBase<ttn::FenceMBarrierInitOp,
-                                FenceMBarrierInitOpPattern> {
+class OffsetOfSts64OpPattern
+    : public NVGPUOpPatternBase<ttn::OffsetOfSts64Op, OffsetOfSts64OpPattern> {
 public:
-  using Base =
-      NVGPUOpPatternBase<ttn::FenceMBarrierInitOp, FenceMBarrierInitOpPattern>;
+  using Base = NVGPUOpPatternBase<ttn::OffsetOfSts64Op, OffsetOfSts64OpPattern>;
   using Base::Base;
 
-  std::string getPtxAsm(ttn::FenceMBarrierInitOp op) const {
-    return "fence.mbarrier_init.release.cluster;";
+  std::vector<std::string> getOutputConstraints(ttn::OffsetOfSts64Op op) const {
+    return {"=r"};
   }
-};
 
-class NamedBarrierArriveOpPattern : public mlir::RewritePattern {
-public:
-  NamedBarrierArriveOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::NamedBarrierArriveOp::getOperationName(), 1,
-                             context) {}
+  OperandsAndConstraints
+  getOperandsAndConstraints(ttn::OffsetOfSts64Op op) const {
+    OperandsAndConstraints operandsAndConstraints;
+    auto threadId = op.getThreadId();
+    auto rowOfWarp = op.getRowOfWarp();
+    auto elemIdx = op.getElemIdx();
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto namedBarrierArriveOp = llvm::dyn_cast<ttn::NamedBarrierArriveOp>(op);
-    if (!namedBarrierArriveOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto bar = namedBarrierArriveOp.getBar();
-    auto numThreads = namedBarrierArriveOp.getNumThreads();
-    PTXBuilder ptxBuilder;
+    operandsAndConstraints.push_back({threadId, "r"});
+    operandsAndConstraints.push_back({elemIdx, "r"});
+    operandsAndConstraints.push_back({rowOfWarp, "r"});
 
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>("bar.arrive $0, $1;");
-    auto *barOpr = ptxBuilder.newOperand(bar, "r");
-    auto *numThreadsOpr = ptxBuilder.newOperand(numThreads, "r");
-    ptxInstr({barOpr, numThreadsOpr}, /*onlyAttachMLIRArgs=*/true);
-
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy);
-    rewriter.eraseOp(op);
-    return mlir::success();
+    return operandsAndConstraints;
   }
-};
 
-class NamedBarrierWaitOpPattern : public mlir::RewritePattern {
-public:
-  NamedBarrierWaitOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::NamedBarrierWaitOp::getOperationName(), 1,
-                             context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto namedBarrierWaitOp = llvm::dyn_cast<ttn::NamedBarrierWaitOp>(op);
-    if (!namedBarrierWaitOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto bar = namedBarrierWaitOp.getBar();
-    auto numThreads = namedBarrierWaitOp.getNumThreads();
-    PTXBuilder ptxBuilder;
-
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>("bar.sync $0, $1;");
-    auto *barOpr = ptxBuilder.newOperand(bar, "r");
-    auto *numThreadsOpr = ptxBuilder.newOperand(numThreads, "r");
-    ptxInstr({barOpr, numThreadsOpr}, /*onlyAttachMLIRArgs=*/true);
-
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy);
-    rewriter.eraseOp(op);
-    return mlir::success();
-  }
-};
-
-class CGABarrierArriveOpPattern
-    : public NVGPUOpPatternBase<ttn::CGABarrierArriveOp,
-                                CGABarrierArriveOpPattern> {
-public:
-  using Base =
-      NVGPUOpPatternBase<ttn::CGABarrierArriveOp, CGABarrierArriveOpPattern>;
-  using Base::Base;
-  std::string getPtxAsm(ttn::CGABarrierArriveOp op) const {
-    return "barrier.cluster.arrive;";
-  }
-};
-
-class CGABarrierWaitOpPattern
-    : public NVGPUOpPatternBase<ttn::CGABarrierWaitOp,
-                                CGABarrierWaitOpPattern> {
-public:
-  using Base =
-      NVGPUOpPatternBase<ttn::CGABarrierWaitOp, CGABarrierWaitOpPattern>;
-  using Base::Base;
-  std::string getPtxAsm(ttn::CGABarrierWaitOp op) const {
-    return "barrier.cluster.wait;";
-  }
-};
-
-class StoreDSmemOpPattern : public mlir::RewritePattern {
-public:
-  StoreDSmemOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::StoreDSmemOp::getOperationName(), 1,
-                             context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto storeDSmemOp = llvm::dyn_cast<ttn::StoreDSmemOp>(op);
-    if (!storeDSmemOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto addr = storeDSmemOp.getAddr();
-    auto ctaId = storeDSmemOp.getCtaId();
-    auto values = storeDSmemOp.getValues();
-    auto pred = storeDSmemOp.getPred();
-
-    auto bitwidth = storeDSmemOp.getBitwidth();
-    auto vec = storeDSmemOp.getVec();
-    assert(
-        (bitwidth == 8 || bitwidth == 16 || bitwidth == 32 || bitwidth == 64) &&
-        "invalid bitwidth");
-    assert((vec == 1 || vec == 2 || vec == 4) && vec == values.size() &&
-           "invalid vec size");
-
-    PTXBuilder ptxBuilder;
-
-    std::string ptxAsm = "{\n\t"
-                         ".reg .u32 remoteAddr;\n\t"
-                         "mapa.shared::cluster.u32 remoteAddr, $0, $1;\n\t"
-                         ".reg .pred p;\n\t"
-                         "mov.pred p, $2;\n\t"
-                         "@p st.shared::cluster";
-    if (vec > 1)
-      ptxAsm += ".v" + std::to_string(vec);
-    ptxAsm += ".u" + std::to_string(bitwidth) + " [remoteAddr], ";
-    if (vec == 1)
-      ptxAsm += "$3";
-    else if (vec == 2)
-      ptxAsm += "{$3, $4}";
-    else if (vec == 4)
-      ptxAsm += "{$3, $4, $5, $6}";
-    ptxAsm += ";\n\t";
-    ptxAsm += "}\n";
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-
-    std::string c = bitwidth == 16 ? "h" : (bitwidth == 32 ? "r" : "l");
-    SmallVector<PTXBuilder::Operand *> oprs;
-    auto *addrOpr = ptxBuilder.newOperand(addr, "r");
-    oprs.push_back(addrOpr);
-    auto *ctaIdOpr = ptxBuilder.newOperand(ctaId, "r");
-    oprs.push_back(ctaIdOpr);
-    auto *predOpr = ptxBuilder.newOperand(pred, "b");
-    oprs.push_back(predOpr);
-    for (unsigned i = 0; i < values.size(); i++) {
-      auto *valueOpr = ptxBuilder.newOperand(values[i], c);
-      oprs.push_back(valueOpr);
-    }
-    ptxInstr(oprs,
-             /*onlyAttachMLIRArgs=*/true);
-
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy, /*hasSideEffect*/ true);
-    rewriter.eraseOp(op);
-    return mlir::success();
-  }
-};
-
-class Sts64OpPattern : public mlir::RewritePattern {
-public:
-  Sts64OpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::Sts64Op::getOperationName(), 1, context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto sts64Op = llvm::dyn_cast<ttn::Sts64Op>(op);
-    if (!sts64Op)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto offset = sts64Op.getOffset();
-    auto d0 = sts64Op.getD0();
-    auto d1 = sts64Op.getD1();
-
-    PTXBuilder ptxBuilder;
-
-    std::string ptxAsm = "st.shared.v2.b32 [$0], {$1, $2}";
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-
-    SmallVector<PTXBuilder::Operand *> oprs;
-    auto *addrOpr = ptxBuilder.newOperand(offset, "r");
-    auto *d0Opr = ptxBuilder.newOperand(d0, "r");
-    auto *d1Opr = ptxBuilder.newOperand(d1, "r");
-
-    ptxInstr({addrOpr, d0Opr, d1Opr},
-             /*onlyAttachMLIRArgs=*/true);
-
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy);
-    rewriter.eraseOp(op);
-    return mlir::success();
-  }
-};
-
-class RegAllocOpPattern
-    : public NVGPUOpPatternBase<ttn::RegAllocOp, RegAllocOpPattern> {
-public:
-  using Base = NVGPUOpPatternBase<ttn::RegAllocOp, RegAllocOpPattern>;
-  using Base::Base;
-
-  std::string getPtxAsm(ttn::RegAllocOp op) const {
-    auto regCount = op.getRegCount();
-    return "setmaxnreg.inc.sync.aligned.u32 " + std::to_string(regCount) + ";";
-  }
-};
-
-class RegDeallocOpPattern
-    : public NVGPUOpPatternBase<ttn::RegDeallocOp, RegDeallocOpPattern> {
-public:
-  using Base = NVGPUOpPatternBase<ttn::RegDeallocOp, RegDeallocOpPattern>;
-  using Base::Base;
-
-  std::string getPtxAsm(ttn::RegDeallocOp op) const {
-    auto regCount = op.getRegCount();
-    return "setmaxnreg.dec.sync.aligned.u32 " + std::to_string(regCount) + ";";
-  }
-};
-
-class ClusterCTAIdOpPattern : public mlir::RewritePattern {
-public:
-  ClusterCTAIdOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::ClusterCTAIdOp::getOperationName(), 1,
-                             context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto clusterCTAIdOp = llvm::dyn_cast<ttn::ClusterCTAIdOp>(op);
-    if (!clusterCTAIdOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-
-    auto x = getSRegValue(rewriter, loc, "%cluster_ctaid.x");
-    auto y = getSRegValue(rewriter, loc, "%cluster_ctaid.y");
-    auto z = getSRegValue(rewriter, loc, "%cluster_ctaid.z");
-    auto nx = getSRegValue(rewriter, loc, "%cluster_nctaid.x");
-    auto ny = getSRegValue(rewriter, loc, "%cluster_nctaid.y");
-    auto res = add(x, mul(add(y, mul(z, ny)), nx));
-    rewriter.replaceOp(op, {res});
-    return mlir::success();
-  }
-};
-
-class WGMMADescCreateOpPattern : public mlir::RewritePattern {
-public:
-  WGMMADescCreateOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::WGMMADescCreateOp::getOperationName(), 1,
-                             context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto wgmmaDescCreateOp = llvm::dyn_cast<ttn::WGMMADescCreateOp>(op);
-    if (!wgmmaDescCreateOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto buffer = wgmmaDescCreateOp.getBuffer();
-    auto height = wgmmaDescCreateOp.getHeight();
-    uint32_t mode = static_cast<uint32_t>(wgmmaDescCreateOp.getMode());
-
-    auto smem_nvvm_pointer = ptrtoint(i64_ty, buffer);
-
-    Value desc = int_val(64, 0);
-    uint64_t swizzling = (mode == 1 ? 128 : mode == 2 ? 64 : 32);
-    Value swizzling_ = int_val(64, swizzling);
-    Value smem_address_bit = smem_nvvm_pointer;
-
-    Value strideDimension =
-        lshr(shl(swizzling_, int_val(64, 3)), int_val(64, 4));
-    Value height64 = zext(i64_ty, height);
-    Value leadingDimension = lshr(mul(height64, swizzling_), int_val(64, 4));
-
-    // Value baseOffset = int_val(64, 0);
-    Value startAddr =
-        lshr(shl(smem_address_bit, int_val(64, 46)), int_val(64, 50));
-
-    Value mode_ = int_val(64, mode);
-    desc = or_(desc, shl(mode_, int_val(64, 62)));
-    desc = or_(desc, shl(strideDimension, int_val(64, 32)));
-    desc = or_(desc, shl(leadingDimension, int_val(64, 16)));
-    // desc = or_(desc, shl(baseOffset, int_val(64, 49)));
-    desc = or_(desc, startAddr);
-
-    rewriter.replaceOp(op, {desc});
-    return mlir::success();
-  }
-};
-
-class OffsetOfSts64OpPattern : public mlir::RewritePattern {
-public:
-  OffsetOfSts64OpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::OffsetOfSts64Op::getOperationName(), 1,
-                             context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto offsetOfSts64Op = llvm::dyn_cast<ttn::OffsetOfSts64Op>(op);
-    if (!offsetOfSts64Op)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto threadId = offsetOfSts64Op.getThreadId();
-    auto rowOfWarp = offsetOfSts64Op.getRowOfWarp();
-    auto elemIdx = offsetOfSts64Op.getElemIdx();
-    auto leadingDimOffset = offsetOfSts64Op.getLeadingDimOffset();
-    auto rowStride = offsetOfSts64Op.getRowStride();
-    auto swizzleEnabled = offsetOfSts64Op.getSwizzleEnabled();
+  std::string getPtxAsm(ttn::OffsetOfSts64Op op) const {
+    auto rowStride = op.getRowStride();
+    auto swizzleEnabled = op.getSwizzleEnabled();
 
     if (swizzleEnabled) {
       assert((rowStride == 32 || rowStride == 64 || rowStride == 128) &&
@@ -1048,51 +904,77 @@ public:
     } else if (rowStride == 32) {
       perPhase = 4;
       maxPhase = 2;
+    } else {
+      assert(false && "Unsupported rowStride");
     }
 
-    auto laneId = and_(threadId, i32_val(0x1f));
-    auto myRow =
-        add(mul(and_(lshr(elemIdx, i32_val(1)), i32_val(0x1)), i32_val(8)),
-            udiv(laneId, i32_val(4)));
-    auto myCol = add(mul(udiv(elemIdx, i32_val(4)), i32_val(8)),
-                     mul(urem(laneId, i32_val(4)), i32_val(2)));
-    myRow = add(myRow, rowOfWarp);
-    auto phase = urem(udiv(myRow, i32_val(perPhase)), i32_val(maxPhase));
-    auto lineOffset =
-        add(mul(urem(myRow, i32_val(perPhase)), i32_val(rowStride)),
-            mul(myCol, i32_val(4)));
-    auto colOffset =
-        add(mul(xor_(udiv(lineOffset, i32_val(16)), phase), i32_val(16)),
-            urem(lineOffset, i32_val(16)));
-    auto offset =
-        add(mul(udiv(myRow, i32_val(perPhase)), i32_val(128)), colOffset);
-
-    rewriter.replaceOp(op, {offset});
-    return mlir::success();
+    auto ptxAsm = "{\n"
+                  ".reg .u32 a<9>;      \n"
+                  "and.b32 a0, $1, 0x1f;\n" // laneid
+                  "shr.b32 a1, $2, 4; \n"
+                  "and.b32 a1, a1, 0x1; \n"
+                  "div.u32 a2, a0, 4; \n"
+                  "mad.lo.u32 a2, a1, 8, a2; \n" // myRow
+                  "div.u32 a3, $2, 4; \n"
+                  "rem.u32 a4, a0, 4; \n"
+                  "mul.lo.u32 a4, a4, 2; \n"
+                  "mad.lo.u32 a4, a3, 8, a4; \n" // myCol
+                  "add.u32 a2, a2, $3; \n"       // myRow = myRow + rowOfWarp
+                  "div.u32 a3, a2, " +
+                  std::to_string(perPhase) +
+                  "; \n"
+                  "rem.u32 a3, a3, " +
+                  std::to_string(maxPhase) +
+                  "; \n" // phase
+                  "rem.u32 a5, a2, " +
+                  std::to_string(perPhase) +
+                  "; \n" // lineOffset
+                  "mul.lo.u32 a5, a5, #rowStride; \n"
+                  "mad.lo.u32 a5, a4, 4, a5; \n" // lineOffset
+                  "div.u32 a6, a5, 16; \n"
+                  "xor.b32 a6, a6, a3; \n" // colOffset
+                  "rem.u32 a7, a5, 16; \n"
+                  "mad.lo.u32 a7, a6, 16, a7; \n" // colOffset
+                  "div.u32 a8, a2, #perPhase; \n"
+                  "mad.lo.u32 $0, a8, 128, a7; \n" // offset
+                  "}";
+    return ptxAsm;
   }
 };
 
-class OffsetOfStmatrixV4OpPattern : public mlir::RewritePattern {
+class OffsetOfStmatrixV4OpPattern
+    : public NVGPUOpPatternBase<ttn::OffsetOfStmatrixV4Op,
+                                OffsetOfStmatrixV4OpPattern> {
 public:
-  OffsetOfStmatrixV4OpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::OffsetOfStmatrixV4Op::getOperationName(), 1,
-                             context) {}
+  using Base = NVGPUOpPatternBase<ttn::OffsetOfStmatrixV4Op,
+                                  OffsetOfStmatrixV4OpPattern>;
+  using Base::Base;
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto offsetOfStmatrixV4Op = llvm::dyn_cast<ttn::OffsetOfStmatrixV4Op>(op);
-    if (!offsetOfStmatrixV4Op)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto threadId = offsetOfStmatrixV4Op.getThreadId();
-    auto rowOfWarp = offsetOfStmatrixV4Op.getRowOfWarp();
-    auto elemIdx = offsetOfStmatrixV4Op.getElemIdx();
-    auto leadingDimOffset = offsetOfStmatrixV4Op.getLeadingDimOffset();
-    auto rowStride = offsetOfStmatrixV4Op.getRowStride();
-    auto swizzleEnabled = offsetOfStmatrixV4Op.getSwizzleEnabled();
+  std::vector<std::string>
+  getOutputConstraints(ttn::OffsetOfStmatrixV4Op op) const {
+    return {"=r"};
+  }
 
+  OperandsAndConstraints
+  getOperandsAndConstraints(ttn::OffsetOfStmatrixV4Op op) const {
+    OperandsAndConstraints operandsAndConstraints;
+    auto threadId = op.getThreadId();
+    auto rowOfWarp = op.getRowOfWarp();
+    auto elemIdx = op.getElemIdx();
+
+    operandsAndConstraints.push_back({threadId, "r"});
+    operandsAndConstraints.push_back({elemIdx, "r"});
+    operandsAndConstraints.push_back({rowOfWarp, "r"});
+
+    return operandsAndConstraints;
+  }
+
+  std::string getPtxAsm(ttn::OffsetOfStmatrixV4Op op) const {
+    auto leadingDimOffset = op.getLeadingDimOffset();
+    auto rowStride = op.getRowStride();
+    auto swizzleEnabled = op.getSwizzleEnabled();
+
+    std::string ptxAsm;
     if (swizzleEnabled) {
       uint32_t perPhase = 0;
       uint32_t maxPhase = 0;
@@ -1105,43 +987,71 @@ public:
       } else if (rowStride == 16) {
         perPhase = 4;
         maxPhase = 2;
+      } else {
+        assert(false && "Unsupported rowStride");
       }
 
-      Value iterOfCol = udiv(elemIdx, i32_val(8));
-      Value myRow = add(rowOfWarp, and_(threadId, i32_val(0xf)));
-      Value myCol =
-          mul(and_(lshr(threadId, i32_val(4)), i32_val(0x1)), i32_val(8));
-      myCol = add(myCol, mul(iterOfCol, i32_val(16)));
-
-      Value offset0 =
-          mul(udiv(myCol, i32_val(rowStride)), i32_val(leadingDimOffset));
-      myCol = urem(myCol, i32_val(rowStride));
-
-      Value phase = urem(udiv(myRow, i32_val(perPhase)), i32_val(maxPhase));
-
-      Value lineOffset =
-          add(mul(urem(myRow, i32_val(perPhase)), i32_val(rowStride)), myCol);
-      Value colOffset =
-          add(mul(xor_(udiv(lineOffset, i32_val(8)), phase), i32_val(8)),
-              urem(lineOffset, i32_val(8)));
-      Value offset1 =
-          add(mul(udiv(myRow, i32_val(perPhase)), i32_val(64)), colOffset);
-
-      Value res = add(offset1, offset0);
-
-      rewriter.replaceOp(op, {res});
+      ptxAsm =
+          "{\n"
+          ".reg .u32 a<10>;      \n"
+          "div.u32 a0, $2, 8; \n"    // iterOfCol = udiv(elemIdx, i32_val(8))
+          "and.b32 a1, $1, 0xf; \n"  // myRow = and_(threadId, i32_val(0xf))
+          "add.u32 a1, a1, $3; \n"   // myRow = myRow + rowOfWarp
+          "shr.b32 a2, $1, 4; \n"    // myCol = lshr(threadId, i32_val(4))
+          "and.b32 a2, a2, 0x1; \n"  // myCol = and_(myCol, i32_val(0x1))
+          "mul.lo.u32 a2, a2, 8; \n" // myCol = mul(myCol, i32_val(8))
+          "mad.lo.u32 a2, a0, 16, a2; \n"  // myCol = add(myCol,
+                                           // mul(iterOfCol, i32_val(16)))
+          "div.u32 a3, a2, #rowStride; \n" // offset0 = udiv(myCol,
+                                           // i32_val(rowStride))
+          "mul.lo.u32 a3, a3, #leadingDimOffset; \n" // offset0 = mul(offset0,
+                                                     // i32_val(leadingDimOffset))
+          "rem.u32 a2, a2, #rowStride; \n" // myCol = myCol % rowStride
+          "div.u32 a4, a1, " +
+          std::to_string(perPhase) +
+          "; \n" // phase =  myrow // perPhase
+          "rem.u32 a4, a4, " +
+          std::to_string(maxPhase) +
+          "; \n" // phase = phase % maxPhase
+          "rem.u32 a5, a1, " +
+          std::to_string(perPhase) +
+          "; \n" // lineOffset = urem(myRow, i32_val(perPhase))
+          "mad.lo.u32 a5, a5, #rowStride, a2; \n" // lineOffset =
+                                                  // add(mul(lineOffset,
+                                                  // rowStride), myCol)
+          "div.u32 a6, a5, 8; \n"  // colOffset = udiv(lineOffset, i32_val(8)
+          "xor.b32 a6, a6, a4; \n" // colOffset = xor_(colOffset, phase)
+          "rem.u32 a7, a5, 8; \n"  // temp = urem(lineOffset, i32_val(8)
+          "mad.lo.u32 a7, a6, 8, a7; \n" // colOffset = add(mul(colOffset,
+                                         // i32_val(8)), temp)
+          "div.u32 a8, a1, " +
+          std::to_string(perPhase) +
+          "; \n" // offset1 = udiv(myRow, i32_val(perPhase))
+          "mad.lo.u32 a9, a8, 64, a7; \n" // offset1 = add(mul(offset1,
+                                          // i32_val(64)), colOffset)
+          "add.u32 $0, a9, a3; \n"        // result = add(offset1, offset0)
+          "}";
     } else {
-      Value iterOfCol = udiv(elemIdx, i32_val(4));
-      Value myRow = add(rowOfWarp, and_(threadId, i32_val(0xf)));
-      Value myCol =
-          mul(and_(lshr(threadId, i32_val(4)), i32_val(0x1)), i32_val(8));
-      myCol = add(myCol, mul(iterOfCol, i32_val(16)));
-
-      Value offset =
-          add(mul(myRow, i32_val(rowStride)), mul(myCol, i32_val(2)));
-      rewriter.replaceOp(op, {offset});
+      ptxAsm = "{\n"
+               ".reg .u64 a<5>;      \n"
+               "div.u32 a0, $2, 4; \n"          // iterOfCol = udiv(elemIdx,
+                                                // i32_val(4))
+               "and.b32 a1, $1, 0xf; \n"        // myRow = and_(threadId,
+                                                // i32_val(0xf))
+               "add.u32 a1, a1, $3; \n"         // myRow = myRow + rowOfWarp
+               "shr.b32 a2, $1, 4; \n"          // myCol = lshr(threadId,
+                                                // i32_val(4))
+               "and.b32 a2, a2, 0x1; \n"        // myCol = and_(myCol,
+                                                // i32_val(0x1))
+               "mul.lo.u32 a2, a2, 8; \n"       // myCol = mul(myCol,
+                                                // i32_val(8))
+               "mul.u32 a3, a1, #rowStride; \n" // offset = myRow * rowStride
+               "mad.lo.u32 $0, a2, 2, a3; \n"   // result = add(mul(myCol,
+                                                // i32_val(2)), offset)
+               "}\n";
     }
-    return mlir::success();
+
+    return ptxAsm;
   }
 };
 
@@ -1155,35 +1065,43 @@ public:
     ModuleOp mod = getOperation();
     RewritePatternSet patterns(context);
 
-    patterns.add<CGABarrierSyncOpPattern>(context);
-    patterns.add<FenceAsyncSharedOpPattern>(context);
-    patterns.add<WGMMAFenceOpPattern>(context);
-    patterns.add<WGMMACommitGroupOpPattern>(context);
-    patterns.add<WGMMAWaitGroupOpPattern>(context);
-    patterns.add<StoreMatrixOpPattern>(context);
-    patterns.add<OffsetOfStmatrixV4OpPattern>(context);
-    patterns.add<WGMMADescCreateOpPattern>(context);
-    patterns.add<MBarrierInitOpPattern>(context);
-    patterns.add<MBarrierArriveOpPattern>(context);
-    patterns.add<MBarrierWaitOpPattern>(context);
-    patterns.add<ClusterArriveOpPattern>(context);
-    patterns.add<ClusterWaitOpPattern>(context);
-    patterns.add<TMALoadTiledOpPattern>(context);
-    patterns.add<TMAStoreTiledOpPattern>(context);
-    patterns.add<LoadDSmemOpPattern>(context);
-    patterns.add<ClusterCTAIdOpPattern>(context);
-    patterns.add<RegAllocOpPattern>(context);
-    patterns.add<RegDeallocOpPattern>(context);
-    patterns.add<WGMMAOpPattern>(context);
-    patterns.add<NamedBarrierWaitOpPattern>(context);
-    patterns.add<NamedBarrierArriveOpPattern>(context);
+#define POPULATE_NVGPU_OP(SRC_OP, ASM)                                         \
+  patterns.add<NVGPUOpGenericPattern<SRC_OP>>(context, ASM, Constraints(),     \
+                                              Constraints());
+    POPULATE_NVGPU_OP(ttn::RegAllocOp, Reg_Alloc_Op)
+    POPULATE_NVGPU_OP(ttn::WGMMAFenceOp, Wgmma_Fence_Op)
+    POPULATE_NVGPU_OP(ttn::CGABarrierSyncOp, Cga_Barrier_Sync_op)
+    POPULATE_NVGPU_OP(ttn::WGMMACommitGroupOp, Wgmma_Commit_Group_Op)
+    POPULATE_NVGPU_OP(ttn::WGMMAWaitGroupOp, Wgmma_Wait_Group_Op)
+    POPULATE_NVGPU_OP(ttn::ClusterWaitOp, Cluster_Wait_Op)
+    POPULATE_NVGPU_OP(ttn::FenceMBarrierInitOp, Fence_Mbarrier_Init_Op)
+    POPULATE_NVGPU_OP(ttn::CGABarrierArriveOp, Cga_Barrier_Arrive_Op)
+    POPULATE_NVGPU_OP(ttn::CGABarrierWaitOp, Cga_Barrier_Wait_Op)
+    POPULATE_NVGPU_OP(ttn::RegDeallocOp, Reg_Dealloc_Op)
+#undef POPULATE_NVGPU_OP
+    patterns.add<NVGPUOpGenericPattern<ttn::MBarrierInitOp>>(
+        context, Mbarrier_Init_Op, Constraints(), Constraints({"r", "b"}));
+    patterns.add<NVGPUOpGenericPattern<ttn::MBarrierWaitOp>>(
+        context, Mbarrier_Wait_Op, Constraints(), Constraints({"r", "r"}));
+    patterns.add<NVGPUOpGenericPattern<ttn::NamedBarrierArriveOp>>(
+        context, Named_Barrier_Arrive_Op, Constraints(),
+        Constraints({"r", "r"}));
+    patterns.add<NVGPUOpGenericPattern<ttn::NamedBarrierWaitOp>>(
+        context, Named_Barrier_Wait_Op, Constraints(), Constraints({"r", "r"}));
+    patterns.add<NVGPUOpGenericPattern<ttn::Sts64Op>>(
+        context, Sts64_Op, Constraints(), Constraints({"r", "r", "r"}));
+    patterns.add<NVGPUOpGenericPattern<ttn::ClusterCTAIdOp>>(
+        context, Cluster_Cta_Id_Op, Constraints({"=r"}), Constraints());
+    patterns.add<NVGPUOpGenericPattern<ttn::WGMMADescCreateOp>>(
+        context, Wgmma_Desc_Create_op, Constraints({"=l"}),
+        Constraints({"l", "l"}));
 
-    patterns.add<FenceMBarrierInitOpPattern>(context);
-    patterns.add<StoreDSmemOpPattern>(context);
-    patterns.add<Sts64OpPattern>(context);
-    patterns.add<OffsetOfSts64OpPattern>(context);
-    patterns.add<CGABarrierWaitOpPattern>(context);
-    patterns.add<CGABarrierArriveOpPattern>(context);
+    patterns.add<FenceAsyncSharedOpPattern, StoreMatrixOpPattern,
+                 OffsetOfStmatrixV4OpPattern, MBarrierArriveOpPattern,
+                 ClusterArriveOpPattern, TMALoadTiledOpPattern,
+                 TMAStoreTiledOpPattern, LoadDSmemOpPattern, WGMMAOpPattern,
+                 StoreDSmemOpPattern, OffsetOfSts64OpPattern>(context);
+
     if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
   }
