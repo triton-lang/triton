@@ -25,6 +25,7 @@ torch_types = ["int8", "uint8", "int16", "int32", "long", "float16", "float32", 
     ("device_print_large", "int32"),
     ("print_multiple_args", "int32"),
     ("device_print_multiple_args", "int32"),
+    ("device_print_single_element", "int32"),
 ])
 def test_print(func_type: str, data_type: str):
     proc = subprocess.Popen([sys.executable, print_path, func_type, data_type], stdout=subprocess.PIPE, shell=False)
@@ -53,6 +54,9 @@ def test_print(func_type: str, data_type: str):
         for i in range(128):
             expected_lines[f"pid (0, 0, 0) idx ({i:3}): (operand 0) {i}"] = 1
             expected_lines[f"pid (0, 0, 0) idx ({i:3}): (operand 1) 1"] = 1
+    elif func_type == "device_print_single_element":
+        line = "pid (0, 0, 0) idx (12,  13) x: 844"
+        expected_lines[line] = 1
 
     actual_lines = Counter()
     for line in outs:

@@ -139,7 +139,8 @@ struct PrintOpConversion
       llvm::raw_string_ostream os(formatStr);
       os << "pid (" << getFormatSubstr(pid[0]) << ", "
          << getFormatSubstr(pid[1]) << ", " << getFormatSubstr(pid[2]) << ")%s";
-      llPrintf(formatStr, {pid[0], pid[1], pid[2], prefixStr}, rewriter);
+      llPrintf(op, formatStr, {pid[0], pid[1], pid[2], prefixStr}, Value(),
+               rewriter);
     } else {
       for (size_t i = 0; i < op.getNumOperands(); i++) {
         // Elements of the tensor that are resident in this GPU thread.
@@ -173,9 +174,9 @@ struct PrintOpConversion
         }
 
         if (!elems.empty()) {
-          printTensor(prefixStr, /*operand=*/i,
+          printTensor(op, prefixStr, /*operand=*/i,
                       /*numOperands=*/op.getNumOperands(), elems, pid, indices,
-                      dimWidths, rewriter);
+                      dimWidths, op.getIndices(), op.getLoc(), rewriter);
         }
       }
     }
@@ -183,11 +184,12 @@ struct PrintOpConversion
     return success();
   }
 
-  void printTensor(Value prefixStr, size_t operand, size_t numOperands,
-                   ArrayRef<Value> elems, std::array<Value, 3> pid,
+  void printTensor(Operation *op, Value prefixStr, size_t operand,
+                   size_t numOperands, ArrayRef<Value> elems,
+                   std::array<Value, 3> pid,
                    ArrayRef<SmallVector<Value>> indices,
-                   ArrayRef<int> dimWidths,
-                   ConversionPatternRewriter &rewriter) const {
+                   ArrayRef<int> dimWidths, ArrayRef<int32_t> indicesToPrint,
+                   Location loc, ConversionPatternRewriter &rewriter) const {
     assert(!elems.empty());
     assert(elems.size() == indices.size());
     assert(dimWidths.size() == indices.front().size());
@@ -255,14 +257,22 @@ struct PrintOpConversion
       os << getFormatSubstr(elem);
       printfOperands.push_back(elem);
 
+      Value cnd = int_val(1, true);
+      for (int j = 0, e = indicesToPrint.size(); j < e; j++) {
+        if (j >= index.size()) {
+          break;
+        }
+        cnd = and_(cnd, icmp_eq(index[j], i32_val(indicesToPrint[j])));
+      }
+
       // It's the same format string each iteration, but it's a lot easier if we
       // construct the format string at the same time as we populate
       // printfOperands.  But we don't want to create BLOCK_SIZE duplicate
       // strings, so we cache the Value.
       if (i == 0) {
-        formatStrValue = llPrintf(formatStr, printfOperands, rewriter);
+        formatStrValue = llPrintf(op, formatStr, printfOperands, cnd, rewriter);
       } else {
-        llPrintf(formatStrValue, printfOperands, rewriter);
+        llPrintf(op, formatStrValue, printfOperands, cnd, rewriter);
       }
     }
   }
@@ -345,8 +355,8 @@ struct PrintOpConversion
   }
 
   // Returns a Value for the format string, which you can reuse.
-  static Value llPrintf(StringRef msg, ValueRange args,
-                        ConversionPatternRewriter &rewriter) {
+  static Value llPrintf(Operation *op, StringRef msg, ValueRange args,
+                        Value cnd, ConversionPatternRewriter &rewriter) {
     assert(!msg.empty() && "printf with empty string not supported");
     llvm::SmallString<64> msgNewline(msg);
     msgNewline.push_back('\n');
@@ -354,19 +364,19 @@ struct PrintOpConversion
     Value msgValue =
         LLVM::addStringToModule(UnknownLoc::get(rewriter.getContext()),
                                 rewriter, "printfFormat_", msgNewline);
-    llPrintf(msgValue, args, rewriter);
+    llPrintf(op, msgValue, args, cnd, rewriter);
     return msgValue;
   }
 
-  static void llPrintf(Value msg, ValueRange args,
+  static void llPrintf(Operation *op, Value msg, ValueRange args, Value cnd,
                        ConversionPatternRewriter &rewriter) {
-    Type int8Ptr = ptr_ty(i8_ty);
 
     auto *ctx = rewriter.getContext();
     auto moduleOp =
         rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     auto funcOp = getVprintfDeclaration(rewriter);
     auto loc = UnknownLoc::get(ctx);
+    Type int8Ptr = ptr_ty(i8_ty);
 
     Value one = i32_val(1);
     Value zero = i32_val(0);
@@ -398,8 +408,33 @@ struct PrintOpConversion
       bufferPtr = bitcast(allocated, int8Ptr);
     }
 
+    Block *thenBlock = nullptr;
+    if (cnd) {
+      // #block1
+      // if (condition) {
+      //   #block2
+      //   __assertfail(message);
+      // }
+      // #block3
+      Block *prevBlock = op->getBlock();
+      Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
+      rewriter.setInsertionPointToStart(ifBlock);
+
+      // Split a block after the call.
+      thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
+      rewriter.setInsertionPointToEnd(ifBlock);
+      Operation *endifBr = rewriter.create<cf::BranchOp>(loc, thenBlock);
+      rewriter.setInsertionPointToEnd(prevBlock);
+      rewriter.create<cf::CondBranchOp>(loc, cnd, ifBlock, thenBlock);
+
+      rewriter.setInsertionPoint(endifBr);
+    }
+
     SmallVector<Value> operands{msg, bufferPtr};
     call(funcOp, operands);
+    if (thenBlock) {
+      rewriter.setInsertionPointToStart(thenBlock);
+    }
   }
 };
 
