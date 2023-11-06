@@ -376,9 +376,9 @@ def get_arch_default_num_stages(device_type, capability=None):
     return num_stages
 
 
-def add_cuda_stages(target, extern_libs, stages):
+def add_cuda_stages(target, extern_libs, stages, ptx_version: int = None):
 
-    stages["ptx"] = (lambda path: Path(path).read_text(), lambda src: llir_to_ptx(src, target))
+    stages["ptx"] = (lambda path: Path(path).read_text(), lambda src: llir_to_ptx(src, target), ptx_version)
     stages["cubin"] = (lambda path: Path(path).read_bytes(), lambda src: ptx_to_cubin(src, target))
 
 
@@ -386,6 +386,7 @@ def compile(fn, **kwargs):
     # Get device type to decide which backend should be used
     device_type = kwargs.get("device_type", "cuda")
     capability = kwargs.get("cc", None)
+    ptx_version = kwargs.get("ptx_version", None)
 
     if is_hip():
         device_type = "hip"
@@ -439,7 +440,7 @@ def compile(fn, **kwargs):
             enable_warp_specialization, enable_persistent, optimize_epilogue))
         stages["llir"] = (lambda path: Path(path).read_text(),
                           lambda src: ttgir_to_llir(src, extern_libs, target, tma_infos))
-        add_cuda_stages(target, extern_libs, stages)
+        add_cuda_stages(target, extern_libs, stages, ptx_version=ptx_version)
     elif device_type == "hip":
         _device_backend.add_stages(target, extern_libs, stages, num_warps=num_warps, num_stages=num_stages)
     else:
