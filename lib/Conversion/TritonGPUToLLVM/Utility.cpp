@@ -282,14 +282,6 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
                             Value val, Value i, int strideInt, NVVM::ShflKind mode,
                             Value clamp, Value laneId = Value()) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
-  //int stride = i.cast<unsigned>();
-  //int stride = i.dyn_cast<int>();
-  //int stride = i.cast<int>().getValue().getSExtValue();
-  //int stride = i.Value();
-  //constantOp.getValue().cast<IntegerAttr>().getValue().getSExtValue();
-  //unsigned strideint = i.cast<IntegerAttr>().getValue().getSExtValue();
-  //auto intAttr = i.dyn_cast_or_null<IntegerAttr>();
-  //auto strideint = intAttr.getValue().getSExtValue();
 
 #ifdef USE_ROCM
   //On AMD, the ds_swizzle_b32 and ds_permute_b32 instructions work on 32bit/dwords
@@ -316,6 +308,21 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
 
 #ifdef USE_ROCM
   GCNBuilder builder;
+
+  auto permute = [&](Value lane, StringRef permuteInstStr) {
+    assert(permuteInstStr == "ds_permute_b32" ||
+           permuteInstStr == "ds_bpermute_b32");
+    // Multiple lineId by 4. (More on permute instruction semantics:
+    // https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/instinct-mi200-cdna2-instruction-set-architecture.pdf#page=180
+    Value byteOffset = i32_val(2);
+    Value permuteAddr = shl(lane, byteOffset);
+    auto shfl = builder.create(permuteInstStr.str());
+    auto dOpr = builder.newOperand("=v");
+    auto addrOpr = builder.newOperand(permuteAddr, "v");
+    auto aOpr = builder.newOperand(val, "v");
+    (*shfl)(dOpr, addrOpr, aOpr);
+  };
+
   switch (mode) {
   case NVVM::ShflKind::bfly:
     if (strideInt > 16) {
@@ -327,14 +334,8 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
                       loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x)})
               .getResult(0);
       Value stride = i32_val(32);
-      Value byteOffset = i32_val(2);
       Value lineId = add(threadId, stride);
-      Value permuteAddr = shl(lineId, byteOffset);
-      auto shfl = builder.create("ds_permute_b32");
-      auto dOpr = builder.newOperand("=v");
-      auto addrOpr = builder.newOperand(permuteAddr, "v");
-      auto aOpr = builder.newOperand(val, "v");
-      (*shfl)(dOpr, addrOpr, aOpr);
+      permute(lineId, "ds_permute_b32");
     } else {
       // This map facilates the butterfly shuffle pattern for a stride less
       // than 16. The pattern stride is the key of the map.
@@ -348,18 +349,18 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
       (*shfl)(dOpr, aOpr, maskOpr);
     }
     break;
-  case NVVM::ShflKind::up:
-    //assert(shuffleType == "up" && "Only shfl_bfly and shfl_up are supported");
+  case NVVM::ShflKind::up: {
     Value mask = icmp_slt(laneId, i);
     Value delta = sub(laneId, i);
     Value index = select(mask, laneId, delta);
-    Value byteOffset = i32_val(2);
-    Value permuteAddr = shl(index, byteOffset);
-    auto shfl = builder.create("ds_bpermute_b32");
-    auto dOpr = builder.newOperand("=v");
-    auto addrOpr = builder.newOperand(permuteAddr, "v");
-    auto aOpr = builder.newOperand(val, "v");
-    (*shfl)(dOpr, addrOpr, aOpr);
+    permute(index, "ds_bpermute_b32");
+    break;
+  }
+  case NVVM::ShflKind::idx:
+    permute(i, "ds_bpermute_b32");
+    break;
+  default:
+    assert(false && "Unsupported ShflKind");
     break;
   }
 
