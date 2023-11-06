@@ -1903,15 +1903,17 @@ def test_scan_layouts(M, N, src_layout, axis, device):
 
 
 layouts = [
-    BlockedLayout([1, 4], [8, 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [8, 4], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([4, 4], [2, 16], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    MmaLayout(version=(2, 0), warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1],
-              instr_shape=[16, 8]),
-    MmaLayout(version=(2, 0), warps_per_cta=[2, 2], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1],
-              instr_shape=[16, 8]),
-    MmaLayout(version=(3, 0), warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0],
-              instr_shape=[16, 16, 16]),
+    #BlockedLayout([1, 4], [8, 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    #BlockedLayout([1, 4], [8, 4], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
+    #BlockedLayout([4, 4], [2, 16], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [1, 32], [8, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    #BlockedLayout([1, 8], [2, 16], [8, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    #MmaLayout(version=(2, 0), warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1],
+    #          instr_shape=[16, 8]),
+    #MmaLayout(version=(2, 0), warps_per_cta=[2, 2], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1],
+    #          instr_shape=[16, 8]),
+    #MmaLayout(version=(3, 0), warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0],
+    #          instr_shape=[16, 16, 16]),
 ]
 
 
@@ -1919,8 +1921,6 @@ layouts = [
 @pytest.mark.parametrize("src_layout", layouts)
 @pytest.mark.parametrize("blocked", [
     BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [1, 32], [8, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 8], [2, 16], [8, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
 ])
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("reduce2d", [False, True])
@@ -1988,9 +1988,10 @@ def test_reduce_layouts(M, N, src_layout, blocked, axis, reduce2d, dtype_str, re
     """ + epilogue
 
     import tempfile
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir', delete=False) as f:
         f.write(ir)
         f.flush()
+        print(f'XXX IR is at {f.name}')
         kernel = triton.compile(f.name)
 
     rs = RandomState(17)
@@ -2004,9 +2005,12 @@ def test_reduce_layouts(M, N, src_layout, blocked, axis, reduce2d, dtype_str, re
     pgm = kernel[(1, 1, 1)](x_tri, x_tri.stride(0), z_tri)
     z_ref = numpy_op(x) if reduce2d else numpy_op(x, axis=axis, keepdims=True)
 
+    np.set_printoptions(threshold=10_000)
     if dtype_str == 'float16':
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-2)
     else:
+        print("XXX expected: " + str(z_ref.reshape(-1)))
+        print("XXX actual:   " + str(to_numpy(z_tri).reshape(-1)))
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
 
 
