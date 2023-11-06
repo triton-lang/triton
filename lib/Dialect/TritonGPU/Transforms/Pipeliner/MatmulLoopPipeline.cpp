@@ -235,7 +235,7 @@ static void collectOpsToPipeline(scf::ForOp forOp,
               std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
 
         auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
-        if (!tensorTy || tensorTy.getRank() < 2)
+        if (!tensorTy)
           continue;
         auto ty =
             tensorTy.getElementType().cast<tt::PointerType>().getPointeeType();
