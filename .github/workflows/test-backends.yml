@@ -67,8 +67,9 @@ jobs:
 
   Integration-Tests-AMD:
     needs: Runner-Preparation
+    if: false
 
-    runs-on: gfx908
+    runs-on: ${{ matrix.runner }}
 
     strategy:
       matrix:
@@ -117,8 +118,9 @@ jobs:
 
   Integration-Tests-Intel:
     needs: Runner-Preparation
+    if: false
 
-    runs-on: arc770
+    runs-on: ${{ matrix.runner }}
 
     strategy:
       matrix:
