@@ -1730,7 +1730,8 @@ def inline_asm_elementwise(asm: str, constraints: str, args: list, dtype, is_pur
             for i, item in enumerate(dispatch_args):
                 dispatch_args[i], _ = bin_op_type_checking(item, broadcast_arg)
             res_ty = block_type(dtype, broadcast_arg.shape)
-    call = _builder.create_inline_asm(asm, constraints, [t.handle for t in dispatch_args], res_ty.to_ir(_builder), is_pure, pack)
+    handles = [t.handle for t in dispatch_args]
+    call = _builder.create_inline_asm(asm, constraints, handles, res_ty.to_ir(_builder), is_pure, pack)
     return tensor(call, res_ty)
 
 
