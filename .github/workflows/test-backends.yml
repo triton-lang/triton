@@ -3,7 +3,11 @@ name: Backend Tests
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, backend_tests_2]
+
+concurrency:
+  group: ${{ github.ref }}_backend_tests
+  cancel-in-progress: true
 
 jobs:
   Runner-Preparation:
@@ -22,6 +26,7 @@ jobs:
 
 
   Integration-Tests-Shared-Middle-Layer:
+    needs: Runner-Preparation
 
     runs-on: ubuntu-latest
 
@@ -68,7 +73,7 @@ jobs:
   Integration-Tests-AMD:
     needs: Runner-Preparation
 
-    runs-on: gfx908
+    runs-on: ${{ matrix.runner }}
 
     strategy:
       matrix:
@@ -118,7 +123,7 @@ jobs:
   Integration-Tests-Intel:
     needs: Runner-Preparation
 
-    runs-on: arc770
+    runs-on: ${{ matrix.runner }}
 
     strategy:
       matrix:
