@@ -411,6 +411,7 @@ struct ConvertTritonGPUToLLVM
 
     // Preprocess
     decomposeFp8e4b15Convert(mod);
+    decomposeSplatToSharedLayout(mod, numWarps, threadsPerWarp, numCTAs);
     decomposeMmaToDotOperand(mod, numWarps, threadsPerWarp, numCTAs);
     decomposeBlockedToDotOperand(mod);
     decomposeInsertSliceAsyncOp(mod);
@@ -651,6 +652,31 @@ private:
       addWSNamedAttrs(newRet, cvtOp->getAttrs());
       cvtOp.replaceAllUsesWith(newRet.getResult());
       cvtOp.erase();
+    });
+  }
+
+  void decomposeSplatToSharedLayout(ModuleOp mod, int numWarps,
+                                    int threadsPerWarp, int numCTAs) const {
+    // Replace `splat -> shared` with `splat -> blocked -> shared`.
+    mod.walk([&](triton::SplatOp splatOp) -> void {
+      auto dstType = splatOp.getType().cast<RankedTensorType>();
+      auto shared =
+          dstType.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
+      if (shared) {
+        OpBuilder builder(splatOp);
+        SmallVector<unsigned, 4> sizePerThread(dstType.getRank(), 1);
+        auto newType = RankedTensorType::get(
+            dstType.getShape(), dstType.getElementType(),
+            triton::gpu::BlockedEncodingAttr::get(
+                mod.getContext(), dstType.getShape(), sizePerThread,
+                getOrder(shared), numWarps, threadsPerWarp, numCTAs));
+        auto newSplat = builder.create<triton::SplatOp>(
+            splatOp.getLoc(), newType, splatOp.getOperand());
+        auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
+            splatOp.getLoc(), dstType, newSplat.getResult());
+        splatOp.replaceAllUsesWith(newConvert.getResult());
+        splatOp.erase();
+      }
     });
   }
 
