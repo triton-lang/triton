@@ -426,9 +426,6 @@ class CodeGenerator(ast.NodeVisitor):
             raise UnsupportedLanguageConstruct(None, node, "simultaneous multiple assignment is not supported.")
         names = _names[0]
         values = self.visit(node.value)
-        if not isinstance(node.value, ast.Constant) and _is_constexpr(values):
-            self.set_value(names, values)
-            return
         if not _is_list_like(names):
             names = [names]
         if not _is_list_like(values):
