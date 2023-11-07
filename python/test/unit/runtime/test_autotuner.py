@@ -12,7 +12,7 @@ def test_kwargs():
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
 
-    @triton.autotune(configs=configs, key=['N'])
+    @triton.autotune(configs=configs, key=['N'], rep=1)
     @triton.jit
     def _kernel(dst, src, N, BLOCK_SIZE: tl.constexpr):
         offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
@@ -30,7 +30,7 @@ def test_restore():
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
 
-    @triton.autotune(configs=configs, key=['N'], restore_value=['src'])
+    @triton.autotune(configs=configs, key=['N'], restore_value=['src'], rep=1)
     @triton.jit
     def _kernel(src, N, BLOCK_SIZE: tl.constexpr):
         offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
@@ -59,14 +59,16 @@ def test_prune_configs(with_perf_model: bool):
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
 
+    if with_perf_model:
+        prune_configs_by = {'perf_model': perf_model, 'top_k': 1}
+    else:
+        prune_configs_by = {'early_config_prune': early_config_prune}
+
     @triton.autotune(
         configs=configs,
         key=['N'],
-        prune_configs_by={
-            'early_config_prune': None if with_perf_model else early_config_prune,
-            'perf_model': perf_model if with_perf_model else None,
-            'top_k': 1,
-        },
+        prune_configs_by=prune_configs_by,
+        rep=1
     )
     @triton.jit
     def _kernel(dst, src, N, BLOCK_SIZE: tl.constexpr):
@@ -76,6 +78,7 @@ def test_prune_configs(with_perf_model: bool):
 
     grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )
     _kernel[grid](dst, src, N)
+    torch.testing.assert_close(src, dst)
     assert len(records) == 1
     if with_perf_model:
         assert records['run_perf_model']
