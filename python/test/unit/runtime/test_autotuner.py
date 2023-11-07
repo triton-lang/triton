@@ -64,13 +64,7 @@ def test_prune_configs(with_perf_model: bool):
     else:
         prune_configs_by = {'early_config_prune': early_config_prune}
 
-    @triton.autotune(
-        configs=configs,
-        key=['N'],
-        prune_configs_by=prune_configs_by,
-        warmup=1,
-        rep=1
-    )
+    @triton.autotune(configs=configs, key=['N'], prune_configs_by=prune_configs_by, warmup=1, rep=1)
     @triton.jit
     def _kernel(dst, src, N, BLOCK_SIZE: tl.constexpr):
         offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
