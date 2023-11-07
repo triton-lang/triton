@@ -313,7 +313,7 @@ arg_type_pattern = {
     "ptx": ptx_arg_type_pattern,
 }
 if is_hip():
-    ttgir_num_warps_pattern = r'"triton_gpu_rocm.num-warps"\s?=\s?(\d+)\s?:'
+    ttgir_num_warps_pattern = r'"triton_gpu.num-warps"\s?=\s?(\d+)\s?:'
 else:
     ttgir_num_warps_pattern = r'"triton_gpu.num-warps"\s?=\s?(\d+)\s?:'
 
