@@ -1,22 +1,14 @@
 name: Backend Tests
 
 on:
-  push:
-   branches: [main, ci_main_backend_check]
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
-
-env:
-  TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
+  push:
+    branches: [main, ci_main_backend_check]
 
 jobs:
   Runner-Preparation:
     runs-on: ubuntu-latest
     outputs:
-      matrix-required: ${{ steps.set-matrix.outputs.matrix-required }}
       matrix-optional: ${{ steps.set-matrix.outputs.matrix-optional }}
     steps:
       - name: Prepare runner matrix
