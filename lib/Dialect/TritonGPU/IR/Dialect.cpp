@@ -600,6 +600,63 @@ bool isExpensiveCat(CatOp cat, Attribute targetEncoding) {
   return newTotalElemsPerThread < totalElemsPerThread;
 }
 
+// Is `vals` some permutation of the numbers 0..(vals.size()-1)?
+static bool isPermutationOfIota(ArrayRef<unsigned> vals) {
+  SmallVector<unsigned, 4> sorted(vals.begin(), vals.end());
+  llvm::sort(sorted);
+  for (int i = 0; i < sorted.size(); i++) {
+    if (sorted[i] != i) {
+      return false;
+    }
+  }
+  return true;
+}
+
+LogicalResult CTALayoutAttr::verify(
+    function_ref<InFlightDiagnostic()> emitError, ArrayRef<unsigned> CTAsPerCGA,
+    ArrayRef<unsigned> CTASplitNum, ArrayRef<unsigned> CTAOrder) {
+  if (CTAsPerCGA.size() != CTASplitNum.size() ||
+      CTASplitNum.size() != CTAOrder.size()) {
+    return emitError() << "CTAsPerCTA, CTASplitNum, and CTAOrder must all have "
+                          "the same rank.";
+  }
+
+  if (!isPermutationOfIota(CTAOrder)) {
+    return emitError()
+           << "CTAOrder must be a permutation of 0..(rank-1), but was ["
+           << CTAOrder << "]";
+  }
+  return success();
+}
+
+LogicalResult
+BlockedEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                            ArrayRef<unsigned> sizePerThread,
+                            ArrayRef<unsigned> threadsPerWarp,
+                            ArrayRef<unsigned> warpsPerCTA,
+                            ArrayRef<unsigned> order, CTALayoutAttr CTALayout) {
+  if (sizePerThread.size() != threadsPerWarp.size() ||
+      threadsPerWarp.size() != warpsPerCTA.size() ||
+      warpsPerCTA.size() != order.size()) {
+    return emitError() << "sizePerThread, threadsPerWarp, warpsPerCTA, and "
+                          "order must all have the same rank.";
+  }
+
+  // Empty CTALayout is allowed, but if it's present its rank must match the
+  // BlockedEncodingAttr's rank.
+  if (CTALayout.getCTASplitNum().size() != 0 &&
+      sizePerThread.size() != CTALayout.getCTASplitNum().size()) {
+    return emitError() << "BlockedEncodingAttr and CTALayout's fields must "
+                          "have the same rank.";
+  }
+  if (!isPermutationOfIota(order)) {
+    return emitError()
+           << "order must be a permutation of 0..(rank-1), but was [" << order
+           << "]";
+  }
+  return success();
+}
+
 } // namespace gpu
 } // namespace triton
 } // namespace mlir

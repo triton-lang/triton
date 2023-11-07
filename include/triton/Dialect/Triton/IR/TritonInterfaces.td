@@ -4,6 +4,7 @@
 include "mlir/IR/OpBase.td"
 
 def TensorSizeTrait : NativeOpTrait<"TensorSizeTrait">;
+def VerifyTensorLayoutsTrait : NativeOpTrait<"VerifyTensorLayoutsTrait">;
 def SameOperandsEncoding : NativeOpTrait<"SameOperandsEncoding">;
 def SameOperandsAndResultEncoding : NativeOpTrait<"SameOperandsAndResultEncoding">;
 def SameLoadStoreOperandsShape : NativeOpTrait<"SameLoadStoreOperandsShape">;
