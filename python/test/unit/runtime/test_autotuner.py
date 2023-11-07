@@ -12,7 +12,7 @@ def test_kwargs():
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
 
-    @triton.autotune(configs=configs, key=['N'], rep=1)
+    @triton.autotune(configs=configs, key=['N'], warmup=1, rep=1)
     @triton.jit
     def _kernel(dst, src, N, BLOCK_SIZE: tl.constexpr):
         offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
@@ -30,7 +30,7 @@ def test_restore():
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
 
-    @triton.autotune(configs=configs, key=['N'], restore_value=['src'], rep=1)
+    @triton.autotune(configs=configs, key=['N'], restore_value=['src'], warmup=1, rep=1)
     @triton.jit
     def _kernel(src, N, BLOCK_SIZE: tl.constexpr):
         offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
@@ -68,6 +68,7 @@ def test_prune_configs(with_perf_model: bool):
         configs=configs,
         key=['N'],
         prune_configs_by=prune_configs_by,
+        warmup=1,
         rep=1
     )
     @triton.jit
