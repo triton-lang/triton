@@ -16,7 +16,9 @@ include "mlir/Interfaces/ViewLikeInterface.td"
 def ResultsAreSharedEncoding: NativeOpTrait<"ResultsAreSharedEncoding">;
 
 class TTG_Op<string mnemonic, list<Trait> traits = []> :
-    Op<TritonGPU_Dialect, mnemonic, traits>;
+    Op<TritonGPU_Dialect, mnemonic,
+       !listconcat(traits, [VerifyTensorLayoutsTrait])> {
+}
 
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
                                  [SameOperandsAndResultShape,

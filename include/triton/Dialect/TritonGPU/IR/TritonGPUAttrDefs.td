@@ -52,6 +52,7 @@ def CTALayoutAttr : TritonGPU_Attr<"CTALayout"> {
     ArrayRefParameter<"unsigned">:$CTASplitNum,
     ArrayRefParameter<"unsigned">:$CTAOrder
   );
+  let genVerifyDecl = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -375,6 +376,7 @@ for
     ArrayRefParameter<"unsigned">:$order, // the fastest-changing axis first
     "CTALayoutAttr":$CTALayout
   );
+  let genVerifyDecl = 1;
 
   let builders = [
     AttrBuilder<(ins "ArrayRef<int64_t>":$shape,
