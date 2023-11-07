@@ -27,7 +27,7 @@ import triton.language as tl
 # This group gemm kernel launches a fixed number of CTA to compute a group
 # of gemms. The scheduling is static and we do it on device
 @triton.autotune(
-    configs= [
+    configs=[
         triton.Config(
             {
                 'BLOCK_SIZE_M': 128,

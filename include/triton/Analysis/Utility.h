@@ -36,7 +36,9 @@ public:
 
   triton::ReduceOp getOperation() { return op; }
 
-  bool isFastReduction();
+  bool isReductionOnLayoutFastAxis();
+
+  unsigned getThreadOffsetOnReductionAxis();
 
   bool isWarpSynchronous();
 
@@ -50,13 +52,15 @@ public:
 
   unsigned getThreadsReductionAxis();
 
-  SmallVector<unsigned> getScratchConfigBasic();
-
-  SmallVector<SmallVector<unsigned>> getScratchConfigsFast();
+  SmallVector<unsigned> getScratchConfig();
 
   unsigned getScratchSizeInBytes();
 
   bool isSupportedLayout();
+
+  bool isReduceWithinCTA();
+
+  unsigned getAxis() { return axis; }
 
 private:
   triton::ReduceOp op;
@@ -84,8 +88,12 @@ public:
   unsigned getNonAxisNumThreadsPerCTA();
   // Return the number of warps per CTA along axis dim.
   unsigned getAxisNumWarps();
+  // Return the number of warps per CTA along axis dim with unique data.
+  unsigned getAxisNumWarpsWithUniqueData();
   // Return the number of threads per warp along axis dim.
   unsigned getAxisNumThreadsPerWarp();
+  // Return the number of threads per warp along axis dim with unique data.
+  unsigned getAxisNumThreadsPerWarpWithUniqueData();
   // Return the number of blocks along axis dim.
   unsigned getAxisNumBlocks();
   // Return the number of blocks along non axis dim.
@@ -103,6 +111,7 @@ public:
   Location getLoc() { return scanOp.getLoc(); }
   unsigned getAxis() { return scanOp.getAxis(); }
   triton::gpu::BlockedEncodingAttr getEncoding();
+  llvm::ArrayRef<int64_t> getShape();
   Region &getCombineOp();
 
 private:
@@ -127,6 +136,10 @@ bool isSingleValue(Value value);
 bool isMmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy);
 
 bool isMmaToMmaShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy);
+
+// Return true if the src and dst layout match.
+bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
+                                   RankedTensorType dstTy);
 
 // TODO: Move utility functions that belong to ConvertLayoutOp to class
 // ConvertLayoutOpHelper in the future

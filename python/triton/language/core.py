@@ -293,7 +293,7 @@ class dtype:
         return self.name
 
     def __repr__(self):
-        return f'triton.language.{self.name}'
+        return f'triton.language.{str(self)}'
 
 
 class pointer_type(dtype):
@@ -551,9 +551,7 @@ class tensor:
         # IR handle
         self.handle = handle
         # Block shape
-        self.shape = (1, )
-        if type.is_block():
-            self.shape = type.shape
+        self.shape = type.shape if type.is_block() else ()
         self.numel = 1
         for s in self.shape:
             self.numel *= s
@@ -564,14 +562,15 @@ class tensor:
         self.shape = [constexpr(s) for s in self.shape]
 
     def __str__(self) -> str:
-        # ex. "float32[3,4]"
-        return str(self.dtype) + '[' + ','.join(str(s) for s in self.shape) + ']'
+        # ex. "float32[16, 32]"
+        return str(self.dtype) + '[' + ', '.join(str(s) for s in self.shape) + ']'
 
     @builtin
     def __add__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.add(self, other, _builder)
 
+    @builtin
     def __radd__(self, other, _builder=None):
         return self.__add__(other, _builder=_builder)
 
@@ -580,6 +579,7 @@ class tensor:
         other = _to_tensor(other, _builder)
         return semantic.sub(self, other, _builder)
 
+    @builtin
     def __rsub__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.sub(other, self, _builder)
@@ -589,6 +589,7 @@ class tensor:
         other = _to_tensor(other, _builder)
         return semantic.mul(self, other, _builder)
 
+    @builtin
     def __rmul__(self, other, _builder=None):
         return self.__mul__(other, _builder=_builder)
 
@@ -597,6 +598,7 @@ class tensor:
         other = _to_tensor(other, _builder)
         return semantic.truediv(self, other, _builder)
 
+    @builtin
     def __rtruediv__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.truediv(other, self, _builder)
@@ -688,8 +690,6 @@ class tensor:
         else:
             return semantic.lshr(other, self, _builder)
 
-    # comparison operators
-
     # >
     @builtin
     def __gt__(self, other, _builder=None):
@@ -763,11 +763,11 @@ class tensor:
 
     @builtin
     def __getitem__(self, slices, _builder=None):
-        if isinstance(slices, slice):
+        if isinstance(slices, (slice, constexpr)):
             slices = [slices]
         ret = self
         for dim, sl in enumerate(slices):
-            if isinstance(sl, constexpr) and sl.value is None:
+            if sl is None or isinstance(sl, constexpr) and sl.value is None:
                 ret = semantic.expand_dims(ret, dim, _builder)
             elif isinstance(sl, slice) and sl.start is None and sl.stop is None and sl.step is None:
                 pass
@@ -852,6 +852,8 @@ def arange(start, end, _builder=None):
 def _shape_check_impl(shape):
     shape = _constexpr_to_value(shape)
     for i, d in enumerate(shape):
+        if isinstance(d, int):
+            d = constexpr(d)
         if not isinstance(d, constexpr):
             raise TypeError(f"Shape element {i} must have type `constexpr`")
         if not isinstance(d.value, int):
@@ -930,6 +932,12 @@ def broadcast_to(input, shape, _builder=None):
 
 @builtin
 def trans(input, _builder=None):
+    """
+    Returns a transposed tensor.
+
+    :param input: The input tensor.
+    :type input:
+    """
     return semantic.trans(input, _builder)
 
 
@@ -968,6 +976,15 @@ def view(input, shape, _builder=None):
 
 @builtin
 def reshape(input, shape, _builder=None):
+    """
+    Returns a tensor with the same number of elements as input but with the
+    provided shape.
+
+    :param input: The input tensor.
+    :type input:
+    :param shape: The new shape.
+    :type shape: Tuple[int]
+    """
     shape = _shape_check_impl(shape)
     return semantic.reshape(input, shape, _builder)
 
@@ -1012,7 +1029,7 @@ def expand_dims(input, axis, _builder=None):
 
 
 @builtin
-def dot(input, other, allow_tf32=True, out_dtype=float32, _builder=None):
+def dot(input, other, acc=None, allow_tf32=True, max_num_imprecise_acc=None, out_dtype=float32, _builder=None):
     """
     Returns the matrix product of two blocks.
 
@@ -1025,7 +1042,8 @@ def dot(input, other, allow_tf32=True, out_dtype=float32, _builder=None):
     """
     allow_tf32 = _constexpr_to_value(allow_tf32)
     out_dtype = _constexpr_to_value(out_dtype)
-    return semantic.dot(input, other, allow_tf32, out_dtype, _builder)
+    max_num_imprecise_acc = _constexpr_to_value(max_num_imprecise_acc)
+    return semantic.dot(input, other, acc, allow_tf32, max_num_imprecise_acc, out_dtype, _builder)
 
 
 # -----------------------
@@ -1266,6 +1284,14 @@ def where(condition, x, y, _builder=None):
 
 @builtin
 def umulhi(x, y, _builder=None):
+    """
+    Returns the most significant 32 bits of the product of x and y.
+
+    :param x: the input tensor
+    :type x: int32
+    :param y: the input tensor
+    :type y: int32
+    """
     x = _to_tensor(x, _builder)
     y = _to_tensor(y, _builder)
     return semantic.umulhi(x, y, _builder)
@@ -1273,6 +1299,15 @@ def umulhi(x, y, _builder=None):
 
 @builtin
 def fdiv(x, y, ieee_rounding=False, _builder=None):
+    """
+    Returns a floating-point resultant tensor of dividing x by y.
+
+    :param x: the input numerator value.
+    :param y: the input denominator value.
+    :param ieee_rounding: To follow IEEE-754 floating point number
+    rounding mechanism
+    :type ieee_rounding: bool
+    """
     ieee_rounding = _constexpr_to_value(ieee_rounding)
     return semantic.fdiv(x, y, ieee_rounding, _builder)
 

@@ -64,7 +64,7 @@ def ty_to_cpp(ty):
 
 def generate_launcher_hip(constants, signature, ids):
     start_desc = len(signature)
-    signature = generate_cu_signature(constants, signature, ids)
+    #signature = generate_cu_signature(constants, signature, ids)
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
     def _extracted_type(ty):

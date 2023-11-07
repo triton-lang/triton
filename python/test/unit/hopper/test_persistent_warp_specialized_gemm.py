@@ -141,7 +141,7 @@ def test_user_defined_persistent_non_warp_specialized_gemm(M, N, K, BLOCK_M, BLO
     c = torch.empty((M, N), device=a.device, dtype=torch.float32)
 
     num_SMs = torch.cuda.get_device_properties('cuda').multi_processor_count
-    grid = lambda META: (num_SMs,)
+    grid = lambda META: (min(META['NUM_SM'], triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N'])),)
 
     if USE_TMA:
         static_persistent_tma_matmul_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c, M=M, N=N, K=K, stride_am=a.stride(0), stride_ak=a.stride(1), stride_bk=b.stride(0), stride_bn=b.stride(1), stride_cm=c.stride(0), stride_cn=c.stride(1), BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K, NUM_SM=num_SMs, num_warps=NUM_WARPS, num_ctas=NUM_CTAS)
@@ -149,7 +149,7 @@ def test_user_defined_persistent_non_warp_specialized_gemm(M, N, K, BLOCK_M, BLO
         static_persistent_matmul_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c, M=M, N=N, K=K, stride_am=a.stride(0), stride_ak=a.stride(1), stride_bk=b.stride(0), stride_bn=b.stride(1), stride_cm=c.stride(0), stride_cn=c.stride(1), BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K, NUM_SM=num_SMs, num_warps=NUM_WARPS, num_ctas=NUM_CTAS)
 
     th_c = torch.matmul(a, b)
-    torch.testing.assert_allclose(th_c, c, atol=1e-2, rtol=0)
+    torch.testing.assert_close(th_c, c, atol=1e-2, rtol=0, check_dtype=False)
 
 
 @triton.jit
@@ -300,7 +300,7 @@ def test_non_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K
             enable_warp_specialization=True)
 
     th_c = torch.matmul(a, b)
-    torch.testing.assert_allclose(th_c, c, atol=1e-2, rtol=0)
+    torch.testing.assert_close(th_c, c, atol=1e-2, rtol=0, check_dtype=False)
 
 
 @triton.jit
@@ -432,7 +432,7 @@ def test_user_defined_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N
     c = torch.empty((M, N), device=a.device, dtype=torch.float32)
 
     num_SMs = torch.cuda.get_device_properties('cuda').multi_processor_count
-    grid = lambda META: (num_SMs,)
+    grid = lambda META: (min(META['NUM_SM'], triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N'])),)
 
     if USE_TMA:
         static_persistent_tma_warp_specialized_matmul_kernel[grid](
@@ -456,7 +456,7 @@ def test_user_defined_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N
             enable_warp_specialization=True)
 
     th_c = torch.matmul(a, b)
-    torch.testing.assert_allclose(th_c, c, atol=1e-2, rtol=0)
+    torch.testing.assert_close(th_c, c, atol=1e-2, rtol=0, check_dtype=False)
 
 
 @triton.jit
@@ -818,7 +818,6 @@ def test_full_static_persistent_matmul_kernel(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WAR
     ]:
         pytest.skip('shapePerCTA[1] < 16 not supported')
 
-    # with ENABLE_TMA=0 and ENABLE_MMA_V3=0
     if '-'.join(map(str, [BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_B])) in [
         '16-32-64-4-1-256-256-256-False',
         '16-32-64-4-2-256-256-256-False',
@@ -899,7 +898,7 @@ def test_full_static_persistent_matmul_kernel(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WAR
     num_SMs = torch.cuda.get_device_properties('cuda').multi_processor_count
 
     def grid(META):
-        return (num_SMs,)
+        return (min(META['NUM_SM'], triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N'])),)
     full_static_persistent_matmul_kernel[grid](
         a_ptr=a, b_ptr=b, w_ptr=w, bias_ptr=bias, z_ptr=z,
         M=M, N=N, K=K,

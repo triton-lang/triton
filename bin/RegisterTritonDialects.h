@@ -1,4 +1,5 @@
 #pragma once
+#include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -11,6 +12,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/InitAllPasses.h"
 
 namespace mlir {
@@ -40,5 +42,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
                   mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
                   mlir::triton::gpu::TritonGPUDialect, mlir::math::MathDialect,
                   mlir::arith::ArithDialect, mlir::scf::SCFDialect,
-                  mlir::gpu::GPUDialect>();
+                  mlir::gpu::GPUDialect, mlir::LLVM::LLVMDialect,
+                  mlir::NVVM::NVVMDialect, mlir::triton::nvgpu::NVGPUDialect>();
 }

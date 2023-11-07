@@ -136,7 +136,8 @@ public:
         op->getLoc(), dotOp.getResult().getType(), _0f);
     auto newDot = rewriter.create<triton::DotOp>(
         op->getLoc(), dotOp.getResult().getType(), dotOp.getOperand(0),
-        dotOp.getOperand(1), _0, dotOp.getAllowTF32());
+        dotOp.getOperand(1), _0, dotOp.getAllowTF32(),
+        dotOp.getMaxNumImpreciseAcc());
     auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
         op->getLoc(), dstTy, newDot.getResult());
     rewriter.replaceOpWithNewOp<arith::AddFOp>(op, newCvt, cvtOp.getOperand());
@@ -235,7 +236,8 @@ static bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
         if (convertOp.getResult()
                 .getType()
                 .cast<RankedTensorType>()
-                .getEncoding() == encoding)
+                .getEncoding()
+                .isa<triton::gpu::MmaEncodingAttr>())
           return true;
       }
       auto yield = dyn_cast<scf::YieldOp>(op);
@@ -298,7 +300,8 @@ static bool hasConvertToMFMATransisitiveUse(Operation *op, Attribute encoding) {
 static bool isLayoutAnchor(Operation *op) {
   if (isa<triton::LoadOp, triton::StoreOp>(op))
     return isExpensiveLoadOrStore(op);
-  if (isa<triton::DotOp, triton::AtomicRMWOp, triton::AtomicCASOp>(op))
+  if (isa<triton::ViewOp, triton::DotOp, triton::AtomicRMWOp,
+          triton::AtomicCASOp>(op))
     return true;
   return false;
 }
@@ -327,7 +330,7 @@ void LayoutPropagation::initAnchorLayout() {
               !hasConvertToMFMATransisitiveUse(op, tensorType.getEncoding()))
             continue;
 #endif
-          layouts.insert({result, tensorType.getEncoding()});
+          layouts.insert({result, LayoutInfo(tensorType.getEncoding())});
         }
       }
     }
@@ -431,14 +434,20 @@ void LayoutPropagation::propagateLayout() {
 
 void LayoutPropagation::resolveConflicts() {
   for (auto &it : layouts) {
+    Operation *op = it.first.getDefiningOp();
     LayoutInfo &info = it.second;
     if (info.encodings.size() <= 1)
       continue;
     // Hacky resolve, prefer block encoding.
     // TODO: add a proper heuristic.
+    int maxSizePerThread = 1;
     Attribute encoding = *info.encodings.begin();
+    bool isLoadOrStore =
+        op && isa<triton::LoadOp, triton::StoreOp, triton::AtomicRMWOp,
+                  triton::AtomicCASOp>(op);
     for (Attribute e : info.encodings) {
-      if (e.isa<triton::gpu::BlockedEncodingAttr>()) {
+      if ((isLoadOrStore && e.isa<triton::gpu::BlockedEncodingAttr>()) ||
+          (!isLoadOrStore && e.isa<triton::gpu::MmaEncodingAttr>())) {
         encoding = e;
         break;
       }
@@ -829,16 +838,15 @@ static scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter,
 
   // Create a new loop before the existing one, with the extra operands.
   rewriter.setInsertionPoint(loop);
-  auto operands = llvm::to_vector<4>(loop.getIterOperands());
+  auto operands = llvm::to_vector<4>(loop.getInitArgs());
   operands.append(newIterOperands.begin(), newIterOperands.end());
   scf::ForOp newLoop = rewriter.create<scf::ForOp>(
       loop.getLoc(), loop.getLowerBound(), loop.getUpperBound(), loop.getStep(),
       operands);
   newLoop.getBody()->erase();
 
-  newLoop.getLoopBody().getBlocks().splice(
-      newLoop.getLoopBody().getBlocks().begin(),
-      loop.getLoopBody().getBlocks());
+  newLoop.getRegion().getBlocks().splice(
+      newLoop.getRegion().getBlocks().begin(), loop.getRegion().getBlocks());
   for (Value operand : newIterOperands)
     newLoop.getBody()->addArgument(operand.getType(), operand.getLoc());
 
@@ -873,9 +881,9 @@ static void rewriteSlice(SetVector<Value> &slice,
       for (auto arg : forOp.getRegionIterArgs()) {
         if (slice.count(arg)) {
           OpOperand &initVal = forOp.getOpOperandForRegionIterArg(arg);
-          argMapping.push_back(
-              std::make_pair(*forOp.getIterArgNumberForOpOperand(initVal),
-                             forOp.getNumIterOperands() + newOperands.size()));
+          argMapping.push_back(std::make_pair(
+              forOp.getResultForOpOperand(initVal).getResultNumber(),
+              forOp.getInitArgs().size() + newOperands.size()));
           newOperands.push_back(mapping.lookup(initVal.get()));
         }
       }
@@ -984,7 +992,7 @@ static void backwardRematerialization(ConvertLayoutOp convertOp) {
 
 // For convert left we try to hoist them above type extension to reduce the cost
 // of the convert.
-static void hoistConvertOnTopOfExt(ConvertLayoutOp convertOp) {
+static void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp) {
   // we don't want to rematerialize any conversion to/from shared
   if (triton::gpu::isSharedEncoding(convertOp.getResult()) ||
       triton::gpu::isSharedEncoding(convertOp.getOperand()))
@@ -995,32 +1003,28 @@ static void hoistConvertOnTopOfExt(ConvertLayoutOp convertOp) {
   if (targetType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
     return;
 
-#ifndef USE_ROCM
-  auto isExtOp = [](Operation *op) {
-    return isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp>(op);
-  };
-#else
-  auto isExtOp = [](Operation *op) {
+  auto isExtOrBroadcastOp = [](Operation *op) {
     return isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp,
-              triton::BroadcastOp, triton::ExpandDimsOp>(op);
+               triton::BroadcastOp, triton::ExpandDimsOp>(op);
   };
-#endif
+
   // 1. Take a backward slice of all the tensor dependencies.
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
-  LogicalResult result = getRematerializableSlice(
-      convertOp.getOperand(), targetType.getEncoding(), slice, layout, isExtOp);
+  LogicalResult result =
+      getRematerializableSlice(convertOp.getOperand(), targetType.getEncoding(),
+                               slice, layout, isExtOrBroadcastOp);
   if (result.failed())
     return;
 
-  Operation *extOp = nullptr;
+  Operation *extOrBroadcatOp = nullptr;
   unsigned sliceSize = slice.size();
   for (unsigned i = 0; i < sliceSize; i++) {
     Value v = slice[i];
     Operation *op = v.getDefiningOp();
     if (!op)
       continue;
-    if (isExtOp(op)) {
+    if (isExtOrBroadcastOp(op)) {
       SetVector<Value> tempSlice;
       DenseMap<Value, Attribute> tempLayout;
       std::optional<Attribute> srcEncoding = inferSrcEncoding(op, layout[v]);
@@ -1037,26 +1041,28 @@ static void hoistConvertOnTopOfExt(ConvertLayoutOp convertOp) {
       }
       // Only apply it if there is a single ext op otherwise we would have to
       // duplicate the convert.
-      if (extOp != nullptr)
+      if (extOrBroadcatOp != nullptr)
         return;
-      extOp = op;
+      extOrBroadcatOp = op;
     }
   }
 
-  if (extOp == nullptr)
+  if (extOrBroadcatOp == nullptr)
     return;
   std::optional<Attribute> srcEncoding =
-       inferSrcEncoding(extOp, layout[extOp->getResult(0)]);
+      inferSrcEncoding(extOrBroadcatOp, layout[extOrBroadcatOp->getResult(0)]);
+  if (!srcEncoding)
+    return;
   // Move the convert before the ext op and rewrite the slice.
-  OpBuilder builder(extOp);
-  auto tensorType = extOp->getOperand(0).getType().cast<RankedTensorType>();
-  auto newType =
-      RankedTensorType::get(tensorType.getShape(), tensorType.getElementType(),
-                            *srcEncoding);
+  OpBuilder builder(extOrBroadcatOp);
+  auto tensorType =
+      extOrBroadcatOp->getOperand(0).getType().cast<RankedTensorType>();
+  auto newType = RankedTensorType::get(
+      tensorType.getShape(), tensorType.getElementType(), *srcEncoding);
   auto newConvertOp = builder.create<ConvertLayoutOp>(
-      convertOp.getLoc(), newType, extOp->getOperand(0));
+      convertOp.getLoc(), newType, extOrBroadcatOp->getOperand(0));
   IRMapping mapping;
-  mapping.map(extOp->getOperand(0), newConvertOp.getResult());
+  mapping.map(extOrBroadcatOp->getOperand(0), newConvertOp.getResult());
   // 3. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp, mapping);
 }
@@ -1075,7 +1081,7 @@ static void hoistConvert(ModuleOp module) {
   module.walk(
       [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
   for (ConvertLayoutOp convertOp : convertOps) {
-    hoistConvertOnTopOfExt(convertOp);
+    hoistConvertOnTopOfExtOrBroadcast(convertOp);
   }
 }
 

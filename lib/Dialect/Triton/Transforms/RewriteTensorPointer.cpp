@@ -326,9 +326,9 @@ public:
   Operation *rewriteForOp(OpBuilder &builder, scf::ForOp op,
                           std::stack<Operation *> &eraser) {
     // Generate new iteration operands and set rewrited information
-    SmallVector<Value> oldIterOperands = op.getIterOperands();
-    SmallVector<Value> newIterOperands = op.getIterOperands();
-    for (unsigned i = 0, oldI = 0, size = op.getNumIterOperands(); i < size;
+    SmallVector<Value> oldIterOperands = llvm::to_vector(op.getInitArgs());
+    SmallVector<Value> newIterOperands = llvm::to_vector(op.getInitArgs());
+    for (unsigned i = 0, oldI = 0, size = op.getInitArgs().size(); i < size;
          ++i, ++oldI) {
       if (!triton::isTensorPointerType(newIterOperands[i].getType()))
         continue;
@@ -351,7 +351,7 @@ public:
     // mapping. It may refer to a value in the old loop, but we will rewrite it
     // later
     IRMapping mapping;
-    for (unsigned i = 0, oldI = 0; oldI < op.getNumIterOperands();
+    for (unsigned i = 0, oldI = 0, sz = op.getInitArgs().size(); oldI < sz;
          ++i, ++oldI) {
       auto oldRegionIterArg = op.getRegionIterArg(oldI);
       if (triton::isTensorPointerType(oldRegionIterArg.getType())) {
@@ -378,7 +378,7 @@ public:
     }
 
     // Replace later usages
-    assert(op.getNumResults() == op.getNumIterOperands());
+    assert(op.getNumResults() == op.getInitArgs().size());
     for (unsigned i = 0, oldI = 0; oldI < op.getNumResults(); ++i, ++oldI) {
       auto oldResult = op.getResult(oldI);
       if (triton::isTensorPointerType(oldResult.getType())) {

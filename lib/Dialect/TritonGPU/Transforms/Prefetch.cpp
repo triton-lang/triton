@@ -269,7 +269,7 @@ scf::ForOp Prefetcher::createNewForOp() {
   OpBuilder builder(forOp);
 
   SmallVector<Value> loopArgs;
-  for (auto v : forOp.getIterOperands())
+  for (auto v : forOp.getInitArgs())
     loopArgs.push_back(v);
   for (Value dot : dots) {
     loopArgs.push_back(

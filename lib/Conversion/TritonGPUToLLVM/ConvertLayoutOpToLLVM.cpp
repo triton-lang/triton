@@ -91,8 +91,7 @@ public:
     // forwarding on mma->mma shortcut, lower distributed->distributed otherwise
     if (srcLayout.isa<MmaEncodingAttr>() && dstLayout.isa<MmaEncodingAttr>()) {
       if (isMmaToMmaShortcut(srcTy, dstTy)) {
-        rewriter.replaceOp(op, op.getSrc());
-        return success();
+        return lowerMmaToMma(op, adaptor, rewriter);
       }
     }
     if (isaDistributedLayout(srcLayout) && isaDistributedLayout(dstLayout)) {
@@ -195,9 +194,11 @@ private:
       Value _16 = i32_val(16);
       if (mmaLayout.isAmpere() || mmaLayout.isHopper()) {
         multiDimWarpId[0] =
-            urem(multiDimWarpId[0], i32_val(shapePerCTA[0] / instrShape[0]));
+            urem(multiDimWarpId[0],
+                 i32_val(ceil<unsigned>(shapePerCTA[0], instrShape[0])));
         multiDimWarpId[1] =
-            urem(multiDimWarpId[1], i32_val(shapePerCTA[1] / instrShape[1]));
+            urem(multiDimWarpId[1],
+                 i32_val(ceil<unsigned>(shapePerCTA[1], instrShape[1])));
 
         Value mmaGrpId = udiv(laneId, _4);
         Value mmaGrpIdP8 = add(mmaGrpId, _8);
@@ -267,12 +268,30 @@ private:
     llvm_unreachable("unexpected layout in getMultiDimOffset");
   }
 
+  SmallVector<Value>
+  getWrappedMultiDimOffset(ConversionPatternRewriter &rewriter, Location loc,
+                           ArrayRef<Value> multiDimOffset,
+                           ArrayRef<unsigned> shape,
+                           SmallVector<unsigned> shapePerCTATile,
+                           SmallVector<int64_t> shapePerCTA) const {
+    unsigned rank = shape.size();
+    SmallVector<Value> multiDimOffsetWrapped(rank);
+    for (unsigned d = 0; d < rank; ++d) {
+      if (shapePerCTATile[d] > shapePerCTA[d])
+        multiDimOffsetWrapped[d] = urem(multiDimOffset[d], i32_val(shape[d]));
+      else
+        multiDimOffsetWrapped[d] = multiDimOffset[d];
+    }
+    return multiDimOffsetWrapped;
+  }
+
   // shared memory rd/st for blocked or mma layout with data padding
   void processReplica(Location loc, ConversionPatternRewriter &rewriter,
                       bool stNotRd, RankedTensorType type,
                       ArrayRef<unsigned> numCTAsEachRep,
                       ArrayRef<unsigned> multiDimRepId, unsigned vec,
                       ArrayRef<unsigned> paddedRepShape,
+                      ArrayRef<unsigned> origRepShape,
                       ArrayRef<unsigned> outOrd, SmallVector<Value> &vals,
                       Value smemBase) const {
     auto accumNumCTAsEachRep = product<unsigned>(numCTAsEachRep);
@@ -316,8 +335,11 @@ private:
         SmallVector<Value> multiDimOffset =
             getMultiDimOffset(layout, loc, rewriter, elemId, type,
                               multiDimCTAInRepId, shapePerCTATile);
-        Value offset =
-            linearize(rewriter, loc, multiDimOffset, paddedRepShape, outOrd);
+        SmallVector<Value> multiDimOffsetWrapped = getWrappedMultiDimOffset(
+            rewriter, loc, multiDimOffset, origRepShape, shapePerCTATile,
+            shapePerCTA);
+        Value offset = linearize(rewriter, loc, multiDimOffsetWrapped,
+                                 paddedRepShape, outOrd);
         auto elemPtrTy = ptr_ty(llvmElemTy, 3);
         Value ptr = gep(elemPtrTy, smemBase, offset);
         auto vecTy = vec_ty(llvmElemTy, vec);
@@ -376,7 +398,7 @@ private:
     SmallVector<unsigned> numCTAsEachRep(rank, 1);
     SmallVector<unsigned> shapePerCTATile = getShapePerCTATile(layout, shape);
     SmallVector<int64_t> shapePerCTA = getShapePerCTA(layout, shape);
-    auto elemTy = type.getElementType();
+    auto elemTy = getTypeConverter()->convertType(type.getElementType());
 
     int ctaId = 0;
 
@@ -605,6 +627,7 @@ private:
                                                      rewriter, srcTy);
     unsigned inVec = 0;
     unsigned outVec = 0;
+    auto origRepShape = getRepShapeForCvtLayout(op);
     auto paddedRepShape = getScratchConfigForCvtLayout(op, inVec, outVec);
     if (getElementTypeOrSelf(op.getType())
             .isa<mlir::Float8E4M3B11FNUZType, mlir::Float8E4M3FNType>()) {
@@ -651,7 +674,7 @@ private:
         else
           processReplica(loc, rewriter, /*stNotRd*/ true, srcTy,
                          inNumCTAsEachRep, multiDimRepId, inVec, paddedRepShape,
-                         outOrd, vals, smemBase);
+                         origRepShape, outOrd, vals, smemBase);
       } else {
         assert(0 && "ConvertLayout with input layout not implemented");
         return failure();
@@ -687,7 +710,8 @@ private:
         else
           processReplica(loc, rewriter, /*stNotRd*/ false, dstTy,
                          outNumCTAsEachRep, multiDimRepId, outVec,
-                         paddedRepShape, outOrd, outVals, smemBase);
+                         paddedRepShape, origRepShape, outOrd, outVals,
+                         smemBase);
       } else {
         assert(0 && "ConvertLayout with output layout not implemented");
         return failure();
@@ -962,6 +986,11 @@ private:
     auto loc = op.getLoc();
     auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
     auto dstTy = op.getResult().getType().cast<RankedTensorType>();
+    if (matchMmaV3AndDotOperandLayout(srcTy, dstTy)) {
+      rewriter.replaceOp(op, op.getSrc());
+      return success();
+    }
+
     if (isMmaToDotShortcut(srcTy, dstTy)) {
       // get source values
       auto vals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(),
@@ -1054,6 +1083,42 @@ private:
     return res;
   }
 #endif
+  // mma -> mma
+  LogicalResult lowerMmaToMma(triton::gpu::ConvertLayoutOp op,
+                              OpAdaptor adaptor,
+                              ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
+    auto dstTy = op.getResult().getType().cast<RankedTensorType>();
+    if (triton::gpu::getTotalElemsPerThread(srcTy) ==
+        triton::gpu::getTotalElemsPerThread(dstTy)) {
+      rewriter.replaceOp(op, op.getSrc());
+      return success();
+    }
+    // get source values
+    auto vals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(),
+                                                     rewriter, srcTy);
+    SmallVector<Value> retVals;
+    SmallVector<unsigned> dstElementPerThread =
+        triton::gpu::getElemsPerThread(dstTy);
+    SmallVector<unsigned> srcElementPerThread =
+        triton::gpu::getElemsPerThread(srcTy);
+    for (unsigned j = 0; j < dstElementPerThread[0]; j++) {
+      for (unsigned i = 0; i < dstElementPerThread[1]; i++) {
+        if (i >= srcElementPerThread[1] || j >= srcElementPerThread[0]) {
+          retVals.push_back(undef(vals[0].getType()));
+          continue;
+        }
+        unsigned index = i + j * srcElementPerThread[1];
+        retVals.push_back(vals[index]);
+      }
+    }
+    assert(retVals.size() == triton::gpu::getTotalElemsPerThread(dstTy));
+    Value view =
+        getTypeConverter()->packLLElements(loc, retVals, rewriter, dstTy);
+    rewriter.replaceOp(op, view);
+    return success();
+  }
 
   // shared -> dot_operand if the result layout is mma
   Value lowerSharedToDotOperandMMA(

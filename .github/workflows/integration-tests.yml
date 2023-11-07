@@ -33,6 +33,7 @@ jobs:
             echo '::set-output name=matrix-optional::["ubuntu-latest"]'
           fi
 
+
   Integration-Tests-Nvidia:
     needs: Runner-Preparation
 
@@ -44,14 +45,14 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
-
+        uses: actions/checkout@v3
+        with:
+          submodules: 'true'
       - name: Set CUDA ENV
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
         run: |
           echo "BACKEND=CUDA" >> "${GITHUB_ENV}"
           echo "ENABLE_TMA=0" >> "${GITHUB_ENV}"
-          echo "ENABLE_MMA_V3=0" >> "${GITHUB_ENV}"
           echo "TRITON_DISABLE_LINE_INFO=1" >> "${GITHUB_ENV}"
 
       - name: Clear cache
@@ -88,24 +89,26 @@ jobs:
           fi
           lit -v "${LIT_TEST_DIR}"
 
-      - name: Enable MMAV3 and TMA
+      - name: Enable TMA
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'H100')}}
         run: |
           echo "ENABLE_TMA=1" >> "${GITHUB_ENV}"
-          echo "ENABLE_MMA_V3=1" >> "${GITHUB_ENV}"
 
-      - name: Run python tests on CUDA with ENABLE_TMA=1 and ENABLE_MMA_V3=1
-        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '1' && env.ENABLE_MMA_V3 == '1'}}
+      - name: Run python tests on CUDA with ENABLE_TMA=1
+        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '1'}}
         run: |
           cd python/test/unit
-          python3 -m pytest -n 8 --ignore=runtime --ignore=operators --ignore=language/test_line_info.py
+          python3 -m pytest -n 8 --ignore=runtime --ignore=operators --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+          python3 -m pytest -n 8 language/test_subprocess.py
           # run runtime tests serially to avoid race condition with cache handling.
           python3 -m pytest runtime/
           # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest language/test_line_info.py
+          #run hopper/test_flashattention.py to avoid out of gpu memory
+          python3 -m pytest hopper/test_flashattention.py
 
-      - name: Run python tests on CUDA with ENABLE_TMA=0 and ENABLE_MMA_V3=0
-        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '0' && env.ENABLE_MMA_V3 == '0'}}
+      - name: Run python tests on CUDA with ENABLE_TMA=0
+        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '0'}}
         run: |
           cd python/test/unit
           python3 -m pytest -n 8 --ignore=runtime --ignore=hopper --ignore=operators --ignore=language/test_line_info.py
@@ -118,14 +121,22 @@ jobs:
         run: |
           rm -rf ~/.triton
 
-      - name: Run partial tests on CUDA with ENABLE_TMA=1 and ENABLE_MMA_V3=1
-        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '1' && env.ENABLE_MMA_V3 == '1'}}
+      - name: Run interpreter tests
+        env:
+          # TRITON_INTERPRET: "1"
+          CUA_VISIBLE_DEVICES: ""
+        run: |
+          cd python/test/unit
+          python3 -m pytest -vs operators/test_flash_attention.py
+
+      - name: Run partial tests on CUDA with ENABLE_TMA=1
+        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '1'}}
         run: |
           cd python/test/unit
           python3 -m pytest -n 8 operators
 
-      - name: Run partial tests on CUDA with ENABLE_TMA=0 and ENABLE_MMA_V3=0
-        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '0' && env.ENABLE_MMA_V3 == '0'}}
+      - name: Run partial tests on CUDA with ENABLE_TMA=0
+        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '0'}}
         run: |
           cd python/test/unit
           python3 -m pytest -n 8 operators
@@ -159,6 +170,50 @@ jobs:
           sudo nvidia-smi -i 0 --lock-gpu-clocks=1280,1280
           python3 -m pytest -vs . --reruns 10
           sudo nvidia-smi -i 0 -rgc
+
+  Integration-Tests-Shared-Middle-Layer:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Clear cache
+        run: |
+          rm -rf ~/.triton
+
+      - name: Update PATH
+        run: |
+          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
+
+      - name: Check pre-commit
+        run: |
+          python3 -m pip install --upgrade pre-commit
+          python3 -m pre_commit run --all-files --verbose
+
+      - name: Install Triton
+        run: |
+          export TRITON_CODEGEN_TRITON_SHARED=1
+          git submodule update --init --recursive
+          cd python
+          python3 -m pip install --upgrade pip
+          python3 -m pip install cmake==3.24
+          python3 -m pip install ninja
+          python3 -m pip uninstall -y triton
+          python3 setup.py build
+          python3 -m pip install --no-build-isolation -vvv '.[tests]'
+
+      - name: Run shared middle-layer lit tests
+        run: |
+          python3 -m pip install lit
+          cd python
+          LIT_TEST_DIR="build/$(ls build | grep -i cmake)/third_party/triton_shared/test"
+          if [ ! -d "${LIT_TEST_DIR}" ]; then
+            echo "Coult not find '${LIT_TEST_DIR}'" ; exit -1
+          fi
+          lit -v "${LIT_TEST_DIR}"
+
 
   Integration-Tests-Third-Party:
     needs: Runner-Preparation
