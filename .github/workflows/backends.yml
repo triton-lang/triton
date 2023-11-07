@@ -3,7 +3,7 @@ name: Backend Tests
 on:
   workflow_dispatch:
   push:
-    branches: [main, ci_main_backend_check]
+    branches: [main]
 
 jobs:
   Runner-Preparation:
