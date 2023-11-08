@@ -236,10 +236,6 @@ def matmul(a, b, activation=""):
 
     return c
 
-def get_best_config(M, N, K):
-    best_config = matmul_kernel_splitK.get_best_config(M = M, N = N, K = K)
-    return best_config
-
 
 def test_correctness(M, N, K, datatype = torch.float16):
     torch.manual_seed(0)
@@ -341,7 +337,7 @@ def main():
 
         if args.compare:
             test_correctness(m, n, k, dtype)
-        best_config = get_best_config(m, n, k)
+        best_config = matmul_kernel_splitK.get_best_config()
 
         if use_rocprof:
             dtype_str = 'fp16' if (not args.specify_type) else args.dtype 

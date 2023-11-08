@@ -547,7 +547,7 @@ class _attention(torch.autograd.Function):
         )
 
         ## restore the grid for bwd kernel
-        best_config = _attn_fwd.get_best_config(Z = q.shape[0], H = q.shape[1], N_CTX = q.shape[2], STAGE = stage, BLOCK_DMODEL=Lk)
+        best_config = _attn_fwd.get_best_config()
         block_m = int(best_config.__str__().split(",")[0].split("BLOCK_M:")[1])
         grid = (triton.cdiv(q.shape[2], block_m), q.shape[0] * q.shape[1], 1)
 
