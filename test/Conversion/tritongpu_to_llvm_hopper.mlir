@@ -213,3 +213,15 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     tt.return
   }
 }
+
+// -----
+
+#shared = #triton_gpu.shared<{vec = 4, perPhase = 1, maxPhase = 8, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0], hasLeadingOffset = true}>
+// CHECK-LABEL: splat_shared_layout
+module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  tt.func @splat_shared_layout(%arg0: !tt.ptr<f32, 1> {tt.divisibility = 16 : i32}) {
+    %0 = tt.load %arg0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : f32
+    %1 = tt.splat %0 : (f32) -> tensor<64x128xf32, #shared>
+    tt.return
+  }
+}

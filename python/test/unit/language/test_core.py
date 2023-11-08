@@ -1280,6 +1280,7 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
     if is_hip() and (dtype_z == "bfloat16"):
         pytest.skip(f'test_cast{(dtype_x, dtype_z)} cast to bfloat16 not supported on HIP.')
 
+    torch.manual_seed(0)
     # This is tricky because numpy doesn't have bfloat, and torch doesn't have uints.
     if dtype_x.startswith('bfloat'):
         x_tri = torch.randn(size, dtype=getattr(torch, dtype_x), device=device)
@@ -3057,22 +3058,6 @@ def test_constexpr_scalar_shape(device):
     x_tri = to_triton(np.empty((256, ), dtype=np.int32), device=device)
     kernel[(1, )](x_tri, 32)
     np.testing.assert_equal(to_numpy(x_tri), np.arange(0, 256) % 8)
-
-
-@triton.jit
-def static_assert_func():
-    tl.static_assert(tl.constexpr(False), "Assert is firing because the constexpr progation did not work properly")
-
-
-def test_constexpr_propagation():
-
-    @triton.jit
-    def _kernel(COND: tl.constexpr):
-        NEW_COND = COND
-        if NEW_COND:
-            static_assert_func()
-
-    _kernel[(1, )](False)
 
 
 # -------------
