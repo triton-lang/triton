@@ -91,7 +91,7 @@ private:
       // suport ForOp only
       if (auto forOp = dyn_cast<scf::ForOp>(argOwner)) {
         // prologue
-        auto iterOperands = forOp.getIterOperands();
+        auto iterOperands = forOp.getInitArgs();
         if (argNum == 0)
           return false;
         if (dependOnSharedEncOperand(iterOperands[argNum - 1]))

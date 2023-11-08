@@ -37,6 +37,7 @@ CUDA_DEFAULT_WARP_SIZE = 32
 class CudaTargetDescriptor:
     capability: int
     num_warps: int
+    enable_fp_fusion: bool
 
 
 def _is_cuda(target):
@@ -147,6 +148,7 @@ def optimize_ttgir(mod, num_stages, num_warps, num_ctas, target,
         pm.add_tritongpu_wspipeline_pass(num_stages, num_warps, capability)
         pm.add_tritongpu_wsmutex_pass(capability)
         pm.add_tritongpu_wsmaterialization_pass(capability)
+        pm.add_licm_pass()
         pm.add_cse_pass()
     else:
         if is_hip():
@@ -220,7 +222,7 @@ def llir_to_ptx(mod: Any, target: CudaTargetDescriptor, ptx_version: int = None)
     if ptx_version is None:
         _, cuda_version = path_to_ptxas()
         ptx_version = ptx_get_version(cuda_version)
-    return translate_llvmir_to_ptx(mod, target.capability, ptx_version)
+    return translate_llvmir_to_ptx(mod, target.capability, ptx_version, target.enable_fp_fusion)
 
 
 def ptx_to_cubin(ptx: str, target: CudaTargetDescriptor):
@@ -231,7 +233,7 @@ def ptx_to_cubin(ptx: str, target: CudaTargetDescriptor):
     :return: str
     '''
     ptxas, _ = path_to_ptxas()
-    return compile_ptx_to_cubin(ptx, ptxas, target.capability)
+    return compile_ptx_to_cubin(ptx, ptxas, target.capability, target.enable_fp_fusion)
 
 
 # ------------------------------------------------------------------------------
@@ -407,8 +409,12 @@ def compile(fn, **kwargs):
     assert num_warps > 0 and (num_warps & (num_warps - 1)) == 0, "num_warps must be a power of 2"
     num_ctas = kwargs.get("num_ctas", 1)
     num_stages = kwargs.get("num_stages", get_arch_default_num_stages(device_type, capability=capability))
+<<<<<<< HEAD
     waves_per_eu = kwargs.get("waves_per_eu", 0)
     matrix_instr_nonkdim = kwargs.get("matrix_instr_nonkdim", 0)
+=======
+    enable_fp_fusion = kwargs.get("enable_fp_fusion", True)
+>>>>>>> 721897fcc4f942aa97d2e9ba3787a5e213758177
     # TODO[shuhaoj]: Default should be to enable warp specialization once possible
     enable_warp_specialization = kwargs.get("enable_warp_specialization", False)
     # TODO[shuhaoj]: persistent can be decoupled with warp specialization
@@ -431,7 +437,7 @@ def compile(fn, **kwargs):
     # build architecture descriptor
     if device_type == "cuda":
         _device_backend = get_backend(device_type)
-        target = CudaTargetDescriptor(capability=get_cuda_capability(capability), num_warps=num_warps)
+        target = CudaTargetDescriptor(capability=get_cuda_capability(capability), num_warps=num_warps, enable_fp_fusion=enable_fp_fusion)
     else:
         _device_backend = get_backend(device_type)
         assert _device_backend

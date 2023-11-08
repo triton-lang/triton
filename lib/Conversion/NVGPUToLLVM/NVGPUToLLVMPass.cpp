@@ -29,8 +29,6 @@ const std::string Reg_Alloc_Op = "setmaxnreg.inc.sync.aligned.u32 #regCount;";
 const std::string Wgmma_Fence_Op = "wgmma.fence.sync.aligned;";
 const std::string Cga_Barrier_Sync_op = "barrier.cluster.sync.aligned;";
 const std::string Wgmma_Commit_Group_Op = "wgmma.commit_group.sync.aligned;";
-const std::string Wgmma_Wait_Group_Op =
-    "wgmma.wait_group.sync.aligned #pendings;";
 const std::string Cluster_Wait_Op = "barrier.cluster.wait.aligned;";
 const std::string Fence_Mbarrier_Init_Op =
     "fence.mbarrier_init.release.cluster;";
@@ -200,29 +198,6 @@ public:
     return {};
   }
 
-  Type getReturnType(std::vector<std::string> outputConstraints,
-                     mlir::PatternRewriter &rewriter) const {
-    auto ctx = rewriter.getContext();
-    Type resTy;
-    if (outputConstraints.empty()) {
-      resTy = void_ty(ctx);
-    } else {
-      SmallVector<Type> retTys;
-      for (auto &outputConstraint : outputConstraints) {
-        assert(outputConstraint[0] == '=' &&
-               "Constraint must be for an output");
-        Type retTy = getTypeFromConstraint(outputConstraint[1], rewriter);
-        retTys.push_back(retTy);
-      }
-      if (retTys.size() == 1) {
-        resTy = retTys[0];
-      } else {
-        resTy = struct_ty(retTys);
-      }
-    }
-    return resTy;
-  }
-
   std::string patchPtxAsm(mlir::Operation *op, std::string ptxAsm) const {
     std::vector<std::pair<int, int>> patchLocations;
     std::vector<std::string> patchValues;
@@ -285,7 +260,8 @@ public:
     outputsAndOperands.append(ptxOperands.begin(), ptxOperands.end());
     auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsmPatched);
     ptxInstr(outputsAndOperands, /*onlyAttachMLIRArgs=*/true);
-    auto retTy = getReturnType(outputConstraints, rewriter);
+    auto retTy =
+        op->getNumResults() == 0 ? void_ty(ctx) : op->getResult(0).getType();
     auto res = ptxBuilder.launch(rewriter, loc, retTy,
                                  /*hasSideEffects*/ hasSideEffects);
     if (op->getNumResults() == 0) {
@@ -700,6 +676,45 @@ public:
   }
 };
 
+class WGMMAWaitGroupOpPattern
+    : public NVGPUOpPatternBase<ttn::WGMMAWaitGroupOp,
+                                WGMMAWaitGroupOpPattern> {
+public:
+  using Base =
+      NVGPUOpPatternBase<ttn::WGMMAWaitGroupOp, WGMMAWaitGroupOpPattern>;
+  using Base::Base;
+
+  std::vector<std::string>
+  getOutputConstraints(ttn::WGMMAWaitGroupOp op) const {
+    auto outputStructType = op.getType().cast<LLVM::LLVMStructType>();
+    uint32_t numOutputRegs = outputStructType.getBody().size();
+    std::string output =
+        outputStructType.getBody().front().isF32() ? "=f" : "=r";
+    return std::vector<std::string>(numOutputRegs, output);
+  }
+
+  OperandsAndConstraints
+  getOperandsAndConstraints(ttn::WGMMAWaitGroupOp op) const {
+    OperandsAndConstraints operandsAndConstraints;
+    auto input = op.getInput();
+    operandsAndConstraints.push_back({input, "0"});
+    return operandsAndConstraints;
+  }
+
+  std::string getPtxAsm(ttn::WGMMAWaitGroupOp op) const {
+    auto outputStructType = op.getType().dyn_cast<LLVM::LLVMStructType>();
+    uint32_t numCRegs = outputStructType.getBody().size();
+    std::string args = "";
+    uint32_t asmOpIdx = 0;
+    for (uint32_t i = 0; i < numCRegs; ++i) {
+      args += "$" + std::to_string(asmOpIdx++) + (i == numCRegs - 1 ? "" : ",");
+    }
+    auto ptxAsm = "// wait for regs: " + args + "\n\t" +
+                  "wgmma.wait_group.sync.aligned #pendings;";
+    return ptxAsm;
+  }
+};
+
 class WGMMAOpPattern : public NVGPUOpPatternBase<ttn::WGMMAOp, WGMMAOpPattern> {
 public:
   using Base = NVGPUOpPatternBase<ttn::WGMMAOp, WGMMAOpPattern>;
@@ -1072,7 +1087,6 @@ public:
     POPULATE_NVGPU_OP(ttn::WGMMAFenceOp, Wgmma_Fence_Op)
     POPULATE_NVGPU_OP(ttn::CGABarrierSyncOp, Cga_Barrier_Sync_op)
     POPULATE_NVGPU_OP(ttn::WGMMACommitGroupOp, Wgmma_Commit_Group_Op)
-    POPULATE_NVGPU_OP(ttn::WGMMAWaitGroupOp, Wgmma_Wait_Group_Op)
     POPULATE_NVGPU_OP(ttn::ClusterWaitOp, Cluster_Wait_Op)
     POPULATE_NVGPU_OP(ttn::FenceMBarrierInitOp, Fence_Mbarrier_Init_Op)
     POPULATE_NVGPU_OP(ttn::CGABarrierArriveOp, Cga_Barrier_Arrive_Op)
@@ -1100,7 +1114,8 @@ public:
                  OffsetOfStmatrixV4OpPattern, MBarrierArriveOpPattern,
                  ClusterArriveOpPattern, TMALoadTiledOpPattern,
                  TMAStoreTiledOpPattern, LoadDSmemOpPattern, WGMMAOpPattern,
-                 StoreDSmemOpPattern, OffsetOfSts64OpPattern>(context);
+                 WGMMAWaitGroupOpPattern, StoreDSmemOpPattern,
+                 OffsetOfSts64OpPattern>(context);
 
     if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();

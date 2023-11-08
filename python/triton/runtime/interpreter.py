@@ -453,7 +453,7 @@ def _unwrap(tensor):
 
 builder = Builder()
 
-RESERVED_KWS = ['num_warps', 'num_stages', 'num_ctas', 'enable_warp_specialization']
+RESERVED_KWS = ['num_warps', 'num_stages', 'num_ctas', 'enable_warp_specialization', 'enable_fp_fusion']
 
 
 class GridExecutor:

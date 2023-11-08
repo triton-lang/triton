@@ -63,8 +63,6 @@ Memory Ops
 
     load
     store
-    atomic_cas
-    atomic_xchg
 
 
 Indexing Ops
@@ -129,10 +127,11 @@ Atomic Ops
     :toctree: generated
     :nosignatures:
 
-    atomic_cas
     atomic_add
+    atomic_cas
     atomic_max
     atomic_min
+    atomic_xchg
 
 
 Comparison ops

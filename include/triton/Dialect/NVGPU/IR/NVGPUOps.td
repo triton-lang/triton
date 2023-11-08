@@ -27,6 +27,7 @@ include "triton/Dialect/NVGPU/IR/NVGPUAttrDefs.td"
 include "mlir/IR/OpBase.td"
 include "mlir/IR/EnumAttr.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
+include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 
 def I8Ptr_global : LLVM_IntPtrBase<8, 1>;
 def I8Ptr_shared : LLVM_IntPtrBase<8, 3>;
@@ -44,9 +45,13 @@ def NVGPU_WGMMACommitGroupOp : NVGPU_Op<"wgmma_commit_group", []> {
   let assemblyFormat = "attr-dict";
 }
 
-def NVGPU_WGMMAWaitGroupOp : NVGPU_Op<"wgmma_wait_group", []> {
-  let arguments = (ins I32Attr:$pendings);
+def NVGPU_WGMMAWaitGroupOp : NVGPU_Op<"wgmma_wait_group",
+[DeclareOpInterfaceMethods<InferTypeOpInterface>,
+ AllTypesMatch<["input", "output"]>]> {
+  let arguments = (ins LLVM_AnyStruct:$input, I32Attr:$pendings);
+  let results = (outs LLVM_AnyStruct:$output);
   let assemblyFormat = "attr-dict";
+  let assemblyFormat = "$input attr-dict `:` type($input)";
 }
 
 def NVGPU_MBarrierInitOp : NVGPU_Op<"mbarrier_init", [MemoryEffects<[MemWrite]>]> {

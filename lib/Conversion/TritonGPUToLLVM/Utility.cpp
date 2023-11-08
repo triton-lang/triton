@@ -371,13 +371,15 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
   Type type = val.getType();
   if (type != i32_ty) {
     val = bitcast(val, int_ty(bits));
-    val = zext(i32_ty, val);
+    if (bits < 32)
+      val = zext(i32_ty, val);
   }
   Value mask = i32_val(0xFFFFFFFF);
   Value result = rewriter.create<NVVM::ShflOp>(loc, i32_ty, mask, val, i, clamp,
                                                mode, UnitAttr());
   if (type != i32_ty) {
-    result = trunc(int_ty(bits), result);
+    if (bits < 32)
+      result = trunc(int_ty(bits), result);
     result = bitcast(result, type);
   }
   return result;

@@ -146,7 +146,8 @@ protected:
     }
     auto newFuncOp = rewriter.create<LLVM::LLVMFuncOp>(
         funcOp.getLoc(), funcOp.getName(), llvmType, linkage,
-        /*dsoLocal*/ false, LLVM::CConv::C, attributes);
+        /*dsoLocal*/ false, LLVM::CConv::C, /*comdat=*/SymbolRefAttr{},
+        attributes);
     rewriter.inlineRegionBefore(funcOp.getBody(), newFuncOp.getBody(),
                                 newFuncOp.end());
     if (failed(rewriter.convertRegionTypes(&newFuncOp.getBody(), *typeConverter,
@@ -361,8 +362,13 @@ public:
     unsigned numElemsPerSwizzlingRow =
         swizzlingByteWidth * 8 / resElemTy.getIntOrFloatBitWidth();
     Value numElemsPerSwizzlingRowVal = i32_val(numElemsPerSwizzlingRow);
-    unsigned leadingDimOffset =
-        numElemsPerSwizzlingRow * srcShapePerCTA[outOrder[1]];
+    unsigned leadingDimOffset;
+    if (outOrder.size() == 2) {
+      leadingDimOffset = numElemsPerSwizzlingRow * srcShapePerCTA[outOrder[1]];
+    } else {
+      leadingDimOffset = numElemsPerSwizzlingRow;
+    }
+
     Value leadingDimOffsetVal = i32_val(leadingDimOffset);
     // Return values
     DenseMap<unsigned, Value> ret;
@@ -374,9 +380,15 @@ public:
       // Extract multi dimensional index for current element
       auto idx = srcIndices[elemIdx];
       Value idxCol = idx[outOrder[0]]; // contiguous dimension
-      Value idxRow = idx[outOrder[1]]; // discontiguous dimension
+      Value idxRow, strideRow;
+      if (outOrder.size() == 2) {
+        idxRow = idx[outOrder[1]]; // discontiguous dimension
+        strideRow = srcStrides[outOrder[1]];
+      } else {
+        idxRow = i32_val(0);
+        strideRow = i32_val(0);
+      }
       Value strideCol = srcStrides[outOrder[0]];
-      Value strideRow = srcStrides[outOrder[1]];
       // compute phase = (row // perPhase) % maxPhase
       Value phase = urem(udiv(idxRow, i32_val(perPhase)), i32_val(maxPhase));
       // extract dynamic/static offset for immediate offsetting
@@ -428,10 +440,16 @@ public:
       offset = add(offset, add(rowOff, mul(colOff, strideCol)));
       Value currPtr = gep(dstPtrTy, dstPtrBase, offset);
       // compute immediate offset
-      Value immedateOff =
-          add(mul(i32_val(immedateOffRow), srcStrides[outOrder[1]]),
-              i32_val(immedateOffCol));
-      ret[elemIdx] = gep(dstPtrTy, currPtr, immedateOff);
+      Value immediateOff;
+      if (outOrder.size() == 2) {
+        immediateOff =
+            add(mul(i32_val(immedateOffRow), srcStrides[outOrder[1]]),
+                i32_val(immedateOffCol));
+      } else {
+        immediateOff = i32_val(immedateOffCol);
+      }
+
+      ret[elemIdx] = gep(dstPtrTy, currPtr, immediateOff);
     }
     return ret;
   }

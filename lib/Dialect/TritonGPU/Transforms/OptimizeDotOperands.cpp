@@ -98,7 +98,9 @@ public:
     // and all operations between the load and the conversion
     // should be layout preserving
     SetVector<Operation *> slice;
-    getBackwardSlice(op, &slice);
+    mlir::BackwardSliceOptions opt;
+    opt.omitBlockArguments = true;
+    getBackwardSlice(op, &slice, opt);
     int loadIdx = -1;
     bool checkOp = false;
     for (int i = 0; i < slice.size(); i++) {

@@ -1603,7 +1603,7 @@ ParseResult parseInsertSliceOp(OpAsmParser &parser, OperationState &result) {
                              result.operands))
     return failure();
 
-  // Deduce operand_segment_sizes from the number of the operands.
+  // Deduce operandSegmentSizes from the number of the operands.
   auto operandSegmentSizesAttrName =
       OpT::getOperandSegmentSizesAttrName(result.name);
   result.addAttribute(
@@ -1616,7 +1616,7 @@ template <class OpT>
 void printInsertSliceOp(OpAsmPrinter &printer, OpT insertSliceOp) {
   printer << " ";
   printer << insertSliceOp.getOperation()->getOperands();
-  // "operand_segment_sizes" can be deduced, so we don't print it.
+  // "operandSegmentSizes" can be deduced, so we don't print it.
   printer.printOptionalAttrDict(
       insertSliceOp->getAttrs(),
       {insertSliceOp.getOperandSegmentSizesAttrName()});

@@ -31,6 +31,7 @@ using triton::gpu::SliceEncodingAttr;
 //
 // -----------------------------------------------------------------------------
 
+<<<<<<< HEAD
 // convert(blocked, dot_operand) ->
 // convert(blocked, mma) + convert(mma,  dot_operand)
 // if this value is itself the result of a dot operation
@@ -102,6 +103,9 @@ public:
 };
 
 //
+=======
+// dot(a, b, load(ptr)) -> add(load(ptr), dot(a, b, 0))
+>>>>>>> 721897fcc4f942aa97d2e9ba3787a5e213758177
 class ConvertDotConvert : public mlir::RewritePattern {
 public:
   ConvertDotConvert(mlir::MLIRContext *context)
@@ -233,12 +237,17 @@ static bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
     getForwardSlice(currentValue, &forwardSlice);
     for (Operation *op : forwardSlice) {
       if (auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-        if (convertOp.getResult()
-                .getType()
-                .cast<RankedTensorType>()
-                .getEncoding()
-                .isa<triton::gpu::MmaEncodingAttr>())
-          return true;
+        Attribute dstEncoding = convertOp.getResult()
+                                    .getType()
+                                    .cast<RankedTensorType>()
+                                    .getEncoding();
+        if (auto mmaLayout =
+                dstEncoding.dyn_cast<triton::gpu::MmaEncodingAttr>())
+          return (mmaLayout.getVersionMajor() > 1) ? true
+                                                   : mmaLayout == encoding;
+        if (dstEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
+          return encoding.cast<triton::gpu::MmaEncodingAttr>()
+                     .getVersionMajor() > 1;
       }
       auto yield = dyn_cast<scf::YieldOp>(op);
       if (!yield)
@@ -560,6 +569,15 @@ Value LayoutPropagation::getValueAs(Value value, Attribute encoding) {
       return rewrittenValue;
     OpBuilder rewriter(value.getContext());
     rewriter.setInsertionPointAfterValue(rewrittenValue);
+    // Workaround: The pipeliner will insert async.wait after a pipelined loop
+    // to ensure that there is no pending copies and it is safe to re-use shared
+    // memory. We shouldn't insert ops that may use shared memory in between the
+    // loop and the async.wait. This is a hack until we fix the IR
+    // representation of async wait.
+    if (Operation *op = rewrittenValue.getDefiningOp()) {
+      if (isa<triton::gpu::AsyncWaitOp>(op->getNextNode()))
+        rewriter.setInsertionPointAfter(op->getNextNode());
+    }
     auto tmpType = RankedTensorType::get(tensorType.getShape(),
                                          tensorType.getElementType(), encoding);
     Value converted = rewriter.create<triton::gpu::ConvertLayoutOp>(
@@ -1122,7 +1140,6 @@ public:
     hoistConvert(m);
 
     mlir::RewritePatternSet decomposePatterns(context);
-    decomposePatterns.add<DecomposeDotOperand>(context);
     decomposePatterns.add<ConvertDotConvert>(context);
     if (mlir::applyPatternsAndFoldGreedily(m, std::move(decomposePatterns))
             .failed()) {
