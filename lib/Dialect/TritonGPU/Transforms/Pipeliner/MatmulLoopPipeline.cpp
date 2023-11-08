@@ -47,21 +47,28 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
 
   // Extract part.
   auto allocType = alloc.getType().cast<RankedTensorType>();
+  SmallVector<int64_t> shape(allocType.getShape().begin() + 1,
+                             allocType.getShape().end());
   RankedTensorType sliceType = RankedTensorType::get(
-      {allocType.getShape()[1], allocType.getShape()[2]},
-      allocType.getElementType(), allocType.getEncoding());
+      shape, allocType.getElementType(), allocType.getEncoding());
+  SmallVector<OpFoldResult> offset;
+  offset.push_back(extractIdx);
+  for (int i = 0; i < sliceType.getRank(); i++) {
+    offset.push_back(int_attr(0));
+  }
+  SmallVector<OpFoldResult> size;
+  size.push_back(int_attr(1));
+  for (int i = 0; i < sliceType.getRank(); i++) {
+    size.push_back(int_attr(sliceType.getShape()[i]));
+  }
+  SmallVector<OpFoldResult> stride(allocType.getRank(), int_attr(1));
   auto extract = builder.create<ttg::ExtractSliceOp>(
-      loc, sliceType, insertOp.getResult(),
-      SmallVector<OpFoldResult>{extractIdx, int_attr(0), int_attr(0)},
-      SmallVector<OpFoldResult>{int_attr(1), int_attr(sliceType.getShape()[0]),
-                                int_attr(sliceType.getShape()[1])},
-      SmallVector<OpFoldResult>{int_attr(1), int_attr(1), int_attr(1)});
+      loc, sliceType, insertOp.getResult(), offset, size, stride);
   Operation *user = *loadOp.getResult().getUsers().begin();
-  auto convertLayout = llvm::cast<ttg::ConvertLayoutOp>(user);
-  auto newCvt = builder.create<ttg::ConvertLayoutOp>(
-      convertLayout->getLoc(), convertLayout.getType(), extract.getResult());
-  convertLayout->replaceAllUsesWith(newCvt->getResults());
-  convertLayout->erase();
+  auto dstType = user->getOperand(0).getType().cast<RankedTensorType>();
+  auto newCvt = builder.create<ttg::ConvertLayoutOp>(loadOp->getLoc(), dstType,
+                                                     extract.getResult());
+  loadOp->replaceAllUsesWith(newCvt->getResults());
   loadOp.erase();
 
   // Fix up the yield op.
@@ -157,6 +164,28 @@ static Value loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3) {
     return Value();
 
   Operation *use = *loadOp.getResult().getUsers().begin();
+  while (use) {
+
+    if (use->getNumResults() != 1)
+      break;
+
+    if (isa<triton::LoadOp>(use))
+      break;
+    SmallVector<Operation *> users;
+    for (auto user : use->getResult(0).getUsers()) {
+      if (isa<scf::YieldOp>(user))
+        continue;
+      users.push_back(user);
+    }
+    if (users.size() != 1)
+      break;
+    use = users[0];
+  }
+  if (isa<triton::LoadOp>(use)) {
+    return loadOp->getResult(0);
+  }
+
+  use = *loadOp.getResult().getUsers().begin();
   if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
     auto tensorType =
         convertLayout.getResult().getType().cast<RankedTensorType>();
@@ -376,11 +405,9 @@ static void createAsynOps(scf::ForOp &forOp, ArrayRef<LoadDotOperand> loads,
     phase = builder.create<arith::SelectOp>(loc, cndExt, phase, nextPhase);
   }
 
-  bool firstLoad = true;
   for (AsyncLoad &asyncLoad : asyncLoads) {
     createAsyncLoad(forOp, asyncLoad.loadOp, asyncLoad.alloc, insertIdx,
                     extractIdx, phase);
-    firstLoad = false;
   }
   // Insert a waitOp after the first async copy. This does make the assumption
   // that the wait will be scheduled in a different stage that all the async
