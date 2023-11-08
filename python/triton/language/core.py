@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from enum import Enum
-from functools import wraps
+from functools import partial, wraps
 from typing import Callable, List, Sequence, TypeVar
 
 from .._C.libtriton.triton import ir
@@ -1707,31 +1707,31 @@ def inline_asm_elementwise(asm: str, constraints: str, args: list, dtype, is_pur
         :param _builder: the builder
         :return: the return value of the function
     '''
-    dispatch_args = args.copy()
     asm = _constexpr_to_value(asm)
     constraints = _constexpr_to_value(constraints)
     pack = _constexpr_to_value(pack)
     is_pure = _constexpr_to_value(is_pure)
-    ret_shape = None
-    arg_types = []
     res_ty = dtype
-    for i in range(len(dispatch_args)):
-        dispatch_args[i] = _to_tensor(dispatch_args[i], _builder)
-        arg_types.append(dispatch_args[i].dtype)
-    if len(arg_types) > 0:
-        arg_types = tuple(arg_types)
+    dispatch_args = [_to_tensor(arg, _builder) for arg in args]
+    if dispatch_args:
+        bin_op_type_checking = partial(
+            semantic.binary_op_type_checking_impl,
+            builder=_builder,
+            arithmetic_check=False,
+            allow_lhs_ptr=True,
+            allow_rhs_ptr=True,
+        )
         broadcast_arg = dispatch_args[0]
         # Get the broadcast shape over all the arguments
-        for i, item in enumerate(dispatch_args):
-            _, broadcast_arg = semantic.binary_op_type_checking_impl(item, broadcast_arg, _builder,
-                                                                     arithmetic_check=False)
-        # Change the shape of each argument based on the broadcast shape
-        for i in range(len(dispatch_args)):
-            dispatch_args[i], _ = semantic.binary_op_type_checking_impl(dispatch_args[i], broadcast_arg, _builder,
-                                                                        arithmetic_check=False)
-        ret_shape = broadcast_arg.shape
-        res_ty = block_type(dtype, ret_shape)
-    call = _builder.create_inline_asm(asm, constraints, [t.handle for t in args], res_ty.to_ir(_builder), is_pure, pack)
+        for item in dispatch_args:
+            _, broadcast_arg = bin_op_type_checking(item, broadcast_arg)
+        if broadcast_arg.shape:
+            # Change the shape of each argument based on the broadcast shape
+            for i, item in enumerate(dispatch_args):
+                dispatch_args[i], _ = bin_op_type_checking(item, broadcast_arg)
+            res_ty = block_type(dtype, broadcast_arg.shape)
+    handles = [t.handle for t in dispatch_args]
+    call = _builder.create_inline_asm(asm, constraints, handles, res_ty.to_ir(_builder), is_pure, pack)
     return tensor(call, res_ty)
 
 

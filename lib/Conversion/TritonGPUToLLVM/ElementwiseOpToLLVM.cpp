@@ -1030,8 +1030,9 @@ struct ElementwiseInlineAsmOpConversion
     SmallVector<Value> packedOperands;
     unsigned numPackedElements = op.getPackedElement();
     for (int i = 0, e = op.getNumOperands(); i < e; i++) {
+      Type elemTy = getElementType(op.getOperand(i));
       unsigned bitWidth =
-          getElementType(op.getOperand(i)).getIntOrFloatBitWidth();
+          elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : 64;
       unsigned numElementPerReg = bitWidth < 32 ? 32 / bitWidth : 1;
       numElementPerReg = std::min(numElementPerReg, numPackedElements);
       for (int j = 0; j < numPackedElements; j += numElementPerReg) {
@@ -1039,9 +1040,8 @@ struct ElementwiseInlineAsmOpConversion
           packedOperands.push_back(operands[j][i]);
           continue;
         }
-        Type t = vec_ty(
-            getTypeConverter()->convertType(getElementType(op.getOperand(i))),
-            numElementPerReg);
+        Type t =
+            vec_ty(getTypeConverter()->convertType(elemTy), numElementPerReg);
         Value packed = undef(t);
         for (int k = 0; k < numElementPerReg; k++) {
           packed = insert_element(packed, operands[j + k][i], i32_val(k));
