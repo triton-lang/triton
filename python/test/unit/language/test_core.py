@@ -1280,6 +1280,7 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
     if is_hip() and (dtype_z == "bfloat16"):
         pytest.skip(f'test_cast{(dtype_x, dtype_z)} cast to bfloat16 not supported on HIP.')
 
+    torch.manual_seed(0)
     # This is tricky because numpy doesn't have bfloat, and torch doesn't have uints.
     if dtype_x.startswith('bfloat'):
         x_tri = torch.randn(size, dtype=getattr(torch, dtype_x), device=device)
