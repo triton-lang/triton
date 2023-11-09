@@ -25,4 +25,4 @@ runs:
           For details pls see "github.com/${{ inputs.ghrepo }}/actions/runs/${{ inputs.ghrunid }}"
         ignore_cert: true
         to: ${{ inputs.jobowner }}
-        from: ghaction@example.com
+        from: github_action@github.com

@@ -11,7 +11,7 @@ on:
         default: amd@example.com
       intelowner:
         required: true
-        default: yudong.si@intel.com    
+        default: yudong.si@intel.com,jian.hui.li@intel.com
   push:
     branches: [main]
 
@@ -213,7 +213,7 @@ jobs:
         uses: ./.github/actions/sent-mail
         with:
           jobname: Integration-Tests-Intel
-          jobowner: ${{ inputs.amdowner }}
+          jobowner: ${{ inputs.intelowner }}
           ghrepo: ${{ github.repository }}
           ghrunid: ${{ github.run_id }}
 
