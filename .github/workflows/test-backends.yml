@@ -2,6 +2,16 @@ name: Backend Tests
 
 on:
   workflow_dispatch:
+    inputs:
+      msowner:
+        required: true
+        default: ms@example.com      
+      amdowner:
+        required: true
+        default: amd@example.com
+      intelowner:
+        required: true
+        default: yudong.si@intel.com    
   push:
     branches: [main]
 
@@ -175,3 +185,35 @@ jobs:
           conda activate triton-xpu-ci
           cd python/test/backend/third_party_backends
           python3 -m pytest --capture=tee-sys -rfs --verbose --backend xpu
+
+  Check-Backends-Tests-And-Notify:
+    runs-on: ubuntu-latest
+    needs: [Integration-Tests-Shared-Middle-Layer, Integration-Tests-AMD, Integration-Tests-Intel]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4    
+      - name: Integration-Tests-Shared-Middle-Layer-Notify
+        if: ${{ needs.Integration-Tests-Shared-Middle-Layer.result != '' && needs.Integration-Tests-Shared-Middle-Layer.result == 'failure' }}        
+        uses: ./.github/actions/sent-mail
+        with:
+          jobname: Integration-Tests-Shared-Middle-Layer
+          jobowner: ${{ inputs.msowner }}
+          ghrepo: ${{ github.repository }}
+          ghrunid: ${{ github.run_id }}   
+      - name: Integration-Tests-AMD-Notify
+        if: ${{ needs.Integration-Tests-AMD.result != '' && needs.Integration-Tests-AMD.result == 'failure' }}        
+        uses: ./.github/actions/sent-mail
+        with:
+          jobname: Integration-Tests-AMD
+          jobowner: ${{ inputs.amdowner }}
+          ghrepo: ${{ github.repository }}
+          ghrunid: ${{ github.run_id }}
+      - name: Integration-Tests-Intel-Notify
+        if: ${{ needs.Integration-Tests-Intel.result != '' && needs.Integration-Tests-Intel.result == 'failure' }}        
+        uses: ./.github/actions/sent-mail
+        with:
+          jobname: Integration-Tests-Intel
+          jobowner: ${{ inputs.amdowner }}
+          ghrepo: ${{ github.repository }}
+          ghrunid: ${{ github.run_id }}
+

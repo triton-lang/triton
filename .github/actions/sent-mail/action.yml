@@ -1,0 +1,28 @@
+name: Email Step
+
+inputs:
+  jobname:
+    required: true
+  jobowner:
+    required: true
+  ghrepo:
+    required: true
+  ghrunid:
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Email
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: smtp.gmail.com
+        server_port: 465
+        subject: "Failure Notification - ${{ inputs.jobname }}"
+        body: |
+          Notification: ${{ inputs.jobname }} failed in backend test,
+
+          For details pls see "github.com/${{ inputs.ghrepo }}/actions/runs/${{ inputs.ghrunid }}"
+        ignore_cert: true
+        to: ${{ inputs.jobowner }}
+        from: ghaction@example.com
