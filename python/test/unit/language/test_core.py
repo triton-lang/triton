@@ -2442,7 +2442,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
             pass
         else:
             ptx = pgm.asm["ptx"]
-            start = ptx.find("shfl.sync")
+            start = ptx.find("shfl.sync.bfly")
             end = ptx.find("cvt.rn.f16.f32")
             red_code = ptx[start:end]
             assert len(red_code) > 0
