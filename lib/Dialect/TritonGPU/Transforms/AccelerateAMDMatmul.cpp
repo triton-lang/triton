@@ -26,7 +26,12 @@ warpsPerTileMFMA(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
-  auto slices = mlir::getSlice(dotOp, filter);
+  mlir::ForwardSliceOptions fwdOpt;
+  fwdOpt.filter = filter;
+  mlir::BackwardSliceOptions bwdOpt;
+  bwdOpt.omitBlockArguments = true;
+  bwdOpt.filter = filter;
+  auto slices = mlir::getSlice(dotOp, bwdOpt, fwdOpt);
   for (Operation *op : slices)
     if (isa<tt::DotOp>(op) && (op != dotOp))
       return {(unsigned)numWarps, 1};
@@ -71,7 +76,12 @@ public:
     auto filter = [&dotOp](Operation *op) {
       return op->getParentRegion() == dotOp->getParentRegion();
     };
-    auto slices = mlir::getSlice(dotOp, filter);
+    mlir::ForwardSliceOptions fwdOpt;
+    fwdOpt.filter = filter;
+    mlir::BackwardSliceOptions bwdOpt;
+    bwdOpt.omitBlockArguments = true;
+    bwdOpt.filter = filter;
+    auto slices = mlir::getSlice(dotOp, bwdOpt, fwdOpt);
     for (Operation *op : slices) {
       if (isa<tt::DotOp>(op) && (op != dotOp))
         return true;

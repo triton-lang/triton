@@ -2043,28 +2043,16 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 
 // -----
 
-<<<<<<< HEAD
-//  CHECK-LABEL: copyitem
+//  CHECK-LABEL: reduce_slice
 //  GCN: llvm.store
 //  GCN: llvm.load
-//  PTX: st.shared.b8
-//  PTX: ld.shared.b8
-//  PTX-NOT: st.shared.b1
-//  PTX-NOT: ld.shared.b1
-#blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
-module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
-  tt.func public @copyitem() attributes {noinline = false} {
-    %cst = arith.constant dense<true> : tensor<4x1xi1, #blocked>
-=======
-//  CHECK-LABEL: reduce_slice
-//  CHECK-NOT: st.shared
-//  CHECK-NOT: ld.shared
+//  PTX-NOT: st.shared
+//  PTX-NOT: ld.shared
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [4, 4, 2], warpsPerCTA = [2, 4, 2], order = [2, 0, 1], CTAsPerCGA = [1, 1, 1], CTASplitNum = [1, 1, 1], CTAOrder = [0, 1, 2]}>
 #sliced2 = #triton_gpu.slice<{dim = 2, parent = #blocked}>
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 16 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
   tt.func public @reduce_slice() attributes {noinline = false} {
     %cst = arith.constant dense<true> : tensor<4x1xi1, #sliced2>
->>>>>>> 721897fcc4f942aa97d2e9ba3787a5e213758177
     %0 = "tt.reduce"(%cst) <{axis = 1 : i32}> ({
     ^bb0(%arg0: i1, %arg1: i1):
       %1 = arith.ori %arg0, %arg1 : i1

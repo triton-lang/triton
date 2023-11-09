@@ -1150,7 +1150,7 @@ struct AtomicRMWOpConversion
 
 #ifdef USE_ROCM
   /// Try to match the mlir::triton::RMWOp to LLVM::AtomicBinOp.
-  static Optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp) {
+  static std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp) {
     switch (atomicOp) {
     case RMWOp::AND:
       return LLVM::AtomicBinOp::_and;

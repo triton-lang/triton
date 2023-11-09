@@ -409,12 +409,9 @@ def compile(fn, **kwargs):
     assert num_warps > 0 and (num_warps & (num_warps - 1)) == 0, "num_warps must be a power of 2"
     num_ctas = kwargs.get("num_ctas", 1)
     num_stages = kwargs.get("num_stages", get_arch_default_num_stages(device_type, capability=capability))
-<<<<<<< HEAD
     waves_per_eu = kwargs.get("waves_per_eu", 0)
     matrix_instr_nonkdim = kwargs.get("matrix_instr_nonkdim", 0)
-=======
     enable_fp_fusion = kwargs.get("enable_fp_fusion", True)
->>>>>>> 721897fcc4f942aa97d2e9ba3787a5e213758177
     # TODO[shuhaoj]: Default should be to enable warp specialization once possible
     enable_warp_specialization = kwargs.get("enable_warp_specialization", False)
     # TODO[shuhaoj]: persistent can be decoupled with warp specialization

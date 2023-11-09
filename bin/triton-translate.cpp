@@ -147,17 +147,13 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
     llvm::outs() << *llvmir << '\n';
   } else if (targetKind == "ptx") {
     llvm::outs() << ::triton::translateLLVMIRToPTX(*llvmir, SMArch.getValue(),
-<<<<<<< HEAD
-                                                   ptxVersion.getValue());
+                                                   ptxVersion.getValue(),
+                                                   enableFpFusion.getValue());
   } else if (targetKind == "hsaco") {
     auto [module, hsaco] = mlir::triton::translateLLVMIRToHSACO(
         *llvmir, GCNArch.getValue(), GCNTriple.getValue(),
         GCNFeatures.getValue());
     llvm::outs() << hsaco;
-=======
-                                                   ptxVersion.getValue(),
-                                                   enableFpFusion.getValue());
->>>>>>> 721897fcc4f942aa97d2e9ba3787a5e213758177
   } else {
     llvm::errs() << "Error: Unknown target specified: " << targetKind << "\n";
     return failure();
