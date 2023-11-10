@@ -302,7 +302,10 @@ class TestMatMulCodegen:
         if test_dir.exists():
             shutil.rmtree(test_dir)
         test_dir.mkdir(parents=True, exist_ok=True)
-        return test_dir
+
+        yield test_dir
+
+        shutil.rmtree(test_dir)
 
     @pytest.fixture(scope="class")
     def reference_dir(self, test_dir):
@@ -584,7 +587,10 @@ class TestMatMulTrace:
         if test_dir.exists():
             shutil.rmtree(test_dir)
         test_dir.mkdir(parents=True, exist_ok=True)
-        return test_dir
+
+        yield test_dir
+
+        shutil.rmtree(test_dir)
 
     @pytest.fixture(scope="class")
     def reference_dir(self, test_dir):
