@@ -25,6 +25,7 @@ class CompiledArtifact:
 
 
 class Grid(namedtuple("Grid", ["x", "y", "z"])):
+
     def __str__(self):
         return f"[{self.x}, {self.y}, {self.z}]"
 
@@ -57,6 +58,7 @@ class JITCompileArgs(dict):
 
 @dataclass
 class _DataClassDict(dict):
+
     def __post_init__(self):
         self.update(self.__dict__)
 
@@ -157,9 +159,7 @@ class AOTCompilerParamsBuilder(ABC):
 
         missing_keys = template.PARAMS - set(params.keys())
         if missing_keys:
-            raise ValueError(
-                f"Missing following expected keys in template {template.TEMPLATE_NAME}: {missing_keys}"
-            )
+            raise ValueError(f"Missing following expected keys in template {template.TEMPLATE_NAME}: {missing_keys}")
 
     def _validate_header(self, params):
         self._validate(self.HEADER_TEMPLATE, params)
@@ -196,22 +196,14 @@ class AOT_C_CUDA_ParamsBuilder(AOTCompilerParamsBuilder):
         return m.hexdigest()[:8]
 
     def _generate_signatures(self):
-        meta_sig = (
-            f'warps{self.jit_args["num_warps"]}xstages{self.jit_args["num_stages"]}'
-        )
+        meta_sig = (f'warps{self.jit_args["num_warps"]}xstages{self.jit_args["num_stages"]}')
 
         config = self.jit_args["configs"][0]
 
         # Case when using AOT compiler from triton.tools.compile
-        if self.jit_args.get("_original_signature", None) and self.jit_args.get(
-            "_original_constants", None
-        ):
-            signature_str = [
-                str(v).strip() for v in self.jit_args["_original_signature"].values()
-            ]
-            const_str = [
-                str(v).strip() for v in self.jit_args["_original_constants"].values()
-            ]
+        if self.jit_args.get("_original_signature", None) and self.jit_args.get("_original_constants", None):
+            signature_str = [str(v).strip() for v in self.jit_args["_original_signature"].values()]
+            const_str = [str(v).strip() for v in self.jit_args["_original_constants"].values()]
         else:
             # Reconstruct full signature with hints to match scripted sig hash
             full_sig = []
@@ -226,11 +218,7 @@ class AOT_C_CUDA_ParamsBuilder(AOTCompilerParamsBuilder):
             full_sig = dict(zip(signature.keys(), full_sig))
 
             # Get constants from kernel_args, removing args specialized to 1
-            constants = {
-                arg.param.num: arg.value
-                for arg in self.jit_args["kernel_args"]
-                if arg.param.is_constexpr
-            }
+            constants = {arg.param.num: arg.value for arg in self.jit_args["kernel_args"] if arg.param.is_constexpr}
             all_args = {**full_sig, **constants}
             signature_str = [str(all_args[k]).strip() for k in sorted(all_args)]
             const_str = [str(v) for k, v in constants.items()]
@@ -244,14 +232,8 @@ class AOT_C_CUDA_ParamsBuilder(AOTCompilerParamsBuilder):
         if self.jit_args.get("_original_constants", None):
             constants = self.jit_args.get("_original_constants", None)
         else:
-            constants = {
-                arg.param.num: arg.value
-                for arg in self.jit_args["kernel_args"]
-                if arg.param.is_constexpr
-            }
-        doc_string = [
-            f"{self.jit_fn.arg_names[i]}={constants[i]}" for i in constants.keys()
-        ]
+            constants = {arg.param.num: arg.value for arg in self.jit_args["kernel_args"] if arg.param.is_constexpr}
+        doc_string = [f"{self.jit_fn.arg_names[i]}={constants[i]}" for i in constants.keys()]
         doc_string += [
             f'num_warps={self.jit_args["num_warps"]}',
             f'num_stages={self.jit_args["num_stages"]}',
@@ -283,39 +265,26 @@ class AOT_C_CUDA_ParamsBuilder(AOTCompilerParamsBuilder):
         suffix = kernel_suffix(self.jit_args["signature"].values(), config)
         func_name = "_".join([self.kernel_name, sig_hash, suffix])
         triton_kernel_name = "_".join([self.kernel_name, suffix])
-        return AOTFunctionNameParams(
-            kernel_name=func_name, triton_kernel_name=triton_kernel_name
-        )
+        return AOTFunctionNameParams(kernel_name=func_name, triton_kernel_name=triton_kernel_name)
 
     def _generate_cubin_params(self):
         hex_ = str(binascii.hexlify(self.compiled_binary.asm["cubin"]))[2:-1]
         bin_data = ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])])
         return AOTCubinParams(bin_size=len(hex_), bin_data=bin_data)
 
-    def _generate_signature_params(
-        self, args: AOTArgs, signatures: AOTSignatureArgs
-    ) -> AOTSignatureParams:
-        signature = ", ".join(
-            [
-                f"{ty_to_cpp(ty)} {name}"
-                for name, ty in zip(args.arg_names, args.arg_types)
-            ]
-        )
+    def _generate_signature_params(self, args: AOTArgs, signatures: AOTSignatureArgs) -> AOTSignatureParams:
+        signature = ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(args.arg_names, args.arg_types)])
 
-        full_signature = ", ".join(
-            [
-                f'{ty_to_cpp(self.jit_args["signature"][i])} {self.jit_fn.arg_names[i]}'
-                for i in self.jit_args["signature"].keys()
-            ]
-        )
+        full_signature = ", ".join([
+            f'{ty_to_cpp(self.jit_args["signature"][i])} {self.jit_fn.arg_names[i]}'
+            for i in self.jit_args["signature"].keys()
+        ])
         algo_info = "_".join([signatures.const_sig, signatures.meta_sig])
 
         return AOTSignatureParams(signature, full_signature, algo_info)
 
     def _generate_grid_params(self):
-        grid_params = AOTGridParams(
-            self.jit_args["grid"][0], self.jit_args["grid"][1], self.jit_args["grid"][2]
-        )
+        grid_params = AOTGridParams(self.jit_args["grid"][0], self.jit_args["grid"][1], self.jit_args["grid"][2])
         return grid_params
 
     def _build_full_params(
@@ -348,9 +317,7 @@ class AOT_C_CUDA_ParamsBuilder(AOTCompilerParamsBuilder):
         args = self._generate_args()
 
         arg_params = self._generate_arg_params(args)
-        function_name_params = self._generate_function_name_params(
-            sig_hash=signatures.sig_hash
-        )
+        function_name_params = self._generate_function_name_params(sig_hash=signatures.sig_hash)
         cubin_params = self._generate_cubin_params()
         signature_params = self._generate_signature_params(args, signatures)
         grid_params = self._generate_grid_params()

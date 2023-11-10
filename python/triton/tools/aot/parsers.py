@@ -44,6 +44,7 @@ class HeaderParsingPatterns:
 
 
 class HeaderParser(ABC):
+
     def __init__(self, patterns=HeaderParsingPatterns):
         self.patterns = patterns
         self.kernels = defaultdict(list)
@@ -54,6 +55,7 @@ class HeaderParser(ABC):
 
 
 class C_CUDA_HeaderParser(HeaderParser):
+
     def parse(self, headers: List[Path | str]) -> Dict[str, List[KernelLinkerMeta]]:
         for header in headers:
             h_path = Path(header)

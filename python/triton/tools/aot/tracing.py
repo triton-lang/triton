@@ -121,22 +121,17 @@ class KernelTracer(ABC):
         no_specs = [p.name for p in params if p.do_not_specialize]
 
         assert set(no_specs) == set(
-            expected_specializations
-        ), f"Incorrect specializations, expected {expected_specializations}"
+            expected_specializations), f"Incorrect specializations, expected {expected_specializations}"
 
     def check_args(self, args, expected_args):
-        assert len(args) == len(
-            expected_args
-        ), f"Incorrect number of args, expected {expected_args}"
+        assert len(args) == len(expected_args), f"Incorrect number of args, expected {expected_args}"
         for i, (expected_key, actual_key) in enumerate(zip(expected_args, args.keys())):
-            assert (
-                expected_key == actual_key
-            ), f"Incorrect arg name at position {i}, expected {expected_key}, got {actual_key}"
+            assert (expected_key == actual_key
+                    ), f"Incorrect arg name at position {i}, expected {expected_key}, got {actual_key}"
 
     def check_constants(self, kernel_constants, expected_constants):
-        assert set(kernel_constants.keys()) == set(
-            expected_constants
-        ), f"Incorrect constants, expected {expected_constants}"
+        assert set(
+            kernel_constants.keys()) == set(expected_constants), f"Incorrect constants, expected {expected_constants}"
 
     def trace(self, kernel_config, trace_config: TraceConfig):
         """Trace a kernel with the given args and constants
@@ -185,9 +180,7 @@ class MatMulKernelTracer(KernelTracer):
         self.kernel_dir = Path(kernel_dir).absolute()
         self.kernel = (self.kernel_dir / self.KERNEL).absolute()
 
-    def trace(
-        self, kernel_configs: List[MatMulConfig], trace_configs: List[TraceConfig]
-    ):
+    def trace(self, kernel_configs: List[MatMulConfig], trace_configs: List[TraceConfig]):
         outputs = []
         checks = []
         traces = []
@@ -247,12 +240,10 @@ class MatMulKernelTracer(KernelTracer):
         }
 
     def build_grid(self, config: MatMulConfig) -> TraceGridConfig:
-        jit_grid = lambda META: (
-            (
-                triton.cdiv(config.M, META["BLOCK_M"]),
-                triton.cdiv(config.N, META["BLOCK_N"]),
-                1,
-            )
-        )
+        jit_grid = lambda META: ((
+            triton.cdiv(config.M, META["BLOCK_M"]),
+            triton.cdiv(config.N, META["BLOCK_N"]),
+            1,
+        ))
         trace_grid = (f"M / {config.BLOCK_M}", f"N / {config.BLOCK_N}", "1")
         return TraceGridConfig(jit_grid, trace_grid)

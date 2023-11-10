@@ -94,13 +94,11 @@ class C_CUDA_HeaderGenerator(HeaderGenerator):
         algo_decls = self._make_algo_decls()
         get_num_algos_decl = self._make_get_num_algos_decl()
         global_decl = self._make_global_decl()
-        src = "\n".join(
-            [
-                algo_decls,
-                get_num_algos_decl,
-                global_decl,
-            ]
-        )
+        src = "\n".join([
+            algo_decls,
+            get_num_algos_decl,
+            global_decl,
+        ])
         return "\n\n".join([includes, src])
 
 
@@ -155,9 +153,7 @@ class C_CUDA_SourceGenerator(SourceGenerator):
             src += "}\n"
         return src
 
-    def _make_kernel_hints_dispatcher(
-        self, name: str, metas: Sequence[KernelLinkerMeta]
-    ) -> str:
+    def _make_kernel_hints_dispatcher(self, name: str, metas: Sequence[KernelLinkerMeta]) -> str:
         # generate dispatcher function for kernels with different integer value hints
         docs_str = f"// launcher for: {name}\n"
         fn_sig = ""
@@ -169,20 +165,11 @@ class C_CUDA_SourceGenerator(SourceGenerator):
         src = "\n".join([docs_str + fn_sig, kernel_sig]) + "\n"
         for meta in sorted(metas, key=lambda m: -m.num_specs):
             conds = " && ".join(
-                [
-                    self._condition_fn(val, hint)
-                    for val, hint in zip(meta.arg_names, meta.sizes)
-                    if hint is not None
-                ]
-            )
-            src += (
-                f"  if ({conds})\n" if any(meta.sizes) else "if (1)\n"
-            )  # Edge case where no special
+                [self._condition_fn(val, hint) for val, hint in zip(meta.arg_names, meta.sizes) if hint is not None])
+            src += (f"  if ({conds})\n" if any(meta.sizes) else "if (1)\n")  # Edge case where no special
             #        dispatcher_conds = self._make_dispatcher_conditions(metas)
 
-            arg_names = [
-                arg for arg, hint in zip(meta.arg_names, meta.sizes) if hint != 1
-            ]
+            arg_names = [arg for arg, hint in zip(meta.arg_names, meta.sizes) if hint != 1]
             src += f"    return {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(stream, {', '.join(arg_names)});\n"
         src += "\n"
         src += "  return CUDA_ERROR_INVALID_VALUE;\n"
@@ -253,14 +240,12 @@ class C_CUDA_SourceGenerator(SourceGenerator):
         get_num_algos_def = self._make_get_num_algos_def()
         load_unload_def = self._make_kernel_load_defs()
         default_algo_kernel = self._make_default_algo_kernel_def()
-        src = "\n".join(
-            [
-                defs,
-                func_pointers_def,
-                get_num_algos_def,
-                meta_const_def,
-                load_unload_def,
-                default_algo_kernel,
-            ]
-        )
+        src = "\n".join([
+            defs,
+            func_pointers_def,
+            get_num_algos_def,
+            meta_const_def,
+            load_unload_def,
+            default_algo_kernel,
+        ])
         return "\n\n".join([includes, src])

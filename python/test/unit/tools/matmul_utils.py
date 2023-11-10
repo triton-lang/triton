@@ -15,12 +15,9 @@ from .matmul_configs import MATMUL_ARGS, MATMUL_CONSTANTS
 
 FIXTURES_DIR = Path(__file__).parent.absolute() / "fixtures"
 
-
 # ------------------------------------------------------------------------------------------------------------ #
-
-
 """
-Utilities for generating reference AOT kernels 
+Utilities for generating reference AOT kernels
 """
 
 
@@ -32,9 +29,7 @@ class AOTScriptRunner:
     """
 
     @staticmethod
-    def compile_kernel(
-        *, dir, signature, kernel_name, out_name, out_path, num_warps, grid, kernel_path
-    ):
+    def compile_kernel(*, dir, signature, kernel_name, out_name, out_path, num_warps, grid, kernel_path):
         compiler_path = os.path.join(triton.tools.__path__[0], "compile.py")
 
         subprocess.run(

@@ -76,22 +76,14 @@ class AOT_C_CUDA_Compiler(AOT_Compiler):
 
     def generate_header(self):
         # Filter params for header keys
-        header_params = {
-            k: v
-            for k, v in self.params.items()
-            if k in self.params_builder.HEADER_TEMPLATE.PARAMS
-        }
+        header_params = {k: v for k, v in self.params.items() if k in self.params_builder.HEADER_TEMPLATE.PARAMS}
         # Generate header
         header = self.params_builder.HEADER_TEMPLATE.TEMPLATE.format(**header_params)
         return header
 
     def generate_source(self):
         # Filter params for source keys
-        source_params = {
-            k: v
-            for k, v in self.params.items()
-            if k in self.params_builder.SOURCE_TEMPLATE.PARAMS
-        }
+        source_params = {k: v for k, v in self.params.items() if k in self.params_builder.SOURCE_TEMPLATE.PARAMS}
         # Generate source
         source = self.params_builder.SOURCE_TEMPLATE.TEMPLATE.format(**source_params)
         return source

@@ -73,15 +73,9 @@ if __name__ == "__main__":
         default=None,
         help="Out name for the compiled kernel",
     )
-    parser.add_argument(
-        "--out-path", "-o", type=Path, default=None, help="Out filename"
-    )
-    parser.add_argument(
-        "--signature", "-s", type=str, help="Signature of the kernel", required=True
-    )
-    parser.add_argument(
-        "--grid", "-g", type=str, help="Launch grid of the kernel", required=True
-    )
+    parser.add_argument("--out-path", "-o", type=Path, default=None, help="Out filename")
+    parser.add_argument("--signature", "-s", type=str, help="Signature of the kernel", required=True)
+    parser.add_argument("--grid", "-g", type=str, help="Launch grid of the kernel", required=True)
     parser.add_argument(
         "--save_args",
         action="store_true",
@@ -146,9 +140,7 @@ if __name__ == "__main__":
 
         original_constants = deepcopy(constexprs)
 
-    signature = {
-        i: s.split(":")[0] for i, s in enumerate(signature) if i not in constexprs
-    }
+    signature = {i: s.split(":")[0] for i, s in enumerate(signature) if i not in constexprs}
     const_sig = "x".join([str(v) for v in constexprs.values()])
     doc_string = [f"{kernel.arg_names[i]}={constexprs[i]}" for i in constexprs.keys()]
     doc_string += [f"num_warps={args.num_warps}", f"num_stages={args.num_stages}"]
@@ -158,9 +150,7 @@ if __name__ == "__main__":
         assert h in [1, 16], f"Only 1 and 16 are valid hints, got {h}"
     divisible_by_16 = [i for i, h in hints.items() if h == 16]
     equal_to_1 = [i for i, h in hints.items() if h == 1]
-    config = triton.compiler.instance_descriptor(
-        divisible_by_16=divisible_by_16, equal_to_1=equal_to_1
-    )
+    config = triton.compiler.instance_descriptor(divisible_by_16=divisible_by_16, equal_to_1=equal_to_1)
     for i in equal_to_1:
         constexprs.update({i: 1})
     ccinfo = triton.compile(
@@ -188,15 +178,8 @@ if __name__ == "__main__":
         "triton_kernel_name": triton_kernel_name,
         "bin_size": len(hex_),
         "bin_data": ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])]),
-        "signature": ", ".join(
-            [f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]
-        ),
-        "full_signature": ", ".join(
-            [
-                f"{ty_to_cpp(signature[i])} {kernel.arg_names[i]}"
-                for i in signature.keys()
-            ]
-        ),
+        "signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),
+        "full_signature": ", ".join([f"{ty_to_cpp(signature[i])} {kernel.arg_names[i]}" for i in signature.keys()]),
         "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names]),
         "num_args": len(arg_names),
         "kernel_docstring": doc_string,
@@ -215,9 +198,7 @@ if __name__ == "__main__":
 
     # Dump compile args
     if args.save_args:
-        with out_path.with_suffix(f".{sig_hash}_{suffix}.jit_args.json").open(
-            "w"
-        ) as fp:
+        with out_path.with_suffix(f".{sig_hash}_{suffix}.jit_args.json").open("w") as fp:
             serialized_sig = json.dumps(signature)
             serialized_const = json.dumps(constexprs)
 

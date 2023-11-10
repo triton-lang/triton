@@ -84,10 +84,8 @@ class DependenciesFinder(ast.NodeVisitor):
         lhs = self.visit(node.value)
         while isinstance(lhs, ast.Attribute):
             lhs = self.visit(lhs.value)
-        if lhs is None or (
-            getattr(lhs, "__name__", "") == "triton"
-            or getattr(lhs, "__name__", "").endswith(".triton")
-        ):
+        if lhs is None or (getattr(lhs, "__name__", "") == "triton"
+                           or getattr(lhs, "__name__", "").endswith(".triton")):
             return None
         return getattr(lhs, node.attr)
 
@@ -97,9 +95,7 @@ class DependenciesFinder(ast.NodeVisitor):
             return
         if inspect.isbuiltin(func):
             return
-        if func.__module__ and (
-            func.__module__.startswith("triton.") or ".triton." in func.__module__
-        ):
+        if func.__module__ and (func.__module__.startswith("triton.") or ".triton." in func.__module__):
             return
         assert isinstance(
             func, JITFunction
@@ -141,10 +137,7 @@ class KernelParam:
 
     @cached_property
     def annotation(self):
-        if (
-            not self._param.annotation
-            or self._param.annotation == inspect.Parameter.empty
-        ):
+        if (not self._param.annotation or self._param.annotation == inspect.Parameter.empty):
             return ""
         return _normalize_ty(self._param.annotation)
 
@@ -190,7 +183,7 @@ class KernelArg:
         assert not self.param.do_not_specialize
 
         try:
-            return (self.value.data_ptr() % JITFunction.divisibility == 0,)
+            return (self.value.data_ptr() % JITFunction.divisibility == 0, )
         except AttributeError:
             pass
 
@@ -202,7 +195,7 @@ class KernelArg:
                 self.value == 1,
             )
 
-        return (False,)
+        return (False, )
 
 
 class KernelInterface(Generic[T]):
@@ -267,10 +260,11 @@ class JITFunction(KernelInterface[T]):
             return arg.data_ptr() % JITFunction.divisibility == 0
         elif isinstance(arg, int):
             return (arg % 16 == 0, arg == 1)
-        return (arg is None,)
+        return (arg is None, )
 
     # TODO(jlebar): Fold this into the KernelArg class.
     def _get_config(self, *args):
+
         def is_divisible_by_16(x):
             if hasattr(x, "data_ptr"):
                 return x.data_ptr() % JITFunction.divisibility == 0
@@ -300,18 +294,11 @@ class JITFunction(KernelInterface[T]):
         equal_to_1 = {
             param.num
             for param, arg in zip(self.params, args)
-            if isinstance(arg, int)
-            and not isinstance(arg, bool)
-            and arg == 1
-            and not param.do_not_specialize
+            if isinstance(arg, int) and not isinstance(arg, bool) and arg == 1 and not param.do_not_specialize
         }
         # folded equal_to_1 and None
         # TODO: method to collect all folded args
-        none_args = {
-            param.num
-            for param, arg in zip(self.params, args)
-            if arg is None and not param.do_not_specialize
-        }
+        none_args = {param.num for param, arg in zip(self.params, args) if arg is None and not param.do_not_specialize}
         ids_of_folded_args = equal_to_1 | none_args
         return namedtuple(
             "instance_descriptor",
@@ -380,13 +367,12 @@ class JITFunction(KernelInterface[T]):
 
         name = self.fn.__name__
         module = self.fn.__module__
-        arg_reprs = ", ".join(
-            [f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])]
-        )
+        arg_reprs = ", ".join([f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])])
         repr = f"{name}[num_warps={num_warps}, num_ctas={num_ctas}, num_stages={num_stages}, enable_warp_specialization={enable_warp_specialization}, enable_fp_fusion={enable_fp_fusion}]({arg_reprs})"
         key = str(key)
 
         class LegacyCompiler:
+
             def __init__(self, module, name):
                 self.module = module
                 self.name = name
@@ -414,12 +400,8 @@ class JITFunction(KernelInterface[T]):
             already_compiled=False,
         )
 
-    def _conclude_device_type(
-        self, device_types: List[str], pinned_memory_flags: List[bool]
-    ) -> str:
-        device_types = [
-            device_type for device_type in device_types if device_type != ""
-        ]
+    def _conclude_device_type(self, device_types: List[str], pinned_memory_flags: List[bool]) -> str:
+        device_types = [device_type for device_type in device_types if device_type != ""]
         # Return cuda if one of the input tensors is cuda
         if "cuda" in device_types:
             import torch
@@ -427,9 +409,7 @@ class JITFunction(KernelInterface[T]):
             return "hip" if torch.version.hip else "cuda"
 
         is_cpu = all(device_type == "cpu" for device_type in device_types)
-        is_pinned_memory = any(
-            pinned_memory_flag for pinned_memory_flag in pinned_memory_flags
-        )
+        is_pinned_memory = any(pinned_memory_flag for pinned_memory_flag in pinned_memory_flags)
         # Return cuda if all the input tensors are cpu while the memory is pinned
         if is_cpu and is_pinned_memory:
             return "cuda"
@@ -456,9 +436,7 @@ class JITFunction(KernelInterface[T]):
         num_warps = get_special_arg("num_warps")
         num_ctas = get_special_arg("num_ctas", 1)
         num_stages = get_special_arg("num_stages")
-        enable_warp_specialization = get_special_arg(
-            "enable_warp_specialization", False
-        )
+        enable_warp_specialization = get_special_arg("enable_warp_specialization", False)
         enable_fp_fusion = get_special_arg("enable_fp_fusion", True)
         extern_libs = get_special_arg("extern_libs")
         stream = get_special_arg("stream")
@@ -476,21 +454,12 @@ class JITFunction(KernelInterface[T]):
         bound_args.apply_defaults()
 
         assert len(bound_args.arguments) == len(self.params)
-        args = [
-            KernelArg(arg_value, param)
-            for (_, arg_value), param in zip(bound_args.arguments.items(), self.params)
-        ]
+        args = [KernelArg(arg_value, param) for (_, arg_value), param in zip(bound_args.arguments.items(), self.params)]
 
-        non_constexpr_arg_values = [
-            arg.value for arg in args if not arg.param.is_constexpr
-        ]
+        non_constexpr_arg_values = [arg.value for arg in args if not arg.param.is_constexpr]
 
-        sig_key = tuple(
-            arg.signature_key() for arg in args if not arg.param.is_constexpr
-        )
-        spec_key = tuple(
-            arg.specialization_key() for arg in args if not arg.param.do_not_specialize
-        )
+        sig_key = tuple(arg.signature_key() for arg in args if not arg.param.is_constexpr)
+        spec_key = tuple(arg.specialization_key() for arg in args if not arg.param.do_not_specialize)
         constexpr_key = tuple(arg.value for arg in args if arg.param.is_constexpr)
 
         assert num_ctas > 0
@@ -519,9 +488,7 @@ class JITFunction(KernelInterface[T]):
         grid_2 = grid[2] if grid_size > 2 else 1
         if device_type is None:
             device_types = [self._device_of(arg) for arg in non_constexpr_arg_values]
-            device_types = [
-                _device_type for _device_type in device_types if _device_type != ""
-            ]
+            device_types = [_device_type for _device_type in device_types if _device_type != ""]
             device_type = self._conclude_device_type(
                 device_types,
                 [self._pinned_memory_of(arg) for arg in non_constexpr_arg_values],
@@ -572,13 +539,11 @@ class JITFunction(KernelInterface[T]):
 
         # Kernel is not cached; we have to compile.
         if key not in self.cache[device]:
-            configs = (self._get_config(*[arg.value for arg in args]),)
+            configs = (self._get_config(*[arg.value for arg in args]), )
             constants = {
                 arg.param.num: arg.value
                 for arg in args
-                if arg.param.is_constexpr
-                or arg.param.num in configs[0].equal_to_1
-                or arg.value is None
+                if arg.param.is_constexpr or arg.param.num in configs[0].equal_to_1 or arg.value is None
             }
             for i, arg in constants.items():
                 if callable(arg):
@@ -592,17 +557,17 @@ class JITFunction(KernelInterface[T]):
             }
 
             if self._call_hook(
-                key,
-                signature,
-                device,
-                constants,
-                num_warps,
-                num_ctas,
-                num_stages,
-                enable_warp_specialization,
-                enable_fp_fusion,
-                extern_libs,
-                configs,
+                    key,
+                    signature,
+                    device,
+                    constants,
+                    num_warps,
+                    num_ctas,
+                    num_stages,
+                    enable_warp_specialization,
+                    enable_fp_fusion,
+                    extern_libs,
+                    configs,
             ):
                 return None
 
@@ -694,9 +659,7 @@ class JITFunction(KernelInterface[T]):
 
         return bin
 
-    def __init__(
-        self, fn, version=None, do_not_specialize=None, debug=None, noinline=None
-    ):
+    def __init__(self, fn, version=None, do_not_specialize=None, debug=None, noinline=None):
         do_not_specialize = do_not_specialize if do_not_specialize else []
 
         # Tracing path -- user passes a filename a python function / `trition.jit` function
@@ -731,14 +694,12 @@ class JITFunction(KernelInterface[T]):
 
         self.params = []
         for i, param in enumerate(self.signature.parameters.values()):
-            dns = do_not_specialize and (
-                i in do_not_specialize or param.name in do_not_specialize
-            )
+            dns = do_not_specialize and (i in do_not_specialize or param.name in do_not_specialize)
             self.params.append(KernelParam(i, param, dns))
 
         # function source code (without decorators)
         self.src = textwrap.dedent(inspect.getsource(fn))
-        self.src = self.src[self.src.find("def") :]
+        self.src = self.src[self.src.find("def"):]
         # cache of just-in-time compiled kernels
         self.cache = defaultdict(dict)
         self.hash = None
@@ -766,9 +727,7 @@ class JITFunction(KernelInterface[T]):
     def cache_key(self):
         # TODO : hash should be attribute of `self`
         if self.hash is None:
-            dependencies_finder = DependenciesFinder(
-                globals=self.__globals__, src=self.src
-            )
+            dependencies_finder = DependenciesFinder(globals=self.__globals__, src=self.src)
             dependencies_finder.visit(self.parse())
             self.hash = dependencies_finder.ret + str(self.starting_line_number)
         return self.hash
@@ -893,6 +852,7 @@ class MockTensor:
 
 
 class TensorWrapper:
+
     def __init__(self, base, dtype):
         self.dtype = dtype
         self.base = base

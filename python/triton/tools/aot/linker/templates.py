@@ -13,8 +13,6 @@ void unload_{orig_kernel_name}();
 """
 
 DEFAULT_HEADER_INCLUDES = ["#include <cuda.h>"]
-
-
 """Source Templates"""
 DEFAULT_SOURCE_INCLUDES = [
     "#include <cuda.h>",
