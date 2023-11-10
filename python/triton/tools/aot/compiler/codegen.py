@@ -55,12 +55,6 @@ class JITCompileArgs(dict):
         self.update(self.__dict__)
 
 
-def hash_signature(signature: List[str]):
-    m = hashlib.sha256()
-    m.update(" ".join(signature).encode())
-    return m.hexdigest()[:8]
-
-
 @dataclass
 class _DataClassDict(dict):
     def __post_init__(self):
@@ -115,6 +109,11 @@ class AOTGridParams(_DataClassDict):
 
 @dataclass
 class AOTParams(_DataClassDict):
+    """Convenience struct for packaging params for AOT codegen
+
+    Subclasses `dict` to allow for unpacking into templates.
+    """
+
     function_name_params: AOTFunctionNameParams
     cubin_params: AOTCubinParams
     signature_params: AOTSignatureParams
@@ -140,6 +139,12 @@ class AOTParams(_DataClassDict):
 
 
 class AOTCompilerParamsBuilder(ABC):
+    """Interface for building params for AOT codegen
+
+    `build` is expected to generate the params needed
+    to hydrate the class-level templates.
+    """
+
     HEADER_TEMPLATE: AOTTemplate
     SOURCE_TEMPLATE: AOTTemplate
 
@@ -164,6 +169,11 @@ class AOTCompilerParamsBuilder(ABC):
 
 
 class AOT_C_CUDA_ParamsBuilder(AOTCompilerParamsBuilder):
+    """Concrete implementation for building params for AOT C CUDA codegen
+
+    Refactor of `triton.tools.compile.py`
+    """
+
     HEADER_TEMPLATE = DEFAULT_AOT_C_CUDA_HEADER_TEMPLATE
     SOURCE_TEMPLATE = DEFAULT_AOT_C_CUDA_SOURCE_TEMPLATE
 

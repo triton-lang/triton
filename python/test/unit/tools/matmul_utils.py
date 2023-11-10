@@ -160,6 +160,7 @@ class MatmulTestConfig:
 
 
 def tt_to_torch(tt):
+    """Convert triton types to torch types"""
     if "16" in tt:
         return torch.float16
     elif "32" in tt:

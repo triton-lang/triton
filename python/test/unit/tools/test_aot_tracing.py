@@ -227,7 +227,7 @@ def check_linked_source(
     The actual function names will differ due to the suffix attached to the generated function name which depends on
     specialization config.
     """
-    
+
     actual_lines, expected_lines = _preprocess_src(actual), _preprocess_src(expected)
     mismatches = []
     for i in range(len(actual_lines)):
@@ -792,9 +792,7 @@ class TestMatMulTrace:
             verbose=True,
         )
 
-    def test_linked_source_match(
-        self, kernel_name, linked_traces, expected_kernels, link_skips
-    ):
+    def test_linked_source_match(self, linked_traces, expected_kernels, link_skips):
         expected_source = expected_kernels.linked_source[0].read_text()
         actual_source = linked_traces.source
 

@@ -11,6 +11,11 @@ from .codegen import AOT_C_CUDA_ParamsBuilder, AOTCompilerParamsBuilder, JITComp
 
 
 class AOT_Compiler(ABC):
+    """Interface for generating AOT kernels from `triton.runtime.jit.JITFunction`
+
+    `generate_header` and `generate_source` should be implemented for header and source codegen.
+    """
+
     PARAM_BUILDER_CLS: AOTCompilerParamsBuilder
 
     def __init__(
@@ -62,7 +67,10 @@ class AOTCompilationResult:
 
 
 class AOT_C_CUDA_Compiler(AOT_Compiler):
-    """Creates C CUDA library for accessing Triton jitted kernels"""
+    """Creates C CUDA library for accessing Triton jitted kernels
+
+    Refactor of `triton.tools.compile.py`
+    """
 
     PARAM_BUILDER_CLS = AOT_C_CUDA_ParamsBuilder
 

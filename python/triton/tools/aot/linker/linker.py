@@ -77,7 +77,7 @@ class AOTLinker(ABC):
 
 class AOT_C_CUDA_Linker(AOTLinker):
     """
-    Generates C CUDA dispatcher code from compiled triton kernels
+    Subclass for C CUDA dispatcher code from compiled triton kernels
     """
 
     HEADER_PARSER_CLS = C_CUDA_HeaderParser

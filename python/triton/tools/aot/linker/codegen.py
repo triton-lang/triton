@@ -12,6 +12,11 @@ from .templates import (
 
 
 class SignatureGenerator:
+    """Generates function signatures for kernels with meta-parameter and constant values
+
+    Ported from `python/triton/tools/link.py`
+    """
+
     @staticmethod
     def gen_signature_with_full_args(m):
         return ", ".join([f"{ty} {arg}" for ty, arg in zip(m.arg_ctypes, m.arg_names)])
@@ -25,6 +30,8 @@ class SignatureGenerator:
 
 
 class HeaderGenerator(ABC):
+    """Interface for generating header for dispatcher code for from compiled triton kernels"""
+
     SIGNATURE_GENERATOR = SignatureGenerator
     DEFAULT_ALGO_DECL_TEMPLATE: str
     DEFAULT_GLOBAL_DECL_TEMPLATE: str
@@ -41,14 +48,17 @@ class HeaderGenerator(ABC):
 
 
 class C_CUDA_HeaderGenerator(HeaderGenerator):
-    """Generates header for dispatcher code for from compiled triton kernels"""
+    """Concrete implementation for C CUDA triton kernels"""
 
     ALGO_DECL_TEMPLATE = DEFAULT_ALGO_DECL_TEMPLATE
     GLOBAL_DECL_TEMPLATE = DEFAULT_GLOBAL_DECL_TEMPLATE
     HEADER_INCLUDES = DEFAULT_HEADER_INCLUDES
 
     def _make_algo_decl(self, name: str, metas: List[KernelLinkerMeta]):
+        """Declarations for kernels"""
+
         args = self.SIGNATURE_GENERATOR.gen_signature_with_full_args(metas[-1])
+
         return self.ALGO_DECL_TEMPLATE.format(
             name=name,
             args=args,
@@ -56,6 +66,7 @@ class C_CUDA_HeaderGenerator(HeaderGenerator):
 
     def _make_algo_decls(self) -> str:
         """Generate declarations of kernels with meta-parameter and constant values"""
+
         algo_decls = []
 
         for name, meta in self.kernels.items():
@@ -69,7 +80,7 @@ class C_CUDA_HeaderGenerator(HeaderGenerator):
         return src
 
     def _make_global_decl(self, meta: Optional[KernelLinkerMeta] = None) -> str:
-        """Generate declarations of kernels with meta-parameter and constant values"""
+        """Generate declarations of global / default kernel launch"""
         meta = meta or self.meta
         return self.GLOBAL_DECL_TEMPLATE.format(
             orig_kernel_name=meta.orig_kernel_name,
@@ -94,6 +105,8 @@ class C_CUDA_HeaderGenerator(HeaderGenerator):
 
 
 class SourceGenerator(ABC):
+    """Interface for generating dispatcher code for from compiled triton kernels"""
+
     SIGNATURE_GENERATOR = SignatureGenerator
     SOURCE_INCLUDES: List[str]
 
@@ -114,7 +127,7 @@ class SourceGenerator(ABC):
 
 
 class C_CUDA_SourceGenerator(SourceGenerator):
-    """Generates dispatcher code for from compiled triton kernels
+    """Concrete implementation for C CUDA triton kernels
 
     TODO: refactor to use templates
     """
@@ -128,21 +141,6 @@ class C_CUDA_SourceGenerator(SourceGenerator):
             return f"({val} == {hint})"
         else:
             return None
-
-    # def _make_dispatcher_conditions(self, metas: List[KernelLinkerMeta]):
-    #     src = ""
-    #     for meta in sorted(metas, key=lambda m: -m.num_specs):
-    #         conds = " && ".join(
-    #             [
-    #                 self._condition_fn(val, hint)
-    #                 for val, hint in zip(meta.arg_names, meta.sizes)
-    #                 if hint is not None
-    #             ]
-    #         )
-    #         src += (
-    #             f"  if ({conds})\n" if any(meta.sizes) else "if (1)\n"
-    #         )  # Edge case where no specializations hence no dispatching required
-    #     return src
 
     def _make_dispatcher_load_defs(self, name, metas):
         src = ""
@@ -192,13 +190,7 @@ class C_CUDA_SourceGenerator(SourceGenerator):
 
         load_defs = self._make_dispatcher_load_defs(name, metas)
         src += "\n" + load_defs
-        # src = "\n".join(
-        #     [
-        #         docs_str + fn_sig,
-        #         kernel_sig,
-        #         dispatcher_conds + return_statements + load_defs,
-        #     ]
-        # )
+
         return src
 
     def _make_defs(self):
