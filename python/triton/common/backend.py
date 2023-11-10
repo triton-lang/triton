@@ -1,4 +1,3 @@
-
 import functools
 import hashlib
 import importlib
@@ -16,6 +15,7 @@ TRITON_VERSION = "2.1.0"
 
 
 class BaseBackend:
+
     def __init__(self, device_type: str) -> None:
         self.device_type = device_type
 
@@ -154,7 +154,7 @@ def compute_core_version_key():
     libtriton_hash = hashlib.sha1()
     with open(os.path.join(TRITON_PATH, "_C/libtriton.so"), "rb") as f:
         while True:
-            chunk = f.read(1024 ** 2)
+            chunk = f.read(1024**2)
             if not chunk:
                 break
             libtriton_hash.update(chunk)

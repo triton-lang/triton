@@ -18,7 +18,6 @@
 # CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 # TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
 """
 Fused Attention
 ===============
@@ -40,18 +39,17 @@ import triton.language as tl
     key=['Q', 'K', 'V'],
 )
 @triton.jit
-def _fwd_kernel(
-    Q, K, V, sm_scale,
-    L, M,
-    Out,
-    stride_qz, stride_qh, stride_qm, stride_qk,
-    stride_kz, stride_kh, stride_kn, stride_kk,
-    stride_vz, stride_vh, stride_vk, stride_vn,
-    stride_oz, stride_oh, stride_om, stride_on,
-    Z, H, N_CTX,
-    BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-):
+def _fwd_kernel(Q, K, V, sm_scale,  #
+                L, M,  #
+                Out,  #
+                stride_qz, stride_qh, stride_qm, stride_qk,  #
+                stride_kz, stride_kh, stride_kn, stride_kk,  #
+                stride_vz, stride_vh, stride_vk, stride_vn,  #
+                stride_oz, stride_oh, stride_om, stride_on,  #
+                Z, H, N_CTX,  #
+                BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,  #
+                BLOCK_N: tl.constexpr  #
+                ):
     start_m = tl.program_id(0)
     off_hz = tl.program_id(1)
     # initialize offsets
@@ -116,11 +114,10 @@ def _fwd_kernel(
 
 
 @triton.jit
-def _bwd_preprocess(
-    Out, DO, L,
-    NewDO, Delta,
-    BLOCK_M: tl.constexpr, D_HEAD: tl.constexpr,
-):
+def _bwd_preprocess(Out, DO, L,  #
+                    NewDO, Delta,  #
+                    BLOCK_M: tl.constexpr, D_HEAD: tl.constexpr  #
+                    ):
     off_m = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
     off_n = tl.arange(0, D_HEAD)
     # load
@@ -136,19 +133,18 @@ def _bwd_preprocess(
 
 
 @triton.jit
-def _bwd_kernel(
-    Q, K, V, sm_scale, Out, DO,
-    DQ, DK, DV,
-    L, M,
-    D,
-    stride_qz, stride_qh, stride_qm, stride_qk,
-    stride_kz, stride_kh, stride_kn, stride_kk,
-    stride_vz, stride_vh, stride_vk, stride_vn,
-    Z, H, N_CTX,
-    num_block,
-    BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-):
+def _bwd_kernel(Q, K, V, sm_scale, Out, DO,  #
+                DQ, DK, DV,  #
+                L, M,  #
+                D,  #
+                stride_qz, stride_qh, stride_qm, stride_qk,  #
+                stride_kz, stride_kh, stride_kn, stride_kk,  #
+                stride_vz, stride_vh, stride_vk, stride_vn,  #
+                Z, H, N_CTX,  #
+                num_block,  #
+                BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,  #
+                BLOCK_N: tl.constexpr,  #
+                ):
     off_hz = tl.program_id(0)
     off_z = off_hz // H
     off_h = off_hz % H
@@ -240,16 +236,16 @@ class _attention(torch.autograd.Function):
         assert num_warps == 4
 
         _fwd_kernel[grid](
-            q, k, v, sm_scale,
-            L, m,
-            o,
-            q.stride(0), q.stride(1), q.stride(2), q.stride(3),
-            k.stride(0), k.stride(1), k.stride(2), k.stride(3),
-            v.stride(0), v.stride(1), v.stride(2), v.stride(3),
-            o.stride(0), o.stride(1), o.stride(2), o.stride(3),
-            q.shape[0], q.shape[1], q.shape[2],
-            BLOCK_M=BLOCK, BLOCK_N=BLOCK,
-            BLOCK_DMODEL=Lk,
+            q, k, v, sm_scale,  #
+            L, m,  #
+            o,  #
+            q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
+            k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
+            v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
+            o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
+            q.shape[0], q.shape[1], q.shape[2],  #
+            BLOCK_M=BLOCK, BLOCK_N=BLOCK,  #
+            BLOCK_DMODEL=Lk  #
         )
 
         ctx.save_for_backward(q, k, v, o, L, m)
@@ -269,24 +265,23 @@ class _attention(torch.autograd.Function):
         do_scaled = torch.empty_like(do)
         delta = torch.empty_like(l)
         _bwd_preprocess[(ctx.grid[0] * ctx.grid[1], )](
-            o, do, l,
-            do_scaled, delta,
-            BLOCK_M=BLOCK, D_HEAD=ctx.BLOCK_DMODEL,
-        )
-        _bwd_kernel[(ctx.grid[1],)](
-            q, k, v, ctx.sm_scale,
-            o, do_scaled,
-            dq, dk, dv,
-            l, m,
-            delta,
-            q.stride(0), q.stride(1), q.stride(2), q.stride(3),
-            k.stride(0), k.stride(1), k.stride(2), k.stride(3),
-            v.stride(0), v.stride(1), v.stride(2), v.stride(3),
-            q.shape[0], q.shape[1], q.shape[2],
-            ctx.grid[0],
-            BLOCK_M=BLOCK, BLOCK_N=BLOCK,
-            BLOCK_DMODEL=ctx.BLOCK_DMODEL, num_warps=8,
-            num_stages=1,
+            o, do, l,  #
+            do_scaled, delta,  #
+            BLOCK_M=BLOCK, D_HEAD=ctx.BLOCK_DMODEL)
+        _bwd_kernel[(ctx.grid[1], )](
+            q, k, v, ctx.sm_scale,  #
+            o, do_scaled,  #
+            dq, dk, dv,  #
+            l, m,  #
+            delta,  #
+            q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
+            k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
+            v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
+            q.shape[0], q.shape[1], q.shape[2],  #
+            ctx.grid[0],  #
+            BLOCK_M=BLOCK, BLOCK_N=BLOCK,  #
+            BLOCK_DMODEL=ctx.BLOCK_DMODEL,  #
+            num_warps=8, num_stages=1  #
         )
         return dq, dk, dv, None
 
@@ -339,19 +334,19 @@ except BaseException:
 
 BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
 # vary seq length for fixed head and batch=4
-configs = [triton.testing.Benchmark(
-    x_names=['N_CTX'],
-    # x_vals=[2**i for i in range(10, 14)],
-    x_vals=[2**i for i in range(10, 11)],
-    line_arg='provider',
-    line_vals=['triton'] + (['flash'] if HAS_FLASH else []),
-    line_names=['Triton'] + (['Flash'] if HAS_FLASH else []),
-    styles=[('red', '-'), ('blue', '-')],
-    ylabel='ms',
-    plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}',
-    args={'H': N_HEADS, 'BATCH': BATCH, 'D_HEAD': D_HEAD, 'dtype': torch.float16, 'mode': mode}
-    # ) for mode in ['fwd', 'bwd']]
-) for mode in ['fwd']]
+configs = [
+    triton.testing.Benchmark(
+        x_names=['N_CTX'],
+        # x_vals=[2**i for i in range(10, 14)],
+        x_vals=[2**i
+                for i in range(10, 11)], line_arg='provider', line_vals=['triton'] + (['flash'] if HAS_FLASH else []),
+        line_names=['Triton'] + (['Flash'] if HAS_FLASH else []), styles=[('red', '-'), ('blue', '-')], ylabel='ms',
+        plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}',
+        args={'H': N_HEADS, 'BATCH': BATCH, 'D_HEAD': D_HEAD, 'dtype': torch.float16, 'mode': mode}
+        # ) for mode in ['fwd', 'bwd']]
+    )
+    for mode in ['fwd']
+]
 
 
 @triton.testing.perf_report(configs)
@@ -374,9 +369,8 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.f
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         return ms
     if provider == "flash":
-        lengths = torch.full((BATCH,), fill_value=N_CTX, device=device)
-        cu_seqlens = torch.zeros(
-            (BATCH + 1,), device=device, dtype=torch.int32)
+        lengths = torch.full((BATCH, ), fill_value=N_CTX, device=device)
+        cu_seqlens = torch.zeros((BATCH + 1, ), device=device, dtype=torch.int32)
         cu_seqlens[1:] = lengths.cumsum(0)
         qkv = torch.randn((BATCH * N_CTX, 3, H, D_HEAD), dtype=dtype, device=device, requires_grad=True)
         fn = lambda: flash_attn_func(qkv, cu_seqlens, 0., N_CTX, causal=True)

@@ -1,5 +1,7 @@
+import importlib.util
 import os
 import shutil
+import tempfile
 
 import pytest
 import torch
@@ -67,6 +69,32 @@ def test_nested1_change():
     assert baseline != updated
 
 
+def write_and_load_module(code, num_extra_lines):
+    with tempfile.NamedTemporaryFile(mode='w+', suffix='.py') as f:
+        f.write(('# extra line\n' * num_extra_lines) + code)
+        f.flush()
+        spec = importlib.util.spec_from_file_location("module.name", f.name)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    return module
+
+
+def test_changed_line_numbers_invalidate_cache():
+    from textwrap import dedent
+    code = dedent("""
+        import triton
+        @triton.jit
+        def test_kernel(i):
+            i = i + 1
+    """)
+    orig_mod = write_and_load_module(code, 0)
+    orig_cache_key = orig_mod.test_kernel.cache_key
+
+    updated_mod = write_and_load_module(code, 1)
+    updated_cache_key = updated_mod.test_kernel.cache_key
+    assert orig_cache_key != updated_cache_key
+
+
 def reset_tmp_dir():
     os.environ["TRITON_CACHE_DIR"] = tmpdir
     if os.path.exists(tmpdir):
@@ -80,11 +108,12 @@ def test_reuse():
     def inc_counter(*args, **kwargs):
         nonlocal counter
         counter += 1
+
     JITFunction.cache_hook = inc_counter
     reset_tmp_dir()
     x = torch.empty(1, dtype=torch.int32, device='cuda')
     for i in range(10):
-        kernel[(1,)](x, 1, BLOCK=1024)
+        kernel[(1, )](x, 1, BLOCK=1024)
     assert counter == 1
 
 
@@ -95,17 +124,19 @@ def test_specialize(mode):
     def inc_counter(*args, **kwargs):
         nonlocal counter
         counter += 1
+
     JITFunction.cache_hook = inc_counter
     reset_tmp_dir()
     x = torch.empty(1, dtype=torch.int32, device='cuda')
     function = {'enable': kernel, 'disable': kernel_nospec}[mode]
     target = {'enable': 4, 'disable': 1}[mode]
     for i in [1, 2, 4, 8, 16, 32]:
-        function[(1,)](x, i, BLOCK=512)
+        function[(1, )](x, i, BLOCK=512)
     assert counter == target
 
 
 def test_annotation():
+
     @triton.jit
     def kernel(X, i: tl.int32):
         tl.store(X, i)
@@ -113,14 +144,15 @@ def test_annotation():
     x = torch.empty(1, dtype=torch.int32, device='cuda')
 
     device = torch.cuda.current_device()
-    kernel[(1,)](x, 1)
-    kernel[(1,)](x, 8)
-    kernel[(1,)](x, 16)
-    kernel[(1,)](x, 17)
+    kernel[(1, )](x, 1)
+    kernel[(1, )](x, 8)
+    kernel[(1, )](x, 16)
+    kernel[(1, )](x, 17)
     assert len(kernel.cache[device]) == 4
 
 
 def test_constexpr_not_callable() -> None:
+
     @triton.jit
     def kernel(X, c: tl.constexpr):
         tl.store(X, 2)
@@ -141,11 +173,11 @@ def test_constexpr_not_callable() -> None:
 
 
 def test_jit_warmup_cache() -> None:
+
     @triton.jit
     def kernel_add(a, b, o, N: tl.constexpr):
         idx = tl.arange(0, N)
-        tl.store(o + idx,
-                 tl.load(a + idx) + tl.load(b + idx))
+        tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
 
     args = [
         torch.randn(32, dtype=torch.float32, device="cuda"),
@@ -155,31 +187,31 @@ def test_jit_warmup_cache() -> None:
     ]
     device = torch.cuda.current_device()
     assert len(kernel_add.cache[device]) == 0
-    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
+    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add.cache[device]) == 1
-    kernel_add.warmup(*args, grid=(1,))
+    kernel_add.warmup(*args, grid=(1, ))
     assert len(kernel_add.cache[device]) == 1
-    kernel_add.warmup(*args, grid=(1,))
+    kernel_add.warmup(*args, grid=(1, ))
     assert len(kernel_add.cache[device]) == 1
 
 
 def test_jit_debug() -> None:
+
     @triton.jit
     def kernel_add(a, b, o, N: tl.constexpr):
         idx = tl.arange(0, N)
         tl.device_assert(idx < 32, "idx < 32")
-        tl.store(o + idx,
-                 tl.load(a + idx) + tl.load(b + idx))
+        tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
 
     device = torch.cuda.current_device()
     assert len(kernel_add.cache[device]) == 0
-    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
+    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add.cache[device]) == 1
     kernel_add.debug = False
-    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
+    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add.cache[device]) == 2
     kernel_add.debug = True
-    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
+    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add.cache[device]) == 3
     bins = list(kernel_add.cache[device].values())
     assert bins[2].asm['ttir'] != bins[1].asm['ttir']
@@ -192,13 +224,14 @@ def add_fn(a, b, o, N: tl.constexpr):
 
 
 def test_jit_noinline() -> None:
+
     @triton.jit
     def kernel_add_device(a, b, o, N: tl.constexpr):
         add_fn(a, b, o, N)
 
     device = torch.cuda.current_device()
     assert len(kernel_add_device.cache[device]) == 0
-    kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
+    kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add_device.cache[device]) == 1
     bins = list(kernel_add_device.cache[device].values())
     inline_ttir = bins[0].asm['ttir']
@@ -206,7 +239,7 @@ def test_jit_noinline() -> None:
     add_fn.hash = None
     kernel_add_device.hash = None
     kernel_add_device.cache[device].clear()
-    kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
+    kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add_device.cache[device]) == 1
     bins = list(kernel_add_device.cache[device].values())
     noinline_ttir = bins[0].asm['ttir']
@@ -214,6 +247,7 @@ def test_jit_noinline() -> None:
 
 
 def test_memory_leak() -> None:
+
     @triton.jit
     def kernel(in_ptr0, out_ptr0, xnumel, XBLOCK: tl.constexpr):
         xnumel = 10

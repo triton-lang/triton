@@ -91,6 +91,7 @@ def randint4x(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
 #     two_to_the_minus_32: tl.constexpr = 2.328306e-10
 #     return x * two_to_the_minus_32
 
+
 @jit
 def uint32_to_uniform_float(x):
     """
@@ -133,6 +134,7 @@ def rand4x(seed, offsets, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     u3 = uint32_to_uniform_float(i3)
     u4 = uint32_to_uniform_float(i4)
     return u1, u2, u3, u4
+
 
 # -------------------
 # randn

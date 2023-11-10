@@ -12,6 +12,7 @@ import triton.language as tl
 
 
 class PhiloxConfig:
+
     def __init__(self, PHILOX_ROUND_A, PHILOX_ROUND_B, PHILOX_KEY_A, PHILOX_KEY_B, DTYPE):
         self.PHILOX_ROUND_A = np.array(PHILOX_ROUND_A, dtype=DTYPE)
         self.PHILOX_ROUND_B = np.array(PHILOX_ROUND_B, dtype=DTYPE)
@@ -40,6 +41,7 @@ PHILOX_64 = PhiloxConfig(
 
 
 class CustomPhilox4x:
+
     def __init__(self, seed, config):
         self._config = config
         seed = self._into_pieces(seed)
@@ -92,6 +94,7 @@ class CustomPhilox4x:
 
 
 class CustomPhilox(CustomPhilox4x):
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.buffer = []
@@ -111,10 +114,9 @@ BLOCK = 1024
 # test generation of random uint32
 
 
-@pytest.mark.parametrize('size, seed',
-                         [(size, seed) for size in ['10', '4,53', '10000']
-                          for seed in [0, 42, 124, 54, 0xffffffff, 0xdeadbeefcafeb0ba]]
-                         )
+@pytest.mark.parametrize('size, seed', [(size, seed)
+                                        for size in ['10', '4,53', '10000']
+                                        for seed in [0, 42, 124, 54, 0xffffffff, 0xdeadbeefcafeb0ba]])
 def test_randint(size, seed, device):
     size = list(map(int, size.split(',')))
 
@@ -123,10 +125,11 @@ def test_randint(size, seed, device):
         offset = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
         rand = tl.randint(seed, offset)
         tl.store(X + offset, rand, mask=offset < N)
+
     # triton result
     x = torch.empty(size, dtype=torch.int32, device=device)
     N = x.numel()
-    grid = (triton.cdiv(N, BLOCK),)
+    grid = (triton.cdiv(N, BLOCK), )
     kernel[grid](x, N, seed)
     out_tri = x.cpu().numpy().astype(np.uint32).flatten().tolist()
     # reference result
@@ -134,44 +137,44 @@ def test_randint(size, seed, device):
     out_ref = [gen.random_raw()[0] for _ in out_tri]
     assert out_tri == out_ref
 
+
 # test uniform PRNG
 
 
-@pytest.mark.parametrize('size, seed',
-                         [(size, seed) for size in [1000000]
-                          for seed in [0, 42, 124, 54]]
-                         )
+@pytest.mark.parametrize('size, seed', [(size, seed) for size in [1000000] for seed in [0, 42, 124, 54]])
 def test_rand(size, seed, device):
+
     @triton.jit
     def kernel(X, N, seed):
         offset = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
         rand = tl.rand(seed, offset)
         tl.store(X + offset, rand, mask=offset < N)
+
     # triton result
     x = torch.empty(size, dtype=torch.float32, device=device)
     N = x.numel()
-    grid = (triton.cdiv(N, BLOCK),)
+    grid = (triton.cdiv(N, BLOCK), )
     kernel[grid](x, N, seed)
     assert all((x >= 0) & (x <= 1))
     assert scipy.stats.kstest(x.tolist(), 'uniform', args=(0, 1)).statistic < 0.01
 
+
 # test normal PRNG
 
 
-@pytest.mark.parametrize('size, seed',
-                         [(size, seed) for size in [1000000]
-                          for seed in [0, 42, 124, 54]]
-                         )
+@pytest.mark.parametrize('size, seed', [(size, seed) for size in [1000000] for seed in [0, 42, 124, 54]])
 def test_randn(size, seed, device):
+
     @triton.jit
     def kernel(X, N, seed):
         offset = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
         rand = tl.randn(seed, offset)
         tl.store(X + offset, rand, mask=offset < N)
+
     # triton result
     x = torch.empty(size, dtype=torch.float32, device=device)
     N = x.numel()
-    grid = (triton.cdiv(N, BLOCK),)
+    grid = (triton.cdiv(N, BLOCK), )
     kernel[grid](x, N, seed)
     assert abs(x.mean()) < 1e-2
     assert abs(x.std() - 1) < 1e-2
@@ -179,7 +182,9 @@ def test_randn(size, seed, device):
 
 # tl.rand() should never produce >=1.0
 
+
 def test_rand_limits(device):
+
     @triton.jit
     def kernel(input, output, n: tl.constexpr):
         idx = tl.arange(0, n)
@@ -192,7 +197,7 @@ def test_rand_limits(device):
         torch.iinfo(torch.int32).max,
     ], dtype=torch.int32, device=device)
     output = torch.empty(2, dtype=torch.float32, device=device)
-    kernel[(1,)](min_max_int32, output, 2)
+    kernel[(1, )](min_max_int32, output, 2)
 
     assert output[0] == output[1]
     assert 1.0 - torch.finfo(torch.float32).eps <= output[0].item() < 1.0

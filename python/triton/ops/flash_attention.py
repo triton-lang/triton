@@ -15,22 +15,19 @@ from .. import language as tl
 
 
 @jit
-def _fwd_kernel(
-    # fmt: off
-    Q, K, V, sm_scale,
-    L,
-    Out,
-    stride_qz, stride_qh, stride_qm, stride_qk,
-    stride_kz, stride_kh, stride_kn, stride_kk,
-    stride_vz, stride_vh, stride_vn, stride_vk,
-    stride_oz, stride_oh, stride_om, stride_on,
-    Z, H, N_CTX,
-    Z_H_N_CTX,
-    BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-    IS_CAUSAL: tl.constexpr,
-    # fmt: on
-):
+def _fwd_kernel(Q, K, V, sm_scale,  #
+                L,  #
+                Out,  #
+                stride_qz, stride_qh, stride_qm, stride_qk,  #
+                stride_kz, stride_kh, stride_kn, stride_kk,  #
+                stride_vz, stride_vh, stride_vn, stride_vk,  #
+                stride_oz, stride_oh, stride_om, stride_on,  #
+                Z, H, N_CTX,  #
+                Z_H_N_CTX,  #
+                BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,  #
+                BLOCK_N: tl.constexpr,  #
+                IS_CAUSAL: tl.constexpr  #
+                ):
     start_m = tl.program_id(0)
     off_hz = tl.program_id(1)
     qvk_offset = off_hz * stride_qh
@@ -132,27 +129,24 @@ def _bwd_preprocess(
 
 
 @jit
-def _bwd_kernel_one_col_block(
-    # fmt: off
-    Q, K, V, sm_scale, qk_scale,
-    Out, DO,
-    DQ, DK, DV,
-    L,
-    D,
-    Q_block_ptr, K_block_ptr, V_block_ptr,
-    DO_block_ptr, DQ_block_ptr, DK_block_ptr, DV_block_ptr,
-    stride_dqa, stride_qz, stride_qh, stride_qm, stride_qk,
-    stride_kz, stride_kh, stride_kn, stride_kk,
-    stride_vz, stride_vh, stride_vn, stride_vk,
-    Z, H, N_CTX,
-    off_h, off_z, off_hz, start_n, num_block,
-    BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-    SEQUENCE_PARALLEL: tl.constexpr,
-    CAUSAL: tl.constexpr,
-    MMA_V3: tl.constexpr
-    # fmt: on
-):
+def _bwd_kernel_one_col_block(Q, K, V, sm_scale, qk_scale,  #
+                              Out, DO,  #
+                              DQ, DK, DV,  #
+                              L,  #
+                              D,  #
+                              Q_block_ptr, K_block_ptr, V_block_ptr,  #
+                              DO_block_ptr, DQ_block_ptr, DK_block_ptr, DV_block_ptr,  #
+                              stride_dqa, stride_qz, stride_qh, stride_qm, stride_qk,  #
+                              stride_kz, stride_kh, stride_kn, stride_kk,  #
+                              stride_vz, stride_vh, stride_vn, stride_vk,  #
+                              Z, H, N_CTX,  #
+                              off_h, off_z, off_hz, start_n, num_block,  #
+                              BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,  #
+                              BLOCK_N: tl.constexpr,  #
+                              SEQUENCE_PARALLEL: tl.constexpr,  #
+                              CAUSAL: tl.constexpr,  #
+                              MMA_V3: tl.constexpr  #
+                              ):
     if CAUSAL:
         lo = start_n * BLOCK_M
     else:
@@ -235,26 +229,23 @@ def _bwd_kernel_one_col_block(
 
 
 @jit
-def _bwd_kernel(
-    # fmt: off
-    Q, K, V, sm_scale,
-    Out, DO,
-    DQ, DK, DV,
-    L,
-    D,
-    stride_dqa, stride_qz, stride_qh, stride_qm, stride_qk,
-    stride_kz, stride_kh, stride_kn, stride_kk,
-    stride_vz, stride_vh, stride_vn, stride_vk,
-    Z, H, N_CTX,
-    Z_H_N_CTX,
-    SQ_Z_H_N_CTX,
-    BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-    SEQUENCE_PARALLEL: tl.constexpr,
-    CAUSAL: tl.constexpr,
-    MMA_V3: tl.constexpr
-    # fmt: on
-):
+def _bwd_kernel(Q, K, V, sm_scale,  #
+                Out, DO,  #
+                DQ, DK, DV,  #
+                L,  #
+                D,  #
+                stride_dqa, stride_qz, stride_qh, stride_qm, stride_qk,  #
+                stride_kz, stride_kh, stride_kn, stride_kk,  #
+                stride_vz, stride_vh, stride_vn, stride_vk,  #
+                Z, H, N_CTX,  #
+                Z_H_N_CTX,  #
+                SQ_Z_H_N_CTX,  #
+                BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,  #
+                BLOCK_N: tl.constexpr,  #
+                SEQUENCE_PARALLEL: tl.constexpr,  #
+                CAUSAL: tl.constexpr,  #
+                MMA_V3: tl.constexpr  #
+                ):
     qk_scale = sm_scale * 1.44269504
     off_hz = tl.program_id(0)
     off_z = off_hz // H
@@ -331,51 +322,46 @@ def _bwd_kernel(
     num_block_n = tl.cdiv(N_CTX, BLOCK_N)
     if not SEQUENCE_PARALLEL:
         for start_n in range(0, num_block_n):
-            _bwd_kernel_one_col_block(
-                # fmt: off
-                Q, K, V, sm_scale, qk_scale, Out, DO,
-                DQ, DK, DV,
-                L,
-                D,
-                Q_block_ptr, K_block_ptr, V_block_ptr,
-                DO_block_ptr, DQ_block_ptr, DK_block_ptr, DV_block_ptr,
-                stride_dqa, stride_qz, stride_qh, stride_qm, stride_qk,
-                stride_kz, stride_kh, stride_kn, stride_kk,
-                stride_vz, stride_vh, stride_vn, stride_vk,
-                Z, H, N_CTX,
-                off_h, off_z, off_hz, start_n, num_block_n,
-                BLOCK_M=BLOCK_M, BLOCK_DMODEL=BLOCK_DMODEL,
-                BLOCK_N=BLOCK_N,
-                SEQUENCE_PARALLEL=SEQUENCE_PARALLEL,
-                CAUSAL=CAUSAL,
-                MMA_V3=MMA_V3
-                # fmt: on
-            )
+            _bwd_kernel_one_col_block(Q, K, V, sm_scale, qk_scale, Out, DO,  #
+                                      DQ, DK, DV,  #
+                                      L,  #
+                                      D,  #
+                                      Q_block_ptr, K_block_ptr, V_block_ptr,  #
+                                      DO_block_ptr, DQ_block_ptr, DK_block_ptr, DV_block_ptr,  #
+                                      stride_dqa, stride_qz, stride_qh, stride_qm, stride_qk,  #
+                                      stride_kz, stride_kh, stride_kn, stride_kk,  #
+                                      stride_vz, stride_vh, stride_vn, stride_vk,  #
+                                      Z, H, N_CTX,  #
+                                      off_h, off_z, off_hz, start_n, num_block_n,  #
+                                      BLOCK_M=BLOCK_M, BLOCK_DMODEL=BLOCK_DMODEL,  #
+                                      BLOCK_N=BLOCK_N,  #
+                                      SEQUENCE_PARALLEL=SEQUENCE_PARALLEL,  #
+                                      CAUSAL=CAUSAL,  #
+                                      MMA_V3=MMA_V3  #
+                                      )
     else:
         start_n = tl.program_id(1)
-        _bwd_kernel_one_col_block(
-            # fmt: off
-            Q, K, V, sm_scale, qk_scale, Out, DO,
-            DQ, DK, DV,
-            L,
-            D,
-            Q_block_ptr, K_block_ptr, V_block_ptr,
-            DO_block_ptr, DQ_block_ptr, DK_block_ptr, DV_block_ptr,
-            stride_dqa, stride_qz, stride_qh, stride_qm, stride_qk,
-            stride_kz, stride_kh, stride_kn, stride_kk,
-            stride_vz, stride_vh, stride_vn, stride_vk,
-            Z, H, N_CTX,
-            off_h, off_z, off_hz, start_n, num_block_n,
-            BLOCK_M=BLOCK_M, BLOCK_DMODEL=BLOCK_DMODEL,
-            BLOCK_N=BLOCK_N,
-            SEQUENCE_PARALLEL=SEQUENCE_PARALLEL,
-            CAUSAL=CAUSAL,
-            MMA_V3=MMA_V3
-            # fmt: on
-        )
+        _bwd_kernel_one_col_block(Q, K, V, sm_scale, qk_scale, Out, DO,  #
+                                  DQ, DK, DV,  #
+                                  L,  #
+                                  D,  #
+                                  Q_block_ptr, K_block_ptr, V_block_ptr,  #
+                                  DO_block_ptr, DQ_block_ptr, DK_block_ptr, DV_block_ptr,  #
+                                  stride_dqa, stride_qz, stride_qh, stride_qm, stride_qk,  #
+                                  stride_kz, stride_kh, stride_kn, stride_kk,  #
+                                  stride_vz, stride_vh, stride_vn, stride_vk,  #
+                                  Z, H, N_CTX,  #
+                                  off_h, off_z, off_hz, start_n, num_block_n,  #
+                                  BLOCK_M=BLOCK_M, BLOCK_DMODEL=BLOCK_DMODEL,  #
+                                  BLOCK_N=BLOCK_N,  #
+                                  SEQUENCE_PARALLEL=SEQUENCE_PARALLEL,  #
+                                  CAUSAL=CAUSAL,  #
+                                  MMA_V3=MMA_V3  #
+                                  )
 
 
 class _attention(torch.autograd.Function):
+
     @staticmethod
     def forward(ctx, q, k, v, causal, sm_scale, sequence_parallel=False):
         # only support for Ampere now
@@ -393,21 +379,19 @@ class _attention(torch.autograd.Function):
         L = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         num_warps = 4 if Lk <= 64 else 8
         _fwd_kernel[grid](
-            # fmt: off
-            q, k, v, sm_scale,
-            L,
-            o,
-            q.stride(0), q.stride(1), q.stride(2), q.stride(3),
-            k.stride(0), k.stride(1), k.stride(2), k.stride(3),
-            v.stride(0), v.stride(1), v.stride(2), v.stride(3),
-            o.stride(0), o.stride(1), o.stride(2), o.stride(3),
-            q.shape[0], q.shape[1], q.shape[2],
-            q.shape[0] * q.shape[1] * q.shape[2],
-            BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_DMODEL=Lk,
-            IS_CAUSAL=causal,
-            num_warps=num_warps,
-            num_stages=4,
-            # fmt: on
+            q, k, v, sm_scale,  #
+            L,  #
+            o,  #
+            q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
+            k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
+            v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
+            o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
+            q.shape[0], q.shape[1], q.shape[2],  #
+            q.shape[0] * q.shape[1] * q.shape[2],  #
+            BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_DMODEL=Lk,  #
+            IS_CAUSAL=causal,  #
+            num_warps=num_warps,  #
+            num_stages=4  #
         )
 
         ctx.save_for_backward(q, k, v, o, L)
@@ -429,14 +413,14 @@ class _attention(torch.autograd.Function):
         do = do.contiguous()
         if sequence_parallel:
             replicas = cdiv(seq_len_kv, BLOCK)
-            new_dq_shape = (replicas,) + q.shape
+            new_dq_shape = (replicas, ) + q.shape
             dq = torch.zeros(new_dq_shape, device=q.device, dtype=q.dtype)
         else:
             dq = torch.zeros_like(q, dtype=q.dtype)
         dk = torch.empty_like(k)
         dv = torch.empty_like(v)
         delta = torch.empty_like(L)
-        _bwd_preprocess[(cdiv(q.shape[2], BLOCK) * ctx.grid[1],)](
+        _bwd_preprocess[(cdiv(q.shape[2], BLOCK) * ctx.grid[1], )](
             o,
             do,
             delta,
@@ -444,26 +428,24 @@ class _attention(torch.autograd.Function):
             D_HEAD=ctx.BLOCK_DMODEL,
         )
         _bwd_kernel[(ctx.grid[1], cdiv(seq_len_kv, BLOCK) if sequence_parallel else 1)](
-            # fmt: off
-            q, k, v, ctx.sm_scale,
-            o, do,
-            dq, dk, dv,
-            L,
-            delta,
-            o.numel(), q.stride(0), q.stride(1), q.stride(2), q.stride(3),
-            k.stride(0), k.stride(1), k.stride(2), k.stride(3),
-            v.stride(0), v.stride(1), v.stride(2), v.stride(3),
-            q.shape[0], q.shape[1], q.shape[2],
-            q.shape[0] * q.shape[1] * q.shape[2],
-            cdiv(seq_len_kv, BLOCK) * q.shape[0] * q.shape[1] * q.shape[2],
-            BLOCK_M=BLOCK, BLOCK_N=BLOCK,
-            BLOCK_DMODEL=ctx.BLOCK_DMODEL,
-            SEQUENCE_PARALLEL=sequence_parallel,
-            CAUSAL=ctx.causal,
-            MMA_V3=MMA_V3,
-            num_warps=8,
-            num_stages=1,
-            # fmt: on
+            q, k, v, ctx.sm_scale,  #
+            o, do,  #
+            dq, dk, dv,  #
+            L,  #
+            delta,  #
+            o.numel(), q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
+            k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
+            v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
+            q.shape[0], q.shape[1], q.shape[2],  #
+            q.shape[0] * q.shape[1] * q.shape[2],  #
+            cdiv(seq_len_kv, BLOCK) * q.shape[0] * q.shape[1] * q.shape[2],  #
+            BLOCK_M=BLOCK, BLOCK_N=BLOCK,  #
+            BLOCK_DMODEL=ctx.BLOCK_DMODEL,  #
+            SEQUENCE_PARALLEL=sequence_parallel,  #
+            CAUSAL=ctx.causal,  #
+            MMA_V3=MMA_V3,  #
+            num_warps=8,  #
+            num_stages=1  #
         )
 
         if len(dq.shape) == 5:

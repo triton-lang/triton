@@ -50,8 +50,13 @@ warpsPerTileV2(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
   };
   auto slices = multiRootGetSlice(dotOp, {filter});
   for (Operation *op : slices)
-    if (isa<tt::DotOp>(op) && (op != dotOp))
-      return {(unsigned)numWarps, 1};
+    if (isa<tt::DotOp>(op) && (op != dotOp)) {
+      if (shape[0] >= shape[1]) {
+        return {(unsigned)numWarps, 1};
+      } else {
+        return {1, (unsigned)numWarps};
+      }
+    }
 
   SmallVector<unsigned, 2> ret = {1, 1};
   SmallVector<int64_t, 2> shapePerWarp = {16, 8};

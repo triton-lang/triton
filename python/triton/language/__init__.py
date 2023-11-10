@@ -109,7 +109,6 @@ from .random import (
     uint32_to_uniform_float,
 )
 
-
 __all__ = [
     "TRITON_MAX_TENSOR_NUMEL",
     "abs",

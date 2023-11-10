@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from enum import Enum
-from functools import wraps
+from functools import partial, wraps
 from typing import Callable, List, Sequence, TypeVar
 
 from .._C.libtriton.triton import ir
@@ -22,10 +22,8 @@ def builtin(fn: T) -> T:
     @wraps(fn)
     def wrapper(*args, **kwargs):
         if "_builder" not in kwargs or kwargs["_builder"] is None:
-            raise ValueError(
-                "Did you forget to add @triton.jit ? "
-                "(`_builder` argument must be provided outside of JIT functions.)"
-            )
+            raise ValueError("Did you forget to add @triton.jit ? "
+                             "(`_builder` argument must be provided outside of JIT functions.)")
         return fn(*args, **kwargs)
 
     setattr(wrapper, TRITON_BUILTIN, True)
@@ -54,7 +52,7 @@ def _to_tensor(x, builder):
         else:
             raise RuntimeError(f'Nonrepresentable integer {x}.')
     elif isinstance(x, float):
-        min_float32 = 2 ** -126
+        min_float32 = 2**-126
         max_float32 = (2 - 2**-23) * 2**127
         abs_x = __builtins__['abs'](x)
         if abs_x == float("inf") or\
@@ -229,7 +227,7 @@ class dtype:
         return not self.__eq__(other)
 
     def __hash__(self):
-        return hash((self.name,))
+        return hash((self.name, ))
 
     @property
     def scalar(self):
@@ -279,6 +277,7 @@ class dtype:
 
 
 class pointer_type(dtype):
+
     def __init__(self, element_ty: dtype, address_space: int = 1):
         if not isinstance(element_ty, dtype):
             raise TypeError('element_ty is a {type(element_ty).__name__}.')
@@ -313,6 +312,7 @@ class pointer_type(dtype):
 
 
 class block_type(dtype):
+
     def __init__(self, element_ty: dtype, shape: List):
         self.element_ty = element_ty
 
@@ -363,6 +363,7 @@ class block_type(dtype):
 
 
 class function_type(dtype):
+
     def __init__(self, ret_types: List[dtype], param_types: List[dtype]) -> None:
         self.ret_types = ret_types
         self.param_types = param_types
@@ -511,7 +512,7 @@ class constexpr:
         return constexpr(~self.value)
 
     def __pow__(self, other):
-        return constexpr(self.value ** other.value)
+        return constexpr(self.value**other.value)
 
     def __rshift__(self, other):
         return constexpr(self.value >> other.value)
@@ -527,6 +528,7 @@ class constexpr:
 
 
 class tensor:
+
     def __init__(self, handle, type: dtype):
         # IR handle
         self.handle = handle
@@ -993,6 +995,7 @@ def expand_dims(input, axis, _builder=None):
         ret = semantic.expand_dims(ret, a, _builder)
     return ret
 
+
 # -----------------------
 # Linear Algebra
 # -----------------------
@@ -1141,6 +1144,7 @@ def advance(base: tensor, offsets, _builder=None):
     """
     return semantic.advance(base, offsets, _builder)
 
+
 # -----------------------
 # Atomic Memory Operations
 # -----------------------
@@ -1253,6 +1257,7 @@ def atomic_xor(pointer, val, mask=None, sem=None, scope=None, _builder=None):
 # Conditioning
 # -----------------------
 
+
 @builtin
 def where(condition, x, y, _builder=None):
     """
@@ -1279,6 +1284,7 @@ def where(condition, x, y, _builder=None):
 # -----------------------
 # Math
 # -----------------------
+
 
 @builtin
 def umulhi(x, y, _builder=None):
@@ -1373,6 +1379,7 @@ def abs(x, _builder=None):
 # Reductions
 # -----------------------
 
+
 def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
@@ -1411,8 +1418,7 @@ def reduce(input, axis, combine_fn, _builder=None, _generator=None):
 
     """
     if isinstance(input, tensor):
-        return reduce((input,), axis, combine_fn,
-                      _builder=_builder, _generator=_generator)[0]
+        return reduce((input, ), axis, combine_fn, _builder=_builder, _generator=_generator)[0]
 
     def make_combine_region(reduce_op):
         in_scalar_tys = [t.type.scalar for t in input]
@@ -1422,14 +1428,14 @@ def reduce(input, axis, combine_fn, _builder=None, _generator=None):
         with _insertion_guard(_builder):
             param_types = [ty.to_ir(_builder) for ty in prototype.param_types]
             block = _builder.create_block_with_parent(region, param_types)
-            args = [tensor(block.arg(i), ty)
-                    for i, ty in enumerate(prototype.param_types)]
+            args = [tensor(block.arg(i), ty) for i, ty in enumerate(prototype.param_types)]
             results = _generator.call_JitFunction(combine_fn, args, kwargs={})
             if isinstance(results, tensor):
                 handles = [results.handle]
             else:
                 handles = [r.handle for r in results]
             _builder.create_reduce_ret(*handles)
+
     if axis is not None:
         axis = _constexpr_to_value(axis)
     return semantic.reduction(input, axis, make_combine_region, _builder)
@@ -1459,14 +1465,14 @@ def _reduce_with_indices(input, axis, combine_fn, _builder=None, _generator=None
         index = expand_dims(index, axes_to_expand, _builder=_builder)
         index = broadcast_to(index, input.shape, _builder=_builder)
 
-    rvalue, rindices = reduce((input, index), axis, combine_fn,
-                              _builder=_builder, _generator=_generator)
+    rvalue, rindices = reduce((input, index), axis, combine_fn, _builder=_builder, _generator=_generator)
     return rvalue, rindices
 
 
 # -----------------------
 # Scans
 # -----------------------
+
 
 def _add_scan_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None) -> Callable[[T], T]:
 
@@ -1492,8 +1498,7 @@ def associative_scan(input, axis, combine_fn, _builder=None, _generator=None):
 
     """
     if isinstance(input, tensor):
-        return associative_scan((input,), axis, combine_fn,
-                                _builder=_builder, _generator=_generator)[0]
+        return associative_scan((input, ), axis, combine_fn, _builder=_builder, _generator=_generator)[0]
 
     def make_combine_region(scan_op):
         in_scalar_tys = [t.type.scalar for t in input]
@@ -1503,16 +1508,17 @@ def associative_scan(input, axis, combine_fn, _builder=None, _generator=None):
         with _insertion_guard(_builder):
             param_types = [ty.to_ir(_builder) for ty in prototype.param_types]
             block = _builder.create_block_with_parent(region, param_types)
-            args = [tensor(block.arg(i), ty)
-                    for i, ty in enumerate(prototype.param_types)]
+            args = [tensor(block.arg(i), ty) for i, ty in enumerate(prototype.param_types)]
             results = _generator.call_JitFunction(combine_fn, args, kwargs={})
             if isinstance(results, tensor):
                 handles = [results.handle]
             else:
                 handles = [r.handle for r in results]
             _builder.create_scan_ret(*handles)
+
     axis = _constexpr_to_value(axis)
     return semantic.associative_scan(input, axis, make_combine_region, _builder)
+
 
 # -----------------------
 # Compiler Hint Ops
@@ -1576,6 +1582,8 @@ def max_constancy(input, values, _builder=None):
             raise TypeError(f"values element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
     values = [x.value for x in values]
     return semantic.max_constancy(input, values)
+
+
 # -----------------------
 # Debugging functions
 # -----------------------
@@ -1699,31 +1707,31 @@ def inline_asm_elementwise(asm: str, constraints: str, args: list, dtype, is_pur
         :param _builder: the builder
         :return: the return value of the function
     '''
-    dispatch_args = args.copy()
     asm = _constexpr_to_value(asm)
     constraints = _constexpr_to_value(constraints)
     pack = _constexpr_to_value(pack)
     is_pure = _constexpr_to_value(is_pure)
-    ret_shape = None
-    arg_types = []
     res_ty = dtype
-    for i in range(len(dispatch_args)):
-        dispatch_args[i] = _to_tensor(dispatch_args[i], _builder)
-        arg_types.append(dispatch_args[i].dtype)
-    if len(arg_types) > 0:
-        arg_types = tuple(arg_types)
+    dispatch_args = [_to_tensor(arg, _builder) for arg in args]
+    if dispatch_args:
+        bin_op_type_checking = partial(
+            semantic.binary_op_type_checking_impl,
+            builder=_builder,
+            arithmetic_check=False,
+            allow_lhs_ptr=True,
+            allow_rhs_ptr=True,
+        )
         broadcast_arg = dispatch_args[0]
         # Get the broadcast shape over all the arguments
-        for i, item in enumerate(dispatch_args):
-            _, broadcast_arg = semantic.binary_op_type_checking_impl(
-                item, broadcast_arg, _builder, arithmetic_check=False)
-        # Change the shape of each argument based on the broadcast shape
-        for i in range(len(dispatch_args)):
-            dispatch_args[i], _ = semantic.binary_op_type_checking_impl(
-                dispatch_args[i], broadcast_arg, _builder, arithmetic_check=False)
-        ret_shape = broadcast_arg.shape
-        res_ty = block_type(dtype, ret_shape)
-    call = _builder.create_inline_asm(asm, constraints, [t.handle for t in args], res_ty.to_ir(_builder), is_pure, pack)
+        for item in dispatch_args:
+            _, broadcast_arg = bin_op_type_checking(item, broadcast_arg)
+        if broadcast_arg.shape:
+            # Change the shape of each argument based on the broadcast shape
+            for i, item in enumerate(dispatch_args):
+                dispatch_args[i], _ = bin_op_type_checking(item, broadcast_arg)
+            res_ty = block_type(dtype, broadcast_arg.shape)
+    handles = [t.handle for t in dispatch_args]
+    call = _builder.create_inline_asm(asm, constraints, handles, res_ty.to_ir(_builder), is_pure, pack)
     return tensor(call, res_ty)
 
 
@@ -1733,7 +1741,6 @@ def inline_asm_elementwise(asm: str, constraints: str, args: list, dtype, is_pur
 
 
 class static_range:
-
     """
     Iterator that counts upward forever.
 
@@ -1777,7 +1784,9 @@ class static_range:
 # Extern functions
 # -----------------------
 
-def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, ret_shape: tuple, is_pure: bool, _builder=None):
+
+def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, ret_shape: tuple,
+             is_pure: bool, _builder=None):
     '''
         Dispatch a function to a library
         :param func: the function to dispatch
@@ -1819,7 +1828,8 @@ def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dic
         return tensor(func(lib_name, lib_path, symbol, arg_list, ret_type.to_ir(_builder), is_pure), ret_type)
 
 
-def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, is_pure: bool, _builder=None):
+def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, is_pure: bool,
+                       _builder=None):
     '''
         Dispatch an elementwise function to a library
         :param lib_name: the name of the library
@@ -1848,12 +1858,12 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
         broadcast_arg = dispatch_args[0]
         # Get the broadcast shape over all the arguments
         for i, item in enumerate(dispatch_args):
-            _, broadcast_arg = semantic.binary_op_type_checking_impl(
-                item, broadcast_arg, _builder, arithmetic_check=arithmetic_check)
+            _, broadcast_arg = semantic.binary_op_type_checking_impl(item, broadcast_arg, _builder,
+                                                                     arithmetic_check=arithmetic_check)
         # Change the shape of each argument based on the broadcast shape
         for i in range(len(dispatch_args)):
-            dispatch_args[i], _ = semantic.binary_op_type_checking_impl(
-                dispatch_args[i], broadcast_arg, _builder, arithmetic_check=arithmetic_check)
+            dispatch_args[i], _ = semantic.binary_op_type_checking_impl(dispatch_args[i], broadcast_arg, _builder,
+                                                                        arithmetic_check=arithmetic_check)
         if not all_scalar:
             ret_shape = broadcast_arg.shape
     func = getattr(_builder, "create_extern_elementwise")

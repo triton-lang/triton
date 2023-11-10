@@ -17,15 +17,14 @@ from ... import language as tl
     'EVEN_K': lambda nargs: nargs['K'] % nargs['TILE_K'] == 0,
 })
 @jit
-def _sdd_kernel(
-    A, B, C,
-    stride_za, stride_ha, stride_ma, stride_ak,
-    stride_zb, stride_hb, stride_bk, stride_nb,
-    stride_zc, stride_hc, stride_mc, stride_nc,
-    K, grid_offset, lut,
-    TILE_M: tl.constexpr, TILE_N: tl.constexpr, TILE_K: tl.constexpr,
-    BLOCK: tl.constexpr, EVEN_K: tl.constexpr
-):
+def _sdd_kernel(A, B, C,  #
+                stride_za, stride_ha, stride_ma, stride_ak,  #
+                stride_zb, stride_hb, stride_bk, stride_nb,  #
+                stride_zc, stride_hc, stride_mc, stride_nc,  #
+                K, grid_offset, lut,  #
+                TILE_M: tl.constexpr, TILE_N: tl.constexpr, TILE_K: tl.constexpr,  #
+                BLOCK: tl.constexpr, EVEN_K: tl.constexpr  #
+                ):
     # ------------ #
     # - Prologue - #
     # ------------ #
@@ -104,13 +103,13 @@ def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, widths, out=
         c = out
     grid = [c.shape[1], 1, c.shape[0]]
     _sdd_kernel[grid](
-        a, b, c,
-        a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),
-        b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),
-        c.stride(0), c.stride(1), c.stride(2), c.stride(3),
-        Ka, 0, lut,
-        TILE_M=block, TILE_N=block, TILE_K=32, BLOCK=block, num_stages=4,
-        num_warps=4,
+        a, b, c,  #
+        a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),  #
+        b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),  #
+        c.stride(0), c.stride(1), c.stride(2), c.stride(3),  #
+        Ka, 0, lut,  #
+        TILE_M=block, TILE_N=block, TILE_K=32, BLOCK=block, num_stages=4,  #
+        num_warps=4  #
     )
     return c
 
@@ -120,6 +119,7 @@ def sdd_lut(layout, block, device):
     lut = lut.contiguous()
     return lut, None
 
+
 # -----------------------------
 # Dense = Sparse x Dense (DSD)
 # This operation uses a look-up table that contains pre-computed pointer increments
@@ -128,15 +128,14 @@ def sdd_lut(layout, block, device):
 
 
 @jit
-def _dsd_kernel(
-    A, B, C,
-    stride_az, stride_ha, stride_am, stride_ak,
-    stride_zb, stride_hb, stride_bk, stride_bn,
-    stride_zc, stride_hc, stride_cm, stride_cn,
-    DS0, DS1, lut,
-    TILE_M: tl.constexpr, TILE_N: tl.constexpr, TILE_K: tl.constexpr,
-    GROUP_SIZE_M: tl.constexpr, BLOCK: tl.constexpr
-):
+def _dsd_kernel(A, B, C,  #
+                stride_az, stride_ha, stride_am, stride_ak,  #
+                stride_zb, stride_hb, stride_bk, stride_bn,  #
+                stride_zc, stride_hc, stride_cm, stride_cn,  #
+                DS0, DS1, lut,  #
+                TILE_M: tl.constexpr, TILE_N: tl.constexpr, TILE_K: tl.constexpr,  #
+                GROUP_SIZE_M: tl.constexpr, BLOCK: tl.constexpr  #
+                ):
     # ------------ #
     # - Prologue - #
     # ------------ #
@@ -229,13 +228,13 @@ def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=N
     # compute output
     grid = lambda meta: [cdiv(BS3, meta['TILE_N']), width, BS0]
     _dsd_kernel[grid](
-        a, b, c,
-        a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),
-        b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),
-        c.stride(0), c.stride(1), c.stride(3 if trans_c else 2), c.stride(2 if trans_c else 3),
-        BS3, AS1, lut,
-        TILE_M=block, TILE_N=TILE_N, TILE_K=min(block, 32), BLOCK=block, num_stages=4,
-        num_warps=4, GROUP_SIZE_M=4,
+        a, b, c,  #
+        a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),  #
+        b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),  #
+        c.stride(0), c.stride(1), c.stride(3 if trans_c else 2), c.stride(2 if trans_c else 3),  #
+        BS3, AS1, lut,  #
+        TILE_M=block, TILE_N=TILE_N, TILE_K=min(block, 32), BLOCK=block, num_stages=4,  #
+        num_warps=4, GROUP_SIZE_M=4  #
     )
     # exit()
     return c
@@ -337,6 +336,7 @@ def dsd_lut(layout, block, step, trans, device):
     # create locks
     return lut, width
 
+
 # -----------------------------
 # Dense = Dense x Sparse (DDS)
 # -----------------------------
@@ -345,6 +345,7 @@ def dsd_lut(layout, block, step, trans, device):
 
 def dds_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=None):
     return dsd_matmul(b, a, not trans_b, not trans_a, not trans_c, spdims, block, lut, width, out=out)
+
 
 ##############
 #  MAIN API  #
@@ -356,10 +357,8 @@ class _matmul(torch.autograd.Function):
     fn = {'sdd': sdd_matmul, 'dsd': dsd_matmul, 'dds': dds_matmul}
 
     @staticmethod
-    def forward(
-        ctx, a, b, trans_a, trans_b, trans_c, mode, spdims, block,
-        c_lut, c_width, da_lut, da_width, db_lut, db_width, out
-    ):
+    def forward(ctx, a, b, trans_a, trans_b, trans_c, mode, spdims, block, c_lut, c_width, da_lut, da_width, db_lut,
+                db_width, out):
         c = _matmul.fn[mode](a, b, trans_a, trans_b, trans_c, spdims, block, c_lut, c_width, out=out)
         # save for backward
         ctx.save_for_backward(a, b)
@@ -385,15 +384,13 @@ class _matmul(torch.autograd.Function):
         # gradients w.r.t. a
         if ctx.needs_input_grad[0]:
             mode_da = mode[1] + mode[0] + mode[2]
-            da = _matmul.fn[mode_da](
-                dc, b, ctx.trans_c, not ctx.trans_b, ctx.trans_a, ctx.spdims, ctx.block, ctx.da_lut, ctx.da_width,
-            )
+            da = _matmul.fn[mode_da](dc, b, ctx.trans_c, not ctx.trans_b, ctx.trans_a, ctx.spdims, ctx.block,
+                                     ctx.da_lut, ctx.da_width)
         # gradients w.r.t. b
         if ctx.needs_input_grad[1]:
             mode_db = mode[2] + mode[1] + mode[0]
-            db = _matmul.fn[mode_db](
-                a, dc, not ctx.trans_a, ctx.trans_c, ctx.trans_b, ctx.spdims, ctx.block, ctx.db_lut, ctx.db_width,
-            )
+            db = _matmul.fn[mode_db](a, dc, not ctx.trans_a, ctx.trans_c, ctx.trans_b, ctx.spdims, ctx.block,
+                                     ctx.db_lut, ctx.db_width)
         dout = dc if ctx.has_out else None
         return da, db, None, None, None, \
             None, None, None, None, \
@@ -427,11 +424,9 @@ class matmul:
             self.db_lut, self.db_width = sdd_lut(layout, block, device)
 
     def __call__(self, a, b, out=None):
-        c = _matmul.apply(
-            a, b, self.trans_a, self.trans_b, self.trans_c, self.mode, self.spdims, self.block,
-            self.c_lut, self.c_width,
-            self.da_lut, self.da_width,
-            self.db_lut, self.db_width,
-            out
-        )
+        c = _matmul.apply(a, b, self.trans_a, self.trans_b, self.trans_c, self.mode, self.spdims, self.block,  #
+                          self.c_lut, self.c_width,  #
+                          self.da_lut, self.da_width,  #
+                          self.db_lut, self.db_width,  #
+                          out)
         return c

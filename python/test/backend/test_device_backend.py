@@ -13,8 +13,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton.common.backend import (BaseBackend, compute_core_version_key,
-                                   register_backend)
+from triton.common.backend import (BaseBackend, compute_core_version_key, register_backend)
 from triton.common.build import quiet
 from triton.compiler.make_launcher import make_so_cache_key
 from triton.runtime.cache import get_cache_manager
@@ -81,6 +80,7 @@ def build_for_backend(name, src, srcdir):
 
 
 class ExtensionUtils:
+
     def __new__(cls):
         if not hasattr(cls, 'instance'):
             cls.instance = super(ExtensionUtils, cls).__new__(cls)
@@ -110,6 +110,7 @@ class ExtensionUtils:
 
 
 class ExtensionDriver(DriverBase):
+
     def __new__(cls):
         if not hasattr(cls, 'instance'):
             cls.instance = super(ExtensionDriver, cls).__new__(cls)
@@ -256,13 +257,13 @@ def test_dummy_backend():
 
     inp = torch.randn(10)
     out = torch.randn(10)
-    kernel[(10,)](inp, out, 10, XBLOCK=16)
+    kernel[(10, )](inp, out, 10, XBLOCK=16)
     spec = importlib.util.spec_from_file_location("__triton_launcher", ExtensionBackend.stub_so_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     launch_counter = getattr(mod, "launch_counter")
 
     for _ in range(100):
-        kernel[(10,)](inp, out, 10, XBLOCK=16)
+        kernel[(10, )](inp, out, 10, XBLOCK=16)
 
     assert launch_counter() > 0

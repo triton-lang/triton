@@ -86,9 +86,15 @@ def _build(name, src, srcdir):
     py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
 
     if is_hip():
-        ret = subprocess.check_call([cc, src, f"-I{hip_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", f"-L{hip_lib_dir}", "-lamdhip64", "-o", so])
+        ret = subprocess.check_call([
+            cc, src, f"-I{hip_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC",
+            f"-L{hip_lib_dir}", "-lamdhip64", "-o", so
+        ])
     else:
-        cc_cmd = [cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda", "-o", so]
+        cc_cmd = [
+            cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda",
+            "-o", so
+        ]
         cc_cmd += [f"-L{dir}" for dir in cuda_lib_dirs]
         ret = subprocess.check_call(cc_cmd)
 

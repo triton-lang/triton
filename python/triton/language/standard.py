@@ -123,6 +123,7 @@ def maximum(x, y):
     """
     return math.max(x, y)
 
+
 # max and argmax
 
 
@@ -149,8 +150,7 @@ def _argmax_combine_tie_break_fast(value1, index1, value2, index2):
 
 
 @jit
-@core._add_reduction_docstr("maximum",
-                            return_indices_arg="return_indices",
+@core._add_reduction_docstr("maximum", return_indices_arg="return_indices",
                             tie_break_arg="return_indices_tie_break_left")
 def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True):
     input = core._promote_reduction_input(input)
@@ -174,6 +174,7 @@ def max(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
 def argmax(input, axis, tie_break_left=True):
     (_, ret) = max(input, axis, return_indices=True, return_indices_tie_break_left=tie_break_left)
     return ret
+
 
 # min and argmin
 
@@ -201,8 +202,7 @@ def _argmin_combine_tie_break_fast(value1, index1, value2, index2):
 
 
 @jit
-@core._add_reduction_docstr("minimum",
-                            return_indices_arg="return_indices",
+@core._add_reduction_docstr("minimum", return_indices_arg="return_indices",
                             tie_break_arg="return_indices_tie_break_left")
 def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True):
     input = core._promote_reduction_input(input)
@@ -222,8 +222,7 @@ def min(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
 
 
 @jit
-@core._add_reduction_docstr("minimum index",
-                            tie_break_arg="tie_break_left")
+@core._add_reduction_docstr("minimum index", tie_break_arg="tie_break_left")
 def argmin(input, axis, tie_break_left=True):
     _, ret = min(input, axis, return_indices=True, return_indices_tie_break_left=tie_break_left)
     return ret
@@ -232,6 +231,7 @@ def argmin(input, axis, tie_break_left=True):
 @jit
 def _sum_combine(a, b):
     return a + b
+
 
 # sum
 
@@ -247,6 +247,7 @@ def sum(input, axis=None):
 def _xor_combine(a, b):
     return a ^ b
 
+
 # xor sum
 
 
@@ -258,8 +259,8 @@ def xor_sum(input, axis=None, _builder=None, _generator=None):
         raise ValueError("xor_sum only supported for integers")
 
     input = core._promote_reduction_input(input, _builder=_builder)
-    return core.reduce(input, axis, _xor_combine,
-                       _builder=_builder, _generator=_generator)
+    return core.reduce(input, axis, _xor_combine, _builder=_builder, _generator=_generator)
+
 
 # cumsum
 
@@ -270,6 +271,7 @@ def cumsum(input, axis=0):
     # todo rename this to a generic function name
     input = core._promote_reduction_input(input)
     return core.associative_scan(input, axis, _sum_combine)
+
 
 # cumprod
 

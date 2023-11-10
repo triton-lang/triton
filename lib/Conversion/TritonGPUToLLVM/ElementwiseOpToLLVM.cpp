@@ -755,11 +755,11 @@ struct FpToFpOpConversion
     return builder.launch(rewriter, loc, i16_ty, false);
   }
 
-  static Value convertFp32ToFp16(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const Value &v) {
+  static Value convertFp32ToFp16NZ(Location loc,
+                                   ConversionPatternRewriter &rewriter,
+                                   const Value &v) {
     PTXBuilder builder;
-    auto &cvt = *builder.create("cvt.rn.f16.f32");
+    auto &cvt = *builder.create("cvt.rz.f16.f32");
     auto res = builder.newOperand("=h");
     auto operand = builder.newOperand(v, "r");
     cvt(res, operand);
@@ -858,7 +858,7 @@ struct FpToFpOpConversion
     }
     if (useFP16IntermediateSrc)
       for (Value &v : inVals)
-        v = convertFp32ToFp16(loc, rewriter, v);
+        v = convertFp32ToFp16NZ(loc, rewriter, v);
     inVals.resize(numElements, undef(typeConverter->convertType(srcType)));
     SmallVector<Value> outVals = cvtFunc(loc, rewriter, inVals);
     assert(outVals.size() == inVals.size());
@@ -1030,8 +1030,9 @@ struct ElementwiseInlineAsmOpConversion
     SmallVector<Value> packedOperands;
     unsigned numPackedElements = op.getPackedElement();
     for (int i = 0, e = op.getNumOperands(); i < e; i++) {
+      Type elemTy = getElementType(op.getOperand(i));
       unsigned bitWidth =
-          getElementType(op.getOperand(i)).getIntOrFloatBitWidth();
+          elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : 64;
       unsigned numElementPerReg = bitWidth < 32 ? 32 / bitWidth : 1;
       numElementPerReg = std::min(numElementPerReg, numPackedElements);
       for (int j = 0; j < numPackedElements; j += numElementPerReg) {
@@ -1039,9 +1040,8 @@ struct ElementwiseInlineAsmOpConversion
           packedOperands.push_back(operands[j][i]);
           continue;
         }
-        Type t = vec_ty(
-            getTypeConverter()->convertType(getElementType(op.getOperand(i))),
-            numElementPerReg);
+        Type t =
+            vec_ty(getTypeConverter()->convertType(elemTy), numElementPerReg);
         Value packed = undef(t);
         for (int k = 0; k < numElementPerReg; k++) {
           packed = insert_element(packed, operands[j + k][i], i32_val(k));
@@ -1421,18 +1421,37 @@ struct IndexCastOpLowering
   }
 };
 
+struct SelectOpConversion
+    : ElementwiseOpConversionBase<mlir::arith::SelectOp, SelectOpConversion> {
+  using Base =
+      ElementwiseOpConversionBase<mlir::arith::SelectOp, SelectOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(mlir::arith::SelectOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    std::array<Value, 3> llvmOperands;
+    if (operands[0].size() == 2) {
+      // Case of scalar condition with tensor operands.
+      assert(op.getCondition().getType().isInteger(1));
+      llvmOperands = {adaptor.getCondition(), operands[0][0], operands[0][1]};
+    } else {
+      llvmOperands = {operands[0][0], operands[0][1], operands[0][2]};
+    }
+    return {rewriter.create<LLVM::SelectOp>(
+        loc, llvmOperands[1].getType(), llvmOperands,
+        adaptor.getAttributes().getValue())};
+  }
+};
+
 void populateElementwiseOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     int computeCapability, PatternBenefit benefit) {
-#define POPULATE_TERNARY_OP(SRC_OP, DST_OP)                                    \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
-      typeConverter, axisInfoAnalysis, benefit);
-  POPULATE_TERNARY_OP(arith::SelectOp, LLVM::SelectOp)
-#undef POPULATE_TERNARY_OP
-
 #define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
   patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
       typeConverter, axisInfoAnalysis, benefit);
@@ -1486,6 +1505,7 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<FAddOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FMulOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
+  patterns.add<SelectOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
