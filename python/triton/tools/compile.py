@@ -104,7 +104,7 @@ if __name__ == "__main__":
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     kernel = getattr(mod, args.kernel_name)
-    grid = args.grid.split(",")
+    grid = [g.strip() for g in args.grid.split(",")]
     assert len(grid) == 3
 
     # validate and parse signature
