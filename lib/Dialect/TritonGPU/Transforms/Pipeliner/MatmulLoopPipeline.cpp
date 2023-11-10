@@ -43,7 +43,7 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
       loc, alloc.getType(), loadOp.getPtr(), alloc, insertIdx, loadOp.getMask(),
       loadOp.getOther(), loadOp.getCache(), loadOp.getEvict(),
       loadOp.getIsVolatile(), /*axis*/ 0);
-  auto commmit = builder.create<ttg::AsyncCommitGroupOp>(loc);
+  // auto commmit = builder.create<ttg::AsyncCommitGroupOp>(loc);
 
   // Extract part.
   auto allocType = alloc.getType().cast<RankedTensorType>();
@@ -412,14 +412,14 @@ static void createAsynOps(scf::ForOp &forOp, ArrayRef<LoadDotOperand> loads,
   // Insert a waitOp after the first async copy. This does make the assumption
   // that the wait will be scheduled in a different stage that all the async
   // copy but we cannot guarantee that one wait is enough otherwise.
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    if (isa<ttg::InsertSliceAsyncOp>(op)) {
-      OpBuilder builder(op.getContext());
-      builder.setInsertionPointAfter(&op);
-      builder.create<ttg::AsyncWaitOp>(op.getLoc(), 0);
-      break;
-    }
-  }
+  // for (auto &op : forOp.getBody()->without_terminator()) {
+  //   if (isa<ttg::InsertSliceAsyncOp>(op)) {
+  //     OpBuilder builder(op.getContext());
+  //     builder.setInsertionPointAfter(&op);
+  //     builder.create<ttg::AsyncWaitOp>(op.getLoc(), 0);
+  //     break;
+  //   }
+  // }
   SmallVector<Value> newYieldOperands = {insertIdx, extractIdx};
   if (needsMbarrierPhase)
     newYieldOperands.push_back(phase);
@@ -539,84 +539,189 @@ static void addOps(scf::ForOp forOp, int stage,
     schedule.emplace_back(&op, stage);
   }
 }
+// TODO: check if we can consolidate this with the addDep function.
+static void recursiveHelper(Operation *op, DenseSet<Operation *> &seen,
+                            DenseMap<Operation *, unsigned> &insertOpToDistance,
+                            unsigned distance = 0) {
+  if (!seen.insert(op).second)
+    return;
+  unsigned d = distance;
+  if (isa<ttg::InsertSliceAsyncOp, ttng::InsertSliceAsyncV2Op>(op)) {
+    insertOpToDistance[op] = distance;
+    d = distance + 1;
+  }
+  for (Value operand : op->getOperands()) {
+    Value v = operand;
+    llvm::SmallDenseSet<Value> seenBlockArgs;
+    while (auto arg = v.dyn_cast<BlockArgument>()) {
+      if (!seenBlockArgs.insert(v).second)
+        break;
+      if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
+        auto yieldOp = op->getBlock()->getTerminator();
+        v = yieldOp->getOperand(arg.getArgNumber() - 1);
+        continue;
+      }
+      break;
+    }
+    Operation *defOp = v.getDefiningOp();
+    if (defOp && defOp->getBlock() == op->getBlock()) {
+      recursiveHelper(defOp, seen, insertOpToDistance, d);
+    }
+  }
+}
+static SmallVector<DenseSet<Operation *>>
+groupInsertOpsByDistanceToDotOp(scf::ForOp forOp) {
+
+  DenseMap<Operation *, unsigned> insertOpToDistance;
+  DenseSet<Operation *> seen;
+  for (Operation &op : forOp.getBody()->without_terminator()) {
+    if (!isa<tt::DotOp>(op))
+      continue;
+    recursiveHelper(&op, seen, insertOpToDistance);
+  }
+  unsigned maxDistance = 0;
+  for (auto &pair : insertOpToDistance) {
+    maxDistance = std::max(maxDistance, pair.second);
+  }
+  // Group insert ops by distance to dot op.
+  // Start from the max distance and go down to 0.
+  SmallVector<DenseSet<Operation *>> groupedInsertOps;
+  groupedInsertOps.resize(maxDistance + 1);
+  for (auto &pair : insertOpToDistance) {
+    unsigned distance = pair.second;
+    groupedInsertOps[maxDistance - distance].insert(pair.first);
+  }
+  return groupedInsertOps;
+}
+
+static bool
+isScheduleValid(scf::ForOp forOp,
+                std::vector<std::pair<Operation *, unsigned>> &schedule) {
+  DenseSet<Operation *> seen;
+  for (auto &pair : schedule) {
+    if (!seen.insert(pair.first).second)
+      return false;
+  }
+  auto loopBody = forOp.getBody()->without_terminator();
+  auto numOps = std::distance(loopBody.begin(), loopBody.end());
+  if (seen.size() != numOps)
+    return false;
+  return true;
+}
 
 // create the schedule for a matmul loop. This is ad hoc based on how we know
 // matmul loops should be pipelined and is not a generic scheduler.
 static std::vector<std::pair<Operation *, unsigned>>
 createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
-  SmallVector<Operation *> insertOps;
-  SmallVector<Operation *> extractOps;
+  auto groupedInsertOps = groupInsertOpsByDistanceToDotOp(forOp);
+  DenseSet<Operation *> insertOps;
+  DenseSet<Operation *> extractOps;
   // Find the insert/extract ops that will go respectively in stage 0 and stage
   // `numStages - 2`. All the other operations will go in stage `numStages - 1`.
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (isa<ttg::InsertSliceAsyncOp, ttg::AsyncCommitGroupOp,
-            ttng::MBarrierArriveOp, ttng::InsertSliceAsyncV2Op>(op))
-      insertOps.emplace_back(&op);
+    if (isa<ttng::MBarrierArriveOp>(op)) {
+      assert(false && "MBarrierArriveOp has not been supported yet!");
+    }
+    if (isa<ttg::InsertSliceAsyncOp, ttng::InsertSliceAsyncV2Op>(op)) {
+      insertOps.insert(&op);
+    }
     if (prefetchExtract) {
-      if (isa<ttg::ExtractSliceOp, ttg::AsyncWaitOp>(op))
-        extractOps.emplace_back(&op);
+      if (isa<ttg::ExtractSliceOp>(op))
+        extractOps.insert(&op);
     }
   }
-  DenseSet<Operation *> insertAndDeps;
-  for (Operation *op : insertOps) {
-    addDep(op, insertAndDeps, false);
+  SmallVector<DenseSet<Operation *>> insertAndDeps;
+  DenseSet<Operation *> seen;
+  for (unsigned i = 0; i < groupedInsertOps.size(); i++) {
+    insertAndDeps.emplace_back();
+    for (Operation *op : groupedInsertOps[i]) {
+      addDep(op, insertAndDeps.back(), false, &seen);
+    }
+    seen.insert(insertAndDeps.back().begin(), insertAndDeps.back().end());
   }
 
   // Find depenencies with distance of 1.
-  SmallVector<Operation *> distanceOneUsers;
-  for (Operation *op : insertAndDeps) {
-    for (Value operand : op->getOperands()) {
-      if (auto arg = operand.dyn_cast<BlockArgument>()) {
-        if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
-          auto yieldOp = op->getBlock()->getTerminator();
-          Value v = yieldOp->getOperand(arg.getArgNumber() - 1);
-          Operation *defOp = v.getDefiningOp();
-          if (defOp && insertAndDeps.count(defOp) == 0) {
-            distanceOneUsers.push_back(defOp);
+  SmallVector<DenseSet<Operation *>> distanceOneUsers;
+  for (unsigned i = 0; i < groupedInsertOps.size(); i++) {
+    auto &group = insertAndDeps[i];
+    distanceOneUsers.emplace_back();
+    for (Operation *op : group) {
+      for (Value operand : op->getOperands()) {
+        if (auto arg = operand.dyn_cast<BlockArgument>()) {
+          if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
+            auto yieldOp = op->getBlock()->getTerminator();
+            Value v = yieldOp->getOperand(arg.getArgNumber() - 1);
+            Operation *defOp = v.getDefiningOp();
+            if (defOp && group.count(defOp) == 0) {
+              distanceOneUsers.back().insert(defOp);
+            }
           }
         }
       }
     }
   }
   // Schedule loads with a distance of 1 in stage 0
-  for (Operation *op : distanceOneUsers) {
-    if (isa<tt::LoadOp>(op)) {
-      addDep(op, insertAndDeps, true);
+  for (unsigned i = 0; i < groupedInsertOps.size(); i++) {
+    auto &group = distanceOneUsers[i];
+    for (auto op : group) {
+      if (isa<tt::LoadOp>(op))
+        addDep(op, insertAndDeps[i], true);
     }
   }
-  // For the rest of the ops we can move then into stage 1 so that they can be
-  // closer to their uses.
-  DenseSet<Operation *> stage1deps;
-  for (Operation *op : distanceOneUsers) {
-    if (!isa<tt::LoadOp>(op)) {
-      addDep(op, stage1deps, true, &insertAndDeps);
+  SmallVector<DenseSet<Operation *>> stage1deps;
+  for (unsigned i = 0; i < groupedInsertOps.size(); i++) {
+    stage1deps.emplace_back();
+    if (i == 1)
+      continue;
+    auto &group = distanceOneUsers[i];
+    for (auto op : group) {
+      if (!isa<tt::LoadOp>(op))
+        addDep(op, stage1deps.back(), true, &insertAndDeps[i]);
     }
+  }
+  DenseSet<Operation *> allInsertAndDeps;
+  for (auto &set : insertAndDeps) {
+    allInsertAndDeps.insert(set.begin(), set.end());
+  }
+
+  DenseSet<Operation *> allStage1Deps;
+  for (auto &set : stage1deps) {
+    allStage1Deps.insert(set.begin(), set.end());
   }
 
   DenseSet<Operation *> extractAndDeps;
   for (Operation *op : extractOps) {
-    addDep(op, extractAndDeps, true, &insertAndDeps);
+    addDep(op, extractAndDeps, true, &allInsertAndDeps);
   }
   std::vector<std::pair<Operation *, unsigned>> schedule;
   // Schedule stage `numStage - 1` first.
   addOps(forOp, numStages - 1, schedule, [&](Operation *op) {
-    return insertAndDeps.count(op) == 0 && stage1deps.count(op) == 0 &&
+    return allInsertAndDeps.count(op) == 0 && allStage1Deps.count(op) == 0 &&
            extractAndDeps.count(op) == 0;
   });
 
   // Schedule some dependencies with distance of 1 into stage 1 to reduce
   // pressure.
-  addOps(forOp, 1, schedule,
-         [&](Operation *op) { return stage1deps.count(op); });
+  unsigned stageIdx = 0;
+  unsigned stageIncrement =
+      ceil<unsigned>(numStages - 2, groupedInsertOps.size());
 
-  // Then Schedule stage 0.
-  addOps(forOp, 0, schedule,
-         [&](Operation *op) { return insertAndDeps.count(op); });
+  for (int i = 0; i < groupedInsertOps.size(); i++) {
+    auto &group = insertAndDeps[i];
+    auto &group1 = stage1deps[i];
+    addOps(forOp, stageIdx + 1, schedule,
+           [&](Operation *op) { return group1.count(op); });
+
+    addOps(forOp, stageIdx, schedule,
+           [&](Operation *op) { return group.count(op); });
+    stageIdx += stageIncrement;
+  }
 
   // Finally schedule the extract ops in stage `numStage - 2` so that they get
   // pre-fetched and play well with pretech pass.
   addOps(forOp, numStages - 2, schedule,
          [&](Operation *op) { return extractAndDeps.count(op); });
+  assert(isScheduleValid(forOp, schedule) && "Invalid schedule.");
   return schedule;
 }
 
