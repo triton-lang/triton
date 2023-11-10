@@ -1684,7 +1684,7 @@ def device_assert(cond, msg="", _builder=None):
     lineno = 0
     func_name = 'unknown'
     file_name = 'unknown'
-    if frame is not None:
+    if frame is not None and frame.f_back is not None:
         func_name = frame.f_code.co_name
         file_name = frame.f_back.f_code.co_filename
         # TODO: The line number currently indicates the line
