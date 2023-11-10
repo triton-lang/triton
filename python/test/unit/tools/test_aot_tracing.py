@@ -12,6 +12,7 @@ from triton.tools.aot.compiler import AOT_C_CUDA_Compiler as AOTCompiler
 from triton.tools.aot.compiler import AOTCompilationResult
 from triton.tools.aot.linker import AOT_C_CUDA_Linker as AOTLinker
 from triton.tools.aot.linker import AOTLinkerResult
+from triton.tools.aot.tracing import MatMulConfig, MatMulKernelTracer, TraceConfig
 
 FIXTURES_DIR = Path(__file__).parent.absolute() / "fixtures"
 
@@ -30,7 +31,12 @@ from .matmul_configs import (
     STRIDE_CM_HINTS,
     STRIDE_CM_SIGNATURE,
 )
-from .matmul_utils import AOTScriptResult, AOTScriptRunner, MatmulTestConfig
+from .matmul_utils import (
+    AOTScriptResult,
+    AOTScriptRunner,
+    MatmulTestConfig,
+    tt_to_torch,
+)
 
 # ------------------------------------------------------------------------------------------------------------ #
 # Tests for `AOTScriptRunner`, which is a wrapper around `triton.tools.compile` and `triton.tools.link`
@@ -525,4 +531,287 @@ class TestMatMulCodegen:
         check_codegen(
             codegen_linked_kernels.source_path.read_text(),
             expected_kernels.linked_source[0].read_text(),
+        )
+
+
+"""
+Tests for tracing JIT functions and generating AOT kernels from the traced functions.
+Motivation is that rather than having the user input a signature, we utilize the existing JIT / compilation machinery to 
+generate the necessary inputs to `triton.compiler.compile`.
+
+AOTTracer is an abstract class for tracing JIT functions and generating AOT kernels from the traced functions that utilizes AOTCompiler 
+and AOTLinker to generate the AOT kernels. 
+
+AOTTracer is implemented by MatMulKernelTracer, which is a concrete implementation of AOTTracer for the matmul kernel.
+
+Since traced code will differ from scripted (`triton.tools.compile`) due to handling of specializations and signatures,
+we don't test for exact codegen matches. In particular, since the AOT script does not handle all specializations in
+the JITTed path such as `ids_of_folded_args` and `divisible_by_8`, any codegen'ed that depend on the `config` passed to 
+`triton.compiler.compile` will necessarily differ.
+
+This includes:
+- the suffix attached generated kernel header and source files
+- fields in the `triton.tools.compile.{h,c}` templates such as `kernel_name` and `triton_kernel_name`
+- the generated cubin image, which will differ due to the differing specializations.
+
+Hence, when comparing the generated code, we skip the aforementioned fields (`SKIP_PARAMS` attribute).
+See `triton/tools/aot/tracing.py` for details.
+"""
+
+
+class TestMatMulTrace:
+    SKIP_PARAMS = ["kernel_name", "triton_kernel_name", "bin_size", "bin_data"]
+
+    @pytest.fixture(
+        scope="class",
+        params=[
+            # Single config tests
+            ("default",),
+            ("stride_cm",),
+            ("stride_am",),
+            ("stride_cm_am",),
+            ("all_hints",),
+            ("no_hints",),
+            # Multi config tests
+            ("all_hints", "no_hints"),
+            ("default", "stride_cm", "stride_am", "stride_cm_am"),
+        ],  # ("no_hints",),
+        ids=lambda params: "-".join([p.upper() for p in params]),
+    )
+    def configs(self, request):
+        return request.param
+
+    @pytest.fixture(scope="class")
+    def kernel_configs(self, configs):
+        return [TEST_CONFIGS[cfg] for cfg in configs]
+
+    @pytest.fixture(scope="class")
+    def test_dir(self, configs):
+        test_dir = (
+            Path(__file__).parent
+            / "matmul_trace_test"
+            / "_".join(cfg for cfg in configs)
+        ).absolute()
+        if test_dir.exists():
+            shutil.rmtree(test_dir)
+        test_dir.mkdir(parents=True, exist_ok=True)
+        return test_dir
+
+    @pytest.fixture(scope="class")
+    def reference_dir(self, test_dir):
+        reference_aot_dir = test_dir / "reference_aot_kernels"
+        reference_aot_dir.mkdir(parents=True, exist_ok=True)
+        return reference_aot_dir
+
+    @pytest.fixture(scope="class")
+    def trace_dir(self, test_dir):
+        trace_dir = test_dir / "traced_kernels"
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        return trace_dir
+
+    @pytest.fixture(scope="class")
+    def kernel_path(self):
+        kernel_path = FIXTURES_DIR / "kernels" / "matmul_kernel.py"
+        return kernel_path
+
+    @pytest.fixture(scope="class")
+    def kernel_name(self):
+        """Must match the name of the kernel in `matmul_kernel.py`"""
+        return "matmul"
+
+    @pytest.fixture(scope="class")
+    def expected_kernels(
+        self, kernel_name, reference_dir: Path, kernel_configs, kernel_path: Path
+    ):
+        signatures = [
+            AOTScriptRunner.generate_signature(
+                kernel_config.dtypes, kernel_config.hints, kernel_config.constants
+            )
+            for kernel_config in kernel_configs
+        ]
+
+        num_warps = [kernel_config.num_warps for kernel_config in kernel_configs]
+        grids = [kernel_config.grid for kernel_config in kernel_configs]
+
+        AOTScriptRunner.compile_matmul_kernels(
+            kernel_name,
+            signatures,
+            num_warps=num_warps,
+            grids=grids,
+            out_dir=reference_dir,
+            kernel_path=kernel_path,
+        )
+        headers = list(reference_dir.glob("*.h"))
+        sources = list(reference_dir.glob("*.c"))
+
+        linked_header = list(reference_dir.glob(f"{kernel_name}.h"))
+        kernel_headers = list(set(headers) - set(linked_header))
+        linked_source = list(reference_dir.glob(f"{kernel_name}.c"))
+        kernel_sources = list(set(sources) - set(linked_source))
+
+        jit_args = list(reference_dir.glob("*jit_args.json"))
+        compiler_params = list(reference_dir.glob("*params.json"))
+
+        return AOTScriptResult(
+            kernel_headers=kernel_headers,
+            kernel_sources=kernel_sources,
+            linked_header=linked_header,
+            linked_source=linked_source,
+            jit_args=jit_args,
+            compiler_params=compiler_params,
+        )
+
+    # @pytest.fixture(scope="class")
+    @pytest.fixture(scope="class")
+    def traced_kernels(
+        self,
+        trace_dir,
+        kernel_path,
+        kernel_configs,
+    ) -> List[AOTCompilationResult]:
+        trace_configs = []
+        matmul_configs = []
+        for kernel_config in kernel_configs:
+            dtype_in = tt_to_torch(kernel_config.dtypes["A"])
+            dtype_out = tt_to_torch(kernel_config.dtypes["C"])
+
+            # Assume that M, N, K are divisible by 16; defaults to 16
+            matmul_config = MatMulConfig(
+                dtype_in=dtype_in,
+                dtype_out=dtype_out,
+                BLOCK_M=kernel_config.constants["BLOCK_M"],
+                BLOCK_N=kernel_config.constants["BLOCK_N"],
+                BLOCK_K=kernel_config.constants["BLOCK_K"],
+            )
+            assert matmul_config.M % matmul_config.BLOCK_M == 0
+            assert matmul_config.N % matmul_config.BLOCK_N == 0
+            assert matmul_config.K % matmul_config.BLOCK_K == 0
+
+            do_not_specialize = [
+                k for k in kernel_config.hints if kernel_config.hints[k] is None
+            ]
+            trace_config = TraceConfig(
+                do_not_specialize=do_not_specialize,
+                num_warps=kernel_config.num_warps,
+                trace_dir=trace_dir,
+                trace_grid=[g.strip() for g in kernel_config.grid.split(",")],
+            )
+            trace_configs.append(trace_config)
+            matmul_configs.append(matmul_config)
+
+        # Use default MatmulConfig (16 x 16 x 16), dtype_in = fp16, dtype_out = fp32
+        matmul_tracer = MatMulKernelTracer(kernel_path.parent)
+        traces, *_ = matmul_tracer.trace(
+            kernel_configs=matmul_configs, trace_configs=trace_configs
+        )
+        # Save jit args
+        for trace in traces:
+            with open(trace_dir / f"{trace.kernel_name}-jit_args.json", "w") as fp:
+                json.dump({k: str(v) for k, v in trace._jit_args.items()}, fp, indent=2)
+            with open(
+                trace_dir / f"{trace.kernel_name}-compiler_params.json", "w"
+            ) as fp:
+                json.dump(
+                    {k: str(v) for k, v in trace._compiler_params.items()}, fp, indent=2
+                )
+        return traces
+
+    @pytest.fixture(scope="class")
+    def linked_traces(self, kernel_name, traced_kernels, trace_dir: Path):
+        headers = [t.header_path for t in traced_kernels]
+        linker = AOTLinker(
+            kernel_name=kernel_name,
+            headers=headers,
+            save_dir=trace_dir,
+        )
+
+        linker_result: AOTLinkerResult = linker.generate()
+        return linker_result
+
+    @pytest.fixture
+    def link_skips(self, traced_kernels):
+        skip = []
+        for trace in traced_kernels:
+            for k, v in trace._compiler_params.items():
+                if k in self.SKIP_PARAMS:
+                    skip.append(str(v))
+        return skip
+
+    def get_skips(self, trace):
+        skip = {}
+        for k, v in trace._compiler_params.items():
+            if k in self.SKIP_PARAMS:
+                skip[k] = str(v)
+        return skip
+
+    def extract_kernel_sig(self, trace: AOTCompilationResult):
+        return "_".join(trace.params["kernel_name"].split("_")[1:])
+
+    def extract_sig_hash(self, trace: AOTCompilationResult):
+        return self.extract_kernel_sig(trace).split("_")[0]
+
+    # Only test for presence of `sig hash` in header file name
+    # Per above documentation, the suffix will differ due to the differing specializations.
+    def test_kernel_header_files(self, traced_kernels, expected_kernels):
+        for trace in traced_kernels:
+            kernel_sig = self.extract_kernel_sig(trace)
+            sig_hash_suffix = kernel_sig.split("_")
+            assert len(sig_hash_suffix) == 2
+
+            sig_hash = sig_hash_suffix[0]
+
+            assert any(sig_hash in str(h) for h in expected_kernels.kernel_headers)
+
+    def test_kernel_header_match(self, traced_kernels, expected_kernels):
+        for trace in traced_kernels:
+            sig_hash = self.extract_sig_hash(trace)
+            expected_header = [
+                h for h in expected_kernels.kernel_headers if sig_hash in str(h)
+            ][0].read_text()
+            actual_header = trace.header
+            skip = self.get_skips(trace)
+            check_codegen(
+                actual_header,
+                expected_header,
+                skip=list(skip.values()),
+                verbose=True,
+            )
+
+    def test_kernel_source_match(self, traced_kernels, expected_kernels):
+        for trace in traced_kernels:
+            sig_hash = self.extract_sig_hash(trace)
+            expected_source = [
+                s for s in expected_kernels.kernel_sources if sig_hash in str(s)
+            ][0].read_text()
+            actual_source = trace.source
+            skip = self.get_skips(trace)
+            check_codegen(
+                actual_source,
+                expected_source,
+                skip=list(skip.values()),
+                verbose=True,
+            )
+
+    def test_linked_header_match(self, linked_traces, expected_kernels, link_skips):
+        expected_header = expected_kernels.linked_header[0].read_text()
+        actual_header = linked_traces.header
+
+        check_codegen(
+            actual_header,
+            expected_header,
+            skip=link_skips,
+            verbose=True,
+        )
+
+    def test_linked_source_match(
+        self, kernel_name, linked_traces, expected_kernels, link_skips
+    ):
+        expected_source = expected_kernels.linked_source[0].read_text()
+        actual_source = linked_traces.source
+
+        check_linked_source(
+            actual_source,
+            expected_source,
+            skip=link_skips,
+            verbose=True,
         )
