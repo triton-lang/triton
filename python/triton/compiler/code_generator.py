@@ -79,10 +79,14 @@ def _get_fn_file_line(fn):
         base_fn = base_fn.fn
     file_name = base_fn.fn.__code__.co_filename
     lines, begin_line = inspect.getsourcelines(base_fn.fn)
-    for line in lines:
-        if line.strip().startswith('@'):
-            begin_line += 1
-        else:
+    # Match the following pattern:
+    # @triton.autotune(...) <- foo.__code__.co_firstlineno
+    # @triton.heuristics(...)
+    # @triton.jit
+    # def foo(...): <- this line is the first line
+    for idx, line in enumerate(lines):
+        if line.strip().startswith("def "):
+            begin_line += idx
             break
     return file_name, begin_line
 
@@ -422,9 +426,6 @@ class CodeGenerator(ast.NodeVisitor):
             raise UnsupportedLanguageConstruct(None, node, "simultaneous multiple assignment is not supported.")
         names = _names[0]
         values = self.visit(node.value)
-        if not isinstance(node.value, ast.Constant) and _is_constexpr(values):
-            self.set_value(names, values)
-            return
         if not _is_list_like(names):
             names = [names]
         if not _is_list_like(values):

@@ -88,13 +88,9 @@ class DependenciesFinder(ast.NodeVisitor):
         assert isinstance(
             func, JITFunction
         ), f'Function "{func.__name__}" is being called from a Triton function but is not a Triton function itself. Decorate it with @triton.jit to fix this'
-        if func.hash is None:
-            tree = ast.parse(func.src)
-            finder = DependenciesFinder(func.__globals__, func.src)
-            finder.visit(tree)
-            func.hash = finder.ret
+        func_cache_key = func.cache_key
         noinline = str(getattr(func, "noinline", False))
-        self.ret = (self.ret + func.hash + noinline).encode("utf-8")
+        self.ret = (self.ret + func_cache_key + noinline).encode("utf-8")
         self.ret = hashlib.sha1(self.ret).hexdigest()
 
 
@@ -578,6 +574,7 @@ class JITFunction(KernelInterface[T]):
         self.version = version
         self.signature = inspect.signature(fn)
         self.do_not_specialize = do_not_specialize
+        self.starting_line_number = inspect.getsourcelines(fn)[1]
 
         self.params = []
         for i, param in enumerate(self.signature.parameters.values()):
@@ -616,7 +613,7 @@ class JITFunction(KernelInterface[T]):
         if self.hash is None:
             dependencies_finder = DependenciesFinder(globals=self.__globals__, src=self.src)
             dependencies_finder.visit(self.parse())
-            self.hash = dependencies_finder.ret
+            self.hash = dependencies_finder.ret + str(self.starting_line_number)
         return self.hash
 
     def warmup(self, *args, **kwargs):

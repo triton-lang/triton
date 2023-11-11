@@ -80,15 +80,13 @@ class Autotuner(KernelInterface):
 
             self.post_hook = _post_hook
 
-        # Prune configs
+        self.perf_model = None
+        self.configs_top_k = 1.0
+        self.early_config_prune = None
         if prune_configs_by:
-            perf_model, top_k = prune_configs_by["perf_model"], prune_configs_by["top_k"]
-            if "early_config_prune" in prune_configs_by:
-                early_config_prune = prune_configs_by["early_config_prune"]
-        else:
-            perf_model, top_k, early_config_prune = None, None, None
-        self.perf_model, self.configs_top_k = perf_model, top_k
-        self.early_config_prune = early_config_prune
+            self.perf_model = prune_configs_by.get("perf_model", self.perf_model)
+            self.configs_top_k = prune_configs_by.get("top_k", self.configs_top_k)
+            self.early_config_prune = prune_configs_by.get("early_config_prune", self.early_config_prune)
 
         self.fn = fn
         self.warmup = warmup
