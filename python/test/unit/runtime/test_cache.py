@@ -1,5 +1,7 @@
+import importlib.util
 import os
 import shutil
+import tempfile
 
 import pytest
 import torch
@@ -65,6 +67,32 @@ def test_nested1_change():
     baseline = kernel.cache_key
     updated = apply_src_change(function_1, 'i + 1', 'i + 2')
     assert baseline != updated
+
+
+def write_and_load_module(code, num_extra_lines):
+    with tempfile.NamedTemporaryFile(mode='w+', suffix='.py') as f:
+        f.write(('# extra line\n' * num_extra_lines) + code)
+        f.flush()
+        spec = importlib.util.spec_from_file_location("module.name", f.name)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    return module
+
+
+def test_changed_line_numbers_invalidate_cache():
+    from textwrap import dedent
+    code = dedent("""
+        import triton
+        @triton.jit
+        def test_kernel(i):
+            i = i + 1
+    """)
+    orig_mod = write_and_load_module(code, 0)
+    orig_cache_key = orig_mod.test_kernel.cache_key
+
+    updated_mod = write_and_load_module(code, 1)
+    updated_cache_key = updated_mod.test_kernel.cache_key
+    assert orig_cache_key != updated_cache_key
 
 
 def reset_tmp_dir():

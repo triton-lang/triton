@@ -39,8 +39,10 @@ getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
   auto srcDotLayout = srcLayout.dyn_cast<DotOperandEncodingAttr>();
   auto dstMmaLayout = dstLayout.dyn_cast<MmaEncodingAttr>();
   auto dstDotLayout = dstLayout.dyn_cast<DotOperandEncodingAttr>();
-  assert(!(srcMmaLayout && dstMmaLayout) &&
-         "Unexpected mma -> mma layout conversion");
+
+  assert(!(srcMmaLayout && dstMmaLayout && !srcMmaLayout.isAmpere()) &&
+         "mma -> mma layout conversion is only supported on Ampere");
+
   // mma or dot layout does not have an order, so the order depends on the
   // layout of the other operand.
   auto inOrd = (srcMmaLayout || srcDotLayout) ? getOrder(dstLayout)
