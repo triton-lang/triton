@@ -12,11 +12,11 @@ import setuptools
 
 # TODO: is_hip shouldn't be here
 def is_hip():
-    if os.environ.get("USE_PADDLE", None) == "TRUE":
+    if os.environ.get("TRITON_PADDLE_SUPPORT", None) == "TRUE":
         return False
-    else:
-        import torch
-        return torch.version.hip is not None
+
+    import torch
+    return torch.version.hip is not None
 
 @functools.lru_cache()
 def libcuda_dirs():

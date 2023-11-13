@@ -18,22 +18,21 @@ from .interpreter import InterpretedFunction
 def get_cuda_stream(idx=None):
     if idx is None:
         idx = get_current_device()
-    if os.environ.get("USE_PADDLE", None) == "TRUE":
+    if os.environ.get("TRITON_PADDLE_SUPPORT", None) == "TRUE":
         import paddle
         #a = paddle.device.cuda.Stream(paddle.CUDAPlace(idx)).cuda_stream
         stream = paddle.device.cuda.current_stream(idx).cuda_stream
         return stream
-    else:
-        try:
-            from torch._C import _cuda_getCurrentRawStream
-            return _cuda_getCurrentRawStream(idx)
-        except ImportError:
-            import torch
-            return torch.cuda.current_stream(idx).cuda_stream
+    try:
+        from torch._C import _cuda_getCurrentRawStream
+        return _cuda_getCurrentRawStream(idx)
+    except ImportError:
+        import torch
+        return torch.cuda.current_stream(idx).cuda_stream
 
 
 def get_current_device():
-    if os.environ.get("USE_PADDLE", None) == "TRUE":
+    if os.environ.get("TRITON_PADDLE_SUPPORT", None) == "TRUE":
         import paddle
         device_num = paddle.device.get_device()
         try:
@@ -42,27 +41,24 @@ def get_current_device():
         except IndexError:
             print("GET Device String does not contain a second part after ':', using 0 as default")
             return 0
-    else:
-        import torch
-        return torch.cuda.current_device()
+    import torch
+    return torch.cuda.current_device()
 
 
 def set_current_device(idx):
-    if os.environ.get("USE_PADDLE", None) == "TRUE":
+    if os.environ.get("TRITON_PADDLE_SUPPORT", None) == "TRUE":
         import paddle
         paddle.device.set_device(f'gpu:{idx}')
-    else:
-        import torch
-        torch.cuda.set_device(idx)
+    import torch
+    torch.cuda.set_device(idx)
 
 
 def get_device_capability(idx):
-    if os.environ.get("USE_PADDLE", None) == "TRUE":
+    if os.environ.get("TRITON_PADDLE_SUPPORT", None) == "TRUE":
         import paddle
         return paddle.device.cuda.get_device_capability(idx)
-    else:
-        import torch
-        return torch.cuda.get_device_capability(idx)
+    import torch
+    return torch.cuda.get_device_capability(idx)
 
 
 T = TypeVar("T")

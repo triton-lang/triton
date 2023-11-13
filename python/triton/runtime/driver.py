@@ -178,20 +178,19 @@ class LazyProxy:
 
 
 def initialize_driver():
-    if os.environ.get("USE_PADDLE", None) == "TRUE":
+    if os.environ.get("TRITON_PADDLE_SUPPORT", None) == "TRUE":
         import paddle
         if paddle.device.is_compiled_with_cuda():
             return CudaDriver()
         else:
             return UnsupportedDriver()
+    import torch
+    if torch.version.hip is not None:
+        return HIPDriver()
+    elif torch.cuda.is_available():
+        return CudaDriver()
     else:
-        import torch
-        if torch.version.hip is not None:
-            return HIPDriver()
-        elif torch.cuda.is_available():
-            return CudaDriver()
-        else:
-            return UnsupportedDriver()
+        return UnsupportedDriver()
 
 
 driver = LazyProxy(initialize_driver)
