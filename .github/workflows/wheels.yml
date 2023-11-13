@@ -22,6 +22,7 @@ jobs:
       - id: check-version
         name: Check latest version
         run: |
+          free -g
           export PACKAGE_DATE=$(python3 -m pip install --user --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/ --dry-run triton-nightly== |& grep -oP '(?<=, )[0-9\.]+dev[0-9]+(?=\))' | grep -oP '(?<=dev)[0-9]+')
           export LATEST_DATE=$(TZ=UTC0 git show --quiet --date='format-local:%Y%m%d%H%M%S' --format="%cd")
           if cmp -s <(echo $PACKAGE_DATE) <(echo $LATEST_DATE); then
