@@ -252,6 +252,7 @@ class JITFunction(KernelInterface[T]):
 
     # TODO(jlebar): Fold this into the KernelArg class.
     def _get_config(self, *args):
+        from ..compiler import instance_descriptor
 
         def is_divisible_by_16(x):
             if hasattr(x, "data_ptr"):
@@ -288,10 +289,8 @@ class JITFunction(KernelInterface[T]):
         # TODO: method to collect all folded args
         none_args = {param.num for param, arg in zip(self.params, args) if arg is None and not param.do_not_specialize}
         ids_of_folded_args = equal_to_1 | none_args
-        return namedtuple("instance_descriptor",
-                          ["divisible_by_16", "equal_to_1", "ids_of_folded_args", "divisible_by_8"])(  #
-                              tuple(divisible_by_16), tuple(equal_to_1), tuple(ids_of_folded_args),
-                              tuple(divisible_by_8))
+        return instance_descriptor(tuple(divisible_by_16), tuple(equal_to_1), tuple(ids_of_folded_args),
+                                   tuple(divisible_by_8))
         # return _triton.code_gen.instance_descriptor(divisible_by_16,
         # equal_to_1)
 
@@ -400,7 +399,7 @@ class JITFunction(KernelInterface[T]):
         return device_types[0] if len(device_types) > 0 else "cuda"
 
     def run(self, *args, **kwargs):
-        from ..compiler import CompiledKernel, compile
+        from ..compiler import CompiledKernel, compile, instance_descriptor
 
         # Get a compiler-flags arg like `num_warps` and remove it from kwargs.
         def get_special_arg(name: str, default=None):
@@ -542,7 +541,7 @@ class JITFunction(KernelInterface[T]):
                 enable_warp_specialization=enable_warp_specialization,
                 enable_fp_fusion=enable_fp_fusion,
                 extern_libs=extern_libs,
-                configs=configs,
+                config=configs[0],
                 debug=self.debug,
             )
 

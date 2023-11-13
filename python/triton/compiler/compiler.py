@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from collections import namedtuple
-from pathlib import Path
 
 from .._C.libtriton.triton import (get_env_vars, ir)
 from ..common.build import is_hip
@@ -13,13 +11,14 @@ from ..common.build import is_hip
 # TODO: runtime.errors
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
-from ..runtime.jit import (JITFunction, get_cuda_stream)
+from ..runtime.jit import (get_cuda_stream)
 from .code_generator import ast_to_ttir
 from .utils import (InfoFromBackendForTensorMap, TensorMapManager)
 from .backends.cuda import CUDABackend
 
 from ..runtime.driver import driver
 import torch
+from dataclasses import dataclass
 
 
 class LazyDict(dict):
@@ -79,28 +78,11 @@ def convert_type_repr(x):
     return x
 
 
-def make_hash(fn, target, env_vars, device_backend, configs, signature, **kwargs):
+def make_hash(fn, target, env_vars, device_backend, config, signature, constants, options):
     version_key = device_backend.get_version_key()
-    if isinstance(fn, JITFunction):
-        constants = kwargs.get("constants", dict())
-        num_warps = kwargs.get("num_warps", 4)
-        num_ctas = kwargs.get("num_ctas", 1)
-        num_stages = kwargs.get("num_stages", 3)
-        enable_warp_specialization = kwargs.get("enable_warp_specialization", False)
-        enable_persistent = kwargs.get("enable_persistent", False)
-        debug = kwargs.get("debug", False)
-        # Get unique key for the compiled code
-        get_conf_key = lambda conf: (sorted(conf.divisible_by_16), sorted(conf.equal_to_1),
-                                     sorted(conf.ids_of_folded_args), sorted(conf.divisible_by_8))
-        configs_key = [get_conf_key(conf) for conf in configs]
-        env_vars_list = [f"{env_vars[k]}" for k in sorted(env_vars.keys())]
-        key = f"{fn.cache_key}-{version_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}-{num_ctas}-{num_stages}-{enable_warp_specialization}-{enable_persistent}-{debug}-{target}-{env_vars_list}"
-        return hashlib.md5(key.encode("utf-8")).hexdigest()
-    assert isinstance(fn, str)
-    ignore_version = kwargs.get('ignore_version', False)
-    if (ignore_version):
-        return hashlib.md5((Path(fn).read_text()).encode("utf-8")).hexdigest()
-    return hashlib.md5((Path(fn).read_text() + version_key).encode("utf-8")).hexdigest()
+    env_vars_list = [f"{env_vars[k]}" for k in sorted(env_vars.keys())]
+    key = f"{fn.cache_key}-{version_key}-{''.join(signature.values())}-{config.hash()}-{constants}-{options.hash()}-{target}-{env_vars_list}"
+    return hashlib.md5(key.encode("utf-8")).hexdigest()
 
 
 # - ^\s*tt\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
@@ -159,12 +141,19 @@ def parse_mlir_module(path, context):
     return module
 
 
-instance_descriptor = namedtuple("instance_descriptor",
-                                 ["divisible_by_16", "equal_to_1", "ids_of_folded_args", "divisible_by_8"],
-                                 defaults=[set(), set(), set(), set()])
+@dataclass
+class instance_descriptor:
+    divisible_by_16: set = None
+    equal_to_1: set = None
+    ids_of_folded_args: set = None
+    divisible_by_8: set = None
+
+    def hash(self):
+        key = str([sorted(x) for x in self.__dict__.values()])
+        return hashlib.md5(key.encode("utf-8")).hexdigest()
 
 
-def compile(src, device_type=("cuda", None), signature=None, configs=None, device=None, constants=None,
+def compile(src, device_type=("cuda", None), signature=None, config=instance_descriptor(), constants=None,
             extern_libs=None, **kwargs):
     # Get device type to decide which backend should be used
     if constants is None:
@@ -178,53 +167,26 @@ def compile(src, device_type=("cuda", None), signature=None, configs=None, devic
     # build compilation stages
     context = ir.context()
     stages = dict()
-    # TODO: CompilationStage object w/ both `parser` and `creator` attributes
     stages["ast"] = (lambda path: src, None)
 
     def create_ttir(src):
-        ttir = ast_to_ttir(src, signature, configs[0], constants, target=target, debug=options.debug)
+        ttir = ast_to_ttir(src, signature, config, constants, target=target, debug=options.debug)
         return optimize_ttir(ttir, target=target)
 
     stages["ttir"] = (lambda path: parse_mlir_module(path, context), create_ttir)
     backend.add_stages(extern_libs, stages, options, context)
 
     # find out the signature of the function
-    if isinstance(src, JITFunction):
-        # signature = kwargs["signature"]
-        if configs is None:
-            configs = [instance_descriptor()]
-        assert len(configs) == 1
-        name = src.__name__
-        first_stage = 0
-        if isinstance(signature, str):
-            signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
-    else:
-        assert isinstance(src, str)
-        _, ir_name = os.path.basename(src).split(".")
-        src = Path(src).read_text()
-        import re
-        match = re.search(prototype_pattern[ir_name], src, re.MULTILINE)
-        # TODO: support function attributes at group 3 (e.g., device function)
-        name, signature = match.group(1), match.group(2)
-        types = re.findall(arg_type_pattern[ir_name], signature)
-        if ir_name == 'ttgir':
-            num_warps_matches = re.findall(ttgir_num_warps_pattern, src)
-            assert len(num_warps_matches) == 1, "Expected exactly one match for num_warps"
-            # assert "num_warps" not in kwargs or int(
-            #     num_warps_matches[0]) == num_warps, "num_warps in ttgir does not match num_warps in compile"
-            # num_warps = int(num_warps_matches[0])
-        param_tys = [convert_type_repr(ty) for ty in types]
-        signature = {k: v for k, v in enumerate(param_tys)}
-        first_stage = list(stages.keys()).index(ir_name)
+    name = src.__name__
+    if isinstance(signature, str):
+        signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
 
     # create cache manager
-    fn_cache_manager = get_cache_manager(
-        make_hash(src, target, get_env_vars(), backend, configs=configs, signature=signature, **options.__dict__))
+    hash = make_hash(src, target, get_env_vars(), backend, config=config, constants=constants, signature=signature,
+                     options=options)
+    fn_cache_manager = get_cache_manager(hash)
     # determine name and extension type of provided function
-    if isinstance(src, JITFunction):
-        name, ext = src.__name__, "ast"
-    else:
-        name, ext = os.path.basename(src).split(".")
+    name, ext = src.__name__, "ast"
     # load metadata if any
     metadata = None
     metadata_filename = f"{name}.json"
@@ -262,7 +224,7 @@ def compile(src, device_type=("cuda", None), signature=None, configs=None, devic
         module = next_module
 
     # cache manager
-    so_path = backend.make_launcher_stub(src, configs, metadata, name, signature, constants)
+    so_path = backend.make_launcher_stub(src, [config], metadata, name, signature, constants)
     # write-back metadata, if it didn't come from the cache
     if metadata_path is None:
         metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
