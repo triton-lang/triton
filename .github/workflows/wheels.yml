@@ -22,7 +22,6 @@ jobs:
       - id: check-version
         name: Check latest version
         run: |
-          free -g
           export PACKAGE_DATE=$(python3 -m pip install --user --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/ --dry-run triton-nightly== |& grep -oP '(?<=, )[0-9\.]+dev[0-9]+(?=\))' | grep -oP '(?<=dev)[0-9]+')
           export LATEST_DATE=$(TZ=UTC0 git show --quiet --date='format-local:%Y%m%d%H%M%S' --format="%cd")
           if cmp -s <(echo $PACKAGE_DATE) <(echo $LATEST_DATE); then
@@ -41,6 +40,9 @@ jobs:
       - name: Build wheels
         if: ${{ steps.check-version.outputs.new_commit == 'true' }}
         run: |
+          # At time of writing, the VM "only" has 32GB of RAM and OOMs while
+          # building if we give it the default number of workers (2 * NUM_CPUs).
+          export MAX_JOBS=4
           export TRITON_WHEEL_NAME="triton-nightly"
           export TRITON_WHEEL_VERSION_SUFFIX="-$(TZ=UTC0 git show --quiet --date='format-local:%Y%m%d%H%M%S' --format="%cd")"
           export CIBW_MANYLINUX_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
