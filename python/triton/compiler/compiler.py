@@ -82,11 +82,9 @@ def convert_type_repr(x):
     return x
 
 
-def make_hash(fn, target, env_vars, device_backend, **kwargs):
+def make_hash(fn, target, env_vars, device_backend, configs, signature, **kwargs):
     version_key = device_backend.get_version_key()
     if isinstance(fn, JITFunction):
-        configs = kwargs["configs"]
-        signature = kwargs["signature"]
         constants = kwargs.get("constants", dict())
         num_warps = kwargs.get("num_warps", 4)
         num_ctas = kwargs.get("num_ctas", 1)
@@ -201,33 +199,30 @@ def get_arch_default_num_stages(device_type, capability=None):
     return num_stages
 
 
-def compile(src, **kwargs):
+def compile(src, device_type="cuda", signature=None, configs=None, device=None, constants=None, extern_libs=None,
+            **kwargs):
     # Get device type to decide which backend should be used
-    constants = kwargs.get("constants", dict())
+    if constants is None:
+        constants = dict()
     # create backend handler
-    device_type = kwargs.get("device_type", "cuda")
     _device_backend = get_backend(device_type)
-    print(_device_backend)
+    options = _device_backend.parse_options(**kwargs)
     assert _device_backend
     target = _device_backend.get_architecture_descriptor(**kwargs)
-    # extern libs
-    extern_libs = kwargs.get("extern_libs", dict())
-    if extern_libs is None:
-        extern_libs = dict()
 
     # compilation options
-    opts = dict()
-    opts["num_warps"] = kwargs.get("num_warps", None)
-    assert opts["num_warps"] > 0 and (opts["num_warps"] &
-                                      (opts["num_warps"] - 1)) == 0, "num_warps must be a power of 2"
-    opts["num_ctas"] = kwargs.get("num_ctas", None)
-    opts["num_stages"] = kwargs.get("num_stages", None)
-    opts["enable_fp_fusion"] = kwargs.get("enable_fp_fusion", True)
-    opts["enable_warp_specialization"] = kwargs.get("enable_warp_specialization", False)
-    opts["enable_persistent"] = kwargs.get("enable_persistent", False)
-    opts["optimize_epilogue"] = os.environ.get('OPTIMIZE_EPILOGUE', '') == '1'
-    opts["cluster_dims"] = kwargs.get('clusterDims', None)
-    opts["debug"] = kwargs.get("debug", False)
+    # opts = dict()
+    # opts["num_warps"] = kwargs.get("num_warps", None)
+    # assert opts["num_warps"] > 0 and (opts["num_warps"] &
+    #                                   (opts["num_warps"] - 1)) == 0, "num_warps must be a power of 2"
+    # opts["num_ctas"] = kwargs.get("num_ctas", None)
+    # opts["num_stages"] = kwargs.get("num_stages", None)
+    # opts["enable_fp_fusion"] = kwargs.get("enable_fp_fusion", True)
+    # opts["enable_warp_specialization"] = kwargs.get("enable_warp_specialization", False)
+    # opts["enable_persistent"] = kwargs.get("enable_persistent", False)
+    # opts["optimize_epilogue"] = os.environ.get('OPTIMIZE_EPILOGUE', '') == '1'
+    # opts["cluster_dims"] = kwargs.get('clusterDims', None)
+    # opts["debug"] = kwargs.get("debug", False)
 
     # build compilation stages
     context = ir.context()
@@ -236,25 +231,22 @@ def compile(src, **kwargs):
     stages["ast"] = (lambda path: src, None)
 
     def create_ttir(src):
-        ttir = ast_to_ttir(src, signature, configs[0], constants, debug=opts["debug"], target=target)
+        ttir = ast_to_ttir(src, signature, configs[0], constants, debug=options.debug, target=target)
         return optimize_ttir(ttir, target=target)
 
     stages["ttir"] = (lambda path: parse_mlir_module(path, context), create_ttir)
-    _device_backend.add_stages(target, extern_libs, stages, opts, context)
+    _device_backend.add_stages(target, extern_libs, stages, options, context)
 
     # find out the signature of the function
     if isinstance(src, JITFunction):
-        configs = kwargs.get("configs", None)
-        signature = kwargs["signature"]
+        # signature = kwargs["signature"]
         if configs is None:
             configs = [instance_descriptor()]
         assert len(configs) == 1
-        kwargs["configs"] = configs
         name = src.__name__
         first_stage = 0
         if isinstance(signature, str):
             signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
-        kwargs["signature"] = signature
     else:
         assert isinstance(src, str)
         _, ir_name = os.path.basename(src).split(".")
@@ -275,7 +267,9 @@ def compile(src, **kwargs):
         first_stage = list(stages.keys()).index(ir_name)
 
     # create cache manager
-    fn_cache_manager = get_cache_manager(make_hash(src, target, get_env_vars(), _device_backend, **kwargs))
+    fn_cache_manager = get_cache_manager(
+        make_hash(src, target, get_env_vars(), _device_backend, configs=configs, signature=signature,
+                  **options.__dict__))
     # determine name and extension type of provided function
     if isinstance(src, JITFunction):
         name, ext = src.__name__, "ast"
@@ -295,11 +289,11 @@ def compile(src, **kwargs):
                 metadata['tensormaps_info'] = [InfoFromBackendForTensorMap(e) for e in metadata['tensormaps_info']]
     else:
         metadata = {"constants": _get_jsonable_constants(constants), "target": target}
-        metadata.update(opts)
+        metadata.update(options.__dict__)
         metadata.update(get_env_vars())
-        if ext == "ptx":
-            assert "shared" in kwargs, "ptx compilation must provide shared memory size"
-            metadata["shared"] = kwargs["shared"]
+        # if ext == "ptx":
+        #     assert "shared" in kwargs, "ptx compilation must provide shared memory size"
+        #     metadata["shared"] = kwargs["shared"]
     metadata["device_type"] = device_type
 
     # run compilation pipeline  and populate metadata
@@ -318,7 +312,7 @@ def compile(src, **kwargs):
         module = next_module
 
     # cache manager
-    so_path = _device_backend.make_launcher_stub(src, kwargs["configs"], metadata, name, signature, constants)
+    so_path = _device_backend.make_launcher_stub(src, configs, metadata, name, signature, constants)
     # write-back metadata, if it didn't come from the cache
     if metadata_path is None:
         metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,

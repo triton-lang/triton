@@ -161,38 +161,47 @@ def ptx_to_cubin(ptx: str, target: CudaTargetDescriptor):
     return compile_ptx_to_cubin(ptx, ptxas, target.capability, target.enable_fp_fusion)
 
 
+@dataclass
+class CUDAOptions:
+    num_warps: int = 4
+    num_ctas: int = 1
+    num_stages: int = 3
+    cluster_dims: list = None
+    enable_warp_specialization: bool = False
+    enable_persistent: bool = False
+    optimize_epilogue: bool = False
+    enable_fp_fusion: bool = True
+    extern_libs = None
+    debug: bool = False
+
+
 class CUDABackend(BaseBackend):
 
     def __init__(self, device_type: str) -> None:
         super().__init__(device_type)
 
-    def add_stages(self, target, extern_libs, stages, opt, context):
-        num_warps = opt['num_warps']
-        num_ctas = opt['num_ctas']
-        num_stages = opt['num_stages']
-        cluster_dims = opt['cluster_dims']
-        enable_warp_specialization = opt['enable_warp_specialization']
-        enable_persistent = opt['enable_persistent']
-        optimize_epilogue = opt['optimize_epilogue']
+    def parse_options(self, **opts) -> Any:
+        return CUDAOptions(**opts)
 
+    def add_stages(self, target, extern_libs, stages, opt, context):
         cluster_info = ClusterInfo()
-        if cluster_dims is not None:
-            cluster_info.clusterDimX = cluster_dims[0]
-            cluster_info.clusterDimY = cluster_dims[1]
-            cluster_info.clusterDimZ = cluster_dims[2]
+        if opt.cluster_dims is not None:
+            cluster_info.clusterDimX = opt.cluster_dims[0]
+            cluster_info.clusterDimY = opt.cluster_dims[1]
+            cluster_info.clusterDimZ = opt.cluster_dims[2]
 
         # TTIR -> TTGIR stage
         def create_ttgir(src):
-            ttgir = ttir_to_ttgir(src, num_warps, num_ctas, target)
-            return optimize_ttgir(ttgir, num_stages, num_warps, num_ctas, target, cluster_info,
-                                  enable_warp_specialization, enable_persistent, optimize_epilogue)
+            ttgir = ttir_to_ttgir(src, opt.num_warps, opt.num_ctas, target)
+            return optimize_ttgir(ttgir, opt.num_stages, opt.num_warps, opt.num_ctas, target, cluster_info,
+                                  opt.enable_warp_specialization, opt.enable_persistent, opt.optimize_epilogue)
 
         stages["ttgir"] = (lambda path: parse_mlir_module(path, context), create_ttgir)
         # TTGIR -> LLIR stage
         tma_infos = TMAInfos()
 
         def create_llir(src):
-            return ttgir_to_llir(src, extern_libs, target, tma_infos)
+            return ttgir_to_llir(src, opt.extern_libs, target, tma_infos)
 
         stages["llir"] = (lambda path: Path(path).read_text(), create_llir)
 
