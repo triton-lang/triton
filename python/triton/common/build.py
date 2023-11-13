@@ -12,9 +12,11 @@ import setuptools
 
 # TODO: is_hip shouldn't be here
 def is_hip():
-    import torch
-    return torch.version.hip is not None
-
+    if os.environ.get("USE_PADDLE", None) == "TRUE":
+        return False
+    else:
+        import torch
+        return torch.version.hip is not None
 
 @functools.lru_cache()
 def libcuda_dirs():
