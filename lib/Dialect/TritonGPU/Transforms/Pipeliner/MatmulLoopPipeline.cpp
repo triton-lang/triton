@@ -160,6 +160,8 @@ static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
     if (user->getNumResults() != 1)
       return nullptr;
     auto tensorType = user->getResult(0).getType().dyn_cast<RankedTensorType>();
+    if (!tensorType)
+      return nullptr;
     ttg::DotOperandEncodingAttr tempAttr;
     if (tensorType.getEncoding().isa<ttg::SharedEncodingAttr>()) {
       tempAttr = allTransitiveUsesHaveDotEncoding(user->getResult(0));
