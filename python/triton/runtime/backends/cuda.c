@@ -446,6 +446,50 @@ static PyObject *tensorMapEncodeTiled(PyObject *self, PyObject *args) {
   return PyLong_FromUnsignedLongLong((unsigned long long)tensorMap);
 }
 
+static PyObject *getMaxActiveClusters(PyObject *self, PyObject *args) {
+  int clusterDimX = -1, clusterDimY = -1, clusterDimZ = -1,
+      maxActiveClusters = -1;
+  int shared = 0;
+  CUfunction func;
+
+  if (!PyArg_ParseTuple(args, "Kiiii", &func, &shared, &clusterDimX,
+                        &clusterDimY, &clusterDimZ)) {
+    return NULL;
+  }
+
+  // Let each SM have one block
+  int maxActiveBlocks = 1;
+  Py_BEGIN_ALLOW_THREADS;
+  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuFuncSetAttribute(
+      func, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared));
+  Py_END_ALLOW_THREADS;
+
+  CUlaunchAttribute launchAttr[1];
+  launchAttr[0].id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION;
+  launchAttr[0].value.clusterDim.x = clusterDimX;
+  launchAttr[0].value.clusterDim.y = clusterDimY;
+  launchAttr[0].value.clusterDim.z = clusterDimZ;
+  CUlaunchConfig config;
+  config.gridDimX = clusterDimX;
+  config.gridDimY = maxActiveBlocks * clusterDimY;
+  config.gridDimZ = clusterDimZ;
+  config.blockDimX = 128;
+  config.blockDimY = 1;
+  config.blockDimZ = 1;
+  config.sharedMemBytes = shared;
+  config.hStream = 0;
+  config.numAttrs = 1;
+  config.attrs = launchAttr;
+
+  Py_BEGIN_ALLOW_THREADS;
+  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuFuncSetAttribute(
+      func, CU_FUNC_ATTRIBUTE_NON_PORTABLE_CLUSTER_SIZE_ALLOWED, 1));
+  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
+      cuOccupancyMaxActiveClusters(&maxActiveClusters, func, &config));
+  Py_END_ALLOW_THREADS;
+  return (PyObject *)Py_BuildValue("i", maxActiveClusters);
+}
+
 static PyMethodDef ModuleMethods[] = {
     {"load_binary", loadBinary, METH_VARARGS,
      "Load provided cubin into CUDA driver"},
@@ -455,6 +499,8 @@ static PyMethodDef ModuleMethods[] = {
     {"cuMemcpyHtoD", memcpyHtoD, METH_VARARGS},
     {"cuMemFree", memFree, METH_VARARGS},
     {"cuTensorMapEncodeTiled", tensorMapEncodeTiled, METH_VARARGS},
+    {"cu_occupancy_max_active_clusters", getMaxActiveClusters, METH_VARARGS,
+     "Python interface for cuOccupancyMaxActiveClusters function"},
     {NULL, NULL, 0, NULL} // sentinel
 };
 

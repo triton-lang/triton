@@ -199,6 +199,15 @@ def TTNG_GetClusterCTAIdOp : TTNG_Op<"get_cluster_cta_id", [Pure]> {
   let assemblyFormat = "attr-dict `:` type($result)";
 }
 
+def TTNG_GetCanonicalWarpId : TTNG_Op<"get_canonical_warp_id", [Pure]> {
+  let description = [{
+    Returns the one dimensional warpId when it's used for producing warp uniform values.
+  }];
+
+  let results = (outs I32:$result);
+  let assemblyFormat = "attr-dict `:` type($result)";
+}
+
 def TTNG_NamedBarrierArriveOp : TTNG_Op<"bar_arrive", []> {
   let summary = "named barrier arrive";
 

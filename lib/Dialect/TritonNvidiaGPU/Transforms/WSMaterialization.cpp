@@ -68,9 +68,9 @@ void materializeGetAgentIdOp(Operation *parentOp) {
     auto loc = op.getLoc();
     OpBuilder builder(op);
 
-    Value _128 = builder.create<arith::ConstantIntOp>(loc, 128, 32);
-    Value threadId = getThreadId(builder, loc);
-    Value agentId = builder.create<arith::DivUIOp>(loc, threadId, _128);
+    Value _4 = builder.create<arith::ConstantIntOp>(loc, 4, 32);
+    Value warpId = builder.create<ttng::GetCanonicalWarpId>(loc);
+    Value agentId = builder.create<arith::DivUIOp>(loc, warpId, _4);
     op.getResult().replaceAllUsesWith(agentId);
     op->erase();
 
@@ -470,29 +470,29 @@ void mutexSyncPingPang(Operation *parentOp, int numAgents, int &nameBarrierId,
     OpBuilder builder(getMutexRoleIdOp);
     numRoles = getMutexRoleIdOp.getNum();
     auto loc = getMutexRoleIdOp->getLoc();
-    Value threadId = getThreadId(builder, loc);
+    // Value threadId = getThreadId(builder, loc);
+    Value warpId = builder.create<ttng::GetCanonicalWarpId>(loc);
     assert(getMutexRoleIdOp->hasAttr("agent.num-warps"));
-    int numThreads =
-        32 * getMutexRoleIdOp->getAttrOfType<IntegerAttr>("agent.num-warps")
-                 .getInt();
-    int numThreadsBase =
-        32 *
+    int numWarps =
+        getMutexRoleIdOp->getAttrOfType<IntegerAttr>("agent.num-warps")
+            .getInt();
+    int numWarpsBase =
         getMutexRoleIdOp->getAttrOfType<IntegerAttr>("agent.num-warps-base")
             .getInt();
-    assert(numThreads % numRoles == 0);
+    assert(numWarps % numRoles == 0);
     // TODO: more flexible ways to determine numWarps of each agent.
-    Value numThreadsValue =
-        builder.create<arith::ConstantIntOp>(loc, numThreads, 32);
     Value numRolesValue =
         builder.create<arith::ConstantIntOp>(loc, numRoles, 32);
-    Value numThreadsBaseValue =
-        builder.create<arith::ConstantIntOp>(loc, numThreadsBase, 32);
-    Value numThreadsPerRole =
-        builder.create<arith::DivUIOp>(loc, numThreadsValue, numRolesValue);
-    Value numRemThreads =
-        builder.create<arith::SubIOp>(loc, threadId, numThreadsBaseValue);
-    roleId =
-        builder.create<arith::DivUIOp>(loc, numRemThreads, numThreadsPerRole);
+    Value numWarpsValue =
+        builder.create<arith::ConstantIntOp>(loc, numWarps, 32);
+    Value numWarpsBaseValue =
+        builder.create<arith::ConstantIntOp>(loc, numWarpsBase, 32);
+    Value numWarpsPerRole =
+        builder.create<arith::DivUIOp>(loc, numWarpsValue, numRolesValue);
+    Value numRemWarps =
+        builder.create<arith::SubIOp>(loc, warpId, numWarpsBaseValue);
+
+    roleId = builder.create<arith::DivUIOp>(loc, numRemWarps, numWarpsPerRole);
     getMutexRoleIdOp.getResult().replaceAllUsesWith(roleId);
     getMutexRoleIdOp->erase();
     times++;
