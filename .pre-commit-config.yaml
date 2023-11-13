@@ -30,8 +30,8 @@ repos:
             ^docs/conf.py$
           )
 
-  - repo: https://github.com/jlebar/yapf
-    rev: bf301f5ef7777e137b97219842629ca78eb5ef2a
+  - repo: https://github.com/google/yapf
+    rev: 6a92535967543aa979461fbe2da63a9b6f7dd595
     hooks:
       - id: yapf
         args: ["-p", "-i"]
