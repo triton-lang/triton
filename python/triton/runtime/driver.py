@@ -185,7 +185,7 @@ def initialize_driver():
         else:
             return UnsupportedDriver()
     import torch
-    
+
     if torch.version.hip is not None:
         return HIPDriver()
     elif torch.cuda.is_available():

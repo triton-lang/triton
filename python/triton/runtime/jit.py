@@ -62,7 +62,7 @@ def get_device_capability(idx):
         import paddle
         return paddle.device.cuda.get_device_capability(idx)
     import torch
-    
+
     return torch.cuda.get_device_capability(idx)
 
 

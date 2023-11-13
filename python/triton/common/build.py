@@ -19,6 +19,7 @@ def is_hip():
     import torch
     return torch.version.hip is not None
 
+
 @functools.lru_cache()
 def libcuda_dirs():
     env_libcuda_path = os.getenv("TRITON_LIBCUDA_PATH")
