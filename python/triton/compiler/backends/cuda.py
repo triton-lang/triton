@@ -10,6 +10,7 @@ from ...runtime.jit import JITFunction
 from ..utils import get_ids_of_tensormaps, parse_tma_info
 from ..make_launcher import make_stub
 from ...tools.disasm import get_sass
+import hashlib
 
 
 def ttir_to_ttgir(mod, num_warps, num_ctas, capability):
@@ -163,6 +164,10 @@ class CUDAOptions:
     enable_fp_fusion: bool = True
     extern_libs = None
     debug: bool = False
+
+    def hash(self):
+        key = '-'.join([str(x) for x in self.__dict__])
+        return hashlib.md5(key.encode("utf-8")).hexdigest()
 
 
 class CUDABackend(BaseBackend):
