@@ -46,17 +46,31 @@ static int getMMAVersionSafe(int computeCapability, tt::DotOp op) {
 SmallVector<unsigned, 2>
 warpsPerTileV2(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
   auto filter = [&dotOp](Operation *op) {
-    return op->getParentRegion() == dotOp->getParentRegion();
+    return op->getParentRegion() == dotOp->getParentRegion() &&
+           !isa<tt::TransOp>(op);
   };
-  auto slices = multiRootGetSlice(dotOp, {filter});
-  for (Operation *op : slices)
+  auto slices = multiRootGetSlice(dotOp, {filter}, {filter});
+  bool hasChainedDot = false;
+  for (Operation *op : slices) {
     if (isa<tt::DotOp>(op) && (op != dotOp)) {
-      if (shape[0] >= shape[1]) {
-        return {(unsigned)numWarps, 1};
-      } else {
-        return {1, (unsigned)numWarps};
+      auto chainedDot = cast<tt::DotOp>(op);
+      if (auto mmaEncoding = chainedDot.getResult()
+                                 .getType()
+                                 .cast<RankedTensorType>()
+                                 .getEncoding()
+                                 .dyn_cast<MmaEncodingAttr>()) {
+        return ttg::getWarpsPerCTA(mmaEncoding);
       }
+      hasChainedDot = true;
     }
+  }
+  if (hasChainedDot) {
+    if (shape[0] >= shape[1]) {
+      return {(unsigned)numWarps, 1};
+    } else {
+      return {1, (unsigned)numWarps};
+    }
+  }
 
   SmallVector<unsigned, 2> ret = {1, 1};
   SmallVector<int64_t, 2> shapePerWarp = {16, 8};
