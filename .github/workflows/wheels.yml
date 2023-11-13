@@ -30,6 +30,11 @@ jobs:
             echo "new_commit=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld
+
       - name: Patch setup.py
         if: ${{ steps.check-version.outputs.new_commit == 'true' }}
         run: |
@@ -45,6 +50,7 @@ jobs:
           export MAX_JOBS=4
           export TRITON_WHEEL_NAME="triton-nightly"
           export TRITON_WHEEL_VERSION_SUFFIX="-$(TZ=UTC0 git show --quiet --date='format-local:%Y%m%d%H%M%S' --format="%cd")"
+          export TRITON_BUILD_WITH_CLANG_LLD=1
           export CIBW_MANYLINUX_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
           #export CIBW_MANYLINUX_PYPY_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
           export CIBW_BEFORE_BUILD="pip install cmake;"
