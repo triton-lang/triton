@@ -2830,7 +2830,7 @@ def _get_warp_size():
     return _triton.get_warp_size()
 
 
-if _get_warp_size() == 64:
+if is_hip():
     layouts = [
         # MmaLayout(version=1, warps_per_cta=[1, 4]),
         # MmaLayout(version=(2, 0), warps_per_cta=[1, 4]),
