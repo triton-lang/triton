@@ -30,11 +30,6 @@ jobs:
             echo "new_commit=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Install prerequisites
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang lld
-
       - name: Patch setup.py
         if: ${{ steps.check-version.outputs.new_commit == 'true' }}
         run: |
@@ -45,15 +40,13 @@ jobs:
       - name: Build wheels
         if: ${{ steps.check-version.outputs.new_commit == 'true' }}
         run: |
+          export LATEST_DATE=$(TZ=UTC0 git show --quiet --date='format-local:%Y%m%d%H%M%S' --format="%cd")
           # At time of writing, the VM "only" has 32GB of RAM and OOMs while
           # building if we give it the default number of workers (2 * NUM_CPUs).
-          export MAX_JOBS=4
-          export TRITON_WHEEL_NAME="triton-nightly"
-          export TRITON_WHEEL_VERSION_SUFFIX="-$(TZ=UTC0 git show --quiet --date='format-local:%Y%m%d%H%M%S' --format="%cd")"
-          export TRITON_BUILD_WITH_CLANG_LLD=1
+          export CIBW_ENVIRONMENT="MAX_JOBS=4 TRITON_WHEEL_NAME=triton-nightly TRITON_BUILD_WITH_CLANG_LLD=1 TRITON_WHEEL_VERSION_SUFFIX=-$LATEST_DATE"
           export CIBW_MANYLINUX_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
           #export CIBW_MANYLINUX_PYPY_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
-          export CIBW_BEFORE_BUILD="pip install cmake;"
+          export CIBW_BEFORE_BUILD="pip install cmake; sudo apt-get update; sudo apt-get install -y clang lld"
           export CIBW_SKIP="cp{35,36}-*"
           export CIBW_BUILD="cp3*-manylinux_x86_64"
           python3 -m cibuildwheel python --output-dir wheelhouse
