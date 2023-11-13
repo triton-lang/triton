@@ -65,21 +65,25 @@ jobs:
             let comparison_result = fs.readFileSync('./comparison_result', 'utf8');
             console.log("PR number = ", pr_number);
             console.log("Comparison result = ", comparison_result);
-      - name: Comment on PR
-        uses: actions/github-script@v6
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            let fs = require('fs');
-            let run_id = context.payload.workflow_run.id;
-            let issue_number = Number(fs.readFileSync('./pr_number'));
-            let comparison_result = fs.readFileSync('./comparison_result', 'utf8');
-            const message = `:warning: **This PR does not produce bitwise identical kernels as the branch it's merged against.** Please check artifacts for details. [Download the output file here](https://github.com/${{ github.repository }}/actions/runs/${run_id}).`;
-            if (comparison_result.trim() !== 'SUCCESS') {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue_number,
-                body: message
-              });
-            }
+      # TODO: uncomment this once we have a way to avoid false positives
+      # False positives usually happen because the reference artifacts are
+      # based on a CI run that does not reflect a state of the main branch.
+      # We might possibly have to run the relevant tests twice within each PR
+      # - name: Comment on PR
+      #   uses: actions/github-script@v6
+      #   with:
+      #     github-token: ${{ secrets.GITHUB_TOKEN }}
+      #     script: |
+      #       let fs = require('fs');
+      #       let run_id = context.payload.workflow_run.id;
+      #       let issue_number = Number(fs.readFileSync('./pr_number'));
+      #       let comparison_result = fs.readFileSync('./comparison_result', 'utf8');
+      #       const message = `:warning: **This PR does not produce bitwise identical kernels as the branch it's merged against.** Please check artifacts for details. [Download the output file here](https://github.com/${{ github.repository }}/actions/runs/${run_id}).`;
+      #       if (comparison_result.trim() !== 'SUCCESS') {
+      #         await github.rest.issues.createComment({
+      #           owner: context.repo.owner,
+      #           repo: context.repo.repo,
+      #           issue_number: issue_number,
+      #           body: message
+      #         });
+      #       }
