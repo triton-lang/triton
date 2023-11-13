@@ -14,17 +14,10 @@ from ...runtime.driver import driver
 from ...tools.disasm import get_sass
 
 
-@dataclass
-class CudaTargetDescriptor:
-    capability: int
-    num_warps: int
-    enable_fp_fusion: bool
-
-
-def ttir_to_ttgir(mod, num_warps, num_ctas, target):
+def ttir_to_ttgir(mod, num_warps, num_ctas, capability):
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
-    pm.add_convert_triton_to_tritongpu_pass(num_warps, 32, num_ctas, target.capability)
+    pm.add_convert_triton_to_tritongpu_pass(num_warps, 32, num_ctas, capability)
     pm.run(mod)
     return mod
 
@@ -49,9 +42,8 @@ def get_kernel_name(src: str, pattern: str) -> str:
             return line.split()[-1]
 
 
-def optimize_ttgir(mod, num_stages, num_warps, num_ctas, target, cluster_info, enable_warp_specialization,
+def optimize_ttgir(mod, num_stages, num_warps, num_ctas, capability, cluster_info, enable_warp_specialization,
                    enable_persistent, optimize_epilogue):
-    capability = target.capability
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_tritongpu_coalesce_pass()
@@ -113,10 +105,10 @@ def _add_external_libs(mod, libs):
     add_external_libs(mod, list(libs.keys()), list(libs.values()))
 
 
-def ttgir_to_llir(mod, extern_libs, target, tma_infos):
+def ttgir_to_llir(mod, extern_libs, capability, tma_infos):
     if extern_libs:
         _add_external_libs(mod, extern_libs)
-    return translate_triton_gpu_to_llvmir(mod, target.capability, tma_infos, runtime.TARGET.NVVM)
+    return translate_triton_gpu_to_llvmir(mod, capability, tma_infos, runtime.TARGET.NVVM)
 
 
 # PTX translation
@@ -138,7 +130,7 @@ def ptx_get_version(cuda_version) -> int:
     raise RuntimeError("Triton only support CUDA 10.0 or higher")
 
 
-def llir_to_ptx(mod: Any, target: CudaTargetDescriptor, ptx_version: int = None) -> str:
+def llir_to_ptx(mod: Any, enable_fp_fusion: bool, capability: int, ptx_version: int = None) -> str:
     '''
     Translate TritonGPU module to PTX code.
     :param mod: a TritonGPU dialect module
@@ -147,10 +139,10 @@ def llir_to_ptx(mod: Any, target: CudaTargetDescriptor, ptx_version: int = None)
     if ptx_version is None:
         _, cuda_version = path_to_ptxas()
         ptx_version = ptx_get_version(cuda_version)
-    return translate_llvmir_to_ptx(mod, target.capability, ptx_version, target.enable_fp_fusion)
+    return translate_llvmir_to_ptx(mod, capability, ptx_version, enable_fp_fusion)
 
 
-def ptx_to_cubin(ptx: str, target: CudaTargetDescriptor):
+def ptx_to_cubin(ptx: str, capability: int, enable_fp_fusion: bool):
     '''
     Compile TritonGPU module to cubin.
     :param ptx: ptx code
@@ -158,7 +150,7 @@ def ptx_to_cubin(ptx: str, target: CudaTargetDescriptor):
     :return: str
     '''
     ptxas, _ = path_to_ptxas()
-    return compile_ptx_to_cubin(ptx, ptxas, target.capability, target.enable_fp_fusion)
+    return compile_ptx_to_cubin(ptx, ptxas, capability, enable_fp_fusion)
 
 
 @dataclass
@@ -177,13 +169,15 @@ class CUDAOptions:
 
 class CUDABackend(BaseBackend):
 
-    def __init__(self, device_type: str) -> None:
+    def __init__(self, device_type: tuple) -> None:
         super().__init__(device_type)
+        self.capability = device_type[1]
+        assert isinstance(self.capability, int)
 
     def parse_options(self, **opts) -> Any:
         return CUDAOptions(**opts)
 
-    def add_stages(self, target, extern_libs, stages, opt, context):
+    def add_stages(self, extern_libs, stages, opt, context):
         cluster_info = ClusterInfo()
         if opt.cluster_dims is not None:
             cluster_info.clusterDimX = opt.cluster_dims[0]
@@ -192,8 +186,8 @@ class CUDABackend(BaseBackend):
 
         # TTIR -> TTGIR stage
         def create_ttgir(src):
-            ttgir = ttir_to_ttgir(src, opt.num_warps, opt.num_ctas, target)
-            return optimize_ttgir(ttgir, opt.num_stages, opt.num_warps, opt.num_ctas, target, cluster_info,
+            ttgir = ttir_to_ttgir(src, opt.num_warps, opt.num_ctas, self.capability)
+            return optimize_ttgir(ttgir, opt.num_stages, opt.num_warps, opt.num_ctas, self.capability, cluster_info,
                                   opt.enable_warp_specialization, opt.enable_persistent, opt.optimize_epilogue)
 
         stages["ttgir"] = (lambda path: parse_mlir_module(path, context), create_ttgir)
@@ -201,19 +195,19 @@ class CUDABackend(BaseBackend):
         tma_infos = TMAInfos()
 
         def create_llir(src):
-            return ttgir_to_llir(src, opt.extern_libs, target, tma_infos)
+            return ttgir_to_llir(src, opt.extern_libs, self.capability, tma_infos)
 
         stages["llir"] = (lambda path: Path(path).read_text(), create_llir)
 
         # LLIR -> PTX stage
         def create_ptx(src):
-            return llir_to_ptx(src, target)
+            return llir_to_ptx(src, opt.enable_fp_fusion, self.capability)
 
         stages["ptx"] = (lambda path: Path(path).read_text(), create_ptx)
 
         # PTx -> CUBIN stage
         def create_cubin(src):
-            return ptx_to_cubin(src, target)
+            return ptx_to_cubin(src, self.capability, opt.enable_fp_fusion)
 
         stages["cubin"] = (lambda path: Path(path).read_bytes(), create_cubin)
         self.tma_infos = tma_infos
@@ -273,15 +267,6 @@ class CUDABackend(BaseBackend):
         enable_warp_specialization = False
 
         return make_stub(name, signature, constants, ids, enable_warp_specialization=enable_warp_specialization)
-
-    def get_architecture_descriptor(self, **kwargs):
-        capability = kwargs.get("cc", None)
-        if capability is None:
-            device = self.get_current_device()
-            capability = torch.cuda.get_device_capability(device)
-            capability = capability[0] * 10 + capability[1]
-        return CudaTargetDescriptor(capability=capability, num_warps=kwargs["num_warps"],
-                                    enable_fp_fusion=kwargs["enable_fp_fusion"])
 
     @classmethod
     def create_backend(cls, device_type: str):

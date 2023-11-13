@@ -400,7 +400,7 @@ class JITFunction(KernelInterface[T]):
         return device_types[0] if len(device_types) > 0 else "cuda"
 
     def run(self, *args, **kwargs):
-        from ..compiler import CompiledKernel, compile, get_arch_default_num_stages, get_arch_default_num_warps
+        from ..compiler import CompiledKernel, compile
 
         # Get a compiler-flags arg like `num_warps` and remove it from kwargs.
         def get_special_arg(name: str, default=None):
@@ -472,9 +472,9 @@ class JITFunction(KernelInterface[T]):
                 stream = device_backend.get_stream()
 
         if num_warps is None:
-            num_warps = get_arch_default_num_warps(device_type)
+            num_warps = 4
         if num_stages is None:
-            num_stages = get_arch_default_num_stages(device_type)
+            num_stages = 3
 
         if device_type in ["cuda"]:
             version_key = get_cuda_version_key()
@@ -529,10 +529,12 @@ class JITFunction(KernelInterface[T]):
             ):
                 return None
 
+            capability = get_device_capability(device)
+            capability = capability[0] * 10 + capability[1]
             self.cache[device][key] = compile(
                 self,
                 signature=signature,
-                device=device,
+                device_type=(device_type, capability),
                 constants=constants,
                 num_warps=num_warps,
                 num_ctas=num_ctas,
@@ -542,7 +544,6 @@ class JITFunction(KernelInterface[T]):
                 extern_libs=extern_libs,
                 configs=configs,
                 debug=self.debug,
-                device_type=device_type,
             )
 
         bin = self.cache[device][key]
