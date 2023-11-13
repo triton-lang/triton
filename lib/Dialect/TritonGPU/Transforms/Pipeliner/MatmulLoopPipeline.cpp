@@ -56,12 +56,9 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
       SmallVector<OpFoldResult>{int_attr(1), int_attr(sliceType.getShape()[0]),
                                 int_attr(sliceType.getShape()[1])},
       SmallVector<OpFoldResult>{int_attr(1), int_attr(1), int_attr(1)});
-  Operation *user = *loadOp.getResult().getUsers().begin();
-  auto convertLayout = llvm::cast<ttg::ConvertLayoutOp>(user);
   auto newCvt = builder.create<ttg::ConvertLayoutOp>(
-      convertLayout->getLoc(), convertLayout.getType(), extract.getResult());
-  convertLayout->replaceAllUsesWith(newCvt->getResults());
-  convertLayout->erase();
+      loadOp->getLoc(), loadOp.getType(), extract.getResult());
+  loadOp->replaceAllUsesWith(newCvt->getResults());
   loadOp.erase();
 
   // Fix up the yield op.
@@ -126,12 +123,9 @@ static void createTMALoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
       loc, mBarTy, barrierArray, extractIdx);
   builder.create<ttng::MBarrierWaitOp>(loc, barrierWait, phase);
 
-  Operation *user = *loadOp.getResult().getUsers().begin();
-  auto convertLayout = llvm::cast<ttg::ConvertLayoutOp>(user);
   auto newCvt = builder.create<ttg::ConvertLayoutOp>(
-      convertLayout->getLoc(), convertLayout.getType(), extract.getResult());
-  convertLayout->replaceAllUsesWith(newCvt->getResults());
-  convertLayout->erase();
+      loadOp->getLoc(), loadOp.getType(), extract.getResult());
+  loadOp->replaceAllUsesWith(newCvt->getResults());
   loadOp.erase();
 
   // Fix up the yield op.
@@ -148,69 +142,83 @@ static void createAsyncLoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   }
 }
 
-// Return the transitive use of the load which is a dot operand.
-static Value loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3) {
-  // We only pipeline loads that have one covert_layout (to dot_op) use
-  // TODO: lift this constraint in the future
-  bool isCandidate = false;
-  if (!loadOp.getResult().hasOneUse())
-    return Value();
+namespace {
+struct LoadDotOperand {
+  LoadDotOperand(tt::LoadOp load,
+                 ttg::DotOperandEncodingAttr dotOperandEncoding)
+      : load(load), dotOperandEncoding(dotOperandEncoding) {}
+  tt::LoadOp load;
+  ttg::DotOperandEncodingAttr dotOperandEncoding;
+};
+} // namespace
 
-  Operation *use = *loadOp.getResult().getUsers().begin();
-  if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
-    auto tensorType =
-        convertLayout.getResult().getType().cast<RankedTensorType>();
-    if (auto sharedEnc =
-            tensorType.getEncoding().dyn_cast<ttg::SharedEncodingAttr>()) {
-      if (sharedEnc.getHasLeadingOffset()) {
-        // MMA V3 case.
-        auto newOrder = sharedEnc.getOrder();
-        auto ty = loadOp.getType().cast<RankedTensorType>();
-        auto oldOrder = ttg::getOrder(ty.getEncoding());
-        if (newOrder[0] == oldOrder[0] || newOrder[1] == oldOrder[1]) {
-          // The operand of MMAv3 is in SharedEncoding and it's order should
-          // not be changed after FuseTranspositions Pass. So we only pipeline
-          // the load if the order of the loaded BlockedEncoding is the same
-          // as the order of the SharedEncoding it is converted to.
-          // TODO: remove this constraint once the LoadOp supports transpose
-          // fusion
-          hasMMAV3 = true;
-          return convertLayout.getResult();
+// If all the transitive uses of the given value have are used by a convert to
+// the same dot operand encoding, return the encoding. Otherwise return nullptr.
+static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
+  ttg::DotOperandEncodingAttr attr;
+  for (Operation *user : val.getUsers()) {
+    if (user->getNumResults() != 1)
+      return nullptr;
+    auto tensorType = user->getResult(0).getType().dyn_cast<RankedTensorType>();
+    if (!tensorType)
+      return nullptr;
+    ttg::DotOperandEncodingAttr tempAttr;
+    if (tensorType.getEncoding().isa<ttg::SharedEncodingAttr>()) {
+      tempAttr = allTransitiveUsesHaveDotEncoding(user->getResult(0));
+    } else {
+      auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(user);
+      if (!convertLayout)
+        return nullptr;
+      auto tensorType =
+          convertLayout.getResult().getType().dyn_cast<RankedTensorType>();
+      if (!tensorType)
+        return nullptr;
+      tempAttr =
+          tensorType.getEncoding().dyn_cast<ttg::DotOperandEncodingAttr>();
+    }
+    if (!tempAttr || (attr != nullptr && attr != tempAttr))
+      return nullptr;
+    attr = tempAttr;
+  }
+  return attr;
+}
+
+// Return the transitive use of the load which is a dot operand.
+static std::optional<LoadDotOperand> loadDotOperand(tt::LoadOp loadOp,
+                                                    bool &hasMMAV3) {
+  bool isCandidate = false;
+  if (loadOp.getResult().hasOneUse()) {
+    Operation *use = *loadOp.getResult().getUsers().begin();
+    if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
+      auto tensorType =
+          convertLayout.getResult().getType().cast<RankedTensorType>();
+      if (auto sharedEnc =
+              tensorType.getEncoding().dyn_cast<ttg::SharedEncodingAttr>()) {
+        if (sharedEnc.getHasLeadingOffset()) {
+          // MMA V3 case.
+          auto newOrder = sharedEnc.getOrder();
+          auto ty = loadOp.getType().cast<RankedTensorType>();
+          auto oldOrder = ttg::getOrder(ty.getEncoding());
+          if (newOrder[0] == oldOrder[0] || newOrder[1] == oldOrder[1]) {
+            // The operand of MMAv3 is in SharedEncoding and it's order should
+            // not be changed after FuseTranspositions Pass. So we only pipeline
+            // the load if the order of the loaded BlockedEncoding is the same
+            // as the order of the SharedEncoding it is converted to.
+            // TODO: remove this constraint once the LoadOp supports transpose
+            // fusion
+            hasMMAV3 = true;
+            return LoadDotOperand(loadOp, nullptr);
+          }
         }
       }
     }
   }
-  // Advance to the first conversion as long as the use resides in shared
-  // memory and it has a single use itself
-  while (use) {
-    if (use->getNumResults() != 1 || !use->getResult(0).hasOneUse())
-      break;
-    auto tensorType = use->getResult(0).getType().dyn_cast<RankedTensorType>();
-    if (!tensorType.getEncoding().isa<ttg::SharedEncodingAttr>())
-      break;
-    use = *use->getResult(0).getUsers().begin();
-  }
-
-  if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
-    if (auto tensorType =
-            convertLayout.getResult().getType().dyn_cast<RankedTensorType>()) {
-      if (auto dotOpEnc = tensorType.getEncoding()
-                              .dyn_cast<ttg::DotOperandEncodingAttr>()) {
-        return convertLayout.getResult();
-      }
-    }
-  }
-  return Value();
+  ttg::DotOperandEncodingAttr attr =
+      allTransitiveUsesHaveDotEncoding(loadOp.getResult());
+  if (!attr)
+    return std::nullopt;
+  return LoadDotOperand(loadOp, attr);
 }
-
-namespace {
-struct LoadDotOperand {
-  LoadDotOperand(tt::LoadOp load, Value dotOperand)
-      : load(load), dotOperand(dotOperand) {}
-  tt::LoadOp load;
-  Value dotOperand;
-};
-} // namespace
 
 /// Collect loads to pipeline. Return success if we can pipeline this loop
 static void collectOpsToPipeline(scf::ForOp forOp,
@@ -250,33 +258,28 @@ static void collectOpsToPipeline(scf::ForOp forOp,
       }
       if (!candidate)
         continue;
-      Value dotOperand = loadDotOperand(loadOp, hasMMAV3);
-      if (!dotOperand)
+      std::optional<LoadDotOperand> loadWithDotOperand =
+          loadDotOperand(loadOp, hasMMAV3);
+      if (!loadWithDotOperand.has_value())
         continue;
-      ops.emplace_back(loadOp, dotOperand);
+      ops.push_back(loadWithDotOperand.value());
     }
   }
 }
 
 // Create an allocation that can old distance number of loadOp shapes.
-static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp, Value dotOperand,
+static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
+                         ttg::DotOperandEncodingAttr dotOpEnc,
                          unsigned distance) {
   OpBuilder builder(forOp);
   auto ty = loadOp.getType().cast<RankedTensorType>();
-  if (!loadOp.getResult().hasOneUse())
-    return Value();
   Attribute sharedEnc;
   auto CTALayout = ttg::getCTALayout(ty.getEncoding());
-  auto tensorType = dotOperand.getType().cast<RankedTensorType>();
-  if (auto dotOpEnc =
-          tensorType.getEncoding().dyn_cast<ttg::DotOperandEncodingAttr>()) {
-    auto convertLayout = dotOperand.getDefiningOp<ttg::ConvertLayoutOp>();
-    bool needTrans = dyn_cast_or_null<tt::TransOp>(
-        convertLayout->getOperand(0).getDefiningOp());
+  if (dotOpEnc) {
     unsigned bitWidth = ty.getElementType().getIntOrFloatBitWidth();
     sharedEnc = ttg::SharedEncodingAttr::get(
         ty.getContext(), dotOpEnc, ty.getShape(),
-        ttg::getOrder(ty.getEncoding()), CTALayout, bitWidth, needTrans);
+        ttg::getOrder(ty.getEncoding()), CTALayout, bitWidth);
   } else {
     // MMAv3
     sharedEnc = ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(),
@@ -313,8 +316,8 @@ static void createAsynOps(scf::ForOp &forOp, ArrayRef<LoadDotOperand> loads,
   bool needsAsyncWait = false;
   for (const LoadDotOperand &loadOperand : loads) {
     tt::LoadOp loadOp = loadOperand.load;
-    Value dotOperand = loadOperand.dotOperand;
-    Value alloc = createAlloc(forOp, loadOp, dotOperand, numBuffers);
+    Value alloc =
+        createAlloc(forOp, loadOp, loadOperand.dotOperandEncoding, numBuffers);
     assert(alloc && "Failed to create alloc for the async load.");
     newOperands.push_back(alloc);
     asyncLoads.emplace_back(loadOp, alloc);
