@@ -210,20 +210,6 @@ def compile(src, device_type="cuda", signature=None, configs=None, device=None, 
     assert _device_backend
     target = _device_backend.get_architecture_descriptor(**kwargs)
 
-    # compilation options
-    # opts = dict()
-    # opts["num_warps"] = kwargs.get("num_warps", None)
-    # assert opts["num_warps"] > 0 and (opts["num_warps"] &
-    #                                   (opts["num_warps"] - 1)) == 0, "num_warps must be a power of 2"
-    # opts["num_ctas"] = kwargs.get("num_ctas", None)
-    # opts["num_stages"] = kwargs.get("num_stages", None)
-    # opts["enable_fp_fusion"] = kwargs.get("enable_fp_fusion", True)
-    # opts["enable_warp_specialization"] = kwargs.get("enable_warp_specialization", False)
-    # opts["enable_persistent"] = kwargs.get("enable_persistent", False)
-    # opts["optimize_epilogue"] = os.environ.get('OPTIMIZE_EPILOGUE', '') == '1'
-    # opts["cluster_dims"] = kwargs.get('clusterDims', None)
-    # opts["debug"] = kwargs.get("debug", False)
-
     # build compilation stages
     context = ir.context()
     stages = dict()
