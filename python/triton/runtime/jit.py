@@ -25,9 +25,11 @@ def get_cuda_stream(idx=None):
         return stream
     try:
         from torch._C import _cuda_getCurrentRawStream
+
         return _cuda_getCurrentRawStream(idx)
     except ImportError:
         import torch
+
         return torch.cuda.current_stream(idx).cuda_stream
 
 
@@ -42,6 +44,7 @@ def get_current_device():
             print("GET Device String does not contain a second part after ':', using 0 as default")
             return 0
     import torch
+
     return torch.cuda.current_device()
 
 
@@ -50,6 +53,7 @@ def set_current_device(idx):
         import paddle
         paddle.device.set_device(f'gpu:{idx}')
     import torch
+
     torch.cuda.set_device(idx)
 
 
@@ -58,6 +62,7 @@ def get_device_capability(idx):
         import paddle
         return paddle.device.cuda.get_device_capability(idx)
     import torch
+    
     return torch.cuda.get_device_capability(idx)
 
 

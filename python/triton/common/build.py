@@ -15,6 +15,7 @@ def is_hip():
     if os.environ.get("TRITON_PADDLE_SUPPORT", None) == "TRUE":
         return False
 
+
     import torch
     return torch.version.hip is not None
 
