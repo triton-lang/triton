@@ -421,6 +421,8 @@ static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
   OpBuilder::InsertionGuard guard(rewriter);
   if (mlir::isMemoryEffectFree(op))
     return op;
+  if (isa<ttg::AllocTensorOp>(op))
+    return op;
   if (isa<ttg::AsyncCommitGroupOp>(op))
     return op;
   if (isa<ttg::AsyncWaitOp>(op))
