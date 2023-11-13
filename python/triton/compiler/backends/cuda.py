@@ -1,16 +1,14 @@
 from triton.common.backend import BaseBackend
 from pathlib import Path
 from dataclasses import dataclass
-import torch
 from ..._C.libtriton.triton import ClusterInfo, get_num_warps, TMAInfos, translate_triton_gpu_to_llvmir, get_shared_memory_size, translate_llvmir_to_ptx, compile_ptx_to_cubin, add_external_libs
 from ...common.backend import get_cuda_version_key, path_to_ptxas
 from ..._C.libtriton.triton import ir, runtime
 import functools
 from typing import Any
-from ...runtime.jit import JITFunction, get_cuda_stream
+from ...runtime.jit import JITFunction
 from ..utils import get_ids_of_tensormaps, parse_tma_info
 from ..make_launcher import make_stub
-from ...runtime.driver import driver
 from ...tools.disasm import get_sass
 
 
@@ -224,26 +222,8 @@ class CUDABackend(BaseBackend):
         if ir_name == "ptx":
             metadata["name"] = get_kernel_name(next_module, pattern='// .globl')
 
-    def get_load_binary_fn(self):
-        return driver.utils.load_binary
-
-    def get_stream(self):
-        return get_cuda_stream()
-
-    def get_device_properties(self, device):
-        return driver.utils.get_device_properties(device)
-
     def get_version_key(self):
         return get_cuda_version_key()
-
-    def get_current_device(self):
-        return torch.cuda.current_device()
-
-    def set_current_device(self, device):
-        torch.cuda.set_device(device)
-
-    def get_kernel_bin(self):
-        return "cubin"
 
     def make_launcher_stub(self, fn, configs, metadata, name, signature, constants):
         ids_of_folded_args = tuple([int(k)
