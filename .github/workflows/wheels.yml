@@ -46,7 +46,7 @@ jobs:
           export CIBW_ENVIRONMENT="MAX_JOBS=4 TRITON_WHEEL_NAME=triton-nightly TRITON_BUILD_WITH_CLANG_LLD=1 TRITON_WHEEL_VERSION_SUFFIX=-$LATEST_DATE"
           export CIBW_MANYLINUX_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
           #export CIBW_MANYLINUX_PYPY_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
-          export CIBW_BEFORE_BUILD="pip install cmake; yum install clang lld"
+          export CIBW_BEFORE_BUILD="pip install cmake; apt install clang lld"
           export CIBW_SKIP="cp{35,36}-*"
           export CIBW_BUILD="cp3*-manylinux_x86_64"
           python3 -m cibuildwheel python --output-dir wheelhouse
