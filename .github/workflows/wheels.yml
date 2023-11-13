@@ -14,15 +14,11 @@ jobs:
       contents: read
 
     steps:
-      - name: Set Swap Space
-        uses: pierotofy/set-swap-space@master
-        with:
-          swap-size-gb: 10
 
       - name: Checkout
         uses: actions/checkout@v3
 
-      # The LATEST_DATE here should be kept in sync with TRITON_WHEEL_VERSION_SUFFIX.
+      # The LATEST_DATE here should be kept in sync with the one in Patch setup.py
       - id: check-version
         name: Check latest version
         run: |
