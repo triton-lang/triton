@@ -8,20 +8,18 @@ from collections import namedtuple
 from pathlib import Path
 
 from .._C.libtriton.triton import (get_env_vars, ir)
-from ..common.backend import get_backend
 from ..common.build import is_hip
 # from ..runtime import driver, jit, JITFunction
 # TODO: runtime.errors
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
-from ..runtime.jit import (JITFunction, get_cuda_stream, get_current_device, get_device_capability)
+from ..runtime.jit import (JITFunction, get_cuda_stream)
 from .code_generator import ast_to_ttir
 from .utils import (InfoFromBackendForTensorMap, TensorMapManager)
-from .backends.cuda import CudaTargetDescriptor
+from .backends.cuda import CUDABackend
 
-
-def _is_cuda(target):
-    return isinstance(target, CudaTargetDescriptor)
+from ..runtime.driver import driver
+import torch
 
 
 class LazyDict(dict):
@@ -46,8 +44,7 @@ def ttir_compute_capability_rewrite(mod, target):
     # with block (tensor) pointers into tensors of pointers
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
-    if _is_cuda(target):
-        pm.add_rewrite_tensor_pointer_pass(target.capability)
+    pm.add_rewrite_tensor_pointer_pass(target.capability)
     pm.run(mod)
     return mod
 
@@ -167,48 +164,16 @@ instance_descriptor = namedtuple("instance_descriptor",
                                  defaults=[set(), set(), set(), set()])
 
 
-# TODO: remove
-def get_cuda_capability(capability):
-    if capability is None:
-        device = get_current_device()
-        capability = get_device_capability(device)
-        capability = capability[0] * 10 + capability[1]
-    return capability
-
-
-def get_arch_default_num_warps(device_type):
-    if device_type in ["cuda", "hip"]:
-        num_warps = 4
-    else:
-        _device_backend = get_backend(device_type)
-        assert _device_backend
-        arch = _device_backend.get_architecture_descriptor()
-        num_warps = arch["num_warps"]
-    return num_warps
-
-
-def get_arch_default_num_stages(device_type, capability=None):
-    if device_type == "cuda":
-        num_stages = 3 if get_cuda_capability(capability) >= 75 else 2
-    else:
-        _device_backend = get_backend(device_type)
-        assert _device_backend
-        arch = _device_backend.get_architecture_descriptor()
-        num_stages = arch["num_stages"]
-
-    return num_stages
-
-
-def compile(src, device_type="cuda", signature=None, configs=None, device=None, constants=None, extern_libs=None,
-            **kwargs):
+def compile(src, device_type=("cuda", None), signature=None, configs=None, device=None, constants=None,
+            extern_libs=None, **kwargs):
     # Get device type to decide which backend should be used
     if constants is None:
         constants = dict()
     # create backend handler
-    _device_backend = get_backend(device_type)
-    options = _device_backend.parse_options(**kwargs)
-    assert _device_backend
-    target = _device_backend.get_architecture_descriptor(**kwargs)
+    backend = CUDABackend(device_type)
+    options = backend.parse_options(**kwargs)
+    target = namedtuple("target", ["capability", "num_warps", "num_stages"])(device_type[1], options.num_warps,
+                                                                             options.num_stages)
 
     # build compilation stages
     context = ir.context()
@@ -217,11 +182,11 @@ def compile(src, device_type="cuda", signature=None, configs=None, device=None, 
     stages["ast"] = (lambda path: src, None)
 
     def create_ttir(src):
-        ttir = ast_to_ttir(src, signature, configs[0], constants, debug=options.debug, target=target)
+        ttir = ast_to_ttir(src, signature, configs[0], constants, target=target, debug=options.debug)
         return optimize_ttir(ttir, target=target)
 
     stages["ttir"] = (lambda path: parse_mlir_module(path, context), create_ttir)
-    _device_backend.add_stages(target, extern_libs, stages, options, context)
+    backend.add_stages(extern_libs, stages, options, context)
 
     # find out the signature of the function
     if isinstance(src, JITFunction):
@@ -254,8 +219,7 @@ def compile(src, device_type="cuda", signature=None, configs=None, device=None, 
 
     # create cache manager
     fn_cache_manager = get_cache_manager(
-        make_hash(src, target, get_env_vars(), _device_backend, configs=configs, signature=signature,
-                  **options.__dict__))
+        make_hash(src, target, get_env_vars(), backend, configs=configs, signature=signature, **options.__dict__))
     # determine name and extension type of provided function
     if isinstance(src, JITFunction):
         name, ext = src.__name__, "ast"
@@ -294,11 +258,11 @@ def compile(src, device_type="cuda", signature=None, configs=None, device=None, 
             continue
         next_module = compile_kernel(module)
         metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
-        _device_backend.add_meta_info(ir_name, module, next_module, metadata, asm)
+        backend.add_meta_info(ir_name, module, next_module, metadata, asm)
         module = next_module
 
     # cache manager
-    so_path = _device_backend.make_launcher_stub(src, configs, metadata, name, signature, constants)
+    so_path = backend.make_launcher_stub(src, configs, metadata, name, signature, constants)
     # write-back metadata, if it didn't come from the cache
     if metadata_path is None:
         metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
@@ -306,6 +270,30 @@ def compile(src, device_type="cuda", signature=None, configs=None, device=None, 
     fn_cache_manager.put_group(metadata_filename, metadata_group)
     # return handle to compiled kernel
     return CompiledKernel(src, so_path, metadata, asm)
+
+
+class RuntimeCudaBackend:
+
+    def __init__(self) -> None:
+        pass
+
+    def get_load_binary_fn(self):
+        return driver.utils.load_binary
+
+    def get_stream(self):
+        return get_cuda_stream()
+
+    def get_device_properties(self, device):
+        return driver.utils.get_device_properties(device)
+
+    def get_current_device(self):
+        return torch.cuda.current_device()
+
+    def set_current_device(self, device):
+        torch.cuda.set_device(device)
+
+    def get_kernel_bin(self):
+        return "cubin"
 
 
 class CompiledKernel:
@@ -333,7 +321,6 @@ class CompiledKernel:
             self.tensormaps_info = metadata["tensormaps_info"]
         self.constants = metadata["constants"]
         self.device_type = metadata["device_type"]
-        self.device_backend = get_backend(self.device_type)
         # initialize asm dict
         self.asm = asm
         # binaries are lazily initialized
@@ -342,15 +329,16 @@ class CompiledKernel:
         self.metadata = metadata
         self.cu_module = None
         self.cu_function = None
+        self.driver = RuntimeCudaBackend()
 
     def _init_handles(self):
         if self.cu_module is not None:
             return
 
-        device = self.device_backend.get_current_device()
-        bin_path = self.device_backend.get_kernel_bin()
-        max_shared = self.device_backend.get_device_properties(device)["max_shared_mem"]
-        fn_load_binary = self.device_backend.get_load_binary_fn()
+        device = self.driver.get_current_device()
+        bin_path = self.driver.get_kernel_bin()
+        max_shared = self.driver.get_device_properties(device)["max_shared_mem"]
+        fn_load_binary = self.driver.get_load_binary_fn()
 
         if self.shared > max_shared:
             raise OutOfResources(self.shared, max_shared, "shared memory")
@@ -383,10 +371,7 @@ class CompiledKernel:
         def runner(*args, stream=None):
             args_expand = self.assemble_tensormap_to_arg(args)
             if stream is None:
-                if self.device_type in ["cuda"]:
-                    stream = get_cuda_stream()
-                else:
-                    stream = get_backend(self.device_type).get_stream(None)
+                stream = self.driver.get_stream(None)
             self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.num_ctas, self.clusterDims[0],
                            self.clusterDims[1], self.clusterDims[2], self.shared, stream, self.cu_function,
                            CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args_expand)
