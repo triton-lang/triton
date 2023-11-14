@@ -163,6 +163,9 @@ class CUDAOptions:
     optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
     extern_libs = None
+    allow_fp8e4nv: bool = False
+    max_num_imprecise_acc: bool = None
+
     debug: bool = False
 
     def hash(self):
@@ -178,9 +181,14 @@ class CUDABackend(BaseBackend):
         assert isinstance(self.capability, int)
 
     def parse_options(self, **opts) -> Any:
-        return CUDAOptions(**opts)
+        options = CUDAOptions(**opts)
+        options.allow_fp8e4nv = self.capability >= 89
+        options.max_num_imprecise_acc = 0 if self.capability >= 89 else None
+        return options
 
-    def add_stages(self, extern_libs, stages, opt, context):
+    def add_stages(self, extern_libs, stages, opt):
+
+        context = ir.context()
         cluster_info = ClusterInfo()
         if opt.cluster_dims is not None:
             cluster_info.clusterDimX = opt.cluster_dims[0]
@@ -228,7 +236,7 @@ class CUDABackend(BaseBackend):
             metadata["name"] = get_kernel_name(next_module, pattern='// .globl')
 
     def get_version_key(self):
-        return get_cuda_version_key()
+        return f'{get_cuda_version_key()}-{self.capability}'
 
     def make_launcher_stub(self, fn, configs, metadata, name, signature, constants):
         ids_of_folded_args = tuple([int(k)
