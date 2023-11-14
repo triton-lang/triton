@@ -403,9 +403,7 @@ private:
 
       if (needTrans) {
         // do transpose
-        auto aEncoding =
-            DotOperandEncodingAttr::get(mma.getContext(), 0, mma, 0);
-        int numM = aEncoding.getMMAv1NumOuter(shapePerCTA);
+        int numM = mma.getMMAv1NumOuter(shapePerCTA, 0);
         int numN = accumSizePerThread / numM;
 
         for (int r = 0; r < numM; r++) {
@@ -1021,7 +1019,7 @@ private:
           dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
           smemObj, getTypeConverter(), getThreadId(rewriter, loc));
     } else if (!isOuter && mmaLayout.isVolta() && isMMA) { // tensor core v1
-      bool isMMAv1Row = dotOperandLayout.getMMAv1IsRow();
+      bool isMMAv1Row = mmaLayout.getMMAv1IsRow(dotOperandLayout.getOpIdx());
       auto srcSharedLayout = src.getType()
                                  .cast<RankedTensorType>()
                                  .getEncoding()
