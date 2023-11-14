@@ -208,8 +208,8 @@ class ContainsReturnChecker(ast.NodeVisitor):
 
 class CodeGenerator(ast.NodeVisitor):
 
-    def __init__(self, context, prototype, gscope, attributes, constants, function_name, target, module=None,
-                 is_kernel=False, function_types: Optional[Dict] = None, debug=False, noinline=False,
+    def __init__(self, context, prototype, gscope, attributes, constants, function_name, options, module=None,
+                 is_kernel=False, function_types: Optional[Dict] = None, noinline=False,
                  file_name: Optional[str] = None, begin_line=0):
         self.context = context
         self.builder = ir.builder(context)
@@ -217,7 +217,7 @@ class CodeGenerator(ast.NodeVisitor):
         # node.lineno starts from 1, so we need to subtract 1
         self.begin_line = begin_line - 1
         self.builder.set_loc(file_name, begin_line, 0)
-        self.builder.target = target
+        self.builder.options = options
         self.module = self.builder.create_module() if module is None else module
         self.function_ret_types = {} if function_types is None else function_types
         self.prototype = prototype
@@ -228,7 +228,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.function_name = function_name
         self.is_kernel = is_kernel
         self.last_node = None
-        self.debug = debug
+        self.debug = options.debug
         self.noinline = noinline
         self.scf_stack = []
         self.last_ret_type = None
@@ -1188,7 +1188,7 @@ def kernel_suffix(signature, specialization):
     return suffix
 
 
-def ast_to_ttir(fn, signature, specialization, constants, debug, target):
+def ast_to_ttir(fn, signature, specialization, constants, options):
     # canonicalize signature
     if isinstance(signature, str):
         signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
@@ -1215,8 +1215,8 @@ def ast_to_ttir(fn, signature, specialization, constants, debug, target):
 
     prototype = language.function_type([], arg_types)
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name,
-                              attributes=new_attrs, is_kernel=True, debug=debug, file_name=file_name,
-                              begin_line=begin_line, target=target)
+                              attributes=new_attrs, is_kernel=True, file_name=file_name, begin_line=begin_line,
+                              options=options)
     try:
         generator.visit(fn.parse())
     except CompilationError as e:

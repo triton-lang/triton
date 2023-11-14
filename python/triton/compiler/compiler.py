@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections import namedtuple
 
 from .._C.libtriton.triton import (get_env_vars, ir)
 from ..common.build import is_hip
@@ -12,13 +11,13 @@ from ..common.build import is_hip
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
 from ..runtime.jit import (get_cuda_stream)
-from .code_generator import ast_to_ttir
 from .utils import (InfoFromBackendForTensorMap, TensorMapManager)
 from .backends.cuda import CUDABackend
 
 from ..runtime.driver import driver
 import torch
 from dataclasses import dataclass
+from .code_generator import ast_to_ttir
 
 
 class LazyDict(dict):
@@ -30,30 +29,16 @@ class LazyDict(dict):
         return val
 
 
-def inline_triton_ir(mod):
+# ------------------------------------------------------------------------------
+# compiler
+# ------------------------------------------------------------------------------
+
+
+def optimize_ttir(mod, capability):
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_inliner_pass()
-    pm.run(mod)
-    return mod
-
-
-def ttir_compute_capability_rewrite(mod, target):
-    # For hardware without support, we must rewrite all load/store
-    # with block (tensor) pointers into tensors of pointers
-    pm = ir.pass_manager(mod.context)
-    pm.enable_debug()
-    pm.add_rewrite_tensor_pointer_pass(target.capability)
-    pm.run(mod)
-    return mod
-
-
-def optimize_ttir(mod, target):
-    mod = inline_triton_ir(mod)
-    mod = ttir_compute_capability_rewrite(mod, target)
-    pm = ir.pass_manager(mod.context)
-    pm.enable_debug()
-    pm.add_inliner_pass()
+    pm.add_rewrite_tensor_pointer_pass(capability)
     pm.add_triton_combine_pass()
     pm.add_canonicalizer_pass()
     pm.add_reorder_broadcast_pass()
@@ -62,11 +47,6 @@ def optimize_ttir(mod, target):
     pm.add_symbol_dce_pass()
     pm.run(mod)
     return mod
-
-
-# ------------------------------------------------------------------------------
-# compiler
-# ------------------------------------------------------------------------------
 
 
 def convert_type_repr(x):
@@ -78,10 +58,10 @@ def convert_type_repr(x):
     return x
 
 
-def make_hash(fn, target, env_vars, device_backend, config, signature, constants, options):
+def make_hash(fn, env_vars, device_backend, config, signature, constants, options):
     version_key = device_backend.get_version_key()
     env_vars_list = [f"{env_vars[k]}" for k in sorted(env_vars.keys())]
-    key = f"{fn.cache_key}-{version_key}-{''.join(signature.values())}-{config.hash()}-{constants}-{options.hash()}-{target}-{env_vars_list}"
+    key = f"{fn.cache_key}-{version_key}-{''.join(signature.values())}-{config.hash()}-{constants}-{options.hash()}-{env_vars_list}"
     return hashlib.md5(key.encode("utf-8")).hexdigest()
 
 
@@ -142,7 +122,7 @@ def parse_mlir_module(path, context):
 
 
 @dataclass
-class instance_descriptor:
+class InstanceDescriptor:
     divisible_by_16: set = None
     equal_to_1: set = None
     ids_of_folded_args: set = None
@@ -153,7 +133,7 @@ class instance_descriptor:
         return hashlib.md5(key.encode("utf-8")).hexdigest()
 
 
-def compile(src, device_type=("cuda", None), signature=None, config=instance_descriptor(), constants=None,
+def compile(src, device_type=("cuda", None), signature=None, config=InstanceDescriptor(), constants=None,
             extern_libs=None, **kwargs):
     # Get device type to decide which backend should be used
     if constants is None:
@@ -161,8 +141,6 @@ def compile(src, device_type=("cuda", None), signature=None, config=instance_des
     # create backend handler
     backend = CUDABackend(device_type)
     options = backend.parse_options(**kwargs)
-    target = namedtuple("target", ["capability", "num_warps", "num_stages"])(device_type[1], options.num_warps,
-                                                                             options.num_stages)
 
     # build compilation stages
     context = ir.context()
@@ -170,11 +148,11 @@ def compile(src, device_type=("cuda", None), signature=None, config=instance_des
     stages["ast"] = (lambda path: src, None)
 
     def create_ttir(src):
-        ttir = ast_to_ttir(src, signature, config, constants, target=target, debug=options.debug)
-        return optimize_ttir(ttir, target=target)
+        ttir = ast_to_ttir(src, signature, config, constants, options=options)
+        return optimize_ttir(ttir, capability=device_type[1])
 
     stages["ttir"] = (lambda path: parse_mlir_module(path, context), create_ttir)
-    backend.add_stages(extern_libs, stages, options, context)
+    backend.add_stages(extern_libs, stages, options)
 
     # find out the signature of the function
     name = src.__name__
@@ -182,7 +160,7 @@ def compile(src, device_type=("cuda", None), signature=None, config=instance_des
         signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
 
     # create cache manager
-    hash = make_hash(src, target, get_env_vars(), backend, config=config, constants=constants, signature=signature,
+    hash = make_hash(src, get_env_vars(), backend, config=config, constants=constants, signature=signature,
                      options=options)
     fn_cache_manager = get_cache_manager(hash)
     # determine name and extension type of provided function
@@ -200,12 +178,9 @@ def compile(src, device_type=("cuda", None), signature=None, config=instance_des
             if 'tensormaps_info' in metadata:
                 metadata['tensormaps_info'] = [InfoFromBackendForTensorMap(e) for e in metadata['tensormaps_info']]
     else:
-        metadata = {"constants": _get_jsonable_constants(constants), "target": target}
+        metadata = {"constants": _get_jsonable_constants(constants)}
         metadata.update(options.__dict__)
         metadata.update(get_env_vars())
-        # if ext == "ptx":
-        #     assert "shared" in kwargs, "ptx compilation must provide shared memory size"
-        #     metadata["shared"] = kwargs["shared"]
     metadata["device_type"] = device_type
 
     # run compilation pipeline  and populate metadata

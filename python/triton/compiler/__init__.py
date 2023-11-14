@@ -1,4 +1,4 @@
-from .compiler import (CompiledKernel, compile, instance_descriptor)
+from .compiler import (CompiledKernel, compile)
 from .errors import CompilationError
 
 __all__ = [
