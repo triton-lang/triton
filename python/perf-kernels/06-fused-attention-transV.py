@@ -17,6 +17,10 @@ import torch
 import triton
 import triton.language as tl
 
+torch_dtype:tl.constexpr = torch.float16
+TORCH_HAS_FP8E5 = hasattr(torch, 'float8_e5m2fnuz')
+if TORCH_HAS_FP8E5:
+    torch_dtype:tl.constexpr = torch.float8_e5m2fnuz
 
 @triton.jit
 def max_fn(x, y):
@@ -145,7 +149,7 @@ def _attn_fwd(
     qk_scale = sm_scale * 1.44269504
     # load q: it will stay in SRAM throughout on NV GPUs but in VGPRs on AMD GPUs
     q = tl.load(Q_block_ptr)
-    q = (q * qk_scale).to(tl.float16)
+    q = (q * qk_scale).to(q.dtype)
     # stage 1: off-band
     # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
     # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
