@@ -487,7 +487,7 @@ static PyObject *getMaxActiveClusters(PyObject *self, PyObject *args) {
   CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
       cuOccupancyMaxActiveClusters(&maxActiveClusters, func, &config));
   Py_END_ALLOW_THREADS;
-  return (PyObject *)Py_BuildValue("i", maxActiveClusters);
+  return PyLong_FromLong(maxActiveClusters);
 }
 
 static PyMethodDef ModuleMethods[] = {
