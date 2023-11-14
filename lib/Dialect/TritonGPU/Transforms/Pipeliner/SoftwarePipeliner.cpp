@@ -31,8 +31,8 @@ using namespace mlir;
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-
-// The main loop pipelining. Return the new ForOp if it was successfully pipelined.
+// The main loop pipelining. Return the new ForOp if it was successfully
+// pipelined.
 static FailureOr<scf::ForOp> pipelineLoop(scf::ForOp forOp, int numStages) {
   mlir::triton::PipeliningOption options;
   // Skip loop with distance > 1 for now.
@@ -56,7 +56,7 @@ static FailureOr<scf::ForOp> pipelineLoop(scf::ForOp forOp, int numStages) {
   FailureOr<scf::ForOp> newForOp =
       mlir::triton::pipelineForLoop(rewriter, forOp, options);
 
-  if (succeeded(newForOp)){
+  if (succeeded(newForOp)) {
     mlir::triton::asyncLaunchDots(newForOp.value());
   }
 
@@ -80,9 +80,8 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
     SmallVector<scf::ForOp> loops;
 
     // Process the scf.for operations from the inside-out.
-    getOperation()->walk<WalkOrder::PostOrder>([&](scf::ForOp forOp) {
-      loops.push_back(forOp);
-    });
+    getOperation()->walk<WalkOrder::PostOrder>(
+        [&](scf::ForOp forOp) { loops.push_back(forOp); });
 
     for (scf::ForOp forOp : loops) {
       // Parents parents of already-pipelined for loops are null.
@@ -95,7 +94,7 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
       if (succeeded(maybeForOp)) {
         forOp = *maybeForOp;
         while ((forOp = forOp.getOperation()->getParentOfType<scf::ForOp>())) {
-          if (scf::ForOp* it = std::find(loops.begin(), loops.end(), forOp)) {
+          if (scf::ForOp *it = std::find(loops.begin(), loops.end(), forOp)) {
             *it = nullptr;
           }
         }
