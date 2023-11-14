@@ -321,9 +321,9 @@ tt.func @max_min() {
   %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
   // CHECK-NEXT: contiguity = [128], divisibility = [64], constancy = [1], constant_value = <none>
   %1 = tt.make_range {end = 192 : i32, start = 64 : i32} : tensor<128xi32>
-  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
+  // CHECK-NEXT: contiguity = [128], divisibility = [64], constancy = [1], constant_value = <none>
   %2 = arith.maxsi %0, %1 : tensor<128xi32>
-  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
+  // CHECK-NEXT: contiguity = [128], divisibility = [64], constancy = [1], constant_value = <none>
   %3 = arith.minsi %0, %1 : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [8], constancy = [128], constant_value = 8
   %4 = arith.constant dense<8> : tensor<128xi32>
@@ -357,6 +357,17 @@ tt.func @for() {
     // CHECK: contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 32], constant_value = <none>
     // CHECK: contiguity = [1, 1], divisibility = [4, 4], constancy = [128, 32], constant_value = 4
     scf.yield %b, %a, %c : tensor<128x32xi32>, tensor<128x32xi32>, tensor<128x32xi32>
+  }
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @for_dynamic
+tt.func @for_dynamic(%lb: index {tt.divisibility = 16 : i32}, %step: index {tt.divisibility = 8 : i32}, %ub: index) {
+  scf.for %iv = %lb to %ub step %step {
+    // CHECK-NEXT: contiguity = [1], divisibility = [8], constancy = [1], constant_value = <none>
+    %t = arith.index_cast %iv : index to i32
   }
   tt.return
 }
