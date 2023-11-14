@@ -1,8 +1,10 @@
 #include "PipelineExpander.h"
 #include "Schedule.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/IR/Visitors.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -29,7 +31,9 @@ using namespace mlir;
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-static void pipelineLoop(scf::ForOp forOp, int numStages) {
+
+// The main loop pipelining. Return the new ForOp if it was successfully pipelined.
+static FailureOr<scf::ForOp> pipelineLoop(scf::ForOp forOp, int numStages) {
   mlir::triton::PipeliningOption options;
   // Skip loop with distance > 1 for now.
   // TODO: relax the constraint in the expander.
@@ -38,22 +42,25 @@ static void pipelineLoop(scf::ForOp forOp, int numStages) {
                      Operation *def = operand.getDefiningOp();
                      return !def;
                    }))
-    return;
+    return failure();
 
   bool foundSchedule = false;
   foundSchedule = preProcessLoopAndGetSchedule(forOp, numStages, options);
 
   // TODO: add more pipelines strategy.
   if (!foundSchedule)
-    return;
+    return failure();
 
   IRRewriter rewriter(forOp->getContext());
   rewriter.setInsertionPoint(forOp);
   FailureOr<scf::ForOp> newForOp =
       mlir::triton::pipelineForLoop(rewriter, forOp, options);
 
-  if (succeeded(newForOp))
+  if (succeeded(newForOp)){
     mlir::triton::asyncLaunchDots(newForOp.value());
+  }
+
+  return newForOp;
 }
 
 namespace {
@@ -71,9 +78,28 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
     if (this->numStages <= 1)
       return;
     SmallVector<scf::ForOp> loops;
-    getOperation()->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
+
+    // Process the scf.for operations from the inside-out.
+    getOperation()->walk<WalkOrder::PostOrder>([&](scf::ForOp forOp) {
+      loops.push_back(forOp);
+    });
+
     for (scf::ForOp forOp : loops) {
-      pipelineLoop(forOp, numStages);
+      // Parents parents of already-pipelined for loops are null.
+      if (!forOp)
+        continue;
+
+      FailureOr<scf::ForOp> maybeForOp = pipelineLoop(forOp, numStages);
+
+      // If this was pipelined don't pipeline any of the parents.
+      if (succeeded(maybeForOp)) {
+        forOp = *maybeForOp;
+        while ((forOp = forOp.getOperation()->getParentOfType<scf::ForOp>())) {
+          if (scf::ForOp* it = std::find(loops.begin(), loops.end(), forOp)) {
+            *it = nullptr;
+          }
+        }
+      }
     }
   }
 };
