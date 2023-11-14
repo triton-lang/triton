@@ -282,6 +282,19 @@ private:
         lattice->join(AxisInfo::getPessimisticValueState(lattice->getPoint())));
   }
 
+  void visitNonControlFlowArguments(
+      Operation *op, const RegionSuccessor &successor,
+      ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices,
+      unsigned firstIndex) override {
+    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+      visitForOpInductionVar(forOp, argLattices);
+    } else {
+      setAllToEntryStates(argLattices.take_front(firstIndex));
+      setAllToEntryStates(argLattices.drop_front(
+          firstIndex + successor.getSuccessorInputs().size()));
+    }
+  }
+
 public:
   AxisInfoAnalysis(DataFlowSolver &solver);
   using dataflow::SparseForwardDataFlowAnalysis<
@@ -291,6 +304,9 @@ public:
   void visitOperation(Operation *op,
                       ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
                       ArrayRef<dataflow::Lattice<AxisInfo> *> results) override;
+  void
+  visitForOpInductionVar(scf::ForOp op,
+                         ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
 };
 
 /// Module level axis info analysis based on the call graph, assuming that we
