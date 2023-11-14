@@ -756,7 +756,7 @@ static void rewriteSlice(SetVector<Value> &slice,
       }
       continue;
     }
-    builder.setInsertionPoint(op);
+    builder.setInsertionPointAfter(op);
     if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
       auto yieldOperands = llvm::to_vector(yieldOp.getOperands());
       for (Value operand : yieldOp.getOperands()) {
