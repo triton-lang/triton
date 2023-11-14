@@ -470,7 +470,6 @@ void mutexSyncPingPang(Operation *parentOp, int numAgents, int &nameBarrierId,
     OpBuilder builder(getMutexRoleIdOp);
     numRoles = getMutexRoleIdOp.getNum();
     auto loc = getMutexRoleIdOp->getLoc();
-    // Value threadId = getThreadId(builder, loc);
     Value warpId = builder.create<ttng::GetCanonicalWarpId>(loc);
     assert(getMutexRoleIdOp->hasAttr("agent.num-warps"));
     int numWarps =
