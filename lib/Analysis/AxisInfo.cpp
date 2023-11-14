@@ -851,7 +851,6 @@ public:
                       /*constantValue=*/constantValue);
     } else {
       AxisInfo::DimVectorT contiguity, divisibility, constancy;
-      std::optional<int64_t> constantValue;
       for (auto d = 0; d < rank; ++d) {
         constancy.push_back(
             std::min(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
@@ -860,11 +859,7 @@ public:
         contiguity.push_back(
             std::min(lhsInfo.getContiguity(d), rhsInfo.getContiguity(d)));
       }
-      if (lhsInfo.getConstantValue().has_value() &&
-          rhsInfo.getConstantValue().has_value() &&
-          lhsInfo.getConstantValue() == rhsInfo.getConstantValue())
-        constantValue = lhsInfo.getConstantValue();
-      return AxisInfo(contiguity, divisibility, constancy, constantValue);
+      return AxisInfo(contiguity, divisibility, constancy, std::nullopt);
     }
   }
 };
