@@ -90,6 +90,7 @@ jobs:
       - name: Publish wheels to Azure DevOps
         if: ${{ steps.check-version.outputs.new_commit == 'true' }}
         run: |
+          python3 -m pip install twine
           python3 -m twine upload -r Triton-Nightly -u TritonArtifactsSP -p ${{ steps.generate-token.outputs.access_token }} --config-file utils/nightly.pypirc --non-interactive --verbose wheelhouse/*
 
       - name: Azure Logout
