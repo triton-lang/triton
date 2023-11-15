@@ -801,9 +801,19 @@ private:
       // load
       auto tmpTy =
           RankedTensorType::get(srcTy.getShape(), resElemTy, srcBlocked);
+      // Combine mask and predicate.
+      Value combinedMask = insertSliceAsyncOp.getPredicate();
+      Type maskType =
+          triton::getI1SameShape(insertSliceAsyncOp.getSrc().getType());
+      combinedMask = builder.create<triton::SplatOp>(
+          insertSliceAsyncOp.getLoc(), maskType, combinedMask);
+      if (Value mask = insertSliceAsyncOp.getMask()) {
+        combinedMask = builder.create<arith::AndIOp>(
+            insertSliceAsyncOp.getLoc(), combinedMask, mask);
+      }
       auto loadOp = builder.create<triton::LoadOp>(
           insertSliceAsyncOp.getLoc(), tmpTy, insertSliceAsyncOp.getSrc(),
-          insertSliceAsyncOp.getMask(), insertSliceAsyncOp.getOther(),
+          combinedMask, insertSliceAsyncOp.getOther(),
           // TODO(Chenggang): confirm `boundaryCheck` and `padding`
           /*boundaryCheck=*/nullptr, /*padding=*/nullptr,
           insertSliceAsyncOp.getCache(), insertSliceAsyncOp.getEvict(),

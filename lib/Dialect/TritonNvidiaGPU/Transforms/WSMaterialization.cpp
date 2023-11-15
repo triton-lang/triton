@@ -206,11 +206,13 @@ int applyCommit(OpBuilder &builder, ttng::ProducerCommitOp &op,
       deprecatedOps.push_back(&ItrOp);
       builder.setInsertionPoint(insertOp);
       if (!::mlir::triton::isTensorPointerType(insertOp.getSrc().getType())) {
+        Value truePred =
+            builder.create<arith::ConstantIntOp>(op.getLoc(), 1, 1);
         // Transform to InsertSliceAsyncOp
         auto newSliceOp = builder.create<triton::gpu::InsertSliceAsyncOp>(
             /*loc=*/insertOp.getLoc(), /*result=*/insertOp.getDst().getType(),
             /*src=*/insertOp.getSrc(), /*dst=*/insertOp.getDst(),
-            /*index=*/insertOp.getIndex(),
+            /*index=*/insertOp.getIndex(), /*predicate=*/truePred,
             /*mask=*/insertOp.getMask(), /*other=*/insertOp.getOther(),
             /*cache=*/insertOp.getCache(), /*evict=*/insertOp.getEvict(),
             /*isVolatile=*/insertOp.getIsVolatile(),

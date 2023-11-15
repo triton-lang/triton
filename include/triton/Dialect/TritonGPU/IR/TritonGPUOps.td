@@ -248,10 +248,10 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
                                      MemoryEffects<[MemRead, MemWrite]>,
                                      TypesMatchWith<"infer mask type from src type",
                                                     "src", "mask", "getI1SameShape($_self)",
-                                                    "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
+                                                    "($_op.getOperands().size() <= 4) || std::equal_to<>()">,
                                      TypesMatchWith<"infer other type from src type",
                                                     "src", "other", "getPointeeType($_self)",
-                                                    "($_op.getOperands().size() <= 4) || std::equal_to<>()">]> {
+                                                    "($_op.getOperands().size() <= 5) || std::equal_to<>()">]> {
   let summary = "insert slice async";
 
   let description = [{
@@ -270,6 +270,7 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
       * src: the tensor that is inserted.
       * dst: the tensor into which the `$src` tensor is inserted.
       * index: the index of the `$src` tensor at the given `$axis` from which the `$dst` tensor is inserted into
+      * predicate: skip the whole operation if the predicate is false. In this case nothing is read not written.
       * mask: optional tensor-rank number of boolean masks which specify which
               elements of the `$src` tensor are inserted into the `$dst` tensor.
       * other: optional tensor-rank number of other tensors which specify what
@@ -292,6 +293,7 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
   }];
 
   let arguments = (ins TT_PtrLike:$src, TT_Tensor:$dst, I32:$index,
+                       I1:$predicate,
                        Optional<I1Tensor>:$mask, Optional<TT_Type>:$other,
                        TT_CacheModifierAttr:$cache, TT_EvictionPolicyAttr:$evict,
                        BoolAttr:$isVolatile, I32Attr:$axis);

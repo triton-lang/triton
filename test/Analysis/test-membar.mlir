@@ -139,7 +139,8 @@ tt.func @insert_slice_async_op(%A : !tt.ptr<f16>, %i1 : i1) {
   %other = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   %tensor = triton_gpu.alloc_tensor : tensor<1x16x16xf16, #A_SHARED>
   %index = arith.constant 0 : i32
-  %3 = triton_gpu.insert_slice_async %a_ptr, %tensor, %index, %mask, %other {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x16x!tt.ptr<f16>, #AL> -> tensor<1x16x16xf16, #A_SHARED>
+  %pred = arith.constant 1 : i1
+  %3 = triton_gpu.insert_slice_async %a_ptr, %tensor, %index, %pred, %mask, %other {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x16x!tt.ptr<f16>, #AL> -> tensor<1x16x16xf16, #A_SHARED>
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
   %4 = tt.cat %3, %3 {axis = 0} : (tensor<1x16x16xf16, #A_SHARED>, tensor<1x16x16xf16, #A_SHARED>) -> tensor<2x16x16xf16, #A_SHARED>

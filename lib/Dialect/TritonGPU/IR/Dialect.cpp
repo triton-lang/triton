@@ -1337,7 +1337,8 @@ int DotOperandEncodingAttr::getMMAv1NumOuter(ArrayRef<int64_t> shape) const {
 //===----------------------------------------------------------------------===//
 
 template <class OpT>
-ParseResult parseInsertSliceOp(OpAsmParser &parser, OperationState &result) {
+ParseResult parseInsertSliceOp(OpAsmParser &parser, OperationState &result,
+                               bool hasPredicate = false) {
   SmallVector<OpAsmParser::UnresolvedOperand, 8> allOperands;
   Type srcType, dstType;
   SMLoc allOperandLoc = parser.getCurrentLocation();
@@ -1353,14 +1354,20 @@ ParseResult parseInsertSliceOp(OpAsmParser &parser, OperationState &result) {
   operandTypes.push_back(dstType); // dst
   operandTypes.push_back(
       IntegerType::get(parser.getBuilder().getContext(), 32)); // index
+  if (hasPredicate) {
+    operandTypes.push_back(
+        IntegerType::get(parser.getBuilder().getContext(), 1)); // predicate
+  }
 
   int hasMask = 0, hasOther = 0;
-  if (allOperands.size() >= 4) {
+  int maskOperandIndex = hasPredicate ? 5 : 4;
+  int otherOperandIndex = hasPredicate ? 6 : 5;
+  if (allOperands.size() >= maskOperandIndex) {
     operandTypes.push_back(
         triton::getI1SameShapeFromTensorOrTensorPtr(srcType)); // mask
     hasMask = 1;
   }
-  if (allOperands.size() >= 5) {
+  if (allOperands.size() >= otherOperandIndex) {
     operandTypes.push_back(triton::getPointeeType(srcType)); // other
     hasOther = 1;
   }
@@ -1372,9 +1379,13 @@ ParseResult parseInsertSliceOp(OpAsmParser &parser, OperationState &result) {
   // Deduce operandSegmentSizes from the number of the operands.
   auto operandSegmentSizesAttrName =
       OpT::getOperandSegmentSizesAttrName(result.name);
+  SmallVector<int32_t> operandSegmentSizes = {1, 1, 1};
+  if (hasPredicate)
+    operandSegmentSizes.push_back(1);
+  operandSegmentSizes.append({hasMask, hasOther});
   result.addAttribute(
       operandSegmentSizesAttrName,
-      parser.getBuilder().getDenseI32ArrayAttr({1, 1, 1, hasMask, hasOther}));
+      parser.getBuilder().getDenseI32ArrayAttr(operandSegmentSizes));
   return success();
 }
 
@@ -1402,7 +1413,8 @@ void InsertSliceOp::print(OpAsmPrinter &printer) {
 
 ParseResult InsertSliceAsyncOp::parse(OpAsmParser &parser,
                                       OperationState &result) {
-  return parseInsertSliceOp<InsertSliceAsyncOp>(parser, result);
+  return parseInsertSliceOp<InsertSliceAsyncOp>(parser, result,
+                                                /*hasPredicate=*/true);
 }
 
 void InsertSliceAsyncOp::print(OpAsmPrinter &printer) {
@@ -1637,10 +1649,10 @@ struct CanonicalizeConvertFromConvert
           op->getLoc(), newType, insert_slice.getDst());
       rewriter.replaceOpWithNewOp<triton::gpu::InsertSliceAsyncOp>(
           op, newType, insert_slice.getSrc(), newArg.getResult(),
-          insert_slice.getIndex(), insert_slice.getMask(),
-          insert_slice.getOther(), insert_slice.getCache(),
-          insert_slice.getEvict(), insert_slice.getIsVolatile(),
-          insert_slice.getAxis());
+          insert_slice.getIndex(), insert_slice.getPredicate(),
+          insert_slice.getMask(), insert_slice.getOther(),
+          insert_slice.getCache(), insert_slice.getEvict(),
+          insert_slice.getIsVolatile(), insert_slice.getAxis());
       return mlir::success();
     }
     // cvt(extract_slice(x), type2) -> extract_slice(cvt(x, type2))

@@ -36,12 +36,13 @@ static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
 static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
                             Value insertIdx, Value extractIdx) {
   OpBuilder builder(forOp);
+  Value truePred = builder.create<arith::ConstantIntOp>(loadOp.getLoc(), 1, 1);
   // Replace the load with insert/extract slice.
   builder.setInsertionPoint(loadOp);
   Location loc = loadOp.getLoc();
   auto insertOp = builder.create<ttg::InsertSliceAsyncOp>(
-      loc, alloc.getType(), loadOp.getPtr(), alloc, insertIdx, loadOp.getMask(),
-      loadOp.getOther(), loadOp.getCache(), loadOp.getEvict(),
+      loc, alloc.getType(), loadOp.getPtr(), alloc, insertIdx, truePred,
+      loadOp.getMask(), loadOp.getOther(), loadOp.getCache(), loadOp.getEvict(),
       loadOp.getIsVolatile(), /*axis*/ 0);
   auto commmit = builder.create<ttg::AsyncCommitGroupOp>(loc);
 
@@ -313,7 +314,6 @@ static void createAsynOps(scf::ForOp &forOp, ArrayRef<LoadDotOperand> loads,
   SmallVector<AsyncLoad> asyncLoads;
   SmallVector<Value> newOperands;
   bool needsMbarrierPhase = false;
-  bool needsAsyncWait = false;
   for (const LoadDotOperand &loadOperand : loads) {
     tt::LoadOp loadOp = loadOperand.load;
     Value alloc =
@@ -323,8 +323,6 @@ static void createAsynOps(scf::ForOp &forOp, ArrayRef<LoadDotOperand> loads,
     asyncLoads.emplace_back(loadOp, alloc);
     if (isLoadFromTensorPtr(loadOp))
       needsMbarrierPhase = true;
-    else
-      needsAsyncWait = true;
   }
 
   OpBuilder builder(forOp);
@@ -379,11 +377,9 @@ static void createAsynOps(scf::ForOp &forOp, ArrayRef<LoadDotOperand> loads,
     phase = builder.create<arith::SelectOp>(loc, cndExt, phase, nextPhase);
   }
 
-  bool firstLoad = true;
   for (AsyncLoad &asyncLoad : asyncLoads) {
     createAsyncLoad(forOp, asyncLoad.loadOp, asyncLoad.alloc, insertIdx,
                     extractIdx, phase);
-    firstLoad = false;
   }
   // Insert a waitOp after the first async copy. This does make the assumption
   // that the wait will be scheduled in a different stage that all the async
@@ -429,10 +425,7 @@ static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
   if (isa<ttg::AsyncWaitOp>(op))
     return op;
   if (auto insertOp = dyn_cast<ttg::InsertSliceAsyncOp>(op)) {
-    rewriter.setInsertionPoint(insertOp);
-    Value mask = getPredMask(rewriter, insertOp.getSrc().getType(),
-                             insertOp.getMask(), pred);
-    insertOp.getMaskMutable().assign(mask);
+    insertOp.getPredicateMutable().assign(pred);
     return op;
   }
   if (auto insertOp = dyn_cast<ttng::InsertSliceAsyncV2Op>(op)) {
@@ -605,9 +598,6 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   collectOpsToPipeline(forOp, loads, hasMMAV3);
   if (loads.empty())
     return false;
-  bool hasAsynCp = llvm::any_of(loads, [](LoadDotOperand &load) {
-    return !isLoadFromTensorPtr(load.load);
-  });
   // 2. Convert the loads into async loads and create the allocs.
   createAsynOps(forOp, loads, numStages, hasMMAV3);
 
@@ -632,13 +622,6 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
                         unsigned iteration) {
         return setWaitNum(op, part, iteration, numLoadsInStage);
       };
-
-  if (hasAsynCp) {
-    // Insert a wait 0 after the loop
-    OpBuilder builder(forOp);
-    builder.setInsertionPointAfter(forOp);
-    builder.create<ttg::AsyncWaitOp>(forOp.getLoc(), 0);
-  }
   return true;
 }
 

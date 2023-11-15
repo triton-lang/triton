@@ -1318,6 +1318,13 @@ struct InsertSliceAsyncOpConversion
     Value res = op.getResult();
     Value mask = op.getMask();
     Value other = op.getOther();
+    Value predicateSrc = op.getPredicate();
+
+    bool skipPredicate = false;
+    if (auto cstPred = predicateSrc.getDefiningOp<arith::ConstantOp>()) {
+      skipPredicate = cstPred.getValue().cast<IntegerAttr>().getInt() != 0;
+    }
+
     auto funcOp = op->getParentOfType<FunctionOpInterface>();
     auto *funcAllocation = allocation->getFuncData(funcOp);
     assert(funcAllocation->getBufferId(res) == Allocation::InvalidBufferId &&
@@ -1339,6 +1346,7 @@ struct InsertSliceAsyncOpConversion
     Value llMask = adaptor.getMask();
     Value llOther = adaptor.getOther();
     Value llIndex = adaptor.getIndex();
+    Value llPredicate = adaptor.getPredicate();
 
     // %src
     auto srcElems = getTypeConverter()->unpackLLElements(loc, llSrc, rewriter,
@@ -1442,7 +1450,11 @@ struct InsertSliceAsyncOpConversion
                                  i32_val(byteWidth), i32_val(0));
           srcSize = ptxBuilder.newOperand(selectOp, "r");
         }
-        copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
+        PTXInstrExecution &inst =
+            copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
+        if (!skipPredicate) {
+          inst.predicate(llPredicate);
+        }
         ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
       }
     }
