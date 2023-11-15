@@ -877,16 +877,46 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     %59 = tt.addptr %58, %24 : tensor<64x!tt.ptr<i64, 1>, #slice1d0>, tensor<64xi32, #slice1d0>
     %66 = tt.addptr %59, %cst_2 : tensor<64x!tt.ptr<i64, 1>, #slice1d0>, tensor<64xi32, #slice1d0>
     %71 = triton_gpu.alloc_tensor : tensor<2x64xi64, #shared>
-    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x8, 0x8
-    // CHECK-NEXT: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x8, 0x8
-    // CHECK-NEXT: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x8, 0x8
-    // CHECK-NEXT: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x8, 0x8
-    // CHECK-NEXT: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x8, 0x8
-    // CHECK-NEXT: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x8, 0x8
-    // CHECK-NEXT: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x8, 0x8
-    // CHECK-NEXT: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x8, 0x8
-    // CHECK-NEXT: cp.async.commit_group
+
+    // This test is PTX specific, GCN targets decompose async operations into oridinary load/stores.
+
+    // PTX: llvm.inline_asm has_side_effects asm_dialect = att
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x8, 0x8
+    // PTX-NEXT: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x8, 0x8
+    // PTX-NEXT: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x8, 0x8
+    // PTX-NEXT: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x8, 0x8
+    // PTX-NEXT: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x8, 0x8
+    // PTX-NEXT: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x8, 0x8
+    // PTX-NEXT: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x8, 0x8
+    // PTX-NEXT: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x8, 0x8
+    // PTX-NEXT: cp.async.commit_group
+
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<i64, 1> to !llvm.ptr<i64>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i64>
+    // GCN: llvm.bitcast {{.*}} : i64 to vector<1xi64>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<i64, 1> to !llvm.ptr<i64>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i64>
+    // GCN: llvm.bitcast {{.*}} : i64 to vector<1xi64>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<i64, 1> to !llvm.ptr<i64>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i64>
+    // GCN: llvm.bitcast {{.*}} : i64 to vector<1xi64>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<i64, 1> to !llvm.ptr<i64>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i64>
+    // GCN: llvm.bitcast {{.*}} : i64 to vector<1xi64>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<i64, 1> to !llvm.ptr<i64>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i64>
+    // GCN: llvm.bitcast {{.*}} : i64 to vector<1xi64>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<i64, 1> to !llvm.ptr<i64>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i64>
+    // GCN: llvm.bitcast {{.*}} : i64 to vector<1xi64>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<i64, 1> to !llvm.ptr<i64>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i64>
+    // GCN: llvm.bitcast {{.*}} : i64 to vector<1xi64>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<i64, 1> to !llvm.ptr<i64>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i64>
+    // GCN: llvm.bitcast {{.*}} : i64 to vector<1xi64>
+    // GCN-COUNT-8: llvm.store {{.*}} : !llvm.ptr<vector<1xi64>, 3>
+
     %73 = triton_gpu.insert_slice_async %66, %71, %c0_i32 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64x!tt.ptr<i64, 1>, #slice1d0> -> tensor<2x64xi64, #shared>
     triton_gpu.async_commit_group
     tt.return
@@ -963,9 +993,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     %index = arith.constant 1 : i32
 
     // This test is PTX specific, GCN targets decompose async operations into oridinary load/stores.
-    // TODO: Fix AMD compilation.
-    // last operation (commit_group) is still emitted by AMD pipeline,
-    // It is left to catch changes in AMD compilation pipeline.
 
     // PTX: llvm.inline_asm has_side_effects asm_dialect = att
     // PTX-SAME: cp.async.cg.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x10, 0x10
@@ -999,7 +1026,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
     // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
     // GCN: llvm.store {{.*}} : !llvm.ptr<vector<8xf32>, 3>
-    // GCN: llvm.inline_asm {{.*}}cp.async.commit_group
     %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x64x!tt.ptr<f32>, #AL> -> tensor<2x16x64xf32, #A>
     triton_gpu.async_commit_group
     tt.return
@@ -1037,9 +1063,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     %index = arith.constant 1 : i32
 
     // This test is PTX specific, GCN targets decompose async operations into oridinary load/stores.
-    // TODO: Fix AMD compilation.
-    // last operation (commit_group) is still emitted by AMD pipeline,
-    // It is left to catch changes in AMD compilation pipeline.
 
     // PTX: llvm.inline_asm
     // PTX: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
@@ -1065,7 +1088,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
     // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
     // GCN-COUNT-4: llvm.store {{.*}} : !llvm.ptr<vector<1xf32>, 3>
-    // GCN: llvm.inline_asm {{.*}}cp.async.commit_group
     %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x32x!tt.ptr<f32>, #AL> -> tensor<2x16x32xf32, #A>
     triton_gpu.async_commit_group
     tt.return
@@ -1102,9 +1124,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     %index = arith.constant 1 : i32
 
     // This test is PTX specific, GCN targets decompose async operations into oridinary load/stores.
-    // TODO: Fix AMD compilation.
-    // last operation (commit_group) is still emitted by AMD pipeline,
-    // It is left to catch changes in AMD compilation pipeline.
     //
     // PTX: llvm.mlir.constant(0 : i32) : i32
     // PTX: llvm.mlir.constant(16 : i32) : i32
@@ -1154,7 +1173,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
     // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
     // GCN-COUNT-8: llvm.store {{.*}} : !llvm.ptr<vector<1xf32>, 3>
-    // GCN: llvm.inline_asm {{.*}}cp.async.commit_group
     %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32x!tt.ptr<f32>, #AL> -> tensor<2x32x32xf32, #A>
     triton_gpu.async_commit_group
     tt.return

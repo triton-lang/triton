@@ -1468,7 +1468,9 @@ struct InsertSliceOpConversion
            "Only support in-place insert_slice for now");
 
     auto srcTy = src.getType().dyn_cast<RankedTensorType>();
-    auto srcLayout = srcTy.getEncoding().dyn_cast<BlockedEncodingAttr>();
+    auto srcLayout = srcTy.getEncoding();
+    assert((srcLayout.isa<BlockedEncodingAttr, SliceEncodingAttr>() &&
+            "Unexpected srcLayout in InsertSliceOpConversion"));
     auto srcShape = srcTy.getShape();
     assert(srcLayout && "Unexpected srcLayout in InsertSliceOpConversion");
 

@@ -512,7 +512,7 @@ public:
                                 ConversionPatternRewriter &rewriter) const {
     auto srcTy = src.getType().cast<RankedTensorType>();
     auto srcShape = srcTy.getShape();
-    assert(srcShape.size() == 2 &&
+    assert((srcShape.size() == 1 || srcShape.size() == 2) &&
            "Unexpected rank of storeDistributedToShared");
     auto dstTy = dst.getType().cast<RankedTensorType>();
     auto srcDistributedLayout = srcTy.getEncoding();
@@ -538,8 +538,12 @@ public:
     auto wordTy = vec_ty(elemTy, minVec);
     Value word;
 
-    SmallVector<Value> srcStrides = {dstStrides[0], dstStrides[1]};
-    SmallVector<Value> offsetVals = {i32_val(0), i32_val(0)};
+    SmallVector<Value> srcStrides;
+    SmallVector<Value> offsetVals;
+    for (int i = 0; i < srcShape.size(); i++) {
+      srcStrides.push_back(dstStrides[i]);
+      offsetVals.push_back(i32_val(0));
+    }
     SharedMemoryObject smemObj(smemBase, srcStrides, offsetVals);
 
     DenseMap<unsigned, Value> sharedPtrs =
