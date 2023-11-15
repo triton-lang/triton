@@ -122,7 +122,7 @@
 <h1>triton.language.atomic_cas<a class="headerlink" href="#triton-language-atomic-cas" title="Permalink to this heading">¶</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.language.atomic_cas">
-<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">atomic_cas</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">pointer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cmp</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">val</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sem</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.atomic_cas" title="Permalink to this definition">¶</a></dt>
+<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">atomic_cas</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">pointer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cmp</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">val</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sem</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scope</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.atomic_cas" title="Permalink to this definition">¶</a></dt>
 <dd><p>Performs an atomic compare-and-swap at the memory location specified by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p>
 <p>Return the data stored at <code class="code docutils literal notranslate"><span class="pre">pointer</span></code> before the atomic operation.</p>
 <dl class="field-list simple">
@@ -133,6 +133,8 @@
 <li><p><strong>val</strong> (<em>Block</em><em> of </em><em>dtype=pointer.dtype.element_ty</em>) – The values with which to perform the atomic operation</p></li>
 <li><p><strong>sem</strong> (<em>str</em>) – Memory semantics to use (“ACQUIRE_RELEASE” (default),
 “ACQUIRE”, “RELEASE”, or “RELAXED”)</p></li>
+<li><p><strong>scope</strong> (<em>str</em>) – Scope of threads that observe synchronizing effect of the
+atomic operation (“GPU” (default), “CTA”, or “SYSTEM”)</p></li>
 </ul>
 </dd>
 </dl>

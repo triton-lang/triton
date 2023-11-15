@@ -131,10 +131,10 @@ Triton automatically selects the correct underlying device function to invoke ba
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
 <span class="k">def</span> <span class="nf">asin_kernel</span><span class="p">(</span>
-        <span class="n">x_ptr</span><span class="p">,</span>
-        <span class="n">y_ptr</span><span class="p">,</span>
-        <span class="n">n_elements</span><span class="p">,</span>
-        <span class="n">BLOCK_SIZE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+    <span class="n">x_ptr</span><span class="p">,</span>
+    <span class="n">y_ptr</span><span class="p">,</span>
+    <span class="n">n_elements</span><span class="p">,</span>
+    <span class="n">BLOCK_SIZE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
 <span class="p">):</span>
     <span class="n">pid</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">block_start</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">*</span> <span class="n">BLOCK_SIZE</span>
@@ -156,14 +156,12 @@ Triton automatically selects the correct underlying device function to invoke ba
 <span class="n">output_torch</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">asin</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
 <span class="k">assert</span> <span class="n">x</span><span class="o">.</span><span class="n">is_cuda</span> <span class="ow">and</span> <span class="n">output_triton</span><span class="o">.</span><span class="n">is_cuda</span>
 <span class="n">n_elements</span> <span class="o">=</span> <span class="n">output_torch</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span>
-<span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">meta</span><span class="p">:</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">n_elements</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s1">&#39;BLOCK_SIZE&#39;</span><span class="p">]),)</span>
+<span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">meta</span><span class="p">:</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">n_elements</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s1">&#39;BLOCK_SIZE&#39;</span><span class="p">]),</span> <span class="p">)</span>
 <span class="n">asin_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span><span class="n">x</span><span class="p">,</span> <span class="n">output_triton</span><span class="p">,</span> <span class="n">n_elements</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="o">=</span><span class="mi">1024</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">output_torch</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">output_triton</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span>
-    <span class="sa">f</span><span class="s1">&#39;The maximum difference between torch and triton is &#39;</span>
-    <span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">torch</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">output_torch</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">output_triton</span><span class="p">))</span><span class="si">}</span><span class="s1">&#39;</span>
-<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;The maximum difference between torch and triton is &#39;</span>
+      <span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">torch</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">output_torch</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">output_triton</span><span class="p">))</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">)</span>
 </pre></div>
 </div>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>tensor([0.4105, 0.5430, 0.0249,  ..., 0.0424, 0.5351, 0.8149], device=&#39;cuda:0&#39;)
@@ -180,10 +178,8 @@ The maximum difference between torch and triton is 2.384185791015625e-07
                   <span class="n">extern_libs</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;libdevice&#39;</span><span class="p">:</span> <span class="s1">&#39;/usr/local/cuda/nvvm/libdevice/libdevice.10.bc&#39;</span><span class="p">})</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">output_torch</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">output_triton</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span>
-    <span class="sa">f</span><span class="s1">&#39;The maximum difference between torch and triton is &#39;</span>
-    <span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">torch</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">output_torch</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">output_triton</span><span class="p">))</span><span class="si">}</span><span class="s1">&#39;</span>
-<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;The maximum difference between torch and triton is &#39;</span>
+      <span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">torch</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">output_torch</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">output_triton</span><span class="p">))</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">)</span>
 </pre></div>
 </div>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>tensor([0.4105, 0.5430, 0.0249,  ..., 0.0424, 0.5351, 0.8149], device=&#39;cuda:0&#39;)
@@ -191,7 +187,7 @@ tensor([0.4105, 0.5430, 0.0249,  ..., 0.0424, 0.5351, 0.8149], device=&#39;cuda:
 The maximum difference between torch and triton is 2.384185791015625e-07
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  0.233 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  0.241 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-07-math-functions-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/77571465f7f4bd281d3a847dc2633146/07-math-functions.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">07-math-functions.py</span></code></a></p>

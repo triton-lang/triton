@@ -101,17 +101,14 @@ Note that one important limitation of Triton is that each block must have a
 power-of-two number of elements, so we need to internally "pad" each row and guard the
 memory operations properly if we want to handle any possible input shapes:
 
-.. GENERATED FROM PYTHON SOURCE LINES 71-100
+.. GENERATED FROM PYTHON SOURCE LINES 71-97
 
 .. code-block:: default
 
 
 
     @triton.jit
-    def softmax_kernel(
-        output_ptr, input_ptr, input_row_stride, output_row_stride, n_cols,
-        BLOCK_SIZE: tl.constexpr
-    ):
+    def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n_cols, BLOCK_SIZE: tl.constexpr):
         # The rows of the softmax are independent, so we parallelize across those
         row_idx = tl.program_id(0)
         # The stride represents how much we need to increase the pointer to advance 1 row
@@ -141,11 +138,11 @@ memory operations properly if we want to handle any possible input shapes:
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 101-102
+.. GENERATED FROM PYTHON SOURCE LINES 98-99
 
 We can create a helper function that enqueues the kernel and its (meta-)arguments for any given input tensor.
 
-.. GENERATED FROM PYTHON SOURCE LINES 102-133
+.. GENERATED FROM PYTHON SOURCE LINES 99-130
 
 .. code-block:: default
 
@@ -168,7 +165,7 @@ We can create a helper function that enqueues the kernel and its (meta-)argument
         y = torch.empty_like(x)
         # Enqueue kernel. The 1D launch grid is simple: we have one kernel instance per row o
         # f the input matrix
-        softmax_kernel[(n_rows,)](
+        softmax_kernel[(n_rows, )](
             y,
             x,
             x.stride(0),
@@ -187,17 +184,17 @@ We can create a helper function that enqueues the kernel and its (meta-)argument
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 134-136
+.. GENERATED FROM PYTHON SOURCE LINES 131-133
 
 Unit Test
 ---------
 
-.. GENERATED FROM PYTHON SOURCE LINES 138-140
+.. GENERATED FROM PYTHON SOURCE LINES 135-137
 
 We make sure that we test our kernel on a matrix with an irregular number of rows and columns.
 This will allow us to verify that our padding mechanism works.
 
-.. GENERATED FROM PYTHON SOURCE LINES 140-147
+.. GENERATED FROM PYTHON SOURCE LINES 137-144
 
 .. code-block:: default
 
@@ -215,11 +212,11 @@ This will allow us to verify that our padding mechanism works.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 148-149
+.. GENERATED FROM PYTHON SOURCE LINES 145-146
 
 As expected, the results are identical.
 
-.. GENERATED FROM PYTHON SOURCE LINES 151-156
+.. GENERATED FROM PYTHON SOURCE LINES 148-153
 
 Benchmark
 ---------
@@ -227,7 +224,7 @@ Benchmark
 Here we will benchmark our operation as a function of the number of columns in the input matrix -- assuming 4096 rows.
 We will then compare its performance against (1) :code:`torch.softmax` and (2) the :code:`naive_softmax` defined above.
 
-.. GENERATED FROM PYTHON SOURCE LINES 156-196
+.. GENERATED FROM PYTHON SOURCE LINES 153-190
 
 .. code-block:: default
 
@@ -236,9 +233,7 @@ We will then compare its performance against (1) :code:`torch.softmax` and (2) t
     @triton.testing.perf_report(
         triton.testing.Benchmark(
             x_names=['N'],  # argument names to use as an x-axis for the plot
-            x_vals=[
-                128 * i for i in range(2, 100)
-            ],  # different possible values for `x_name`
+            x_vals=[128 * i for i in range(2, 100)],  # different possible values for `x_name`
             line_arg='provider',  # argument name whose value corresponds to a different line in the plot
             line_vals=[
                 'triton',
@@ -254,8 +249,7 @@ We will then compare its performance against (1) :code:`torch.softmax` and (2) t
             ylabel="GB/s",  # label name for the y-axis
             plot_name="softmax-performance",  # name for the plot. Used also as a file name for saving the plot.
             args={'M': 4096},  # values for function arguments not in `x_names` and `y_name`
-        )
-    )
+        ))
     def benchmark(M, N, provider):
         x = torch.randn(M, N, device='cuda', dtype=torch.float32)
         quantiles = [0.5, 0.2, 0.8]
@@ -286,24 +280,24 @@ We will then compare its performance against (1) :code:`torch.softmax` and (2) t
 
     softmax-performance:
               N       Triton  Torch (native)  Torch (jit)
-    0     256.0   682.666643      682.666643   256.000001
-    1     384.0   877.714274      819.200021   307.200008
-    2     512.0   910.222190      910.222190   341.333321
+    0     256.0   682.666643      682.666643   252.061538
+    1     384.0   877.714274      877.714274   311.088617
+    2     512.0   910.222190      963.764689   341.333321
     3     640.0  1024.000026      930.909084   372.363633
     4     768.0  1068.521715     1023.999964   384.000001
     ..      ...          ...             ...          ...
-    93  12160.0  1601.316858     1066.082150   464.343688
-    94  12288.0  1604.963246     1021.340281   464.245579
+    93  12160.0  1601.316858     1066.082150   463.790234
+    94  12288.0  1604.963246     1021.340281   464.794337
     95  12416.0  1602.064538     1029.305700   461.990713
-    96  12544.0  1599.235121     1016.222759   463.519622
-    97  12672.0  1602.782573     1008.716405   462.904122
+    96  12544.0  1599.235121     1016.222759   464.055486
+    97  12672.0  1596.472358     1011.231926   462.376291
 
     [98 rows x 4 columns]
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 197-201
+.. GENERATED FROM PYTHON SOURCE LINES 191-195
 
 In the above plot, we can see that:
  - Triton is 4x faster than the Torch JIT. This confirms our suspicions that the Torch JIT does not do any fusion here.
@@ -313,7 +307,7 @@ In the above plot, we can see that:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  44.246 seconds)
+   **Total running time of the script:** ( 0 minutes  40.173 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_02-fused-softmax.py:

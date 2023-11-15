@@ -170,7 +170,7 @@ more than 10\% on some hardware architecture (e.g., 220 to 245 TFLOPS on A100).
 Final Result
 ------------
 
-.. GENERATED FROM PYTHON SOURCE LINES 152-262
+.. GENERATED FROM PYTHON SOURCE LINES 152-270
 
 .. code-block:: default
 
@@ -188,33 +188,41 @@ Final Result
     #       provided configs
     @triton.autotune(
         configs=[
-            triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
-            triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-            triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-            triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-            triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-            triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-            triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
-            triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
+            triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3,
+                          num_warps=8),
+            triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
+                          num_warps=4),
+            triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
+                          num_warps=4),
+            triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
+                          num_warps=4),
+            triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
+                          num_warps=4),
+            triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
+                          num_warps=4),
+            triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5,
+                          num_warps=2),
+            triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5,
+                          num_warps=2),
         ],
         key=['M', 'N', 'K'],
     )
     @triton.jit
     def matmul_kernel(
-        # Pointers to matrices
-        a_ptr, b_ptr, c_ptr,
-        # Matrix dimensions
-        M, N, K,
-        # The stride variables represent how much to increase the ptr by when moving by 1
-        # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
-        # by to get the element one row down (A has M rows).
-        stride_am, stride_ak,
-        stride_bk, stride_bn,
-        stride_cm, stride_cn,
-        # Meta-parameters
-        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
-        GROUP_SIZE_M: tl.constexpr,
-        ACTIVATION: tl.constexpr,
+            # Pointers to matrices
+            a_ptr, b_ptr, c_ptr,
+            # Matrix dimensions
+            M, N, K,
+            # The stride variables represent how much to increase the ptr by when moving by 1
+            # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
+            # by to get the element one row down (A has M rows).
+            stride_am, stride_ak,  #
+            stride_bk, stride_bn,  #
+            stride_cm, stride_cn,
+            # Meta-parameters
+            BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,  #
+            GROUP_SIZE_M: tl.constexpr,  #
+            ACTIVATION: tl.constexpr  #
     ):
         """Kernel for computing the matmul C = A x B.
         A has shape (M, K), B has shape (K, N) and C has shape (M, N)
@@ -291,12 +299,12 @@ Final Result
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 263-265
+.. GENERATED FROM PYTHON SOURCE LINES 271-273
 
 We can now create a convenience wrapper function that only takes two input tensors,
 and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel.
 
-.. GENERATED FROM PYTHON SOURCE LINES 265-291
+.. GENERATED FROM PYTHON SOURCE LINES 273-297
 
 .. code-block:: default
 
@@ -312,16 +320,14 @@ and (1) checks any shape constraint; (2) allocates the output; (3) launches the 
         # Allocates output.
         c = torch.empty((M, N), device=a.device, dtype=a.dtype)
         # 1D launch kernel where each block gets its own program.
-        grid = lambda META: (
-            triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
-        )
+        grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
         matmul_kernel[grid](
-            a, b, c,
-            M, N, K,
-            a.stride(0), a.stride(1),
-            b.stride(0), b.stride(1),
-            c.stride(0), c.stride(1),
-            ACTIVATION=activation
+            a, b, c,  #
+            M, N, K,  #
+            a.stride(0), a.stride(1),  #
+            b.stride(0), b.stride(1),  #
+            c.stride(0), c.stride(1),  #
+            ACTIVATION=activation  #
         )
         return c
 
@@ -333,14 +339,14 @@ and (1) checks any shape constraint; (2) allocates the output; (3) launches the 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 292-296
+.. GENERATED FROM PYTHON SOURCE LINES 298-302
 
 Unit Test
 ---------
 
 We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).
 
-.. GENERATED FROM PYTHON SOURCE LINES 296-309
+.. GENERATED FROM PYTHON SOURCE LINES 302-315
 
 .. code-block:: default
 
@@ -386,7 +392,7 @@ We can test our custom matrix multiplication operation against a native torch im
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 310-318
+.. GENERATED FROM PYTHON SOURCE LINES 316-324
 
 Benchmark
 ---------
@@ -397,7 +403,7 @@ Square Matrix Performance
 We can now compare the performance of our kernel against that of cuBLAS. Here we focus on square matrices,
 but feel free to arrange this script as you wish to benchmark any other matrix shape.
 
-.. GENERATED FROM PYTHON SOURCE LINES 318-351
+.. GENERATED FROM PYTHON SOURCE LINES 324-354
 
 .. code-block:: default
 
@@ -406,9 +412,7 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
     @triton.testing.perf_report(
         triton.testing.Benchmark(
             x_names=['M', 'N', 'K'],  # Argument names to use as an x-axis for the plot
-            x_vals=[
-                128 * i for i in range(2, 33)
-            ],  # Different possible values for `x_name`
+            x_vals=[128 * i for i in range(2, 33)],  # Different possible values for `x_name`
             line_arg='provider',  # Argument name whose value corresponds to a different line in the plot
             # Possible values for `line_arg`
             line_vals=['cublas', 'triton'],
@@ -419,8 +423,7 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
             ylabel="TFLOPS",  # Label name for the y-axis
             plot_name="matmul-performance",  # Name for the plot, used also as a file name for saving the plot.
             args={},
-        )
-    )
+        ))
     def benchmark(M, N, K, provider):
         a = torch.randn((M, K), device='cuda', dtype=torch.float16)
         b = torch.randn((K, N), device='cuda', dtype=torch.float16)
@@ -449,37 +452,37 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
 
     matmul-performance:
              M       N       K      cuBLAS      Triton
-    0    256.0   256.0   256.0    4.681143    4.096000
-    1    384.0   384.0   384.0   12.288000   12.288000
-    2    512.0   512.0   512.0   26.214401   21.845333
-    3    640.0   640.0   640.0   42.666665   39.384616
-    4    768.0   768.0   768.0   63.195428   58.982401
-    5    896.0   896.0   896.0   78.051553   82.642822
-    6   1024.0  1024.0  1024.0  110.376426   99.864382
-    7   1152.0  1152.0  1152.0  135.726544  129.825388
-    8   1280.0  1280.0  1280.0  157.538463  163.840004
+    0    256.0   256.0   256.0    4.096000    1.129931
+    1    384.0   384.0   384.0   12.288000    4.253539
+    2    512.0   512.0   512.0   26.214401    9.362286
+    3    640.0   640.0   640.0   42.666665   18.962963
+    4    768.0   768.0   768.0   68.056616   31.597714
+    5    896.0   896.0   896.0   78.051553   52.034370
+    6   1024.0  1024.0  1024.0  110.376426   77.672296
+    7   1152.0  1152.0  1152.0  135.726544  106.642284
+    8   1280.0  1280.0  1280.0  163.840004  146.285712
     9   1408.0  1408.0  1408.0  155.765024  132.970149
     10  1536.0  1536.0  1536.0  181.484314  157.286398
     11  1664.0  1664.0  1664.0  179.978245  179.978245
     12  1792.0  1792.0  1792.0  172.914215  212.064605
-    13  1920.0  1920.0  1920.0  203.294114  170.666670
+    13  1920.0  1920.0  1920.0  203.294114  168.585369
     14  2048.0  2048.0  2048.0  226.719125  192.841562
-    15  2176.0  2176.0  2176.0  209.621326  211.827867
-    16  2304.0  2304.0  2304.0  227.503545  229.691080
-    17  2432.0  2432.0  2432.0  205.069087  203.583068
-    18  2560.0  2560.0  2560.0  224.438347  218.453323
-    19  2688.0  2688.0  2688.0  197.567993  199.647657
-    20  2816.0  2816.0  2816.0  210.696652  212.752230
-    21  2944.0  2944.0  2944.0  221.493479  225.502413
-    22  3072.0  3072.0  3072.0  207.410628  207.410628
-    23  3200.0  3200.0  3200.0  216.216207  217.687077
-    24  3328.0  3328.0  3328.0  206.278780  209.277023
-    25  3456.0  3456.0  3456.0  215.565692  218.486642
-    26  3584.0  3584.0  3584.0  218.772251  210.574693
-    27  3712.0  3712.0  3712.0  210.310194  217.641271
-    28  3840.0  3840.0  3840.0  206.328356  211.053446
-    29  3968.0  3968.0  3968.0  212.585252  218.680889
-    30  4096.0  4096.0  4096.0  222.214781  213.382710
+    15  2176.0  2176.0  2176.0  211.827867  214.081356
+    16  2304.0  2304.0  2304.0  227.503545  234.194828
+    17  2432.0  2432.0  2432.0  203.583068  205.069087
+    18  2560.0  2560.0  2560.0  229.146857  218.453323
+    19  2688.0  2688.0  2688.0  197.567993  198.602388
+    20  2816.0  2816.0  2816.0  211.719459  211.719459
+    21  2944.0  2944.0  2944.0  224.486628  225.502413
+    22  3072.0  3072.0  3072.0  207.410628  208.941345
+    23  3200.0  3200.0  3200.0  214.046818  218.430042
+    24  3328.0  3328.0  3328.0  205.689424  208.067338
+    25  3456.0  3456.0  3456.0  218.486642  215.565692
+    26  3584.0  3584.0  3584.0  218.772251  213.575751
+    27  3712.0  3712.0  3712.0  208.119472  216.697064
+    28  3840.0  3840.0  3840.0  209.058596  210.651436
+    29  3968.0  3968.0  3968.0  211.114084  219.073497
+    30  4096.0  4096.0  4096.0  222.030979  216.829933
 
 
 
@@ -487,7 +490,7 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  40.737 seconds)
+   **Total running time of the script:** ( 0 minutes  41.511 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_03-matrix-multiplication.py:

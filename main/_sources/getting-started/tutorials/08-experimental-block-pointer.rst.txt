@@ -112,7 +112,7 @@ For example, to advance the block pointer by :code:`BLOCK_SIZE_K` in the second 
 Final Result
 ------------
 
-.. GENERATED FROM PYTHON SOURCE LINES 92-212
+.. GENERATED FROM PYTHON SOURCE LINES 92-215
 
 .. code-block:: default
 
@@ -125,14 +125,22 @@ Final Result
 
     @triton.autotune(
         configs=[
-            triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-            triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-            triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-            triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-            triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-            triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-            triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
-            triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
+            triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
+                          num_warps=4),
+            triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
+                          num_warps=4),
+            triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
+                          num_warps=4),
+            triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
+                          num_warps=4),
+            triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
+                          num_warps=4),
+            triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
+                          num_warps=4),
+            triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5,
+                          num_warps=2),
+            triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5,
+                          num_warps=2),
         ],
         key=['M', 'N', 'K'],
     )
@@ -145,13 +153,11 @@ Final Result
             # The stride variables represent how much to increase the ptr by when moving by 1
             # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
             # by to get the element one row down (A has M rows).
-            stride_am, stride_ak,
-            stride_bk, stride_bn,
+            stride_am, stride_ak,  #
+            stride_bk, stride_bn,  #
             stride_cm, stride_cn,
             # Meta-parameters
-            BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
-            GROUP_SIZE_M: tl.constexpr
-    ):
+            BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
         """Kernel for computing the matmul C = A x B.
         A has shape (M, K), B has shape (K, N) and C has shape (M, N)
         """
@@ -223,16 +229,13 @@ Final Result
         # Allocates output.
         c = torch.empty((M, N), device=a.device, dtype=a.dtype)
         # 1D launch kernel where each block gets its own program.
-        grid = lambda META: (
-            triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
-        )
+        grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
         matmul_kernel_with_block_pointers[grid](
-            a, b, c,
-            M, N, K,
-            a.stride(0), a.stride(1),
-            b.stride(0), b.stride(1),
-            c.stride(0), c.stride(1),
-        )
+            a, b, c,  #
+            M, N, K,  #
+            a.stride(0), a.stride(1),  #
+            b.stride(0), b.stride(1),  #
+            c.stride(0), c.stride(1))
         return c
 
 
@@ -243,14 +246,14 @@ Final Result
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 213-217
+.. GENERATED FROM PYTHON SOURCE LINES 216-220
 
 Unit Test
 ---------
 
 Still we can test our matrix multiplication with block pointers against a native torch implementation (i.e., cuBLAS).
 
-.. GENERATED FROM PYTHON SOURCE LINES 217-229
+.. GENERATED FROM PYTHON SOURCE LINES 220-232
 
 .. code-block:: default
 
@@ -298,7 +301,7 @@ Still we can test our matrix multiplication with block pointers against a native
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  6.512 seconds)
+   **Total running time of the script:** ( 0 minutes  6.723 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_08-experimental-block-pointer.py:

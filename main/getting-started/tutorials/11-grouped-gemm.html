@@ -115,7 +115,7 @@ of gemms. The scheduling is static and we do it on device.</p>
         N    cuBLAS    Triton
 0   128.0  0.021504  0.014336
 1   256.0  0.023552  0.018432
-2   512.0  0.032768  0.026624
+2   512.0  0.032768  0.027648
 3  1024.0  0.071680  0.088064
 </pre></div>
 </div>
@@ -151,38 +151,30 @@ of gemms. The scheduling is static and we do it on device.</p>
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">autotune</span><span class="p">(</span>
     <span class="n">configs</span><span class="o">=</span><span class="p">[</span>
-        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">(</span>
-            <span class="p">{</span>
-                <span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
-                <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
-                <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span>
-                <span class="s1">&#39;NUM_SM&#39;</span><span class="p">:</span> <span class="mi">84</span><span class="p">,</span>
-            <span class="p">}</span>
-        <span class="p">),</span>
-        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">(</span>
-            <span class="p">{</span>
-                <span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
-                <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
-                <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span>
-                <span class="s1">&#39;NUM_SM&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
-            <span class="p">}</span>
-        <span class="p">),</span>
-        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">(</span>
-            <span class="p">{</span>
-                <span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span>
-                <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span>
-                <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span>
-                <span class="s1">&#39;NUM_SM&#39;</span><span class="p">:</span> <span class="mi">84</span><span class="p">,</span>
-            <span class="p">}</span>
-        <span class="p">),</span>
-        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">(</span>
-            <span class="p">{</span>
-                <span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span>
-                <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span>
-                <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span>
-                <span class="s1">&#39;NUM_SM&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
-            <span class="p">}</span>
-        <span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span>
+            <span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
+            <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
+            <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span>
+            <span class="s1">&#39;NUM_SM&#39;</span><span class="p">:</span> <span class="mi">84</span><span class="p">,</span>
+        <span class="p">}),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span>
+            <span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
+            <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
+            <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span>
+            <span class="s1">&#39;NUM_SM&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
+        <span class="p">}),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span>
+            <span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span>
+            <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span>
+            <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span>
+            <span class="s1">&#39;NUM_SM&#39;</span><span class="p">:</span> <span class="mi">84</span><span class="p">,</span>
+        <span class="p">}),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span>
+            <span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span>
+            <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span>
+            <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span>
+            <span class="s1">&#39;NUM_SM&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
+        <span class="p">}),</span>
     <span class="p">],</span>
     <span class="n">key</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;group_size&#39;</span><span class="p">],</span>
 <span class="p">)</span>
@@ -218,9 +210,7 @@ of gemms. The scheduling is static and we do it on device.</p>
         <span class="n">num_n_tiles</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">gn</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
         <span class="n">num_tiles</span> <span class="o">=</span> <span class="n">num_m_tiles</span> <span class="o">*</span> <span class="n">num_n_tiles</span>
         <span class="c1"># iterate through the tiles in the current gemm problem</span>
-        <span class="k">while</span> <span class="p">(</span>
-            <span class="n">tile_idx</span> <span class="o">&gt;=</span> <span class="n">last_problem_end</span> <span class="ow">and</span> <span class="n">tile_idx</span> <span class="o">&lt;</span> <span class="n">last_problem_end</span> <span class="o">+</span> <span class="n">num_tiles</span>
-        <span class="p">):</span>
+        <span class="k">while</span> <span class="p">(</span><span class="n">tile_idx</span> <span class="o">&gt;=</span> <span class="n">last_problem_end</span> <span class="ow">and</span> <span class="n">tile_idx</span> <span class="o">&lt;</span> <span class="n">last_problem_end</span> <span class="o">+</span> <span class="n">num_tiles</span><span class="p">):</span>
             <span class="c1"># pick up a tile from the current gemm problem</span>
             <span class="n">k</span> <span class="o">=</span> <span class="n">gk</span>
             <span class="n">lda</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">g_lds</span> <span class="o">+</span> <span class="n">g</span> <span class="o">*</span> <span class="mi">3</span><span class="p">)</span>
@@ -240,9 +230,7 @@ of gemms. The scheduling is static and we do it on device.</p>
             <span class="n">offs_k</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">)</span>
             <span class="n">a_ptrs</span> <span class="o">=</span> <span class="n">a_ptr</span> <span class="o">+</span> <span class="n">offs_am</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">lda</span> <span class="o">+</span> <span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>
             <span class="n">b_ptrs</span> <span class="o">=</span> <span class="n">b_ptr</span> <span class="o">+</span> <span class="n">offs_k</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">ldb</span> <span class="o">+</span> <span class="n">offs_bn</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>
-            <span class="n">accumulator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span>
-                <span class="p">(</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span>
-            <span class="p">)</span>
+            <span class="n">accumulator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
             <span class="k">for</span> <span class="n">kk</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">)):</span>
                 <span class="c1"># hint to Triton compiler to do proper loop pipelining</span>
                 <span class="n">tl</span><span class="o">.</span><span class="n">multiple_of</span><span class="p">(</span><span class="n">a_ptrs</span><span class="p">,</span> <span class="p">[</span><span class="mi">16</span><span class="p">,</span> <span class="mi">16</span><span class="p">])</span>
@@ -290,7 +278,7 @@ of gemms. The scheduling is static and we do it on device.</p>
         <span class="n">group_C</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">C</span><span class="p">)</span>
         <span class="n">A_addrs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">A</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">())</span>
         <span class="n">B_addrs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">B</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">())</span>
-        <span class="n">C_addrs</span> <span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">C</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">())</span>
+        <span class="n">C_addrs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">C</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">())</span>
         <span class="n">g_sizes</span> <span class="o">+=</span> <span class="p">[</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">]</span>
         <span class="n">g_lds</span> <span class="o">+=</span> <span class="p">[</span><span class="n">A</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">B</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">C</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">)]</span>
 
@@ -298,14 +286,10 @@ of gemms. The scheduling is static and we do it on device.</p>
     <span class="n">d_a_ptrs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">A_addrs</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
     <span class="n">d_b_ptrs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">B_addrs</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
     <span class="n">d_c_ptrs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">C_addrs</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-    <span class="n">d_g_sizes</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span>
-        <span class="n">g_sizes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
-    <span class="p">)</span>
-    <span class="n">d_g_lds</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span>
-        <span class="n">g_lds</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
-    <span class="p">)</span>
+    <span class="n">d_g_sizes</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">g_sizes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+    <span class="n">d_g_lds</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">g_lds</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
     <span class="c1"># we use a fixed number of CTA, and it&#39;s auto-tunable</span>
-    <span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">META</span><span class="p">:</span> <span class="p">(</span><span class="n">META</span><span class="p">[</span><span class="s1">&#39;NUM_SM&#39;</span><span class="p">],)</span>
+    <span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">META</span><span class="p">:</span> <span class="p">(</span><span class="n">META</span><span class="p">[</span><span class="s1">&#39;NUM_SM&#39;</span><span class="p">],</span> <span class="p">)</span>
     <span class="n">grouped_matmul_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>
         <span class="n">d_a_ptrs</span><span class="p">,</span>
         <span class="n">d_b_ptrs</span><span class="p">,</span>
@@ -343,7 +327,7 @@ of gemms. The scheduling is static and we do it on device.</p>
 
 <span class="c1"># only launch the kernel, no tensor preparation here to remove all overhead</span>
 <span class="k">def</span> <span class="nf">triton_perf_fn</span><span class="p">(</span><span class="n">a_ptrs</span><span class="p">,</span> <span class="n">b_ptrs</span><span class="p">,</span> <span class="n">c_ptrs</span><span class="p">,</span> <span class="n">sizes</span><span class="p">,</span> <span class="n">lds</span><span class="p">,</span> <span class="n">group_size</span><span class="p">):</span>
-    <span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">META</span><span class="p">:</span> <span class="p">(</span><span class="n">META</span><span class="p">[</span><span class="s1">&#39;NUM_SM&#39;</span><span class="p">],)</span>
+    <span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">META</span><span class="p">:</span> <span class="p">(</span><span class="n">META</span><span class="p">[</span><span class="s1">&#39;NUM_SM&#39;</span><span class="p">],</span> <span class="p">)</span>
     <span class="n">grouped_matmul_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>
         <span class="n">a_ptrs</span><span class="p">,</span>
         <span class="n">b_ptrs</span><span class="p">,</span>
@@ -363,7 +347,7 @@ of gemms. The scheduling is static and we do it on device.</p>
     <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">Benchmark</span><span class="p">(</span>
         <span class="c1"># argument names to use as an x-axis for the plot</span>
         <span class="n">x_names</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;N&#39;</span><span class="p">],</span>
-        <span class="n">x_vals</span><span class="o">=</span><span class="p">[</span><span class="mi">2</span> <span class="o">**</span> <span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">7</span><span class="p">,</span> <span class="mi">11</span><span class="p">)],</span>  <span class="c1"># different possible values for `x_name`</span>
+        <span class="n">x_vals</span><span class="o">=</span><span class="p">[</span><span class="mi">2</span><span class="o">**</span><span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">7</span><span class="p">,</span> <span class="mi">11</span><span class="p">)],</span>  <span class="c1"># different possible values for `x_name`</span>
         <span class="n">line_arg</span><span class="o">=</span><span class="s1">&#39;provider&#39;</span><span class="p">,</span>
         <span class="c1"># argument name whose value corresponds to a different line in the plot</span>
         <span class="c1"># possible values for `line_arg``</span>
@@ -376,8 +360,7 @@ of gemms. The scheduling is static and we do it on device.</p>
         <span class="n">plot_name</span><span class="o">=</span><span class="s2">&quot;group-gemm-performance&quot;</span><span class="p">,</span>
         <span class="c1"># name for the plot. Used also as a file name for saving the plot.</span>
         <span class="n">args</span><span class="o">=</span><span class="p">{},</span>
-    <span class="p">)</span>
-<span class="p">)</span>
+    <span class="p">))</span>
 <span class="k">def</span> <span class="nf">benchmark</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">provider</span><span class="p">):</span>
     <span class="n">group_size</span> <span class="o">=</span> <span class="mi">4</span>
     <span class="n">group_A</span> <span class="o">=</span> <span class="p">[]</span>
@@ -397,7 +380,7 @@ of gemms. The scheduling is static and we do it on device.</p>
         <span class="n">group_C</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">C</span><span class="p">)</span>
         <span class="n">A_addrs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">A</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">())</span>
         <span class="n">B_addrs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">B</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">())</span>
-        <span class="n">C_addrs</span> <span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">C</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">())</span>
+        <span class="n">C_addrs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">C</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">())</span>
         <span class="n">g_sizes</span> <span class="o">+=</span> <span class="p">[</span><span class="n">N</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">N</span><span class="p">]</span>
         <span class="n">g_lds</span> <span class="o">+=</span> <span class="p">[</span><span class="n">N</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">N</span><span class="p">]</span>
 
@@ -411,14 +394,15 @@ of gemms. The scheduling is static and we do it on device.</p>
     <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s1">&#39;cublas&#39;</span><span class="p">:</span>
         <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">torch_perf_fn</span><span class="p">(</span><span class="n">group_A</span><span class="p">,</span> <span class="n">group_B</span><span class="p">),</span> <span class="n">quantiles</span><span class="o">=</span><span class="n">quantiles</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s1">&#39;triton&#39;</span><span class="p">:</span>
-        <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">triton_perf_fn</span><span class="p">(</span><span class="n">d_a_ptrs</span><span class="p">,</span> <span class="n">d_b_ptrs</span><span class="p">,</span> <span class="n">d_c_ptrs</span><span class="p">,</span> <span class="n">d_g_sizes</span><span class="p">,</span> <span class="n">d_g_lds</span><span class="p">,</span> <span class="n">group_size</span><span class="p">),</span> <span class="n">quantiles</span><span class="o">=</span><span class="n">quantiles</span><span class="p">)</span>
+        <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span>
+            <span class="k">lambda</span><span class="p">:</span> <span class="n">triton_perf_fn</span><span class="p">(</span><span class="n">d_a_ptrs</span><span class="p">,</span> <span class="n">d_b_ptrs</span><span class="p">,</span> <span class="n">d_c_ptrs</span><span class="p">,</span> <span class="n">d_g_sizes</span><span class="p">,</span> <span class="n">d_g_lds</span><span class="p">,</span> <span class="n">group_size</span><span class="p">),</span> <span class="n">quantiles</span><span class="o">=</span><span class="n">quantiles</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">ms</span><span class="p">,</span> <span class="n">max_ms</span><span class="p">,</span> <span class="n">min_ms</span>
 
 
 <span class="n">benchmark</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">show_plots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  3.804 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  3.752 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-11-grouped-gemm-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/55d0b981e02085e74aabef87b0116d13/11-grouped-gemm.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">11-grouped-gemm.py</span></code></a></p>

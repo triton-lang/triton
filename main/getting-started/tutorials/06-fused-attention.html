@@ -121,25 +121,25 @@ Credits: OpenAI kernel team</p>
 </ul>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>fused-attention-batch4-head48-d64-fwd-causal=True:
      N_CTX      Triton
-0   1024.0  125.207980
-1   2048.0  151.959048
-2   4096.0  167.761394
-3   8192.0  175.352514
-4  16384.0  180.524026
+0   1024.0  126.544829
+1   2048.0  153.146275
+2   4096.0  169.605944
+3   8192.0  178.007597
+4  16384.0  183.522092
 fused-attention-batch4-head48-d64-fwd-causal=False:
      N_CTX      Triton
-0   1024.0  166.553000
-1   2048.0  176.669539
-2   4096.0  181.054633
-3   8192.0  182.650579
-4  16384.0  183.626695
+0   1024.0  168.027798
+1   2048.0  177.955833
+2   4096.0  182.366674
+3   8192.0  184.253235
+4  16384.0  185.242337
 fused-attention-batch4-head48-d64-bwd-causal=True:
      N_CTX      Triton
-0   1024.0   68.716672
-1   2048.0   91.215508
-2   4096.0  106.196121
-3   8192.0  116.865187
-4  16384.0  121.334069
+0   1024.0   75.878022
+1   2048.0  100.836311
+2   4096.0  118.555480
+3   8192.0  130.463276
+4  16384.0  129.867175
 </pre></div>
 </div>
 <div class="line-block">
@@ -153,18 +153,12 @@ fused-attention-batch4-head48-d64-bwd-causal=True:
 
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
-<span class="k">def</span> <span class="nf">_attn_fwd_inner</span><span class="p">(</span>
-    <span class="n">acc</span><span class="p">,</span> <span class="n">l_i</span><span class="p">,</span> <span class="n">m_i</span><span class="p">,</span> <span class="n">q</span><span class="p">,</span>
-    <span class="n">K_block_ptr</span><span class="p">,</span> <span class="n">V_block_ptr</span><span class="p">,</span>
-    <span class="n">start_m</span><span class="p">,</span> <span class="n">qk_scale</span><span class="p">,</span>
-    <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="n">BLOCK_DMODEL</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="n">STAGE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="n">offs_m</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="n">offs_n</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="n">N_CTX</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-<span class="p">):</span>
+<span class="k">def</span> <span class="nf">_attn_fwd_inner</span><span class="p">(</span><span class="n">acc</span><span class="p">,</span> <span class="n">l_i</span><span class="p">,</span> <span class="n">m_i</span><span class="p">,</span> <span class="n">q</span><span class="p">,</span>  <span class="c1">#</span>
+                    <span class="n">K_block_ptr</span><span class="p">,</span> <span class="n">V_block_ptr</span><span class="p">,</span>  <span class="c1">#</span>
+                    <span class="n">start_m</span><span class="p">,</span> <span class="n">qk_scale</span><span class="p">,</span>  <span class="c1">#</span>
+                    <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                    <span class="n">STAGE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">offs_m</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">offs_n</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                    <span class="n">N_CTX</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
     <span class="c1"># range of values handled by this stage</span>
     <span class="k">if</span> <span class="n">STAGE</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
         <span class="n">lo</span><span class="p">,</span> <span class="n">hi</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">start_m</span> <span class="o">*</span> <span class="n">BLOCK_M</span>
@@ -207,6 +201,7 @@ fused-attention-batch4-head48-d64-bwd-causal=True:
         <span class="n">K_block_ptr</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">advance</span><span class="p">(</span><span class="n">K_block_ptr</span><span class="p">,</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">))</span>
     <span class="k">return</span> <span class="n">acc</span><span class="p">,</span> <span class="n">l_i</span><span class="p">,</span> <span class="n">m_i</span>
 
+
 <span class="c1"># We don&#39;t run auto-tuning everytime to keep the tutorial fast. Uncommenting</span>
 <span class="c1"># the code below and commenting out the equivalent parameters is convenient for</span>
 <span class="c1"># re-tuning.</span>
@@ -233,19 +228,18 @@ fused-attention-batch4-head48-d64-bwd-causal=True:
 
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
-<span class="k">def</span> <span class="nf">_attn_fwd</span><span class="p">(</span>
-    <span class="n">Q</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">V</span><span class="p">,</span> <span class="n">sm_scale</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">Out</span><span class="p">,</span>
-    <span class="n">stride_qz</span><span class="p">,</span> <span class="n">stride_qh</span><span class="p">,</span> <span class="n">stride_qm</span><span class="p">,</span> <span class="n">stride_qk</span><span class="p">,</span>
-    <span class="n">stride_kz</span><span class="p">,</span> <span class="n">stride_kh</span><span class="p">,</span> <span class="n">stride_kn</span><span class="p">,</span> <span class="n">stride_kk</span><span class="p">,</span>
-    <span class="n">stride_vz</span><span class="p">,</span> <span class="n">stride_vh</span><span class="p">,</span> <span class="n">stride_vk</span><span class="p">,</span> <span class="n">stride_vn</span><span class="p">,</span>
-    <span class="n">stride_oz</span><span class="p">,</span> <span class="n">stride_oh</span><span class="p">,</span> <span class="n">stride_om</span><span class="p">,</span> <span class="n">stride_on</span><span class="p">,</span>
-    <span class="n">Z</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span>
-    <span class="n">N_CTX</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="n">BLOCK_DMODEL</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="n">STAGE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-<span class="p">):</span>
+<span class="k">def</span> <span class="nf">_attn_fwd</span><span class="p">(</span><span class="n">Q</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">V</span><span class="p">,</span> <span class="n">sm_scale</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">Out</span><span class="p">,</span>  <span class="c1">#</span>
+              <span class="n">stride_qz</span><span class="p">,</span> <span class="n">stride_qh</span><span class="p">,</span> <span class="n">stride_qm</span><span class="p">,</span> <span class="n">stride_qk</span><span class="p">,</span>  <span class="c1">#</span>
+              <span class="n">stride_kz</span><span class="p">,</span> <span class="n">stride_kh</span><span class="p">,</span> <span class="n">stride_kn</span><span class="p">,</span> <span class="n">stride_kk</span><span class="p">,</span>  <span class="c1">#</span>
+              <span class="n">stride_vz</span><span class="p">,</span> <span class="n">stride_vh</span><span class="p">,</span> <span class="n">stride_vk</span><span class="p">,</span> <span class="n">stride_vn</span><span class="p">,</span>  <span class="c1">#</span>
+              <span class="n">stride_oz</span><span class="p">,</span> <span class="n">stride_oh</span><span class="p">,</span> <span class="n">stride_om</span><span class="p">,</span> <span class="n">stride_on</span><span class="p">,</span>  <span class="c1">#</span>
+              <span class="n">Z</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span>  <span class="c1">#</span>
+              <span class="n">N_CTX</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+              <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+              <span class="n">BLOCK_DMODEL</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+              <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+              <span class="n">STAGE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span>  <span class="c1">#</span>
+              <span class="p">):</span>
     <span class="n">start_m</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">off_hz</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
     <span class="n">off_z</span> <span class="o">=</span> <span class="n">off_hz</span> <span class="o">//</span> <span class="n">H</span>
@@ -301,23 +295,21 @@ fused-attention-batch4-head48-d64-bwd-causal=True:
     <span class="c1"># For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE</span>
     <span class="c1"># For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE</span>
     <span class="k">if</span> <span class="n">STAGE</span> <span class="o">&amp;</span> <span class="mi">1</span><span class="p">:</span>
-        <span class="n">acc</span><span class="p">,</span> <span class="n">l_i</span><span class="p">,</span> <span class="n">m_i</span> <span class="o">=</span> <span class="n">_attn_fwd_inner</span><span class="p">(</span>
-            <span class="n">acc</span><span class="p">,</span> <span class="n">l_i</span><span class="p">,</span> <span class="n">m_i</span><span class="p">,</span> <span class="n">q</span><span class="p">,</span> <span class="n">K_block_ptr</span><span class="p">,</span> <span class="n">V_block_ptr</span><span class="p">,</span>
-            <span class="n">start_m</span><span class="p">,</span> <span class="n">qk_scale</span><span class="p">,</span>
-            <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span>
-            <span class="mi">4</span> <span class="o">-</span> <span class="n">STAGE</span><span class="p">,</span> <span class="n">offs_m</span><span class="p">,</span> <span class="n">offs_n</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
-        <span class="p">)</span>
+        <span class="n">acc</span><span class="p">,</span> <span class="n">l_i</span><span class="p">,</span> <span class="n">m_i</span> <span class="o">=</span> <span class="n">_attn_fwd_inner</span><span class="p">(</span><span class="n">acc</span><span class="p">,</span> <span class="n">l_i</span><span class="p">,</span> <span class="n">m_i</span><span class="p">,</span> <span class="n">q</span><span class="p">,</span> <span class="n">K_block_ptr</span><span class="p">,</span> <span class="n">V_block_ptr</span><span class="p">,</span>  <span class="c1">#</span>
+                                        <span class="n">start_m</span><span class="p">,</span> <span class="n">qk_scale</span><span class="p">,</span>  <span class="c1">#</span>
+                                        <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span>  <span class="c1">#</span>
+                                        <span class="mi">4</span> <span class="o">-</span> <span class="n">STAGE</span><span class="p">,</span> <span class="n">offs_m</span><span class="p">,</span> <span class="n">offs_n</span><span class="p">,</span> <span class="n">N_CTX</span>  <span class="c1">#</span>
+                                        <span class="p">)</span>
     <span class="c1"># stage 2: on-band</span>
     <span class="k">if</span> <span class="n">STAGE</span> <span class="o">&amp;</span> <span class="mi">2</span><span class="p">:</span>
         <span class="c1"># barrier makes it easier for compielr to schedule the</span>
         <span class="c1"># two loops independently</span>
         <span class="n">tl</span><span class="o">.</span><span class="n">debug_barrier</span><span class="p">()</span>
-        <span class="n">acc</span><span class="p">,</span> <span class="n">l_i</span><span class="p">,</span> <span class="n">m_i</span> <span class="o">=</span> <span class="n">_attn_fwd_inner</span><span class="p">(</span>
-            <span class="n">acc</span><span class="p">,</span> <span class="n">l_i</span><span class="p">,</span> <span class="n">m_i</span><span class="p">,</span> <span class="n">q</span><span class="p">,</span> <span class="n">K_block_ptr</span><span class="p">,</span> <span class="n">V_block_ptr</span><span class="p">,</span>
-            <span class="n">start_m</span><span class="p">,</span> <span class="n">qk_scale</span><span class="p">,</span>
-            <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span>
-            <span class="mi">2</span><span class="p">,</span> <span class="n">offs_m</span><span class="p">,</span> <span class="n">offs_n</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
-        <span class="p">)</span>
+        <span class="n">acc</span><span class="p">,</span> <span class="n">l_i</span><span class="p">,</span> <span class="n">m_i</span> <span class="o">=</span> <span class="n">_attn_fwd_inner</span><span class="p">(</span><span class="n">acc</span><span class="p">,</span> <span class="n">l_i</span><span class="p">,</span> <span class="n">m_i</span><span class="p">,</span> <span class="n">q</span><span class="p">,</span> <span class="n">K_block_ptr</span><span class="p">,</span> <span class="n">V_block_ptr</span><span class="p">,</span>  <span class="c1">#</span>
+                                        <span class="n">start_m</span><span class="p">,</span> <span class="n">qk_scale</span><span class="p">,</span>  <span class="c1">#</span>
+                                        <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span>  <span class="c1">#</span>
+                                        <span class="mi">2</span><span class="p">,</span> <span class="n">offs_m</span><span class="p">,</span> <span class="n">offs_n</span><span class="p">,</span> <span class="n">N_CTX</span>  <span class="c1">#</span>
+                                        <span class="p">)</span>
     <span class="c1"># epilogue</span>
     <span class="n">m_i</span> <span class="o">+=</span> <span class="n">tl</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">log2</span><span class="p">(</span><span class="n">l_i</span><span class="p">)</span>
     <span class="n">acc</span> <span class="o">=</span> <span class="n">acc</span> <span class="o">/</span> <span class="n">l_i</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span>
@@ -327,12 +319,11 @@ fused-attention-batch4-head48-d64-bwd-causal=True:
 
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
-<span class="k">def</span> <span class="nf">_attn_bwd_preprocess</span><span class="p">(</span>
-    <span class="n">O</span><span class="p">,</span> <span class="n">DO</span><span class="p">,</span>
-    <span class="n">Delta</span><span class="p">,</span>
-    <span class="n">Z</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
-    <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-<span class="p">):</span>
+<span class="k">def</span> <span class="nf">_attn_bwd_preprocess</span><span class="p">(</span><span class="n">O</span><span class="p">,</span> <span class="n">DO</span><span class="p">,</span>  <span class="c1">#</span>
+                         <span class="n">Delta</span><span class="p">,</span>  <span class="c1">#</span>
+                         <span class="n">Z</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>  <span class="c1">#</span>
+                         <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span>  <span class="c1">#</span>
+                         <span class="p">):</span>
     <span class="n">off_m</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">*</span> <span class="n">BLOCK_M</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">)</span>
     <span class="n">off_hz</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
     <span class="n">off_n</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="p">)</span>
@@ -346,21 +337,18 @@ fused-attention-batch4-head48-d64-bwd-causal=True:
 
 <span class="c1"># The main inner-loop logic for computing dK and dV.</span>
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
-<span class="k">def</span> <span class="nf">_attn_bwd_dkdv</span><span class="p">(</span>
-    <span class="n">dk</span><span class="p">,</span> <span class="n">dv</span><span class="p">,</span>
-    <span class="n">Q</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">sm_scale</span><span class="p">,</span>
-    <span class="n">DO</span><span class="p">,</span>
-    <span class="n">M</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span>
-    <span class="c1"># shared by Q/K/V/DO.</span>
-    <span class="n">stride_tok</span><span class="p">,</span> <span class="n">stride_d</span><span class="p">,</span>
-    <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
-    <span class="n">BLOCK_M1</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="n">BLOCK_N1</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="n">BLOCK_DMODEL</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="c1"># Filled in by the wrapper.</span>
-    <span class="n">start_n</span><span class="p">,</span> <span class="n">start_m</span><span class="p">,</span> <span class="n">num_steps</span><span class="p">,</span>
-    <span class="n">MASK</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-<span class="p">):</span>
+<span class="k">def</span> <span class="nf">_attn_bwd_dkdv</span><span class="p">(</span><span class="n">dk</span><span class="p">,</span> <span class="n">dv</span><span class="p">,</span>  <span class="c1">#</span>
+                   <span class="n">Q</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">sm_scale</span><span class="p">,</span>  <span class="c1">#</span>
+                   <span class="n">DO</span><span class="p">,</span>  <span class="c1">#</span>
+                   <span class="n">M</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span>  <span class="c1">#</span>
+                   <span class="c1"># shared by Q/K/V/DO.</span>
+                   <span class="n">stride_tok</span><span class="p">,</span> <span class="n">stride_d</span><span class="p">,</span>  <span class="c1">#</span>
+                   <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="n">BLOCK_M1</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                   <span class="n">BLOCK_N1</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                   <span class="n">BLOCK_DMODEL</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                   <span class="c1"># Filled in by the wrapper.</span>
+                   <span class="n">start_n</span><span class="p">,</span> <span class="n">start_m</span><span class="p">,</span> <span class="n">num_steps</span><span class="p">,</span>  <span class="c1">#</span>
+                   <span class="n">MASK</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
     <span class="n">offs_m</span> <span class="o">=</span> <span class="n">start_m</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_M1</span><span class="p">)</span>
     <span class="n">offs_n</span> <span class="o">=</span> <span class="n">start_n</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_N1</span><span class="p">)</span>
     <span class="n">offs_k</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">)</span>
@@ -402,19 +390,17 @@ fused-attention-batch4-head48-d64-bwd-causal=True:
 
 <span class="c1"># the main inner-loop logic for computing dQ</span>
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
-<span class="k">def</span> <span class="nf">_attn_bwd_dq</span><span class="p">(</span>
-    <span class="n">dq</span><span class="p">,</span> <span class="n">q</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">V</span><span class="p">,</span>
-    <span class="n">do</span><span class="p">,</span> <span class="n">m</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span>
-    <span class="c1"># shared by Q/K/V/DO.</span>
-    <span class="n">stride_tok</span><span class="p">,</span> <span class="n">stride_d</span><span class="p">,</span>
-    <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
-    <span class="n">BLOCK_M2</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="n">BLOCK_N2</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="n">BLOCK_DMODEL</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="c1"># Filled in by the wrapper.</span>
-    <span class="n">start_m</span><span class="p">,</span> <span class="n">start_n</span><span class="p">,</span> <span class="n">num_steps</span><span class="p">,</span>
-    <span class="n">MASK</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-<span class="p">):</span>
+<span class="k">def</span> <span class="nf">_attn_bwd_dq</span><span class="p">(</span><span class="n">dq</span><span class="p">,</span> <span class="n">q</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">V</span><span class="p">,</span>  <span class="c1">#</span>
+                 <span class="n">do</span><span class="p">,</span> <span class="n">m</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span>
+                 <span class="c1"># shared by Q/K/V/DO.</span>
+                 <span class="n">stride_tok</span><span class="p">,</span> <span class="n">stride_d</span><span class="p">,</span>  <span class="c1">#</span>
+                 <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>  <span class="c1">#</span>
+                 <span class="n">BLOCK_M2</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                 <span class="n">BLOCK_N2</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                 <span class="n">BLOCK_DMODEL</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+                 <span class="c1"># Filled in by the wrapper.</span>
+                 <span class="n">start_m</span><span class="p">,</span> <span class="n">start_n</span><span class="p">,</span> <span class="n">num_steps</span><span class="p">,</span>  <span class="c1">#</span>
+                 <span class="n">MASK</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
     <span class="n">offs_m</span> <span class="o">=</span> <span class="n">start_m</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_M2</span><span class="p">)</span>
     <span class="n">offs_n</span> <span class="o">=</span> <span class="n">start_n</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_N2</span><span class="p">)</span>
     <span class="n">offs_k</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">)</span>
@@ -451,21 +437,19 @@ fused-attention-batch4-head48-d64-bwd-causal=True:
 
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
-<span class="k">def</span> <span class="nf">_attn_bwd</span><span class="p">(</span>
-    <span class="n">Q</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">V</span><span class="p">,</span> <span class="n">sm_scale</span><span class="p">,</span>
-    <span class="n">DO</span><span class="p">,</span>
-    <span class="n">DQ</span><span class="p">,</span> <span class="n">DK</span><span class="p">,</span> <span class="n">DV</span><span class="p">,</span>
-    <span class="n">M</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span>
-    <span class="c1"># shared by Q/K/V/DO.</span>
-    <span class="n">stride_z</span><span class="p">,</span> <span class="n">stride_h</span><span class="p">,</span> <span class="n">stride_tok</span><span class="p">,</span> <span class="n">stride_d</span><span class="p">,</span>
-    <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
-    <span class="n">BLOCK_M1</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="n">BLOCK_N1</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="n">BLOCK_M2</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="n">BLOCK_N2</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="n">BLK_SLICE_FACTOR</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="n">BLOCK_DMODEL</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-<span class="p">):</span>
+<span class="k">def</span> <span class="nf">_attn_bwd</span><span class="p">(</span><span class="n">Q</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">V</span><span class="p">,</span> <span class="n">sm_scale</span><span class="p">,</span>  <span class="c1">#</span>
+              <span class="n">DO</span><span class="p">,</span>  <span class="c1">#</span>
+              <span class="n">DQ</span><span class="p">,</span> <span class="n">DK</span><span class="p">,</span> <span class="n">DV</span><span class="p">,</span>  <span class="c1">#</span>
+              <span class="n">M</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span>
+              <span class="c1"># shared by Q/K/V/DO.</span>
+              <span class="n">stride_z</span><span class="p">,</span> <span class="n">stride_h</span><span class="p">,</span> <span class="n">stride_tok</span><span class="p">,</span> <span class="n">stride_d</span><span class="p">,</span>  <span class="c1">#</span>
+              <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>  <span class="c1">#</span>
+              <span class="n">BLOCK_M1</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+              <span class="n">BLOCK_N1</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+              <span class="n">BLOCK_M2</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+              <span class="n">BLOCK_N2</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+              <span class="n">BLK_SLICE_FACTOR</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+              <span class="n">BLOCK_DMODEL</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
     <span class="n">LN2</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="mf">0.6931471824645996</span>  <span class="c1"># = ln(2)</span>
 
     <span class="n">bhid</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
@@ -487,8 +471,6 @@ fused-attention-batch4-head48-d64-bwd-causal=True:
     <span class="c1"># load scales</span>
     <span class="n">offs_k</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">)</span>
 
-    <span class="c1"># THIS BLOCK DOES DK/DV/DR:</span>
-
     <span class="n">start_n</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">*</span> <span class="n">BLOCK_N1</span>
     <span class="n">start_m</span> <span class="o">=</span> <span class="n">start_n</span>
 
@@ -504,31 +486,32 @@ fused-attention-batch4-head48-d64-bwd-causal=True:
 
     <span class="n">num_steps</span> <span class="o">=</span> <span class="n">BLOCK_N1</span> <span class="o">//</span> <span class="n">MASK_BLOCK_M1</span>
 
-    <span class="n">dk</span><span class="p">,</span> <span class="n">dv</span> <span class="o">=</span> <span class="n">_attn_bwd_dkdv</span><span class="p">(</span><span class="n">dk</span><span class="p">,</span> <span class="n">dv</span><span class="p">,</span>
-                            <span class="n">Q</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">sm_scale</span><span class="p">,</span>
-                            <span class="n">DO</span><span class="p">,</span>
-                            <span class="n">M</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span>
-                            <span class="n">stride_tok</span><span class="p">,</span> <span class="n">stride_d</span><span class="p">,</span>
-                            <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
-                            <span class="n">MASK_BLOCK_M1</span><span class="p">,</span> <span class="n">BLOCK_N1</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">,</span>
-                            <span class="n">start_n</span><span class="p">,</span> <span class="n">start_m</span><span class="p">,</span> <span class="n">num_steps</span><span class="p">,</span>
-                            <span class="n">MASK</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">dk</span><span class="p">,</span> <span class="n">dv</span> <span class="o">=</span> <span class="n">_attn_bwd_dkdv</span><span class="p">(</span><span class="n">dk</span><span class="p">,</span> <span class="n">dv</span><span class="p">,</span>  <span class="c1">#</span>
+                            <span class="n">Q</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">sm_scale</span><span class="p">,</span>  <span class="c1">#</span>
+                            <span class="n">DO</span><span class="p">,</span>  <span class="c1">#</span>
+                            <span class="n">M</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span>  <span class="c1">#</span>
+                            <span class="n">stride_tok</span><span class="p">,</span> <span class="n">stride_d</span><span class="p">,</span>  <span class="c1">#</span>
+                            <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>  <span class="c1">#</span>
+                            <span class="n">MASK_BLOCK_M1</span><span class="p">,</span> <span class="n">BLOCK_N1</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">,</span>  <span class="c1">#</span>
+                            <span class="n">start_n</span><span class="p">,</span> <span class="n">start_m</span><span class="p">,</span> <span class="n">num_steps</span><span class="p">,</span>  <span class="c1">#</span>
+                            <span class="n">MASK</span><span class="o">=</span><span class="kc">True</span>  <span class="c1">#</span>
                             <span class="p">)</span>
 
     <span class="n">start_m</span> <span class="o">+=</span> <span class="n">num_steps</span> <span class="o">*</span> <span class="n">MASK_BLOCK_M1</span>
     <span class="n">num_steps</span> <span class="o">=</span> <span class="p">(</span><span class="n">N_CTX</span> <span class="o">-</span> <span class="n">start_m</span><span class="p">)</span> <span class="o">//</span> <span class="n">BLOCK_M1</span>
 
     <span class="c1"># Compute dK and dV for non-masked blocks.</span>
-    <span class="n">dk</span><span class="p">,</span> <span class="n">dv</span> <span class="o">=</span> <span class="n">_attn_bwd_dkdv</span><span class="p">(</span><span class="n">dk</span><span class="p">,</span> <span class="n">dv</span><span class="p">,</span>
-                            <span class="n">Q</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">sm_scale</span><span class="p">,</span>
-                            <span class="n">DO</span><span class="p">,</span>
-                            <span class="n">M</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span>
-                            <span class="n">stride_tok</span><span class="p">,</span> <span class="n">stride_d</span><span class="p">,</span>
-                            <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
-                            <span class="n">BLOCK_M1</span><span class="p">,</span> <span class="n">BLOCK_N1</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">,</span>
-                            <span class="n">start_n</span><span class="p">,</span> <span class="n">start_m</span><span class="p">,</span> <span class="n">num_steps</span><span class="p">,</span>
-                            <span class="n">MASK</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-                            <span class="p">)</span>
+    <span class="n">dk</span><span class="p">,</span> <span class="n">dv</span> <span class="o">=</span> <span class="n">_attn_bwd_dkdv</span><span class="p">(</span>  <span class="c1">#</span>
+        <span class="n">dk</span><span class="p">,</span> <span class="n">dv</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">Q</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">sm_scale</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">DO</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">M</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">stride_tok</span><span class="p">,</span> <span class="n">stride_d</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">BLOCK_M1</span><span class="p">,</span> <span class="n">BLOCK_N1</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">start_n</span><span class="p">,</span> <span class="n">start_m</span><span class="p">,</span> <span class="n">num_steps</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">MASK</span><span class="o">=</span><span class="kc">False</span>  <span class="c1">#</span>
+    <span class="p">)</span>
 
     <span class="n">dv_ptrs</span> <span class="o">=</span> <span class="n">DV</span> <span class="o">+</span> <span class="n">offs_n</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_tok</span> <span class="o">+</span> <span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_d</span>
     <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">dv_ptrs</span><span class="p">,</span> <span class="n">dv</span><span class="p">)</span>
@@ -558,27 +541,25 @@ fused-attention-batch4-head48-d64-bwd-causal=True:
     <span class="c1"># not due to anything important.  I just wanted to reuse the loop</span>
     <span class="c1"># structure for dK &amp; dV above as much as possible.</span>
     <span class="n">num_steps</span> <span class="o">=</span> <span class="n">BLOCK_M2</span> <span class="o">//</span> <span class="n">MASK_BLOCK_N2</span>
-    <span class="n">dq</span> <span class="o">=</span> <span class="n">_attn_bwd_dq</span><span class="p">(</span>
-        <span class="n">dq</span><span class="p">,</span> <span class="n">q</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">V</span><span class="p">,</span>
-        <span class="n">do</span><span class="p">,</span> <span class="n">m</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span>
-        <span class="n">stride_tok</span><span class="p">,</span> <span class="n">stride_d</span><span class="p">,</span>
-        <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
-        <span class="n">BLOCK_M2</span><span class="p">,</span> <span class="n">MASK_BLOCK_N2</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">,</span>
-        <span class="n">start_m</span><span class="p">,</span> <span class="n">end_n</span> <span class="o">-</span> <span class="n">num_steps</span> <span class="o">*</span> <span class="n">MASK_BLOCK_N2</span><span class="p">,</span> <span class="n">num_steps</span><span class="p">,</span>
-        <span class="n">MASK</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-    <span class="p">)</span>
+    <span class="n">dq</span> <span class="o">=</span> <span class="n">_attn_bwd_dq</span><span class="p">(</span><span class="n">dq</span><span class="p">,</span> <span class="n">q</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">V</span><span class="p">,</span>  <span class="c1">#</span>
+                      <span class="n">do</span><span class="p">,</span> <span class="n">m</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span>  <span class="c1">#</span>
+                      <span class="n">stride_tok</span><span class="p">,</span> <span class="n">stride_d</span><span class="p">,</span>  <span class="c1">#</span>
+                      <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>  <span class="c1">#</span>
+                      <span class="n">BLOCK_M2</span><span class="p">,</span> <span class="n">MASK_BLOCK_N2</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">,</span>  <span class="c1">#</span>
+                      <span class="n">start_m</span><span class="p">,</span> <span class="n">end_n</span> <span class="o">-</span> <span class="n">num_steps</span> <span class="o">*</span> <span class="n">MASK_BLOCK_N2</span><span class="p">,</span> <span class="n">num_steps</span><span class="p">,</span>  <span class="c1">#</span>
+                      <span class="n">MASK</span><span class="o">=</span><span class="kc">True</span>  <span class="c1">#</span>
+                      <span class="p">)</span>
     <span class="n">end_n</span> <span class="o">-=</span> <span class="n">num_steps</span> <span class="o">*</span> <span class="n">MASK_BLOCK_N2</span>
     <span class="c1"># stage 2</span>
     <span class="n">num_steps</span> <span class="o">=</span> <span class="n">end_n</span> <span class="o">//</span> <span class="n">BLOCK_N2</span>
-    <span class="n">dq</span> <span class="o">=</span> <span class="n">_attn_bwd_dq</span><span class="p">(</span>
-        <span class="n">dq</span><span class="p">,</span> <span class="n">q</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">V</span><span class="p">,</span>
-        <span class="n">do</span><span class="p">,</span> <span class="n">m</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span>
-        <span class="n">stride_tok</span><span class="p">,</span> <span class="n">stride_d</span><span class="p">,</span>
-        <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
-        <span class="n">BLOCK_M2</span><span class="p">,</span> <span class="n">BLOCK_N2</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">,</span>
-        <span class="n">start_m</span><span class="p">,</span> <span class="n">end_n</span> <span class="o">-</span> <span class="n">num_steps</span> <span class="o">*</span> <span class="n">BLOCK_N2</span><span class="p">,</span> <span class="n">num_steps</span><span class="p">,</span>
-        <span class="n">MASK</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-    <span class="p">)</span>
+    <span class="n">dq</span> <span class="o">=</span> <span class="n">_attn_bwd_dq</span><span class="p">(</span><span class="n">dq</span><span class="p">,</span> <span class="n">q</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">V</span><span class="p">,</span>  <span class="c1">#</span>
+                      <span class="n">do</span><span class="p">,</span> <span class="n">m</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span>  <span class="c1">#</span>
+                      <span class="n">stride_tok</span><span class="p">,</span> <span class="n">stride_d</span><span class="p">,</span>  <span class="c1">#</span>
+                      <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>  <span class="c1">#</span>
+                      <span class="n">BLOCK_M2</span><span class="p">,</span> <span class="n">BLOCK_N2</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">,</span>  <span class="c1">#</span>
+                      <span class="n">start_m</span><span class="p">,</span> <span class="n">end_n</span> <span class="o">-</span> <span class="n">num_steps</span> <span class="o">*</span> <span class="n">BLOCK_N2</span><span class="p">,</span> <span class="n">num_steps</span><span class="p">,</span>  <span class="c1">#</span>
+                      <span class="n">MASK</span><span class="o">=</span><span class="kc">False</span>  <span class="c1">#</span>
+                      <span class="p">)</span>
     <span class="c1"># Write back dQ.</span>
     <span class="n">dq_ptrs</span> <span class="o">=</span> <span class="n">DQ</span> <span class="o">+</span> <span class="n">offs_m</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_tok</span> <span class="o">+</span> <span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_d</span>
     <span class="n">dq</span> <span class="o">*=</span> <span class="n">LN2</span>
@@ -589,6 +570,7 @@ fused-attention-batch4-head48-d64-bwd-causal=True:
 
 
 <span class="k">class</span> <span class="nc">_attention</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
+
     <span class="nd">@staticmethod</span>
     <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">q</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">causal</span><span class="p">,</span> <span class="n">sm_scale</span><span class="p">):</span>
         <span class="c1"># shape constraints</span>
@@ -608,19 +590,19 @@ fused-attention-batch4-head48-d64-bwd-causal=True:
         <span class="n">grid</span> <span class="o">=</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="n">BLOCK_M</span><span class="p">),</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="mi">1</span><span class="p">)</span>
         <span class="n">M</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">2</span><span class="p">]),</span> <span class="n">device</span><span class="o">=</span><span class="n">q</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
         <span class="n">_attn_fwd</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>
-            <span class="n">q</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">sm_scale</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">o</span><span class="p">,</span>
-            <span class="n">q</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">q</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span> <span class="n">q</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span> <span class="n">q</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
-            <span class="n">k</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">k</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span> <span class="n">k</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span> <span class="n">k</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
-            <span class="n">v</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">v</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span> <span class="n">v</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span> <span class="n">v</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
-            <span class="n">o</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">o</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span> <span class="n">o</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span> <span class="n">o</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
-            <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span>
-            <span class="n">N_CTX</span><span class="o">=</span><span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span>
-            <span class="n">BLOCK_M</span><span class="o">=</span><span class="n">BLOCK_M</span><span class="p">,</span>
-            <span class="n">BLOCK_N</span><span class="o">=</span><span class="n">BLOCK_N</span><span class="p">,</span>
-            <span class="n">BLOCK_DMODEL</span><span class="o">=</span><span class="n">Lk</span><span class="p">,</span>
-            <span class="n">STAGE</span><span class="o">=</span><span class="n">stage</span><span class="p">,</span>
-            <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">,</span>
-            <span class="n">num_stages</span><span class="o">=</span><span class="n">num_stages</span><span class="p">,</span>
+            <span class="n">q</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">sm_scale</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">o</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">q</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">q</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span> <span class="n">q</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span> <span class="n">q</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>  <span class="c1">#</span>
+            <span class="n">k</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">k</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span> <span class="n">k</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span> <span class="n">k</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>  <span class="c1">#</span>
+            <span class="n">v</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">v</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span> <span class="n">v</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span> <span class="n">v</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>  <span class="c1">#</span>
+            <span class="n">o</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">o</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span> <span class="n">o</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span> <span class="n">o</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>  <span class="c1">#</span>
+            <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span>  <span class="c1">#</span>
+            <span class="n">N_CTX</span><span class="o">=</span><span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span>  <span class="c1">#</span>
+            <span class="n">BLOCK_M</span><span class="o">=</span><span class="n">BLOCK_M</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">BLOCK_N</span><span class="o">=</span><span class="n">BLOCK_N</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">BLOCK_DMODEL</span><span class="o">=</span><span class="n">Lk</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">STAGE</span><span class="o">=</span><span class="n">stage</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">num_stages</span><span class="o">=</span><span class="n">num_stages</span>  <span class="c1">#</span>
         <span class="p">)</span>
 
         <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span><span class="n">q</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">o</span><span class="p">,</span> <span class="n">M</span><span class="p">)</span>
@@ -640,7 +622,7 @@ fused-attention-batch4-head48-d64-bwd-causal=True:
         <span class="n">dv</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
         <span class="n">BATCH</span><span class="p">,</span> <span class="n">N_HEAD</span><span class="p">,</span> <span class="n">N_CTX</span> <span class="o">=</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="mi">3</span><span class="p">]</span>
         <span class="n">PRE_BLOCK</span> <span class="o">=</span> <span class="mi">128</span>
-        <span class="n">NUM_WARPS</span><span class="p">,</span> <span class="n">NUM_STAGES</span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">1</span>
+        <span class="n">NUM_WARPS</span><span class="p">,</span> <span class="n">NUM_STAGES</span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span>
         <span class="n">BLOCK_M1</span><span class="p">,</span> <span class="n">BLOCK_N1</span><span class="p">,</span> <span class="n">BLOCK_M2</span><span class="p">,</span> <span class="n">BLOCK_N2</span> <span class="o">=</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="mi">32</span>
         <span class="n">BLK_SLICE_FACTOR</span> <span class="o">=</span> <span class="mi">2</span>
         <span class="n">RCP_LN2</span> <span class="o">=</span> <span class="mf">1.4426950408889634</span>  <span class="c1"># = 1.0 / ln(2)</span>
@@ -651,23 +633,23 @@ fused-attention-batch4-head48-d64-bwd-causal=True:
         <span class="n">pre_grid</span> <span class="o">=</span> <span class="p">(</span><span class="n">N_CTX</span> <span class="o">//</span> <span class="n">PRE_BLOCK</span><span class="p">,</span> <span class="n">BATCH</span> <span class="o">*</span> <span class="n">N_HEAD</span><span class="p">)</span>
         <span class="n">delta</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">M</span><span class="p">)</span>
         <span class="n">_attn_bwd_preprocess</span><span class="p">[</span><span class="n">pre_grid</span><span class="p">](</span>
-            <span class="n">o</span><span class="p">,</span> <span class="n">do</span><span class="p">,</span>
-            <span class="n">delta</span><span class="p">,</span>
-            <span class="n">BATCH</span><span class="p">,</span> <span class="n">N_HEAD</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
-            <span class="n">BLOCK_M</span><span class="o">=</span><span class="n">PRE_BLOCK</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="o">=</span><span class="n">ctx</span><span class="o">.</span><span class="n">BLOCK_DMODEL</span><span class="p">,</span>
+            <span class="n">o</span><span class="p">,</span> <span class="n">do</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">delta</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">BATCH</span><span class="p">,</span> <span class="n">N_HEAD</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">BLOCK_M</span><span class="o">=</span><span class="n">PRE_BLOCK</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="o">=</span><span class="n">ctx</span><span class="o">.</span><span class="n">BLOCK_DMODEL</span>  <span class="c1">#</span>
         <span class="p">)</span>
         <span class="n">grid</span> <span class="o">=</span> <span class="p">(</span><span class="n">N_CTX</span> <span class="o">//</span> <span class="n">BLOCK_N1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">BATCH</span> <span class="o">*</span> <span class="n">N_HEAD</span><span class="p">)</span>
         <span class="n">_attn_bwd</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>
-            <span class="n">q</span><span class="p">,</span> <span class="n">arg_k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">ctx</span><span class="o">.</span><span class="n">sm_scale</span><span class="p">,</span> <span class="n">do</span><span class="p">,</span> <span class="n">dq</span><span class="p">,</span> <span class="n">dk</span><span class="p">,</span> <span class="n">dv</span><span class="p">,</span>
-            <span class="n">M</span><span class="p">,</span> <span class="n">delta</span><span class="p">,</span>
-            <span class="n">q</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">q</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span> <span class="n">q</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span> <span class="n">q</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
-            <span class="n">N_HEAD</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
-            <span class="n">BLOCK_M1</span><span class="o">=</span><span class="n">BLOCK_M1</span><span class="p">,</span> <span class="n">BLOCK_N1</span><span class="o">=</span><span class="n">BLOCK_N1</span><span class="p">,</span>
-            <span class="n">BLOCK_M2</span><span class="o">=</span><span class="n">BLOCK_M2</span><span class="p">,</span> <span class="n">BLOCK_N2</span><span class="o">=</span><span class="n">BLOCK_N2</span><span class="p">,</span>
-            <span class="n">BLK_SLICE_FACTOR</span><span class="o">=</span><span class="n">BLK_SLICE_FACTOR</span><span class="p">,</span>
-            <span class="n">BLOCK_DMODEL</span><span class="o">=</span><span class="n">ctx</span><span class="o">.</span><span class="n">BLOCK_DMODEL</span><span class="p">,</span>
-            <span class="n">num_warps</span><span class="o">=</span><span class="n">NUM_WARPS</span><span class="p">,</span>
-            <span class="n">num_stages</span><span class="o">=</span><span class="n">NUM_STAGES</span><span class="p">,</span>
+            <span class="n">q</span><span class="p">,</span> <span class="n">arg_k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">ctx</span><span class="o">.</span><span class="n">sm_scale</span><span class="p">,</span> <span class="n">do</span><span class="p">,</span> <span class="n">dq</span><span class="p">,</span> <span class="n">dk</span><span class="p">,</span> <span class="n">dv</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">M</span><span class="p">,</span> <span class="n">delta</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">q</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">q</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span> <span class="n">q</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span> <span class="n">q</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>  <span class="c1">#</span>
+            <span class="n">N_HEAD</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">BLOCK_M1</span><span class="o">=</span><span class="n">BLOCK_M1</span><span class="p">,</span> <span class="n">BLOCK_N1</span><span class="o">=</span><span class="n">BLOCK_N1</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">BLOCK_M2</span><span class="o">=</span><span class="n">BLOCK_M2</span><span class="p">,</span> <span class="n">BLOCK_N2</span><span class="o">=</span><span class="n">BLOCK_N2</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">BLK_SLICE_FACTOR</span><span class="o">=</span><span class="n">BLK_SLICE_FACTOR</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">BLOCK_DMODEL</span><span class="o">=</span><span class="n">ctx</span><span class="o">.</span><span class="n">BLOCK_DMODEL</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">num_warps</span><span class="o">=</span><span class="n">NUM_WARPS</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">num_stages</span><span class="o">=</span><span class="n">NUM_STAGES</span>  <span class="c1">#</span>
         <span class="p">)</span>
 
         <span class="k">return</span> <span class="n">dq</span><span class="p">,</span> <span class="n">dk</span><span class="p">,</span> <span class="n">dv</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
@@ -680,21 +662,9 @@ fused-attention-batch4-head48-d64-bwd-causal=True:
 <span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;causal&quot;</span><span class="p">,</span> <span class="p">[</span><span class="kc">True</span><span class="p">])</span>
 <span class="k">def</span> <span class="nf">test_op</span><span class="p">(</span><span class="n">Z</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="p">,</span> <span class="n">causal</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">):</span>
     <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">20</span><span class="p">)</span>
-    <span class="n">q</span> <span class="o">=</span> <span class="p">(</span>
-        <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">Z</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
-        <span class="o">.</span><span class="n">normal_</span><span class="p">(</span><span class="n">mean</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">std</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span>
-        <span class="o">.</span><span class="n">requires_grad_</span><span class="p">()</span>
-    <span class="p">)</span>
-    <span class="n">k</span> <span class="o">=</span> <span class="p">(</span>
-        <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">Z</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
-        <span class="o">.</span><span class="n">normal_</span><span class="p">(</span><span class="n">mean</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">std</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span>
-        <span class="o">.</span><span class="n">requires_grad_</span><span class="p">()</span>
-    <span class="p">)</span>
-    <span class="n">v</span> <span class="o">=</span> <span class="p">(</span>
-        <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">Z</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
-        <span class="o">.</span><span class="n">normal_</span><span class="p">(</span><span class="n">mean</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">std</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span>
-        <span class="o">.</span><span class="n">requires_grad_</span><span class="p">()</span>
-    <span class="p">)</span>
+    <span class="n">q</span> <span class="o">=</span> <span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">Z</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">normal_</span><span class="p">(</span><span class="n">mean</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">std</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span><span class="o">.</span><span class="n">requires_grad_</span><span class="p">())</span>
+    <span class="n">k</span> <span class="o">=</span> <span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">Z</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">normal_</span><span class="p">(</span><span class="n">mean</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">std</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span><span class="o">.</span><span class="n">requires_grad_</span><span class="p">())</span>
+    <span class="n">v</span> <span class="o">=</span> <span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">Z</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">normal_</span><span class="p">(</span><span class="n">mean</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">std</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span><span class="o">.</span><span class="n">requires_grad_</span><span class="p">())</span>
     <span class="n">sm_scale</span> <span class="o">=</span> <span class="mf">0.5</span>
     <span class="n">dout</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn_like</span><span class="p">(</span><span class="n">q</span><span class="p">)</span>
     <span class="c1"># reference implementation</span>
@@ -755,14 +725,11 @@ fused-attention-batch4-head48-d64-bwd-causal=True:
                     <span class="s2">&quot;mode&quot;</span><span class="p">:</span> <span class="n">mode</span><span class="p">,</span>
                     <span class="s2">&quot;causal&quot;</span><span class="p">:</span> <span class="n">causal</span><span class="p">,</span>
                 <span class="p">},</span>
-            <span class="p">)</span>
-        <span class="p">)</span>
+            <span class="p">))</span>
 
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">perf_report</span><span class="p">(</span><span class="n">configs</span><span class="p">)</span>
-<span class="k">def</span> <span class="nf">bench_flash_attention</span><span class="p">(</span>
-    <span class="n">BATCH</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="p">,</span> <span class="n">causal</span><span class="p">,</span> <span class="n">mode</span><span class="p">,</span> <span class="n">provider</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span>
-<span class="p">):</span>
+<span class="k">def</span> <span class="nf">bench_flash_attention</span><span class="p">(</span><span class="n">BATCH</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="p">,</span> <span class="n">causal</span><span class="p">,</span> <span class="n">mode</span><span class="p">,</span> <span class="n">provider</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">):</span>
     <span class="k">assert</span> <span class="n">mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;fwd&quot;</span><span class="p">,</span> <span class="s2">&quot;bwd&quot;</span><span class="p">]</span>
     <span class="n">warmup</span> <span class="o">=</span> <span class="mi">25</span>
     <span class="n">rep</span> <span class="o">=</span> <span class="mi">100</span>
@@ -781,9 +748,7 @@ fused-attention-batch4-head48-d64-bwd-causal=True:
             <span class="n">fn</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">o</span><span class="o">.</span><span class="n">backward</span><span class="p">(</span><span class="n">do</span><span class="p">,</span> <span class="n">retain_graph</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
         <span class="n">ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="n">fn</span><span class="p">,</span> <span class="n">warmup</span><span class="o">=</span><span class="n">warmup</span><span class="p">,</span> <span class="n">rep</span><span class="o">=</span><span class="n">rep</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s2">&quot;flash&quot;</span><span class="p">:</span>
-        <span class="n">qkv</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span>
-            <span class="p">(</span><span class="n">BATCH</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="kc">True</span>
-        <span class="p">)</span>
+        <span class="n">qkv</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">BATCH</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
         <span class="n">fn</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">flash_attn_func</span><span class="p">(</span><span class="n">qkv</span><span class="p">,</span> <span class="n">causal</span><span class="o">=</span><span class="n">causal</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">mode</span> <span class="o">==</span> <span class="s2">&quot;bwd&quot;</span><span class="p">:</span>
             <span class="n">o</span> <span class="o">=</span> <span class="n">fn</span><span class="p">()</span>
@@ -803,7 +768,7 @@ fused-attention-batch4-head48-d64-bwd-causal=True:
 <span class="n">bench_flash_attention</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s2">&quot;.&quot;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  18.420 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  19.454 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-06-fused-attention-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/54a35f6ec55f9746935b9566fb6bb1df/06-fused-attention.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">06-fused-attention.py</span></code></a></p>

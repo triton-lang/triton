@@ -225,23 +225,20 @@ here’s a diagram of the parallel reduction strategy for <span class="math notr
 In Stage 2, the buffers are further reduced to compute the final <span class="math notranslate nohighlight">\(\nabla_{w}\)</span> and <span class="math notranslate nohighlight">\(\nabla_{b}\)</span>.
 In the following implementation, Stage 1 is implemented by the function <code class="code docutils literal notranslate"><span class="pre">_layer_norm_bwd_dx_fused</span></code> and Stage 2 is implemented by the function <code class="code docutils literal notranslate"><span class="pre">_layer_norm_bwd_dwdb</span></code>.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
-<span class="k">def</span> <span class="nf">_layer_norm_bwd_dx_fused</span><span class="p">(</span>
-    <span class="n">DX</span><span class="p">,</span>  <span class="c1"># pointer to the input gradient</span>
-    <span class="n">DY</span><span class="p">,</span>  <span class="c1"># pointer to the output gradient</span>
-    <span class="n">DW</span><span class="p">,</span>  <span class="c1"># pointer to the partial sum of weights gradient</span>
-    <span class="n">DB</span><span class="p">,</span>  <span class="c1"># pointer to the partial sum of biases gradient</span>
-    <span class="n">X</span><span class="p">,</span>   <span class="c1"># pointer to the input</span>
-    <span class="n">W</span><span class="p">,</span>   <span class="c1"># pointer to the weights</span>
-    <span class="n">B</span><span class="p">,</span>   <span class="c1"># pointer to the biases</span>
-    <span class="n">Mean</span><span class="p">,</span>   <span class="c1"># pointer to the mean</span>
-    <span class="n">Rstd</span><span class="p">,</span>   <span class="c1"># pointer to the 1/std</span>
-    <span class="n">Lock</span><span class="p">,</span>  <span class="c1"># pointer to the lock</span>
-    <span class="n">stride</span><span class="p">,</span>  <span class="c1"># how much to increase the pointer when moving by 1 row</span>
-    <span class="n">N</span><span class="p">,</span>  <span class="c1"># number of columns in X</span>
-    <span class="n">eps</span><span class="p">,</span>  <span class="c1"># epsilon to avoid division by zero</span>
-    <span class="n">GROUP_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="n">BLOCK_SIZE_N</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span>
-<span class="p">):</span>
+<span class="k">def</span> <span class="nf">_layer_norm_bwd_dx_fused</span><span class="p">(</span><span class="n">DX</span><span class="p">,</span>  <span class="c1"># pointer to the input gradient</span>
+                             <span class="n">DY</span><span class="p">,</span>  <span class="c1"># pointer to the output gradient</span>
+                             <span class="n">DW</span><span class="p">,</span>  <span class="c1"># pointer to the partial sum of weights gradient</span>
+                             <span class="n">DB</span><span class="p">,</span>  <span class="c1"># pointer to the partial sum of biases gradient</span>
+                             <span class="n">X</span><span class="p">,</span>  <span class="c1"># pointer to the input</span>
+                             <span class="n">W</span><span class="p">,</span>  <span class="c1"># pointer to the weights</span>
+                             <span class="n">B</span><span class="p">,</span>  <span class="c1"># pointer to the biases</span>
+                             <span class="n">Mean</span><span class="p">,</span>  <span class="c1"># pointer to the mean</span>
+                             <span class="n">Rstd</span><span class="p">,</span>  <span class="c1"># pointer to the 1/std</span>
+                             <span class="n">Lock</span><span class="p">,</span>  <span class="c1"># pointer to the lock</span>
+                             <span class="n">stride</span><span class="p">,</span>  <span class="c1"># how much to increase the pointer when moving by 1 row</span>
+                             <span class="n">N</span><span class="p">,</span>  <span class="c1"># number of columns in X</span>
+                             <span class="n">eps</span><span class="p">,</span>  <span class="c1"># epsilon to avoid division by zero</span>
+                             <span class="n">GROUP_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
     <span class="c1"># Map the program id to the elements of X, DX, and DY it should compute.</span>
     <span class="n">row</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">cols</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
@@ -290,16 +287,13 @@ In the following implementation, Stage 1 is implemented by the function <code cl
 
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
-<span class="k">def</span> <span class="nf">_layer_norm_bwd_dwdb</span><span class="p">(</span>
-    <span class="n">DW</span><span class="p">,</span>  <span class="c1"># pointer to the partial sum of weights gradient</span>
-    <span class="n">DB</span><span class="p">,</span>  <span class="c1"># pointer to the partial sum of biases gradient</span>
-    <span class="n">FINAL_DW</span><span class="p">,</span>  <span class="c1"># pointer to the weights gradient</span>
-    <span class="n">FINAL_DB</span><span class="p">,</span>  <span class="c1"># pointer to the biases gradient</span>
-    <span class="n">M</span><span class="p">,</span>  <span class="c1"># GROUP_SIZE_M</span>
-    <span class="n">N</span><span class="p">,</span>  <span class="c1"># number of columns</span>
-    <span class="n">BLOCK_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="n">BLOCK_SIZE_N</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span>
-<span class="p">):</span>
+<span class="k">def</span> <span class="nf">_layer_norm_bwd_dwdb</span><span class="p">(</span><span class="n">DW</span><span class="p">,</span>  <span class="c1"># pointer to the partial sum of weights gradient</span>
+                         <span class="n">DB</span><span class="p">,</span>  <span class="c1"># pointer to the partial sum of biases gradient</span>
+                         <span class="n">FINAL_DW</span><span class="p">,</span>  <span class="c1"># pointer to the weights gradient</span>
+                         <span class="n">FINAL_DB</span><span class="p">,</span>  <span class="c1"># pointer to the biases gradient</span>
+                         <span class="n">M</span><span class="p">,</span>  <span class="c1"># GROUP_SIZE_M</span>
+                         <span class="n">N</span><span class="p">,</span>  <span class="c1"># number of columns</span>
+                         <span class="n">BLOCK_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
     <span class="c1"># Map the program id to the elements of DW and DB it should compute.</span>
     <span class="n">pid</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">cols</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
@@ -344,9 +338,10 @@ Specifically, one can set <code class="code docutils literal notranslate"><span 
         <span class="c1"># heuristics for number of warps</span>
         <span class="n">num_warps</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="nb">max</span><span class="p">(</span><span class="n">BLOCK_SIZE</span> <span class="o">//</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="mi">8</span><span class="p">)</span>
         <span class="c1"># enqueue kernel</span>
-        <span class="n">_layer_norm_fwd_fused</span><span class="p">[(</span><span class="n">M</span><span class="p">,)](</span><span class="n">x_arg</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">bias</span><span class="p">,</span> <span class="n">mean</span><span class="p">,</span> <span class="n">rstd</span><span class="p">,</span>
-                                    <span class="n">x_arg</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">N</span><span class="p">,</span> <span class="n">eps</span><span class="p">,</span>
-                                    <span class="n">BLOCK_SIZE</span><span class="o">=</span><span class="n">BLOCK_SIZE</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">,</span> <span class="n">num_ctas</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">_layer_norm_fwd_fused</span><span class="p">[(</span><span class="n">M</span><span class="p">,</span> <span class="p">)](</span>  <span class="c1">#</span>
+            <span class="n">x_arg</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">bias</span><span class="p">,</span> <span class="n">mean</span><span class="p">,</span> <span class="n">rstd</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">x_arg</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">N</span><span class="p">,</span> <span class="n">eps</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">BLOCK_SIZE</span><span class="o">=</span><span class="n">BLOCK_SIZE</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">,</span> <span class="n">num_ctas</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">bias</span><span class="p">,</span> <span class="n">mean</span><span class="p">,</span> <span class="n">rstd</span><span class="p">)</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">BLOCK_SIZE</span> <span class="o">=</span> <span class="n">BLOCK_SIZE</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">num_warps</span> <span class="o">=</span> <span class="n">num_warps</span>
@@ -366,23 +361,25 @@ Specifically, one can set <code class="code docutils literal notranslate"><span 
         <span class="n">locks</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">GROUP_SIZE_M</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">)</span>
         <span class="n">_dw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">GROUP_SIZE_M</span><span class="p">,</span> <span class="n">w</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">x</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">w</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
         <span class="n">_db</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">GROUP_SIZE_M</span><span class="p">,</span> <span class="n">w</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">x</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">w</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
-        <span class="n">dw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">w</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">w</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">w</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
-        <span class="n">db</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">w</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">w</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">w</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+        <span class="n">dw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">w</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">w</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">w</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+        <span class="n">db</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">w</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">w</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">w</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
         <span class="n">dx</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">dy</span><span class="p">)</span>
         <span class="c1"># enqueue kernel using forward pass heuristics</span>
         <span class="c1"># also compute partial sums for DW and DB</span>
         <span class="n">x_arg</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
         <span class="n">M</span><span class="p">,</span> <span class="n">N</span> <span class="o">=</span> <span class="n">x_arg</span><span class="o">.</span><span class="n">shape</span>
-        <span class="n">_layer_norm_bwd_dx_fused</span><span class="p">[(</span><span class="n">M</span><span class="p">,)](</span><span class="n">dx</span><span class="p">,</span> <span class="n">dy</span><span class="p">,</span> <span class="n">_dw</span><span class="p">,</span> <span class="n">_db</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">w</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">m</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">locks</span><span class="p">,</span>
-                                       <span class="n">x_arg</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">N</span><span class="p">,</span> <span class="n">ctx</span><span class="o">.</span><span class="n">eps</span><span class="p">,</span>
-                                       <span class="n">BLOCK_SIZE_N</span><span class="o">=</span><span class="n">ctx</span><span class="o">.</span><span class="n">BLOCK_SIZE</span><span class="p">,</span>
-                                       <span class="n">GROUP_SIZE_M</span><span class="o">=</span><span class="n">GROUP_SIZE_M</span><span class="p">,</span>
-                                       <span class="n">num_warps</span><span class="o">=</span><span class="n">ctx</span><span class="o">.</span><span class="n">num_warps</span><span class="p">)</span>
+        <span class="n">_layer_norm_bwd_dx_fused</span><span class="p">[(</span><span class="n">M</span><span class="p">,</span> <span class="p">)](</span>  <span class="c1">#</span>
+            <span class="n">dx</span><span class="p">,</span> <span class="n">dy</span><span class="p">,</span> <span class="n">_dw</span><span class="p">,</span> <span class="n">_db</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">w</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">m</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">locks</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">x_arg</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">N</span><span class="p">,</span> <span class="n">ctx</span><span class="o">.</span><span class="n">eps</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">BLOCK_SIZE_N</span><span class="o">=</span><span class="n">ctx</span><span class="o">.</span><span class="n">BLOCK_SIZE</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">GROUP_SIZE_M</span><span class="o">=</span><span class="n">GROUP_SIZE_M</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">num_warps</span><span class="o">=</span><span class="n">ctx</span><span class="o">.</span><span class="n">num_warps</span><span class="p">)</span>
         <span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">meta</span><span class="p">:</span> <span class="p">[</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">])]</span>
         <span class="c1"># accumulate partial sums in separate kernel</span>
-        <span class="n">_layer_norm_bwd_dwdb</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span><span class="n">_dw</span><span class="p">,</span> <span class="n">_db</span><span class="p">,</span> <span class="n">dw</span><span class="p">,</span> <span class="n">db</span><span class="p">,</span> <span class="n">GROUP_SIZE_M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span>
-                                   <span class="n">BLOCK_SIZE_M</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span>
-                                   <span class="n">BLOCK_SIZE_N</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span> <span class="n">num_ctas</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">_layer_norm_bwd_dwdb</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>
+            <span class="n">_dw</span><span class="p">,</span> <span class="n">_db</span><span class="p">,</span> <span class="n">dw</span><span class="p">,</span> <span class="n">db</span><span class="p">,</span> <span class="n">GROUP_SIZE_M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">BLOCK_SIZE_M</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">BLOCK_SIZE_N</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span> <span class="n">num_ctas</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
         <span class="k">return</span> <span class="n">dx</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="n">dw</span><span class="p">,</span> <span class="n">db</span><span class="p">,</span> <span class="kc">None</span>
 
 
@@ -425,9 +422,8 @@ Specifically, one can set <code class="code docutils literal notranslate"><span 
         <span class="n">styles</span><span class="o">=</span><span class="p">[(</span><span class="s1">&#39;blue&#39;</span><span class="p">,</span> <span class="s1">&#39;-&#39;</span><span class="p">),</span> <span class="p">(</span><span class="s1">&#39;green&#39;</span><span class="p">,</span> <span class="s1">&#39;-&#39;</span><span class="p">),</span> <span class="p">(</span><span class="s1">&#39;orange&#39;</span><span class="p">,</span> <span class="s1">&#39;-&#39;</span><span class="p">)],</span>
         <span class="n">ylabel</span><span class="o">=</span><span class="s1">&#39;GB/s&#39;</span><span class="p">,</span>
         <span class="n">plot_name</span><span class="o">=</span><span class="s1">&#39;layer-norm-backward&#39;</span><span class="p">,</span>
-        <span class="n">args</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;M&#39;</span><span class="p">:</span> <span class="mi">4096</span><span class="p">,</span> <span class="s1">&#39;dtype&#39;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">,</span> <span class="s1">&#39;mode&#39;</span><span class="p">:</span> <span class="s1">&#39;backward&#39;</span><span class="p">}</span>
-    <span class="p">)</span>
-<span class="p">)</span>
+        <span class="n">args</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;M&#39;</span><span class="p">:</span> <span class="mi">4096</span><span class="p">,</span> <span class="s1">&#39;dtype&#39;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">,</span> <span class="s1">&#39;mode&#39;</span><span class="p">:</span> <span class="s1">&#39;backward&#39;</span><span class="p">},</span>
+    <span class="p">))</span>
 <span class="k">def</span> <span class="nf">bench_layer_norm</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">provider</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s1">&#39;backward&#39;</span><span class="p">,</span> <span class="n">eps</span><span class="o">=</span><span class="mf">1e-5</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">):</span>
     <span class="c1"># create data</span>
     <span class="n">x_shape</span> <span class="o">=</span> <span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">)</span>
@@ -440,24 +436,34 @@ Specifically, one can set <code class="code docutils literal notranslate"><span 
     <span class="n">quantiles</span> <span class="o">=</span> <span class="p">[</span><span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">,</span> <span class="mf">0.8</span><span class="p">]</span>
     <span class="c1"># utility functions</span>
     <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s1">&#39;triton&#39;</span><span class="p">:</span>
-        <span class="k">def</span> <span class="nf">y_fwd</span><span class="p">():</span> <span class="k">return</span> <span class="n">layer_norm</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">w_shape</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">bias</span><span class="p">,</span> <span class="n">eps</span><span class="p">)</span>  <span class="c1"># noqa: F811, E704</span>
-    <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s1">&#39;torch&#39;</span><span class="p">:</span>
-        <span class="k">def</span> <span class="nf">y_fwd</span><span class="p">():</span> <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">functional</span><span class="o">.</span><span class="n">layer_norm</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">w_shape</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">bias</span><span class="p">,</span> <span class="n">eps</span><span class="p">)</span>  <span class="c1"># noqa: F811, E704</span>
-    <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s1">&#39;apex&#39;</span><span class="p">:</span>
-        <span class="n">apex_layer_norm</span> <span class="o">=</span> <span class="n">apex</span><span class="o">.</span><span class="n">normalization</span><span class="o">.</span><span class="n">FusedLayerNorm</span><span class="p">(</span>
-            <span class="n">w_shape</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">device</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
 
-        <span class="k">def</span> <span class="nf">y_fwd</span><span class="p">():</span> <span class="k">return</span> <span class="n">apex_layer_norm</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>  <span class="c1"># noqa: F811, E704</span>
+        <span class="k">def</span> <span class="nf">y_fwd</span><span class="p">():</span>
+            <span class="k">return</span> <span class="n">layer_norm</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">w_shape</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">bias</span><span class="p">,</span> <span class="n">eps</span><span class="p">)</span>  <span class="c1"># noqa: F811, E704</span>
+
+    <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s1">&#39;torch&#39;</span><span class="p">:</span>
+
+        <span class="k">def</span> <span class="nf">y_fwd</span><span class="p">():</span>
+            <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">functional</span><span class="o">.</span><span class="n">layer_norm</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">w_shape</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">bias</span><span class="p">,</span> <span class="n">eps</span><span class="p">)</span>  <span class="c1"># noqa: F811, E704</span>
+
+    <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s1">&#39;apex&#39;</span><span class="p">:</span>
+        <span class="n">apex_layer_norm</span> <span class="o">=</span> <span class="n">apex</span><span class="o">.</span><span class="n">normalization</span><span class="o">.</span><span class="n">FusedLayerNorm</span><span class="p">(</span><span class="n">w_shape</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">device</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">y_fwd</span><span class="p">():</span>
+            <span class="k">return</span> <span class="n">apex_layer_norm</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>  <span class="c1"># noqa: F811, E704</span>
+
     <span class="c1"># forward pass</span>
     <span class="k">if</span> <span class="n">mode</span> <span class="o">==</span> <span class="s1">&#39;forward&#39;</span><span class="p">:</span>
         <span class="n">gbps</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">ms</span><span class="p">:</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">x</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span> <span class="o">*</span> <span class="n">x</span><span class="o">.</span><span class="n">element_size</span><span class="p">()</span> <span class="o">/</span> <span class="n">ms</span> <span class="o">*</span> <span class="mf">1e-6</span>
         <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="n">y_fwd</span><span class="p">,</span> <span class="n">quantiles</span><span class="o">=</span><span class="n">quantiles</span><span class="p">,</span> <span class="n">rep</span><span class="o">=</span><span class="mi">500</span><span class="p">)</span>
     <span class="c1"># backward pass</span>
     <span class="k">if</span> <span class="n">mode</span> <span class="o">==</span> <span class="s1">&#39;backward&#39;</span><span class="p">:</span>
-        <span class="k">def</span> <span class="nf">gbps</span><span class="p">(</span><span class="n">ms</span><span class="p">):</span> <span class="k">return</span> <span class="mi">3</span> <span class="o">*</span> <span class="n">x</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span> <span class="o">*</span> <span class="n">x</span><span class="o">.</span><span class="n">element_size</span><span class="p">()</span> <span class="o">/</span> <span class="n">ms</span> <span class="o">*</span> <span class="mf">1e-6</span>  <span class="c1"># noqa: F811, E704</span>
+
+        <span class="k">def</span> <span class="nf">gbps</span><span class="p">(</span><span class="n">ms</span><span class="p">):</span>
+            <span class="k">return</span> <span class="mi">3</span> <span class="o">*</span> <span class="n">x</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span> <span class="o">*</span> <span class="n">x</span><span class="o">.</span><span class="n">element_size</span><span class="p">()</span> <span class="o">/</span> <span class="n">ms</span> <span class="o">*</span> <span class="mf">1e-6</span>  <span class="c1"># noqa: F811, E704</span>
+
         <span class="n">y</span> <span class="o">=</span> <span class="n">y_fwd</span><span class="p">()</span>
-        <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">y</span><span class="o">.</span><span class="n">backward</span><span class="p">(</span><span class="n">dy</span><span class="p">,</span> <span class="n">retain_graph</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span>
-                                                     <span class="n">quantiles</span><span class="o">=</span><span class="n">quantiles</span><span class="p">,</span> <span class="n">grad_to_none</span><span class="o">=</span><span class="p">[</span><span class="n">x</span><span class="p">],</span> <span class="n">rep</span><span class="o">=</span><span class="mi">500</span><span class="p">)</span>
+        <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">y</span><span class="o">.</span><span class="n">backward</span><span class="p">(</span><span class="n">dy</span><span class="p">,</span> <span class="n">retain_graph</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="n">quantiles</span><span class="o">=</span><span class="n">quantiles</span><span class="p">,</span>
+                                                     <span class="n">grad_to_none</span><span class="o">=</span><span class="p">[</span><span class="n">x</span><span class="p">],</span> <span class="n">rep</span><span class="o">=</span><span class="mi">500</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">gbps</span><span class="p">(</span><span class="n">ms</span><span class="p">),</span> <span class="n">gbps</span><span class="p">(</span><span class="n">max_ms</span><span class="p">),</span> <span class="n">gbps</span><span class="p">(</span><span class="n">min_ms</span><span class="p">)</span>
 
 
@@ -467,36 +473,36 @@ Specifically, one can set <code class="code docutils literal notranslate"><span 
 </div>
 <img src="../../_images/sphx_glr_05-layer-norm_001.png" srcset="../../_images/sphx_glr_05-layer-norm_001.png" alt="05 layer norm" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>layer-norm-backward:
           N      Triton       Torch
-0    1024.0  130.031747  372.363633
-1    1536.0  197.133692  438.857146
-2    2048.0  262.844923  496.484863
-3    2560.0  325.079368  529.655159
-4    3072.0  392.170201  538.160602
-5    3584.0  521.309075  467.478250
-6    4096.0  588.646687  472.615390
-7    4608.0  511.999999  480.834772
-8    5120.0  556.018113  481.882369
-9    5632.0  592.842094  489.739120
-10   6144.0  624.813540  494.818794
-11   6656.0  657.382710  499.200013
-12   7168.0  696.485861  476.542919
-13   7680.0  731.428577  479.999983
-14   8192.0  765.011652  487.861027
-15   8704.0  673.858058  489.217808
-16   9216.0  704.407633  492.614684
-17   9728.0  725.068307  497.808111
-18  10240.0  744.727250  500.529518
-19  10752.0  772.598776  485.966077
-20  11264.0  795.105885  489.739120
-21  11776.0  819.199982  493.235604
-22  12288.0  845.020035  500.699488
-23  12800.0  848.618804  501.960781
-24  13312.0  865.821169  501.551005
-25  13824.0  859.523317  503.453709
-26  14336.0  866.659958  494.344826
-27  14848.0  871.276283  497.004192
-28  15360.0  890.434763  502.234332
-29  15872.0  885.879100  503.873020
+0    1024.0   80.577051  372.363633
+1    1536.0  122.471764  438.857146
+2    2048.0  163.839992  496.484863
+3    2560.0  204.119606  529.655159
+4    3072.0  241.731152  538.160602
+5    3584.0  283.881181  470.032796
+6    4096.0  321.254900  474.898540
+7    4608.0  364.990089  480.834772
+8    5120.0  405.544544  483.779502
+9    5632.0  446.098998  489.739120
+10   6144.0  488.264900  494.818794
+11   6656.0  532.479975  499.200013
+12   7168.0  571.534897  476.542919
+13   7680.0  610.331125  479.999983
+14   8192.0  651.019867  487.861027
+15   8704.0  658.977922  489.217808
+16   9216.0  711.202548  491.520008
+17   9728.0  770.534633  497.808111
+18  10240.0  792.774186  500.529518
+19  10752.0  819.199969  485.966077
+20  11264.0  834.370388  489.739120
+21  11776.0  859.039508  494.097911
+22  12288.0  888.289167  500.699488
+23  12800.0  908.875706  501.141916
+24  13312.0  926.052153  500.764869
+25  13824.0  934.580291  502.690894
+26  14336.0  947.834713  493.635574
+27  14848.0  957.935459  495.621695
+28  15360.0  970.105232  500.869554
+29  15872.0  986.860104  503.207397
 </pre></div>
 </div>
 </section>
@@ -508,7 +514,7 @@ Specifically, one can set <code class="code docutils literal notranslate"><span 
 <p>Jimmy Lei Ba and Jamie Ryan Kiros and Geoffrey E. Hinton, “Layer Normalization”, Arxiv 2016</p>
 </div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  29.402 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  30.590 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-05-layer-norm-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/935c0dd0fbeb4b2e69588471cbb2d4b2/05-layer-norm.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">05-layer-norm.py</span></code></a></p>

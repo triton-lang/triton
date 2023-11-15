@@ -33,7 +33,7 @@ Triton automatically selects the correct underlying device function to invoke ba
 asin Kernel
 ------------
 
-.. GENERATED FROM PYTHON SOURCE LINES 16-38
+.. GENERATED FROM PYTHON SOURCE LINES 16-39
 
 .. code-block:: default
 
@@ -46,10 +46,10 @@ asin Kernel
 
     @triton.jit
     def asin_kernel(
-            x_ptr,
-            y_ptr,
-            n_elements,
-            BLOCK_SIZE: tl.constexpr,
+        x_ptr,
+        y_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
     ):
         pid = tl.program_id(axis=0)
         block_start = pid * BLOCK_SIZE
@@ -66,16 +66,16 @@ asin Kernel
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 39-42
+
+.. GENERATED FROM PYTHON SOURCE LINES 40-43
 
 Using the default libdevice library path
 -----------------------------------------
 We can use the default libdevice library path encoded in `triton/language/math.py`
 
-.. GENERATED FROM PYTHON SOURCE LINES 42-60
+.. GENERATED FROM PYTHON SOURCE LINES 43-58
 
 .. code-block:: default
-
 
 
     torch.manual_seed(0)
@@ -85,14 +85,12 @@ We can use the default libdevice library path encoded in `triton/language/math.p
     output_torch = torch.asin(x)
     assert x.is_cuda and output_triton.is_cuda
     n_elements = output_torch.numel()
-    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
     asin_kernel[grid](x, output_triton, n_elements, BLOCK_SIZE=1024)
     print(output_torch)
     print(output_triton)
-    print(
-        f'The maximum difference between torch and triton is '
-        f'{torch.max(torch.abs(output_torch - output_triton))}'
-    )
+    print(f'The maximum difference between torch and triton is '
+          f'{torch.max(torch.abs(output_torch - output_triton))}')
 
 
 
@@ -109,13 +107,13 @@ We can use the default libdevice library path encoded in `triton/language/math.p
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 61-64
+.. GENERATED FROM PYTHON SOURCE LINES 59-62
 
 Customize the libdevice library path
 -------------------------------------
 We can also customize the libdevice library path by passing the path to the `libdevice` library to the `asin` kernel.
 
-.. GENERATED FROM PYTHON SOURCE LINES 64-74
+.. GENERATED FROM PYTHON SOURCE LINES 62-70
 
 .. code-block:: default
 
@@ -125,10 +123,8 @@ We can also customize the libdevice library path by passing the path to the `lib
                       extern_libs={'libdevice': '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'})
     print(output_torch)
     print(output_triton)
-    print(
-        f'The maximum difference between torch and triton is '
-        f'{torch.max(torch.abs(output_torch - output_triton))}'
-    )
+    print(f'The maximum difference between torch and triton is '
+          f'{torch.max(torch.abs(output_torch - output_triton))}')
 
 
 
@@ -147,7 +143,7 @@ We can also customize the libdevice library path by passing the path to the `lib
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  0.233 seconds)
+   **Total running time of the script:** ( 0 minutes  0.241 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_07-math-functions.py:
