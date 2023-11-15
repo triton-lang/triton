@@ -261,8 +261,7 @@ public:
   template <typename T>
   Value getSharedMemoryBase(Location loc, ConversionPatternRewriter &rewriter,
                             T value) const {
-    auto ptrTy = LLVM::LLVMPointerType::get(
-        this->getTypeConverter()->convertType(rewriter.getI8Type()), 3);
+    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
     FunctionOpInterface funcOp;
     if constexpr (std::is_pointer_v<T>)
       funcOp = value->template getParentOfType<FunctionOpInterface>();
@@ -275,7 +274,9 @@ public:
     assert(bufferId != Allocation::InvalidBufferId && "BufferId not found");
     size_t offset = funcAllocation->getOffset(bufferId);
     Value offVal = i32_val(offset);
-    Value base = gep(ptrTy, smem, offVal);
+    Value base =
+        gep(ptrTy, this->getTypeConverter()->convertType(rewriter.getI8Type()),
+            smem, offVal);
     return base;
   }
 
@@ -312,9 +313,10 @@ public:
     // then (x + y) XOR z = 0byyyyxxxx XOR 0b00000zzzz = (x XOR z) + y
     // This means that we can use some immediate offsets for shared memory
     // operations.
-    auto dstPtrTy = ptr_ty(getTypeConverter()->convertType(resElemTy), 3);
+    auto dstPtrTy = ptr_ty(rewriter.getContext(), 3);
     auto dstOffset = dot(rewriter, loc, offsetVals, smemObj.strides);
-    Value dstPtrBase = gep(dstPtrTy, smemObj.base, dstOffset);
+    Value dstPtrBase = gep(dstPtrTy, getTypeConverter()->convertType(resElemTy),
+                           smemObj.base, dstOffset);
 
     auto srcEncoding = srcTy.getEncoding();
     auto srcShape = srcTy.getShape();
@@ -423,7 +425,8 @@ public:
       Value colOff = add(colOffSwizzled, colOffOrdered);
       // compute non-immediate offset
       offset = add(offset, add(rowOff, mul(colOff, strideCol)));
-      Value currPtr = gep(dstPtrTy, dstPtrBase, offset);
+      Value currPtr = gep(dstPtrTy, getTypeConverter()->convertType(resElemTy),
+                          dstPtrBase, offset);
       // compute immediate offset
       Value immediateOff;
       if (outOrder.size() == 2) {
@@ -434,7 +437,8 @@ public:
         immediateOff = i32_val(immedateOffCol);
       }
 
-      ret[elemIdx] = gep(dstPtrTy, currPtr, immediateOff);
+      ret[elemIdx] = gep(dstPtrTy, getTypeConverter()->convertType(resElemTy),
+                         currPtr, immediateOff);
     }
     return ret;
   }
@@ -479,8 +483,8 @@ public:
     SmallVector<Value> outVals(outElems);
     for (unsigned i = 0; i < numVecs; ++i) {
       Value smemAddr = sharedPtrs[i * minVec];
-      smemAddr = bitcast(smemAddr, ptr_ty(wordTy, 3));
-      Value valVec = load(smemAddr);
+      smemAddr = bitcast(smemAddr, ptr_ty(rewriter.getContext(), 3));
+      Value valVec = load(wordTy, smemAddr);
       for (unsigned v = 0; v < minVec; ++v) {
         Value currVal = extract_element(dstElemTy, valVec, i32_val(v));
         outVals[i * minVec + v] = currVal;
@@ -537,7 +541,7 @@ public:
       word = insert_element(wordTy, word, inVals[i], i32_val(i % minVec));
       if (i % minVec == minVec - 1) {
         Value smemAddr = sharedPtrs[i / minVec * minVec];
-        smemAddr = bitcast(smemAddr, ptr_ty(wordTy, 3));
+        smemAddr = bitcast(smemAddr, ptr_ty(rewriter.getContext(), 3));
         store(word, smemAddr);
       }
     }

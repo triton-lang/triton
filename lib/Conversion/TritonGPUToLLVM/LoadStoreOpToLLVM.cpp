@@ -562,8 +562,7 @@ struct StoreAsyncOpConversion
 
     Value tmaDesc =
         llFuncOp.getBody().front().getArgument(tmaInfo.TMADescArgIdx);
-    auto ptrI8SharedTy = LLVM::LLVMPointerType::get(
-        typeConverter->convertType(rewriter.getI8Type()), 3);
+    auto ptrSharedTy = LLVM::LLVMPointerType::get(ctx, 3);
 
     auto threadId = getThreadId(rewriter, loc);
     Value pred = icmp_eq(threadId, i32_val(0));
@@ -600,9 +599,10 @@ struct StoreAsyncOpConversion
         }
       }
       Value srcOffset = i32_val(b * boxStride);
-      auto srcPtrTy = ptr_ty(getTypeConverter()->convertType(elemTy), 3);
-      Value srcPtrBase = gep(srcPtrTy, smemObj.base, srcOffset);
-      auto addr = bitcast(srcPtrBase, ptrI8SharedTy);
+      auto srcPtrTy = ptr_ty(ctx, 3);
+      Value srcPtrBase = gep(srcPtrTy, getTypeConverter()->convertType(elemTy),
+                             smemObj.base, srcOffset);
+      auto addr = bitcast(srcPtrBase, ptrSharedTy);
       rewriter.create<triton::nvgpu::TMAStoreTiledOp>(loc, tmaDesc, addr, pred,
                                                       coord);
     }
@@ -750,7 +750,7 @@ struct StoreAsyncOpConversion
     Value llDst = adaptor.getDst();
     Value llSrc = adaptor.getSrc();
     auto srcShape = srcTy.getShape();
-    auto dstElemPtrTy = ptr_ty(getTypeConverter()->convertType(dstElemTy), 3);
+    auto dstElemPtrTy = ptr_ty(ctx, 3);
     Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
     smemBase = bitcast(smemBase, dstElemPtrTy);
 
@@ -761,8 +761,7 @@ struct StoreAsyncOpConversion
 
     Value tmaDesc =
         llFuncOp.getBody().front().getArgument(tmaInfo.TMADescArgIdx);
-    auto ptrI8SharedTy = LLVM::LLVMPointerType::get(
-        typeConverter->convertType(rewriter.getI8Type()), 3);
+    auto ptrSharedTy = LLVM::LLVMPointerType::get(ctx, 3);
 
     auto threadId = getThreadId(rewriter, loc);
     Value pred = int_val(1, 1);
@@ -818,7 +817,9 @@ struct StoreAsyncOpConversion
               i32_val(b * numElemsPerRep / numBox + idx), leadingDimOffset,
               numElemsPerSwizzlingRow, true);
 
-          Value addr = gep(dstElemPtrTy, smemBase, offset);
+          Value addr =
+              gep(dstElemPtrTy, getTypeConverter()->convertType(dstElemTy),
+                  smemBase, offset);
           Value words[4];
           for (unsigned i = 0; i < 8; ++i) {
             if (i % minVec == 0)
@@ -828,7 +829,7 @@ struct StoreAsyncOpConversion
           }
 
           rewriter.create<triton::nvgpu::StoreMatrixOp>(
-              loc, bitcast(addr, ptrI8SharedTy),
+              loc, bitcast(addr, ptrSharedTy),
               ValueRange{bitcast(words[0], i32_ty), bitcast(words[1], i32_ty),
                          bitcast(words[2], i32_ty), bitcast(words[3], i32_ty)});
         }
@@ -861,9 +862,11 @@ struct StoreAsyncOpConversion
                                             instrShape[1] * warpsPerCTA[1] /
                                             numBox),
                 mul(warpId0, i32_val(instrShape[0] * numElemsPerSwizzlingRow)));
-        auto srcPtrTy = ptr_ty(getTypeConverter()->convertType(dstElemTy), 3);
-        Value srcPtrBase = gep(srcPtrTy, smemBase, srcOffset);
-        auto addr = bitcast(srcPtrBase, ptrI8SharedTy);
+        auto srcPtrTy = ptr_ty(ctx, 3);
+        Value srcPtrBase =
+            gep(srcPtrTy, getTypeConverter()->convertType(dstElemTy), smemBase,
+                srcOffset);
+        auto addr = bitcast(srcPtrBase, ptrSharedTy);
         rewriter.create<triton::nvgpu::TMAStoreTiledOp>(loc, tmaDesc, addr,
                                                         pred, coord);
       }
@@ -1029,7 +1032,7 @@ struct AtomicCASOpConversion
         auto old = ptxBuilderAtomicCAS.launch(rewriter, loc, valueElemTy);
         createBarrier(rewriter, loc, numCTAs);
         Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
-        atomPtr = bitcast(atomPtr, ptr_ty(valueElemTy, 3));
+        atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
         // Only threads with mask = True store the result
         PTXBuilder ptxBuilderStore;
         auto *dstOprStore = ptxBuilderStore.newAddrOperand(atomPtr, "r");
@@ -1040,7 +1043,7 @@ struct AtomicCASOpConversion
         auto ASMReturnTy = void_ty(ctx);
         ptxBuilderStore.launch(rewriter, loc, ASMReturnTy);
         createBarrier(rewriter, loc, numCTAs);
-        Value ret = load(atomPtr);
+        Value ret = load(valueElemTy, atomPtr);
         createBarrier(rewriter, loc, numCTAs);
         rewriter.replaceOp(op, {ret});
       }
@@ -1202,7 +1205,7 @@ struct AtomicRMWOpConversion
           return success();
         }
         Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
-        atomPtr = bitcast(atomPtr, ptr_ty(valueElemTy, 3));
+        atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
         // Only threads with rmwMask = True store the result
         PTXBuilder ptxBuilderStore;
         auto &storeShared =
@@ -1212,7 +1215,7 @@ struct AtomicRMWOpConversion
         storeShared(ptrOpr, valOpr).predicate(rmwMask);
         ptxBuilderStore.launch(rewriter, loc, void_ty(ctx));
         createBarrier(rewriter, loc, numCTAs);
-        Value ret = load(atomPtr);
+        Value ret = load(valueElemTy, atomPtr);
         createBarrier(rewriter, loc, numCTAs);
         rewriter.replaceOp(op, {ret});
       }
@@ -1281,8 +1284,8 @@ struct InsertSliceOpConversion
     // object
     auto offset = dot(rewriter, loc, offsets, smemObj.strides);
     auto elemTy = getTypeConverter()->convertType(dstTy.getElementType());
-    auto elemPtrTy = ptr_ty(elemTy, 3);
-    auto smemBase = gep(elemPtrTy, smemObj.base, offset);
+    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+    auto smemBase = gep(elemPtrTy, elemTy, smemObj.base, offset);
 
     auto llSrc = adaptor.getSource();
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy);
@@ -1365,8 +1368,8 @@ struct InsertSliceAsyncOpConversion
     // Compute the offset based on the original dimensions of the shared
     // memory object
     auto dstOffset = dot(rewriter, loc, offsetVals, smemObj.strides);
-    auto dstPtrTy = ptr_ty(resElemTy, 3);
-    Value dstPtrBase = gep(dstPtrTy, smemObj.base, dstOffset);
+    auto dstPtrTy = ptr_ty(rewriter.getContext(), 3);
+    Value dstPtrBase = gep(dstPtrTy, resElemTy, smemObj.base, dstOffset);
 
     // %mask
     SmallVector<Value> maskElems;
@@ -1646,7 +1649,7 @@ struct InsertSliceAsyncV2OpConversion
     // currently only support rank == 2.
     dstOffsetCommon =
         add(dstOffsetCommon, mul(sliceCoord, i32_val(boxDims[0])));
-    auto dstPtrTy = ptr_ty(getTypeConverter()->convertType(elemTy), 3);
+    auto dstPtrTy = ptr_ty(rewriter.getContext(), 3);
 
     Value tmaDesc =
         llFuncOp.getBody().front().getArgument(tmaInfo.TMADescArgIdx);
@@ -1654,8 +1657,7 @@ struct InsertSliceAsyncV2OpConversion
     // cache-policy modes
     Value l2Desc = int_val(64, 0x1000000000000000ll);
 
-    auto ptrI8SharedTy = LLVM::LLVMPointerType::get(
-        typeConverter->convertType(rewriter.getI8Type()), 3);
+    auto ptrSharedTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
 
     SmallVector<Value> coordCommon;
     auto llCoord = getTypeConverter()->unpackLLElements(
@@ -1696,11 +1698,12 @@ struct InsertSliceAsyncV2OpConversion
     for (size_t i = 0; i < numBoxes; ++i) {
       Value dstOffset =
           add(dstOffsetCommon, i32_val(i * elemsPerBox * accNumMcast));
-      Value dstPtrBase = gep(dstPtrTy, smemObj.base, dstOffset);
+      Value dstPtrBase = gep(dstPtrTy, getTypeConverter()->convertType(elemTy),
+                             smemObj.base, dstOffset);
       SmallVector<Value> coord = coordCommon;
       coord[0] = add(coordCommon[0], i32_val(i * boxDims[0]));
       rewriter.create<triton::nvgpu::TMALoadTiledOp>(
-          loc, bitcast(dstPtrBase, ptrI8SharedTy), adaptor.getMbar(), tmaDesc,
+          loc, bitcast(dstPtrBase, ptrSharedTy), adaptor.getMbar(), tmaDesc,
           l2Desc, pred, coord, mcastMask);
     }
 
