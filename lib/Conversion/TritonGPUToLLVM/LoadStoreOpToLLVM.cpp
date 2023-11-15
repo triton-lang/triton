@@ -552,7 +552,8 @@ struct StoreAsyncOpConversion
     Value llDst = adaptor.getDst();
     Value llSrc = adaptor.getSrc();
     auto srcShape = srcTy.getShape();
-    auto smemObj = getSharedMemoryObjectFromStruct(loc, llSrc, rewriter);
+    auto smemObj =
+        getSharedMemoryObjectFromStruct(loc, llSrc, elemTy, rewriter);
 
     SmallVector<Value> offsetVals;
     for (auto i = 0; i < srcShape.size(); ++i) {
@@ -1258,7 +1259,8 @@ struct InsertSliceOpConversion
 
     // newBase = base + offset
     // Triton support either static and dynamic offsets
-    auto smemObj = getSharedMemoryObjectFromStruct(loc, llDst, rewriter);
+    auto smemObj = getSharedMemoryObjectFromStruct(
+        loc, llDst, dstTy.getElementType(), rewriter);
     SmallVector<Value, 4> offsets;
     SmallVector<Value, 4> srcStrides;
     auto mixedOffsets = op.getMixedOffsets();
@@ -1347,7 +1349,8 @@ struct InsertSliceAsyncOpConversion
     // %dst
     auto dstTy = dst.getType().cast<RankedTensorType>();
     auto dstShape = dstTy.getShape();
-    auto smemObj = getSharedMemoryObjectFromStruct(loc, llDst, rewriter);
+    auto smemObj =
+        getSharedMemoryObjectFromStruct(loc, llDst, resElemTy, rewriter);
     auto axis = op->getAttrOfType<IntegerAttr>("axis").getInt();
     SmallVector<Value, 4> offsetVals;
     SmallVector<Value, 4> srcStrides;
@@ -1609,7 +1612,9 @@ struct InsertSliceAsyncV2OpConversion
     Value dst = op.getDst();
     auto dstTy = dst.getType().cast<RankedTensorType>();
     auto dstShape = dstTy.getShape();
-    auto smemObj = getSharedMemoryObjectFromStruct(loc, llDst, rewriter);
+    auto smemObj = getSharedMemoryObjectFromStruct(
+        loc, llDst, typeConverter->convertType(dstTy.getElementType()),
+        rewriter);
 
     // the offset of coord considering multicast slicing
     SmallVector<Value> mcastOffsetVals;
