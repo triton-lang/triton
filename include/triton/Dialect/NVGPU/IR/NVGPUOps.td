@@ -29,8 +29,8 @@ include "mlir/IR/EnumAttr.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 
-def LLVM_PointerGlobal : LLVM_OpaquePointerInAddressSpace<1>;
-def LLVM_PointerShared : LLVM_OpaquePointerInAddressSpace<3>;
+def LLVM_PointerGlobal : LLVM_PointerInAddressSpace<1>;
+def LLVM_PointerShared : LLVM_PointerInAddressSpace<3>;
 
 class NVGPU_Op<string mnemonic, list<Trait> traits = []> :
     LLVM_OpBase<NVGPU_Dialect, mnemonic, traits>;
