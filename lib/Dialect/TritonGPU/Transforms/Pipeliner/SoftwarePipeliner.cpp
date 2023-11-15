@@ -39,7 +39,7 @@ bool preCondition(scf::ForOp forOp) {
                      return !def;
                    }))
     return false;
-  bool hasNestedLoop = false;
+  // Don't pipeline outer loops.
   if (forOp
           ->walk([&](Operation *op) {
             if (forOp.getOperation() == op)
