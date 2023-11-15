@@ -132,7 +132,7 @@ void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
 }
 
 SharedMemoryObject
-getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct,
+getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct, Type elemTy,
                                 ConversionPatternRewriter &rewriter) {
   ArrayRef<Type> types =
       llvmStruct.getType().cast<LLVM::LLVMStructType>().getBody();
@@ -144,6 +144,7 @@ getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct,
 
   auto rank = (elems.size() - 1) / 2;
   return {/*base=*/elems[0],
+          /*baseElemType=*/elemTy,
           /*strides=*/{elems.begin() + 1, elems.begin() + 1 + rank},
           /*offsets=*/{elems.begin() + 1 + rank, elems.end()}};
 }

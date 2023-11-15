@@ -705,8 +705,9 @@ private:
     auto dstLayout = dstTy.getEncoding();
     auto inOrd = getOrder(srcSharedLayout);
 
-    auto smemObj =
-        getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(), rewriter);
+    auto smemObj = getSharedMemoryObjectFromStruct(
+        loc, adaptor.getSrc(),
+        getTypeConverter()->convertType(srcTy.getElementType()), rewriter);
     auto elemTy = getTypeConverter()->convertType(dstTy.getElementType());
 
     auto srcStrides =
@@ -841,8 +842,8 @@ private:
       storeDistributedToShared(src, adaptor.getSrc(), dstStrides, srcIndices,
                                dst, smemBase, elemTy, loc, rewriter);
     }
-    auto smemObj =
-        SharedMemoryObject(smemBase, dstShapePerCTA, outOrd, loc, rewriter);
+    auto smemObj = SharedMemoryObject(smemBase, elemTy, dstShapePerCTA, outOrd,
+                                      loc, rewriter);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
@@ -1011,8 +1012,11 @@ private:
     Value dst = op.getResult();
     bool isMMA = supportMMA(dst, mmaLayout.getVersionMajor());
 
-    auto smemObj =
-        getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(), rewriter);
+    auto llvmElemTy = getTypeConverter()->convertType(
+        src.getType().cast<RankedTensorType>().getElementType());
+
+    auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                   llvmElemTy, rewriter);
     Value res;
     if (!isOuter && mmaLayout.isAmpere()) { // tensor core v2
       res = SharedToDotOperandMMAv2::convertLayout(

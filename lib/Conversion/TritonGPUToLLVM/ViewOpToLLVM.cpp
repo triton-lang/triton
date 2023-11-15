@@ -211,14 +211,16 @@ struct TransOpConversion
   matchAndRewrite(triton::TransOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto srcSmemObj =
-        getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(), rewriter);
+    auto llvmElemTy = getTypeConverter()->convertType(
+        op.getType().cast<RankedTensorType>().getElementType());
+    auto srcSmemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                      llvmElemTy, rewriter);
     SmallVector<Value> dstStrides = {srcSmemObj.strides[1],
                                      srcSmemObj.strides[0]};
     SmallVector<Value> dstOffsets = {srcSmemObj.offsets[1],
                                      srcSmemObj.offsets[0]};
-    auto dstSmemObj =
-        SharedMemoryObject(srcSmemObj.base, dstStrides, dstOffsets);
+    auto dstSmemObj = SharedMemoryObject(
+        srcSmemObj.base, srcSmemObj.baseElemType, dstStrides, dstOffsets);
     auto retVal = getStructFromSharedMemoryObject(loc, dstSmemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();

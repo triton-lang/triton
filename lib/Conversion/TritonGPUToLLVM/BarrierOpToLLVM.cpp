@@ -67,8 +67,10 @@ struct AllocMBarrierOpConversion : public ConvertTritonGPUOpToLLVMPattern<
                                                      op.getCount());
     }
     if (resultTensorTy) {
-      auto smemObj = SharedMemoryObject(smemBase, resultTensorTy.getShape(),
-                                        {0}, loc, rewriter);
+      auto llvmElemTy =
+          getTypeConverter()->convertType(resultTensorTy.getElementType());
+      auto smemObj = SharedMemoryObject(
+          smemBase, llvmElemTy, resultTensorTy.getShape(), {0}, loc, rewriter);
       auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
       rewriter.replaceOp(op, retVal);
     } else {
