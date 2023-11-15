@@ -60,13 +60,11 @@ Type TritonGPUToLLVMTypeConverter::convertTritonPointerType(
     for (size_t i = 0; i < 2 * shape.size(); ++i)
       types.push_back(IntegerType::get(ctx, 64));
 
-    types.push_back(LLVM::LLVMPointerType::get(convertType(eleType),
-                                               type.getAddressSpace()));
+    types.push_back(LLVM::LLVMPointerType::get(ctx, type.getAddressSpace()));
 
     return LLVM::LLVMStructType::getLiteral(ctx, types);
   }
-  return LLVM::LLVMPointerType::get(convertType(type.getPointeeType()),
-                                    type.getAddressSpace());
+  return LLVM::LLVMPointerType::get(ctx, type.getAddressSpace());
 }
 
 Value TritonGPUToLLVMTypeConverter::packLLElements(
@@ -145,7 +143,7 @@ Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
   if (auto shared_layout = layout.dyn_cast<SharedEncodingAttr>()) {
     SmallVector<Type, 4> types;
     // base ptr
-    auto ptrType = LLVM::LLVMPointerType::get(eltType, 3);
+    auto ptrType = LLVM::LLVMPointerType::get(ctx, 3);
     types.push_back(ptrType);
     // shape dims
     auto rank = type.getRank();

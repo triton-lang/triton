@@ -73,7 +73,9 @@ void StoreDSmemOp::build(OpBuilder &builder, OperationState &state, Value addr,
 unsigned StoreDSmemOp::getBitwidth() {
   auto addrTy = getAddr().getType();
   assert(addrTy.isa<LLVM::LLVMPointerType>() && "addr must be a pointer type");
-  auto elemTy = addrTy.cast<LLVM::LLVMPointerType>().getElementType();
+  if (getValues().empty())
+    return 0;
+  auto elemTy = getValues().back().getType();
   return elemTy.getIntOrFloatBitWidth();
 }
 

@@ -209,9 +209,10 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 /// (1) load_dsmem(addr, ctaId)
 /// (2) load_dsmem(addr, ctaId, vec)
 Value createLoadDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId);
+                      Value ctaId, Type elemTy);
 SmallVector<Value> createLoadDSmem(Location loc, PatternRewriter &rewriter,
-                                   Value addr, Value ctaId, unsigned vec);
+                                   Value addr, Value ctaId, unsigned vec,
+                                   Type elemTy);
 
 /// Usage of macro store_dsmem
 /// (1) store_dsmem(addr, ctaId, value, pred)
@@ -326,7 +327,7 @@ Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
                   Value val, Value pred);
 
 Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                 Value pred);
+                 Type elemTy, Value pred);
 
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i);

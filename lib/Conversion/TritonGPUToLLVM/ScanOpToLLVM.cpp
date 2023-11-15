@@ -112,7 +112,8 @@ static void storeWarpAccumulator(SmallVector<Value> &srcValues,
     Value mask = icmp_eq(laneId, i32_val(scanDim - 1));
     Value index = add(parallelLaneId, mul(warpId, i32_val(numParallelLane)));
     index = add(index, i32_val(chunkId * numParallelLane * axisNumWarps));
-    Value writePtr = gep(baseSharedMemPtr.getType(), baseSharedMemPtr, index);
+    Value writePtr = gep(baseSharedMemPtr.getType(), lastElement.getType(),
+                         baseSharedMemPtr, index);
     storeShared(rewriter, loc, writePtr, lastElement, mask);
     chunkId++;
   }
@@ -170,8 +171,9 @@ static void AddPartialReduce(SmallVector<Value> &srcValues,
     for (unsigned i = 0; i < axisNumWarps; ++i) {
       Value index = add(parallelLaneId, i32_val(numParallelLane *
                                                 (i + chunkId * axisNumWarps)));
-      Value ptr = gep(sharedMemoryPtr.getType(), sharedMemoryPtr, index);
-      Value partialReduce = load(ptr);
+      Value ptr = gep(sharedMemoryPtr.getType(), srcValues[srcIndex].getType(),
+                      sharedMemoryPtr, index);
+      Value partialReduce = load(srcValues[srcIndex].getType(), ptr);
       if (!accumulator.acc) {
         accumulator.acc = partialReduce;
         accumulator.maskedAcc = partialReduce;
@@ -411,7 +413,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   if (axisNumWarps > 1) {
     // Slow path for the case where there are multiple warps with unique data on
     // the axis.
-    Type elemPtrTys = LLVM::LLVMPointerType::get(srcValues[0].getType(), 3);
+    Type elemPtrTys = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
     Value baseSharedMemPtr = bitcast(
         getSharedMemoryBase(loc, rewriter, op.getOperation()), elemPtrTys);
     // Store the partial reducing for each warp into shared memory.
