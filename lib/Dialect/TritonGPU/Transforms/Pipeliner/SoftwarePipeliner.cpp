@@ -77,7 +77,7 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
       return;
     SmallVector<scf::ForOp> loops;
 
-    getOperation()->walk<WalkOrder::PostOrder>(
+    getOperation()->walk(
         [&loops](scf::ForOp forOp) { loops.push_back(forOp); });
 
     // All for ops that have a forOp as descendant will be tombstoned.
