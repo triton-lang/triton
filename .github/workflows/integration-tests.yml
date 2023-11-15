@@ -18,6 +18,7 @@ env:
 jobs:
   Runner-Preparation:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
       matrix-required: ${{ steps.set-matrix.outputs.matrix-required }}
       matrix-optional: ${{ steps.set-matrix.outputs.matrix-optional }}
@@ -38,6 +39,7 @@ jobs:
     needs: Runner-Preparation
 
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
 
     strategy:
       matrix:
@@ -173,6 +175,7 @@ jobs:
 
   Compare-artifacts:
     needs: Integration-Tests
+    timeout-minutes: 5
 
     runs-on: ubuntu-latest
 

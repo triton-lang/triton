@@ -18,6 +18,7 @@ jobs:
 
   Integration-Tests:
     needs: Runner-Preparation
+    timeout-minutes: 240  # 4 hours
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
