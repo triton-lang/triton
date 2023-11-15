@@ -438,6 +438,31 @@ OpFoldResult MakeRangeOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
+LogicalResult MakeRangeOp::verify() {
+  int64_t start = getStartAttr().getInt();
+  int64_t end = getEndAttr().getInt();
+  if (start > end) {
+    return this->emitOpError() << "start must be less than or equal to end";
+  }
+  auto ty = getType().dyn_cast<RankedTensorType>();
+  if (!ty) {
+    return this->emitOpError() << "return type must be a ranked tensor";
+  }
+  if (ty.getShape().size() != 1) {
+    return this->emitOpError() << "return type must be a 1D tensor";
+  }
+  if (end - start != ty.getShape()[0]) {
+    return this->emitOpError()
+           << "number of elements in returned tensor, " << ty.getShape()[0]
+           << ", must match size of range [" << start << ", " << end
+           << "), which has " << end - start << " elements";
+  }
+  if (!ty.getElementType().isInteger(32)) {
+    return this->emitOpError() << "returned tensor must have i32 elements";
+  }
+  return success();
+}
+
 //-- ReduceOp --
 static mlir::LogicalResult
 inferReduceReturnShape(const RankedTensorType &argTy, const Type &retEltTy,
