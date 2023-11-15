@@ -556,11 +556,13 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
   }
 }
 
+// -----
+
 // CHECK-NOT: triton_gpu.alloc_tensor
 // CHECK: scf.for
 // CHECK: triton_gpu.alloc_tensor
 // CHECK: scf.for
-
+//
 // The following code has the structure:
 //
 // ```
@@ -577,6 +579,10 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 // causes an assertion to fail while pipelining the outer `for`, in
 // particular while predicating the operations scheduled to be emitted
 // in the prologue.
+//
+// We check that there is no allocation before the first occurance of
+// scf.for because that would mean that the first load `%a = load()`
+// would be pipelined.
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 #mma = #triton_gpu.mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 2], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0], instrShape = [16, 8]}>
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
@@ -629,3 +635,5 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       }
     }
     tt.return
+  }
+}
