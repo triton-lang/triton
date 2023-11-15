@@ -101,7 +101,9 @@ Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
 
   bool isARow = aOrder[0] == 1;
 
-  auto aSmem = getSharedMemoryObjectFromStruct(loc, llA, rewriter);
+  auto aSmem = getSharedMemoryObjectFromStruct(
+      loc, llA, typeConverter->convertType(aTensorTy.getElementType()),
+      rewriter);
   Value strideAM = aSmem.strides[0];
   Value strideAK = aSmem.strides[1];
   Value strideA0 = isARow ? strideAK : strideAM;
@@ -166,7 +168,9 @@ Value loadBFMA(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
 
   bool isBRow = bOrder[0] == 1;
 
-  auto bSmem = getSharedMemoryObjectFromStruct(loc, llB, rewriter);
+  auto bSmem = getSharedMemoryObjectFromStruct(
+      loc, llB, typeConverter->convertType(bTensorTy.getElementType()),
+      rewriter);
   Value strideBN = bSmem.strides[1];
   Value strideBK = bSmem.strides[0];
   Value strideB0 = isBRow ? strideBN : strideBK;

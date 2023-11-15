@@ -531,7 +531,7 @@ public:
 
     SmallVector<Value> srcStrides = {dstStrides[0], dstStrides[1]};
     SmallVector<Value> offsetVals = {i32_val(0), i32_val(0)};
-    SharedMemoryObject smemObj(smemBase, srcStrides, offsetVals);
+    SharedMemoryObject smemObj(smemBase, elemTy, srcStrides, offsetVals);
 
     DenseMap<unsigned, Value> sharedPtrs =
         getSwizzledSharedPtrs(loc, inVec, srcTy, dstSharedLayout, dstElemTy,

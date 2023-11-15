@@ -695,8 +695,8 @@ struct AllocTensorOpConversion
     }
 
     auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
-    auto smemObj =
-        SharedMemoryObject(smemBase, shapePerCTA, newOrder, loc, rewriter);
+    auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, shapePerCTA,
+                                      newOrder, loc, rewriter);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
@@ -719,10 +719,12 @@ struct ExtractSliceOpConversion
     assert(op.hasUnitStride() &&
            "Only unit stride supported by ExtractSliceOpConversion");
 
+    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+
     // newBase = base + offset
     // Triton supports either static and dynamic offsets
-    auto smemObj =
-        getSharedMemoryObjectFromStruct(loc, adaptor.getSource(), rewriter);
+    auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSource(),
+                                                   llvmElemTy, rewriter);
     SmallVector<Value, 4> opOffsetVals;
     SmallVector<Value, 4> offsetVals;
     auto mixedOffsets = op.getMixedOffsets();
@@ -750,10 +752,9 @@ struct ExtractSliceOpConversion
       }
     }
 
-    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto elemPtrTy = ptr_ty(llvmElemTy, 3);
     smemObj = SharedMemoryObject(gep(elemPtrTy, smemObj.base, offset),
-                                 strideVals, offsetVals);
+                                 llvmElemTy, strideVals, offsetVals);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
