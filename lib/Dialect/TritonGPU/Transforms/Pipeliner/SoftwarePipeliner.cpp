@@ -39,11 +39,17 @@ bool preCondition(scf::ForOp forOp) {
                      return !def;
                    }))
     return false;
-  for (Operation &op : forOp.getBody()->without_terminator()) {
-    // Only pipeline single block loops.
-    if (isa<scf::ForOp, scf::IfOp, scf::WhileOp>(op))
-      return false;
-  }
+  bool hasNestedLoop = false;
+  if (forOp
+          ->walk([&](Operation *op) {
+            if (forOp.getOperation() == op)
+              return WalkResult::advance();
+            if (isa<scf::ForOp, scf::WhileOp>(op))
+              return WalkResult::interrupt();
+            return WalkResult::advance();
+          })
+          .wasInterrupted())
+    return false;
   return true;
 }
 
