@@ -1,10 +1,8 @@
 #include "PipelineExpander.h"
 #include "Schedule.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
-#include "mlir/IR/Visitors.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -31,10 +29,8 @@ using namespace mlir;
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-// The main loop pipelining. Return the new ForOp if it was successfully
-// pipelined.
-static void pipelineLoop(scf::ForOp forOp, int numStages) {
-  mlir::triton::PipeliningOption options;
+// Return true if the preconditions for pipelining the loop are met.
+bool preCondition(scf::ForOp forOp) {
   // Skip loop with distance > 1 for now.
   // TODO: relax the constraint in the expander.
   if (llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
@@ -42,6 +38,18 @@ static void pipelineLoop(scf::ForOp forOp, int numStages) {
                      Operation *def = operand.getDefiningOp();
                      return !def;
                    }))
+    return false;
+  for (Operation &op : forOp.getBody()->without_terminator()) {
+    // Only pipeline single block loops.
+    if (isa<scf::ForOp, scf::IfOp, scf::WhileOp>(op))
+      return false;
+  }
+  return true;
+}
+
+static void pipelineLoop(scf::ForOp forOp, int numStages) {
+  mlir::triton::PipeliningOption options;
+  if (!preCondition(forOp))
     return;
 
   bool foundSchedule = false;
@@ -56,9 +64,8 @@ static void pipelineLoop(scf::ForOp forOp, int numStages) {
   FailureOr<scf::ForOp> newForOp =
       mlir::triton::pipelineForLoop(rewriter, forOp, options);
 
-  if (succeeded(newForOp)) {
+  if (succeeded(newForOp))
     mlir::triton::asyncLaunchDots(newForOp.value());
-  }
 }
 
 namespace {
@@ -76,26 +83,8 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
     if (this->numStages <= 1)
       return;
     SmallVector<scf::ForOp> loops;
-
-    getOperation()->walk(
-        [&loops](scf::ForOp forOp) { loops.push_back(forOp); });
-
-    // All for ops that have a forOp as descendant will be tombstoned.
+    getOperation()->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
     for (scf::ForOp forOp : loops) {
-      if (!forOp)
-        continue;
-      while ((forOp = forOp.getOperation()->getParentOfType<scf::ForOp>())) {
-        scf::ForOp *it = std::find(loops.begin(), loops.end(), forOp);
-        if (it != loops.end()) {
-          *it = nullptr;
-        }
-      }
-    }
-
-    // Pipeline the loops that were not found to be ancestors of other loops.
-    for (scf::ForOp forOp : loops) {
-      if (!forOp)
-        continue;
       pipelineLoop(forOp, numStages);
     }
   }
