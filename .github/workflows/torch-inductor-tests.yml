@@ -2,7 +2,7 @@ name: Torchinductor
 
 on:
   workflow_run:
-    workflows: ["Wheel"]
+    workflows: ["Wheels"]
     types: [completed]
 
 jobs:
