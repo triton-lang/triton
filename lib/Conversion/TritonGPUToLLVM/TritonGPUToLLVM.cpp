@@ -140,43 +140,42 @@ struct PrintOpConversion
       os << "pid (" << getFormatSubstr(pid[0]) << ", "
          << getFormatSubstr(pid[1]) << ", " << getFormatSubstr(pid[2]) << ")%s";
       llPrintf(formatStr, {pid[0], pid[1], pid[2], prefixStr}, rewriter);
-    } else {
-      for (size_t i = 0; i < op.getNumOperands(); i++) {
-        // Elements of the tensor that are resident in this GPU thread.
-        auto elems = getTypeConverter()->unpackLLElements(
-            loc, adaptor.getOperands()[i], rewriter,
-            op.getOperand(i).getType());
+      return success();
+    }
 
-        // Get the indices of `elems` within the tensor.  Note that if `elems`
-        // has an "interesting" layout, then these will not be in any
-        // particularly nice order.
+    for (size_t i = 0; i < op.getNumOperands(); i++) {
+      // Elements of the tensor that are resident in this GPU thread.
+      auto elems = getTypeConverter()->unpackLLElements(
+          loc, adaptor.getOperands()[i], rewriter, op.getOperand(i).getType());
 
-        // Extract the shape of the tensor being printed and use it to figure
-        // out how many digits we need for each of the dimensions.
-        SmallVector<int, 8> dimWidths;
-        SmallVector<SmallVector<Value>> indices;
-        if (auto rankedTy =
-                op.getOperand(i).getType().dyn_cast<RankedTensorType>()) {
-          indices =
-              emitIndices(loc, rewriter, rankedTy.getEncoding(), rankedTy);
-          for (int64_t dim : rankedTy.getShape()) {
-            if (dim > 0) {
-              dimWidths.push_back(static_cast<int>(std::ceil(std::log10(dim))));
-            } else {
-              dimWidths.push_back(0);
-            }
+      // Get the indices of `elems` within the tensor.  Note that if `elems` has
+      // an "interesting" layout, then these will not be in any particularly
+      // nice order.
+
+      // Extract the shape of the tensor being printed and use it to figure out
+      // how many digits we need for each of the dimensions.
+      SmallVector<int, 8> dimWidths;
+      SmallVector<SmallVector<Value>> indices;
+      if (auto rankedTy =
+              op.getOperand(i).getType().dyn_cast<RankedTensorType>()) {
+        indices = emitIndices(loc, rewriter, rankedTy.getEncoding(), rankedTy);
+        for (int64_t dim : rankedTy.getShape()) {
+          if (dim > 0) {
+            dimWidths.push_back(static_cast<int>(std::ceil(std::log10(dim))));
+          } else {
+            dimWidths.push_back(0);
           }
-        } else {
-          // We're printing a scalar.
-          assert(elems.size() == 1);
-          indices.push_back({});
         }
+      } else {
+        // We're printing a scalar.
+        assert(elems.size() == 1);
+        indices.push_back({});
+      }
 
-        if (!elems.empty()) {
-          printTensor(prefixStr, /*operand=*/i,
-                      /*numOperands=*/op.getNumOperands(), elems, pid, indices,
-                      dimWidths, rewriter);
-        }
+      if (!elems.empty()) {
+        printTensor(prefixStr, /*operand=*/i,
+                    /*numOperands=*/op.getNumOperands(), elems, pid, indices,
+                    dimWidths, rewriter);
       }
     }
     rewriter.eraseOp(op);
@@ -306,8 +305,7 @@ struct PrintOpConversion
 
     auto *context = rewriter.getContext();
 
-    SmallVector<Type> argsType{ptr_ty(IntegerType::get(context, 8)),
-                               ptr_ty(IntegerType::get(context, 8))};
+    SmallVector<Type> argsType{ptr_ty(context), ptr_ty(context)};
     auto funcType = LLVM::LLVMFunctionType::get(i32_ty, argsType);
 
     ConversionPatternRewriter::InsertionGuard guard(rewriter);
@@ -360,9 +358,8 @@ struct PrintOpConversion
 
   static void llPrintf(Value msg, ValueRange args,
                        ConversionPatternRewriter &rewriter) {
-    Type int8Ptr = ptr_ty(i8_ty);
-
     auto *ctx = rewriter.getContext();
+    Type ptr = ptr_ty(ctx);
     auto moduleOp =
         rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     auto funcOp = getVprintfDeclaration(rewriter);
@@ -371,7 +368,7 @@ struct PrintOpConversion
     Value one = i32_val(1);
     Value zero = i32_val(0);
 
-    Value bufferPtr = null(int8Ptr);
+    Value bufferPtr = null(ptr);
 
     SmallVector<Value, 16> newArgs;
     if (args.size() >= 1) {
@@ -386,16 +383,16 @@ struct PrintOpConversion
 
       Type structTy = LLVM::LLVMStructType::getLiteral(ctx, argTypes);
       auto allocated =
-          rewriter.create<LLVM::AllocaOp>(loc, ptr_ty(structTy), one,
+          rewriter.create<LLVM::AllocaOp>(loc, ptr_ty(ctx), structTy, one,
                                           /*alignment=*/0);
 
       for (const auto &entry : llvm::enumerate(newArgs)) {
         auto index = i32_val(entry.index());
-        auto fieldPtr = gep(ptr_ty(argTypes[entry.index()]), allocated,
+        auto fieldPtr = gep(ptr_ty(ctx), argTypes[entry.index()], allocated,
                             ArrayRef<Value>{zero, index});
         store(entry.value(), fieldPtr);
       }
-      bufferPtr = bitcast(allocated, int8Ptr);
+      bufferPtr = bitcast(allocated, ptr);
     }
 
     SmallVector<Value> operands{msg, bufferPtr};
@@ -489,8 +486,7 @@ struct AssertOpConversion
     // void __assert_fail(const char * assertion, const char * file, unsigned
     // int line, const char * function);
     auto *ctx = rewriter.getContext();
-    SmallVector<Type> argsType{ptr_ty(i8_ty), ptr_ty(i8_ty), i32_ty,
-                               ptr_ty(i8_ty),
+    SmallVector<Type> argsType{ptr_ty(ctx), ptr_ty(ctx), i32_ty, ptr_ty(ctx),
                                rewriter.getIntegerType(sizeof(size_t) * 8)};
     auto funcType = LLVM::LLVMFunctionType::get(void_ty(ctx), argsType);
 
@@ -638,11 +634,14 @@ struct AddPtrOpConversion
     Location loc = op->getLoc();
     auto resultTy = op.getType();
     auto offsetTy = op.getOffset().getType();
-    auto ptrTy = op.getPtr().getType();
     auto resultTensorTy = resultTy.dyn_cast<RankedTensorType>();
     if (resultTensorTy) {
       unsigned elems = getTotalElemsPerThread(resultTy);
       Type elemTy =
+          getTypeConverter()->convertType(resultTensorTy.getElementType()
+                                              .cast<triton::PointerType>()
+                                              .getPointeeType());
+      Type ptrTy =
           getTypeConverter()->convertType(resultTensorTy.getElementType());
       auto ptrs = getTypeConverter()->unpackLLElements(loc, adaptor.getPtr(),
                                                        rewriter, ptrTy);
@@ -650,15 +649,18 @@ struct AddPtrOpConversion
           loc, adaptor.getOffset(), rewriter, offsetTy);
       SmallVector<Value> resultVals(elems);
       for (unsigned i = 0; i < elems; ++i) {
-        resultVals[i] = gep(elemTy, ptrs[i], offsets[i]);
+        resultVals[i] = gep(ptrTy, elemTy, ptrs[i], offsets[i]);
       }
       Value view = getTypeConverter()->packLLElements(loc, resultVals, rewriter,
                                                       resultTy);
       rewriter.replaceOp(op, view);
     } else {
       assert(resultTy.isa<triton::PointerType>());
-      Type llResultTy = getTypeConverter()->convertType(resultTy);
-      Value result = gep(llResultTy, adaptor.getPtr(), adaptor.getOffset());
+      auto resultPtrTy = getTypeConverter()->convertType(resultTy);
+      auto resultElemTy = getTypeConverter()->convertType(
+          resultTy.cast<triton::PointerType>().getPointeeType());
+      Value result =
+          gep(resultPtrTy, resultElemTy, adaptor.getPtr(), adaptor.getOffset());
       rewriter.replaceOp(op, result);
     }
     return success();
@@ -676,9 +678,7 @@ struct AllocTensorOpConversion
     Location loc = op->getLoc();
     Value smemBase = getSharedMemoryBase(loc, rewriter, op.getResult());
     auto resultTy = op.getType().dyn_cast<RankedTensorType>();
-    auto llvmElemTy =
-        getTypeConverter()->convertType(resultTy.getElementType());
-    auto elemPtrTy = ptr_ty(llvmElemTy, 3);
+    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     smemBase = bitcast(smemBase, elemPtrTy);
     auto sharedLayout = resultTy.getEncoding().cast<SharedEncodingAttr>();
     auto order = sharedLayout.getOrder();
@@ -694,6 +694,8 @@ struct AllocTensorOpConversion
       newOrder = SmallVector<unsigned>(order.begin(), order.end());
     }
 
+    auto llvmElemTy =
+        getTypeConverter()->convertType(resultTy.getElementType());
     auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
     auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, shapePerCTA,
                                       newOrder, loc, rewriter);
@@ -752,9 +754,10 @@ struct ExtractSliceOpConversion
       }
     }
 
-    auto elemPtrTy = ptr_ty(llvmElemTy, 3);
-    smemObj = SharedMemoryObject(gep(elemPtrTy, smemObj.base, offset),
-                                 llvmElemTy, strideVals, offsetVals);
+    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+    smemObj =
+        SharedMemoryObject(gep(elemPtrTy, llvmElemTy, smemObj.base, offset),
+                           llvmElemTy, strideVals, offsetVals);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
