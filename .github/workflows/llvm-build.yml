@@ -20,6 +20,7 @@ jobs:
   build:
     name: Build on ${{ matrix.config.runner }}
     runs-on: ${{ matrix.config.runs_on }}
+    timeout-minutes: 240  # 4 hours
 
     strategy:
       fail-fast: true

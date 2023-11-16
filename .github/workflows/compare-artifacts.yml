@@ -9,6 +9,8 @@ on:
 jobs:
   Compare-artifacts:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
 
     steps:
