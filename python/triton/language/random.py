@@ -108,13 +108,18 @@ def randint4x(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
 
 
 @jit
-def uint32_to_uniform_float(x):
+def uint_to_uniform_float(x):
     """
-    Numerically stable function to convert a random uint32 into a random float uniformly sampled in [0, 1).
+    Numerically stable function to convert a random uint into a random float uniformly sampled in [0, 1).
     """
-    x = x.to(tl.int32, bitcast=True)
-    # maximum value such that `MAX_INT * scale < 1.0` (with float rounding)
-    scale = 4.6566127342e-10
+    if x.dtype == tl.uint32:
+        # maximum value such that `MAX_INT * scale < 1.0` (with float rounding)
+        x = x.to(tl.int32, bitcast=True)
+        scale = 4.6566127342e-10
+    else:
+        tl.static_assert(x.dtype == tl.uint64)
+        x = x.to(tl.int64, bitcast=True)
+        scale = 1.0842021724855044e-19
     x = tl.where(x < 0, -x - 1, x)
     return x * scale
 
@@ -128,9 +133,8 @@ def rand(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     :param seed: The seed for generating random numbers.
     :param offsets: The offsets to generate random numbers for.
     """
-    offset = offset.to(tl.uint32, bitcast=True)
     source = randint(seed, offset, n_rounds)
-    return uint32_to_uniform_float(source)
+    return uint_to_uniform_float(source)
 
 
 @jit
@@ -142,12 +146,11 @@ def rand4x(seed, offsets, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     :param seed: The seed for generating random numbers.
     :param offsets: The offsets to generate random numbers for.
     """
-    offsets = offsets.to(tl.uint32, bitcast=True)
     i1, i2, i3, i4 = randint4x(seed, offsets, n_rounds)
-    u1 = uint32_to_uniform_float(i1)
-    u2 = uint32_to_uniform_float(i2)
-    u3 = uint32_to_uniform_float(i3)
-    u4 = uint32_to_uniform_float(i4)
+    u1 = uint_to_uniform_float(i1)
+    u2 = uint_to_uniform_float(i2)
+    u3 = uint_to_uniform_float(i3)
+    u4 = uint_to_uniform_float(i4)
     return u1, u2, u3, u4
 
 
@@ -175,8 +178,8 @@ def randn(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     :param offsets: The offsets to generate random numbers for.
     """
     i1, i2, _, _ = randint4x(seed, offset, n_rounds)
-    u1 = uint32_to_uniform_float(i1)
-    u2 = uint32_to_uniform_float(i2)
+    u1 = uint_to_uniform_float(i1)
+    u2 = uint_to_uniform_float(i2)
     n1, _ = pair_uniform_to_normal(u1, u2)
     return n1
 
