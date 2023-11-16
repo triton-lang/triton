@@ -574,13 +574,22 @@ bool isaDistributedLayout(Attribute layout) {
          layout.isa<SliceEncodingAttr>();
 }
 
-bool isSharedEncoding(Value value) {
+template <typename T>
+bool isEncoding(Value value) {
   auto type = value.getType();
   if (auto tensorType = type.dyn_cast<RankedTensorType>()) {
     auto encoding = tensorType.getEncoding();
-    return encoding && encoding.isa<triton::gpu::SharedEncodingAttr>();
+    return encoding && encoding.isa<T>();
   }
   return false;
+}
+
+bool isSharedEncoding(Value value) {
+  return isEncoding<triton::gpu::SharedEncodingAttr>(value);
+}
+
+bool isDotOperandEncoding(Value value) {
+  return isEncoding<triton::gpu::DotOperandEncodingAttr>(value);
 }
 
 bool isExpensiveCat(CatOp cat, Attribute targetEncoding) {
@@ -1596,6 +1605,12 @@ struct CanonicalizeConvertFromConvert
     // cvt(view) -> view
     if (auto view = dyn_cast<triton::ViewOp>(arg)) {
       if (isExpensiveView(view.getOperand().getType(), op.getType()))
+        return failure();
+      // Part of values with dot operand encoding will be packed/unpacked as
+      // i32 elements when lowering to LLVM. To avoid errors, skip this folding
+      // when either the operand or result of view has a dot operand encoding.
+      if (isDotOperandEncoding(op->getOperand(0)) ||
+          isDotOperandEncoding(op->getResult(0)))
         return failure();
       rewriter.replaceOpWithNewOp<triton::ViewOp>(
           op, op->getResult(0).getType(), view.getResult());
