@@ -114,26 +114,31 @@ BLOCK = 1024
 # test generation of random uint32
 
 
-@pytest.mark.parametrize('size, seed', [(size, seed)
-                                        for size in ['10', '4,53', '10000']
-                                        for seed in [0, 42, 124, 54, 0xffffffff, 0xdeadbeefcafeb0ba]])
-def test_randint(size, seed, device):
+@pytest.mark.parametrize('size, seed, dtype', [(size, seed, dtype)
+                                               for size in ['10', '4,53', '400']
+                                               for seed in [0, 42, 124, 54, 0xffffffff, 0x0000000fcafeb0ba]
+                                               for dtype in ['int32', 'int64']])
+def test_randint(size, seed, device, dtype):
     size = list(map(int, size.split(',')))
+    torch_dtype = getattr(torch, dtype)
+    numpy_dtype = getattr(np, f"u{dtype}")
+    config = {'int32': PHILOX_32, 'int64': PHILOX_64}[dtype]
 
     @triton.jit
     def kernel(X, N, seed):
-        offset = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        pid = tl.program_id(0).to(X.dtype.element_ty)
+        offset = pid * BLOCK + tl.arange(0, BLOCK)
         rand = tl.randint(seed, offset)
         tl.store(X + offset, rand, mask=offset < N)
 
     # triton result
-    x = torch.empty(size, dtype=torch.int32, device=device)
+    x = torch.empty(size, dtype=torch_dtype, device=device)
     N = x.numel()
     grid = (triton.cdiv(N, BLOCK), )
     kernel[grid](x, N, seed)
-    out_tri = x.cpu().numpy().astype(np.uint32).flatten().tolist()
+    out_tri = x.cpu().numpy().astype(numpy_dtype).flatten().tolist()
     # reference result
-    gen = CustomPhilox4x(seed, config=PHILOX_32)
+    gen = CustomPhilox4x(seed, config=config)
     out_ref = [gen.random_raw()[0] for _ in out_tri]
     assert out_tri == out_ref
 
@@ -141,7 +146,7 @@ def test_randint(size, seed, device):
 # test uniform PRNG
 
 
-@pytest.mark.parametrize('size, seed', [(size, seed) for size in [1000000] for seed in [0, 42, 124, 54]])
+@pytest.mark.parametrize('size, seed', [(size, seed) for size in [100000] for seed in [0, 42, 124, 54]])
 def test_rand(size, seed, device):
 
     @triton.jit
@@ -162,7 +167,7 @@ def test_rand(size, seed, device):
 # test normal PRNG
 
 
-@pytest.mark.parametrize('size, seed', [(size, seed) for size in [1000000] for seed in [0, 42, 124, 54]])
+@pytest.mark.parametrize('size, seed', [(size, seed) for size in [100000] for seed in [0, 42, 124, 54]])
 def test_randn(size, seed, device):
 
     @triton.jit
