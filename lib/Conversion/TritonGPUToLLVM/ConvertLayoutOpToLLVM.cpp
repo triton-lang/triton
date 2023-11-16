@@ -901,7 +901,7 @@ private:
     auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
     auto dstTy = op.getResult().getType().cast<RankedTensorType>();
     if (matchMmaV3AndDotOperandLayout(srcTy, dstTy)) {
-      rewriter.replaceOp(op, op.getSrc());
+      rewriter.replaceOp(op, adaptor.getSrc());
       return success();
     }
 
@@ -975,7 +975,7 @@ private:
     auto dstTy = op.getResult().getType().cast<RankedTensorType>();
     if (triton::gpu::getTotalElemsPerThread(srcTy) ==
         triton::gpu::getTotalElemsPerThread(dstTy)) {
-      rewriter.replaceOp(op, op.getSrc());
+      rewriter.replaceOp(op, adaptor.getSrc());
       return success();
     }
     // get source values
