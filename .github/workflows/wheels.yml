@@ -7,6 +7,7 @@ on:
 jobs:
 
   Build-Wheels:
+    timeout-minutes: 60
 
     runs-on: [self-hosted, CPU]
     permissions:
