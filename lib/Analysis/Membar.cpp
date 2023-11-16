@@ -100,7 +100,6 @@ void MembarAnalysis::visitTerminator(Operation *op,
 
 void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
   OpBuilder::InsertionGuard g(*builder);
-  builder->setInsertionPointAfter(op);
   auto barrierOp = builder->create<gpu::BarrierOp>(op->getLoc());
   if (auto optionalAgentId = getWSAgentId(op)) {
     int agentId = *optionalAgentId, roleId = 0;
@@ -137,6 +136,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       !isa<gpu::BarrierOp>(op->getNextNode())) {
     // If the current op is an async wait and the next op is not a barrier we
     // insert a barrier op and sync
+    builder->setInsertionPointAfter(op);
     insertBarrier(op, builder);
     blockInfo->sync();
     return;
@@ -189,6 +189,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   }
 
   if (blockInfo->isIntersected(curBlockInfo)) {
+    builder->setInsertionPoint(op);
     insertBarrier(op, builder);
     blockInfo->sync();
   }
