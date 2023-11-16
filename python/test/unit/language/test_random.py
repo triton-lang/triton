@@ -196,21 +196,23 @@ def test_randn(size, seed, dtype, device):
 # tl.rand() should never produce >=1.0
 
 
-def test_rand_limits(device):
+@pytest.mark.parametrize('dtype', ['int32', 'int64'])
+def test_rand_limits(dtype, device):
 
     @triton.jit
     def kernel(input, output, n: tl.constexpr):
         idx = tl.arange(0, n)
-        x = tl.load(input + idx).to(tl.uint32, bitcast=True)
+        x = tl.load(input + idx)
         y = tl.random.uint_to_uniform_float(x)
-        tl.store(output + idx, y.to(tl.int32, bitcast=True))
+        tl.store(output + idx, y)
 
-    min_max_int32 = torch.tensor([
-        torch.iinfo(torch.int32).min,
-        torch.iinfo(torch.int32).max,
-    ], dtype=torch.int32, device=device)
+    torch_dtype = getattr(torch, dtype)
+    min_max_int = torch.tensor([
+        torch.iinfo(torch_dtype).min,
+        torch.iinfo(torch_dtype).max,
+    ], dtype=torch_dtype, device=device)
     output = torch.empty(2, dtype=torch.float32, device=device)
-    kernel[(1, )](min_max_int32, output, 2)
+    kernel[(1, )](min_max_int, output, 2)
 
     assert output[0] == output[1]
     assert 1.0 - torch.finfo(torch.float32).eps <= output[0].item() < 1.0
