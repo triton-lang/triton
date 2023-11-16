@@ -2062,8 +2062,8 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 // -----
 
 //  CHECK-LABEL: reduce_slice
-//  GCN: llvm.store
-//  GCN: llvm.load
+//  GCN-NOT: llvm.store
+//  GCN-NOT: llvm.load
 //  PTX-NOT: st.shared
 //  PTX-NOT: ld.shared
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [4, 4, 2], warpsPerCTA = [2, 4, 2], order = [2, 0, 1], CTAsPerCGA = [1, 1, 1], CTASplitNum = [1, 1, 1], CTAOrder = [0, 1, 2]}>
