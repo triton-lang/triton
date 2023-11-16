@@ -225,3 +225,82 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     tt.return
   }
 }
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 4], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#shared = #triton_gpu.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0], CTAsPerCGA = [1, 4], CTASplitNum = [1, 1], CTAOrder = [0, 1], hasLeadingOffset = true}>
+// CHECK-LABEL: alloc_mbarrier
+// CHECK-NOT: mbarrier0
+module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  tt.func @alloc_mbarrier(%basePtr: !tt.ptr<f16> {tt.divisibility = 8 : i32}, %dim0: i64, %dim1: i64, %stride0: i64, %stride1: i64, %coord0: i32, %coord1: i32) {
+    %mbar = triton_nvidia_gpu.alloc_mbarrier { count = 128 : i32 } : !tt.ptr<i64, 3>
+    %dst = triton_gpu.alloc_tensor : tensor<1x64x64xf16, #shared>
+    %c0 = arith.constant 0 : i32
+    %src = tt.make_tensor_ptr %basePtr, [%dim0, %dim1], [%stride0, %stride1], [%coord0, %coord1] {order = array<i32: 1, 0>} : !tt.ptr<tensor<64x64xf16, #blocked>, 1>
+    %res = triton_nvidia_gpu.insert_slice_async_v2 %src, %dst, %c0, %mbar {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 0, 0>} : !tt.ptr<tensor<64x64xf16, #blocked>, 1>, tensor<1x64x64xf16, #shared>, i32, !tt.ptr<i64, 3> -> tensor<1x64x64xf16, #shared>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 4], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#shared = #triton_gpu.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0], CTAsPerCGA = [1, 4], CTASplitNum = [1, 1], CTAOrder = [0, 1], hasLeadingOffset = true}>
+// CHECK-LABEL: barrier
+// CHECK: barrier0
+module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  tt.func @barrier(%basePtr: !tt.ptr<f16> {tt.divisibility = 8 : i32}, %dim0: i64, %dim1: i64, %stride0: i64, %stride1: i64, %coord0: i32, %coord1: i32) {
+    %mbar = triton_nvidia_gpu.alloc_mbarrier { count = 128 : i32 } : !tt.ptr<i64, 3>
+    %dst = triton_gpu.alloc_tensor : tensor<1x64x64xf16, #shared>
+    %c0 = arith.constant 0 : i32
+    %src = tt.make_tensor_ptr %basePtr, [%dim0, %dim1], [%stride0, %stride1], [%coord0, %coord1] {order = array<i32: 1, 0>} : !tt.ptr<tensor<64x64xf16, #blocked>, 1>
+    // Write
+    %res = triton_nvidia_gpu.insert_slice_async_v2 %src, %dst, %c0, %mbar {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 0, 0>} : !tt.ptr<tensor<64x64xf16, #blocked>, 1>, tensor<1x64x64xf16, #shared>, i32, !tt.ptr<i64, 3> -> tensor<1x64x64xf16, #shared>
+    // Read
+    %1 = triton_gpu.extract_slice %dst[0, 0, 0][1, 64, 64][1, 1, 1] : tensor<1x64x64xf16, #shared> to tensor<64x64xf16, #shared>
+    %2 = triton_gpu.convert_layout %1 : (tensor<64x64xf16, #shared>) -> tensor<64x64xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 4], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#shared = #triton_gpu.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0], CTAsPerCGA = [1, 4], CTASplitNum = [1, 1], CTAOrder = [0, 1], hasLeadingOffset = true}>
+// CHECK-LABEL: barrier_ws_overlap
+// CHECK: bar.sync
+// CHECK-NOT: bar.sync
+module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  tt.func @barrier_ws_overlap(%basePtr: !tt.ptr<f16> {tt.divisibility = 8 : i32}, %dim0: i64, %dim1: i64, %stride0: i64, %stride1: i64, %coord0: i32, %coord1: i32) {
+    %mbar = triton_nvidia_gpu.alloc_mbarrier { count = 128 : i32 } : !tt.ptr<i64, 3>
+    %dst = triton_gpu.alloc_tensor : tensor<1x64x64xf16, #shared>
+    %c0 = arith.constant 0 : i32
+    %src = tt.make_tensor_ptr %basePtr, [%dim0, %dim1], [%stride0, %stride1], [%coord0, %coord1] {order = array<i32: 1, 0>} : !tt.ptr<tensor<64x64xf16, #blocked>, 1>
+    // Write
+    %res = triton_nvidia_gpu.insert_slice_async_v2 %src, %dst, %c0, %mbar {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 0, 0>} : !tt.ptr<tensor<64x64xf16, #blocked>, 1>, tensor<1x64x64xf16, #shared>, i32, !tt.ptr<i64, 3> -> tensor<1x64x64xf16, #shared>
+    // Read
+    %1 = triton_gpu.extract_slice %dst[0, 0, 0][1, 64, 64][1, 1, 1] : tensor<1x64x64xf16, #shared> to tensor<64x64xf16, #shared>
+    %2 = triton_gpu.convert_layout %1 {async_agent=dense<[1]>: tensor<1xi32>, agent.mutex_role=1: i32} : (tensor<64x64xf16, #shared>) -> tensor<64x64xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 4], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#shared = #triton_gpu.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0], CTAsPerCGA = [1, 4], CTASplitNum = [1, 1], CTAOrder = [0, 1], hasLeadingOffset = true}>
+// CHECK-LABEL: barrier_ws_wait
+// CHECK: bar.sync
+// CHECK-NOT: bar.sync
+module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  tt.func @barrier_ws_wait(%basePtr: !tt.ptr<f16> {tt.divisibility = 8 : i32}, %dim0: i64, %dim1: i64, %stride0: i64, %stride1: i64, %coord0: i32, %coord1: i32) {
+    %mbar = triton_nvidia_gpu.alloc_mbarrier { count = 128 : i32 } : !tt.ptr<i64, 3>
+    %dst = triton_gpu.alloc_tensor : tensor<1x64x64xf16, #shared>
+    %c0 = arith.constant 0 : i32
+    %src = tt.make_tensor_ptr %basePtr, [%dim0, %dim1], [%stride0, %stride1], [%coord0, %coord1] {order = array<i32: 1, 0>} : !tt.ptr<tensor<64x64xf16, #blocked>, 1>
+    %res = triton_nvidia_gpu.insert_slice_async_v2 %src, %dst, %c0, %mbar {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 0, 0>} : !tt.ptr<tensor<64x64xf16, #blocked>, 1>, tensor<1x64x64xf16, #shared>, i32, !tt.ptr<i64, 3> -> tensor<1x64x64xf16, #shared>
+    triton_gpu.async_wait { num=0: i32, async_agent=dense<[1]>: tensor<1xi32>, agent.mutex_role=1: i32 }
+    tt.return
+  }
+}
