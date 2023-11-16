@@ -698,22 +698,22 @@ void init_triton_ir(py::module &&m) {
                  v, self.getBuilder().getI1Type()));
            })
       .def("get_int8",
-           [](TritonOpBuilder &self, uint64_t v) -> mlir::Value {
+           [](TritonOpBuilder &self, int64_t v) -> mlir::Value {
              return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
                  v, self.getBuilder().getI8Type()));
            })
       .def("get_int16",
-           [](TritonOpBuilder &self, uint64_t v) -> mlir::Value {
+           [](TritonOpBuilder &self, int64_t v) -> mlir::Value {
              return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
                  v, self.getBuilder().getI16Type()));
            })
       .def("get_int32",
-           [](TritonOpBuilder &self, uint64_t v) -> mlir::Value {
+           [](TritonOpBuilder &self, int64_t v) -> mlir::Value {
              return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
                  v, self.getBuilder().getI32Type()));
            })
       .def("get_int64",
-           [](TritonOpBuilder &self, uint64_t v) -> mlir::Value {
+           [](TritonOpBuilder &self, int64_t v) -> mlir::Value {
              return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
                  v, self.getBuilder().getI64Type()));
            })
