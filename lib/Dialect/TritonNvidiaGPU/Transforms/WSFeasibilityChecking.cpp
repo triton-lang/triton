@@ -50,8 +50,6 @@ public:
     auto i32_ty = IntegerType::get(mod->getContext(), 32);
     mod->setAttr(ttng::TritonNvidiaGPUDialect::getWSSupportedAttrName(),
                  IntegerAttr::get(i32_ty, llvm::APInt(32, wsSupported)));
-    int num_ctas =
-        mod->getAttrOfType<IntegerAttr>("triton_gpu.num-ctas").getInt();
     if (wsSupported == 0) {
       mod->walk([](triton::FuncOp func) {
         llvm::errs() << "Warning: kernel \'" << func.getName()
@@ -60,7 +58,8 @@ public:
       });
     }
     // TODO: remove it when unspecialzied kernel supports NUM_CTAS>1
-    if (num_ctas > 1 && wsSupported == 0)
+    if (mod->getAttrOfType<IntegerAttr>("triton_gpu.num-ctas").getInt() > 1 &&
+        wsSupported == 0)
       llvm::report_fatal_error(
           "Currently unspecialized kernel doesn't support NUM_CTAS > 1");
   }
