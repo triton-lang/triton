@@ -1203,9 +1203,16 @@ def ast_to_ttir(fn, signature, specialization, constants, debug, target):
     tys = list(signature.values())
     new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for k in specialization.equal_to_1}
     new_attrs = {k: [("tt.divisibility", 16)] for k in specialization.divisible_by_16}
+    
+    # Note: Here we defines 'max_divisibility' for later TMA usage. 
+    # fp16 requires 'max_divisibility >= 8' and fp8 requires 'max_divisibility >= 16'. 
+    # Since we only need to support TMA for fp16 and fp8 now, 'max_divisibility' is either 8 or 16. 
     for k in specialization.divisible_by_8:
         attr = new_attrs[k] if k in new_attrs else []
-        attr.append(("tt.max_divisibility", 8))
+        if k in specialization.divisible_by_16:
+            attr.append(("tt.max_divisibility", 16))
+        else:
+            attr.append(("tt.max_divisibility", 8))
         new_attrs[k] = attr
 
     all_constants = constants.copy()
