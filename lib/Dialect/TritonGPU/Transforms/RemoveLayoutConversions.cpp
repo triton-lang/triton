@@ -827,8 +827,8 @@ static LogicalResult getRematerializableSlice(
 
 static void backwardRematerialization(ConvertLayoutOp convertOp) {
   // we don't want to rematerialize any conversion to/from shared
-  if (triton::gpu::isSharedEncoding(convertOp.getResult()) ||
-      triton::gpu::isSharedEncoding(convertOp.getOperand()))
+  if (triton::gpu::hasSharedEncoding(convertOp.getResult()) ||
+      triton::gpu::hasSharedEncoding(convertOp.getOperand()))
     return;
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristics to accommodate fused attention
@@ -853,8 +853,8 @@ static void backwardRematerialization(ConvertLayoutOp convertOp) {
 // of the convert.
 static void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp) {
   // we don't want to rematerialize any conversion to/from shared
-  if (triton::gpu::isSharedEncoding(convertOp.getResult()) ||
-      triton::gpu::isSharedEncoding(convertOp.getOperand()))
+  if (triton::gpu::hasSharedEncoding(convertOp.getResult()) ||
+      triton::gpu::hasSharedEncoding(convertOp.getOperand()))
     return;
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristics to accommodate fused attention
