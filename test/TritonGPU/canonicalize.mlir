@@ -37,7 +37,7 @@ tt.func @test_canonicalize_convert_expensive_view(%arg0: tensor<256x16xf32, #blo
 // -----
 
 // Test that the convert doesn't get combined with view if the either the
-// operand or result has a dot operand ecnoding.
+// operand or result has a dot operand encoding.
 // CHECK-LABEL: @test_canonicalize_convert_view_with_dot_operand_encoding
 // CHECK-SAME: (%[[ARG:.+]]: tensor<32x4x32xbf16
 //       CHECK:   %[[V:.+]] = tt.view %[[ARG]]
