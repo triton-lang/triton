@@ -926,13 +926,11 @@ private:
     Value _fpw1 = i32_val(fpw[1]);
 
     // A info
-    auto aEncoding = DotOperandEncodingAttr::get(ctx, 0, mmaLayout, 0);
-    auto aRep = aEncoding.getMMAv1Rep();
-    auto aSpw = aEncoding.getMMAv1ShapePerWarp();
+    auto aRep = mmaLayout.getMMAv1Rep(0);
+    auto aSpw = mmaLayout.getMMAv1ShapePerWarp(0);
     // B info
-    auto bEncoding = DotOperandEncodingAttr::get(ctx, 1, mmaLayout, 0);
-    auto bSpw = bEncoding.getMMAv1ShapePerWarp();
-    auto bRep = bEncoding.getMMAv1Rep();
+    auto bSpw = mmaLayout.getMMAv1ShapePerWarp(1);
+    auto bRep = mmaLayout.getMMAv1Rep(1);
 
     SmallVector<int, 2> rep({aRep[0], bRep[1]});
     SmallVector<int, 2> spw({aSpw[0], bSpw[1]});
@@ -986,15 +984,11 @@ private:
 
     // TODO: seems like the apttern below to get `rep`/`spw` appears quite often
     // A info
-    auto aEncoding =
-        DotOperandEncodingAttr::get(type.getContext(), 0, mmaLayout, 0);
-    auto aRep = aEncoding.getMMAv1Rep();
-    auto aSpw = aEncoding.getMMAv1ShapePerWarp();
+    auto aRep = mmaLayout.getMMAv1Rep(0);
+    auto aSpw = mmaLayout.getMMAv1ShapePerWarp(0);
     // B info
-    auto bEncoding =
-        DotOperandEncodingAttr::get(type.getContext(), 1, mmaLayout, 0);
-    auto bSpw = bEncoding.getMMAv1ShapePerWarp();
-    auto bRep = bEncoding.getMMAv1Rep();
+    auto bSpw = mmaLayout.getMMAv1ShapePerWarp(1);
+    auto bRep = mmaLayout.getMMAv1Rep(1);
 
     auto wpt = mmaLayout.getWarpsPerCTA();
     static constexpr std::array<int, 3> fpw{{2, 2, 1}};

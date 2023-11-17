@@ -305,6 +305,13 @@ private:
     res.insert(res.begin() + index, static_cast<T>(value));
     return res;
   }
+  template <typename T>
+  SmallVector<T> insertValue(const SmallVector<T> &vec, unsigned index,
+                             int value) const {
+    SmallVector<T> res(vec.begin(), vec.end());
+    res.insert(res.begin() + index, static_cast<T>(value));
+    return res;
+  }
 };
 
 std::unique_ptr<Pass> mlir::createTritonGPUOptimizeThreadLocalityPass() {

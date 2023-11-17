@@ -63,15 +63,15 @@ LogicalResult convertMMA884(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   auto AShape = ATensorTy.getShape();
   auto BShape = BTensorTy.getShape();
 
-  bool isARow = ALayout.getMMAv1IsRow();
-  bool isBRow = BLayout.getMMAv1IsRow();
+  bool isARow = mmaLayout.getMMAv1IsRow(ALayout.getOpIdx());
+  bool isBRow = mmaLayout.getMMAv1IsRow(BLayout.getOpIdx());
   auto [isARow_, isBRow_, isAVec4_, isBVec4_, _] =
       mmaLayout.decodeVoltaLayoutStates();
   assert(isARow == isARow_);
   assert(isBRow == isBRow_);
 
-  unsigned numM = ALayout.getMMAv1NumOuter(AShape);
-  unsigned numN = BLayout.getMMAv1NumOuter(BShape);
+  unsigned numM = mmaLayout.getMMAv1NumOuter(AShape, ALayout.getOpIdx());
+  unsigned numN = mmaLayout.getMMAv1NumOuter(BShape, ALayout.getOpIdx());
   unsigned NK = AShape[1];
 
   auto has = extractLoadedOperand(adaptor.getA(), NK, rewriter, typeConverter,
