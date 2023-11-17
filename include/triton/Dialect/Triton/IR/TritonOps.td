@@ -605,6 +605,15 @@ def TT_MakeTensorPtrOp : TT_Op<"make_tensor_ptr",
   ];
 }
 
+def TT_ReshapeOp : TT_Op<"reshape", [Pure,
+                                     SameOperandsAndResultElementType]> {
+    let summary = "reinterpret a tensor to a different shape without changing elements order.";
+    let arguments = (ins TT_Tensor:$src);
+    let results = (outs TT_Tensor:$result);
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
+    let hasVerifier = 1;
+}
+
 // The following ops, including `call`, `func`, and `return` are copied and modified from
 // https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/Func/IR/FuncOps.td
 // We could revert it back once MLIR has a better inliner interface.

@@ -225,6 +225,27 @@ struct TransOpConversion
   }
 };
 
+struct ReshapeOpConversion : public ConvertTritonGPUOpToLLVMPattern<ReshapeOp> {
+  using OpAdaptor = typename ReshapeOp::Adaptor;
+  explicit ReshapeOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+
+                               PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern<ReshapeOp>(typeConverter, benefit) {}
+
+  LogicalResult
+  matchAndRewrite(ReshapeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto resultTy = op.getType().template cast<RankedTensorType>();
+    auto vals = this->getTypeConverter()->unpackLLElements(
+        loc, adaptor.getSrc(), rewriter, op.getOperand().getType());
+    Value ret =
+        this->getTypeConverter()->packLLElements(loc, vals, rewriter, resultTy);
+    rewriter.replaceOp(op, ret);
+    return success();
+  }
+};
+
 void populateViewOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns, int numWarps,
                                   ModuleAxisInfoAnalysis &axisInfoAnalysis,
@@ -236,4 +257,5 @@ void populateViewOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
   patterns.add<CatOpConversion>(typeConverter, benefit);
   patterns.add<TransOpConversion>(typeConverter, benefit);
+  patterns.add<ReshapeOpConversion>(typeConverter, benefit);
 }

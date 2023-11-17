@@ -1368,6 +1368,14 @@ void init_triton_ir(py::module &&m) {
              return self.create<mlir::triton::ViewOp>(
                  mlir::RankedTensorType::get(shape, argType), arg);
            })
+      .def("create_reshape",
+           [](TritonOpBuilder &self, mlir::Value &arg,
+              std::vector<int64_t> &shape) -> mlir::Value {
+             auto argType =
+                 arg.getType().cast<mlir::RankedTensorType>().getElementType();
+             return self.create<mlir::triton::ReshapeOp>(
+                 mlir::RankedTensorType::get(shape, argType), arg);
+           })
       .def(
           "create_expand_dims",
           [](TritonOpBuilder &self, mlir::Value &arg, int axis) -> mlir::Value {

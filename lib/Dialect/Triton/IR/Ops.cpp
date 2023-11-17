@@ -817,6 +817,17 @@ void MakeTensorPtrOp::build(::mlir::OpBuilder &builder,
                builder.getDenseI32ArrayAttr(order));
 }
 
+//-- ReshapeOp --
+mlir::LogicalResult mlir::triton::ReshapeOp::verify() {
+  auto dstType = getType().cast<RankedTensorType>();
+  auto srcType = getSrc().getType().cast<RankedTensorType>();
+  if (dstType.getNumElements() != srcType.getNumElements()) {
+    return emitError(
+        "number of src and dst elements of reshape must be the same");
+  }
+  return mlir::success();
+}
+
 // The following ops, including `call`, `func`, and `return` are copied and
 // modified from
 // https://github.com/llvm/llvm-project/blob/main/mlir/lib/Dialect/Func/IR/FuncOps.cpp

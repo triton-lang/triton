@@ -31,6 +31,7 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
     int rank = shape.size();
     llvm::SmallVector<unsigned> order(rank);
     std::iota(order.begin(), order.end(), 0);
+    std::reverse(order.begin(), order.end());
     llvm::SmallVector<unsigned> sizePerThread(rank, 1);
     Attribute encoding = triton::gpu::BlockedEncodingAttr::get(
         this->context, shape, sizePerThread, order, this->numWarps,

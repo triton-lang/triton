@@ -210,3 +210,10 @@ tt.func @inline_asm(%0: tensor<512xi8>) {
     {constraints = "=r,r", packed_element = 4 : i32, pure = true} %0 : tensor<512xi8> -> tensor<512xi8>
   tt.return
 }
+
+// CHECK-LABEL: reshape
+tt.func @reshape(%0: tensor<512xi32>) {
+  // CHECK: tt.reshape %{{.+}} : tensor<512xi32> -> tensor<16x32xi32>
+  %1 = tt.reshape %0 : tensor<512xi32> -> tensor<16x32xi32>
+  tt.return
+}

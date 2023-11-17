@@ -516,8 +516,8 @@ def view(input: tl.tensor, dst_shape: List[int], builder: ir.builder) -> tl.tens
 
 
 def reshape(input: tl.tensor, dst_shape: List[int], builder: ir.builder) -> tl.tensor:
-    raise ValueError("`reshape` is not supported yet. Please use `view` instead if applicable. "
-                     "Note that view may reorder elements in an implementation- and context- dependent way.")
+    ret_ty = tl.block_type(input.type.scalar, dst_shape)
+    return tl.tensor(builder.create_reshape(input.handle, dst_shape), ret_ty)
 
 
 def expand_dims(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
