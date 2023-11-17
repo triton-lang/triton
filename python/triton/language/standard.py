@@ -108,6 +108,8 @@ def minimum(x, y):
     :param other: the second input tensor
     :type other: Block
     """
+    x = core._promote_reduction_input(x)
+    y = core._promote_reduction_input(y)
     return math.min(x, y)
 
 
@@ -121,6 +123,8 @@ def maximum(x, y):
     :param other: the second input tensor
     :type other: Block
     """
+    x = core._promote_reduction_input(x)
+    y = core._promote_reduction_input(y)
     return math.max(x, y)
 
 
