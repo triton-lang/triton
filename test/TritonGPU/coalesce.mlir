@@ -86,7 +86,7 @@ tt.func public @load_tensors_two_types(%arg0: !tt.ptr<f32, 1> {tt.divisibility =
     %3 = tt.splat %1 : (i32) -> tensor<1024xi32, #blocked>
     %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
     %5 = tt.splat %arg3 : (i32) -> tensor<1024xi32, #blocked>
-    %6 = "triton_gpu.cmpi"(%4, %5) <{predicate = 2 : i64}> : (tensor<1024xi32, #blocked>, tensor<1024xi32, #blocked>) -> tensor<1024xi1, #blocked>
+    %6 = arith.cmpi "slt", %4, %5 : tensor<1024xi32, #blocked>
     %7 = tt.splat %arg0 : (!tt.ptr<f32, 1>) -> tensor<1024x!tt.ptr<f32, 1>, #blocked>
     %8 = tt.addptr %7, %4 : tensor<1024x!tt.ptr<f32, 1>, #blocked>, tensor<1024xi32, #blocked>
     %9 = tt.load %8, %6 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<1024xf32, #blocked>
@@ -120,7 +120,7 @@ tt.func public @load_tensors_two_types(%arg0: !tt.ptr<f32, 1> {tt.divisibility =
     %3 = tt.splat %1 : (i32) -> tensor<1024xi32, #blocked>
     %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
     %5 = tt.splat %arg3 : (i32) -> tensor<1024xi32, #blocked>
-    %6 = "triton_gpu.cmpi"(%4, %5) <{predicate = 2 : i64}> : (tensor<1024xi32, #blocked>, tensor<1024xi32, #blocked>) -> tensor<1024xi1, #blocked>
+    %6 = arith.cmpi "slt", %4, %5 : tensor<1024xi32, #blocked>
     %7 = tt.splat %arg0 : (!tt.ptr<f32, 1>) -> tensor<1024x!tt.ptr<f32, 1>, #blocked>
     %8 = tt.addptr %7, %4 : tensor<1024x!tt.ptr<f32, 1>, #blocked>, tensor<1024xi32, #blocked>
     %9 = tt.load %8, %6 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<1024xf32, #blocked>

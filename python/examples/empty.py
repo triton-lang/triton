@@ -10,4 +10,4 @@ def kernel(X, stride_xm, stride_xn, BLOCK: tl.constexpr):
 
 
 X = torch.randn(1, device="cuda")
-pgm = kernel[(1,)](X, 1, 1, BLOCK=1024)
+pgm = kernel[(1, )](X, 1, 1, BLOCK=1024)

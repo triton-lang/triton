@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import torch
@@ -14,8 +13,8 @@ def test_annotations(device):
         pass
 
     x = torch.empty(1, device=device)
-    _kernel[(1,)](x, x.shape[0], 32)
+    _kernel[(1, )](x, x.shape[0], 32)
     try:
-        _kernel[(1,)](x.shape[0], x.shape[0], 32)
+        _kernel[(1, )](x.shape[0], x.shape[0], 32)
     except AttributeError:
         pass

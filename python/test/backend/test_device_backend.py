@@ -13,12 +13,11 @@ import torch
 
 import triton
 import triton.language as tl
-from triton.common.backend import BaseBackend, register_backend
+from triton.common.backend import (BaseBackend, compute_core_version_key, register_backend)
 from triton.common.build import quiet
 from triton.compiler.make_launcher import make_so_cache_key
 from triton.runtime.cache import get_cache_manager
 from triton.runtime.driver import DriverBase
-from triton.runtime.jit import version_key
 
 
 def build_for_backend(name, src, srcdir):
@@ -81,6 +80,7 @@ def build_for_backend(name, src, srcdir):
 
 
 class ExtensionUtils:
+
     def __new__(cls):
         if not hasattr(cls, 'instance'):
             cls.instance = super(ExtensionUtils, cls).__new__(cls)
@@ -110,6 +110,7 @@ class ExtensionUtils:
 
 
 class ExtensionDriver(DriverBase):
+
     def __new__(cls):
         if not hasattr(cls, 'instance'):
             cls.instance = super(ExtensionDriver, cls).__new__(cls)
@@ -125,6 +126,7 @@ class ExtensionBackend(BaseBackend):
     def __init__(self, device_type: str) -> None:
         super(ExtensionBackend, self).__init__(device_type)
         self.driver = ExtensionDriver()
+        self.version_key = None
 
     def add_stages(self, arch, extern_libs, stages):
         filter_in_stages = ["ast", "ttir", "ttgir"]
@@ -163,9 +165,14 @@ class ExtensionBackend(BaseBackend):
     def get_architecture_descriptor(self, **kwargs):
         return ""
 
+    def get_version_key(self):
+        if self.version_key is None:
+            self.version_key = compute_core_version_key()
+        return self.version_key
+
     def make_launcher_stub(self, name, signature, constants):
         # name of files that are cached
-        so_cache_key = make_so_cache_key(version_key(), signature, constants)
+        so_cache_key = make_so_cache_key(self.get_version_key(), signature, constants)
         so_cache_manager = get_cache_manager(so_cache_key)
         so_name = f"{name}.so"
         # retrieve stub from cache if it exists
@@ -250,13 +257,13 @@ def test_dummy_backend():
 
     inp = torch.randn(10)
     out = torch.randn(10)
-    kernel[(10,)](inp, out, 10, XBLOCK=16)
+    kernel[(10, )](inp, out, 10, XBLOCK=16)
     spec = importlib.util.spec_from_file_location("__triton_launcher", ExtensionBackend.stub_so_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     launch_counter = getattr(mod, "launch_counter")
 
     for _ in range(100):
-        kernel[(10,)](inp, out, 10, XBLOCK=16)
+        kernel[(10, )](inp, out, 10, XBLOCK=16)
 
     assert launch_counter() > 0

@@ -26,7 +26,6 @@ sm_clocks = {'v100': 1350, 'a100': 1350}
 mem_clocks = {'v100': 877, 'a100': 1215}
 
 matmul_data = {
-    # NOTE:
     'a100': {
         # square
         (512, 512, 512): {'float16': 0.108, 'float32': 0.097, 'int8': 0.05},
@@ -49,10 +48,9 @@ matmul_data = {
 }
 
 
-@pytest.mark.parametrize('M, N, K, dtype_str',
-                         [(M, N, K, dtype_str)
-                          for M, N, K in matmul_data[DEVICE_NAME].keys()
-                          for dtype_str in ['float16']])
+@pytest.mark.parametrize('M, N, K, dtype_str', [(M, N, K, dtype_str)
+                                                for M, N, K in matmul_data[DEVICE_NAME].keys()
+                                                for dtype_str in ['float16']])
 def test_matmul(M, N, K, dtype_str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -86,8 +84,7 @@ def test_matmul(M, N, K, dtype_str):
 
 
 @triton.jit
-def _add(x_ptr, y_ptr, output_ptr, n_elements,
-         BLOCK_SIZE: tl.constexpr):
+def _add(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -136,36 +133,36 @@ def test_elementwise(N, dtype_str):
     print_perf(ms, cur_gpu_util, ref_gpu_util)
     triton.testing.assert_close(cur_gpu_util, ref_gpu_util, atol=0.02, rtol=0.01)
 
+
 #######################
 # Flash-Attention
 #######################
-
 
 flash_attention_data = {
     "a100": {
         (4, 48, 4096, 64, True, True, 'forward', 'float16'): 0.542,
         (4, 48, 4096, 64, True, True, 'forward', 'bfloat16'): 0.471,
         (4, 48, 1024, 16, True, True, 'forward', 'float32'): 0.155,
-        (4, 48, 4096, 64, True, True, 'backward', 'float16'): 0.203,
-        (4, 48, 4096, 64, True, True, 'backward', 'bfloat16'): 0.202,
-        (4, 48, 1024, 16, True, True, 'backward', 'float32'): 0.108,
+        (4, 48, 4096, 64, True, True, 'backward', 'float16'): 0.232,
+        (4, 48, 4096, 64, True, True, 'backward', 'bfloat16'): 0.231,
+        (4, 48, 1024, 16, True, True, 'backward', 'float32'): 0.138,
         (4, 48, 4096, 64, True, False, 'forward', 'float16'): 0.306,
         (4, 48, 4096, 64, True, False, 'forward', 'bfloat16'): 0.266,
         (4, 48, 1024, 16, True, False, 'forward', 'float32'): 0.098,
         (4, 48, 4096, 64, True, False, 'backward', 'float16'): 0.134,
         (4, 48, 4096, 64, True, False, 'backward', 'bfloat16'): 0.135,
-        (4, 48, 1024, 16, True, False, 'backward', 'float32'): 0.066,
+        (4, 48, 1024, 16, True, False, 'backward', 'float32'): 0.092,
         (4, 48, 4096, 64, False, True, 'forward', 'float16'): 0.541,
         (4, 48, 4096, 64, False, True, 'forward', 'bfloat16'): 0.471,
         (4, 48, 1024, 16, False, True, 'forward', 'float32'): 0.150,
-        (4, 48, 4096, 64, False, True, 'backward', 'float16'): 0.263,
+        (4, 48, 4096, 64, False, True, 'backward', 'float16'): 0.291,
         (4, 48, 4096, 64, False, True, 'backward', 'bfloat16'): 0.255,
         (4, 48, 1024, 16, False, True, 'backward', 'float32'): 0.144,
         (4, 48, 4096, 64, False, False, 'forward', 'float16'): 0.306,
         (4, 48, 4096, 64, False, False, 'forward', 'bfloat16'): 0.266,
         (4, 48, 1024, 16, False, False, 'forward', 'float32'): 0.098,
         (4, 48, 4096, 64, False, False, 'backward', 'float16'): 0.159,
-        (4, 48, 4096, 64, False, False, 'backward', 'bfloat16'): 0.136,
+        (4, 48, 4096, 64, False, False, 'backward', 'bfloat16'): 0.159,
         (4, 48, 1024, 16, False, False, 'backward', 'float32'): 0.088,
     }
 }
@@ -221,8 +218,7 @@ def test_flash_attention(Z, H, N_CTX, D_HEAD, seq_par, causal, mode, dtype_str):
 
 
 @triton.jit
-def _sum(x_ptr, y_ptr, output_ptr, n_elements,
-         BLOCK_SIZE: tl.constexpr):
+def _sum(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -260,8 +256,8 @@ def test_reductions(N, dtype_str):
         y = torch.randn_like(z)
     else:
         info = torch.iinfo(dtype)
-        x = torch.randint(info.min, info.max, (N,), dtype=dtype, device='cuda')
-        y = torch.randint(info.min, info.max, (N,), dtype=dtype, device='cuda')
+        x = torch.randint(info.min, info.max, (N, ), dtype=dtype, device='cuda')
+        y = torch.randint(info.min, info.max, (N, ), dtype=dtype, device='cuda')
     grid = lambda args: (triton.cdiv(N, args['BLOCK_SIZE']), )
     fn = lambda: _sum[grid](x, y, z, N, BLOCK_SIZE=1024)
     ms = triton.testing.do_bench_cudagraph(fn)

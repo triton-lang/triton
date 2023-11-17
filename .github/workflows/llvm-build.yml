@@ -18,43 +18,17 @@ permissions:
 jobs:
 
   build:
+    name: Build on ${{ matrix.config.runner }}
+    runs-on: ${{ matrix.config.runs_on }}
 
     strategy:
       fail-fast: true
-
       matrix:
-        platform: [
-          ubuntu-20.04-x64,
-          ubuntu-22.04-x64,
-          centos-7-x64,
-          macos-x64,
-          macos-arm64
-        ]
-
-        include:
-          # Specify OS versions
-          - platform: ubuntu-20.04-x64
-            host-os: ubuntu-20.04
-            target-os: ubuntu
-            arch: x64
-          - platform: ubuntu-22.04-x64
-            host-os: ubuntu-22.04
-            target-os: ubuntu
-            arch: x64
-          - platform: centos-7-x64
-            host-os: ubuntu-22.04
-            target-os: centos
-            arch: x64
-          - platform: macos-x64
-            host-os: macos-12
-            target-os: macos
-            arch: x64
-          - platform: macos-arm64
-            host-os: macos-12
-            target-os: macos
-            arch: arm64
-
-    runs-on: ${{ matrix.host-os }}
+        config:
+        - {runner: 'Ubuntu 20.04', runs_on: 'ubuntu-20.04', target-os: 'ubuntu', arch: 'x64'}
+        - {runner: 'CentOS 7', runs_on: ['self-hosted', 'CPU'], target-os: 'centos', arch: 'x64'}
+        - {runner: 'MacOS X64', runs_on: 'macos-12', target-os: 'macos', arch: 'x64'}
+        - {runner: 'MacOS ARM64', runs_on: 'macos-12', target-os: 'macos', arch: 'arm64'}
 
     steps:
 
@@ -73,7 +47,7 @@ jobs:
         echo "Short LLVM commit hash: ${SHORT_LLVM_COMMIT_HASH}"
         echo "short_llvm_commit_hash=${SHORT_LLVM_COMMIT_HASH}" >> ${GITHUB_ENV}
 
-        INSTALL_DIR="llvm-${SHORT_LLVM_COMMIT_HASH}-${{ matrix.platform }}"
+        INSTALL_DIR="llvm-${SHORT_LLVM_COMMIT_HASH}-${{ matrix.config.target-os }}-${{ matrix.config.arch }}"
         echo "LLVM installation directory name: ${INSTALL_DIR}"
         echo "llvm_install_dir=${INSTALL_DIR}" >> ${GITHUB_ENV}
 
@@ -99,11 +73,11 @@ jobs:
       uses: actions/cache@v3
       with:
         path: ${{ env.SCCACHE_DIR }}
-        key: ${{ matrix.platform }}-${{ env.short_llvm_commit_hash }}
-        restore-keys: ${{ matrix.platform }}-
+        key: ${{ matrix.config.target-os }}-${{ matrix.config.arch }}-${{ env.short_llvm_commit_hash }}
+        restore-keys: ${{ matrix.config.target-os }}-${{ matrix.config.arch }}-
 
     - name: Configure, Build, Test, and Install LLVM (Ubuntu and macOS x64)
-      if: matrix.arch == 'x64' && contains(fromJSON('["ubuntu", "macos"]'), matrix.target-os)
+      if: matrix.config.arch == 'x64' && (matrix.config.target-os == 'ubuntu' || matrix.config.target-os == 'macos')
       run: >
         python3 -m pip install -r llvm-project/mlir/python/requirements.txt
 
@@ -114,11 +88,13 @@ jobs:
         -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}"
         -DCMAKE_LINKER=lld
         -DLLVM_BUILD_UTILS=ON
+        -DLLVM_BUILD_TOOLS=ON
         -DLLVM_ENABLE_ASSERTIONS=ON
         -DMLIR_ENABLE_BINDINGS_PYTHON=ON
         -DLLVM_ENABLE_PROJECTS=mlir
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
+        -DLLVM_ENABLE_TERMINFO=OFF
         llvm-project/llvm
 
         ninja -C llvm-project/build check-mlir install
@@ -126,7 +102,7 @@ jobs:
         tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
 
     - name: Configure, Build, and Install LLVM (macOS arm64)
-      if: matrix.arch == 'arm64' && matrix.target-os == 'macos'
+      if: matrix.config.arch == 'arm64' && matrix.config.target-os == 'macos'
       run: >
         python3 -m pip install -r llvm-project/mlir/python/requirements.txt
 
@@ -138,6 +114,7 @@ jobs:
         -DCMAKE_LINKER=lld
         -DCMAKE_OSX_ARCHITECTURES=arm64
         -DLLVM_BUILD_UTILS=ON
+        -DLLVM_BUILD_TOOLS=ON
         -DLLVM_ENABLE_ASSERTIONS=ON
         -DMLIR_ENABLE_BINDINGS_PYTHON=ON
         -DLLVM_ENABLE_PROJECTS=mlir
@@ -145,6 +122,7 @@ jobs:
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="AArch64"
         -DLLVM_USE_HOST_TOOLS=ON
+        -DLLVM_ENABLE_TERMINFO=OFF
         llvm-project/llvm
 
         ninja -C llvm-project/build install
@@ -152,10 +130,10 @@ jobs:
         tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
 
     - name: Configure, Build, Test, and Install LLVM (CentOS)
-      if: matrix.target-os == 'centos'
+      if: matrix.config.target-os == 'centos'
       run: |
         docker build --tag llvm-build --build-arg llvm_dir=llvm-project \
-          -f llvm-build/.github/workflows/Dockerfile .
+          -f llvm-build/.github/workflows/llvm-build/Dockerfile .
 
         # Create temporary container to copy cache and installed artifacts.
         CONTAINER_ID=$(docker create llvm-build)

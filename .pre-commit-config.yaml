@@ -15,34 +15,29 @@ repos:
       - id: check-shebang-scripts-are-executable
       - id: detect-private-key
       - id: debug-statements
-  - repo: https://github.com/PyCQA/isort
-    rev: 5.12.0
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.1.3
     hooks:
-      - id: isort
-        stages: [commit, push, manual]
-  - repo: https://github.com/pre-commit/mirrors-autopep8
-    rev: v1.6.0
-    hooks:
-      - id: autopep8
-        args: ["-i"]
-        stages: [commit, push, manual]
-  - repo: https://github.com/pycqa/flake8
-    rev: 6.0.0
-    hooks:
-      - id: flake8
-        # TODO: uncomment this to enable more flake8 plugins
-        # additional_dependencies:
-        #   - flake8-bugbear
-        #   - flake8-comprehensions
-        #   - flake8-docstrings
-        #   - flake8-pyi
-        #   - flake8-simplify
+      - id: ruff
+        files: '^python/.*'
+        args: ["--fix", "--line-length", "120"]
         stages: [commit, push, manual]
         exclude: |
           (?x)(
+            ^python/triton/runtime/.*|
             ^test/|
             ^docs/conf.py$
           )
+
+  - repo: https://github.com/jlebar/yapf
+    rev: bf301f5ef7777e137b97219842629ca78eb5ef2a
+    hooks:
+      - id: yapf
+        args: ["-p", "-i"]
+        stages: [commit, push, manual]
+        exclude: "python/test/unit/language/test_line_info.py"
+
   - repo: https://github.com/pre-commit/mirrors-clang-format
     rev: v16.0.6
     hooks:

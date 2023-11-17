@@ -19,6 +19,7 @@ def default_dump_dir():
 
 
 class CacheManager(ABC):
+
     def __init__(self, key):
         pass
 
@@ -44,20 +45,21 @@ class CacheManager(ABC):
 
 
 class FileCacheManager(CacheManager):
+
     def __init__(self, key, override=False, dump=False):
         self.key = key
         self.lock_path = None
-        if (dump):
+        if dump:
             self.cache_dir = default_dump_dir()
             self.cache_dir = os.path.join(self.cache_dir, self.key)
             self.lock_path = os.path.join(self.cache_dir, "lock")
             os.makedirs(self.cache_dir, exist_ok=True)
-        elif (override):
+        elif override:
             self.cache_dir = default_override_dir()
             self.cache_dir = os.path.join(self.cache_dir, self.key)
         else:
             # create cache directory if it doesn't exist
-            self.cache_dir = os.getenv('TRITON_CACHE_DIR', "").strip() or default_cache_dir()
+            self.cache_dir = os.getenv("TRITON_CACHE_DIR", "").strip() or default_cache_dir()
             if self.cache_dir:
                 self.cache_dir = os.path.join(self.cache_dir, self.key)
                 self.lock_path = os.path.join(self.cache_dir, "lock")
@@ -93,9 +95,8 @@ class FileCacheManager(CacheManager):
         result = {}
         for c in child_paths:
             p = self._make_path(c)
-            if not os.path.exists(p):
-                raise Exception(f"Group file {p} does not exist from group {grp_filename} ")
-            result[c] = p
+            if os.path.exists(p):
+                result[c] = p
         return result
 
     # Note a group of pushed files as being part of a group
@@ -142,6 +143,7 @@ def get_cache_manager(key) -> CacheManager:
 
     if user_cache_manager is not None and user_cache_manager != __cache_cls_nme:
         import importlib
+
         module_path, clz_nme = user_cache_manager.split(":")
         module = importlib.import_module(module_path)
         __cache_cls = getattr(module, clz_nme)

@@ -232,8 +232,10 @@ std::string GraphLayoutMarker::getColor(const Type &type) const {
       return "orange";
     else if (layout.isa<triton::gpu::SharedEncodingAttr>())
       return "orangered";
-    else
-      assert(0 && "Unrecognized layout");
+    else {
+      llvm::report_fatal_error("Unrecognized layout");
+      return "unknown";
+    }
   } else {
     return "white";
   }
@@ -342,11 +344,39 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
     }
     return true;
   }
+  if (auto view = dyn_cast<triton::ViewOp>(op)) {
+    auto viewDstType = view.getType().cast<RankedTensorType>();
+    RankedTensorType newDstType = RankedTensorType::get(
+        viewDstType.getShape(), viewDstType.getElementType(), targetEncoding);
+    return !triton::gpu::isExpensiveView(view.getOperand().getType(),
+                                         newDstType);
+  }
   return isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
-             triton::MakeRangeOp, triton::SplatOp, triton::ViewOp>(op);
+             triton::MakeRangeOp, triton::SplatOp>(op);
 }
 
-//
+scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
+                                        ValueRange newIterOperands) {
+  OpBuilder::InsertionGuard g(rewriter);
+  rewriter.setInsertionPoint(loop);
+
+  // Create a new loop before the existing one, with the extra operands.
+  auto operands = llvm::to_vector<4>(loop.getInitArgs());
+  operands.append(newIterOperands.begin(), newIterOperands.end());
+  scf::ForOp newLoop = rewriter.create<scf::ForOp>(
+      loop.getLoc(), loop.getLowerBound(), loop.getUpperBound(), loop.getStep(),
+      operands);
+  newLoop.getBody()->erase();
+  newLoop.getRegion().getBlocks().splice(
+      newLoop.getRegion().getBlocks().begin(), loop.getRegion().getBlocks());
+  for (Value operand : newIterOperands)
+    newLoop.getBody()->addArgument(operand.getType(), operand.getLoc());
+
+  for (auto it : llvm::zip(loop.getResults(), newLoop.getResults().take_front(
+                                                  loop.getNumResults())))
+    std::get<0>(it).replaceAllUsesWith(std::get<1>(it));
+  return newLoop;
+}
 
 Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
                               IRMapping &mapping) {

@@ -98,7 +98,7 @@ bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout) {
     auto dim = sliceLayout.getDim();
     auto CTAsPerCGA = triton::gpu::getCTAsPerCGA(sliceLayout.getParent());
     if (CTAsPerCGA[dim] != 1)
-      assert(0 && "Layout conversion to be implemented");
+      llvm::report_fatal_error("Layout conversion to be implemented");
   }
 
   // Case where CTAsPerCGA of dstLayout in the sliced dim is not 1 is supported

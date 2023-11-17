@@ -111,6 +111,11 @@ bool isExpensiveLoadOrStore(Operation *op);
 
 bool canFoldIntoConversion(Operation *op, Attribute targetEncoding);
 
+// Replace ForOp with a new ForOp with extra operands. The YieldOp is not
+// updated and needs to be updated separatly for the loop to be correct.
+scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
+                                        ValueRange newIterOperands);
+
 Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
                               IRMapping &mapping);
 
@@ -140,7 +145,6 @@ Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
 
 Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape);
-
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_

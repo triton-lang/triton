@@ -8,7 +8,7 @@ jobs:
 
   Build-Wheels:
 
-    runs-on: [self-hosted, V100]
+    runs-on: [self-hosted, CPU]
     permissions:
       id-token: write
       contents: read

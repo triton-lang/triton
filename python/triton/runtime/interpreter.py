@@ -74,11 +74,15 @@ class BlockPointerHandle:
 
 
 def wrap_ret(compute_ret_ty):
+
     def wrapper(fn):
+
         def wrapped(*args, **kwargs):
             ret = fn(*args, **kwargs)
             return TensorHandle(ret.data, compute_ret_ty(*args, **kwargs))
+
         return wrapped
+
     return wrapper
 
 
@@ -249,11 +253,13 @@ class Builder:
     # ternary functions
     def ternary_op(self, lhs, rhs, other, op):
         return TensorHandle(op(lhs.data, rhs.data, other.data), other.dtype)
+
     create_select = lambda self, cond, lhs, rhs: self.ternary_op(cond, lhs, rhs, np.where)
 
     # unary functions
     def unary_op(self, arg, op):
         return TensorHandle(op(arg.data), arg.dtype)
+
     create_exp = lambda self, arg: self.unary_op(arg, np.exp)
     create_cos = lambda self, arg: self.unary_op(arg, np.cos)
     create_sin = lambda self, arg: self.unary_op(arg, np.sin)
@@ -279,7 +285,8 @@ class Builder:
         dtype_tt = ptr.dtype.element_ty
         return TensorHandle(ptr.data + (dtype_tt.primitive_bitwidth // 8) * offset.data.astype(np.uint64), ptr.dtype)
 
-    def create_tensor_pointer_load(self, ptr, boundary_check, padding_option, cache_modifier, eviction_policy, is_volatile):
+    def create_tensor_pointer_load(self, ptr, boundary_check, padding_option, cache_modifier, eviction_policy,
+                                   is_volatile):
         ptrs, masks = ptr.materialize_pointers(boundary_check)
         assert padding_option is None
         other = None
@@ -297,6 +304,7 @@ class Builder:
 
     def create_int_to_ptr(self, val, dst_ty):
         return TensorHandle(val.data.astype(np.uint64), dst_ty)
+
     # def create_cat(self, lhs, rhs):
     #     pass
 
@@ -360,7 +368,10 @@ class Builder:
 
 
 def patch_attr(obj, name, member, builder):
-    new_member = lambda *args, member=member, **kwargs: (member(*args, **{k: v for k, v in kwargs.items() if k != '_builder'}, _builder=builder))
+    new_member = lambda *args, member=member, **kwargs: (member(*args, **
+                                                                {k: v
+                                                                 for k, v in kwargs.items()
+                                                                 if k != "_builder"}, _builder=builder))
     setattr(obj, name, new_member)
 
 
@@ -384,8 +395,8 @@ def _patch_lang_core(lang, builder):
     def _new_reduce(input, axis, combine_fn):
         fn = combine_fn.fn.__name__
         mapping = {
-            'maximum': np.max,
-            '_sum_combine': np.sum,
+            "maximum": np.max,
+            "_sum_combine": np.sum,
         }
         ret = mapping[fn](input.handle.data, axis=axis)
         ret_type = tl.block_type(input.dtype, ret.shape)
@@ -397,15 +408,16 @@ def _patch_lang_core(lang, builder):
 def _patch_lang_math(lang, builder):
     math = lang.math
     mapping = {
-        'abs': 'abs',
-        'acos': 'arccos',
-        'asin': 'arcsin',
-        'exp2': 'exp2',
-        'log2': 'log2',
-        'max': 'maximum',
+        "abs": "abs",
+        "acos": "arccos",
+        "asin": "arcsin",
+        "exp2": "exp2",
+        "log2": "log2",
+        "max": "maximum",
     }
 
     def make_numpy(name):
+
         def impl(*args, **kwargs):
             ret_type = args[0].type  # TODO: incorrect
             ret_dtype = args[0].dtype  # TODO: incorrect
@@ -414,15 +426,18 @@ def _patch_lang_math(lang, builder):
             ret = getattr(np, mapping[name])(*args, **kwargs)
             ret = tl.core.tensor(TensorHandle(ret, ret_dtype), ret_type)
             return ret
+
         return impl
 
     def make_fallback(name):
+
         def fallback(*args, **kwargs):
             raise NotImplementedError(f"""
 {name} not supported in interpreter mode: no known numpy implementation.
 If you think that {name} in fact does have a numpy implementation, please add it
 to the mapping in python/triton/interpreter/new_interpreter.py:_patch_lang_math.
 """)
+
         return fallback
 
     for name, member in inspect.getmembers(math):
@@ -438,7 +453,7 @@ def _implicit_cvt(arg):
         ty = str_to_ty(triton.runtime.jit.JITFunction._type_of(triton.runtime.jit.JITFunction._key_of(arg)))
         handle = TensorHandle(np.array([arg], dtype=np.int32), ty)
         return tl.tensor(handle, ty)
-    if hasattr(arg, 'data_ptr'):
+    if hasattr(arg, "data_ptr"):
         ty = str_to_ty(triton.runtime.jit.JITFunction._type_of(triton.runtime.jit.JITFunction._key_of(arg)))
         handle = TensorHandle(np.array([arg.data_ptr()], dtype=np.uint64), ty)
         return tl.tensor(handle, ty)
@@ -453,28 +468,29 @@ def _unwrap(tensor):
 
 builder = Builder()
 
-RESERVED_KWS = ['num_warps', 'num_stages', 'num_ctas', 'enable_warp_specialization', 'enable_fp_fusion']
+RESERVED_KWS = ["num_warps", "num_stages", "num_ctas", "enable_warp_specialization", "enable_fp_fusion"]
 
 
 class GridExecutor:
 
     def __init__(self, fn, arg_names, grid):
         from .jit import _normalize_ty  # TODO: modularize
+
         self.fn = fn
         self.arg_names = arg_names
         self.grid = grid
         __annotations__ = {name: _normalize_ty(ty) for name, ty in fn.__annotations__.items()}
-        self.constexprs = [name for name in arg_names if __annotations__.get(name) == 'constexpr']
+        self.constexprs = [name for name in arg_names if __annotations__.get(name) == "constexpr"]
 
     def _patch_lang(self, builder):
         lang = [value for _, value in self.fn.__globals__.items() if value in [tl, tl.core]]
         assert len(lang) == 1, "triton.language must be visible from within jit'd function"
-        _patch_lang_tensor(getattr(lang[0], 'tensor'), builder)
+        _patch_lang_tensor(getattr(lang[0], "tensor"), builder)
         _patch_lang_core(lang[0], builder)
         _patch_lang_math(lang[0], builder)
 
     def __call__(self, *args_dev, **kwargs):
-        args_hst = [_unwrap(arg).cpu() if hasattr(arg, 'data_ptr') else arg for arg in args_dev]
+        args_hst = [_unwrap(arg).cpu() if hasattr(arg, "data_ptr") else arg for arg in args_dev]
         # removes reserved keywords from kwargs
         kwargs = {k: v for k, v in kwargs.items() if k not in RESERVED_KWS}
         # remaps core language functions to interpreted ones
@@ -486,7 +502,7 @@ class GridExecutor:
         # iterate through grid
         grid = self.grid(args) if callable(self.grid) else self.grid
         assert len(grid) <= 3
-        grid = grid + (1,) * (3 - len(grid))
+        grid = grid + (1, ) * (3 - len(grid))
         builder.set_grid_dim(*grid)
         for x in range(grid[0]):
             for y in range(grid[1]):
@@ -495,7 +511,7 @@ class GridExecutor:
                     self.fn(**args)
         # copy arguments back to propagate side-effects
         for arg_dev, arg_hst in zip(args_dev, args_hst):
-            if hasattr(arg_dev, 'data_ptr'):
+            if hasattr(arg_dev, "data_ptr"):
                 _unwrap(arg_dev).copy_(arg_hst.to(arg_dev.device))
 
 
@@ -504,17 +520,18 @@ class InterpretedFunction:
     def _patch_lang(self, builder):
         lang = [value for _, value in self.fn.__globals__.items() if value in [tl, tl.core]]
         assert len(lang) == 1, "triton.language must be visible from within jit'd function"
-        _patch_lang_tensor(getattr(lang[0], 'tensor'), builder)
+        _patch_lang_tensor(getattr(lang[0], "tensor"), builder)
         _patch_lang_core(lang[0], builder)
 
     def __init__(self, fn) -> None:
         self.fn = fn
 
         def run(*args, **kwargs):
-            grid = kwargs['grid']
-            kwargs = {k: v for k, v in kwargs.items() if k not in RESERVED_KWS + ['grid']}
+            grid = kwargs["grid"]
+            kwargs = {k: v for k, v in kwargs.items() if k not in RESERVED_KWS + ["grid"]}
 
             return GridExecutor(self.fn, self.arg_names, grid)(*args, **kwargs)
+
         self.run = run
         signature = inspect.signature(fn)
         self.arg_names = [v.name for v in signature.parameters.values()]

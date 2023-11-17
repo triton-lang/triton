@@ -79,6 +79,17 @@ void CreateMutexOp::build(::mlir::OpBuilder &builder,
   build(builder, state, MutexType::get(builder.getContext()));
 }
 
+///--- DotWaitOp ---
+LogicalResult DotWaitOp::inferReturnTypes(
+    ::mlir::MLIRContext *context, ::std::optional<::mlir::Location> location,
+    ::mlir::ValueRange operands, ::mlir::DictionaryAttr attributes,
+    ::mlir::OpaqueProperties properties, ::mlir::RegionRange regions,
+    ::llvm::SmallVectorImpl<::mlir::Type> &inferredReturnTypes) {
+  for (Value operand : operands)
+    inferredReturnTypes.push_back(operand.getType());
+  return mlir::success();
+}
+
 } // namespace nvidia_gpu
 } // namespace triton
 } // namespace mlir

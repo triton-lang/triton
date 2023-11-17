@@ -38,19 +38,6 @@ namespace ttng = ::mlir::triton::nvidia_gpu;
 
 typedef DenseMap<Operation *, triton::MakeTensorPtrOp> TensorPtrMapT;
 
-namespace mlir {
-namespace LLVM {
-
-// Helper function for using printf in LLVM conversion.
-void vprintf(StringRef msg, ValueRange args,
-             ConversionPatternRewriter &rewriter);
-
-void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
-                   std::string elem_repr, ConversionPatternRewriter &builder);
-
-} // namespace LLVM
-} // namespace mlir
-
 // FuncOpConversion/FuncOpConversionBase is borrowed from
 // https://github.com/llvm/llvm-project/blob/fae656b2dd80246c3c6f01e9c77c49560368752c/mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp#L276
 // since it is not exposed on header files in mlir v14
@@ -193,10 +180,10 @@ public:
   // Key: {layout, shape, withCTAOffset}
   struct IndexCacheInfo {
     DenseMap<IndexCacheKeyT, SmallVector<Value>, CacheKeyDenseMapInfo>
-        *baseIndexCache;
+        *baseIndexCache = nullptr;
     DenseMap<IndexCacheKeyT, SmallVector<SmallVector<Value>>,
-             CacheKeyDenseMapInfo> *indexCache;
-    OpBuilder::InsertPoint *indexInsertPoint;
+             CacheKeyDenseMapInfo> *indexCache = nullptr;
+    OpBuilder::InsertPoint *indexInsertPoint = nullptr;
   };
 
   explicit ConvertTritonGPUOpToLLVMPatternBase(
@@ -835,7 +822,7 @@ public:
             emitIndicesForDistributedLayout(loc, b, slice, type, withCTAOffset);
       } else {
         llvm_unreachable(
-            "emitIndices for layouts other than blocked & slice not "
+            "emitIndices for layouts other than blocked, mma, and slice not "
             "implemented yet");
       }
       if (cache) {

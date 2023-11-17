@@ -422,7 +422,6 @@ MMA16816SmemLoader::MMA16816SmemLoader(
   needTrans = kOrder != order[0];
   canUseLdmatrix = elemBytes == 2 || (!needTrans);
   canUseLdmatrix = canUseLdmatrix && (kWidth == vecWidth);
-  // canUseLdmatrix = false;
 
   if (canUseLdmatrix) {
     // Each CTA, the warps is arranged as [1xwarpsPerTile] if not transposed,

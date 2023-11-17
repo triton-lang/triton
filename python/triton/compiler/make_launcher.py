@@ -3,9 +3,9 @@ import os
 import tempfile
 
 from ..common import _build
+from ..common.backend import get_cuda_version_key
 from ..common.build import is_hip
 from ..runtime.cache import get_cache_manager
-from ..runtime.jit import version_key
 from .utils import generate_cu_signature
 
 # ----- stub --------
@@ -23,7 +23,7 @@ def make_so_cache_key(version_hash, signature, constants, ids, **kwargs):
 
 def make_stub(name, signature, constants, ids, **kwargs):
     # name of files that are cached
-    so_cache_key = make_so_cache_key(version_key(), signature, constants, ids, **kwargs)
+    so_cache_key = make_so_cache_key(get_cuda_version_key(), signature, constants, ids, **kwargs)
     so_cache_manager = get_cache_manager(so_cache_key)
     so_name = f"{name}.so"
     # retrieve stub from cache if it exists
@@ -39,6 +39,7 @@ def make_stub(name, signature, constants, ids, **kwargs):
                 return so_cache_manager.put(f.read(), so_name, binary=True)
     else:
         return cache_path
+
 
 # ----- source code generation --------
 
@@ -100,7 +101,10 @@ def generate_launcher(constants, signature, ids):
 
     # generate glue code
     folded_without_constexprs = [c for c in ids['ids_of_folded_args'] if c not in ids['ids_of_const_exprs']]
-    params = [i for i in signature.keys() if i >= desc_start_idx or (i not in constants and i not in folded_without_constexprs)]
+    params = [
+        i for i in signature.keys()
+        if i >= desc_start_idx or (i not in constants and i not in folded_without_constexprs)
+    ]
     src = f"""
 #include \"cuda.h\"
 #include <stdbool.h>

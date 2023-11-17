@@ -46,23 +46,6 @@ template <class Op> struct GenericOpPattern : public OpConversionPattern<Op> {
   }
 };
 
-template <class SrcOp, class DstOp>
-class ArithCmpPattern : public OpConversionPattern<SrcOp> {
-public:
-  using OpConversionPattern<SrcOp>::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(SrcOp op, typename SrcOp::Adaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Type retType = this->getTypeConverter()->convertType(op.getType());
-    addNamedAttrs(
-        rewriter.replaceOpWithNewOp<DstOp>(op, retType, adaptor.getPredicate(),
-                                           adaptor.getLhs(), adaptor.getRhs()),
-        adaptor.getAttributes());
-    return success();
-  }
-};
-
 class ArithConstantPattern : public OpConversionPattern<arith::ConstantOp> {
 public:
   using OpConversionPattern<arith::ConstantOp>::OpConversionPattern;
@@ -122,53 +105,15 @@ void populateArithPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<arith::MulFOp>, GenericOpPattern<arith::DivFOp>,
       GenericOpPattern<arith::RemFOp>,
       // Cmp
-      ArithCmpPattern<arith::CmpIOp, triton::gpu::CmpIOp>,
-      ArithCmpPattern<arith::CmpFOp, triton::gpu::CmpFOp>,
+      GenericOpPattern<arith::CmpIOp>, GenericOpPattern<arith::CmpFOp>,
+      // Select
+      GenericOpPattern<arith::SelectOp>,
       // Cast Ops
       GenericOpPattern<arith::TruncIOp>, GenericOpPattern<arith::TruncFOp>,
       GenericOpPattern<arith::ExtUIOp>, GenericOpPattern<arith::ExtSIOp>,
       GenericOpPattern<arith::ExtFOp>, GenericOpPattern<arith::SIToFPOp>,
       GenericOpPattern<arith::FPToSIOp>, GenericOpPattern<arith::FPToUIOp>,
       GenericOpPattern<arith::UIToFPOp>>(typeConverter, context);
-}
-
-// this shouldn't exist if mlir's SelectOp checked encodings properly
-class StdSelectPattern : public OpConversionPattern<arith::SelectOp> {
-public:
-  using OpConversionPattern<arith::SelectOp>::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(arith::SelectOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Type retType = this->getTypeConverter()->convertType(op.getType());
-
-    Value cond = adaptor.getCondition();
-    if (llvm::isa<RankedTensorType>(retType) &&
-        !llvm::isa<TensorType>(cond.getType())) {
-      // triton_gpu.select doesn't support scalar condition values, so add a
-      // splat
-      auto retTypeTensor = llvm::cast<RankedTensorType>(retType);
-      auto retShape = retTypeTensor.getShape();
-      auto retEncoding = retTypeTensor.getEncoding();
-      Type condTy =
-          RankedTensorType::get(retShape, cond.getType(), retEncoding);
-      cond = rewriter.create<triton::SplatOp>(op.getLoc(), condTy, cond);
-    }
-
-    addNamedAttrs(
-        rewriter.replaceOpWithNewOp<triton::gpu::SelectOp>(
-            op, retType, cond, adaptor.getTrueValue(), adaptor.getFalseValue()),
-        adaptor.getAttributes());
-    return success();
-  }
-};
-
-void populateStdPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
-                                    RewritePatternSet &patterns,
-                                    TritonGPUConversionTarget &target) {
-  MLIRContext *context = patterns.getContext();
-  // Rewrite rule
-  patterns.add<StdSelectPattern>(typeConverter, context);
 }
 
 void populateMathPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
@@ -529,6 +474,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::StoreOp>,
       GenericOpPattern<triton::ExternElementwiseOp>,
       GenericOpPattern<triton::PrintOp>, GenericOpPattern<triton::AssertOp>,
+      GenericOpPattern<triton::AtomicCASOp>,
       GenericOpPattern<triton::AtomicRMWOp>, GenericOpPattern<ReturnOp>,
       GenericOpPattern<triton::CallOp>, TritonFuncOpPattern>(typeConverter,
                                                              context);
@@ -745,7 +691,6 @@ public:
     // rewrite patterns
     RewritePatternSet patterns(context);
     // add rules
-    populateStdPatternsAndLegality(typeConverter, patterns, target);
     populateArithPatternsAndLegality(typeConverter, patterns, target);
     populateMathPatternsAndLegality(typeConverter, patterns, target);
     populateTritonPatterns(typeConverter, patterns, numCTAs);

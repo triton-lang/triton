@@ -5,14 +5,13 @@ import triton
 import triton.ops
 
 
-@pytest.mark.parametrize("M, N, dtype, mode",
-                         [
-                             (M, N, dtype, mode) for M in [1024, 821]
-                             for N in [512, 857, 1871, 2089, 8573, 31000]
-                             for dtype in ['float16', 'float32']
-                             for mode in ['forward', 'backward']
-                         ]
-                         )
+@pytest.mark.parametrize("M, N, dtype, mode", [  #
+    (M, N, dtype, mode)
+    for M in [1024, 821]
+    for N in [512, 857, 1871, 2089, 8573, 31000]
+    for dtype in ['float16', 'float32']
+    for mode in ['forward', 'backward']
+])
 def test_op(M, N, dtype, mode):
     capability = torch.cuda.get_device_capability()
     if capability[0] < 8 and dtype == "bfloat16":
