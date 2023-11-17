@@ -570,13 +570,21 @@ bool isaDistributedLayout(Attribute layout) {
          layout.isa<SliceEncodingAttr>();
 }
 
-bool isSharedEncoding(Value value) {
+template <typename T> bool hasEncoding(Value value) {
   auto type = value.getType();
   if (auto tensorType = type.dyn_cast<RankedTensorType>()) {
     auto encoding = tensorType.getEncoding();
-    return encoding && encoding.isa<triton::gpu::SharedEncodingAttr>();
+    return encoding && encoding.isa<T>();
   }
   return false;
+}
+
+bool hasSharedEncoding(Value value) {
+  return hasEncoding<triton::gpu::SharedEncodingAttr>(value);
+}
+
+bool hasDotOperandEncoding(Value value) {
+  return hasEncoding<triton::gpu::DotOperandEncodingAttr>(value);
 }
 
 bool isExpensiveCat(CatOp cat, Attribute targetEncoding) {
@@ -1741,6 +1749,15 @@ struct CanonicalizeConvertFromConvert
     if (auto view = dyn_cast<triton::ViewOp>(arg)) {
       if (isExpensiveView(view.getOperand().getType(), op.getType()))
         return failure();
+      // In TritonGPUToLLVM phase, ViewOp is converted to unpacking and packing
+      // operations, which requires the element type to match between unpacking
+      // and packing. However, part of values with dot operand encoding will be
+      // packed/unpacked as i32 elements instead of the underlying element type.
+      // To avoid errors, skip this folding when either the operand or result
+      // of view has a dot operand encoding.
+      if (hasDotOperandEncoding(op->getOperand(0)) ||
+          hasDotOperandEncoding(op->getResult(0)))
+        return failure();
       rewriter.replaceOpWithNewOp<triton::ViewOp>(
           op, op->getResult(0).getType(), view.getResult());
       return mlir::success();
@@ -1758,7 +1775,7 @@ struct CanonicalizeConvertFromConvert
     // cvt(alloc_tensor(x), type2) -> alloc_tensor(x, type2)
     auto alloc_tensor = dyn_cast<triton::gpu::AllocTensorOp>(arg);
     if (alloc_tensor) {
-      if (!triton::gpu::isSharedEncoding(op->getResult(0))) {
+      if (!triton::gpu::hasSharedEncoding(op->getResult(0))) {
         return mlir::failure();
       }
       rewriter.replaceOpWithNewOp<triton::gpu::AllocTensorOp>(
@@ -1768,7 +1785,7 @@ struct CanonicalizeConvertFromConvert
     // cvt(insert_slice(x), type2) -> insert_slice(cvt(x, type2))
     auto insert_slice = dyn_cast<triton::gpu::InsertSliceAsyncOp>(arg);
     if (insert_slice) {
-      if (!triton::gpu::isSharedEncoding(op->getResult(0))) {
+      if (!triton::gpu::hasSharedEncoding(op->getResult(0))) {
         return mlir::failure();
       }
       auto newType = op->getResult(0).getType().cast<RankedTensorType>();
@@ -1790,7 +1807,7 @@ struct CanonicalizeConvertFromConvert
     // cvt(extract_slice(x), type2) -> extract_slice(cvt(x, type2))
     auto extract_slice = dyn_cast<triton::gpu::ExtractSliceOp>(arg);
     if (extract_slice) {
-      if (!triton::gpu::isSharedEncoding(op->getResult(0))) {
+      if (!triton::gpu::hasSharedEncoding(op->getResult(0))) {
         return mlir::failure();
       }
       auto origType =
@@ -1820,13 +1837,13 @@ struct CanonicalizeConvertFromConvert
     // cvt(cvt(x, type1), type2) -> cvt(x, type2)
     if (llvm::isa<triton::gpu::ConvertLayoutOp>(arg)) {
       if (arg->getOperand(0).getDefiningOp() &&
-          !triton::gpu::isSharedEncoding(arg->getOperand(0)) &&
-          triton::gpu::isSharedEncoding(op.getOperand()) &&
-          !triton::gpu::isSharedEncoding(op.getResult())) {
+          !triton::gpu::hasSharedEncoding(arg->getOperand(0)) &&
+          triton::gpu::hasSharedEncoding(op.getOperand()) &&
+          !triton::gpu::hasSharedEncoding(op.getResult())) {
         return mlir::failure();
       }
-      if (triton::gpu::isSharedEncoding(op.getOperand()) &&
-          triton::gpu::isSharedEncoding(op.getResult())) {
+      if (triton::gpu::hasSharedEncoding(op.getOperand()) &&
+          triton::gpu::hasSharedEncoding(op.getResult())) {
         return mlir::failure();
       }
       auto srcType = op.getOperand().getType().cast<RankedTensorType>();
