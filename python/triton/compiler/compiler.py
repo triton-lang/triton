@@ -314,6 +314,25 @@ def _get_jsonable_constants(constants):
     return serialized_constants
 
 
+def _get_num_warps_from_ir_str(src: str):
+    # TODO(jlebar): Using a regex to get num-warps is a hack, and will break if
+    # e.g. someone has an instruction (not module) attribute named "num-warps".
+    num_warps_matches = re.findall(ttgir_num_warps_pattern, src)
+    assert len(num_warps_matches) == 1, "Expected exactly one match for num_warps"
+    num_warps = int(num_warps_matches[0])
+
+    # If warp specialization is enabled, the true number of warps from
+    # the perspective of e.g. CUDA is num-warps times the number of
+    # specialized groups.
+    num_warp_groups_matches = re.findall(r'"triton_gpu.num-warp-groups-per-cta"\s?=\s?(\d+)\s?:', src)
+    assert len(num_warp_groups_matches) == 0 or len(num_warp_groups_matches) == 1, \
+      "Expected triton_gpu.num-warp-groups-per-cta attribute to appear 0 or 1 times"
+    if num_warp_groups_matches:
+        num_warps *= int(num_warp_groups_matches[0])
+
+    return num_warps
+
+
 def parse_mlir_module(path, context):
     module = ir.parse_mlir_module(path, context)
     # module takes ownership of the context
@@ -453,24 +472,9 @@ def compile(fn, **kwargs):
         name, signature = match.group(1), match.group(2)
         types = re.findall(arg_type_pattern[ir_name], signature)
         if ir_name == 'ttgir':
-            # TODO(jlebar): Using a regex to get num-warps is a hack, and will
-            # break if e.g. someone has an instruction (not module) attribute
-            # named "num-warps".
-            num_warps_matches = re.findall(ttgir_num_warps_pattern, src)
-            assert len(num_warps_matches) == 1, "Expected exactly one match for num_warps"
-            ir_num_warps = int(num_warps_matches[0])
-            assert "num_warps" not in kwargs or ir_num_warps == num_warps, "num_warps in ttgir does not match num_warps in compile"
-
-            # If warp specialization is enabled, the true number of warps from
-            # the perspective of e.g. CUDA is num-warps times the number of
-            # specialized groups.
-            num_warp_groups_matches = re.findall(r'"triton_gpu.num-warp-groups-per-cta"\s?=\s?(\d+)\s?:', src)
-            assert len(num_warp_groups_matches) == 0 or len(num_warp_groups_matches) == 1, \
-                "Expected triton_gpu.num-warp-groups-per-cta attribute to appear 0 or 1 times"
-            if num_warp_groups_matches:
-                ir_num_warps *= int(num_warp_groups_matches[0])
-
-            num_warps = ir_num_warps
+            num_warps_from_ir = _get_num_warps_from_ir_str(src)
+            assert "num_warps" not in kwargs or num_warps_from_ir == num_warps, "num_warps in ttgir does not match num_warps in compile"
+            num_warps = num_warps_from_ir
 
         param_tys = [convert_type_repr(ty) for ty in types]
         signature = {k: v for k, v in enumerate(param_tys)}
