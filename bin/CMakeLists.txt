@@ -72,7 +72,6 @@ llvm_update_compile_flags(triton-translate)
          MLIRPass
          MLIRSupport
          MLIRTransforms
-         MLIRExecutionEngine
          MLIRMathToLLVM
          MLIRTransformUtils
          MLIRLLVMToLLVMIRTranslation

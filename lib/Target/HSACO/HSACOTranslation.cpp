@@ -116,7 +116,7 @@ initialize_module(llvm::Module *module, const std::string &triple,
   opt.NoNaNsFPMath = true;
   llvm::TargetMachine *machine = target->createTargetMachine(
       module->getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
-      std::nullopt, llvm::CodeGenOpt::Aggressive);
+      std::nullopt, llvm::CodeGenOptLevel::Aggressive);
 
   module->setDataLayout(machine->createDataLayout());
 
@@ -141,7 +141,7 @@ std::string generate_amdgcn_assembly(llvm::Module *module,
 
   // emit
   machine->addPassesToEmitFile(pass, stream, nullptr,
-                               llvm::CodeGenFileType::CGFT_AssemblyFile);
+                               llvm::CodeGenFileType::AssemblyFile);
   pass.run(*module);
 
   std::string amdgcn(buffer.begin(), buffer.end());
@@ -210,7 +210,7 @@ std::string generate_hsaco(llvm::Module *module, const std::string &triple,
   // emit
   llvm::legacy::PassManager pass;
   machine->addPassesToEmitFile(pass, *isabin_fs, nullptr,
-                               llvm::CGFT_ObjectFile);
+                               llvm::CodeGenFileType::ObjectFile);
   pass.run(*module);
 
   // generate HASCO file

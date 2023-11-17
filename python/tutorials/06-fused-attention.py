@@ -18,9 +18,15 @@ import triton
 import triton.language as tl
 
 torch_dtype:tl.constexpr = torch.float16
-TORCH_HAS_FP8E5 = hasattr(torch, 'float8_e5m2fnuz')
+TORCH_HAS_FP8 = False
+TORCH_HAS_FP8E5 = hasattr(torch, 'float8_e5m2')
+TORCH_HAS_FP8E5FNUZ = hasattr(torch, 'float8_e5m2fnuz')
 if TORCH_HAS_FP8E5:
+    torch_dtype:tl.constexpr = torch.float8_e5m2
+    TORCH_HAS_FP8 = True
+if TORCH_HAS_FP8E5FNUZ:
     torch_dtype:tl.constexpr = torch.float8_e5m2fnuz
+    TORCH_HAS_FP8 = True
 
 @triton.jit
 def _attn_fwd_inner(
@@ -77,7 +83,9 @@ def _attn_fwd_inner(
         K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
     return acc, l_i, m_i
 
-
+# We don't run auto-tuning everytime to keep the tutorial fast. Uncommenting
+# the code below and commenting out the equivalent parameters is convenient for
+# re-tuning.
 @triton.autotune(
    configs=[
        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 64, 'waves_per_eu': 2, 'pre_load_v': False}, num_stages=1, num_warps=8),
@@ -431,6 +439,10 @@ class _attention(torch.autograd.Function):
             BLOCK_N = 64 if Lk <= 64 else 32
             num_stages = 4 if Lk <= 64 else 3
             num_warps = 4 if Lk <= 64 else 8
+            # Tuning for H100
+            if torch.cuda.get_device_capability()[0] == 9:
+                num_warps = 8
+                num_stages = 7 if Lk >= 64 else 3
 
         stage = 3 if causal else 1
         grid = lambda META: (
@@ -561,7 +573,7 @@ def test_op_fwd(Z, H, N_CTX, D_HEAD, causal, dtype=torch.float16):
     q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
     k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
     v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
-    if TORCH_HAS_FP8E5:
+    if TORCH_HAS_FP8:
         q = q.to(torch_dtype)
         k = k.to(torch_dtype)
     sm_scale = 0.5
@@ -683,7 +695,7 @@ def bench_flash_attention(
         q = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
         k = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
         v = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
-        if mode == "fwd":
+        if mode == "fwd" and TORCH_HAS_FP8:
             q = q.to(torch_dtype)
             k = k.to(torch_dtype)
         sm_scale = 1.3

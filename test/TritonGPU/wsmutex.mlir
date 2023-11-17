@@ -2,9 +2,9 @@
 
 
 // CHECK: scf.if
+// CHECK: triton_nvidia_gpu.create_mutex
+// CHECK: triton_nvidia_gpu.create_mutex
 // CHECK: scf.for
-// CHECK: triton_nvidia_gpu.create_mutex
-// CHECK: triton_nvidia_gpu.create_mutex
 // CHECK: triton_nvidia_gpu.lock
 // CHECK: agent.mutex_role = 0 : i32
 // CHECK: triton_nvidia_gpu.unlock

@@ -168,7 +168,9 @@ DotOpMmaV3SmemLoader loadA(TritonGPUToLLVMTypeConverter *typeConverter,
   int numRepM = ceil<unsigned>(shapePerCTA[0], instrShape[0] * wpt[0]);
   int numRepK = ceil<unsigned>(shapePerCTA[1], instrShape[2]);
 
-  Value warp = udiv(thread, i32_val(32));
+  // The descriptor should be calculated based on the first warp of the
+  // warpgroup.
+  Value warp = and_(udiv(thread, i32_val(32)), i32_val(0xFFFFFFFC));
   Value warpM = urem(warp, i32_val(wpt[0]));
   Value warpId = urem(warpM, i32_val(shapePerCTA[0] / instrShape[0]));
 
@@ -199,7 +201,7 @@ DotOpMmaV3SmemLoader loadB(TritonGPUToLLVMTypeConverter *typeConverter,
   int numRepK = ceil<unsigned>(shapePerCTA[0], instrShape[2]);
   int numRepN = ceil<unsigned>(shapePerCTA[1], instrShape[1] * wpt[1]);
 
-  Value warp = udiv(thread, i32_val(32));
+  Value warp = and_(udiv(thread, i32_val(32)), i32_val(0xFFFFFFFC));
   Value warpMN = udiv(warp, i32_val(wpt[0]));
   Value warpN = urem(warpMN, i32_val(wpt[1]));
   Value warpId = urem(warpN, i32_val(shapePerCTA[1] / instrShape[1]));
@@ -291,6 +293,26 @@ static bool isZero(Value v) {
           dyn_cast<DenseIntElementsAttr>(constantOp.getValueAttr()))
     return denseAttr.isSplat() && denseAttr.getSplatValue<APInt>().isZero();
   return false;
+}
+
+static SmallVector<Value> emitWait(ConversionPatternRewriter &rewriter,
+                                   Location loc, SmallVector<Value> acc,
+                                   int pendings) {
+  SmallVector<Type> types(acc.size(), acc[0].getType());
+  auto structTy =
+      LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
+  Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
+  int i = 0;
+  for (Value v : acc) {
+    llvmStruct = insert_val(structTy, llvmStruct, v, i++);
+  }
+  Value res = rewriter.create<triton::nvgpu::WGMMAWaitGroupOp>(loc, llvmStruct,
+                                                               pendings);
+  SmallVector<Value> results;
+  for (int i = 0; i < acc.size(); ++i) {
+    results.push_back(extract_val(types[0], res, i));
+  }
+  return results;
 }
 
 LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
@@ -427,7 +449,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   rewriter.create<triton::nvgpu::WGMMACommitGroupOp>(loc);
 
   if (sync)
-    rewriter.create<triton::nvgpu::WGMMAWaitGroupOp>(loc, 0);
+    mmaResults = emitWait(rewriter, loc, mmaResults, 0);
 
   SmallVector<Value> results =
       unpackAccumulator(rewriter, loc, mmaResults, dTensorTy);

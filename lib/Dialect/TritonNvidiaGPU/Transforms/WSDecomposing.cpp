@@ -220,7 +220,9 @@ public:
     SetVector<Operation *> backwardSlice;
     mod.walk([&](triton::MakeTensorPtrOp op) -> void {
       assert(isa<triton::FuncOp>(op->getParentOp()));
-      getBackwardSlice(op.getOperation(), &backwardSlice);
+      mlir::BackwardSliceOptions opt;
+      opt.omitBlockArguments = true;
+      getBackwardSlice(op.getOperation(), &backwardSlice, opt);
       op->removeAttr("async_agent");
     });
     for (auto op : backwardSlice) {

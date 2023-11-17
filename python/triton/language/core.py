@@ -1057,14 +1057,19 @@ def load(pointer, mask=None, other=None, boundary_check=tuple(), padding_option=
     """
     Return a tensor of data whose values are loaded from memory at location defined by `pointer`:
         (1) `pointer` could be a single element pointer, then a scalar will be loaded
+
             - `mask` and `other` must be scalar too
             - `other` is implicitly typecast to `pointer.dtype.element_ty`
             - `boundary_check` and `padding_option` must be empty
+
         (2) `pointer` could be element-wise tensor of pointers, in which case:
+
             - `mask` and `other` are implicitly broadcast to `pointer.shape`
             - `other` is implicitly typecast to `pointer.dtype.element_ty`
             - `boundary_check` and `padding_option` must be empty
+
         (3) `pointer` could be a block pointer defined by `make_block_ptr`, in which case:
+
             - `mask` and `other` must be None
             - `boundary_check` and `padding_option` can be specified to control the behavior of out-of-bound access
 
@@ -1103,14 +1108,20 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
     """
     Store a tensor of data into memory locations defined by `pointer`:
         (1) `pointer` could be a single element pointer, then a scalar will be stored
+
             - `mask` must be scalar too
             - `boundary_check` and `padding_option` must be empty
+
         (2) `pointer` could be element-wise tensor of pointers, in which case:
+
             - `mask` is implicitly broadcast to `pointer.shape`
             - `boundary_check` must be empty
+
         (3) or `pointer` could be a block pointer defined by `make_block_ptr`, in which case:
+
             - `mask` must be None
             - `boundary_check` can be specified to control the behavior of out-of-bound access
+
     `value` is implicitly broadcast to `pointer.shape` and typecast to `pointer.dtype.element_ty`.
 
     :param pointer: The memory location where the elements of `value` are stored
@@ -1165,29 +1176,35 @@ def advance(base: tensor, offsets, _builder=None):
 # -----------------------
 
 
-def _add_atomic_docstr(name: str) -> Callable[[T], T]:
+def _add_atomic_docstr(name: str, has_cmp: bool = False) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
-        docstr = """
+        docstr = f"""
     Performs an atomic {name} at the memory location specified by :code:`pointer`.
 
     Return the data stored at :code:`pointer` before the atomic operation.
 
-    :param pointer: The memory locations to compare-and-swap.
-    :type pointer: Block of dtype=triton.PointerDType
+    :param pointer: The memory locations to operate on
+    :type pointer: Block of dtype=triton.PointerDType"""
+        if has_cmp:
+            docstr += """
     :param cmp: The values expected to be found in the atomic object
-    :type cmp: Block of dtype=`pointer.dtype.element_ty`
-    :param val: The values to copy in case the expected value matches the contained value.
-    :type val: Block of dtype=`pointer.dtype.element_ty`
+    :type cmp: Block of dtype=pointer.dtype.element_ty"""
+        docstr += """
+    :param val: The values with which to perform the atomic operation
+    :type val: Block of dtype=pointer.dtype.element_ty
+    :param sem: Memory semantics to use ("ACQUIRE_RELEASE" (default),
+        "ACQUIRE", "RELEASE", or "RELAXED")
+    :type sem: str
     """
-        func.__doc__ = docstr.format(name=name)
+        func.__doc__ = docstr
         return func
 
     return _decorator
 
 
 @builtin
-@_add_atomic_docstr("compare-and-swap")
+@_add_atomic_docstr("compare-and-swap", has_cmp=True)
 def atomic_cas(pointer, cmp, val, sem=None, _builder=None):
     cmp = _to_tensor(cmp, _builder)
     val = _to_tensor(val, _builder)
@@ -1309,6 +1326,8 @@ def fdiv(x, y, ieee_rounding=False, _builder=None):
     :type ieee_rounding: bool
     """
     ieee_rounding = _constexpr_to_value(ieee_rounding)
+    x = _to_tensor(x, _builder)
+    y = _to_tensor(y, _builder)
     return semantic.fdiv(x, y, ieee_rounding, _builder)
 
 
@@ -1330,36 +1349,42 @@ def _add_math_1arg_docstr(name: str) -> Callable[[T], T]:
 @builtin
 @_add_math_1arg_docstr("exponential")
 def exp(x, _builder=None):
+    x = _to_tensor(x, _builder)
     return semantic.exp(x, _builder)
 
 
 @builtin
 @_add_math_1arg_docstr("natural logarithm")
 def log(x, _builder=None):
+    x = _to_tensor(x, _builder)
     return semantic.log(x, _builder)
 
 
 @builtin
 @_add_math_1arg_docstr("cosine")
 def cos(x, _builder=None):
+    x = _to_tensor(x, _builder)
     return semantic.cos(x, _builder)
 
 
 @builtin
 @_add_math_1arg_docstr("sine")
 def sin(x, _builder=None):
+    x = _to_tensor(x, _builder)
     return semantic.sin(x, _builder)
 
 
 @builtin
 @_add_math_1arg_docstr("square root")
 def sqrt(x, _builder=None):
+    x = _to_tensor(x, _builder)
     return semantic.sqrt(x, _builder)
 
 
 @builtin
 @_add_math_1arg_docstr("absolute value")
 def abs(x, _builder=None):
+    x = _to_tensor(x, _builder)
     return semantic.abs(x, _builder)
 
 

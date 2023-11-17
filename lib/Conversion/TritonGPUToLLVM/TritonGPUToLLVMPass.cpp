@@ -935,8 +935,10 @@ private:
       auto mask = insertSliceAsyncOp.getMask();
       auto srcTy = src.getType().cast<RankedTensorType>();
       auto dstTy = dst.getType().cast<RankedTensorType>();
-      auto srcBlocked =
-          srcTy.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
+      auto srcLayout = srcTy.getEncoding();
+      assert((srcLayout.isa<BlockedEncodingAttr, SliceEncodingAttr>() &&
+              "Unexpected srcLayout"));
+
       auto resSharedLayout =
           dstTy.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
       auto resElemTy = dstTy.getElementType();
@@ -966,7 +968,7 @@ private:
 
       // load
       auto tmpTy =
-          RankedTensorType::get(srcTy.getShape(), resElemTy, srcBlocked);
+          RankedTensorType::get(srcTy.getShape(), resElemTy, srcLayout);
       auto loadOp = builder.create<triton::LoadOp>(
           insertSliceAsyncOp.getLoc(), tmpTy, insertSliceAsyncOp.getSrc(),
           insertSliceAsyncOp.getMask(), insertSliceAsyncOp.getOther(),
@@ -999,8 +1001,12 @@ private:
     });
 
     mod.walk([&](triton::gpu::AsyncCommitGroupOp asyncCommitGroupOp) -> void {
+#ifdef USE_ROCM
+      asyncCommitGroupOp.erase();
+#else
       if (!triton::gpu::AsyncCommitGroupOp::isSupported(computeCapability))
         asyncCommitGroupOp.erase();
+#endif
     });
 
     mod.walk([&](triton::gpu::AsyncWaitOp asyncWaitOp) -> void {

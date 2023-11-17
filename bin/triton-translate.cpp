@@ -104,10 +104,15 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
       "", llvm::cl::desc("AMDGCN features. e.g. '+sramecc,-xnack'"),
       llvm::cl::value_desc("features"), llvm::cl::init("+sramecc,-xnack"));
 
+  static llvm::cl::opt<bool> enableFpFusion(
+      "enable-fp-fusion", llvm::cl::desc("Enables fusion of fadd/fmul"),
+      llvm::cl::init(true));
+
   llvm::InitLLVM y(argc, argv);
 
   registerAsmPrinterCLOptions();
   registerMLIRContextCLOptions();
+  registerPassManagerCLOptions();
   llvm::cl::ParseCommandLineOptions(argc, argv, toolName);
 
   mlir::MLIRContext context;
@@ -142,7 +147,8 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
     llvm::outs() << *llvmir << '\n';
   } else if (targetKind == "ptx") {
     llvm::outs() << ::triton::translateLLVMIRToPTX(*llvmir, SMArch.getValue(),
-                                                   ptxVersion.getValue());
+                                                   ptxVersion.getValue(),
+                                                   enableFpFusion.getValue());
   } else if (targetKind == "hsaco") {
     auto [module, hsaco] = mlir::triton::translateLLVMIRToHSACO(
         *llvmir, GCNArch.getValue(), GCNTriple.getValue(),

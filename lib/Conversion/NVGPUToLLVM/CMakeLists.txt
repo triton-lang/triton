@@ -14,7 +14,7 @@ add_mlir_conversion_library(NVGPUToLLVM
     LINK_LIBS PUBLIC
     MLIRIR
     MLIRPass
-    MLIRGPUOps
+    MLIRGPUDialect
     MLIRGPUToNVVMTransforms
     MLIRGPUToROCDLTransforms
     MLIRGPUTransforms

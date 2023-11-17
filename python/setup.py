@@ -73,23 +73,20 @@ def get_llvm_package_info():
     if arch == 'aarch64':
         arch = 'arm64'
     if system == "Darwin":
-        system_suffix = "apple-darwin"
         arch = platform.machine()
+        system_suffix = f"macos-{arch}"
     elif system == "Linux":
+        # TODO: arm64
         vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
         vglibc = vglibc[0] * 100 + vglibc[1]
-        linux_suffix = 'ubuntu-18.04' if vglibc > 217 else 'centos-7'
-        system_suffix = f"linux-gnu-{linux_suffix}"
+        system_suffix = 'ubuntu-x64' if vglibc > 217 else 'centos-x64'
     else:
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
-    use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
-    release_suffix = "assert" if use_assert_enabled_llvm else "release"
-    name = f'llvm+mlir-17.0.0-{arch}-{system_suffix}-{release_suffix}'
-    version = "llvm-17.0.0-c5dede880d17"
-    url = f"https://github.com/ptillet/triton-llvm-releases/releases/download/{version}/{name}.tar.xz"
-    # FIXME: remove the following once github.com/ptillet/triton-llvm-releases has arm64 llvm releases
-    if arch == 'arm64' and 'linux' in system_suffix:
-        url = f"https://github.com/acollins3/triton-llvm-releases/releases/download/{version}/{name}.tar.xz"
+    # use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
+    # release_suffix = "assert" if use_assert_enabled_llvm else "release"
+    rev = "b1115f8c"
+    name = f"llvm-{rev}-{system_suffix}"
+    url = f"https://tritonlang.blob.core.windows.net/llvm-builds/{name}.tar.gz"
     return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
 
