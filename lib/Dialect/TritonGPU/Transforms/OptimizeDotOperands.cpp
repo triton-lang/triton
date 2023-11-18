@@ -110,9 +110,13 @@ public:
       if (isa<triton::LoadOp>(currOp))
         checkOp = true;
       else if (checkOp) {
+        // Bail out if there exists an op after Load that is not FpToFp, Bitcast, or Arith.
         if (!isa<triton::FpToFpOp, triton::BitcastOp>(currOp) &&
             currOp->getDialect()->getTypeID() !=
                 mlir::TypeID::get<arith::ArithDialect>())
+          return mlir::failure();
+        // Also bail out if there exists an op after Load that is Select.
+        if (isa<arith::SelectOp>(currOp))
           return mlir::failure();
       }
     }
