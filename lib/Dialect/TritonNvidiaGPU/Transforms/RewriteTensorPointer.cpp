@@ -124,6 +124,13 @@ private:
     return res;
   }
 
+  template <typename T>
+  SmallVector<T> insertOne(const SmallVector<T> &vec, unsigned axis) const {
+    SmallVector<T> res(vec.begin(), vec.end());
+    res.insert(res.begin() + axis, 1);
+    return res;
+  }
+
   // Example:    order = [   0, 2, 1, 3], dim = 2
   //          resOrder = [2, 0, 3, 1, 4]
   SmallVector<unsigned> insertOrder(ArrayRef<unsigned> order,

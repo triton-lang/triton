@@ -189,7 +189,7 @@ private:
     // XXX(Keren): Why this hard-coded alignment?
     size_t kAlignment = 8;
     for (Value result : op->getResults()) {
-      if (triton::gpu::isSharedEncoding(result)) {
+      if (triton::gpu::hasSharedEncoding(result)) {
         // Bytes could be a different value once we support padding or other
         // allocation policies.
         auto tensorType = result.getType().dyn_cast<RankedTensorType>();

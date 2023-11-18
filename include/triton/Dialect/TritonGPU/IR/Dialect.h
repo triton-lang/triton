@@ -103,7 +103,7 @@ unsigned getNumCTAs(Attribute layout);
 
 bool isaDistributedLayout(Attribute layout);
 
-bool isSharedEncoding(Value value);
+bool hasSharedEncoding(Value value);
 
 bool isExpensiveCat(CatOp cat, Attribute targetEncoding);
 

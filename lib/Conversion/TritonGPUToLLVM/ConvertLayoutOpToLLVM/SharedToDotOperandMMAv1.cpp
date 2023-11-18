@@ -93,12 +93,12 @@ static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
                    TritonGPUToLLVMTypeConverter *typeConverter,
                    ConversionPatternRewriter &rewriter, Type resultTy) {
   static constexpr std::array<int, 3> fpw{{2, 2, 1}};
-  auto wpt = resultTy.cast<RankedTensorType>()
-                 .getEncoding()
-                 .cast<DotOperandEncodingAttr>()
-                 .getParent()
-                 .cast<MmaEncodingAttr>()
-                 .getWarpsPerCTA();
+  auto mmaEncoding = resultTy.cast<RankedTensorType>()
+                         .getEncoding()
+                         .cast<DotOperandEncodingAttr>()
+                         .getParent()
+                         .cast<MmaEncodingAttr>();
+  auto wpt = mmaEncoding.getWarpsPerCTA();
 
   auto *ctx = rewriter.getContext();
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
@@ -114,8 +114,10 @@ static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
                             .getEncoding()
                             .cast<DotOperandEncodingAttr>();
   auto [offsetAM, offsetAK, _3, _4] = computeOffsets(
-      thread, isARow, false, fpw, resultEncoding.getMMAv1ShapePerWarp(),
-      resultEncoding.getMMAv1Rep(), rewriter, loc, resultTy);
+      thread, isARow, false, fpw,
+      mmaEncoding.getMMAv1ShapePerWarp(resultEncoding.getOpIdx()),
+      mmaEncoding.getMMAv1Rep(resultEncoding.getOpIdx()), rewriter, loc,
+      resultTy);
 
   int vecA = sharedLayout.getVec();
 
@@ -192,9 +194,10 @@ static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
     }
   };
 
-  bool isARow_ = resultEncoding.getMMAv1IsRow();
-  bool isAVec4 = resultEncoding.getMMAv1IsVec4();
-  unsigned numM = resultEncoding.getMMAv1NumOuter(shape);
+  bool isARow_ = mmaEncoding.getMMAv1IsRow(resultEncoding.getOpIdx());
+  bool isAVec4 = mmaEncoding.getMMAv1IsVec4(resultEncoding.getOpIdx());
+  unsigned numM =
+      mmaEncoding.getMMAv1NumOuter(shape, resultEncoding.getOpIdx());
   for (unsigned k = 0; k < NK; k += 4)
     for (unsigned m = 0; m < numM / 2; ++m)
       if (!has.count({m, k}))
@@ -216,12 +219,12 @@ static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
                    TritonGPUToLLVMTypeConverter *typeConverter,
                    ConversionPatternRewriter &rewriter, Type resultTy) {
   static constexpr std::array<int, 3> fpw{{2, 2, 1}};
-  auto wpt = resultTy.cast<RankedTensorType>()
-                 .getEncoding()
-                 .cast<DotOperandEncodingAttr>()
-                 .getParent()
-                 .cast<MmaEncodingAttr>()
-                 .getWarpsPerCTA();
+  auto mmaEncoding = resultTy.cast<RankedTensorType>()
+                         .getEncoding()
+                         .cast<DotOperandEncodingAttr>()
+                         .getParent()
+                         .cast<MmaEncodingAttr>();
+  auto wpt = mmaEncoding.getWarpsPerCTA();
   // smem
   auto strides = smemObj.strides;
 
@@ -248,8 +251,10 @@ static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
   int strideRepK = 1;
 
   auto [_3, _4, offsetBN, offsetBK] = computeOffsets(
-      thread, false, isBRow, fpw, resultEncoding.getMMAv1ShapePerWarp(),
-      resultEncoding.getMMAv1Rep(), rewriter, loc, resultTy);
+      thread, false, isBRow, fpw,
+      mmaEncoding.getMMAv1ShapePerWarp(resultEncoding.getOpIdx()),
+      mmaEncoding.getMMAv1Rep(resultEncoding.getOpIdx()), rewriter, loc,
+      resultTy);
 
   // swizzling
   int perPhaseB = sharedLayout.getPerPhase();
@@ -315,10 +320,11 @@ static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
     }
   };
 
-  bool isBRow_ = resultEncoding.getMMAv1IsRow();
+  bool isBRow_ = mmaEncoding.getMMAv1IsRow(resultEncoding.getOpIdx());
   assert(isBRow == isBRow_ && "B need smem isRow");
-  bool isBVec4 = resultEncoding.getMMAv1IsVec4();
-  unsigned numN = resultEncoding.getMMAv1NumOuter(shape);
+  bool isBVec4 = mmaEncoding.getMMAv1IsVec4(resultEncoding.getOpIdx());
+  unsigned numN =
+      mmaEncoding.getMMAv1NumOuter(shape, resultEncoding.getOpIdx());
   for (unsigned k = 0; k < NK; k += 4)
     for (unsigned n = 0; n < numN / 2; ++n) {
       if (!hbs.count({n, k}))
@@ -357,13 +363,11 @@ SmallVector<CoordTy> getMNCoords(Value thread, Location loc,
   Value _fpw1 = i32_val(fpw[1]);
 
   // A info
-  auto aEncoding = DotOperandEncodingAttr::get(ctx, 0, mmaLayout, 0);
-  auto aRep = aEncoding.getMMAv1Rep();
-  auto aSpw = aEncoding.getMMAv1ShapePerWarp();
+  auto aRep = mmaLayout.getMMAv1Rep(0);
+  auto aSpw = mmaLayout.getMMAv1ShapePerWarp(0);
   // B info
-  auto bEncoding = DotOperandEncodingAttr::get(ctx, 1, mmaLayout, 0);
-  auto bSpw = bEncoding.getMMAv1ShapePerWarp();
-  auto bRep = bEncoding.getMMAv1Rep();
+  auto bSpw = mmaLayout.getMMAv1ShapePerWarp(1);
+  auto bRep = mmaLayout.getMMAv1Rep(1);
 
   SmallVector<int, 2> rep({aRep[0], bRep[1]});
   SmallVector<int, 2> spw({aSpw[0], bSpw[1]});
