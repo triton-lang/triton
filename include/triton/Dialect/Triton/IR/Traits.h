@@ -24,6 +24,7 @@ namespace impl {
 int constexpr maxTensorNumElements = 1048576;
 
 LogicalResult verifyTensorSize(Operation *op);
+LogicalResult verifyTensorLayouts(Operation *op);
 
 LogicalResult verifySameOperandsEncoding(Operation *op,
                                          bool allowTensorPointerType = false);
@@ -45,6 +46,17 @@ class TensorSizeTrait : public TraitBase<ConcreteType, TensorSizeTrait> {
 public:
   static LogicalResult verifyTrait(Operation *op) {
     return impl::verifyTensorSize(op);
+  }
+};
+
+// Trait applied to all Triton MLIR ops.  Checks that the layouts of tensors are
+// valid.
+template <class ConcreteType>
+class VerifyTensorLayoutsTrait
+    : public TraitBase<ConcreteType, VerifyTensorLayoutsTrait> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return impl::verifyTensorLayouts(op);
   }
 };
 

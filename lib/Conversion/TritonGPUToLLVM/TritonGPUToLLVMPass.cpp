@@ -409,6 +409,13 @@ struct ConvertTritonGPUToLLVM
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
+    // Hack: WSMaterialization may have changed the effective number of warps,
+    // in a way that isn't reflected in triton_gpu.num-warps.  If so, we have to
+    // respect that here.
+    if (Attribute attr = mod->getAttr("triton_gpu.num-warp-groups-per-cta")) {
+      numWarps *= attr.cast<IntegerAttr>().getInt();
+    }
+
     // Preprocess
     decomposeFp8e4b15Convert(mod);
     decomposeSplatToSharedLayout(mod, numWarps, threadsPerWarp, numCTAs);
