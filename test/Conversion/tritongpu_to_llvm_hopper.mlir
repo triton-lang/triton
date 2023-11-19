@@ -232,7 +232,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
 #shared = #triton_gpu.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0], CTAsPerCGA = [1, 4], CTASplitNum = [1, 1], CTAOrder = [0, 1], hasLeadingOffset = true}>
 // CHECK-LABEL: alloc_mbarrier
 // CHECK-NOT: mbarrier0
-module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 4 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
   tt.func @alloc_mbarrier(%basePtr: !tt.ptr<f16> {tt.divisibility = 8 : i32}, %dim0: i64, %dim1: i64, %stride0: i64, %stride1: i64, %coord0: i32, %coord1: i32) {
     %mbar = triton_nvidia_gpu.alloc_mbarrier { count = 128 : i32 } : !tt.ptr<i64, 3>
     %dst = triton_gpu.alloc_tensor : tensor<1x64x64xf16, #shared>
@@ -249,7 +249,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
 #shared = #triton_gpu.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0], CTAsPerCGA = [1, 4], CTASplitNum = [1, 1], CTAOrder = [0, 1], hasLeadingOffset = true}>
 // CHECK-LABEL: barrier
 // CHECK: barrier0
-module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 4 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
   tt.func @barrier(%basePtr: !tt.ptr<f16> {tt.divisibility = 8 : i32}, %dim0: i64, %dim1: i64, %stride0: i64, %stride1: i64, %coord0: i32, %coord1: i32) {
     %mbar = triton_nvidia_gpu.alloc_mbarrier { count = 128 : i32 } : !tt.ptr<i64, 3>
     %dst = triton_gpu.alloc_tensor : tensor<1x64x64xf16, #shared>
@@ -271,7 +271,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
 // CHECK-LABEL: barrier_ws_overlap
 // CHECK: bar.sync
 // CHECK-NOT: bar.sync
-module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 4 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
   tt.func @barrier_ws_overlap(%basePtr: !tt.ptr<f16> {tt.divisibility = 8 : i32}, %dim0: i64, %dim1: i64, %stride0: i64, %stride1: i64, %coord0: i32, %coord1: i32) {
     %mbar = triton_nvidia_gpu.alloc_mbarrier { count = 128 : i32 } : !tt.ptr<i64, 3>
     %dst = triton_gpu.alloc_tensor : tensor<1x64x64xf16, #shared>
@@ -293,7 +293,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
 // CHECK-LABEL: barrier_ws_wait
 // CHECK: bar.sync
 // CHECK-NOT: bar.sync
-module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 4 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
   tt.func @barrier_ws_wait(%basePtr: !tt.ptr<f16> {tt.divisibility = 8 : i32}, %dim0: i64, %dim1: i64, %stride0: i64, %stride1: i64, %coord0: i32, %coord1: i32) {
     %mbar = triton_nvidia_gpu.alloc_mbarrier { count = 128 : i32 } : !tt.ptr<i64, 3>
     %dst = triton_gpu.alloc_tensor : tensor<1x64x64xf16, #shared>
