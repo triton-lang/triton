@@ -152,7 +152,7 @@
 <p>This operation defines a tensor of a particular shape.
 The contents of the tensor are supposed to be in shared memory.</p>
 <p>Note: This op can be repalced to a <code class="docutils literal notranslate"><span class="pre">bufferization.alloc_tensor</span></code> in LLVM 16.</p>
-<p>Traits: ResultsAreSharedEncoding</p>
+<p>Traits: ResultsAreSharedEncoding, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{MemoryEffects::Allocate on ::mlir::SideEffects::DefaultResource}</p>
 <section id="results">
@@ -178,6 +178,7 @@ The contents of the tensor are supposed to be in shared memory.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_gpu.async_bulk_commit_group` attr-dict
 </pre></div>
 </div>
+<p>Traits: VerifyTensorLayoutsTrait</p>
 </section>
 <section id="triton-gpu-async-bulk-wait-triton-gpu-asyncbulkwaitop">
 <h2><code class="docutils literal notranslate"><span class="pre">triton_gpu.async_bulk_wait</span></code> (triton::gpu::AsyncBulkWaitOp)<a class="headerlink" href="#triton-gpu-async-bulk-wait-triton-gpu-asyncbulkwaitop" title="Permalink to this heading">¶</a></h2>
@@ -186,6 +187,7 @@ The contents of the tensor are supposed to be in shared memory.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_gpu.async_bulk_wait` attr-dict
 </pre></div>
 </div>
+<p>Traits: VerifyTensorLayoutsTrait</p>
 <section id="attributes">
 <h3>Attributes:<a class="headerlink" href="#attributes" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -201,6 +203,7 @@ The contents of the tensor are supposed to be in shared memory.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_gpu.async_commit_group` attr-dict
 </pre></div>
 </div>
+<p>Traits: VerifyTensorLayoutsTrait</p>
 </section>
 <section id="triton-gpu-async-wait-triton-gpu-asyncwaitop">
 <h2><code class="docutils literal notranslate"><span class="pre">triton_gpu.async_wait</span></code> (triton::gpu::AsyncWaitOp)<a class="headerlink" href="#triton-gpu-async-wait-triton-gpu-asyncwaitop" title="Permalink to this heading">¶</a></h2>
@@ -209,6 +212,7 @@ The contents of the tensor are supposed to be in shared memory.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_gpu.async_wait` attr-dict
 </pre></div>
 </div>
+<p>Traits: VerifyTensorLayoutsTrait</p>
 <section id="id1">
 <h3>Attributes:<a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -224,7 +228,7 @@ The contents of the tensor are supposed to be in shared memory.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_gpu.convert_layout` $src attr-dict `:` functional-type(operands, results)
 </pre></div>
 </div>
-<p>Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, SameOperandsAndResultShape</p>
+<p>Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, SameOperandsAndResultShape, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="operands">
@@ -276,7 +280,7 @@ We reimplement ExtractSliceOp with int32 index, because:</p>
 <li><p>we still want to use indexWidth = 64 when lowering to LLVM because our loops can have
 64-bit induction variables and scf.for uses indexType for bounds/ivs</p></li>
 </ul>
-<p>Traits: AlwaysSpeculatableImplTrait, AttrSizedOperandSegments, ResultsAreSharedEncoding</p>
+<p>Traits: AlwaysSpeculatableImplTrait, AttrSizedOperandSegments, ResultsAreSharedEncoding, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface), OffsetSizeAndStrideOpInterface</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id3">
@@ -361,7 +365,7 @@ element of the <code class="docutils literal notranslate"><span class="pre">$mas
 triiton_gpu.async_wait { num = 0 : i32 }
 </pre></div>
 </div>
-<p>Traits: AttrSizedOperandSegments, ResultsAreSharedEncoding</p>
+<p>Traits: AttrSizedOperandSegments, ResultsAreSharedEncoding, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource, MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}</p>
 <section id="id6">
@@ -465,7 +469,7 @@ TMA load                           : tt.load(mode 2) -(tt-&gt;ttgpu+Coalesce)-&g
 %2 = triton_gpu.insert_slice %0, %1, %index { axis = 0 } : tensor&lt;32x!tt.ptr&lt;f32&gt;, #AL&gt; -&gt; tensor&lt;2x32xf32, #A&gt;
 </pre></div>
 </div>
-<p>Traits: AttrSizedOperandSegments, ResultsAreSharedEncoding</p>
+<p>Traits: AttrSizedOperandSegments, ResultsAreSharedEncoding, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource, MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}</p>
 <section id="id9">

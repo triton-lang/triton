@@ -287,7 +287,7 @@ symbol reference attribute named “callee”.</p>
 <div class="highlight-mlir notranslate"><div class="highlight"><pre><span></span>%2 = tt.call @my_add(%0, %1) : (f32, f32) -&gt; f32
 </pre></div>
 </div>
-<p>Traits: TensorSizeTrait</p>
+<p>Traits: TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: CallOpInterface, SymbolUserOpInterface</p>
 <section id="attributes">
 <h3>Attributes:<a class="headerlink" href="#attributes" title="Permalink to this heading">¶</a></h3>
@@ -362,7 +362,7 @@ tt.func @example_fn_result() -&gt; (f64 {dialectName.attrName = 0 : i64})
 tt.func @example_fn_attr() attributes {dialectName.attrName = false}
 </pre></div>
 </div>
-<p>Traits: AffineScope, AutomaticAllocationScope, IsolatedFromAbove, TensorSizeTrait</p>
+<p>Traits: AffineScope, AutomaticAllocationScope, IsolatedFromAbove, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: CallableOpInterface, FunctionOpInterface, OpAsmOpInterface, Symbol</p>
 <section id="id1">
 <h3>Attributes:<a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h3>
@@ -394,7 +394,7 @@ that contains the operation.</p>
 }
 </pre></div>
 </div>
-<p>Traits: AlwaysSpeculatableImplTrait, HasParent<FuncOp>, ReturnLike, TensorSizeTrait, Terminator</p>
+<p>Traits: AlwaysSpeculatableImplTrait, HasParent<FuncOp>, ReturnLike, TensorSizeTrait, Terminator, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface), RegionBranchTerminatorOpInterface</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id2">
@@ -419,7 +419,7 @@ that contains the operation.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.addptr` $ptr `,` $offset attr-dict `:` type($result) `,` type($offset)
 </pre></div>
 </div>
-<p>Traits: AlwaysSpeculatableImplTrait, Elementwise, SameOperandsAndResultEncoding, SameOperandsAndResultShape, TensorSizeTrait</p>
+<p>Traits: AlwaysSpeculatableImplTrait, Elementwise, SameOperandsAndResultEncoding, SameOperandsAndResultShape, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id3">
@@ -463,7 +463,7 @@ that contains the operation.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.advance` $ptr `,` `[` $offsets `]` attr-dict `:` type($result)
 </pre></div>
 </div>
-<p>Traits: AlwaysSpeculatableImplTrait, TensorSizeTrait</p>
+<p>Traits: AlwaysSpeculatableImplTrait, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id5">
@@ -509,7 +509,7 @@ that contains the operation.</p>
 </div>
 <p><code class="docutils literal notranslate"><span class="pre">tt.assert</span></code> takes a condition tensor, a message string, a file string, a function string, and a line number.
 If the condition is false, the message is printed, and the program is aborted.</p>
-<p>Traits: TensorSizeTrait</p>
+<p>Traits: TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}</p>
 <section id="id7">
@@ -545,7 +545,7 @@ If the condition is false, the message is printed, and the program is aborted.</
 <p>if $old == $cmp, store $val to $ptr,</p>
 <p>else store $old to $ptr,</p>
 <p>return $old</p>
-<p>Traits: SameOperandsAndResultEncoding, SameOperandsAndResultShape, TensorSizeTrait</p>
+<p>Traits: SameOperandsAndResultEncoding, SameOperandsAndResultShape, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource}, MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}</p>
 <section id="id9">
@@ -605,7 +605,7 @@ If the condition is false, the message is printed, and the program is aborted.</
 <p><em>Atomic rmw</em></p>
 <p>load data at $ptr, do $rmw_op with $val, and store result to $ptr.</p>
 <p>return old value at $ptr</p>
-<p>Traits: SameOperandsAndResultEncoding, SameOperandsAndResultShape, TensorSizeTrait</p>
+<p>Traits: SameOperandsAndResultEncoding, SameOperandsAndResultShape, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource}, MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}</p>
 <section id="id12">
@@ -678,7 +678,7 @@ If the condition is false, the message is printed, and the program is aborted.</
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.bitcast` $from attr-dict `:` type($from) `-&gt;` type($result)
 </pre></div>
 </div>
-<p>Traits: AlwaysSpeculatableImplTrait, Elementwise, SameOperandsAndResultEncoding, SameOperandsAndResultShape, TensorSizeTrait</p>
+<p>Traits: AlwaysSpeculatableImplTrait, Elementwise, SameOperandsAndResultEncoding, SameOperandsAndResultShape, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id15">
@@ -719,7 +719,7 @@ If the condition is false, the message is printed, and the program is aborted.</
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.broadcast` $src attr-dict `:` functional-type(operands, results)
 </pre></div>
 </div>
-<p>Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, SameOperandsAndResultEncoding, TensorSizeTrait</p>
+<p>Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, SameOperandsAndResultEncoding, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id17">
@@ -760,7 +760,7 @@ If the condition is false, the message is printed, and the program is aborted.</
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.cat` $lhs `,` $rhs attr-dict `:` functional-type(operands, results)
 </pre></div>
 </div>
-<p>Traits: SameOperandsAndResultElementType, TensorSizeTrait</p>
+<p>Traits: SameOperandsAndResultElementType, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: NoMemoryEffect (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id19">
@@ -805,7 +805,7 @@ If the condition is false, the message is printed, and the program is aborted.</
 </pre></div>
 </div>
 <p>$d = matrix_multiply($a, $b) + $c</p>
-<p>Traits: AlwaysSpeculatableImplTrait, TensorSizeTrait</p>
+<p>Traits: AlwaysSpeculatableImplTrait, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id21">
@@ -863,7 +863,7 @@ If the condition is false, the message is printed, and the program is aborted.</
 <p>This will apply the given in inline assembly to <code class="docutils literal notranslate"><span class="pre">packed_element</span></code> number of
 elements of the inputs. The elements packed together is unknown and will
 depend on the backend implementation.</p>
-<p>Traits: Elementwise, SameOperandsAndResultEncoding, TensorSizeTrait</p>
+<p>Traits: Elementwise, SameOperandsAndResultEncoding, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: MemoryEffectOpInterface</p>
 <section id="id24">
 <h3>Attributes:<a class="headerlink" href="#id24" title="Permalink to this heading">¶</a></h3>
@@ -913,7 +913,7 @@ depend on the backend implementation.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.expand_dims` $src attr-dict `:` functional-type(operands, results)
 </pre></div>
 </div>
-<p>Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, TensorSizeTrait</p>
+<p>Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id27">
@@ -962,7 +962,7 @@ depend on the backend implementation.</p>
 </div>
 <p>call an external function $symbol implemented in $libpath/$libname with $args
 return $libpath/$libname:$symbol($args…)</p>
-<p>Traits: Elementwise, SameOperandsAndResultEncoding, SameVariadicOperandSize, TensorSizeTrait</p>
+<p>Traits: Elementwise, SameOperandsAndResultEncoding, SameVariadicOperandSize, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: MemoryEffectOpInterface</p>
 <section id="id30">
 <h3>Attributes:<a class="headerlink" href="#id30" title="Permalink to this heading">¶</a></h3>
@@ -1014,7 +1014,7 @@ return $libpath/$libname:$symbol($args…)</p>
 </div>
 <p>Floating point casting for custom types (F8).</p>
 <p>F8 &lt;-&gt; FP16, BF16, FP32, FP64</p>
-<p>Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultEncoding, SameOperandsAndResultShape, TensorSizeTrait</p>
+<p>Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultEncoding, SameOperandsAndResultShape, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id33">
@@ -1054,7 +1054,7 @@ return $libpath/$libname:$symbol($args…)</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.get_num_programs` attr-dict `:` type($result)
 </pre></div>
 </div>
-<p>Traits: AlwaysSpeculatableImplTrait, TensorSizeTrait</p>
+<p>Traits: AlwaysSpeculatableImplTrait, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id35">
@@ -1086,7 +1086,7 @@ return $libpath/$libname:$symbol($args…)</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.get_program_id` $axis attr-dict `:` type($result)
 </pre></div>
 </div>
-<p>Traits: AlwaysSpeculatableImplTrait, TensorSizeTrait</p>
+<p>Traits: AlwaysSpeculatableImplTrait, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id37">
@@ -1122,7 +1122,7 @@ return $libpath/$libname:$symbol($args…)</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.int_to_ptr` $from attr-dict `:` type($from) `-&gt;` type($result)
 </pre></div>
 </div>
-<p>Traits: AlwaysSpeculatableImplTrait, Elementwise, SameOperandsAndResultEncoding, SameOperandsAndResultShape, TensorSizeTrait</p>
+<p>Traits: AlwaysSpeculatableImplTrait, Elementwise, SameOperandsAndResultEncoding, SameOperandsAndResultShape, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id39">
@@ -1159,7 +1159,7 @@ return $libpath/$libname:$symbol($args…)</p>
 <section id="tt-load-triton-loadop">
 <h2><code class="docutils literal notranslate"><span class="pre">tt.load</span></code> (triton::LoadOp)<a class="headerlink" href="#tt-load-triton-loadop" title="Permalink to this heading">¶</a></h2>
 <p><em>Load from a tensor of pointers or from a tensor pointer</em></p>
-<p>Traits: AttrSizedOperandSegments, SameLoadStoreOperandsAndResultEncoding, SameLoadStoreOperandsAndResultShape, TensorSizeTrait</p>
+<p>Traits: AttrSizedOperandSegments, SameLoadStoreOperandsAndResultEncoding, SameLoadStoreOperandsAndResultShape, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: MemoryEffectOpInterface</p>
 <section id="id41">
 <h3>Attributes:<a class="headerlink" href="#id41" title="Permalink to this heading">¶</a></h3>
@@ -1229,7 +1229,7 @@ return $libpath/$libname:$symbol($args…)</p>
 </div>
 <p>Returns an 1D int32 tensor.</p>
 <p>Values span from $start to $end (exclusive), with step = 1</p>
-<p>Traits: AlwaysSpeculatableImplTrait, TensorSizeTrait</p>
+<p>Traits: AlwaysSpeculatableImplTrait, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id44">
@@ -1265,7 +1265,7 @@ return $libpath/$libname:$symbol($args…)</p>
 </div>
 <p><code class="docutils literal notranslate"><span class="pre">tt.make_tensor_ptr</span></code> takes both meta information of the parent tensor and the block tensor, then it returns a
 pointer to the block tensor, e.g. returns a type of <code class="docutils literal notranslate"><span class="pre">tt.ptr&lt;tensor&lt;8x8xf16&gt;&gt;</span></code>.</p>
-<p>Traits: AlwaysSpeculatableImplTrait, SameVariadicOperandSize, TensorSizeTrait</p>
+<p>Traits: AlwaysSpeculatableImplTrait, SameVariadicOperandSize, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id46">
@@ -1324,7 +1324,7 @@ pointer to the block tensor, e.g. returns a type of <code class="docutils litera
 </div>
 <p><code class="docutils literal notranslate"><span class="pre">tt.print</span></code> takes a literal string prefix and an arbitrary number of scalar or tensor arguments that should be printed.
 format are generated automatically from the arguments.</p>
-<p>Traits: TensorSizeTrait</p>
+<p>Traits: TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}</p>
 <section id="id49">
@@ -1357,7 +1357,7 @@ format are generated automatically from the arguments.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.ptr_to_int` $from attr-dict `:` type($from) `-&gt;` type($result)
 </pre></div>
 </div>
-<p>Traits: AlwaysSpeculatableImplTrait, Elementwise, SameOperandsAndResultEncoding, SameOperandsAndResultShape, TensorSizeTrait</p>
+<p>Traits: AlwaysSpeculatableImplTrait, Elementwise, SameOperandsAndResultEncoding, SameOperandsAndResultShape, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id51">
@@ -1394,7 +1394,7 @@ format are generated automatically from the arguments.</p>
 <section id="tt-reduce-triton-reduceop">
 <h2><code class="docutils literal notranslate"><span class="pre">tt.reduce</span></code> (triton::ReduceOp)<a class="headerlink" href="#tt-reduce-triton-reduceop" title="Permalink to this heading">¶</a></h2>
 <p><em>Reduction using generic combination algorithm</em></p>
-<p>Traits: AlwaysSpeculatableImplTrait, SameOperandsEncoding, SingleBlock, TensorSizeTrait</p>
+<p>Traits: AlwaysSpeculatableImplTrait, SameOperandsEncoding, SingleBlock, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id53">
@@ -1442,7 +1442,7 @@ format are generated automatically from the arguments.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.reduce.return` $result attr-dict `:` type($result)
 </pre></div>
 </div>
-<p>Traits: AlwaysSpeculatableImplTrait, HasParent<ReduceOp>, ReturnLike, TensorSizeTrait, Terminator</p>
+<p>Traits: AlwaysSpeculatableImplTrait, HasParent<ReduceOp>, ReturnLike, TensorSizeTrait, Terminator, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface), RegionBranchTerminatorOpInterface</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id56">
@@ -1464,7 +1464,7 @@ format are generated automatically from the arguments.</p>
 <section id="tt-scan-triton-scanop">
 <h2><code class="docutils literal notranslate"><span class="pre">tt.scan</span></code> (triton::ScanOp)<a class="headerlink" href="#tt-scan-triton-scanop" title="Permalink to this heading">¶</a></h2>
 <p><em>Reduction using generic combination algorithm</em></p>
-<p>Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, SameOperandsAndResultEncoding, SingleBlock, TensorSizeTrait</p>
+<p>Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, SameOperandsAndResultEncoding, SingleBlock, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id57">
@@ -1512,7 +1512,7 @@ format are generated automatically from the arguments.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.scan.return` $result attr-dict `:` type($result)
 </pre></div>
 </div>
-<p>Traits: AlwaysSpeculatableImplTrait, HasParent<ScanOp>, ReturnLike, TensorSizeTrait, Terminator</p>
+<p>Traits: AlwaysSpeculatableImplTrait, HasParent<ScanOp>, ReturnLike, TensorSizeTrait, Terminator, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface), RegionBranchTerminatorOpInterface</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id60">
@@ -1538,7 +1538,7 @@ format are generated automatically from the arguments.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.splat` $src attr-dict `:` functional-type(operands, results)
 </pre></div>
 </div>
-<p>Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, SameOperandsAndResultEncoding, TensorSizeTrait</p>
+<p>Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, SameOperandsAndResultEncoding, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id61">
@@ -1575,7 +1575,7 @@ format are generated automatically from the arguments.</p>
 <section id="tt-store-triton-storeop">
 <h2><code class="docutils literal notranslate"><span class="pre">tt.store</span></code> (triton::StoreOp)<a class="headerlink" href="#tt-store-triton-storeop" title="Permalink to this heading">¶</a></h2>
 <p><em>Store by a tensor of pointers or by a tensor pointer</em></p>
-<p>Traits: SameLoadStoreOperandsEncoding, SameLoadStoreOperandsShape, TensorSizeTrait</p>
+<p>Traits: SameLoadStoreOperandsEncoding, SameLoadStoreOperandsShape, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}</p>
 <section id="id63">
@@ -1625,7 +1625,7 @@ format are generated automatically from the arguments.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.trans` $src attr-dict `:` functional-type(operands, results)
 </pre></div>
 </div>
-<p>Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, TensorSizeTrait</p>
+<p>Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id65">
@@ -1666,7 +1666,7 @@ format are generated automatically from the arguments.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.view` $src attr-dict `:` functional-type(operands, results)
 </pre></div>
 </div>
-<p>Traits: SameOperandsAndResultElementType, TensorSizeTrait</p>
+<p>Traits: SameOperandsAndResultElementType, TensorSizeTrait, VerifyTensorLayoutsTrait</p>
 <p>Interfaces: NoMemoryEffect (MemoryEffectOpInterface)</p>
 <p>Effects: MemoryEffects::Effect{}</p>
 <section id="id67">

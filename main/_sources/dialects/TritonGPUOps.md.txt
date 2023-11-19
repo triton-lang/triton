@@ -15,7 +15,7 @@ The contents of the tensor are supposed to be in shared memory.
 
 Note: This op can be repalced to a `bufferization.alloc_tensor` in LLVM 16.
 
-Traits: ResultsAreSharedEncoding
+Traits: ResultsAreSharedEncoding, VerifyTensorLayoutsTrait
 
 Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
 
@@ -39,6 +39,8 @@ operation ::= `triton_gpu.async_bulk_commit_group` attr-dict
 ```
 
 
+Traits: VerifyTensorLayoutsTrait
+
 ### `triton_gpu.async_bulk_wait` (triton::gpu::AsyncBulkWaitOp)
 
 _Async bulk wait_
@@ -50,6 +52,8 @@ Syntax:
 operation ::= `triton_gpu.async_bulk_wait` attr-dict
 ```
 
+
+Traits: VerifyTensorLayoutsTrait
 
 #### Attributes:
 
@@ -70,6 +74,8 @@ operation ::= `triton_gpu.async_commit_group` attr-dict
 ```
 
 
+Traits: VerifyTensorLayoutsTrait
+
 ### `triton_gpu.async_wait` (triton::gpu::AsyncWaitOp)
 
 _Async wait_
@@ -81,6 +87,8 @@ Syntax:
 operation ::= `triton_gpu.async_wait` attr-dict
 ```
 
+
+Traits: VerifyTensorLayoutsTrait
 
 #### Attributes:
 
@@ -101,7 +109,7 @@ operation ::= `triton_gpu.convert_layout` $src attr-dict `:` functional-type(ope
 ```
 
 
-Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, SameOperandsAndResultShape
+Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, SameOperandsAndResultShape, VerifyTensorLayoutsTrait
 
 Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)
 
@@ -140,7 +148,7 @@ We reimplement ExtractSliceOp with int32 index, because:
 - we still want to use indexWidth = 64 when lowering to LLVM because our loops can have
   64-bit induction variables and scf.for uses indexType for bounds/ivs
 
-Traits: AlwaysSpeculatableImplTrait, AttrSizedOperandSegments, ResultsAreSharedEncoding
+Traits: AlwaysSpeculatableImplTrait, AttrSizedOperandSegments, ResultsAreSharedEncoding, VerifyTensorLayoutsTrait
 
 Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface), OffsetSizeAndStrideOpInterface
 
@@ -209,7 +217,7 @@ Example:
 triiton_gpu.async_wait { num = 0 : i32 }
 ```
 
-Traits: AttrSizedOperandSegments, ResultsAreSharedEncoding
+Traits: AttrSizedOperandSegments, ResultsAreSharedEncoding, VerifyTensorLayoutsTrait
 
 Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
 
@@ -299,7 +307,7 @@ Example:
 %2 = triton_gpu.insert_slice %0, %1, %index { axis = 0 } : tensor<32x!tt.ptr<f32>, #AL> -> tensor<2x32xf32, #A>
 ```
 
-Traits: AttrSizedOperandSegments, ResultsAreSharedEncoding
+Traits: AttrSizedOperandSegments, ResultsAreSharedEncoding, VerifyTensorLayoutsTrait
 
 Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
 
