@@ -139,7 +139,12 @@ struct PrintOpConversion
       llvm::raw_string_ostream os(formatStr);
       os << "pid (" << getFormatSubstr(pid[0]) << ", "
          << getFormatSubstr(pid[1]) << ", " << getFormatSubstr(pid[2]) << ")%s";
+#ifdef USE_ROCM
+      llPrintfHIP(loc, op->getParentOfType<mlir::ModuleOp>(), formatStr, 
+		      {pid[0], pid[1], pid[2], prefixStr}, rewriter);
+#else
       llPrintf(formatStr, {pid[0], pid[1], pid[2], prefixStr}, rewriter);
+#endif
     } else {
       for (size_t i = 0; i < op.getNumOperands(); i++) {
         // Elements of the tensor that are resident in this GPU thread.
@@ -173,36 +178,17 @@ struct PrintOpConversion
         }
 
         if (!elems.empty()) {
-          printTensor(prefixStr, /*operand=*/i,
+          printTensor(op, prefixStr, /*operand=*/i,
                       /*numOperands=*/op.getNumOperands(), elems, pid, indices,
                       dimWidths, rewriter);
         }
       }
     }
-<<<<<<< HEAD
-    std::string formatStr;
-    llvm::raw_string_ostream os(formatStr);
-    os << op.getPrefix();
-    if (!operands.empty()) {
-      os << getFormatSubstr(operands[0]);
-    }
-
-    for (size_t i = 1; i < operands.size(); ++i) {
-      os << ", " << getFormatSubstr(operands[i]);
-    }
-#ifdef USE_ROCM
-    llPrintfHIP(loc, op->getParentOfType<mlir::ModuleOp>(), formatStr, operands,
-                rewriter);
-#else
-    llPrintf(formatStr, operands, rewriter);
-#endif
-=======
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
     rewriter.eraseOp(op);
     return success();
   }
 
-  void printTensor(Value prefixStr, size_t operand, size_t numOperands,
+  void printTensor(triton::PrintOp op, Value prefixStr, size_t operand, size_t numOperands,
                    ArrayRef<Value> elems, std::array<Value, 3> pid,
                    ArrayRef<SmallVector<Value>> indices,
                    ArrayRef<int> dimWidths,
@@ -279,8 +265,17 @@ struct PrintOpConversion
       // printfOperands.  But we don't want to create BLOCK_SIZE duplicate
       // strings, so we cache the Value.
       if (i == 0) {
+#ifdef USE_ROCM
+        formatStrVAlue = llPrintfHIP(loc, op->getParentOfType<mlir::ModuleOp>(), formatStr, 
+			printfOperands, rewriter);
+#else
         formatStrValue = llPrintf(formatStr, printfOperands, rewriter);
+#endif
       } else {
+#ifdef USE_ROCM
+        llPrintfHIP(loc, op->getParentOfType<mlir::ModuleOp>(), formatStr, printfOperands,
+                    rewriter);
+#else
         llPrintf(formatStrValue, printfOperands, rewriter);
       }
     }
@@ -618,7 +613,6 @@ struct GetProgramIdOpConversion
   LogicalResult
   matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-<<<<<<< HEAD
 
 #ifdef USE_ROCM
     Location loc = op->getLoc();
@@ -629,24 +623,8 @@ struct GetProgramIdOpConversion
     rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, i32_ty, blockId);
     return success();
 #else
-    // It is not easy to get the compute capability here, so we use numCTAs to
-    // decide the semantic of GetProgramIdOp. If numCTAs = 1, then
-    // GetProgramIdOp is converted to "%ctaid", otherwise it is converted to
-    // "%clusterid".
-    auto moduleOp = op->getParentOfType<ModuleOp>();
-    assert(moduleOp && "Parent ModuleOp not found for GetProgramIdOp");
-    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
-
-    Location loc = op->getLoc();
-    assert(op.getAxisAsInt() < 3);
-    std::string sreg = numCTAs == 1 ? "%ctaid." : "%clusterid.";
-    sreg.append(1, 'x' + op.getAxisAsInt()); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
-
-    Value programId = getSRegValue(rewriter, loc, sreg);
-=======
     Value programId = llGetPid(op.getAxisAsInt(), op->getLoc(),
                                op->getParentOfType<ModuleOp>(), rewriter);
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
     rewriter.replaceOp(op, programId);
     return success();
 #endif

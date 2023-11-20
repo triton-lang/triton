@@ -24,10 +24,6 @@ class OutOfResources(Exception):
 
 
 class Autotuner(KernelInterface):
-<<<<<<< HEAD
-    def __init__(self, fn, arg_names, configs, key, verbose, reset_to_zero, prune_configs_by: Dict = None, warmup=25, rep=100):
-        '''
-=======
 
     def __init__(
         self,
@@ -35,6 +31,7 @@ class Autotuner(KernelInterface):
         arg_names,
         configs,
         key,
+        verbose,
         reset_to_zero,
         restore_value,
         prune_configs_by: Dict = None,
@@ -42,7 +39,6 @@ class Autotuner(KernelInterface):
         rep=100,
     ):
         """
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
             'perf_model': performance model used to predicate running time with different configs, returns running time
             'top_k': number of configs to bench
@@ -252,31 +248,17 @@ class Config:
     def __str__(self):
         res = []
         for k, v in self.kwargs.items():
-<<<<<<< HEAD
             res.append(f'{k}: {v}')
         res.append(f'num_warps: {self.num_warps}')
         ## Comment out Hopper specific parameters
         #res.append(f'num_ctas: {self.num_ctas}')
         res.append(f'num_stages: {self.num_stages}')
-        #res.append(
-        #    f'enable_warp_specialization: {self.enable_warp_specialization}')
+        #res.append(f'enable_warp_specialization: {self.enable_warp_specialization}')
         #res.append(f'enable_persistent: {self.enable_persistent}')
         return ', '.join(res)
 
 
-def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, verbose=False, warmup=25, rep=100):
-=======
-            res.append(f"{k}: {v}")
-        res.append(f"num_warps: {self.num_warps}")
-        res.append(f"num_ctas: {self.num_ctas}")
-        res.append(f"num_stages: {self.num_stages}")
-        res.append(f"enable_warp_specialization: {self.enable_warp_specialization}")
-        res.append(f"enable_persistent: {self.enable_persistent}")
-        return ", ".join(res)
-
-
-def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_value=None, warmup=25, rep=100):
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
+def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_value=None, verbose=False, warmup=25, rep=100):
     """
     Decorator for auto-tuning a :code:`triton.jit`'d function.
 
@@ -318,11 +300,7 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     """
 
     def decorator(fn):
-<<<<<<< HEAD
-        return Autotuner(fn, fn.arg_names, configs, key, verbose, reset_to_zero, prune_configs_by, warmup, rep)
-=======
-        return Autotuner(fn, fn.arg_names, configs, key, reset_to_zero, restore_value, prune_configs_by, warmup, rep)
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
+        return Autotuner(fn, fn.arg_names, configs, key, verbose, reset_to_zero, restore_value, prune_configs_by, warmup, rep)
 
     return decorator
 

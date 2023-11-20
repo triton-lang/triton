@@ -48,25 +48,15 @@ def test_assert(func: str):
     x = torch.arange(0, shape[0], dtype=torch.int32, device='cuda')
     y = torch.zeros(shape, dtype=x.dtype, device="cuda")
     if func == "device_assert":
-<<<<<<< HEAD
-        kernel_device_assert[(1,)](x, y, num_warps=2, BLOCK=shape[0])
-        kernel_device_assert_scalar[(1,)](x, y, num_warps=2, BLOCK=shape[0])
-    elif func == "no_debug":
-        # TRITON_DEBUG=True can override the debug flag
-        kernel_device_assert_no_debug[(1,)](x, y, num_warps=2, BLOCK=shape[0])
-    elif func == "assert":
-        kernel_assert[(1,)](x, y, num_warps=2, BLOCK=shape[0])
-=======
-        kernel_device_assert[(1, )](x, y, BLOCK=shape[0])
+        kernel_device_assert[(1, )](x, y, num_warps=2, BLOCK=shape[0])
     if func == "device_assert_passes":
         # Assert passes; no error.
-        kernel_assert_passes[(1, )](x, y, BLOCK=shape[0])
+        kernel_assert_passes[(1, )](x, y, num_warps=2, BLOCK=shape[0])
     elif func == "no_debug":
         # TRITON_DEBUG=1 can override the debug flag
-        kernel_device_assert_no_debug[(1, )](x, y, BLOCK=shape[0])
+        kernel_device_assert_no_debug[(1, )](x, y, num_warps=2, BLOCK=shape[0])
     elif func == "assert":
-        kernel_assert[(1, )](x, y, BLOCK=shape[0])
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
+        kernel_assert[(1, )](x, y, num_warps=2, BLOCK=shape[0])
     elif func == "static_assert":
         kernel_static_assert[(1, )](x, y, BLOCK=shape[0])
     elif func == "double_assert":
@@ -80,8 +70,8 @@ def test_assert(func: str):
         #  - Now the GPU is in an error state.  We need to detect this inside
         #    the kernel-launch/loading code and bail out properly.  If we don't,
         #    we segfault.
-        kernel_device_assert[(1, )](x, y, BLOCK=shape[0])
-        kernel_assert_passes[(1, )](x, y, BLOCK=shape[0])
+        kernel_device_assert[(1, )](x, y, num_warps=2, BLOCK=shape[0])
+        kernel_assert_passes[(1, )](x, y, num_warps=2, BLOCK=shape[0])
     assert_close(y, x)
 
 
@@ -141,19 +131,11 @@ def test_assert_nested(caller: str, callee: str):
     x = torch.arange(0, shape[0], dtype=torch.int32, device='cuda')
     y = torch.zeros(shape, dtype=x.dtype, device="cuda")
     if caller == "none":
-<<<<<<< HEAD
-        kernel_device_assert_nested[(1,)](x, y, num_warps=2, BLOCK=shape[0], jit_debug=callee)
+        kernel_device_assert_nested[(1, )](x, y, num_warps=2, BLOCK=shape[0], jit_debug=callee)
     elif caller == "true":
-        kernel_device_assert_nested_true[(1,)](x, y, num_warps=2, BLOCK=shape[0], jit_debug=callee)
+        kernel_device_assert_nested_true[(1, )](x, y, num_warps=2, BLOCK=shape[0], jit_debug=callee)
     elif caller == "false":
-        kernel_device_assert_nested_false[(1,)](x, y, num_warps=2, BLOCK=shape[0], jit_debug=callee)
-=======
-        kernel_device_assert_nested[(1, )](x, y, BLOCK=shape[0], jit_debug=callee)
-    elif caller == "true":
-        kernel_device_assert_nested_true[(1, )](x, y, BLOCK=shape[0], jit_debug=callee)
-    elif caller == "false":
-        kernel_device_assert_nested_false[(1, )](x, y, BLOCK=shape[0], jit_debug=callee)
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
+        kernel_device_assert_nested_false[(1, )](x, y, num_warps=2, BLOCK=shape[0], jit_debug=callee)
     assert_close(y, x)
 
 

@@ -240,11 +240,7 @@ Fp8E5M2_to_Bf16(Location loc, ConversionPatternRewriter &rewriter,
 static const std::string Fp8E5M2_to_Bf16(bool hasNativeFP) {
   std::string ret;
   if (!hasNativeFP) {
-<<<<<<< HEAD
-        ret = "{                                        \n"
-=======
     ret = "{                                        \n"
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
           ".reg .b32 a<2>, b<2>, c<4>, d<4>, e112;  \n" // if input = 0xf1f2f3f4
           "mov.u32 e112, 0x77800000;                \n"
           "prmt.b32 a0, 0, $2, 0x5140;              \n" // a0 = 0xf300f400
@@ -269,18 +265,6 @@ static const std::string Fp8E5M2_to_Bf16(bool hasNativeFP) {
           "lop3.b32 $1, b1, 0x80008000, a1, 0xf8;   \n" // (restore sign)
           "}";
   } else {
-<<<<<<< HEAD
-    ret = "{                                       \n"
-          ".reg .b32 a;                            \n"
-          ".reg .f16 a<2>;                         \n"
-          ".reg .b16 b<2>;                         \n"
-          "cvt.rn.f16x2.e5m2x2 a, $1;              \n"
-          "mov.b32 {a0, a1}, a;                    \n"
-          "cvt.bf16.f16 b0, a0;                    \n"
-          "cvt.bf16.f16 b1, a1;                    \n"
-          "mov.b32 $0, {b0, b1};                   \n"
-          "}";
-=======
     ret =
         "{                                       \n"
         ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
@@ -298,7 +282,6 @@ static const std::string Fp8E5M2_to_Bf16(bool hasNativeFP) {
         "mul.rn.bf16x2 $0, b0, e112;            \n" // b0.exp += 2**7-2**4
         "mul.rn.bf16x2 $1, b1, e112;            \n" // exponent compensate = 112
         "}";
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
   }
   return ret;
 }
@@ -1537,10 +1520,9 @@ struct FpToFpOpConversion
 #endif
   }
 
-<<<<<<< HEAD
-  static Value convertFp32ToFp16(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const Value &v) {
+  static Value convertFp32ToFp16NZ(Location loc,
+                                   ConversionPatternRewriter &rewriter,
+                                   const Value &v) {
 #ifdef USE_ROCM
     GCNBuilder builder;
     auto &cvt = *builder.create("v_cvt_f16_f32");
@@ -1549,11 +1531,6 @@ struct FpToFpOpConversion
     cvt(res, operand);
     return builder.launch(rewriter, loc, f16_ty, false);
 #else
-=======
-  static Value convertFp32ToFp16NZ(Location loc,
-                                   ConversionPatternRewriter &rewriter,
-                                   const Value &v) {
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
     PTXBuilder builder;
     auto &cvt = *builder.create("cvt.rz.f16.f32");
     auto res = builder.newOperand("=h");

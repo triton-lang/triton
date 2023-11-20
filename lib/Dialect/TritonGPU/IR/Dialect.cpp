@@ -340,8 +340,7 @@ SmallVector<unsigned> getThreadsPerCTA(Attribute layout) {
       threads = {8 * mmaLayout.getWarpsPerCTA()[0],
                  4 * mmaLayout.getWarpsPerCTA()[1]};
     } else
-<<<<<<< HEAD
-      assert(0 && "Unimplemented usage of MmaEncodingAttr");
+      llvm::report_fatal_error("Unimplemented usage of MmaEncodingAttr");
   } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
     if (mfmaLayout.getNonKDim() == 32) {
       threads = {32 * mfmaLayout.getWarpsPerCTA()[0],
@@ -350,9 +349,6 @@ SmallVector<unsigned> getThreadsPerCTA(Attribute layout) {
       threads = {16 * mfmaLayout.getWarpsPerCTA()[0],
                  4 * mfmaLayout.getWarpsPerCTA()[1]};
     }
-=======
-      llvm::report_fatal_error("Unimplemented usage of MmaEncodingAttr");
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
   } else {
     llvm::report_fatal_error("Unimplemented usage of getThreadsPerCTA");
   }
@@ -388,15 +384,11 @@ SmallVector<unsigned> getShapePerCTATile(Attribute layout,
       return {16 * mmaLayout.getWarpsPerCTA()[0],
               instrShape[1] * mmaLayout.getWarpsPerCTA()[1]};
     }
-<<<<<<< HEAD
-    assert(0 && "Unexpected MMA layout version found");
+    llvm::report_fatal_error("Unexpected MMA layout version found");
   } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
     auto nonKDim = mfmaLayout.getNonKDim();
     return {nonKDim * mfmaLayout.getWarpsPerCTA()[0],
             nonKDim * mfmaLayout.getWarpsPerCTA()[1]};
-=======
-    llvm::report_fatal_error("Unexpected MMA layout version found");
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
     auto parentLayout = dotLayout.getParent();
     assert(parentLayout && "DotOperandEncodingAttr must have a parent");

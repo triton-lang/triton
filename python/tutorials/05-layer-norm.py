@@ -338,16 +338,9 @@ def test_layer_norm(M, N, dtype, eps=1e-5, device='cuda'):
         line_names=['Triton', 'Torch'] + (['Apex'] if HAS_APEX else []),
         styles=[('blue', '-'), ('green', '-'), ('orange', '-')],
         ylabel='GB/s',
-<<<<<<< HEAD
         plot_name='layer-norm-forward',
         args={'M': 4096, 'dtype': torch.float16, 'mode': 'forward'}
-    )
-)
-=======
-        plot_name='layer-norm-backward',
-        args={'M': 4096, 'dtype': torch.float16, 'mode': 'backward'},
     ))
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
 def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device='cuda'):
     # create data
     x_shape = (M, N)

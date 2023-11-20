@@ -341,9 +341,6 @@ class JITFunction(KernelInterface[T]):
         constants = dict(zip(self.constexprs, constexpr_key))
         return constants
 
-<<<<<<< HEAD
-    def _call_hook(self, key, signature, device, constants, num_warps, num_ctas, num_stages, waves_per_eu, matrix_instr_nonkdim, enable_warp_specialization,enable_fp_fusion, extern_libs, configs):
-=======
     def _call_hook(
         self,
         key,
@@ -353,24 +350,19 @@ class JITFunction(KernelInterface[T]):
         num_warps,
         num_ctas,
         num_stages,
+        waves_per_eu,
         enable_warp_specialization,
         enable_fp_fusion,
         extern_libs,
         configs,
     ):
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
         if JITFunction.cache_hook is None:
             return False
 
         name = self.fn.__name__
         module = self.fn.__module__
-<<<<<<< HEAD
-        arg_reprs = ', '.join([f'{name}: {ty}' for name, ty in zip(self.arg_names, key[1])])
+        arg_reprs = ', '.join([f'{param.name}: {ty}' for param, ty in zip(self.params, key[1])])
         repr = f"{name}[num_warps={num_warps}, num_ctas={num_ctas}, num_stages={num_stages}, waves_per_eu={waves_per_eu}, matrix_instr_nonkdim={matrix_instr_nonkdim}, enable_warp_specialization={enable_warp_specialization}]({arg_reprs}), enable_fp_fusion={enable_fp_fusion}]({arg_reprs})"
-=======
-        arg_reprs = ", ".join([f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])])
-        repr = f"{name}[num_warps={num_warps}, num_ctas={num_ctas}, num_stages={num_stages}, enable_warp_specialization={enable_warp_specialization}, enable_fp_fusion={enable_fp_fusion}]({arg_reprs})"
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
         key = str(key)
 
         class LegacyCompiler:
@@ -380,38 +372,6 @@ class JITFunction(KernelInterface[T]):
                 self.name = name
                 pass
 
-<<<<<<< HEAD
-        kwargs = dict(signature=signature, device=device, constants=constants,
-                      num_warps=num_warps, num_ctas=num_ctas, num_stages=num_stages, waves_per_eu=waves_per_eu, enable_warp_specialization=enable_warp_specialization, enable_fp_fusion=enable_fp_fusion, extern_libs=extern_libs,
-                      configs=configs)
-
-        return JITFunction.cache_hook(key=key, repr=repr, fn=LegacyCompiler(module, name), compile={
-                                      "key": key, **kwargs}, is_manual_warmup=False, already_compiled=False)
-
-    def _get_arg_specialization_key(self, arg_name, arg):
-        arg_annotation = self.__annotations__.get(arg_name, '')
-        if arg_annotation == '':
-            return (arg.data_ptr() % JITFunction.divisibility == 0) if hasattr(arg, "data_ptr") \
-                else (arg % JITFunction.divisibility == 0, arg % JITFunction.divisibility_8 == 0, arg == 1) if isinstance(arg, int) \
-                else (False,)
-        elif 'Tensor' in arg_annotation:
-            return (arg.data_ptr() % JITFunction.divisibility == 0)
-        elif 'int' in arg_annotation or 'bool' in arg_annotation:
-            return (arg % JITFunction.divisibility == 0, arg % JITFunction.divisibility_8 == 0, arg == 1)
-        else:
-            return (False,)
-
-    def _get_arg_sig_key(self, arg_name, arg) -> str:
-        arg_annotation = self.__annotations__.get(arg_name, '')
-        if 'Tensor' in arg_annotation:
-            return arg.dtype
-        elif arg_annotation == 'bool':
-            return "i1"
-        elif arg_annotation == 'float':
-            return 'fp32'
-        else:
-            return self._key_of(arg)
-=======
         kwargs = dict(
             signature=signature,
             device=device,
@@ -419,11 +379,11 @@ class JITFunction(KernelInterface[T]):
             num_warps=num_warps,
             num_ctas=num_ctas,
             num_stages=num_stages,
+            waves_per_eu=waves_per_eu,
             enable_warp_specialization=enable_warp_specialization,
-            enable_fp_fusion=enable_fp_fusion,
+            enable_fp_fusion=enable_fp_fusion, 
             extern_libs=extern_libs,
-            configs=configs,
-        )
+            configs=configs)
 
         return JITFunction.cache_hook(
             key=key,
@@ -433,7 +393,6 @@ class JITFunction(KernelInterface[T]):
             is_manual_warmup=False,
             already_compiled=False,
         )
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
 
     def _conclude_device_type(self, device_types: List[str], pinned_memory_flags: List[bool]) -> str:
         device_types = [device_type for device_type in device_types if device_type != ""]
@@ -447,122 +406,6 @@ class JITFunction(KernelInterface[T]):
         is_pinned_memory = any(pinned_memory_flag for pinned_memory_flag in pinned_memory_flags)
         # Return cuda if all the input tensors are cpu while the memory is pinned
         if is_cpu and is_pinned_memory:
-<<<<<<< HEAD
-            return 'cuda'
-
-        return device_types[0] if len(device_types) > 0 else 'cuda'
-
-    def _make_launcher(self):
-        regular_args = [arg for i, arg in enumerate(
-            self.arg_names) if i not in self.constexprs]
-        constexpr_args = [arg for i, arg in enumerate(
-            self.arg_names) if i in self.constexprs]
-
-        def regular_args_v(args_proxy):
-            return [args_proxy[arg_name] for arg_name in regular_args]
-
-        def launcher_body(args_proxy, grid, num_warps, num_ctas, num_stages, waves_per_eu, matrix_instr_nonkdim, enable_warp_specialization, enable_fp_fusion, extern_libs, stream, warmup, device, device_type):
-            from ..compiler import (CompiledKernel, compile,
-                                    get_arch_default_num_stages,
-                                    get_arch_default_num_warps)
-            sig_key = tuple([self._get_arg_sig_key(arg_name, args_proxy[arg_name]) for arg_name in regular_args])
-            constexpr_key = tuple([args_proxy[arg_name] for arg_name in constexpr_args])
-            specializations = []
-            for i, arg_name in enumerate(regular_args):
-                if i in self.do_not_specialize:
-                    continue
-                specializations += [self._get_arg_specialization_key(arg_name, args_proxy[arg_name])]
-
-            spec_key = tuple(specializations)
-            assert num_ctas > 0
-            assert grid is not None
-            if callable(grid):
-                grid = grid(args_proxy)
-            grid_size = len(grid)
-            grid_0 = grid[0]
-            grid_1 = grid[1] if grid_size > 1 else 1
-            grid_2 = grid[2] if grid_size > 2 else 1
-            if device_type is None:
-                device_types = [self._device_of(arg) for arg in regular_args_v(args_proxy)]
-                device_types = [_device_type for _device_type in device_types if _device_type != '']
-                device_type = self._conclude_device_type(device_types, [self._pinned_memory_of(arg) for arg in
-                                                                        regular_args_v(args_proxy)])
-
-            device_backend = None
-            if device_type not in ['cuda']:
-                device_backend = get_backend(device_type)
-                if device_backend is None:
-                    raise ValueError('Cannot find backend for ' + device_type)
-
-            if device is None:
-                if device_type in ['cuda']:
-                    device = get_current_device()
-                    set_current_device(device)
-                else:
-                    device = device_backend.get_current_device()
-                    device_backend.set_current_device(device)
-            if stream is None and not warmup:
-                if device_type in ['cuda']:
-                    stream = get_cuda_stream(device)
-                else:
-                    stream = device_backend.get_stream()
-
-            if num_warps is None:
-                num_warps = get_arch_default_num_warps(device_type)
-            if num_stages is None:
-                num_stages = get_arch_default_num_stages(device_type)
-
-            key = (version_key, sig_key, constexpr_key, spec_key, num_warps, num_ctas, num_stages, waves_per_eu, matrix_instr_nonkdim, enable_warp_specialization, enable_fp_fusion, self.debug)
-            if extern_libs is not None:
-                key = (key, tuple(extern_libs.items()))
-
-            bin = self.cache[device].get(key, None)
-            if bin is not None:
-                # build dict of constant values
-                args = regular_args_v(args_proxy)
-                # Create tensormaps and append to args
-                args = bin.assemble_tensormap_to_arg(args)
-                if not warmup:
-                    bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.num_ctas, bin.clusterDims[0], bin.clusterDims[1], bin.clusterDims[2], bin.shared, stream, bin.cu_function, CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, bin, *args)
-                return bin
-            # kernel not cached -- compile
-            else:
-                # build dict of constant values
-                args = regular_args_v(args_proxy)
-                all_args = tuple([args_proxy[arg_name] for arg_name in self.arg_names])
-                configs = self._get_config(*all_args),
-                constants = self._make_constants(constexpr_key)
-                constants.update({i: None for i, arg in enumerate(all_args) if arg is None})
-                constants.update({i: 1 for i in configs[0].equal_to_1})
-                # build kernel signature -- doesn't include specialized arguments
-                signature = {i: self._type_of(self._key_of(arg)) for i, arg in enumerate(all_args) if i not in self.constexprs}
-                # build stub signature -- includes arguments that are specialized
-                for i, arg in constants.items():
-                    if callable(arg):
-                        raise TypeError(f"Callable constexpr at index {i} is not supported")
-                if not self._call_hook(key, signature, device, constants, num_warps, num_ctas, num_stages, waves_per_eu, matrix_instr_nonkdim, enable_warp_specialization, enable_fp_fusion, extern_libs, configs):
-                    bin = compile(self, signature=signature, device=device, constants=constants, num_warps=num_warps, num_ctas=num_ctas, num_stages=num_stages, waves_per_eu=waves_per_eu, matrix_instr_nonkdim=matrix_instr_nonkdim, enable_warp_specialization=enable_warp_specialization, enable_fp_fusion=enable_fp_fusion, extern_libs=extern_libs, configs=configs, debug=self.debug, device_type=device_type)
-                    # Create tensormaps and append to args
-                    args = bin.assemble_tensormap_to_arg(args)
-                    if not warmup:
-                        bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.num_ctas, bin.clusterDims[0], bin.clusterDims[1], bin.clusterDims[2], bin.shared, stream, bin.cu_function, CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, bin, *args)
-                    self.cache[device][key] = bin
-                    return bin
-                return None
-
-        # create a wrapper to call launcher_body
-        args_map = ','.join([f'"{arg}": {arg}' for arg in self.arg_names])
-        args_signature = ', '.join(name if dflt == inspect._empty else f'{name} = triton.language.dtype(\'{dflt}\')' if dtype.is_dtype(f'{dflt}') else f'{name} = {dflt}' for name, dflt in zip(self.arg_names, self.arg_defaults))
-        args_signature = args_signature + ', ' if len(args_signature) > 0 else ''
-        src = f"""
-import triton
-def {self.fn.__name__}({args_signature}grid=None, num_warps=None, num_ctas=1, num_stages=None, waves_per_eu=0, matrix_instr_nonkdim=0, enable_warp_specialization=False,  enable_fp_fusion=True, extern_libs=None, stream=None, warmup=False, device=None, device_type=None):
-    return launcher_body({{{args_map}}}, grid, num_warps, num_ctas, num_stages, waves_per_eu, matrix_instr_nonkdim, enable_warp_specialization, enable_fp_fusion, extern_libs, stream, warmup, device, device_type)
-"""
-        scope = {"launcher_body": launcher_body}
-        exec(src, scope)
-        return scope[self.fn.__name__]
-=======
             return "cuda"
 
         return device_types[0] if len(device_types) > 0 else "cuda"
@@ -582,6 +425,8 @@ def {self.fn.__name__}({args_signature}grid=None, num_warps=None, num_ctas=1, nu
         num_warps = get_special_arg("num_warps")
         num_ctas = get_special_arg("num_ctas", 1)
         num_stages = get_special_arg("num_stages")
+        waves_per_eu = get_special_arg("waves_per_eu"),
+        matrix_instr_nonkdim = get_special_arg("matrix_instr_nonkdim"),
         enable_warp_specialization = get_special_arg("enable_warp_specialization", False)
         enable_fp_fusion = get_special_arg("enable_fp_fusion", True)
         extern_libs = get_special_arg("extern_libs")
@@ -656,6 +501,8 @@ def {self.fn.__name__}({args_signature}grid=None, num_warps=None, num_ctas=1, nu
             num_warps,
             num_ctas,
             num_stages,
+            waves_per_eu,
+            matrix_instr_nonkdim,
             enable_warp_specialization,
             enable_fp_fusion,
             self.debug,
@@ -690,6 +537,8 @@ def {self.fn.__name__}({args_signature}grid=None, num_warps=None, num_ctas=1, nu
                     num_warps,
                     num_ctas,
                     num_stages,
+                    waves_per_eu,
+                    matrix_instr_nonkdim,
                     enable_warp_specialization,
                     enable_fp_fusion,
                     extern_libs,
@@ -705,6 +554,8 @@ def {self.fn.__name__}({args_signature}grid=None, num_warps=None, num_ctas=1, nu
                 num_warps=num_warps,
                 num_ctas=num_ctas,
                 num_stages=num_stages,
+                waves_per_eu=waves_per_eu,
+                matrix_instr_nonkdim=matrix_instr_nonkdim,
                 enable_warp_specialization=enable_warp_specialization,
                 enable_fp_fusion=enable_fp_fusion,
                 extern_libs=extern_libs,
@@ -733,7 +584,6 @@ def {self.fn.__name__}({args_signature}grid=None, num_warps=None, num_ctas=1, nu
                 *bin.assemble_tensormap_to_arg(non_constexpr_arg_values),
             )
         return bin
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
 
     def __init__(self, fn, version=None, do_not_specialize=None, debug=None, noinline=None):
         do_not_specialize = do_not_specialize if do_not_specialize else []

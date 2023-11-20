@@ -100,13 +100,8 @@ def ttir_to_ttgir(mod, num_warps, warpsize, num_ctas, target):
     return mod
 
 
-<<<<<<< HEAD
-def optimize_ttgir(mod, num_stages, num_warps, num_ctas, target,
-                   cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue, matrix_inst_type):
-=======
 def optimize_ttgir(mod, num_stages, num_warps, num_ctas, target, cluster_info, enable_warp_specialization,
-                   enable_persistent, optimize_epilogue):
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
+                   enable_persistent, optimize_epilogue, matrix_inst_type):
     is_cuda = _is_cuda(target)
     if is_cuda:
         capability = target.capability
@@ -130,13 +125,9 @@ def optimize_ttgir(mod, num_stages, num_warps, num_ctas, target, cluster_info, e
     if optimize_epilogue:
         pm.add_tritongpu_optimize_epilogue_pass()
     pm.add_tritongpu_optimize_dot_operands_pass()
-<<<<<<< HEAD
     if num_stages == 0 and is_hip() and gpu_matrix_core_version() != 0:
         pm.add_tritongpu_stream_pipeline_pass()
         pm.add_canonicalizer_pass()
-=======
-    pm.add_cse_pass()
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
     ws_enabled = False
     # `num_warps` does not mean the total number of warps of a CTA when
     # warp specialization is enabled.
@@ -292,11 +283,7 @@ def make_hash(fn, target, env_vars, device_backend, **kwargs):
                                      sorted(conf.ids_of_folded_args), sorted(conf.divisible_by_8))
         configs_key = [get_conf_key(conf) for conf in configs]
         env_vars_list = [f"{env_vars[k]}" for k in sorted(env_vars.keys())]
-<<<<<<< HEAD
-        key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}-{waves_per_eu}-{matrix_instr_nonkdim}-{num_ctas}-{num_stages}-{enable_warp_specialization}-{enable_persistent}-{debug}-{target}-{env_vars_list}"
-=======
-        key = f"{fn.cache_key}-{version_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}-{num_ctas}-{num_stages}-{enable_warp_specialization}-{enable_persistent}-{debug}-{target}-{env_vars_list}"
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
+        key = f"{fn.cache_key}-{version_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}-{waves_per_eu}-{matrix_instr_nonkdim}-{num_ctas}-{num_stages}-{enable_warp_specialization}-{enable_persistent}-{debug}-{target}-{env_vars_list}"
         return hashlib.md5(key.encode("utf-8")).hexdigest()
     assert isinstance(fn, str)
     ignore_version = kwargs.get('ignore_version', False)
@@ -407,16 +394,9 @@ def get_arch_default_num_stages(device_type, capability=None):
 
 
 def add_cuda_stages(target, extern_libs, stages):
-<<<<<<< HEAD
-    stages["ptx"] = (lambda path: Path(path).read_text(),
-                     lambda src: llir_to_ptx(src, target))
-    stages["cubin"] = (lambda path: Path(path).read_bytes(),
-                       lambda src: ptx_to_cubin(src, target))
-=======
 
     stages["ptx"] = (lambda path: Path(path).read_text(), lambda src: llir_to_ptx(src, target))
     stages["cubin"] = (lambda path: Path(path).read_bytes(), lambda src: ptx_to_cubin(src, target))
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
 
 
 def compile(fn, **kwargs):
@@ -574,30 +554,19 @@ def compile(fn, **kwargs):
             if 'tensormaps_info' in metadata:
                 metadata['tensormaps_info'] = [InfoFromBackendForTensorMap(e) for e in metadata['tensormaps_info']]
     else:
-<<<<<<< HEAD
-        metadata = {"num_warps": num_warps,
-                    "warp_size": warp_size,
-                    "num_ctas": num_ctas,
-                    "num_stages": num_stages,
-                    "waves_per_eu": waves_per_eu,
-                    "matrix_instr_nonkdim": matrix_instr_nonkdim,
-                    "enable_warp_specialization": enable_warp_specialization,
-                    "enable_persistent": enable_persistent,
-                    "constants": _get_jsonable_constants(constants),
-                    "debug": debug,
-                    "target": target, }
-=======
         metadata = {
             "num_warps": num_warps,
+            "warp_size": warp_size,
             "num_ctas": num_ctas,
             "num_stages": num_stages,
+            "waves_per_eu": waves_per_eu,
+            "matrix_instr_nonkdim": matrix_instr_nonkdim,
             "enable_warp_specialization": enable_warp_specialization,
             "enable_persistent": enable_persistent,
             "constants": _get_jsonable_constants(constants),
             "debug": debug,
-            "target": target,
+            "target": target, }
         }
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
         metadata.update(get_env_vars())
         if ext == "ptx":
             assert "shared" in kwargs, "ptx compilation must provide shared memory size"

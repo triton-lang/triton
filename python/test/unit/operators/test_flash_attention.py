@@ -58,9 +58,6 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par):
 
     # # triton implementation
     tri_out = triton.ops.attention(q, k, v, causal, sm_scale, seq_par)
-<<<<<<< HEAD
-    # print(ref_out)
-    # print(tri_out)
     if torch.version.hip is None:
         tri_out.backward(dout)
         tri_dv, v.grad = v.grad.clone(), None
@@ -73,17 +70,6 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par):
       torch.testing.assert_close(ref_dv, tri_dv, atol=atol, rtol=0)
       torch.testing.assert_close(ref_dk, tri_dk, atol=atol, rtol=0)
       torch.testing.assert_close(ref_dq, tri_dq, atol=atol, rtol=0)
-=======
-    tri_out.backward(dout)
-    tri_dv, v.grad = v.grad.clone(), None
-    tri_dk, k.grad = k.grad.clone(), None
-    tri_dq, q.grad = q.grad.clone(), None
-    # compare
-    atol = 1e-1 if dtype == torch.bfloat16 else 1e-2
-    torch.testing.assert_close(ref_out, tri_out, atol=atol, rtol=0)
-    torch.testing.assert_close(ref_dv, tri_dv, atol=atol, rtol=0)
-    torch.testing.assert_close(ref_dk, tri_dk, atol=atol, rtol=0)
-    torch.testing.assert_close(ref_dq, tri_dq, atol=atol, rtol=0)
 
 
 try:
@@ -143,4 +129,3 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, casual, seq_par, provid
 
 # only works on post-Ampere GPUs right now
 # bench_flash_attention.run(save_path='.', print_data=True)
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52

@@ -354,14 +354,8 @@ setup(
         "triton/third_party",
         "triton/tools",
     ],
-<<<<<<< HEAD
     long_description_content_type="text/markdown",
-    install_requires=[
-        "filelock"
-    ],
-=======
     install_requires=["filelock"],
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={"build_ext": CMakeBuild, "build_py": CMakeBuildPy, "clean": CMakeClean},

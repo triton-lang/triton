@@ -1073,18 +1073,9 @@ def atomic_max(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope:
             return tl.tensor(
                 builder.create_atomic_rmw(ir.ATOMIC_OP.MAX, ptr.handle, val.handle, mask.handle, sem, scope), val.type)
         else:
-<<<<<<< HEAD
-            return tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.UMAX,
-                                                       ptr.handle,
-                                                       val.handle,
-                                                       mask.handle,
-                                                       sem),
-                             val.type)
-    # ROCM TODO: implement atomic_max/min for f32 as they are supported by MI cards.
-=======
             return tl.tensor(
                 builder.create_atomic_rmw(ir.ATOMIC_OP.UMAX, ptr.handle, val.handle, mask.handle, sem, scope), val.type)
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
+    # ROCM TODO: implement atomic_max/min for f32 as they are supported by MI cards.
     # for float
     # return atomic_smax(i_ptr, i_val) if val >= 0
     # return atomic_umin(i_ptr, i_val) if val < 0
@@ -1243,20 +1234,10 @@ def mfma_supported(M, N, K, allow_tf32, ret_scalar_ty) -> bool:
         return False
     return True
 
-<<<<<<< HEAD
-def dot(lhs: tl.tensor,
-        rhs: tl.tensor,
-        acc: tl.tensor,
-        allow_tf32: bool,
-        max_num_imprecise_acc: int,
-        out_dtype: tl.dtype,
-        builder: ir.builder) -> tl.tensor:
-=======
 
 def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_num_imprecise_acc: int,
         out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
 
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
     def assert_dtypes_valid(lhs_dtype, rhs_dtype, target):
         # Checks for non-cuda archs
         if not _is_cuda(target):
@@ -1349,23 +1330,17 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
         else:
             _0 = builder.create_splat(builder.get_fp32(0), [M, N])
         ret_ty = tl.block_type(ret_cast_scalar_ty, [M, N])
-<<<<<<< HEAD
         ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32, max_num_imprecise_acc),
                         ret_ty)
         return cast(ret, ret_scalar_ty, builder)
-    if is_hip() and mfma_supported(M, N, lhs.type.shape[1], allow_tf32, ret_scalar_ty) and ret_scalar_ty.primitive_bitwidth <= 32:
+    if is_hip() and mfma_supported(M, N, lhs.type.shape[1], allow_tf32,
+                                   ret_scalar_ty) and ret_scalar_ty.primitive_bitwidth < 32:
         # max_num_imprecise_acc does not yet apply to hip
         if is_hip():
             max_num_imprecise_acc = 0
         if max_num_imprecise_acc is None:
             max_num_imprecise_acc = 2**30
 
-=======
-        ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32), ret_ty)
-        return cast(ret, ret_scalar_ty, builder)
-    if is_hip() and mfma_supported(M, N, lhs.type.shape[1], allow_tf32,
-                                   ret_scalar_ty) and ret_scalar_ty.primitive_bitwidth < 32:
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
         if lhs.type.scalar.is_int():
             ret_dot_scalar_ty = tl.int32
             _0 = builder.create_splat(builder.get_int32(0), [M, N])
@@ -1373,12 +1348,8 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
             ret_dot_scalar_ty = tl.float32
             _0 = builder.create_splat(builder.get_fp32(0), [M, N])
         ret_ty = tl.block_type(ret_dot_scalar_ty, [M, N])
-<<<<<<< HEAD
         ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32, max_num_imprecise_acc),
                         ret_ty)
-=======
-        ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32), ret_ty)
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
         return cast(ret, ret_scalar_ty, builder)
 
     _0 = builder.create_splat(_0, [M, N])

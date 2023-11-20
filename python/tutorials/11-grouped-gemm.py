@@ -1,5 +1,3 @@
-<<<<<<< HEAD
-=======
 """
 Group GEMM
 ============================
@@ -7,7 +5,6 @@ This group gemm kernel launches a fixed number of CTA to compute a group
 of gemms. The scheduling is static and we do it on device.
 """
 
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
 # Copyright (c) 2023 NVIDIA Corporation & Affiliates. All rights reserved.
 #
 # Permission is hereby granted, free of charge, to any person obtaining
@@ -38,7 +35,6 @@ import triton.language as tl
 # of gemms. The scheduling is static and we do it on device
 @triton.autotune(
     configs=[
-<<<<<<< HEAD
         triton.Config(
             {
                 'BLOCK_SIZE_M': 128,
@@ -122,32 +118,6 @@ import triton.language as tl
             num_stages = 0,
             num_warps = 2,
         ),
-=======
-        triton.Config({
-            'BLOCK_SIZE_M': 128,
-            'BLOCK_SIZE_N': 128,
-            'BLOCK_SIZE_K': 32,
-            'NUM_SM': 84,
-        }),
-        triton.Config({
-            'BLOCK_SIZE_M': 128,
-            'BLOCK_SIZE_N': 128,
-            'BLOCK_SIZE_K': 32,
-            'NUM_SM': 128,
-        }),
-        triton.Config({
-            'BLOCK_SIZE_M': 64,
-            'BLOCK_SIZE_N': 64,
-            'BLOCK_SIZE_K': 32,
-            'NUM_SM': 84,
-        }),
-        triton.Config({
-            'BLOCK_SIZE_M': 64,
-            'BLOCK_SIZE_N': 64,
-            'BLOCK_SIZE_K': 32,
-            'NUM_SM': 128,
-        }),
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
     ],
     key=['SUM_M', 'SUM_N', 'SUM_K'],
 )
@@ -312,13 +282,8 @@ for i in range(group_size):
 
 
 # only launch the kernel, no tensor preparation here to remove all overhead
-<<<<<<< HEAD
 def triton_perf_fn(a_ptrs, b_ptrs, c_ptrs, sizes, lds, group_size, sum_m, sum_n, sum_k):
     grid = lambda META: (META['NUM_SM'],)
-=======
-def triton_perf_fn(a_ptrs, b_ptrs, c_ptrs, sizes, lds, group_size):
-    grid = lambda META: (META['NUM_SM'], )
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
     grouped_matmul_kernel[grid](
         a_ptrs,
         b_ptrs,
@@ -388,12 +353,8 @@ def benchmark(N, provider):
     if provider == 'cublas':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch_perf_fn(group_A, group_B), quantiles=quantiles)
     if provider == 'triton':
-<<<<<<< HEAD
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: triton_perf_fn(d_a_ptrs, d_b_ptrs, d_c_ptrs, d_g_sizes, d_g_lds, group_size, group_size*N, group_size*N, group_size*N), quantiles=quantiles)
-=======
         ms, min_ms, max_ms = triton.testing.do_bench(
-            lambda: triton_perf_fn(d_a_ptrs, d_b_ptrs, d_c_ptrs, d_g_sizes, d_g_lds, group_size), quantiles=quantiles)
->>>>>>> cb3d79a185e40c9d8a579bea07747a8a8d157d52
+            lambda: triton_perf_fn(d_a_ptrs, d_b_ptrs, d_c_ptrs, d_g_sizes, d_g_lds, group_size, group_size*N, group_size*N, group_size*N), quantiles=quantiles)
     return ms, max_ms, min_ms
 
 
