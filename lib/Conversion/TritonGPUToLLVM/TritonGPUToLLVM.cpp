@@ -207,6 +207,7 @@ struct PrintOpConversion
     // with " " and ends with ": ").
 
     Value formatStrValue;
+    ConvertTritonGPUOpToLLVMPatternBase::PrintFormatting formatting;
     for (int i = 0; i < elems.size(); i++) {
       std::string formatStr;
       llvm::raw_string_ostream os(formatStr);
@@ -266,17 +267,18 @@ struct PrintOpConversion
       // strings, so we cache the Value.
       if (i == 0) {
 #ifdef USE_ROCM
-        formatStrVAlue = llPrintfHIP(loc, op->getParentOfType<mlir::ModuleOp>(), formatStr, 
+        formatting = llPrintfHIP(op->getLoc(), op->getParentOfType<mlir::ModuleOp>(), formatStr,
 			printfOperands, rewriter);
 #else
         formatStrValue = llPrintf(formatStr, printfOperands, rewriter);
 #endif
       } else {
 #ifdef USE_ROCM
-        llPrintfHIP(loc, op->getParentOfType<mlir::ModuleOp>(), formatStr, printfOperands,
-                    rewriter);
+        llPrintfHIP(op->getLoc(), op->getParentOfType<mlir::ModuleOp>(), formatting,
+			printfOperands, rewriter);
 #else
         llPrintf(formatStrValue, printfOperands, rewriter);
+#endif
       }
     }
   }
