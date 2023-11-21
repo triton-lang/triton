@@ -36,6 +36,8 @@ def _attn_fwd_inner(
     offs_n: tl.constexpr,
     N_CTX,
     pre_load_v: tl.constexpr,
+    padded_block: tl.constexpr,
+    total_tokens: tl.constexpr,
 ):
     # range of values handled by this stage
     if STAGE == 1:
@@ -45,19 +47,39 @@ def _attn_fwd_inner(
         lo = tl.multiple_of(lo, BLOCK_M)
         K_block_ptr = tl.advance(K_block_ptr, (0, lo))
         V_block_ptr = tl.advance(V_block_ptr, (lo, 0))
+    # N_CTX is the seqlen to the nearest block (round down).
+    # So here, we are computing the elements for that last irregular block.
+    # In the loop,  we will mask the elements of BLOCK_N that do not exist.
+    elif padded_block:
+        lo, hi = N_CTX, N_CTX + BLOCK_N
+        lo = tl.multiple_of(lo, BLOCK_M)
+        K_block_ptr = tl.advance(K_block_ptr, (0, lo))
+        V_block_ptr = tl.advance(V_block_ptr, (lo, 0))
     # causal = False
     else:
         lo, hi = 0, N_CTX
     # loop over k, v and update accumulator
     for start_n in range(lo, hi, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
-        # -- compute qk ----
-        k = tl.load(K_block_ptr)
+        # For padded blocks, we will overrun the tensor size if
+        # we load all BLOCK_N. For others, the blocks are all within range.
+        if padded_block:
+            k = tl.load(K_block_ptr, boundary_check=(1,), padding_option="zero")
+        else:
+            k = tl.load(K_block_ptr)
         if pre_load_v:
-            v = tl.load(V_block_ptr)
+            if padded_block:
+                v = tl.load(V_block_ptr, boundary_check=(0,), padding_option="zero")
+            else:
+                v = tl.load(V_block_ptr)
+        # -- compute qk ----
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         if STAGE == 2:
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
+            qk = tl.where(mask, qk, float("-inf"))
+        if padded_block:
+            boundary = tl.full([BLOCK_M], total_tokens, dtype=tl.float32)
+            mask = (start_n + offs_n[None,:]) <= boundary[:,None]
             qk = tl.where(mask, qk, float("-inf"))
         qk += tl.dot(q, k)
         m_ij = tl.maximum(m_i, tl.max(qk, 1))
@@ -67,7 +89,10 @@ def _attn_fwd_inner(
         alpha = tl.math.exp2(m_i - m_ij)
         acc = acc * alpha[:, None]
         if not pre_load_v:
-            v = tl.load(V_block_ptr)
+            if padded_block:
+                v = tl.load(V_block_ptr, boundary_check=(0,), padding_option="zero")
+            else:
+                v = tl.load(V_block_ptr)
         acc += tl.dot(p.to(v.dtype), v)
         # -- update m_i and l_i
         l_ij = tl.sum(p, 1)
@@ -93,6 +118,8 @@ def _attn_fwd(
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
     pre_load_v: tl.constexpr,
+    need_padding: tl.constexpr,
+    extra_tokens_n: tl.constexpr,
 ):
     start_m = tl.program_id(0)
     off_hz = tl.program_id(1)
@@ -143,19 +170,34 @@ def _attn_fwd(
     # don't work as expected with `exp` in the loop
     qk_scale = sm_scale * 1.44269504
     # load q: it will stay in SRAM throughout on NV GPUs but in VGPRs on AMD GPUs
-    q = tl.load(Q_block_ptr)
+    q = tl.load(Q_block_ptr, boundary_check=(0,1), padding_option="zero")
     q = (q * qk_scale).to(q.dtype)
     # stage 1: off-band
     # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
     # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
     if STAGE & 1:
+        # We don't currently support causal masking and padding.
+        tl.static_assert((STAGE != 3) or not need_padding)
+        # equal to N_CTX if N_CTX is already a multiple of block_M
+        seqlen_aligned = N_CTX - extra_tokens_n
         acc, l_i, m_i = _attn_fwd_inner(
             acc, l_i, m_i, q, K_block_ptr, V_block_ptr,
             start_m,
             BLOCK_M, BLOCK_DMODEL, BLOCK_N,
             4 - STAGE, offs_m, offs_n,
-            N_CTX, pre_load_v,
+            seqlen_aligned, pre_load_v,
+            False, seqlen_aligned
         )
+        tl.debug_barrier()
+        if need_padding:
+            acc, l_i, m_i = _attn_fwd_inner(
+                acc, l_i, m_i, q, K_block_ptr, V_block_ptr,
+                start_m,
+                BLOCK_M, BLOCK_DMODEL, BLOCK_N,
+                4 - STAGE, offs_m, offs_n,
+                seqlen_aligned, pre_load_v,
+                True, N_CTX,
+            )
     # stage 2: on-band
     if STAGE & 2:
         # barrier makes it easier for compielr to schedule the
@@ -172,8 +214,16 @@ def _attn_fwd(
     # write back m
     acc = acc / l_i[:, None]
     m_ptrs = M + off_hz * N_CTX + offs_m
-    tl.store(m_ptrs, m_i + tl.math.log2(l_i))
-    tl.store(O_block_ptr, acc.to(Out.type.element_ty))
+    # Check for last block_M
+    overflow_size = (start_m * BLOCK_M) - N_CTX
+    if overflow_size > 0:
+        boundary = tl.full((BLOCK_M,), overflow_size, dtype=tl.float32)
+        # This is a > check because mask being 0 blocks the store.
+        m_ptrs_mask = boundary > tl.arange(0, BLOCK_M)
+        tl.store(m_ptrs, m_i + tl.math.log2(l_i))
+    else:
+        tl.store(m_ptrs, m_i + tl.math.log2(l_i))
+    tl.store(O_block_ptr, acc.to(Out.type.element_ty), boundary_check=(0,1))
 
 
 @triton.jit
@@ -427,52 +477,36 @@ class _attention(torch.autograd.Function):
         
         stage = 3 if causal else 1
         need_padding = True if seqlen % BLOCK_M else False
+        extra_tokens_n = seqlen % BLOCK_N
 
-        # We pad q with 1.0 because padding it with 0 and multiplying k which has inf will
-        # result in NaN
-        if need_padding:
-            seq_pad_len_q = seqlen % BLOCK_M
-            seq_pad_len_kv = seqlen % BLOCK_N
-            q_padded = torch.nn.functional.pad(
-                           q, (0,0,0,0,0,seq_pad_len_q,0,0), mode='constant', value=1.0)
-            # We pad k with -inf because qk will have -inf and max(stuff, -inf) ignores -inf
-            # Also, exp(-inf) = 0.
-            k_padded = torch.nn.functional.pad(
-                           k, (0,0,0,0,0,seq_pad_len_kv,0,0), mode='constant', value=float("-Inf"))
-            v_padded = torch.nn.functional.pad(
-                           v, (0,0,0,0,0,seq_pad_len_kv,0,0), mode='constant', value=0.0)
-        else:
-            q_padded, k_padded, v_padded = q, k, v
-
-        # TODO: We can optimize this by masking the values we store, instead of storing everything.
-        o_padded = torch.empty_like(q_padded, dtype=v.dtype)
+        o = torch.empty_like(q, dtype=v.dtype)
         M = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         
         grid = (triton.cdiv(q.shape[2], BLOCK_M), q.shape[0] * q.shape[1], 1)
 
-
         _attn_fwd[grid](
-            q_padded, k_padded, v_padded, sm_scale, M, o_padded,
-            q_padded.stride(0), q_padded.stride(1), q_padded.stride(2), q_padded.stride(3),
-            k_padded.stride(0), k_padded.stride(1), k_padded.stride(2), k_padded.stride(3),
-            v_padded.stride(0), v_padded.stride(1), v_padded.stride(2), v_padded.stride(3),
-            o_padded.stride(0), o_padded.stride(1), o_padded.stride(2), o_padded.stride(3),
-            q_padded.shape[0], q_padded.shape[1],
-            N_CTX=q_padded.shape[2],
+            q, k, v, sm_scale, M, o,
+            q.stride(0), q.stride(1), q.stride(2), q.stride(3),
+            k.stride(0), k.stride(1), k.stride(2), k.stride(3),
+            v.stride(0), v.stride(1), v.stride(2), v.stride(3),
+            o.stride(0), o.stride(1), o.stride(2), o.stride(3),
+            q.shape[0], q.shape[1],
+            N_CTX=q.shape[2],
             BLOCK_DMODEL=Lk,
             STAGE=stage,
             BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
             waves_per_eu=waves_per_eu, pre_load_v=pre_load_v,
+            need_padding=need_padding, extra_tokens_n=extra_tokens_n,
             num_stages=1, num_warps=num_warps
         )
 
-        ctx.save_for_backward(q, k, v, o_padded[:,:,0:seqlen,:], M)
+        ctx.save_for_backward(q, k, v, o[:,:,0:seqlen,:], M)
         ctx.grid = grid
         ctx.sm_scale = sm_scale
         ctx.BLOCK_DMODEL = Lk
         ctx.causal = causal
         ctx.split_kernel = split_kernel
-        return o_padded[:,:,0:seqlen,:]
+        return o
 
     @staticmethod
     def backward(ctx, do):
@@ -556,20 +590,24 @@ attention = _attention.apply
 
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD',
                          [(4, 48, 1024, 64),
+                          (4, 48, 997, 64),
                           (4, 48, 2048, 64),
                           (4, 48, 4096, 64),
+                          (4, 48, 3989, 64),
                           (4, 48, 1024, 128),
+                          (4, 48, 1021, 128),
                           (4, 48, 2048, 128),
                           (4, 48, 4096, 128),
-                          #(4, 48, 8192, 64),
+                          (4, 16, 8192, 64),
+                          (4, 16, 8080, 64),
                           #(4, 48, 16384, 64)
                           ])
-@pytest.mark.parametrize('causal', [False, True])
+@pytest.mark.parametrize('causal', [False])
 def test_op_fwd(Z, H, N_CTX, D_HEAD, causal, dtype=torch.float16):
     torch.manual_seed(20)
-    q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
-    k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
-    v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
+    q = torch.randn((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
+    k = torch.randn((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
+    v = torch.randn((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
     if TORCH_HAS_FP8E5:
         q = q.to(torch_dtype)
         k = k.to(torch_dtype)
@@ -643,7 +681,7 @@ except BaseException:
 # vary seq length for fixed head and batch=4
 configs = []
 for mode in ['fwd']:
-    for D_HEAD in [128, 64]:
+    for D_HEAD in [128]:
         if mode == 'bwd' and D_HEAD == 128:
             continue
         for causal in [False]:
@@ -656,21 +694,19 @@ for mode in ['fwd']:
                         (4, 16, 4096),
                         (2, 16, 8192),
                         (1, 16, 16384),
-                        (4, 48, 1024),
-                        (4, 48, 2048),
-                        (4, 48, 4096),
-                        (4, 48, 8192),
-                        (4, 48, 16384),
-                        (16, 16, 995),
+                        (2, 48, 1024),
+                        (2, 48, 2048),
+                        (2, 48, 4096),
+                        (2, 48, 8192),
+                        (2, 48, 16384),
                         (8, 16, 1989),
                         (4, 16, 4097),
                         (2, 16, 8122),
                         (1, 16, 16281),
-                        (4, 48, 1021),
-                        (4, 48, 2001),
-                        (4, 48, 3996),
-                        (4, 48, 8181),
-                        (4, 48, 16300),
+                        (2, 48, 1021),
+                        (2, 48, 2001),
+                        (2, 48, 3996),
+                        (2, 48, 8181),
                         ],
                 line_arg='provider',
                 line_vals=['triton'] + (['flash'] if HAS_FLASH else []),
