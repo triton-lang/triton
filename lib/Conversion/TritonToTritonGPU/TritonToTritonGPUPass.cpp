@@ -122,9 +122,10 @@ void populateMathPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
   MLIRContext *context = patterns.getContext();
   // Rewrite rule
   patterns.add<GenericOpPattern<math::ExpOp>, GenericOpPattern<math::CosOp>,
-               GenericOpPattern<math::SinOp>, GenericOpPattern<math::LogOp>,
-               GenericOpPattern<math::AbsFOp>, GenericOpPattern<math::AbsIOp>,
-               GenericOpPattern<math::SqrtOp>>(typeConverter, context);
+               GenericOpPattern<math::SinOp>, GenericOpPattern<math::TanhOp>,
+               GenericOpPattern<math::LogOp>, GenericOpPattern<math::AbsFOp>,
+               GenericOpPattern<math::AbsIOp>, GenericOpPattern<math::SqrtOp>>(
+      typeConverter, context);
 }
 
 //

@@ -1508,6 +1508,10 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, mlir::Value &val) -> mlir::Value {
              return self.create<mlir::math::SinOp>(val);
            })
+      .def("create_tanh",
+           [](TritonOpBuilder &self, mlir::Value &val) -> mlir::Value {
+             return self.create<mlir::math::TanhOp>(val);
+           })
       .def("create_log",
            [](TritonOpBuilder &self, mlir::Value &val) -> mlir::Value {
              return self.create<mlir::math::LogOp>(val);

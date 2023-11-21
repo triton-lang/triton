@@ -84,6 +84,7 @@ from .core import (
     static_print,
     store,
     static_range,
+    tanh,
     tensor,
     trans,
     # triton,

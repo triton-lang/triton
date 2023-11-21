@@ -797,7 +797,7 @@ def test_unary_op(dtype_x, expr, num_ctas, device):
 
 @pytest.mark.parametrize("dtype_x, expr, x", [(dtype_x, expr, x)
                                               for dtype_x in ["float32", "float64"]
-                                              for expr in ['exp', 'log', 'cos', 'sin']
+                                              for expr in ['exp', 'log', 'cos', 'sin', 'tanh']
                                               for x in ['x', '3.0']])
 def test_math_op(dtype_x, expr, device, x):
     _test_unary(dtype_x, f'tl.{expr}({x})', f'np.{expr}({x}) ', device=device)

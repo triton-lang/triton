@@ -638,13 +638,13 @@ bool CTAPlanner::isElementwiseOp(Operation *op) const {
                 arith::SubIOp, arith::TruncFOp, arith::TruncIOp,
                 arith::UIToFPOp, arith::XOrIOp>(op))
     return true;
-  if (llvm::isa<math::AbsFOp, math::AbsIOp, math::AtanOp, math::Atan2Op,
-                math::CeilOp, math::CopySignOp, math::CosOp, math::SinOp,
-                math::CountLeadingZerosOp, math::CountTrailingZerosOp,
-                math::CtPopOp, math::ErfOp, math::ExpOp, math::Exp2Op,
-                math::ExpM1Op, math::FloorOp, math::FmaOp, math::LogOp,
-                math::Log10Op, math::Log1pOp, math::Log2Op, math::PowFOp,
-                math::RsqrtOp, math::SqrtOp, math::TanhOp>(op))
+  if (llvm::isa<
+          math::AbsFOp, math::AbsIOp, math::AtanOp, math::Atan2Op, math::CeilOp,
+          math::CopySignOp, math::CosOp, math::SinOp, math::TanhOp,
+          math::CountLeadingZerosOp, math::CountTrailingZerosOp, math::CtPopOp,
+          math::ErfOp, math::ExpOp, math::Exp2Op, math::ExpM1Op, math::FloorOp,
+          math::FmaOp, math::LogOp, math::Log10Op, math::Log1pOp, math::Log2Op,
+          math::PowFOp, math::RsqrtOp, math::SqrtOp, math::TanhOp>(op))
     return true;
   if (llvm::isa<triton::IntToPtrOp, triton::PtrToIntOp, triton::BitcastOp,
                 triton::FpToFpOp, triton::AddPtrOp>(op))

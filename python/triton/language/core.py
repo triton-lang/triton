@@ -1362,6 +1362,13 @@ def sin(x, _builder=None):
 
 
 @builtin
+@_add_math_1arg_docstr('hyperbolic tangent')
+def tanh(x, _builder=None):
+  x = _to_tensor(x, _builder)
+  return semantic.tanh(x, _builder)
+
+
+@builtin
 @_add_math_1arg_docstr("square root")
 def sqrt(x, _builder=None):
     x = _to_tensor(x, _builder)

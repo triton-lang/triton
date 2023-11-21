@@ -1346,6 +1346,30 @@ struct ExpOpConversionApprox
   }
 };
 
+struct TanhConversionApprox
+    : ElementwiseOpConversionBase<mlir::math::TanhOp, TanhConversionApprox> {
+  using Base =
+      ElementwiseOpConversionBase<mlir::math::TanhOp, TanhConversionApprox>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(mlir::math::TanhOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    // For non-FP32 input, call __nv_tanh for higher-precision calculation
+    if (elemTy.getIntOrFloatBitWidth() != 32)
+      return {};
+
+    PTXBuilder ptxBuilder;
+    auto &tanh = ptxBuilder.create<PTXInstr>("tanh")->o("approx").o("f32");
+    auto output = ptxBuilder.newOperand("=f");
+    auto input = ptxBuilder.newOperand(operands[0][0], "f");
+    tanh(output, input);
+    return {ptxBuilder.launch(rewriter, loc, f32_ty, false)};
+  }
+};
+
 struct AbsIOpConversion
     : ElementwiseOpConversionBase<mlir::math::AbsIOp, AbsIOpConversion> {
   using Base =
@@ -1488,6 +1512,7 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(math::LogOp, math::LogOp)
   POPULATE_UNARY_OP(math::CosOp, math::CosOp)
   POPULATE_UNARY_OP(math::SinOp, math::SinOp)
+  POPULATE_UNARY_OP(math::TanhOp, math::TanhOp)
   POPULATE_UNARY_OP(math::SqrtOp, math::SqrtOp)
   POPULATE_UNARY_OP(math::ExpOp, math::ExpOp)
   POPULATE_UNARY_OP(triton::BitcastOp, LLVM::BitcastOp)
@@ -1524,4 +1549,5 @@ void populateElementwiseOpToLLVMPatterns(
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
   // __nv_expf for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<TanhConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
 }
