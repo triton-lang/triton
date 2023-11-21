@@ -110,6 +110,8 @@ public:
       if (isa<triton::LoadOp>(currOp))
         checkOp = true;
       else if (checkOp) {
+        // Bail out if there exists an op after Load that is not FpToFp,
+        // Bitcast, or Arith.
         if (!isa<triton::FpToFpOp, triton::BitcastOp>(currOp) &&
             currOp->getDialect()->getTypeID() !=
                 mlir::TypeID::get<arith::ArithDialect>())
@@ -134,19 +136,22 @@ public:
     // only considers conversions to dot operand
     if (!cvtTy.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
       return mlir::failure();
-    auto argTy = cvtArgOp->getOperand(0).getType().cast<RankedTensorType>();
     auto retTy = cvtArgOp->getResult(0).getType().cast<RankedTensorType>();
-    if (!argTy || !retTy)
+    if (!retTy)
       return mlir::failure();
     Type newRetTy = RankedTensorType::get(
         retTy.getShape(), retTy.getElementType(), cvtTy.getEncoding());
-    Type newCvtTy = RankedTensorType::get(
-        retTy.getShape(), argTy.getElementType(), cvtTy.getEncoding());
     int numArgs = cvtArgOp->getNumOperands();
     SmallVector<triton::gpu::ConvertLayoutOp> newCvts(numArgs);
-    for (int i = 0; i < numArgs; i++)
+    for (int i = 0; i < numArgs; i++) {
+      auto argTy = cvtArgOp->getOperand(i).getType().cast<RankedTensorType>();
+      if (!argTy)
+        return mlir::failure();
+      Type newCvtTy = RankedTensorType::get(
+          retTy.getShape(), argTy.getElementType(), cvtTy.getEncoding());
       newCvts[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
           cvt.getLoc(), newCvtTy, cvtArgOp->getOperand(i));
+    }
     auto newRet = rewriter.clone(*cvtArgOp);
     for (int i = 0; i < numArgs; i++)
       newRet->setOperand(i, newCvts[i]);
