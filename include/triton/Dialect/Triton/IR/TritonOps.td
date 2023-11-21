@@ -153,29 +153,35 @@ def TT_LoadOp : TT_Op<"load",
     let arguments = (ins AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>:$ptr, Optional<TT_BoolLike>:$mask,
                          Optional<TT_Type>:$other, OptionalAttr<DenseI32ArrayAttr>:$boundaryCheck,
                          OptionalAttr<TT_PaddingOptionAttr>:$padding, TT_CacheModifierAttr:$cache,
-                         TT_EvictionPolicyAttr:$evict, BoolAttr:$isVolatile);
+                         TT_EvictionPolicyAttr:$evict, BoolAttr:$isVolatile,
+                         OptionalAttr<BoolAttr>:$pipeline);
 
     let results = (outs TT_Type:$result);
 
     let builders = [
         // A tensor of pointers or a pointer to a scalar
         OpBuilder<(ins "Value":$ptr, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile,
+                       "std::optional<bool>":$pipeline)>,
         // A tensor pointer with boundary check and padding
         OpBuilder<(ins "Value":$ptr, "ArrayRef<int32_t>":$boundaryCheck,
                        "std::optional<triton::PaddingOption>":$padding, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile,
+                       "std::optional<bool>":$pipeline)>,
         // A tensor of pointers or a pointer to a scalar with mask
         OpBuilder<(ins "Value":$ptr, "Value":$mask, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile,
+                       "std::optional<bool>":$pipeline)>,
         // A tensor of pointers or a pointer to a scalar with mask and other
         OpBuilder<(ins "Value":$ptr, "Value":$mask, "Value":$other, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile,
+                       "std::optional<bool>":$pipeline)>,
         // A utility function to build the operation with all attributes
         OpBuilder<(ins "Value":$ptr, "Value":$mask, "Value":$other,
                        "std::optional<ArrayRef<int32_t>>":$boundaryCheck,
                        "std::optional<triton::PaddingOption>":$padding, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile,
+                       "std::optional<bool>":$pipeline)>
     ];
 
     // Format: `tt.load operands attrs : optional(type(ptr)) -> type(result)`

@@ -1026,7 +1026,7 @@ def dot(input, other, acc=None, allow_tf32=True, max_num_imprecise_acc=None, out
 
 @builtin
 def load(pointer, mask=None, other=None, boundary_check=tuple(), padding_option="", cache_modifier="",
-         eviction_policy="", volatile=False, _builder=None):
+         eviction_policy="", volatile=False, pipeline=None, _builder=None):
     """
     Return a tensor of data whose values are loaded from memory at location defined by `pointer`:
         (1) `pointer` could be a single element pointer, then a scalar will be loaded
@@ -1062,6 +1062,8 @@ def load(pointer, mask=None, other=None, boundary_check=tuple(), padding_option=
     :type eviction_policy: str, optional
     :param volatile: changes volatile option in NVIDIA PTX
     :type volatile: bool, optional
+    :param pipeline: If true the compiler will try to pipeline, False will avoid pipelining and None will use the pattern matching machinery.
+    :type pipeline: bool, optional
     """
     # `mask` and `other` can be constexpr
     if _constexpr_to_value(mask) is not None:
@@ -1072,8 +1074,9 @@ def load(pointer, mask=None, other=None, boundary_check=tuple(), padding_option=
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
     volatile = _constexpr_to_value(volatile)
+    pipeline = _constexpr_to_value(pipeline)
     return semantic.load(pointer, mask, other, boundary_check, padding_option, cache_modifier, eviction_policy,
-                         volatile, _builder)
+                         volatile, pipeline, _builder)
 
 
 @builtin

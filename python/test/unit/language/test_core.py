@@ -2666,7 +2666,6 @@ def test_arange(start, num_ctas, device):
 # test load
 # ---------------
 
-
 @pytest.mark.parametrize("dtype_str, size, size_diff", [(dtype_str, size, size_diff)
                                                         for dtype_str in torch_dtypes
                                                         for size in [128, 512]
