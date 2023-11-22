@@ -29,7 +29,7 @@ mlir::OpTrait::impl::verifySource1IsSharedEncoding(Operation *op) {
   if (failed(verifyAtLeastNOperands(op, 2)))
     return failure();
 
-  if (!mlir::triton::gpu::isSharedEncoding(op->getOperand(1)))
+  if (!mlir::triton::gpu::hasSharedEncoding(op->getOperand(1)))
     return op->emitOpError() << "requires operand 1 to be shared encoding";
 
   return success();

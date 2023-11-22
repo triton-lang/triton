@@ -39,7 +39,9 @@ def Source1IsSharedEncoding: NativeOpTrait<"Source1IsSharedEncoding">;
 def ResultsAreSharedEncoding: NativeOpTrait<"ResultsAreSharedEncoding">;
 
 class TTNG_Op<string mnemonic, list<Trait> traits = []> :
-    Op<TritonNvidiaGPU_Dialect, mnemonic, traits>;
+    Op<TritonNvidiaGPU_Dialect, mnemonic,
+       !listconcat(traits, [VerifyTensorLayoutsTrait])> {
+}
 
 // --------------------------------------------------------------------------------------------------
 // MBarrier related Ops:

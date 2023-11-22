@@ -145,7 +145,7 @@ private:
   llvm::MapVector<Value, LayoutInfo> layouts;
   // map of the values rewrite based on their encoding.
   DenseMap<std::pair<Value, Attribute>, Value> rewriteMapping;
-  std::vector<Operation *> opToDelete;
+  SetVector<Operation *> opToDelete;
   triton::FuncOp funcOp;
 };
 
@@ -441,8 +441,11 @@ Value LayoutPropagation::getValueAs(Value value, Attribute encoding) {
     // loop and the async.wait. This is a hack until we fix the IR
     // representation of async wait.
     if (Operation *op = rewrittenValue.getDefiningOp()) {
-      if (isa<triton::gpu::AsyncWaitOp>(op->getNextNode()))
-        rewriter.setInsertionPointAfter(op->getNextNode());
+      Operation *nextNode = op->getNextNode();
+      while (nextNode && opToDelete.count(nextNode) != 0)
+        nextNode = nextNode->getNextNode();
+      if (nextNode && isa<triton::gpu::AsyncWaitOp>(nextNode))
+        rewriter.setInsertionPointAfter(nextNode);
     }
     auto tmpType = RankedTensorType::get(tensorType.getShape(),
                                          tensorType.getElementType(), encoding);
@@ -651,7 +654,7 @@ void LayoutPropagation::rewriteReduceToScalar(Operation *reduceOp) {
 }
 
 Operation *LayoutPropagation::rewriteOp(Operation *op) {
-  opToDelete.push_back(op);
+  opToDelete.insert(op);
   if (auto forOp = dyn_cast<scf::ForOp>(op))
     return rewriteForOp(forOp);
   if (auto whileOp = dyn_cast<scf::WhileOp>(op))
@@ -824,8 +827,8 @@ static LogicalResult getRematerializableSlice(
 
 static void backwardRematerialization(ConvertLayoutOp convertOp) {
   // we don't want to rematerialize any conversion to/from shared
-  if (triton::gpu::isSharedEncoding(convertOp.getResult()) ||
-      triton::gpu::isSharedEncoding(convertOp.getOperand()))
+  if (triton::gpu::hasSharedEncoding(convertOp.getResult()) ||
+      triton::gpu::hasSharedEncoding(convertOp.getOperand()))
     return;
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristics to accommodate fused attention
@@ -850,8 +853,8 @@ static void backwardRematerialization(ConvertLayoutOp convertOp) {
 // of the convert.
 static void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp) {
   // we don't want to rematerialize any conversion to/from shared
-  if (triton::gpu::isSharedEncoding(convertOp.getResult()) ||
-      triton::gpu::isSharedEncoding(convertOp.getOperand()))
+  if (triton::gpu::hasSharedEncoding(convertOp.getResult()) ||
+      triton::gpu::hasSharedEncoding(convertOp.getOperand()))
     return;
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristics to accommodate fused attention

@@ -124,6 +124,13 @@ private:
     return res;
   }
 
+  template <typename T>
+  SmallVector<T> insertOne(const SmallVector<T> &vec, unsigned axis) const {
+    SmallVector<T> res(vec.begin(), vec.end());
+    res.insert(res.begin() + axis, 1);
+    return res;
+  }
+
   // Example:    order = [   0, 2, 1, 3], dim = 2
   //          resOrder = [2, 0, 3, 1, 4]
   SmallVector<unsigned> insertOrder(ArrayRef<unsigned> order,
@@ -169,63 +176,94 @@ public:
 
   void setEncoding(Attribute newLayout) { layout = newLayout; }
 
+  // Creates a tensor with the values [0, tensorShape[axis]) + offsets[axis]
+  // broadcasted to N dimensions along axis (i.e. so that
+  // result[.., <axis'th dim> i, ...] = offsets[axis] + i).
   Value getExpandedOffsetWithRange(OpBuilder &builder, const Location &loc,
-                                   unsigned i) {
-    if (cachedOffsetWithRange.count(i))
-      return cachedOffsetWithRange[i];
+                                   unsigned axis) {
+    if (cachedOffsetWithRange.count(axis))
+      return cachedOffsetWithRange[axis];
 
-    // Add range
-    auto indexI32RowType =
-        RankedTensorType::get({tensorShape[i]}, builder.getI32Type(), layout);
-    auto indexRowType =
-        RankedTensorType::get({tensorShape[i]}, builder.getI64Type(), layout);
-    Value splatOffset =
-        builder.create<tt::SplatOp>(loc, indexRowType, offsets[i]);
-    Value range = builder.create<tt::MakeRangeOp>(loc, indexI32RowType, 0,
-                                                  tensorShape[i]);
-    Value i64Range = builder.create<arith::ExtSIOp>(loc, indexRowType, range);
+    // Ultimately this will look like:
+    //
+    //   % base = create_range ... : tensor<N>
+    //   %a0 = expand_dims %base   : tensor<M, 1>
+    //   %a1 = broadcast %a0       : tensor<M, N>
+    //   %b0 = expand_dims %a1     : tensor<M, N, 1>
+    //   %b1 = broadcast %b1       : tensor<M, N, K>
+    //   ...
+    //
+    // The final result has layout this->layout.  When we subtract a dim, that's
+    // equivalent to taking a sliced layout, so e.g. the layout of %a0/%a1 is a
+    // slice of %b0/%b1's layout.
+    size_t rank = tensorShape.size();
+    auto ctx = loc.getContext();
 
-    // Expand dimensions
-    Value expandedResult =
-        builder.create<arith::AddIOp>(loc, splatOffset, i64Range);
-    for (int axis = 0; axis < tensorShape.size(); ++axis) {
-      if (axis == i)
-        continue;
+    // layouts[i] is the layout at the i'th step of the algorithm.  In the last
+    // step of the algorithm, we have this->layout.  Every step before that
+    // slices away one dimension, until we get to the first step, which has all
+    // but `axis` sliced away.  For example:
+    //   - Suppose rank = 4 and axis = 2.
+    //   - Then the layouts will be:
+    //
+    //     layouts[0] = slice(layouts[1], remove_dim=0), containing axes [2]
+    //     layouts[1] = slice(layouts[2], remove_dim=1), containing axes [0,2]
+    //     layouts[2] = slice(layouts[3], remove_dim=3), containing axes [0,1,2]
+    //     layouts[3] = layout, containing axes [0,1,2,3]
+    //
+    // The loop below implements this algorithm.
+    SmallVector<Attribute, 4> layouts;
+    layouts.resize(rank);
+    layouts[rank - 1] = layout;
+    size_t axisToRemove = rank - 1;
+    for (int64_t i = rank - 2; i >= 0; i--) {
+      if (axisToRemove == axis)
+        axisToRemove--;
 
-      if (layout) {
-        auto argEncoding = layout.cast<ttg::BlockedEncodingAttr>();
-        auto retSizePerThread = insertOne(argEncoding.getSizePerThread(), axis);
-        auto retThreadsPerWarp =
-            insertOne(argEncoding.getThreadsPerWarp(), axis);
-        auto retWarpsPerCTA = insertOne(argEncoding.getWarpsPerCTA(), axis);
-        auto retOrder = insertOrder(argEncoding.getOrder(), axis);
-
-        auto argCTALayout = argEncoding.getCTALayout();
-        auto retCTAsPerCGA = insertOne(argCTALayout.getCTAsPerCGA(), axis);
-        auto retCTASplitNum = insertOne(argCTALayout.getCTASplitNum(), axis);
-        auto retCTAOrder = insertOrder(argCTALayout.getCTAOrder(), axis);
-
-        auto retCTALayout = ttg::CTALayoutAttr::get(
-            loc.getContext(), retCTAsPerCGA, retCTASplitNum, retCTAOrder);
-
-        auto retEncoding = ttg::BlockedEncodingAttr::get(
-            loc.getContext(), retSizePerThread, retThreadsPerWarp,
-            retWarpsPerCTA, retOrder, retCTALayout);
-
-        auto newArgEncoding =
-            ttg::SliceEncodingAttr::get(loc.getContext(), axis, retEncoding);
-        auto newArgType = RankedTensorType::get(indexRowType.getShape(),
-                                                indexRowType.getElementType(),
-                                                newArgEncoding);
-        Value newArg = builder.create<ttg::ConvertLayoutOp>(loc, newArgType,
-                                                            expandedResult);
-        expandedResult = builder.create<tt::ExpandDimsOp>(loc, newArg, axis);
-      } else
-        expandedResult =
-            builder.create<tt::ExpandDimsOp>(loc, expandedResult, axis);
+      layouts[i] =
+          ttg::SliceEncodingAttr::get(ctx, axisToRemove, layouts[i + 1]);
+      axisToRemove--;
     }
 
-    return cachedOffsetWithRange[i] = expandedResult;
+    // Now that we know the layout at each step, we can do the multi-step
+    // broadcast.  Start with the base case.
+    auto baseTy = RankedTensorType::get({tensorShape[axis]},
+                                        builder.getI64Type(), layouts[0]);
+    auto baseTyI32 = RankedTensorType::get({tensorShape[axis]},
+                                           builder.getI32Type(), layouts[0]);
+    Value base = builder.create<arith::AddIOp>(
+        loc,
+        // tt::MakeRangeOp can only return i32, so we have to extend it to i64.
+        builder.create<arith::ExtSIOp>(
+            loc, baseTy,
+            builder.create<tt::MakeRangeOp>(loc, baseTyI32, 0,
+                                            tensorShape[axis])),
+        builder.create<tt::SplatOp>(loc, baseTy, offsets[axis]));
+
+    // Now incrementally build up the full result.
+    Value curTensor = base;
+    SmallVector<int64_t, 4> curShape = {tensorShape[axis]};
+    size_t curAxis = 0;
+    for (size_t i = 1; i < rank; i++) {
+      if (curAxis == axis)
+        curAxis++;
+
+      curShape.insert(curShape.begin() + curAxis, 1);
+      Value expanded =
+          builder.create<tt::ExpandDimsOp>(loc, curTensor, curAxis);
+
+      curShape[curAxis] = tensorShape[curAxis];
+      Value broadcasted = builder.create<tt::BroadcastOp>(
+          loc,
+          RankedTensorType::get(curShape, builder.getI64Type(), layouts[i]),
+          expanded);
+
+      curTensor = broadcasted;
+      curAxis++;
+    }
+
+    cachedOffsetWithRange[axis] = curTensor;
+    return curTensor;
   }
 
   Value generatePtr(OpBuilder &builder, const Location &loc) {

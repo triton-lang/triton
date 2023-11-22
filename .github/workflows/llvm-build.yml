@@ -20,6 +20,7 @@ jobs:
   build:
     name: Build on ${{ matrix.config.runner }}
     runs-on: ${{ matrix.config.runs_on }}
+    timeout-minutes: 240  # 4 hours
 
     strategy:
       fail-fast: true
@@ -132,6 +133,9 @@ jobs:
     - name: Configure, Build, Test, and Install LLVM (CentOS)
       if: matrix.config.target-os == 'centos'
       run: |
+        # if this step crashes, it can leave behind a stale docker container
+        docker container prune -f
+
         docker build --tag llvm-build --build-arg llvm_dir=llvm-project \
           -f llvm-build/.github/workflows/llvm-build/Dockerfile .
 

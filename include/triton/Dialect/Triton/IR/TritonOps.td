@@ -22,7 +22,8 @@ include "mlir/Interfaces/CallInterfaces.td" // CallOpInterface
 // Op Base
 //
 class TT_Op<string mnemonic, list<Trait> traits = []> :
-    Op<Triton_Dialect, mnemonic, !listconcat(traits, [TensorSizeTrait])> {
+    Op<Triton_Dialect, mnemonic,
+       !listconcat(traits, [TensorSizeTrait, VerifyTensorLayoutsTrait])> {
 }
 
 //
@@ -488,7 +489,6 @@ def TT_ExternElementwiseOp : TT_Op<"extern_elementwise", [Elementwise,
 //
 // Make Range Op
 //
-// TODO: should have ConstantLike as Trait
 def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
     let summary = "make range";
 
@@ -498,6 +498,10 @@ def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
         Values span from $start to $end (exclusive), with step = 1
     }];
 
+    // WARNING: MLIR generates getStart()/getEnd() functions which return
+    // uint32_t, even though these arguments are to be interpreted as *signed*
+    // int32 values.  If this matters, use get{Start,End}Attr().getInt(), which
+    // return int64_t.
     let arguments = (ins I32Attr:$start, I32Attr:$end);
 
     let results = (outs TT_IntTensor:$result);
@@ -505,6 +509,7 @@ def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
     let assemblyFormat = "attr-dict `:` type($result)";
 
     let hasFolder = 1;
+    let hasVerifier = 1;
 }
 
 //
