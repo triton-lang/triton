@@ -136,20 +136,38 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
   }
 };
 
-struct ViewOpConversion : public ConvertTritonGPUOpToLLVMPattern<ViewOp> {
-  using OpAdaptor = typename ViewOp::Adaptor;
-  explicit ViewOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+struct ReshapeOpConversion : public ConvertTritonGPUOpToLLVMPattern<ReshapeOp> {
+  using OpAdaptor = typename ReshapeOp::Adaptor;
+  explicit ReshapeOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
 
-                            PatternBenefit benefit = 1)
-      : ConvertTritonGPUOpToLLVMPattern<ViewOp>(typeConverter, benefit) {}
+                               PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern<ReshapeOp>(typeConverter, benefit) {}
 
   LogicalResult
-  matchAndRewrite(ViewOp op, OpAdaptor adaptor,
+  matchAndRewrite(ReshapeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     assert(!triton::gpu::isExpensiveView(op.getSrc().getType(), op.getType()) &&
            "expensive view not supported");
     auto resultTy = op.getType().template cast<RankedTensorType>();
+    auto srcTy = op.getSrc().getType().template cast<RankedTensorType>();
+    if (!op.getAllowReorder()) {
+      // Only support trivial block layouts for now.
+      auto mod = op->getParentOfType<ModuleOp>();
+      int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+      int threadsPerWarp =
+          triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+      int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
+      assert(resultTy.getEncoding() == triton::gpu::getDefaultBlockedEncoding(
+                                           op.getContext(), resultTy.getShape(),
+                                           numWarps, threadsPerWarp, numCTAs) &&
+             "ReshapeOp lowering only support block encoding right now.");
+      assert(srcTy.getEncoding() == triton::gpu::getDefaultBlockedEncoding(
+                                        op.getContext(), srcTy.getShape(),
+                                        numWarps, threadsPerWarp, numCTAs) &&
+             "ReshapeOp lowering only support block encoding right now.");
+    }
+
     auto vals = this->getTypeConverter()->unpackLLElements(
         loc, adaptor.getSrc(), rewriter, op.getOperand().getType());
     Value ret =
@@ -225,37 +243,15 @@ struct TransOpConversion
   }
 };
 
-struct ReshapeOpConversion : public ConvertTritonGPUOpToLLVMPattern<ReshapeOp> {
-  using OpAdaptor = typename ReshapeOp::Adaptor;
-  explicit ReshapeOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
-
-                               PatternBenefit benefit = 1)
-      : ConvertTritonGPUOpToLLVMPattern<ReshapeOp>(typeConverter, benefit) {}
-
-  LogicalResult
-  matchAndRewrite(ReshapeOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    auto resultTy = op.getType().template cast<RankedTensorType>();
-    auto vals = this->getTypeConverter()->unpackLLElements(
-        loc, adaptor.getSrc(), rewriter, op.getOperand().getType());
-    Value ret =
-        this->getTypeConverter()->packLLElements(loc, vals, rewriter, resultTy);
-    rewriter.replaceOp(op, ret);
-    return success();
-  }
-};
-
 void populateViewOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns, int numWarps,
                                   ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                   ModuleAllocation &allocation,
                                   PatternBenefit benefit) {
-  patterns.add<ViewOpConversion>(typeConverter, benefit);
+  patterns.add<ReshapeOpConversion>(typeConverter, benefit);
   patterns.add<ExpandDimsOpConversion>(typeConverter, benefit);
   patterns.add<SplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
   patterns.add<CatOpConversion>(typeConverter, benefit);
   patterns.add<TransOpConversion>(typeConverter, benefit);
-  patterns.add<ReshapeOpConversion>(typeConverter, benefit);
 }

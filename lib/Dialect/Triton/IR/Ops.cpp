@@ -734,7 +734,7 @@ OpFoldResult ExpandDimsOp::fold(FoldAdaptor adaptor) {
   return foldViewLikeOp(*this, adaptor.getSrc());
 }
 
-//-- ViewOp --
+//-- ReshapeOp --
 template <typename OpType>
 LogicalResult canonicalizeViewOrBroadcast(OpType op,
                                           PatternRewriter &rewriter) {
@@ -745,8 +745,9 @@ LogicalResult canonicalizeViewOrBroadcast(OpType op,
 
   // view(view) -> view
   if (auto parent_view = dyn_cast<OpType>(definingOp)) {
-    rewriter.replaceOpWithNewOp<OpType>(op, op.getType(),
-                                        parent_view.getOperand());
+    rewriter.replaceOpWithNewOp<OpType>(op, TypeRange({op.getType()}),
+                                        parent_view->getOperands(),
+                                        parent_view->getAttrs());
     return mlir::success();
   }
 
@@ -759,17 +760,30 @@ LogicalResult canonicalizeViewOrBroadcast(OpType op,
 
   return mlir::failure();
 }
-LogicalResult ViewOp::canonicalize(ViewOp op, PatternRewriter &rewriter) {
+
+LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
+  if (!op.getAllowReorder())
+    return failure();
   return canonicalizeViewOrBroadcast(op, rewriter);
 }
 
-OpFoldResult ViewOp::fold(FoldAdaptor adaptor) {
+OpFoldResult ReshapeOp::fold(FoldAdaptor adaptor) {
   if (getType() == getOperand().getType()) {
     // no-op
     return getOperand();
   }
 
   return foldViewLikeOp(*this, adaptor.getSrc());
+}
+
+mlir::LogicalResult mlir::triton::ReshapeOp::verify() {
+  auto dstType = getType().cast<RankedTensorType>();
+  auto srcType = getSrc().getType().cast<RankedTensorType>();
+  if (dstType.getNumElements() != srcType.getNumElements()) {
+    return emitError(
+        "number of src and dst elements of reshape must be the same");
+  }
+  return mlir::success();
 }
 
 //-- BroadcastOp --
@@ -815,17 +829,6 @@ void MakeTensorPtrOp::build(::mlir::OpBuilder &builder,
 
   return build(builder, state, result, base, shape, strides, offsets,
                builder.getDenseI32ArrayAttr(order));
-}
-
-//-- ReshapeOp --
-mlir::LogicalResult mlir::triton::ReshapeOp::verify() {
-  auto dstType = getType().cast<RankedTensorType>();
-  auto srcType = getSrc().getType().cast<RankedTensorType>();
-  if (dstType.getNumElements() != srcType.getNumElements()) {
-    return emitError(
-        "number of src and dst elements of reshape must be the same");
-  }
-  return mlir::success();
 }
 
 // The following ops, including `call`, `func`, and `return` are copied and

@@ -2,6 +2,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <algorithm>
 #include <numeric>
 
@@ -24,18 +25,10 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
     // TODO: check for layout encodings more specifically
     if (tensorType.getEncoding())
       return tensorType;
-    // pessimistic values for attributes:
-    //   - 1 element per thread
-    //   - order = arange(rank)
     ArrayRef<int64_t> shape = tensorType.getShape();
-    int rank = shape.size();
-    llvm::SmallVector<unsigned> order(rank);
-    std::iota(order.begin(), order.end(), 0);
-    std::reverse(order.begin(), order.end());
-    llvm::SmallVector<unsigned> sizePerThread(rank, 1);
-    Attribute encoding = triton::gpu::BlockedEncodingAttr::get(
-        this->context, shape, sizePerThread, order, this->numWarps,
-        this->threadsPerWarp, this->numCTAs);
+    triton::gpu::BlockedEncodingAttr encoding =
+        getDefaultBlockedEncoding(this->context, shape, this->numWarps,
+                                  this->threadsPerWarp, this->numCTAs);
     return RankedTensorType::get(shape, tensorType.getElementType(), encoding);
   });
 

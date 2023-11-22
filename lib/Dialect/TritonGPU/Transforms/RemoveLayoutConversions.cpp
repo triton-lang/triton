@@ -197,7 +197,7 @@ static bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
 static bool isLayoutAnchor(Operation *op) {
   if (isa<triton::LoadOp, triton::StoreOp>(op))
     return isExpensiveLoadOrStore(op);
-  if (isa<triton::ViewOp, triton::DotOp, triton::AtomicRMWOp,
+  if (isa<triton::ReshapeOp, triton::DotOp, triton::AtomicRMWOp,
           triton::AtomicCASOp>(op))
     return true;
   return false;
@@ -707,7 +707,7 @@ static bool canBeRemat(Operation *op) {
     return !isExpensiveLoadOrStore(op);
   if (isa<tensor::ExtractSliceOp, triton::gpu::AllocTensorOp,
           triton::gpu::InsertSliceAsyncOp, triton::AtomicRMWOp,
-          triton::AtomicCASOp, triton::DotOp, triton::ReshapeOp>(op))
+          triton::AtomicCASOp, triton::DotOp>(op))
     return false;
   if (isa<scf::IfOp, scf::WhileOp, scf::ConditionOp>(op))
     return false;

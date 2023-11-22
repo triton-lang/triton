@@ -512,12 +512,12 @@ def view(input: tl.tensor, dst_shape: List[int], builder: ir.builder) -> tl.tens
     if input.type.numel != numel:
         raise ValueError("cannot view block of different shape")
     ret_ty = tl.block_type(input.type.scalar, dst_shape)
-    return tl.tensor(builder.create_view(input.handle, dst_shape), ret_ty)
+    return tl.tensor(builder.create_reshape(input.handle, dst_shape, True), ret_ty)
 
 
 def reshape(input: tl.tensor, dst_shape: List[int], builder: ir.builder) -> tl.tensor:
     ret_ty = tl.block_type(input.type.scalar, dst_shape)
-    return tl.tensor(builder.create_reshape(input.handle, dst_shape), ret_ty)
+    return tl.tensor(builder.create_reshape(input.handle, dst_shape, False), ret_ty)
 
 
 def expand_dims(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:

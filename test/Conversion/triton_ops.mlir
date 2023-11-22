@@ -213,7 +213,7 @@ tt.func @inline_asm(%0: tensor<512xi8>) {
 
 // CHECK-LABEL: reshape
 tt.func @reshape(%0: tensor<512xi32>) {
-  // CHECK: tt.reshape %{{.+}} : tensor<512xi32> -> tensor<16x32xi32>
-  %1 = tt.reshape %0 : tensor<512xi32> -> tensor<16x32xi32>
+  // CHECK: tt.reshape %{{.+}} {allow_reorder = false} : tensor<512xi32> -> tensor<16x32xi32>
+  %1 = tt.reshape %0 {allow_reorder = false} : tensor<512xi32> -> tensor<16x32xi32>
   tt.return
 }
