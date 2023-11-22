@@ -38,8 +38,8 @@ def get_current_device():
         import paddle
         device_num = paddle.device.get_device()
         try:
-            second_part = device_num.split(':')[1]
-            return (int)(second_part)
+            gpu_id = device_num.split(':')[1]
+            return (int)(gpu_id)
         except IndexError:
             print("GET Device String does not contain a second part after ':', using 0 as default")
             return 0
@@ -52,6 +52,7 @@ def set_current_device(idx):
     if os.environ.get("TRITON_PADDLE_SUPPORT", None) == "TRUE":
         import paddle
         paddle.device.set_device(f'gpu:{idx}')
+        return 
     import torch
 
     torch.cuda.set_device(idx)
