@@ -12,7 +12,7 @@ import setuptools
 
 # TODO: is_hip shouldn't be here
 def is_hip():
-    if os.environ.get("TRITON_PADDLE_SUPPORT", None) == "TRUE":
+    if os.environ.get("TRITON_USE_PADDLE", None) == "TRUE":
         return False
 
 

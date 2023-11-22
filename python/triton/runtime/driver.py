@@ -178,7 +178,7 @@ class LazyProxy:
 
 
 def initialize_driver():
-    if os.environ.get("TRITON_PADDLE_SUPPORT", None) == "TRUE":
+    if os.environ.get("TRITON_USE_PADDLE", None) == "TRUE":
         import paddle
         if paddle.device.is_compiled_with_cuda():
             return CudaDriver()

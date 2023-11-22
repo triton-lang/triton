@@ -18,9 +18,8 @@ from .interpreter import InterpretedFunction
 def get_cuda_stream(idx=None):
     if idx is None:
         idx = get_current_device()
-    if os.environ.get("TRITON_PADDLE_SUPPORT", None) == "TRUE":
+    if os.environ.get("TRITON_USE_PADDLE", None) == "TRUE":
         import paddle
-        #a = paddle.device.cuda.Stream(paddle.CUDAPlace(idx)).cuda_stream
         stream = paddle.device.cuda.current_stream(idx).cuda_stream
         return stream
     try:
@@ -34,7 +33,7 @@ def get_cuda_stream(idx=None):
 
 
 def get_current_device():
-    if os.environ.get("TRITON_PADDLE_SUPPORT", None) == "TRUE":
+    if os.environ.get("TRITON_USE_PADDLE", None) == "TRUE":
         import paddle
         device_num = paddle.device.get_device()
         try:
@@ -49,7 +48,7 @@ def get_current_device():
 
 
 def set_current_device(idx):
-    if os.environ.get("TRITON_PADDLE_SUPPORT", None) == "TRUE":
+    if os.environ.get("TRITON_USE_PADDLE", None) == "TRUE":
         import paddle
         paddle.device.set_device(f'gpu:{idx}')
         return 
@@ -59,7 +58,7 @@ def set_current_device(idx):
 
 
 def get_device_capability(idx):
-    if os.environ.get("TRITON_PADDLE_SUPPORT", None) == "TRUE":
+    if os.environ.get("TRITON_USE_PADDLE", None) == "TRUE":
         import paddle
         return paddle.device.cuda.get_device_capability(idx)
     import torch
