@@ -503,21 +503,18 @@ def splat(value: tl.tensor, shape: List[int], builder: ir.builder) -> tl.tensor:
 
 
 def view(input: tl.tensor, dst_shape: List[int], builder: ir.builder) -> tl.tensor:
-    # TODO: disable when TritonToTritonGPU handles views properly
-
-    # assert len(input.shape) == len(dst_shape)
     numel = 1
     for s in dst_shape:
         numel *= s
     if input.type.numel != numel:
         raise ValueError("cannot view block of different shape")
     ret_ty = tl.block_type(input.type.scalar, dst_shape)
-    return tl.tensor(builder.create_view(input.handle, dst_shape), ret_ty)
+    return tl.tensor(builder.create_reshape(input.handle, dst_shape, True), ret_ty)
 
 
 def reshape(input: tl.tensor, dst_shape: List[int], builder: ir.builder) -> tl.tensor:
-    raise ValueError("`reshape` is not supported yet. Please use `view` instead if applicable. "
-                     "Note that view may reorder elements in an implementation- and context- dependent way.")
+    ret_ty = tl.block_type(input.type.scalar, dst_shape)
+    return tl.tensor(builder.create_reshape(input.handle, dst_shape, False), ret_ty)
 
 
 def expand_dims(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:

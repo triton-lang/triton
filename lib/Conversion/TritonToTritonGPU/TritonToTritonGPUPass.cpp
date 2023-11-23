@@ -462,7 +462,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
                    // layout
       GenericOpPattern<triton::AdvanceOp>,
       GenericOpPattern<triton::MakeTensorPtrOp>,
-      GenericOpPattern<triton::ViewOp>, GenericOpPattern<triton::BitcastOp>,
+      GenericOpPattern<triton::ReshapeOp>, GenericOpPattern<triton::BitcastOp>,
       GenericOpPattern<triton::FpToFpOp>, GenericOpPattern<triton::IntToPtrOp>,
       GenericOpPattern<triton::PtrToIntOp>, GenericOpPattern<triton::SplatOp>,
       TritonBroadcastPattern, GenericOpPattern<triton::AddPtrOp>,
