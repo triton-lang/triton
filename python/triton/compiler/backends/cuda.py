@@ -48,7 +48,8 @@ def optimize_ttgir(mod, num_stages, num_warps, num_ctas, capability, cluster_inf
     pm.add_tritongpu_coalesce_pass()
     # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
     pm.add_plan_cta_pass(cluster_info)
-    pm.add_tritongpu_rewrite_tensor_pointer_pass(capability)
+    if capability // 10 < 9:
+        pm.add_tritongpu_rewrite_tensor_pointer_pass()
     pm.add_plan_cta_pass(cluster_info)
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_accelerate_matmul_pass(capability)
