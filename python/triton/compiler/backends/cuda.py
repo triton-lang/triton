@@ -158,7 +158,7 @@ class CUDAOptions:
     num_warps: int = 4
     num_ctas: int = 1
     num_stages: int = 3
-    cluster_dims: list = None
+    cluster_dims: tuple = (1, 1, 1)
     enable_warp_specialization: bool = False
     enable_persistent: bool = False
     optimize_epilogue: bool = False
