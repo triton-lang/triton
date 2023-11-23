@@ -196,9 +196,7 @@ private:
   DenseMap<Value, RewritedInfo> rewritedInfo;
 
 public:
-  explicit RewriteTensorPointerPass(int computeCapability) {
-    this->computeCapability = computeCapability;
-  }
+  explicit RewriteTensorPointerPass() {}
 
   static bool needRewrite(Operation *op) {
     return std::any_of(op->getOperands().begin(), op->getOperands().end(),
@@ -473,10 +471,6 @@ public:
   }
 
   void runOnOperation() override {
-    // Only rewrite if the hardware does not support
-    if (computeCapability >= 90)
-      return;
-
     // NOTES(Chenggang): we don't use `ConversionPatternRewriter`, because
     // MLIR does not support one-multiple value mapping. For example, if we use
     // `ConversionPatternRewriter`, we can not make a type converter, which
@@ -502,7 +496,6 @@ public:
   }
 };
 
-std::unique_ptr<Pass>
-triton::createRewriteTensorPointerPass(int computeCapability) {
-  return std::make_unique<RewriteTensorPointerPass>(computeCapability);
+std::unique_ptr<Pass> triton::createRewriteTensorPointerPass() {
+  return std::make_unique<RewriteTensorPointerPass>();
 }
