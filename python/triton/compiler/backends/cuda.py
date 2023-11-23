@@ -164,6 +164,7 @@ class CUDAOptions:
     enable_fp_fusion: bool = True
     extern_libs = None
     allow_fp8e4nv: bool = False
+    rewrite_tensor_pointer: bool = True
     max_num_imprecise_acc: bool = None
 
     debug: bool = False

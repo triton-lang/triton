@@ -34,11 +34,12 @@ class LazyDict(dict):
 # ------------------------------------------------------------------------------
 
 
-def optimize_ttir(mod, capability):
+def optimize_ttir(mod, options):
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_inliner_pass()
-    pm.add_rewrite_tensor_pointer_pass(capability)
+    if options.rewrite_tensor_pointer:
+        pm.add_rewrite_tensor_pointer_pass()
     pm.add_triton_combine_pass()
     pm.add_canonicalizer_pass()
     pm.add_reorder_broadcast_pass()
@@ -98,22 +99,6 @@ else:
     ttgir_num_warps_pattern = r'"triton_gpu.num-warps"\s?=\s?(\d+)\s?:'
 
 
-def _get_jsonable_constants(constants):
-
-    def _is_jsonable(x):
-        try:
-            json.dumps(x)
-            return True
-        except (TypeError, OverflowError):
-            return False
-
-    serialized_constants = {}
-    for constant in constants:
-        if _is_jsonable(constants[constant]):
-            serialized_constants[constant] = constants[constant]
-    return serialized_constants
-
-
 def parse_mlir_module(path, context):
     module = ir.parse_mlir_module(path, context)
     # module takes ownership of the context
@@ -148,13 +133,12 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
 
     def create_ttir(src):
         ttir = ast_to_ttir(src, signature, config, constants, options=options)
-        return optimize_ttir(ttir, capability=device_type[1])
+        return optimize_ttir(ttir, options=options)
 
     stages["ttir"] = (lambda path: parse_mlir_module(path, context), create_ttir)
     backend.add_stages(extern_libs, stages, options)
 
     # find out the signature of the function
-    name = src.__name__
     if isinstance(signature, str):
         signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
 
@@ -162,10 +146,10 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
     hash = make_hash(src, get_env_vars(), backend, config=config, constants=constants, signature=signature,
                      options=options)
     fn_cache_manager = get_cache_manager(hash)
-    # determine name and extension type of provided function
-    name, ext = src.__name__, "ttir"
+
     # load metadata if any
     # The group is addressed by the metadata
+    name, ext = src.__name__, "ttir"
     metadata_filename = f"{name}.json"
     metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
     metadata_path = metadata_group.get(metadata_filename)
@@ -177,7 +161,7 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
             if 'tensormaps_info' in metadata:
                 metadata['tensormaps_info'] = [InfoFromBackendForTensorMap(e) for e in metadata['tensormaps_info']]
     else:
-        metadata = {"constants": _get_jsonable_constants(constants)}
+        metadata = {"constants": constants}
         metadata.update(options.__dict__)
         metadata.update(get_env_vars())
     metadata["device_type"] = device_type
