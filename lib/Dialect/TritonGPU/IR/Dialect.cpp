@@ -657,6 +657,23 @@ BlockedEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
   return success();
 }
 
+// 1 element per thread
+// order = reverse(arange(rank))
+triton::gpu::BlockedEncodingAttr
+getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,
+                          int numWarps, int threadsPerWarp, int numCTAs) {
+  int rank = shape.size();
+  llvm::SmallVector<unsigned> order(rank);
+  std::iota(order.begin(), order.end(), 0);
+  std::reverse(order.begin(), order.end());
+  llvm::SmallVector<unsigned> sizePerThread(rank, 1);
+  triton::gpu::BlockedEncodingAttr encoding =
+      triton::gpu::BlockedEncodingAttr::get(context, shape, sizePerThread,
+                                            order, numWarps, threadsPerWarp,
+                                            numCTAs);
+  return encoding;
+}
+
 } // namespace gpu
 } // namespace triton
 } // namespace mlir
@@ -1741,13 +1758,14 @@ struct TritonGPUInferLayoutInterface
 //===----------------------------------------------------------------------===//
 
 struct CanonicalizeConvertFromView
-    : public mlir::OpRewritePattern<triton::ViewOp> {
+    : public mlir::OpRewritePattern<triton::ReshapeOp> {
 
   CanonicalizeConvertFromView(MLIRContext *context)
-      : OpRewritePattern<triton::ViewOp>(context, 1) {}
+      : OpRewritePattern<triton::ReshapeOp>(context, 1) {}
 
   mlir::LogicalResult
-  matchAndRewrite(triton::ViewOp op, PatternRewriter &rewriter) const override {
+  matchAndRewrite(triton::ReshapeOp op,
+                  PatternRewriter &rewriter) const override {
     Operation *arg = op->getOperand(0).getDefiningOp();
     if (!arg)
       return mlir::failure();
@@ -1756,9 +1774,12 @@ struct CanonicalizeConvertFromView
       return failure();
     if (isExpensiveView(convert.getOperand().getType(), op.getType()))
       return failure();
-    // view(convert) -> view
-    rewriter.replaceOpWithNewOp<triton::ViewOp>(op, op->getResult(0).getType(),
-                                                convert.getOperand());
+    if (!op.getAllowReorder())
+      return failure();
+    // reshape(cvt)->reshape
+    rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
+        op, op->getResult(0).getType(), convert.getOperand(),
+        op.getAllowReorder());
     return mlir::success();
   }
 };
@@ -1802,9 +1823,10 @@ struct CanonicalizeConvertFromConvert
     // block argument
     if (!arg)
       return mlir::failure();
-    // cvt(view) -> view
-    if (auto view = dyn_cast<triton::ViewOp>(arg)) {
-      if (isExpensiveView(view.getOperand().getType(), op.getType()))
+    // cvt(reshape) -> reshape
+    if (auto reshape = dyn_cast<triton::ReshapeOp>(arg)) {
+      if (!reshape.getAllowReorder() ||
+          isExpensiveView(reshape.getOperand().getType(), op.getType()))
         return failure();
       // In TritonGPUToLLVM phase, ViewOp is converted to unpacking and packing
       // operations, which requires the element type to match between unpacking
@@ -1815,8 +1837,9 @@ struct CanonicalizeConvertFromConvert
       if (hasDotOperandEncoding(op->getOperand(0)) ||
           hasDotOperandEncoding(op->getResult(0)))
         return failure();
-      rewriter.replaceOpWithNewOp<triton::ViewOp>(
-          op, op->getResult(0).getType(), view.getResult());
+      rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
+          op, op->getResult(0).getType(), reshape.getResult(),
+          reshape.getAllowReorder());
       return mlir::success();
     }
     // cvt(cat) -> cat
