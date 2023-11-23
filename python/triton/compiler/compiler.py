@@ -145,7 +145,6 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
     # build compilation stages
     context = ir.context()
     stages = dict()
-    stages["ast"] = (lambda path: src, None)
 
     def create_ttir(src):
         ttir = ast_to_ttir(src, signature, config, constants, options=options)
@@ -164,14 +163,14 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
                      options=options)
     fn_cache_manager = get_cache_manager(hash)
     # determine name and extension type of provided function
-    name, ext = src.__name__, "ast"
+    name, ext = src.__name__, "ttir"
     # load metadata if any
-    metadata = None
-    metadata_filename = f"{name}.json"
     # The group is addressed by the metadata
+    metadata_filename = f"{name}.json"
     metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
     metadata_path = metadata_group.get(metadata_filename)
     # initialize metadata
+    metadata = None
     if metadata_path is not None:
         with open(metadata_path) as f:
             metadata = json.load(f)
@@ -187,13 +186,10 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
     first_stage = list(stages.keys()).index(ext)
     asm = LazyDict()
     module = src
-    for ir_name, (parse, compile_kernel) in list(stages.items())[first_stage:]:
+    for ir_name, (parse_ir, compile_ir) in list(stages.items())[first_stage:]:
         ir_filename = f"{name}.{ir_name}"
         path = metadata_group.get(ir_filename)
-        if ir_name == ext:
-            next_module = parse(src if name == ext else path)
-            continue
-        next_module = compile_kernel(module)
+        next_module = compile_ir(module) if path is None else parse_ir(path)
         metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
         backend.add_meta_info(ir_name, module, next_module, metadata, asm)
         module = next_module
