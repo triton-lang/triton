@@ -18,6 +18,7 @@ from ..runtime.driver import driver
 import torch
 from dataclasses import dataclass
 from .code_generator import ast_to_ttir
+from pathlib import Path
 
 
 class LazyDict(dict):
@@ -38,8 +39,6 @@ def optimize_ttir(mod, options):
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_inliner_pass()
-    if options.rewrite_tensor_pointer:
-        pm.add_rewrite_tensor_pointer_pass()
     pm.add_triton_combine_pass()
     pm.add_canonicalizer_pass()
     pm.add_reorder_broadcast_pass()
@@ -137,6 +136,8 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
     metadata_filename = f"{name}.json"
     metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
     metadata_path = metadata_group.get(metadata_filename)
+    if metadata_path is not None:
+        pass
 
     # build compilation stages
     context = ir.context()
@@ -185,7 +186,7 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
                                                                  binary=False)
     fn_cache_manager.put_group(metadata_filename, metadata_group)
     # return handle to compiled kernel
-    return CompiledKernel(src, so_path, metadata, asm)
+    return CompiledKernel(so_path, metadata_group.get(metadata_filename))
 
 
 class RuntimeCudaBackend:
@@ -219,33 +220,34 @@ class CompiledKernel:
     launch_exit_hook = None
     tensormap_manager = TensorMapManager()
 
-    def __init__(self, fn, so_path, metadata, asm):
+    @staticmethod
+    def read_text_or_bytes(path):
+        try:
+            return path.read_text()
+        except UnicodeDecodeError:
+            return path.read_bytes()
+
+    def __init__(self, so_path, metadata_path):
+        metadata_path = Path(metadata_path)
+        self.driver = RuntimeCudaBackend()
         # initialize launcher
         import importlib.util
         spec = importlib.util.spec_from_file_location("__triton_launcher", so_path)
         mod = importlib.util.module_from_spec(spec)
-        self.fn = fn
         spec.loader.exec_module(mod)
         self.c_wrapper = getattr(mod, "launch")
         # initialize metadata
-        self.shared = metadata["shared"]
-        self.num_warps = metadata["num_warps"]
-        self.num_ctas = metadata["num_ctas"]
-        self.num_stages = metadata["num_stages"]
-        self.clusterDims = metadata["clusterDims"]
-        if "tensormaps_info" in metadata:
-            self.tensormaps_info = metadata["tensormaps_info"]
-        self.constants = metadata["constants"]
-        self.device_type = metadata["device_type"]
-        # initialize asm dict
-        self.asm = asm
+        self.metadata = json.loads(metadata_path.read_text())
+        for key, val in self.metadata.items():
+            setattr(self, key, val)
+        # stores the text of each level of IR that was generated during compilation
+        asm_files = [file for file in metadata_path.parent.glob(f'{metadata_path.stem}.*') if file.suffix != '.json']
+        self.asm = {file.suffix[1:]: self.read_text_or_bytes(file) for file in asm_files}
         # binaries are lazily initialized
         # because it involves doing runtime things
         # (e.g., checking amount of shared memory on current device)
-        self.metadata = metadata
         self.cu_module = None
         self.cu_function = None
-        self.driver = RuntimeCudaBackend()
 
     def _init_handles(self):
         if self.cu_module is not None:
@@ -288,8 +290,8 @@ class CompiledKernel:
             args_expand = self.assemble_tensormap_to_arg(args)
             if stream is None:
                 stream = self.driver.get_stream(None)
-            self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.num_ctas, self.clusterDims[0],
-                           self.clusterDims[1], self.clusterDims[2], self.shared, stream, self.cu_function,
+            self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.num_ctas, self.cluster_dims[0],
+                           self.cluster_dims[1], self.cluster_dims[2], self.shared, stream, self.cu_function,
                            CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args_expand)
 
         return runner

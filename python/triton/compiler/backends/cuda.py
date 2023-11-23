@@ -165,7 +165,6 @@ class CUDAOptions:
     enable_fp_fusion: bool = True
     extern_libs = None
     allow_fp8e4nv: bool = False
-    rewrite_tensor_pointer: bool = True
     max_num_imprecise_acc: bool = None
 
     debug: bool = False
@@ -218,7 +217,7 @@ class CUDABackend(BaseBackend):
 
         stages["ptx"] = (lambda path: Path(path).read_text(), create_ptx)
 
-        # PTx -> CUBIN stage
+        # PTX -> CUBIN stage
         def create_cubin(src):
             return ptx_to_cubin(src, self.capability, opt.enable_fp_fusion)
 
@@ -243,8 +242,8 @@ class CUDABackend(BaseBackend):
     def make_launcher_stub(self, fn, configs, metadata, name, signature, constants):
         ids_of_folded_args = tuple([int(k)
                                     for k in configs[0].ids_of_folded_args]) if isinstance(fn, JITFunction) else ()
-        if "clusterDims" not in metadata:
-            metadata["clusterDims"] = [1, 1, 1]
+        if "cluster_dims" not in metadata:
+            metadata["cluster_dims"] = [1, 1, 1]
         if len(self.tma_infos) > 0:
             metadata["tensormaps_info"] = parse_tma_info(self.tma_infos, ids_of_folded_args)
         # set constant
