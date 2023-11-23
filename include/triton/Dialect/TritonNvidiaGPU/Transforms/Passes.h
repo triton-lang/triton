@@ -70,8 +70,7 @@ createTritonNvidiaGPUWSMaterializationPass(int computeCapability = 90);
 std::unique_ptr<Pass>
 createTritonNvidiaGPUFenceInsertionPass(int computeCapability = 90);
 
-std::unique_ptr<Pass>
-createTritonGPURewriteTensorPointerPass(int computeCapability = 80);
+std::unique_ptr<Pass> createTritonGPURewriteTensorPointerPass();
 
 std::unique_ptr<Pass> createTritonNvidiaGPUWSFixupMissingAttrs();
 

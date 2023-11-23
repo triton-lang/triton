@@ -120,12 +120,23 @@ class InstanceDescriptor:
 
 def compile(src, device_type=("cuda", None), signature=None, config=InstanceDescriptor(), constants=None,
             extern_libs=None, **kwargs):
-    # Get device type to decide which backend should be used
-    if constants is None:
-        constants = dict()
     # create backend handler
     backend = CUDABackend(device_type)
     options = backend.parse_options(**kwargs)
+    # Get device type to decide which backend should be used
+    if constants is None:
+        constants = dict()
+    # find out the signature of the function
+    if isinstance(signature, str):
+        signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
+    # create cache manager
+    hash = make_hash(src, get_env_vars(), backend, config=config, constants=constants, signature=signature,
+                     options=options)
+    fn_cache_manager = get_cache_manager(hash)
+    name = src.__name__
+    metadata_filename = f"{name}.json"
+    metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
+    metadata_path = metadata_group.get(metadata_filename)
 
     # build compilation stages
     context = ir.context()
@@ -138,21 +149,8 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
     stages["ttir"] = (lambda path: parse_mlir_module(path, context), create_ttir)
     backend.add_stages(extern_libs, stages, options)
 
-    # find out the signature of the function
-    if isinstance(signature, str):
-        signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
-
-    # create cache manager
-    hash = make_hash(src, get_env_vars(), backend, config=config, constants=constants, signature=signature,
-                     options=options)
-    fn_cache_manager = get_cache_manager(hash)
-
     # load metadata if any
     # The group is addressed by the metadata
-    name, ext = src.__name__, "ttir"
-    metadata_filename = f"{name}.json"
-    metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
-    metadata_path = metadata_group.get(metadata_filename)
     # initialize metadata
     metadata = None
     if metadata_path is not None:
@@ -167,6 +165,7 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
     metadata["device_type"] = device_type
 
     # run compilation pipeline  and populate metadata
+    ext = "ttir"
     first_stage = list(stages.keys()).index(ext)
     asm = LazyDict()
     module = src
