@@ -1776,7 +1776,7 @@ struct CanonicalizeConvertFromView
       return failure();
     if (!op.getAllowReorder())
       return failure();
-    // view(convert) -> view
+    // reshape(cvt)->reshape
     rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
         op, op->getResult(0).getType(), convert.getOperand(),
         op.getAllowReorder());

@@ -744,10 +744,10 @@ LogicalResult canonicalizeViewOrBroadcast(OpType op,
   }
 
   // view(view) -> view
-  if (auto parent_view = dyn_cast<OpType>(definingOp)) {
+  if (auto parentView = dyn_cast<OpType>(definingOp)) {
     rewriter.replaceOpWithNewOp<OpType>(op, TypeRange({op.getType()}),
-                                        parent_view->getOperands(),
-                                        parent_view->getAttrs());
+                                        parentView->getOperands(),
+                                        parentView->getAttrs());
     return mlir::success();
   }
 
