@@ -11,7 +11,7 @@ from ..common.build import is_hip
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
 from ..runtime.jit import (get_cuda_stream)
-from .utils import (InfoFromBackendForTensorMap, TensorMapManager)
+from .utils import (TensorMapManager)
 from .backends.cuda import CUDABackend
 
 from ..runtime.driver import driver
@@ -137,54 +137,48 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
     metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
     metadata_path = metadata_group.get(metadata_filename)
     if metadata_path is not None:
-        pass
+        metadata = json.loads(Path(metadata_path).read_text())
+        so_path = backend.make_launcher_stub(src, [config], metadata, name, signature, constants)
+        return CompiledKernel(so_path, metadata_path)
 
     # build compilation stages
     context = ir.context()
     stages = dict()
 
-    def create_ttir(src):
+    def create_ttir(src, metadata):
         ttir = ast_to_ttir(src, signature, config, constants, options=options)
         return optimize_ttir(ttir, options=options)
 
     stages["ttir"] = (lambda path: parse_mlir_module(path, context), create_ttir)
     backend.add_stages(extern_libs, stages, options)
 
-    # load metadata if any
-    # The group is addressed by the metadata
     # initialize metadata
-    metadata = None
-    if metadata_path is not None:
-        with open(metadata_path) as f:
-            metadata = json.load(f)
-            if 'tensormaps_info' in metadata:
-                metadata['tensormaps_info'] = [InfoFromBackendForTensorMap(e) for e in metadata['tensormaps_info']]
-    else:
-        metadata = {"constants": constants}
-        metadata.update(options.__dict__)
-        metadata.update(get_env_vars())
-    metadata["device_type"] = device_type
+    metadata = {
+        "constants": constants,
+        "device_type": device_type,
+        "ids_of_folded_args": tuple([int(k) for k in config.ids_of_folded_args]),
+        **options.__dict__,
+        **get_env_vars(),
+    }
 
     # run compilation pipeline  and populate metadata
     ext = "ttir"
     first_stage = list(stages.keys()).index(ext)
-    asm = LazyDict()
     module = src
     for ir_name, (parse_ir, compile_ir) in list(stages.items())[first_stage:]:
         ir_filename = f"{name}.{ir_name}"
         path = metadata_group.get(ir_filename)
-        next_module = compile_ir(module) if path is None else parse_ir(path)
+        next_module = compile_ir(module, metadata) if path is None else parse_ir(path)
         metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
-        backend.add_meta_info(ir_name, module, next_module, metadata, asm)
         module = next_module
 
     # cache manager
-    so_path = backend.make_launcher_stub(src, [config], metadata, name, signature, constants)
     # write-back metadata, if it didn't come from the cache
     if metadata_path is None:
         metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
                                                                  binary=False)
     fn_cache_manager.put_group(metadata_filename, metadata_group)
+    so_path = backend.make_launcher_stub(src, [config], metadata, name, signature, constants)
     # return handle to compiled kernel
     return CompiledKernel(so_path, metadata_group.get(metadata_filename))
 

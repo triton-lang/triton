@@ -9,7 +9,6 @@ from typing import Any
 from ...runtime.jit import JITFunction
 from ..utils import get_ids_of_tensormaps, parse_tma_info
 from ..make_launcher import make_stub
-from ...tools.disasm import get_sass
 import hashlib
 
 
@@ -197,69 +196,57 @@ class CUDABackend(BaseBackend):
             cluster_info.clusterDimZ = opt.cluster_dims[2]
 
         # TTIR -> TTGIR stage
-        def create_ttgir(src):
+        def create_ttgir(src, metadata):
             ttgir = ttir_to_ttgir(src, opt.num_warps, opt.num_ctas, self.capability)
             return optimize_ttgir(ttgir, opt.num_stages, opt.num_warps, opt.num_ctas, self.capability, cluster_info,
                                   opt.enable_warp_specialization, opt.enable_persistent, opt.optimize_epilogue)
 
         stages["ttgir"] = (lambda path: parse_mlir_module(path, context), create_ttgir)
-        # TTGIR -> LLIR stage
-        tma_infos = TMAInfos()
 
-        def create_llir(src):
-            return ttgir_to_llir(src, opt.extern_libs, self.capability, tma_infos)
+        # TTGIR -> LLIR stage
+
+        def create_llir(src, metadata):
+            metadata["enable_warp_specialization"] = ir.is_ws_supported(src)
+            metadata["num_warps"] = get_num_warps(src)
+            tma_infos = TMAInfos()
+            ret = ttgir_to_llir(src, opt.extern_libs, self.capability, tma_infos)
+            if len(tma_infos) > 0:
+                metadata["tensormaps_info"] = parse_tma_info(tma_infos, metadata["ids_of_folded_args"])
+                for i, _ in enumerate(metadata["tensormaps_info"]):
+                    metadata["tensormaps_info"][i].ids_of_folded_args = metadata["ids_of_folded_args"]
+            metadata["ids_of_tensormaps"] = get_ids_of_tensormaps(metadata.get("tensormaps_info", None))
+            metadata["shared"] = get_shared_memory_size(src)
+            return ret
 
         stages["llir"] = (lambda path: Path(path).read_text(), create_llir)
 
         # LLIR -> PTX stage
-        def create_ptx(src):
+        def create_ptx(src, metadata):
             return llir_to_ptx(src, opt.enable_fp_fusion, self.capability)
 
         stages["ptx"] = (lambda path: Path(path).read_text(), create_ptx)
 
         # PTX -> CUBIN stage
-        def create_cubin(src):
+        def create_cubin(src, metadata):
+            metadata["name"] = get_kernel_name(src, pattern='// .globl')
             return ptx_to_cubin(src, self.capability, opt.enable_fp_fusion)
 
         stages["cubin"] = (lambda path: Path(path).read_bytes(), create_cubin)
-        self.tma_infos = tma_infos
-
-    def add_meta_info(self, ir_name, cur_module, next_module, metadata, asm):
-        if ir_name == "cubin":
-            asm[ir_name] = next_module
-            asm["sass"] = lambda: get_sass(next_module)
-        if ir_name == "llir" and "shared" not in metadata:
-            metadata["shared"] = get_shared_memory_size(cur_module)
-        if ir_name == "ttgir":
-            metadata["enable_warp_specialization"] = ir.is_ws_supported(next_module)
-            metadata["num_warps"] = get_num_warps(next_module)
-        if ir_name == "ptx":
-            metadata["name"] = get_kernel_name(next_module, pattern='// .globl')
 
     def get_version_key(self):
         return f'{get_cuda_version_key()}-{self.capability}'
 
     def make_launcher_stub(self, fn, configs, metadata, name, signature, constants):
-        ids_of_folded_args = tuple([int(k)
-                                    for k in configs[0].ids_of_folded_args]) if isinstance(fn, JITFunction) else ()
-        if "cluster_dims" not in metadata:
-            metadata["cluster_dims"] = [1, 1, 1]
-        if len(self.tma_infos) > 0:
-            metadata["tensormaps_info"] = parse_tma_info(self.tma_infos, ids_of_folded_args)
-        # set constant
-        if "tensormaps_info" in metadata:
-            for i, _ in enumerate(metadata["tensormaps_info"]):
-                metadata["tensormaps_info"][i].ids_of_folded_args = ids_of_folded_args
-        ids_of_tensormaps = get_ids_of_tensormaps(metadata.get("tensormaps_info", None))
         if isinstance(fn, JITFunction) and "tensormaps_info" in metadata:
             fn.tensormaps_info = metadata["tensormaps_info"]
         ids_of_const_exprs = tuple(fn.constexprs) if isinstance(fn, JITFunction) else ()
         ids = {
-            "ids_of_tensormaps": ids_of_tensormaps, "ids_of_folded_args": ids_of_folded_args, "ids_of_const_exprs":
-            ids_of_const_exprs
+            "ids_of_tensormaps": metadata["ids_of_tensormaps"], "ids_of_folded_args": metadata["ids_of_folded_args"],
+            "ids_of_const_exprs": ids_of_const_exprs
         }
         enable_warp_specialization = False
 
+        # set constant
         return make_stub(name, signature, constants, ids, enable_warp_specialization=enable_warp_specialization)
 
     @classmethod
