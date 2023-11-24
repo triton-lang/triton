@@ -122,12 +122,15 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
     # create backend handler
     backend = CUDABackend(device_type)
     options = backend.parse_options(**kwargs)
+
     # Get device type to decide which backend should be used
     if constants is None:
         constants = dict()
+
     # find out the signature of the function
     if isinstance(signature, str):
         signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
+
     # create cache manager
     hash = make_hash(src, get_env_vars(), backend, config=config, constants=constants, signature=signature,
                      options=options)
@@ -143,12 +146,7 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
 
     # build compilation stages
     stages = dict()
-
-    def create_ttir(src, metadata):
-        ttir = ast_to_ttir(src, signature, config, constants, options=options)
-        return optimize_ttir(ttir, options=options)
-
-    stages["ttir"] = create_ttir
+    stages["ttir"] = lambda src, metadata: optimize_ttir(src, options=options)
     backend.add_stages(extern_libs, stages, options)
 
     # initialize metadata
@@ -162,7 +160,7 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
 
     # run compilation pipeline  and populate metadata
     first_stage = list(stages.keys()).index("ttir")
-    module = src
+    module = ast_to_ttir(src, signature, config, constants, options=options)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         metadata_group[f"{name}.{ext}"] = fn_cache_manager.put(next_module, f"{name}.{ext}")
