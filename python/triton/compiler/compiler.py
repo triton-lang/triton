@@ -123,8 +123,8 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
             extern_libs=None, **kwargs):
     # TODO (backward-breaking):
     #   - merge InstanceDescriptor and SpecializationDescriptor
-    #   - extern_libs => linker_flags: Dict
-    #   - **kwargs -> compiler_flags: Dict
+    #   - extern_libs => linker_flags: dict
+    #   - **kwargs -> compiler_flags: dict
 
     # create backend handler
     backend = CUDABackend(device_type)
@@ -144,10 +144,6 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
         so_path = backend.make_launcher_stub(src, metadata, name, specialization)
         return CompiledKernel(so_path, metadata_path)
 
-    # build compilation stages
-    stages = dict()
-    backend.add_stages(extern_libs, stages, options)
-
     # initialize metadata
     metadata = {
         "constants": constants,
@@ -157,18 +153,17 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
         **get_env_vars(),
     }
     # run compilation pipeline  and populate metadata
+    stages = dict()
+    backend.add_stages(extern_libs, stages, options)
     first_stage = list(stages.keys()).index("ttir")
     module = ast_to_ttir(src, specialization, options=options)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         metadata_group[f"{name}.{ext}"] = fn_cache_manager.put(next_module, f"{name}.{ext}")
         module = next_module
-
-    # cache manager
-    # write-back metadata, if it didn't come from the cache
-    if metadata_path is None:
-        metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
-                                                                 binary=False)
+    # write-back metadata
+    metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
+                                                             binary=False)
     fn_cache_manager.put_group(metadata_filename, metadata_group)
     so_path = backend.make_launcher_stub(src, metadata, name, specialization)
     # return handle to compiled kernel
