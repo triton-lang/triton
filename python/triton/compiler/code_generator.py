@@ -1188,29 +1188,28 @@ def kernel_suffix(signature, specialization):
     return suffix
 
 
-def ast_to_ttir(fn, signature, specialization, constants, options):
+def ast_to_ttir(fn, specialization, options):
+    config = specialization.config
     # canonicalize signature
-    if isinstance(signature, str):
-        signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
     context = ir.context()
     context.load_triton()
     # create kernel prototype
     cst_key = lambda i: fn.arg_names.index(i) if isinstance(i, str) else i
-    constants = {cst_key(key): value for key, value in constants.items()}
+    constants = {cst_key(key): value for key, value in specialization.constants.items()}
     # visit kernel AST
     gscope = fn.__globals__.copy()
-    function_name = '_'.join([fn.__name__, kernel_suffix(signature.values(), specialization)])
-    tys = list(signature.values())
-    new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for k in specialization.equal_to_1}
-    new_attrs = {k: [("tt.divisibility", 16)] for k in specialization.divisible_by_16}
-    for k in specialization.divisible_by_8:
+    function_name = '_'.join([fn.__name__, kernel_suffix(specialization.signature.values(), config)])
+    tys = list(specialization.signature.values())
+    new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for k in config.equal_to_1}
+    new_attrs = {k: [("tt.divisibility", 16)] for k in config.divisible_by_16}
+    for k in config.divisible_by_8:
         attr = new_attrs[k] if k in new_attrs else []
         attr.append(("tt.max_divisibility", 8))
         new_attrs[k] = attr
 
     all_constants = constants.copy()
     all_constants.update(new_constants)
-    arg_types = [str_to_ty(v) for k, v in signature.items() if k not in constants]
+    arg_types = [str_to_ty(v) for k, v in specialization.signature.items() if k not in constants]
     file_name, begin_line = _get_fn_file_line(fn)
 
     prototype = language.function_type([], arg_types)

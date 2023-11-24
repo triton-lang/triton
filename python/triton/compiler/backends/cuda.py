@@ -249,7 +249,7 @@ class CUDABackend(BaseBackend):
     def get_version_key(self):
         return f'{get_cuda_version_key()}-{self.capability}'
 
-    def make_launcher_stub(self, fn, configs, metadata, name, signature, constants):
+    def make_launcher_stub(self, fn, metadata, name, specialization):
         if isinstance(fn, JITFunction) and "tensormaps_info" in metadata:
             fn.tensormaps_info = metadata["tensormaps_info"]
         ids_of_const_exprs = tuple(fn.constexprs) if isinstance(fn, JITFunction) else ()
@@ -260,7 +260,8 @@ class CUDABackend(BaseBackend):
         enable_warp_specialization = False
 
         # set constant
-        return make_stub(name, signature, constants, ids, enable_warp_specialization=enable_warp_specialization)
+        return make_stub(name, specialization.signature, specialization.constants, ids,
+                         enable_warp_specialization=enable_warp_specialization)
 
     @classmethod
     def create_backend(cls, device_type: str):
