@@ -5,7 +5,7 @@ on:
     branches:
       - llvm-head
     paths:
-      - llvm-hash.txt
+      - cmake/llvm-hash.txt
   workflow_dispatch:
 
 env:
@@ -40,7 +40,7 @@ jobs:
 
     - name: Fetch LLVM Commit Hash
       run: |
-        LLVM_COMMIT_HASH="$(cat llvm-build/llvm-hash.txt)"
+        LLVM_COMMIT_HASH="$(cat llvm-build/cmake/llvm-hash.txt)"
         echo "Found LLVM commit hash: ${LLVM_COMMIT_HASH}"
         echo "llvm_commit_hash=${LLVM_COMMIT_HASH}" >> ${GITHUB_ENV}
 
