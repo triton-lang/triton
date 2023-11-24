@@ -142,14 +142,13 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
         return CompiledKernel(so_path, metadata_path)
 
     # build compilation stages
-    context = ir.context()
     stages = dict()
 
     def create_ttir(src, metadata):
         ttir = ast_to_ttir(src, signature, config, constants, options=options)
         return optimize_ttir(ttir, options=options)
 
-    stages["ttir"] = (lambda path: parse_mlir_module(path, context), create_ttir)
+    stages["ttir"] = create_ttir
     backend.add_stages(extern_libs, stages, options)
 
     # initialize metadata
@@ -162,14 +161,11 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
     }
 
     # run compilation pipeline  and populate metadata
-    ext = "ttir"
-    first_stage = list(stages.keys()).index(ext)
+    first_stage = list(stages.keys()).index("ttir")
     module = src
-    for ir_name, (parse_ir, compile_ir) in list(stages.items())[first_stage:]:
-        ir_filename = f"{name}.{ir_name}"
-        path = metadata_group.get(ir_filename)
-        next_module = compile_ir(module, metadata) if path is None else parse_ir(path)
-        metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
+    for ext, compile_ir in list(stages.items())[first_stage:]:
+        next_module = compile_ir(module, metadata)
+        metadata_group[f"{name}.{ext}"] = fn_cache_manager.put(next_module, f"{name}.{ext}")
         module = next_module
 
     # cache manager
