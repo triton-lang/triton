@@ -1,5 +1,4 @@
 from triton.common.backend import BaseBackend
-from pathlib import Path
 from dataclasses import dataclass
 from ..._C.libtriton.triton import ClusterInfo, get_num_warps, TMAInfos, translate_triton_gpu_to_llvmir, get_shared_memory_size, translate_llvmir_to_ptx, compile_ptx_to_cubin, add_external_libs
 from ...common.backend import get_cuda_version_key, path_to_ptxas
@@ -187,8 +186,6 @@ class CUDABackend(BaseBackend):
         return options
 
     def add_stages(self, extern_libs, stages, opt):
-
-        context = ir.context()
         cluster_info = ClusterInfo()
         if opt.cluster_dims is not None:
             cluster_info.clusterDimX = opt.cluster_dims[0]
@@ -201,7 +198,7 @@ class CUDABackend(BaseBackend):
             return optimize_ttgir(ttgir, opt.num_stages, opt.num_warps, opt.num_ctas, self.capability, cluster_info,
                                   opt.enable_warp_specialization, opt.enable_persistent, opt.optimize_epilogue)
 
-        stages["ttgir"] = (lambda path: parse_mlir_module(path, context), create_ttgir)
+        stages["ttgir"] = create_ttgir
 
         # TTGIR -> LLIR stage
 
@@ -218,20 +215,20 @@ class CUDABackend(BaseBackend):
             metadata["shared"] = get_shared_memory_size(src)
             return ret
 
-        stages["llir"] = (lambda path: Path(path).read_text(), create_llir)
+        stages["llir"] = create_llir
 
         # LLIR -> PTX stage
         def create_ptx(src, metadata):
             return llir_to_ptx(src, opt.enable_fp_fusion, self.capability)
 
-        stages["ptx"] = (lambda path: Path(path).read_text(), create_ptx)
+        stages["ptx"] = create_ptx
 
         # PTX -> CUBIN stage
         def create_cubin(src, metadata):
             metadata["name"] = get_kernel_name(src, pattern='// .globl')
             return ptx_to_cubin(src, self.capability, opt.enable_fp_fusion)
 
-        stages["cubin"] = (lambda path: Path(path).read_bytes(), create_cubin)
+        stages["cubin"] = create_cubin
 
     def get_version_key(self):
         return f'{get_cuda_version_key()}-{self.capability}'
