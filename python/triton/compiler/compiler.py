@@ -35,20 +35,6 @@ class LazyDict(dict):
 # ------------------------------------------------------------------------------
 
 
-def optimize_ttir(mod, options):
-    pm = ir.pass_manager(mod.context)
-    pm.enable_debug()
-    pm.add_inliner_pass()
-    pm.add_triton_combine_pass()
-    pm.add_canonicalizer_pass()
-    pm.add_reorder_broadcast_pass()
-    pm.add_cse_pass()
-    pm.add_licm_pass()
-    pm.add_symbol_dce_pass()
-    pm.run(mod)
-    return mod
-
-
 def convert_type_repr(x):
     # Currently we only capture the pointer type and assume the pointer is on global memory.
     # TODO: Capture and support shared memory space
@@ -100,8 +86,7 @@ else:
 
 def parse_mlir_module(path, context):
     module = ir.parse_mlir_module(path, context)
-    # module takes ownership of the context
-    module.context = context
+    module.context = context  # module takes ownership of the context
     return module
 
 
@@ -140,13 +125,13 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
     metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
     metadata_path = metadata_group.get(metadata_filename)
     if metadata_path is not None:
+        # cache hit!
         metadata = json.loads(Path(metadata_path).read_text())
         so_path = backend.make_launcher_stub(src, [config], metadata, name, signature, constants)
         return CompiledKernel(so_path, metadata_path)
 
     # build compilation stages
     stages = dict()
-    stages["ttir"] = lambda src, metadata: optimize_ttir(src, options=options)
     backend.add_stages(extern_libs, stages, options)
 
     # initialize metadata
@@ -157,7 +142,6 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
         **options.__dict__,
         **get_env_vars(),
     }
-
     # run compilation pipeline  and populate metadata
     first_stage = list(stages.keys()).index("ttir")
     module = ast_to_ttir(src, signature, config, constants, options=options)

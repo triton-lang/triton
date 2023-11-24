@@ -11,6 +11,20 @@ from ..make_launcher import make_stub
 import hashlib
 
 
+def optimize_ttir(mod, options):
+    pm = ir.pass_manager(mod.context)
+    pm.enable_debug()
+    pm.add_inliner_pass()
+    pm.add_triton_combine_pass()
+    pm.add_canonicalizer_pass()
+    pm.add_reorder_broadcast_pass()
+    pm.add_cse_pass()
+    pm.add_licm_pass()
+    pm.add_symbol_dce_pass()
+    pm.run(mod)
+    return mod
+
+
 def ttir_to_ttgir(mod, num_warps, num_ctas, capability):
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
@@ -191,6 +205,8 @@ class CUDABackend(BaseBackend):
             cluster_info.clusterDimX = opt.cluster_dims[0]
             cluster_info.clusterDimY = opt.cluster_dims[1]
             cluster_info.clusterDimZ = opt.cluster_dims[2]
+
+        stages["ttir"] = lambda src, metadata: optimize_ttir(src, opt)
 
         # TTIR -> TTGIR stage
         def create_ttgir(src, metadata):
