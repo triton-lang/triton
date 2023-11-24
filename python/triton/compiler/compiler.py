@@ -44,10 +44,10 @@ def convert_type_repr(x):
     return x
 
 
-def make_hash(fn, env_vars, device_backend, config, signature, constants, options):
+def make_hash(fn, env_vars, device_backend, specialization, options):
     version_key = device_backend.get_version_key()
     env_vars_list = [f"{env_vars[k]}" for k in sorted(env_vars.keys())]
-    key = f"{fn.cache_key}-{version_key}-{''.join(signature.values())}-{config.hash()}-{constants}-{options.hash()}-{env_vars_list}"
+    key = f"{fn.cache_key}-{version_key}-{specialization.hash()}-{options.hash()}-{env_vars_list}"
     return hashlib.md5(key.encode("utf-8")).hexdigest()
 
 
@@ -102,23 +102,37 @@ class InstanceDescriptor:
         return hashlib.md5(key.encode("utf-8")).hexdigest()
 
 
+@dataclass
+class SpecializationDescriptor:
+    config: InstanceDescriptor
+    signature: dict
+    constants: dict
+
+    def __post_init__(self):
+        if isinstance(self.signature, str):
+            self.signature = {k: v.strip() for k, v in enumerate(self.signature.split(","))}
+        if self.constants is None:
+            self.constants = dict()
+
+    def hash(self):
+        key = f"{self.config.hash()}-{self.signature.values()}-{self.constants}"
+        return hashlib.md5(key.encode("utf-8")).hexdigest()
+
+
 def compile(src, device_type=("cuda", None), signature=None, config=InstanceDescriptor(), constants=None,
             extern_libs=None, **kwargs):
+    # TODO (backward-breaking):
+    #   - merge InstanceDescriptor and SpecializationDescriptor
+    #   - extern_libs => linker_flags: Dict
+    #   - **kwargs -> compiler_flags: Dict
+
     # create backend handler
     backend = CUDABackend(device_type)
     options = backend.parse_options(**kwargs)
-
-    # Get device type to decide which backend should be used
-    if constants is None:
-        constants = dict()
-
-    # find out the signature of the function
-    if isinstance(signature, str):
-        signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
+    specialization = SpecializationDescriptor(config, signature, constants)
 
     # create cache manager
-    hash = make_hash(src, get_env_vars(), backend, config=config, constants=constants, signature=signature,
-                     options=options)
+    hash = make_hash(src, get_env_vars(), backend, specialization, options=options)
     fn_cache_manager = get_cache_manager(hash)
     name = src.__name__
     metadata_filename = f"{name}.json"
@@ -127,7 +141,7 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
     if metadata_path is not None:
         # cache hit!
         metadata = json.loads(Path(metadata_path).read_text())
-        so_path = backend.make_launcher_stub(src, [config], metadata, name, signature, constants)
+        so_path = backend.make_launcher_stub(src, metadata, name, specialization)
         return CompiledKernel(so_path, metadata_path)
 
     # build compilation stages
@@ -144,7 +158,7 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
     }
     # run compilation pipeline  and populate metadata
     first_stage = list(stages.keys()).index("ttir")
-    module = ast_to_ttir(src, signature, config, constants, options=options)
+    module = ast_to_ttir(src, specialization, options=options)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         metadata_group[f"{name}.{ext}"] = fn_cache_manager.put(next_module, f"{name}.{ext}")
@@ -156,7 +170,7 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
         metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
                                                                  binary=False)
     fn_cache_manager.put_group(metadata_filename, metadata_group)
-    so_path = backend.make_launcher_stub(src, [config], metadata, name, signature, constants)
+    so_path = backend.make_launcher_stub(src, metadata, name, specialization)
     # return handle to compiled kernel
     return CompiledKernel(so_path, metadata_group.get(metadata_filename))
 
