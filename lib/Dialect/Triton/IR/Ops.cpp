@@ -438,6 +438,31 @@ OpFoldResult MakeRangeOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
+LogicalResult MakeRangeOp::verify() {
+  int64_t start = getStartAttr().getInt();
+  int64_t end = getEndAttr().getInt();
+  if (start > end) {
+    return this->emitOpError() << "start must be less than or equal to end";
+  }
+  auto ty = getType().dyn_cast<RankedTensorType>();
+  if (!ty) {
+    return this->emitOpError() << "return type must be a ranked tensor";
+  }
+  if (ty.getShape().size() != 1) {
+    return this->emitOpError() << "return type must be a 1D tensor";
+  }
+  if (end - start != ty.getShape()[0]) {
+    return this->emitOpError()
+           << "number of elements in returned tensor, " << ty.getShape()[0]
+           << ", must match size of range [" << start << ", " << end
+           << "), which has " << end - start << " elements";
+  }
+  if (!ty.getElementType().isInteger(32)) {
+    return this->emitOpError() << "returned tensor must have i32 elements";
+  }
+  return success();
+}
+
 //-- ReduceOp --
 static mlir::LogicalResult
 inferReduceReturnShape(const RankedTensorType &argTy, const Type &retEltTy,
@@ -709,7 +734,7 @@ OpFoldResult ExpandDimsOp::fold(FoldAdaptor adaptor) {
   return foldViewLikeOp(*this, adaptor.getSrc());
 }
 
-//-- ViewOp --
+//-- ReshapeOp --
 template <typename OpType>
 LogicalResult canonicalizeViewOrBroadcast(OpType op,
                                           PatternRewriter &rewriter) {
@@ -719,9 +744,10 @@ LogicalResult canonicalizeViewOrBroadcast(OpType op,
   }
 
   // view(view) -> view
-  if (auto parent_view = dyn_cast<OpType>(definingOp)) {
-    rewriter.replaceOpWithNewOp<OpType>(op, op.getType(),
-                                        parent_view.getOperand());
+  if (auto parentView = dyn_cast<OpType>(definingOp)) {
+    rewriter.replaceOpWithNewOp<OpType>(op, TypeRange({op.getType()}),
+                                        parentView->getOperands(),
+                                        parentView->getAttrs());
     return mlir::success();
   }
 
@@ -734,17 +760,30 @@ LogicalResult canonicalizeViewOrBroadcast(OpType op,
 
   return mlir::failure();
 }
-LogicalResult ViewOp::canonicalize(ViewOp op, PatternRewriter &rewriter) {
+
+LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
+  if (!op.getAllowReorder())
+    return failure();
   return canonicalizeViewOrBroadcast(op, rewriter);
 }
 
-OpFoldResult ViewOp::fold(FoldAdaptor adaptor) {
+OpFoldResult ReshapeOp::fold(FoldAdaptor adaptor) {
   if (getType() == getOperand().getType()) {
     // no-op
     return getOperand();
   }
 
   return foldViewLikeOp(*this, adaptor.getSrc());
+}
+
+mlir::LogicalResult mlir::triton::ReshapeOp::verify() {
+  auto dstType = getType().cast<RankedTensorType>();
+  auto srcType = getSrc().getType().cast<RankedTensorType>();
+  if (dstType.getNumElements() != srcType.getNumElements()) {
+    return emitError(
+        "number of src and dst elements of reshape must be the same");
+  }
+  return mlir::success();
 }
 
 //-- BroadcastOp --

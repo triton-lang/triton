@@ -88,7 +88,8 @@ def get_llvm_package_info():
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     # use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
     # release_suffix = "assert" if use_assert_enabled_llvm else "release"
-    rev = "49af6502"
+    llvm_hash_file = open("../cmake/llvm-hash.txt", "r")
+    rev = llvm_hash_file.read(8)
     name = f"llvm-{rev}-{system_suffix}"
     url = f"https://tritonlang.blob.core.windows.net/llvm-builds/{name}.tar.gz"
     return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
@@ -341,8 +342,8 @@ download_and_copy(
 )
 
 setup(
-    name="triton",
-    version="2.1.0",
+    name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
+    version="2.1.0" + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
     author="Philippe Tillet",
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",

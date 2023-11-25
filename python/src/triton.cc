@@ -1359,14 +1359,14 @@ void init_triton_ir(py::module &&m) {
              self.create<mlir::triton::StoreOp>(ptrs, val, mask, cacheModifier,
                                                 evictionPolicy);
            })
-      .def("create_view",
+      .def("create_reshape",
            [](TritonOpBuilder &self, mlir::Value &arg,
-              std::vector<int64_t> &shape) -> mlir::Value {
-             auto argType = arg.getType()
-                                .dyn_cast<mlir::RankedTensorType>()
-                                .getElementType();
-             return self.create<mlir::triton::ViewOp>(
-                 mlir::RankedTensorType::get(shape, argType), arg);
+              std::vector<int64_t> &shape, bool allowReorder) -> mlir::Value {
+             auto argType =
+                 arg.getType().cast<mlir::RankedTensorType>().getElementType();
+             return self.create<mlir::triton::ReshapeOp>(
+                 mlir::RankedTensorType::get(shape, argType), arg,
+                 allowReorder);
            })
       .def(
           "create_expand_dims",
@@ -1855,7 +1855,14 @@ void init_triton_translation(py::module &m) {
   m.def("get_num_warps", [](mlir::ModuleOp mod) {
     auto shared = mod->getAttrOfType<mlir::IntegerAttr>("triton_gpu.num-warps");
     assert(shared);
-    return shared.getInt();
+    int num_warps = shared.getInt();
+
+    if (auto attr = mod->getAttrOfType<mlir::IntegerAttr>(
+            "triton_gpu.num-warp-groups-per-cta")) {
+      num_warps *= attr.getInt();
+    }
+
+    return num_warps;
   });
 
   m.def(

@@ -22,7 +22,8 @@ include "mlir/Interfaces/CallInterfaces.td" // CallOpInterface
 // Op Base
 //
 class TT_Op<string mnemonic, list<Trait> traits = []> :
-    Op<Triton_Dialect, mnemonic, !listconcat(traits, [TensorSizeTrait])> {
+    Op<Triton_Dialect, mnemonic,
+       !listconcat(traits, [TensorSizeTrait, VerifyTensorLayoutsTrait])> {
 }
 
 //
@@ -301,19 +302,15 @@ def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
     let hasFolder = 1;
 }
 
-// view is not `pure` because it may reorder elements
-def TT_ViewOp : TT_Op<"view", [NoMemoryEffect,
-                               SameOperandsAndResultElementType]> {
-    let summary = "view";
-
-    let arguments = (ins TT_Tensor:$src);
-
+def TT_ReshapeOp : TT_Op<"reshape", [Pure,
+                                     SameOperandsAndResultElementType]> {
+    let summary = "reinterpret a tensor to a different shape. It may change elements order if the attribute is set.";
+    let arguments = (ins TT_Tensor:$src, BoolAttr:$allow_reorder);
     let results = (outs TT_Tensor:$result);
-
-    let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
-
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
     let hasCanonicalizeMethod = 1;
     let hasFolder = 1;
+    let hasVerifier = 1;
 }
 
 def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
@@ -488,7 +485,6 @@ def TT_ExternElementwiseOp : TT_Op<"extern_elementwise", [Elementwise,
 //
 // Make Range Op
 //
-// TODO: should have ConstantLike as Trait
 def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
     let summary = "make range";
 
@@ -498,6 +494,10 @@ def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
         Values span from $start to $end (exclusive), with step = 1
     }];
 
+    // WARNING: MLIR generates getStart()/getEnd() functions which return
+    // uint32_t, even though these arguments are to be interpreted as *signed*
+    // int32 values.  If this matters, use get{Start,End}Attr().getInt(), which
+    // return int64_t.
     let arguments = (ins I32Attr:$start, I32Attr:$end);
 
     let results = (outs TT_IntTensor:$result);
@@ -505,6 +505,7 @@ def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
     let assemblyFormat = "attr-dict `:` type($result)";
 
     let hasFolder = 1;
+    let hasVerifier = 1;
 }
 
 //
