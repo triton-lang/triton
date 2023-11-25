@@ -13,6 +13,7 @@ from typing import Callable, Generic, Iterable, List, Optional, TypeVar, Union, 
 from .._C.libtriton.triton import TMAInfos
 from ..common.backend import get_backend, get_cuda_version_key
 from .interpreter import InterpretedFunction
+from ..runtime.driver import driver
 
 
 def get_cuda_stream(idx=None):
@@ -558,11 +559,11 @@ class JITFunction(KernelInterface[T]):
                 bin.cluster_dims[2],
                 bin.shared,
                 stream,
-                bin.cu_function,
+                bin.function,
                 CompiledKernel.launch_enter_hook,
                 CompiledKernel.launch_exit_hook,
                 bin,
-                *bin.assemble_tensormap_to_arg(non_constexpr_arg_values),
+                *driver.assemble_tensormap_to_arg(non_constexpr_arg_values),
             )
         return bin
 
