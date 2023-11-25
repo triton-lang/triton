@@ -110,14 +110,6 @@ class CudaDriver(DriverBase):
                 args_with_tma.append(CudaDriver.tensormap_manager[(e, args_ptr)])
         return args_with_tma
 
-    def launch_kernel(self, kernel, stream, grid, launch_enter_hook, launch_exit_hook, *args):
-        args_expand = self.assemble_tensormap_to_arg(args)
-        if stream is None:
-            stream = self.get_stream(None)
-        kernel.c_wrapper(grid[0], grid[1], grid[2], kernel.num_warps, kernel.num_ctas, kernel.cluster_dims[0],
-                         kernel.cluster_dims[1], kernel.cluster_dims[2], kernel.shared, stream, kernel.function,
-                         launch_enter_hook, launch_exit_hook, kernel, *args_expand)
-
 
 # -----------------------------
 # HIP

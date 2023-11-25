@@ -8,7 +8,7 @@ from .._C.libtriton.triton import (get_env_vars, ir)
 # TODO: runtime.errors
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
-from ..runtime.jit import get_current_device
+from ..runtime.jit import get_current_device, get_cuda_stream
 from ..runtime.driver import driver
 from .backends.cuda import CUDABackend
 from dataclasses import dataclass
@@ -80,6 +80,26 @@ def convert_type_repr(x):
     return x
 
 
+def _get_num_warps_from_ir_str(src: str):
+    ttgir_num_warps_pattern = r'"triton_gpu.num-warps"\s?=\s?(\d+)\s?:'
+    # TODO(jlebar): Using a regex to get num-warps is a hack, and will break if
+    # e.g. someone has an instruction (not module) attribute named "num-warps".
+    num_warps_matches = re.findall(ttgir_num_warps_pattern, src)
+    assert len(num_warps_matches) == 1, "Expected exactly one match for num_warps"
+    num_warps = int(num_warps_matches[0])
+
+    # If warp specialization is enabled, the true number of warps from
+    # the perspective of e.g. CUDA is num-warps times the number of
+    # specialized groups.
+    num_warp_groups_matches = re.findall(r'"triton_gpu.num-warp-groups-per-cta"\s?=\s?(\d+)\s?:', src)
+    assert len(num_warp_groups_matches) == 0 or len(num_warp_groups_matches) == 1, \
+      "Expected triton_gpu.num-warp-groups-per-cta attribute to appear 0 or 1 times"
+    if num_warp_groups_matches:
+        num_warps *= int(num_warp_groups_matches[0])
+
+    return num_warps
+
+
 class SourceDescriptor:
 
     def __init__(self, src):
@@ -94,17 +114,16 @@ class SourceDescriptor:
             signature = match.group(2)
             types = re.findall(arg_type_pattern[self.ext], signature)
             self.signature = {k: convert_type_repr(ty) for k, ty in enumerate(types)}
-            # TODO: number of warps
-            # if ir_name == 'ttgir':
-            #     num_warps_from_ir = _get_num_warps_from_ir_str(src)
-            #     assert "num_warps" not in kwargs or num_warps_from_ir == num_warps, "num_warps in ttgir does not match num_warps in compile"
-            #     num_warps = num_warps_from_ir
             self.is_ast = False
 
         else:
             self.fn = src
             self.name = src.__name__
             self.is_ast = True
+
+    def update_options(self, options):
+        if not self.is_ast and self.ext == "ttgir":
+            options.num_warps = _get_num_warps_from_ir_str(self.src)
 
     def hash(self):
         if self.is_ast:
@@ -124,6 +143,7 @@ def compile(src, device_type=("cuda", 80), signature=None, config=InstanceDescri
     backend = CUDABackend(device_type)
     options = backend.parse_options(**kwargs)
     specialization = SpecializationDescriptor(config, signature, constants)
+    src.update_options(options)
 
     # create cache manager
     key = f"{src.hash()}-{backend.hash()}-{options.hash()}-{frozenset(sorted(get_env_vars().items()))}"
@@ -145,7 +165,6 @@ def compile(src, device_type=("cuda", 80), signature=None, config=InstanceDescri
 
     # initialize metadata
     metadata = {
-        "constants": constants,
         "device_type": device_type,
         **options.__dict__,
         **get_env_vars(),
@@ -170,8 +189,7 @@ def compile(src, device_type=("cuda", 80), signature=None, config=InstanceDescri
         metadata_group[f"{src.name}.{ext}"] = fn_cache_manager.put(next_module, f"{src.name}.{ext}")
         module = next_module
     # write-back metadata
-    metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
-                                                             binary=False)
+    metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata), metadata_filename, binary=False)
     fn_cache_manager.put_group(metadata_filename, metadata_group)
     so_path = backend.make_launcher_stub(src, metadata, specialization)
     # return handle to compiled kernel
@@ -226,3 +244,16 @@ class CompiledKernel:
         if name == 'c_wrapper':
             self._init_handles()
         return super().__getattribute__(name)
+
+    def __getitem__(self, grid):
+        self._init_handles()
+
+        def runner(*args, stream=None):
+            args_expand = driver.assemble_tensormap_to_arg(args)
+            if stream is None:
+                stream = get_cuda_stream()
+            self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.num_ctas, self.cluster_dims[0],
+                           self.cluster_dims[1], self.cluster_dims[2], self.shared, stream, self.function,
+                           CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args_expand)
+
+        return runner

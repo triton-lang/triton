@@ -176,12 +176,15 @@ class CUDAOptions:
     enable_fp_fusion: bool = True
     extern_libs = None
     allow_fp8e4nv: bool = False
-    max_num_imprecise_acc: bool = None
-
+    max_num_imprecise_acc_default: bool = None
     debug: bool = False
 
+    def __post_init__(self):
+        assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
+               "num_warps must be a power of 2"
+
     def hash(self):
-        key = '-'.join([str(x) for x in self.__dict__])
+        key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
         return hashlib.md5(key.encode("utf-8")).hexdigest()
 
 
