@@ -103,12 +103,18 @@ unsigned getNumCTAs(Attribute layout);
 
 bool isaDistributedLayout(Attribute layout);
 
-bool isSharedEncoding(Value value);
+bool hasSharedEncoding(Value value);
 
 bool isExpensiveCat(CatOp cat, Attribute targetEncoding);
 
 // Return true if a view between the two types cannot be implemented as a no-op.
 bool isExpensiveView(Type srcType, Type dstType);
+
+// Return a blocked encoding where the shape is distributed contiguously amonsgt
+// the threads, warps, CTAs with 1 element per threads.
+triton::gpu::BlockedEncodingAttr
+getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,
+                          int numWarps, int threadsPerWarp, int numCTAs);
 
 } // namespace gpu
 } // namespace triton

@@ -9,6 +9,8 @@
 #A_DOT = #triton_gpu.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
 #B_DOT = #triton_gpu.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
 
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.compute-capability" = 80} {
+
 // CHECK-LABEL: matmul_loop
 // There shouldn't be any aliasing with the dot op encoding.
 tt.func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
@@ -268,3 +270,5 @@ tt.func @cf_for(%arg0: index, %arg1: index, %arg2: index, %arg3: !tt.ptr<f16>, %
   %9 = tt.cat %0, %0 {axis = 0 : i64} : (tensor<256x32xf16, #A_SHARED>, tensor<256x32xf16, #A_SHARED>) -> tensor<512x32xf16, #A_SHARED>
   tt.return
 }
+
+}  // module

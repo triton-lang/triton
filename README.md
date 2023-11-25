@@ -2,13 +2,11 @@
   <img src="https://cdn.openai.com/triton/assets/triton-logo.png" alt="Triton logo" width="88" height="100">
 </div>
 
-[![Wheels](https://github.com/openai/triton/actions/workflows/wheels.yml/badge.svg?branch=release/2.0.x)](https://github.com/openai/triton/actions/workflows/wheels.yml)
-
 We're hiring! If you are interested in working on Triton at OpenAI, we have roles open for [Compiler Engineers](https://openai.com/careers/software-engineer-triton-compiler) and [Kernel Engineers](https://openai.com/careers/kernel-engineer).
 
-**`Documentation`** |
-------------------- |
-[![Documentation](https://github.com/openai/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/)
+| **`Documentation`** | **`Nightly Wheels`** |
+|-------------------- | -------------------- |
+| [![Documentation](https://github.com/openai/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/) | [![Wheels](https://github.com/openai/triton/actions/workflows/wheels.yml/badge.svg?branch=release/2.0.x)](https://github.com/openai/triton/actions/workflows/wheels.yml) |
 
 
 # Triton
@@ -65,13 +63,12 @@ downloads a prebuilt LLVM, but you can also build LLVM from source and use that.
 LLVM does not have a stable API, so the Triton build will not work at an
 arbitrary LLVM version.
 
-1. Find the version of LLVM that Triton builds against.  Check `python/setup.py`
-   for a line like
-
-       rev = "b1115f8c"
+1. Find the version of LLVM that Triton builds against.  Check
+`cmake/llvm-hash.txt` to see the current version. For example, if it says:
+       49af6502c6dcb4a7f7520178bd14df396f78240c
 
    This means that the version of Triton you have builds against
-   [LLVM](https://github.com/llvm/llvm-project) b1115f8c.
+   [LLVM](https://github.com/llvm/llvm-project) 49af6502.
 
 2. `git checkout` LLVM at this revision.  Optionally, make additional
    modifications to LLVM.
