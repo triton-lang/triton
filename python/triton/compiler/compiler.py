@@ -3,8 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-from .._C.libtriton.triton import (get_env_vars, ir)
-from ..common.build import is_hip
+from .._C.libtriton.triton import (get_env_vars)
 # from ..runtime import driver, jit, JITFunction
 # TODO: runtime.errors
 from ..runtime.autotuner import OutOfResources
@@ -27,45 +26,6 @@ def make_hash(fn, env_vars, device_backend, specialization, options):
     env_vars_list = [f"{env_vars[k]}" for k in sorted(env_vars.keys())]
     key = f"{fn.cache_key}-{version_key}-{specialization.hash()}-{options.hash()}-{env_vars_list}"
     return hashlib.md5(key.encode("utf-8")).hexdigest()
-
-
-# - ^\s*tt\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
-#    and any following whitespace
-# - (public\s+)? : optionally match the keyword public and any following whitespace
-# - (@\w+) : match an @ symbol followed by one or more word characters
-#   (letters, digits, or underscores), and capture it as group 1 (the function name)
-# - (\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\)) : match a pair of parentheses enclosing
-#   zero or more arguments separated by commas, and capture it as group 2 (the argument list)
-# - (attributes \{[\S\s]+\})? : optionally match attributes enclosed in braces and capture it as group 3
-mlir_prototype_pattern = r"^\s*tt\.func\s+(?:public\s+)?(@\w+)(\((?:%\w+: [\S\s]+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*(attributes \{[\S\s]+\})?\s+\{\s*$"
-ptx_prototype_pattern = r"\.(?:visible|extern)\s+\.(?:entry|func)\s+(\w+)\s*\(([^)]*)\)"
-prototype_pattern = {
-    "ttir": mlir_prototype_pattern,
-    "ttgir": mlir_prototype_pattern,
-    "ptx": ptx_prototype_pattern,
-}
-
-# - ((?:[^,\s<]+|<[^>]+>)+): Capturing group that matches one or more of either:
-#   [^,\s<]+: One or more characters that are not a comma, whitespace, or the < symbol.
-#   |: OR
-#   <[^>]+>: A string that starts with < and ends with >, containing any characters except > in between.
-mlir_arg_type_pattern = r'%\w+: ((?:[^,\s<]+|<[^>]+>)+),?'
-ptx_arg_type_pattern = r"\.param\s+\.(\w+)"
-arg_type_pattern = {
-    "ttir": mlir_arg_type_pattern,
-    "ttgir": mlir_arg_type_pattern,
-    "ptx": ptx_arg_type_pattern,
-}
-if is_hip():
-    ttgir_num_warps_pattern = r'"triton_gpu_rocm.num-warps"\s?=\s?(\d+)\s?:'
-else:
-    ttgir_num_warps_pattern = r'"triton_gpu.num-warps"\s?=\s?(\d+)\s?:'
-
-
-def parse_mlir_module(path, context):
-    module = ir.parse_mlir_module(path, context)
-    module.context = context  # module takes ownership of the context
-    return module
 
 
 @dataclass
