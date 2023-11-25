@@ -5,7 +5,6 @@ from ...common.backend import get_cuda_version_key, path_to_ptxas
 from ..._C.libtriton.triton import ir, runtime
 import functools
 from typing import Any
-from ...runtime.jit import JITFunction
 from ..utils import get_ids_of_tensormaps, parse_tma_info
 from ..make_launcher import make_stub
 import hashlib
@@ -249,18 +248,16 @@ class CUDABackend(BaseBackend):
     def hash(self):
         return f'{get_cuda_version_key()}-{self.capability}'
 
-    def make_launcher_stub(self, fn, metadata, name, specialization):
-        if isinstance(fn, JITFunction) and "tensormaps_info" in metadata:
-            fn.tensormaps_info = metadata["tensormaps_info"]
-        ids_of_const_exprs = tuple(fn.constexprs) if isinstance(fn, JITFunction) else ()
+    def make_launcher_stub(self, src, metadata, specialization):
+        ids_of_const_exprs = tuple(src.fn.constexprs) if hasattr(src, "fn") else ()
         ids = {
-            "ids_of_tensormaps": metadata["ids_of_tensormaps"], "ids_of_folded_args": metadata["ids_of_folded_args"],
-            "ids_of_const_exprs": ids_of_const_exprs
+            "ids_of_tensormaps": metadata.get("ids_of_tensormaps", tuple()), "ids_of_folded_args":
+            metadata.get("ids_of_folded_args", tuple()), "ids_of_const_exprs": ids_of_const_exprs
         }
         enable_warp_specialization = False
 
         # set constant
-        return make_stub(name, specialization.signature, specialization.constants, ids,
+        return make_stub(src.name, specialization.signature, specialization.constants, ids,
                          enable_warp_specialization=enable_warp_specialization)
 
     @classmethod

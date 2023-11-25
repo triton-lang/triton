@@ -980,12 +980,11 @@ class CodeGenerator(ast.NodeVisitor):
             prototype = language.function_type([], arg_types)
             gscope = sys.modules[fn.fn.__module__].__dict__
             # If the callee is not set, we use the same debug setting as the caller
-            debug = self.debug if fn.debug is None else fn.debug
             file_name, begin_line = _get_fn_file_line(fn)
             generator = CodeGenerator(self.context, prototype, gscope, attributes, constants, module=self.module,
-                                      function_name=fn_name, function_types=self.function_ret_types, debug=debug,
+                                      function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
-                                      target=self.builder.target)
+                                      options=self.builder.options)
             generator.visit(fn.parse())
             callee_ret_type = generator.last_ret_type
             self.function_ret_types[fn_name] = callee_ret_type
