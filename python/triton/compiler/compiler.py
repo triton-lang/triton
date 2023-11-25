@@ -8,24 +8,12 @@ from .._C.libtriton.triton import (get_env_vars)
 # TODO: runtime.errors
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
-from ..runtime.jit import (get_current_device)
-from .backends.cuda import CUDABackend
-
+from ..runtime.jit import get_current_device
 from ..runtime.driver import driver
+from .backends.cuda import CUDABackend
 from dataclasses import dataclass
 from .code_generator import ast_to_ttir
 from pathlib import Path
-
-# ------------------------------------------------------------------------------
-# compiler
-# ------------------------------------------------------------------------------
-
-
-def make_hash(fn, env_vars, device_backend, specialization, options):
-    version_key = device_backend.get_version_key()
-    env_vars_list = [f"{env_vars[k]}" for k in sorted(env_vars.keys())]
-    key = f"{fn.cache_key}-{version_key}-{specialization.hash()}-{options.hash()}-{env_vars_list}"
-    return hashlib.md5(key.encode("utf-8")).hexdigest()
 
 
 @dataclass
@@ -64,13 +52,14 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
     #   - extern_libs => linker_flags: dict
     #   - **kwargs -> compiler_flags: dict
 
-    # create backend handler
+    # create backend
     backend = CUDABackend(device_type)
     options = backend.parse_options(**kwargs)
     specialization = SpecializationDescriptor(config, signature, constants)
 
     # create cache manager
-    hash = make_hash(src, get_env_vars(), backend, specialization, options=options)
+    key = f"{src.cache_key}-{backend.hash()}-{specialization.hash()}-{options.hash()}-{frozenset(get_env_vars().items())}"
+    hash = hashlib.md5(key.encode("utf-8")).hexdigest()
     fn_cache_manager = get_cache_manager(hash)
     name = src.__name__
     metadata_filename = f"{name}.json"
