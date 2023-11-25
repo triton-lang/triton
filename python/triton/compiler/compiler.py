@@ -145,8 +145,3 @@ class CompiledKernel:
         if name == 'c_wrapper':
             self._init_handles()
         return super().__getattribute__(name)
-
-    def __getitem__(self, grid):
-        self._init_handles()
-        return lambda *args, stream=None: driver.launch_kernel(self, stream, grid, CompiledKernel.launch_enter_hook,
-                                                               CompiledKernel.launch_exit_hook, *args)
