@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 
 from .._C.libtriton.triton import (get_env_vars, ir)
 from ..common.build import is_hip
@@ -10,38 +9,17 @@ from ..common.build import is_hip
 # TODO: runtime.errors
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
-from ..runtime.jit import (get_cuda_stream)
-from .utils import (TensorMapManager)
+from ..runtime.jit import (get_current_device)
 from .backends.cuda import CUDABackend
 
 from ..runtime.driver import driver
-import torch
 from dataclasses import dataclass
 from .code_generator import ast_to_ttir
 from pathlib import Path
 
-
-class LazyDict(dict):
-
-    def __getitem__(self, key):
-        val = dict.__getitem__(self, key)
-        if callable(val):
-            return val()
-        return val
-
-
 # ------------------------------------------------------------------------------
 # compiler
 # ------------------------------------------------------------------------------
-
-
-def convert_type_repr(x):
-    # Currently we only capture the pointer type and assume the pointer is on global memory.
-    # TODO: Capture and support shared memory space
-    match = re.search(r'!tt\.ptr<([^,]+)', x)
-    if match is not None:
-        return '*' + convert_type_repr(match.group(1))
-    return x
 
 
 def make_hash(fn, env_vars, device_backend, specialization, options):
@@ -170,47 +148,15 @@ def compile(src, device_type=("cuda", None), signature=None, config=InstanceDesc
     return CompiledKernel(so_path, metadata_group.get(metadata_filename))
 
 
-class RuntimeCudaBackend:
-
-    def __init__(self) -> None:
-        pass
-
-    def get_load_binary_fn(self):
-        return driver.utils.load_binary
-
-    def get_stream(self):
-        return get_cuda_stream()
-
-    def get_device_properties(self, device):
-        return driver.utils.get_device_properties(device)
-
-    def get_current_device(self):
-        return torch.cuda.current_device()
-
-    def set_current_device(self, device):
-        torch.cuda.set_device(device)
-
-    def get_kernel_bin(self):
-        return "cubin"
-
-
 class CompiledKernel:
 
     # Hooks for external tools to monitor the execution of triton kernels
+    # TODO: move out of this namespace since it's a runtime thing
     launch_enter_hook = None
     launch_exit_hook = None
-    tensormap_manager = TensorMapManager()
-
-    @staticmethod
-    def read_text_or_bytes(path):
-        try:
-            return path.read_text()
-        except UnicodeDecodeError:
-            return path.read_bytes()
 
     def __init__(self, so_path, metadata_path):
         metadata_path = Path(metadata_path)
-        self.driver = RuntimeCudaBackend()
         # initialize launcher
         import importlib.util
         spec = importlib.util.spec_from_file_location("__triton_launcher", so_path)
@@ -223,56 +169,35 @@ class CompiledKernel:
             setattr(self, key, val)
         # stores the text of each level of IR that was generated during compilation
         asm_files = [file for file in metadata_path.parent.glob(f'{metadata_path.stem}.*') if file.suffix != '.json']
-        self.asm = {file.suffix[1:]: self.read_text_or_bytes(file) for file in asm_files}
+        self.asm = {
+            file.suffix[1:]: file.read_bytes() if file.suffix[1:] == driver.binary_ext else file.read_text()
+            for file in asm_files
+        }
+        self.kernel = self.asm[driver.binary_ext]
         # binaries are lazily initialized
         # because it involves doing runtime things
         # (e.g., checking amount of shared memory on current device)
-        self.cu_module = None
-        self.cu_function = None
+        self.module = None
+        self.function = None
 
     def _init_handles(self):
-        if self.cu_module is not None:
+        if self.module is not None:
             return
-
-        device = self.driver.get_current_device()
-        bin_path = self.driver.get_kernel_bin()
-        max_shared = self.driver.get_device_properties(device)["max_shared_mem"]
-        fn_load_binary = self.driver.get_load_binary_fn()
-
+        device = get_current_device()
+        # not enough shared memory to run the kernel
+        max_shared = driver.utils.get_device_properties(device)["max_shared_mem"]
         if self.shared > max_shared:
             raise OutOfResources(self.shared, max_shared, "shared memory")
-
-        mod, func, n_regs, n_spills = fn_load_binary(self.metadata["name"], self.asm[bin_path], self.shared, device)
-
-        self.n_spills = n_spills
-        self.n_regs = n_regs
-        self.cu_module = mod
-        self.cu_function = func
+        # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
+        self.module, self.function, self.n_regs, self.n_spills = driver.utils.load_binary(
+            self.name, self.kernel, self.shared, device)
 
     def __getattribute__(self, name):
         if name == 'c_wrapper':
             self._init_handles()
         return super().__getattribute__(name)
 
-    # capture args and expand args with cutensormap*
-    def assemble_tensormap_to_arg(self, args):
-        args_with_tma = list(args)
-        if hasattr(self, 'tensormaps_info'):
-            # tuple for hashable
-            args_ptr = tuple([arg.data_ptr() if hasattr(arg, 'data_ptr') else arg for arg in args])
-            for i, e in enumerate(self.tensormaps_info):
-                args_with_tma.append(CompiledKernel.tensormap_manager[(e, args_ptr)])
-        return args_with_tma
-
     def __getitem__(self, grid):
         self._init_handles()
-
-        def runner(*args, stream=None):
-            args_expand = self.assemble_tensormap_to_arg(args)
-            if stream is None:
-                stream = self.driver.get_stream(None)
-            self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.num_ctas, self.cluster_dims[0],
-                           self.cluster_dims[1], self.cluster_dims[2], self.shared, stream, self.cu_function,
-                           CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args_expand)
-
-        return runner
+        return lambda *args, stream=None: driver.launch_kernel(self, stream, grid, CompiledKernel.launch_enter_hook,
+                                                               CompiledKernel.launch_exit_hook, *args)

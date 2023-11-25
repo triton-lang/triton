@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ..common.build import _build
 from .cache import get_cache_manager
+from ..runtime import driver
 
 
 class DriverBase(metaclass=abc.ABCMeta):
@@ -65,7 +66,30 @@ class CudaUtils(object):
         self.cuMemFree = mod.cuMemFree
 
 
+class TensorMapManager:
+
+    def __init__(self):
+        self.tensormaps_device = {}
+
+    def __getitem__(self, key: tuple):
+        if key in self.tensormaps_device:
+            return int(self.tensormaps_device[key])
+        else:
+            (e, args) = key
+            t_tensormap = e.tensormap(args)
+            TENSORMAP_SIZE_IN_BYTES = 128
+            t_tensormap_device = driver.utils.cuMemAlloc(TENSORMAP_SIZE_IN_BYTES)
+            driver.utils.cuMemcpyHtoD(t_tensormap_device, t_tensormap, TENSORMAP_SIZE_IN_BYTES)
+            self.tensormaps_device[key] = t_tensormap_device
+            return int(self.tensormaps_device[key])
+
+    def __del__(self):
+        for _, v in self.tensormaps_device.items():
+            driver.utils.cuMemFree(v)
+
+
 class CudaDriver(DriverBase):
+    tensormap_manager = TensorMapManager()
 
     def __new__(cls):
         if not hasattr(cls, "instance"):
@@ -75,6 +99,24 @@ class CudaDriver(DriverBase):
     def __init__(self):
         self.utils = CudaUtils()
         self.backend = self.CUDA
+        self.binary_ext = "cubin"
+
+    def assemble_tensormap_to_arg(self, args):
+        args_with_tma = list(args)
+        if hasattr(self, 'tensormaps_info'):
+            # tuple for hashable
+            args_ptr = tuple([arg.data_ptr() if hasattr(arg, 'data_ptr') else arg for arg in args])
+            for i, e in enumerate(self.tensormaps_info):
+                args_with_tma.append(CudaDriver.tensormap_manager[(e, args_ptr)])
+        return args_with_tma
+
+    def launch_kernel(self, kernel, stream, grid, launch_enter_hook, launch_exit_hook, *args):
+        args_expand = self.assemble_tensormap_to_arg(args)
+        if stream is None:
+            stream = self.get_stream(None)
+        kernel.c_wrapper(grid[0], grid[1], grid[2], kernel.num_warps, kernel.num_ctas, kernel.cluster_dims[0],
+                         kernel.cluster_dims[1], kernel.cluster_dims[2], kernel.shared, stream, kernel.function,
+                         launch_enter_hook, launch_exit_hook, kernel, *args_expand)
 
 
 # -----------------------------
