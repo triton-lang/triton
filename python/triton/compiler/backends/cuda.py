@@ -246,7 +246,7 @@ class CUDABackend(BaseBackend):
 
         stages["cubin"] = create_cubin
 
-    def get_version_key(self):
+    def hash(self):
         return f'{get_cuda_version_key()}-{self.capability}'
 
     def make_launcher_stub(self, fn, metadata, name, specialization):

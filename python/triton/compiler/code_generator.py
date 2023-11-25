@@ -1190,7 +1190,6 @@ def kernel_suffix(signature, specialization):
 
 def ast_to_ttir(fn, specialization, options):
     config = specialization.config
-    # canonicalize signature
     context = ir.context()
     context.load_triton()
     # create kernel prototype
