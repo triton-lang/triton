@@ -97,7 +97,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
 def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
               stride_qz, stride_qh, stride_qm, stride_qk,  #
               stride_kz, stride_kh, stride_kn, stride_kk,  #
-              stride_vz, stride_vh, stride_vk, stride_vn,  #
+              stride_vz, stride_vh, stride_vn, stride_vk,  #
               stride_oz, stride_oh, stride_om, stride_on,  #
               Z, H,  #
               N_CTX: tl.constexpr,  #
