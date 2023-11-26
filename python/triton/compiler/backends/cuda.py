@@ -10,13 +10,6 @@ from ..make_launcher import make_stub
 import hashlib
 
 
-def parse_mlir_module(path, context):
-    module = ir.parse_mlir_module(path, context)
-    # module takes ownership of the context
-    module.context = context
-    return module
-
-
 def get_kernel_name(src: str, pattern: str) -> str:
     '''
     Get kernel name from PTX code.
