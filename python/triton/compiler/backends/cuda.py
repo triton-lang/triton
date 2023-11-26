@@ -202,16 +202,16 @@ class CUDABackend(BaseBackend):
         return options
 
     def add_stages(self, extern_libs, stages, opt):
-        cluster_info = ClusterInfo()
-        if opt.cluster_dims is not None:
-            cluster_info.clusterDimX = opt.cluster_dims[0]
-            cluster_info.clusterDimY = opt.cluster_dims[1]
-            cluster_info.clusterDimZ = opt.cluster_dims[2]
 
         stages["ttir"] = lambda src, metadata: optimize_ttir(src, opt)
 
         # TTIR -> TTGIR stage
         def create_ttgir(src, metadata):
+            cluster_info = ClusterInfo()
+            if opt.cluster_dims is not None:
+                cluster_info.clusterDimX = opt.cluster_dims[0]
+                cluster_info.clusterDimY = opt.cluster_dims[1]
+                cluster_info.clusterDimZ = opt.cluster_dims[2]
             ttgir = ttir_to_ttgir(src, opt.num_warps, opt.num_ctas, self.capability)
             return optimize_ttgir(ttgir, opt.num_stages, opt.num_warps, opt.num_ctas, self.capability, cluster_info,
                                   opt.enable_warp_specialization, opt.enable_persistent, opt.optimize_epilogue)
