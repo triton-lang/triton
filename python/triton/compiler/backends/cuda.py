@@ -251,17 +251,17 @@ class CUDABackend(BaseBackend):
     def hash(self):
         return f'{get_cuda_version_key()}-{self.capability}'
 
-    def make_launcher_stub(self, src, metadata, specialization):
-        ids_of_const_exprs = tuple(src.fn.constexprs) if hasattr(src, "fn") else ()
+    def make_launcher_stub(self, src, metadata):
         ids = {
             "ids_of_tensormaps": metadata.get("ids_of_tensormaps", tuple()), "ids_of_folded_args":
-            metadata.get("ids_of_folded_args", tuple()), "ids_of_const_exprs": ids_of_const_exprs
+            metadata.get("ids_of_folded_args",
+                         tuple()), "ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()
         }
+        constants = src.constants if hasattr(src, "constants") else dict()
         enable_warp_specialization = False
 
         # set constant
-        return make_stub(src.name, specialization.signature, specialization.constants, ids,
-                         enable_warp_specialization=enable_warp_specialization)
+        return make_stub(src.name, src.signature, constants, ids, enable_warp_specialization=enable_warp_specialization)
 
     @classmethod
     def create_backend(cls, device_type: str):

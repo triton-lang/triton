@@ -100,35 +100,58 @@ def _get_num_warps_from_ir_str(src: str):
     return num_warps
 
 
-class SourceDescriptor:
+class ASTSource:
 
-    def __init__(self, src):
-        if isinstance(src, str):
-            src_path = Path(src)
-            self.path = src
-            self.ext = src_path.suffix[1:]
-            self.src = src_path.read_text()
-            match = re.search(prototype_pattern[self.ext], self.src, re.MULTILINE)
-            self.name = match.group(1)
-            # TODO: signature shouldn't be here
-            signature = match.group(2)
-            types = re.findall(arg_type_pattern[self.ext], signature)
-            self.signature = {k: convert_type_repr(ty) for k, ty in enumerate(types)}
-            self.is_ast = False
-
-        else:
-            self.fn = src
-            self.name = src.__name__
-            self.is_ast = True
-
-    def update_options(self, options):
-        if not self.is_ast and self.ext == "ttgir":
-            options.num_warps = _get_num_warps_from_ir_str(self.src)
+    def __init__(self, fn, signature, constants, config) -> None:
+        self.fn = fn
+        self.ext = "ttir"
+        self.name = fn.__name__
+        self.signature = signature
+        self.constants = constants
+        self.config = config
+        if isinstance(self.signature, str):
+            self.signature = {k: v.strip() for k, v in enumerate(self.signature.split(","))}
+        if self.constants is None:
+            self.constants = dict()
 
     def hash(self):
-        if self.is_ast:
-            return self.fn.cache_key
+        key = f"{self.fn.cache_key}-{self.config.hash()}-{self.signature.values()}-{self.constants}"
+        return hashlib.md5(key.encode("utf-8")).hexdigest()
+
+    def make_ir(self, options):
+        specialization = SpecializationDescriptor(self.config, self.signature, self.constants)
+        return ast_to_ttir(self.fn, specialization, options=options)
+
+    def update_options(self, options):
+        pass
+
+
+class IRSource:
+
+    def __init__(self, path):
+        self.path = path
+        path = Path(path)
+        self.ext = path.suffix[1:]
+        self.src = path.read_text()
+        match = re.search(prototype_pattern[self.ext], self.src, re.MULTILINE)
+        self.name = match.group(1)
+        # TODO: signature shouldn't be here
+        signature = match.group(2)
+        types = re.findall(arg_type_pattern[self.ext], signature)
+        self.signature = {k: convert_type_repr(ty) for k, ty in enumerate(types)}
+
+    def hash(self):
         return hashlib.md5(self.src.encode("utf-8")).hexdigest()
+
+    def make_ir(self, options):
+        context = ir.context()
+        module = ir.parse_mlir_module(self.path, context)
+        module.context = context
+        return module
+
+    def update_options(self, options):
+        if self.ext == "ttgir":
+            options.num_warps = _get_num_warps_from_ir_str(self.src)
 
 
 def compile(src, device_type=("cuda", 80), signature=None, config=InstanceDescriptor(), constants=None,
@@ -139,19 +162,13 @@ def compile(src, device_type=("cuda", 80), signature=None, config=InstanceDescri
     #   - **kwargs -> compiler_flags: dict
 
     # create backend
-    src = SourceDescriptor(src)
+    src = IRSource(src) if isinstance(src, str) else ASTSource(src, signature, constants, config)
     backend = CUDABackend(device_type)
     options = backend.parse_options(**kwargs)
-    specialization = SpecializationDescriptor(config, signature, constants)
     src.update_options(options)
 
     # create cache manager
     key = f"{src.hash()}-{backend.hash()}-{options.hash()}-{frozenset(sorted(get_env_vars().items()))}"
-    if src.is_ast:
-        key = f"{key}-{specialization.hash()}"
-    else:
-        # TODO: clean up
-        specialization.signature = src.signature
     hash = hashlib.md5(key.encode("utf-8")).hexdigest()
     fn_cache_manager = get_cache_manager(hash)
     metadata_filename = f"{src.name}.json"
@@ -160,7 +177,7 @@ def compile(src, device_type=("cuda", 80), signature=None, config=InstanceDescri
     if metadata_path is not None:
         # cache hit!
         metadata = json.loads(Path(metadata_path).read_text())
-        so_path = backend.make_launcher_stub(src, metadata, specialization)
+        so_path = backend.make_launcher_stub(src, metadata)
         return CompiledKernel(so_path, metadata_path)
 
     # initialize metadata
@@ -174,16 +191,9 @@ def compile(src, device_type=("cuda", 80), signature=None, config=InstanceDescri
     # run compilation pipeline  and populate metadata
     stages = dict()
     backend.add_stages(extern_libs, stages, options)
-    # TODO: clean up
-    if src.is_ast:
-        first_stage = list(stages.keys()).index("ttir")
-        module = ast_to_ttir(src.fn, specialization, options=options)
-    else:
-        context = ir.context()
-        first_stage = list(stages.keys()).index(src.ext)
-        module = ir.parse_mlir_module(src.path, context)
-        module.context = context
-
+    #
+    first_stage = list(stages.keys()).index(src.ext)
+    module = src.make_ir(options)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         metadata_group[f"{src.name}.{ext}"] = fn_cache_manager.put(next_module, f"{src.name}.{ext}")
@@ -191,7 +201,7 @@ def compile(src, device_type=("cuda", 80), signature=None, config=InstanceDescri
     # write-back metadata
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata), metadata_filename, binary=False)
     fn_cache_manager.put_group(metadata_filename, metadata_group)
-    so_path = backend.make_launcher_stub(src, metadata, specialization)
+    so_path = backend.make_launcher_stub(src, metadata)
     # return handle to compiled kernel
     return CompiledKernel(so_path, metadata_group.get(metadata_filename))
 
