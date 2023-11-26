@@ -197,6 +197,7 @@ class CUDABackend(BaseBackend):
 
     @staticmethod
     def make_cubin(src, metadata, opt, capability):
+        metadata["name"] = get_kernel_name(src, pattern='// .globl')
         ptxas, _ = path_to_ptxas()
         return compile_ptx_to_cubin(src, ptxas, capability, opt.enable_fp_fusion)
 
