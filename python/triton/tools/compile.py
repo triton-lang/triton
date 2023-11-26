@@ -104,7 +104,7 @@ if __name__ == "__main__":
         assert h in [1, 16], f"Only 1 and 16 are valid hints, got {h}"
     divisible_by_16 = [i for i, h in hints.items() if h == 16]
     equal_to_1 = [i for i, h in hints.items() if h == 1]
-    config = triton.compiler.instance_descriptor(divisible_by_16=divisible_by_16, equal_to_1=equal_to_1)
+    config = triton.compiler.InstanceDescriptor(divisible_by_16=divisible_by_16, equal_to_1=equal_to_1)
     for i in equal_to_1:
         constexprs.update({i: 1})
     ccinfo = triton.compile(kernel, signature=signature, constants=constexprs, configs=[config],
