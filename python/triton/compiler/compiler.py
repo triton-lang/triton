@@ -171,8 +171,8 @@ def compile(src, device_type=("cuda", 80), signature=None, config=InstanceDescri
     hash = hashlib.md5(key.encode("utf-8")).hexdigest()
     fn_cache_manager = get_cache_manager(hash)
     metadata_filename = f"{src.name}.json"
-    cache_group = fn_cache_manager.get_group(metadata_filename) or {}
-    metadata_path = cache_group.get(metadata_filename)
+    metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
+    metadata_path = metadata_group.get(metadata_filename)
     if metadata_path is not None:
         # cache hit!
         metadata = json.loads(Path(metadata_path).read_text())
@@ -196,14 +196,14 @@ def compile(src, device_type=("cuda", 80), signature=None, config=InstanceDescri
     module = src.make_ir(options)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
-        cache_group[f"{src.name}.{ext}"] = fn_cache_manager.put(next_module, f"{src.name}.{ext}")
+        metadata_group[f"{src.name}.{ext}"] = fn_cache_manager.put(next_module, f"{src.name}.{ext}")
         module = next_module
     # write-back metadata
-    cache_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata), metadata_filename, binary=False)
-    fn_cache_manager.put_group(metadata_filename, cache_group)
+    metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata), metadata_filename, binary=False)
+    fn_cache_manager.put_group(metadata_filename, metadata_group)
     so_path = backend.make_launcher_stub(src, metadata)
     # return handle to compiled kernel
-    return CompiledKernel(so_path, cache_group.get(metadata_filename))
+    return CompiledKernel(so_path, metadata_group.get(metadata_filename))
 
 
 class CompiledKernel:

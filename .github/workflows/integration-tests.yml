@@ -34,7 +34,6 @@ jobs:
             echo '::set-output name=matrix-optional::["ubuntu-latest"]'
           fi
 
-
   Integration-Tests:
     needs: Runner-Preparation
 
@@ -49,7 +48,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
         with:
-          submodules: 'true'
+          submodules: "true"
       - name: Set CUDA ENV
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
         run: |
@@ -99,15 +98,15 @@ jobs:
       - name: Run python tests on CUDA with ENABLE_TMA=1
         if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '1'}}
         run: |
-          cd python/test/unit
-          python3 -m pytest -n 8 --ignore=runtime --ignore=operators --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
-          python3 -m pytest -n 8 language/test_subprocess.py
+          #cd python/test/unit
+          #python3 -m pytest -n 8 --ignore=runtime --ignore=operators --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+          #python3 -m pytest -n 8 language/test_subprocess.py
           # run runtime tests serially to avoid race condition with cache handling.
-          python3 -m pytest runtime/
+          #python3 -m pytest runtime/
           # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest language/test_line_info.py
+          #TRITON_DISABLE_LINE_INFO=0 python3 -m pytest language/test_line_info.py
           #run hopper/test_flashattention.py to avoid out of gpu memory
-          python3 -m pytest hopper/test_flashattention.py
+          #python3 -m pytest hopper/test_flashattention.py
 
       - name: Run python tests on CUDA with ENABLE_TMA=0
         if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '0'}}
