@@ -23,13 +23,6 @@ def get_kernel_name(src: str, pattern: str) -> str:
             return line.split()[-1]
 
 
-def _add_external_libs(mod, libs):
-    for name, path in libs.items():
-        if len(name) == 0 or len(path) == 0:
-            return
-    add_external_libs(mod, list(libs.keys()), list(libs.values()))
-
-
 @functools.lru_cache()
 def ptx_get_version(cuda_version) -> int:
     '''
@@ -169,7 +162,7 @@ class CUDABackend(BaseBackend):
         tma_infos = TMAInfos()
 
         if opt.extern_libs:
-            _add_external_libs(src, opt.extern_libs)
+            add_external_libs(src, list(opt.extern_libs.keys()), list(opt.extern_libs.values()))
         ret = translate_triton_gpu_to_llvmir(src, capability, tma_infos, runtime.TARGET.NVVM)
 
         if len(tma_infos) > 0:
