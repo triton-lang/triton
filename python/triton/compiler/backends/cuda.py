@@ -10,28 +10,6 @@ from ..make_launcher import make_stub
 import hashlib
 
 
-def optimize_ttir(mod, options):
-    pm = ir.pass_manager(mod.context)
-    pm.enable_debug()
-    pm.add_inliner_pass()
-    pm.add_triton_combine_pass()
-    pm.add_canonicalizer_pass()
-    pm.add_reorder_broadcast_pass()
-    pm.add_cse_pass()
-    pm.add_licm_pass()
-    pm.add_symbol_dce_pass()
-    pm.run(mod)
-    return mod
-
-
-def ttir_to_ttgir(mod, num_warps, num_ctas, capability):
-    pm = ir.pass_manager(mod.context)
-    pm.enable_debug()
-    pm.add_convert_triton_to_tritongpu_pass(num_warps, 32, num_ctas, capability)
-    pm.run(mod)
-    return mod
-
-
 def parse_mlir_module(path, context):
     module = ir.parse_mlir_module(path, context)
     # module takes ownership of the context
@@ -52,77 +30,11 @@ def get_kernel_name(src: str, pattern: str) -> str:
             return line.split()[-1]
 
 
-def optimize_ttgir(mod, num_stages, num_warps, num_ctas, capability, cluster_info, enable_warp_specialization,
-                   enable_persistent, optimize_epilogue):
-    pm = ir.pass_manager(mod.context)
-    pm.enable_debug()
-    pm.add_tritongpu_coalesce_pass()
-    # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
-    pm.add_plan_cta_pass(cluster_info)
-    if capability // 10 < 9:
-        pm.add_tritongpu_rewrite_tensor_pointer_pass()
-    pm.add_plan_cta_pass(cluster_info)
-    pm.add_tritongpu_remove_layout_conversions_pass()
-    pm.add_tritongpu_accelerate_matmul_pass(capability)
-    pm.add_tritongpu_remove_layout_conversions_pass()
-    if optimize_epilogue:
-        pm.add_tritongpu_optimize_epilogue_pass()
-    pm.add_tritongpu_optimize_dot_operands_pass()
-    pm.add_cse_pass()
-    ws_enabled = False
-    # `num_warps` does not mean the total number of warps of a CTA when
-    # warp specialization is enabled.
-    # it's the responsibility of the compiler to figure out the exact
-    # `num_warps` to use.
-    # TODO: support the case where `num_warps` from user is not 4.
-    if capability // 10 >= 9 and enable_warp_specialization and num_warps == 4:
-        pm.add_tritongpu_ws_feasibility_checking_pass(capability)
-        pm.run(mod)
-        ws_enabled = ir.is_ws_supported(mod)
-        pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
-    if ws_enabled:
-        pm.add_tritongpu_wsdecomposing_pass(capability)
-        pm.add_tritongpu_wspipeline_pass(num_stages, num_warps, capability)
-        pm.add_tritongpu_wsmutex_pass(capability)
-        pm.add_tritongpu_wsmaterialization_pass(capability)
-        pm.add_licm_pass()
-        pm.add_cse_pass()
-    else:
-        pm.add_tritongpu_pipeline_pass(num_stages, num_warps, num_ctas, capability)
-    pm.add_tritongpu_materialize_load_store_pass(num_warps, capability)
-    if capability // 10 <= 8:
-        pm.add_tritongpu_prefetch_pass()
-    pm.add_tritongpu_optimize_dot_operands_pass()
-    pm.add_tritongpu_remove_layout_conversions_pass()
-    pm.add_tritongpu_decompose_conversions_pass()
-    pm.add_tritongpu_ws_fixup_missing_attrs_pass()
-    pm.add_tritongpu_reorder_instructions_pass()
-    pm.add_cse_pass()
-    pm.add_symbol_dce_pass()
-    if capability // 10 >= 9:
-        pm.add_tritongpu_fence_insertion_pass()
-    pm.add_tritongpu_ws_fixup_missing_attrs_pass()
-    pm.add_tritongpu_optimize_thread_locality_pass()
-    pm.add_canonicalizer_pass()
-    pm.run(mod)
-    return mod
-
-
 def _add_external_libs(mod, libs):
     for name, path in libs.items():
         if len(name) == 0 or len(path) == 0:
             return
     add_external_libs(mod, list(libs.keys()), list(libs.values()))
-
-
-def ttgir_to_llir(mod, extern_libs, capability, tma_infos):
-    if extern_libs:
-        _add_external_libs(mod, extern_libs)
-    return translate_triton_gpu_to_llvmir(mod, capability, tma_infos, runtime.TARGET.NVVM)
-
-
-# PTX translation
 
 
 @functools.lru_cache()
@@ -141,35 +53,13 @@ def ptx_get_version(cuda_version) -> int:
     raise RuntimeError("Triton only support CUDA 10.0 or higher")
 
 
-def llir_to_ptx(mod: Any, enable_fp_fusion: bool, capability: int, ptx_version: int = None) -> str:
-    '''
-    Translate TritonGPU module to PTX code.
-    :param mod: a TritonGPU dialect module
-    :return: PTX code
-    '''
-    if ptx_version is None:
-        _, cuda_version = path_to_ptxas()
-        ptx_version = ptx_get_version(cuda_version)
-    return translate_llvmir_to_ptx(mod, capability, ptx_version, enable_fp_fusion)
-
-
-def ptx_to_cubin(ptx: str, capability: int, enable_fp_fusion: bool):
-    '''
-    Compile TritonGPU module to cubin.
-    :param ptx: ptx code
-    :param compute_capability: compute capability
-    :return: str
-    '''
-    ptxas, _ = path_to_ptxas()
-    return compile_ptx_to_cubin(ptx, ptxas, capability, enable_fp_fusion)
-
-
 @dataclass
 class CUDAOptions:
     num_warps: int = 4
     num_ctas: int = 1
     num_stages: int = 3
     cluster_dims: tuple = (1, 1, 1)
+    ptx_version: int = None
     enable_warp_specialization: bool = False
     enable_persistent: bool = False
     optimize_epilogue: bool = False
@@ -201,52 +91,121 @@ class CUDABackend(BaseBackend):
         options.max_num_imprecise_acc = 0 if self.capability >= 89 else None
         return options
 
+    @staticmethod
+    def make_ttir(mod, metadata, opt):
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+        pm.add_inliner_pass()
+        pm.add_triton_combine_pass()
+        pm.add_canonicalizer_pass()
+        pm.add_reorder_broadcast_pass()
+        pm.add_cse_pass()
+        pm.add_licm_pass()
+        pm.add_symbol_dce_pass()
+        pm.run(mod)
+        return mod
+
+    @staticmethod
+    def make_ttgir(mod, metadata, opt, capability):
+        cluster_info = ClusterInfo()
+        if opt.cluster_dims is not None:
+            cluster_info.clusterDimX = opt.cluster_dims[0]
+            cluster_info.clusterDimY = opt.cluster_dims[1]
+            cluster_info.clusterDimZ = opt.cluster_dims[2]
+        # TTIR -> TTGIR
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+        pm.add_convert_triton_to_tritongpu_pass(opt.num_warps, 32, opt.num_ctas, capability)
+        # optimize TTGIR
+        pm.add_tritongpu_coalesce_pass()
+        # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
+        pm.add_plan_cta_pass(cluster_info)
+        if capability // 10 < 9:
+            pm.add_tritongpu_rewrite_tensor_pointer_pass()
+        pm.add_plan_cta_pass(cluster_info)
+        pm.add_tritongpu_remove_layout_conversions_pass()
+        pm.add_tritongpu_accelerate_matmul_pass(capability)
+        pm.add_tritongpu_remove_layout_conversions_pass()
+        if opt.optimize_epilogue:
+            pm.add_tritongpu_optimize_epilogue_pass()
+        pm.add_tritongpu_optimize_dot_operands_pass()
+        pm.add_cse_pass()
+        ws_enabled = False
+        # `num_warps` does not mean the total number of warps of a CTA when
+        # warp specialization is enabled.
+        # it's the responsibility of the compiler to figure out the exact
+        # `num_warps` to use.
+        # TODO: support the case where `num_warps` from user is not 4.
+        if capability // 10 >= 9 and opt.enable_warp_specialization and opt.num_warps == 4:
+            pm.add_tritongpu_ws_feasibility_checking_pass(capability)
+            pm.run(mod)
+            ws_enabled = ir.is_ws_supported(mod)
+            pm = ir.pass_manager(mod.context)
+            pm.enable_debug()
+        if ws_enabled:
+            pm.add_tritongpu_wsdecomposing_pass(capability)
+            pm.add_tritongpu_wspipeline_pass(opt.num_stages, opt.num_warps, capability)
+            pm.add_tritongpu_wsmutex_pass(capability)
+            pm.add_tritongpu_wsmaterialization_pass(capability)
+            pm.add_licm_pass()
+            pm.add_cse_pass()
+        else:
+            pm.add_tritongpu_pipeline_pass(opt.num_stages, opt.num_warps, opt.num_ctas, capability)
+        pm.add_tritongpu_materialize_load_store_pass(opt.num_warps, capability)
+        if capability // 10 <= 8:
+            pm.add_tritongpu_prefetch_pass()
+        pm.add_tritongpu_optimize_dot_operands_pass()
+        pm.add_tritongpu_remove_layout_conversions_pass()
+        pm.add_tritongpu_decompose_conversions_pass()
+        pm.add_tritongpu_ws_fixup_missing_attrs_pass()
+        pm.add_tritongpu_reorder_instructions_pass()
+        pm.add_cse_pass()
+        pm.add_symbol_dce_pass()
+        if capability // 10 >= 9:
+            pm.add_tritongpu_fence_insertion_pass()
+        pm.add_tritongpu_ws_fixup_missing_attrs_pass()
+        pm.add_tritongpu_optimize_thread_locality_pass()
+        pm.add_canonicalizer_pass()
+        pm.run(mod)
+        return mod
+
+    @staticmethod
+    def make_llir(src, metadata, opt, capability):
+        metadata["enable_warp_specialization"] = ir.is_ws_supported(src)
+        metadata["num_warps"] = get_num_warps(src)
+        tma_infos = TMAInfos()
+
+        if opt.extern_libs:
+            _add_external_libs(src, opt.extern_libs)
+        ret = translate_triton_gpu_to_llvmir(src, capability, tma_infos, runtime.TARGET.NVVM)
+
+        if len(tma_infos) > 0:
+            metadata["tensormaps_info"] = parse_tma_info(tma_infos, metadata["ids_of_folded_args"])
+            for i, _ in enumerate(metadata["tensormaps_info"]):
+                metadata["tensormaps_info"][i].ids_of_folded_args = metadata["ids_of_folded_args"]
+        metadata["ids_of_tensormaps"] = get_ids_of_tensormaps(metadata.get("tensormaps_info", None))
+        metadata["shared"] = get_shared_memory_size(src)
+        return ret
+
+    @staticmethod
+    def make_ptx(src, metadata, opt, capability):
+        ptx_version = opt.ptx_version
+        if ptx_version is None:
+            _, cuda_version = path_to_ptxas()
+            ptx_version = ptx_get_version(cuda_version)
+        return translate_llvmir_to_ptx(src, capability, ptx_version, opt.enable_fp_fusion)
+
+    @staticmethod
+    def make_cubin(src, metadata, opt, capability):
+        ptxas, _ = path_to_ptxas()
+        return compile_ptx_to_cubin(src, ptxas, capability, opt.enable_fp_fusion)
+
     def add_stages(self, extern_libs, stages, opt):
-
-        stages["ttir"] = lambda src, metadata: optimize_ttir(src, opt)
-
-        # TTIR -> TTGIR stage
-        def create_ttgir(src, metadata):
-            cluster_info = ClusterInfo()
-            if opt.cluster_dims is not None:
-                cluster_info.clusterDimX = opt.cluster_dims[0]
-                cluster_info.clusterDimY = opt.cluster_dims[1]
-                cluster_info.clusterDimZ = opt.cluster_dims[2]
-            ttgir = ttir_to_ttgir(src, opt.num_warps, opt.num_ctas, self.capability)
-            return optimize_ttgir(ttgir, opt.num_stages, opt.num_warps, opt.num_ctas, self.capability, cluster_info,
-                                  opt.enable_warp_specialization, opt.enable_persistent, opt.optimize_epilogue)
-
-        stages["ttgir"] = create_ttgir
-
-        # TTGIR -> LLIR stage
-
-        def create_llir(src, metadata):
-            metadata["enable_warp_specialization"] = ir.is_ws_supported(src)
-            metadata["num_warps"] = get_num_warps(src)
-            tma_infos = TMAInfos()
-            ret = ttgir_to_llir(src, opt.extern_libs, self.capability, tma_infos)
-            if len(tma_infos) > 0:
-                metadata["tensormaps_info"] = parse_tma_info(tma_infos, metadata["ids_of_folded_args"])
-                for i, _ in enumerate(metadata["tensormaps_info"]):
-                    metadata["tensormaps_info"][i].ids_of_folded_args = metadata["ids_of_folded_args"]
-            metadata["ids_of_tensormaps"] = get_ids_of_tensormaps(metadata.get("tensormaps_info", None))
-            metadata["shared"] = get_shared_memory_size(src)
-            return ret
-
-        stages["llir"] = create_llir
-
-        # LLIR -> PTX stage
-        def create_ptx(src, metadata):
-            return llir_to_ptx(src, opt.enable_fp_fusion, self.capability)
-
-        stages["ptx"] = create_ptx
-
-        # PTX -> CUBIN stage
-        def create_cubin(src, metadata):
-            metadata["name"] = get_kernel_name(src, pattern='// .globl')
-            return ptx_to_cubin(src, self.capability, opt.enable_fp_fusion)
-
-        stages["cubin"] = create_cubin
+        stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, opt)
+        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, opt, self.capability)
+        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, opt, self.capability)
+        stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, opt, self.capability)
+        stages["cubin"] = lambda src, metadata: self.make_cubin(src, metadata, opt, self.capability)
 
     def hash(self):
         return f'{get_cuda_version_key()}-{self.capability}'
