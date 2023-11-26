@@ -940,6 +940,43 @@ Effects: MemoryEffects::Effect{}
 | :-----: | ----------- |
 | `result` | variadic of any type
 
+### `tt.reshape` (triton::ReshapeOp)
+
+_Reinterpret a tensor to a different shape. It may change elements order if the attribute is set._
+
+
+Syntax:
+
+```
+operation ::= `tt.reshape` $src attr-dict `:` type($src) `->` type($result)
+```
+
+
+Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, TensorSizeTrait, VerifyTensorLayoutsTrait
+
+Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)
+
+Effects: MemoryEffects::Effect{}
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>allow_reorder</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `src` | tensor of floating-point values or tensor of integer values or tensor of ptr values
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | tensor of floating-point values or tensor of integer values or tensor of ptr values
+
 ### `tt.scan` (triton::ScanOp)
 
 _Reduction using generic combination algorithm_
@@ -1076,36 +1113,6 @@ operation ::= `tt.trans` $src attr-dict `:` functional-type(operands, results)
 Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, TensorSizeTrait, VerifyTensorLayoutsTrait
 
 Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)
-
-Effects: MemoryEffects::Effect{}
-
-#### Operands:
-
-| Operand | Description |
-| :-----: | ----------- |
-| `src` | tensor of floating-point values or tensor of integer values or tensor of ptr values
-
-#### Results:
-
-| Result | Description |
-| :----: | ----------- |
-| `result` | tensor of floating-point values or tensor of integer values or tensor of ptr values
-
-### `tt.view` (triton::ViewOp)
-
-_View_
-
-
-Syntax:
-
-```
-operation ::= `tt.view` $src attr-dict `:` functional-type(operands, results)
-```
-
-
-Traits: SameOperandsAndResultElementType, TensorSizeTrait, VerifyTensorLayoutsTrait
-
-Interfaces: NoMemoryEffect (MemoryEffectOpInterface)
 
 Effects: MemoryEffects::Effect{}
 
