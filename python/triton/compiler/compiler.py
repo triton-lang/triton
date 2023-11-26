@@ -24,6 +24,16 @@ class InstanceDescriptor:
     ids_of_folded_args: set = None
     divisible_by_8: set = None
 
+    def __post_init__(self):
+        if self.divisible_by_16 is None:
+            self.divisible_by_16 = set()
+        if self.equal_to_1 is None:
+            self.equal_to_1 = set()
+        if self.ids_of_folded_args is None:
+            self.ids_of_folded_args = set()
+        if self.divisible_by_8 is None:
+            self.divisible_by_8 = set()
+
     def hash(self):
         key = str([sorted(x) for x in self.__dict__.values()])
         return hashlib.md5(key.encode("utf-8")).hexdigest()
@@ -153,13 +163,15 @@ class IRSource:
             options.num_warps = _get_num_warps_from_ir_str(self.src)
 
 
-def compile(src, device_type=("cuda", 80), signature=None, config=InstanceDescriptor(), constants=None,
-            extern_libs=None, **kwargs):
+def compile(src, device_type=("cuda", 80), signature=None, configs=None, constants=None, extern_libs=None, **kwargs):
     # TODO (backward-breaking):
     #   - merge InstanceDescriptor and SpecializationDescriptor
+    #   - no more configs
     #   - extern_libs => linker_flags: dict
     #   - **kwargs -> compiler_flags: dict
-
+    configs = [InstanceDescriptor()] if configs is None else configs
+    assert len(configs) == 1
+    config = configs[0]
     # create backend
     src = IRSource(src) if isinstance(src, str) else ASTSource(src, signature, constants, config)
     backend = CUDABackend(device_type)

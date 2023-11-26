@@ -542,7 +542,7 @@ class JITFunction(KernelInterface[T]):
                 enable_warp_specialization=enable_warp_specialization,
                 enable_fp_fusion=enable_fp_fusion,
                 extern_libs=extern_libs,
-                config=configs[0],
+                configs=[configs[0]],
                 debug=self.debug,
             )
 
