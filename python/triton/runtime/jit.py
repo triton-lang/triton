@@ -400,7 +400,7 @@ class JITFunction(KernelInterface[T]):
         return device_types[0] if len(device_types) > 0 else "cuda"
 
     def run(self, *args, **kwargs):
-        from ..compiler import CompiledKernel, compile, InstanceDescriptor
+        from ..compiler import CompiledKernel, compile
 
         # Get a compiler-flags arg like `num_warps` and remove it from kwargs.
         def get_special_arg(name: str, default=None):

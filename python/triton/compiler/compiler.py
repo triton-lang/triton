@@ -135,7 +135,6 @@ class IRSource:
         self.src = path.read_text()
         match = re.search(prototype_pattern[self.ext], self.src, re.MULTILINE)
         self.name = match.group(1)
-        # TODO: signature shouldn't be here
         signature = match.group(2)
         types = re.findall(arg_type_pattern[self.ext], signature)
         self.signature = {k: convert_type_repr(ty) for k, ty in enumerate(types)}
@@ -172,8 +171,8 @@ def compile(src, device_type=("cuda", 80), signature=None, config=InstanceDescri
     hash = hashlib.md5(key.encode("utf-8")).hexdigest()
     fn_cache_manager = get_cache_manager(hash)
     metadata_filename = f"{src.name}.json"
-    metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
-    metadata_path = metadata_group.get(metadata_filename)
+    cache_group = fn_cache_manager.get_group(metadata_filename) or {}
+    metadata_path = cache_group.get(metadata_filename)
     if metadata_path is not None:
         # cache hit!
         metadata = json.loads(Path(metadata_path).read_text())
@@ -186,6 +185,7 @@ def compile(src, device_type=("cuda", 80), signature=None, config=InstanceDescri
         **options.__dict__,
         **get_env_vars(),
     }
+    # TODO: remove once TMA support is cleaned up
     if signature is not None:
         metadata["ids_of_folded_args"] = tuple([int(k) for k in config.ids_of_folded_args])
     # run compilation pipeline  and populate metadata
@@ -196,14 +196,14 @@ def compile(src, device_type=("cuda", 80), signature=None, config=InstanceDescri
     module = src.make_ir(options)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
-        metadata_group[f"{src.name}.{ext}"] = fn_cache_manager.put(next_module, f"{src.name}.{ext}")
+        cache_group[f"{src.name}.{ext}"] = fn_cache_manager.put(next_module, f"{src.name}.{ext}")
         module = next_module
     # write-back metadata
-    metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata), metadata_filename, binary=False)
-    fn_cache_manager.put_group(metadata_filename, metadata_group)
+    cache_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata), metadata_filename, binary=False)
+    fn_cache_manager.put_group(metadata_filename, cache_group)
     so_path = backend.make_launcher_stub(src, metadata)
     # return handle to compiled kernel
-    return CompiledKernel(so_path, metadata_group.get(metadata_filename))
+    return CompiledKernel(so_path, cache_group.get(metadata_filename))
 
 
 class CompiledKernel:
