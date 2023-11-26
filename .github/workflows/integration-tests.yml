@@ -27,7 +27,7 @@ jobs:
         id: set-matrix
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
-            echo '::set-output name=matrix-required::[["self-hosted", "A100"], ["self-hosted", "H100"]]'
+            echo '::set-output name=matrix-required::[["self-hosted", "A100"]]'
             echo '::set-output name=matrix-optional::[["self-hosted", "gfx908"], ["self-hosted", "arc770"]]'
           else
             echo '::set-output name=matrix-required::["ubuntu-latest"]'
@@ -98,15 +98,15 @@ jobs:
       - name: Run python tests on CUDA with ENABLE_TMA=1
         if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '1'}}
         run: |
-          #cd python/test/unit
-          #python3 -m pytest -n 8 --ignore=runtime --ignore=operators --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
-          #python3 -m pytest -n 8 language/test_subprocess.py
+          cd python/test/unit
+          python3 -m pytest -n 8 --ignore=runtime --ignore=operators --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+          python3 -m pytest -n 8 language/test_subprocess.py
           # run runtime tests serially to avoid race condition with cache handling.
-          #python3 -m pytest runtime/
+          python3 -m pytest runtime/
           # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          #TRITON_DISABLE_LINE_INFO=0 python3 -m pytest language/test_line_info.py
+          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest language/test_line_info.py
           #run hopper/test_flashattention.py to avoid out of gpu memory
-          #python3 -m pytest hopper/test_flashattention.py
+          python3 -m pytest hopper/test_flashattention.py
 
       - name: Run python tests on CUDA with ENABLE_TMA=0
         if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '0'}}
@@ -128,7 +128,7 @@ jobs:
           CUA_VISIBLE_DEVICES: ""
         run: |
           cd python/test/unit
-          #python3 -m pytest -vs operators/test_flash_attention.py
+          python3 -m pytest -vs operators/test_flash_attention.py
 
       - name: Run partial tests on CUDA with ENABLE_TMA=1
         if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '1'}}
