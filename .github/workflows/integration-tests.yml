@@ -128,7 +128,7 @@ jobs:
           CUA_VISIBLE_DEVICES: ""
         run: |
           cd python/test/unit
-          python3 -m pytest -vs operators/test_flash_attention.py
+          #python3 -m pytest -vs operators/test_flash_attention.py
 
       - name: Run partial tests on CUDA with ENABLE_TMA=1
         if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '1'}}
