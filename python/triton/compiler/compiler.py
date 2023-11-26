@@ -643,6 +643,8 @@ class CompiledKernel:
         # initialize metadata
         self.shared = metadata["shared"]
         self.num_warps = metadata["num_warps"]
+        if "threads_per_warp" in metadata:
+            self.threads_per_warp = metadata["threads_per_warp"]
         self.num_ctas = metadata["num_ctas"]
         self.num_stages = metadata["num_stages"]
         self.clusterDims = metadata["clusterDims"]

@@ -217,8 +217,8 @@ private:
     builder.setInsertionPointAfter(reduce);
     IRMapping mapping;
     for (auto operand : reduce.getOperands()) {
-      auto viewOp = builder.create<triton::ViewOp>(reduce.getLoc(),
-                                                   viewOpTensorType, operand);
+      auto viewOp = builder.create<triton::ReshapeOp>(
+          reduce.getLoc(), viewOpTensorType, operand, /*allowReorder=*/true);
       mapping.map(operand, viewOp);
     }
 
