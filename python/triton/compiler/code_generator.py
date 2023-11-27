@@ -981,6 +981,8 @@ class CodeGenerator(ast.NodeVisitor):
             gscope = sys.modules[fn.fn.__module__].__dict__
             # If the callee is not set, we use the same debug setting as the caller
             file_name, begin_line = _get_fn_file_line(fn)
+            options = self.builder.options
+            options.debug = self.debug if fn.debug is None else fn.debug
             generator = CodeGenerator(self.context, prototype, gscope, attributes, constants, module=self.module,
                                       function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
