@@ -54,7 +54,7 @@ def _attn_fwd_inner(
     # In the loop,  we will mask the elements of BLOCK_N that do not exist.
     elif padded_block:
         lo, hi = N_CTX, N_CTX + BLOCK_N
-        lo = tl.multiple_of(lo, BLOCK_M)
+        lo = tl.multiple_of(lo, BLOCK_N)
         K_block_ptr = tl.advance(K_block_ptr, (0, lo))
         V_block_ptr = tl.advance(V_block_ptr, (lo, 0))
     # causal = False
