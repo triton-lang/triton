@@ -5,6 +5,8 @@ Fused Attention
 This is a Triton implementation of the Flash Attention v2 algorithm from Tri Dao (https://tridao.me/publications/flash2/flash2.pdf)
 Credits: OpenAI kernel team
 
+This kernel supports arbitrarily sized sequence lengths.
+
 Extra Credits:
 - Original flash attention paper (https://arxiv.org/abs/2205.14135)
 - Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
