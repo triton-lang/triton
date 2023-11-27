@@ -565,7 +565,7 @@ def compile(fn, **kwargs):
             "enable_persistent": enable_persistent,
             "constants": _get_jsonable_constants(constants),
             "debug": debug,
-            "target": target, }
+            "target": target,
         }
         metadata.update(get_env_vars())
         if ext == "ptx":
