@@ -1244,8 +1244,21 @@ struct AtomicRMWOpConversion
 
     auto valueTy = op.getResult().getType();
     auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
+    auto elementTy = tensorTy.getElementType();
+    const bool isHopper =
+        moduleOp->hasAttr("triton_gpu.compute-capability") &&
+        moduleOp->getAttrOfType<IntegerAttr>("triton_gpu.compute-capability")
+                .getInt() >= 90;
+    if (atomicRmwAttr == RMWOp::FADD && elementTy.isBF16() && !isHopper) {
+      if (valElements.size() && !valElements[0].getType().isBF16()) {
+        assert(false && "atom.add.bf16 fallback requires bf16 stored elements");
+      } else {
+        return matchAndRewriteROCm(op, adaptor, rewriter);
+      }
+    }
+
     Type valueElemTy =
-        tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
+        tensorTy ? getTypeConverter()->convertType(elementTy)
                  : valueTy;
     const size_t valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     auto elemsPerThread = getTotalElemsPerThread(val.getType());
@@ -1302,7 +1315,7 @@ struct AtomicRMWOpConversion
       case RMWOp::FADD:
         rmwOp = "add";
         rmwOp += (valueElemNBits == 16 ? ".noftz" : "");
-        sTy = "f" + sBits;
+        sTy = ((isHopper && elementTy.isBF16()) ? "bf" : "f") + sBits;
         sTy += (vec == 2 && valueElemNBits == 16) ? "x2" : "";
         break;
       case RMWOp::MAX:

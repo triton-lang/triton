@@ -38,7 +38,15 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
   });
   // Internally store bfloat16 as int16
   addConversion([&](BFloat16Type type) -> std::optional<Type> {
+    // TODO: Experimental ifdef to try storing bf16 as bf16 since LLVM does
+    // support this type now. Needed because some irgen fails if an instruction
+    // operand expects a bf16 and gets an i16 instead.
+    #define STORE_BF16_AS_BF16 1
+    #if STORE_BF16_AS_BF16
+    return FloatType::getBF16(type.getContext());
+    #else
     return IntegerType::get(type.getContext(), 16);
+    #endif
   });
 }
 
