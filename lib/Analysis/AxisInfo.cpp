@@ -685,14 +685,19 @@ public:
       }
     } else {
       for (auto d = 0; d < rank; ++d) {
+        // The condition can be either a tensor or i1.
+        // If i1 is used as the condition, the entire tensor of either
+        // lhs or rhs is selected.
+        auto condConstancyValue =
+            condConstancy.size() > d ? condConstancy[d] : condConstancy[0];
         constancy.push_back(
-            std::min(gcd(lhsInfo.getConstancy(d), condConstancy[d]),
-                     gcd(rhsInfo.getConstancy(d), condConstancy[d])));
+            std::min(gcd(lhsInfo.getConstancy(d), condConstancyValue),
+                     gcd(rhsInfo.getConstancy(d), condConstancyValue)));
         divisibility.push_back(
             std::min(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d)));
         contiguity.push_back(
-            std::min(gcd(lhsInfo.getContiguity(d), condConstancy[d]),
-                     gcd(rhsInfo.getContiguity(d), condConstancy[d])));
+            std::min(gcd(lhsInfo.getContiguity(d), condConstancyValue),
+                     gcd(rhsInfo.getContiguity(d), condConstancyValue)));
       }
       if (lhsInfo.getConstantValue().has_value() &&
           rhsInfo.getConstantValue().has_value() &&

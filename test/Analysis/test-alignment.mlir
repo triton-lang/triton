@@ -276,7 +276,7 @@ tt.func @logic() {
 // -----
 
 // CHECK-LABEL: @select
-tt.func @select() {
+tt.func @select(%arg0 : i1) {
   // CHECK: contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>
   %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [4611686018427387904], constancy = [128], constant_value = 0
@@ -293,6 +293,12 @@ tt.func @select() {
   %5 = arith.select %4, %3, %7 : tensor<128xi1>
   // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [128], constant_value = <none>
   %8 = arith.select %7, %3, %2 : tensor<128xi1>, tensor<128xi1>
+  // CHECK-NEXT: contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 1], constant_value = <none>
+  %9 = tt.expand_dims %2 {axis = 1 : i32} : (tensor<128xi1>) -> tensor<128x1xi1>
+  // CHECK-NEXT: contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 1], constant_value = <none>
+  %10 = tt.expand_dims %3 {axis = 1 : i32} : (tensor<128xi1>) -> tensor<128x1xi1>
+  // CHECK-NEXT: contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 1], constant_value = <none>
+  %11 = arith.select %arg0, %9, %10 : tensor<128x1xi1>
   tt.return
 }
 
