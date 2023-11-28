@@ -1,6 +1,14 @@
 name: Email Step
 
 inputs:
+  server:
+    required: true
+  port:
+    required: true
+  user:
+    required: true
+  pswd:
+    required: true
   jobname:
     required: true
   jobowner:
@@ -16,13 +24,14 @@ runs:
     - name: Email
       uses: dawidd6/action-send-mail@v3
       with:
-        server_address: smtp.gmail.com
-        server_port: 465
+        server_address: ${{ inputs.server }}
+        server_port: ${{ inputs.port }}
+        username: ${{ inputs.user }}
+        password: ${{ inputs.pswd }}        
         subject: "Failure Notification - ${{ inputs.jobname }}"
         body: |
           Notification: ${{ inputs.jobname }} failed in backend test,
 
           For details pls see "github.com/${{ inputs.ghrepo }}/actions/runs/${{ inputs.ghrunid }}"
-        ignore_cert: true
         to: ${{ inputs.jobowner }}
         from: github_action@github.com

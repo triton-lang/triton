@@ -2,16 +2,6 @@ name: Backend Tests
 
 on:
   workflow_dispatch:
-    inputs:
-      msowner:
-        required: true
-        default: ms@example.com      
-      amdowner:
-        required: true
-        default: amd@example.com
-      intelowner:
-        required: true
-        default: yudong.si@intel.com,jian.hui.li@intel.com
   push:
     branches: [main]
 
@@ -63,7 +53,7 @@ jobs:
           python3 -m pip uninstall -y triton
           python3 setup.py build
           python3 -m pip install --no-build-isolation -vvv '.[tests]'
-
+    
       - name: Run shared middle-layer lit tests
         run: |
           python3 -m pip install lit
@@ -196,24 +186,36 @@ jobs:
         if: ${{ needs.Integration-Tests-Shared-Middle-Layer.result != '' && needs.Integration-Tests-Shared-Middle-Layer.result == 'failure' }}        
         uses: ./.github/actions/sent-mail
         with:
+          server: ${{ secrets.MAIL_SERVER }}
+          port: ${{ secrets.MAIL_SERVER_PORT }}
+          user: ${{ secrets.MAIL_USERNAME }}
+          pswd: ${{ secrets.MAIL_PASSWORD }}          
           jobname: Integration-Tests-Shared-Middle-Layer
-          jobowner: ${{ inputs.msowner }}
+          jobowner: ${{ secrets.MAIL_MS_RECEIVERS }}
           ghrepo: ${{ github.repository }}
           ghrunid: ${{ github.run_id }}   
       - name: Integration-Tests-AMD-Notify
         if: ${{ needs.Integration-Tests-AMD.result != '' && needs.Integration-Tests-AMD.result == 'failure' }}        
         uses: ./.github/actions/sent-mail
         with:
+          server: ${{ secrets.MAIL_SERVER }}
+          port: ${{ secrets.MAIL_SERVER_PORT }}
+          user: ${{ secrets.MAIL_USERNAME }}
+          pswd: ${{ secrets.MAIL_PASSWORD }}          
           jobname: Integration-Tests-AMD
-          jobowner: ${{ inputs.amdowner }}
+          jobowner: ${{ secrets.MAIL_AMD_RECEIVERS }}
           ghrepo: ${{ github.repository }}
           ghrunid: ${{ github.run_id }}
       - name: Integration-Tests-Intel-Notify
         if: ${{ needs.Integration-Tests-Intel.result != '' && needs.Integration-Tests-Intel.result == 'failure' }}        
         uses: ./.github/actions/sent-mail
         with:
+          server: ${{ secrets.MAIL_SERVER }}
+          port: ${{ secrets.MAIL_SERVER_PORT }}
+          user: ${{ secrets.MAIL_USERNAME }}
+          pswd: ${{ secrets.MAIL_PASSWORD }}       
           jobname: Integration-Tests-Intel
-          jobowner: ${{ inputs.intelowner }}
+          jobowner: ${{ secrets.MAIL_INTEL_RECEIVERS }}
           ghrepo: ${{ github.repository }}
           ghrunid: ${{ github.run_id }}
 
