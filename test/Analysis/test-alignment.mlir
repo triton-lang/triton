@@ -276,7 +276,7 @@ tt.func @logic() {
 // -----
 
 // CHECK-LABEL: @select
-tt.func @select() {
+tt.func @select(%arg0 : i1, %arg1 : tensor<4xi1>) {
   // CHECK: contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>
   %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [4611686018427387904], constancy = [128], constant_value = 0
@@ -293,6 +293,22 @@ tt.func @select() {
   %5 = arith.select %4, %3, %7 : tensor<128xi1>
   // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [128], constant_value = <none>
   %8 = arith.select %7, %3, %2 : tensor<128xi1>, tensor<128xi1>
+  // CHECK-NEXT: contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 1], constant_value = <none>
+  %9 = tt.expand_dims %2 {axis = 1 : i32} : (tensor<128xi1>) -> tensor<128x1xi1>
+  // CHECK-NEXT: contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 1], constant_value = <none>
+  %10 = tt.expand_dims %3 {axis = 1 : i32} : (tensor<128xi1>) -> tensor<128x1xi1>
+  // CHECK-NEXT: contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 1], constant_value = <none>
+  %11 = arith.select %arg0, %9, %10 : tensor<128x1xi1>
+  // CHECK-NEXT: contiguity = [1], divisibility = [4], constancy = [4], constant_value = 4
+  %cst = arith.constant dense<4> : tensor<4xi32>
+  // CHECK-NEXT: contiguity = [4], divisibility = [1073741824], constancy = [1], constant_value = <none>
+  %12 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32>
+  // CHECK-NEXT: contiguity = [1], divisibility = [4], constancy = [1], constant_value = <none>
+  %13 = arith.muli %12, %cst : tensor<4xi32>
+  // CHECK-NEXT: contiguity = [4], divisibility = [16], constancy = [1], constant_value = <none>
+  %14 = tt.make_range {end = 20 : i32, start = 16 : i32} : tensor<4xi32>
+  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
+  %15 = arith.select %arg1, %12, %13 : tensor<4xi1>, tensor<4xi32>
   tt.return
 }
 
