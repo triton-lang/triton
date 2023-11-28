@@ -1,4 +1,3 @@
-#include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 
@@ -1072,7 +1071,7 @@ struct AtomicRMWOpConversion
 
 #ifdef USE_ROCM
   /// Try to match the mlir::triton::RMWOp to LLVM::AtomicBinOp.
-  static Optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp) {
+  static std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp) {
     switch (atomicOp) {
     case RMWOp::AND:
       return LLVM::AtomicBinOp::_and;
@@ -1095,24 +1094,9 @@ struct AtomicRMWOpConversion
     case RMWOp::XCHG:
       return LLVM::AtomicBinOp::xchg;
     default:
-      return llvm::None;
+      return std::nullopt;
     }
     llvm_unreachable("Invalid RMWOp");
-  }
-
-  /// Clones a segment of ops [start, end) and erases the original.
-  static void moveOpsRange(ValueRange oldResult, ValueRange newResult,
-                           Block::iterator start, Block::iterator end,
-                           ConversionPatternRewriter &rewriter) {
-    BlockAndValueMapping mapping;
-    mapping.map(oldResult, newResult);
-    SmallVector<Operation *, 2> opsToErase;
-    for (auto it = start; it != end; ++it) {
-      rewriter.clone(*it, mapping);
-      opsToErase.push_back(&*it);
-    }
-    for (auto *it : opsToErase)
-      rewriter.eraseOp(it);
   }
 
   LogicalResult
@@ -1121,97 +1105,107 @@ struct AtomicRMWOpConversion
     auto loc = op.getLoc();
     MLIRContext *ctx = rewriter.getContext();
 
-    auto atomicRmwAttr = op.atomic_rmw_op();
-    Value ptr = op.ptr();
-    Value val = op.val();
+    auto atomicRmwAttr = op.getAtomicRmwOp();
+    Value ptr = op.getPtr();
+    Value val = op.getVal();
 
-    Value llPtr = adaptor.ptr();
-    Value llVal = adaptor.val();
-    Value llMask = adaptor.mask();
+    Value llPtr = adaptor.getPtr();
+    Value llVal = adaptor.getVal();
+    Value llMask = adaptor.getMask();
 
-    auto valElements = getElementsFromStruct(loc, llVal, rewriter);
-    auto ptrElements = getElementsFromStruct(loc, llPtr, rewriter);
-    auto maskElements = getElementsFromStruct(loc, llMask, rewriter);
+    auto valElements = getTypeConverter()->unpackLLElements(
+        loc, llVal, rewriter, val.getType());
+    auto ptrElements = getTypeConverter()->unpackLLElements(
+        loc, llPtr, rewriter, ptr.getType());
+    SmallVector<Value> maskElements;
+    if (llMask)
+      maskElements = getTypeConverter()->unpackLLElements(
+          loc, llMask, rewriter, op.getMask().getType());
 
     Value opResult = op.getResult();
-    auto valueTy = opResult.getType().dyn_cast<RankedTensorType>();
+    auto tensorTy = opResult.getType().dyn_cast<RankedTensorType>();
     Type valueElemTy =
-        valueTy ? getTypeConverter()->convertType(valueTy.getElementType())
+        tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
                 : opResult.getType();
     const size_t valueElemNbits = valueElemTy.getIntOrFloatBitWidth();
-    auto elemsPerThread = getElemsPerThread(val.getType());
-    // vec = 1 for scalar
+    auto elemsPerThread = getTotalElemsPerThread(val.getType());
+    // vec = 1, numElements = 1 for scalar
     auto vec = getVectorSize(ptr);
-    Value mask = int_val(1, 1);
-    auto tid = tid_val();
+    int numElems = 1;
     // tensor
-    if (valueTy) {
+    if (tensorTy) {
       auto valTy = val.getType().cast<RankedTensorType>();
       vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
       // mask
-      auto shape = valueTy.getShape();
-      auto numElements = product(shape);
-      mask = and_(mask, icmp_slt(mul(tid, i32_val(elemsPerThread)),
-                                 i32_val(numElements)));
+      numElems = tensorTy.getNumElements();
     }
+    Value mask = int_val(1, 1);
+    auto tid = tid_val();
+    mask = and_(mask,
+                icmp_slt(mul(tid, i32_val(elemsPerThread)), i32_val(numElems)));
 
     auto vecTy = vec_ty(valueElemTy, vec);
+    auto retType = vec == 1 ? valueElemTy : vecTy;
     SmallVector<Value> resultVals(elemsPerThread);
+    const bool f16v2 = vec == 2 && valueElemTy.isF16();
     for (size_t i = 0; i < elemsPerThread; i += vec) {
-      Value rmwVal = undef(vecTy);
-      for (int ii = 0; ii < vec; ++ii) {
-        Value iiVal = createIndexAttrConstant(
-            rewriter, loc, getTypeConverter()->getIndexType(), ii);
-        rmwVal = insert_element(vecTy, rmwVal, valElements[i + ii], iiVal);
-      }
-
       Value rmwPtr = ptrElements[i];
-      Value rmwMask = maskElements[i];
-      rmwMask = and_(rmwMask, mask);
-      if (!valueTy) {
-        rmwMask = and_(rmwMask, icmp_eq(tid, i32_val(0)));
-      }
+      // TODO: in case llMask is zero we can create only one branch for all
+      // elemsPerThread.
+      Value rmwMask = llMask ? and_(mask, maskElements[i]) : mask;
 
+      Value undefVal = undef(retType);
       // Build blocks to bypass the atomic instruction for ~rmwMask.
       auto *curBlock = rewriter.getInsertionBlock();
+      auto *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
       auto *atomicBlock = rewriter.createBlock(
           curBlock->getParent(), std::next(Region::iterator(curBlock)));
-      auto *endBlock = rewriter.createBlock(
-          atomicBlock->getParent(), std::next(Region::iterator(atomicBlock)));
+      endBlock->addArgument({retType}, {loc});
 
-      // Operations range to be moved to `endBlock`.
-      auto opsToMoveStart = op->getIterator();
-      auto opsToMoveEnd = curBlock->back().getIterator();
       rewriter.setInsertionPointToEnd(curBlock);
+      rewriter.create<LLVM::CondBrOp>(loc, rmwMask, atomicBlock, endBlock,
+                                      undefVal);
 
-      rewriter.create<LLVM::CondBrOp>(loc, rmwMask, atomicBlock, endBlock);
       rewriter.setInsertionPointToEnd(atomicBlock);
-
       auto maybeKind = matchAtomicOp(atomicRmwAttr);
-      auto atom = rewriter.create<LLVM::AtomicRMWOp>(
-          loc, valueElemTy, *maybeKind, rmwPtr, valElements[i],
-          LLVM::AtomicOrdering::monotonic);
-      rewriter.create<LLVM::BrOp>(loc, ValueRange(), endBlock);
+      // TODO: use rocdl.raw.buffer.atomic from ROCDL dialect to use efficient
+      // atomics for MI-* series of AMD GPU.
+      Value atom = rewriter.create<LLVM::AtomicRMWOp>(
+          loc, *maybeKind, rmwPtr, valElements[i],
+          LLVM::AtomicOrdering::monotonic, StringRef("agent")).getResult();
 
-      rewriter.setInsertionPointToEnd(endBlock);
-      Value ret = atom.getResult();
-      if (valueTy) {
+      // NV for the f16v2 case generates one packed instruction. We have to
+      // create two separate instructions since LLVM::AtomicRMWOp doesn't
+      // support this. Can be optimized out with rocdl.raw.buffer.atomic.
+      if (f16v2) {
+        Value atom2 = rewriter.create<LLVM::AtomicRMWOp>(
+            loc, *maybeKind, ptrElements[i+1], valElements[i + 1],
+            LLVM::AtomicOrdering::monotonic, StringRef("agent")).getResult();
+        auto tmp = insert_element(vecTy, undef(vecTy), atom, i32_val(0));
+        atom = insert_element(vecTy, tmp, atom2, i32_val(1)).getResult();
+      }
+      rewriter.create<LLVM::BrOp>(loc, atom, endBlock);
+
+      rewriter.setInsertionPointToStart(endBlock);
+      Value retVal = endBlock->getArgument(0);
+      if (tensorTy) {
         for (int ii = 0; ii < vec; ++ii) {
           resultVals[i + ii] =
-              vec == 1 ? ret : extract_element(valueElemTy, ret, idx_val(ii));
+              vec == 1 ? retVal
+                       : extract_element(valueElemTy, retVal, i32_val(ii));
         }
       } else {
-        rewriter.replaceOp(op, {atom});
+        Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+        atomPtr = bitcast(atomPtr, ptr_ty(valueElemTy, 3));
+        store(retVal, atomPtr);
+        Value ret = load(atomPtr);
+        rewriter.replaceOp(op, {ret});
       }
-
-      // Move the all the instructions after tt.atomic to `endBlock`.
-      moveOpsRange(opResult, ret, std::next(opsToMoveStart),
-                   std::next(opsToMoveEnd), rewriter);
     }
-    if (valueTy) {
-      Type structTy = getTypeConverter()->convertType(valueTy);
-      Value resultStruct =
-          getStructFromElements(loc, resultVals, rewriter, structTy);
+    if (tensorTy) {
+      Type structTy = getTypeConverter()->convertType(tensorTy);
+      Value resultStruct = getTypeConverter()->packLLElements(
+          loc, resultVals, rewriter, structTy);
       rewriter.replaceOp(op, {resultStruct});
     }
     return success();
