@@ -615,6 +615,22 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
         continue;
       if (yieldOperand.value() == block.getArgument(yieldOperand.index() + 1))
         continue;
+
+      // The yield operand might live outside the loop, e.g.
+      //   %init = ...
+      //   %x = ...
+      //   %y = for iter_args(%unused = %init) {
+      //     yield %x
+      //   }
+      //
+      // In this case, the loop returns %x if it runs 1 or more times, and
+      // otherwise it returns %init.  We cowardly refuse to remove this operand
+      // from the yield.  (We could, but we'd need to prove that the loop runs 0
+      // or >=1 times.)
+      if (!forOp->isAncestor(
+              yieldOperand.value().getParentRegion()->getParentOp()))
+        continue;
+
       deadArg.push_back(yieldOperand.index());
     }
     if (deadArg.empty())

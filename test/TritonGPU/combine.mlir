@@ -1917,3 +1917,38 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 :
     tt.return
   }
 }
+
+// -----
+
+// Suppose we have a loop which yields a value from outside the loop:
+//   %x = ...
+//   %y = ...
+//   %z = for iter_args(%unused = %x) {
+//     yield %y
+//   }
+//   return %z
+//
+// This loop returns %y if it runs 1 or more times; otherwise, it returns %x.
+//
+// Check that we don't transform this loop into `yield %x` on the incorrect
+// theory that the yield is dead.
+
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32} {
+
+// CHECK-LABEL @f
+tt.func public @f(%arg0: i32, %arg1: i32) -> (i32) {
+  %c0 = arith.constant 0 : index
+  %c5 = arith.constant 5 : index
+  %c1 = arith.constant 1 : index
+  %0 = scf.for %i = %c0 to %c5 step %c1 iter_args(%arg3 = %arg0) -> (i32) {
+    scf.yield %arg1 : i32
+  }
+
+  // We should return %arg1, not %arg0.  (It would also be OK to return %0, if
+  // the loop didn't get eliminated.)
+  //
+  // CHECK: tt.return %arg1
+  tt.return %0 : i32
+}  // end function
+
+}  // end module
