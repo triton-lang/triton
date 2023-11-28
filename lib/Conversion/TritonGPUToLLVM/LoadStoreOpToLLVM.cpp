@@ -1069,7 +1069,6 @@ struct AtomicRMWOpConversion
             converter, allocation, benefit),
         LoadStoreConversionBase(axisAnalysisPass) {}
 
-#ifdef USE_ROCM
   /// Try to match the mlir::triton::RMWOp to LLVM::AtomicBinOp.
   static std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp) {
     switch (atomicOp) {
@@ -1100,8 +1099,8 @@ struct AtomicRMWOpConversion
   }
 
   LogicalResult
-  matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  matchAndRewriteROCm(triton::AtomicRMWOp op, OpAdaptor adaptor,
+                      ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     MLIRContext *ctx = rewriter.getContext();
 
@@ -1211,11 +1210,13 @@ struct AtomicRMWOpConversion
     return success();
   }
 
-#else  // USE_ROCM
-
   LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    #ifdef USE_ROCM
+    return matchAndRewriteROCm(op, adaptor, rewriter);
+    #endif
+
     auto loc = op.getLoc();
     MLIRContext *ctx = rewriter.getContext();
 
@@ -1368,7 +1369,6 @@ struct AtomicRMWOpConversion
     }
     return success();
   }
-#endif // USE_ROCM
 };
 
 struct InsertSliceOpConversion
