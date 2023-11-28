@@ -101,12 +101,12 @@ class CudaDriver(DriverBase):
         self.backend = self.CUDA
         self.binary_ext = "cubin"
 
-    def assemble_tensormap_to_arg(self, args):
+    def assemble_tensormap_to_arg(self, tensormaps_info, args):
         args_with_tma = list(args)
-        if hasattr(self, 'tensormaps_info'):
+        if tensormaps_info is not None:
             # tuple for hashable
             args_ptr = tuple([arg.data_ptr() if hasattr(arg, 'data_ptr') else arg for arg in args])
-            for i, e in enumerate(self.tensormaps_info):
+            for i, e in enumerate(tensormaps_info):
                 args_with_tma.append(CudaDriver.tensormap_manager[(e, args_ptr)])
         return args_with_tma
 

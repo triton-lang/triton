@@ -563,7 +563,7 @@ class JITFunction(KernelInterface[T]):
                 CompiledKernel.launch_enter_hook,
                 CompiledKernel.launch_exit_hook,
                 bin,
-                *driver.assemble_tensormap_to_arg(non_constexpr_arg_values),
+                *driver.assemble_tensormap_to_arg(bin.metadata["tensormaps_info"], non_constexpr_arg_values),
             )
         return bin
 
