@@ -351,6 +351,7 @@ class JITFunction(KernelInterface[T]):
         num_ctas,
         num_stages,
         waves_per_eu,
+        matrix_instr_nonkdim,
         enable_warp_specialization,
         enable_fp_fusion,
         extern_libs,
@@ -425,8 +426,8 @@ class JITFunction(KernelInterface[T]):
         num_warps = get_special_arg("num_warps")
         num_ctas = get_special_arg("num_ctas", 1)
         num_stages = get_special_arg("num_stages")
-        waves_per_eu = get_special_arg("waves_per_eu"),
-        matrix_instr_nonkdim = get_special_arg("matrix_instr_nonkdim"),
+        waves_per_eu = get_special_arg("waves_per_eu", 0)
+        matrix_instr_nonkdim = get_special_arg("matrix_instr_nonkdim", 0)
         enable_warp_specialization = get_special_arg("enable_warp_specialization", False)
         enable_fp_fusion = get_special_arg("enable_fp_fusion", True)
         extern_libs = get_special_arg("extern_libs")
