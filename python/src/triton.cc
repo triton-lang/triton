@@ -184,17 +184,8 @@ static std::string locationToString(mlir::Location loc) {
 static void outputWarning(mlir::Location loc, const std::string &msg) {
   std::string locStr = locationToString(loc);
 
-  py::exec(
-      R"(
-import warnings
-
-def custom_showwarning(message, category, filename, lineno, file=None, line=None):
-    print(f"UserWarning: {message}")
-
-warnings.showwarning = custom_showwarning
-warnings.warn(f"{loc}: {msg}")
-)",
-      py::globals(), py::dict(py::arg("loc") = locStr, py::arg("msg") = msg));
+  PyErr_WarnEx(PyExc_UserWarning, (locStr + ": " + msg).c_str(),
+               /*stack_level=*/2);
 }
 
 /*****************************************************************************/
