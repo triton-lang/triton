@@ -270,7 +270,7 @@ class Builder:
 
     # tensor operators
     create_dot = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.dot)
-    create_view = lambda self, arg, shape: TensorHandle(arg.data.reshape(shape), arg.dtype)
+    create_reshape = lambda self, arg, shape, allowReorder: TensorHandle(arg.data.reshape(shape), arg.dtype)
     create_trans = lambda self, arg: self.unary_op(arg, np.transpose)
 
     def create_dot(self, a, b, d, allow_tf32, maxNumImpreciseAcc):

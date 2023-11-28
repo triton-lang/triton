@@ -1204,7 +1204,10 @@ def ast_to_ttir(fn, specialization, options):
     new_attrs = {k: [("tt.divisibility", 16)] for k in config.divisible_by_16}
     for k in config.divisible_by_8:
         attr = new_attrs[k] if k in new_attrs else []
-        attr.append(("tt.max_divisibility", 8))
+        if k in config.divisible_by_16:
+            attr.append(("tt.max_divisibility", 16))
+        else:
+            attr.append(("tt.max_divisibility", 8))
         new_attrs[k] = attr
 
     all_constants = constants.copy()
