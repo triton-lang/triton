@@ -243,6 +243,7 @@ class InfoFromBackendForTensorMap:
         return strides_in_bytes
 
     def getOriginArgIdx(self, idx, args):
+        print(self.ids_of_folded_args)
         if self.ids_of_folded_args:
             ids_before_folding_arg = [i for i in range(len(args)) if i not in self.ids_of_folded_args]
             return ids_before_folding_arg[idx]

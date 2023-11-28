@@ -10,6 +10,7 @@ from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
 from ..runtime.jit import get_current_device, get_cuda_stream
 from ..runtime.driver import driver
+from .utils import InfoFromBackendForTensorMap
 from .backends.cuda import CUDABackend
 from dataclasses import dataclass
 from .code_generator import ast_to_ttir
@@ -211,7 +212,8 @@ def compile(src, device_type=("cuda", 80), signature=None, configs=None, constan
         metadata_group[f"{src.name}.{ext}"] = fn_cache_manager.put(next_module, f"{src.name}.{ext}")
         module = next_module
     # write-back metadata
-    metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata), metadata_filename, binary=False)
+    metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
+                                                             binary=False)
     fn_cache_manager.put_group(metadata_filename, metadata_group)
     so_path = backend.make_launcher_stub(src, metadata)
     # return handle to compiled kernel
@@ -235,6 +237,10 @@ class CompiledKernel:
         self.c_wrapper = getattr(mod, "launch")
         # initialize metadata
         self.metadata = json.loads(metadata_path.read_text())
+        self.metadata['tensormaps_info'] = [InfoFromBackendForTensorMap(e) for e in self.metadata['tensormaps_info']
+                                            ] if 'tensormaps_info' in self.metadata else []
+        for i, _ in enumerate(self.metadata["tensormaps_info"]):
+            self.metadata["tensormaps_info"][i].ids_of_folded_args = tuple(self.metadata["ids_of_folded_args"])
         for key, val in self.metadata.items():
             setattr(self, key, val)
         # stores the text of each level of IR that was generated during compilation
