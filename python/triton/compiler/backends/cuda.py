@@ -153,6 +153,7 @@ class CUDABackend(BaseBackend):
         pm.add_tritongpu_optimize_thread_locality_pass()
         pm.add_canonicalizer_pass()
         pm.run(mod)
+        metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         return mod
 
     @staticmethod
