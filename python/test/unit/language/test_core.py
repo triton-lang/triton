@@ -785,8 +785,8 @@ def test_where_broadcast(num_ctas, device):
 @pytest.mark.parametrize("dtype", dtypes_with_bfloat16)
 @pytest.mark.parametrize("op", ["maximum", "minimum"])
 def test_maximum_minium(dtype, op):
-  expr = f'tl.{op}(x, y)'
-  _test_binary(dtype, dtype, expr)
+    expr = f'tl.{op}(x, y)'
+    _test_binary(dtype, dtype, expr)
 
 
 # ---------------
