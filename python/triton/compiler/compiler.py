@@ -255,7 +255,6 @@ class CompiledKernel:
         # (e.g., checking amount of shared memory on current device)
         self.module = None
         self.function = None
-        print(self.num_ctas, self.cluster_dims)
 
     def _init_handles(self):
         if self.module is not None:
