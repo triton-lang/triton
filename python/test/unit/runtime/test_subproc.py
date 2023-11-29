@@ -56,7 +56,7 @@ def compile_fn_dot(config, cc):
     triton.compile(
         src=kernel_dot,
         signature={0: "*fp32"},
-        device_type=("cuda", cc),
+        target=("cuda", cc),
         configs=[config],
     )
 
