@@ -249,6 +249,12 @@ public:
     return tid;
   }
 
+  Value GetCanonicalWarpId(ConversionPatternRewriter &rewriter,
+                           Location loc) const {
+    return rewriter.create<triton::nvgpu::CanonicalWarpIdOp>(
+        loc, rewriter.getI32Type());
+  }
+
   Value getClusterCTAId(ConversionPatternRewriter &rewriter,
                         Location loc) const {
     return rewriter.create<triton::nvgpu::ClusterCTAIdOp>(

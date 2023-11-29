@@ -599,6 +599,20 @@ struct GetThreadIdOpConversion : public ConvertTritonGPUOpToLLVMPattern<
   }
 };
 
+struct GetCanonicalWarpIdConversion
+    : public ConvertTritonGPUOpToLLVMPattern<
+          triton::nvidia_gpu::GetCanonicalWarpId> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::nvidia_gpu::GetCanonicalWarpId>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::GetCanonicalWarpId op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOp(op, GetCanonicalWarpId(rewriter, op->getLoc()));
+    return success();
+  }
+};
+
 struct GetClusterCTAIdOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<
           triton::nvidia_gpu::GetClusterCTAIdOp> {
@@ -854,6 +868,7 @@ void populateTritonGPUToLLVMPatterns(
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
   patterns.add<GetNumProgramsOpConversion>(typeConverter, benefit);
   patterns.add<GetThreadIdOpConversion>(typeConverter, benefit);
+  patterns.add<GetCanonicalWarpIdConversion>(typeConverter, benefit);
   patterns.add<GetClusterCTAIdOpConversion>(typeConverter, benefit);
   patterns.add<MakeRangeOpConversion>(typeConverter, indexCacheInfo, benefit);
   patterns.add<ReturnOpConversion>(typeConverter, benefit);

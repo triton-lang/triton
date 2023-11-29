@@ -248,6 +248,11 @@ def NVGPU_ClusterCTAIdOp : NVGPU_Op<"cluster_id", [Pure]> {
   let assemblyFormat = "attr-dict";
 }
 
+def NVGPU_CanonicalWarpIdOp : NVGPU_Op<"canonical_warp_id", [Pure]> {
+  let results = (outs I32:$result);
+  let assemblyFormat = "attr-dict";
+}
+
 def NVGPU_RegAllocOp : NVGPU_Op<"reg_alloc", []> {
   let arguments = (ins I32Attr: $regCount);
   let assemblyFormat = "operands attr-dict `:` type(operands)";

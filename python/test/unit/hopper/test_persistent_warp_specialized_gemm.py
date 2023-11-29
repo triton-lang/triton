@@ -26,6 +26,14 @@ from torch.testing import assert_close
 
 import triton
 import triton.language as tl
+from triton.runtime import driver
+from triton.runtime.jit import get_current_device
+
+
+# kernel used to query max clusters for persistent kernel when NUM_CTAS > 1
+@triton.jit
+def empty_kernel(null, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+    pass
 
 
 @triton.jit
@@ -782,6 +790,14 @@ def full_static_persistent_matmul_kernel(a_ptr, b_ptr, w_ptr, bias_ptr, z_ptr,  
         for use_tma_store in [False, True]
         for num_stages in [3, 4]
         for enable_ws in [True]
+    ] + [
+        # larger NUM_CTAS
+        [1024, 128, 64, 4, 8, 1300, 1800, 3000, False, False, 'none', 'float16', True, 5, True],
+        [512, 256, 64, 4, 8, 800, 30000, 10000, True, True, 'none', 'float16', True, 4, True],
+        [1024, 128, 64, 4, 8, 1800, 10000, 15000, True, True, 'none', 'float16', True, 5, True],
+        [512, 256, 64, 4, 8, 1300, 1800, 3000, False, False, 'none', 'float16', True, 5, True],
+        [128, 1024, 64, 4, 8, 800, 30000, 10000, True, True, 'none', 'float16', True, 5, True],
+        [512, 256, 64, 4, 8, 1800, 10000, 15000, True, True, 'none', 'float16', True, 5, True],
     ])
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
 def test_full_static_persistent_matmul_kernel(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, TRANS_B,
@@ -882,9 +898,17 @@ def test_full_static_persistent_matmul_kernel(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WAR
     golden = process_epilogue(dot, bias, w, epilogue)
 
     num_SMs = torch.cuda.get_device_properties('cuda').multi_processor_count
+    if NUM_CTAS > 1:
+        device = get_current_device()
+        null_kernel = triton.compile(empty_kernel, signature="i32", constants={"BLOCK_M": 64, "BLOCK_N": 64})
+        null_kernel._init_handles()
+        max_shared_mem = driver.utils.get_device_properties(device)["max_shared_mem"]
+        num_clusters = driver.utils.cu_occupancy_max_active_clusters(null_kernel.cu_function, max_shared_mem, NUM_CTAS,
+                                                                     1, 1)
+        num_SMs = num_clusters
 
     def grid(META):
-        return (min(META['NUM_SM'], triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N'])), )
+        return (min(num_SMs, triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N'])), )
 
     full_static_persistent_matmul_kernel[grid](
         a_ptr=a, b_ptr=b, w_ptr=w, bias_ptr=bias, z_ptr=z,  #
