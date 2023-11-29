@@ -10,7 +10,7 @@ from . import semantic
 
 T = TypeVar('T')
 
-TRITON_MAX_TENSOR_NUMEL = 131072
+TRITON_MAX_TENSOR_NUMEL = 1048576
 
 TRITON_BUILTIN = "__triton_builtin__"
 
