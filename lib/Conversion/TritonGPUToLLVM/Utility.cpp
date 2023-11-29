@@ -366,8 +366,7 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
   Value globalPtr = rewriter.create<LLVM::AddressOfOp>(
       UnknownLoc::get(ctx), globalPtrType, global.getSymName());
   Value stringStart =
-      rewriter.create<LLVM::GEPOp>(UnknownLoc::get(ctx), ptr_ty(ctx), i8_ty,
-                                   globalPtr, SmallVector<Value>({zero, zero}));
+      gep(ptr_ty(ctx), i8_ty, globalPtr, SmallVector<Value>({zero}));
   return stringStart;
 }
 

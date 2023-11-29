@@ -388,8 +388,8 @@ struct PrintOpConversion
 
       for (const auto &entry : llvm::enumerate(newArgs)) {
         auto index = i32_val(entry.index());
-        auto fieldPtr = gep(ptr_ty(ctx), argTypes[entry.index()], allocated,
-                            ArrayRef<Value>{zero, index});
+        auto fieldPtr =
+            gep(ptr_ty(ctx), structTy, allocated, ArrayRef<Value>{zero, index});
         store(entry.value(), fieldPtr);
       }
       bufferPtr = bitcast(allocated, ptr);
