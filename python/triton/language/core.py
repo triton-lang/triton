@@ -1536,7 +1536,7 @@ def debug_barrier(_builder=None):
 @builtin
 def multiple_of(input, values, _builder=None):
     """
-    Let the compiler knows that the values in :code:`input` are all multiples of :code:`value`.
+    Let the compiler know that the values in :code:`input` are all multiples of :code:`value`.
     """
     if isinstance(values, constexpr):
         values = [values]
@@ -1552,7 +1552,7 @@ def multiple_of(input, values, _builder=None):
 @builtin
 def max_contiguous(input, values, _builder=None):
     """
-    Let the compiler knows that the `value` first values in :code:`input` are contiguous.
+    Let the compiler know that the `value` first values in :code:`input` are contiguous.
     """
     if isinstance(values, constexpr):
         values = [values]
@@ -1568,7 +1568,7 @@ def max_contiguous(input, values, _builder=None):
 @builtin
 def max_constancy(input, values, _builder=None):
     """
-    Let the compiler knows that the `value` first values in :code:`input` are constant.
+    Let the compiler know that the `value` first values in :code:`input` are constant.
 
     e.g. if :code:`values` is [4], then each group of 4 values in :code:`input` should all be equal,
     for example [0, 0, 0, 0, 1, 1, 1, 1].
