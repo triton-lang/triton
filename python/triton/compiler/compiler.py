@@ -158,8 +158,8 @@ def compile(src, target=None, compiler_options=None, linker_options=None):
         target = get_current_target()
     backend = CUDABackend(target)
     # create backend
-    compiler_options = backend.parse_compiler_options(compiler_options)
-    linker_options = backend.parse_linker_options(linker_options)
+    compiler_options = backend.parse_compiler_options(compiler_options or dict())
+    linker_options = backend.parse_linker_options(linker_options or dict())
     if not isinstance(src, ASTSource):
         assert isinstance(src, str), "source must be either AST or a filepath"
         src = IRSource(src)
@@ -225,6 +225,7 @@ class CompiledKernel:
             self.metadata["tensormaps_info"][i].ids_of_folded_args = tuple(self.metadata["ids_of_folded_args"])
         for key, val in self.metadata["compiler_options"].items():
             setattr(self, key, val)
+        self.tensormaps_info = self.metadata["tensormaps_info"]
         self.shared = self.metadata["shared"]
         self.name = self.metadata["name"]
         # stores the text of each level of IR that was generated during compilation
