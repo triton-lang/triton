@@ -47,6 +47,14 @@ def get_device_capability(idx):
     return torch.cuda.get_device_capability(idx)
 
 
+def get_current_target():
+    import torch
+    device = get_current_device()
+    capability = get_device_capability(device)
+    capability = capability[0] * 10 + capability[1]
+    return ("cuda", capability)
+
+
 T = TypeVar("T")
 
 # -----------------------------------------------------------------------------
@@ -533,8 +541,8 @@ class JITFunction(KernelInterface[T]):
             capability = capability[0] * 10 + capability[1]
             self.cache[device][key] = compile(
                 self,
+                target=(device_type, capability),
                 signature=signature,
-                device_type=(device_type, capability),
                 constants=constants,
                 num_warps=num_warps,
                 num_ctas=num_ctas,
