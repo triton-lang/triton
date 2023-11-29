@@ -3072,6 +3072,35 @@ def test_constexpr_scalar_shape(device):
     np.testing.assert_equal(to_numpy(x_tri), np.arange(0, 256) % 8)
 
 
+reshape_list = [((64, ), (8, 8)), ((2, 32), (16, 4)), ((512, ), (2, 2, 2, 2, 2, 2, 2, 2, 2)), ((64, 32), (16, 8, 16))]
+
+
+@pytest.mark.parametrize("formats", reshape_list)
+def test_reshape(formats, device):
+    in_format, out_format = formats
+
+    @triton.jit
+    def kernel(Z, X, out_tuple: tl.constexpr):
+        x = tl.load(X_PTR_EXPR)
+        z = tl.reshape(x, out_tuple)
+        tl.store(Z_PTR_EXPR, z)
+
+    def generate_kernel(shape_x, shape_z):
+        to_replace = {
+            'X_PTR_EXPR': make_ptr_str('X', shape_x),
+            'Z_PTR_EXPR': make_ptr_str('Z', shape_z),
+        }
+        return patch_kernel(kernel, to_replace)
+
+    x = numpy_random(in_format, dtype_str="int32")
+    z = x.reshape(out_format)
+    x_tri = to_triton(x, device=device)
+    patched_kernel = generate_kernel(in_format, out_format)
+    z_tri = to_triton(np.empty(out_format, dtype=np.int32), device=device)
+    patched_kernel[(1, )](z_tri, x_tri, out_format)
+    np.testing.assert_equal(z, to_numpy(z_tri))
+
+
 # -------------
 # test call
 # -------------

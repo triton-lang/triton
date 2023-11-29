@@ -184,17 +184,8 @@ static std::string locationToString(mlir::Location loc) {
 static void outputWarning(mlir::Location loc, const std::string &msg) {
   std::string locStr = locationToString(loc);
 
-  py::exec(
-      R"(
-import warnings
-
-def custom_showwarning(message, category, filename, lineno, file=None, line=None):
-    print(f"UserWarning: {message}")
-
-warnings.showwarning = custom_showwarning
-warnings.warn(f"{loc}: {msg}")
-)",
-      py::globals(), py::dict(py::arg("loc") = locStr, py::arg("msg") = msg));
+  PyErr_WarnEx(PyExc_UserWarning, (locStr + ": " + msg).c_str(),
+               /*stack_level=*/2);
 }
 
 /*****************************************************************************/
@@ -1359,14 +1350,14 @@ void init_triton_ir(py::module &&m) {
              self.create<mlir::triton::StoreOp>(ptrs, val, mask, cacheModifier,
                                                 evictionPolicy);
            })
-      .def("create_view",
+      .def("create_reshape",
            [](TritonOpBuilder &self, mlir::Value &arg,
-              std::vector<int64_t> &shape) -> mlir::Value {
-             auto argType = arg.getType()
-                                .dyn_cast<mlir::RankedTensorType>()
-                                .getElementType();
-             return self.create<mlir::triton::ViewOp>(
-                 mlir::RankedTensorType::get(shape, argType), arg);
+              std::vector<int64_t> &shape, bool allowReorder) -> mlir::Value {
+             auto argType =
+                 arg.getType().cast<mlir::RankedTensorType>().getElementType();
+             return self.create<mlir::triton::ReshapeOp>(
+                 mlir::RankedTensorType::get(shape, argType), arg,
+                 allowReorder);
            })
       .def(
           "create_expand_dims",
@@ -1857,7 +1848,14 @@ void init_triton_translation(py::module &m) {
   m.def("get_num_warps", [](mlir::ModuleOp mod) {
     auto shared = mod->getAttrOfType<mlir::IntegerAttr>("triton_gpu.num-warps");
     assert(shared);
-    return shared.getInt();
+    int num_warps = shared.getInt();
+
+    if (auto attr = mod->getAttrOfType<mlir::IntegerAttr>(
+            "triton_gpu.num-warp-groups-per-cta")) {
+      num_warps *= attr.getInt();
+    }
+
+    return num_warps;
   });
 
   m.def(

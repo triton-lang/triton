@@ -7,7 +7,7 @@ on:
 jobs:
   Build-Documentation:
     runs-on: [self-hosted, A100]
-    timeout-minutes: 5
+    timeout-minutes: 20
 
     steps:
       - name: Checkout branch

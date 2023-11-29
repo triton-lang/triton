@@ -684,15 +684,41 @@ public:
         constantValue = lhsInfo.getConstantValue();
       }
     } else {
+      // The condition can be either a tensor or i1.
+      // If i1 is used as the condition, the entire tensor of either
+      // lhs or rhs is selected.
+      bool i1Cond = op.getOperand(0).getType().template isa<IntegerType>();
       for (auto d = 0; d < rank; ++d) {
-        constancy.push_back(
-            std::min(gcd(lhsInfo.getConstancy(d), condConstancy[d]),
-                     gcd(rhsInfo.getConstancy(d), condConstancy[d])));
-        divisibility.push_back(
-            std::min(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d)));
-        contiguity.push_back(
-            std::min(gcd(lhsInfo.getContiguity(d), condConstancy[d]),
-                     gcd(rhsInfo.getContiguity(d), condConstancy[d])));
+        if (i1Cond) {
+          constancy.push_back(
+              std::min(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
+          divisibility.push_back(
+              std::min(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d)));
+          contiguity.push_back(
+              std::min(lhsInfo.getContiguity(d), rhsInfo.getContiguity(d)));
+        } else {
+          constancy.push_back(
+              std::min(gcd(lhsInfo.getConstancy(d), condConstancy[d]),
+                       gcd(rhsInfo.getConstancy(d), condConstancy[d])));
+          contiguity.push_back(
+              std::min(gcd(lhsInfo.getContiguity(d), condConstancy[d]),
+                       gcd(rhsInfo.getContiguity(d), condConstancy[d])));
+          if (contiguity.back() == lhsInfo.getContiguity(d) &&
+              contiguity.back() == rhsInfo.getContiguity(d)) {
+            // Contiguity not changed
+            divisibility.push_back(
+                gcd(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d)));
+          } else {
+            // Contiguity changed, we cannot use only divisibility.
+            // For example, the following example should have contiguity 2 and
+            // divisibility 2
+            // [[0, 1], [4, 5]]
+            // [[16, 17, 18, 19]]
+            divisibility.push_back(
+                std::min(gcd(lhsInfo.getDivisibility(d), contiguity.back()),
+                         gcd(rhsInfo.getDivisibility(d), contiguity.back())));
+          }
+        }
       }
       if (lhsInfo.getConstantValue().has_value() &&
           rhsInfo.getConstantValue().has_value() &&

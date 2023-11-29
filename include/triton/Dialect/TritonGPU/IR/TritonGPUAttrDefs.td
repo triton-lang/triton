@@ -82,6 +82,8 @@ def CTALayoutAttr : TritonGPU_Attr<"CTALayout"> {
         "Unsupported getTotalElemsPerThread in CTALayoutAttr.");
     }
   }];
+
+  let genVerifyDecl = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -477,6 +479,7 @@ for
     ArrayRefParameter<"unsigned">:$order, // the fastest-changing axis first
     "CTALayoutAttr":$CTALayout
   );
+  let genVerifyDecl = 1;
 
   let builders = [
     AttrBuilder<(ins "ArrayRef<int64_t>":$shape,

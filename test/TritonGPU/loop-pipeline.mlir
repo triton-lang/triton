@@ -2,8 +2,8 @@
 
 // 4 warps
 // matmul: 128x32 @ 32x128 -> 128x128
-#AL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 1]}>
-#BL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 1]}>
+#AL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#BL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #ALs0 = #triton_gpu.slice<{parent=#AL, dim=0}>
 #BLs0 = #triton_gpu.slice<{parent=#BL, dim=0}>
 #BLs1 = #triton_gpu.slice<{parent=#BL, dim=1}>
@@ -48,6 +48,8 @@
 // CHECK:   %[[NEXT_A:.*]] = triton_gpu.extract_slice %{{.+}}[%[[EXT_IDX_3]], 0, 0]
 // CHECK:   %[[NEXT_B:.*]] = triton_gpu.extract_slice %{{.+}}[%[[EXT_IDX_3]], 0, 0]
 // CHECK:   scf.yield {{.*}}, %[[NEXT_A_BUFFER]], %[[NEXT_B_BUFFER]], %[[INS_IDX_3]], %[[EXT_IDX_3]], %[[NEXT_A]], %[[NEXT_B]]
+
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.compute-capability" = 80} {
 tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
                   %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
                   %B : !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #C> {
@@ -166,7 +168,6 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
   }
   tt.return %loop1#0 : tensor<128x128xf32, #C>
 }
-
 
 // CHECK-LABEL: tt.func @matmul_loop_single_pipeline
 // CHECK-DAG: %[[CONSTANT_0:.*]] = arith.constant 0 : i32
@@ -494,6 +495,7 @@ tt.func @dep_arg_two_uses(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32},
   }
   tt.return %91#3 : tensor<128x128xf32, #C>
 }
+}  // end module
 
 // -----
 
@@ -636,4 +638,4 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     }
     tt.return
   }
-}
+}  // end module
