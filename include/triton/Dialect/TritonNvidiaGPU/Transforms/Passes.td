@@ -218,7 +218,11 @@ def TritonGPURewriteTensorPointer : Pass</*cli-arg*/"tritongpu-rewrite-tensor-po
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];
 
-  let options = [];
+  let options = [
+    Option<"computeCapability", "compute-capability",
+           "int32_t", /*default*/"80",
+           "device compute capability">
+  ];
 }
 
 def TritonGPUWSFixupMissingAttrs : Pass<"triton-nvidia-gpu-ws-fixup-missing-attrs", "mlir::ModuleOp"> {

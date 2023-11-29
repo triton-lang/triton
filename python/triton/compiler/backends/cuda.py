@@ -106,8 +106,7 @@ class CUDABackend(BaseBackend):
         pm.add_tritongpu_coalesce_pass()
         # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
         pm.add_plan_cta_pass(cluster_info)
-        if capability // 10 < 9:
-            pm.add_tritongpu_rewrite_tensor_pointer_pass()
+        pm.add_tritongpu_rewrite_tensor_pointer_pass(capability)
         pm.add_plan_cta_pass(cluster_info)
         pm.add_tritongpu_remove_layout_conversions_pass()
         pm.add_tritongpu_accelerate_matmul_pass(capability)

@@ -71,8 +71,8 @@ bool isDivisible(Value v, unsigned divisor) {
   }
 }
 
-bool shouldRemove(tt::MakeTensorPtrOp &op) {
-  if (!::triton::tools::getBoolEnv("ENABLE_TMA"))
+bool shouldRemove(tt::MakeTensorPtrOp &op, int computeCapability) {
+  if (computeCapability < 90 || !::triton::tools::getBoolEnv("ENABLE_TMA"))
     return true;
   auto resType = op.getResult()
                      .getType()
@@ -395,7 +395,13 @@ private:
   DenseMap<Value, RewritedInfo> rewritedInfo;
 
 public:
+  // explicit TritonGPURewriteTensorPointerPass(int computeCapability)
+  //     : computeCapability(computeCapability) {}
+
   TritonGPURewriteTensorPointerPass() = default;
+  TritonGPURewriteTensorPointerPass(int computeCapability) {
+    this->computeCapability = computeCapability;
+  }
 
   static bool needRewrite(Operation *op, const DenseSet<Value> &valueToRemove) {
     if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
@@ -797,14 +803,14 @@ public:
     DenseSet<Value> valueToRemove;
     mod.walk([&valueToRemove, this](Operation *op) {
       if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
-        if (shouldRemove(makeTensorPtrOp))
+        if (shouldRemove(makeTensorPtrOp, this->computeCapability))
           valueToRemove.insert(op->getResult(0));
       }
       if (llvm::isa<tt::AdvanceOp>(op)) {
         auto src = op->getOperand(0);
         if (tt::isTensorPointerType(src.getType())) {
           auto makeTensorPtrOp = getMakeTensorPtrOp(src);
-          if (shouldRemove(makeTensorPtrOp)) {
+          if (shouldRemove(makeTensorPtrOp, this->computeCapability)) {
             valueToRemove.insert(op->getResult(0));
           }
         }
@@ -813,7 +819,7 @@ public:
         auto src = op->getOperand(0);
         if (tt::isTensorPointerType(src.getType())) {
           auto makeTensorPtrOp = getMakeTensorPtrOp(src);
-          if (shouldRemove(makeTensorPtrOp))
+          if (shouldRemove(makeTensorPtrOp, this->computeCapability))
             valueToRemove.insert(src);
         }
       }
@@ -822,7 +828,7 @@ public:
         for (unsigned i = 0, size = forOp.getInitArgs().size(); i < size; ++i) {
           if (tt::isTensorPointerType(iterOperands[i].getType())) {
             auto makeTensorPtrOp = getMakeTensorPtrOp(iterOperands[i]);
-            if (shouldRemove(makeTensorPtrOp))
+            if (shouldRemove(makeTensorPtrOp, this->computeCapability))
               valueToRemove.insert(iterOperands[i]);
           }
         }
@@ -831,7 +837,7 @@ public:
         for (unsigned i = 0, size = yieldOp.getNumOperands(); i < size; ++i) {
           if (tt::isTensorPointerType(operands[i].getType())) {
             auto makeTensorPtrOp = getMakeTensorPtrOp(operands[i]);
-            if (shouldRemove(makeTensorPtrOp))
+            if (shouldRemove(makeTensorPtrOp, this->computeCapability))
               valueToRemove.insert(operands[i]);
           }
         }
@@ -864,6 +870,7 @@ public:
   }
 };
 
-std::unique_ptr<Pass> mlir::createTritonGPURewriteTensorPointerPass() {
-  return std::make_unique<TritonGPURewriteTensorPointerPass>();
+std::unique_ptr<Pass>
+mlir::createTritonGPURewriteTensorPointerPass(int computeCapability) {
+  return std::make_unique<TritonGPURewriteTensorPointerPass>(computeCapability);
 }
