@@ -19,7 +19,7 @@ import re
 
 
 @dataclass
-class InstanceDescriptor:
+class AttrsDescriptor:
     divisible_by_16: set = None
     equal_to_1: set = None
     ids_of_folded_args: set = None
@@ -37,23 +37,6 @@ class InstanceDescriptor:
 
     def hash(self):
         key = str([sorted(x) for x in self.__dict__.values()])
-        return hashlib.md5(key.encode("utf-8")).hexdigest()
-
-
-@dataclass
-class SpecializationDescriptor:
-    config: InstanceDescriptor
-    signature: dict
-    constants: dict
-
-    def __post_init__(self):
-        if isinstance(self.signature, str):
-            self.signature = {k: v.strip() for k, v in enumerate(self.signature.split(","))}
-        if self.constants is None:
-            self.constants = dict()
-
-    def hash(self):
-        key = f"{self.config.hash()}-{self.signature.values()}-{self.constants}"
         return hashlib.md5(key.encode("utf-8")).hexdigest()
 
 
@@ -113,25 +96,28 @@ def _get_num_warps_from_ir_str(src: str):
 
 class ASTSource:
 
-    def __init__(self, fn, signature, constants, config) -> None:
+    def __init__(self, fn, signature, constants, attrs) -> None:
         self.fn = fn
         self.ext = "ttir"
         self.name = fn.__name__
         self.signature = signature
         self.constants = constants
-        self.config = config
+        self.attrs = attrs
         if isinstance(self.signature, str):
             self.signature = {k: v.strip() for k, v in enumerate(self.signature.split(","))}
         if self.constants is None:
             self.constants = dict()
 
     def hash(self):
-        key = f"{self.fn.cache_key}-{self.config.hash()}-{self.signature.values()}-{self.constants}"
+        key = f"{self.fn.cache_key}-{self.attrs.hash()}-{self.signature.values()}-{self.constants}"
         return hashlib.md5(key.encode("utf-8")).hexdigest()
 
     def make_ir(self, options):
-        specialization = SpecializationDescriptor(self.config, self.signature, self.constants)
-        return ast_to_ttir(self.fn, specialization, options=options)
+        return ast_to_ttir(self.fn, self, options=options)
+
+    def metadata(self):
+        # TODO: remove once TMA support is cleaned up
+        return {"ids_of_folded_args": tuple([int(k) for k in self.attrs.ids_of_folded_args])}
 
     def update_options(self, options):
         pass
@@ -159,30 +145,27 @@ class IRSource:
         module.context = context
         return module
 
+    def metadata(self):
+        return dict()
+
     def update_options(self, options):
         if self.ext == "ttgir":
             options.num_warps = _get_num_warps_from_ir_str(self.src)
 
 
-def compile(src, target=None, signature=None, configs=None, constants=None, extern_libs=None, **kwargs):
-    # TODO (backward-breaking):
-    #   - merge InstanceDescriptor and SpecializationDescriptor
-    #   - no more configs
-    #   - extern_libs => linker_flags: dict
-    #   - **kwargs -> compiler_flags: dict
+def compile(src, target=None, compiler_options=None, linker_options=None):
     if target is None:
         target = get_current_target()
     backend = CUDABackend(target)
-    configs = [InstanceDescriptor()] if configs is None else configs
-    assert len(configs) == 1
-    config = configs[0]
     # create backend
-    src = IRSource(src) if isinstance(src, str) else ASTSource(src, signature, constants, config)
-    options = backend.parse_options(**kwargs)
-    src.update_options(options)
-
+    compiler_options = backend.parse_compiler_options(compiler_options)
+    linker_options = backend.parse_linker_options(linker_options)
+    if not isinstance(src, ASTSource):
+        assert isinstance(src, str), "source must be either AST or a filepath"
+        src = IRSource(src)
+    src.update_options(compiler_options)
     # create cache manager
-    key = f"{src.hash()}-{backend.hash()}-{options.hash()}-{frozenset(sorted(get_env_vars().items()))}"
+    key = f"{src.hash()}-{backend.hash()}-{compiler_options.hash()}-{frozenset(sorted(get_env_vars().items()))}"
     hash = hashlib.md5(key.encode("utf-8")).hexdigest()
     fn_cache_manager = get_cache_manager(hash)
     metadata_filename = f"{src.name}.json"
@@ -193,22 +176,19 @@ def compile(src, target=None, signature=None, configs=None, constants=None, exte
         metadata = json.loads(Path(metadata_path).read_text())
         so_path = backend.make_launcher_stub(src, metadata)
         return CompiledKernel(so_path, metadata_path)
-
     # initialize metadata
     metadata = {
         "target": target,
-        **options.__dict__,
-        **get_env_vars(),
+        "compiler_options": compiler_options.__dict__,
+        "linker_options": linker_options.__dict__,
+        "environment": get_env_vars(),
+        **src.metadata(),
     }
-    # TODO: remove once TMA support is cleaned up
-    if signature is not None:
-        metadata["ids_of_folded_args"] = tuple([int(k) for k in config.ids_of_folded_args])
     # run compilation pipeline  and populate metadata
     stages = dict()
-    backend.add_stages(extern_libs, stages, options)
-    #
+    backend.add_stages(stages, compiler_options, linker_options)
     first_stage = list(stages.keys()).index(src.ext)
-    module = src.make_ir(options)
+    module = src.make_ir(compiler_options)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         metadata_group[f"{src.name}.{ext}"] = fn_cache_manager.put(next_module, f"{src.name}.{ext}")
@@ -243,8 +223,10 @@ class CompiledKernel:
                                             ] if 'tensormaps_info' in self.metadata else []
         for i, _ in enumerate(self.metadata["tensormaps_info"]):
             self.metadata["tensormaps_info"][i].ids_of_folded_args = tuple(self.metadata["ids_of_folded_args"])
-        for key, val in self.metadata.items():
+        for key, val in self.metadata["compiler_options"].items():
             setattr(self, key, val)
+        self.shared = self.metadata["shared"]
+        self.name = self.metadata["name"]
         # stores the text of each level of IR that was generated during compilation
         asm_files = [file for file in metadata_path.parent.glob(f'{metadata_path.stem}.*') if file.suffix != '.json']
         self.asm = {
