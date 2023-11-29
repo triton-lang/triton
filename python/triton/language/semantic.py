@@ -641,7 +641,8 @@ def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder) -> tl.tensor:
     src_sca_ty = src_ty.scalar
     dst_sca_ty = dst_ty.scalar
 
-    assert builder.options.allow_fp8e4nv, "fp8e4nv data type is not supported on CUDA arch < 89"
+    if (src_sca_ty.is_fp8e4nv() or dst_sca_ty.is_fp8e4nv()):
+        assert builder.options.allow_fp8e4nv, "fp8e4nv data type is not supported on CUDA arch < 89"
 
     # Casting with customized floating types involved: fp8 <=> bf16, fp16, fp32, fp64
     if (src_sca_ty.is_fp8() and dst_sca_ty.is_floating()) or \
