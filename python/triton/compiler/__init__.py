@@ -1,7 +1,7 @@
-from .compiler import (CompiledKernel, compile, InstanceDescriptor)
+from .compiler import (CompiledKernel, ASTSource, compile, AttrsDescriptor)
 from .errors import CompilationError
 
 __all__ = [
-    "compile", "InstanceDescriptor", "CompiledKernel", "CompilationError", "get_arch_default_num_warps",
+    "compile", "ASTSource", "AttrsDescriptor", "CompiledKernel", "CompilationError", "get_arch_default_num_warps",
     "get_arch_default_num_stages"
 ]

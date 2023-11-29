@@ -261,7 +261,7 @@ class JITFunction(KernelInterface[T]):
 
     # TODO(jlebar): Fold this into the KernelArg class.
     def _get_config(self, *args):
-        from ..compiler import InstanceDescriptor
+        from ..compiler import AttrsDescriptor
 
         def is_divisible_by_16(x):
             if hasattr(x, "data_ptr"):
@@ -298,8 +298,8 @@ class JITFunction(KernelInterface[T]):
         # TODO: method to collect all folded args
         none_args = {param.num for param, arg in zip(self.params, args) if arg is None and not param.do_not_specialize}
         ids_of_folded_args = equal_to_1 | none_args
-        return InstanceDescriptor(tuple(divisible_by_16), tuple(equal_to_1), tuple(ids_of_folded_args),
-                                  tuple(divisible_by_8))
+        return AttrsDescriptor(tuple(divisible_by_16), tuple(equal_to_1), tuple(ids_of_folded_args),
+                               tuple(divisible_by_8))
         # return _triton.code_gen.instance_descriptor(divisible_by_16,
         # equal_to_1)
 
@@ -408,7 +408,7 @@ class JITFunction(KernelInterface[T]):
         return device_types[0] if len(device_types) > 0 else "cuda"
 
     def run(self, *args, **kwargs):
-        from ..compiler import CompiledKernel, compile
+        from ..compiler import CompiledKernel, compile, ASTSource
 
         # Get a compiler-flags arg like `num_warps` and remove it from kwargs.
         def get_special_arg(name: str, default=None):
@@ -539,19 +539,19 @@ class JITFunction(KernelInterface[T]):
 
             capability = get_device_capability(device)
             capability = capability[0] * 10 + capability[1]
+            src = ASTSource(self, signature, constants, configs[0])
             self.cache[device][key] = compile(
-                self,
+                src,
                 target=(device_type, capability),
-                signature=signature,
-                constants=constants,
-                num_warps=num_warps,
-                num_ctas=num_ctas,
-                num_stages=num_stages,
-                enable_warp_specialization=enable_warp_specialization,
-                enable_fp_fusion=enable_fp_fusion,
-                extern_libs=extern_libs,
-                configs=[configs[0]],
-                debug=self.debug,
+                compiler_options={
+                    "num_warps": num_warps,
+                    "num_ctas": num_ctas,
+                    "num_stages": num_stages,
+                    "enable_warp_specialization": enable_warp_specialization,
+                    "enable_fp_fusion": enable_fp_fusion,
+                    "debug": self.debug,
+                },
+                linker_options={"libs": extern_libs},
             )
 
         bin = self.cache[device][key]

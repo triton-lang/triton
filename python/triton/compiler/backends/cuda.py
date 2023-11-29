@@ -50,7 +50,6 @@ class CUDAOptions:
     enable_persistent: bool = False
     optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
-    extern_libs = None
     allow_fp8e4nv: bool = False
     max_num_imprecise_acc_default: bool = None
     debug: bool = False
@@ -64,6 +63,11 @@ class CUDAOptions:
         return hashlib.md5(key.encode("utf-8")).hexdigest()
 
 
+@dataclass
+class CUDALinkerOptions:
+    libs: dict = None
+
+
 class CUDABackend(BaseBackend):
 
     def __init__(self, device_type: tuple) -> None:
@@ -71,11 +75,14 @@ class CUDABackend(BaseBackend):
         self.capability = device_type[1]
         assert isinstance(self.capability, int)
 
-    def parse_options(self, **opts) -> Any:
+    def parse_compiler_options(self, opts) -> Any:
         options = CUDAOptions(**opts)
         options.allow_fp8e4nv = self.capability >= 89
         options.max_num_imprecise_acc_default = 0 if self.capability >= 89 else None
         return options
+
+    def parse_linker_options(self, opts) -> Any:
+        return CUDALinkerOptions(**opts)
 
     @staticmethod
     def make_ttir(mod, metadata, opt):
@@ -156,15 +163,15 @@ class CUDABackend(BaseBackend):
         return mod
 
     @staticmethod
-    def make_llir(src, metadata, opt, capability):
+    def make_llir(src, metadata, linker_options, capability):
         metadata["enable_warp_specialization"] = ir.is_ws_supported(src)
         metadata["num_warps"] = get_num_warps(src)
         tma_infos = TMAInfos()
-
-        if opt.extern_libs:
-            add_external_libs(src, list(opt.extern_libs.keys()), list(opt.extern_libs.values()))
+        # link libraries
+        if linker_options.libs:
+            add_external_libs(src, list(linker_options.libs.keys()), list(linker_options.libs.values()))
+        # TritonGPU -> LLVM-IR
         ret = translate_triton_gpu_to_llvmir(src, capability, tma_infos, runtime.TARGET.NVVM)
-
         if len(tma_infos) > 0:
             metadata["tensormaps_info"] = parse_tma_info(tma_infos, metadata["ids_of_folded_args"])
             for i, _ in enumerate(metadata["tensormaps_info"]):
@@ -187,12 +194,12 @@ class CUDABackend(BaseBackend):
         ptxas, _ = path_to_ptxas()
         return compile_ptx_to_cubin(src, ptxas, capability, opt.enable_fp_fusion)
 
-    def add_stages(self, extern_libs, stages, opt):
-        stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, opt)
-        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, opt, self.capability)
-        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, opt, self.capability)
-        stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, opt, self.capability)
-        stages["cubin"] = lambda src, metadata: self.make_cubin(src, metadata, opt, self.capability)
+    def add_stages(self, stages, compiler_options, linker_options):
+        stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, compiler_options)
+        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, compiler_options, self.capability)
+        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, linker_options, self.capability)
+        stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, compiler_options, self.capability)
+        stages["cubin"] = lambda src, metadata: self.make_cubin(src, metadata, compiler_options, self.capability)
 
     def hash(self):
         return f'{get_cuda_version_key()}-{self.capability}'

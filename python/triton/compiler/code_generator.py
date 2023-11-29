@@ -1190,7 +1190,7 @@ def kernel_suffix(signature, specialization):
 
 
 def ast_to_ttir(fn, specialization, options):
-    config = specialization.config
+    attrs = specialization.attrs
     context = ir.context()
     context.load_triton()
     # create kernel prototype
@@ -1198,13 +1198,13 @@ def ast_to_ttir(fn, specialization, options):
     constants = {cst_key(key): value for key, value in specialization.constants.items()}
     # visit kernel AST
     gscope = fn.__globals__.copy()
-    function_name = '_'.join([fn.__name__, kernel_suffix(specialization.signature.values(), config)])
+    function_name = '_'.join([fn.__name__, kernel_suffix(specialization.signature.values(), attrs)])
     tys = list(specialization.signature.values())
-    new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for k in config.equal_to_1}
-    new_attrs = {k: [("tt.divisibility", 16)] for k in config.divisible_by_16}
-    for k in config.divisible_by_8:
+    new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for k in attrs.equal_to_1}
+    new_attrs = {k: [("tt.divisibility", 16)] for k in attrs.divisible_by_16}
+    for k in attrs.divisible_by_8:
         attr = new_attrs[k] if k in new_attrs else []
-        if k in config.divisible_by_16:
+        if k in attrs.divisible_by_16:
             attr.append(("tt.max_divisibility", 16))
         else:
             attr.append(("tt.max_divisibility", 8))
