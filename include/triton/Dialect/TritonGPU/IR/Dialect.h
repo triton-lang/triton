@@ -69,8 +69,6 @@ getThreadsPerWarpWithUniqueData(Attribute layout,
 SmallVector<unsigned>
 getWarpsPerCTAWithUniqueData(Attribute layout, ArrayRef<int64_t> tensorShape);
 
-SmallVector<unsigned> getThreadsPerCTA(Attribute layout);
-
 SmallVector<unsigned> getOrder(Attribute layout);
 
 CTALayoutAttr getCTALayout(Attribute layout);
