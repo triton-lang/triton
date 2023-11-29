@@ -279,7 +279,7 @@ class CompiledKernel:
         self._init_handles()
 
         def runner(*args, stream=None):
-            args_expand = driver.assemble_tensormap_to_arg(args)
+            args_expand = driver.assemble_tensormap_to_arg(self.tensormaps_info, args)
             if stream is None:
                 stream = get_cuda_stream()
             self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.num_ctas, self.cluster_dims[0],
