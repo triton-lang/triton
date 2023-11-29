@@ -40,7 +40,11 @@ def TritonRewriteTensorPointer : Pass</*cli-arg*/"triton-rewrite-tensor-pointer"
 
   let dependentDialects = ["mlir::triton::TritonDialect"];
 
-  let options = [];
+  let options = [
+    Option<"computeCapability", "compute-capability",
+           "int32_t", /*default*/"80",
+           "device compute capability">
+  ];
 }
 
 #endif

@@ -1685,8 +1685,9 @@ void init_triton_ir(py::module &&m) {
              self.addPass(mlir::triton::createReorderBroadcastPass());
            })
       .def("add_rewrite_tensor_pointer_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::triton::createRewriteTensorPointerPass());
+           [](mlir::PassManager &self, int capability) {
+             self.addPass(
+                 mlir::triton::createRewriteTensorPointerPass(capability));
            })
       .def("add_tritongpu_ws_feasibility_checking_pass",
            [](mlir::PassManager &self, int computeCapability) {
@@ -1760,8 +1761,9 @@ void init_triton_ir(py::module &&m) {
              self.addPass(mlir::createTritonGPUReorderInstructionsPass());
            })
       .def("add_tritongpu_rewrite_tensor_pointer_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::createTritonGPURewriteTensorPointerPass());
+           [](mlir::PassManager &self, int capability) {
+             self.addPass(
+                 mlir::createTritonGPURewriteTensorPointerPass(capability));
            })
       .def("add_tritongpu_decompose_conversions_pass",
            [](mlir::PassManager &self) {
