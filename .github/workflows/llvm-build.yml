@@ -135,6 +135,7 @@ jobs:
       run: |
         # if this step crashes, it can leave behind a stale docker container
         docker container prune -f
+        docker rmi -f $(docker images -q)
 
         docker build --tag llvm-build --build-arg llvm_dir=llvm-project \
           -f llvm-build/.github/workflows/llvm-build/Dockerfile .

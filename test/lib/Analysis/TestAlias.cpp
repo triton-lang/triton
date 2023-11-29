@@ -87,7 +87,7 @@ struct TestAliasPass
       }
       if (auto forOp = dyn_cast<scf::ForOp>(op)) {
         for (auto arg : llvm::enumerate(forOp.getRegionIterArgs())) {
-          auto operand = forOp.getOpOperandForRegionIterArg(arg.value()).get();
+          auto operand = forOp.getTiedLoopInit(arg.value())->get();
           auto opNames = getAllocOpNames(operand);
           auto argName = getValueOperandName(arg.value(), state);
           print(argName, opNames, os);

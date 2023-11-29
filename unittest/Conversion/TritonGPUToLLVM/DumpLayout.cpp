@@ -69,7 +69,7 @@ public:
                           Type elemTy, llvm::ArrayRef<int64_t> shape,
                           bool withCTAOffset) {
     auto srcTy = RankedTensorType::get(shape, elemTy, srcLayout);
-    SharedMemoryObject smemObj(getMockSmemBase(), shape,
+    SharedMemoryObject smemObj(getMockSmemBase(), elemTy, shape,
                                sharedLayout.getOrder(), loc, rewriter);
     return base.getSwizzledSharedPtrs(loc, /*inVec=*/1, srcTy, sharedLayout,
                                       elemTy, smemObj, rewriter,
@@ -80,8 +80,7 @@ private:
   Value getMockSmemBase() {
     Value mockSmemBase =
         mlir::LLVM::getSRegValue(rewriter, loc, "%mock_smem_base");
-    auto llPtrTy = LLVM::LLVMPointerType::get(
-        typeConverter.convertType(rewriter.getI8Type()), 3);
+    auto llPtrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
     auto cast = rewriter.create<UnrealizedConversionCastOp>(
         loc, TypeRange{llPtrTy}, ValueRange{mockSmemBase});
     return cast.getResult(0);
@@ -144,7 +143,7 @@ int evalGEPOp(mlir::LLVM::GEPOp gepOp, int ctaid, int tid) {
   int base = eval(gepOp.getBase(), ctaid, tid);
   int offset = eval(gepOp.getOperand(1), ctaid, tid);
   auto llPtrTy = gepOp.getRes().getType().cast<LLVM::LLVMPointerType>();
-  int bytesPerElem = llPtrTy.getElementType().getIntOrFloatBitWidth() / 8;
+  int bytesPerElem = llPtrTy.getIntOrFloatBitWidth() / 8;
   return base + offset * bytesPerElem;
 }
 
