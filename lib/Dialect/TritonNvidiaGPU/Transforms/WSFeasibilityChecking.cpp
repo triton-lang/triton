@@ -57,11 +57,6 @@ public:
                         "the unspecialized version...\n";
       });
     }
-    // TODO: remove it when unspecialzied kernel supports NUM_CTAS>1
-    if (mod->getAttrOfType<IntegerAttr>("triton_gpu.num-ctas").getInt() > 1 &&
-        wsSupported == 0)
-      llvm::report_fatal_error(
-          "Currently unspecialized kernel doesn't support NUM_CTAS > 1");
   }
 };
 
