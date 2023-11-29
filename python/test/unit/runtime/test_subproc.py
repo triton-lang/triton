@@ -6,6 +6,7 @@ import torch
 
 import triton
 import triton.language as tl
+from triton.compiler import ASTSource
 
 tmpdir = ".tmp"
 
@@ -16,20 +17,20 @@ def reset_tmp_dir():
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def compile_fn(config, cc):
+def compile_fn(attrs, capability):
 
     @triton.jit
     def kernel_sub(a, b, o, N: tl.constexpr):
         idx = tl.arange(0, N)
         tl.store(o + idx, tl.load(a + idx) - tl.load(b + idx) * 777)
 
-    triton.compile(
-        src=kernel_sub,
-        signature={0: "*fp32", 1: "*fp32", 2: "*fp32"},
-        target=("cuda", cc),
+    src = ASTSource(
+        fn=kernel_sub,
         constants={3: 32},
-        configs=[config],
+        signature={0: "*fp32", 1: "*fp32", 2: "*fp32"},
+        attrs=attrs,
     )
+    triton.compile(src=src, target=("cuda", capability))
 
 
 def test_compile_in_subproc() -> None:
@@ -44,7 +45,7 @@ def test_compile_in_subproc() -> None:
     assert proc.exitcode == 0
 
 
-def compile_fn_dot(config, cc):
+def compile_fn_dot(attrs, capability):
 
     @triton.jit
     def kernel_dot(Z):
@@ -53,22 +54,22 @@ def compile_fn_dot(config, cc):
         z = tl.dot(z, z)
         tl.store(Z + offs, z)
 
-    triton.compile(
-        src=kernel_dot,
+    src = ASTSource(
+        fn=kernel_dot,
         signature={0: "*fp32"},
-        target=("cuda", cc),
-        configs=[config],
+        attrs=attrs,
     )
+    triton.compile(src=src, target=("cuda", capability))
 
 
 def test_compile_in_forked_subproc() -> None:
     reset_tmp_dir()
     major, minor = torch.cuda.get_device_capability(0)
-    cc = major * 10 + minor
-    config = triton.compiler.InstanceDescriptor(tuple(range(1)), (), (), ())
+    capability = major * 10 + minor
+    config = triton.compiler.AttrsDescriptor(tuple(range(1)), (), (), ())
 
     assert multiprocessing.get_start_method() == 'fork'
-    proc = multiprocessing.Process(target=compile_fn_dot, args=(config, cc))
+    proc = multiprocessing.Process(target=compile_fn_dot, args=(config, capability))
     proc.start()
     proc.join()
     assert proc.exitcode == 0
