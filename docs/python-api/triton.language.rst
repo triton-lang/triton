@@ -191,4 +191,3 @@ Iterators
     :nosignatures:
 
     static_range
-    multiple_of
