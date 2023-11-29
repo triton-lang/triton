@@ -67,6 +67,9 @@ class CUDAOptions:
 class CUDALinkerOptions:
     libs: dict = None
 
+    def __post_init__(self):
+        self.libs = {k: v for k, v in self.libs.items() if v}
+
 
 class CUDABackend(BaseBackend):
 
