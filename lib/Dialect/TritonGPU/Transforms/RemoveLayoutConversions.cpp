@@ -907,8 +907,9 @@ static void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp) {
 
   if (extOrBroadcatOp == nullptr)
     return;
+  Attribute dstEncoding = layout[extOrBroadcatOp->getResult(0)];
   std::optional<Attribute> srcEncoding =
-      inferSrcEncoding(extOrBroadcatOp, layout[extOrBroadcatOp->getResult(0)]);
+      inferSrcEncoding(extOrBroadcatOp, dstEncoding);
   if (!srcEncoding)
     return;
   // Move the convert before the ext op and rewrite the slice.
@@ -919,8 +920,17 @@ static void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp) {
       tensorType.getShape(), tensorType.getElementType(), *srcEncoding);
   auto newConvertOp = builder.create<ConvertLayoutOp>(
       convertOp.getLoc(), newType, extOrBroadcatOp->getOperand(0));
+  Operation *newExtOrBroadcast = builder.clone(*extOrBroadcatOp);
+  newExtOrBroadcast->setOperand(0, newConvertOp.getResult());
+  auto oldExtOrBroadcastType =
+      extOrBroadcatOp->getResult(0).getType().cast<RankedTensorType>();
+  Type newExtOrBroadcasrType = RankedTensorType::get(
+      oldExtOrBroadcastType.getShape(), oldExtOrBroadcastType.getElementType(),
+      dstEncoding);
+  newExtOrBroadcast->getResult(0).setType(newExtOrBroadcasrType);
   IRMapping mapping;
-  mapping.map(extOrBroadcatOp->getOperand(0), newConvertOp.getResult());
+  mapping.map(extOrBroadcatOp->getResult(0), newExtOrBroadcast->getResult(0));
+  slice.remove(extOrBroadcatOp->getResult(0));
   // 3. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp, mapping);
 }
