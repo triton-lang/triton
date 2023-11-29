@@ -8,7 +8,7 @@ from .._C.libtriton.triton import (get_env_vars, ir)
 # TODO: runtime.errors
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
-from ..runtime.jit import get_current_device, get_cuda_stream
+from ..runtime.jit import get_current_device, get_cuda_stream, get_current_target
 from ..runtime.driver import driver
 from .utils import InfoFromBackendForTensorMap
 from .backends.cuda import CUDABackend
@@ -164,18 +164,20 @@ class IRSource:
             options.num_warps = _get_num_warps_from_ir_str(self.src)
 
 
-def compile(src, device_type=("cuda", 80), signature=None, configs=None, constants=None, extern_libs=None, **kwargs):
+def compile(src, target=None, signature=None, configs=None, constants=None, extern_libs=None, **kwargs):
     # TODO (backward-breaking):
     #   - merge InstanceDescriptor and SpecializationDescriptor
     #   - no more configs
     #   - extern_libs => linker_flags: dict
     #   - **kwargs -> compiler_flags: dict
+    if target is None:
+        target = get_current_target()
+    backend = CUDABackend(target)
     configs = [InstanceDescriptor()] if configs is None else configs
     assert len(configs) == 1
     config = configs[0]
     # create backend
     src = IRSource(src) if isinstance(src, str) else ASTSource(src, signature, constants, config)
-    backend = CUDABackend(device_type)
     options = backend.parse_options(**kwargs)
     src.update_options(options)
 
@@ -194,7 +196,7 @@ def compile(src, device_type=("cuda", 80), signature=None, configs=None, constan
 
     # initialize metadata
     metadata = {
-        "device_type": device_type,
+        "target": target,
         **options.__dict__,
         **get_env_vars(),
     }
