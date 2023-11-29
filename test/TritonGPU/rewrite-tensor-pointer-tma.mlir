@@ -1,4 +1,4 @@
-// RUN: ENABLE_TMA=1 triton-opt %s -split-input-file -tritongpu-rewrite-tensor-pointer | FileCheck %s
+// RUN: ENABLE_TMA=1 triton-opt %s -split-input-file -tritongpu-rewrite-tensor-pointer=compute-capability=90 | FileCheck %s
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [2, 2], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
