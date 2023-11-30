@@ -3060,6 +3060,35 @@ def test_constexpr_scalar_shape(device):
     np.testing.assert_equal(to_numpy(x_tri), np.arange(0, 256) % 8)
 
 
+reshape_list = [((64, ), (8, 8)), ((2, 32), (16, 4)), ((512, ), (2, 2, 2, 2, 2, 2, 2, 2, 2)), ((64, 32), (16, 8, 16))]
+
+
+@pytest.mark.parametrize("formats", reshape_list)
+def test_reshape(formats, device):
+    in_format, out_format = formats
+
+    @triton.jit
+    def kernel(Z, X, out_tuple: tl.constexpr):
+        x = tl.load(X_PTR_EXPR)
+        z = tl.reshape(x, out_tuple)
+        tl.store(Z_PTR_EXPR, z)
+
+    def generate_kernel(shape_x, shape_z):
+        to_replace = {
+            'X_PTR_EXPR': make_ptr_str('X', shape_x),
+            'Z_PTR_EXPR': make_ptr_str('Z', shape_z),
+        }
+        return patch_kernel(kernel, to_replace)
+
+    x = numpy_random(in_format, dtype_str="int32")
+    z = x.reshape(out_format)
+    x_tri = to_triton(x, device=device)
+    patched_kernel = generate_kernel(in_format, out_format)
+    z_tri = to_triton(np.empty(out_format, dtype=np.int32), device=device)
+    patched_kernel[(1, )](z_tri, x_tri, out_format)
+    np.testing.assert_equal(z, to_numpy(z_tri))
+
+
 # -------------
 # test call
 # -------------
@@ -4060,3 +4089,30 @@ def test_enable_fp_fusion(enable_fp_fusion):
 
     found_fma = re.search(r'(mad|fma)\.r[nzmp]\.(ftz\.)?f32', h.asm["ptx"]) is not None
     assert found_fma == enable_fp_fusion
+
+
+# -----------------------
+# test sort
+# -----------------------
+
+
+@pytest.mark.parametrize("M, N", [[1, 512], [8, 64], [256, 16], [512, 8]])
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("dtype_str", ['int32', 'float16', 'float32'])
+def test_sort(M, N, descending, dtype_str, device):
+
+    @triton.jit
+    def sort_kernel(X, Z, N: tl.constexpr, M: tl.constexpr, descending: tl.constexpr):
+        offx = tl.arange(0, M)
+        offy = tl.arange(0, N) * M
+        off2d = offx[None, :] + offy[:, None]
+        x = tl.load(X + off2d)
+        x = tl.sort(x, descending=descending)
+        tl.store(Z + off2d, x)
+
+    x = numpy_random((N, M), dtype_str=dtype_str)
+    x = torch.from_numpy(x).to("cuda")
+    y = torch.sort(x, descending=descending)[0]
+    z = torch.empty_like(x)
+    sort_kernel[(1, )](x, z, N, M, descending, num_warps=8)
+    assert (y == z).all(), (y, z)

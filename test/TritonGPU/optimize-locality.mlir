@@ -4,7 +4,7 @@
 // CHECK: %[[INIT_ARG:.*]] = arith.constant dense<0.000000e+00>
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[INIT_ARG]]) -> {{.*}}
 // CHECK: %[[LOAD:.*]] = tt.load
-// CHECK: tt.view %[[LOAD]] : {{.*}} -> tensor<{{32x32x4xf32.*}}
+// CHECK: tt.reshape %[[LOAD]] {allow_reorder = true} : {{.*}} -> tensor<{{32x32x4xf32.*}}
 // CHECK-NEXT: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.addf
 // CHECK: arith.addf %[[FOR_ARG]], %[[REDUCE]]
@@ -57,7 +57,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 // CHECK-NEXT: %[[CST1:.*]] = arith.constant dense<0.000000e+00>
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[CST1]]) -> {{.*}}
 // CHECK: tt.load
-// CHECK: tt.view
+// CHECK: tt.reshape
 // CHECK-NEXT: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.addf
 // CHECK: arith.addf %[[FOR_ARG]], %[[REDUCE]]
@@ -207,7 +207,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 // CHECK: %[[INIT_ARG:.*]] = arith.constant dense<0xFF800000>
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[INIT_ARG]]) -> {{.*}}
 // CHECK: %[[LOAD:.*]] = tt.load
-// CHECK: tt.view %[[LOAD]] : {{.*}} -> tensor<{{32x32x4xf32.*}}
+// CHECK: tt.reshape %[[LOAD]] {allow_reorder = true} : {{.*}} -> tensor<{{32x32x4xf32.*}}
 // CHECK-NEXT: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.maximumf
 // CHECK: arith.maximumf %[[FOR_ARG]], %[[REDUCE]]
@@ -261,7 +261,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 // CHECK-NEXT: %[[CST1:.*]] = arith.constant dense<0xFF800000>
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[CST1]]) -> {{.*}}
 // CHECK: tt.load
-// CHECK: tt.view
+// CHECK: tt.reshape
 // CHECK-NEXT: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.maximumf
 // CHECK: arith.maximumf %[[FOR_ARG]], %[[REDUCE]]
@@ -314,7 +314,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 // CHECK: %[[CST:.*]] = arith.constant dense<0x7F800000>
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[CST]]) -> {{.*}}
 // CHECK: %[[LOAD:.*]] = tt.load
-// CHECK: tt.view %[[LOAD]] : {{.*}} -> tensor<{{32x32x4xf32.*}}
+// CHECK: tt.reshape %[[LOAD]] {allow_reorder = true} : {{.*}} -> tensor<{{32x32x4xf32.*}}
 // CHECK-NEXT: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.minimumf
 // CHECK: arith.minimumf %[[FOR_ARG]], %[[REDUCE]]
@@ -368,7 +368,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 // CHECK-NEXT: %[[CST1:.*]] = arith.constant dense<0x7F800000>
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[CST1]]) -> {{.*}}
 // CHECK: tt.load
-// CHECK: tt.view
+// CHECK: tt.reshape
 // CHECK-NEXT: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.minimumf
 // CHECK: arith.minimumf %[[FOR_ARG]], %[[REDUCE]]
@@ -421,7 +421,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 // CHECK: %[[CST:.*]] = arith.constant dense<1.000000e+00>
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[CST]]) -> {{.*}}
 // CHECK: %[[LOAD:.*]] = tt.load
-// CHECK: tt.view %[[LOAD]] : {{.*}} -> tensor<{{32x32x4xf32.*}}
+// CHECK: tt.reshape %[[LOAD]] {allow_reorder = true} : {{.*}} -> tensor<{{32x32x4xf32.*}}
 // CHECK-NEXT: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.mulf
 // CHECK: arith.mulf %[[FOR_ARG]], %[[REDUCE]]
@@ -475,7 +475,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 // CHECK-NEXT: %[[CST1:.*]] = arith.constant dense<1.000000e+00>
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[CST1]]) -> {{.*}}
 // CHECK: tt.load
-// CHECK: tt.view
+// CHECK: tt.reshape
 // CHECK-NEXT: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.mulf
 // CHECK: arith.mulf %[[FOR_ARG]], %[[REDUCE]]

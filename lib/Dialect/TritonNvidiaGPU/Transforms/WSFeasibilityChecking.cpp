@@ -50,6 +50,13 @@ public:
     auto i32_ty = IntegerType::get(mod->getContext(), 32);
     mod->setAttr(ttng::TritonNvidiaGPUDialect::getWSSupportedAttrName(),
                  IntegerAttr::get(i32_ty, llvm::APInt(32, wsSupported)));
+    if (wsSupported == 0) {
+      mod->walk([](triton::FuncOp func) {
+        llvm::errs() << "Warning: kernel \'" << func.getName()
+                     << "\' cannot be warp specialized and will fall back to "
+                        "the unspecialized version...\n";
+      });
+    }
   }
 };
 

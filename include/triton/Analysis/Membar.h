@@ -113,6 +113,8 @@ private:
   /// Collects the successors of the terminator
   void visitTerminator(Operation *operation, SmallVector<Block *> &successors);
 
+  void insertBarrier(Operation *operation, OpBuilder *builder);
+
 private:
   Allocation *allocation = nullptr;
 };

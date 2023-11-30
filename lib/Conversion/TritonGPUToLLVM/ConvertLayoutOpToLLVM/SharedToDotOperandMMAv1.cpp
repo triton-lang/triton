@@ -93,12 +93,12 @@ static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
                    TritonGPUToLLVMTypeConverter *typeConverter,
                    ConversionPatternRewriter &rewriter, Type resultTy) {
   static constexpr std::array<int, 3> fpw{{2, 2, 1}};
-  auto wpt = resultTy.cast<RankedTensorType>()
-                 .getEncoding()
-                 .cast<DotOperandEncodingAttr>()
-                 .getParent()
-                 .cast<MmaEncodingAttr>()
-                 .getWarpsPerCTA();
+  auto mmaEncoding = resultTy.cast<RankedTensorType>()
+                         .getEncoding()
+                         .cast<DotOperandEncodingAttr>()
+                         .getParent()
+                         .cast<MmaEncodingAttr>();
+  auto wpt = mmaEncoding.getWarpsPerCTA();
 
   auto *ctx = rewriter.getContext();
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
@@ -114,8 +114,10 @@ static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
                             .getEncoding()
                             .cast<DotOperandEncodingAttr>();
   auto [offsetAM, offsetAK, _3, _4] = computeOffsets(
-      thread, isARow, false, fpw, resultEncoding.getMMAv1ShapePerWarp(),
-      resultEncoding.getMMAv1Rep(), rewriter, loc, resultTy);
+      thread, isARow, false, fpw,
+      mmaEncoding.getMMAv1ShapePerWarp(resultEncoding.getOpIdx()),
+      mmaEncoding.getMMAv1Rep(resultEncoding.getOpIdx()), rewriter, loc,
+      resultTy);
 
   int vecA = sharedLayout.getVec();
 
@@ -150,10 +152,10 @@ static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
   }
 
   Type elemX2Ty = vec_ty(f16_ty, 2);
-  Type elemPtrTy = ptr_ty(f16_ty, 3);
+  Type elemTy = f16_ty;
   if (tensorTy.getElementType().isBF16()) {
     elemX2Ty = vec_ty(i16_ty, 2);
-    elemPtrTy = ptr_ty(i16_ty, 3);
+    elemTy = i16_ty;
   }
 
   // prepare arguments
@@ -161,22 +163,23 @@ static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
 
   std::map<std::pair<int, int>, std::pair<Value, Value>> has;
   for (int i = 0; i < numPtrA; i++)
-    ptrA[i] = gep(ptr_ty(f16_ty, 3), smemBase, offA[i]);
+    ptrA[i] = gep(ptr_ty(ctx, 3), f16_ty, smemBase, offA[i]);
 
   auto ld = [&](decltype(has) &vals, int m, int k, Value val0, Value val1) {
     vals[{m, k}] = {val0, val1};
   };
   auto loadA = [&](int m, int k) {
     int offidx = (isARow ? k / 4 : m) % numPtrA;
-    Value thePtrA = gep(elemPtrTy, smemBase, offA[offidx]);
+    Value thePtrA = gep(ptr_ty(ctx, 3), elemTy, smemBase, offA[offidx]);
 
     int stepAM = isARow ? m : m / numPtrA * numPtrA;
     int stepAK = isARow ? k / (numPtrA * vecA) * (numPtrA * vecA) : k;
     Value offset = add(mul(i32_val(stepAM * strideRepM), strideAM),
                        mul(i32_val(stepAK), strideAK));
-    Value pa = gep(elemPtrTy, thePtrA, offset);
-    Type aPtrTy = ptr_ty(vec_ty(i32_ty, std::max<int>(vecA / 2, 1)), 3);
-    Value ha = load(bitcast(pa, aPtrTy));
+    Value pa = gep(ptr_ty(ctx, 3), elemTy, thePtrA, offset);
+    Type vecTy = vec_ty(i32_ty, std::max<int>(vecA / 2, 1));
+    Type aPtrTy = ptr_ty(ctx, 3);
+    Value ha = load(vecTy, bitcast(pa, aPtrTy));
     // record lds that needs to be moved
     Value ha00 = bitcast(extract_element(ha, i32_val(0)), elemX2Ty);
     Value ha01 = bitcast(extract_element(ha, i32_val(1)), elemX2Ty);
@@ -192,9 +195,10 @@ static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
     }
   };
 
-  bool isARow_ = resultEncoding.getMMAv1IsRow();
-  bool isAVec4 = resultEncoding.getMMAv1IsVec4();
-  unsigned numM = resultEncoding.getMMAv1NumOuter(shape);
+  bool isARow_ = mmaEncoding.getMMAv1IsRow(resultEncoding.getOpIdx());
+  bool isAVec4 = mmaEncoding.getMMAv1IsVec4(resultEncoding.getOpIdx());
+  unsigned numM =
+      mmaEncoding.getMMAv1NumOuter(shape, resultEncoding.getOpIdx());
   for (unsigned k = 0; k < NK; k += 4)
     for (unsigned m = 0; m < numM / 2; ++m)
       if (!has.count({m, k}))
@@ -216,12 +220,12 @@ static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
                    TritonGPUToLLVMTypeConverter *typeConverter,
                    ConversionPatternRewriter &rewriter, Type resultTy) {
   static constexpr std::array<int, 3> fpw{{2, 2, 1}};
-  auto wpt = resultTy.cast<RankedTensorType>()
-                 .getEncoding()
-                 .cast<DotOperandEncodingAttr>()
-                 .getParent()
-                 .cast<MmaEncodingAttr>()
-                 .getWarpsPerCTA();
+  auto mmaEncoding = resultTy.cast<RankedTensorType>()
+                         .getEncoding()
+                         .cast<DotOperandEncodingAttr>()
+                         .getParent()
+                         .cast<MmaEncodingAttr>();
+  auto wpt = mmaEncoding.getWarpsPerCTA();
   // smem
   auto strides = smemObj.strides;
 
@@ -248,8 +252,10 @@ static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
   int strideRepK = 1;
 
   auto [_3, _4, offsetBN, offsetBK] = computeOffsets(
-      thread, false, isBRow, fpw, resultEncoding.getMMAv1ShapePerWarp(),
-      resultEncoding.getMMAv1Rep(), rewriter, loc, resultTy);
+      thread, false, isBRow, fpw,
+      mmaEncoding.getMMAv1ShapePerWarp(resultEncoding.getOpIdx()),
+      mmaEncoding.getMMAv1Rep(resultEncoding.getOpIdx()), rewriter, loc,
+      resultTy);
 
   // swizzling
   int perPhaseB = sharedLayout.getPerPhase();
@@ -273,17 +279,17 @@ static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
     offB[i] = add(mul(offB0I, strideB0), mul(offB1, strideB1));
   }
 
-  Type elemPtrTy = ptr_ty(f16_ty, 3);
+  Type elemTy = f16_ty;
   Type elemX2Ty = vec_ty(f16_ty, 2);
   if (tensorTy.getElementType().isBF16()) {
-    elemPtrTy = ptr_ty(i16_ty, 3);
+    elemTy = i16_ty;
     elemX2Ty = vec_ty(i16_ty, 2);
   }
 
   SmallVector<Value> ptrB(numPtrB);
   ValueTable hbs;
   for (int i = 0; i < numPtrB; ++i)
-    ptrB[i] = gep(ptr_ty(f16_ty, 3), smem, offB[i]);
+    ptrB[i] = gep(ptr_ty(ctx, 3), f16_ty, smem, offB[i]);
 
   auto ld = [&](decltype(hbs) &vals, int m, int k, Value val0, Value val1) {
     vals[{m, k}] = {val0, val1};
@@ -297,10 +303,10 @@ static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
     int stepBK = isBRow ? K : K / (numPtrB * vecB) * (numPtrB * vecB);
     Value offset = add(mul(i32_val(stepBN * strideRepN), strideBN),
                        mul(i32_val(stepBK), strideBK));
-    Value pb = gep(elemPtrTy, thePtrB, offset);
+    Value pb = gep(ptr_ty(ctx, 3), elemTy, thePtrB, offset);
 
-    Value hb =
-        load(bitcast(pb, ptr_ty(vec_ty(i32_ty, std::max(vecB / 2, 1)), 3)));
+    Type vecTy = vec_ty(i32_ty, std::max(vecB / 2, 1));
+    Value hb = load(vecTy, bitcast(pb, ptr_ty(ctx, 3)));
     // record lds that needs to be moved
     Value hb00 = bitcast(extract_element(hb, i32_val(0)), elemX2Ty);
     Value hb01 = bitcast(extract_element(hb, i32_val(1)), elemX2Ty);
@@ -315,10 +321,11 @@ static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
     }
   };
 
-  bool isBRow_ = resultEncoding.getMMAv1IsRow();
+  bool isBRow_ = mmaEncoding.getMMAv1IsRow(resultEncoding.getOpIdx());
   assert(isBRow == isBRow_ && "B need smem isRow");
-  bool isBVec4 = resultEncoding.getMMAv1IsVec4();
-  unsigned numN = resultEncoding.getMMAv1NumOuter(shape);
+  bool isBVec4 = mmaEncoding.getMMAv1IsVec4(resultEncoding.getOpIdx());
+  unsigned numN =
+      mmaEncoding.getMMAv1NumOuter(shape, resultEncoding.getOpIdx());
   for (unsigned k = 0; k < NK; k += 4)
     for (unsigned n = 0; n < numN / 2; ++n) {
       if (!hbs.count({n, k}))
@@ -357,13 +364,11 @@ SmallVector<CoordTy> getMNCoords(Value thread, Location loc,
   Value _fpw1 = i32_val(fpw[1]);
 
   // A info
-  auto aEncoding = DotOperandEncodingAttr::get(ctx, 0, mmaLayout, 0);
-  auto aRep = aEncoding.getMMAv1Rep();
-  auto aSpw = aEncoding.getMMAv1ShapePerWarp();
+  auto aRep = mmaLayout.getMMAv1Rep(0);
+  auto aSpw = mmaLayout.getMMAv1ShapePerWarp(0);
   // B info
-  auto bEncoding = DotOperandEncodingAttr::get(ctx, 1, mmaLayout, 0);
-  auto bSpw = bEncoding.getMMAv1ShapePerWarp();
-  auto bRep = bEncoding.getMMAv1Rep();
+  auto bSpw = mmaLayout.getMMAv1ShapePerWarp(1);
+  auto bRep = mmaLayout.getMMAv1Rep(1);
 
   SmallVector<int, 2> rep({aRep[0], bRep[1]});
   SmallVector<int, 2> spw({aSpw[0], bSpw[1]});

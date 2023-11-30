@@ -161,8 +161,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
     // memory to the function arguments.
     auto loc = funcOp.getLoc();
     auto ctx = funcOp->getContext();
-    auto ptrTy = LLVM::LLVMPointerType::get(
-        this->getTypeConverter()->convertType(rewriter.getI8Type()), 3);
+    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
     // 1. Modify the function type to add the new argument.
     auto funcTy = funcOp.getFunctionType();
     auto amendedInputTy = llvm::to_vector<4>(funcTy.getInputs());
@@ -232,15 +231,14 @@ struct FuncOpConversion : public FuncOpConversionBase {
     allocation.mapFuncOp(funcOp, newFuncOp);
 
     // Append arguments to receive TMADesc in global memory in the runtime
-    auto i8PtrTy = LLVM::LLVMPointerType::get(
-        this->getTypeConverter()->convertType(rewriter.getI8Type()), 1);
+    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 1);
     auto numArgs = newFuncOp.getBody().front().getNumArguments();
     auto funcTy = newFuncOp.getFunctionType().cast<LLVM::LLVMFunctionType>();
     SmallVector<Type> newInputsTy(funcTy.getParams().begin(),
                                   funcTy.getParams().end());
     for (unsigned i = 0; i < numTMA; ++i) {
-      newFuncOp.getBody().front().addArgument(i8PtrTy, funcOp.getLoc());
-      newInputsTy.push_back(i8PtrTy);
+      newFuncOp.getBody().front().addArgument(ptrTy, funcOp.getLoc());
+      newInputsTy.push_back(ptrTy);
     }
     newFuncOp.setType(
         LLVM::LLVMFunctionType::get(funcTy.getReturnType(), newInputsTy));
@@ -296,9 +294,8 @@ private:
     // of shared memory and append it to the operands of the callOp.
     auto loc = callOp.getLoc();
     auto caller = callOp->getParentOfType<FunctionOpInterface>();
-    auto ptrTy = LLVM::LLVMPointerType::get(
-        this->getTypeConverter()->convertType(rewriter.getI8Type()),
-        NVVM::kSharedMemorySpace);
+    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
+                                            NVVM::kSharedMemorySpace);
     auto promotedOperands = this->getTypeConverter()->promoteOperands(
         callOp.getLoc(), /*opOperands=*/callOp->getOperands(),
         adaptor.getOperands(), rewriter);
@@ -312,7 +309,9 @@ private:
     }
     // function has a shared mem buffer
     auto offset = funcAllocation->getOffset(bufferId);
-    auto offsetValue = gep(ptrTy, base, i32_val(offset));
+    auto offsetValue =
+        gep(ptrTy, this->getTypeConverter()->convertType(rewriter.getI8Type()),
+            base, i32_val(offset));
     promotedOperands.push_back(offsetValue);
     return promotedOperands;
   }
@@ -408,6 +407,13 @@ struct ConvertTritonGPUToLLVM
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+
+    // Hack: WSMaterialization may have changed the effective number of warps,
+    // in a way that isn't reflected in triton_gpu.num-warps.  If so, we have to
+    // respect that here.
+    if (Attribute attr = mod->getAttr("triton_gpu.num-warp-groups-per-cta")) {
+      numWarps *= attr.cast<IntegerAttr>().getInt();
+    }
 
     // Preprocess
     decomposeFp8e4b15Convert(mod);
@@ -613,9 +619,8 @@ private:
       } else {
         funcSmem = funcOp.getArgument(funcOp.getNumArguments() - 1);
       }
-      auto ptrTy =
-          LLVM::LLVMPointerType::get(typeConverter.convertType(b.getI8Type()),
-                                     NVVM::NVVMMemorySpace::kSharedMemorySpace);
+      auto ptrTy = LLVM::LLVMPointerType::get(
+          ctx, NVVM::NVVMMemorySpace::kSharedMemorySpace);
       funcSmem = b.create<LLVM::BitcastOp>(loc, ptrTy, funcSmem);
       allocation.setFunctionSharedMemoryValue(funcOp, funcSmem);
     });

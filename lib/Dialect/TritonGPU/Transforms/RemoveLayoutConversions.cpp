@@ -197,7 +197,7 @@ static bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
 static bool isLayoutAnchor(Operation *op) {
   if (isa<triton::LoadOp, triton::StoreOp>(op))
     return isExpensiveLoadOrStore(op);
-  if (isa<triton::ViewOp, triton::DotOp, triton::AtomicRMWOp,
+  if (isa<triton::ReshapeOp, triton::DotOp, triton::AtomicRMWOp,
           triton::AtomicCASOp>(op))
     return true;
   return false;
@@ -245,8 +245,8 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
   for (OpOperand &use : value.getUses()) {
     Operation *user = use.getOwner();
     if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-      Value arg = forOp.getRegionIterArgForOpOperand(use);
-      Value result = forOp.getResultForOpOperand(use);
+      Value arg = forOp.getTiedLoopRegionIterArg(&use);
+      Value result = forOp.getTiedLoopResult(&use);
       setEncoding({arg, result}, info, changed, user);
       continue;
     }
@@ -739,9 +739,9 @@ static void rewriteSlice(SetVector<Value> &slice,
       SmallVector<Value> newOperands;
       for (auto arg : forOp.getRegionIterArgs()) {
         if (slice.count(arg)) {
-          OpOperand &initVal = forOp.getOpOperandForRegionIterArg(arg);
+          OpOperand &initVal = *forOp.getTiedLoopInit(arg);
           argMapping.push_back(std::make_pair(
-              forOp.getResultForOpOperand(initVal).getResultNumber(),
+              forOp.getTiedLoopResult(&initVal).getResultNumber(),
               forOp.getInitArgs().size() + newOperands.size()));
           newOperands.push_back(mapping.lookup(initVal.get()));
         }
@@ -827,8 +827,8 @@ static LogicalResult getRematerializableSlice(
 
 static void backwardRematerialization(ConvertLayoutOp convertOp) {
   // we don't want to rematerialize any conversion to/from shared
-  if (triton::gpu::isSharedEncoding(convertOp.getResult()) ||
-      triton::gpu::isSharedEncoding(convertOp.getOperand()))
+  if (triton::gpu::hasSharedEncoding(convertOp.getResult()) ||
+      triton::gpu::hasSharedEncoding(convertOp.getOperand()))
     return;
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristics to accommodate fused attention
@@ -853,8 +853,8 @@ static void backwardRematerialization(ConvertLayoutOp convertOp) {
 // of the convert.
 static void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp) {
   // we don't want to rematerialize any conversion to/from shared
-  if (triton::gpu::isSharedEncoding(convertOp.getResult()) ||
-      triton::gpu::isSharedEncoding(convertOp.getOperand()))
+  if (triton::gpu::hasSharedEncoding(convertOp.getResult()) ||
+      triton::gpu::hasSharedEncoding(convertOp.getOperand()))
     return;
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristics to accommodate fused attention
@@ -907,8 +907,9 @@ static void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp) {
 
   if (extOrBroadcatOp == nullptr)
     return;
+  Attribute dstEncoding = layout[extOrBroadcatOp->getResult(0)];
   std::optional<Attribute> srcEncoding =
-      inferSrcEncoding(extOrBroadcatOp, layout[extOrBroadcatOp->getResult(0)]);
+      inferSrcEncoding(extOrBroadcatOp, dstEncoding);
   if (!srcEncoding)
     return;
   // Move the convert before the ext op and rewrite the slice.
@@ -919,8 +920,17 @@ static void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp) {
       tensorType.getShape(), tensorType.getElementType(), *srcEncoding);
   auto newConvertOp = builder.create<ConvertLayoutOp>(
       convertOp.getLoc(), newType, extOrBroadcatOp->getOperand(0));
+  Operation *newExtOrBroadcast = builder.clone(*extOrBroadcatOp);
+  newExtOrBroadcast->setOperand(0, newConvertOp.getResult());
+  auto oldExtOrBroadcastType =
+      extOrBroadcatOp->getResult(0).getType().cast<RankedTensorType>();
+  Type newExtOrBroadcasrType = RankedTensorType::get(
+      oldExtOrBroadcastType.getShape(), oldExtOrBroadcastType.getElementType(),
+      dstEncoding);
+  newExtOrBroadcast->getResult(0).setType(newExtOrBroadcasrType);
   IRMapping mapping;
-  mapping.map(extOrBroadcatOp->getOperand(0), newConvertOp.getResult());
+  mapping.map(extOrBroadcatOp->getResult(0), newExtOrBroadcast->getResult(0));
+  slice.remove(extOrBroadcatOp->getResult(0));
   // 3. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp, mapping);
 }

@@ -10,7 +10,7 @@
 #A_DOT = #triton_gpu.dot_op<{opIdx = 0, parent = #C}>
 #B_DOT = #triton_gpu.dot_op<{opIdx = 1, parent = #C}>
 
-module attributes {"triton_gpu.num-warps" = 4 : i32} {
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32} {
 
 // CHECK-LABEL: matmul_loop
 // There shouldn't be any membar with the dot op encoding.
@@ -504,7 +504,7 @@ tt.func @cf_if_else_return(%i1 : i1) {
 
 }
 
-module attributes {"triton_gpu.num-warps" = 4 : i32} {
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32} {
 
 // CHECK-LABEL: convert_layout1
 tt.func @convert_layout1(%A : !tt.ptr<f16>) {

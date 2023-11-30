@@ -23,14 +23,14 @@
 
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
+#include <set>
+
 #include "mlir/IR/OperationSupport.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
-
-#include <set>
 
 using namespace mlir;
 namespace ttg = triton::gpu;
@@ -68,9 +68,9 @@ void materializeGetAgentIdOp(Operation *parentOp) {
     auto loc = op.getLoc();
     OpBuilder builder(op);
 
-    Value _128 = builder.create<arith::ConstantIntOp>(loc, 128, 32);
-    Value threadId = getThreadId(builder, loc);
-    Value agentId = builder.create<arith::DivUIOp>(loc, threadId, _128);
+    Value _4 = builder.create<arith::ConstantIntOp>(loc, 4, 32);
+    Value warpId = builder.create<ttng::GetCanonicalWarpId>(loc);
+    Value agentId = builder.create<arith::DivUIOp>(loc, warpId, _4);
     op.getResult().replaceAllUsesWith(agentId);
     op->erase();
 
@@ -470,29 +470,28 @@ void mutexSyncPingPang(Operation *parentOp, int numAgents, int &nameBarrierId,
     OpBuilder builder(getMutexRoleIdOp);
     numRoles = getMutexRoleIdOp.getNum();
     auto loc = getMutexRoleIdOp->getLoc();
-    Value threadId = getThreadId(builder, loc);
+    Value warpId = builder.create<ttng::GetCanonicalWarpId>(loc);
     assert(getMutexRoleIdOp->hasAttr("agent.num-warps"));
-    int numThreads =
-        32 * getMutexRoleIdOp->getAttrOfType<IntegerAttr>("agent.num-warps")
-                 .getInt();
-    int numThreadsBase =
-        32 *
+    int numWarps =
+        getMutexRoleIdOp->getAttrOfType<IntegerAttr>("agent.num-warps")
+            .getInt();
+    int numWarpsBase =
         getMutexRoleIdOp->getAttrOfType<IntegerAttr>("agent.num-warps-base")
             .getInt();
-    assert(numThreads % numRoles == 0);
+    assert(numWarps % numRoles == 0);
     // TODO: more flexible ways to determine numWarps of each agent.
-    Value numThreadsValue =
-        builder.create<arith::ConstantIntOp>(loc, numThreads, 32);
     Value numRolesValue =
         builder.create<arith::ConstantIntOp>(loc, numRoles, 32);
-    Value numThreadsBaseValue =
-        builder.create<arith::ConstantIntOp>(loc, numThreadsBase, 32);
-    Value numThreadsPerRole =
-        builder.create<arith::DivUIOp>(loc, numThreadsValue, numRolesValue);
-    Value numRemThreads =
-        builder.create<arith::SubIOp>(loc, threadId, numThreadsBaseValue);
-    roleId =
-        builder.create<arith::DivUIOp>(loc, numRemThreads, numThreadsPerRole);
+    Value numWarpsValue =
+        builder.create<arith::ConstantIntOp>(loc, numWarps, 32);
+    Value numWarpsBaseValue =
+        builder.create<arith::ConstantIntOp>(loc, numWarpsBase, 32);
+    Value numWarpsPerRole =
+        builder.create<arith::DivUIOp>(loc, numWarpsValue, numRolesValue);
+    Value numRemWarps =
+        builder.create<arith::SubIOp>(loc, warpId, numWarpsBaseValue);
+
+    roleId = builder.create<arith::DivUIOp>(loc, numRemWarps, numWarpsPerRole);
     getMutexRoleIdOp.getResult().replaceAllUsesWith(roleId);
     getMutexRoleIdOp->erase();
     times++;
@@ -682,10 +681,13 @@ void tryRegisterRealloc(ModuleOp mod) {
   }
 }
 
-//===----------------------------------------------------------------------===//
-// WSMaterializationPass
-//===----------------------------------------------------------------------===//
-
+// This pass adds top-level `if` statements to the module so that:
+//   - there's one group of four warps that handles memory operations, and
+//   - there are one or two groups of four warps handling math operations.
+//
+// If we use two groups for math operations, it's in "ping-pong" fashion:
+// The memory warp group does loads/stores for group A while group B runs, then
+// it switches to serving group B.
 struct WSMaterializationPass
     : public TritonGPUWSMaterializationBase<WSMaterializationPass> {
   WSMaterializationPass() = default;
@@ -710,12 +712,36 @@ struct WSMaterializationPass
     materializeMutexOperations(mod);
     tryRegisterRealloc(mod);
 
-    // TODO: More flexible way to set num-warps
-    // One dma, one math warp group, set num-warps = 8
-    auto i32_ty = IntegerType::get(mod->getContext(), 32);
-    mod->setAttr("triton_gpu.num-warps",
-                 IntegerAttr::get(i32_ty, llvm::APInt(32, 8)));
-
+    // The IR before this pass specifies 4 warps per CTA.  But this pass splits
+    // things so that there are 4 warps per *group* (aka "agent"), and there are
+    // 2 or 3 groups.  So from CUDA's perspective there are now 8 or 12 warps
+    // per CTA.
+    //
+    // A natural thing to do would be to change the module's num-warps property
+    // to be 8 or 12 to match the new reality.  But it's actually better to keep
+    // num-warps as 4, because the 2 or 3 groups are not working
+    // collaboratively.
+    //
+    // For example, tensors are not distributed between the groups.  A blocked
+    // layout with `warpsPerCta = [2,2]` (implying the data is distributed among
+    // 4 warps) makes sense, but `warpsPerCta = [4,2]` should not appear in the
+    // IR, because this would be saying that the data is distributed among 8
+    // warps, which would mean that its data is distributed between the groups.
+    // It's an invariant that the product of the warpsPerCta equals the module's
+    // num-warps, so this implies the module's num-warps should be 4.
+    //
+    // As another example, there is code that checks whether a load is
+    // "expensive" by comparing the number of elements loaded to the number of
+    // warps in the module.  Here too we should compare the number of elements
+    // being loaded to 4 warps, because only the 4 warps from the load/store
+    // group are participating in the load.
+    //
+    // But at some point (at least when we launch the kernel!) we really do need
+    // to know that the CTA has 8 or 12 warps in it.  So instead of modifying
+    // num-warps, we add a *new* attribute to the module that indicates how many
+    // warp groups there are, and we modify users that need to know the "true"
+    // number of warps to read it.
+    int32_t numWarpGroups = 2;
     WalkResult result = mod->walk([&](scf::IfOp ifOp) {
       if (ifOp->hasAttr("agent.num-roles")) {
         return WalkResult::interrupt();
@@ -723,10 +749,13 @@ struct WSMaterializationPass
       return WalkResult::advance();
     });
     if (result.wasInterrupted()) {
-      mod->setAttr("triton_gpu.num-warps",
-                   IntegerAttr::get(i32_ty, llvm::APInt(32, 12)));
+      numWarpGroups = 3;
     }
     mod->removeAttr("async.num-agents");
+
+    auto builder = OpBuilder::atBlockBegin(mod.getBody());
+    mod->setAttr("triton_gpu.num-warp-groups-per-cta",
+                 builder.getI32IntegerAttr(numWarpGroups));
   }
 };
 

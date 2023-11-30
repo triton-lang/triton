@@ -55,7 +55,7 @@ bool isDivisible(Value v, unsigned divisor) {
     auto func = dyn_cast<tt::FuncOp>(parentOp);
     assert(func);
     if (auto attr = func.getArgAttrOfType<IntegerAttr>(blockArg.getArgNumber(),
-                                                       "tt.divisibility"))
+                                                       "tt.max_divisibility"))
       return attr.getValue().getZExtValue() % divisor == 0;
     return false;
   } else if (v.getParentBlock()->isEntryBlock() && (!v.isa<BlockArgument>())) {
@@ -119,6 +119,13 @@ private:
 
   template <typename T>
   SmallVector<T> insertOne(ArrayRef<T> vec, unsigned axis) const {
+    SmallVector<T> res(vec.begin(), vec.end());
+    res.insert(res.begin() + axis, 1);
+    return res;
+  }
+
+  template <typename T>
+  SmallVector<T> insertOne(const SmallVector<T> &vec, unsigned axis) const {
     SmallVector<T> res(vec.begin(), vec.end());
     res.insert(res.begin() + axis, 1);
     return res;

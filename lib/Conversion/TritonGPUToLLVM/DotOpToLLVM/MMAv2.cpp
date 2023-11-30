@@ -287,12 +287,12 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   auto dShapePerCTA = triton::gpu::getShapePerCTA(dTensorTy);
 
   int bitwidth = aTensorTy.getElementType().getIntOrFloatBitWidth();
-  auto repA =
-      aTensorTy.getEncoding().cast<DotOperandEncodingAttr>().getMMAv2Rep(
-          aShapePerCTA, bitwidth);
-  auto repB =
-      bTensorTy.getEncoding().cast<DotOperandEncodingAttr>().getMMAv2Rep(
-          bShapePerCTA, bitwidth);
+  auto dotOpA = aTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+  auto repA = dotOpA.getParent().cast<MmaEncodingAttr>().getMMAv2Rep(
+      aShapePerCTA, bitwidth, dotOpA.getOpIdx());
+  auto dotOpB = bTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+  auto repB = dotOpB.getParent().cast<MmaEncodingAttr>().getMMAv2Rep(
+      bShapePerCTA, bitwidth, dotOpB.getOpIdx());
 
   assert(repA[1] == repB[0]);
   int repM = repA[0], repN = repB[1], repK = repA[1];

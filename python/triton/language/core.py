@@ -10,7 +10,7 @@ from . import semantic
 
 T = TypeVar('T')
 
-TRITON_MAX_TENSOR_NUMEL = 131072
+TRITON_MAX_TENSOR_NUMEL = 1048576
 
 TRITON_BUILTIN = "__triton_builtin__"
 
@@ -923,9 +923,8 @@ def cat(input, other, can_reorder=False, _builder=None):
     :param other: The second input tensor.
     :type other:
     :param reorder: Compiler hint. If true, the compiler is
-    allowed to reorder elements while concatenating inputs.
-    Only use if the order does not matter (e.g., result is
-    only used in reduction ops)
+        allowed to reorder elements while concatenating inputs.  Only use if the
+        order does not matter (e.g., result is only used in reduction ops)
     """
     return semantic.cat(input, other, can_reorder, _builder)
 
@@ -1309,7 +1308,7 @@ def fdiv(x, y, ieee_rounding=False, _builder=None):
     :param x: the input numerator value.
     :param y: the input denominator value.
     :param ieee_rounding: To follow IEEE-754 floating point number
-    rounding mechanism
+        rounding mechanism
     :type ieee_rounding: bool
     """
     ieee_rounding = _constexpr_to_value(ieee_rounding)
@@ -1448,7 +1447,6 @@ def _promote_reduction_input(t, _builder=None):
     # hardware doesn't support FMAX, FMIN, CMP for bfloat16
     if scalar_ty is bfloat16:
         return t.to(float32, _builder=_builder)
-
     return t
 
 
@@ -1536,7 +1534,7 @@ def debug_barrier(_builder=None):
 @builtin
 def multiple_of(input, values, _builder=None):
     """
-    Let the compiler knows that the values in :code:`input` are all multiples of :code:`value`.
+    Let the compiler know that the values in :code:`input` are all multiples of :code:`value`.
     """
     if isinstance(values, constexpr):
         values = [values]
@@ -1552,7 +1550,7 @@ def multiple_of(input, values, _builder=None):
 @builtin
 def max_contiguous(input, values, _builder=None):
     """
-    Let the compiler knows that the `value` first values in :code:`input` are contiguous.
+    Let the compiler know that the `value` first values in :code:`input` are contiguous.
     """
     if isinstance(values, constexpr):
         values = [values]
@@ -1568,7 +1566,7 @@ def max_contiguous(input, values, _builder=None):
 @builtin
 def max_constancy(input, values, _builder=None):
     """
-    Let the compiler knows that the `value` first values in :code:`input` are constant.
+    Let the compiler know that the `value` first values in :code:`input` are constant.
 
     e.g. if :code:`values` is [4], then each group of 4 values in :code:`input` should all be equal,
     for example [0, 0, 0, 0, 1, 1, 1, 1].

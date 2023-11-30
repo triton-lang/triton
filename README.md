@@ -63,13 +63,12 @@ downloads a prebuilt LLVM, but you can also build LLVM from source and use that.
 LLVM does not have a stable API, so the Triton build will not work at an
 arbitrary LLVM version.
 
-1. Find the version of LLVM that Triton builds against.  Check `python/setup.py`
-   for a line like
-
-       rev = "b1115f8c"
+1. Find the version of LLVM that Triton builds against.  Check
+`cmake/llvm-hash.txt` to see the current version. For example, if it says:
+       49af6502c6dcb4a7f7520178bd14df396f78240c
 
    This means that the version of Triton you have builds against
-   [LLVM](https://github.com/llvm/llvm-project) b1115f8c.
+   [LLVM](https://github.com/llvm/llvm-project) 49af6502.
 
 2. `git checkout` LLVM at this revision.  Optionally, make additional
    modifications to LLVM.

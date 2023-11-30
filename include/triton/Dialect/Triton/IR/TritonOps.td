@@ -22,7 +22,8 @@ include "mlir/Interfaces/CallInterfaces.td" // CallOpInterface
 // Op Base
 //
 class TT_Op<string mnemonic, list<Trait> traits = []> :
-    Op<Triton_Dialect, mnemonic, !listconcat(traits, [TensorSizeTrait])> {
+    Op<Triton_Dialect, mnemonic,
+       !listconcat(traits, [TensorSizeTrait, VerifyTensorLayoutsTrait])> {
 }
 
 //
@@ -301,19 +302,15 @@ def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
     let hasFolder = 1;
 }
 
-// view is not `pure` because it may reorder elements
-def TT_ViewOp : TT_Op<"view", [NoMemoryEffect,
-                               SameOperandsAndResultElementType]> {
-    let summary = "view";
-
-    let arguments = (ins TT_Tensor:$src);
-
+def TT_ReshapeOp : TT_Op<"reshape", [Pure,
+                                     SameOperandsAndResultElementType]> {
+    let summary = "reinterpret a tensor to a different shape. It may change elements order if the attribute is set.";
+    let arguments = (ins TT_Tensor:$src, BoolAttr:$allow_reorder);
     let results = (outs TT_Tensor:$result);
-
-    let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
-
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
     let hasCanonicalizeMethod = 1;
     let hasFolder = 1;
+    let hasVerifier = 1;
 }
 
 def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
