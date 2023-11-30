@@ -310,10 +310,10 @@ private:
             shapePerCTA);
         Value offset = linearize(rewriter, loc, multiDimOffsetWrapped,
                                  paddedRepShape, outOrd);
-        auto elemPtrTy = ptr_ty(llvmElemTy, 3);
-        Value ptr = gep(elemPtrTy, smemBase, offset);
+        auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+        Value ptr = gep(elemPtrTy, llvmElemTy, smemBase, offset);
         auto vecTy = vec_ty(llvmElemTy, vec);
-        ptr = bitcast(ptr, ptr_ty(vecTy, 3));
+        ptr = bitcast(ptr, ptr_ty(rewriter.getContext(), 3));
         if (stNotRd) {
           Value valVec = undef(vecTy);
           for (unsigned v = 0; v < vec; ++v) {
@@ -326,7 +326,7 @@ private:
           }
           store(valVec, ptr);
         } else {
-          Value valVec = load(ptr);
+          Value valVec = load(vecTy, ptr);
           for (unsigned v = 0; v < vec; ++v) {
             Value currVal = extract_element(llvmElemTy, valVec, i32_val(v));
             if (isInt1)
@@ -421,10 +421,10 @@ private:
     for (unsigned elemId = 0; elemId < accumSizePerThread; elemId += vec) {
       auto coord = coord2valT[elemId].first;
       Value offset = linearize(rewriter, loc, coord, paddedRepShape, outOrd);
-      auto elemPtrTy = ptr_ty(elemTy, 3);
-      Value ptr = gep(elemPtrTy, smemBase, offset);
+      auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+      Value ptr = gep(elemPtrTy, elemTy, smemBase, offset);
       auto vecTy = vec_ty(elemTy, vec);
-      ptr = bitcast(ptr, ptr_ty(vecTy, 3));
+      ptr = bitcast(ptr, ptr_ty(rewriter.getContext(), 3));
       if (stNotRd) {
         Value valVec = undef(vecTy);
         for (unsigned v = 0; v < vec; ++v) {
@@ -433,7 +433,7 @@ private:
         }
         store(valVec, ptr);
       } else {
-        Value valVec = load(ptr);
+        Value valVec = load(vecTy, ptr);
         for (unsigned v = 0; v < vec; ++v) {
           Value currVal = extract_element(elemTy, valVec, i32_val(v));
           vals[elemId + v] = currVal;
@@ -460,7 +460,7 @@ private:
     unsigned rank = srcShapePerCTA.size();
 
     auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
-    auto elemPtrTy = ptr_ty(llvmElemTy, 3);
+    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
 
     Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
     smemBase = bitcast(smemBase, elemPtrTy);
@@ -478,7 +478,7 @@ private:
 
       for (unsigned i = 0; i < inIndices.size(); ++i) {
         Value offset = linearize(rewriter, loc, inIndices[i], smemShape);
-        Value ptr = gep(elemPtrTy, smemBase, offset);
+        Value ptr = gep(elemPtrTy, llvmElemTy, smemBase, offset);
         store(inVals[i], ptr);
       }
     }
@@ -511,8 +511,8 @@ private:
             linearize(rewriter, loc, multiDimCTAId, srcCTAsPerCGA, srcCTAOrder);
         Value localOffset = linearize(rewriter, loc, localCoord, smemShape);
 
-        Value ptr = gep(elemPtrTy, smemBase, localOffset);
-        outVals.push_back(load_dsmem(ptr, remoteCTAId));
+        Value ptr = gep(elemPtrTy, llvmElemTy, smemBase, localOffset);
+        outVals.push_back(load_dsmem(ptr, remoteCTAId, llvmElemTy));
       }
 
       Value result =
@@ -543,10 +543,8 @@ private:
 
     if (shouldUseDistSmem(srcLayout, dstLayout))
       return lowerDistToDistWithDistSmem(op, adaptor, rewriter);
-
-    auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
-    auto elemPtrTy = ptr_ty(llvmElemTy, 3);
+    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     smemBase = bitcast(smemBase, elemPtrTy);
     auto shape = dstTy.getShape();
     unsigned rank = dstTy.getRank();
@@ -705,8 +703,9 @@ private:
     auto dstLayout = dstTy.getEncoding();
     auto inOrd = getOrder(srcSharedLayout);
 
-    auto smemObj =
-        getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(), rewriter);
+    auto smemObj = getSharedMemoryObjectFromStruct(
+        loc, adaptor.getSrc(),
+        getTypeConverter()->convertType(srcTy.getElementType()), rewriter);
     auto elemTy = getTypeConverter()->convertType(dstTy.getElementType());
 
     auto srcStrides =
@@ -744,7 +743,7 @@ private:
     auto outOrd = dstSharedLayout.getOrder();
     Value smemBase = getSharedMemoryBase(loc, rewriter, dst);
     auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    auto elemPtrTy = ptr_ty(getTypeConverter()->convertType(elemTy), 3);
+    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     smemBase = bitcast(smemBase, elemPtrTy);
 
     int32_t elemSize = elemTy.getIntOrFloatBitWidth();
@@ -771,8 +770,7 @@ private:
       unsigned leadingDimOffset =
           numElemsPerSwizzlingRow * srcShapePerCTA[outOrd[1]];
 
-      auto ptrI8SharedTy = LLVM::LLVMPointerType::get(
-          typeConverter->convertType(rewriter.getI8Type()), 3);
+      auto ptrSharedTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
 
       uint32_t rowsPerRep = getShapePerCTATile(mmaLayout)[0];
 
@@ -801,7 +799,8 @@ private:
               loc, i32_ty, threadId, rowOfWarp, i32_val(idx), leadingDimOffset,
               numElemsPerSwizzlingRow, true);
 
-          Value addr = gep(elemPtrTy, smemBase, offset);
+          Value addr = gep(elemPtrTy, getTypeConverter()->convertType(elemTy),
+                           smemBase, offset);
 
           Value words[4];
           for (unsigned i = 0; i < 8; ++i) {
@@ -812,7 +811,7 @@ private:
           }
 
           rewriter.create<triton::nvgpu::StoreMatrixOp>(
-              loc, bitcast(addr, ptrI8SharedTy),
+              loc, bitcast(addr, ptrSharedTy),
               ValueRange{bitcast(words[0], i32_ty), bitcast(words[1], i32_ty),
                          bitcast(words[2], i32_ty), bitcast(words[3], i32_ty)});
         }
@@ -841,8 +840,8 @@ private:
       storeDistributedToShared(src, adaptor.getSrc(), dstStrides, srcIndices,
                                dst, smemBase, elemTy, loc, rewriter);
     }
-    auto smemObj =
-        SharedMemoryObject(smemBase, dstShapePerCTA, outOrd, loc, rewriter);
+    auto smemObj = SharedMemoryObject(smemBase, elemTy, dstShapePerCTA, outOrd,
+                                      loc, rewriter);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
@@ -1011,8 +1010,11 @@ private:
     Value dst = op.getResult();
     bool isMMA = supportMMA(dst, mmaLayout.getVersionMajor());
 
-    auto smemObj =
-        getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(), rewriter);
+    auto llvmElemTy = getTypeConverter()->convertType(
+        src.getType().cast<RankedTensorType>().getElementType());
+
+    auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                   llvmElemTy, rewriter);
     Value res;
     if (!isOuter && mmaLayout.isAmpere()) { // tensor core v2
       res = SharedToDotOperandMMAv2::convertLayout(

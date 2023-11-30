@@ -432,6 +432,12 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
     llvm::errs() << "failed to apply pass manager CL options\n";
     return nullptr;
   }
+  auto getWSSupportedAttr = [](mlir::ModuleOp mod) -> int {
+    std::string name = "triton_gpu.enable-warp-specialization";
+    if (!mod->hasAttr(name))
+      return 0;
+    return mod->getAttrOfType<IntegerAttr>(name).getInt();
+  };
   auto printingFlags = mlir::OpPrintingFlags();
   printingFlags.elideLargeElementsAttrs(16);
   printingFlags.enableDebugInfo();
@@ -449,6 +455,12 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
   pm.addPass(mlir::createConvertIndexToLLVMPass());
   pm.addPass(
       createConvertTritonGPUToLLVMPass(computeCapability, target, &tmaInfos));
+  // To avoid register spill, only enable the following two pass in warp
+  // specialized kernel, where reg_alloc can alleviate this problem.
+  if (getWSSupportedAttr(module)) {
+    pm.addPass(mlir::createLoopInvariantCodeMotionPass());
+    pm.addPass(mlir::createCSEPass());
+  }
   pm.addPass(createConvertNVGPUToLLVMPass());
   pm.addPass(mlir::createArithToLLVMConversionPass());
   pm.addPass(mlir::createCanonicalizerPass());
