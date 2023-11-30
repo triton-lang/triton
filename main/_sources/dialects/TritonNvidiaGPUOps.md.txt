@@ -310,6 +310,28 @@ Effects: MemoryEffects::Effect{}
 | :----: | ----------- |
 | `result` | 32-bit signless integer
 
+### `triton_nvidia_gpu.get_canonical_warp_id` (triton::nvidia_gpu::GetCanonicalWarpId)
+
+Syntax:
+
+```
+operation ::= `triton_nvidia_gpu.get_canonical_warp_id` attr-dict `:` type($result)
+```
+
+Returns the one dimensional warpId when it's used for producing warp uniform values.
+
+Traits: AlwaysSpeculatableImplTrait, VerifyTensorLayoutsTrait
+
+Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)
+
+Effects: MemoryEffects::Effect{}
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | 32-bit signless integer
+
 ### `triton_nvidia_gpu.get_cluster_cta_id` (triton::nvidia_gpu::GetClusterCTAIdOp)
 
 Syntax:

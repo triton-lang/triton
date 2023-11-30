@@ -26,6 +26,27 @@ operation ::= `nvgpu.cga_barrier_wait` attr-dict
 ```
 
 
+### `nvgpu.canonical_warp_id` (triton::nvgpu::CanonicalWarpIdOp)
+
+Syntax:
+
+```
+operation ::= `nvgpu.canonical_warp_id` attr-dict
+```
+
+
+Traits: AlwaysSpeculatableImplTrait
+
+Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)
+
+Effects: MemoryEffects::Effect{}
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | 32-bit signless integer
+
 ### `nvgpu.cluster_arrive` (triton::nvgpu::ClusterArriveOp)
 
 Syntax:
@@ -156,7 +177,7 @@ operation ::= `nvgpu.mbarrier_arrive` $mbarrier `,` $pred (`,` $ctaId^)? attr-di
 
 | Operand | Description |
 | :-----: | ----------- |
-| `mbarrier` | LLVM pointer to 64-bit signless integer
+| `mbarrier` | LLVM pointer in address space 3
 | `pred` | 1-bit signless integer
 | `ctaId` | 32-bit signless integer
 
@@ -184,7 +205,7 @@ Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::Defa
 
 | Operand | Description |
 | :-----: | ----------- |
-| `mbarrier` | LLVM pointer to 64-bit signless integer
+| `mbarrier` | LLVM pointer in address space 3
 | `pred` | 1-bit signless integer
 
 ### `nvgpu.mbarrier_wait` (triton::nvgpu::MBarrierWaitOp)
@@ -200,7 +221,7 @@ operation ::= `nvgpu.mbarrier_wait` $mbarrier `,` $phase attr-dict `:` type(oper
 
 | Operand | Description |
 | :-----: | ----------- |
-| `mbarrier` | LLVM pointer to 64-bit signless integer
+| `mbarrier` | LLVM pointer in address space 3
 | `phase` | 1-bit signless integer
 
 ### `nvgpu.bar_arrive` (triton::nvgpu::NamedBarrierArriveOp)
@@ -374,7 +395,7 @@ Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::Defa
 
 | Operand | Description |
 | :-----: | ----------- |
-| `addr` | LLVM pointer to 8-bit signless integer
+| `addr` | LLVM pointer in address space 3
 | `datas` | variadic of 32-bit signless integer
 
 ### `nvgpu.sts64` (triton::nvgpu::Sts64Op)
@@ -418,9 +439,9 @@ operation ::= `nvgpu.tma_load_im2col` operands attr-dict `:` type(operands)
 
 | Operand | Description |
 | :-----: | ----------- |
-| `dst` | LLVM pointer to 8-bit signless integer
-| `mbarrier` | LLVM pointer to 64-bit signless integer
-| `tmaDesc` | LLVM pointer to 8-bit signless integer
+| `dst` | LLVM pointer in address space 3
+| `mbarrier` | LLVM pointer in address space 3
+| `tmaDesc` | LLVM pointer in address space 1
 | `l2Desc` | 64-bit signless integer
 | `im2colOffsets` | LLVM structure type
 | `pred` | 1-bit signless integer
@@ -441,9 +462,9 @@ Traits: AttrSizedOperandSegments
 
 | Operand | Description |
 | :-----: | ----------- |
-| `dst` | LLVM pointer to 8-bit signless integer
-| `mbarrier` | LLVM pointer to 64-bit signless integer
-| `tmaDesc` | LLVM pointer to 8-bit signless integer
+| `dst` | LLVM pointer in address space 3
+| `mbarrier` | LLVM pointer in address space 3
+| `tmaDesc` | LLVM pointer in address space 1
 | `l2Desc` | 64-bit signless integer
 | `pred` | 1-bit signless integer
 | `coords` | variadic of 32-bit signless integer
@@ -466,8 +487,8 @@ Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::Defa
 
 | Operand | Description |
 | :-----: | ----------- |
-| `tmaDesc` | LLVM pointer to 8-bit signless integer
-| `src` | LLVM pointer to 8-bit signless integer
+| `tmaDesc` | LLVM pointer in address space 1
+| `src` | LLVM pointer in address space 3
 | `pred` | 1-bit signless integer
 | `coords` | variadic of 32-bit signless integer
 
