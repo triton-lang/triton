@@ -433,8 +433,23 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
     if (currentValue.getDefiningOp<scf::ForOp>())
       return failure();
     slice.insert(currentValue);
+    if (layout.find(currentValue) != layout.end()) {
+      if (layout[currentValue] != encoding)
+        return failure();
+    }
     layout[currentValue] = encoding;
     if (auto *definingOp = currentValue.getDefiningOp()) {
+      // If the op has multiple results we need to update all results layout.
+      for (Value result : definingOp->getResults()) {
+        if (result == currentValue || !result.getType().isa<RankedTensorType>())
+          continue;
+        if (layout.find(result) != layout.end()) {
+          if (layout[result] != encoding)
+            return failure();
+          continue;
+        }
+        layout[result] = encoding;
+      }
       if (canFoldIntoConversion(definingOp, encoding))
         continue;
       if (stopPropagation && stopPropagation(definingOp))
