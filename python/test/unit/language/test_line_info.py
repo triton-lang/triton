@@ -100,19 +100,17 @@ def test_line_info(func: str):
         pytest.skip("nvdisasm is not available")
 
     shape = (128, )
-    x = torch.arange(0, shape[0], dtype=torch.float32, device='cuda')
-    y = torch.zeros(shape, dtype=x.dtype, device="cuda")
     kernel_info = {}
     if func == "single":
-        kernel_info = kernel_single[(1,)](x, y, BLOCK=shape[0])
+        kernel_info = kernel_single.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,))
     elif func == "call":
-        kernel_info = kernel_call[(1,)](x, y, BLOCK=shape[0])
+        kernel_info = kernel_call.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,))
     elif func == "call_noinline":
-        kernel_info = kernel_call_noinline[(1,)](x, y, BLOCK=shape[0])
+        kernel_info = kernel_call_noinline.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,))
     elif func == "multi_files":
-        kernel_info = kernel_multi_files[(1,)](x, y, BLOCK=shape[0])
+        kernel_info = kernel_multi_files.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,))
     elif func == "autotune":
-        kernel_info = kernel_autotune[(1,)](x, y, SIZE=shape[0])
+        kernel_info = kernel_autotune.warmup(torch.float32, torch.float32, SIZE=shape[0], grid=(1,))[0]
 
     file_lines = extract_file_lines(kernel_info.asm["cubin"])
     if func == "single":
