@@ -900,11 +900,12 @@ def test_full_static_persistent_matmul_kernel(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WAR
     num_SMs = torch.cuda.get_device_properties('cuda').multi_processor_count
     if NUM_CTAS > 1:
         device = get_current_device()
-        null_kernel = triton.compile(empty_kernel, signature="i32", constants={"BLOCK_M": 64, "BLOCK_N": 64})
+        src = triton.compiler.ASTSource(fn=empty_kernel, signature="i32", constants={"BLOCK_M": 64, "BLOCK_N": 64})
+        null_kernel = triton.compile(src)
         null_kernel._init_handles()
         max_shared_mem = driver.utils.get_device_properties(device)["max_shared_mem"]
-        num_clusters = driver.utils.cu_occupancy_max_active_clusters(null_kernel.cu_function, max_shared_mem, NUM_CTAS,
-                                                                     1, 1)
+        num_clusters = driver.utils.cu_occupancy_max_active_clusters(null_kernel.function, max_shared_mem, NUM_CTAS, 1,
+                                                                     1)
         num_SMs = num_clusters
 
     def grid(META):

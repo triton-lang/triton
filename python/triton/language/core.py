@@ -1447,7 +1447,6 @@ def _promote_reduction_input(t, _builder=None):
     # hardware doesn't support FMAX, FMIN, CMP for bfloat16
     if scalar_ty is bfloat16:
         return t.to(float32, _builder=_builder)
-
     return t
 
 
