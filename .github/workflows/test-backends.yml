@@ -179,7 +179,7 @@ jobs:
   Check-Backends-Tests-And-Notify:
     runs-on: ubuntu-latest
     needs: [Integration-Tests-Shared-Middle-Layer, Integration-Tests-AMD, Integration-Tests-Intel]
-    if: always()
+    if: ${{ always() && github.repository == 'openai/triton' }}
     steps:
       - uses: actions/checkout@v4    
       - name: Integration-Tests-Shared-Middle-Layer-Notify
