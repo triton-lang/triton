@@ -89,31 +89,6 @@ def NVGPU_NamedBarrierWaitOp : NVGPU_Op<"bar_wait", []> {
   let assemblyFormat = "$bar `,` $numThreads attr-dict `:` type(operands)";
 }
 
-def WGMMADesc_ModeAttr : I32EnumAttr<"WGMMADescMode",
-    "wgmma desc mode, either 'none', 'swizzle128', 'swizzle64', or 'swizzle32'",
-    [
-      I32EnumAttrCase<"none", 0>,
-      I32EnumAttrCase<"swizzle128", 1>,
-      I32EnumAttrCase<"swizzle64", 2>,
-      I32EnumAttrCase<"swizzle32", 3>
-    ]>{
-  let cppNamespace = "::mlir::triton::nvgpu";
-}
-
-def NVGPU_WGMMADescCreateOp : NVGPU_Op<"wgmma_desc_create", []> {
-  let arguments = (ins LLVM_AnyPointer:$buffer, I32:$height, WGMMADesc_ModeAttr:$mode, I64Attr:$swizzling);
-  let builders = [
-    OpBuilder<(ins "Value":$buffer,
-                     "Value":$height,
-                     "WGMMADescMode":$mode), [{
-                      uint32_t mode_ = static_cast<uint32_t>(mode);
-                      uint64_t swizzling = (mode_ == 1 ? 128 : mode_ == 2 ? 64 : 32);
-                      build($_builder, $_state, $_builder.getIntegerType(64), buffer, height, WGMMADescModeAttr::get($_builder.getContext(), mode), $_builder.getI64IntegerAttr(swizzling));
-                     }]>];
-  let results = (outs I64:$res);
-  let assemblyFormat = "$buffer `,` $height attr-dict `:` functional-type(operands, results)";
-}
-
 def NVGPU_TMALoadTiledOp : NVGPU_Op<"tma_load_tiled", [AttrSizedOperandSegments]> {
   let arguments = (ins LLVM_PointerShared:$dst, LLVM_PointerShared:$mbarrier, LLVM_PointerGlobal:$tmaDesc, I64:$l2Desc,
                        I1:$pred, Variadic<I32>:$coords, Optional<I16>:$mcastMask);

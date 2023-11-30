@@ -65,21 +65,16 @@ triton::nvgpu::WGMMAEltType getMmaOperandType(Value a, bool allowTF32) {
   }
 }
 
-mlir::triton::nvgpu::WGMMADescMode
-getModeFromLayout(const SharedEncodingAttr &layout, uint32_t widthInByte) {
+int64_t getSwizzlingFromLayout(const SharedEncodingAttr &layout,
+                               uint32_t widthInByte) {
   int perPhase = layout.getPerPhase();
   int maxPhase = layout.getMaxPhase();
   uint32_t swizzlingByteWidth = 0;
-
-  mlir::triton::nvgpu::WGMMADescMode mode;
   if (perPhase == 4 && maxPhase == 2) {
-    mode = mlir::triton::nvgpu::WGMMADescMode::swizzle32;
     swizzlingByteWidth = 32;
   } else if (perPhase == 2 && maxPhase == 4) {
-    mode = mlir::triton::nvgpu::WGMMADescMode::swizzle64;
     swizzlingByteWidth = 64;
   } else if (perPhase == 1 && maxPhase == 8) {
-    mode = mlir::triton::nvgpu::WGMMADescMode::swizzle128;
     swizzlingByteWidth = 128;
   } else {
     llvm::report_fatal_error("Unsupported shared layout.");
@@ -90,7 +85,50 @@ getModeFromLayout(const SharedEncodingAttr &layout, uint32_t widthInByte) {
   // allocating shared memory.
   assert(swizzlingByteWidth <= widthInByte &&
          "swizzling size larger than matrix width is not supported.");
-  return mode;
+  return swizzlingByteWidth;
+}
+
+static Value createDescriptor(ConversionPatternRewriter &rewriter, Location loc,
+                              int64_t swizzling, uint32_t stride) {
+  // Create descriptor based on the format described in the spec:
+  // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#asynchronous-warpgroup-level-matrix-shared-memory-layout-matrix-descriptor
+  union WGMMADescriptor {
+    uint64_t descriptor;
+    struct {
+      uint64_t baseAddress : 14;
+      uint64_t : 2;
+      uint64_t leadDimensionBaseOffset : 14;
+      uint64_t : 2;
+      uint64_t strideDimensionBaseOffset : 14;
+      uint64_t : 3;
+      uint64_t matrixBaseOffset : 3;
+      uint64_t : 10;
+      uint64_t swizzlingMode : 2;
+    };
+  };
+  static_assert(sizeof(WGMMADescriptor) == 8,
+                "Descriptor size should be 64 bits.");
+  WGMMADescriptor desc;
+  desc.descriptor = 0;
+  switch (swizzling) {
+  case 0:
+    desc.swizzlingMode = 0;
+    break;
+  case 32:
+    desc.swizzlingMode = 3;
+    break;
+  case 64:
+    desc.swizzlingMode = 2;
+    break;
+  case 128:
+    desc.swizzlingMode = 1;
+    break;
+  default:
+    llvm::report_fatal_error("Unsupported swizzling size.");
+  }
+  desc.strideDimensionBaseOffset = swizzling >> 1;
+  desc.leadDimensionBaseOffset = (swizzling * stride) >> 4;
+  return int_val(64, desc.descriptor);
 }
 
 class DotOpMmaV3SmemLoader {
@@ -112,10 +150,9 @@ public:
     elemsPerSwizzlingRowVal = i32_val(elemsPerSwizzlingRow);
 
     uint32_t widthInByte = shape[ord[0]] * elemBytes;
-    mode = getModeFromLayout(sharedLayout, widthInByte);
+    int64_t swizzling = getSwizzlingFromLayout(sharedLayout, widthInByte);
 
-    baseDesc = rewriter.create<triton::nvgpu::WGMMADescCreateOp>(
-        loc, base, i32_val(shape[ord[1]]), mode);
+    descriptor = createDescriptor(rewriter, loc, swizzling, shape[ord[1]]);
   }
 
   Value smemLoad(int a, int b, ConversionPatternRewriter &rewriter,
@@ -134,7 +171,12 @@ public:
     Value off1 = mul(i32_val(elemBytes), offset);
     Value off_ = zext(i64_ty, udiv(off1, i32_val(16)));
 
-    return add(baseDesc, off_);
+    Value loadDesc = add(descriptor, off_);
+    // Add the base at the end to make it easier to do loop invariant code
+    // motion.
+    loadDesc = add(loadDesc, lshr(shl(ptrtoint(i64_ty, base), int_val(64, 46)),
+                                  int_val(64, 50)));
+    return loadDesc;
   }
 
 private:
@@ -144,12 +186,11 @@ private:
   int dimWpt;
   bool trans;
   Value elemsPerSwizzlingRowVal;
-  mlir::triton::nvgpu::WGMMADescMode mode;
   SmallVector<unsigned int> instrShape;
   ArrayRef<unsigned> ord;
   int elemsPerSwizzlingRow;
   int elemBytes;
-  Value baseDesc;
+  Value descriptor;
 };
 
 DotOpMmaV3SmemLoader loadA(TritonGPUToLLVMTypeConverter *typeConverter,
