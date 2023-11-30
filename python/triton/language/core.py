@@ -923,9 +923,8 @@ def cat(input, other, can_reorder=False, _builder=None):
     :param other: The second input tensor.
     :type other:
     :param reorder: Compiler hint. If true, the compiler is
-    allowed to reorder elements while concatenating inputs.
-    Only use if the order does not matter (e.g., result is
-    only used in reduction ops)
+        allowed to reorder elements while concatenating inputs.  Only use if the
+        order does not matter (e.g., result is only used in reduction ops)
     """
     return semantic.cat(input, other, can_reorder, _builder)
 
@@ -1309,7 +1308,7 @@ def fdiv(x, y, ieee_rounding=False, _builder=None):
     :param x: the input numerator value.
     :param y: the input denominator value.
     :param ieee_rounding: To follow IEEE-754 floating point number
-    rounding mechanism
+        rounding mechanism
     :type ieee_rounding: bool
     """
     ieee_rounding = _constexpr_to_value(ieee_rounding)
