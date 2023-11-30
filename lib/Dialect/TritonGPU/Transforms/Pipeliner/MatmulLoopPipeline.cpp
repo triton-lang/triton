@@ -145,16 +145,21 @@ static void createAsyncLoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
 namespace {
 struct LoadDotOperand {
   LoadDotOperand(tt::LoadOp load,
-                 ttg::DotOperandEncodingAttr dotOperandEncoding)
-      : load(load), dotOperandEncoding(dotOperandEncoding) {}
+                 ttg::DotOperandEncodingAttr dotOperandEncoding,
+                 bool needTrans = false)
+      : load(load), dotOperandEncoding(dotOperandEncoding),
+        needTrans(needTrans) {}
   tt::LoadOp load;
   ttg::DotOperandEncodingAttr dotOperandEncoding;
+  bool needTrans;
 };
 } // namespace
 
 // If all the transitive uses of the given value have are used by a convert to
 // the same dot operand encoding, return the encoding. Otherwise return nullptr.
-static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
+// Negate `needTrans` when a TransOp is seen on the transitive use chain.
+static ttg::DotOperandEncodingAttr
+allTransitiveUsesHaveDotEncoding(Value val, bool &needTrans) {
   ttg::DotOperandEncodingAttr attr;
   for (Operation *user : val.getUsers()) {
     if (user->getNumResults() != 1)
@@ -162,9 +167,12 @@ static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
     auto tensorType = user->getResult(0).getType().dyn_cast<RankedTensorType>();
     if (!tensorType)
       return nullptr;
+    if (isa<triton::TransOp>(user))
+      needTrans = !needTrans;
     ttg::DotOperandEncodingAttr tempAttr;
     if (tensorType.getEncoding().isa<ttg::SharedEncodingAttr>()) {
-      tempAttr = allTransitiveUsesHaveDotEncoding(user->getResult(0));
+      tempAttr =
+          allTransitiveUsesHaveDotEncoding(user->getResult(0), needTrans);
     } else {
       auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(user);
       if (!convertLayout)
@@ -213,11 +221,12 @@ static std::optional<LoadDotOperand> loadDotOperand(tt::LoadOp loadOp,
       }
     }
   }
+  bool needTrans = false;
   ttg::DotOperandEncodingAttr attr =
-      allTransitiveUsesHaveDotEncoding(loadOp.getResult());
+      allTransitiveUsesHaveDotEncoding(loadOp.getResult(), needTrans);
   if (!attr)
     return std::nullopt;
-  return LoadDotOperand(loadOp, attr);
+  return LoadDotOperand(loadOp, attr, needTrans);
 }
 
 /// Collect loads to pipeline. Return success if we can pipeline this loop
@@ -270,16 +279,17 @@ static void collectOpsToPipeline(scf::ForOp forOp,
 // Create an allocation that can old distance number of loadOp shapes.
 static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
                          ttg::DotOperandEncodingAttr dotOpEnc,
-                         unsigned distance) {
+                         unsigned distance, bool needTrans) {
   OpBuilder builder(forOp);
   auto ty = loadOp.getType().cast<RankedTensorType>();
   Attribute sharedEnc;
   auto CTALayout = ttg::getCTALayout(ty.getEncoding());
   if (dotOpEnc) {
     unsigned bitWidth = ty.getElementType().getIntOrFloatBitWidth();
+    // set needTrans to avoid unnecessary conversion between shared encodings.
     sharedEnc = ttg::SharedEncodingAttr::get(
         ty.getContext(), dotOpEnc, ty.getShape(),
-        ttg::getOrder(ty.getEncoding()), CTALayout, bitWidth);
+        ttg::getOrder(ty.getEncoding()), CTALayout, bitWidth, needTrans);
   } else {
     // MMAv3
     sharedEnc = ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(),
@@ -316,8 +326,8 @@ static void createAsynOps(scf::ForOp &forOp, ArrayRef<LoadDotOperand> loads,
   bool needsAsyncWait = false;
   for (const LoadDotOperand &loadOperand : loads) {
     tt::LoadOp loadOp = loadOperand.load;
-    Value alloc =
-        createAlloc(forOp, loadOp, loadOperand.dotOperandEncoding, numBuffers);
+    Value alloc = createAlloc(forOp, loadOp, loadOperand.dotOperandEncoding,
+                              numBuffers, loadOperand.needTrans);
     assert(alloc && "Failed to create alloc for the async load.");
     newOperands.push_back(alloc);
     asyncLoads.emplace_back(loadOp, alloc);
