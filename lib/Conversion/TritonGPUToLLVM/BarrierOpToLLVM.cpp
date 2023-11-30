@@ -65,13 +65,16 @@ struct AllocMBarrierOpConversion : public ConvertTritonGPUOpToLLVMPattern<
     Value smemBase = getSharedMemoryBase(loc, rewriter, op.getResult());
     auto resultTy = op.getType();
     auto resultTensorTy = resultTy.dyn_cast<RankedTensorType>();
-    Type elemPtrTy;
+    Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+    Type llvmElemTy;
     if (resultTensorTy) {
-      auto llvmElemTy =
+      llvmElemTy =
           getTypeConverter()->convertType(resultTensorTy.getElementType());
-      elemPtrTy = ptr_ty(llvmElemTy, 3);
     } else {
-      elemPtrTy = getTypeConverter()->convertType(resultTy);
+      auto resultPtrTy = resultTy.dyn_cast<triton::PointerType>();
+      assert(resultPtrTy && "Unknown type for AllocMBarrierOp");
+      llvmElemTy =
+          getTypeConverter()->convertType(resultPtrTy.getPointeeType());
     }
     smemBase = bitcast(smemBase, elemPtrTy);
     auto threadId = getThreadId(rewriter, loc);
@@ -85,14 +88,16 @@ struct AllocMBarrierOpConversion : public ConvertTritonGPUOpToLLVMPattern<
     for (int i = 0; i < numMBarriers; ++i) {
       Value smem = smemBase;
       if (i > 0) {
-        smem = gep(elemPtrTy, smem, i32_val(i));
+        smem = gep(elemPtrTy, llvmElemTy, smem, i32_val(i));
       }
       rewriter.create<triton::nvgpu::MBarrierInitOp>(loc, smem, pred,
                                                      op.getCount());
     }
     if (resultTensorTy) {
-      auto smemObj = SharedMemoryObject(smemBase, resultTensorTy.getShape(),
-                                        {0}, loc, rewriter);
+      auto llvmElemTy =
+          getTypeConverter()->convertType(resultTensorTy.getElementType());
+      auto smemObj = SharedMemoryObject(
+          smemBase, llvmElemTy, resultTensorTy.getShape(), {0}, loc, rewriter);
       auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
       rewriter.replaceOp(op, retVal);
     } else {
@@ -164,11 +169,11 @@ struct ExtractMBarrierOpConversion
         op.getTensor().getType().cast<RankedTensorType>().getElementType();
     auto tensorStruct = adaptor.getTensor();
     auto index = adaptor.getIndex();
-    auto ptrTy =
-        LLVM::LLVMPointerType::get(getTypeConverter()->convertType(elemTy), 3);
+    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
     auto basePtr =
         extract_val(ptrTy, tensorStruct, rewriter.getDenseI64ArrayAttr(0));
-    Value result = gep(ptrTy, basePtr, index);
+    Value result =
+        gep(ptrTy, getTypeConverter()->convertType(elemTy), basePtr, index);
     rewriter.replaceOp(op, result);
     return success();
   }

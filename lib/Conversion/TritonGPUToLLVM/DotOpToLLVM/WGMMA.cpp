@@ -336,8 +336,15 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   Value baseA;
   Value baseB;
   if (aSharedLayout)
-    baseA = getSharedMemoryObjectFromStruct(loc, loadedA, rewriter).base;
-  baseB = getSharedMemoryObjectFromStruct(loc, loadedB, rewriter).base;
+    baseA =
+        getSharedMemoryObjectFromStruct(
+            loc, loadedA,
+            typeConverter->convertType(aTensorTy.getElementType()), rewriter)
+            .base;
+  baseB = getSharedMemoryObjectFromStruct(
+              loc, loadedB,
+              typeConverter->convertType(bTensorTy.getElementType()), rewriter)
+              .base;
   if (aSharedLayout) {
     auto aOrd = aSharedLayout.getOrder();
     transA = aOrd[0] == 0;

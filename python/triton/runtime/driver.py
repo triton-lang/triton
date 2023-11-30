@@ -64,6 +64,7 @@ class CudaUtils(object):
         self.cuMemAlloc = mod.cuMemAlloc
         self.cuMemcpyHtoD = mod.cuMemcpyHtoD
         self.cuMemFree = mod.cuMemFree
+        self.cu_occupancy_max_active_clusters = mod.cu_occupancy_max_active_clusters
 
 
 class TensorMapManager:

@@ -46,12 +46,11 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 // (2) Create LoadDSmemOp
 // (3) Bitcast result from dataTy (u16/u32/u64) back to elemTy
 Value createLoadDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId) {
+                      Value ctaId, Type elemTy) {
   assert(addr.getType().isa<LLVMPointerType>() &&
          "addr must be a pointer type");
   auto ptrTy = addr.getType().cast<LLVMPointerType>();
   assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
-  auto elemTy = ptrTy.getElementType();
   unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
   Value ret =
       rewriter.create<triton::nvgpu::LoadDSmemOp>(loc, addr, ctaId, bitwidth);
@@ -63,12 +62,12 @@ Value createLoadDSmem(Location loc, PatternRewriter &rewriter, Value addr,
 // (2) Create LoadDSmemOp and extract results from retStruct
 // (3) Bitcast results from dataTy (u16/u32/u64) back to elemTy
 SmallVector<Value> createLoadDSmem(Location loc, PatternRewriter &rewriter,
-                                   Value addr, Value ctaId, unsigned vec) {
+                                   Value addr, Value ctaId, unsigned vec,
+                                   Type elemTy) {
   assert(addr.getType().isa<LLVMPointerType>() &&
          "addr must be a pointer type");
   auto ptrTy = addr.getType().cast<LLVMPointerType>();
   assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
-  auto elemTy = ptrTy.getElementType();
   unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
   Value retStruct = rewriter.create<triton::nvgpu::LoadDSmemOp>(
       loc, addr, ctaId, bitwidth, vec);
@@ -91,8 +90,7 @@ void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
          "addr must be a pointer type");
   auto ptrTy = addr.getType().cast<LLVMPointerType>();
   assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
-  auto elemTy = ptrTy.getElementType();
-  unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
+  unsigned bitwidth = value.getType().getIntOrFloatBitWidth();
   auto dataTy = rewriter.getIntegerType(bitwidth);
   Value data = bitcast(value, dataTy);
   rewriter.create<triton::nvgpu::StoreDSmemOp>(loc, addr, ctaId, data, pred);
@@ -115,8 +113,10 @@ void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
          "addr must be a pointer type");
   auto ptrTy = addr.getType().cast<LLVMPointerType>();
   assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
-  auto elemTy = ptrTy.getElementType();
-  unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
+  unsigned bitwidth = 0;
+  if (!values.empty()) {
+    bitwidth = values.back().getType().getIntOrFloatBitWidth();
+  }
   auto dataTy = rewriter.getIntegerType(bitwidth);
   SmallVector<Value> data;
   for (unsigned i = 0; i < values.size(); ++i)
@@ -132,7 +132,7 @@ void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
 }
 
 SharedMemoryObject
-getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct,
+getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct, Type elemTy,
                                 ConversionPatternRewriter &rewriter) {
   ArrayRef<Type> types =
       llvmStruct.getType().cast<LLVM::LLVMStructType>().getBody();
@@ -144,6 +144,7 @@ getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct,
 
   auto rank = (elems.size() - 1) / 2;
   return {/*base=*/elems[0],
+          /*baseElemType=*/elemTy,
           /*strides=*/{elems.begin() + 1, elems.begin() + 1 + rank},
           /*offsets=*/{elems.begin() + 1 + rank, elems.end()}};
 }
@@ -252,11 +253,10 @@ Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
 }
 
 Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                 Value pred) {
+                 Type elemTy, Value pred) {
   MLIRContext *ctx = rewriter.getContext();
   auto ptrTy = ptr.getType().cast<LLVMPointerType>();
   assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for loadShared");
-  auto elemTy = ptrTy.getElementType();
   unsigned bitwidth = std::max(8u, elemTy.getIntOrFloatBitWidth());
 
   const char *c = bitwidth == 64 ? "=l" : (bitwidth == 16 ? "=h" : "=r");
@@ -362,13 +362,11 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
   }
 
   Value zero = i32_val(0);
-  Type globalPtrType =
-      LLVM::LLVMPointerType::get(globalType, global.getAddrSpace());
+  Type globalPtrType = LLVM::LLVMPointerType::get(ctx, global.getAddrSpace());
   Value globalPtr = rewriter.create<LLVM::AddressOfOp>(
       UnknownLoc::get(ctx), globalPtrType, global.getSymName());
   Value stringStart =
-      rewriter.create<LLVM::GEPOp>(UnknownLoc::get(ctx), ptr_ty(i8_ty),
-                                   globalPtr, SmallVector<Value>({zero, zero}));
+      gep(ptr_ty(ctx), i8_ty, globalPtr, SmallVector<Value>({zero}));
   return stringStart;
 }
 
