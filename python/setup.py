@@ -80,7 +80,6 @@ def get_llvm_package_info():
             arch = "x64"
         system_suffix = f"macos-{arch}"
     elif system == "Linux":
-        # TODO: arm64
         if arch == 'arm64':
             system_suffix = 'ubuntu-arm64'
         else:
