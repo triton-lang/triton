@@ -96,7 +96,7 @@ def _get_num_warps_from_ir_str(src: str):
 
 class ASTSource:
 
-    def __init__(self, fn, signature, constants, attrs) -> None:
+    def __init__(self, fn, signature, constants=None, attrs=None) -> None:
         self.fn = fn
         self.ext = "ttir"
         self.name = fn.__name__
@@ -107,6 +107,8 @@ class ASTSource:
             self.signature = {k: v.strip() for k, v in enumerate(self.signature.split(","))}
         if self.constants is None:
             self.constants = dict()
+        if self.attrs is None:
+            self.attrs = AttrsDescriptor()
 
     def hash(self):
         key = f"{self.fn.cache_key}-{self.attrs.hash()}-{self.signature.values()}-{self.constants}"
