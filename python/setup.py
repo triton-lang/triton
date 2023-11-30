@@ -356,6 +356,7 @@ setup(
         "triton/_C",
         "triton/common",
         "triton/compiler",
+        "triton/compiler/backends",
         "triton/language",
         "triton/language/extra",
         "triton/ops",
