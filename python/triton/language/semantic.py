@@ -9,16 +9,6 @@ from . import core as tl
 
 T = TypeVar('T')
 
-# TODO: redundant code -- remove after 3P backend refactor
-
-
-def _is_cuda(target):
-    from ..compiler.compiler import CudaTargetDescriptor
-    return isinstance(target, CudaTargetDescriptor)
-
-
-# Create custom exception that prints message "hello"
-
 
 class IncompatibleTypeErrorImpl(Exception):
 
@@ -651,9 +641,8 @@ def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder) -> tl.tensor:
     src_sca_ty = src_ty.scalar
     dst_sca_ty = dst_ty.scalar
 
-    if _is_cuda(builder.target) and builder.target.capability < 89 and \
-       (src_sca_ty.is_fp8e4nv() or dst_sca_ty.is_fp8e4nv()):
-        assert False, "fp8e4nv data type is not supported on CUDA arch < 89"
+    if (src_sca_ty.is_fp8e4nv() or dst_sca_ty.is_fp8e4nv()):
+        assert builder.options.allow_fp8e4nv, "fp8e4nv data type is not supported on CUDA arch < 89"
 
     # Casting with customized floating types involved: fp8 <=> bf16, fp16, fp32, fp64
     if (src_sca_ty.is_fp8() and dst_sca_ty.is_floating()) or \
@@ -1185,13 +1174,8 @@ def mfma_supported(M, N, K, allow_tf32, ret_scalar_ty) -> bool:
 def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_num_imprecise_acc: int,
         out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
 
-    def assert_dtypes_valid(lhs_dtype, rhs_dtype, target):
-        # Checks for non-cuda archs
-        if not _is_cuda(target):
-            assert lhs_dtype == rhs_dtype, f"First input ({lhs_dtype}) and second input ({rhs_dtype}) must have the same dtype!"
-            return
-        # Checks for cuda arch
-        if target.capability < 90:
+    def assert_dtypes_valid(lhs_dtype, rhs_dtype, options):
+        if not options.allow_fp8e4nv:
             assert not lhs_dtype.is_fp8e4nv() and not rhs_dtype.is_fp8e4nv(
             ), "Dot op does not support fp8e4nv on CUDA arch < 90"
             if lhs_dtype.is_fp8() and rhs_dtype.is_fp8():
@@ -1220,7 +1204,7 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
 
     assert lhs.type.is_block() and rhs.type.is_block()
 
-    assert_dtypes_valid(lhs.dtype, rhs.dtype, builder.target)
+    assert_dtypes_valid(lhs.dtype, rhs.dtype, builder.options)
 
     assert len(lhs.shape) == 2, f"First input shape ({lhs.shape}) is not two dimensional!"
     assert len(rhs.shape) == 2, f"Second input shape ({rhs.shape}) is not two dimensional!"
@@ -1279,11 +1263,11 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
         assert acc.type == ret_ty
 
     # max_num_imprecise_acc only applies to fp8 -> fp32 dot on sm_90
-    if not (_is_cuda(builder.target) and builder.target.capability == 90 and lhs.dtype.is_fp8() and rhs.dtype.is_fp8()
-            and ret_scalar_ty.is_fp32()):
-        max_num_imprecise_acc = 0
-    if max_num_imprecise_acc is None:
-        max_num_imprecise_acc = 2**30
+    max_num_imprecise_acc = 0
+    if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
+        max_num_imprecise_acc = builder.options.max_num_imprecise_acc_default
+        if max_num_imprecise_acc is None:
+            max_num_imprecise_acc = 2**30
 
     return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, acc_handle, allow_tf32, max_num_imprecise_acc), ret_ty)
 
