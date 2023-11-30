@@ -63,6 +63,9 @@ def kernel_autotune(X, Y, SIZE: tl.constexpr, BLOCK: tl.constexpr):
         tl.store(Y + i + tl.arange(0, BLOCK), x)
 
 
+# AddIOp(DotOp(a, b, c), d) and c==0 => DotOp(a, b, d)
+# Since the + symbol will take effect in the dot op after combination,
+# it seems making sense to annotate with the same line as dot.
 @triton.jit
 def kernel_dot_combine(x):
     c = tl.full((32, 32), 4, dtype=tl.int8)
@@ -156,5 +159,5 @@ def test_line_info(func: str):
         assert (check_file_lines(file_lines, "test_line_info.py", 62))
         assert (check_file_lines(file_lines, "test_line_info.py", 63))
     elif func == "dot_combine":
-        assert (check_file_lines(file_lines, "test_line_info.py", 70))
-        assert (check_file_lines(file_lines, "test_line_info.py", 71, should_contain=False))
+        assert (check_file_lines(file_lines, "test_line_info.py", 73))
+        assert (check_file_lines(file_lines, "test_line_info.py", 74, should_contain=False))
