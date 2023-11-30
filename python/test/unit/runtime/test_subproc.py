@@ -36,7 +36,7 @@ def compile_fn(attrs, capability):
 def test_compile_in_subproc() -> None:
     major, minor = torch.cuda.get_device_capability(0)
     cc = major * 10 + minor
-    config = triton.compiler.InstanceDescriptor(tuple(range(4)), (), (), ())
+    config = triton.compiler.AttrsDescriptor(tuple(range(4)), (), (), ())
 
     multiprocessing.set_start_method('fork')
     proc = multiprocessing.Process(target=compile_fn, args=(config, cc))
@@ -54,11 +54,7 @@ def compile_fn_dot(attrs, capability):
         z = tl.dot(z, z)
         tl.store(Z + offs, z)
 
-    src = ASTSource(
-        fn=kernel_dot,
-        signature={0: "*fp32"},
-        attrs=attrs,
-    )
+    src = ASTSource(fn=kernel_dot, signature={0: "*fp32"}, attrs=attrs, constants=dict())
     triton.compile(src=src, target=("cuda", capability))
 
 
