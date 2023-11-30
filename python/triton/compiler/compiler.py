@@ -179,9 +179,9 @@ def compile(src, target=None, compiler_options=None, linker_options=None):
     # initialize metadata
     metadata = {
         "target": target,
-        "compiler_options": compiler_options.__dict__,
-        "linker_options": linker_options.__dict__,
-        "environment": get_env_vars(),
+        **compiler_options.__dict__,
+        **linker_options.__dict__,
+        **get_env_vars(),
         **src.metadata(),
     }
     # run compilation pipeline  and populate metadata
@@ -223,11 +223,8 @@ class CompiledKernel:
                                             ] if 'tensormaps_info' in self.metadata else []
         for i, _ in enumerate(self.metadata["tensormaps_info"]):
             self.metadata["tensormaps_info"][i].ids_of_folded_args = tuple(self.metadata["ids_of_folded_args"])
-        for key, val in self.metadata["compiler_options"].items():
+        for key, val in self.metadata.items():
             setattr(self, key, val)
-        self.tensormaps_info = self.metadata["tensormaps_info"]
-        self.shared = self.metadata["shared"]
-        self.name = self.metadata["name"]
         # stores the text of each level of IR that was generated during compilation
         asm_files = [file for file in metadata_path.parent.glob(f'{metadata_path.stem}.*') if file.suffix != '.json']
         self.asm = {
