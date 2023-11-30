@@ -27,6 +27,7 @@ jobs:
       matrix:
         config:
         - {runner: 'Ubuntu 20.04', runs_on: 'ubuntu-20.04', target-os: 'ubuntu', arch: 'x64'}
+        - {runner: 'Ubuntu 20.04', runs_on: 'ubuntu-20.04', target-os: 'ubuntu', arch: 'arm64'}
         - {runner: 'CentOS 7', runs_on: ['self-hosted', 'CPU'], target-os: 'centos', arch: 'x64'}
         - {runner: 'MacOS X64', runs_on: 'macos-12', target-os: 'macos', arch: 'x64'}
         - {runner: 'MacOS ARM64', runs_on: 'macos-12', target-os: 'macos', arch: 'arm64'}
@@ -103,7 +104,7 @@ jobs:
         tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
 
     - name: Configure, Build, and Install LLVM (macOS arm64)
-      if: matrix.config.arch == 'arm64' && matrix.config.target-os == 'macos'
+      if: matrix.config.arch == 'arm64' && (matrix.config.target-os == 'ubuntu' || matrix.config.target-os == 'macos')
       run: >
         python3 -m pip install -r llvm-project/mlir/python/requirements.txt
 
