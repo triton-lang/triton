@@ -89,8 +89,8 @@ class Autotuner(KernelInterface):
             self.early_config_prune = prune_configs_by.get("early_config_prune", self.early_config_prune)
 
         self.fn = fn
-        self.warmup = warmup
-        self.rep = rep
+        self.num_warmups = warmup
+        self.num_reps = rep
 
     def _bench(self, *args, config, **meta):
         # check for conflicts, i.e. meta-parameters both provided
@@ -113,13 +113,14 @@ class Autotuner(KernelInterface):
                 num_stages=config.num_stages,
                 num_ctas=config.num_ctas,
                 enable_warp_specialization=config.enable_warp_specialization,
+                # TODO: Make it configurable
                 # enable_persistent=False,
                 **current,
             )
             self.post_hook(args)
 
         try:
-            return do_bench(kernel_call, warmup=self.warmup, rep=self.rep, quantiles=(0.5, 0.2, 0.8))
+            return do_bench(kernel_call, warmup=self.num_warmups, rep=self.num_reps, quantiles=(0.5, 0.2, 0.8))
         except OutOfResources:
             return [float("inf"), float("inf"), float("inf")]
 
@@ -184,7 +185,8 @@ class Autotuner(KernelInterface):
                         num_warps=config.num_warps,
                         num_ctas=config.num_ctas,
                         enable_warp_specialization=config.enable_warp_specialization,
-                        enable_persistent=config.enable_persistent,
+                        # TODO: Make it configurable
+                        # enable_persistent=False,
                     )
                     for config in pruned_configs
                 }
@@ -193,18 +195,22 @@ class Autotuner(KernelInterface):
 
     def warmup(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
+        ret = []
         for config in self.prune_configs(kwargs):
-            self.fn.warmup(
-                *args,
-                num_warps=config.num_warps,
-                num_ctas=config.num_ctas,
-                num_stages=config.num_stages,
-                enable_warp_specialization=config.enable_warp_specialization,
-                enable_persistent=config.enable_persistent,
-                **kwargs,
-                **config.kwargs,
-            )
+            ret.append(
+                self.fn.warmup(
+                    *args,
+                    num_warps=config.num_warps,
+                    num_ctas=config.num_ctas,
+                    num_stages=config.num_stages,
+                    enable_warp_specialization=config.enable_warp_specialization,
+                    # TODO: Make it configurable
+                    # enable_persistent=False,
+                    **kwargs,
+                    **config.kwargs,
+                ))
         self.nargs = None
+        return ret
 
 
 class Config:

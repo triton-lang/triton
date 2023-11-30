@@ -13,6 +13,7 @@ from typing import Callable, Generic, Iterable, List, Optional, TypeVar, Union, 
 from .._C.libtriton.triton import TMAInfos
 from ..common.backend import get_backend, get_cuda_version_key
 from .interpreter import InterpretedFunction
+from ..runtime.driver import driver
 
 
 def get_cuda_stream(idx=None):
@@ -44,6 +45,14 @@ def get_device_capability(idx):
     import torch
 
     return torch.cuda.get_device_capability(idx)
+
+
+def get_current_target():
+    import torch
+    device = get_current_device()
+    capability = get_device_capability(device)
+    capability = capability[0] * 10 + capability[1]
+    return ("cuda", capability)
 
 
 T = TypeVar("T")
@@ -252,6 +261,7 @@ class JITFunction(KernelInterface[T]):
 
     # TODO(jlebar): Fold this into the KernelArg class.
     def _get_config(self, *args):
+        from ..compiler import AttrsDescriptor
 
         def is_divisible_by_16(x):
             if hasattr(x, "data_ptr"):
@@ -288,10 +298,8 @@ class JITFunction(KernelInterface[T]):
         # TODO: method to collect all folded args
         none_args = {param.num for param, arg in zip(self.params, args) if arg is None and not param.do_not_specialize}
         ids_of_folded_args = equal_to_1 | none_args
-        return namedtuple("instance_descriptor",
-                          ["divisible_by_16", "equal_to_1", "ids_of_folded_args", "divisible_by_8"])(  #
-                              tuple(divisible_by_16), tuple(equal_to_1), tuple(ids_of_folded_args),
-                              tuple(divisible_by_8))
+        return AttrsDescriptor(tuple(divisible_by_16), tuple(equal_to_1), tuple(ids_of_folded_args),
+                               tuple(divisible_by_8))
         # return _triton.code_gen.instance_descriptor(divisible_by_16,
         # equal_to_1)
 
@@ -400,7 +408,7 @@ class JITFunction(KernelInterface[T]):
         return device_types[0] if len(device_types) > 0 else "cuda"
 
     def run(self, *args, **kwargs):
-        from ..compiler import CompiledKernel, compile, get_arch_default_num_stages, get_arch_default_num_warps
+        from ..compiler import CompiledKernel, compile, ASTSource
 
         # Get a compiler-flags arg like `num_warps` and remove it from kwargs.
         def get_special_arg(name: str, default=None):
@@ -472,9 +480,9 @@ class JITFunction(KernelInterface[T]):
                 stream = device_backend.get_stream()
 
         if num_warps is None:
-            num_warps = get_arch_default_num_warps(device_type)
+            num_warps = 4
         if num_stages is None:
-            num_stages = get_arch_default_num_stages(device_type)
+            num_stages = 3
 
         if device_type in ["cuda"]:
             version_key = get_cuda_version_key()
@@ -529,20 +537,21 @@ class JITFunction(KernelInterface[T]):
             ):
                 return None
 
+            capability = get_device_capability(device)
+            capability = capability[0] * 10 + capability[1]
+            src = ASTSource(self, signature, constants, configs[0])
             self.cache[device][key] = compile(
-                self,
-                signature=signature,
-                device=device,
-                constants=constants,
-                num_warps=num_warps,
-                num_ctas=num_ctas,
-                num_stages=num_stages,
-                enable_warp_specialization=enable_warp_specialization,
-                enable_fp_fusion=enable_fp_fusion,
-                extern_libs=extern_libs,
-                configs=configs,
-                debug=self.debug,
-                device_type=device_type,
+                src,
+                target=(device_type, capability),
+                compiler_options={
+                    "num_warps": num_warps,
+                    "num_ctas": num_ctas,
+                    "num_stages": num_stages,
+                    "enable_warp_specialization": enable_warp_specialization,
+                    "enable_fp_fusion": enable_fp_fusion,
+                    "debug": self.debug,
+                },
+                linker_options={"libs": extern_libs},
             )
 
         bin = self.cache[device][key]
@@ -553,16 +562,16 @@ class JITFunction(KernelInterface[T]):
                 grid_2,
                 bin.num_warps,
                 bin.num_ctas,
-                bin.clusterDims[0],
-                bin.clusterDims[1],
-                bin.clusterDims[2],
+                bin.cluster_dims[0],
+                bin.cluster_dims[1],
+                bin.cluster_dims[2],
                 bin.shared,
                 stream,
-                bin.cu_function,
+                bin.function,
                 CompiledKernel.launch_enter_hook,
                 CompiledKernel.launch_exit_hook,
                 bin,
-                *bin.assemble_tensormap_to_arg(non_constexpr_arg_values),
+                *driver.assemble_tensormap_to_arg(bin.metadata["tensormaps_info"], non_constexpr_arg_values),
             )
         return bin
 

@@ -88,9 +88,8 @@ LogicalResult getDependentPointers(Value ptr, DenseSet<Value> &dependentSet,
     auto parentOp = blockArg.getOwner()->getParentOp();
     if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
       if (blockArg.getArgNumber() >= forOp.getNumInductionVars()) {
-        if (failed(getDependentPointers(
-                forOp.getOpOperandForRegionIterArg(blockArg).get(),
-                dependentSet, processedSet)))
+        if (failed(getDependentPointers(forOp.getTiedLoopInit(blockArg)->get(),
+                                        dependentSet, processedSet)))
           return failure();
 
         unsigned operandIdx =
@@ -383,7 +382,7 @@ LogicalResult getDependentValues(Value val, DenseSet<Value> &depSet,
       if (failed(addControlOperandsForForOp(forOp)))
         return failure();
       if (blockArg.getArgNumber() >= forOp.getNumInductionVars()) {
-        Value operand = forOp.getOpOperandForRegionIterArg(blockArg).get();
+        Value operand = forOp.getTiedLoopInit(blockArg)->get();
         if (failed(tryInsertAndPropagate(operand)))
           return failure();
 

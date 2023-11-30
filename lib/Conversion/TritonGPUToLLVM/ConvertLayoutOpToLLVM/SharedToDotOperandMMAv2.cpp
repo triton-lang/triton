@@ -282,7 +282,7 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
 
 std::tuple<Value, Value, Value, Value>
 MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> ptrs, Type matTy,
-                           Type shemPtrTy) const {
+                           Type shemTy) const {
   assert(mat0 % 2 == 0 && mat1 % 2 == 0 && "smem matrix load must be aligned");
   int matIdx[2] = {mat0, mat1};
 
@@ -321,7 +321,7 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> ptrs, Type matTy,
     Value stridedOffset =
         mul(i32_val(matIdx[order[1]] * stridedLoadMatOffset * stridedMatShape),
             stridedSmemOffset);
-    Value readPtr = gep(shemPtrTy, ptr, stridedOffset);
+    Value readPtr = gep(ptr_ty(ctx, 3), shemTy, ptr, stridedOffset);
 
     PTXBuilder builder;
     // ldmatrix.m8n8.x4 returns 4x2xfp16(that is 4xb32) elements for a
@@ -363,7 +363,7 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> ptrs, Type matTy,
 
     for (int i = 0; i < 4; ++i)
       for (int j = 0; j < vecWidth; ++j) {
-        vptrs[i][j] = gep(shemPtrTy, ptrs[i / 2][j], ii[i % 2]);
+        vptrs[i][j] = gep(ptr_ty(ctx, 3), shemTy, ptrs[i / 2][j], ii[i % 2]);
       }
     // row + trans and col + no-trans are equivalent
     bool isActualTrans =
@@ -381,8 +381,8 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> ptrs, Type matTy,
         int e = em % vecWidth;
         int m = em / vecWidth;
         int idx = m * 2 + r;
-        Value ptr = bitcast(vptrs[idx][e], ptr_ty(packedTy, 3));
-        Value val = load(ptr);
+        Value ptr = bitcast(vptrs[idx][e], ptr_ty(ctx, 3));
+        Value val = load(packedTy, ptr);
         Value canonval = bitcast(val, vec_ty(canonInt, canonWidth));
         for (int w = 0; w < canonWidth; ++w) {
           int ridx = idx + w * kWidth / vecWidth;
@@ -455,16 +455,16 @@ MMA16816SmemLoader::MMA16816SmemLoader(
   warpMatOffset = instrShape[kOrder ^ 1] / matShape[kOrder ^ 1];
 }
 
-Type getSharedMemPtrTy(Type argType) {
+Type getSharedMemTy(Type argType) {
   MLIRContext *ctx = argType.getContext();
   if (argType.isF16())
-    return ptr_ty(type::f16Ty(ctx), 3);
+    return type::f16Ty(ctx);
   else if (argType.isBF16())
-    return ptr_ty(type::i16Ty(ctx), 3);
+    return type::i16Ty(ctx);
   else if (argType.isF32())
-    return ptr_ty(type::f32Ty(ctx), 3);
+    return type::f32Ty(ctx);
   else if (argType.getIntOrFloatBitWidth() == 8)
-    return ptr_ty(type::i8Ty(ctx), 3);
+    return type::i8Ty(ctx);
   else
     llvm::report_fatal_error("mma16816 data type not supported");
 }
@@ -531,15 +531,16 @@ std::function<void(int, int)> getLoadMatrixFn(
     const int numPtrs = loader.getNumPtrs();
     SmallVector<Value> ptrs(numPtrs);
     Value smemBase = smemObj.getBaseBeforeSlice(order[0], loc, rewriter);
-    Type smemPtrTy = getSharedMemPtrTy(eltTy);
+    Type smemTy = getSharedMemTy(eltTy);
     for (int i = 0; i < numPtrs; ++i)
-      ptrs[i] = bitcast(gep(smemPtrTy, smemBase, offs[i]), smemPtrTy);
+      ptrs[i] =
+          gep(ptr_ty(rewriter.getContext(), 3), smemTy, smemBase, offs[i]);
     // actually load from shared memory
     auto matTy = LLVM::LLVMStructType::getLiteral(eltTy.getContext(),
                                                   SmallVector<Type>(4, i32_ty));
     auto [ha0, ha1, ha2, ha3] = loader.loadX4(
         (kOrder == 1) ? a : b /*mat0*/, (kOrder == 1) ? b : a /*mat1*/, ptrs,
-        matTy, getSharedMemPtrTy(eltTy));
+        matTy, getSharedMemTy(eltTy));
     if (!isA)
       std::swap(ha1, ha2);
     // the following is incorrect

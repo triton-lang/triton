@@ -2,7 +2,7 @@ name: Wheels
 on:
   workflow_dispatch:
   schedule:
-    - cron: "20 2 * * *"
+    - cron: "0 8 * * *"
 
 jobs:
 

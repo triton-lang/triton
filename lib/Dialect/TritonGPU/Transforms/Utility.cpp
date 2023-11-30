@@ -433,8 +433,23 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
     if (currentValue.getDefiningOp<scf::ForOp>())
       return failure();
     slice.insert(currentValue);
+    if (layout.find(currentValue) != layout.end()) {
+      if (layout[currentValue] != encoding)
+        return failure();
+    }
     layout[currentValue] = encoding;
     if (auto *definingOp = currentValue.getDefiningOp()) {
+      // If the op has multiple results we need to update all results layout.
+      for (Value result : definingOp->getResults()) {
+        if (result == currentValue || !result.getType().isa<RankedTensorType>())
+          continue;
+        if (layout.find(result) != layout.end()) {
+          if (layout[result] != encoding)
+            return failure();
+          continue;
+        }
+        layout[result] = encoding;
+      }
       if (canFoldIntoConversion(definingOp, encoding))
         continue;
       if (stopPropagation && stopPropagation(definingOp))
@@ -454,10 +469,10 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
     Block *block = blockArg.getOwner();
     Operation *parentOp = block->getParentOp();
     if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
-      OpOperand &initOperand = forOp.getOpOperandForRegionIterArg(blockArg);
+      OpOperand *initOperand = forOp.getTiedLoopInit(blockArg);
       Value yieldOperand = forOp.getBody()->getTerminator()->getOperand(
           blockArg.getArgNumber() - forOp.getNumInductionVars());
-      queue.push_back({initOperand.get(), encoding});
+      queue.push_back({initOperand->get(), encoding});
       queue.push_back({yieldOperand, encoding});
       continue;
     }
@@ -569,7 +584,7 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
       Value value = queue.pop_back_val();
       if (auto nestedFor = value.getDefiningOp<scf::ForOp>()) {
         auto result = value.cast<OpResult>();
-        OpOperand &forOperand = nestedFor.getOpOperandForResult(result);
+        OpOperand &forOperand = *nestedFor.getTiedLoopInit(result);
         markLive(forOperand.get());
         auto nestedYieldOp =
             cast<scf::YieldOp>(nestedFor.getBody()->getTerminator());

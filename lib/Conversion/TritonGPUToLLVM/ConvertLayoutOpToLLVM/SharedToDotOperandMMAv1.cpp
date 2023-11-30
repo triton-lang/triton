@@ -152,10 +152,10 @@ static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
   }
 
   Type elemX2Ty = vec_ty(f16_ty, 2);
-  Type elemPtrTy = ptr_ty(f16_ty, 3);
+  Type elemTy = f16_ty;
   if (tensorTy.getElementType().isBF16()) {
     elemX2Ty = vec_ty(i16_ty, 2);
-    elemPtrTy = ptr_ty(i16_ty, 3);
+    elemTy = i16_ty;
   }
 
   // prepare arguments
@@ -163,22 +163,23 @@ static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
 
   std::map<std::pair<int, int>, std::pair<Value, Value>> has;
   for (int i = 0; i < numPtrA; i++)
-    ptrA[i] = gep(ptr_ty(f16_ty, 3), smemBase, offA[i]);
+    ptrA[i] = gep(ptr_ty(ctx, 3), f16_ty, smemBase, offA[i]);
 
   auto ld = [&](decltype(has) &vals, int m, int k, Value val0, Value val1) {
     vals[{m, k}] = {val0, val1};
   };
   auto loadA = [&](int m, int k) {
     int offidx = (isARow ? k / 4 : m) % numPtrA;
-    Value thePtrA = gep(elemPtrTy, smemBase, offA[offidx]);
+    Value thePtrA = gep(ptr_ty(ctx, 3), elemTy, smemBase, offA[offidx]);
 
     int stepAM = isARow ? m : m / numPtrA * numPtrA;
     int stepAK = isARow ? k / (numPtrA * vecA) * (numPtrA * vecA) : k;
     Value offset = add(mul(i32_val(stepAM * strideRepM), strideAM),
                        mul(i32_val(stepAK), strideAK));
-    Value pa = gep(elemPtrTy, thePtrA, offset);
-    Type aPtrTy = ptr_ty(vec_ty(i32_ty, std::max<int>(vecA / 2, 1)), 3);
-    Value ha = load(bitcast(pa, aPtrTy));
+    Value pa = gep(ptr_ty(ctx, 3), elemTy, thePtrA, offset);
+    Type vecTy = vec_ty(i32_ty, std::max<int>(vecA / 2, 1));
+    Type aPtrTy = ptr_ty(ctx, 3);
+    Value ha = load(vecTy, bitcast(pa, aPtrTy));
     // record lds that needs to be moved
     Value ha00 = bitcast(extract_element(ha, i32_val(0)), elemX2Ty);
     Value ha01 = bitcast(extract_element(ha, i32_val(1)), elemX2Ty);
@@ -278,17 +279,17 @@ static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
     offB[i] = add(mul(offB0I, strideB0), mul(offB1, strideB1));
   }
 
-  Type elemPtrTy = ptr_ty(f16_ty, 3);
+  Type elemTy = f16_ty;
   Type elemX2Ty = vec_ty(f16_ty, 2);
   if (tensorTy.getElementType().isBF16()) {
-    elemPtrTy = ptr_ty(i16_ty, 3);
+    elemTy = i16_ty;
     elemX2Ty = vec_ty(i16_ty, 2);
   }
 
   SmallVector<Value> ptrB(numPtrB);
   ValueTable hbs;
   for (int i = 0; i < numPtrB; ++i)
-    ptrB[i] = gep(ptr_ty(f16_ty, 3), smem, offB[i]);
+    ptrB[i] = gep(ptr_ty(ctx, 3), f16_ty, smem, offB[i]);
 
   auto ld = [&](decltype(hbs) &vals, int m, int k, Value val0, Value val1) {
     vals[{m, k}] = {val0, val1};
@@ -302,10 +303,10 @@ static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
     int stepBK = isBRow ? K : K / (numPtrB * vecB) * (numPtrB * vecB);
     Value offset = add(mul(i32_val(stepBN * strideRepN), strideBN),
                        mul(i32_val(stepBK), strideBK));
-    Value pb = gep(elemPtrTy, thePtrB, offset);
+    Value pb = gep(ptr_ty(ctx, 3), elemTy, thePtrB, offset);
 
-    Value hb =
-        load(bitcast(pb, ptr_ty(vec_ty(i32_ty, std::max(vecB / 2, 1)), 3)));
+    Type vecTy = vec_ty(i32_ty, std::max(vecB / 2, 1));
+    Value hb = load(vecTy, bitcast(pb, ptr_ty(ctx, 3)));
     // record lds that needs to be moved
     Value hb00 = bitcast(extract_element(hb, i32_val(0)), elemX2Ty);
     Value hb01 = bitcast(extract_element(hb, i32_val(1)), elemX2Ty);

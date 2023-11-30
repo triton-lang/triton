@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm="target=nvvm" | FileCheck %s
 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
-  // CHECK: llvm.func @test_empty_kernel(%arg0: i64, %arg1: !llvm.ptr<f16, 1>)
+  // CHECK: llvm.func @test_empty_kernel(%arg0: i64, %arg1: !llvm.ptr<1>)
   // Here the 128 comes from the 4 in module attribute multiples 32
   // CHECK: nvvm.kernel = 1 : ui1, nvvm.maxntid = [128 : i32]
   tt.func @test_empty_kernel(%lb : index, %A : !tt.ptr<f16>) {
@@ -560,9 +560,9 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     %index = arith.constant 1 : i32
 
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<vector<8xi32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<vector<8xi32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x64x!tt.ptr<f16>, #AL> -> tensor<2x16x64xf16, #A>
     tt.return
   }
@@ -752,38 +752,38 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
   tt.func @convert_layout_blocked_blocked(%arg0: tensor<16x16xf32, #blocked0>) {
     // CHECK: llvm.mlir.addressof @global_smem
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<1xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<1xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<1xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<1xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<1xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<1xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<1xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<1xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: nvvm.barrier0
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<vector<1xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<vector<1xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<vector<1xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<vector<1xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<vector<1xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<vector<1xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<vector<1xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<vector<1xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     %0 = triton_gpu.convert_layout %arg0 : (tensor<16x16xf32, #blocked0>) -> tensor<16x16xf32, #blocked1>
     tt.return
   }
@@ -799,14 +799,14 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
   tt.func @convert_layout_blocked_blocked_vec(%arg0: tensor<16x16xf32, #blocked0>) {
     // CHECK: llvm.mlir.addressof @global_smem
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: nvvm.barrier0
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     %0 = triton_gpu.convert_layout %arg0 : (tensor<16x16xf32, #blocked0>) -> tensor<16x16xf32, #blocked1>
     tt.return
   }
@@ -822,20 +822,20 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
   tt.func @convert_layout_blocked_blocked_multi_rep(%arg0: tensor<16x16xf32, #blocked0>) {
     // CHECK: llvm.mlir.addressof @global_smem
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: nvvm.barrier0
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: nvvm.barrier0
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: nvvm.barrier0
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     %0 = triton_gpu.convert_layout %arg0 : (tensor<16x16xf32, #blocked0>) -> tensor<16x16xf32, #blocked1>
     tt.return
   }
@@ -889,12 +889,12 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   // CHECK-LABEL: convert_layout_mmav2_block
   tt.func @convert_layout_mmav2_blocked(%arg0: tensor<32x16xf32, #mma>) {
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: nvvm.barrier0
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     %0 = triton_gpu.convert_layout %arg0 : (tensor<32x16xf32, #mma>) -> tensor<32x16xf32, #blocked0>
     tt.return
   }
@@ -909,16 +909,16 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   // CHECK-LABEL: convert_layout_mmav1_block
   tt.func @convert_layout_mmav1_blocked(%arg0: tensor<32x64xf32, #mma>) {
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: nvvm.barrier0
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     %0 = triton_gpu.convert_layout %arg0 : (tensor<32x64xf32, #mma>) -> tensor<32x64xf32, #blocked>
     tt.return
   }
@@ -932,9 +932,9 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
   // CHECK-LABEL: convert_layout_blocked_shared
   tt.func @convert_layout_blocked_shared(%arg0: tensor<128x32xf32, #blocked0>) {
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<8xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<8xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<3>
     %0 = triton_gpu.convert_layout %arg0 : (tensor<128x32xf32, #blocked0>) -> tensor<128x32xf32, #shared0>
     tt.return
   }
@@ -947,7 +947,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_blocked1d_to_slice0
   tt.func @convert_blocked1d_to_slice0(%src:tensor<32xi32, #blocked0>) {
-    // CHECK-COUNT-4: llvm.load {{.*}} : !llvm.ptr<vector<1xi32>, 3>
+    // CHECK-COUNT-4: llvm.load {{.*}} : !llvm.ptr<3>
     %cvt = triton_gpu.convert_layout %src : (tensor<32xi32, #blocked0>) -> tensor<32xi32, #triton_gpu.slice<{dim = 0, parent = #blocked1}>>
     tt.return
   }
@@ -960,7 +960,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_blocked1d_to_slice1
   tt.func @convert_blocked1d_to_slice1(%src:tensor<32xi32, #blocked0>) {
-    // CHECK-COUNT-8: llvm.load {{.*}} : !llvm.ptr<vector<1xi32>, 3>
+    // CHECK-COUNT-8: llvm.load {{.*}} : !llvm.ptr<3>
     %cvt = triton_gpu.convert_layout %src : (tensor<32xi32, #blocked0>) -> tensor<32xi32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
     tt.return
   }
