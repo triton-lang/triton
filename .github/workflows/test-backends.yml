@@ -26,6 +26,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      ## set failure status to test mail function
+      - name: Set failure
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@v2
 
