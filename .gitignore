@@ -10,6 +10,7 @@ python/triton*.egg-info/
 python/triton/_C/*.pyd
 python/triton/_C/*.so
 python/triton/_C/*.dylib
+python/triton/_C/*.dll
 
 # Backends copied from submodules
 python/triton/backends/

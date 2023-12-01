@@ -73,6 +73,7 @@ mlir_check_all_link_libraries(triton-lsp)
 
 
 add_llvm_executable(triton-llvm-opt
+  PARTIAL_SOURCES_INTENDED
   triton-llvm-opt.cpp
 
   PARTIAL_SOURCES_INTENDED
