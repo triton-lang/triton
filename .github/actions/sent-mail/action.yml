@@ -27,7 +27,7 @@ runs:
         server_address: ${{ inputs.server }}
         server_port: ${{ inputs.port }}
         username: ${{ inputs.user }}
-        password: ${{ inputs.pswd }}        
+        password: ${{ inputs.pswd }}
         subject: "Failure Notification - ${{ inputs.jobname }}"
         body: |
           Notification: ${{ inputs.jobname }} failed in backend test,

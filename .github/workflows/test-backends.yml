@@ -53,7 +53,7 @@ jobs:
           python3 -m pip uninstall -y triton
           python3 setup.py build
           python3 -m pip install --no-build-isolation -vvv '.[tests]'
-    
+
       - name: Run shared middle-layer lit tests
         run: |
           python3 -m pip install lit
@@ -181,41 +181,40 @@ jobs:
     needs: [Integration-Tests-Shared-Middle-Layer, Integration-Tests-AMD, Integration-Tests-Intel]
     if: ${{ always() && github.repository == 'openai/triton' }}
     steps:
-      - uses: actions/checkout@v4    
+      - uses: actions/checkout@v4
       - name: Integration-Tests-Shared-Middle-Layer-Notify
-        if: ${{ needs.Integration-Tests-Shared-Middle-Layer.result != '' && needs.Integration-Tests-Shared-Middle-Layer.result == 'failure' }}        
+        if: ${{ needs.Integration-Tests-Shared-Middle-Layer.result != '' && needs.Integration-Tests-Shared-Middle-Layer.result == 'failure' }}
         uses: ./.github/actions/sent-mail
         with:
           server: ${{ secrets.MAIL_SERVER }}
           port: ${{ secrets.MAIL_SERVER_PORT }}
           user: ${{ secrets.MAIL_USERNAME }}
-          pswd: ${{ secrets.MAIL_PASSWORD }}          
+          pswd: ${{ secrets.MAIL_PASSWORD }}
           jobname: Integration-Tests-Shared-Middle-Layer
           jobowner: ${{ secrets.MAIL_MS_RECEIVERS }}
           ghrepo: ${{ github.repository }}
-          ghrunid: ${{ github.run_id }}   
+          ghrunid: ${{ github.run_id }}
       - name: Integration-Tests-AMD-Notify
-        if: ${{ needs.Integration-Tests-AMD.result != '' && needs.Integration-Tests-AMD.result == 'failure' }}        
+        if: ${{ needs.Integration-Tests-AMD.result != '' && needs.Integration-Tests-AMD.result == 'failure' }}
         uses: ./.github/actions/sent-mail
         with:
           server: ${{ secrets.MAIL_SERVER }}
           port: ${{ secrets.MAIL_SERVER_PORT }}
           user: ${{ secrets.MAIL_USERNAME }}
-          pswd: ${{ secrets.MAIL_PASSWORD }}          
+          pswd: ${{ secrets.MAIL_PASSWORD }}
           jobname: Integration-Tests-AMD
           jobowner: ${{ secrets.MAIL_AMD_RECEIVERS }}
           ghrepo: ${{ github.repository }}
           ghrunid: ${{ github.run_id }}
       - name: Integration-Tests-Intel-Notify
-        if: ${{ needs.Integration-Tests-Intel.result != '' && needs.Integration-Tests-Intel.result == 'failure' }}        
+        if: ${{ needs.Integration-Tests-Intel.result != '' && needs.Integration-Tests-Intel.result == 'failure' }}
         uses: ./.github/actions/sent-mail
         with:
           server: ${{ secrets.MAIL_SERVER }}
           port: ${{ secrets.MAIL_SERVER_PORT }}
           user: ${{ secrets.MAIL_USERNAME }}
-          pswd: ${{ secrets.MAIL_PASSWORD }}       
+          pswd: ${{ secrets.MAIL_PASSWORD }}
           jobname: Integration-Tests-Intel
           jobowner: ${{ secrets.MAIL_INTEL_RECEIVERS }}
           ghrepo: ${{ github.repository }}
           ghrunid: ${{ github.run_id }}
-
