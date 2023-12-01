@@ -223,8 +223,8 @@ void LoopPipelinerInternal::emitPrologue(RewriterBase &rewriter) {
   }
   auto yield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
   Location loc = forOp.getLoc();
+  SmallVector<Value, 5> predicates(maxStage);
   for (int64_t i = 0; i < maxStage; i++) {
-    Value predicate;
     if (dynamicLoop) {
       Type t = ub.getType();
       // pred = ub > lb + (i * step)
@@ -234,8 +234,8 @@ void LoopPipelinerInternal::emitPrologue(RewriterBase &rewriter) {
               loc, step,
               rewriter.create<arith::ConstantOp>(
                   loc, rewriter.getIntegerAttr(t, i))));
-      predicate = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
-                                                 iv, ub);
+      predicates[i] = rewriter.create<arith::CmpIOp>(
+          loc, arith::CmpIPredicate::slt, iv, ub);
     }
 
     // special handling for induction variable as the increment is implicit.
@@ -259,8 +259,9 @@ void LoopPipelinerInternal::emitPrologue(RewriterBase &rewriter) {
               newOperand->set(replacement);
             }
           });
-      if (predicate) {
-        newOp = predicateFn(rewriter, newOp, predicate);
+      int predicateIdx = i - stages[op];
+      if (predicates[predicateIdx]) {
+        newOp = predicateFn(rewriter, newOp, predicates[predicateIdx]);
         assert(newOp && "failed to predicate op.");
       }
       if (annotateFn)
