@@ -30,8 +30,17 @@ set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
 # used conditionally in this file and by lit tests
 
 # Customized release build type with assertions: TritonRelBuildWithAsserts
-set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
-set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
+if(NOT MSVC)
+  set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
+  set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
+else()
+  set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "/Zi /Ob0 /Od /RTC1")
+  set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "/Zi /Ob0 /Od /RTC1")
+  set(CMAKE_EXE_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
+  set(CMAKE_MODULE_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
+  set(CMAKE_SHARED_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
+  set(CMAKE_STATIC_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
+endif()
 
 # Default build type
 if(NOT CMAKE_BUILD_TYPE)
@@ -45,7 +54,15 @@ endif()
 
 # Compiler flags
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
-set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17")
+if(NOT MSVC)
+  if(NOT WIN32)
+    set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17")
+  else()
+    set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS -std=gnu++17 -Wno-deprecated")
+  endif()
+else()
+  set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  /wd4244 /wd4624 /wd4715 /wd4530")
+endif()
 
 # Third-party
 include_directories(${PYBIND11_INCLUDE_DIR})
@@ -103,7 +120,11 @@ endfunction()
 
 
 # Disable warnings that show up in external code (gtest;pybind11)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default -fvisibility=hidden")
+if(NOT MSVC)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default -fvisibility=hidden")
+else()
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /WX-")
+endif()
 
 include_directories(".")
 include_directories(${MLIR_INCLUDE_DIRS})
@@ -137,6 +158,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   if(PYTHON_INCLUDE_DIRS)
     include_directories(${PYTHON_INCLUDE_DIRS})
+    message(STATUS "PYTHON_LIB_DIRS ${PYTHON_LIB_DIRS}")
+    link_directories(${PYTHON_LIB_DIRS})
   else()
     find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
     include_directories(${Python3_INCLUDE_DIRS})
@@ -203,6 +226,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
   target_link_libraries(triton PUBLIC ${TRITON_LIBRARIES})
   if(WIN32)
     target_link_libraries(triton PRIVATE ${CMAKE_DL_LIBS})
+    set_target_properties(triton PROPERTIES SUFFIX ".pyd")
+    set_target_properties(triton PROPERTIES PREFIX "lib")
   else()
     target_link_libraries(triton PRIVATE z)
   endif()
@@ -218,6 +243,11 @@ if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
   endif()
 
   target_link_libraries(triton PRIVATE ${PYTHON_LDFLAGS})
+endif()
+
+if(WIN32)
+  option(CMAKE_USE_WIN32_THREADS_INIT "using WIN32 threads" ON)
+  option(gtest_disable_pthreads "Disable uses of pthreads in gtest." ON)
 endif()
 
 add_subdirectory(bin)
