@@ -160,23 +160,17 @@
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#nvgpu-wgmma-commit-group-triton-nvgpu-wgmmacommitgroupop"><code class="docutils literal notranslate"><span class="pre">nvgpu.wgmma_commit_group</span></code> (triton::nvgpu::WGMMACommitGroupOp)</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#nvgpu-wgmma-desc-create-triton-nvgpu-wgmmadesccreateop"><code class="docutils literal notranslate"><span class="pre">nvgpu.wgmma_desc_create</span></code> (triton::nvgpu::WGMMADescCreateOp)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#nvgpu-wgmma-fence-triton-nvgpu-wgmmafenceop"><code class="docutils literal notranslate"><span class="pre">nvgpu.wgmma_fence</span></code> (triton::nvgpu::WGMMAFenceOp)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#nvgpu-wgmma-triton-nvgpu-wgmmaop"><code class="docutils literal notranslate"><span class="pre">nvgpu.wgmma</span></code> (triton::nvgpu::WGMMAOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id27">Attributes:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id28">Operands:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id29">Results:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#nvgpu-wgmma-fence-triton-nvgpu-wgmmafenceop"><code class="docutils literal notranslate"><span class="pre">nvgpu.wgmma_fence</span></code> (triton::nvgpu::WGMMAFenceOp)</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#nvgpu-wgmma-triton-nvgpu-wgmmaop"><code class="docutils literal notranslate"><span class="pre">nvgpu.wgmma</span></code> (triton::nvgpu::WGMMAOp)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#nvgpu-wgmma-wait-group-triton-nvgpu-wgmmawaitgroupop"><code class="docutils literal notranslate"><span class="pre">nvgpu.wgmma_wait_group</span></code> (triton::nvgpu::WGMMAWaitGroupOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id30">Attributes:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id31">Operands:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id32">Results:</a></li>
-</ul>
-</li>
-<li class="toctree-l3"><a class="reference internal" href="#nvgpu-wgmma-wait-group-triton-nvgpu-wgmmawaitgroupop"><code class="docutils literal notranslate"><span class="pre">nvgpu.wgmma_wait_group</span></code> (triton::nvgpu::WGMMAWaitGroupOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id33">Attributes:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id34">Operands:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id35">Results:</a></li>
 </ul>
 </li>
 </ul>
@@ -883,59 +877,6 @@
 </pre></div>
 </div>
 </section>
-<section id="nvgpu-wgmma-desc-create-triton-nvgpu-wgmmadesccreateop">
-<h2><code class="docutils literal notranslate"><span class="pre">nvgpu.wgmma_desc_create</span></code> (triton::nvgpu::WGMMADescCreateOp)<a class="headerlink" href="#nvgpu-wgmma-desc-create-triton-nvgpu-wgmmadesccreateop" title="Permalink to this heading">¶</a></h2>
-<p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvgpu.wgmma_desc_create` $buffer `,` $height attr-dict `:` functional-type(operands, results)
-</pre></div>
-</div>
-<p>Interfaces: InferTypeOpInterface</p>
-<section id="id27">
-<h3>Attributes:<a class="headerlink" href="#id27" title="Permalink to this heading">¶</a></h3>
-<table>
-<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>mode</code></td><td>::mlir::triton::nvgpu::WGMMADescModeAttr</td><td><details><summary>wgmma desc mode, either 'none', 'swizzle128', 'swizzle64', or 'swizzle32'</summary>{{% markdown %}}Enum cases:
-* none (`none`)
-* swizzle128 (`swizzle128`)
-* swizzle64 (`swizzle64`)
-* swizzle32 (`swizzle32`){{% /markdown %}}</details></td></tr>
-<tr><td><code>swizzling</code></td><td>::mlir::IntegerAttr</td><td>64-bit signless integer attribute</td></tr>
-</table>
-</section>
-<section id="id28">
-<h3>Operands:<a class="headerlink" href="#id28" title="Permalink to this heading">¶</a></h3>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
-<th class="head"><p>Description</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">buffer</span></code></p></td>
-<td><p>LLVM pointer type</p></td>
-</tr>
-<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">height</span></code></p></td>
-<td><p>32-bit signless integer</p></td>
-</tr>
-</tbody>
-</table>
-</section>
-<section id="id29">
-<h3>Results:<a class="headerlink" href="#id29" title="Permalink to this heading">¶</a></h3>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head text-center"><p>Result</p></th>
-<th class="head"><p>Description</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">res</span></code></p></td>
-<td><p>64-bit signless integer</p></td>
-</tr>
-</tbody>
-</table>
-</section>
-</section>
 <section id="nvgpu-wgmma-fence-triton-nvgpu-wgmmafenceop">
 <h2><code class="docutils literal notranslate"><span class="pre">nvgpu.wgmma_fence</span></code> (triton::nvgpu::WGMMAFenceOp)<a class="headerlink" href="#nvgpu-wgmma-fence-triton-nvgpu-wgmmafenceop" title="Permalink to this heading">¶</a></h2>
 <p>Syntax:</p>
@@ -949,8 +890,8 @@
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvgpu.wgmma` $opA `,` $opB (`,` $opC^)? attr-dict `:` functional-type(operands, $res)
 </pre></div>
 </div>
-<section id="id30">
-<h3>Attributes:<a class="headerlink" href="#id30" title="Permalink to this heading">¶</a></h3>
+<section id="id27">
+<h3>Attributes:<a class="headerlink" href="#id27" title="Permalink to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>m</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
@@ -991,8 +932,8 @@
 * col (`col`){{% /markdown %}}</details></td></tr>
 </table>
 </section>
-<section id="id31">
-<h3>Operands:<a class="headerlink" href="#id31" title="Permalink to this heading">¶</a></h3>
+<section id="id28">
+<h3>Operands:<a class="headerlink" href="#id28" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -1012,8 +953,8 @@
 </tbody>
 </table>
 </section>
-<section id="id32">
-<h3>Results:<a class="headerlink" href="#id32" title="Permalink to this heading">¶</a></h3>
+<section id="id29">
+<h3>Results:<a class="headerlink" href="#id29" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
@@ -1035,15 +976,15 @@
 </pre></div>
 </div>
 <p>Interfaces: InferTypeOpInterface</p>
-<section id="id33">
-<h3>Attributes:<a class="headerlink" href="#id33" title="Permalink to this heading">¶</a></h3>
+<section id="id30">
+<h3>Attributes:<a class="headerlink" href="#id30" title="Permalink to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>pendings</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 </section>
-<section id="id34">
-<h3>Operands:<a class="headerlink" href="#id34" title="Permalink to this heading">¶</a></h3>
+<section id="id31">
+<h3>Operands:<a class="headerlink" href="#id31" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -1057,8 +998,8 @@
 </tbody>
 </table>
 </section>
-<section id="id35">
-<h3>Results:<a class="headerlink" href="#id35" title="Permalink to this heading">¶</a></h3>
+<section id="id32">
+<h3>Results:<a class="headerlink" href="#id32" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>

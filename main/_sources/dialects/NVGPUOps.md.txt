@@ -501,42 +501,6 @@ operation ::= `nvgpu.wgmma_commit_group` attr-dict
 ```
 
 
-### `nvgpu.wgmma_desc_create` (triton::nvgpu::WGMMADescCreateOp)
-
-Syntax:
-
-```
-operation ::= `nvgpu.wgmma_desc_create` $buffer `,` $height attr-dict `:` functional-type(operands, results)
-```
-
-
-Interfaces: InferTypeOpInterface
-
-#### Attributes:
-
-<table>
-<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>mode</code></td><td>::mlir::triton::nvgpu::WGMMADescModeAttr</td><td><details><summary>wgmma desc mode, either 'none', 'swizzle128', 'swizzle64', or 'swizzle32'</summary>{{% markdown %}}Enum cases:
-* none (`none`)
-* swizzle128 (`swizzle128`)
-* swizzle64 (`swizzle64`)
-* swizzle32 (`swizzle32`){{% /markdown %}}</details></td></tr>
-<tr><td><code>swizzling</code></td><td>::mlir::IntegerAttr</td><td>64-bit signless integer attribute</td></tr>
-</table>
-
-#### Operands:
-
-| Operand | Description |
-| :-----: | ----------- |
-| `buffer` | LLVM pointer type
-| `height` | 32-bit signless integer
-
-#### Results:
-
-| Result | Description |
-| :----: | ----------- |
-| `res` | 64-bit signless integer
-
 ### `nvgpu.wgmma_fence` (triton::nvgpu::WGMMAFenceOp)
 
 Syntax:
