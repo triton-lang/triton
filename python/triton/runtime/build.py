@@ -18,6 +18,26 @@ def quiet():
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
 
+def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
+    if cc in ["cl", "clang-cl"]:
+        cc_cmd = [cc, src, "/nologo", "/O2", "/LD"]
+        cc_cmd += [f"/I{dir}" for dir in include_dirs]
+        cc_cmd += ["/link"]
+        cc_cmd += [f"/LIBPATH:{dir}" for dir in library_dirs]
+        cc_cmd += [f'{lib}.lib' for lib in libraries]
+        cc_cmd += [f"/OUT:{out}"]
+    else:
+        cc_cmd = [cc, src, "-O3", "-shared", "-fPIC"]
+        cc_cmd += [f'-l{lib}' for lib in libraries]
+        cc_cmd += [f"-L{dir}" for dir in library_dirs]
+        cc_cmd += [f"-I{dir}" for dir in include_dirs]
+        cc_cmd += ["-o", out]
+
+        if os.name == "nt": cc_cmd.pop(cc_cmd.index("-fPIC"))
+
+    return cc_cmd
+
+
 def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
@@ -41,10 +61,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
         scheme = 'posix_prefix'
     py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
     include_dirs = include_dirs + [srcdir, py_include_dir]
-    cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-o", so]
-    cc_cmd += [f'-l{lib}' for lib in libraries]
-    cc_cmd += [f"-L{dir}" for dir in library_dirs]
-    cc_cmd += [f"-I{dir}" for dir in include_dirs]
+    cc_cmd = _cc_cmd(cc, src, so, include_dirs, library_dirs, libraries)
     ret = subprocess.check_call(cc_cmd)
     if ret == 0:
         return so
@@ -58,7 +75,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
         language='c',
         sources=[src],
         include_dirs=include_dirs,
-        extra_compile_args=extra_compile_args + ['-O3'],
+        extra_compile_args=extra_compile_args + ['-O3' if "-O3" in cc_cmd else "/O2"],
         extra_link_args=extra_link_args,
         library_dirs=library_dirs,
         libraries=libraries,
