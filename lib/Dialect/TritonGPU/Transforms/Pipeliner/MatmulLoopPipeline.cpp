@@ -634,8 +634,8 @@ void mlir::triton::asyncLaunchDots(scf::ForOp forOp) {
       lastOp = op;
       op = op->getBlock()->getParentOp();
     }
-    return std::distance(lastOp->getBlock()->getParent()->begin(),
-                         lastOp->getBlock()->getIterator());
+    return (long)std::distance(lastOp->getBlock()->getParent()->begin(),
+                               lastOp->getBlock()->getIterator());
   };
   /// XXX(Keren): Clean up the following duplicate code with checkDotOp
   /// dots to be pipelined
