@@ -1693,7 +1693,7 @@ def test_reduce(op, dtype_str, shape, axis, num_ctas, device):
     z_tri = to_triton(numpy_random(z_shape, dtype_str=z_dtype_str, rs=rs), device=device, dst_type=z_tri_dtype_str)
     BLOCK_K = 1 if len(shape) == 2 else shape[2]
     IS_3D = bool(len(shape) == 3)
-    if axis >= len(shape):
+    if axis is not None and axis >= len(shape):
         with pytest.raises(triton.CompilationError):
             kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
                           num_ctas=num_ctas)
