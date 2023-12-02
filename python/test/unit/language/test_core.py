@@ -1639,7 +1639,8 @@ reduce_configs3 = [(op, 'float32', shape, axis)
 invalid_config = [('sum', 'float32', (32, 32), axis) for axis in [2, 3]]
 
 
-@pytest.mark.parametrize("op, dtype_str, shape, axis", invalid_config)
+@pytest.mark.parametrize("op, dtype_str, shape, axis",
+                         reduce_configs1 + reduce_configs2 + reduce_configs3 + invalid_config)
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_reduce(op, dtype_str, shape, axis, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
