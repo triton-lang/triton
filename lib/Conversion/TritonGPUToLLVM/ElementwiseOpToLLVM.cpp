@@ -287,6 +287,8 @@ static const std::string Fp32_to_Fp8E4M3Nv =
 static const std::string Fp32_to_Fp8E5M2 =
     "cvt.rn.satfinite.e5m2x2.f32 $0, $2, $1; \n";
 
+// MMA encoding has a different order depending on the element's bit width;
+// reorder if we're in this case.
 static SmallVector<Value> reorderValues(const SmallVector<Value> &values,
                                         Type inType, Type ouType) {
   auto inTensorTy = inType.dyn_cast<RankedTensorType>();
@@ -1013,16 +1015,14 @@ private:
 };
 
 struct ElementwiseInlineAsmOpConversion
-    : public ElementwiseOpConversionBase<ElementwiseInlineAsmOp,
-                                         ElementwiseInlineAsmOpConversion> {
-  using Base = ElementwiseOpConversionBase<ElementwiseInlineAsmOp,
-                                           ElementwiseInlineAsmOpConversion>;
+    : public ConvertTritonGPUOpToLLVMPattern<ElementwiseInlineAsmOp> {
+  using Base = ConvertTritonGPUOpToLLVMPattern<ElementwiseInlineAsmOp>;
+
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
   typedef typename Base::OpAdaptor OpAdaptor;
 
-  // If operand size is smaller than 32bits pack by groups of 32bits.
-  // Otherwise have separate inputs.
+  // If operand size is smaller than 32 bits, pack in groups of 32 bits.
   SmallVector<Value> packOperands(ElementwiseInlineAsmOp op,
                                   MultipleOperandsRange operands,
                                   ConversionPatternRewriter &rewriter,
@@ -1052,43 +1052,170 @@ struct ElementwiseInlineAsmOpConversion
     return packedOperands;
   }
 
-  SmallVector<Value> createDestOps(ElementwiseInlineAsmOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    int numPackedElements = op.getPackedElement();
-    if (operands.size() % numPackedElements != 0)
+  SmallVector<SmallVector<Value>>
+  createDestOps(ElementwiseInlineAsmOp op, OpAdaptor adaptor,
+                ConversionPatternRewriter &rewriter,
+                MultipleOperandsRange operands, Location loc) const {
+    auto ctx = op->getContext();
+
+    if (operands.size() % op.getPackedElement() != 0)
       llvm::report_fatal_error("Inline asm op has more packed elements than "
                                "number of elements per thread.");
+
+    // Pack elems smaller than 32 bits into 32-bit registers.
     SmallVector<Value> packedOperands =
         packOperands(op, operands, rewriter, loc);
-    Type dstType =
-        getTypeConverter()->convertType(getElementType(op.getResult()));
-    Type retType = dstType;
-    if (numPackedElements > 1)
-      retType = vec_ty(retType, numPackedElements);
-    Value result = rewriter
-                       .create<LLVM::InlineAsmOp>(
-                           loc, retType,
-                           packedOperands,      // operands
-                           op.getAsmString(),   // asm_string
-                           op.getConstraints(), // constraints
-                           !op.getPure(),       // has_side_effects
-                           false,               // is_align_stack
-                           LLVM::AsmDialectAttr::get(
-                               rewriter.getContext(),
-                               LLVM::AsmDialect::AD_ATT), // asm_dialect
-                           ArrayAttr()                    // operand_attrs
-                           )
-                       ->getResult(0);
-    SmallVector<Value> results;
-    if (numPackedElements > 1) {
-      for (int i = 0; i < numPackedElements; i++)
-        results.push_back(extract_element(result, i32_val(i)));
-    } else {
-      results = {result};
+
+    // Types returned by the LLVM asm op.  If there's more than one, they'll be
+    // wrapped in a struct.
+    SmallVector<Type> asmRetTypes;
+    for (auto result : op.getResult()) {
+      auto ty = getTypeConverter()->convertType(getElementType(result));
+
+      // Pack return elements into 32-bits.
+      unsigned bitWidth = ty.isIntOrFloat() ? ty.getIntOrFloatBitWidth() : 64;
+      unsigned numElemsPerReg =
+          std::min(bitWidth < 32 ? 32 / bitWidth : 1, op.getPackedElement());
+      assert(op.getPackedElement() % numElemsPerReg == 0);
+      if (numElemsPerReg > 1) {
+        ty = vec_ty(ty, numElemsPerReg);
+      }
+      for (unsigned i = 0; i < op.getPackedElement() / numElemsPerReg; i++) {
+        asmRetTypes.push_back(ty);
+      }
     }
-    return results;
+    Type asmRetType =
+        asmRetTypes.size() > 1 ? struct_ty(asmRetTypes) : asmRetTypes[0];
+
+    Value asmResults =
+        rewriter
+            .create<LLVM::InlineAsmOp>(
+                loc, asmRetType,
+                /*operands=*/packedOperands,
+                /*asm_string=*/op.getAsmString(),
+                /*constraints=*/op.getConstraints(),
+                /*has_side_effects=*/!op.getPure(),
+                /*is_align_stack=*/false,
+                /*asm_dialect=*/
+                LLVM::AsmDialectAttr::get(rewriter.getContext(),
+                                          LLVM::AsmDialect::AD_ATT),
+                /*operand_attrs=*/ArrayAttr())
+            ->getResult(0);
+
+    // asmResults is a flat struct; pack its values into
+    // [return_value][op.getPackedElement()].
+    SmallVector<SmallVector<Value>> ret(op->getNumResults());
+    for (int i = 0; i < op->getNumResults(); i++) {
+      for (int j = 0; j < op.getPackedElement(); j++) {
+        auto val = asmRetTypes.size() > 1
+                       ? extract_val(asmResults, i * op.getPackedElement() + j)
+                       : asmResults;
+        if (auto vectorTy = val.getType().dyn_cast<VectorType>()) {
+          for (int k = 0; k < vectorTy.getNumElements(); k++) {
+            ret[i].push_back(extract_element(val, i32_val(k)));
+          }
+          j += vectorTy.getNumElements() - 1;
+        } else {
+          ret[i].push_back(val);
+        }
+      }
+    }
+    return ret;
+  }
+
+  LogicalResult
+  matchAndRewrite(ElementwiseInlineAsmOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+
+    // Layout is unpackedOperands[operand][elem].
+    SmallVector<SmallVector<Value>> unpackedOperands;
+    for (auto operand : adaptor.getOperands()) {
+      auto argTy = op->getOperand(0).getType();
+      auto subOperands =
+          getTypeConverter()->unpackLLElements(loc, operand, rewriter, argTy);
+      unpackedOperands.push_back(
+          unpackI32(subOperands, argTy, rewriter, loc, getTypeConverter()));
+    }
+    if (unpackedOperands.empty())
+      unpackedOperands.push_back({});
+
+    // Although we ensure that all operands and results to this op have the same
+    // encoding, MMA layouts have a different physical ordering depending on the
+    // bit width of the underlying element.
+    //
+    // Thus if the inputs to the inline asm op are MMA with different widths, we
+    // need to reorder them so we iterate over the operands' elements in the
+    // same logical order.
+    for (unsigned i = 1; i < unpackedOperands.size(); ++i) {
+      unpackedOperands[i] = reorderValues(
+          unpackedOperands[i], /*inType=*/op->getOperand(i).getType(),
+          /*ouType=*/op->getResult(0).getType());
+    }
+
+    // Number of (unpacked) elements to process per operand.  Normally this
+    // equals the number of output elements per return value, except when the
+    // asm has no inputs, in which case there's 1 output element.
+    size_t numInputElems = unpackedOperands[0].size();
+    for (unsigned i = 0; i < unpackedOperands.size(); ++i) {
+      if (unpackedOperands[i].size() != numInputElems) {
+        llvm::report_fatal_error("Inline asm op has operands with different "
+                                 "numbers of elements.");
+      }
+    }
+
+    // TODO(jlebar): This should be checked by the verifier.
+    if (numInputElems % op.getPackedElement() != 0) {
+      llvm::report_fatal_error("Inline asm op has packed_element=k, but k does "
+                               "not divide the number of elements per thread.");
+    }
+
+    // Run the inline asm op on each block of elements.
+    //
+    // Layout is unpackedResults[result_idx][elem].
+    //
+    // This loop always runs at least once, even when the asm has no input
+    // elements.
+    SmallVector<SmallVector<Value>> unpackedResults(op->getNumResults());
+    for (unsigned i = 0; i < std::max(numInputElems, size_t{1});
+         i += op.getPackedElement()) {
+      // Block of elements to process with one call to the inline asm.  This is
+      // ordered opposite `unpackedResults`: The outer dim is
+      // op.getPackedElement(), and the inner dim is the operand.
+      SmallVector<SmallVector<Value>> block(op.getPackedElement());
+      if (numInputElems > 0) {
+        for (auto &os : unpackedOperands) {
+          for (int j = 0; j < op.getPackedElement(); j++) {
+            block[j].push_back(os[i + j]);
+          }
+        }
+      }
+      auto cur = createDestOps(op, adaptor, rewriter, block, loc);
+      assert(cur.size() == unpackedResults.size());
+      for (unsigned j = 0; j < cur.size(); j++) {
+        unpackedResults[j].insert(unpackedResults[j].end(), cur[j].begin(),
+                                  cur[j].end());
+      }
+    }
+
+    // Reorder and pack the results.
+    SmallVector<Value> outs;
+    for (int i = 0; i < unpackedResults.size(); i++) {
+      // We reordered all the inputs so they match operand 0.  Reorder the
+      // outputs accordingly.
+      if (op->getNumOperands() > 0) {
+        unpackedResults[i] = reorderValues(
+            unpackedResults[i], /*inType=*/op->getOperand(0).getType(),
+            /*ouType=*/op->getResult(i).getType());
+      }
+      auto packed = packI32(unpackedResults[i], op->getResult(i).getType(),
+                            rewriter, loc, getTypeConverter());
+      outs.push_back(getTypeConverter()->packLLElements(
+          loc, unpackedResults[i], rewriter, op->getResult(i).getType()));
+    }
+
+    rewriter.replaceOp(op, outs);
+    return success();
   }
 };
 
@@ -1517,8 +1644,7 @@ void populateElementwiseOpToLLVMPatterns(
 
   patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
                                               benefit);
-  patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter,
-                                                 axisInfoAnalysis, benefit);
+  patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter, benefit);
   // ExpOpConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
