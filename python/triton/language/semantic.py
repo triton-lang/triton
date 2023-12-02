@@ -1306,9 +1306,11 @@ def reduction(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, builder
         axis = 0
     # get result shape
     shape = inputs[0].type.shape
+    rank = len(shape)
+    assert axis < rank, f"reduction axis must be < inputs rank ({rank})"
     ret_shape = [s for i, s in enumerate(shape) if i != axis]
     for t in inputs:
-        assert t.type.shape == shape
+        assert t.type.shape == shape, "all reduction inputs must have the same shape"
 
     def wrap_tensor(x, scalar_ty):
         if ret_shape:
