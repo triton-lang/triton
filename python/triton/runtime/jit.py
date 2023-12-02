@@ -179,10 +179,8 @@ class KernelArg:
     def specialization_key(self):
         assert not self.param.do_not_specialize
 
-        try:
+        if hasattr(self.value, "data_ptr"):
             return (self.value.data_ptr() % JITFunction.divisibility == 0, )
-        except AttributeError:
-            pass
 
         if isinstance(self.value, int):
             # bool is a subclass of int, so we don't check explicitly above.
@@ -239,16 +237,16 @@ class JITFunction(KernelInterface[T]):
 
     @staticmethod
     def _device_of(arg):
-        try:
+        if hasattr(arg, "device") and hasattr(arg.device, "type"):
             return arg.device.type
-        except AttributeError:
+        else:
             return ""
 
     @staticmethod
     def _pinned_memory_of(arg):
-        try:
+        if hasattr(arg, "is_pinned") and callable(arg.is_pinned):
             return arg.is_pinned()
-        except (AttributeError, TypeError):
+        else:
             return False
 
     @staticmethod
