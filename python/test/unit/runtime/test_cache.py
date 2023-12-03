@@ -129,7 +129,7 @@ def test_combine_fn_change():
 
 
 def write_and_load_module(code, num_extra_lines):
-    with tempfile.NamedTemporaryFile(mode='w+', suffix='.py') as f:
+    with tempfile.NamedTemporaryFile(mode='w+', suffix='.py', delete=False) as f:
         f.write(('# extra line\n' * num_extra_lines) + code)
         f.flush()
         spec = importlib.util.spec_from_file_location("module.name", f.name)

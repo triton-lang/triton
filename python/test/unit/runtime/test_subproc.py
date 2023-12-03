@@ -26,8 +26,12 @@ def compile_fn(attrs):
 
 
 def test_compile_in_subproc() -> None:
+    import os
     config = AttrsDescriptor.from_hints({i: 16 for i in range(4)})
-    multiprocessing.set_start_method('fork')
+    if os.name == "nt":
+        multiprocessing.set_start_method('spawn')
+    else:
+        multiprocessing.set_start_method('fork')
     proc = multiprocessing.Process(target=compile_fn, args=(config, ))
     proc.start()
     proc.join()
@@ -49,7 +53,7 @@ def compile_fn_dot(attrs):
 
 def test_compile_in_forked_subproc(fresh_triton_cache) -> None:
     config = AttrsDescriptor.from_hints({0: 16})
-    assert multiprocessing.get_start_method() == 'fork'
+    assert multiprocessing.get_start_method() in ['fork', 'spawn']
     proc = multiprocessing.Process(target=compile_fn_dot, args=(config, ))
     proc.start()
     proc.join()
