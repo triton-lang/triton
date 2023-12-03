@@ -1650,9 +1650,11 @@ reduce_configs3 = [(op, 'float32', shape, axis)
                    for op in ['min', 'max', 'sum', 'argmin', 'argmax']
                    for shape in reduce3d_shapes
                    for axis in [0, 1, 2]]
+invalid_config = [('sum', 'float32', (32, 32), axis) for axis in [2, 3]]
 
 
-@pytest.mark.parametrize("op, dtype_str, shape, axis", reduce_configs1 + reduce_configs2 + reduce_configs3)
+@pytest.mark.parametrize("op, dtype_str, shape, axis",
+                         reduce_configs1 + reduce_configs2 + reduce_configs3 + invalid_config)
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_reduce(op, dtype_str, shape, axis, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
@@ -1699,6 +1701,22 @@ def test_reduce(op, dtype_str, shape, axis, num_ctas, device):
     numpy_op = {'sum': np.sum, 'max': np.max, 'min': np.min, 'argmin': np.argmin, 'argmax': np.argmax}[op]
     z_dtype_str = get_reduced_dtype(dtype_str, op)
     z_tri_dtype_str = z_dtype_str
+    # triton result
+    ret_numel = 1 if axis is None else shape[1 - axis]
+    z_shape = (1, ) if axis is None else tuple(shape_i for i, shape_i in enumerate(shape) if i != axis)
+    z_tri = to_triton(numpy_random(z_shape, dtype_str=z_dtype_str, rs=rs), device=device, dst_type=z_tri_dtype_str)
+    BLOCK_K = 1 if len(shape) == 2 else shape[2]
+    IS_3D = bool(len(shape) == 3)
+    if axis is not None and axis >= len(shape):
+        with pytest.raises(triton.CompilationError):
+            kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
+                          num_ctas=num_ctas)
+        return
+    else:
+        kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
+                      num_ctas=num_ctas)
+
+    z_tri = to_numpy(z_tri)
     # numpy result
     if op not in ['argmin', 'argmax'] and dtype_str == 'bfloat16':
         z_dtype_str = 'float32'
@@ -1708,15 +1726,6 @@ def test_reduce(op, dtype_str, shape, axis, num_ctas, device):
         z_ref = (z_ref.view('uint32') & np.uint32(0xffff0000)).view('float32')
     else:
         z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
-    # triton result
-    ret_numel = 1 if axis is None else shape[1 - axis]
-    z_shape = (1, ) if axis is None else tuple(shape_i for i, shape_i in enumerate(shape) if i != axis)
-    z_tri = to_triton(numpy_random(z_shape, dtype_str=z_dtype_str, rs=rs), device=device, dst_type=z_tri_dtype_str)
-    BLOCK_K = 1 if len(shape) == 2 else shape[2]
-    IS_3D = bool(len(shape) == 3)
-    kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
-                  num_ctas=num_ctas)
-    z_tri = to_numpy(z_tri)
     # compare
     if op == 'sum':
         np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
