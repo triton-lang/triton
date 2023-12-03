@@ -121,25 +121,25 @@ Credits: OpenAI kernel team</p>
 </ul>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>fused-attention-batch4-head48-d64-fwd-causal=True:
      N_CTX      Triton
-0   1024.0  125.690647
-1   2048.0  151.484359
-2   4096.0  167.314549
-3   8192.0  174.886885
-4  16384.0  181.069439
+0   1024.0  125.046928
+1   2048.0  151.306112
+2   4096.0  164.698147
+3   8192.0  175.719836
+4  16384.0  181.441709
 fused-attention-batch4-head48-d64-fwd-causal=False:
      N_CTX      Triton
-0   1024.0  162.153661
-1   2048.0  171.802150
-2   4096.0  176.866393
-3   8192.0  178.062692
-4  16384.0  179.605543
+0   1024.0  161.718307
+1   2048.0  171.400914
+2   4096.0  175.072039
+3   8192.0  178.046926
+4  16384.0  177.553808
 fused-attention-batch4-head48-d64-bwd-causal=True:
      N_CTX      Triton
-0   1024.0   75.873415
-1   2048.0   99.960419
-2   4096.0  117.562352
-3   8192.0  128.978334
-4  16384.0  131.042136
+0   1024.0   75.758471
+1   2048.0   99.856037
+2   4096.0  117.351771
+3   8192.0  128.981097
+4  16384.0  130.511213
 </pre></div>
 </div>
 <div class="line-block">
@@ -768,7 +768,7 @@ fused-attention-batch4-head48-d64-bwd-causal=True:
 <span class="n">bench_flash_attention</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s2">&quot;.&quot;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  18.138 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  18.175 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-06-fused-attention-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/54a35f6ec55f9746935b9566fb6bb1df/06-fused-attention.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">06-fused-attention.py</span></code></a></p>
