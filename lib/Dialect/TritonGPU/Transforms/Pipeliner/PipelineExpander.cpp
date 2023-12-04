@@ -186,7 +186,8 @@ bool LoopPipelinerInternal::initializeLoopInfo(
   if (llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
                    [this](Value operand) {
                      Operation *def = operand.getDefiningOp();
-                     return !def || !stages.contains(def);
+                     return !def ||
+                            (!stages.contains(def) && forOp->isAncestor(def));
                    })) {
     LDBG("--only support loop carried dependency with a distance of 1 -> BAIL");
     return false;
@@ -347,10 +348,13 @@ scf::ForOp LoopPipelinerInternal::createKernelLoop(
     Operation *def = retVal.value().getDefiningOp();
     assert(def && "Only support loop carried dependencies of distance 1");
     unsigned defStage = stages[def];
-    Value valueVersion = valueMapping[forOp.getRegionIterArgs()[retVal.index()]]
-                                     [maxStage - defStage];
-    assert(valueVersion);
-    newLoopArg.push_back(valueVersion);
+    if (forOp->isAncestor(def)) {
+      Value valueVersion = valueMapping[forOp.getRegionIterArgs()[retVal.index()]]
+                                      [maxStage - defStage];
+      assert(valueVersion);
+      newLoopArg.push_back(valueVersion);
+    } else 
+      newLoopArg.push_back(retVal.value());
   }
   for (auto escape : crossStageValues) {
     LiverangeInfo &info = escape.second;
@@ -488,9 +492,14 @@ LogicalResult LoopPipelinerInternal::createKernel(
         continue;
       auto remap = loopArgMap.find(
           std::make_pair(operand->get(), useStage - stageDef->second));
-      assert(remap != loopArgMap.end());
-      nestedNewOp->setOperand(operand->getOperandNumber(),
-                              newForOp.getRegionIterArgs()[remap->second]);
+      if (remap != loopArgMap.end())
+        nestedNewOp->setOperand(operand->getOperandNumber(),
+                                newForOp.getRegionIterArgs()[remap->second]);
+      else {
+        assert(!forOp->isAncestor(def) &&
+               "Source must be defined outside loop.");
+        nestedNewOp->setOperand(operand->getOperandNumber(), source);
+      }
     }
 
     if (predicates[useStage]) {
