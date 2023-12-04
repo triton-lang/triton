@@ -186,8 +186,7 @@ bool LoopPipelinerInternal::initializeLoopInfo(
   if (llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
                    [this](Value operand) {
                      Operation *def = operand.getDefiningOp();
-                     return !def ||
-                            (!stages.contains(def) && forOp->isAncestor(def));
+                     return !def || !stages.contains(def);
                    })) {
     LDBG("--only support loop carried dependency with a distance of 1 -> BAIL");
     return false;
@@ -347,11 +346,11 @@ scf::ForOp LoopPipelinerInternal::createKernelLoop(
        llvm::enumerate(forOp.getBody()->getTerminator()->getOperands())) {
     Operation *def = retVal.value().getDefiningOp();
     assert(def && "Only support loop carried dependencies of distance 1");
-    unsigned defStage = stages[def];
-    if (forOp->isAncestor(def)) {
+    auto defStage = stages.find(def);
+    if (defStage != stages.end()) {
       Value valueVersion =
           valueMapping[forOp.getRegionIterArgs()[retVal.index()]]
-                      [maxStage - defStage];
+                      [maxStage - defStage->second];
       assert(valueVersion);
       newLoopArg.push_back(valueVersion);
     } else
@@ -493,14 +492,9 @@ LogicalResult LoopPipelinerInternal::createKernel(
         continue;
       auto remap = loopArgMap.find(
           std::make_pair(operand->get(), useStage - stageDef->second));
-      if (remap != loopArgMap.end())
-        nestedNewOp->setOperand(operand->getOperandNumber(),
-                                newForOp.getRegionIterArgs()[remap->second]);
-      else {
-        assert(!forOp->isAncestor(def) &&
-               "Source must be defined outside loop.");
-        nestedNewOp->setOperand(operand->getOperandNumber(), source);
-      }
+      assert(remap != loopArgMap.end());
+      nestedNewOp->setOperand(operand->getOperandNumber(),
+                              newForOp.getRegionIterArgs()[remap->second]);
     }
 
     if (predicates[useStage]) {
@@ -568,12 +562,11 @@ LogicalResult LoopPipelinerInternal::createKernel(
        llvm::enumerate(forOp.getBody()->getTerminator()->getOperands())) {
     Operation *def = retVal.value().getDefiningOp();
     assert(def && "Only support loop carried dependencies of distance 1");
-    unsigned defStage = stages[def];
-    if (defStage > 0) {
+    auto defStage = stages.find(def);
+    if (defStage != stages.end() && defStage->second > 0)
       setValueMapping(forOp.getRegionIterArgs()[retVal.index()],
                       newForOp->getResult(retVal.index()),
-                      maxStage - defStage + 1);
-    }
+                      maxStage - defStage->second + 1);
   }
   rewriter.create<scf::YieldOp>(forOp.getLoc(), yieldOperands);
   return success();
