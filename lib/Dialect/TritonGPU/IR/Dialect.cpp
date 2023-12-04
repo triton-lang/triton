@@ -1302,7 +1302,7 @@ unsigned MmaEncodingAttr::getTotalElemsPerThreadForOperands(
   int warpsPerCTAN = getWarpsPerCTA()[1];
   // H100
   if (isHopper()) {
-    if (eltTy.isF16())
+    if (eltTy.isF16() || eltTy.isBF16())
       return getTotalElemsPerThread(shape, eltTy);
   }
   // A100
