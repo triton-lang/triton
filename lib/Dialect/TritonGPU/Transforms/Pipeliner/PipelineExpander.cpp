@@ -180,16 +180,18 @@ bool LoopPipelinerInternal::initializeLoopInfo(
     }
   }
 
-  // Only support loop carried dependency with a distance of 1. This means the
-  // source of all the scf.yield operands needs to be defined by operations in
-  // the loop.
+  // Support only loop-carried dependencies with a distance of one iteration or
+  // those defined outside of the loop. This means that any dependency within a
+  // loop should either be on the immediately preceding iteration, the current
+  // iteration, or on variables whose values are set before entering the loop.
   if (llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
                    [this](Value operand) {
                      Operation *def = operand.getDefiningOp();
                      return !def ||
                             (!stages.contains(def) && forOp->isAncestor(def));
                    })) {
-    LDBG("--only support loop carried dependency with a distance of 1 -> BAIL");
+    LDBG("--only support loop carried dependency with a distance of 1 or "
+         "defined outside of the loop -> BAIL");
     return false;
   }
   annotateFn = options.annotateFn;
@@ -346,7 +348,8 @@ scf::ForOp LoopPipelinerInternal::createKernelLoop(
   for (const auto &retVal :
        llvm::enumerate(forOp.getBody()->getTerminator()->getOperands())) {
     Operation *def = retVal.value().getDefiningOp();
-    assert(def && "Only support loop carried dependencies of distance 1");
+    assert(def && "Only support loop carried dependencies of distance of 1 or "
+                  "outside the loop");
     auto defStage = stages.find(def);
     if (defStage != stages.end()) {
       Value valueVersion =
@@ -562,7 +565,8 @@ LogicalResult LoopPipelinerInternal::createKernel(
   for (const auto &retVal :
        llvm::enumerate(forOp.getBody()->getTerminator()->getOperands())) {
     Operation *def = retVal.value().getDefiningOp();
-    assert(def && "Only support loop carried dependencies of distance 1");
+    assert(def && "Only support loop carried dependencies of distance of 1 or "
+                  "defined outside the loop");
     auto defStage = stages.find(def);
     if (defStage != stages.end() && defStage->second > 0)
       setValueMapping(forOp.getRegionIterArgs()[retVal.index()],
