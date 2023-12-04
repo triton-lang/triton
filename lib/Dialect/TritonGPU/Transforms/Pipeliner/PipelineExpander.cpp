@@ -186,7 +186,8 @@ bool LoopPipelinerInternal::initializeLoopInfo(
   if (llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
                    [this](Value operand) {
                      Operation *def = operand.getDefiningOp();
-                     return !def || !stages.contains(def);
+                     return !def ||
+                            (!stages.contains(def) && forOp->isAncestor(def));
                    })) {
     LDBG("--only support loop carried dependency with a distance of 1 -> BAIL");
     return false;
