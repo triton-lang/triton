@@ -349,11 +349,12 @@ scf::ForOp LoopPipelinerInternal::createKernelLoop(
     assert(def && "Only support loop carried dependencies of distance 1");
     unsigned defStage = stages[def];
     if (forOp->isAncestor(def)) {
-      Value valueVersion = valueMapping[forOp.getRegionIterArgs()[retVal.index()]]
-                                      [maxStage - defStage];
+      Value valueVersion =
+          valueMapping[forOp.getRegionIterArgs()[retVal.index()]]
+                      [maxStage - defStage];
       assert(valueVersion);
       newLoopArg.push_back(valueVersion);
-    } else 
+    } else
       newLoopArg.push_back(retVal.value());
   }
   for (auto escape : crossStageValues) {
