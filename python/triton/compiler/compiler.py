@@ -218,7 +218,7 @@ class CompiledKernel:
         spec = importlib.util.spec_from_file_location("__triton_launcher", so_path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        self.c_wrapper = getattr(mod, "launch")
+        self.run = getattr(mod, "launch")
         # initialize metadata
         self.metadata = json.loads(metadata_path.read_text())
         self.metadata['tensormaps_info'] = [InfoFromBackendForTensorMap(e) for e in self.metadata['tensormaps_info']
@@ -253,7 +253,7 @@ class CompiledKernel:
             self.name, self.kernel, self.shared, device)
 
     def __getattribute__(self, name):
-        if name == 'c_wrapper':
+        if name == 'run':
             self._init_handles()
         return super().__getattribute__(name)
 
@@ -264,8 +264,8 @@ class CompiledKernel:
             args_expand = driver.assemble_tensormap_to_arg(self.tensormaps_info, args)
             if stream is None:
                 stream = get_cuda_stream()
-            self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.num_ctas, self.cluster_dims[0],
-                           self.cluster_dims[1], self.cluster_dims[2], self.shared, stream, self.function,
-                           CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args_expand)
+            self.run(grid[0], grid[1], grid[2], self.num_warps, self.num_ctas, self.cluster_dims[0],
+                     self.cluster_dims[1], self.cluster_dims[2], self.shared, stream, self.function,
+                     CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args_expand)
 
         return runner

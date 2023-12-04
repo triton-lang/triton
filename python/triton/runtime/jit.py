@@ -204,7 +204,8 @@ class KernelInterface(Generic[T]):
         Hence JITFunction.__getitem__ returns a callable proxy that
         memorizes the grid.
         """
-        return cast(T, functools.partial(cast(Callable, self.run), grid=grid))
+        return lambda *args, **kwargs: self.run(grid, False, *args, **kwargs)
+        # return cast(T, functools.partial(cast(Callable, self.run), grid=grid))
 
 
 class JITFunction(KernelInterface[T]):
@@ -236,20 +237,6 @@ class JITFunction(KernelInterface[T]):
             return None
         else:
             raise TypeError(f"Unsupported type {type(arg)} for {arg}")
-
-    @staticmethod
-    def _device_of(arg):
-        try:
-            return arg.device.type
-        except AttributeError:
-            return ""
-
-    @staticmethod
-    def _pinned_memory_of(arg):
-        try:
-            return arg.is_pinned()
-        except (AttributeError, TypeError):
-            return False
 
     @staticmethod
     def _spec_of(arg):
@@ -391,59 +378,27 @@ class JITFunction(KernelInterface[T]):
             already_compiled=False,
         )
 
-    def _conclude_device_type(self, device_types: List[str], pinned_memory_flags: List[bool]) -> str:
-        device_types = [device_type for device_type in device_types if device_type != ""]
-        # Return cuda if one of the input tensors is cuda
-        if "cuda" in device_types:
-            import torch
-
-            return "hip" if torch.version.hip else "cuda"
-
-        is_cpu = all(device_type == "cpu" for device_type in device_types)
-        is_pinned_memory = any(pinned_memory_flag for pinned_memory_flag in pinned_memory_flags)
-        # Return cuda if all the input tensors are cpu while the memory is pinned
-        if is_cpu and is_pinned_memory:
-            return "cuda"
-
-        return device_types[0] if len(device_types) > 0 else "cuda"
-
-    def run(self, *args, **kwargs):
+    def run(self, grid, warmup, *args, **kwargs):
         from ..compiler import CompiledKernel, compile, ASTSource
-
-        # Get a compiler-flags arg like `num_warps` and remove it from kwargs.
-        def get_special_arg(name: str, default=None):
-            if name not in kwargs:
-                return default
-            ret = kwargs[name]
-            del kwargs[name]
-            return ret
-
-        grid = get_special_arg("grid")
-        num_warps = get_special_arg("num_warps")
-        num_ctas = get_special_arg("num_ctas", 1)
-        num_stages = get_special_arg("num_stages")
-        enable_warp_specialization = get_special_arg("enable_warp_specialization", False)
-        enable_fp_fusion = get_special_arg("enable_fp_fusion", True)
-        extern_libs = get_special_arg("extern_libs")
-        stream = get_special_arg("stream")
-        warmup = get_special_arg("warmup", False)
-        device = get_special_arg("device")
-        device_type = get_special_arg("device_type")
-
-        # Bind the remaining arguments to `fn`.
+        from ..compiler.backends.cuda import CUDABackend
+        # deprecated arguments
+        assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
+        assert "device" not in kwargs, "device option is deprecated; current device will be used"
+        assert "stream" not in kwargs, "stream option is deprecated; current stream will be used"
+        # parse options
+        stream = get_cuda_stream()
+        device = get_current_device()
+        target = get_current_target()
+        backend = CUDABackend(target)
+        compiler_options = backend.parse_compiler_options(kwargs)
+        linker_options = backend.parse_linker_options(kwargs)
+        # bind non-reserved keyword args and set defaults
+        is_reserved = lambda k: k in compiler_options.__dict__ or k in linker_options.__dict__
+        kwargs = {k: v for k, v in kwargs.items() if not is_reserved(k)}
         bound_args = self.signature.bind(*args, **kwargs)
         bound_args.apply_defaults()
-
         assert len(bound_args.arguments) == len(self.params)
-        args = [KernelArg(arg_value, param) for (_, arg_value), param in zip(bound_args.arguments.items(), self.params)]
-
-        non_constexpr_arg_values = [arg.value for arg in args if not arg.param.is_constexpr]
-
-        sig_key = tuple(arg.signature_key() for arg in args if not arg.param.is_constexpr)
-        spec_key = tuple(arg.specialization_key() for arg in args if not arg.param.do_not_specialize)
-        constexpr_key = tuple(arg.value for arg in args if arg.param.is_constexpr)
-
-        assert num_ctas > 0
+        # canonicalize grid
         assert grid is not None
         if callable(grid):
             # Arguments are passed as a dict to `grid`, by contract.
@@ -454,55 +409,12 @@ class JITFunction(KernelInterface[T]):
         grid_0 = grid[0]
         grid_1 = grid[1] if grid_size > 1 else 1
         grid_2 = grid[2] if grid_size > 2 else 1
-        if device_type is None:
-            device_types = [self._device_of(arg) for arg in non_constexpr_arg_values]
-            device_types = [_device_type for _device_type in device_types if _device_type != ""]
-            device_type = self._conclude_device_type(device_types,
-                                                     [self._pinned_memory_of(arg) for arg in non_constexpr_arg_values])
-
-        device_backend = None
-        if device_type not in ["cuda"]:
-            device_backend = get_backend(device_type)
-            if device_backend is None:
-                raise ValueError("Cannot find backend for " + device_type)
-
-        if device is None:
-            if device_type in ["cuda"]:
-                device = get_current_device()
-                set_current_device(device)
-            else:
-                device = device_backend.get_current_device()
-                device_backend.set_current_device(device)
-        if stream is None and not warmup:
-            if device_type in ["cuda"]:
-                stream = get_cuda_stream(device)
-            else:
-                stream = device_backend.get_stream()
-
-        if num_warps is None:
-            num_warps = 4
-        if num_stages is None:
-            num_stages = 3
-
-        if device_type in ["cuda"]:
-            version_key = get_cuda_version_key()
-        else:
-            version_key = device_backend.get_version_key()
-        key = (
-            version_key,
-            sig_key,
-            constexpr_key,
-            spec_key,
-            num_warps,
-            num_ctas,
-            num_stages,
-            enable_warp_specialization,
-            enable_fp_fusion,
-            self.debug,
-        )
-        if extern_libs is not None:
-            key = (key, tuple(extern_libs.items()))
-
+        # compute cache key
+        args = [KernelArg(arg_value, param) for (_, arg_value), param in zip(bound_args.arguments.items(), self.params)]
+        sig_key = tuple(arg.signature_key() for arg in args if not arg.param.is_constexpr)
+        spec_key = tuple(arg.specialization_key() for arg in args if not arg.param.do_not_specialize)
+        constexpr_key = tuple(arg.value for arg in args if arg.param.is_constexpr)
+        key = (get_cuda_version_key(), sig_key, constexpr_key, spec_key, compiler_options, linker_options, self.debug)
         # Kernel is not cached; we have to compile.
         if key not in self.cache[device]:
             configs = (self._get_config(*[arg.value for arg in args]), )
@@ -522,58 +434,28 @@ class JITFunction(KernelInterface[T]):
                 if not arg.param.is_constexpr
             }
 
-            if self._call_hook(
-                    key,
-                    signature,
-                    device,
-                    constants,
-                    num_warps,
-                    num_ctas,
-                    num_stages,
-                    enable_warp_specialization,
-                    enable_fp_fusion,
-                    extern_libs,
-                    configs,
-            ):
+            if self._call_hook(key, signature, device, constants, compiler_options.num_warps, compiler_options.num_ctas,
+                               compiler_options.num_stages, compiler_options.enable_warp_specialization,
+                               compiler_options.enable_fp_fusion, linker_options.libs, configs):
                 return None
-
-            capability = get_device_capability(device)
-            capability = capability[0] * 10 + capability[1]
+            # compile the kernel
             src = ASTSource(self, signature, constants, configs[0])
             self.cache[device][key] = compile(
                 src,
-                target=(device_type, capability),
-                compiler_options={
-                    "num_warps": num_warps,
-                    "num_ctas": num_ctas,
-                    "num_stages": num_stages,
-                    "enable_warp_specialization": enable_warp_specialization,
-                    "enable_fp_fusion": enable_fp_fusion,
-                    "debug": self.debug,
-                },
-                linker_options={"libs": extern_libs},
+                target=target,
+                compiler_options=compiler_options.__dict__,
+                linker_options=linker_options.__dict__,
             )
 
-        bin = self.cache[device][key]
         if not warmup:
-            bin.c_wrapper(
-                grid_0,
-                grid_1,
-                grid_2,
-                bin.num_warps,
-                bin.num_ctas,
-                bin.cluster_dims[0],
-                bin.cluster_dims[1],
-                bin.cluster_dims[2],
-                bin.shared,
-                stream,
-                bin.function,
-                CompiledKernel.launch_enter_hook,
-                CompiledKernel.launch_exit_hook,
-                bin,
-                *driver.assemble_tensormap_to_arg(bin.metadata["tensormaps_info"], non_constexpr_arg_values),
-            )
-        return bin
+            args = [arg.value for arg in args if not arg.param.is_constexpr]
+            kernel = self.cache[device][key]
+            kernel.run(grid_0, grid_1, grid_2, kernel.num_warps, kernel.num_ctas,  # number of warps/ctas per instance
+                       kernel.cluster_dims[0], kernel.cluster_dims[1], kernel.cluster_dims[2],  # cluster
+                       kernel.shared, stream, kernel.function, CompiledKernel.launch_enter_hook,
+                       CompiledKernel.launch_exit_hook, kernel,
+                       *driver.assemble_tensormap_to_arg(kernel.metadata["tensormaps_info"], args))
+        return kernel
 
     def __init__(self, fn, version=None, do_not_specialize=None, debug=None, noinline=None):
         do_not_specialize = do_not_specialize if do_not_specialize else []

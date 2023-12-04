@@ -39,7 +39,7 @@ def ptx_get_version(cuda_version) -> int:
     raise RuntimeError("Triton only support CUDA 10.0 or higher")
 
 
-@dataclass
+@dataclass(frozen=True)
 class CUDAOptions:
     num_warps: int = 4
     num_ctas: int = 1
@@ -63,7 +63,7 @@ class CUDAOptions:
         return hashlib.md5(key.encode("utf-8")).hexdigest()
 
 
-@dataclass
+@dataclass(frozen=True)
 class CUDALinkerOptions:
     libs: dict = None
 
@@ -80,13 +80,14 @@ class CUDABackend(BaseBackend):
         assert isinstance(self.capability, int)
 
     def parse_compiler_options(self, opts) -> Any:
-        options = CUDAOptions(**opts)
-        options.allow_fp8e4nv = self.capability >= 89
-        options.max_num_imprecise_acc_default = 0 if self.capability >= 89 else None
-        return options
+        args = {k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts}
+        args["allow_fp8e4nv"] = self.capability >= 89
+        args["max_num_imprecise_acc_default"] = 0 if self.capability >= 89 else None
+        return CUDAOptions(**args)
 
     def parse_linker_options(self, opts) -> Any:
-        return CUDALinkerOptions(**opts)
+        args = {k: opts[k] for k in CUDALinkerOptions.__dataclass_fields__.keys() if k in opts}
+        return CUDALinkerOptions(**args)
 
     @staticmethod
     def make_ttir(mod, metadata, opt):
