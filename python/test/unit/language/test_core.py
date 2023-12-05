@@ -1353,6 +1353,26 @@ def test_cat(dtype_str, num_warps, device):
     assert z.unique().size(0) == z.size(0)
 
 
+def test_stack_minor(device):
+
+    @triton.jit
+    def kernel(X, Y, Z, N: tl.constexpr):
+        offs = tl.arange(0, N)
+        x = tl.load(X + offs)
+        y = tl.load(Y + offs)
+        z = tl._experimental_stack_minor([x, y])
+        z_offs = 2 * tl.arange(0, N)[:, None] + tl.arange(0, 2)[None, :]
+        tl.store(Z + z_offs, z)
+
+    x = torch.arange(0, 128, device=device).to(torch.int32)
+    y = torch.arange(-128, 0, device=device).to(torch.int32)
+    z_ref = torch.stack([x, y], dim=-1)
+    z = torch.zeros((128, 2), dtype=torch.int32, device=device)
+    kernel[(1, )](x, y, z, N=128)
+
+    np.testing.assert_equal(to_numpy(z_ref), to_numpy(z))
+
+
 @pytest.mark.parametrize("dtype_str", list(torch_dtypes))
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_store_constant(dtype_str, num_ctas, device):

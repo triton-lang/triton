@@ -930,6 +930,30 @@ def cat(input, other, can_reorder=False, _builder=None):
 
 
 @builtin
+def _experimental_stack_minor(inputs: Sequence, _builder=None):
+    """
+    Create a new tensor by concatenating the given tensors along a new, minor
+    dimension.
+
+    Equivalent to np.stack(inputs, axis=-1).  For example,
+    _experimental_stack_minor([[1,2,3], [4,5,6]]) returns [[1,4], [2,5], [3,6]].
+
+    The inputs are broadcasted to a common shape before being concatenated.
+
+    Currently you can only stack exactly 2 tensors.  (This is motivated by the
+    fact that tensors in Triton have to have power-of-2 size.  It might be
+    possible to stack other power-of-two number of tensors in the future.)
+
+    The "experimental" prefix indicates that this is not a stable API.  It may
+    change in the future.
+
+    :param input: The tensors to concatenate
+    :type input: Sequence[Union[Tensor, int, float]]
+    """
+    return semantic._experimental_stack_minor(inputs, _builder)
+
+
+@builtin
 def view(input, shape, _builder=None):
     """
     Returns a tensor with the same elements as `input` but a different shape.

@@ -1388,6 +1388,20 @@ void init_triton_ir(py::module &&m) {
                  mlir::RankedTensorType::get(shape, lhsType.getElementType()),
                  lhs, rhs);
            })
+      .def("create_stack_minor",
+           [](TritonOpBuilder &self,
+              const std::vector<mlir::Value> &args) -> mlir::Value {
+             if (args.empty())
+               throw std::runtime_error(
+                   "stack_minor expects at least one argument");
+             auto arg0Ty = args[0].getType().cast<mlir::RankedTensorType>();
+             llvm::SmallVector<int64_t, 8> shape(arg0Ty.getShape().begin(),
+                                                 arg0Ty.getShape().end());
+             shape.push_back(args.size());
+             return self.create<mlir::triton::StackMinorOp>(
+                 mlir::RankedTensorType::get(shape, arg0Ty.getElementType()),
+                 args);
+           })
       .def("create_trans",
            [](TritonOpBuilder &self, mlir::Value &arg) -> mlir::Value {
              auto argType = arg.getType().dyn_cast<mlir::RankedTensorType>();
