@@ -162,7 +162,7 @@ class KernelInterface(Generic[T]):
         Hence JITFunction.__getitem__ returns a callable proxy that
         memorizes the grid.
         """
-        return lambda *args, **kwargs: self.run(grid, False, *args, **kwargs)
+        return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
         # return cast(T, functools.partial(cast(Callable, self.run), grid=grid))
 
 
@@ -336,7 +336,7 @@ class JITFunction(KernelInterface[T]):
             already_compiled=False,
         )
 
-    def run(self, grid, warmup, *args, **kwargs):
+    def run(self, *args, grid, warmup, **kwargs):
         from ..compiler import CompiledKernel, compile, ASTSource
         from ..compiler.backends.cuda import CUDABackend
         # deprecated arguments
@@ -463,10 +463,8 @@ class JITFunction(KernelInterface[T]):
             self.hash = dependencies_finder.ret + str(self.starting_line_number)
         return self.hash
 
-    def warmup(self, *args, **kwargs):
-        grid = kwargs['grid']
-        del kwargs['grid']
-        return self.run(grid, True, *map(MockTensor.wrap_dtype, args), **kwargs)
+    def warmup(self, *args, grid, **kwargs):
+        return self.run(grid=grid, warmup=True, *map(MockTensor.wrap_dtype, args), **kwargs)
 
     # we do not parse `src` in the constructor because
     # the user might want to monkey-patch self.src dynamically.
