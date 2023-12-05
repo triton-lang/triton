@@ -180,15 +180,18 @@ bool LoopPipelinerInternal::initializeLoopInfo(
     }
   }
 
-  // Only support loop carried dependency with a distance of 1. This means the
-  // source of all the scf.yield operands needs to be defined by operations in
-  // the loop.
+  // Support only loop-carried dependencies with a distance of one iteration or
+  // those defined outside of the loop. This means that any dependency within a
+  // loop should either be on the immediately preceding iteration, the current
+  // iteration, or on variables whose values are set before entering the loop.
   if (llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
                    [this](Value operand) {
                      Operation *def = operand.getDefiningOp();
-                     return !def || !stages.contains(def);
+                     return !def ||
+                            (!stages.contains(def) && forOp->isAncestor(def));
                    })) {
-    LDBG("--only support loop carried dependency with a distance of 1 -> BAIL");
+    LDBG("--only support loop carried dependency with a distance of 1 or "
+         "defined outside of the loop -> BAIL");
     return false;
   }
   annotateFn = options.annotateFn;
@@ -223,8 +226,8 @@ void LoopPipelinerInternal::emitPrologue(RewriterBase &rewriter) {
   }
   auto yield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
   Location loc = forOp.getLoc();
+  SmallVector<Value, 5> predicates(maxStage);
   for (int64_t i = 0; i < maxStage; i++) {
-    Value predicate;
     if (dynamicLoop) {
       Type t = ub.getType();
       // pred = ub > lb + (i * step)
@@ -234,8 +237,8 @@ void LoopPipelinerInternal::emitPrologue(RewriterBase &rewriter) {
               loc, step,
               rewriter.create<arith::ConstantOp>(
                   loc, rewriter.getIntegerAttr(t, i))));
-      predicate = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
-                                                 iv, ub);
+      predicates[i] = rewriter.create<arith::CmpIOp>(
+          loc, arith::CmpIPredicate::slt, iv, ub);
     }
 
     // special handling for induction variable as the increment is implicit.
@@ -259,8 +262,9 @@ void LoopPipelinerInternal::emitPrologue(RewriterBase &rewriter) {
               newOperand->set(replacement);
             }
           });
-      if (predicate) {
-        newOp = predicateFn(rewriter, newOp, predicate);
+      int predicateIdx = i - stages[op];
+      if (predicates[predicateIdx]) {
+        newOp = predicateFn(rewriter, newOp, predicates[predicateIdx]);
         assert(newOp && "failed to predicate op.");
       }
       if (annotateFn)
@@ -344,12 +348,17 @@ scf::ForOp LoopPipelinerInternal::createKernelLoop(
   for (const auto &retVal :
        llvm::enumerate(forOp.getBody()->getTerminator()->getOperands())) {
     Operation *def = retVal.value().getDefiningOp();
-    assert(def && "Only support loop carried dependencies of distance 1");
-    unsigned defStage = stages[def];
-    Value valueVersion = valueMapping[forOp.getRegionIterArgs()[retVal.index()]]
-                                     [maxStage - defStage];
-    assert(valueVersion);
-    newLoopArg.push_back(valueVersion);
+    assert(def && "Only support loop carried dependencies of distance of 1 or "
+                  "outside the loop");
+    auto defStage = stages.find(def);
+    if (defStage != stages.end()) {
+      Value valueVersion =
+          valueMapping[forOp.getRegionIterArgs()[retVal.index()]]
+                      [maxStage - defStage->second];
+      assert(valueVersion);
+      newLoopArg.push_back(valueVersion);
+    } else
+      newLoopArg.push_back(retVal.value());
   }
   for (auto escape : crossStageValues) {
     LiverangeInfo &info = escape.second;
@@ -556,13 +565,13 @@ LogicalResult LoopPipelinerInternal::createKernel(
   for (const auto &retVal :
        llvm::enumerate(forOp.getBody()->getTerminator()->getOperands())) {
     Operation *def = retVal.value().getDefiningOp();
-    assert(def && "Only support loop carried dependencies of distance 1");
-    unsigned defStage = stages[def];
-    if (defStage > 0) {
+    assert(def && "Only support loop carried dependencies of distance of 1 or "
+                  "defined outside the loop");
+    auto defStage = stages.find(def);
+    if (defStage != stages.end() && defStage->second > 0)
       setValueMapping(forOp.getRegionIterArgs()[retVal.index()],
                       newForOp->getResult(retVal.index()),
-                      maxStage - defStage + 1);
-    }
+                      maxStage - defStage->second + 1);
   }
   rewriter.create<scf::YieldOp>(forOp.getLoc(), yieldOperands);
   return success();

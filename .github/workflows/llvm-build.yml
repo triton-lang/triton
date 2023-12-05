@@ -27,9 +27,11 @@ jobs:
       matrix:
         config:
         - {runner: 'Ubuntu 20.04', runs_on: 'ubuntu-20.04', target-os: 'ubuntu', arch: 'x64'}
+        - {runner: 'Ubuntu 20.04', runs_on: 'ubuntu-20.04', target-os: 'ubuntu', arch: 'arm64'}
         - {runner: 'CentOS 7', runs_on: ['self-hosted', 'CPU'], target-os: 'centos', arch: 'x64'}
         - {runner: 'MacOS X64', runs_on: 'macos-12', target-os: 'macos', arch: 'x64'}
         - {runner: 'MacOS ARM64', runs_on: 'macos-12', target-os: 'macos', arch: 'arm64'}
+        - {runner: 'Windows Latest', runs_on: 'windows-latest', target-os: 'windows', arch: 'x64'}
 
     steps:
 
@@ -39,6 +41,7 @@ jobs:
         path: llvm-build
 
     - name: Fetch LLVM Commit Hash
+      shell: bash
       run: |
         LLVM_COMMIT_HASH="$(cat llvm-build/cmake/llvm-hash.txt)"
         echo "Found LLVM commit hash: ${LLVM_COMMIT_HASH}"
@@ -64,7 +67,14 @@ jobs:
       with:
         python-version: 3.11
 
+    - name: Set up MSVC
+      if: matrix.config.arch == 'x64' && (matrix.config.target-os == 'windows')
+      uses: ilammy/msvc-dev-cmd@v1.4.1
+      with:
+        arch: amd64
+
     - name: Install Prerequisites
+      shell: bash
       run: |
         python3 -m pip install cmake ninja sccache
         mkdir -p ${{ env.SCCACHE_DIR }}
@@ -102,8 +112,31 @@ jobs:
 
         tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
 
+    - name: Configure, Build, Test, and Install LLVM (Windows)
+      if: matrix.config.arch == 'x64' && (matrix.config.target-os == 'windows')
+      run: >
+        python3 -m pip install -r llvm-project/mlir/python/requirements.txt
+
+        cmake -GNinja -Bllvm-project/build
+        -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
+        -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}"
+        -DLLVM_BUILD_UTILS=ON
+        -DLLVM_BUILD_TOOLS=ON
+        -DLLVM_ENABLE_ASSERTIONS=ON
+        -DMLIR_ENABLE_BINDINGS_PYTHON=ON
+        -DLLVM_ENABLE_PROJECTS="clang;mlir"
+        -DLLVM_INSTALL_UTILS=ON
+        -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
+        -DLLVM_ENABLE_TERMINFO=OFF
+        llvm-project/llvm
+
+        ninja -C llvm-project/build check-mlir install
+
+        tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
+
     - name: Configure, Build, and Install LLVM (macOS arm64)
-      if: matrix.config.arch == 'arm64' && matrix.config.target-os == 'macos'
+      if: matrix.config.arch == 'arm64' && (matrix.config.target-os == 'ubuntu' || matrix.config.target-os == 'macos')
       run: >
         python3 -m pip install -r llvm-project/mlir/python/requirements.txt
 
@@ -153,7 +186,15 @@ jobs:
 
         docker rm "${CONTAINER_ID}"
 
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: llvm-${{ matrix.config.target-os }}-${{ matrix.config.arch }}
+        path: |
+          ${{ github.workspace }}/llvm-*.tar.gz
+
     - name: Azure Login
+      if: ${{ (github.repository == 'openai/triton') }}
       uses: azure/login@v1
       with:
         client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -161,6 +202,7 @@ jobs:
         subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
     - name: Upload LLVM Artifacts to Azure
+      if: ${{ (github.repository == 'openai/triton') }}
       run: |
         az storage blob upload --account-name tritonlang --auth-mode login --container-name llvm-builds --file "${{ env.llvm_install_dir }}.tar.gz" --name "${{ env.llvm_install_dir }}.tar.gz" --overwrite
 
@@ -168,11 +210,11 @@ jobs:
         echo "Blob URL: ${URL}"
 
     - name: Azure Logout
+      if: ${{ (github.repository == 'openai/triton') }}
       run: |
         az logout
         az cache purge
         az account clear
-      if: always()
 
     - name: Dump Sccache Statistics
       run: sccache --show-stats

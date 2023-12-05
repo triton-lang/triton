@@ -307,22 +307,8 @@ def _indicator(n_dims: core.constexpr, idx: core.constexpr, pos: core.constexpr)
 
 
 @jit
-def _take_slice(x, n_dims: core.constexpr, idx: core.constexpr, pos: core.constexpr, keep_dim: core.constexpr = True):
-    y = sum(x * _indicator(n_dims, idx, pos), n_dims - 1 - idx)
-    if keep_dim:
-        y = core.expand_dims(y, n_dims - 1 - idx)
-
-    return y
-
-
-@jit
-def _compare_and_swap(x, desc_mask, n_dims: core.constexpr, idx: core.constexpr):
-    l = _take_slice(x, n_dims, idx, 0)
-    r = _take_slice(x, n_dims, idx, 1)
-
-    x_int = x
-    l_int = l
-    r_int = r
+def _cast_to_int(x):
+    y = x
     if x.dtype.is_floating():
         if core.constexpr(x.dtype.primitive_bitwidth) == 16:
             dtype_int = core.int16
@@ -332,9 +318,27 @@ def _compare_and_swap(x, desc_mask, n_dims: core.constexpr, idx: core.constexpr)
             dtype_int = core.int64
         else:
             raise ValueError("Unsupported dtype")
-        x_int = x.to(dtype_int, bitcast=True)
-        l_int = l.to(dtype_int, bitcast=True)
-        r_int = r.to(dtype_int, bitcast=True)
+        y = x.to(dtype_int, bitcast=True)
+    return y
+
+
+@jit
+def _take_slice(x, n_dims: core.constexpr, idx: core.constexpr, pos: core.constexpr, keep_dim: core.constexpr = True):
+    y = sum(x * _indicator(n_dims, idx, pos).to(x.dtype), n_dims - 1 - idx)
+    if keep_dim:
+        y = core.expand_dims(y, n_dims - 1 - idx)
+
+    return y
+
+
+@jit
+def _compare_and_swap(x, desc_mask, n_dims: core.constexpr, idx: core.constexpr):
+    x_int = _cast_to_int(x)
+    l_int = _take_slice(x_int, n_dims, idx, 0)
+    r_int = _take_slice(x_int, n_dims, idx, 1)
+    l = l_int.to(x.dtype, bitcast=True)
+    r = r_int.to(x.dtype, bitcast=True)
+
     desc_mask = desc_mask.to(x_int.dtype)
     zero = zeros_like(x_int)
     y = x_int ^ core.where((l > r) ^ desc_mask, l_int ^ r_int, zero)

@@ -461,7 +461,9 @@ void init_triton_ir(py::module &&m) {
            [](mlir::OpState &self) -> std::string {
              std::string str;
              llvm::raw_string_ostream os(str);
-             self->print(os);
+             auto printingFlags = mlir::OpPrintingFlags();
+             printingFlags.enableDebugInfo();
+             self->print(os, printingFlags);
              return str;
            })
       .def("append_operand",
@@ -498,7 +500,9 @@ void init_triton_ir(py::module &&m) {
            [](mlir::ModuleOp &self) -> std::string {
              std::string str;
              llvm::raw_string_ostream os(str);
-             self.print(os);
+             auto printingFlags = mlir::OpPrintingFlags();
+             printingFlags.enableDebugInfo();
+             self.print(os, printingFlags);
              return str;
            })
       .def("bytecode",
@@ -1560,10 +1564,11 @@ void init_triton_ir(py::module &&m) {
       .def("create_inline_asm",
            [](TritonOpBuilder &self, const std::string &inlineAsm,
               const std::string &constraints,
-              const std::vector<mlir::Value> &values, mlir::Type &type,
-              bool isPure, int pack) -> mlir::Value {
+              const std::vector<mlir::Value> &values,
+              const std::vector<mlir::Type> &types, bool isPure,
+              int pack) -> mlir::OpState {
              return self.create<mlir::triton::ElementwiseInlineAsmOp>(
-                 type, inlineAsm, constraints, isPure, pack, values);
+                 types, inlineAsm, constraints, isPure, pack, values);
            })
       .def("create_print",
            [](TritonOpBuilder &self, const std::string &prefix,

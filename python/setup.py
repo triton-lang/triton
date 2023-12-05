@@ -80,10 +80,12 @@ def get_llvm_package_info():
             arch = "x64"
         system_suffix = f"macos-{arch}"
     elif system == "Linux":
-        # TODO: arm64
-        vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
-        vglibc = vglibc[0] * 100 + vglibc[1]
-        system_suffix = 'ubuntu-x64' if vglibc > 217 else 'centos-x64'
+        if arch == 'arm64':
+            system_suffix = 'ubuntu-arm64'
+        else:
+            vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
+            vglibc = vglibc[0] * 100 + vglibc[1]
+            system_suffix = 'ubuntu-x64' if vglibc > 217 else 'centos-x64'
     else:
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     # use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")

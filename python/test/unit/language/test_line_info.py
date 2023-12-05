@@ -63,6 +63,18 @@ def kernel_autotune(X, Y, SIZE: tl.constexpr, BLOCK: tl.constexpr):
         tl.store(Y + i + tl.arange(0, BLOCK), x)
 
 
+# AddIOp(DotOp(a, b, c), d) and c==0 => DotOp(a, b, d)
+# Since the + symbol will take effect in the dot op after combination,
+# it seems making sense to annotate with the same line as dot.
+@triton.jit
+def kernel_dot_combine(x):
+    c = tl.full((32, 32), 4, dtype=tl.int8)
+    a = (tl.arange(0, 32)[:, None] + tl.arange(0, 32)[None, :]).to(tl.int8)
+    d = tl.dot(a, a)
+    d = d + c
+    tl.device_print("", d)
+
+
 def extract_file_lines(asm):
     nvdisasm, _ = path_to_nvdisasm()
     fd, path = tempfile.mkstemp()
@@ -78,18 +90,26 @@ def extract_file_lines(asm):
     return file_lines
 
 
-def check_file_lines(file_lines, file_name, lineno):
+def check_file_lines(file_lines, file_name, lineno, should_contain=True):
+    """
+    Check if the file name and line number is in the file_lines
+
+    Args:
+        file_lines: list of (file_name, line_number)
+        file_name: file name
+        lineno: line number, -1 means do not check line number
+        should_contain: whether the file name and line number should be in the file_lines
+    """
     for file, line in file_lines:
-        # -1 means do not check line number
         if lineno == -1:
             if file_name in file:
                 return True
         if file_name in file and str(lineno) in line:
-            return True
-    return False
+            return should_contain
+    return not should_contain
 
 
-func_types = ["single", "call", "call_noinline", "multi_files", "autotune"]
+func_types = ["single", "call", "call_noinline", "multi_files", "autotune", "dot_combine"]
 
 
 @pytest.mark.parametrize("func", func_types)
@@ -100,19 +120,19 @@ def test_line_info(func: str):
         pytest.skip("nvdisasm is not available")
 
     shape = (128, )
-    x = torch.arange(0, shape[0], dtype=torch.float32, device='cuda')
-    y = torch.zeros(shape, dtype=x.dtype, device="cuda")
     kernel_info = {}
     if func == "single":
-        kernel_info = kernel_single[(1,)](x, y, BLOCK=shape[0])
+        kernel_info = kernel_single.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,))
     elif func == "call":
-        kernel_info = kernel_call[(1,)](x, y, BLOCK=shape[0])
+        kernel_info = kernel_call.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,))
     elif func == "call_noinline":
-        kernel_info = kernel_call_noinline[(1,)](x, y, BLOCK=shape[0])
+        kernel_info = kernel_call_noinline.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,))
     elif func == "multi_files":
-        kernel_info = kernel_multi_files[(1,)](x, y, BLOCK=shape[0])
+        kernel_info = kernel_multi_files.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,))
     elif func == "autotune":
-        kernel_info = kernel_autotune[(1,)](x, y, SIZE=shape[0])
+        kernel_info = kernel_autotune.warmup(torch.float32, torch.float32, SIZE=shape[0], grid=(1,))[0]
+    elif func == "dot_combine":
+        kernel_info = kernel_dot_combine.warmup(20, grid=(1,))
 
     file_lines = extract_file_lines(kernel_info.asm["cubin"])
     if func == "single":
@@ -138,3 +158,6 @@ def test_line_info(func: str):
         assert (check_file_lines(file_lines, "test_line_info.py", 61))
         assert (check_file_lines(file_lines, "test_line_info.py", 62))
         assert (check_file_lines(file_lines, "test_line_info.py", 63))
+    elif func == "dot_combine":
+        assert (check_file_lines(file_lines, "test_line_info.py", 73))
+        assert (check_file_lines(file_lines, "test_line_info.py", 74, should_contain=False))

@@ -139,10 +139,8 @@ class KernelArg:
     def specialization_key(self):
         assert not self.param.do_not_specialize
 
-        try:
+        if hasattr(self.value, "data_ptr"):
             return (self.value.data_ptr() % JITFunction.divisibility == 0, )
-        except AttributeError:
-            pass
 
         if isinstance(self.value, int):
             # bool is a subclass of int, so we don't check explicitly above.

@@ -13,21 +13,21 @@ include "mlir/IR/PatternBase.td"
 // AddFOp(d, DotOp(a, b, c)) and c==0 => DotOp(a, b, d)
 def CombineDotAddIPattern : Pat<
         (Arith_AddIOp $d, (TT_DotOp:$res $a, $b, $c, $allowTF32, $maxNumImpreciseAcc)),
-        (TT_DotOp $a, $b, $d, $allowTF32, $maxNumImpreciseAcc),
+        (TT_DotOp $a, $b, $d, $allowTF32, $maxNumImpreciseAcc, (location $res)),
         [(Constraint<CPred<"isZero($0)">> $c)]>;
 def CombineDotAddFPattern : Pat<
         (Arith_AddFOp $d, (TT_DotOp:$res $a, $b, $c, $allowTF32, $maxNumImpreciseAcc), $fastmath),
-        (TT_DotOp $a, $b, $d, $allowTF32, $maxNumImpreciseAcc),
+        (TT_DotOp $a, $b, $d, $allowTF32, $maxNumImpreciseAcc, (location $res)),
         [(Constraint<CPred<"isZero($0)">> $c),
          (Constraint<CPred<"::llvm::cast<::mlir::IntegerAttr>($0).getInt() == 0">> $maxNumImpreciseAcc)]>;
 
 def CombineDotAddIRevPattern : Pat<
         (Arith_AddIOp (TT_DotOp:$res $a, $b, $c, $allowTF32, $maxNumImpreciseAcc), $d),
-        (TT_DotOp $a, $b, $d, $allowTF32, $maxNumImpreciseAcc),
+        (TT_DotOp $a, $b, $d, $allowTF32, $maxNumImpreciseAcc, (location $res)),
         [(Constraint<CPred<"isZero($0)">> $c)]>;
 def CombineDotAddFRevPattern : Pat<
         (Arith_AddFOp (TT_DotOp:$res $a, $b, $c, $allowTF32, $maxNumImpreciseAcc), $d, $fastmath),
-        (TT_DotOp $a, $b, $d, $allowTF32, $maxNumImpreciseAcc),
+        (TT_DotOp $a, $b, $d, $allowTF32, $maxNumImpreciseAcc, (location $res)),
         [(Constraint<CPred<"isZero($0)">> $c),
          (Constraint<CPred<"::llvm::cast<::mlir::IntegerAttr>($0).getInt() == 0">> $maxNumImpreciseAcc)]>;
 
@@ -44,7 +44,7 @@ def CombineDotAddFRevPattern : Pat<
 def getConstantValue : NativeCodeCall<"getConstantValue($_builder, $0, $1)">;
 def CombineBroadcastConstantPattern : Pat<
     (TT_BroadcastOp:$bcast_res (Arith_ConstantOp $value)),
-    (Arith_ConstantOp (getConstantValue $value, $bcast_res)),
+    (Arith_ConstantOp (getConstantValue $value, $bcast_res), (location $bcast_res)),
     [(Constraint<CPred<"isBroadcastConstantCombinable($0)">> $value)]>;
 
 #endif
