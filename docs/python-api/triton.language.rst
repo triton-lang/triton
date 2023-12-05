@@ -159,6 +159,26 @@ Random Number Generation
     randn
 
 
+Iterators
+-----------------
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    static_range
+
+
+Inline Assembly
+-----------------
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    inline_asm_elementwise
+
+
 Compiler Hint Ops
 -----------------
 
@@ -171,6 +191,7 @@ Compiler Hint Ops
     max_contiguous
     multiple_of
 
+
 Debug Ops
 -----------------
 
@@ -182,12 +203,3 @@ Debug Ops
     static_assert
     device_print
     device_assert
-
-Iterators
------------------
-
-.. autosummary::
-    :toctree: generated
-    :nosignatures:
-
-    static_range
