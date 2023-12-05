@@ -403,9 +403,9 @@ class JITFunction(KernelInterface[T]):
                 options=options.__dict__,
             )
 
+        kernel = self.cache[device][key]
         if not warmup:
             args = [arg.value for arg in args if not arg.param.is_constexpr]
-            kernel = self.cache[device][key]
             kernel.run(grid_0, grid_1, grid_2, kernel.num_warps, kernel.num_ctas,  # number of warps/ctas per instance
                        kernel.cluster_dims[0], kernel.cluster_dims[1], kernel.cluster_dims[2],  # cluster
                        kernel.shared, stream, kernel.function, CompiledKernel.launch_enter_hook,
@@ -464,7 +464,9 @@ class JITFunction(KernelInterface[T]):
         return self.hash
 
     def warmup(self, *args, **kwargs):
-        return self.run(*map(MockTensor.wrap_dtype, args), **kwargs, warmup=True)
+        grid = kwargs['grid']
+        del kwargs['grid']
+        return self.run(grid, True, *map(MockTensor.wrap_dtype, args), **kwargs)
 
     # we do not parse `src` in the constructor because
     # the user might want to monkey-patch self.src dynamically.
