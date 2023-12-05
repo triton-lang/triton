@@ -16,9 +16,6 @@ import numpy as np
 import triton.language as tl
 from triton import jit
 
-input_dtypes = ["float32", "float64"]
-out_dtypes = ["float16", "float32"]
-
 
 def test_elementwise_dedupe():
     # XXX: Could probably be achieved with interpreter mode aswell.
