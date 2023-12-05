@@ -348,11 +348,9 @@ class JITFunction(KernelInterface[T]):
         stream = driver.get_current_stream(device)
         target = driver.get_current_target()
         backend = CUDABackend(target)
-        compiler_options = backend.parse_compiler_options(kwargs)
-        linker_options = backend.parse_linker_options(kwargs)
+        options = backend.parse_options(kwargs)
         # bind non-reserved keyword args and set defaults
-        is_reserved = lambda k: k in compiler_options.__dict__ or k in linker_options.__dict__
-        kwargs = {k: v for k, v in kwargs.items() if not is_reserved(k)}
+        kwargs = {k: v for k, v in kwargs.items() if not k in options.__dict__}
         bound_args = self.signature.bind(*args, **kwargs)
         bound_args.apply_defaults()
         assert len(bound_args.arguments) == len(self.params)
@@ -372,7 +370,7 @@ class JITFunction(KernelInterface[T]):
         sig_key = tuple(arg.signature_key() for arg in args if not arg.param.is_constexpr)
         spec_key = tuple(arg.specialization_key() for arg in args if not arg.param.do_not_specialize)
         constexpr_key = tuple(arg.value for arg in args if arg.param.is_constexpr)
-        key = (get_cuda_version_key(), sig_key, constexpr_key, spec_key, compiler_options, linker_options, self.debug)
+        key = (get_cuda_version_key(), sig_key, constexpr_key, spec_key, options, self.debug)
         # Kernel is not cached; we have to compile.
         if key not in self.cache[device]:
             configs = (self._get_config(*[arg.value for arg in args]), )
@@ -392,17 +390,16 @@ class JITFunction(KernelInterface[T]):
                 if not arg.param.is_constexpr
             }
 
-            if self._call_hook(key, signature, device, constants, compiler_options.num_warps, compiler_options.num_ctas,
-                               compiler_options.num_stages, compiler_options.enable_warp_specialization,
-                               compiler_options.enable_fp_fusion, linker_options.libs, configs):
+            if self._call_hook(key, signature, device, constants, options.num_warps, options.num_ctas,
+                               options.num_stages, options.enable_warp_specialization, options.enable_fp_fusion,
+                               options.extern_libs, configs):
                 return None
             # compile the kernel
             src = ASTSource(self, signature, constants, configs[0])
             self.cache[device][key] = compile(
                 src,
                 target=target,
-                compiler_options=compiler_options.__dict__,
-                linker_options=linker_options.__dict__,
+                options=options.__dict__,
             )
 
         if not warmup:

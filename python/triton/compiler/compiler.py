@@ -155,7 +155,7 @@ class IRSource:
         return dict()
 
 
-def compile(src, target=None, compiler_options=None, linker_options=None):
+def compile(src, target=None, options=None):
     if target is None:
         target = driver.get_current_target()
     backend = CUDABackend(target)
@@ -164,10 +164,9 @@ def compile(src, target=None, compiler_options=None, linker_options=None):
         assert isinstance(src, str), "source must be either AST or a filepath"
         src = IRSource(src)
     extra_options = src.parse_options()
-    compiler_options = backend.parse_compiler_options(dict(compiler_options or dict(), **extra_options))
-    linker_options = backend.parse_linker_options(linker_options or dict())
+    options = backend.parse_options(dict(options or dict(), **extra_options))
     # create cache manager
-    key = f"{src.hash()}-{backend.hash()}-{compiler_options.hash()}-{frozenset(sorted(get_env_vars().items()))}"
+    key = f"{src.hash()}-{backend.hash()}-{options.hash()}-{frozenset(sorted(get_env_vars().items()))}"
     hash = hashlib.md5(key.encode("utf-8")).hexdigest()
     fn_cache_manager = get_cache_manager(hash)
     metadata_filename = f"{src.name}.json"
@@ -181,16 +180,15 @@ def compile(src, target=None, compiler_options=None, linker_options=None):
     # initialize metadata
     metadata = {
         "target": target,
-        **compiler_options.__dict__,
-        **linker_options.__dict__,
+        **options.__dict__,
         **get_env_vars(),
         **src.metadata(),
     }
     # run compilation pipeline  and populate metadata
     stages = dict()
-    backend.add_stages(stages, compiler_options, linker_options)
+    backend.add_stages(stages, options)
     first_stage = list(stages.keys()).index(src.ext)
-    module = src.make_ir(compiler_options)
+    module = src.make_ir(options)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         metadata_group[f"{src.name}.{ext}"] = fn_cache_manager.put(next_module, f"{src.name}.{ext}")
