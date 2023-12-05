@@ -2116,3 +2116,32 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     tt.return %4 : tensor<1xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
   }
 }
+
+// -----
+
+// We can propagate convert-layout ops through stack_minor, but the new
+// dimension must be minor, with elems-per-thread equal to the number of tensors
+// being stacked.
+#blocked  = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+#blocked2 = #triton_gpu.blocked<{sizePerThread = [2,2], threadsPerWarp = [32,1], warpsPerCTA = [1,1], order = [1,0], CTAsPerCGA = [1,1], CTASplitNum = [1,1], CTAOrder = [1,0]}>
+#blocked3 = #triton_gpu.blocked<{sizePerThread = [1,2], threadsPerWarp = [32,1], warpsPerCTA = [1,1], order = [1,0], CTAsPerCGA = [1,1], CTASplitNum = [1,1], CTAOrder = [1,0]}>
+// CHECK-DAG: [[$BLOCKED:#.*]] = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+// CHECK-DAG: [[$BLOCKED3:#.*]] = #triton_gpu.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+// CHECK-LABEL: @fn
+// CHECK-NOT: triton_gpu.convert_layout
+// CHECK: tt.stack_minor{{.*}}(tensor<32xi32, [[$BLOCKED]]>, tensor<32xi32, [[$BLOCKED]]>) -> tensor<32x2xi32, [[$BLOCKED3]]>
+// CHECK-NEXT: tt.return
+module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+tt.func public @fn(%ptr0 : !tt.ptr<i32>, %ptr1 : !tt.ptr<i32>) -> tensor<32x2xi32, #blocked3> {
+  %p0 = tt.splat %ptr0 : (!tt.ptr<i32>) -> tensor<32x!tt.ptr<i32>, #blocked>
+  %p1 = tt.splat %ptr1 : (!tt.ptr<i32>) -> tensor<32x!tt.ptr<i32>, #blocked>
+  %t0 = tt.load %p0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32xi32, #blocked>
+  %t1 = tt.load %p1 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32xi32, #blocked>
+  %a0 = triton_gpu.convert_layout %t0 : (tensor<32xi32, #blocked>) -> tensor<32xi32, #blocked1>
+  %a1 = triton_gpu.convert_layout %t1 : (tensor<32xi32, #blocked>) -> tensor<32xi32, #blocked1>
+  %0 = tt.stack_minor %a0, %a1 : (tensor<32xi32, #blocked1>, tensor<32xi32, #blocked1>) -> tensor<32x2xi32, #blocked2>
+  %1 = triton_gpu.convert_layout %0 : (tensor<32x2xi32, #blocked2>) -> tensor<32x2xi32, #blocked3>
+  tt.return %1 : tensor<32x2xi32, #blocked3>
+}
+}  // end module

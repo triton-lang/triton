@@ -16,9 +16,30 @@
 
 using namespace mlir;
 using namespace mlir::triton;
+using namespace triton::gpu;
 
 #define GEN_PASS_CLASSES
 #include "triton/Conversion/TritonToTritonGPU/Passes.h.inc"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+
+// The rewrites in this file convert from the Triton dialect to the TritonGPU
+// dialect.  In practice, this mostly means adding encodings (layouts) to
+// instructions.  The machinery works as follows.
+//
+// * The rewriter uses TritonGPUTypeConverter to "convert" every type to the
+//   TritonGPU dialect.  In practice, this means it adds the default blocked
+//   encoding to every operand and return value.
+//
+// * We then run the custom rewrites for each op.  These rewrites can modify the
+//   return-type encoding and do other things like add new instructions.
+//
+// * If an instruction changed the encoding of its return type, then this won't
+//   match the encoding expected by users (namely, the default blocked
+//   encoding).  TritonGPUTypeConverter harmonizes the types by adding
+//   ConvertLayoutOp instrs.
+//
+// * This whole process creates many unnecessary ConvertLayoutOp's.  These are
+//   removed by the RemoveLayoutConversions pass.
 
 namespace {
 
@@ -313,6 +334,54 @@ struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
   }
 };
 
+struct TritonStackMinorPattern
+    : public OpConversionPattern<triton::StackMinorOp> {
+  using OpConversionPattern<triton::StackMinorOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::StackMinorOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Preconditions:
+    //   * Input shapes are all the same.
+    //   * Input encodings are all the same.
+    //   * Input encoding is a blocked layout.
+    //   * The number of inputs is a power of 2.  (This is due to Triton's
+    //     restricton on tensor sizes.)
+    //
+    // These are mostly taken care of by the nature of this rewrite: All the
+    // operands provided by `adaptor` have the default blocked layout.
+    //
+    // Postconditions:
+    //   * Output shape is `input_shape + [num_inputs]`.
+    //   * Output encoding is the input encoding, with a new dim added in the
+    //     minor (i.e. fastest-moving) position.
+    unsigned numOperands = op.getNumOperands();
+    assert(numOperands > 0);
+    assert(llvm::isPowerOf2_32(numOperands));
+    for (auto operand : adaptor.getOperands())
+      assert(operand.getType() == adaptor.getOperands()[0].getType());
+
+    auto operandEnc = adaptor.getOperands()[0]
+                          .getType()
+                          .cast<RankedTensorType>()
+                          .getEncoding()
+                          .cast<BlockedEncodingAttr>();
+    auto newRetEncoding = inferDstEncoding(op, operandEnc);
+    if (!newRetEncoding.has_value())
+      return failure();
+
+    auto retType = this->getTypeConverter()
+                       ->convertType(op.getType())
+                       .cast<RankedTensorType>();
+    auto newRetType = RankedTensorType::get(
+        retType.getShape(), retType.getElementType(), *newRetEncoding);
+    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::StackMinorOp>(
+                      op, newRetType, adaptor.getOperands()),
+                  adaptor.getAttributes());
+    return success();
+  }
+};
+
 struct TritonTransPattern : public OpConversionPattern<triton::TransOp> {
 
   using OpConversionPattern<triton::TransOp>::OpConversionPattern;
@@ -466,9 +535,10 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::FpToFpOp>, GenericOpPattern<triton::IntToPtrOp>,
       GenericOpPattern<triton::PtrToIntOp>, GenericOpPattern<triton::SplatOp>,
       TritonBroadcastPattern, GenericOpPattern<triton::AddPtrOp>,
-      TritonCatPattern, GenericOpPattern<triton::ElementwiseInlineAsmOp>,
-      TritonReducePattern, GenericOpPattern<triton::ReduceReturnOp>,
-      TritonScanPattern, GenericOpPattern<triton::ScanReturnOp>,
+      TritonCatPattern, TritonStackMinorPattern,
+      GenericOpPattern<triton::ElementwiseInlineAsmOp>, TritonReducePattern,
+      GenericOpPattern<triton::ReduceReturnOp>, TritonScanPattern,
+      GenericOpPattern<triton::ScanReturnOp>,
       GenericOpPattern<triton::MakeRangeOp>, TritonExpandDimsPattern,
       TritonTransPattern, TritonDotPattern, GenericOpPattern<triton::LoadOp>,
       GenericOpPattern<triton::StoreOp>,

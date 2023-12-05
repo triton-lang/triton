@@ -340,6 +340,18 @@ def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
 }
 
+// TODO: Add verifier.  Operand shapes + encodings must be the same, and output
+// shape is also constrained.
+def TT_StackMinorOp : TT_Op<"stack_minor", [NoMemoryEffect, SameOperandsAndResultElementType]> {
+    let summary = "stack tensors along minor axis";
+
+    let arguments = (ins Variadic<TT_Tensor>:$operands);
+
+    let results = (outs TT_Tensor:$result);
+
+    let assemblyFormat = "$operands attr-dict `:` functional-type(operands, results)";
+}
+
 def TT_TransOp : TT_Op<"trans", [Pure,
                                  DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                  SameOperandsAndResultElementType]> {

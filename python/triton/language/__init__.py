@@ -24,6 +24,7 @@ from .standard import (
     zeros_like,
 )
 from .core import (
+    _experimental_stack_minor,
     TRITON_MAX_TENSOR_NUMEL,
     abs,
     advance,
@@ -111,6 +112,7 @@ from .random import (
 )
 
 __all__ = [
+    "_experimental_stack_minor",
     "TRITON_MAX_TENSOR_NUMEL",
     "abs",
     "advance",

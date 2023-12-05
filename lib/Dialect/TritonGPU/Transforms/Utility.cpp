@@ -258,6 +258,46 @@ static std::optional<Attribute> inferDstEncoding(triton::ExpandDimsOp op,
   return sliceEncoding.getParent();
 }
 
+static std::optional<Attribute> inferDstEncoding(triton::StackMinorOp op,
+                                                 Attribute encoding) {
+  auto ctx = op->getContext();
+  auto operandEnc = encoding.dyn_cast<triton::gpu::BlockedEncodingAttr>();
+  if (!operandEnc)
+    return std::nullopt;
+
+  // The layout of StackMinorOp is the same as the layout of its inputs, except
+  // we add a new minor dimension of size num-inputs.  Each thread gets
+  // num-inputs elements of the new dimension.
+  auto numOperands = op.getNumOperands();
+
+  auto newSizePerThread = operandEnc.getSizePerThread();
+  newSizePerThread.push_back(numOperands);
+
+  auto newThreadsPerWarp = operandEnc.getThreadsPerWarp();
+  newThreadsPerWarp.push_back(1);
+
+  auto newWarpsPerCTA = operandEnc.getWarpsPerCTA();
+  newWarpsPerCTA.push_back(1);
+
+  // The new dimension is the most minor, so it goes at the front of `order`.
+  auto newOrder = llvm::to_vector(operandEnc.getOrder());
+  newOrder.insert(newOrder.begin(), newOrder.size());
+
+  auto newCTAsPerCGA = operandEnc.getCTAsPerCGA();
+  newCTAsPerCGA.push_back(1);
+
+  auto newCTASplitNum = operandEnc.getCTASplitNum();
+  newCTASplitNum.push_back(1);
+
+  auto newCTAOrder = operandEnc.getCTAOrder();
+  newCTAOrder.insert(newCTAOrder.begin(), newCTAOrder.size());
+
+  return triton::gpu::BlockedEncodingAttr::get(
+      ctx, newSizePerThread, newThreadsPerWarp, newWarpsPerCTA, newOrder,
+      triton::gpu::CTALayoutAttr::get(ctx, newCTAsPerCGA, newCTASplitNum,
+                                      newCTAOrder));
+}
+
 static std::optional<Attribute> inferSrcEncoding(triton::ReduceOp op,
                                                  Attribute encoding) {
   auto sliceEncoding = encoding.dyn_cast<triton::gpu::SliceEncodingAttr>();
@@ -274,11 +314,55 @@ static std::optional<Attribute> inferSrcEncoding(triton::ExpandDimsOp op,
                                              encoding);
 }
 
+static std::optional<Attribute> inferSrcEncoding(triton::StackMinorOp op,
+                                                 Attribute dstEncoding) {
+  // src encoding simply strips off the minor dimension of the dst encoding.
+  auto ctx = op->getContext();
+  auto dstEnc = dstEncoding.dyn_cast<triton::gpu::BlockedEncodingAttr>();
+  if (!dstEnc)
+    return std::nullopt;
+
+  auto numOperands = op.getNumOperands();
+
+  auto newSizePerThread = dstEnc.getSizePerThread();
+  newSizePerThread.pop_back();
+
+  auto newThreadsPerWarp = dstEnc.getThreadsPerWarp();
+  newThreadsPerWarp.pop_back();
+
+  auto newWarpsPerCTA = dstEnc.getWarpsPerCTA();
+  newWarpsPerCTA.pop_back();
+
+  // Erase the max dimension from the order.
+  auto newOrder = llvm::to_vector(dstEnc.getOrder());
+  auto it = llvm::find(newOrder, numOperands - 1);
+  assert(it != newOrder.end());
+  newOrder.erase(it);
+
+  auto newCTAsPerCGA = dstEnc.getCTAsPerCGA();
+  newCTAsPerCGA.pop_back();
+
+  auto newCTASplitNum = dstEnc.getCTASplitNum();
+  newCTASplitNum.pop_back();
+
+  auto newCTAOrder = dstEnc.getCTAOrder();
+  auto it2 = llvm::find(newCTAOrder, numOperands - 1);
+  newCTAOrder.erase(it2);
+
+  return triton::gpu::BlockedEncodingAttr::get(
+      ctx, newSizePerThread, newThreadsPerWarp, newWarpsPerCTA, newOrder,
+      triton::gpu::CTALayoutAttr::get(ctx, newCTAsPerCGA, newCTASplitNum,
+                                      newCTAOrder));
+}
+
 std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
+  // TODO: Add StackMinor op.
   if (auto reduceOp = dyn_cast<triton::ReduceOp>(op))
     return inferSrcEncoding(reduceOp, encoding);
   if (auto expand = dyn_cast<triton::ExpandDimsOp>(op))
     return inferSrcEncoding(expand, encoding);
+  if (auto stackMinorOp = dyn_cast<triton::StackMinorOp>(op))
+    return inferSrcEncoding(stackMinorOp, encoding);
   if (isa<triton::ReshapeOp, triton::CatOp>(op))
     return std::nullopt;
   return encoding;
@@ -289,6 +373,8 @@ std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
     return inferDstEncoding(reduceOp, encoding);
   if (auto expand = dyn_cast<triton::ExpandDimsOp>(op))
     return inferDstEncoding(expand, encoding);
+  if (auto stackMinorOp = dyn_cast<triton::StackMinorOp>(op))
+    return inferDstEncoding(stackMinorOp, encoding);
   if (isa<triton::ReshapeOp, triton::CatOp>(op))
     return std::nullopt;
   return encoding;

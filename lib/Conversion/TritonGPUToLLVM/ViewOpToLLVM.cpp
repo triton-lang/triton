@@ -104,7 +104,6 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
   using OpAdaptor = typename CatOp::Adaptor;
 
   explicit CatOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
-
                            PatternBenefit benefit = 1)
       : ConvertTritonGPUOpToLLVMPattern<CatOp>(typeConverter, benefit) {}
 
@@ -131,6 +130,42 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
     // pack and replace
     Value ret =
         getTypeConverter()->packLLElements(loc, retVals, rewriter, resultTy);
+    rewriter.replaceOp(op, ret);
+    return success();
+  }
+};
+
+struct StackMinorOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<StackMinorOp> {
+  using OpAdaptor = typename StackMinorOp::Adaptor;
+
+  explicit StackMinorOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+                                  PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern<StackMinorOp>(typeConverter, benefit) {}
+
+  LogicalResult
+  matchAndRewrite(StackMinorOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    // TODO: The result should have a particular encoding, based on the inputs.
+    auto resultTy = op.getType().template cast<RankedTensorType>();
+
+    SmallVector<SmallVector<Value>> inputVals;
+    for (auto input : adaptor.getOperands()) {
+      inputVals.push_back(getTypeConverter()->unpackLLElements(
+          loc, input, rewriter, input.getType()));
+    }
+
+    SmallVector<Value> interleavedValues;
+    for (size_t i = 0; i < inputVals[0].size(); i++) {
+      for (size_t j = 0; j < inputVals.size(); j++) {
+        assert(inputVals[j].size() == inputVals[0].size());
+        interleavedValues.push_back(inputVals[j][i]);
+      }
+    }
+
+    Value ret = getTypeConverter()->packLLElements(loc, interleavedValues,
+                                                   rewriter, resultTy);
     rewriter.replaceOp(op, ret);
     return success();
   }
@@ -255,5 +290,6 @@ void populateViewOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
   patterns.add<SplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
   patterns.add<CatOpConversion>(typeConverter, benefit);
+  patterns.add<StackMinorOpConversion>(typeConverter, benefit);
   patterns.add<TransOpConversion>(typeConverter, benefit);
 }

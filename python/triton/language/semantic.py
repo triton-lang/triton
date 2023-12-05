@@ -525,6 +525,29 @@ def cat(lhs: tl.tensor, rhs: tl.tensor, can_reorder: bool, builder: ir.builder) 
     return tl.tensor(builder.create_cat(lhs.handle, rhs.handle), ret_type)
 
 
+def _experimental_stack_minor(inputs: Sequence[tl.tensor], builder: ir.builder):
+    assert len(inputs) == 2, "_experimental_stack_minor currently only supports stacking two tensors"
+
+    # Don't modify the list that the user may have passed in.
+    inputs = list(inputs)
+
+    # Broadcast all args to the same shape.
+    arg0 = inputs[0]
+    for arg in inputs[1:]:
+        broadcast_arg, _ = broadcast_impl_value(arg0, arg, builder)
+    if arg0.shape:
+        for i, arg in enumerate(inputs[1:]):
+            _, inputs[i + 1] = broadcast_impl_value(arg0, arg, builder)
+
+    # tl.block_type requires all elements to be constexpr or not.
+    new_shape = list(arg0.shape) + [len(inputs)]
+    if arg0.shape and isinstance(arg0.shape[0], tl.constexpr):
+        new_shape[-1] = tl.constexpr(new_shape[-1])
+
+    ret_type = tl.block_type(arg0.type.scalar, new_shape)
+    return tl.tensor(builder.create_stack_minor([t.handle for t in inputs]), ret_type)
+
+
 def trans(input: tl.tensor, builder: ir.builder) -> tl.tensor:
     if len(input.shape) != 2:
         raise ValueError("Only 2D tensors can be transposed")

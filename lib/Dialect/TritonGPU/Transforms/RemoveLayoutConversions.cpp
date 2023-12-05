@@ -76,25 +76,25 @@ public:
 };
 
 // Class to propagate layout globally within a function.
-// The current algorithm works by analysis the IR and doing a one shot rewrite
-// based on the analysis. The algorithm is as follows:
-// 1. Find all the anchor ops. These are ops that have a layout we want to
-// preserve.
 //
-// 2. Propagate the layout to every op reachable which is a transitive child of
-// an anchor op until we reach a fix point.
-// An op can have multiple transitive anchor parents therefore at this stage
-// it may have multiple layout associated to it.
+// The current algorithm works by analyzing the IR and doing a one-shot rewrite
+// based on the analysis. The algorithm is as follows.
+//
+// 1. Find all the anchor ops. These are ops that have a layout we want to
+//    preserve.
+//
+// 2. For each anchor, propagate its layout to all its descendants.
+//    An op can have multiple ancestors that are anchors, so at this stage an op
+//    may have multiple layouts associated with it.
 //
 // 3. Resolve conflicts by deciding which of the multiple layouts the op should
-// keep. If one of the parents has a different layout than what is picked a
-// convert operation will be inserted. After this stage each value should have
-// only one layout associated.
+//    keep, inserting convert-layout ops to resolve conflicts.  After this
+//    stage, each value has only one layout associated with it.
 //
-// 4. Rewrite the IR by walking the function following dominance order. Since we
-// assume the IR is structured we just need to process the regions in the
-// correct order. For each op rewrite it using the layout decided by the
-// analysis phase.
+// 4. Rewrite the IR by walking the function in dominance order. Since we
+//    assume the IR is structured we just need to process the regions in the
+//    correct order. For each op, rewrite it using the layout decided by the
+//    analysis phase.
 class LayoutPropagation {
 public:
   // Structure to keep track of the layout associated to a value.
@@ -284,7 +284,7 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     }
     if (user->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<mlir::OpTrait::Elementwise>() ||
-        isa<triton::ReduceOp, triton::ExpandDimsOp,
+        isa<triton::ReduceOp, triton::ExpandDimsOp, triton::StackMinorOp,
             triton::gpu::ConvertLayoutOp>(user)) {
       setEncoding(user->getResults(), info, changed, user);
       continue;
@@ -415,6 +415,9 @@ void LayoutPropagation::map(Value old, Value newV) {
 }
 
 Value LayoutPropagation::getValueAs(Value value, Attribute encoding) {
+  /*llvm::dbgs() << "XXX getValueAs\n";
+  llvm::dbgs() << "XXX value: " << value << "\n";
+  llvm::dbgs() << "XXX encoding: " << encoding << "\n";*/
   if (auto tensorType = value.getType().dyn_cast<RankedTensorType>()) {
     Value rewrittenValue;
     auto layoutIt = layouts.find(value);
@@ -690,8 +693,8 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   }
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
-      isa<triton::ReduceOp, triton::ExpandDimsOp, triton::gpu::ConvertLayoutOp>(
-          op)) {
+      isa<triton::ReduceOp, triton::ExpandDimsOp, triton::StackMinorOp,
+          triton::gpu::ConvertLayoutOp>(op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
          llvm::zip(op->getResults(), newOp->getResults()))
@@ -846,6 +849,12 @@ static void backwardRematerialization(ConvertLayoutOp convertOp) {
     return;
 
   // 2. Rewrite the slice.
+  // llvm::dbgs() << "XXX rewriteSlice for " << convertOp << ": ";
+  /*for (Value v : slice)
+    llvm::dbgs() << "  * " << v << "\n";
+  for (auto it : layout)
+    llvm::dbgs() << "  + " << it.first << " -> " << it.second << "\n";*/
+
   rewriteSlice(slice, layout, convertOp);
 }
 
@@ -966,14 +975,29 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
 
+    /*llvm::dbgs() << "XXX Running TritonGPURemoveLayoutConversionsPass\n";
+    llvm::dbgs() << "1 ---------------------\n";
+    llvm::dbgs() << m << "\n";
+    llvm::dbgs() << "---------------------\n";*/
+
     // 1. Propagate layout forward starting from "anchor" ops.
     m.walk([](triton::FuncOp funcOp) {
       LayoutPropagation layoutPropagation(funcOp);
       layoutPropagation.initAnchorLayout();
+      // llvm::dbgs() << "XXX 1\n";
+      // layoutPropagation.dump();
       layoutPropagation.propagateLayout();
+      // llvm::dbgs() << "XXX 2\n";
+      // layoutPropagation.dump();
       layoutPropagation.resolveConflicts();
+      // llvm::dbgs() << "XXX 3\n";
+      // layoutPropagation.dump();
       layoutPropagation.rewrite();
     });
+
+    /*llvm::dbgs() << "2 ---------------------\n";
+    llvm::dbgs() << m << "\n";
+    llvm::dbgs() << "---------------------\n";*/
 
     mlir::RewritePatternSet cleanUpPatterns(context);
     ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns, context);
@@ -982,12 +1006,25 @@ public:
       signalPassFailure();
     }
 
+    /*llvm::dbgs() << "3 ---------------------\n";
+    llvm::dbgs() << m << "\n";
+    llvm::dbgs() << "---------------------\n";*/
+
     // 2. For convert ops left try to rematerialize the slice of producer
     // operation to avoid having to convert.
     backwardRematerialization(m);
+
+    /*llvm::dbgs() << "3a ---------------------\n";
+    llvm::dbgs() << m << "\n";
+    llvm::dbgs() << "---------------------\n";*/
+
     // 3. For converts left try to hoist them above cast generating larger size
     // types in order to reduce the cost of the convert op.
     hoistConvert(m);
+
+    /*llvm::dbgs() << "4 ---------------------\n";
+    llvm::dbgs() << m << "\n";
+    llvm::dbgs() << "---------------------\n";*/
 
     mlir::RewritePatternSet decomposePatterns(context);
     decomposePatterns.add<ConvertDotConvert>(context);
@@ -995,6 +1032,10 @@ public:
             .failed()) {
       signalPassFailure();
     }
+
+    /*llvm::dbgs() << "5 ---------------------\n";
+    llvm::dbgs() << m << "\n";
+    llvm::dbgs() << "---------------------\n";*/
 
     // 4. Apply clean up patterns to remove remove dead convert and dead code
     // generated by the previous transformations.
@@ -1006,6 +1047,10 @@ public:
             .failed()) {
       signalPassFailure();
     }
+
+    /*llvm::dbgs() << "6 ---------------------\n";
+    llvm::dbgs() << m << "\n";
+    llvm::dbgs() << "---------------------\n";*/
   }
 };
 
