@@ -120,8 +120,8 @@ class ASTSource:
         # TODO: remove once TMA support is cleaned up
         return {"ids_of_folded_args": tuple([int(k) for k in self.attrs.ids_of_folded_args])}
 
-    def update_options(self, options):
-        pass
+    def parse_options(self):
+        return dict()
 
 
 class IRSource:
@@ -149,9 +149,10 @@ class IRSource:
     def metadata(self):
         return dict()
 
-    def update_options(self, options):
+    def parse_options(self):
         if self.ext == "ttgir":
-            options['num_warps'] = _get_num_warps_from_ir_str(self.src)
+            return {'num_warps': _get_num_warps_from_ir_str(self.src)}
+        return dict()
 
 
 def compile(src, target=None, compiler_options=None, linker_options=None):
@@ -162,8 +163,8 @@ def compile(src, target=None, compiler_options=None, linker_options=None):
     if not isinstance(src, ASTSource):
         assert isinstance(src, str), "source must be either AST or a filepath"
         src = IRSource(src)
-    src.update_options(compiler_options)
-    compiler_options = backend.parse_compiler_options(compiler_options or dict())
+    extra_options = src.parse_options()
+    compiler_options = backend.parse_compiler_options(dict(compiler_options or dict(), **extra_options))
     linker_options = backend.parse_linker_options(linker_options or dict())
     # create cache manager
     key = f"{src.hash()}-{backend.hash()}-{compiler_options.hash()}-{frozenset(sorted(get_env_vars().items()))}"
@@ -262,7 +263,8 @@ class CompiledKernel:
         def runner(*args, stream=None):
             args_expand = driver.assemble_tensormap_to_arg(self.tensormaps_info, args)
             if stream is None:
-                stream = driver.get_current_stream()
+                device = driver.get_current_device()
+                stream = driver.get_current_stream(device)
             self.run(grid[0], grid[1], grid[2], self.num_warps, self.num_ctas, self.cluster_dims[0],
                      self.cluster_dims[1], self.cluster_dims[2], self.shared, stream, self.function,
                      CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args_expand)
