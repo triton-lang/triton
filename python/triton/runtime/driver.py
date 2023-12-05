@@ -22,32 +22,6 @@ class DriverBase(metaclass=abc.ABCMeta):
         pass
 
 
-def get_current_device():
-    import torch
-
-    return torch.cuda.current_device()
-
-
-def set_current_device(idx):
-    import torch
-
-    torch.cuda.set_device(idx)
-
-
-def get_device_capability(idx):
-    import torch
-
-    return torch.cuda.get_device_capability(idx)
-
-
-def get_current_target():
-    import torch
-    device = get_current_device()
-    capability = get_device_capability(device)
-    capability = capability[0] * 10 + capability[1]
-    return ("cuda", capability)
-
-
 # -----------------------------
 # CUDA
 # -----------------------------
