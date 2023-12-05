@@ -33,6 +33,11 @@ LogicalResult
 verifySameOperandsAndResultEncoding(Operation *op,
                                     bool allowTensorPointerType = false);
 
+LogicalResult verifySameOperandsAndResultIfPresentEncoding(
+    Operation *op, bool allowTensorPointerType = false);
+
+LogicalResult verifySameOperandsAndResultIfPresentShape(Operation *op);
+
 LogicalResult verifySameLoadStoreOperandsShape(Operation *op);
 
 LogicalResult verifySameLoadStoreOperandsAndResultShape(Operation *op);
@@ -66,6 +71,27 @@ class SameOperandsAndResultEncoding
 public:
   static LogicalResult verifyTrait(Operation *op) {
     return impl::verifySameOperandsAndResultEncoding(op);
+  }
+};
+
+// Like SameOperandsAndResultEncoding, except it allows the op to have 0
+// results.
+template <typename ConcreteType>
+class SameOperandsAndResultIfPresentEncoding
+    : public TraitBase<ConcreteType, SameOperandsAndResultIfPresentEncoding> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return impl::verifySameOperandsAndResultIfPresentEncoding(op);
+  }
+};
+
+// Like SameOperandsAndResultShape, except it allows the op to have 0 results.
+template <typename ConcreteType>
+class SameOperandsAndResultIfPresentShape
+    : public TraitBase<ConcreteType, SameOperandsAndResultIfPresentShape> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return impl::verifySameOperandsAndResultIfPresentShape(op);
   }
 };
 

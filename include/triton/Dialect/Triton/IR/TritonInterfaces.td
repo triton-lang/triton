@@ -12,4 +12,9 @@ def SameLoadStoreOperandsAndResultShape : NativeOpTrait<"SameLoadStoreOperandsAn
 def SameLoadStoreOperandsEncoding : NativeOpTrait<"SameLoadStoreOperandsEncoding">;
 def SameLoadStoreOperandsAndResultEncoding : NativeOpTrait<"SameLoadStoreOperandsAndResultEncoding">;
 
+// Like SameOperandsAndResult{Shape,Encoding}, except those require at least one
+// result, whereas these allow 0 results.
+def SameOperandsAndResultIfPresentShape : NativeOpTrait<"SameOperandsAndResultIfPresentShape">;
+def SameOperandsAndResultIfPresentEncoding : NativeOpTrait<"SameOperandsAndResultIfPresentEncoding">;
+
 #endif // TRITON_INTERFACES

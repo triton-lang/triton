@@ -46,20 +46,62 @@ OpTrait::impl::verifySameOperandsEncoding(Operation *op,
 
 LogicalResult OpTrait::impl::verifySameOperandsAndResultEncoding(
     Operation *op, bool allowTensorPointerType) {
-  if (op->getNumOperands() == 0)
-    return success();
-
-  if (failed(verifyAtLeastNOperands(op, 1)) ||
-      failed(verifyAtLeastNResults(op, 1)))
+  if (failed(verifyAtLeastNResults(op, 1)))
     return failure();
 
-  auto type = op->getOperand(0).getType();
+  return OpTrait::impl::verifySameOperandsAndResultIfPresentEncoding(
+      op, allowTensorPointerType);
+}
+
+LogicalResult OpTrait::impl::verifySameOperandsAndResultIfPresentEncoding(
+    Operation *op, bool allowTensorPointerType) {
+  Type type;
+  if (op->getNumOperands() > 0) {
+    type = op->getOperand(0).getType();
+  } else if (op->getNumResults() > 0) {
+    type = op->getResult(0).getType();
+  } else {
+    return success();
+  }
+
   for (auto resultType : op->getResultTypes())
     if (failed(verifySameEncoding(resultType, type, allowTensorPointerType)))
       return op->emitOpError()
              << "requires the same encoding for all operands and results";
 
   return verifySameOperandsEncoding(op, allowTensorPointerType);
+}
+
+LogicalResult
+OpTrait::impl::verifySameOperandsAndResultIfPresentShape(Operation *op) {
+  ArrayRef<int64_t> shape;
+  if (op->getNumOperands() > 0) {
+    shape = op->getOperand(0).getType().cast<RankedTensorType>().getShape();
+  } else if (op->getNumResults() > 0) {
+    shape = op->getResult(0).getType().cast<RankedTensorType>().getShape();
+  } else {
+    return success();
+  }
+
+  auto checkShape = [&](Type type) -> LogicalResult {
+    if (failed(verifyCompatibleShape(type.cast<RankedTensorType>().getShape(),
+                                     shape))) {
+      return op->emitOpError()
+             << "requires the same shape for all operands and results";
+    }
+    return success();
+  };
+
+  for (auto type : op->getOperandTypes()) {
+    if (failed(checkShape(type)))
+      return failure();
+  }
+  for (auto type : op->getResultTypes()) {
+    if (failed(checkShape(type)))
+      return failure();
+  }
+
+  return success();
 }
 
 LogicalResult OpTrait::impl::verifyTensorSize(Operation *op) {
