@@ -15,46 +15,6 @@ from ..common.backend import get_backend, get_cuda_version_key
 from .interpreter import InterpretedFunction
 from ..runtime.driver import driver
 
-
-def get_cuda_stream(idx=None):
-    if idx is None:
-        idx = get_current_device()
-    try:
-        from torch._C import _cuda_getCurrentRawStream
-
-        return _cuda_getCurrentRawStream(idx)
-    except ImportError:
-        import torch
-
-        return torch.cuda.current_stream(idx).cuda_stream
-
-
-def get_current_device():
-    import torch
-
-    return torch.cuda.current_device()
-
-
-def set_current_device(idx):
-    import torch
-
-    torch.cuda.set_device(idx)
-
-
-def get_device_capability(idx):
-    import torch
-
-    return torch.cuda.get_device_capability(idx)
-
-
-def get_current_target():
-    import torch
-    device = get_current_device()
-    capability = get_device_capability(device)
-    capability = capability[0] * 10 + capability[1]
-    return ("cuda", capability)
-
-
 T = TypeVar("T")
 
 # -----------------------------------------------------------------------------
@@ -386,9 +346,9 @@ class JITFunction(KernelInterface[T]):
         assert "device" not in kwargs, "device option is deprecated; current device will be used"
         assert "stream" not in kwargs, "stream option is deprecated; current stream will be used"
         # parse options
-        stream = get_cuda_stream()
-        device = get_current_device()
-        target = get_current_target()
+        device = driver.get_current_device()
+        stream = driver.get_current_stream(device)
+        target = driver.get_current_target()
         backend = CUDABackend(target)
         compiler_options = backend.parse_compiler_options(kwargs)
         linker_options = backend.parse_linker_options(kwargs)

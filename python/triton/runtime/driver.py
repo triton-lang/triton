@@ -3,6 +3,7 @@ import hashlib
 import os
 import tempfile
 from pathlib import Path
+import functools
 
 from ..common.build import _build
 from .cache import get_cache_manager
@@ -19,6 +20,32 @@ class DriverBase(metaclass=abc.ABCMeta):
 
     def __init__(self) -> None:
         pass
+
+
+def get_current_device():
+    import torch
+
+    return torch.cuda.current_device()
+
+
+def set_current_device(idx):
+    import torch
+
+    torch.cuda.set_device(idx)
+
+
+def get_device_capability(idx):
+    import torch
+
+    return torch.cuda.get_device_capability(idx)
+
+
+def get_current_target():
+    import torch
+    device = get_current_device()
+    capability = get_device_capability(device)
+    capability = capability[0] * 10 + capability[1]
+    return ("cuda", capability)
 
 
 # -----------------------------
@@ -101,6 +128,23 @@ class CudaDriver(DriverBase):
         self.utils = CudaUtils()
         self.backend = self.CUDA
         self.binary_ext = "cubin"
+        # TODO: support other frameworks than torch
+        import torch
+        self.get_device_capability = torch.cuda.get_device_capability
+        try:
+            from torch._C import _cuda_getCurrentRawStream
+            self.get_current_stream = _cuda_getCurrentRawStream
+        except ImportError:
+            self.get_current_stream = lambda idx: torch.cuda.current_stream(idx).cuda_stream
+        self.get_current_device = torch.cuda.current_device
+        self.set_current_device = torch.cuda.set_device
+
+    @functools.lru_cache()
+    def get_current_target(self):
+        device = self.get_current_device()
+        capability = self.get_device_capability(device)
+        capability = capability[0] * 10 + capability[1]
+        return ("cuda", capability)
 
     def assemble_tensormap_to_arg(self, tensormaps_info, args):
         args_with_tma = list(args)

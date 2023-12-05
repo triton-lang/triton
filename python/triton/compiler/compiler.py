@@ -8,7 +8,6 @@ from .._C.libtriton.triton import (get_env_vars, ir)
 # TODO: runtime.errors
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
-from ..runtime.jit import get_current_device, get_cuda_stream, get_current_target
 from ..runtime.driver import driver
 from .utils import InfoFromBackendForTensorMap
 from .backends.cuda import CUDABackend
@@ -157,7 +156,7 @@ class IRSource:
 
 def compile(src, target=None, compiler_options=None, linker_options=None):
     if target is None:
-        target = get_current_target()
+        target = driver.get_current_target()
     backend = CUDABackend(target)
     # create backend
     compiler_options = backend.parse_compiler_options(compiler_options or dict())
@@ -243,7 +242,7 @@ class CompiledKernel:
     def _init_handles(self):
         if self.module is not None:
             return
-        device = get_current_device()
+        device = driver.get_current_device()
         # not enough shared memory to run the kernel
         max_shared = driver.utils.get_device_properties(device)["max_shared_mem"]
         if self.shared > max_shared:
@@ -263,7 +262,7 @@ class CompiledKernel:
         def runner(*args, stream=None):
             args_expand = driver.assemble_tensormap_to_arg(self.tensormaps_info, args)
             if stream is None:
-                stream = get_cuda_stream()
+                stream = driver.get_current_stream()
             self.run(grid[0], grid[1], grid[2], self.num_warps, self.num_ctas, self.cluster_dims[0],
                      self.cluster_dims[1], self.cluster_dims[2], self.shared, stream, self.function,
                      CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args_expand)
