@@ -109,7 +109,7 @@ if __name__ == "__main__":
         constants.update({i: 1})
     src = triton.compiler.ASTSource(fn=kernel, constants=constants, signature=signature, attrs=attrs)
     opts = {"num_warps": args.num_warps, "num_stages": args.num_stages}
-    ccinfo = triton.compile(src, compiler_options=opts)
+    ccinfo = triton.compile(src, options=opts)
     arg_names = []
     arg_types = []
     for i in signature.keys():
