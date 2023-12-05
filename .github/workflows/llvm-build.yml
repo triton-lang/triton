@@ -70,7 +70,7 @@ jobs:
 
     - name: Set up MSVC
       if: matrix.config.arch == 'x64' && (matrix.config.target-os == 'windows')
-      uses: ilammy/msvc-dev-cmd@v1.4.1
+      uses: ilammy/msvc-dev-cmd@v1.12.1
       with:
         arch: amd64
 
@@ -204,6 +204,7 @@ jobs:
 
     - name: Upload LLVM Artifacts to Azure
       if: ${{ (github.repository == 'openai/triton') }}
+      shell: bash -el {0}
       run: |
         az storage blob upload --account-name tritonlang --auth-mode login --container-name llvm-builds --file "${{ env.llvm_install_dir }}.tar.gz" --name "${{ env.llvm_install_dir }}.tar.gz" --overwrite
 
