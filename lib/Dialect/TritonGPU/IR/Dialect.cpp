@@ -403,7 +403,7 @@ LogicalResult CTALayoutAttr::verify(
     ArrayRef<unsigned> CTASplitNum, ArrayRef<unsigned> CTAOrder) {
   if (CTAsPerCGA.size() != CTASplitNum.size() ||
       CTASplitNum.size() != CTAOrder.size()) {
-    return emitError() << "CTAsPerCTA, CTASplitNum, and CTAOrder must all have "
+    return emitError() << "CTAsPerCGA, CTASplitNum, and CTAOrder must all have "
                           "the same rank.";
   }
 

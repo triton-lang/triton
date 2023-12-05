@@ -3409,6 +3409,126 @@ def test_inline_asm_with_pointers(num_ctas, device):
     np.testing.assert_equal(y_ref, to_numpy(y_tri))
 
 
+def test_inline_asm_multiple_outputs(device):
+    check_cuda_only(device)
+    if is_hip():
+        pytest.skip('This test uses PTX inline assembly, so is not compatible with AMD')
+
+    @triton.jit
+    def kernel(A, B, C, D, BLOCK: tl.constexpr):
+        a = tl.load(A + tl.arange(0, BLOCK))
+        b = tl.load(B + tl.arange(0, BLOCK))
+
+        # C = A - B
+        # D = B - A
+        (c, d) = tl.inline_asm_elementwise(
+            asm="""
+            sub.u32 $0, $2, $3;  // C = A - B
+            sub.u32 $1, $3, $2;  // D = B - A
+            """,
+            constraints=(
+                # 2 output registers: $0=C and $1=D.
+                "=r,=r,"
+                # 2 input registers: $2=A and $3=B.
+                "r,r"),
+            args=[a, b],
+            dtype=(tl.uint32, tl.uint32),
+            is_pure=True,
+            pack=1,
+        )
+        tl.store(C + tl.arange(0, BLOCK), c)
+        tl.store(D + tl.arange(0, BLOCK), d)
+
+    shape = (512, )
+    rs = RandomState(17)
+    A = numpy_random(shape, dtype_str='uint32', rs=rs)
+    B = numpy_random(shape, dtype_str='uint32', rs=rs)
+    A_tri = to_triton(A, device=device)
+    B_tri = to_triton(B, device=device)
+    C_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
+    D_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
+    kernel[(1, )](A_tri, B_tri, C_tri, D_tri, BLOCK=shape[0])
+
+    C_ref = A - B
+    D_ref = B - A
+
+    np.testing.assert_equal(C_ref, to_numpy(C_tri))
+    np.testing.assert_equal(D_ref, to_numpy(D_tri))
+
+
+def test_inline_asm_packed_multiple_outputs(device):
+    check_cuda_only(device)
+    if is_hip():
+        pytest.skip('This test uses PTX inline assembly, so is not compatible with AMD')
+
+    @triton.jit
+    def kernel(A, B, C, D, BLOCK: tl.constexpr):
+        a = tl.load(A + tl.arange(0, BLOCK))
+        b = tl.load(B + tl.arange(0, BLOCK))
+
+        # For each (a,b) in zip(a,b), perform the following:
+        # - Let ai be `a` converted to int32.
+        # - Let af be `a` converted to float.
+        # - Let m be the max of ai and b.
+        # - Return ai and mi.
+        # Do the above 4 elements at a time.
+        (c, d) = tl.inline_asm_elementwise(
+            asm="""
+            {
+                // Unpack `a` into `ai`.
+                .reg .b8 tmp<4>;
+                mov.b32 {tmp0, tmp1, tmp2, tmp3}, $8;
+                cvt.u32.u8 $0, tmp0;
+                cvt.u32.u8 $1, tmp1;
+                cvt.u32.u8 $2, tmp2;
+                cvt.u32.u8 $3, tmp3;
+            }
+            // Convert `ai` to float.
+            cvt.rn.f32.s32 $4, $0;
+            cvt.rn.f32.s32 $5, $1;
+            cvt.rn.f32.s32 $6, $2;
+            cvt.rn.f32.s32 $7, $3;
+            // Take max of `ai` and `b`.
+            max.f32 $4, $4, $9;
+            max.f32 $5, $5, $10;
+            max.f32 $6, $6, $11;
+            max.f32 $7, $7, $12;
+            """,
+            constraints=(
+                # 8 output registers, namely
+                #   $0=ai0, $1=ai1, $2=ai2, $3=ai3,
+                #   $4=m0,  $5=m1,  $6=m2,  $7=m3.
+                "=r,=r,=r,=r,=r,=r,=r,=r,"
+                # 5 input registers, namely
+                #   $8=ai,
+                #   $9=b0, $10=b1, $11=b2, $12=b3.
+                # The four elements from `a` are all packed into one register.
+                "r,r,r,r,r"),
+            args=[a, b],
+            dtype=(tl.int32, tl.float32),
+            is_pure=True,
+            pack=4,
+        )
+        tl.store(C + tl.arange(0, BLOCK), c)
+        tl.store(D + tl.arange(0, BLOCK), d)
+
+    shape = (512, )
+    rs = RandomState(17)
+    A = numpy_random(shape, dtype_str='uint8', rs=rs)
+    B = numpy_random(shape, dtype_str='float32', rs=rs)
+    A_tri = to_triton(A, device=device)
+    B_tri = to_triton(B, device=device)
+    C_tri = to_triton(numpy_random(shape, dtype_str='int32', rs=rs), device=device)
+    D_tri = to_triton(numpy_random(shape, dtype_str='float32', rs=rs), device=device)
+    kernel[(1, )](A_tri, B_tri, C_tri, D_tri, BLOCK=shape[0])
+
+    C_ref = A.astype(np.int32)
+    D_ref = np.maximum(A.astype(np.float32), B)
+
+    np.testing.assert_equal(C_ref, to_numpy(C_tri))
+    np.testing.assert_equal(D_ref, to_numpy(D_tri))
+
+
 # -----------------------
 # test control flow
 # -----------------------
