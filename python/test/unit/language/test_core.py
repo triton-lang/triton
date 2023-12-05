@@ -3393,10 +3393,15 @@ def test_inline_asm_with_pointers(num_ctas, device):
         x_ptrs = X + tl.arange(0, BLOCK)
         y_ptrs = Y + tl.arange(0, BLOCK)
         tl.inline_asm_elementwise(
-            "ld.global.b8 $0, [$1]; \
-                                   shl.b32 $0, $0, 3; \
-                                   st.global.b8 [$2], $0;", "=r,l,l", [x_ptrs, y_ptrs], dtype=tl.int8, is_pure=False,
-            pack=1)
+            "ld.global.b8 $0, [$1]; "
+            "shl.b32 $0, $0, 3; "
+            "st.global.b8 [$2], $0; ",  #
+            "=r,l,l",
+            [x_ptrs, y_ptrs],
+            dtype=tl.int8,
+            is_pure=False,
+            pack=1,
+        )
 
     shape = (512, )
     rs = RandomState(17)
@@ -3527,6 +3532,43 @@ def test_inline_asm_packed_multiple_outputs(device):
 
     np.testing.assert_equal(C_ref, to_numpy(C_tri))
     np.testing.assert_equal(D_ref, to_numpy(D_tri))
+
+
+def test_inline_asm_no_outputs(device):
+    check_cuda_only(device)
+    if is_hip():
+        pytest.skip('This test uses PTX inline assembly, so is not compatible with AMD')
+
+    @triton.jit
+    def kernel(A, B, C, BLOCK: tl.constexpr):
+        a = A + tl.arange(0, BLOCK)
+        b = B + tl.arange(0, BLOCK)
+        c = C + tl.arange(0, BLOCK)
+        tl.inline_asm_elementwise(
+            asm="""
+            st.global.b32 [$0], 42;
+            st.global.b32 [${1}], 24;
+            st.global.b32 [${2:r}], 100;
+            """,
+            constraints=("l,l,l"),
+            args=[a, b, c],
+            dtype=(),
+            is_pure=False,
+            pack=1,
+        )
+
+    shape = (512, )
+    A = np.zeros(shape, dtype=np.int32)
+    B = np.zeros(shape, dtype=np.int32)
+    C = np.zeros(shape, dtype=np.int32)
+    A_tri = to_triton(A, device=device)
+    B_tri = to_triton(B, device=device)
+    C_tri = to_triton(C, device=device)
+    kernel[(1, )](A_tri, B_tri, C_tri, BLOCK=shape[0])
+
+    np.testing.assert_equal(np.full(shape, 42), to_numpy(A_tri))
+    np.testing.assert_equal(np.full(shape, 24), to_numpy(B_tri))
+    np.testing.assert_equal(np.full(shape, 100), to_numpy(C_tri))
 
 
 # -----------------------

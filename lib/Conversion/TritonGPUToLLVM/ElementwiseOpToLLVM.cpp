@@ -1069,38 +1069,47 @@ struct ElementwiseInlineAsmOpConversion
     // Types returned by the LLVM asm op.  If there's more than one, they'll be
     // wrapped in a struct.
     SmallVector<Type> asmRetTypes;
-    for (auto result : op.getResult()) {
-      auto ty = getTypeConverter()->convertType(getElementType(result));
+    if (op.getNumResults() > 0) {
+      for (auto result : op.getResult()) {
+        auto ty = getTypeConverter()->convertType(getElementType(result));
 
-      // Pack return elements into 32-bits.
-      unsigned bitWidth = ty.isIntOrFloat() ? ty.getIntOrFloatBitWidth() : 64;
-      unsigned numElemsPerReg =
-          std::min(bitWidth < 32 ? 32 / bitWidth : 1, op.getPackedElement());
-      assert(op.getPackedElement() % numElemsPerReg == 0);
-      if (numElemsPerReg > 1) {
-        ty = vec_ty(ty, numElemsPerReg);
-      }
-      for (unsigned i = 0; i < op.getPackedElement() / numElemsPerReg; i++) {
-        asmRetTypes.push_back(ty);
+        // Pack return elements into 32-bits.
+        unsigned bitWidth = ty.isIntOrFloat() ? ty.getIntOrFloatBitWidth() : 64;
+        unsigned numElemsPerReg =
+            std::min(bitWidth < 32 ? 32 / bitWidth : 1, op.getPackedElement());
+        assert(op.getPackedElement() % numElemsPerReg == 0);
+        if (numElemsPerReg > 1) {
+          ty = vec_ty(ty, numElemsPerReg);
+        }
+        for (unsigned i = 0; i < op.getPackedElement() / numElemsPerReg; i++) {
+          asmRetTypes.push_back(ty);
+        }
       }
     }
-    Type asmRetType =
-        asmRetTypes.size() > 1 ? struct_ty(asmRetTypes) : asmRetTypes[0];
+    Type asmRetType;
+    if (asmRetTypes.empty()) {
+      // Leave the return type null if the asm doesn't return anything.
+    } else if (asmRetTypes.size() == 1) {
+      asmRetType = asmRetTypes[0];
+    } else {
+      asmRetType = struct_ty(asmRetTypes);
+    }
 
-    Value asmResults =
-        rewriter
-            .create<LLVM::InlineAsmOp>(
-                loc, asmRetType,
-                /*operands=*/packedOperands,
-                /*asm_string=*/op.getAsmString(),
-                /*constraints=*/op.getConstraints(),
-                /*has_side_effects=*/!op.getPure(),
-                /*is_align_stack=*/false,
-                /*asm_dialect=*/
-                LLVM::AsmDialectAttr::get(rewriter.getContext(),
-                                          LLVM::AsmDialect::AD_ATT),
-                /*operand_attrs=*/ArrayAttr())
-            ->getResult(0);
+    Op asmOp = rewriter.create<LLVM::InlineAsmOp>(
+        loc, asmRetType,
+        /*operands=*/packedOperands,
+        /*asm_string=*/op.getAsmString(),
+        /*constraints=*/op.getConstraints(),
+        /*has_side_effects=*/!op.getPure(),
+        /*is_align_stack=*/false,
+        /*asm_dialect=*/
+        LLVM::AsmDialectAttr::get(rewriter.getContext(),
+                                  LLVM::AsmDialect::AD_ATT),
+        /*operand_attrs=*/ArrayAttr());
+    if (asmRetTypes.empty()) {
+      return {};
+    }
+    Value asmResults = asmOp.getResult(0);
 
     // asmResults is a flat struct; pack its values into
     // [return_value][op.getPackedElement()].
@@ -1150,7 +1159,7 @@ struct ElementwiseInlineAsmOpConversion
     for (unsigned i = 1; i < unpackedOperands.size(); ++i) {
       unpackedOperands[i] = reorderValues(
           unpackedOperands[i], /*inType=*/op->getOperand(i).getType(),
-          /*ouType=*/op->getResult(0).getType());
+          /*ouType=*/op->getOperand(0).getType());
     }
 
     // Number of (unpacked) elements to process per operand.  Normally this
