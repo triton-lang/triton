@@ -348,6 +348,7 @@ class JITFunction(KernelInterface[T]):
         stream = driver.get_current_stream(device)
         target = driver.get_current_target()
         backend = CUDABackend(target)
+        kwargs["debug"] = self.debug
         options = backend.parse_options(kwargs)
         # bind non-reserved keyword args and set defaults
         kwargs = {k: v for k, v in kwargs.items() if not k in options.__dict__}
@@ -370,7 +371,7 @@ class JITFunction(KernelInterface[T]):
         sig_key = tuple(arg.signature_key() for arg in args if not arg.param.is_constexpr)
         spec_key = tuple(arg.specialization_key() for arg in args if not arg.param.do_not_specialize)
         constexpr_key = tuple(arg.value for arg in args if arg.param.is_constexpr)
-        key = (get_cuda_version_key(), sig_key, constexpr_key, spec_key, options, self.debug)
+        key = (get_cuda_version_key(), sig_key, constexpr_key, spec_key, options)
         # Kernel is not cached; we have to compile.
         if key not in self.cache[device]:
             configs = (self._get_config(*[arg.value for arg in args]), )
