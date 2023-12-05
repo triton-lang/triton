@@ -159,12 +159,12 @@ def compile(src, target=None, compiler_options=None, linker_options=None):
         target = driver.get_current_target()
     backend = CUDABackend(target)
     # create backend
-    src.update_options(compiler_options)
-    compiler_options = backend.parse_compiler_options(compiler_options or dict())
-    linker_options = backend.parse_linker_options(linker_options or dict())
     if not isinstance(src, ASTSource):
         assert isinstance(src, str), "source must be either AST or a filepath"
         src = IRSource(src)
+    src.update_options(compiler_options)
+    compiler_options = backend.parse_compiler_options(compiler_options or dict())
+    linker_options = backend.parse_linker_options(linker_options or dict())
     # create cache manager
     key = f"{src.hash()}-{backend.hash()}-{compiler_options.hash()}-{frozenset(sorted(get_env_vars().items()))}"
     hash = hashlib.md5(key.encode("utf-8")).hexdigest()
