@@ -4,7 +4,7 @@ from .. import Config, autotune, cdiv, heuristics, jit
 from .. import language as tl
 from .matmul_perf_model import early_config_prune, estimate_matmul_time
 
-_ordered_datatypes = [torch.float16, torch.bfloat16, torch.float32]
+_ordered_datatypes = [torch.int8, torch.float16, torch.bfloat16, torch.float32]
 
 
 def upcast_if_fp8(a):
