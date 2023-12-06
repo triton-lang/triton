@@ -208,8 +208,8 @@ class ContainsReturnChecker(ast.NodeVisitor):
 
 class CodeGenerator(ast.NodeVisitor):
 
-    def __init__(self, context, prototype, gscope, attributes, constants, function_name, options, module=None,
-                 is_kernel=False, function_types: Optional[Dict] = None, noinline=False,
+    def __init__(self, context, prototype, gscope, attributes, constants, function_name, options, debug=None,
+                 module=None, is_kernel=False, function_types: Optional[Dict] = None, noinline=False,
                  file_name: Optional[str] = None, begin_line=0):
         self.context = context
         self.builder = ir.builder(context)
@@ -228,7 +228,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.function_name = function_name
         self.is_kernel = is_kernel
         self.last_node = None
-        self.debug = options.debug
+        self.debug = options.debug if debug is None else debug
         self.noinline = noinline
         self.scf_stack = []
         self.last_ret_type = None
@@ -981,12 +981,11 @@ class CodeGenerator(ast.NodeVisitor):
             gscope = sys.modules[fn.fn.__module__].__dict__
             # If the callee is not set, we use the same debug setting as the caller
             file_name, begin_line = _get_fn_file_line(fn)
-            options = self.builder.options
-            options.debug = self.debug if fn.debug is None else fn.debug
+            debug = self.debug if fn.debug is None else fn.debug
             generator = CodeGenerator(self.context, prototype, gscope, attributes, constants, module=self.module,
                                       function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
-                                      options=self.builder.options)
+                                      options=self.builder.options, debug=debug)
             generator.visit(fn.parse())
             callee_ret_type = generator.last_ret_type
             self.function_ret_types[fn_name] = callee_ret_type
