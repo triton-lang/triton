@@ -241,6 +241,18 @@ tt.func @alloc(%A : !tt.ptr<f16>) {
   // CHECK-NEXT: size = 512
 }
 
+
+// CHECK-LABEL: dealloc
+tt.func @dealloc(%A : !tt.ptr<f16>) {
+  // CHECK: offset = 0, size = 1024
+  %cst0 = triton_gpu.alloc_tensor : tensor<32x16xf16, #A_SHARED>
+  // CHECK: offset = 1024, size = 1024
+  %cst1 = triton_gpu.alloc_tensor : tensor<32x16xf16, #A_SHARED>
+  triton_gpu.dealloc_tensor %cst0 : tensor<32x16xf16, #A_SHARED>
+  tt.return
+  // CHECK-NEXT: size = 2048
+}
+
 // mbarrier's shared memory cannot be reused
 // CHECK-LABEL: alloc_m_barrier
 tt.func @alloc_m_barrier() {
