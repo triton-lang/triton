@@ -1715,8 +1715,10 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
         Input elements of size less than 4 bytes are packed into 4-byte
         registers.
 
-        This op does not currently support empty :code:`dtype` -- the inline asm
-        must return a tensor, even if you don't need it.
+        This op does not support empty :code:`dtype` -- the inline asm must
+        return at least one tensor, even if you don't need it.  You can work
+        around this by returning a dummy tensor of arbitrary type; it shouldn't
+        cost you anything if you don't use it.
 
         Example using
         [PTX](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html)
