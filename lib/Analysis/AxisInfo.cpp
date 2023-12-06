@@ -68,6 +68,9 @@ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
   auto rank = 1;
   if (TensorType ty = value.getType().dyn_cast<TensorType>())
     rank = ty.getRank();
+  if (triton::PointerType ty = value.getType().dyn_cast<triton::PointerType>())
+    if (TensorType elemTy = ty.getPointeeType().dyn_cast<TensorType>())
+      rank = elemTy.getRank();
 
   DimVectorT knownContiguity(rank, 1);
   DimVectorT knownDivisibility(rank, 1);

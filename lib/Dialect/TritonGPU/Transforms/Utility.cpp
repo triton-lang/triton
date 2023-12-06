@@ -642,8 +642,14 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
       // otherwise it returns %init.  We cowardly refuse to remove this operand
       // from the yield.  (We could, but we'd need to prove that the loop runs 0
       // or >=1 times.)
+      //
+      // As a special case, if it doesn't matter whether the loop runs 0 or >=1
+      // times (because the loop returns the same value in both cases) then we
+      // can still mark the operand as dead. This occurs in the above example
+      // when %init is the same as %x.
       if (!forOp->isAncestor(
-              yieldOperand.value().getParentRegion()->getParentOp()))
+              yieldOperand.value().getParentRegion()->getParentOp()) &&
+          yieldOperand.value() != forOp.getInitArgs()[yieldOperand.index()])
         continue;
 
       deadArg.push_back(yieldOperand.index());

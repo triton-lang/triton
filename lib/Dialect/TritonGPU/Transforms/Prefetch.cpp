@@ -340,7 +340,7 @@ scf::ForOp Prefetcher::createNewForOp() {
   // prefetch next iteration
   SmallVector<Value> yieldValues;
   for (Value v : forOp.getBody()->getTerminator()->getOperands())
-    yieldValues.push_back(mapping.lookup(v));
+    yieldValues.push_back(mapping.lookupOrDefault(v));
   for (Value dot : dots) {
     Attribute dotEncoding =
         dot.getType().cast<RankedTensorType>().getEncoding();

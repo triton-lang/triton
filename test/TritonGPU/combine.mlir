@@ -1931,12 +1931,12 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 :
 // This loop returns %y if it runs 1 or more times; otherwise, it returns %x.
 //
 // Check that we don't transform this loop into `yield %x` on the incorrect
-// theory that the yield is dead.
+// theory that the yield is dead unless %x = %y.
 
 module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32} {
 
-// CHECK-LABEL @f
-tt.func public @f(%arg0: i32, %arg1: i32) -> (i32) {
+// CHECK-LABEL @yield_outside_loop1
+tt.func public @yield_outside_loop1(%arg0: i32, %arg1: i32) -> (i32) {
   %c0 = arith.constant 0 : index
   %c5 = arith.constant 5 : index
   %c1 = arith.constant 1 : index
@@ -1949,6 +1949,22 @@ tt.func public @f(%arg0: i32, %arg1: i32) -> (i32) {
   //
   // CHECK: tt.return %arg1
   tt.return %0 : i32
+}  // end function
+
+// CHECK-LABEL @yield_outside_loop2
+tt.func public @yield_outside_loop2(%arg0: i32, %arg1: i32) -> (i32, i32) {
+  %c0 = arith.constant 0 : index
+  %c5 = arith.constant 5 : index
+  %c1 = arith.constant 1 : index
+  %i0 = arith.constant 0 : i32
+  // Only yield a single value
+  // CHECK: scf.yield %{{.*}} : i32
+  %0, %1 = scf.for %i = %c0 to %c5 step %c1 iter_args(%arg3 = %arg0, %sum = %i0) -> (i32, i32) {
+    %sum1 = arith.addi %sum, %arg3 : i32
+    scf.yield %arg0, %sum1 : i32, i32
+  }
+
+  tt.return %0, %1 : i32, i32
 }  // end function
 
 }  // end module
