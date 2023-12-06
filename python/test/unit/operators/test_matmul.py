@@ -71,6 +71,8 @@ import triton.ops
             ("float8e4b15", "float8e4b15"),
             ("float8e4nv", "float16"),
             ("float16", "float8e5"),
+            ("int8", "bfloat16"),
+            ("float16", "int8"),
             ("float16", "float32"),
             ("float32", "float16"),
             ("bfloat16", "float32"),
@@ -163,8 +165,6 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     th_b = upcast_if_fp8(b, BDTYPE)
     ab_dtype = triton.ops.get_higher_dtype(th_a.dtype, th_b.dtype)
     th_c = torch.matmul(th_a.to(ab_dtype), th_b.to(ab_dtype))
-    if ADTYPE == "int8" or BDTYPE == "int8":
-        th_c = th_c.to(torch.int8)
     try:
         if is_fp8(ADTYPE):
             a = triton.reinterpret(a, getattr(tl, ADTYPE))
