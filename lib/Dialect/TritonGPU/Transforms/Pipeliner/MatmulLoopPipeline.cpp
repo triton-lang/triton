@@ -624,8 +624,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     return !isLoadFromTensorPtr(load.load);
   });
   // 2. Convert the loads into async loads and create the allocs.
-  SmallVector<Value> allocs =
-      createAsynOps(forOp, loads, numStages, hasMMAV3);
+  SmallVector<Value> allocs = createAsynOps(forOp, loads, numStages, hasMMAV3);
 
   // 3. Create the final schedule for the kernel loop. This will dictate the
   // stages and order of operations to the pipeline expander.

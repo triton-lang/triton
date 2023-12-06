@@ -13,7 +13,6 @@ mlir::OpTrait::impl::verifyResultsAreSharedEncoding(Operation *op) {
   return success();
 };
 
-
 mlir::LogicalResult
 mlir::OpTrait::impl::verifyOperandsAreSharedEncoding(Operation *op) {
   for (auto operand : op->getOperands())
