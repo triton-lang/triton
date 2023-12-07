@@ -158,8 +158,8 @@ def test_user_defined_persistent_non_warp_specialized_gemm(M, N, K, BLOCK_M, BLO
         static_persistent_tma_matmul_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c, M=M, N=N, K=K, stride_am=a.stride(0),
                                                   stride_ak=a.stride(1), stride_bk=b.stride(0), stride_bn=b.stride(1),
                                                   stride_cm=c.stride(0), stride_cn=c.stride(1), BLOCK_M=BLOCK_M,
-                                                  BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K, NUM_SMS=NUM_SMS, num_warps=NUM_WARPS,
-                                                  num_ctas=NUM_CTAS)
+                                                  BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K, NUM_SMS=NUM_SMS,
+                                                  num_warps=NUM_WARPS, num_ctas=NUM_CTAS)
     else:
         static_persistent_matmul_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c, M=M, N=N, K=K, stride_am=a.stride(0),
                                               stride_ak=a.stride(1), stride_bk=b.stride(0), stride_bn=b.stride(1),

@@ -402,8 +402,10 @@ typedef CUresult (*cuOccupancyMaxActiveClusters_t)(
     return funcHandle;                                                         \
   }
 
-defineGetFunctionHandle(getCuTensorMapEncodeTiledHandle, cuTensorMapEncodeTiled_t)
-defineGetFunctionHandle(getCuOccupancyMaxActiveClusters, cuOccupancyMaxActiveClusters_t)
+defineGetFunctionHandle(getCuTensorMapEncodeTiledHandle,
+                        cuTensorMapEncodeTiled_t);
+defineGetFunctionHandle(getCuOccupancyMaxActiveClusters,
+                        cuOccupancyMaxActiveClusters_t);
 
 static PyObject *tensorMapEncodeTiled(PyObject *self, PyObject *args) {
   CUtensorMap *tensorMap = (CUtensorMap *)malloc(sizeof(CUtensorMap));
