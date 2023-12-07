@@ -113,6 +113,7 @@ class CUDABackend(BaseBackend):
         pm.add_tritongpu_rewrite_tensor_pointer_pass(capability)
         pm.add_plan_cta_pass(cluster_info)
         pm.add_tritongpu_remove_layout_conversions_pass()
+        pm.add_tritongpu_optimize_thread_locality_pass()
         pm.add_tritongpu_accelerate_matmul_pass(capability)
         pm.add_tritongpu_remove_layout_conversions_pass()
         if opt.optimize_epilogue:
@@ -153,7 +154,6 @@ class CUDABackend(BaseBackend):
         if capability // 10 >= 9:
             pm.add_tritongpu_fence_insertion_pass()
         pm.add_tritongpu_ws_fixup_missing_attrs_pass()
-        pm.add_tritongpu_optimize_thread_locality_pass()
         pm.add_canonicalizer_pass()
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
