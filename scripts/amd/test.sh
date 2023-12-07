@@ -23,7 +23,6 @@ UNIT_TEST="python/test/unit/language/test_core_amd.py"
 # UNIT_TEST="python/test/unit/language/test_core.py::test_bin_op[int8-float16-%]"
 # UNIT_TEST="python/test/unit/language/test_core_amd.py::test_masked_load_shared_memory[dtype0]"
 # UNIT_TEST="python/test/unit/language/test_core_amd.py::test_masked_load_shared_memory[dtype1]"
-# UNIT_TEST="python/test/unit/language/test_elementwise.py"
 
 # check for backtrace
 if [ "$1" == "backtrace" ]; then
