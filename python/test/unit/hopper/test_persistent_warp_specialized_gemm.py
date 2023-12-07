@@ -43,7 +43,7 @@ def static_persistent_matmul_kernel(  #
         stride_bk, stride_bn,  #
         stride_cm, stride_cn,  #
         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
-        NUM_SM: tl.constexpr  #
+        NUM_SMS: tl.constexpr  #
 ):
     start_tile = tl.program_id(axis=0)
     m_tiles = tl.cdiv(M, BLOCK_M)
@@ -51,7 +51,7 @@ def static_persistent_matmul_kernel(  #
     num_tiles = m_tiles * n_tiles
     offs_k = tl.arange(0, BLOCK_K)
 
-    for tile_id in range(start_tile, num_tiles, NUM_SM):
+    for tile_id in range(start_tile, num_tiles, NUM_SMS):
         pid_m = tile_id // n_tiles
         pid_n = tile_id % n_tiles
         accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
@@ -82,7 +82,7 @@ def static_persistent_tma_matmul_kernel(  #
         stride_bk, stride_bn,  #
         stride_cm, stride_cn,  #
         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
-        NUM_SM: tl.constexpr  #
+        NUM_SMS: tl.constexpr  #
 ):
     start_tile = tl.program_id(axis=0)
     m_tiles = tl.cdiv(M, BLOCK_M)
@@ -99,11 +99,11 @@ def static_persistent_tma_matmul_kernel(  #
                                    offsets=(block_offset_m, 0), block_shape=(BLOCK_M, BLOCK_K), order=(1, 0))
     b_tile_ptr = tl.make_block_ptr(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
                                    offsets=(0, block_offset_n), block_shape=(BLOCK_K, BLOCK_N), order=(0, 1))
-    for tile_id in range(start_tile, num_tiles, NUM_SM):
+    for tile_id in range(start_tile, num_tiles, NUM_SMS):
         pid_m = tile_id // n_tiles
         pid_n = tile_id % n_tiles
         accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-        if tile_id >= NUM_SM:
+        if tile_id >= NUM_SMS:
             a_tile_ptr = tl.advance(a_tile_ptr, [(pid_m - pre_pid_m) * BLOCK_M, -k_tiles * BLOCK_K])
             b_tile_ptr = tl.advance(b_tile_ptr, [-k_tiles * BLOCK_K, (pid_n - pre_pid_n) * BLOCK_N])
 
@@ -151,20 +151,20 @@ def test_user_defined_persistent_non_warp_specialized_gemm(M, N, K, BLOCK_M, BLO
         b = .1 * torch.randn((K, N), device='cuda', dtype=torch.float16)
     c = torch.empty((M, N), device=a.device, dtype=torch.float32)
 
-    num_SMs = torch.cuda.get_device_properties('cuda').multi_processor_count
-    grid = lambda META: (min(META['NUM_SM'], triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N'])), )
+    NUM_SMS = torch.cuda.get_device_properties('cuda').multi_processor_count
+    grid = lambda META: (min(META['NUM_SMS'], triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N'])), )
 
     if USE_TMA:
         static_persistent_tma_matmul_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c, M=M, N=N, K=K, stride_am=a.stride(0),
                                                   stride_ak=a.stride(1), stride_bk=b.stride(0), stride_bn=b.stride(1),
                                                   stride_cm=c.stride(0), stride_cn=c.stride(1), BLOCK_M=BLOCK_M,
-                                                  BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K, NUM_SM=num_SMs, num_warps=NUM_WARPS,
-                                                  num_ctas=NUM_CTAS)
+                                                  BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K, NUM_SMS=NUM_SMS,
+                                                  num_warps=NUM_WARPS, num_ctas=NUM_CTAS)
     else:
         static_persistent_matmul_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c, M=M, N=N, K=K, stride_am=a.stride(0),
                                               stride_ak=a.stride(1), stride_bk=b.stride(0), stride_bn=b.stride(1),
                                               stride_cm=c.stride(0), stride_cn=c.stride(1), BLOCK_M=BLOCK_M,
-                                              BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K, NUM_SM=num_SMs, num_warps=NUM_WARPS,
+                                              BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K, NUM_SMS=NUM_SMS, num_warps=NUM_WARPS,
                                               num_ctas=NUM_CTAS)
 
     th_c = torch.matmul(a, b)
@@ -327,7 +327,7 @@ def static_persistent_warp_specialized_matmul_kernel(  #
         stride_bk, stride_bn,  #
         stride_cm, stride_cn,  #
         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
-        NUM_SM: tl.constexpr  #
+        NUM_SMS: tl.constexpr  #
 ):
     start_tile = tl.program_id(axis=0)
     m_tiles = tl.cdiv(M, BLOCK_M)
@@ -335,7 +335,7 @@ def static_persistent_warp_specialized_matmul_kernel(  #
     num_tiles = m_tiles * n_tiles
     offs_k = tl.arange(0, BLOCK_K)
 
-    for tile_id in range(start_tile, num_tiles, NUM_SM):
+    for tile_id in range(start_tile, num_tiles, NUM_SMS):
         pid_m = tile_id // n_tiles
         pid_n = tile_id % n_tiles
         accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
@@ -366,7 +366,7 @@ def static_persistent_tma_warp_specialized_matmul_kernel(  #
         stride_bk, stride_bn,  #
         stride_cm, stride_cn,  #
         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
-        NUM_SM: tl.constexpr  #
+        NUM_SMS: tl.constexpr  #
 ):
     start_tile = tl.program_id(axis=0)
     m_tiles = tl.cdiv(M, BLOCK_M)
@@ -383,11 +383,11 @@ def static_persistent_tma_warp_specialized_matmul_kernel(  #
                                    offsets=(block_offset_m, 0), block_shape=(BLOCK_M, BLOCK_K), order=(1, 0))
     b_tile_ptr = tl.make_block_ptr(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
                                    offsets=(0, block_offset_n), block_shape=(BLOCK_K, BLOCK_N), order=(0, 1))
-    for tile_id in range(start_tile, num_tiles, NUM_SM):
+    for tile_id in range(start_tile, num_tiles, NUM_SMS):
         pid_m = tile_id // n_tiles
         pid_n = tile_id % n_tiles
         accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-        if tile_id >= NUM_SM:
+        if tile_id >= NUM_SMS:
             a_tile_ptr = tl.advance(a_tile_ptr, [(pid_m - pre_pid_m) * BLOCK_M, -k_tiles * BLOCK_K])
             b_tile_ptr = tl.advance(b_tile_ptr, [-k_tiles * BLOCK_K, (pid_n - pre_pid_n) * BLOCK_N])
 
@@ -447,13 +447,13 @@ def test_user_defined_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N
         b = .1 * torch.randn((K, N), device='cuda', dtype=torch.float16)
     c = torch.empty((M, N), device=a.device, dtype=torch.float32)
 
-    num_SMs = torch.cuda.get_device_properties('cuda').multi_processor_count
-    grid = lambda META: (min(META['NUM_SM'], triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N'])), )
+    NUM_SMS = torch.cuda.get_device_properties('cuda').multi_processor_count
+    grid = lambda META: (min(META['NUM_SMS'], triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N'])), )
 
     if USE_TMA:
         static_persistent_tma_warp_specialized_matmul_kernel[grid](
             a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_M,
-            BLOCK_N, BLOCK_K, num_SMs, num_warps=4, num_ctas=NUM_CTAS,  #
+            BLOCK_N, BLOCK_K, NUM_SMS, num_warps=4, num_ctas=NUM_CTAS,  #
             enable_warp_specialization=True)
     else:
         static_persistent_warp_specialized_matmul_kernel[grid](
@@ -462,7 +462,7 @@ def test_user_defined_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N
             a.stride(0), a.stride(1),  #
             b.stride(0), b.stride(1),  #
             c.stride(0), c.stride(1),  #
-            BLOCK_M, BLOCK_N, BLOCK_K, num_SMs,  #
+            BLOCK_M, BLOCK_N, BLOCK_K, NUM_SMS,  #
             num_warps=4, num_ctas=NUM_CTAS,  #
             enable_warp_specialization=True)
 
@@ -478,7 +478,7 @@ def static_persistent_matmul_no_scf_kernel(a_ptr, b_ptr, c_ptr,  #
                                            stride_cm, stride_cn,  #
                                            BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
                                            FLOAT16_OUTPUT: tl.constexpr, USE_TMA_EPILOGUE: tl.constexpr,  #
-                                           NUM_SM: tl.constexpr, USE_TMA_LOAD: tl.constexpr  #
+                                           NUM_SMS: tl.constexpr, USE_TMA_LOAD: tl.constexpr  #
                                            ):
     start_tile = tl.program_id(axis=0)
     m_tiles = tl.cdiv(M, BLOCK_M)
@@ -500,7 +500,7 @@ def static_persistent_matmul_no_scf_kernel(a_ptr, b_ptr, c_ptr,  #
                                         offsets=(block_offset_m, block_offset_n), block_shape=(BLOCK_M, BLOCK_N),
                                         order=(1, 0))
 
-    for tile_id in range(start_tile, num_tiles, NUM_SM):
+    for tile_id in range(start_tile, num_tiles, NUM_SMS):
         pid_m = tile_id // n_tiles
         pid_n = tile_id % n_tiles
 
@@ -570,16 +570,16 @@ def test_static_persistent_matmul_no_scf_kernel(M, N, K, NUM_CTAS, NUM_WARPS, TR
     else:
         c = torch.empty((M, N), device=a.device, dtype=torch.float32)
 
-    num_SMs = torch.cuda.get_device_properties('cuda').multi_processor_count
+    NUM_SMS = torch.cuda.get_device_properties('cuda').multi_processor_count
 
     # TODO: set `enable_warp_specialization=False` will lead to compilation error.
-    static_persistent_matmul_no_scf_kernel[(num_SMs, )](
+    static_persistent_matmul_no_scf_kernel[(NUM_SMS, )](
         a_ptr=a, b_ptr=b, c_ptr=c,  #
         M=M, N=N, K=K,  #
         stride_am=a.stride(0), stride_ak=a.stride(1),  #
         stride_bk=b.stride(0), stride_bn=b.stride(1),  #
         stride_cm=c.stride(0), stride_cn=c.stride(1),  #
-        BLOCK_M=M if M < 128 else M // 2, BLOCK_N=N if N < 128 else N // 2, BLOCK_K=K, NUM_SM=num_SMs,  #
+        BLOCK_M=M if M < 128 else M // 2, BLOCK_N=N if N < 128 else N // 2, BLOCK_K=K, NUM_SMS=NUM_SMS,  #
         num_warps=NUM_WARPS,  #
         num_ctas=NUM_CTAS,  #
         FLOAT16_OUTPUT=(OUTPUT_TYPE == "float16"),  #
@@ -607,7 +607,7 @@ def full_static_persistent_matmul_kernel(a_ptr, b_ptr, w_ptr, bias_ptr, z_ptr,  
                                          DO_SOFTMAX: tl.constexpr, CHAIN_DOT: tl.constexpr,  #
                                          A_ORDER_0: tl.constexpr, A_ORDER_1: tl.constexpr,  #
                                          B_ORDER_0: tl.constexpr, B_ORDER_1: tl.constexpr,  #
-                                         NUM_SM: tl.constexpr  #
+                                         NUM_SMS: tl.constexpr  #
                                          ):
     start_pid = tl.program_id(axis=0)
     num_pid_n = tl.cdiv(N, BLOCK_N)
@@ -636,7 +636,7 @@ def full_static_persistent_matmul_kernel(a_ptr, b_ptr, w_ptr, bias_ptr, z_ptr,  
                                         offsets=(pre_block_offset_m, pre_block_offset_n),
                                         block_shape=(BLOCK_M, BLOCK_N), order=(1, 0))
 
-    for tile_id in range(start_pid, num_tiles, NUM_SM):
+    for tile_id in range(start_pid, num_tiles, NUM_SMS):
         group_id = tile_id // num_pid_in_group
         first_pid_m = group_id * GROUP_SIZE_M
         group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
@@ -652,7 +652,7 @@ def full_static_persistent_matmul_kernel(a_ptr, b_ptr, w_ptr, bias_ptr, z_ptr,  
         mask = (offs_m < M)[:, None] & (offs_n < N)[None, :]
 
         # TODO: lib/Dialect/TritonGPU/Transforms/RewriteTensorPointer.cpp does not support scf.if yet.
-        # if tile_id >= NUM_SM:
+        # if tile_id >= NUM_SMS:
         #     a_tile_ptr = tl.advance(a_tile_ptr, [(pid_m - pre_pid_m) * BLOCK_M, -tl.cdiv(K, BLOCK_K) * BLOCK_K])
         #     b_tile_ptr = tl.advance(b_tile_ptr, [-tl.cdiv(K, BLOCK_K) * BLOCK_K, (pid_n - pre_pid_n) * BLOCK_N])
 
@@ -896,19 +896,17 @@ def test_full_static_persistent_matmul_kernel(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WAR
 
     golden = process_epilogue(dot, bias, w, epilogue)
 
-    num_SMs = torch.cuda.get_device_properties('cuda').multi_processor_count
+    NUM_SMS = torch.cuda.get_device_properties('cuda').multi_processor_count
     if NUM_CTAS > 1:
         src = triton.compiler.ASTSource(fn=empty_kernel, signature="i32", constants={"BLOCK_M": 64, "BLOCK_N": 64})
         null_kernel = triton.compile(src)
         null_kernel._init_handles()
         device = driver.get_current_device()
         max_shared_mem = driver.utils.get_device_properties(device)["max_shared_mem"]
-        num_clusters = driver.utils.cu_occupancy_max_active_clusters(null_kernel.function, max_shared_mem, NUM_CTAS, 1,
-                                                                     1)
-        num_SMs = num_clusters
+        NUM_SMS = driver.utils.cuOccupancyMaxActiveClusters(null_kernel.function, max_shared_mem, NUM_CTAS, 1, 1)
 
     def grid(META):
-        return (min(num_SMs, triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N'])), )
+        return (min(NUM_SMS, triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N'])), )
 
     full_static_persistent_matmul_kernel[grid](
         a_ptr=a, b_ptr=b, w_ptr=w, bias_ptr=bias, z_ptr=z,  #
@@ -929,7 +927,7 @@ def test_full_static_persistent_matmul_kernel(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WAR
         B_ORDER_0=b_order[0], B_ORDER_1=b_order[1],  #
         num_warps=NUM_WARPS, num_ctas=NUM_CTAS, num_stages=NUM_STAGES,  #
         enable_warp_specialization=ENABLE_WS,  #
-        NUM_SM=num_SMs)
+        NUM_SMS=NUM_SMS)
 
     torch.set_printoptions(profile="full")
     golden = torch.nn.functional.normalize(golden)
