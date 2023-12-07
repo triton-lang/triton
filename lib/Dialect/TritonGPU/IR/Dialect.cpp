@@ -403,7 +403,7 @@ LogicalResult CTALayoutAttr::verify(
     ArrayRef<unsigned> CTASplitNum, ArrayRef<unsigned> CTAOrder) {
   if (CTAsPerCGA.size() != CTASplitNum.size() ||
       CTASplitNum.size() != CTAOrder.size()) {
-    return emitError() << "CTAsPerCTA, CTASplitNum, and CTAOrder must all have "
+    return emitError() << "CTAsPerCGA, CTASplitNum, and CTAOrder must all have "
                           "the same rank.";
   }
 
@@ -1671,7 +1671,7 @@ struct CanonicalizeConvertFromView
       return failure();
     if (isExpensiveView(convert.getOperand().getType(), op.getType()))
       return failure();
-    if (!op.getAllowReorder())
+    if (!op.getAllowReorder() || op.getEfficientLayout().has_value())
       return failure();
     // reshape(cvt)->reshape
     rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
@@ -1723,6 +1723,7 @@ struct CanonicalizeConvertFromConvert
     // cvt(reshape) -> reshape
     if (auto reshape = dyn_cast<triton::ReshapeOp>(arg)) {
       if (!reshape.getAllowReorder() ||
+          reshape.getEfficientLayout().has_value() ||
           isExpensiveView(reshape.getOperand().getType(), op.getType()))
         return failure();
       // In TritonGPUToLLVM phase, ViewOp is converted to unpacking and packing

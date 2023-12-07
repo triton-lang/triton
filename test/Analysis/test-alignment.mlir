@@ -643,3 +643,13 @@ tt.func @call_graph(%arg0: i32) {
 }
 
 }
+
+// -----
+
+// CHECK-LABEL: @tensor_ptr
+tt.func @tensor_ptr(%arg0: !tt.ptr<tensor<64x16xi32>, 1>) {
+  // CHECK: contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  %0 = tt.load %arg0 {boundaryCheck = array<i32: 0>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} :
+    !tt.ptr<tensor<64x16xi32>, 1> -> tensor<64x16xi32>
+  tt.return
+}

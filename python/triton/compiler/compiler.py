@@ -8,7 +8,6 @@ from .._C.libtriton.triton import (get_env_vars, ir)
 # TODO: runtime.errors
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
-from ..runtime.jit import get_current_device, get_cuda_stream, get_current_target
 from ..runtime.driver import driver
 from .utils import InfoFromBackendForTensorMap
 from .backends.cuda import CUDABackend
@@ -121,8 +120,8 @@ class ASTSource:
         # TODO: remove once TMA support is cleaned up
         return {"ids_of_folded_args": tuple([int(k) for k in self.attrs.ids_of_folded_args])}
 
-    def update_options(self, options):
-        pass
+    def parse_options(self):
+        return dict()
 
 
 class IRSource:
@@ -150,24 +149,24 @@ class IRSource:
     def metadata(self):
         return dict()
 
-    def update_options(self, options):
+    def parse_options(self):
         if self.ext == "ttgir":
-            options.num_warps = _get_num_warps_from_ir_str(self.src)
+            return {'num_warps': _get_num_warps_from_ir_str(self.src)}
+        return dict()
 
 
-def compile(src, target=None, compiler_options=None, linker_options=None):
+def compile(src, target=None, options=None):
     if target is None:
-        target = get_current_target()
+        target = driver.get_current_target()
     backend = CUDABackend(target)
     # create backend
-    compiler_options = backend.parse_compiler_options(compiler_options or dict())
-    linker_options = backend.parse_linker_options(linker_options or dict())
     if not isinstance(src, ASTSource):
         assert isinstance(src, str), "source must be either AST or a filepath"
         src = IRSource(src)
-    src.update_options(compiler_options)
+    extra_options = src.parse_options()
+    options = backend.parse_options(dict(options or dict(), **extra_options))
     # create cache manager
-    key = f"{src.hash()}-{backend.hash()}-{compiler_options.hash()}-{frozenset(sorted(get_env_vars().items()))}"
+    key = f"{src.hash()}-{backend.hash()}-{options.hash()}-{frozenset(sorted(get_env_vars().items()))}"
     hash = hashlib.md5(key.encode("utf-8")).hexdigest()
     fn_cache_manager = get_cache_manager(hash)
     metadata_filename = f"{src.name}.json"
@@ -177,20 +176,19 @@ def compile(src, target=None, compiler_options=None, linker_options=None):
         # cache hit!
         metadata = json.loads(Path(metadata_path).read_text())
         so_path = backend.make_launcher_stub(src, metadata)
-        return CompiledKernel(so_path, metadata_path)
+        return CompiledKernel(so_path, metadata_group)
     # initialize metadata
     metadata = {
         "target": target,
-        **compiler_options.__dict__,
-        **linker_options.__dict__,
+        **options.__dict__,
         **get_env_vars(),
         **src.metadata(),
     }
     # run compilation pipeline  and populate metadata
     stages = dict()
-    backend.add_stages(stages, compiler_options, linker_options)
+    backend.add_stages(stages, options)
     first_stage = list(stages.keys()).index(src.ext)
-    module = src.make_ir(compiler_options)
+    module = src.make_ir(options)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         metadata_group[f"{src.name}.{ext}"] = fn_cache_manager.put(next_module, f"{src.name}.{ext}")
@@ -201,7 +199,7 @@ def compile(src, target=None, compiler_options=None, linker_options=None):
     fn_cache_manager.put_group(metadata_filename, metadata_group)
     so_path = backend.make_launcher_stub(src, metadata)
     # return handle to compiled kernel
-    return CompiledKernel(so_path, metadata_group.get(metadata_filename))
+    return CompiledKernel(so_path, metadata_group)
 
 
 class CompiledKernel:
@@ -211,14 +209,14 @@ class CompiledKernel:
     launch_enter_hook = None
     launch_exit_hook = None
 
-    def __init__(self, so_path, metadata_path):
-        metadata_path = Path(metadata_path)
+    def __init__(self, so_path, metadata_group):
+        metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
         # initialize launcher
         import importlib.util
         spec = importlib.util.spec_from_file_location("__triton_launcher", so_path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        self.c_wrapper = getattr(mod, "launch")
+        self.run = getattr(mod, "launch")
         # initialize metadata
         self.metadata = json.loads(metadata_path.read_text())
         self.metadata['tensormaps_info'] = [InfoFromBackendForTensorMap(e) for e in self.metadata['tensormaps_info']
@@ -228,7 +226,7 @@ class CompiledKernel:
         for key, val in self.metadata.items():
             setattr(self, key, val)
         # stores the text of each level of IR that was generated during compilation
-        asm_files = [file for file in metadata_path.parent.glob(f'{metadata_path.stem}.*') if file.suffix != '.json']
+        asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
         self.asm = {
             file.suffix[1:]: file.read_bytes() if file.suffix[1:] == driver.binary_ext else file.read_text()
             for file in asm_files
@@ -243,7 +241,7 @@ class CompiledKernel:
     def _init_handles(self):
         if self.module is not None:
             return
-        device = get_current_device()
+        device = driver.get_current_device()
         # not enough shared memory to run the kernel
         max_shared = driver.utils.get_device_properties(device)["max_shared_mem"]
         if self.shared > max_shared:
@@ -253,7 +251,7 @@ class CompiledKernel:
             self.name, self.kernel, self.shared, device)
 
     def __getattribute__(self, name):
-        if name == 'c_wrapper':
+        if name == 'run':
             self._init_handles()
         return super().__getattribute__(name)
 
@@ -263,9 +261,10 @@ class CompiledKernel:
         def runner(*args, stream=None):
             args_expand = driver.assemble_tensormap_to_arg(self.tensormaps_info, args)
             if stream is None:
-                stream = get_cuda_stream()
-            self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.num_ctas, self.cluster_dims[0],
-                           self.cluster_dims[1], self.cluster_dims[2], self.shared, stream, self.function,
-                           CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args_expand)
+                device = driver.get_current_device()
+                stream = driver.get_current_stream(device)
+            self.run(grid[0], grid[1], grid[2], self.num_warps, self.num_ctas, self.cluster_dims[0],
+                     self.cluster_dims[1], self.cluster_dims[2], self.shared, stream, self.function,
+                     CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args_expand)
 
         return runner

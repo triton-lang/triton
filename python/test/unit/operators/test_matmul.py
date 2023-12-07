@@ -8,23 +8,6 @@ import triton.language as tl
 import triton.ops
 
 
-def f8_to_f16(x, dtype):
-
-    @triton.jit
-    def kernel(Y, X, N, BLOCK_SIZE: tl.constexpr):
-        pid = tl.program_id(0)
-        offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-        mask = offs < N
-        x = tl.load(X + offs, mask=mask)
-        tl.store(Y + offs, x, mask=mask)
-
-    ret = torch.empty(x.shape, dtype=torch.float16, device=x.device)
-    grid = lambda META: (triton.cdiv(x.numel(), META['BLOCK_SIZE']), )
-    dtype = getattr(tl, dtype)
-    kernel[grid](ret, triton.reinterpret(x, dtype), ret.numel(), BLOCK_SIZE=1024)
-    return ret
-
-
 @pytest.mark.parametrize(
     "BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, ADTYPE, BDTYPE, ALLOW_TF32, F8_FASTACCUM",
     itertools.chain(
@@ -88,6 +71,8 @@ def f8_to_f16(x, dtype):
             ("float8e4b15", "float8e4b15"),
             ("float8e4nv", "float16"),
             ("float16", "float8e5"),
+            ("int8", "bfloat16"),
+            ("float16", "int8"),
             ("float16", "float32"),
             ("float32", "float16"),
             ("bfloat16", "float32"),
@@ -133,8 +118,27 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     N = BLOCK_N if N is None else N
     K = BLOCK_K * SPLIT_K if K is None else K
 
-    def maybe_upcast(x, dtype, is_float8):
-        if is_float8:
+    def is_fp8(dtype):
+        return "float8" in dtype
+
+    def f8_to_f16(x, dtype):
+
+        @triton.jit
+        def kernel(Y, X, N, BLOCK_SIZE: tl.constexpr):
+            pid = tl.program_id(0)
+            offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+            mask = offs < N
+            x = tl.load(X + offs, mask=mask)
+            tl.store(Y + offs, x, mask=mask)
+
+        ret = torch.empty_strided(x.shape, x.stride(), dtype=torch.float16, device=x.device)
+        grid = lambda META: (triton.cdiv(x.numel(), META['BLOCK_SIZE']), )
+        dtype = getattr(tl, dtype)
+        kernel[grid](ret, triton.reinterpret(x, dtype), ret.numel(), BLOCK_SIZE=1024)
+        return ret
+
+    def upcast_if_fp8(x, dtype):
+        if is_fp8(dtype):
             return f8_to_f16(x, dtype)
         return x
 
@@ -157,25 +161,14 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     a = a if not AT else a.T.contiguous().T
     b = b if not BT else b.T.contiguous().T
     # run test
-    a_fp8 = "float8" in ADTYPE
-    b_fp8 = "float8" in BDTYPE
-    th_a = maybe_upcast(a, ADTYPE, a_fp8)
-    if AT and a_fp8:
-        th_a = th_a.view(th_a.shape[::-1]).T
-    th_b = maybe_upcast(b, BDTYPE, b_fp8)
-    if BT and b_fp8:
-        th_b = th_b.view(th_b.shape[::-1]).T
-    if th_a.is_floating_point():
-        ab_dtype = th_a.dtype if th_a.element_size() > th_b.element_size() else th_b.dtype
-    else:
-        ab_dtype = torch.float32
+    th_a = upcast_if_fp8(a, ADTYPE)
+    th_b = upcast_if_fp8(b, BDTYPE)
+    ab_dtype = triton.ops.get_higher_dtype(th_a.dtype, th_b.dtype)
     th_c = torch.matmul(th_a.to(ab_dtype), th_b.to(ab_dtype))
-    if ADTYPE == "int8" or BDTYPE == "int8":
-        th_c = th_c.to(torch.int8)
     try:
-        if a_fp8:
+        if is_fp8(ADTYPE):
             a = triton.reinterpret(a, getattr(tl, ADTYPE))
-        if b_fp8:
+        if is_fp8(BDTYPE):
             b = triton.reinterpret(b, getattr(tl, BDTYPE))
         tt_c = triton.ops.matmul(a, b, None, ALLOW_TF32, F8_FASTACCUM)
         torch.testing.assert_close(th_c, tt_c)

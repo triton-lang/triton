@@ -93,8 +93,7 @@ class FileCacheManager(CacheManager):
         if child_paths is None:
             return None
         result = {}
-        for c in child_paths:
-            p = self._make_path(c)
+        for c, p in child_paths.items():
             if os.path.exists(p):
                 result[c] = p
         return result
@@ -103,7 +102,7 @@ class FileCacheManager(CacheManager):
     def put_group(self, filename: str, group: Dict[str, str]) -> str:
         if not self.cache_dir:
             raise RuntimeError("Could not create or locate cache dir")
-        grp_contents = json.dumps({"child_paths": sorted(list(group.keys()))})
+        grp_contents = json.dumps({"child_paths": group})
         grp_filename = f"__grp__{filename}"
         return self.put(grp_contents, grp_filename, binary=False)
 
