@@ -1,20 +1,105 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <memory>
+#include <numeric>
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
 using namespace mlir;
+namespace {
+// Change the destination layout of reshape ops allowing reoder when used by a
+// reduction in order to minimize the amount of cross thread communication for
+// the reduction.
+struct OptimizeReshapeLayoutPattern
+    : public mlir::OpRewritePattern<triton::ReshapeOp> {
+  OptimizeReshapeLayoutPattern(mlir::MLIRContext *context)
+      : OpRewritePattern<triton::ReshapeOp>(context, 1) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(triton::ReshapeOp viewOp,
+                  mlir::PatternRewriter &rewriter) const override {
+    if (!viewOp.getAllowReorder())
+      return failure();
+    std::optional<int> reductionAxis;
+    for (Operation *user : viewOp.getResult().getUsers()) {
+      if (auto reduceOp = dyn_cast<triton::ReduceOp>(user)) {
+        if (reductionAxis) {
+          if (reductionAxis != reduceOp.getAxis())
+            return failure();
+        } else {
+          reductionAxis = reduceOp.getAxis();
+        }
+      }
+    }
+    if (!reductionAxis)
+      return failure();
+    auto tensorType = viewOp.getResult().getType().cast<RankedTensorType>();
+    if (auto blocked = tensorType.getEncoding()
+                           .dyn_cast<triton::gpu::BlockedEncodingAttr>()) {
+      // If the layout already has all the elements along the reduction
+      // dimension in the same thread we can skip.
+      if (blocked.getThreadsPerWarp()[*reductionAxis] == 1 &&
+          blocked.getWarpsPerCTA()[*reductionAxis] == 1 &&
+          blocked.getCTAsPerCGA()[*reductionAxis] == 1)
+        return failure();
+    }
+    ArrayRef<int64_t> shape = tensorType.getShape();
+    llvm::SmallVector<unsigned> order;
+    for (int i : triton::gpu::getOrder(tensorType.getEncoding())) {
+      if (i != *reductionAxis)
+        order.push_back(i);
+    }
+    // Make the reduction axis last so that elements won't be distributed
+    // amongst threads along this dimension.
+    order.push_back(*reductionAxis);
+    llvm::SmallVector<unsigned> sizePerThread(shape.size(), 1);
+    auto mod = viewOp->getParentOfType<ModuleOp>();
+    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
+    triton::gpu::BlockedEncodingAttr encoding =
+        triton::gpu::BlockedEncodingAttr::get(viewOp.getContext(), shape,
+                                              sizePerThread, order, numWarps,
+                                              threadsPerWarp, numCTAs);
+    if (encoding == tensorType.getEncoding())
+      return failure();
+    RankedTensorType newType =
+        RankedTensorType::get(shape, tensorType.getElementType(), encoding);
+    if (triton::gpu::isExpensiveView(viewOp.getSrc().getType(), newType))
+      return failure();
+    rewriter.setInsertionPointAfter(viewOp);
+    rewriter.updateRootInPlace(viewOp, [&]() {
+      viewOp.getResult().setType(newType);
+      viewOp.setEfficientLayout(true);
+    });
+    auto cvt = rewriter.create<mlir::triton::gpu::ConvertLayoutOp>(
+        viewOp.getLoc(), tensorType, viewOp.getResult());
+    rewriter.replaceAllUsesExcept(viewOp.getResult(), cvt.getResult(), cvt);
+    return mlir::success();
+  }
+};
+
+} // namespace
 
 class TritonGPUOptimizeThreadLocalityPass
     : public TritonGPUOptimizeThreadLocalityBase<
           TritonGPUOptimizeThreadLocalityPass> {
   void runOnOperation() override {
     ModuleOp mod = getOperation();
+
+    // First try to optimize the layout of existing views.
+    mlir::RewritePatternSet viewLayoutPatterns(&getContext());
+    viewLayoutPatterns.add<OptimizeReshapeLayoutPattern>(&getContext());
+    if (mlir::applyPatternsAndFoldGreedily(mod, std::move(viewLayoutPatterns))
+            .failed()) {
+      signalPassFailure();
+    }
+
     DenseSet<triton::ReduceOp> reduceOps;
     mod.walk([&](triton::ReduceOp reduce) -> void {
       auto srcType = reduce.getOperands()[0].getType().cast<RankedTensorType>();
@@ -219,6 +304,7 @@ private:
     for (auto operand : reduce.getOperands()) {
       auto viewOp = builder.create<triton::ReshapeOp>(
           reduce.getLoc(), viewOpTensorType, operand, /*allowReorder=*/true);
+      viewOp.setEfficientLayout(true);
       mapping.map(operand, viewOp);
     }
 

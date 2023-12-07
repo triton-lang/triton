@@ -305,12 +305,26 @@ def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
 def TT_ReshapeOp : TT_Op<"reshape", [Pure,
                                      SameOperandsAndResultElementType]> {
     let summary = "reinterpret a tensor to a different shape. It may change elements order if the attribute is set.";
-    let arguments = (ins TT_Tensor:$src, BoolAttr:$allow_reorder);
+    let description = [{
+        reinterpret a tensor to a different shape.
+
+        If allow_reorder is set the compiler is free to change the order of
+        elements to generate more efficient code.
+
+        If efficient_layout is set, this is a hint that the destination layout should be kept for performance reason.
+        The compiler is still free to change it for better performance.
+    }];
+    let arguments = (ins TT_Tensor:$src, BoolAttr:$allow_reorder, OptionalAttr<UnitAttr>:$efficient_layout);
     let results = (outs TT_Tensor:$result);
     let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
     let hasCanonicalizeMethod = 1;
     let hasFolder = 1;
     let hasVerifier = 1;
+    let builders = [
+      OpBuilder<(ins "Type":$type, "Value":$src, "bool":$allow_reorder),
+        [{
+        build($_builder, $_state, type, src, allow_reorder, /*efficient_layout=*/UnitAttr());
+        }]>];
 }
 
 def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
