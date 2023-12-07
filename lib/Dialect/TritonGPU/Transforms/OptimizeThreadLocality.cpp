@@ -39,6 +39,15 @@ struct OptimizeReshapeLayoutPattern
     if (!reductionAxis)
       return failure();
     auto tensorType = viewOp.getResult().getType().cast<RankedTensorType>();
+    if (auto blocked = tensorType.getEncoding()
+                           .dyn_cast<triton::gpu::BlockedEncodingAttr>()) {
+      // If the layout already has all the elements along the reduction
+      // dimension in the same thread we can skip.
+      if (blocked.getThreadsPerWarp()[*reductionAxis] == 1 &&
+          blocked.getWarpsPerCTA()[*reductionAxis] == 1 &&
+          blocked.getCTAsPerCGA()[*reductionAxis] == 1)
+        return failure();
+    }
     ArrayRef<int64_t> shape = tensorType.getShape();
     llvm::SmallVector<unsigned> order;
     for (int i : triton::gpu::getOrder(tensorType.getEncoding())) {
