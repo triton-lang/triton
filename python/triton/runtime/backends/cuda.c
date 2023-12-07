@@ -377,13 +377,16 @@ typedef CUresult (*cuTensorMapEncodeTiled_t)(
     CUtensorMapSwizzle swizzle, CUtensorMapL2promotion l2Promotion,
     CUtensorMapFloatOOBfill oobFill);
 
-#define defineGetFunctionHandle(name, retType, errRet)                         \
+typedef CUresult (*cuOccupancyMaxActiveClusters_t)(
+    int *numClusters, CUfunction func, const CUlaunchConfig *config);
+
+#define defineGetFunctionHandle(name, retType)                         \
   static retType name() {                                                      \
     /* Open the shared library */                                              \
     void *libHandle = dlopen("libcuda.so", RTLD_LAZY);                         \
     if (!libHandle) {                                                          \
       PyErr_SetString(PyExc_RuntimeError, "Failed to open libcuda.so");        \
-      return errRet;                                                           \
+      return NULL;                                                           \
     }                                                                          \
     /* Clear any existing error */                                             \
     dlerror();                                                                 \
@@ -394,13 +397,13 @@ typedef CUresult (*cuTensorMapEncodeTiled_t)(
       PyErr_SetString(PyExc_RuntimeError,                                      \
                       "Failed to retrieve " #name " from libcuda.so");         \
       dlclose(libHandle);                                                      \
-      return errRet;                                                           \
+      return NULL;                                                           \
     }                                                                          \
     return funcHandle;                                                         \
   }
 
-defineGetFunctionHandle(getCuTensorMapEncodeTiledHandle, cuTensorMapEncodeTiled_t, NULL)
-defineGetFunctionHandle(getCuOccupancyMaxActiveClusters, int, NULL)
+defineGetFunctionHandle(getCuTensorMapEncodeTiledHandle, cuTensorMapEncodeTiled_t)
+defineGetFunctionHandle(getCuOccupancyMaxActiveClusters, cuOccupancyMaxActiveClusters_t)
 
 static PyObject *tensorMapEncodeTiled(PyObject *self, PyObject *args) {
   CUtensorMap *tensorMap = (CUtensorMap *)malloc(sizeof(CUtensorMap));
