@@ -487,7 +487,7 @@ static PyObject *getMaxActiveClusters(PyObject *self, PyObject *args) {
   config.numAttrs = 1;
   config.attrs = launchAttr;
 
-  static cuTensorMapEncodeTiled_t cuOccupancyMaxActiveClusters = NULL;
+  static cuOccupancyMaxActiveClusters_t cuOccupancyMaxActiveClusters = NULL;
   if (cuOccupancyMaxActiveClusters == NULL) {
     cuOccupancyMaxActiveClusters = getCuOccupancyMaxActiveClusters();
   }
