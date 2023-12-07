@@ -1865,61 +1865,6 @@ tt.func @whileop(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %cond: i1) {
 
 // -----
 
-
-#blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
-#blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
-#blocked2 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32} {
-
-// Check that we don't insert convert in between the loop and async_wait as this is a required barrier.
-// CHECK-LABEL: workaround
-//       CHECK: scf.for
-//       CHECK:   scf.yield
-//  CHECK-NEXT: }
-//  CHECK-NEXT: triton_gpu.async_wait
-//  CHECK-NEXT: triton_gpu.convert_layout
-  tt.func @workaround(%arg0: !tt.ptr<f32, 1>, %arg1: i32, %arg2: !tt.ptr<f32, 1>, %arg3: i32, %arg4: i32) {
-    %cst = arith.constant dense<64> : tensor<64x64xi32, #blocked>
-    %c1 = arith.constant 1 : index
-    %c32 = arith.constant 32 : index
-    %c0 = arith.constant 0 : index
-    %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked>
-    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
-    %1 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #triton_gpu.slice<{dim = 0, parent = #blocked1}>>
-    %2 = tt.expand_dims %0 {axis = 1 : i32} : (tensor<64xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>) -> tensor<64x1xi32, #blocked>
-    %3 = tt.splat %arg1 : (i32) -> tensor<64x1xi32, #blocked>
-    %4 = arith.muli %2, %3 : tensor<64x1xi32, #blocked>
-    %5 = tt.splat %arg0 : (!tt.ptr<f32, 1>) -> tensor<64x1x!tt.ptr<f32, 1>, #blocked>
-    %6 = tt.addptr %5, %4 : tensor<64x1x!tt.ptr<f32, 1>, #blocked>, tensor<64x1xi32, #blocked>
-    %7 = tt.expand_dims %1 {axis = 0 : i32} : (tensor<64xi32, #triton_gpu.slice<{dim = 0, parent = #blocked1}>>) -> tensor<1x64xi32, #blocked1>
-    %8 = tt.broadcast %6 : (tensor<64x1x!tt.ptr<f32, 1>, #blocked>) -> tensor<64x64x!tt.ptr<f32, 1>, #blocked>
-    %9 = tt.broadcast %7 : (tensor<1x64xi32, #blocked1>) -> tensor<64x64xi32, #blocked1>
-    %10 = triton_gpu.convert_layout %9 : (tensor<64x64xi32, #blocked1>) -> tensor<64x64xi32, #blocked>
-    %11 = tt.addptr %8, %10 : tensor<64x64x!tt.ptr<f32, 1>, #blocked>, tensor<64x64xi32, #blocked>
-    %12 = tt.splat %arg2 : (!tt.ptr<f32, 1>) -> tensor<64x1x!tt.ptr<f32, 1>, #blocked>
-    %13 = tt.addptr %12, %2 : tensor<64x1x!tt.ptr<f32, 1>, #blocked>, tensor<64x1xi32, #blocked>
-    %14 = tt.splat %arg3 : (i32) -> tensor<1x64xi32, #blocked1>
-    %15 = arith.muli %7, %14 : tensor<1x64xi32, #blocked1>
-    %16 = tt.broadcast %13 : (tensor<64x1x!tt.ptr<f32, 1>, #blocked>) -> tensor<64x64x!tt.ptr<f32, 1>, #blocked>
-    %17 = tt.broadcast %15 : (tensor<1x64xi32, #blocked1>) -> tensor<64x64xi32, #blocked1>
-    %18 = triton_gpu.convert_layout %17 : (tensor<64x64xi32, #blocked1>) -> tensor<64x64xi32, #blocked>
-    %19 = tt.addptr %16, %18 : tensor<64x64x!tt.ptr<f32, 1>, #blocked>, tensor<64x64xi32, #blocked>
-    %20:2 = scf.for %arg5 = %c0 to %c32 step %c1 iter_args(%arg6 = %cst_0, %arg7 = %11) -> (tensor<64x64xf32, #blocked>, tensor<64x64x!tt.ptr<f32, 1>, #blocked>) {
-      %21 = triton_gpu.convert_layout %arg7 : (tensor<64x64x!tt.ptr<f32, 1>, #blocked>) -> tensor<64x64x!tt.ptr<f32, 1>, #blocked2>
-      %22 = tt.load %21 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64x64xf32, #blocked2>
-      %23 = triton_gpu.convert_layout %22 : (tensor<64x64xf32, #blocked2>) -> tensor<64x64xf32, #blocked>
-      %24 = arith.addf %arg6, %23 : tensor<64x64xf32, #blocked>
-      %25 = tt.addptr %arg7, %cst : tensor<64x64x!tt.ptr<f32, 1>, #blocked>, tensor<64x64xi32, #blocked>
-      scf.yield %24, %25 : tensor<64x64xf32, #blocked>, tensor<64x64x!tt.ptr<f32, 1>, #blocked>
-    }
-    triton_gpu.async_wait {num = 0 : i32}
-    tt.store %19, %20#0 {cache = 1 : i32, evict = 1 : i32} : tensor<64x64xf32, #blocked>
-    tt.return
-  }
-}
-
-// -----
-
 // Suppose we have a loop which yields a value from outside the loop:
 //   %x = ...
 //   %y = ...

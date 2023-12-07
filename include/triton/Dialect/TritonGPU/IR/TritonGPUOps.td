@@ -15,6 +15,8 @@ include "mlir/Interfaces/ViewLikeInterface.td"
 
 def ResultsAreSharedEncoding: NativeOpTrait<"ResultsAreSharedEncoding">;
 
+def OperandsAreSharedEncoding: NativeOpTrait<"OperandsAreSharedEncoding">;
+
 class TTG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonGPU_Dialect, mnemonic,
        !listconcat(traits, [VerifyTensorLayoutsTrait])> {
@@ -339,13 +341,25 @@ def TTG_AllocTensorOp : TTG_Op<"alloc_tensor", [MemoryEffects<[MemAlloc]>,  // A
   let description = [{
     This operation defines a tensor of a particular shape.
     The contents of the tensor are supposed to be in shared memory.
-
-    Note: This op can be repalced to a `bufferization.alloc_tensor` in LLVM 16.
   }];
 
   let assemblyFormat = [{attr-dict `:` type($result)}];
 
   let results = (outs TT_Tensor:$result);
+}
+
+def TTG_DeallocTensorOp : TTG_Op<"dealloc_tensor", [MemoryEffects<[MemFree]>,  // Deallocate shared memory
+                                                    OperandsAreSharedEncoding]> {
+  let summary = "dealloc tensor";
+
+  let description = [{
+    This operation deallocate a tensor explicitly.
+    The contents of the tensor are supposed to be in shared memory.
+  }];
+
+  let arguments = (ins TT_Tensor:$src);
+
+  let assemblyFormat = [{$src attr-dict `:` type($src)}];
 }
 
 #endif

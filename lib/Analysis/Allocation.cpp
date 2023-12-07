@@ -443,6 +443,7 @@ private:
     // Analyze liveness of explicit buffers
     Liveness liveness(operation);
     auto getValueLivenessRange = [&](Value value) {
+      // TODO(Keren): Investigate mbarrier and figure out how to clean this up
       // Shared memory allocated by mbarrier cannot be reused
       if (value.getDefiningOp() &&
           isa<triton::nvidia_gpu::AllocMBarrierOp>(value.getDefiningOp()))

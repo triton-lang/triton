@@ -91,8 +91,7 @@ void MembarAnalysis::visitTerminator(Operation *op,
     return;
   }
   // Otherwise, it could be a return op
-  if (isa<triton::ReduceReturnOp>(op) || isa<triton::ScanReturnOp>(op) ||
-      isa<triton::ReturnOp>(op)) {
+  if (isa<triton::ReduceReturnOp, triton::ScanReturnOp, triton::ReturnOp>(op)) {
     return;
   }
   llvm_unreachable("Unknown terminator encountered in membar analysis");
@@ -118,10 +117,9 @@ void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
-  if (isa<triton::gpu::ExtractSliceOp>(op) ||
-      isa<triton::gpu::AllocTensorOp>(op) || isa<triton::TransOp>(op) ||
-      isa<triton::nvidia_gpu::AllocMBarrierOp>(op)) {
-    // alloc is an allocation op without memory write.
+  if (isa<triton::gpu::ExtractSliceOp, triton::gpu::AllocTensorOp,
+          triton::gpu::DeallocTensorOp, triton::TransOp,
+          triton::nvidia_gpu::AllocMBarrierOp>(op)) {
     // FIXME(Keren): extract_slice is always alias for now
     return;
   }
@@ -155,9 +153,9 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     for (Value value : op->getOperands()) {
       for (auto bufferId : allocation->getBufferIds(value)) {
         if (bufferId != Allocation::InvalidBufferId) {
-          if (isa<triton::gpu::InsertSliceAsyncOp>(op) ||
-              isa<triton::nvidia_gpu::InsertSliceAsyncV2Op>(op) ||
-              isa<tensor::InsertSliceOp>(op)) {
+          if (isa<triton::gpu::InsertSliceAsyncOp,
+                  triton::nvidia_gpu::InsertSliceAsyncV2Op,
+                  tensor::InsertSliceOp>(op)) {
             // FIXME(Keren): insert_slice and insert_slice_async are always
             // alias for now
             curBlockInfo.syncWriteIntervals.insert(

@@ -435,18 +435,6 @@ Value LayoutPropagation::getValueAs(Value value, Attribute encoding) {
       return rewrittenValue;
     OpBuilder rewriter(value.getContext());
     rewriter.setInsertionPointAfterValue(rewrittenValue);
-    // Workaround: The pipeliner will insert async.wait after a pipelined loop
-    // to ensure that there is no pending copies and it is safe to re-use shared
-    // memory. We shouldn't insert ops that may use shared memory in between the
-    // loop and the async.wait. This is a hack until we fix the IR
-    // representation of async wait.
-    if (Operation *op = rewrittenValue.getDefiningOp()) {
-      Operation *nextNode = op->getNextNode();
-      while (nextNode && opToDelete.count(nextNode) != 0)
-        nextNode = nextNode->getNextNode();
-      if (nextNode && isa<triton::gpu::AsyncWaitOp>(nextNode))
-        rewriter.setInsertionPointAfter(nextNode);
-    }
     auto tmpType = RankedTensorType::get(tensorType.getShape(),
                                          tensorType.getElementType(), encoding);
     Value converted = rewriter.create<triton::gpu::ConvertLayoutOp>(

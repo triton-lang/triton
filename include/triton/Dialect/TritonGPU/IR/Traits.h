@@ -14,6 +14,8 @@ namespace OpTrait {
 // instantiated/duplicated.
 namespace impl {
 LogicalResult verifyResultsAreSharedEncoding(Operation *op);
+
+LogicalResult verifyOperandsAreSharedEncoding(Operation *op);
 } // namespace impl
 
 template <typename ConcreteType>
@@ -22,6 +24,15 @@ class ResultsAreSharedEncoding
 public:
   static LogicalResult verifyTrait(Operation *op) {
     return impl::verifyResultsAreSharedEncoding(op);
+  }
+};
+
+template <typename ConcreteType>
+class OperandsAreSharedEncoding
+    : public TraitBase<ConcreteType, OperandsAreSharedEncoding> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return impl::verifyOperandsAreSharedEncoding(op);
   }
 };
 
