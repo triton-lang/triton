@@ -12,11 +12,12 @@
 
 using namespace mlir;
 namespace {
-// Change the layout of view destination when used by a reduction in order to
-// minimize the amount of cross thread communication for the reduction.
-struct OptimizeViewLayoutPattern
+// Change the destination layout of reshape ops allowing reoder when used by a
+// reduction in order to minimize the amount of cross thread communication for
+// the reduction.
+struct OptimizeReshapeLayoutPattern
     : public mlir::OpRewritePattern<triton::ReshapeOp> {
-  OptimizeViewLayoutPattern(mlir::MLIRContext *context)
+  OptimizeReshapeLayoutPattern(mlir::MLIRContext *context)
       : OpRewritePattern<triton::ReshapeOp>(context, 1) {}
 
   mlir::LogicalResult
@@ -40,7 +41,7 @@ struct OptimizeViewLayoutPattern
     auto tensorType = viewOp.getResult().getType().cast<RankedTensorType>();
     ArrayRef<int64_t> shape = tensorType.getShape();
     llvm::SmallVector<unsigned> order;
-    for (int i = shape.size() - 1; i >= 0; i--) {
+    for (int i : triton::gpu::getOrder(tensorType.getEncoding())) {
       if (i != *reductionAxis)
         order.push_back(i);
     }
@@ -84,7 +85,7 @@ class TritonGPUOptimizeThreadLocalityPass
 
     // First try to optimize the layout of existing views.
     mlir::RewritePatternSet viewLayoutPatterns(&getContext());
-    viewLayoutPatterns.add<OptimizeViewLayoutPattern>(&getContext());
+    viewLayoutPatterns.add<OptimizeReshapeLayoutPattern>(&getContext());
     if (mlir::applyPatternsAndFoldGreedily(mod, std::move(viewLayoutPatterns))
             .failed()) {
       signalPassFailure();
