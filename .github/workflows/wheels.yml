@@ -59,7 +59,7 @@ jobs:
           # installing the prebuilt clang 10 binary distributed by LLVM, and I
           # quickly ran into Linux DLL hell.  I give up, for now.  Perhaps
           # manylinux_x_y will save us; I didn't try.
-          export CIBW_ENVIRONMENT="MAX_JOBS=4 TRITON_WHEEL_NAME=triton-nightly TRITON_WHEEL_VERSION_SUFFIX=-$LATEST_DATE"
+          export CIBW_ENVIRONMENT="MAX_JOBS=4 TRITON_WHEEL_NAME=triton"
           export CIBW_MANYLINUX_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
           #export CIBW_MANYLINUX_PYPY_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
           export CIBW_BEFORE_BUILD="pip install cmake;"
@@ -67,36 +67,7 @@ jobs:
           export CIBW_BUILD="cp3*-manylinux_x86_64"
           python3 -m cibuildwheel python --output-dir wheelhouse
 
-      - name: Install Azure CLI
-        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
-        run: |
-          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 
-      - name: Azure login
-        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
-        uses: azure/login@v1
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - id: generate-token
-        name: Generate token
-        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
+      - name: Upload wheels to PyPI
         run: |
-          AZ_TOKEN=$(az account get-access-token --query accessToken)
-          echo "::add-mask::$AZ_TOKEN"
-          echo "access_token=$AZ_TOKEN" >> "$GITHUB_OUTPUT"
-
-      - name: Publish wheels to Azure DevOps
-        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
-        run: |
-          python3 -m pip install twine
-          python3 -m twine upload -r Triton-Nightly -u TritonArtifactsSP -p ${{ steps.generate-token.outputs.access_token }} --config-file utils/nightly.pypirc --non-interactive --verbose wheelhouse/*
-
-      - name: Azure Logout
-        if: ${{ steps.check-version.outputs.new_commit == 'true' && (success() || failure()) }}
-        run: |
-          az logout
-          az cache purge
-          az account clear
+          python3 -m twine upload wheelhouse/* -u __token__ -p ${{ secrets.PYPY_API_TOKEN }}
