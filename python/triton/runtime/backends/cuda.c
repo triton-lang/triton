@@ -390,7 +390,7 @@ typedef CUresult (*cuOccupancyMaxActiveClusters_t)(
     }                                                                          \
     /* Clear any existing error */                                             \
     dlerror();                                                                 \
-    retType (*funcHandle)() = (retType(*)())dlsym(libHandle, #name);           \
+    retType funcHandle = (retType)dlsym(libHandle, #name);                     \
     /* Check for errors */                                                     \
     const char *err = dlerror();                                               \
     if (err) {                                                                 \
@@ -452,7 +452,7 @@ static PyObject *tensorMapEncodeTiled(PyObject *self, PyObject *args) {
   return PyLong_FromUnsignedLongLong((unsigned long long)tensorMap);
 }
 
-static PyObject *getMaxActiveClusters(PyObject *self, PyObject *args) {
+static PyObject *occupancyMaxActiveClusters(PyObject *self, PyObject *args) {
   int clusterDimX = -1, clusterDimY = -1, clusterDimZ = -1,
       maxActiveClusters = -1;
   int shared = 0;
