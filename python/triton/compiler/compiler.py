@@ -176,7 +176,7 @@ def compile(src, target=None, options=None):
         # cache hit!
         metadata = json.loads(Path(metadata_path).read_text())
         so_path = backend.make_launcher_stub(src, metadata)
-        return CompiledKernel(so_path, metadata_path)
+        return CompiledKernel(so_path, metadata_group)
     # initialize metadata
     metadata = {
         "target": target,
@@ -199,7 +199,7 @@ def compile(src, target=None, options=None):
     fn_cache_manager.put_group(metadata_filename, metadata_group)
     so_path = backend.make_launcher_stub(src, metadata)
     # return handle to compiled kernel
-    return CompiledKernel(so_path, metadata_group.get(metadata_filename))
+    return CompiledKernel(so_path, metadata_group)
 
 
 class CompiledKernel:
@@ -209,8 +209,8 @@ class CompiledKernel:
     launch_enter_hook = None
     launch_exit_hook = None
 
-    def __init__(self, so_path, metadata_path):
-        metadata_path = Path(metadata_path)
+    def __init__(self, so_path, metadata_group):
+        metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
         # initialize launcher
         import importlib.util
         spec = importlib.util.spec_from_file_location("__triton_launcher", so_path)
@@ -226,7 +226,7 @@ class CompiledKernel:
         for key, val in self.metadata.items():
             setattr(self, key, val)
         # stores the text of each level of IR that was generated during compilation
-        asm_files = [file for file in metadata_path.parent.glob(f'{metadata_path.stem}.*') if file.suffix != '.json']
+        asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
         self.asm = {
             file.suffix[1:]: file.read_bytes() if file.suffix[1:] == driver.binary_ext else file.read_text()
             for file in asm_files
