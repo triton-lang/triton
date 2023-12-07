@@ -12,3 +12,12 @@ mlir::OpTrait::impl::verifyResultsAreSharedEncoding(Operation *op) {
 
   return success();
 };
+
+mlir::LogicalResult
+mlir::OpTrait::impl::verifyOperandsAreSharedEncoding(Operation *op) {
+  for (auto operand : op->getOperands())
+    if (!triton::gpu::hasSharedEncoding(operand))
+      return op->emitOpError() << "requires all operands to be shared encoding";
+
+  return success();
+};

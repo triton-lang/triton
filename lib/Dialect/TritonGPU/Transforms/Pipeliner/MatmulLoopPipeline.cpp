@@ -307,8 +307,9 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
 
 // Convert load ops into their asyn version and apply multi-buffering based on
 // the number of stages.
-static void createAsynOps(scf::ForOp &forOp, ArrayRef<LoadDotOperand> loads,
-                          int numStages, bool hasMMAV3) {
+static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
+                                        ArrayRef<LoadDotOperand> loads,
+                                        int numStages, bool hasMMAV3) {
   struct AsyncLoad {
     AsyncLoad(tt::LoadOp loadOp, Value alloc) : loadOp(loadOp), alloc(alloc) {}
     tt::LoadOp loadOp;
@@ -321,6 +322,7 @@ static void createAsynOps(scf::ForOp &forOp, ArrayRef<LoadDotOperand> loads,
   if (hasMMAV3)
     numBuffers++;
   SmallVector<AsyncLoad> asyncLoads;
+  SmallVector<Value> allocs;
   SmallVector<Value> newOperands;
   bool needsMbarrierPhase = false;
   bool needsAsyncWait = false;
@@ -330,6 +332,7 @@ static void createAsynOps(scf::ForOp &forOp, ArrayRef<LoadDotOperand> loads,
                               numBuffers, loadOperand.needTrans);
     assert(alloc && "Failed to create alloc for the async load.");
     newOperands.push_back(alloc);
+    allocs.push_back(alloc);
     asyncLoads.emplace_back(loadOp, alloc);
     if (isLoadFromTensorPtr(loadOp))
       needsMbarrierPhase = true;
@@ -411,6 +414,8 @@ static void createAsynOps(scf::ForOp &forOp, ArrayRef<LoadDotOperand> loads,
     newYieldOperands.push_back(phase);
   // Patch the yield with the updated counters.
   appendToYield(forOp, newYieldOperands);
+
+  return allocs;
 }
 
 // Combine the current mask with the given predicate.
@@ -619,7 +624,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     return !isLoadFromTensorPtr(load.load);
   });
   // 2. Convert the loads into async loads and create the allocs.
-  createAsynOps(forOp, loads, numStages, hasMMAV3);
+  SmallVector<Value> allocs = createAsynOps(forOp, loads, numStages, hasMMAV3);
 
   // 3. Create the final schedule for the kernel loop. This will dictate the
   // stages and order of operations to the pipeline expander.
@@ -648,6 +653,9 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     OpBuilder builder(forOp);
     builder.setInsertionPointAfter(forOp);
     builder.create<ttg::AsyncWaitOp>(forOp.getLoc(), 0);
+    // Explicitly deallocate allocated tensors after the wait op
+    for (auto alloc : allocs)
+      builder.create<ttg::DeallocTensorOp>(forOp.getLoc(), alloc);
   }
   return true;
 }
