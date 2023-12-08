@@ -240,6 +240,46 @@ private:
     return newReduce;
   }
 
+  // Work around the lack of support for MaxNumFOp and MinNumFOp in
+  // arith::getNeutralElement.
+  std::optional<TypedAttr> getNeutralElement(Operation *op) const {
+    if (isa<arith::MaxNumFOp, arith::MinNumFOp>(op)) {
+      OpBuilder builder(op->getContext());
+      bool useOnlyFiniteValue = false;
+
+      auto fmfOpInterface = dyn_cast<arith::ArithFastMathInterface>(op);
+      if (fmfOpInterface) {
+        arith::FastMathFlagsAttr fmfAttr =
+            fmfOpInterface.getFastMathFlagsAttr();
+        useOnlyFiniteValue =
+            bitEnumContainsAny(fmfAttr.getValue(), arith::FastMathFlags::ninf);
+      }
+      Type resultType = op->getResult(0).getType();
+      const llvm::fltSemantics &semantic =
+          llvm::cast<FloatType>(resultType).getFloatSemantics();
+      if (isa<arith::MaxNumFOp>(op)) {
+        if (useOnlyFiniteValue)
+          return builder.getFloatAttr(
+              resultType, APFloat::getLargest(semantic, /*Negative=*/true));
+        else
+          return builder.getFloatAttr(
+              resultType, APFloat::getInf(semantic, /*Negative=*/true));
+      }
+      if (isa<arith::MinNumFOp>(op)) {
+        if (useOnlyFiniteValue)
+          return builder.getFloatAttr(
+              resultType, APFloat::getLargest(semantic, /*Negative=*/false));
+        else
+          return builder.getFloatAttr(
+              resultType, APFloat::getInf(semantic, /*Negative=*/false));
+      }
+    } else {
+      return mlir::arith::getNeutralElement(op);
+    }
+    llvm_unreachable("Unhandled reduction op");
+    return std::nullopt;
+  }
+
   Operation *createAccum(OpBuilder &builder, triton::ReduceOp reduce,
                          Value &oldAccum, SmallVector<int64_t> &shape,
                          Attribute &slice2d) const {
@@ -253,7 +293,7 @@ private:
     builder.setInsertionPointAfter(oldAccum.getDefiningOp());
     auto reductionOp = getReductionOp(reduce);
     assert(reductionOp && "Processing a reduce that is not supported!");
-    auto neutralVal = mlir::arith::getNeutralElement(reductionOp.value());
+    auto neutralVal = getNeutralElement(reductionOp.value());
     assert(neutralVal && "Could not find neutral value for reduction op!");
     auto denseAttr = DenseElementsAttr::get(accumType, neutralVal.value());
     auto newAccum = builder.create<arith::ConstantOp>(oldAccum.getLoc(),
