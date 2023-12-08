@@ -1,18 +1,18 @@
 import functools
 import os
-from enum import Enum
+from enum import IntEnum
 
 from ..common.build import is_hip
 from . import core
 
-class PropagateNan(Enum):
+class PropagateNan(IntEnum):
     """
     PropagateNan is an enum class that specifies how NaNs are handled in min/max operations.
     PropagateNan.ALL means that if either input is NaN, the result is NaN. PropagateNan.NONE
     means that if either input is NaN, the result is the non-NaN input. This is the default.
     """
-    ALL = 0x00000000
-    NONE = 0x11111111
+    ALL = 0xFFFFFFFF
+    NONE = 0x00000000
 
 @functools.lru_cache()
 def libdevice_path():
@@ -58,9 +58,9 @@ def min(arg0, arg1, propagate_nan: core.constexpr, _builder=None):
     dtype = arg0.dtype
     if dtype.is_floating():
         if propagate_nan == core.constexpr(PropagateNan.ALL):
-            return core.tensor(_builder.create_minf(arg0.handle, arg1.handle), arg0.type)
+            return core.tensor(_builder.create_minimumf(arg0.handle, arg1.handle), arg0.type)
         elif propagate_nan == core.constexpr(PropagateNan.NONE):
-            return core.tensor(_builder.create_fminf(arg0.handle, arg1.handle), arg0.type)
+            return core.tensor(_builder.create_minnumf(arg0.handle, arg1.handle), arg0.type)
         else:
             assert False, f"Unexpected propagate_nan {propagate_nan}"
     elif dtype.is_int_signed():
@@ -79,9 +79,9 @@ def max(arg0, arg1, propagate_nan: core.constexpr, _builder=None):
     dtype = arg0.dtype
     if dtype.is_floating():
         if propagate_nan == core.constexpr(PropagateNan.ALL):
-            return core.tensor(_builder.create_maxf(arg0.handle, arg1.handle), arg0.type)
+            return core.tensor(_builder.create_maximumf(arg0.handle, arg1.handle), arg0.type)
         elif propagate_nan == core.constexpr(PropagateNan.NONE):
-            return core.tensor(_builder.create_fmaxf(arg0.handle, arg1.handle), arg0.type)
+            return core.tensor(_builder.create_maxnumf(arg0.handle, arg1.handle), arg0.type)
         else:
             assert False, f"Unexpected propagate_nan {propagate_nan}"
     elif dtype.is_int_signed():

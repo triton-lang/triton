@@ -4244,9 +4244,12 @@ def test_propagate_nan(propagate_nan, func):
 
         if mode == 'both':
             assert torch.isnan(C[0])
-
-        if propagate_nan == tl.PropagateNan.NONE and mode != 'both':
-            assert not torch.isnan(C[0])
+        else:
+            if eval(propagate_nan) == tl.PropagateNan.NONE:
+                assert not torch.isnan(C[0])
+            else:
+                assert eval(propagate_nan) == tl.PropagateNan.ALL
+                assert torch.isnan(C[0])
 
 
 # -----------------------

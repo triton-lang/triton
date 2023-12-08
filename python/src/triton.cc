@@ -1125,15 +1125,15 @@ void init_triton_ir(py::module &&m) {
               mlir::Value &rhs) -> mlir::Value {
              return mlir::Value(self.create<mlir::arith::MinUIOp>(lhs, rhs));
            })
-      // min follows the torch.minimum convention and returns NaN if either
+      // minimumf follows the torch.minimum convention and returns NaN if either
       // operand is NaN
-      .def("create_minf",
+      .def("create_minimumf",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
              return mlir::Value(self.create<mlir::arith::MinimumFOp>(lhs, rhs));
            })
-      // fmin follows the torch.fmin convention and returns the non-NaN operand
-      .def("create_fminf",
+      // minnumf follows the torch.fmin convention and returns the non-NaN operand
+      .def("create_minnumf",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
              return mlir::Value(self.create<mlir::arith::MinNumFOp>(lhs, rhs));
@@ -1148,15 +1148,15 @@ void init_triton_ir(py::module &&m) {
               mlir::Value &rhs) -> mlir::Value {
              return mlir::Value(self.create<mlir::arith::MaxUIOp>(lhs, rhs));
            })
-      // max follows the torch.maximum convention and returns NaN if either
+      // maximumf follows the torch.maximum convention and returns NaN if either
       // operand is NaN
-      .def("create_maxf",
+      .def("create_maximumf",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
              return mlir::Value(self.create<mlir::arith::MaximumFOp>(lhs, rhs));
            })
-      // fmax follows the torch.fmax convention and returns the non-NaN operand
-      .def("create_fmaxf",
+      // maxnumf follows the torch.fmax convention and returns the non-NaN operand
+      .def("create_maxnumf",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
              return mlir::Value(self.create<mlir::arith::MaxNumFOp>(lhs, rhs));
