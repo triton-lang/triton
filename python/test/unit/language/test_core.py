@@ -4243,14 +4243,10 @@ def test_propagate_nan(propagate_nan, func):
         C = torch.zeros_like(A, device='cuda', dtype=torch.float32)
         kernel[(1, )](A, B, C)
 
-        if mode == 'both':
+        if mode == 'both' or eval(propagate_nan) == tl.PropagateNan.ALL:
             assert torch.isnan(C[0])
         else:
-            if eval(propagate_nan) == tl.PropagateNan.NONE:
-                assert not torch.isnan(C[0])
-            else:
-                assert eval(propagate_nan) == tl.PropagateNan.ALL
-                assert torch.isnan(C[0])
+            assert not torch.isnan(C[0])
 
 
 # -----------------------
