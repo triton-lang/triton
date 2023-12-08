@@ -110,6 +110,10 @@ from .random import (
     uint_to_uniform_float,
 )
 
+from .math import (
+    PropagateNan,
+)
+
 __all__ = [
     "TRITON_MAX_TENSOR_NUMEL",
     "abs",

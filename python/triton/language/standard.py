@@ -99,29 +99,37 @@ def zeros_like(input):
 
 
 @jit
-def minimum(x, y):
+def minimum(x, y, propagate_nan: core.constexpr = math.PropagateNan.NONE):
     """
     Computes the element-wise minimum of :code:`x` and :code:`y`.
 
-    :param input: the first input tensor
-    :type input: Block
-    :param other: the second input tensor
-    :type other: Block
+    :param x: the first input tensor
+    :type x: Block
+    :param y: the second input tensor
+    :type y: Block
+    :param propagate_nan: whether to propagate NaN values.
+    :type propagate_nan: tl.PropagateNan
+
+    .. seealso:: :class:`tl.PropagateNan`
     """
-    return math.min(x, y)
+    return math.min(x, y, propagate_nan)
 
 
 @jit
-def maximum(x, y):
+def maximum(x, y, propagate_nan: core.constexpr = math.PropagateNan.NONE):
     """
     Computes the element-wise maximum of :code:`x` and :code:`y`.
 
-    :param input: the first input tensor
-    :type input: Block
-    :param other: the second input tensor
-    :type other: Block
+    :param x: the first input tensor
+    :type x: Block
+    :param y: the second input tensor
+    :type y: Block
+    :param propagate_nan: whether to propagate NaN values.
+    :type propagate_nan: tl.PropagateNan
+
+    .. seealso:: :class:`tl.PropagateNan`
     """
-    return math.max(x, y)
+    return math.max(x, y, propagate_nan)
 
 
 # max and argmax

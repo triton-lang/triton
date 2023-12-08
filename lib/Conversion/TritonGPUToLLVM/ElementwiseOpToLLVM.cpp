@@ -1596,8 +1596,10 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_BINARY_OP(arith::ShLIOp, LLVM::ShlOp)        // <<
   POPULATE_BINARY_OP(arith::ShRSIOp, LLVM::AShrOp)      // >>
   POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp)      // >>
-  POPULATE_BINARY_OP(arith::MinimumFOp, LLVM::MinNumOp) // fmin
-  POPULATE_BINARY_OP(arith::MaximumFOp, LLVM::MaxNumOp) // fmax
+  POPULATE_BINARY_OP(arith::MinimumFOp, LLVM::MinimumOp) // min (return NaN if either op is Nan)
+  POPULATE_BINARY_OP(arith::MaximumFOp, LLVM::MaximumOp) // max  (return NaN if either op is Nan)
+  POPULATE_BINARY_OP(arith::MinNumFOp, LLVM::MinNumOp) // fmin (return non-NaN if either op is non-NaN)
+  POPULATE_BINARY_OP(arith::MaxNumFOp, LLVM::MaxNumOp) // fmax (return non-NaN if either op is non-NaN)
   POPULATE_BINARY_OP(arith::MinSIOp, LLVM::SMinOp)      // smin
   POPULATE_BINARY_OP(arith::MaxSIOp, LLVM::SMaxOp)      // smax
   POPULATE_BINARY_OP(arith::MinUIOp, LLVM::UMinOp)      // umin

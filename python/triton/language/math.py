@@ -1,9 +1,18 @@
 import functools
 import os
+from enum import Enum
 
 from ..common.build import is_hip
 from . import core
 
+class PropagateNan(Enum):
+    """
+    PropagateNan is an enum class that specifies how NaNs are handled in min/max operations.
+    PropagateNan.ALL means that if either input is NaN, the result is NaN. PropagateNan.NONE
+    means that if either input is NaN, the result is the non-NaN input. This is the default.
+    """
+    ALL = 0x00000000
+    NONE = 0x11111111
 
 @functools.lru_cache()
 def libdevice_path():
@@ -42,13 +51,18 @@ def byte_perm(arg0, arg1, arg2, _builder=None):
 
 
 @core.extern
-def min(arg0, arg1, _builder=None):
+def min(arg0, arg1, propagate_nan: core.constexpr, _builder=None):
     arg0 = core._to_tensor(arg0, _builder)
     arg1 = core._to_tensor(arg1, _builder)
     arg0, arg1 = core.binary_op_type_legalization(arg0, arg1, _builder)
     dtype = arg0.dtype
     if dtype.is_floating():
-        return core.tensor(_builder.create_minf(arg0.handle, arg1.handle), arg0.type)
+        if propagate_nan == core.constexpr(PropagateNan.ALL):
+            return core.tensor(_builder.create_minf(arg0.handle, arg1.handle), arg0.type)
+        elif propagate_nan == core.constexpr(PropagateNan.NONE):
+            return core.tensor(_builder.create_fminf(arg0.handle, arg1.handle), arg0.type)
+        else:
+            assert False, f"Unexpected propagate_nan {propagate_nan}"
     elif dtype.is_int_signed():
         return core.tensor(_builder.create_minsi(arg0.handle, arg1.handle), arg0.type)
     elif dtype.is_int_unsigned():
@@ -58,13 +72,18 @@ def min(arg0, arg1, _builder=None):
 
 
 @core.extern
-def max(arg0, arg1, _builder=None):
+def max(arg0, arg1, propagate_nan: core.constexpr, _builder=None):
     arg0 = core._to_tensor(arg0, _builder)
     arg1 = core._to_tensor(arg1, _builder)
     arg0, arg1 = core.binary_op_type_legalization(arg0, arg1, _builder)
     dtype = arg0.dtype
     if dtype.is_floating():
-        return core.tensor(_builder.create_maxf(arg0.handle, arg1.handle), arg0.type)
+        if propagate_nan == core.constexpr(PropagateNan.ALL):
+            return core.tensor(_builder.create_maxf(arg0.handle, arg1.handle), arg0.type)
+        elif propagate_nan == core.constexpr(PropagateNan.NONE):
+            return core.tensor(_builder.create_fmaxf(arg0.handle, arg1.handle), arg0.type)
+        else:
+            assert False, f"Unexpected propagate_nan {propagate_nan}"
     elif dtype.is_int_signed():
         return core.tensor(_builder.create_maxsi(arg0.handle, arg1.handle), arg0.type)
     elif dtype.is_int_unsigned():
