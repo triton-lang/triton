@@ -1447,7 +1447,7 @@ def reduce(input, axis, combine_fn, _builder=None, _generator=None):
 
 
 @builtin
-def _promote_reduction_input(t, _builder=None):
+def _promote_bfloat16_to_float32(t, _builder=None):
     scalar_ty = t.type.scalar
 
     # hardware doesn't support FMAX, FMIN, CMP for bfloat16
