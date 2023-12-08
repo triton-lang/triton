@@ -13,7 +13,7 @@ from typing import Callable, Generic, Iterable, List, Optional, TypeVar, Union, 
 from .._C.libtriton.triton import TMAInfos
 from ..common.backend import get_backend, get_cuda_version_key
 from .interpreter import InterpretedFunction
-from ..runtime.driver import driver
+from ..runtime.driver import driver as builtin_driver
 
 T = TypeVar("T")
 
@@ -338,18 +338,42 @@ class JITFunction(KernelInterface[T]):
 
     def run(self, *args, grid, warmup, **kwargs):
         from ..compiler import CompiledKernel, compile, ASTSource
-        from ..compiler.backends.cuda import CUDABackend
         # deprecated arguments
         assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
         assert "device" not in kwargs, "device option is deprecated; current device will be used"
         assert "stream" not in kwargs, "stream option is deprecated; current stream will be used"
+        def conclude_device_type(*args, **kwargs) -> str:
+            import itertools
+            input_values = itertools.chain(args, kwargs.values())
+            # Use the torch attributes 'tensor.device.type' and 'tensor.is_pinned' to check the device type.
+            device_types = map(lambda v: v.device.type if hasattr(v, "device") and hasattr(v.device, "type") else "",
+                               input_values)
+            pinned_memory_flags = map(lambda v: v.is_pinned() if hasattr(v, "is_pinned") and callable(v.is_pinned) else False,
+                               input_values)
+            device_types = [_device_type for _device_type in device_types if _device_type != ""]
+
+            is_cpu = all(device_type == "cpu" for device_type in device_types)
+            is_pinned_memory = any(pinned_memory_flag for pinned_memory_flag in pinned_memory_flags)
+            # Return cuda if all the input tensors are cpu while the memory is pinned
+            if is_cpu and is_pinned_memory:
+                return "cuda"
+
+            return "cuda"
+            # return device_types[0] if len(device_types) > 0 else "cuda"
+
+        # deduce the backend type from the input tensor.
+        device_type = conclude_device_type(*args, **kwargs)
+        backend = get_backend(device_type)
+        if backend is None:
+            raise ValueError("Cannot find backend for: " + device_type)
+        driver = backend.get_driver()
+
         # parse options
         device = driver.get_current_device()
         stream = driver.get_current_stream(device)
         target = driver.get_current_target()
-        backend = CUDABackend(target)
         kwargs["debug"] = self.debug
-        options = backend.parse_options(kwargs)
+        options = backend.parse_options(kwargs, target)
         # bind non-reserved keyword args and set defaults
         kwargs = {k: v for k, v in kwargs.items() if not k in options.__dict__}
         bound_args = self.signature.bind(*args, **kwargs)
@@ -371,7 +395,8 @@ class JITFunction(KernelInterface[T]):
         sig_key = tuple(arg.signature_key() for arg in args if not arg.param.is_constexpr)
         spec_key = tuple(arg.specialization_key() for arg in args if not arg.param.do_not_specialize)
         constexpr_key = tuple(arg.value for arg in args if arg.param.is_constexpr)
-        key = (get_cuda_version_key(), sig_key, constexpr_key, spec_key, options)
+        version_key = backend.get_version_key()
+        key = (version_key, sig_key, constexpr_key, spec_key, options)
         # Kernel is not cached; we have to compile.
         if key not in self.cache[device]:
             configs = (self._get_config(*[arg.value for arg in args]), )

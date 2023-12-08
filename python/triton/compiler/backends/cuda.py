@@ -1,4 +1,4 @@
-from triton.common.backend import BaseBackend
+from triton.common.backend import BaseBackend, register_backend
 from dataclasses import dataclass
 from ..._C.libtriton.triton import ClusterInfo, get_num_warps, TMAInfos, translate_triton_gpu_to_llvmir, get_shared_memory_size, translate_llvmir_to_ptx, compile_ptx_to_cubin, add_external_libs
 from ...common.backend import get_cuda_version_key, path_to_ptxas
@@ -8,6 +8,8 @@ from typing import Any
 from ..utils import get_ids_of_tensormaps, parse_tma_info
 from ..make_launcher import make_stub
 import hashlib
+
+from ...runtime.driver import driver as builtin_driver
 
 
 def get_kernel_name(src: str, pattern: str) -> str:
@@ -54,6 +56,7 @@ class CUDAOptions:
     max_num_imprecise_acc_default: bool = None
     extern_libs: dict = None
     debug: bool = False
+    capability: int = 80
 
     def __post_init__(self):
         # TODO: change API
@@ -70,15 +73,19 @@ class CUDAOptions:
 
 class CUDABackend(BaseBackend):
 
-    def __init__(self, device_type: tuple) -> None:
+    def __init__(self, device_type: str) -> None:
         super().__init__(device_type)
-        self.capability = device_type[1]
-        assert isinstance(self.capability, int)
+        # self.driver = SYCLDriver()
+        # self.capability = device_type[1]
+        # assert isinstance(self.capability, int)
 
-    def parse_options(self, opts) -> Any:
+    def parse_options(self, opts, target) -> Any:
         args = {k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts}
-        args["allow_fp8e4nv"] = self.capability >= 89
-        args["max_num_imprecise_acc_default"] = 0 if self.capability >= 89 else None
+        capability = target[1]
+        assert isinstance(capability, int)
+        args["allow_fp8e4nv"] = capability >= 89
+        args["max_num_imprecise_acc_default"] = 0 if capability >= 89 else None
+        args["capability"] = capability
         return CUDAOptions(**args)
 
     @staticmethod
@@ -96,7 +103,7 @@ class CUDABackend(BaseBackend):
         return mod
 
     @staticmethod
-    def make_ttgir(mod, metadata, opt, capability):
+    def make_ttgir(mod, metadata, opt):
         cluster_info = ClusterInfo()
         if opt.cluster_dims is not None:
             cluster_info.clusterDimX = opt.cluster_dims[0]
@@ -105,16 +112,16 @@ class CUDABackend(BaseBackend):
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        pm.add_convert_triton_to_tritongpu_pass(opt.num_warps, 32, opt.num_ctas, capability)
+        pm.add_convert_triton_to_tritongpu_pass(opt.num_warps, 32, opt.num_ctas, opt.capability)
         # optimize TTGIR
         pm.add_tritongpu_coalesce_pass()
         # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
         pm.add_plan_cta_pass(cluster_info)
-        pm.add_tritongpu_rewrite_tensor_pointer_pass(capability)
+        pm.add_tritongpu_rewrite_tensor_pointer_pass(opt.capability)
         pm.add_plan_cta_pass(cluster_info)
         pm.add_tritongpu_remove_layout_conversions_pass()
         pm.add_tritongpu_optimize_thread_locality_pass()
-        pm.add_tritongpu_accelerate_matmul_pass(capability)
+        pm.add_tritongpu_accelerate_matmul_pass(opt.capability)
         pm.add_tritongpu_remove_layout_conversions_pass()
         if opt.optimize_epilogue:
             pm.add_tritongpu_optimize_epilogue_pass()
@@ -126,23 +133,23 @@ class CUDABackend(BaseBackend):
         # it's the responsibility of the compiler to figure out the exact
         # `num_warps` to use.
         # TODO: support the case where `num_warps` from user is not 4.
-        if capability // 10 >= 9 and opt.enable_warp_specialization and opt.num_warps == 4:
-            pm.add_tritongpu_ws_feasibility_checking_pass(capability)
+        if opt.capability // 10 >= 9 and opt.enable_warp_specialization and opt.num_warps == 4:
+            pm.add_tritongpu_ws_feasibility_checking_pass(opt.capability)
             pm.run(mod)
             ws_enabled = ir.is_ws_supported(mod)
             pm = ir.pass_manager(mod.context)
             pm.enable_debug()
         if ws_enabled:
-            pm.add_tritongpu_wsdecomposing_pass(capability)
-            pm.add_tritongpu_wspipeline_pass(opt.num_stages, opt.num_warps, capability)
-            pm.add_tritongpu_wsmutex_pass(capability)
-            pm.add_tritongpu_wsmaterialization_pass(capability)
+            pm.add_tritongpu_wsdecomposing_pass(opt.capability)
+            pm.add_tritongpu_wspipeline_pass(opt.num_stages, opt.num_warps, opt.capability)
+            pm.add_tritongpu_wsmutex_pass(opt.capability)
+            pm.add_tritongpu_wsmaterialization_pass(opt.capability)
             pm.add_licm_pass()
             pm.add_cse_pass()
         else:
-            pm.add_tritongpu_pipeline_pass(opt.num_stages, opt.num_warps, opt.num_ctas, capability)
-        pm.add_tritongpu_materialize_load_store_pass(opt.num_warps, capability)
-        if capability // 10 <= 8:
+            pm.add_tritongpu_pipeline_pass(opt.num_stages, opt.num_warps, opt.num_ctas, opt.capability)
+        pm.add_tritongpu_materialize_load_store_pass(opt.num_warps, opt.capability)
+        if opt.capability // 10 <= 8:
             pm.add_tritongpu_prefetch_pass()
         pm.add_tritongpu_optimize_dot_operands_pass()
         pm.add_tritongpu_remove_layout_conversions_pass()
@@ -151,7 +158,7 @@ class CUDABackend(BaseBackend):
         pm.add_tritongpu_reorder_instructions_pass()
         pm.add_cse_pass()
         pm.add_symbol_dce_pass()
-        if capability // 10 >= 9:
+        if opt.capability // 10 >= 9:
             pm.add_tritongpu_fence_insertion_pass()
         pm.add_tritongpu_ws_fixup_missing_attrs_pass()
         pm.add_canonicalizer_pass()
@@ -160,7 +167,7 @@ class CUDABackend(BaseBackend):
         return mod
 
     @staticmethod
-    def make_llir(src, metadata, options, capability):
+    def make_llir(src, metadata, options):
         metadata["enable_warp_specialization"] = ir.is_ws_supported(src)
         metadata["num_warps"] = get_num_warps(src)
         tma_infos = TMAInfos()
@@ -170,7 +177,7 @@ class CUDABackend(BaseBackend):
             paths = [lib[1] for lib in options.extern_libs]
             add_external_libs(src, names, paths)
         # TritonGPU -> LLVM-IR
-        ret = translate_triton_gpu_to_llvmir(src, capability, tma_infos, runtime.TARGET.NVVM)
+        ret = translate_triton_gpu_to_llvmir(src, options.capability, tma_infos, runtime.TARGET.NVVM)
         if len(tma_infos) > 0:
             metadata["tensormaps_info"] = parse_tma_info(tma_infos, metadata["ids_of_folded_args"])
             for i, _ in enumerate(metadata["tensormaps_info"]):
@@ -180,28 +187,31 @@ class CUDABackend(BaseBackend):
         return ret
 
     @staticmethod
-    def make_ptx(src, metadata, opt, capability):
+    def make_ptx(src, metadata, opt):
         ptx_version = opt.ptx_version
         if ptx_version is None:
             _, cuda_version = path_to_ptxas()
             ptx_version = ptx_get_version(cuda_version)
-        return translate_llvmir_to_ptx(src, capability, ptx_version, opt.enable_fp_fusion)
+        return translate_llvmir_to_ptx(src, opt.capability, ptx_version, opt.enable_fp_fusion)
 
     @staticmethod
-    def make_cubin(src, metadata, opt, capability):
+    def make_cubin(src, metadata, opt):
         metadata["name"] = get_kernel_name(src, pattern='// .globl')
         ptxas, _ = path_to_ptxas()
-        return compile_ptx_to_cubin(src, ptxas, capability, opt.enable_fp_fusion)
+        return compile_ptx_to_cubin(src, ptxas, opt.capability, opt.enable_fp_fusion)
 
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
-        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.capability)
-        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, self.capability)
-        stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, options, self.capability)
-        stages["cubin"] = lambda src, metadata: self.make_cubin(src, metadata, options, self.capability)
+        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options)
+        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
+        stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, options)
+        stages["cubin"] = lambda src, metadata: self.make_cubin(src, metadata, options)
 
     def hash(self):
-        return f'{get_cuda_version_key()}-{self.capability}'
+        return self.get_version_key()
+
+    def get_version_key(self):
+        return f'{get_cuda_version_key()}'
 
     def make_launcher_stub(self, src, metadata):
         ids = {
@@ -218,3 +228,9 @@ class CUDABackend(BaseBackend):
     @classmethod
     def create_backend(cls, device_type: str):
         return cls(device_type)
+
+
+    def get_driver(self):
+        return builtin_driver
+
+register_backend("cuda", CUDABackend)

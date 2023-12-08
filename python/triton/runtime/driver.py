@@ -112,6 +112,8 @@ class CudaDriver(DriverBase):
             self.get_current_stream = lambda idx: torch.cuda.current_stream(idx).cuda_stream
         self.get_current_device = torch.cuda.current_device
         self.set_current_device = torch.cuda.set_device
+        self.get_device_properties = self.utils.get_device_properties
+        self.load_binary = self.utils.load_binary
 
     @functools.lru_cache()
     def get_current_target(self):
