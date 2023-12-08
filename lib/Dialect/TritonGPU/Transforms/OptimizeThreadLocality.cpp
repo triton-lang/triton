@@ -245,33 +245,17 @@ private:
   std::optional<TypedAttr> getNeutralElement(Operation *op) const {
     if (isa<arith::MaxNumFOp, arith::MinNumFOp>(op)) {
       OpBuilder builder(op->getContext());
-      bool useOnlyFiniteValue = false;
 
-      auto fmfOpInterface = dyn_cast<arith::ArithFastMathInterface>(op);
-      if (fmfOpInterface) {
-        arith::FastMathFlagsAttr fmfAttr =
-            fmfOpInterface.getFastMathFlagsAttr();
-        useOnlyFiniteValue =
-            bitEnumContainsAny(fmfAttr.getValue(), arith::FastMathFlags::ninf);
-      }
       Type resultType = op->getResult(0).getType();
       const llvm::fltSemantics &semantic =
           llvm::cast<FloatType>(resultType).getFloatSemantics();
       if (isa<arith::MaxNumFOp>(op)) {
-        if (useOnlyFiniteValue)
-          return builder.getFloatAttr(
-              resultType, APFloat::getLargest(semantic, /*Negative=*/true));
-        else
-          return builder.getFloatAttr(
-              resultType, APFloat::getInf(semantic, /*Negative=*/true));
+        return builder.getFloatAttr(
+            resultType, APFloat::getInf(semantic, /*Negative=*/true));
       }
       if (isa<arith::MinNumFOp>(op)) {
-        if (useOnlyFiniteValue)
-          return builder.getFloatAttr(
-              resultType, APFloat::getLargest(semantic, /*Negative=*/false));
-        else
-          return builder.getFloatAttr(
-              resultType, APFloat::getInf(semantic, /*Negative=*/false));
+        return builder.getFloatAttr(
+            resultType, APFloat::getInf(semantic, /*Negative=*/false));
       }
     } else {
       return mlir::arith::getNeutralElement(op);
