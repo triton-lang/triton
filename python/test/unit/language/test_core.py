@@ -4228,9 +4228,10 @@ def test_enable_fp_fusion(enable_fp_fusion):
 @pytest.mark.parametrize("propagate_nan", ['tl.PropagateNan.NONE', 'tl.PropagateNan.ALL'])
 @pytest.mark.parametrize("func", ['tl.minimum', 'tl.maximum'])
 def test_propagate_nan(propagate_nan, func):
+
     @triton.jit
     def kernel(A, B, C):
-        tl.store(C, FUNC (tl.load(A), tl.load(B), propagate_nan=PROPAGATE_NAN))
+        tl.store(C, FUNC(tl.load(A), tl.load(B), propagate_nan=PROPAGATE_NAN))
 
     kernel = patch_kernel(kernel, {'FUNC': func, 'PROPAGATE_NAN': propagate_nan})
 

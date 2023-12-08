@@ -22,10 +22,9 @@ class TritonGPUOptimizeThreadLocalityPass
       auto srcEncoding = srcType.getEncoding();
       auto reductionOp = getReductionOp(reduce);
       if (!reductionOp ||
-          !isa<arith::AddFOp, arith::MulFOp,
-               arith::MaximumFOp, arith::MaxNumFOp,
-               arith::MinimumFOp, arith::MinNumFOp
-               >(reductionOp.value()))
+          !isa<arith::AddFOp, arith::MulFOp, arith::MaximumFOp,
+               arith::MaxNumFOp, arith::MinimumFOp, arith::MinNumFOp>(
+              reductionOp.value()))
         return;
       // TODO: relax this restriction
       if (!(srcEncoding.isa<triton::gpu::BlockedEncodingAttr>() && rank > 1))

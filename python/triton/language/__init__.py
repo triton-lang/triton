@@ -4,6 +4,7 @@
 from . import math
 from . import extra
 from .standard import (
+    PropagateNan,
     argmax,
     argmin,
     cdiv,
@@ -110,11 +111,8 @@ from .random import (
     uint_to_uniform_float,
 )
 
-from .math import (
-    PropagateNan,
-)
-
 __all__ = [
+    "PropagateNan",
     "TRITON_MAX_TENSOR_NUMEL",
     "abs",
     "advance",

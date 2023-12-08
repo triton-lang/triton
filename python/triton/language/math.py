@@ -5,6 +5,7 @@ from enum import IntEnum
 from ..common.build import is_hip
 from . import core
 
+
 class PropagateNan(IntEnum):
     """
     PropagateNan is an enum class that specifies how NaNs are handled in min/max operations.
@@ -13,6 +14,7 @@ class PropagateNan(IntEnum):
     """
     ALL = 0xFFFFFFFF
     NONE = 0x00000000
+
 
 @functools.lru_cache()
 def libdevice_path():

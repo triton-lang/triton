@@ -1590,20 +1590,26 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_BINARY_OP(arith::RemFOp, LLVM::FRemOp) // %
   POPULATE_BINARY_OP(arith::RemSIOp, LLVM::SRemOp)
   POPULATE_BINARY_OP(arith::RemUIOp, LLVM::URemOp)
-  POPULATE_BINARY_OP(arith::AndIOp, LLVM::AndOp)        // &
-  POPULATE_BINARY_OP(arith::OrIOp, LLVM::OrOp)          // |
-  POPULATE_BINARY_OP(arith::XOrIOp, LLVM::XOrOp)        // ^
-  POPULATE_BINARY_OP(arith::ShLIOp, LLVM::ShlOp)        // <<
-  POPULATE_BINARY_OP(arith::ShRSIOp, LLVM::AShrOp)      // >>
-  POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp)      // >>
-  POPULATE_BINARY_OP(arith::MinimumFOp, LLVM::MinimumOp) // min (return NaN if either op is Nan)
-  POPULATE_BINARY_OP(arith::MaximumFOp, LLVM::MaximumOp) // max  (return NaN if either op is Nan)
-  POPULATE_BINARY_OP(arith::MinNumFOp, LLVM::MinNumOp) // fmin (return non-NaN if either op is non-NaN)
-  POPULATE_BINARY_OP(arith::MaxNumFOp, LLVM::MaxNumOp) // fmax (return non-NaN if either op is non-NaN)
-  POPULATE_BINARY_OP(arith::MinSIOp, LLVM::SMinOp)      // smin
-  POPULATE_BINARY_OP(arith::MaxSIOp, LLVM::SMaxOp)      // smax
-  POPULATE_BINARY_OP(arith::MinUIOp, LLVM::UMinOp)      // umin
-  POPULATE_BINARY_OP(arith::MaxUIOp, LLVM::UMaxOp)      // umax
+  POPULATE_BINARY_OP(arith::AndIOp, LLVM::AndOp)   // &
+  POPULATE_BINARY_OP(arith::OrIOp, LLVM::OrOp)     // |
+  POPULATE_BINARY_OP(arith::XOrIOp, LLVM::XOrOp)   // ^
+  POPULATE_BINARY_OP(arith::ShLIOp, LLVM::ShlOp)   // <<
+  POPULATE_BINARY_OP(arith::ShRSIOp, LLVM::AShrOp) // >>
+  POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp) // >>
+  POPULATE_BINARY_OP(arith::MinimumFOp,
+                     LLVM::MinimumOp) // min (return NaN if either op is Nan)
+  POPULATE_BINARY_OP(arith::MaximumFOp,
+                     LLVM::MaximumOp) // max  (return NaN if either op is Nan)
+  POPULATE_BINARY_OP(
+      arith::MinNumFOp,
+      LLVM::MinNumOp) // fmin (return non-NaN if either op is non-NaN)
+  POPULATE_BINARY_OP(
+      arith::MaxNumFOp,
+      LLVM::MaxNumOp) // fmax (return non-NaN if either op is non-NaN)
+  POPULATE_BINARY_OP(arith::MinSIOp, LLVM::SMinOp) // smin
+  POPULATE_BINARY_OP(arith::MaxSIOp, LLVM::SMaxOp) // smax
+  POPULATE_BINARY_OP(arith::MinUIOp, LLVM::UMinOp) // umin
+  POPULATE_BINARY_OP(arith::MaxUIOp, LLVM::UMaxOp) // umax
 #undef POPULATE_BINARY_OP
 
 #define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
