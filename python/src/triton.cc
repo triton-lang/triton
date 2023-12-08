@@ -1125,10 +1125,19 @@ void init_triton_ir(py::module &&m) {
               mlir::Value &rhs) -> mlir::Value {
              return mlir::Value(self.create<mlir::arith::MinUIOp>(lhs, rhs));
            })
-      .def("create_minf",
+      // minimumf follows the torch.minimum convention and returns NaN if either
+      // operand is NaN
+      .def("create_minimumf",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
              return mlir::Value(self.create<mlir::arith::MinimumFOp>(lhs, rhs));
+           })
+      // minnumf follows the torch.fmin convention and returns the non-NaN
+      // operand
+      .def("create_minnumf",
+           [](TritonOpBuilder &self, mlir::Value &lhs,
+              mlir::Value &rhs) -> mlir::Value {
+             return mlir::Value(self.create<mlir::arith::MinNumFOp>(lhs, rhs));
            })
       .def("create_maxsi",
            [](TritonOpBuilder &self, mlir::Value &lhs,
@@ -1140,10 +1149,19 @@ void init_triton_ir(py::module &&m) {
               mlir::Value &rhs) -> mlir::Value {
              return mlir::Value(self.create<mlir::arith::MaxUIOp>(lhs, rhs));
            })
-      .def("create_maxf",
+      // maximumf follows the torch.maximum convention and returns NaN if either
+      // operand is NaN
+      .def("create_maximumf",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
              return mlir::Value(self.create<mlir::arith::MaximumFOp>(lhs, rhs));
+           })
+      // maxnumf follows the torch.fmax convention and returns the non-NaN
+      // operand
+      .def("create_maxnumf",
+           [](TritonOpBuilder &self, mlir::Value &lhs,
+              mlir::Value &rhs) -> mlir::Value {
+             return mlir::Value(self.create<mlir::arith::MaxNumFOp>(lhs, rhs));
            })
       // AddPtr (similar to GEP)
       .def("create_addptr",

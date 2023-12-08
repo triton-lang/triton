@@ -107,8 +107,9 @@ class TritonGPUOptimizeThreadLocalityPass
       auto srcEncoding = srcType.getEncoding();
       auto reductionOp = getReductionOp(reduce);
       if (!reductionOp ||
-          !isa<arith::AddFOp, arith::MaximumFOp, arith::MinimumFOp,
-               arith::MulFOp>(reductionOp.value()))
+          !isa<arith::AddFOp, arith::MulFOp, arith::MaximumFOp,
+               arith::MaxNumFOp, arith::MinimumFOp, arith::MinNumFOp>(
+              reductionOp.value()))
         return;
       // TODO: relax this restriction
       if (!(srcEncoding.isa<triton::gpu::BlockedEncodingAttr>() && rank > 1))
@@ -325,6 +326,30 @@ private:
     return newReduce;
   }
 
+  // Work around the lack of support for MaxNumFOp and MinNumFOp in
+  // arith::getNeutralElement.
+  std::optional<TypedAttr> getNeutralElement(Operation *op) const {
+    if (isa<arith::MaxNumFOp, arith::MinNumFOp>(op)) {
+      OpBuilder builder(op->getContext());
+
+      Type resultType = op->getResult(0).getType();
+      const llvm::fltSemantics &semantic =
+          llvm::cast<FloatType>(resultType).getFloatSemantics();
+      if (isa<arith::MaxNumFOp>(op)) {
+        return builder.getFloatAttr(
+            resultType, APFloat::getInf(semantic, /*Negative=*/true));
+      }
+      if (isa<arith::MinNumFOp>(op)) {
+        return builder.getFloatAttr(
+            resultType, APFloat::getInf(semantic, /*Negative=*/false));
+      }
+    } else {
+      return mlir::arith::getNeutralElement(op);
+    }
+    llvm_unreachable("Unhandled reduction op");
+    return std::nullopt;
+  }
+
   Operation *createAccum(OpBuilder &builder, triton::ReduceOp reduce,
                          Value &oldAccum, SmallVector<int64_t> &shape,
                          Attribute &slice2d) const {
@@ -338,7 +363,7 @@ private:
     builder.setInsertionPointAfter(oldAccum.getDefiningOp());
     auto reductionOp = getReductionOp(reduce);
     assert(reductionOp && "Processing a reduce that is not supported!");
-    auto neutralVal = mlir::arith::getNeutralElement(reductionOp.value());
+    auto neutralVal = getNeutralElement(reductionOp.value());
     assert(neutralVal && "Could not find neutral value for reduction op!");
     auto denseAttr = DenseElementsAttr::get(accumType, neutralVal.value());
     auto newAccum = builder.create<arith::ConstantOp>(oldAccum.getLoc(),
