@@ -936,6 +936,28 @@ def cat(input, other, can_reorder=False, _builder=None):
 
 
 @builtin
+def _experimental_interleave(a, b, _builder=None):
+    """
+    Interleave the given tensors in their minor dimension.
+
+    For example, given :code:`a=[1,2,3]` and :code:`b=[4,5,6]`, the result is
+    :code:`[1,4,2,5,3,6]`.
+
+    The two inputs are broadcasted to be the same shape.
+
+    If you want to interleave more than two elements, you can use multiple calls
+    to this function.  This reflects the constraint in Triton that tensors must
+    have power-of-two sizes.
+
+    :param a: The first input tensor.
+    :type a: Tensor
+    :param b: The second input tensor.
+    :type b: Tensor
+    """
+    return semantic.interleave(a, b, _builder)
+
+
+@builtin
 def view(input, shape, _builder=None):
     """
     Returns a tensor with the same elements as `input` but a different shape.
