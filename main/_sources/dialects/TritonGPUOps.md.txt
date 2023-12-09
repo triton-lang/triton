@@ -13,8 +13,6 @@ operation ::= `triton_gpu.alloc_tensor` attr-dict `:` type($result)
 This operation defines a tensor of a particular shape.
 The contents of the tensor are supposed to be in shared memory.
 
-Note: This op can be repalced to a `bufferization.alloc_tensor` in LLVM 16.
-
 Traits: ResultsAreSharedEncoding, VerifyTensorLayoutsTrait
 
 Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
@@ -126,6 +124,32 @@ Effects: MemoryEffects::Effect{}
 | Result | Description |
 | :----: | ----------- |
 | `result` | tensor of floating-point values or tensor of integer values or tensor of ptr values
+
+### `triton_gpu.dealloc_tensor` (triton::gpu::DeallocTensorOp)
+
+_Dealloc tensor_
+
+
+Syntax:
+
+```
+operation ::= `triton_gpu.dealloc_tensor` $src attr-dict `:` type($src)
+```
+
+This operation deallocate a tensor explicitly.
+The contents of the tensor are supposed to be in shared memory.
+
+Traits: OperandsAreSharedEncoding, VerifyTensorLayoutsTrait
+
+Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
+
+Effects: MemoryEffects::Effect{MemoryEffects::Free on ::mlir::SideEffects::DefaultResource}
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `src` | tensor of floating-point values or tensor of integer values or tensor of ptr values
 
 ### `triton_gpu.extract_slice` (triton::gpu::ExtractSliceOp)
 

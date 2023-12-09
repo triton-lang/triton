@@ -466,7 +466,7 @@ Effects: MemoryEffects::Effect{}
 
 ### `tt.elementwise_inline_asm` (triton::ElementwiseInlineAsmOp)
 
-_Inline assembly applying elementwise operation to a group of packed element._
+_Inline assembly applying an elementwise operation to a group of packed elements._
 
 
 Syntax:
@@ -475,9 +475,10 @@ Syntax:
 operation ::= `tt.elementwise_inline_asm` $asm_string attr-dict ($args^ `:` type($args))? `->` type($result)
 ```
 
-This will apply the given in inline assembly to `packed_element` number of
-elements of the inputs. The elements packed together is unknown and will
-depend on the backend implementation.
+Runs an inline asm block to generate one or more tensors.
+
+The asm block is given `packed_element` elements at a time.  Exactly which
+elems it receives is unspecified.
 
 Traits: Elementwise, SameOperandsAndResultEncoding, TensorSizeTrait, VerifyTensorLayoutsTrait
 
@@ -503,7 +504,7 @@ Interfaces: MemoryEffectOpInterface
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | floating-point or tensor of floating-point values or integer or tensor of integer values or ptr or tensor of ptr values or ptr
+| `result` | variadic of floating-point or tensor of floating-point values or integer or tensor of integer values or ptr or tensor of ptr values or ptr
 
 ### `tt.expand_dims` (triton::ExpandDimsOp)
 
@@ -951,6 +952,13 @@ Syntax:
 operation ::= `tt.reshape` $src attr-dict `:` type($src) `->` type($result)
 ```
 
+reinterpret a tensor to a different shape.
+
+If allow_reorder is set the compiler is free to change the order of
+elements to generate more efficient code.
+
+If efficient_layout is set, this is a hint that the destination layout should be kept for performance reason.
+The compiler is still free to change it for better performance.
 
 Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, TensorSizeTrait, VerifyTensorLayoutsTrait
 
@@ -963,6 +971,7 @@ Effects: MemoryEffects::Effect{}
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>allow_reorder</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+<tr><td><code>efficient_layout</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 </table>
 
 #### Operands:
