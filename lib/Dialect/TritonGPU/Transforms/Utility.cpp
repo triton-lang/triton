@@ -258,6 +258,27 @@ static std::optional<Attribute> inferDstEncoding(triton::ExpandDimsOp op,
   return sliceEncoding.getParent();
 }
 
+static std::optional<Attribute>
+inferDstEncoding(triton::ExperimentalInterleaveOp op, Attribute encoding) {
+  // Same as src encoding, except the last dim has 2x the elements per thread.
+  auto ctx = op->getContext();
+  auto enc = encoding.dyn_cast<triton::gpu::BlockedEncodingAttr>();
+  if (!enc)
+    return std::nullopt;
+
+  // Precondition for the interleave op in general: The last dim is also the
+  // most minor dim (i.e. it occurs first in `order`).
+  if (enc.getOrder()[0] != enc.getOrder().size() - 1)
+    return std::nullopt;
+
+  auto newSizePerThread = enc.getSizePerThread();
+  newSizePerThread[newSizePerThread.size() - 1] *= 2;
+
+  return triton::gpu::BlockedEncodingAttr::get(
+      ctx, newSizePerThread, enc.getThreadsPerWarp(), enc.getWarpsPerCTA(),
+      enc.getOrder(), enc.getCTALayout());
+}
+
 static std::optional<Attribute> inferSrcEncoding(triton::ReduceOp op,
                                                  Attribute encoding) {
   auto sliceEncoding = encoding.dyn_cast<triton::gpu::SliceEncodingAttr>();
@@ -274,11 +295,37 @@ static std::optional<Attribute> inferSrcEncoding(triton::ExpandDimsOp op,
                                              encoding);
 }
 
+static std::optional<Attribute>
+inferSrcEncoding(triton::ExperimentalInterleaveOp op, Attribute encoding) {
+  // Same as dst encoding, except the last dim has half the elements per thread.
+  auto ctx = op->getContext();
+  auto enc = encoding.dyn_cast<triton::gpu::BlockedEncodingAttr>();
+  if (!enc)
+    return std::nullopt;
+
+  // Precondition for the interleave op in general: The last dim is also the
+  // most minor dim (i.e. it occurs first in `order`).
+  if (enc.getOrder()[0] != enc.getOrder().size() - 1)
+    return std::nullopt;
+
+  if (enc.getSizePerThread()[enc.getSizePerThread().size() - 1] % 2 != 0)
+    return std::nullopt;
+
+  auto newSizePerThread = enc.getSizePerThread();
+  newSizePerThread[newSizePerThread.size() - 1] /= 2;
+
+  return triton::gpu::BlockedEncodingAttr::get(
+      ctx, newSizePerThread, enc.getThreadsPerWarp(), enc.getWarpsPerCTA(),
+      enc.getOrder(), enc.getCTALayout());
+}
+
 std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
   if (auto reduceOp = dyn_cast<triton::ReduceOp>(op))
     return inferSrcEncoding(reduceOp, encoding);
   if (auto expand = dyn_cast<triton::ExpandDimsOp>(op))
     return inferSrcEncoding(expand, encoding);
+  if (auto interleave = dyn_cast<triton::ExperimentalInterleaveOp>(op))
+    return inferSrcEncoding(interleave, encoding);
   if (isa<triton::ReshapeOp, triton::CatOp>(op))
     return std::nullopt;
   return encoding;
@@ -289,6 +336,8 @@ std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
     return inferDstEncoding(reduceOp, encoding);
   if (auto expand = dyn_cast<triton::ExpandDimsOp>(op))
     return inferDstEncoding(expand, encoding);
+  if (auto interleave = dyn_cast<triton::ExperimentalInterleaveOp>(op))
+    return inferDstEncoding(interleave, encoding);
   if (isa<triton::ReshapeOp, triton::CatOp>(op))
     return std::nullopt;
   return encoding;

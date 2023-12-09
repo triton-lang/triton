@@ -354,6 +354,19 @@ def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
 }
 
+def TT_ExperimentalInterleaveOp : TT_Op<"experimental_interleave", [NoMemoryEffect, SameTypeOperands, SameOperandsAndResultElementType]> {
+    let summary = "interleave two tensors in their minor dimension";
+    let description = [{
+        For example, if the two input tensors are [1,2,3] and [4,5,6],
+        interleaving them returns [1,4,2,5,3,6].
+    }];
+
+    let arguments = (ins TT_Tensor:$lhs, TT_Tensor:$rhs);
+    let results = (outs TT_Tensor:$result);
+    let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
+    let hasVerifier = 1;
+}
+
 def TT_TransOp : TT_Op<"trans", [Pure,
                                  DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                  SameOperandsAndResultElementType]> {

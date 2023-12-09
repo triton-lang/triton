@@ -75,26 +75,24 @@ public:
   }
 };
 
-// Class to propagate layout globally within a function.
-// The current algorithm works by analysis the IR and doing a one shot rewrite
-// based on the analysis. The algorithm is as follows:
-// 1. Find all the anchor ops. These are ops that have a layout we want to
-// preserve.
+// The current algorithm works by analyzing the IR and doing a one-shot rewrite
+// based on the analysis. The algorithm is as follows.
 //
-// 2. Propagate the layout to every op reachable which is a transitive child of
-// an anchor op until we reach a fix point.
-// An op can have multiple transitive anchor parents therefore at this stage
-// it may have multiple layout associated to it.
+// 1. Find all the anchor ops. These are ops that have a layout we want to
+//    preserve.
+//
+// 2. For each anchor, propagate its layout to all its descendants.
+//    An op can have multiple ancestors that are anchors, so at this stage an op
+//    may have multiple layouts associated with it.
 //
 // 3. Resolve conflicts by deciding which of the multiple layouts the op should
-// keep. If one of the parents has a different layout than what is picked a
-// convert operation will be inserted. After this stage each value should have
-// only one layout associated.
+//    keep, inserting convert-layout ops to resolve conflicts.  After this
+//    stage, each value has only one layout associated with it.
 //
-// 4. Rewrite the IR by walking the function following dominance order. Since we
-// assume the IR is structured we just need to process the regions in the
-// correct order. For each op rewrite it using the layout decided by the
-// analysis phase.
+// 4. Rewrite the IR by walking the function in dominance order. Since we
+//    assume the IR is structured we just need to process the regions in the
+//    correct order. For each op, rewrite it using the layout decided by the
+//    analysis phase.
 class LayoutPropagation {
 public:
   // Structure to keep track of the layout associated to a value.
@@ -285,7 +283,8 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     if (user->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<mlir::OpTrait::Elementwise>() ||
         isa<triton::ReduceOp, triton::ExpandDimsOp,
-            triton::gpu::ConvertLayoutOp>(user)) {
+            triton::ExperimentalInterleaveOp, triton::gpu::ConvertLayoutOp>(
+            user)) {
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
@@ -678,8 +677,8 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   }
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
-      isa<triton::ReduceOp, triton::ExpandDimsOp, triton::gpu::ConvertLayoutOp>(
-          op)) {
+      isa<triton::ReduceOp, triton::ExpandDimsOp,
+          triton::ExperimentalInterleaveOp, triton::gpu::ConvertLayoutOp>(op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
          llvm::zip(op->getResults(), newOp->getResults()))
