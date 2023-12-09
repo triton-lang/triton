@@ -97,6 +97,7 @@ from .core import (
     view,
     void,
     where,
+    _experimental_interleave,
 )
 from .random import (
     pair_uniform_to_normal,
@@ -217,4 +218,5 @@ __all__ = [
     "xor_sum",
     "zeros",
     "zeros_like",
+    _experimental_interleave,
 ]
