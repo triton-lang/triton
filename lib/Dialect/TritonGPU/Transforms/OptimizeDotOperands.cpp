@@ -259,11 +259,12 @@ struct MMAV3UseRegOperand : public OpRewritePattern<triton::DotOp> {
     if (!srcEncoding || srcEncoding.getVersionMajor() != 3 || !dstEncoding ||
         dstEncoding.getVersionMajor() != 3)
       return failure();
-    // We currently only support convert from f16 mma to f16 dot operand as the
-    // other types require shuffling data across threads.
+    // We currently only support convert from f16 and bf16 mma to f16 and bf16
+    // dot operand as the other types require shuffling data across threads.
     // TODO: extend it to more types.
     auto srcType = convertLhs.getSrc().getType().cast<RankedTensorType>();
-    if (!srcType.getElementType().isF16())
+    if (!(srcType.getElementType().isF16() ||
+          srcType.getElementType().isBF16()))
       return failure();
     auto dotOperandEncoding =
         DotOperandEncodingAttr::get(dotOp.getContext(), 0, srcEncoding, 0);
