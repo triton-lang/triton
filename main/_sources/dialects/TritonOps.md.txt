@@ -543,6 +543,39 @@ Effects: MemoryEffects::Effect{}
 | :----: | ----------- |
 | `result` | tensor of floating-point values or tensor of integer values or tensor of ptr values
 
+### `tt.experimental_interleave` (triton::ExperimentalInterleaveOp)
+
+_Interleave two tensors in their minor dimension_
+
+
+Syntax:
+
+```
+operation ::= `tt.experimental_interleave` $lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)
+```
+
+For example, if the two input tensors are [1,2,3] and [4,5,6],
+interleaving them returns [1,4,2,5,3,6].
+
+Traits: SameOperandsAndResultElementType, SameTypeOperands, TensorSizeTrait, VerifyTensorLayoutsTrait
+
+Interfaces: NoMemoryEffect (MemoryEffectOpInterface)
+
+Effects: MemoryEffects::Effect{}
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `lhs` | tensor of floating-point values or tensor of integer values or tensor of ptr values
+| `rhs` | tensor of floating-point values or tensor of integer values or tensor of ptr values
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | tensor of floating-point values or tensor of integer values or tensor of ptr values
+
 ### `tt.extern_elementwise` (triton::ExternElementwiseOp)
 
 Syntax:
