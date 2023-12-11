@@ -579,8 +579,8 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
   ];
 }
 
-def NvidiaMmaEncodingAttr : DistributedEncoding<"MmaEncoding", [MmaEncodingTrait]> {
-  let mnemonic = "mma";
+def NvidiaMmaEncodingAttr : DistributedEncoding<"NvidiaMmaEncoding", [MmaEncodingTrait]> {
+  let mnemonic = "nvidia_mma";
 
   let description = [{
 An encoding for tensors that have been produced by tensor cores.
