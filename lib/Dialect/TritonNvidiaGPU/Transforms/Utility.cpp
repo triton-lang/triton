@@ -296,7 +296,7 @@ void setAgentIds(Operation *op, ArrayRef<AgentId> agentIds) {
   op->setAttr("async_agent", DenseIntElementsAttr::get(vecTy, sortedAgentIds));
 }
 
-SmallVector<AgentId> collectAgentIds(Operation *op) {
+SmallVector<AgentId> getNestedAgentIds(Operation *op) {
   SetVector<AgentId> agentIds;
   op->walk([&](Operation *curOp) {
     for (AgentId agentId : getAgentIds(curOp))

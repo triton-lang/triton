@@ -131,12 +131,7 @@ LoadType scanLoadTypes(ttng::CreateTokenOp createTokenOp) {
   // TODO: Attach information of binded tensors to CreateTokenOp
   std::set<LoadType> loadTypes;
   createTokenOp->getBlock()->walk([&](Operation *op) {
-    if (auto insertOp = dyn_cast<ttg::InsertSliceOp>(op)) {
-      if (triton::isTensorPointerType(insertOp.getSrc().getType()))
-        loadTypes.insert(LoadType::InsertSliceAsyncV2Op);
-      else
-        loadTypes.insert(LoadType::InsertSliceAsyncOp);
-    } else if (isa<ttg::InsertSliceAsyncOp>(op)) {
+    if (isa<ttg::InsertSliceAsyncOp>(op)) {
       loadTypes.insert(LoadType::InsertSliceAsyncOp);
     } else if (isa<ttng::InsertSliceAsyncV2Op>(op)) {
       loadTypes.insert(LoadType::InsertSliceAsyncV2Op);
@@ -202,7 +197,9 @@ int applyCommit(OpBuilder &builder, ttng::ProducerCommitOp &op,
                                              OperationEquivalence::None)) {
       break;
     }
-    if (auto insertOp = dyn_cast<ttg::InsertSliceOp>(ItrOp)) {
+    if (auto insertOp = dyn_cast<ttg::InsertSliceAsyncOp>(ItrOp)) {
+      if (getNestedAgentIds(insertOp).size() == 0)
+        continue;
       deprecatedOps.push_back(&ItrOp);
       builder.setInsertionPoint(insertOp);
       if (!::mlir::triton::isTensorPointerType(insertOp.getSrc().getType())) {
@@ -633,8 +630,7 @@ void tryRegisterRealloc(ModuleOp mod) {
   auto isLoadAgent = [](scf::IfOp ifOp) -> bool {
     return ifOp
         ->walk([](Operation *op) {
-          if (isa<ttg::InsertSliceOp, ttg::InsertSliceAsyncOp,
-                  ttng::InsertSliceAsyncV2Op>(op))
+          if (isa<ttg::InsertSliceAsyncOp, ttng::InsertSliceAsyncV2Op>(op))
             return WalkResult::interrupt();
           return WalkResult::advance();
         })

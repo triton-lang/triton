@@ -1456,11 +1456,10 @@ void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
 }
 
 //===----------------------------------------------------------------------===//
-// InsertSliceOp / InsertSliceAsyncOp
+// InsertSliceAsyncOp
 //===----------------------------------------------------------------------===//
 
-template <class OpT>
-ParseResult parseInsertSliceOp(OpAsmParser &parser, OperationState &result) {
+ParseResult parseInsertSliceAsyncOp(OpAsmParser &parser, OperationState &result) {
   SmallVector<OpAsmParser::UnresolvedOperand, 8> allOperands;
   Type srcType, dstType;
   SMLoc allOperandLoc = parser.getCurrentLocation();
@@ -1494,15 +1493,14 @@ ParseResult parseInsertSliceOp(OpAsmParser &parser, OperationState &result) {
 
   // Deduce operandSegmentSizes from the number of the operands.
   auto operandSegmentSizesAttrName =
-      OpT::getOperandSegmentSizesAttrName(result.name);
+      triton::gpu::InsertSliceAsyncOp::getOperandSegmentSizesAttrName(result.name);
   result.addAttribute(
       operandSegmentSizesAttrName,
       parser.getBuilder().getDenseI32ArrayAttr({1, 1, 1, hasMask, hasOther}));
   return success();
 }
 
-template <class OpT>
-void printInsertSliceOp(OpAsmPrinter &printer, OpT insertSliceOp) {
+void printInsertSliceAsyncOp(OpAsmPrinter &printer, triton::gpu::InsertSliceAsyncOp insertSliceOp) {
   printer << " ";
   printer << insertSliceOp.getOperation()->getOperands();
   // "operandSegmentSizes" can be deduced, so we don't print it.
@@ -1515,21 +1513,14 @@ void printInsertSliceOp(OpAsmPrinter &printer, OpT insertSliceOp) {
   printer.printStrippedAttrOrType(insertSliceOp.getDst().getType());
 }
 
-ParseResult InsertSliceOp::parse(OpAsmParser &parser, OperationState &result) {
-  return parseInsertSliceOp<InsertSliceOp>(parser, result);
-}
-
-void InsertSliceOp::print(OpAsmPrinter &printer) {
-  printInsertSliceOp<InsertSliceOp>(printer, *this);
-}
 
 ParseResult InsertSliceAsyncOp::parse(OpAsmParser &parser,
                                       OperationState &result) {
-  return parseInsertSliceOp<InsertSliceAsyncOp>(parser, result);
+  return parseInsertSliceAsyncOp(parser, result);
 }
 
 void InsertSliceAsyncOp::print(OpAsmPrinter &printer) {
-  printInsertSliceOp<InsertSliceAsyncOp>(printer, *this);
+  printInsertSliceAsyncOp(printer, *this);
 }
 
 //===----------------------------------------------------------------------===//
