@@ -37,7 +37,6 @@
 #include "triton/Target/PTX/PTXTranslation.h"
 #include "triton/Target/PTX/TmaMetadata.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
-#include "triton/Tools/Sys/GetPlatform.hpp"
 
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
