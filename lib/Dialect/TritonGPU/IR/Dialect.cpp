@@ -1459,7 +1459,8 @@ void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
 // InsertSliceAsyncOp
 //===----------------------------------------------------------------------===//
 
-ParseResult parseInsertSliceAsyncOp(OpAsmParser &parser, OperationState &result) {
+ParseResult parseInsertSliceAsyncOp(OpAsmParser &parser,
+                                    OperationState &result) {
   SmallVector<OpAsmParser::UnresolvedOperand, 8> allOperands;
   Type srcType, dstType;
   SMLoc allOperandLoc = parser.getCurrentLocation();
@@ -1493,14 +1494,16 @@ ParseResult parseInsertSliceAsyncOp(OpAsmParser &parser, OperationState &result)
 
   // Deduce operandSegmentSizes from the number of the operands.
   auto operandSegmentSizesAttrName =
-      triton::gpu::InsertSliceAsyncOp::getOperandSegmentSizesAttrName(result.name);
+      triton::gpu::InsertSliceAsyncOp::getOperandSegmentSizesAttrName(
+          result.name);
   result.addAttribute(
       operandSegmentSizesAttrName,
       parser.getBuilder().getDenseI32ArrayAttr({1, 1, 1, hasMask, hasOther}));
   return success();
 }
 
-void printInsertSliceAsyncOp(OpAsmPrinter &printer, triton::gpu::InsertSliceAsyncOp insertSliceOp) {
+void printInsertSliceAsyncOp(OpAsmPrinter &printer,
+                             triton::gpu::InsertSliceAsyncOp insertSliceOp) {
   printer << " ";
   printer << insertSliceOp.getOperation()->getOperands();
   // "operandSegmentSizes" can be deduced, so we don't print it.
@@ -1512,7 +1515,6 @@ void printInsertSliceAsyncOp(OpAsmPrinter &printer, triton::gpu::InsertSliceAsyn
   printer << " -> ";
   printer.printStrippedAttrOrType(insertSliceOp.getDst().getType());
 }
-
 
 ParseResult InsertSliceAsyncOp::parse(OpAsmParser &parser,
                                       OperationState &result) {
