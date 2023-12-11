@@ -31,7 +31,7 @@ static CUtensorMapDataType getCUtensorMapDataType(Type ty) {
   } else if (ty.getIntOrFloatBitWidth() == 8) {
     return CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_UINT8;
   } else {
-    llvm::report_fatal_error("Unsupported elemTy for InsertSliceAsyncV2Op");
+    llvm::report_fatal_error("Unsupported elemTy for InsertSliceTMAOp");
     return CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_FLOAT16;
   }
 }
@@ -1458,26 +1458,26 @@ struct InsertSliceAsyncOpConversion
   }
 };
 
-struct InsertSliceAsyncV2OpConversion
+struct InsertSliceTMAOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<
-          triton::nvidia_gpu::InsertSliceAsyncV2Op> {
+          triton::nvidia_gpu::InsertSliceTMAOp> {
   using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::InsertSliceAsyncV2Op>::
+      triton::nvidia_gpu::InsertSliceTMAOp>::
       ConvertTritonGPUOpToLLVMPattern;
 
-  InsertSliceAsyncV2OpConversion(TritonGPUToLLVMTypeConverter &converter,
+  InsertSliceTMAOpConversion(TritonGPUToLLVMTypeConverter &converter,
 
                                  ModuleAllocation &allocation,
                                  mlir::triton::gpu::TMAMetadataTy *tmaMetadata,
                                  const TensorPtrMapT *tensorPtrMap,
                                  PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<
-            triton::nvidia_gpu::InsertSliceAsyncV2Op>(converter, allocation,
+            triton::nvidia_gpu::InsertSliceTMAOp>(converter, allocation,
                                                       tmaMetadata, benefit),
         tensorPtrMap(tensorPtrMap) {}
 
   LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::InsertSliceAsyncV2Op op,
+  matchAndRewrite(triton::nvidia_gpu::InsertSliceTMAOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
@@ -1494,13 +1494,13 @@ struct InsertSliceAsyncV2OpConversion
     SmallVector<unsigned> shape;
     auto axis = op->getAttrOfType<IntegerAttr>("axis").getInt();
     auto moduleOp = op->getParentOfType<ModuleOp>();
-    assert(moduleOp && "Parent ModuleOp not found for InsertSliceAsyncV2Op");
+    assert(moduleOp && "Parent ModuleOp not found for InsertSliceTMAOp");
     auto llFuncOp = op->getParentOfType<LLVM::LLVMFuncOp>();
-    assert(llFuncOp && "LLVMFuncOp not found for InsertSliceAsyncV2Op");
+    assert(llFuncOp && "LLVMFuncOp not found for InsertSliceTMAOp");
     int numTMADescs = getNumTMADescs(llFuncOp);
     assert(numTMADescs > 0);
     auto sharedLayout = resultTy.getEncoding().dyn_cast<SharedEncodingAttr>();
-    assert(sharedLayout && "unexpected layout of InsertSliceAsyncV2Op");
+    assert(sharedLayout && "unexpected layout of InsertSliceTMAOp");
     auto CTAsPerCGA = sharedLayout.getCTALayout().getCTAsPerCGA();
     auto CTAOrder = sharedLayout.getCTALayout().getCTAOrder();
     auto CTASplitNum = sharedLayout.getCTALayout().getCTASplitNum();
@@ -1582,7 +1582,7 @@ struct InsertSliceAsyncV2OpConversion
       swizzle = CUtensorMapSwizzle::CU_TENSOR_MAP_SWIZZLE_128B;
     else
       llvm::report_fatal_error(
-          "Unsupported shared layout for InsertSliceAsyncV2Op");
+          "Unsupported shared layout for InsertSliceTMAOp");
 
     tmaInfo.swizzle = swizzle;
     tmaInfo.interleave = CUtensorMapInterleave::CU_TENSOR_MAP_INTERLEAVE_NONE;
@@ -1847,7 +1847,7 @@ void populateLoadStoreOpToLLVMPatterns(
                                         indexCacheInfo, benefit);
   patterns.add<InsertSliceAsyncOpConversion>(
       typeConverter, allocation, indexCacheInfo, axisInfoAnalysis, benefit);
-  patterns.add<InsertSliceAsyncV2OpConversion>(
+  patterns.add<InsertSliceTMAOpConversion>(
       typeConverter, allocation, tmaMetadata, tensorPtrMap, benefit);
   patterns.add<StoreAsyncOpConversion>(typeConverter, allocation, tmaMetadata,
                                        tensorPtrMap, benefit);

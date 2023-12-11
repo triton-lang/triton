@@ -224,11 +224,11 @@ def TTNG_NamedBarrierWaitOp : TTNG_Op<"bar_wait", []> {
   let assemblyFormat = "$bar `,` $numThreads attr-dict `:` type(operands)";
 }
 
-def TTNG_InsertSliceAsyncV2Op : TTNG_Op<"insert_slice_async_v2",
-                                      [AttrSizedOperandSegments,
-                                       ResultsAreSharedEncoding,
-                                       // TODO: Check if MemWrite will degrade performance of non-warp-specialized kernel
-                                       MemoryEffects<[MemRead, MemWrite]>]> {
+def TTNG_InsertSliceTMAOp : TTNG_Op<"insert_slice_tma",
+                                     [AttrSizedOperandSegments,
+                                      ResultsAreSharedEncoding,
+                                      // TODO: Check if MemWrite will degrade performance of non-warp-specialized kernel
+                                      MemoryEffects<[MemRead, MemWrite]>]> {
 
   let arguments = (ins AnyTypeOf<[TT_Ptr, TT_PtrTensor]>:$src, TT_Tensor:$dst,
                        I32:$index, TT_Ptr:$mbar,

@@ -380,7 +380,7 @@ bool maybeSharedAllocationOp(Operation *op) {
 bool maybeAliasOp(Operation *op) {
   return isa<triton::gpu::ExtractSliceOp, triton::TransOp,
              triton::gpu::InsertSliceAsyncOp,
-             triton::nvidia_gpu::InsertSliceAsyncV2Op,
+             triton::nvidia_gpu::InsertSliceTMAOp,
              triton::nvidia_gpu::StoreAsyncOp, tensor::InsertSliceOp>(op);
 }
 

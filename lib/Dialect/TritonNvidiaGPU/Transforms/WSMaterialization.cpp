@@ -44,7 +44,7 @@ namespace {
 enum class LoadType {
   Uninitialized,
   InsertSliceAsyncOp,
-  InsertSliceAsyncV2Op,
+  InsertSliceTMAOp,
   MultiKinds,
 };
 
@@ -133,8 +133,8 @@ LoadType scanLoadTypes(ttng::CreateTokenOp createTokenOp) {
   createTokenOp->getBlock()->walk([&](Operation *op) {
     if (isa<ttg::InsertSliceAsyncOp>(op)) {
       loadTypes.insert(LoadType::InsertSliceAsyncOp);
-    } else if (isa<ttng::InsertSliceAsyncV2Op>(op)) {
-      loadTypes.insert(LoadType::InsertSliceAsyncV2Op);
+    } else if (isa<ttng::InsertSliceTMAOp>(op)) {
+      loadTypes.insert(LoadType::InsertSliceTMAOp);
     }
   });
   assert(loadTypes.size() > 0 && "InsertSliceOp not found");
@@ -164,7 +164,7 @@ Value getMBarrierPhaseBit(OpBuilder &builder, Operation *op,
   return curPhase;
 }
 
-int getTxBytes(ttng::InsertSliceAsyncV2Op load) {
+int getTxBytes(ttng::InsertSliceTMAOp load) {
   // Both support ptr of tensor and tensor of ptr.
   RankedTensorType srcTensorType;
   if (auto srcType = dyn_cast<RankedTensorType>(load.getSrc().getType())) {
@@ -215,10 +215,10 @@ int applyCommit(OpBuilder &builder, ttng::ProducerCommitOp &op,
         insertOp.getResult().replaceAllUsesWith(newSliceOp.getResult());
         setAgentIds(newSliceOp, agentIds);
       } else {
-        // Transform to InsertSliceAsyncV2Op
+        // Transform to InsertSliceTMAOp
         auto extractBarrierOp = dyn_cast<ttng::ExtractMBarrierOp>(
             builder.clone(*(mbarrier.getDefiningOp())));
-        auto newSliceOp = builder.create<ttng::InsertSliceAsyncV2Op>(
+        auto newSliceOp = builder.create<ttng::InsertSliceTMAOp>(
             /*loc=*/insertOp.getLoc(), /*result=*/insertOp.getDst().getType(),
             /*src=*/insertOp.getSrc(), /*dst=*/insertOp.getDst(),
             /*index=*/insertOp.getIndex(),
@@ -362,7 +362,7 @@ void materializeTokenOperations(Operation *parentOp, int numCTAs) {
     OpBuilder builder(createTokenOp);
     auto tokenLoc = createTokenOp.getLoc();
     unsigned bufferFullCount =
-        loadType == LoadType::InsertSliceAsyncV2Op ? 1 : 128;
+        loadType == LoadType::InsertSliceTMAOp ? 1 : 128;
     Value bufferFullArray = builder.create<ttng::AllocMBarrierOp>(
         tokenLoc, mBarriersTy, bufferFullCount);
     Value bufferEmptyArray =
@@ -630,7 +630,7 @@ void tryRegisterRealloc(ModuleOp mod) {
   auto isLoadAgent = [](scf::IfOp ifOp) -> bool {
     return ifOp
         ->walk([](Operation *op) {
-          if (isa<ttg::InsertSliceAsyncOp, ttng::InsertSliceAsyncV2Op>(op))
+          if (isa<ttg::InsertSliceAsyncOp, ttng::InsertSliceTMAOp>(op))
             return WalkResult::interrupt();
           return WalkResult::advance();
         })
