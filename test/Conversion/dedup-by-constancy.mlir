@@ -1,15 +1,17 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm="target=nvvm" --llvm-optimize-for-nvvm-target | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm=target=rocdl | FileCheck %s --check-prefixes=CHECK,GCN
 
 // CHECK-LABEL: dedup_by_constancy_full
-// CHECK-COUNT-5: llvm.add
+// GCN-COUNT-26: llvm.add
+// PTX-COUNT-5: llvm.add
 // CHECK-NOT: llvm.add
 // CHECK: llvm.icmp "slt"
-// CHECK-NOT: llvm.icmp "slt"
+// PTX-NOT: llvm.icmp "slt"
 // CHECK: llvm.sdiv
-// CHECK-NOT: llvm.sdiv
-// CHECK: llvm.getelementptr %arg0[[[REGISTER:%[0-9]+]]]
-// CHECK-COUNT-7: llvm.getelementptr %arg0[[[REGISTER]]]
-// CHECK-NOT: llvm.getelementptr %arg0[[[REGISTER]]]
+// PTX-NOT: llvm.sdiv
+// PTX: llvm.getelementptr %arg0[[[REGISTER:%[0-9]+]]]
+// PTX-COUNT-7: llvm.getelementptr %arg0[[[REGISTER]]]
+// GCN-COUNT-16: llvm.getelementptr
+// PTX-NOT: llvm.getelementptr %arg0[[[REGISTER]]]
 #blocked = #triton_gpu.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
   tt.func public @dedup_by_constancy_full(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}) attributes {noinline = false} {
@@ -36,18 +38,21 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 // -----
 
 // CHECK-LABEL: dedup_by_constancy_partial
-// CHECK-COUNT-8: llvm.add
-// CHECK-NOT: llvm.add
+// PTX-COUNT-8: llvm.add
+// GCN-COUNT-26: llvm.add
+// PTX-NOT: llvm.add
 // CHECK: llvm.icmp "slt"
-// CHECK-NOT: llvm.icmp "slt"
-// CHECK-COUNT-2: llvm.sdiv
-// CHECK-NOT: llvm.sdiv
-// CHECK: llvm.getelementptr %arg0[[[REGISTER1:%[0-9]+]]]
-// CHECK-COUNT-3: llvm.getelementptr %arg0[[[REGISTER1]]]
-// CHECK-NOT: llvm.getelementptr %arg0[[[REGISTER1]]]
-// CHECK: llvm.getelementptr %arg0[[[REGISTER2:%[0-9]+]]]
-// CHECK-COUNT-3: llvm.getelementptr %arg0[[[REGISTER2]]]
-// CHECK-NOT: llvm.getelementptr %arg0[[[REGISTER2]]]
+// PTX-NOT: llvm.icmp "slt"
+// PTX-COUNT-2: llvm.sdiv
+// GCN-COUNT-8: llvm.sdiv
+// PTX-NOT: llvm.sdiv
+// PTX: llvm.getelementptr %arg0[[[REGISTER1:%[0-9]+]]]
+// PTX-COUNT-3: llvm.getelementptr %arg0[[[REGISTER1]]]
+// GCN-COUNT-16: llvm.getelementptr
+// PTX-NOT: llvm.getelementptr %arg0[[[REGISTER1]]]
+// PTX: llvm.getelementptr %arg0[[[REGISTER2:%[0-9]+]]]
+// PTX-COUNT-3: llvm.getelementptr %arg0[[[REGISTER2]]]
+// PTX-NOT: llvm.getelementptr %arg0[[[REGISTER2]]]
 #blocked = #triton_gpu.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
   tt.func public @dedup_by_constancy_partial(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}) attributes {noinline = false} {
