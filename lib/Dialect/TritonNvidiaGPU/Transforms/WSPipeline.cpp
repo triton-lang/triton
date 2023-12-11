@@ -786,7 +786,8 @@ void buildAsyncComm(const DenseMap<Operation *, SmallVector<Channel *>> &map,
       auto dot = dotOp.getResult();
       auto resTy = dot.getType().dyn_cast<RankedTensorType>();
       auto cArg = dotOp.getOperand(2).dyn_cast<BlockArgument>();
-      if (auto resEnc = resTy.getEncoding().dyn_cast<ttg::MmaEncodingAttr>())
+      if (auto resEnc =
+              resTy.getEncoding().dyn_cast<ttg::NvidiaMmaEncodingAttr>())
         if (resEnc.isHopper() && dot.hasOneUse() &&
             isa<scf::YieldOp>(*dot.getUsers().begin()) && cArg &&
             cArg.hasOneUse())

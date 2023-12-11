@@ -30,7 +30,7 @@ using namespace mlir::triton;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
-using ::mlir::triton::gpu::MmaEncodingAttr;
+using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 triton::nvgpu::WGMMAEltType getMmaRetType(Value d) {
@@ -195,8 +195,8 @@ private:
 
 DotOpMmaV3SmemLoader loadA(TritonGPUToLLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Location loc,
-                           const MmaEncodingAttr &mmaEncoding, Value tensor,
-                           Value smemObjBase, Value thread) {
+                           const NvidiaMmaEncodingAttr &mmaEncoding,
+                           Value tensor, Value smemObjBase, Value thread) {
   auto aTensorTy = tensor.getType().cast<RankedTensorType>();
   auto aSharedLayout = aTensorTy.getEncoding().dyn_cast<SharedEncodingAttr>();
   assert(aSharedLayout && "only support load dot operand from shared.");
@@ -232,7 +232,7 @@ DotOpMmaV3SmemLoader loadA(TritonGPUToLLVMTypeConverter *typeConverter,
 
 DotOpMmaV3SmemLoader loadB(TritonGPUToLLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Location loc,
-                           MmaEncodingAttr &mmaEncoding, Value tensor,
+                           NvidiaMmaEncodingAttr &mmaEncoding, Value tensor,
                            Value base, Value thread) {
   auto bTensorTy = tensor.getType().cast<RankedTensorType>();
   auto bSharedLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
@@ -378,7 +378,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   auto dTensorTy = d.getType().cast<RankedTensorType>();
   auto aSharedLayout = aTensorTy.getEncoding().dyn_cast<SharedEncodingAttr>();
   auto bSharedLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
-  auto mmaEncoding = dTensorTy.getEncoding().cast<MmaEncodingAttr>();
+  auto mmaEncoding = dTensorTy.getEncoding().cast<NvidiaMmaEncodingAttr>();
   auto bOrd = bSharedLayout.getOrder();
   bool transA = false;
   Value baseA;
