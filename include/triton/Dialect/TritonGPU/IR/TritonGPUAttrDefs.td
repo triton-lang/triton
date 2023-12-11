@@ -572,6 +572,7 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
     InterfaceMethod<"Return total element size per thread for dot operands.", "unsigned",
       "getTotalElemsPerThreadForOperands", (ins "ArrayRef<int64_t>":$tensorShape,
                                                 "Type":$eltTy,
+                                                "unsigned":$kWidth,
                                                 "unsigned":$opIdx)>,
 
     InterfaceMethod<"Return size per thread for dot operands.", "SmallVector<unsigned>",
@@ -664,7 +665,12 @@ The data will be distributed between threads as follows:
     }
     SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx) const;
     SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int opIdx) const;
-    unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int opIdx) const;
+    unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
+    SmallVector<int64_t> getMFMAElemsPerInstrForOperands(int kWidth, int opIdx) const;
+    SmallVector<int64_t> getMFMARepForOperands(ArrayRef<int64_t> operandShape,
+                                      Type elemType, int kWidth, int opIdx) const;
+
+
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -858,7 +864,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     };
     SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx) const;
     SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int opIdx) const;
-    unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int opIdx) const;
+    unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
   }];
 
   let hasCustomAssemblyFormat = 1;

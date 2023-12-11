@@ -856,7 +856,7 @@ unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
                                                         Type eltTy) const {
   if (auto mmaParent = getParent().dyn_cast<MmaEncodingTrait>()) {
     return mmaParent.getTotalElemsPerThreadForOperands(shape, eltTy,
-                                                       getOpIdx());
+                                                       getKWidth(), getOpIdx());
   }
   if (auto blockedLayout = getParent().dyn_cast<BlockedEncodingAttr>()) {
     auto shapePerCTA = getShapePerCTA(*this, shape);
@@ -1310,45 +1310,44 @@ SmallVector<unsigned> MfmaEncodingAttr::getSizePerThread() const {
   }
 }
 
-// SmallVector<int64_t>
-// DotOperandEncodingAttr::getMFMAElemsPerInstr() const {
-//   auto mfmaEncoding = getParent().cast<MfmaEncodingAttr>();
-//   int64_t nonKDim = mfmaEncoding.getNonKDim();
-//   assert(nonKDim == 32 || nonKDim == 16);
-//   int64_t kWidth = getKWidth();
-//   int64_t kDim = kWidth * (nonKDim == 32 ? 2 : 4);
-//   if (getOpIdx() == 0)
-//     return {nonKDim, kDim};
-//   else
-//     return {kDim, nonKDim};
-// }
+SmallVector<int64_t>
+MfmaEncodingAttr::getMFMAElemsPerInstrForOperands(int kWidth, int opIdx) const {
+  int64_t nonKDim = getNonKDim();
+  assert(nonKDim == 32 || nonKDim == 16);
+  int64_t kDim = kWidth * (nonKDim == 32 ? 2 : 4);
+  if (opIdx == 0)
+    return {nonKDim, kDim};
+  else {
+    assert(opIdx == 1);
+    return {kDim, nonKDim};
+  }
+}
 
-// SmallVector<int64_t>
-// DotOperandEncodingAttr::getMFMARep(ArrayRef<int64_t> operandShape,
-//                                    Type elemType) const {
-//   auto operandTileShape = getMFMAElemsPerInstr();
-//   auto warpsPerCTA = getParent().cast<MfmaEncodingAttr>().getWarpsPerCTA();
-//   if (getOpIdx() == 0)
-//     return {
-//         std::max<int64_t>(1, operandShape[0] / (operandTileShape[0] *
-//         warpsPerCTA[0])), std::max<int64_t>(1, operandShape[1] /
-//         operandTileShape[1])};
-//   else {
-//     assert(getOpIdx() == 1);
-//     return {std::max<int64_t>(1, operandShape[0] / operandTileShape[0]),
-//             std::max<int64_t>(1, operandShape[1] /
-//                                      (operandTileShape[1] *
-//                                      warpsPerCTA[1]))};
-//   }
-// }
+SmallVector<int64_t>
+MfmaEncodingAttr::getMFMARepForOperands(ArrayRef<int64_t> operandShape,
+                                        Type elemType, int kWidth,
+                                        int opIdx) const {
+  auto operandTileShape = getMFMAElemsPerInstrForOperands(kWidth, opIdx);
+  auto warpsPerCTA = getWarpsPerCTA();
+  if (opIdx == 0)
+    return {std::max<int64_t>(1, operandShape[0] /
+                                     (operandTileShape[0] * warpsPerCTA[0])),
+            std::max<int64_t>(1, operandShape[1] / operandTileShape[1])};
+  else {
+    assert(opIdx == 1);
+    return {std::max<int64_t>(1, operandShape[0] / operandTileShape[0]),
+            std::max<int64_t>(1, operandShape[1] /
+                                     (operandTileShape[1] * warpsPerCTA[1]))};
+  }
+}
 
 unsigned MfmaEncodingAttr::getTotalElemsPerThreadForOperands(
-    ArrayRef<int64_t> shape, Type eltTy, int opIdx) const {
+    ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const {
   int warpsPerCTAM = getWarpsPerCTA()[0];
   int warpsPerCTAN = getWarpsPerCTA()[1];
   constexpr int waveSize = 64;
-  auto tileSize = getMFMAElemsPerInstr();
-  auto rep = getMFMARep(shape, eltTy);
+  auto tileSize = getMFMAElemsPerInstrForOperands(kWidth, opIdx);
+  auto rep = getMFMARepForOperands(shape, eltTy, kWidth, opIdx);
   return rep[0] * rep[1];
 }
 
@@ -1365,9 +1364,9 @@ MfmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
 }
 
 SmallVector<unsigned>
-MfmaEncodingAttr::getShapePerCTATileForOperands(ArrayRef<int64_t> tensorShape,
-                                                unsigned opIdx) const {
-  auto parentShapePerCTA = getShapePerCTATile(tensorShape);
+MfmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
+                                                   int opIdx) const {
+  auto parentShapePerCTA = getShapePerCTATile(shape);
   if (opIdx == 0) {
     return {parentShapePerCTA[0], 32};
   } else if (opIdx == 1) {
@@ -1531,7 +1530,7 @@ SmallVector<int64_t> MmaEncodingAttr::getMMAv2Rep(ArrayRef<int64_t> shape,
   }
 }
 unsigned MmaEncodingAttr::getTotalElemsPerThreadForOperands(
-    ArrayRef<int64_t> shape, Type eltTy, int opIdx) const {
+    ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const {
   auto shapePerCTA = getShapePerCTA(*this, shape);
   int warpsPerCTAM = getWarpsPerCTA()[0];
   int warpsPerCTAN = getWarpsPerCTA()[1];
