@@ -771,6 +771,48 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
   let hasCustomAssemblyFormat = 1;
 }
 
+def WmmaEncodingAttr : DistributedEncoding<"WmmaEncoding"> {
+  let mnemonic = "wmma";
+
+  let description = [{
+An encoding for tensors that have been produced by WMMA instructions,
+available on RDNA 3.
+A `warpsPerCTA` parameter characterizes data distribution between waves.
+An important limitation of WMMA for layout is a shape for tiles proccessed
+by a single wave. It is [16, 16].
+This encoding assumes specific access to matrix elements by threads.
+Example:
+Suppose we have a tensor with shape [32, 48], `warpsPerCTA` set to [2, 3].
+
+    wave 0 [16, 16]           wave 1 [16, 16]           wave 2 [16, 16]
+-----------/\----------   -----------/\----------   -----------/\----------
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+...                       ...                       ...
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+
+    wave 3 [16, 16]           wave 4 [16, 16]           wave 5 [16, 16]
+-----------/\----------   -----------/\----------   -----------/\----------
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+...                       ...                       ...
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+  }];
+
+  let parameters = (
+    ins
+    ArrayRefParameter<"unsigned">:$warpsPerCTA
+  );
+
+  let hasCustomAssemblyFormat = 1;
+}
+
 def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
   let mnemonic = "slice";
 
@@ -814,7 +856,7 @@ def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding"> {
 In TritonGPU dialect, considering `d = tt.dot a, b, c`
 tt.dot's operands a and b must be of DotOperandEncodingAttr layout.
 a's opIdx is 0, b's opIdx is 1.
-The parend field in DotOperandEncodingAttr is the layout of d.
+The parent field in DotOperandEncodingAttr is the layout of d.
 
 For MMA v1, an additional attribute `isMMAv1Row` determines whether e.g. the a operand is used
 in the context of an mma.884.row.col or an mma.884.col.col operation. See the PTX ISA documentation

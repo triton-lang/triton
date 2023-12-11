@@ -117,9 +117,9 @@ def optimize_ttgir(mod, num_stages, num_warps, num_ctas, target, cluster_info, e
         pm.add_tritongpu_accelerate_matmul_pass(capability)
     # TODO change interface of accelerate_matmul_pass
     if is_hip():
-        matrix_core_version = target["matrix_core_version"]
+        gfx_arch = target["gfx_arch"]
         matrix_inst_size = matrix_inst_type
-        pm.add_tritonamdgpu_accelerate_matmul_pass(matrix_core_version, matrix_inst_size)
+        pm.add_tritonamdgpu_accelerate_matmul_pass(gfx_arch, matrix_inst_size)
     pm.add_tritongpu_remove_layout_conversions_pass()
     if optimize_epilogue:
         pm.add_tritongpu_optimize_epilogue_pass()

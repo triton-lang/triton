@@ -127,6 +127,8 @@ bool maybeAliasOp(Operation *op);
 
 #ifdef USE_ROCM
 bool supportMFMA(triton::DotOp op);
+
+bool supportWMMA(triton::DotOp op);
 #endif
 
 bool supportMMA(triton::DotOp op, int version);

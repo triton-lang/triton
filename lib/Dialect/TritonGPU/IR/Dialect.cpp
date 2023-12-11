@@ -1364,6 +1364,37 @@ void MfmaEncodingAttr::print(AsmPrinter &printer) const {
 }
 
 //===----------------------------------------------------------------------===//
+// WMMA encoding
+//===----------------------------------------------------------------------===//
+
+Attribute WmmaEncodingAttr::parse(AsmParser &parser, Type type) {
+  if (parser.parseLess().failed())
+    return {};
+  DictionaryAttr dict;
+  if (parser.parseAttribute(dict).failed())
+    return {};
+  if (parser.parseGreater().failed())
+    return {};
+
+  SmallVector<unsigned> warpsPerCTA;
+
+  for (const NamedAttribute &attr : dict) {
+    if (attr.getName() == "warpsPerCTA") {
+      if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
+        return {};
+    }
+  }
+
+  return parser.getChecked<WmmaEncodingAttr>(
+      parser.getContext(), warpsPerCTA);
+}
+
+void WmmaEncodingAttr::print(AsmPrinter &printer) const {
+  printer << "<{"
+          << "warpsPerCTA = [" << getWarpsPerCTA() << "]}>";
+}
+
+//===----------------------------------------------------------------------===//
 // Sliced Encoding
 //===----------------------------------------------------------------------===//
 
