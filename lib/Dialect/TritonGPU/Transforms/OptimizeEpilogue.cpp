@@ -74,7 +74,7 @@ public:
              .getType()
              .cast<RankedTensorType>()
              .getEncoding()
-             .isa<triton::gpu::NvidiaMmaEncodingAttr>())
+             .isa<triton::gpu::MmaEncodingTrait>())
       return mlir::failure();
 
     if (!cvtOp.getResult().hasOneUse())

@@ -155,6 +155,48 @@ compared to 1*64 when the hasLeadingOffset is false.
                      "CTALayoutAttr":$CTALayout,
                      "unsigned":$typeWidthInBit,
                      "bool":$needTrans), [{
+
+        // ---- begin GFX908/GFX90A ----
+        auto mfmaEnc = dotOpEnc.getParent().dyn_cast<MfmaEncodingAttr>();
+
+        if (mfmaEnc) {
+          int kDimNum = dotOpEnc.getOpIdx() == 0 ? 1 : 0;
+          bool isKDimInner = (order[0] == kDimNum);
+          if (isKDimInner) {
+            const int numBanks = 32;
+            const int bankBitWidth = 32;
+            const int SIMDWidth = 16;
+
+            // number of inner dimension rows per one pattern repeat
+            int innerDimLength = shape[order[0]];
+            int elemsPerOneBanksRow = (numBanks * bankBitWidth) / typeWidthInBit;
+
+            int perPhase = std::max(1, elemsPerOneBanksRow / innerDimLength);
+            // Note: the following settings is customized to avoid
+            // **load** bank conflicts
+            //
+            // vecSize is set to k_base, which is the number of elements each
+            // workitem loads for one mfma instruction.
+            // For now, the k_base rules are as follows
+            // 1. All selected mfma instructions produce a single block
+            // 2. For f16 data type, 2 VGPRs are used for operand A --> k_base = 4
+            // 3. For non-f16 data types, 1 VGPR are used for operand A
+            //    k_base = 32 / elemTypeInBits
+            // 4. TODO: what about f64?
+            //
+            // maxPhase is set to SIMDWidth / perPhase
+            int vecSize = ((typeWidthInBit == 16) ? 64 : 32 ) / typeWidthInBit;
+            int maxPhase = SIMDWidth / perPhase;
+
+            return get(context, vecSize, perPhase, maxPhase, order, CTALayout);
+          } else {
+            // Do not swizzle in case k dimension is not innermost.
+            // In this case accesses will go in different banks even without swizzling.
+            return get(context, 1, 1, 1, order, CTALayout);
+          }
+        }
+
+
         auto mmaEnc = dotOpEnc.getParent().dyn_cast<NvidiaMmaEncodingAttr>();
 
         if(!mmaEnc)
