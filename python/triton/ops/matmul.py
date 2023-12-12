@@ -153,7 +153,7 @@ class _matmul(torch.autograd.Function):
     _locks = {}
 
     @staticmethod
-    def _call(a, b, acc_dtype, allow_tf32, fp8_fast_accum):
+    def _call(a, b, acc_dtype, allow_tf32, fp8_fast_accum, output_dtype):
         device = a.device
         # handle non-contiguous inputs if necessary
         if a.stride(0) > 1 and a.stride(1) > 1:
@@ -169,7 +169,10 @@ class _matmul(torch.autograd.Function):
         ab_dtype = get_higher_dtype(a.dtype, b.dtype)
 
         # allocates output
-        c = torch.empty((M, N), device=device, dtype=ab_dtype)
+        if (output_dtype is None):
+            output_dtype = ab_dtype
+
+        c = torch.empty((M, N), device=device, dtype=output_dtype)
 
         # Allowed types for acc_type given the types of a and b.
         supported_acc_dtypes = {
@@ -189,6 +192,7 @@ class _matmul(torch.autograd.Function):
 
         acc_dtype = to_tl_type(acc_dtype)
         ab_dtype = to_tl_type(ab_dtype)
+        output_dtype = to_tl_type(output_dtype)
 
         # Tensor cores support input with mixed float8 types.
         if a.dtype in [tl.float8e4nv, tl.float8e5] and b.dtype in [tl.float8e4nv, tl.float8e5]:
@@ -207,8 +211,9 @@ class _matmul(torch.autograd.Function):
         return c
 
     @staticmethod
-    def forward(ctx, a, b, acc_dtype=None, allow_tf32=True, fp8_fast_accum=True):
-        return _matmul._call(a, b, acc_dtype=acc_dtype, allow_tf32=allow_tf32, fp8_fast_accum=fp8_fast_accum)
+    def forward(ctx, a, b, acc_dtype=None, allow_tf32=True, fp8_fast_accum=True, output_dtype=None):
+        return _matmul._call(a, b, acc_dtype=acc_dtype, allow_tf32=allow_tf32, fp8_fast_accum=fp8_fast_accum,
+                             output_dtype=output_dtype)
 
 
 matmul = _matmul.apply
