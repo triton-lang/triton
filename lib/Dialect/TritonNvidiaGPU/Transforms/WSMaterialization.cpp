@@ -131,11 +131,13 @@ LoadType scanLoadTypes(ttng::CreateTokenOp createTokenOp) {
   // TODO: Attach information of binded tensors to CreateTokenOp
   std::set<LoadType> loadTypes;
   createTokenOp->getBlock()->walk([&](Operation *op) {
-    if (isa<ttg::InsertSliceAsyncOp>(op)) {
-      loadTypes.insert(LoadType::InsertSliceAsyncOp);
-    } else if (isa<ttng::InsertSliceTMAOp>(op)) {
+    if (auto insertOp = dyn_cast<ttg::InsertSliceAsyncOp>(op)) {
+      if (triton::isTensorPointerType(insertOp.getSrc().getType()))
+        loadTypes.insert(LoadType::InsertSliceTMAOp);
+      else
+        loadTypes.insert(LoadType::InsertSliceAsyncOp);
+    } else if (isa<ttng::InsertSliceTMAOp>(op))
       loadTypes.insert(LoadType::InsertSliceTMAOp);
-    }
   });
   assert(loadTypes.size() > 0 && "InsertSliceOp not found");
   assert(loadTypes.size() == 1 &&
