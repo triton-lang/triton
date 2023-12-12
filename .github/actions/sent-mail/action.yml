@@ -1,13 +1,8 @@
 name: Email Step
 
 inputs:
-  server:
-    required: true
-  port:
-    required: true
-  user:
-    required: true
-  pswd:
+  mailconnection:
+    description: Specify connection via URL,like smtp+starttls://user:password@server:port
     required: true
   jobname:
     required: true
@@ -24,10 +19,7 @@ runs:
     - name: Email
       uses: dawidd6/action-send-mail@v3
       with:
-        server_address: ${{ inputs.server }}
-        server_port: ${{ inputs.port }}
-        username: ${{ inputs.user }}
-        password: ${{ inputs.pswd }}
+        connection_url: ${{ inputs.mailconnection }}
         subject: "Failure Notification - ${{ inputs.jobname }}"
         body: |
           Notification: ${{ inputs.jobname }} failed in backend test,
