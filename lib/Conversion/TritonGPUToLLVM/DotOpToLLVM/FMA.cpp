@@ -6,7 +6,7 @@ using namespace mlir::triton;
 
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::MmaEncodingAttr;
+using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
 using ValueTableFMA = std::map<std::pair<int, int>, Value>;
 

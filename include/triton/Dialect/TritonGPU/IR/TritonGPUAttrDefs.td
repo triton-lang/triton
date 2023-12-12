@@ -155,7 +155,7 @@ compared to 1*64 when the hasLeadingOffset is false.
                      "CTALayoutAttr":$CTALayout,
                      "unsigned":$typeWidthInBit,
                      "bool":$needTrans), [{
-        auto mmaEnc = dotOpEnc.getParent().dyn_cast<MmaEncodingAttr>();
+        auto mmaEnc = dotOpEnc.getParent().dyn_cast<NvidiaMmaEncodingAttr>();
 
         if(!mmaEnc)
           return get(context, 1, 1, 1, order, CTALayout);
@@ -676,8 +676,9 @@ The data will be distributed between threads as follows:
   let hasCustomAssemblyFormat = 1;
 }
 
-def MmaEncodingAttr : DistributedEncoding<"MmaEncoding", [MmaEncodingTrait]> {
-  let mnemonic = "mma";
+
+def NvidiaMmaEncodingAttr : DistributedEncoding<"NvidiaMmaEncoding", [MmaEncodingTrait]> {
+  let mnemonic = "nvidia_mma";
 
   let description = [{
 An encoding for tensors that have been produced by tensor cores.
@@ -932,7 +933,7 @@ section 9.7.13.4.1 for more details.
     AttrBuilder<(ins "unsigned":$opIdx,
                      "Attribute":$parent,
                      "Type":$eltTy), [{
-      MmaEncodingAttr parentAttr = parent.dyn_cast<MmaEncodingAttr>();
+      NvidiaMmaEncodingAttr parentAttr = parent.dyn_cast<NvidiaMmaEncodingAttr>();
       if (!parentAttr || !parentAttr.isAmpere())
         return $_get(context, opIdx, parent, 0);
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();

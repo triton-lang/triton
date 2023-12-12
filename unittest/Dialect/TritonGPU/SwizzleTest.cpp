@@ -32,8 +32,8 @@ TEST_P(SwizzleDotOperandTestFixture, DotOperands) {
       triton::gpu::CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {0, 1});
 
   // create encoding
-  auto parent = triton::gpu::MmaEncodingAttr::get(&ctx, 2, 0, {1, 1}, CTALayout,
-                                                  {16, 64, 16});
+  auto parent = triton::gpu::NvidiaMmaEncodingAttr::get(
+      &ctx, 2, 0, {1, 1}, CTALayout, {16, 64, 16});
   auto encoding = triton::gpu::DotOperandEncodingAttr::get(
       &ctx, params.opIdx, parent, 32 / params.typeWidth);
 
