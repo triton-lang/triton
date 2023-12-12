@@ -54,6 +54,12 @@ def prune_configs(M, N, K, configs):
         BLOCK_SIZE_M = config.get("BLOCK_SIZE_M")
         BLOCK_SIZE_N = config.get("BLOCK_SIZE_N")
         BLOCK_SIZE_K = config.get("BLOCK_SIZE_K")
+        if mfma == 4 and BLOCK_SIZE_K < 64:
+            continue
+        # some layouts could not work properly in case
+        # number elemens per thread is less 1
+        if BLOCK_SIZE_M * BLOCK_SIZE_N < 64:
+            continue
         SPLIT_K = config.get("SPLIT_K")
         GROUP_M = config.get("GROUP_SIZE_M")
         if BLOCK_SIZE_M < mfma or BLOCK_SIZE_N < mfma:

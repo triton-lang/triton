@@ -782,7 +782,9 @@ public:
     auto nonKDim = mfmaLayout.getNonKDim();
     // MFMA output tile consists of repeated "dot operand B" layout groups along
     // row axis. This variable defines number of these groups.
-    const unsigned numGroups = (nonKDim == 32 ? 4 : 1);
+    DenseMap<int, int> groups{{4, 1}, {16, 1}, {32, 4}};
+    unsigned numGroups = groups.at(nonKDim);
+
     const unsigned elemsPerThreadPerGroup = 4;
     auto warpSize = getWarpSize(mfmaLayout);
     assert(warpSize == 64);
@@ -1200,7 +1202,12 @@ private:
 
     Value threadId = getThreadId(rewriter, loc);
     Value warpSize = i32_val(triton::gpu::getWarpSize(mfmaLayout));
-    Value laneId = urem(threadId, warpSize);
+    Value effectiveWarpSize = warpSize;
+    if (nonKDim == 4) {
+      const int uniqueValuesPerWarp = 4;
+      effectiveWarpSize = i32_val(uniqueValuesPerWarp);
+    }
+    Value laneId = urem(threadId, effectiveWarpSize);
 
     Value warpId = udiv(threadId, warpSize);
     Value warpId0 =

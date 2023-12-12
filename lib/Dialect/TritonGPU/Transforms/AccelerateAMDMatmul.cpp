@@ -105,9 +105,18 @@ public:
     if (enforcedNonKDim != 0) {
       nonKDim = enforcedNonKDim;
     } else {
-      nonKDim = (resShape[0] < 32 || resShape[1] < 32) ? 16 : 32;
+      nonKDim = -1;
+      int minSize = std::min(resShape[0], resShape[1]);
+      if (minSize >= 32)
+        nonKDim = 32;
+      if (minSize >= 16 && minSize < 32)
+        nonKDim = 16;
+      if (minSize < 16)
+        nonKDim = 4;
+      assert(nonKDim != -1);
     }
-    if (nonKDim == 32) {
+    switch (nonKDim) {
+    case 32:
       if (elemType.isF32())
         kDim = 2;
       if (elemType.isF16())
@@ -130,7 +139,8 @@ public:
           kDim = 8;
         }
       }
-    } else {
+      break;
+    case 16:
       if (elemType.isF32())
         kDim = 4;
       if (elemType.isF16())
@@ -152,7 +162,25 @@ public:
         else {
           kDim = 16;
         }
-      }      
+      }
+      break;
+    case 4:
+      if (elemType.isF32())
+        kDim = 16;
+      if (elemType.isF16())
+        kDim = 64;
+      if (elemType.isBF16()) {
+        if (mfmaVersion == 1)
+          kDim = 32;
+        if (mfmaVersion >= 2)
+          kDim = 64;
+      }
+      if (elemType.isInteger(8)) {
+        kDim = 64;
+      }
+      break;
+    default:
+      llvm::report_fatal_error("unsupported nonKDim size in MFMA dot");
     }
     assert(kDim != -1);
     assert(nonKDim != -1);
@@ -221,11 +249,19 @@ public:
     auto kWidth = kDim;
     // in mfma 32x32 case argument matrix groups elements in 2 groups
     // in mfma 16x16 case argument matrix groups elements in 4 groups
-    if (nonKDim == 32) {
+    // in mfma 4x4 case arguemnt matrix groups in 16 groups
+    switch (nonKDim) {
+    case 32:
       kWidth /= 2;
-    } else {
-      assert(nonKDim == 16);
+      break;
+    case 16:
       kWidth /= 4;
+      break;
+    case 4:
+      kWidth /= 16;
+      break;
+    default:
+      llvm::report_fatal_error("unsupported kDim in mfma dot");
     }
     auto newAType = RankedTensorType::get(
         oldAType.getShape(), oldAType.getElementType(),

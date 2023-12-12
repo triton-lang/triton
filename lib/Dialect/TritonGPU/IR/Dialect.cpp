@@ -238,15 +238,22 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
     }
   } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
     unsigned rows, cols;
-    if (mfmaLayout.getNonKDim() == 32) {
+    switch (mfmaLayout.getNonKDim()) {
+    case 32:
       rows = 16;
       cols = 1;
-    } else if (mfmaLayout.getNonKDim() == 16) {
+      break;
+    case 16:
       rows = 4;
       cols = 1;
-    } else
+      break;
+    case 4:
+      rows = 4;
+      cols = 1;
+      break;
+    default:
       llvm_unreachable("Unexpected mfma non-k dim");
-
+    }
     if (mfmaLayout.getIsTransposed()) {
       return {cols, rows};
     } else {
@@ -984,9 +991,11 @@ SmallVector<int64_t>
 DotOperandEncodingAttr::getMFMAElemsPerInstr() const {
   auto mfmaEncoding = getParent().cast<MfmaEncodingAttr>();
   int64_t nonKDim = mfmaEncoding.getNonKDim();
-  assert(nonKDim == 32 || nonKDim == 16);
+  assert(nonKDim == 32 || nonKDim == 16 || nonKDim == 4);
   int64_t kWidth = getKWidth();
-  int64_t kDim = kWidth * (nonKDim == 32 ? 2 : 4);
+  constexpr int waveSize = 64; // MFMA is used on wave64 architectures only
+  int kGroups = waveSize / nonKDim;
+  int64_t kDim = kWidth * kGroups;
   if (getOpIdx() == 0)
     return {nonKDim, kDim};
   else
