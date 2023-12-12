@@ -24,7 +24,7 @@ namespace {
 using triton::DotOp;
 using triton::gpu::ConvertLayoutOp;
 using triton::gpu::DotOperandEncodingAttr;
-using triton::gpu::NvidiaMmaEncodingAttr;
+using triton::gpu::MmaEncodingTrait;
 using triton::gpu::SliceEncodingAttr;
 
 // -----------------------------------------------------------------------------
@@ -165,10 +165,21 @@ static bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
                                     .getType()
                                     .cast<RankedTensorType>()
                                     .getEncoding();
+
+        // TODO: find underlying principle for returning True
+        // and wrap in an interface
         if (auto mmaLayout =
-                dstEncoding.dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>())
-          return (mmaLayout.getVersionMajor() > 1) ? true
-                                                   : mmaLayout == encoding;
+                dstEncoding.dyn_cast<triton::gpu::AmdMmaEncodingAttr>())
+          return mmaLayout ==
+                         encoding if (
+                             auto mmaLayout =
+                                 dstEncoding.dyn_cast<
+                                     triton::gpu::
+                                         NvidiaMmaEncodingAttr>()) return (mmaLayout
+                                                                               .getVersionMajor() >
+                                                                           1)
+                     ? true
+                     : mmaLayout == encoding;
         if (dstEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
           return encoding.cast<triton::gpu::NvidiaMmaEncodingAttr>()
                      .getVersionMajor() > 1;
@@ -210,8 +221,7 @@ void LayoutPropagation::initAnchorLayout() {
           // back to mma further down to avoid generating reduction with MMA
           // layout that may have lower performance.
           // This can be improved with more aggressive backward propagation.
-          if (tensorType.getEncoding()
-                  .isa<triton::gpu::NvidiaMmaEncodingAttr>() &&
+          if (tensorType.getEncoding().isa<triton::gpu::MmaEncodingTrait>() &&
               !hasConvertToMMATransisitiveUse(op, tensorType.getEncoding()))
             continue;
           layouts.insert({result, LayoutInfo(tensorType.getEncoding())});
@@ -286,6 +296,14 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
         isa<triton::ReduceOp, triton::ExpandDimsOp,
             triton::ExperimentalInterleaveOp, triton::gpu::ConvertLayoutOp>(
             user)) {
+      // TODO:
+      // this was in the original AMD code but i'm not sure when it needs it ?
+      // if (auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(user)) {
+      //   if (triton::gpu::isSharedEncoding(convertOp.getResult()) ||
+      //       triton::gpu::isSharedEncoding(convertOp.getOperand()))
+      //     continue;
+      // }
+
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
@@ -322,7 +340,7 @@ void LayoutPropagation::resolveConflicts() {
                   triton::AtomicCASOp>(op);
     for (Attribute e : info.encodings) {
       if ((isLoadOrStore && e.isa<triton::gpu::BlockedEncodingAttr>()) ||
-          (!isLoadOrStore && e.isa<triton::gpu::NvidiaMmaEncodingAttr>())) {
+          (!isLoadOrStore && e.isa<triton::gpu::MmaEncodingTrait>())) {
         encoding = e;
         break;
       }
