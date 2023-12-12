@@ -52,7 +52,7 @@ public:
                                .getType()
                                .cast<RankedTensorType>()
                                .getEncoding()
-                               .dyn_cast<ttg::MmaEncodingAttr>();
+                               .dyn_cast<ttg::NvidiaMmaEncodingAttr>();
         auto isHopperEncoding = mmaEncoding && mmaEncoding.isHopper();
         if (isHopperEncoding &&
             (dependOnSharedEncOperand(a) || dependOnSharedEncOperand(b))) {

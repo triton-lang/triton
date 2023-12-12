@@ -741,7 +741,8 @@ void mlir::triton::asyncLaunchDots(scf::ForOp forOp) {
   for (Operation &op : *loop) {
     if (auto dotOp = dyn_cast<tt::DotOp>(&op)) {
       auto resTy = dotOp.getResult().getType().dyn_cast<RankedTensorType>();
-      if (auto resEnc = resTy.getEncoding().dyn_cast<ttg::MmaEncodingAttr>()) {
+      if (auto resEnc =
+              resTy.getEncoding().dyn_cast<ttg::NvidiaMmaEncodingAttr>()) {
         if (resEnc && resEnc.isHopper()) {
           auto dot = dotOp.getResult();
           bool valid = true;
