@@ -694,7 +694,7 @@ private:
       auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
       auto dstType = cvtOp.getType().cast<RankedTensorType>();
       auto srcMma =
-          srcType.getEncoding().dyn_cast<triton::gpu::MmaEncodingAttr>();
+          srcType.getEncoding().dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>();
       auto dstDotOp =
           dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
       if (srcMma && dstDotOp && !isMmaToDotShortcut(srcType, dstType)) {
@@ -874,10 +874,10 @@ private:
       Type AElType =
           dotOp.getA().getType().cast<RankedTensorType>().getElementType();
       Type promoteType;
-      MmaEncodingAttr mmaLayout = D.getType()
-                                      .cast<RankedTensorType>()
-                                      .getEncoding()
-                                      .dyn_cast<MmaEncodingAttr>();
+      NvidiaMmaEncodingAttr mmaLayout = D.getType()
+                                            .cast<RankedTensorType>()
+                                            .getEncoding()
+                                            .dyn_cast<NvidiaMmaEncodingAttr>();
       if (mmaLayout) {
         bool isNativeHopperFP8 =
             AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();

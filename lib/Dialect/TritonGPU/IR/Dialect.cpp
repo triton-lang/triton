@@ -147,7 +147,7 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
 }
 
 SmallVector<unsigned> getContigPerThread(Attribute layout) {
-  if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+  if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
     assert(mmaLayout.isVolta() || mmaLayout.isAmpere() || mmaLayout.isHopper());
     return {1, 2};
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
@@ -715,11 +715,12 @@ SliceEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
 }
 
 SmallVector<unsigned>
-MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
+NvidiaMmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
+                                         Type eltTy) const {
   size_t rank = shape.size();
   assert(rank == 2 && "Unexpected rank of mma layout");
   assert((isVolta() || isAmpere() || isHopper()) &&
-         "For MmaEncodingAttr only version 1~3 is supported");
+         "For NvidiaMmaEncodingAttr only version 1~3 is supported");
 
   auto shapePerCTA = getShapePerCTA(getCTALayout().getCTASplitNum(), shape);
 
@@ -760,9 +761,8 @@ MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
   return elemsPerThread;
 }
 
-unsigned
-MmaEncodingAttr::getElemsPerThreadOfOperand(int opIdx,
-                                            ArrayRef<int64_t> shape) const {
+unsigned NvidiaMmaEncodingAttr::getElemsPerThreadOfOperand(
+    int opIdx, ArrayRef<int64_t> shape) const {
   size_t rank = shape.size();
   assert(rank == 2 && "Unexpected rank of mma layout");
   auto shapePerCTA = getShapePerCTA(*this, shape);
@@ -791,8 +791,8 @@ MmaEncodingAttr::getElemsPerThreadOfOperand(int opIdx,
   return res;
 }
 
-unsigned MmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
-                                                 Type eltTy) const {
+unsigned NvidiaMmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
+                                                       Type eltTy) const {
   return product<unsigned>(getElemsPerThread(shape, eltTy));
 }
 
@@ -882,7 +882,7 @@ SmallVector<unsigned> DotOperandEncodingAttr::getShapePerCTATile(
                                                             getOpIdx());
   } else {
     llvm::report_fatal_error(
-        "DotOperandEncodingAttr non-MmaEncodingAttr parent not "
+        "DotOperandEncodingAttr non-NvidiaMmaEncodingAttr parent not "
         "supported yet");
   }
 }
@@ -973,7 +973,7 @@ void BlockedEncodingAttr::print(mlir::AsmPrinter &printer) const {
 // MMA encoding
 //===----------------------------------------------------------------------===//
 
-Attribute MmaEncodingAttr::parse(AsmParser &parser, Type type) {
+Attribute NvidiaMmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseLess().failed())
     return {};
   DictionaryAttr dict;
@@ -1025,12 +1025,12 @@ Attribute MmaEncodingAttr::parse(AsmParser &parser, Type type) {
   auto CTALayout = CTALayoutAttr::get(parser.getContext(), CTAsPerCGA,
                                       CTASplitNum, CTAOrder);
 
-  return parser.getChecked<MmaEncodingAttr>(parser.getContext(), versionMajor,
-                                            versionMinor, warpsPerCTA,
-                                            CTALayout, instrShape);
+  return parser.getChecked<NvidiaMmaEncodingAttr>(
+      parser.getContext(), versionMajor, versionMinor, warpsPerCTA, CTALayout,
+      instrShape);
 }
 
-void MmaEncodingAttr::print(AsmPrinter &printer) const {
+void NvidiaMmaEncodingAttr::print(AsmPrinter &printer) const {
   auto warpsPerCTA = getWarpsPerCTA();
   printer << "<{"
           << "versionMajor = " << getVersionMajor() << ", "
@@ -1146,36 +1146,36 @@ void SharedEncodingAttr::print(AsmPrinter &printer) const {
 // Mma encoding
 //===----------------------------------------------------------------------===//
 
-bool MmaEncodingAttr::isVolta() const { return getVersionMajor() == 1; }
+bool NvidiaMmaEncodingAttr::isVolta() const { return getVersionMajor() == 1; }
 
-bool MmaEncodingAttr::isTuring() const {
+bool NvidiaMmaEncodingAttr::isTuring() const {
   return getVersionMajor() == 2 && getVersionMinor() == 1;
 }
 
-bool MmaEncodingAttr::isAmpere() const { return getVersionMajor() == 2; }
+bool NvidiaMmaEncodingAttr::isAmpere() const { return getVersionMajor() == 2; }
 
-bool MmaEncodingAttr::isHopper() const { return getVersionMajor() == 3; }
+bool NvidiaMmaEncodingAttr::isHopper() const { return getVersionMajor() == 3; }
 
-SmallVector<unsigned> MmaEncodingAttr::getCTAsPerCGA() const {
+SmallVector<unsigned> NvidiaMmaEncodingAttr::getCTAsPerCGA() const {
   ArrayRef<unsigned> ref = getCTALayout().getCTAsPerCGA();
   return SmallVector<unsigned>(ref.begin(), ref.end());
 }
-SmallVector<unsigned> MmaEncodingAttr::getCTAOrder() const {
+SmallVector<unsigned> NvidiaMmaEncodingAttr::getCTAOrder() const {
   ArrayRef<unsigned> ref = getCTALayout().getCTAOrder();
   return SmallVector<unsigned>(ref.begin(), ref.end());
 }
-SmallVector<unsigned> MmaEncodingAttr::getCTASplitNum() const {
+SmallVector<unsigned> NvidiaMmaEncodingAttr::getCTASplitNum() const {
   ArrayRef<unsigned> ref = getCTALayout().getCTASplitNum();
   return SmallVector<unsigned>(ref.begin(), ref.end());
 }
-SmallVector<unsigned> MmaEncodingAttr::getWarpsPerCTA() const {
+SmallVector<unsigned> NvidiaMmaEncodingAttr::getWarpsPerCTA() const {
   return SmallVector<unsigned>(getWarpsPerCTA__().begin(),
                                getWarpsPerCTA__().end());
 }
-SmallVector<unsigned> MmaEncodingAttr::getWarpOrder() const {
+SmallVector<unsigned> NvidiaMmaEncodingAttr::getWarpOrder() const {
   return ::getOrder(*this);
 }
-SmallVector<unsigned> MmaEncodingAttr::getThreadsPerWarp() const {
+SmallVector<unsigned> NvidiaMmaEncodingAttr::getThreadsPerWarp() const {
   if (isVolta())
     return {4, 8};
   if (isAmpere())
@@ -1185,10 +1185,10 @@ SmallVector<unsigned> MmaEncodingAttr::getThreadsPerWarp() const {
   llvm::report_fatal_error(
       "getThreadsPerWarp not implemented for unknown Mma version ");
 }
-SmallVector<unsigned> MmaEncodingAttr::getThreadOrder() const {
+SmallVector<unsigned> NvidiaMmaEncodingAttr::getThreadOrder() const {
   return ::getOrder(*this);
 }
-SmallVector<unsigned> MmaEncodingAttr::getSizePerThread() const {
+SmallVector<unsigned> NvidiaMmaEncodingAttr::getSizePerThread() const {
   if (isAmpere()) {
     return {2, 2};
   } else if (isVolta()) {
@@ -1202,7 +1202,7 @@ SmallVector<unsigned> MmaEncodingAttr::getSizePerThread() const {
   }
 }
 SmallVector<unsigned>
-MmaEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
+NvidiaMmaEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
   if (isAmpere())
     return {16 * getWarpsPerCTA()[0], 8 * getWarpsPerCTA()[1]};
   if (isVolta()) {
@@ -1222,7 +1222,7 @@ MmaEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
 
 // Get [isARow, isBRow, isAVec4, isBVec4, id] from versionMinor
 std::tuple<bool, bool, bool, bool, int>
-MmaEncodingAttr::decodeVoltaLayoutStates() const {
+NvidiaMmaEncodingAttr::decodeVoltaLayoutStates() const {
   unsigned versionMinor = getVersionMinor();
   bool isARow = versionMinor & (1 << 0);
   bool isBRow = versionMinor & (1 << 1);
@@ -1236,16 +1236,16 @@ MmaEncodingAttr::decodeVoltaLayoutStates() const {
   return std::make_tuple(isARow, isBRow, isAVec4, isBVec4, id);
 }
 
-bool MmaEncodingAttr::getMMAv1IsRow(int opIdx) const {
+bool NvidiaMmaEncodingAttr::getMMAv1IsRow(int opIdx) const {
   auto [isARow, isBRow, _0, _1, _2] = decodeVoltaLayoutStates();
   return opIdx == 0 ? isARow : isBRow;
 }
-bool MmaEncodingAttr::getMMAv1IsVec4(int opIdx) const {
+bool NvidiaMmaEncodingAttr::getMMAv1IsVec4(int opIdx) const {
   auto [_0, _1, isAVec4, isBVec4, _2] = decodeVoltaLayoutStates();
   return opIdx == 0 ? isAVec4 : isBVec4;
 }
-int MmaEncodingAttr::getMMAv1NumOuter(ArrayRef<int64_t> shape,
-                                      int opIdx) const {
+int NvidiaMmaEncodingAttr::getMMAv1NumOuter(ArrayRef<int64_t> shape,
+                                            int opIdx) const {
   auto spw = getMMAv1ShapePerWarp(opIdx);
   auto rep = getMMAv1Rep(opIdx);
   auto warpsPerCTA = getWarpsPerCTA();
@@ -1255,7 +1255,7 @@ int MmaEncodingAttr::getMMAv1NumOuter(ArrayRef<int64_t> shape,
     return rep[1] * shape[1] / (spw[1] * warpsPerCTA[1]);
   }
 }
-SmallVector<int> MmaEncodingAttr::getMMAv1Rep(int opIdx) const {
+SmallVector<int> NvidiaMmaEncodingAttr::getMMAv1Rep(int opIdx) const {
   auto [isARow, isBRow, isAVec4, isBVec4, _] = decodeVoltaLayoutStates();
   // A
   if (opIdx == 0) {
@@ -1268,7 +1268,7 @@ SmallVector<int> MmaEncodingAttr::getMMAv1Rep(int opIdx) const {
     return {0, 2 * packSize, 1};
   }
 }
-SmallVector<int> MmaEncodingAttr::getMMAv1ShapePerWarp(int opIdx) const {
+SmallVector<int> NvidiaMmaEncodingAttr::getMMAv1ShapePerWarp(int opIdx) const {
   auto rep = getMMAv1Rep(opIdx);
   if (opIdx == 0) {
     return {8 * rep[0], 0, 1};
@@ -1276,12 +1276,12 @@ SmallVector<int> MmaEncodingAttr::getMMAv1ShapePerWarp(int opIdx) const {
     return {0, 8 * rep[1], 1};
   }
 }
-int MmaEncodingAttr::getMMAv1Vec(int opIdx) const {
+int NvidiaMmaEncodingAttr::getMMAv1Vec(int opIdx) const {
   return 2 * getMMAv1Rep(opIdx)[opIdx];
 }
-SmallVector<int64_t> MmaEncodingAttr::getMMAv2Rep(ArrayRef<int64_t> shape,
-                                                  int bitwidth,
-                                                  int opIdx) const {
+SmallVector<int64_t> NvidiaMmaEncodingAttr::getMMAv2Rep(ArrayRef<int64_t> shape,
+                                                        int bitwidth,
+                                                        int opIdx) const {
   SmallVector<int> shapePerWarp = {16, 8, 4 * 64 / bitwidth};
   auto warpsPerCTA = getWarpsPerCTA();
   assert(isAmpere());
@@ -1295,14 +1295,14 @@ SmallVector<int64_t> MmaEncodingAttr::getMMAv2Rep(ArrayRef<int64_t> shape,
         std::max<int64_t>(1, shape[1] / (shapePerWarp[1] * warpsPerCTA[1]))};
   }
 }
-unsigned MmaEncodingAttr::getTotalElemsPerThreadForOperands(
+unsigned NvidiaMmaEncodingAttr::getTotalElemsPerThreadForOperands(
     ArrayRef<int64_t> shape, Type eltTy, int opIdx) const {
   auto shapePerCTA = getShapePerCTA(*this, shape);
   int warpsPerCTAM = getWarpsPerCTA()[0];
   int warpsPerCTAN = getWarpsPerCTA()[1];
   // H100
   if (isHopper()) {
-    if (eltTy.isF16())
+    if (eltTy.isF16() || eltTy.isBF16())
       return getTotalElemsPerThread(shape, eltTy);
   }
   // A100
@@ -1376,8 +1376,8 @@ unsigned MmaEncodingAttr::getTotalElemsPerThreadForOperands(
   llvm_unreachable("unknown mma layout");
 }
 SmallVector<unsigned>
-MmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
-                                                  int opIdx) const {
+NvidiaMmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
+                                                        int opIdx) const {
   assert(isAmpere() && "mmaLayout version = 1 is not implemented yet");
   auto parentShapePerCTATile = getShapePerCTATile(shape);
   if (opIdx == 0) {
@@ -1389,7 +1389,7 @@ MmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
   }
 }
 SmallVector<unsigned>
-MmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
+NvidiaMmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
   assert(isAmpere() && "mmaLayout version = 1 is not implemented yet");
   if (opIdx == 0) {
     return {2, 4};
@@ -1415,7 +1415,7 @@ SmallVector<unsigned> DotOperandEncodingAttr::getSizePerThread() const {
     return parentMmaLayout.getSizePerThreadForOperands(getOpIdx());
   } else {
     llvm::report_fatal_error(
-        "DotOperandEncodingAttr non-MmaEncodingAttr parent not "
+        "DotOperandEncodingAttr non-NvidiaMmaEncodingAttr parent not "
         "supported yet");
     return {};
   }
@@ -1431,7 +1431,7 @@ Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
     return {};
   unsigned opIdx = attrs.get("opIdx").cast<IntegerAttr>().getInt();
   Attribute parent = attrs.get("parent");
-  auto mmaParent = parent.dyn_cast<MmaEncodingAttr>();
+  auto mmaParent = parent.dyn_cast<NvidiaMmaEncodingAttr>();
   unsigned kWidth = 0;
   Attribute _kWidth = attrs.get("kWidth");
   if (_kWidth) {
@@ -1447,7 +1447,7 @@ Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
-  auto mmaParent = getParent().dyn_cast<MmaEncodingAttr>();
+  auto mmaParent = getParent().dyn_cast<NvidiaMmaEncodingAttr>();
   printer << "<{"
           << "opIdx = " << getOpIdx() << ", parent = " << getParent();
   if (mmaParent && mmaParent.isAmpere())
@@ -1600,14 +1600,14 @@ struct TritonGPUInferLayoutInterface
   inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
                      Attribute retEncoding,
                      std::optional<Location> location) const override {
-    auto mmaRetEncoding = retEncoding.dyn_cast<MmaEncodingAttr>();
+    auto mmaRetEncoding = retEncoding.dyn_cast<NvidiaMmaEncodingAttr>();
     if (mmaRetEncoding && mmaRetEncoding.isHopper()) {
       auto dotOpEnc = operandEncoding.dyn_cast<DotOperandEncodingAttr>();
       if (!operandEncoding.isa<SharedEncodingAttr>() &&
           !(opIdx == 0 && dotOpEnc && dotOpEnc.getOpIdx() == 0 &&
-            dotOpEnc.getParent().isa<MmaEncodingAttr>())) {
+            dotOpEnc.getParent().isa<NvidiaMmaEncodingAttr>())) {
         return emitOptionalError(
-            location, "unexpected operand layout for MmaEncodingAttr v3");
+            location, "unexpected operand layout for NvidiaMmaEncodingAttr v3");
       }
     } else if (auto dotOpEnc =
                    operandEncoding.dyn_cast<DotOperandEncodingAttr>()) {
@@ -1631,7 +1631,7 @@ struct TritonGPUInferLayoutInterface
     if (!aEncoding && !bEncoding)
       return mlir::success();
     auto mmaAEncoding =
-        aEncoding.getParent().dyn_cast_or_null<MmaEncodingAttr>();
+        aEncoding.getParent().dyn_cast_or_null<NvidiaMmaEncodingAttr>();
     if (mmaAEncoding && mmaAEncoding.isHopper())
       return success();
     // Verify that the encodings are valid.
@@ -1688,7 +1688,7 @@ struct CanonicalizeConvertFromConvert
     auto srcType = op.getOperand().getType().cast<RankedTensorType>();
     auto dstType = op.getType().cast<RankedTensorType>();
     if (dstType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>() &&
-        srcType.getEncoding().isa<triton::gpu::MmaEncodingAttr>())
+        srcType.getEncoding().isa<triton::gpu::NvidiaMmaEncodingAttr>())
       return mlir::failure();
     // for hopper MMAv3
     if (!op.use_empty()) {
@@ -1699,7 +1699,7 @@ struct CanonicalizeConvertFromConvert
 
       if (hasDotUser) {
         if (dstType.getEncoding().isa<triton::gpu::SharedEncodingAttr>() &&
-            srcType.getEncoding().isa<triton::gpu::MmaEncodingAttr>())
+            srcType.getEncoding().isa<triton::gpu::NvidiaMmaEncodingAttr>())
           return mlir::failure();
       }
     }

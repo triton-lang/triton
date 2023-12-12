@@ -144,7 +144,7 @@ class MmaLayout:
         self.instr_shape = str(instr_shape)
 
     def __str__(self):
-        return f"#{GPU_DIALECT}.mma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA={str(self.warps_per_cta)}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}, instrShape={self.instr_shape}}}>"
+        return f"#{GPU_DIALECT}.nvidia_mma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA={str(self.warps_per_cta)}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}, instrShape={self.instr_shape}}}>"
 
 
 class BlockedLayout:
@@ -1408,6 +1408,43 @@ def test_load_store_same_ptr(device):
         assert torch.all(x == 2)
 
 
+def test_interleave(device):
+
+    @triton.jit
+    def kernel(X, Y, Z, N: tl.constexpr):
+        offs = tl.arange(0, N)
+        x = tl.load(X + offs)
+        y = tl.load(Y + offs)
+        z = tl._experimental_interleave(x, y)
+        tl.store(Z + tl.arange(0, 2 * N), z)
+
+    x = torch.arange(0, 128, device=device).to(torch.int32)
+    y = torch.arange(-128, 0, device=device).to(torch.int32)
+    z_ref = torch.stack([x, y], dim=-1).reshape((256, ))
+    z = torch.zeros_like(z_ref)
+    kernel[(1, )](x, y, z, N=128)
+
+    np.testing.assert_equal(to_numpy(z_ref), to_numpy(z))
+
+
+def test_interleave_with_mma(device):
+
+    @triton.jit
+    def kernel(X, Z):
+        x = tl.load(X + 16 * tl.arange(0, 32)[:, None] + tl.arange(0, 16)[None, :])  # (32,16)
+        x2 = tl._experimental_interleave(x, 2 * x)  # (32,32)
+        z = tl.dot(x2, x2)  # (32,32)
+        tl.store(Z + 32 * tl.arange(0, 32)[:, None] + tl.arange(0, 32)[None, :], z)
+
+    x = torch.arange(0, 32 * 16, device=device, dtype=torch.float32).reshape((32, 16))
+    r = torch.stack([x, 2 * x], dim=-1).reshape((32, 32))
+    z_ref = torch.matmul(r, r)
+    z = torch.zeros_like(z_ref)
+    kernel[(1, )](x, z)
+
+    torch.testing.assert_close(z, z_ref)
+
+
 def convert_float_to_float32(fp: torch.tensor, dtype=None):
     if not dtype:
         dtype = getattr(tl, torch_dtype_name(fp.dtype))
@@ -2329,7 +2366,7 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
                                                                                                     'float32')]] +
     [(64, 64, 64, 4, col_a, col_b, 'none', False, 'float32', 'float32')
      for col_a in [True, False]
-     for col_b in [True, False]])
+     for col_b in [True, False]] + [(64, 64, 64, 4, False, False, 'chain-dot', False, 'bfloat16', 'float32')])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, out_dtype, num_ctas, device):
     check_cuda_only(device)

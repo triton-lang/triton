@@ -30,7 +30,7 @@ using namespace mlir::triton;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
-using ::mlir::triton::gpu::MmaEncodingAttr;
+using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 triton::nvgpu::WGMMAEltType getMmaRetType(Value d) {
@@ -195,8 +195,8 @@ private:
 
 DotOpMmaV3SmemLoader loadA(TritonGPUToLLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Location loc,
-                           const MmaEncodingAttr &mmaEncoding, Value tensor,
-                           Value smemObjBase, Value thread) {
+                           const NvidiaMmaEncodingAttr &mmaEncoding,
+                           Value tensor, Value smemObjBase, Value thread) {
   auto aTensorTy = tensor.getType().cast<RankedTensorType>();
   auto aSharedLayout = aTensorTy.getEncoding().dyn_cast<SharedEncodingAttr>();
   assert(aSharedLayout && "only support load dot operand from shared.");
@@ -232,7 +232,7 @@ DotOpMmaV3SmemLoader loadA(TritonGPUToLLVMTypeConverter *typeConverter,
 
 DotOpMmaV3SmemLoader loadB(TritonGPUToLLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Location loc,
-                           MmaEncodingAttr &mmaEncoding, Value tensor,
+                           NvidiaMmaEncodingAttr &mmaEncoding, Value tensor,
                            Value base, Value thread) {
   auto bTensorTy = tensor.getType().cast<RankedTensorType>();
   auto bSharedLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
@@ -271,18 +271,25 @@ llvm::SmallVector<Value> loadReg(ConversionPatternRewriter &rewriter,
                                  Operation *insertBefore) {
   OpBuilder::InsertionGuard g(rewriter);
   rewriter.setInsertionPoint(insertBefore);
-  if (!elements[0].getType().isF16()) {
+
+  // Internally bfloat16 is stored as int16, so we check them both
+  auto isBF16 =
+      elements[0].getType().isBF16() || elements[0].getType().isInteger(16);
+
+  if (!(elements[0].getType().isF16() || isBF16)) {
     llvm::SmallVector<Value> mmaOut(numElements);
     for (int i = 0; i < numElements; ++i)
       mmaOut[i] = elements[startIndex + i];
     return mmaOut;
   }
-  // For FP16 we need to pack accumulator into 32-bit integers.
+
+  // For FP16 and BF16 we need to pack accumulator into 32-bit integers.
   llvm::SmallVector<Value> mmaOut(numElements / 2);
+  Type cPackTy = isBF16 ? vec_ty(rewriter.getIntegerType(16), 2)
+                        : vec_ty(rewriter.getF16Type(), 2);
   for (int i = 0; i < numElements / 2; ++i) {
     Value a0 = elements[startIndex + 2 * i];
     Value a1 = elements[startIndex + 2 * i + 1];
-    Type cPackTy = vec_ty(rewriter.getF16Type(), 2);
     Value pack = rewriter.create<LLVM::UndefOp>(loc, cPackTy);
     pack = insert_element(cPackTy, pack, a0, i32_val(0));
     pack = insert_element(cPackTy, pack, a1, i32_val(1));
@@ -371,7 +378,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   auto dTensorTy = d.getType().cast<RankedTensorType>();
   auto aSharedLayout = aTensorTy.getEncoding().dyn_cast<SharedEncodingAttr>();
   auto bSharedLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
-  auto mmaEncoding = dTensorTy.getEncoding().cast<MmaEncodingAttr>();
+  auto mmaEncoding = dTensorTy.getEncoding().cast<NvidiaMmaEncodingAttr>();
   auto bOrd = bSharedLayout.getOrder();
   bool transA = false;
   Value baseA;

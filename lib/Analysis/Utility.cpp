@@ -435,12 +435,10 @@ bool supportMMA(Value value, int version) {
 }
 
 static bool isMmaToMmaShortcut(Attribute srcEncoding, Attribute dstEncoding) {
-  auto src = srcEncoding.dyn_cast<triton::gpu::MmaEncodingAttr>();
-  auto dst = dstEncoding.dyn_cast<triton::gpu::MmaEncodingAttr>();
+  auto src = srcEncoding.dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>();
+  auto dst = dstEncoding.dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>();
   if (!src || !dst)
     return false;
-  auto srcInstrShape = src.getInstrShape();
-  auto dstInstrShape = dst.getInstrShape();
   // when #mma = MmaEncoding<version=3, warpsPerCTA=[..., 1]>
   return src && dst && src.getVersionMajor() == 3 &&
          src.getWarpsPerCTA()[1] == 1 && dst.getVersionMajor() == 3 &&
@@ -451,16 +449,18 @@ bool isMmaToMmaShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
   return isMmaToMmaShortcut(srcTy.getEncoding(), dstTy.getEncoding());
 }
 
-// For MMAV3 dotOperand layout matches mma operand for f16 case.
+// For MMAV3 dotOperand layout matches mma operand for f16 and bf16 cases.
 bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
                                    RankedTensorType dstTy) {
   auto srcLayout = srcTy.getEncoding();
   auto dstLayout = dstTy.getEncoding();
-  auto mmaLayout = srcLayout.cast<triton::gpu::MmaEncodingAttr>();
+  auto mmaLayout = srcLayout.cast<triton::gpu::NvidiaMmaEncodingAttr>();
   auto dotOperandLayout = dstLayout.cast<triton::gpu::DotOperandEncodingAttr>();
-  return mmaLayout.getVersionMajor() == 3 && dotOperandLayout.getOpIdx() == 0 &&
-         isMmaToMmaShortcut(dotOperandLayout.getParent(), srcLayout) &&
-         srcTy.getElementType().isF16();
+  auto ans =
+      mmaLayout.getVersionMajor() == 3 && dotOperandLayout.getOpIdx() == 0 &&
+      isMmaToMmaShortcut(dotOperandLayout.getParent(), srcLayout) &&
+      (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16());
+  return ans;
 }
 
 bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
@@ -470,7 +470,7 @@ bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
   // when #mma = MmaEncoding<version=2, warpsPerCTA=[..., 1]>
   auto srcLayout = srcTy.getEncoding();
   auto dstLayout = dstTy.getEncoding();
-  auto mmaLayout = srcLayout.cast<triton::gpu::MmaEncodingAttr>();
+  auto mmaLayout = srcLayout.cast<triton::gpu::NvidiaMmaEncodingAttr>();
   auto dotOperandLayout = dstLayout.cast<triton::gpu::DotOperandEncodingAttr>();
   return mmaLayout.getVersionMajor() == 2 &&
          mmaLayout.getWarpsPerCTA()[1] == 1 &&
