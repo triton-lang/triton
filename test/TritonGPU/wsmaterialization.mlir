@@ -13,8 +13,8 @@ module attributes {"async.num-agents" = 2 : i32, "triton_gpu.compute-capability"
   // CHECK: scf.for
   // CHECK: triton_nvidia_gpu.extract_mbarrier
   // CHECK: triton_nvidia_gpu.mbarrier_wait
-  // CHECK: triton_nvidia_gpu.insert_slice_async_v2
-  // CHECK: triton_nvidia_gpu.insert_slice_async_v2
+  // CHECK: triton_nvidia_gpu.insert_slice_tma
+  // CHECK: triton_nvidia_gpu.insert_slice_tma
   // CHECK: triton_nvidia_gpu.extract_mbarrier
   // CHECK: triton_nvidia_gpu.mbarrier_arrive
   // CHECK: scf.yield
@@ -165,8 +165,8 @@ module attributes {"async.num-agents" = 2 : i32, "triton_gpu.compute-capability"
   // CHECK: scf.for
   // CHECK: triton_nvidia_gpu.extract_mbarrier
   // CHECK: triton_nvidia_gpu.mbarrier_wait
-  // CHECK: triton_nvidia_gpu.insert_slice_async_v2
-  // CHECK: triton_nvidia_gpu.insert_slice_async_v2
+  // CHECK: triton_nvidia_gpu.insert_slice_tma
+  // CHECK: triton_nvidia_gpu.insert_slice_tma
   // CHECK: triton_nvidia_gpu.extract_mbarrier
   // CHECK: triton_nvidia_gpu.mbarrier_arrive
   // CHECK: scf.yield
