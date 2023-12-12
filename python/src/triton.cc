@@ -33,6 +33,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
+#include "triton/Target/HSACO/HSACOTranslation.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 #include "triton/Target/PTX/PTXTranslation.h"
 #include "triton/Target/PTX/TmaMetadata.h"
@@ -1910,6 +1911,34 @@ void init_triton_translation(py::module &m) {
         return str;
       },
       ret::take_ownership);
+
+  m.def(
+      "translate_llvmir_to_hsaco",
+      [](std::string llvmIR, std::string gfx_arch, std::string gfx_triple,
+         std::string gfx_features) -> std::tuple<std::string, std::string> {
+        // std::cout << "translate_llvmir_to_hsaco" << std::endl;
+
+        llvm::LLVMContext context;
+        std::unique_ptr<llvm::MemoryBuffer> buffer =
+            llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
+        llvm::SMDiagnostic error;
+        std::unique_ptr<llvm::Module> llvmModule =
+            llvm::parseIR(buffer->getMemBufferRef(), error, context);
+
+        // translate module to HSACO
+        auto hsacoCode = mlir::triton::translateLLVMIRToHSACO(
+            *llvmModule, gfx_arch, gfx_triple, gfx_features);
+
+        return hsacoCode;
+      },
+      ret::take_ownership);
+
+  m.def("add_external_libs_rocm",
+        [](mlir::ModuleOp &op, const std::vector<std::string> &names,
+           const std::vector<std::string> &paths) {
+          // std::cout << "add_external_libs_rocm" << std::endl;
+          ::mlir::triton::addExternalLibs(op, names, paths);
+        });
 
   m.def(
       "translate_llvmir_to_ptx",

@@ -1,6 +1,6 @@
 from triton.common.backend import BaseBackend
 from ..._C.libtriton.triton import ir, runtime
-from ..._C.libtriton.triton import get_num_warps, TMAInfos, translate_triton_gpu_to_llvmir, get_shared_memory_size, add_external_libs
+from ..._C.libtriton.triton import get_num_warps, TMAInfos, translate_triton_gpu_to_llvmir, get_shared_memory_size, add_external_libs, translate_llvmir_to_hsaco
 # from ..._C.libtriton.amd_triton import amd_ir
 from dataclasses import dataclass
 from ...common.backend import get_cuda_version_key
@@ -96,10 +96,16 @@ class HIPBackend(BaseBackend):
         metadata["shared"] = get_shared_memory_size(src)
         return ret
 
+    @staticmethod
+    def make_amdgcn(src, metadata, options):
+        ret = translate_llvmir_to_hsaco(src, options.gfx_arch, options.archgfx_triple, options.gfx_features)
+        return ret
+
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
         stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, 90)
+        stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)
 
     def hash(self):
         return f'{get_cuda_version_key()}-{self.capability}'
