@@ -226,7 +226,7 @@ std::string GraphLayoutMarker::getColor(const Type &type) const {
       return "green";
     else if (layout.isa<triton::gpu::SliceEncodingAttr>())
       return "yellow";
-    else if (layout.isa<triton::gpu::MmaEncodingAttr>())
+    else if (layout.isa<triton::gpu::NvidiaMmaEncodingAttr>())
       return "lightslateblue";
     else if (layout.isa<triton::gpu::DotOperandEncodingAttr>())
       return "orange";
@@ -385,7 +385,7 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
     return !triton::gpu::isExpensiveCat(cast<triton::CatOp>(op),
                                         targetEncoding);
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-    if (targetEncoding.isa<triton::gpu::MmaEncodingAttr>()) {
+    if (targetEncoding.isa<triton::gpu::NvidiaMmaEncodingAttr>()) {
       auto srcEncoding =
           convert.getOperand().getType().cast<RankedTensorType>().getEncoding();
       if (targetEncoding != srcEncoding)

@@ -5,7 +5,7 @@ using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::MmaEncodingAttr;
+using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
 using ValueTable = std::map<std::pair<int, int>, std::pair<Value, Value>>;
 
@@ -47,7 +47,7 @@ LogicalResult convertMMA884(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   auto mmaLayout = D.getType()
                        .cast<RankedTensorType>()
                        .getEncoding()
-                       .cast<MmaEncodingAttr>();
+                       .cast<NvidiaMmaEncodingAttr>();
   auto ALayout = A.getType()
                      .cast<RankedTensorType>()
                      .getEncoding()

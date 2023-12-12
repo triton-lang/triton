@@ -19,7 +19,7 @@ using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getUniqueContigPerThread;
-using ::mlir::triton::gpu::MmaEncodingAttr;
+using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 
@@ -35,9 +35,9 @@ constexpr int kPtrBitWidth = 64;
 
 static std::pair<SmallVector<unsigned>, SmallVector<unsigned>>
 getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
-  auto srcMmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>();
+  auto srcMmaLayout = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>();
   auto srcDotLayout = srcLayout.dyn_cast<DotOperandEncodingAttr>();
-  auto dstMmaLayout = dstLayout.dyn_cast<MmaEncodingAttr>();
+  auto dstMmaLayout = dstLayout.dyn_cast<NvidiaMmaEncodingAttr>();
   auto dstDotLayout = dstLayout.dyn_cast<DotOperandEncodingAttr>();
 
   assert(!(srcMmaLayout && dstMmaLayout && !srcMmaLayout.isAmpere()) &&
@@ -65,12 +65,13 @@ SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
   }
 
   // MmaToDotShortcut and MmaToMmaShortcut doesn't use shared mem
-  if (auto srcMmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>()) {
+  if (auto srcMmaLayout = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
     if (dstLayout.isa<DotOperandEncodingAttr>()) {
       if (isMmaToDotShortcut(srcTy, dstTy)) {
         return {};
       }
-    } else if (auto dstMmaLayout = dstLayout.dyn_cast<MmaEncodingAttr>()) {
+    } else if (auto dstMmaLayout =
+                   dstLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
       if (isMmaToMmaShortcut(srcTy, dstTy)) {
         return {};
       }
@@ -272,7 +273,7 @@ private:
                    dyn_cast<triton::nvidia_gpu::StoreAsyncOp>(op)) {
       auto srcTy = storeAsyncOp.getSrc().getType().cast<RankedTensorType>();
       auto srcEncoding = srcTy.getEncoding();
-      if (!srcEncoding.isa<MmaEncodingAttr>()) {
+      if (!srcEncoding.isa<NvidiaMmaEncodingAttr>()) {
         return;
       }
       auto smemShape = getScratchConfigForStoreAsync(storeAsyncOp);

@@ -47,7 +47,7 @@ namespace ttng = mlir::triton::nvidia_gpu;
 
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::getCTALayout;
-using ::mlir::triton::gpu::MmaEncodingAttr;
+using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 namespace {
@@ -173,7 +173,7 @@ void MaterializeLoadStorePass::materializeStoreTilePtr(
     auto srcTy = cvtOp.getOperand().getType().cast<RankedTensorType>();
     auto dstTy = cvtOp.getResult().getType().cast<RankedTensorType>();
     auto elemTy = srcTy.getElementType();
-    auto srcMmaLayout = srcTy.getEncoding().dyn_cast<MmaEncodingAttr>();
+    auto srcMmaLayout = srcTy.getEncoding().dyn_cast<NvidiaMmaEncodingAttr>();
     auto dstBlockedLayout = dstTy.getEncoding().dyn_cast<BlockedEncodingAttr>();
     auto truncFOP = llvm::dyn_cast_or_null<arith::TruncFOp>(
         cvtOp.getOperand().getDefiningOp());

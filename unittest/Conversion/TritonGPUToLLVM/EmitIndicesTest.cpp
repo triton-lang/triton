@@ -121,9 +121,9 @@ protected:
                        llvm::ArrayRef<unsigned> warpsPerCTA,
                        llvm::ArrayRef<unsigned> instrShape,
                        const std::string &refStr) {
-    auto layout =
-        MmaEncodingAttr::get(&context, versionMajor, versionMinor, warpsPerCTA,
-                             getSingleCTALayout2d(), instrShape);
+    auto layout = NvidiaMmaEncodingAttr::get(
+        &context, versionMajor, versionMinor, warpsPerCTA,
+        getSingleCTALayout2d(), instrShape);
     runDistributed2d(row, col, layout, /*multiCTA=*/false, refStr);
   }
 
@@ -132,9 +132,9 @@ protected:
                          llvm::ArrayRef<unsigned> warpsPerCTA,
                          llvm::ArrayRef<unsigned> instrShape, unsigned opIdx,
                          const std::string &refStr) {
-    auto parent =
-        MmaEncodingAttr::get(&context, versionMajor, versionMinor, warpsPerCTA,
-                             getSingleCTALayout2d(), instrShape);
+    auto parent = NvidiaMmaEncodingAttr::get(
+        &context, versionMajor, versionMinor, warpsPerCTA,
+        getSingleCTALayout2d(), instrShape);
     auto layout = DotOperandEncodingAttr::get(&context, opIdx, parent, 0);
     runDistributed2d(row, col, layout, /*multiCTA=*/false, refStr);
   }
@@ -542,7 +542,7 @@ TEST_F(EmitIndicesTest, SliceLayout_MultiCTA) {
 }
 
 //===----------------------------------------------------------------------===//
-// Tests for MmaEncodingAttr
+// Tests for NvidiaMmaEncodingAttr
 //===----------------------------------------------------------------------===//
 
 TEST_F(EmitIndicesTest, MmaLayout) {
@@ -638,7 +638,7 @@ TEST_F(EmitIndicesTest, LayoutVisualizer_Mma) {
       CTALayoutAttr::get(/*context=*/&context, /*CTAsPerCGA=*/{1, 1},
                          /*CTASplitNum=*/{1, 1}, /*CTAOrder=*/{1, 0});
 
-  Attribute mmaLayout = MmaEncodingAttr::get(
+  Attribute mmaLayout = NvidiaMmaEncodingAttr::get(
       /*context=*/&context, /*versionMajor=*/2, /*versionMinor=*/1,
       /*warpsPerCTA=*/{1, 1}, /*CTALayout=*/CTALayout, /*instrShape=*/{16, 8});
 
