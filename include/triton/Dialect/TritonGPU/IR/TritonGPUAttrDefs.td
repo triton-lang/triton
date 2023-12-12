@@ -27,7 +27,7 @@ def TritonGPU_AttrTrait : AttrInterface<"TritonGPU_AttrTrait"> {
   ];
 }
 
-class TritonGPU_Attr<string name, list<Trait> traits = [],
+class TritonGPU_Attr<string name, string attrMnemonic, list<Trait> traits = [],
                      Dialect dialect = TritonGPU_Dialect,
                      string baseCppClass = "::mlir::Attribute">
   : AttrDef<dialect, name, !listconcat([TritonGPU_AttrTrait], traits), baseCppClass> {
@@ -52,6 +52,7 @@ Then, attaching $\mathcal{L} to a tensor $T$ would mean that:
 
 Right now, Triton implements two classes of layouts: shared, and distributed.
   }];
+  let attrName = "triton.gpu." # attrMnemonic;
 
   code extraBaseClassDeclaration = [{
     unsigned getTotalElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
@@ -64,7 +65,7 @@ Right now, Triton implements two classes of layouts: shared, and distributed.
 // CTA Layout
 //===----------------------------------------------------------------------===//
 
-def CTALayoutAttr : TritonGPU_Attr<"CTALayout"> {
+def CTALayoutAttr : TritonGPU_Attr<"CTALayout", "cta_layout"> {
   let parameters = (
     ins
     ArrayRefParameter<"unsigned">:$CTAsPerCGA,
@@ -90,7 +91,7 @@ def CTALayoutAttr : TritonGPU_Attr<"CTALayout"> {
 // Shared Layout Encoding
 //===----------------------------------------------------------------------===//
 
-def SharedEncodingAttr : TritonGPU_Attr<"SharedEncoding"> {
+def SharedEncodingAttr : TritonGPU_Attr<"SharedEncoding", "shared_encoding"> {
   let mnemonic = "shared";
 
   let description = [{
@@ -387,8 +388,8 @@ For the Threads Per Warp and Values Per Thread level, the linear id distribution
   ];
 }
 
-class DistributedEncoding<string name, list<Trait> traits = [],
-                     Dialect dialect = TritonGPU_Dialect> : TritonGPU_Attr<name, !listconcat([DistributedEncodingTrait], traits), dialect> {
+class DistributedEncoding<string name, string attrMnemonic, list<Trait> traits = [],
+                     Dialect dialect = TritonGPU_Dialect> : TritonGPU_Attr<name, attrMnemonic, !listconcat([DistributedEncodingTrait], traits), dialect> {
   let description = [{
 Distributed encodings have a layout function that is entirely characterized
 by a d-dimensional tensor L. Note that L doesn't need to have the same shape
@@ -430,7 +431,7 @@ L(A) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
 // Blocked Layout Encoding
 //===----------------------------------------------------------------------===//
 
-def BlockedEncodingAttr : DistributedEncoding<"BlockedEncoding"> {
+def BlockedEncodingAttr : DistributedEncoding<"BlockedEncoding", "blocked_encoding"> {
   let mnemonic = "blocked";
 
   let description = [{
@@ -913,7 +914,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
   let hasCustomAssemblyFormat = 1;
 }
 
-def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
+def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding"> {
   let mnemonic = "slice";
 
   let description = [{
@@ -949,7 +950,7 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
   let hasCustomAssemblyFormat = 1;
 }
 
-def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding"> {
+def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding", "dot_operand_encoding"> {
   let mnemonic = "dot_op";
 
   let description = [{
