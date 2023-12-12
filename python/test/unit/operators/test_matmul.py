@@ -149,7 +149,7 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
             return f8_to_f16(x, dtype)
         return x
 
-    def init_input(m, n, dtype):
+    def init_input(m, n, dtype, acc_dtype):
         if 'float8' in dtype:
             ewidth = {'float8e4b15': 4, 'float8e4nv': 4, 'float8e5': 5}[dtype]
             sign = torch.randint(2, size=(m, n), device="cuda", dtype=torch.int8) * 128
@@ -158,13 +158,14 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
         if dtype == "int8":
             return torch.randint(-128, 127, (m, n), device="cuda", dtype=torch.int8)
         # Use small range of values to prevent numerical issues.
-        exponents = torch.randint(-4, 0, size=(m, n))
+        min_exp = -4 if acc_dtype == "float16" else -10
+        exponents = torch.randint(min_exp, 0, size=(m, n))
         ret = (2.**exponents).to(getattr(torch, dtype)).to("cuda")
         return ret
 
     # allocate/transpose inputs
-    a = init_input(M, K, ADTYPE)
-    b = init_input(K, N, BDTYPE)
+    a = init_input(M, K, ADTYPE, ACC_DTYPE)
+    b = init_input(K, N, BDTYPE, ACC_DTYPE)
     a = a if not AT else a.T.contiguous().T
     b = b if not BT else b.T.contiguous().T
     # run test
