@@ -10,7 +10,7 @@ from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
 from ..runtime.driver import driver
 from .utils import InfoFromBackendForTensorMap
-from .backends.cuda import CUDABackend
+from .backends import make_backend
 from dataclasses import dataclass
 from .code_generator import ast_to_ttir
 from pathlib import Path
@@ -158,7 +158,7 @@ class IRSource:
 def compile(src, target=None, options=None):
     if target is None:
         target = driver.get_current_target()
-    backend = CUDABackend(target)
+    backend = make_backend(target)
     # create backend
     if not isinstance(src, ASTSource):
         assert isinstance(src, str), "source must be either AST or a filepath"
