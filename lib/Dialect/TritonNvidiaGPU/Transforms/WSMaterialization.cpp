@@ -361,8 +361,7 @@ void materializeTokenOperations(Operation *parentOp, int numCTAs) {
     // Process CreateTokenOp
     OpBuilder builder(createTokenOp);
     auto tokenLoc = createTokenOp.getLoc();
-    unsigned bufferFullCount =
-        loadType == LoadType::InsertSliceTMAOp ? 1 : 128;
+    unsigned bufferFullCount = loadType == LoadType::InsertSliceTMAOp ? 1 : 128;
     Value bufferFullArray = builder.create<ttng::AllocMBarrierOp>(
         tokenLoc, mBarriersTy, bufferFullCount);
     Value bufferEmptyArray =

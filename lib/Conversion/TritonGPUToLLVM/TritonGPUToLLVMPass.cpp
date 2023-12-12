@@ -430,15 +430,15 @@ struct ConvertTritonGPUToLLVM
 
     /* Get tensorPtrMap before conversion */
     TensorPtrMapT tensorPtrMap;
-    mod.walk([&tensorPtrMap](
-                 mlir::triton::nvidia_gpu::InsertSliceTMAOp insertOp) {
-      auto src = insertOp.getSrc();
-      auto ptrTy = src.getType().dyn_cast<triton::PointerType>();
-      if (ptrTy && ptrTy.getPointeeType().isa<RankedTensorType>()) {
-        auto makeTensorPtrOp = getMakeTensorPtrOp(insertOp.getSrc());
-        tensorPtrMap[insertOp.getOperation()] = makeTensorPtrOp;
-      }
-    });
+    mod.walk(
+        [&tensorPtrMap](mlir::triton::nvidia_gpu::InsertSliceTMAOp insertOp) {
+          auto src = insertOp.getSrc();
+          auto ptrTy = src.getType().dyn_cast<triton::PointerType>();
+          if (ptrTy && ptrTy.getPointeeType().isa<RankedTensorType>()) {
+            auto makeTensorPtrOp = getMakeTensorPtrOp(insertOp.getSrc());
+            tensorPtrMap[insertOp.getOperation()] = makeTensorPtrOp;
+          }
+        });
 
     mod.walk([&tensorPtrMap](mlir::triton::nvidia_gpu::StoreAsyncOp storeOp) {
       auto dst = storeOp.getDst();
