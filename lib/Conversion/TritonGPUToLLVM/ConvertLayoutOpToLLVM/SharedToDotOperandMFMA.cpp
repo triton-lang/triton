@@ -441,7 +441,7 @@ Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value thread,
             const SharedMemoryObject &smemObj) {
   auto mfmaLayout = encoding.getParent().cast<MfmaEncodingAttr>();
   auto nonKDim = mfmaLayout.getNonKDim();
-  assert(nonKDim == 32 || nonKDim == 16);
+  assert(nonKDim == 32 || nonKDim == 16 || nonKDim == 4);
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 
   auto aTensorTy = tensor.getType().cast<RankedTensorType>();
@@ -587,7 +587,7 @@ Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value thread,
             const SharedMemoryObject &smemObj) {
   auto mfmaLayout = encoding.getParent().cast<MfmaEncodingAttr>();
   auto nonKDim = mfmaLayout.getNonKDim();
-  assert(nonKDim == 32 || nonKDim == 16);
+  assert(nonKDim == 32 || nonKDim == 16 || nonKDim == 4);
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 
   auto bTensorTy = tensor.getType().cast<RankedTensorType>();

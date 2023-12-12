@@ -1644,7 +1644,7 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                                                       ('float8e4m3fnuz', 'float32'),
                                                       ('float16', 'float32'),
                                                       ('float32', 'float32')]
-                          for non_k_dim in [0, 16, 32]
+                          for non_k_dim in [0, 4, 16, 32]
                           if not (allow_tf32 and (in_dtype in ['float16']))] +
 
                          [(*shape_nw, col_a, col_b, 'none', allow_tf32, in_dtype, out_dtype, non_k_dim)
@@ -1670,13 +1670,18 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                                            [64, 32, 32, 2],
                                            [256, 32, 32, 2],
                                            [256, 32, 32, 4],
+                                           [32, 8, 128, 4],
+                                           [8, 32, 128, 2],
+                                           [4, 32, 64, 4],
+                                           [32, 4, 64, 2],
+                                           [16, 4, 64, 8]
                                            ]
                           for allow_tf32 in [False, True]
                           for col_a in [True, False]
                           for col_b in [True, False]
                           for in_dtype in ['int8', 'bfloat16', 'float16', 'float32']
                           for out_dtype in [None]
-                          for non_k_dim in [0, 16, 32]])
+                          for non_k_dim in [0, 4, 16, 32]])
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, out_dtype, non_k_dim, device='cuda'):
     capability = torch.cuda.get_device_capability()
 
@@ -1697,6 +1702,12 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
                 out_dtype = "int32"
         if non_k_dim == 32 and (M < 32 or N < 32):
             pytest.skip("incompatible non_k_dim == 32 with MN sizes")
+        if non_k_dim == 16 and (M < 16 or N < 16):
+            pytest.skip("incompatible non_k_dim == 16 with MN sizes")
+        if non_k_dim == 4 and (K < 64):
+            pytest.skip("incompatible non_k_dim == 4 with K size")
+        if non_k_dim == 4 and (M > 16 or N > 16):
+            pytest.skip("skipping lage matrices for non_k_dim == 4 to speedup testing")
 
     if capability[0] < 7:
         pytest.skip("Only test tl.dot() on devices with sm >= 70")
@@ -2003,6 +2014,7 @@ def get_variant_golden(a, b):
 
 @pytest.mark.parametrize('SIZE_M,SIZE_N,SIZE_K,NUM_WARPS,BLOCK_SIZE_M,BLOCK_SIZE_N,BLOCK_SIZE_K,NUM_STAGES', [
     [64, 32, 128, 4, 64, 32, 64, 0],
+    [4, 16, 128, 4, 4, 16, 64, 1],
     [64, 32, 128, 4, 64, 32, 64, 2]
 ])
 def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, NUM_STAGES):

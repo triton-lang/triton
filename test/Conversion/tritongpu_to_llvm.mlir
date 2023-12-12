@@ -1978,11 +1978,11 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 //       PTX:   nvvm.shfl.sync bfly
 //       PTX:   nvvm.barrier0
 
-//       GCN-COUNT-4:   ds_swizzle_b32
+//       GCN-COUNT-4:   rocdl.ds_swizzle %{{.*}} : (i32, i32) -> i32
 //       GCN:   llvm.store
 //       GCN:   rocdl.barrier
 //       GCN:   llvm.load
-//       GCN-COUNT-2:   ds_swizzle_b32
+//       GCN-COUNT-2:   rocdl.ds_swizzle %{{.*}} : (i32, i32) -> i32
 //       GCN:   llvm.store
 //       GCN:   rocdl.barrier
 //       GCN:   llvm.load

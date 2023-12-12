@@ -69,3 +69,26 @@ On some node, I saw the following runtime error
 ```
 It's hard to reproduce the error. **Needs further investigation**
 - https://github.com/ROCmSoftwarePlatform/frameworks-internal/issues/6011
+
+# One config running script
+
+`one_config.py` is a script that runs one given matmul config.
+It is an interface to `tune_gemm.py` functionality and could be used for triton debugging.
+
+### Usage
+
+This script supports two methods to specify configuration parameters.
+
+Variant 1: Separate command line attributes.
+
+```bash
+python one_config.py -m 256 -n 256 -k 256 --block_m 64 --block_n 64 --block_k 64 --group_m 1 --split_k 2 --num_warps 2 --num_stages 0 --waves_per_eu 0
+```
+
+Variant 2: one-line config description.
+This is how configs are printed by `tune_gemm.py` script
+
+```bash
+python one_config.py --config_str M16_N8_K128_BM64_BN64_BK64_GM1_SK2_nW2_nS0_EU0
+```
+
