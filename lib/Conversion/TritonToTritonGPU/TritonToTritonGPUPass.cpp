@@ -19,8 +19,11 @@ using namespace mlir::triton;
 
 #define GEN_PASS_CLASSES
 #include "triton/Conversion/TritonToTritonGPU/Passes.h.inc"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 namespace {
+
+using triton::gpu::BlockedEncodingAttr;
 
 // pass named attrs (e.g., tt.contiguity) from Triton to Triton
 static void addNamedAttrs(Operation *op, DictionaryAttr dictAttrs) {
@@ -314,6 +317,46 @@ struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
   }
 };
 
+struct TritonInterleaveOpPattern
+    : public OpConversionPattern<triton::ExperimentalInterleaveOp> {
+  using OpConversionPattern<
+      triton::ExperimentalInterleaveOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(ExperimentalInterleaveOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const {
+    // Preconditions:
+    //   * The two inputs shapes and encodings are the same.
+    //   * The input encoding is a blocked layout.
+    //
+    // These are mostly taken care of by the nature of this rewrite: All the
+    // operands provided by `adaptor` have the default blocked layout.
+    //
+    // Postconditions:
+    //   * Output shape is `input_shape[0:-1] + [2 * input_shape[-1]]`.
+    //   * Output encoding is the input encoding except the last dimension has
+    //     twice as many elems per thread.
+    assert(adaptor.getLhs().getType() == adaptor.getRhs().getType());
+    auto operandEnc = adaptor.getLhs()
+                          .getType()
+                          .cast<RankedTensorType>()
+                          .getEncoding()
+                          .cast<BlockedEncodingAttr>();
+    auto newRetEncoding = inferDstEncoding(op, operandEnc);
+    if (!newRetEncoding.has_value())
+      return failure();
+
+    auto retType = this->getTypeConverter()
+                       ->convertType(op.getType())
+                       .cast<RankedTensorType>();
+    auto newRetType = RankedTensorType::get(
+        retType.getShape(), retType.getElementType(), *newRetEncoding);
+    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::ExperimentalInterleaveOp>(
+                      op, newRetType, adaptor.getOperands()),
+                  adaptor.getAttributes());
+    return success();
+  }
+};
+
 struct TritonTransPattern : public OpConversionPattern<triton::TransOp> {
 
   using OpConversionPattern<triton::TransOp>::OpConversionPattern;
@@ -467,9 +510,10 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::FpToFpOp>, GenericOpPattern<triton::IntToPtrOp>,
       GenericOpPattern<triton::PtrToIntOp>, GenericOpPattern<triton::SplatOp>,
       TritonBroadcastPattern, GenericOpPattern<triton::AddPtrOp>,
-      TritonCatPattern, GenericOpPattern<triton::ElementwiseInlineAsmOp>,
-      TritonReducePattern, GenericOpPattern<triton::ReduceReturnOp>,
-      TritonScanPattern, GenericOpPattern<triton::ScanReturnOp>,
+      TritonCatPattern, TritonInterleaveOpPattern,
+      GenericOpPattern<triton::ElementwiseInlineAsmOp>, TritonReducePattern,
+      GenericOpPattern<triton::ReduceReturnOp>, TritonScanPattern,
+      GenericOpPattern<triton::ScanReturnOp>,
       GenericOpPattern<triton::MakeRangeOp>, TritonExpandDimsPattern,
       TritonTransPattern, TritonDotPattern, GenericOpPattern<triton::LoadOp>,
       GenericOpPattern<triton::StoreOp>,

@@ -1406,6 +1406,17 @@ void init_triton_ir(py::module &&m) {
                  mlir::RankedTensorType::get(shape, lhsType.getElementType()),
                  lhs, rhs);
            })
+      .def("create_interleave",
+           [](TritonOpBuilder &self, mlir::Value &a,
+              mlir::Value &b) -> mlir::Value {
+             auto aTy = a.getType().cast<mlir::RankedTensorType>();
+             llvm::SmallVector<int64_t> shape(aTy.getShape().begin(),
+                                              aTy.getShape().end());
+             shape[shape.size() - 1] *= 2;
+             return self.create<mlir::triton::ExperimentalInterleaveOp>(
+                 mlir::RankedTensorType::get(shape, aTy.getElementType()), a,
+                 b);
+           })
       .def("create_trans",
            [](TritonOpBuilder &self, mlir::Value &arg) -> mlir::Value {
              auto argType = arg.getType().dyn_cast<mlir::RankedTensorType>();
