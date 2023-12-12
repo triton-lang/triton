@@ -1330,7 +1330,7 @@ protected:
     formatting.formatStrValue =
         LLVM::addStringToModule(loc, rewriter, "printfFormat_", msgNewline);
     formatting.formatStrSize = msgNewline.size_in_bytes();
-    llPrintfHIP(loc, moduleOp, formatting, args, rewriter);
+    llPrintfHIP(loc, moduleOp, formatting, args, rewriter, stderr);
     return formatting;
   }
 
@@ -1342,7 +1342,7 @@ protected:
 
     auto typeConverter = getTypeConverter();
     mlir::Type llvmI8 = typeConverter->convertType(rewriter.getI8Type());
-    mlir::Type i8Ptr = typeConverter->getPointerType(llvmI8);
+    auto ptrType = LLVM::LLVMPointerType::get(rewriter.getContext());
     mlir::Type llvmI32 = typeConverter->convertType(rewriter.getI32Type());
     mlir::Type llvmI64 = typeConverter->convertType(rewriter.getI64Type());
 
@@ -1364,7 +1364,7 @@ protected:
         moduleOp, loc, rewriter, "__ockl_printf_append_string_n",
         LLVM::LLVMFunctionType::get(
             llvmI64,
-            {llvmI64, i8Ptr, /*length (bytes)*/ llvmI64, /*isLast*/ llvmI32}));
+            {llvmI64, {ptrType}, /*length (bytes)*/ llvmI64, /*isLast*/ llvmI32}));
 
     /// Start the printf hostcall
     Value zeroI64 = rewriter.create<LLVM::ConstantOp>(loc, llvmI64, 0);
@@ -1405,12 +1405,11 @@ protected:
         Value arg = args[i];
         if (auto floatType = arg.getType().dyn_cast<FloatType>()) {
           if (!floatType.isF64())
-            arg = rewriter.create<LLVM::FPExtOp>(
-                loc, typeConverter->convertType(rewriter.getF64Type()), arg);
-          arg = rewriter.create<LLVM::BitcastOp>(loc, llvmI64, arg);
+            arg = fpext(typeConverter->convertType(rewriter.getF64Type()), arg);
+          arg = bitcast(arg, llvmI64);
         }
         if (arg.getType().getIntOrFloatBitWidth() != 64)
-          arg = rewriter.create<LLVM::ZExtOp>(loc, llvmI64, arg);
+           arg = zext(llvmI64, arg);
 
         arguments.push_back(arg);
       }
@@ -1421,7 +1420,7 @@ protected:
 
       auto isLast = (bound == nArgs) ? oneI32 : zeroI32;
       arguments.push_back(isLast);
-      auto call = rewriter.create<LLVM::CallOp>(loc, ocklAppendArgs, arguments);
+      auto call = call(ocklAppendArgs, arguments);
       printfDesc = call.getResult();
     }
   }

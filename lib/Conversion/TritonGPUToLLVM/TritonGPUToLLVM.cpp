@@ -17,7 +17,13 @@ Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
   assert(axis >= 0);
   assert(axis < 3);
   assert(moduleOp);
-
+#ifdef USE_ROCM
+  static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
+                                                  mlir::gpu::Dimension::y,
+                                                  mlir::gpu::Dimension::z};
+  Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[axis]);
+  return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
+#else
   // It is not easy to get the compute capability here, so we use numCTAs to
   // decide the semantic of GetProgramIdOp. If numCTAs = 1, then
   // GetProgramIdOp is converted to "%ctaid", otherwise it is converted to
@@ -27,6 +33,7 @@ Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
   std::string sreg = numCTAs == 1 ? "%ctaid." : "%clusterid.";
   sreg.append(1, 'x' + axis); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
   return getSRegValue(rewriter, loc, sreg);
+#endif
 }
 
 struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
@@ -137,12 +144,14 @@ struct PrintOpConversion
     if (op.getNumOperands() == 0) {
       std::string formatStr;
       llvm::raw_string_ostream os(formatStr);
+#ifdef USE_ROCM
+      os << "pid (" << getFormatSubstr(pid[0]) << ", "
+         << getFormatSubstr(pid[1]) << ", " << getFormatSubstr(pid[2]) << ")" << op.getPrefix().str();
+      llPrintfHIP(loc, op->getParentOfType<mlir::ModuleOp>(), formatStr, 
+		      {pid[0], pid[1], pid[2]}, rewriter);
+#else
       os << "pid (" << getFormatSubstr(pid[0]) << ", "
          << getFormatSubstr(pid[1]) << ", " << getFormatSubstr(pid[2]) << ")%s";
-#ifdef USE_ROCM
-      llPrintfHIP(loc, op->getParentOfType<mlir::ModuleOp>(), formatStr, 
-		      {pid[0], pid[1], pid[2], prefixStr}, rewriter);
-#else
       llPrintf(formatStr, {pid[0], pid[1], pid[2], prefixStr}, rewriter);
 #endif
     } else {
@@ -250,8 +259,12 @@ struct PrintOpConversion
       }
       os << ")";
 
+#if USE_ROCM
+      os << op.getPrefix().str();
+#else
       os << "%s";
       printfOperands.push_back(prefixStr);
+#endif
 
       if (numOperands > 1) {
         os << "(operand " << operand << ") ";
@@ -266,7 +279,7 @@ struct PrintOpConversion
       // printfOperands.  But we don't want to create BLOCK_SIZE duplicate
       // strings, so we cache the Value.
       if (i == 0) {
-#ifdef USE_ROCM
+#if USE_ROCM
         formatting = llPrintfHIP(op->getLoc(), op->getParentOfType<mlir::ModuleOp>(), formatStr,
 			printfOperands, rewriter);
 #else
@@ -616,20 +629,14 @@ struct GetProgramIdOpConversion
   matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
-#ifdef USE_ROCM
-    Location loc = op->getLoc();
-    assert(op.getAxisAsInt() < 3);
-
-    Value blockId =
-        rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[op.getAxisAsInt()]);
-    rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, i32_ty, blockId);
-    return success();
-#else
     Value programId = llGetPid(op.getAxisAsInt(), op->getLoc(),
                                op->getParentOfType<ModuleOp>(), rewriter);
+#ifdef USE_ROCM
+    rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, i32_ty, programId);
+#else
     rewriter.replaceOp(op, programId);
-    return success();
 #endif
+    return success();
   }
   static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
                                                   mlir::gpu::Dimension::y,
