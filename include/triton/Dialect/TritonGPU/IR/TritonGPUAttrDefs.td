@@ -855,8 +855,7 @@ section 9.7.13.4.1 for more details.
                                      int bitwidth) const;
 #ifdef USE_ROCM
     SmallVector<int64_t> getMFMAElemsPerInstr() const;
-    SmallVector<int64_t> getMFMARep(ArrayRef<int64_t> operandShape,
-                                    Type elemType) const;
+    SmallVector<int64_t> getMFMARep(ArrayRef<int64_t> operandShape) const;
 #endif
   }];
 }

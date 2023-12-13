@@ -165,16 +165,7 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
 
 #ifdef USE_ROCM
   if (auto mfmaParent = dotOpLayout.getParent().dyn_cast<MfmaEncodingAttr>()) {
-    if (elemTy.isF32())
-      return elemTy;
-    if (elemTy.isInteger(16)) // aka BF16
-      return vec_ty(elemTy, dotOpLayout.getKWidth());
-    if (elemTy.isF16())
-      return vec_ty(elemTy, 4);
-    if (elemTy.isInteger(8) && dotOpLayout.getKWidth() == 4)
-      return IntegerType::get(ctx, 32);
-    if (elemTy.isInteger(8) && dotOpLayout.getKWidth() == 8)
-      return IntegerType::get(ctx, 64);
+    return vec_ty(elemTy, dotOpLayout.getKWidth());
   }
 #endif
 

@@ -380,8 +380,11 @@ struct DotOpMFMAConversionHelper {
     auto aEncoding = aTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
     auto bEncoding = bTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
 
-    auto repA = aEncoding.getMFMARep(aTensorTy.getShape(), elemTy);
-    auto repB = bEncoding.getMFMARep(bTensorTy.getShape(), elemTy);
+    auto kWidth = aEncoding.getKWidth();
+    assert(kWidth == bEncoding.getKWidth());
+
+    auto repA = aEncoding.getMFMARep(aTensorTy.getShape());
+    auto repB = bEncoding.getMFMARep(bTensorTy.getShape());
 
     assert(repA[1] == repB[0]);
 
@@ -394,9 +397,9 @@ struct DotOpMFMAConversionHelper {
     auto numRepK = repA[1];
 
     ValueTable ha = getValuesFromDotOperandLayoutStruct(
-        loadedA, numRepM, numRepK, aTensorTy.getElementType());
+        loadedA, numRepM, numRepK, kWidth, aTensorTy.getElementType());
     ValueTable hb = getValuesFromDotOperandLayoutStruct(
-        loadedB, numRepN, numRepK, aTensorTy.getElementType());
+        loadedB, numRepN, numRepK, kWidth, aTensorTy.getElementType());
     auto dstElemTy = dTensorTy.getElementType();
     auto fc =
         typeConverter->unpackLLElements(loc, loadedC, rewriter, dstElemTy);
@@ -441,13 +444,29 @@ struct DotOpMFMAConversionHelper {
     return success();
   }
 
-  ValueTable getValuesFromDotOperandLayoutStruct(Value value, int n0, int n1,
+/**
+ * @brief Converts dot operand structure to value table and converts types appropriate for mfma instructions
+*/
+  ValueTable getValuesFromDotOperandLayoutStruct(Value value, int n0, int n1, int kWidth,
                                                  Type type) const {
     auto elems = typeConverter->unpackLLElements(loc, value, rewriter, type);
     ValueTable vals;
     for (int i = 0; i < n0; i++) {
       for (int j = 0; j < n1; j++) {
-        vals[{i, j}] = elems[n1 * i + j];
+        auto rawElems = elems[n1 * i + j];
+        Value convertedElems;
+        if (type.isF32()) {
+          convertedElems = extract_element(type, rawElems, i32_val(0));
+        } else if (type.getIntOrFloatBitWidth() == 8) {
+          if (kWidth == 4)
+            convertedElems = bitcast(rawElems, i32_ty);
+          if (kWidth == 8)
+            convertedElems = bitcast(rawElems, i64_ty);
+        } else {
+          assert(type.isBF16() || type.isF16());
+          convertedElems = rawElems;
+        }
+        vals[{i, j}] = convertedElems;
       }
     }
     return vals;

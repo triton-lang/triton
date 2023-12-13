@@ -1003,8 +1003,7 @@ DotOperandEncodingAttr::getMFMAElemsPerInstr() const {
 }
 
 SmallVector<int64_t>
-DotOperandEncodingAttr::getMFMARep(ArrayRef<int64_t> operandShape,
-                                   Type elemType) const {
+DotOperandEncodingAttr::getMFMARep(ArrayRef<int64_t> operandShape) const {
   auto operandTileShape = getMFMAElemsPerInstr();
   auto warpsPerCTA = getParent().cast<MfmaEncodingAttr>().getWarpsPerCTA();
   if (getOpIdx() == 0)
@@ -1033,7 +1032,7 @@ unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
     int warpsPerCTAN = mfmaParent.getWarpsPerCTA()[1];
     constexpr int waveSize = 64;
     auto tileSize = getMFMAElemsPerInstr();
-    auto rep = getMFMARep(shape, eltTy);
+    auto rep = getMFMARep(shape);
     return rep[0] * rep[1];
   }
   auto shapePerCTA = getShapePerCTA(*this, shape);
