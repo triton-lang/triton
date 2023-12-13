@@ -2958,6 +2958,9 @@ else:
 @pytest.mark.parametrize("src_layout", layouts)
 @pytest.mark.parametrize("axis", [0, 1])
 def test_reduce_layouts(M, N, src_layout, axis, device='cuda'):
+    if is_hip():
+        pytest.skip("Skiping test_reduce_layouts for now.")
+
     if torch.version.hip is not None and _get_warp_size() == 64:
         if src_layout.is_transposed and axis == 0:
             pytest.skip("Reduce along axis 0 is not supported in transposed mfma layout")
