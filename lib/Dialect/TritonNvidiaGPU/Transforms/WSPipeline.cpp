@@ -141,7 +141,7 @@ scf::ForOp createNewPersistentLoop(scf::ForOp forOp, int numStages,
   // The agentId set of pipelineIdx is the union of agentId sets of all ops in
   // the for loop
   OpBuilderWithAgentIds builder(forOp.getContext());
-  builder.setAgentIdsFromArray(collectAgentIds(forOp));
+  builder.setAgentIdsFromArray(getNestedAgentIds(forOp));
 
   builder.setInsertionPoint(forOp);
   Value numStagesVal =
@@ -210,7 +210,7 @@ scf::ForOp createNewMathLoop(scf::ForOp forOp, int numStages,
   // The agentId set of pipelineIdx is the union of agentId sets of all ops in
   // the for loop
   OpBuilderWithAgentIds builder(forOp.getContext());
-  builder.setAgentIdsFromArray(collectAgentIds(forOp));
+  builder.setAgentIdsFromArray(getNestedAgentIds(forOp));
 
   builder.setInsertionPoint(forOp);
   Value numStagesVal =
@@ -422,7 +422,7 @@ DenseMap<AgentId, scf::ForOp> createForOpsForEachAgentId(scf::ForOp forOp) {
   DenseMap<AgentId, scf::ForOp> agentsToForOp;
 
   // Create newForOp for each agent
-  for (AgentId agentId : collectAgentIds(forOp)) {
+  for (AgentId agentId : getNestedAgentIds(forOp)) {
     auto usedArgs = checkDependencyAndCollectUsedArgs(forOp, agentId,
                                                       blockArgToYieldOperand);
 
@@ -517,7 +517,7 @@ DenseMap<AgentId, scf::IfOp> SpecializeAgentRegion(triton::FuncOp funcOp) {
   DenseMap<AgentId, scf::IfOp> agentsToIfOp;
   DenseMap<AgentId, IRMapping> agentsToIRMappings;
 
-  for (AgentId agentId : collectAgentIds(funcOp)) {
+  for (AgentId agentId : getNestedAgentIds(funcOp)) {
     // Create IfOp for each agentId
     Value cond = builder.create<arith::CmpIOp>(
         loc, arith::CmpIPredicate::eq, curAgentId,
@@ -765,8 +765,8 @@ void buildAsyncComm(const DenseMap<Operation *, SmallVector<Channel *>> &map,
   auto getAgents = [&](Operation *p, Operation *c, SmallVector<AgentId> &agentP,
                        SmallVector<AgentId> &agentC,
                        SmallVector<AgentId> &agentsPC) -> void {
-    agentP = collectAgentIds(p);
-    agentC = collectAgentIds(c);
+    agentP = getNestedAgentIds(p);
+    agentC = getNestedAgentIds(c);
     agentsPC.reserve(agentP.size() + agentC.size());
     agentsPC.insert(agentsPC.end(), agentP.begin(), agentP.end());
     agentsPC.insert(agentsPC.end(), agentC.begin(), agentC.end());
@@ -849,7 +849,7 @@ void buildAsyncComm(const DenseMap<Operation *, SmallVector<Channel *>> &map,
       auto loc = dot.getLoc();
       auto forOp = cvg->getParentOfType<scf::ForOp>();
 
-      auto agentIds = collectAgentIds(dotOp);
+      auto agentIds = getNestedAgentIds(dotOp);
       OpBuilderWithAgentIds builder(dotOp.getContext());
       builder.setAgentIdsFromArray(agentIds);
       builder.setInsertionPoint(dotOp);
@@ -958,12 +958,13 @@ void buildAsyncComm(const DenseMap<Operation *, SmallVector<Channel *>> &map,
         // Create InsertSliceOp
         builder.setAgentIdsFromOp(loadOp);
         builder.setInsertionPointAfter(loadOp);
-        auto insertSliceOp = builder.createWithAgentIds<ttg::InsertSliceOp>(
-            /*loc=*/loadOp.getLoc(), /*result=*/bufferType,
-            /*src=*/loadOp.getPtr(), /*dst=*/buffer, /*index=*/pipelineIdx,
-            /*mask=*/loadOp.getMask(), /*other=*/loadOp.getOther(),
-            /*cache=*/loadOp.getCache(), /*evict=*/loadOp.getEvict(),
-            /*isVolatile=*/loadOp.getIsVolatile(), /*axis=*/0);
+        auto insertSliceOp =
+            builder.createWithAgentIds<ttg::InsertSliceAsyncOp>(
+                /*loc=*/loadOp.getLoc(), /*result=*/bufferType,
+                /*src=*/loadOp.getPtr(), /*dst=*/buffer, /*index=*/pipelineIdx,
+                /*mask=*/loadOp.getMask(), /*other=*/loadOp.getOther(),
+                /*cache=*/loadOp.getCache(), /*evict=*/loadOp.getEvict(),
+                /*isVolatile=*/loadOp.getIsVolatile(), /*axis=*/0);
 
         // Create ExtractSliceOp
         auto attr = [&](int val) { return builder.getI64IntegerAttr(val); };

@@ -89,99 +89,6 @@ def TTG_AsyncBulkCommitGroupOp : TTG_Op<"async_bulk_commit_group"> {
   }];
 }
 
-// TODO[goostavz]: extract a base class for InsertSlice & InsertSliceAsync once the op definition is verified
-def TTG_InsertSliceOp : TTG_Op<"insert_slice",
-                               [AttrSizedOperandSegments,
-                                ResultsAreSharedEncoding,
-                                MemoryEffects<[MemRead, MemWrite]>,
-                                TypesMatchWith<"infer mask type from src type",
-                                               "src", "mask", "getI1SameShape($_self)",
-                                               "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
-                                TypesMatchWith<"infer other type from src type",
-                                               "src", "other", "getPointeeType($_self)",
-                                               "($_op.getOperands().size() <= 4) || std::equal_to<>()">]> {
-  let summary = "insert slice";
-
-  let description = [{
-      This operation inserts a tensor `$src` into another tensor `$dst` as specified by the operation’s
-      `$index` argument and `$axis` attribute.
-
-      It returns a copy of `$dst` with the proper slice updated with the value of `$src`.
-
-      When converting from `tt.load` to `triton_gpu.insert_slice`, the `$evict`, `$cache`, and `$isVolatile` fields
-      might be ignored on certain hardware. For example, on NVIDIA GPUs, the cache policy is determined by the backend,
-      and `$evict` and `$isVolatile` are ignored because they apply to L1 cache only.
-
-      The insert_slice operation supports the following arguments:
-
-      * src: the tensor that is inserted.
-      * dst: the tensor into which the `$src` tensor is inserted.
-      * index: the index of the `$src` tensor at the given `$axis` from which the `$dst` tensor is inserted into
-      * mask: optional tensor-rank number of boolean masks which specify which
-              elements of the `$src` tensor are inserted into the `$dst` tensor.
-      * other: optional tensor-rank number of other tensors which specify what
-              values are inserted into the `$dst` tensor if the corresponding
-              element of the `$mask` tensor is false.
-
-      ttgpu.load_tile_async depracate
-      triton_gpu.insert_slice might be further lowered into triton_gpu_async for different hardware implementations
-
-      like tt.load, ttgpu.insert_slice/insert_slice_async has two modes up to the type of src
-      mode 1: ptr/src is a tensor of pointers
-      mode 2: ptr/src is a tensor pointer
-
-      Some typical lowering paths are:
-      in case the load is pipelined by the pipeline pass( load is inside kBlock loop, which means "pipeline pass):
-        Load from global + store to shared : tt.load(mode 1) -(tt->ttgpu+Coalesce)-> tt.load(mode 1) -(Pipeline)-> ttgpu.insert_slice(mode 1)
-        Non-bulk cp.async                  : tt.load(mode 1) -(tt->ttgpu+Coalesce)-> tt.load(mode 1) -(Pipeline)-> ttgpu.insert_slice(mode 1) -(MaterializeLoad)> ttgpu.insert_slice_async(mode 1) + ttgpu.await-> llvm
-        TMA load : tt.load(mode 2) -(tt->ttgpu+Coalesce)-> tt.load(mode 2) -(Pipeline)-> ttgpu.insert_slice(mode 2) -(MaterializeLoad)> ttgpu.insert_slice_async_v2(mode 2) + ttgpu.await-> llvm
-
-      otherwise:
-        Load from global + store to shared : tt.load(mode 1) -(tt->ttgpu+Coalesce)-> tt.load(mode 1)
-        Non-bulk cp.async                  : tt.load(mode 1) -(tt->ttgpu+Coalesce)-> tt.load(mode 1) -> ... -(MaterializeLoad)-> ttgpu.insert_slice_async(mode 1) + ttgpu.await -> llvm
-        TMA load                           : tt.load(mode 2) -(tt->ttgpu+Coalesce)-> tt.load(mode 2) -> ... -(MaterializeLoad)-> ttgpu.insert_slice_async(mode 2) + ttgpu.await -> llvm
-
-      Example:
-
-      ```
-      %1 = triton_gpu.alloc_tensor : tensor<2x32xf32>
-      %2 = triton_gpu.insert_slice %0, %1, %index { axis = 0 } : tensor<32x!tt.ptr<f32>, #AL> -> tensor<2x32xf32, #A>
-      ```
-  }];
-
-  let arguments = (ins TT_PtrLike:$src, TT_Tensor:$dst, I32:$index,
-                       Optional<I1Tensor>:$mask, Optional<TT_Type>:$other,
-                       TT_CacheModifierAttr:$cache, TT_EvictionPolicyAttr:$evict,
-                       BoolAttr:$isVolatile, I32Attr:$axis);
-
-  let builders = [
-      OpBuilder<(ins "Value":$src, "Value":$dst, "Value":$index,
-                     "triton::CacheModifier":$cache,
-                     "triton::EvictionPolicy":$evict, "bool":$isVolatile, "int":$axis)>,
-      OpBuilder<(ins "Value":$src, "Value":$dst, "Value":$index, "Value":$mask,
-                     "triton::CacheModifier":$cache,
-                     "triton::EvictionPolicy":$evict, "bool":$isVolatile, "int":$axis)>,
-      OpBuilder<(ins "Value":$src, "Value":$dst, "Value":$index,
-                     "Value":$mask, "Value":$other,
-                     "triton::CacheModifier":$cache,
-                     "triton::EvictionPolicy":$evict, "bool":$isVolatile, "int":$axis)>,
-  ];
-
-  let results = (outs TT_Tensor:$result);
-
-  let extraClassDeclaration = [{
-    static DenseSet<unsigned> getEligibleLoadByteWidth(int computeCapability) {
-      DenseSet<unsigned> validLoadBytes;
-      if (computeCapability >= 80) {
-        validLoadBytes = {4, 8, 16};
-      }
-      return validLoadBytes;
-    }
-  }];
-
-  let hasCustomAssemblyFormat = 1;
-}
-
 
 def TTG_ExtractSliceOp : TTG_Op<"extract_slice",
                                 [AttrSizedOperandSegments,
@@ -242,8 +149,6 @@ def TTG_ExtractSliceOp : TTG_Op<"extract_slice",
     attr-dict `:` type($source) `to` type($result)
   }];
 }
-
-//
 
 def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
                                     [AttrSizedOperandSegments,
