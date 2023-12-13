@@ -192,10 +192,8 @@ class HIPDriver(FrameworkGPUDriver):
 
     def get_current_target(self):
         device = self.get_current_device()
-        gfx_triple = 'amdgcn-amd-amdhsa'
-        gfx_arch = 'gfx90a'
-        gfx_features = ''
-        return ("hip", gfx_triple, gfx_arch, gfx_features)
+        arch = self.utils.get_device_properties(device)['arch']
+        return ("hip", arch.split(':')[0])
 
     def assemble_tensormap_to_arg(self, tensormaps_info, args):
         return args

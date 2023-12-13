@@ -240,9 +240,7 @@ class HIPOptions:
     extern_libs: dict = None
     cluster_dims: tuple = (1, 1, 1)
     debug: bool = False
-    gfx_triple: str = None
-    gfx_arch: str = None
-    gfx_features: str = None
+    arch: str = None
     # TODO: deprecate when hook interface has changed
     enable_warp_specialization: bool = False
     enable_fp_fusion: bool = False
@@ -265,16 +263,14 @@ class HIPBackend(BaseBackend):
 
     def __init__(self, device_type: tuple) -> None:
         super().__init__(device_type)
-        assert isinstance(device_type, tuple) and len(device_type) == 4
+        assert isinstance(device_type, tuple) and len(device_type) == 2
         assert device_type[0] == 'hip'
         assert isinstance(device_type[1], str)
-        assert isinstance(device_type[2], str)
-        assert isinstance(device_type[3], str)
         self.device_type = device_type
 
     def parse_options(self, opts) -> Any:
         device_type = self.device_type
-        args = {'gfx_triple': device_type[1], 'gfx_arch': device_type[2], 'gfx_features': device_type[3]}
+        args = {'arch': device_type[1]}
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts})
         return HIPOptions(**args)
 
@@ -337,7 +333,7 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_hsaco(src, metadata, options):
-        ret, name = translate_llvmir_to_hsaco(src, options.gfx_arch, options.gfx_triple, options.gfx_features)
+        ret, name = translate_llvmir_to_hsaco(src, options.arch, 'amdgcn-amd-amdhsa', '')
         metadata["name"] = name
         return ret
 
