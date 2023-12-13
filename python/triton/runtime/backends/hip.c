@@ -56,21 +56,6 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
     return NULL;
   }
 
-  // Open HSACO file
-  // FILE *hsaco_file;
-  // if ((hsaco_file = fopen(data, "rb")) == NULL) {
-  //   return NULL;
-  // }
-
-  // // Read HSCAO file into Buffer
-  // fseek(hsaco_file, 0L, SEEK_END);
-  // size_t hsaco_file_size = ftell(hsaco_file);
-  // unsigned char *hsaco =
-  //     (unsigned char *)malloc(hsaco_file_size * sizeof(unsigned char));
-  // rewind(hsaco_file);
-  // fread(hsaco, sizeof(unsigned char), hsaco_file_size, hsaco_file);
-  // fclose(hsaco_file);
-
   // set HIP options
   hipJitOption opt[] = {hipJitOptionErrorLogBufferSizeBytes,
                         hipJitOptionErrorLogBuffer,
@@ -86,8 +71,8 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   // launch HIP Binary
   hipModule_t mod;
   hipFunction_t fun;
-  hipModuleLoadDataEx(&mod, data, 5, opt, optval);
-  hipModuleGetFunction(&fun, mod, name);
+  HIP_CHECK(hipModuleLoadDataEx(&mod, data, 5, opt, optval))
+  HIP_CHECK(hipModuleGetFunction(&fun, mod, name));
 
   // get allocated registers and spilled registers from the function
   int n_regs = 0;

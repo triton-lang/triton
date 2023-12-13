@@ -327,7 +327,8 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_hsaco(src, metadata, options):
-        ret = translate_llvmir_to_hsaco(src, options.gfx_arch, options.gfx_triple, options.gfx_features)
+        ret, name = translate_llvmir_to_hsaco(src, options.gfx_arch, options.gfx_triple, options.gfx_features)
+        metadata["name"] = name
         return ret
 
     def add_stages(self, stages, options):
