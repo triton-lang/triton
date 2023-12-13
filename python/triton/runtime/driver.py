@@ -188,12 +188,16 @@ class HIPDriver(FrameworkGPUDriver):
         super().__init__()
         self.utils = HIPUtils()
         self.backend = self.HIP
+        self.binary_ext = "hsaco"
 
     def get_current_target(self):
         device = self.get_current_device()
         capability = self.get_device_capability(device)
         capability = capability[0] * 10 + capability[1]
         return ("hip", capability)
+
+    def assemble_tensormap_to_arg(self, tensormaps_info, args):
+        return args
 
 
 class UnsupportedDriver(DriverBase):
