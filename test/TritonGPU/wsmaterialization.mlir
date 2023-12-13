@@ -13,8 +13,8 @@ module attributes {"async.num-agents" = 2 : i32, "triton_gpu.compute-capability"
   // CHECK: scf.for
   // CHECK: triton_nvidia_gpu.extract_mbarrier
   // CHECK: triton_nvidia_gpu.mbarrier_wait
-  // CHECK: triton_nvidia_gpu.insert_slice_async_v2
-  // CHECK: triton_nvidia_gpu.insert_slice_async_v2
+  // CHECK: triton_nvidia_gpu.insert_slice_tma
+  // CHECK: triton_nvidia_gpu.insert_slice_tma
   // CHECK: triton_nvidia_gpu.extract_mbarrier
   // CHECK: triton_nvidia_gpu.mbarrier_arrive
   // CHECK: scf.yield
@@ -76,8 +76,8 @@ module attributes {"async.num-agents" = 2 : i32, "triton_gpu.compute-capability"
       %false = arith.constant {async_agent = dense<[0, 1]> : vector<2xi32>} false
       %31:4 = scf.for %arg12 = %c0_i32 to %arg7 step %c64_i32 iter_args(%arg13 = %22, %arg14 = %25, %arg15 = %false, %arg16 = %c0_i32_1) -> (!tt.ptr<tensor<128x64xf16, #blocked>, 1>, !tt.ptr<tensor<64x128xf16, #blocked1>, 1>, i1, i32)  : i32 {
         triton_nvidia_gpu.producer_acquire %2, %arg16 {async_agent = dense<0> : vector<1xi32>} : tensor<3x!triton_nvidia_gpu.token>, i32
-        %32 = triton_gpu.insert_slice %arg13, %0, %arg16 {async_agent = dense<0> : vector<1xi32>, axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<128x64xf16, #blocked>, 1> -> tensor<3x128x64xf16, #shared>
-        %33 = triton_gpu.insert_slice %arg14, %1, %arg16 {async_agent = dense<0> : vector<1xi32>, axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<64x128xf16, #blocked1>, 1> -> tensor<3x64x128xf16, #shared1>
+        %32 = triton_gpu.insert_slice_async %arg13, %0, %arg16 {async_agent = dense<0> : vector<1xi32>, axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<128x64xf16, #blocked>, 1> -> tensor<3x128x64xf16, #shared>
+        %33 = triton_gpu.insert_slice_async %arg14, %1, %arg16 {async_agent = dense<0> : vector<1xi32>, axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<64x128xf16, #blocked1>, 1> -> tensor<3x64x128xf16, #shared1>
         triton_nvidia_gpu.producer_commit %2, %arg16 {async_agent = dense<0> : vector<1xi32>} : tensor<3x!triton_nvidia_gpu.token>, i32
         %34 = tt.advance %arg13, [%c0_i32, %c64_i32] {async_agent = dense<0> : vector<1xi32>} : <tensor<128x64xf16, #blocked>, 1>
         %35 = tt.advance %arg14, [%c64_i32, %c0_i32] {async_agent = dense<0> : vector<1xi32>} : <tensor<64x128xf16, #blocked1>, 1>
@@ -165,8 +165,8 @@ module attributes {"async.num-agents" = 2 : i32, "triton_gpu.compute-capability"
   // CHECK: scf.for
   // CHECK: triton_nvidia_gpu.extract_mbarrier
   // CHECK: triton_nvidia_gpu.mbarrier_wait
-  // CHECK: triton_nvidia_gpu.insert_slice_async_v2
-  // CHECK: triton_nvidia_gpu.insert_slice_async_v2
+  // CHECK: triton_nvidia_gpu.insert_slice_tma
+  // CHECK: triton_nvidia_gpu.insert_slice_tma
   // CHECK: triton_nvidia_gpu.extract_mbarrier
   // CHECK: triton_nvidia_gpu.mbarrier_arrive
   // CHECK: scf.yield
@@ -267,8 +267,8 @@ module attributes {"async.num-agents" = 2 : i32, "triton_gpu.compute-capability"
         %60 = arith.trunci %59 {async_agent = dense<0> : vector<1xi32>} : i32 to i1
         %61:4 = scf.for %arg17 = %c0_i32 to %arg7 step %c16_i32 iter_args(%arg18 = %47, %arg19 = %50, %arg20 = %60, %arg21 = %58) -> (!tt.ptr<tensor<64x16xf16, #blocked>, 1>, !tt.ptr<tensor<16x64xf16, #blocked1>, 1>, i1, i32)  : i32 {
           triton_nvidia_gpu.producer_acquire %2, %arg21 {async_agent = dense<0> : vector<1xi32>} : tensor<3x!triton_nvidia_gpu.token>, i32
-          %65 = triton_gpu.insert_slice %arg18, %0, %arg21 {async_agent = dense<0> : vector<1xi32>, axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<64x16xf16, #blocked>, 1> -> tensor<3x64x16xf16, #shared>
-          %66 = triton_gpu.insert_slice %arg19, %1, %arg21 {async_agent = dense<0> : vector<1xi32>, axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<16x64xf16, #blocked1>, 1> -> tensor<3x16x64xf16, #shared1>
+          %65 = triton_gpu.insert_slice_async %arg18, %0, %arg21 {async_agent = dense<0> : vector<1xi32>, axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<64x16xf16, #blocked>, 1> -> tensor<3x64x16xf16, #shared>
+          %66 = triton_gpu.insert_slice_async %arg19, %1, %arg21 {async_agent = dense<0> : vector<1xi32>, axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<16x64xf16, #blocked1>, 1> -> tensor<3x16x64xf16, #shared1>
           triton_nvidia_gpu.producer_commit %2, %arg21 {async_agent = dense<0> : vector<1xi32>} : tensor<3x!triton_nvidia_gpu.token>, i32
           %67 = tt.advance %arg18, [%c0_i32, %c16_i32] {async_agent = dense<0> : vector<1xi32>} : <tensor<64x16xf16, #blocked>, 1>
           %68 = tt.advance %arg19, [%c16_i32, %c0_i32] {async_agent = dense<0> : vector<1xi32>} : <tensor<16x64xf16, #blocked1>, 1>

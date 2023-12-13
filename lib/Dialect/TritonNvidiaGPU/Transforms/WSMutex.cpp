@@ -19,7 +19,7 @@ namespace {
 
 // Target operations: dot, load, store. Add more when necessary.
 #define KEY_TYPES                                                              \
-  triton::DotOp, triton::nvidia_gpu::DotAsyncOp, ttg::InsertSliceOp,           \
+  triton::DotOp, triton::nvidia_gpu::DotAsyncOp, ttg::InsertSliceAsyncOp,      \
       triton::StoreOp
 
 template <typename Head, typename... Tails>
