@@ -243,6 +243,7 @@ class CodeGenerator(ast.NodeVisitor):
     builtin_namespace.update((
         ('print', language.core.device_print),
         ('min', language.minimum),
+        ('max', language.maximum),
     ))
 
     def _define_name_lookup(self):

@@ -118,7 +118,7 @@ def minimum(x, y, propagate_nan: core.constexpr = PropagateNan.NONE):
 
 
 @jit
-def maximum(x, y, propagate_nan: core.constexpr = math.PropagateNan.NONE):
+def maximum(x, y, propagate_nan: core.constexpr = PropagateNan.NONE):
     """
     Computes the element-wise maximum of :code:`x` and :code:`y`.
 
