@@ -970,7 +970,7 @@ void init_triton_ir(py::module &&m) {
            })
 
       // Cast instructions
-      // Conversions for custom FP types (FP8)
+      // Conversions for custom FP types (FP8 and non-standard rounding modes)
       .def("create_fp_to_fp",
            [](TritonOpBuilder &self, mlir::Value &src, mlir::Type &dstType,
               std::optional<::mlir::triton::RoundingMode> roundingMode)
