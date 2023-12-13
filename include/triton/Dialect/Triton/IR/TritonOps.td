@@ -92,7 +92,7 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
         F8 <-> FP16, BF16, FP32, FP64
     }];
 
-    let arguments = (ins TT_FloatLike:$from);
+    let arguments = (ins TT_FloatLike:$from, OptionalAttr<TT_RoundingModeAttr>:$rounding);
 
     let results = (outs TT_FloatLike:$result);
 

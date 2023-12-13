@@ -778,12 +778,12 @@ class tensor:
         assert False, "Transposition must be created by the AST Visitor"
 
     @builtin
-    def to(self, dtype, bitcast=False, _builder=None):
+    def to(self, dtype, fp_downcast_rounding: str = None, bitcast=False, _builder=None):
         if isinstance(bitcast, constexpr):
             bitcast = bitcast.value
         if bitcast:
             return semantic.bitcast(self, dtype, _builder)
-        return semantic.cast(self, dtype, _builder)
+        return semantic.cast(self, dtype, _builder, fp_downcast_rounding)
 
 
 # -----------------------
