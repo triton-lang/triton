@@ -1915,7 +1915,7 @@ void init_triton_translation(py::module &m) {
   m.def(
       "translate_llvmir_to_hsaco",
       [](std::string llvmIR, std::string gfx_arch, std::string gfx_triple,
-         std::string gfx_features) -> std::tuple<std::string, std::string> {
+         std::string gfx_features) -> py::object {
         // std::cout << "translate_llvmir_to_hsaco" << std::endl;
 
         llvm::LLVMContext context;
@@ -1926,10 +1926,15 @@ void init_triton_translation(py::module &m) {
             llvm::parseIR(buffer->getMemBufferRef(), error, context);
 
         // translate module to HSACO
-        auto hsacoCode = mlir::triton::translateLLVMIRToHSACO(
+        std::string hsacoPath = mlir::triton::translateLLVMIRToHSACO(
             *llvmModule, gfx_arch, gfx_triple, gfx_features);
 
-        return hsacoCode;
+        std::ifstream _hsaco(hsacoPath, std::ios::binary);
+        std::string hsaco =
+            std::string(std::istreambuf_iterator<char>(_hsaco), {});
+        _hsaco.close();
+
+        return std::move(py::bytes(hsaco));
       },
       ret::take_ownership);
 

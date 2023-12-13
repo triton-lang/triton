@@ -14,6 +14,9 @@ class HIPOptions:
     num_stages: int = 3
     extern_libs: dict = None
     debug: bool = False
+    gfx_triple: str = 'amdgcn-amd-amdhsa'
+    gfx_arch: str = 'gfx90a'
+    gfx_features: str = ''
 
     def __post_init__(self):
         # TODO: change API
@@ -63,7 +66,7 @@ class HIPBackend(BaseBackend):
         # pm = amd_ir.pass_manager(mod.context)
         # pm.enable_debug()
         # pm.add_tritonamdgpu_coalesce_pass()
-        # pm.add_tritonamdgpu_accelerate_matmul_pass(opt.matrix_core_version, opt.matrix_inst_shape)
+        # pm.add_tritonamdgpu_accelerate_matmul_pass(gpu_matrix_core_version(), opt.matrix_inst_shape)
         # pm.add_tritonamdgpu_remove_layout_conversions_pass()
         # pm.add_tritonamdgpu_optimize_epilogue_pass()
         # pm.add_tritonamdgpu_optimize_dot_operands_pass()
@@ -97,15 +100,17 @@ class HIPBackend(BaseBackend):
         return ret
 
     @staticmethod
-    def make_amdgcn(src, metadata, options):
-        ret = translate_llvmir_to_hsaco(src, options.gfx_arch, options.archgfx_triple, options.gfx_features)
+    def make_hsaco(src, metadata, options):
+        ret = translate_llvmir_to_hsaco(src, options.gfx_arch, options.gfx_triple, options.gfx_features)
         return ret
 
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
         stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, 90)
-        stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)
+        # TODO: first amdgcn, then hsaco
+        # stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)
+        stages["hsaco"] = lambda src, metadata: self.make_hsaco(src, metadata, options)
 
     def hash(self):
         return f'{get_cuda_version_key()}-{self.capability}'
