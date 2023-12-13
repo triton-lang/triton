@@ -240,9 +240,13 @@ class HIPOptions:
     extern_libs: dict = None
     cluster_dims: tuple = (1, 1, 1)
     debug: bool = False
-    gfx_triple: str = 'amdgcn-amd-amdhsa'
-    gfx_arch: str = 'gfx90a'
-    gfx_features: str = ''
+    gfx_triple: str = None
+    gfx_arch: str = None
+    gfx_features: str = None
+    # TODO: deprecate when hook interface has changed
+    enable_warp_specialization: bool = False
+    enable_fp_fusion: bool = False
+    capability: int = None
 
     def __post_init__(self):
         # TODO: change API
@@ -261,11 +265,17 @@ class HIPBackend(BaseBackend):
 
     def __init__(self, device_type: tuple) -> None:
         super().__init__(device_type)
-        self.capability = device_type[1]
-        assert isinstance(self.capability, int)
+        assert isinstance(device_type, tuple) and len(device_type) == 4
+        assert device_type[0] == 'hip'
+        assert isinstance(device_type[1], str)
+        assert isinstance(device_type[2], str)
+        assert isinstance(device_type[3], str)
+        self.device_type = device_type
 
     def parse_options(self, opts) -> Any:
-        args = {k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts}
+        device_type = self.device_type
+        args = {'gfx_triple': device_type[1], 'gfx_arch': device_type[2], 'gfx_features': device_type[3]}
+        args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts})
         return HIPOptions(**args)
 
     @staticmethod
@@ -340,7 +350,7 @@ class HIPBackend(BaseBackend):
         stages["hsaco"] = lambda src, metadata: self.make_hsaco(src, metadata, options)
 
     def hash(self):
-        return f'{get_cuda_version_key()}-{self.capability}'
+        return f'{get_cuda_version_key()}-{self.device_type}'
 
     def make_launcher_stub(self, src, metadata):
         ids = {

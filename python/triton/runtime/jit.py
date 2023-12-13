@@ -338,7 +338,7 @@ class JITFunction(KernelInterface[T]):
 
     def run(self, *args, grid, warmup, **kwargs):
         from ..compiler import CompiledKernel, compile, ASTSource
-        from ..compiler.backends.cuda import CUDABackend
+        from ..compiler.backends import make_backend
         # deprecated arguments
         assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
         assert "device" not in kwargs, "device option is deprecated; current device will be used"
@@ -347,7 +347,7 @@ class JITFunction(KernelInterface[T]):
         device = driver.get_current_device()
         stream = driver.get_current_stream(device)
         target = driver.get_current_target()
-        backend = CUDABackend(target)
+        backend = make_backend(target)
         kwargs["debug"] = self.debug
         options = backend.parse_options(kwargs)
         # bind non-reserved keyword args and set defaults
