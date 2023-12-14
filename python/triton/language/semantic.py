@@ -675,7 +675,8 @@ def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder, fp_downcast_ro
         if fp_downcast_rounding is None: fp_downcast_rounding = ir.ROUNDING_MODE.RTNE
         elif fp_downcast_rounding != ir.ROUNDING_MODE.RTNE: use_custom_rounding = True
     else:
-        raise ValueError("fp_downcast_rounding should be set only for truncating fp conversions. "
+        if fp_downcast_rounding is not None:
+            raise ValueError("fp_downcast_rounding should be set only for truncating fp conversions. "
                          "Source scalar type is " + str(src_sca_ty) + " and destination type is " + str(dst_sca_ty))
 
     if (src_sca_ty.is_fp8e4nv() or dst_sca_ty.is_fp8e4nv()):
