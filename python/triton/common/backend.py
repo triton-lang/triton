@@ -109,7 +109,8 @@ def _path_to_binary(binary: str):
     base_dir = os.path.join(os.path.dirname(__file__), os.pardir)
     paths = [
         os.environ.get(f"TRITON_{binary.upper()}_PATH", ""),
-        os.path.join(base_dir, "third_party", "cuda", "bin", binary)
+        os.path.join(base_dir, "third_party", "cuda", "bin", binary),
+        os.path.join(base_dir, "third_party", "rocm", "bin", binary)
     ]
 
     for p in paths:
@@ -136,6 +137,11 @@ def path_to_cuobjdump():
 @functools.lru_cache()
 def path_to_nvdisasm():
     return _path_to_binary("nvdisasm")
+
+
+@functools.lru_cache()
+def path_to_rocm_lld():
+    return "/opt/rocm/llvm/bin/ld.lld"
 
 
 @functools.lru_cache()

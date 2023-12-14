@@ -134,102 +134,18 @@ std::string translateLLVMIRToHSACO(llvm::Module &module, std::string proc,
     f.addFnAttr(llvm::Attribute::AlwaysInline);
 
   auto machine = std::unique_ptr<llvm::TargetMachine>(_machine);
-
-  std::string dump_path = ::triton::tools::getenv("AMDGCN_DUMP_PATH");
-
-  // create unique dir for kernel's binary and hsaco
-  std::error_code ec;
-  std::string kernel_name_base = "amd_triton_kernel";
-  std::filesystem::path tmp = std::filesystem::temp_directory_path();
-  std::filesystem::path kernel_dir_base(kernel_name_base);
-  llvm::SmallString<256> unique_dir;
-  ec = llvm::sys::fs::createUniqueDirectory((tmp / kernel_dir_base).string(),
-                                            unique_dir);
-  if (ec) {
-    std::cerr << "Directory for " << kernel_name_base
-              << " was not created. error code: " << ec << std::endl;
-  }
-  std::filesystem::path kernel_dir(unique_dir.data());
-  std::string kernel_name = kernel_dir.stem();
-
-  // Save GCN ISA binary.
-  std::filesystem::path isa_binary(kernel_name + ".o");
-  std::string isabin_path;
-  if (!dump_path.empty())
-    isabin_path = (dump_path / isa_binary).string();
-  else
-    isabin_path = (kernel_dir / isa_binary).string();
-  std::unique_ptr<llvm::raw_fd_ostream> isabin_fs(
-      new llvm::raw_fd_ostream(isabin_path, ec, llvm::sys::fs::OF_Text));
-  if (ec) {
-    llvm::errs() << isabin_path
-                 << " was not created. error code: " << ec.category().name()
-                 << ':' << ec.value() << '\n';
-  }
-
-  // Write out bitcode
-  std::filesystem::path bitcode_filename(kernel_name + ".bc");
-  std::string bitcode_path;
-  if (!dump_path.empty())
-    bitcode_path = (dump_path / bitcode_filename).string();
-  else
-    bitcode_path = (kernel_dir / bitcode_filename).string();
-  std::unique_ptr<llvm::raw_fd_ostream> bitecode_fs(
-      new llvm::raw_fd_ostream(bitcode_path, ec, llvm::sys::fs::OF_Text));
-  if (ec) {
-    llvm::errs() << bitcode_path
-                 << " was not created. error code: " << ec.category().name()
-                 << ':' << ec.value() << '\n';
-  }
-
-  llvm::WriteBitcodeToFile(module, *bitecode_fs);
-
   // emit
   llvm::legacy::PassManager pass;
-  machine->addPassesToEmitFile(pass, *isabin_fs, nullptr,
-                               llvm::CodeGenFileType::ObjectFile);
-  pass.run(module);
 
-  // generate HASCO file
-  std::filesystem::path hsaco(kernel_name + ".hsaco");
-  std::string hsaco_path = (kernel_dir / hsaco).string();
-  std::string error_message;
-
-  // Check in triton/third_party/rocm/llvm/bin first.  For whls this will be the
-  // correct location. If not found, go back to using ROCM_PATH or /opt/rocm
-  // static const auto this_library_path = [] {
-  // Dl_info fileinfo;
-  // if (dladdr(reinterpret_cast<void *>(generate_hsaco), &fileinfo) == 0) {
-  //   return std::filesystem::path();
-  // }
-  // return std::filesystem::path(fileinfo.dli_fname);
-  // }();
-
-  // static const auto compiletime_path = this_library_path.parent_path()
-  //                                             .parent_path()
-  //                                             .parent_path() /
-  //                                             "triton" / "third_party" /
-  //                                             "rocm" / "llvm" / "bin" /
-  //                                             "ld.lld";
-  // std::string lld_path = compiletime_path.string();
-  // // TODO: this should come from the runtime
-  // if (!std::filesystem::exists(lld_path)) {
-  static const std::string ROCM_DEFAULT_DIR = "/opt/rocm/";
-  std::string rocm_path = ::triton::tools::getenv("ROCM_PATH");
-  std::string lld_path = (rocm_path.empty()) ? ROCM_DEFAULT_DIR : rocm_path;
-  lld_path += "/llvm/bin/ld.lld";
-  // }
-
-  int lld_result = llvm::sys::ExecuteAndWait(
-      lld_path,
-      {lld_path, "-flavor", "gnu", "-shared", "-o", hsaco_path, isabin_path},
-      std::nullopt, {}, 0, 0, &error_message);
-  if (lld_result) {
-    llvm::errs() << "ld.lld execute fail: " << '\n'
-                 << error_message << "Code: " << lld_result << '\n';
+  std::string result;
+  {
+    llvm::raw_string_ostream stream(result);
+    llvm::buffer_ostream pstream(stream);
+    machine->addPassesToEmitFile(pass, pstream, nullptr,
+                                 llvm::CodeGenFileType::ObjectFile);
+    pass.run(module);
   }
-
-  return hsaco_path;
+  return result;
 }
 
 } // namespace triton

@@ -3,7 +3,7 @@ from ..._C.libtriton.triton import ir, runtime
 from ..._C.libtriton.triton import get_num_warps, TMAInfos, translate_triton_gpu_to_llvmir, get_shared_memory_size, add_external_libs, translate_llvmir_to_hsaco
 # from ..._C.libtriton.amd_triton import amd_ir
 from dataclasses import dataclass
-from ...common.backend import get_cuda_version_key
+from ...common.backend import get_cuda_version_key, path_to_rocm_lld
 from typing import Any
 import hashlib
 from triton.compiler.make_launcher import get_cache_manager, make_so_cache_key
@@ -333,8 +333,17 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_hsaco(src, metadata, options):
-        ret, name = translate_llvmir_to_hsaco(src, options.arch, 'amdgcn-amd-amdhsa', '')
+        src, name = translate_llvmir_to_hsaco(src, options.arch, 'amdgcn-amd-amdhsa', '')
         metadata["name"] = name
+        import subprocess
+        rocm_path = path_to_rocm_lld()
+        with tempfile.NamedTemporaryFile() as tmp_out:
+            with tempfile.NamedTemporaryFile() as tmp_in:
+                with open(tmp_in.name, 'wb') as fd_in:
+                    fd_in.write(src)
+                subprocess.check_call([rocm_path, '-flavor', 'gnu', '-shared', tmp_in.name, '-o', tmp_out.name])
+            with open(tmp_out.name, 'rb') as fd_out:
+                ret = fd_out.read()
         return ret
 
     def add_stages(self, stages, options):

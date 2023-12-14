@@ -191,6 +191,7 @@ class CUDABackend(BaseBackend):
     def make_cubin(src, metadata, opt, capability):
         metadata["name"] = get_kernel_name(src, pattern='// .globl')
         ptxas, _ = path_to_ptxas()
+        # TODO: move to python
         return compile_ptx_to_cubin(src, ptxas, capability, opt.enable_fp_fusion)
 
     def add_stages(self, stages, options):

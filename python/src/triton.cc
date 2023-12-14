@@ -1930,14 +1930,8 @@ void init_triton_translation(py::module &m) {
         // assert(functions.size()==1);
         std::string name = functions.begin()->getName().str();
 
-        std::string hsacoPath = mlir::triton::translateLLVMIRToHSACO(
+        std::string hsaco = mlir::triton::translateLLVMIRToHSACO(
             *llvmModule, gfx_arch, gfx_triple, gfx_features);
-
-        std::ifstream _hsaco(hsacoPath, std::ios::binary);
-        std::string hsaco =
-            std::string(std::istreambuf_iterator<char>(_hsaco), {});
-        _hsaco.close();
-
         return std::make_tuple(std::move(py::bytes(hsaco)), name);
       },
       ret::take_ownership);
