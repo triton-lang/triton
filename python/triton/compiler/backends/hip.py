@@ -333,14 +333,14 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_hsaco(src, metadata, options):
-        src, name = translate_llvmir_to_hsaco(src, options.arch, 'amdgcn-amd-amdhsa', '')
+        hsaco, name = translate_llvmir_to_hsaco(src, options.arch, 'amdgcn-amd-amdhsa', '')
         metadata["name"] = name
         import subprocess
         rocm_path = path_to_rocm_lld()
         with tempfile.NamedTemporaryFile() as tmp_out:
             with tempfile.NamedTemporaryFile() as tmp_in:
                 with open(tmp_in.name, 'wb') as fd_in:
-                    fd_in.write(src)
+                    fd_in.write(hsaco)
                 subprocess.check_call([rocm_path, '-flavor', 'gnu', '-shared', tmp_in.name, '-o', tmp_out.name])
             with open(tmp_out.name, 'rb') as fd_out:
                 ret = fd_out.read()
