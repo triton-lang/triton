@@ -521,6 +521,7 @@ void addExternalLibs(mlir::ModuleOp &module,
   module.getOperation()->setAttr("triton_gpu.externs", dict);
 }
 
+// TODO: move to python
 static void initLLVM() {
   static std::once_flag init_flag;
   std::call_once(init_flag, []() {
@@ -528,6 +529,12 @@ static void initLLVM() {
     LLVMInitializeNVPTXTarget();
     LLVMInitializeNVPTXTargetMC();
     LLVMInitializeNVPTXAsmPrinter();
+
+    LLVMInitializeAMDGPUTarget();
+    LLVMInitializeAMDGPUTargetInfo();
+    LLVMInitializeAMDGPUTargetMC();
+    LLVMInitializeAMDGPUAsmParser();
+    LLVMInitializeAMDGPUAsmPrinter();
   });
 }
 
@@ -536,7 +543,7 @@ std::string translateLLVMIRToASM(llvm::Module &module,
                                  const std::string &proc,
                                  const std::string &features,
                                  const std::vector<std::string> &flags,
-                                 bool enable_fp_fusion) {
+                                 bool enable_fp_fusion, bool isObject) {
   initLLVM();
   // options
   auto options = llvm::cl::getRegisteredOptions();
@@ -582,8 +589,9 @@ std::string translateLLVMIRToASM(llvm::Module &module,
       f.addFnAttr(llvm::Attribute::AlwaysInline);
     llvm::legacy::PassManager pass;
     // emit
-    machine->addPassesToEmitFile(pass, pstream, nullptr,
-                                 llvm::CodeGenFileType::AssemblyFile);
+    auto fileType = isObject ? llvm::CodeGenFileType::ObjectFile
+                             : llvm::CodeGenFileType::AssemblyFile;
+    machine->addPassesToEmitFile(pass, pstream, nullptr, fileType);
     pass.run(module);
   }
   return result;

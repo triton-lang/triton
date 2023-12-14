@@ -184,7 +184,7 @@ class CUDABackend(BaseBackend):
     def make_ptx(src, metadata, opt, capability):
         proc = 'sm_90a' if capability == 90 else f'sm_{capability}'
         ret, name = translate_llvmir_to_asm(src, 'nvptx64-nvidia-cuda', proc, '', ['nvptx-short-ptr'],
-                                            opt.enable_fp_fusion)
+                                            opt.enable_fp_fusion, False)
         metadata["name"] = name
         # post-process
         ptx_version = opt.ptx_version
@@ -192,7 +192,6 @@ class CUDABackend(BaseBackend):
             _, cuda_version = path_to_ptxas()
             ptx_version = ptx_get_version(cuda_version)
         ptx_version = f'{ptx_version//10}.{ptx_version%10}'
-        ret = ret.decode('utf-8')
         ret = re.sub(r'\.version \d+\.\d+', f'.version {ptx_version}', ret, flags=re.MULTILINE)
         return ret
 

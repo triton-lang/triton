@@ -333,7 +333,8 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_hsaco(src, metadata, options):
-        hsaco, name = translate_llvmir_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion)
+        hsaco, name = translate_llvmir_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion,
+                                              True)
         metadata["name"] = name
         import subprocess
         rocm_path = path_to_rocm_lld()

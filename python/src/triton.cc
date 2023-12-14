@@ -1917,7 +1917,8 @@ void init_triton_translation(py::module &m) {
       "translate_llvmir_to_asm",
       [](std::string llvmIR, std::string triple, std::string proc,
          std::string features, std::vector<std::string> flags,
-         bool enable_fp_fusion) -> std::tuple<py::object, std::string> {
+         bool enable_fp_fusion,
+         bool isObject) -> std::tuple<py::object, std::string> {
         py::gil_scoped_release allow_threads;
 
         // create LLVM module from C++
@@ -1938,8 +1939,11 @@ void init_triton_translation(py::module &m) {
         std::string name = functions.begin()->getName().str();
         // translate module to PTX
         std::string obj = mlir::triton::translateLLVMIRToASM(
-            *module, triple, proc, features, flags, enable_fp_fusion);
-        return std::make_tuple(py::bytes(obj), name);
+            *module, triple, proc, features, flags, enable_fp_fusion, isObject);
+        if (isObject)
+          return std::make_tuple(py::bytes(obj), name);
+        else
+          return std::make_tuple(py::str(obj), name);
       },
       ret::take_ownership);
 
