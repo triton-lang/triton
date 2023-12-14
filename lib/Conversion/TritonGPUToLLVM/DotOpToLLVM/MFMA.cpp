@@ -139,6 +139,22 @@ struct DotOpMFMAConversionHelper {
     auto resType = valC.getType();
     Value zeroFlag = i32_val(0);
     switch (coreType) {
+    case MatrixCoreType::FP32_FP8_FP8_FP32:
+      return rewriter.create<ROCDL::mfma_f32_16x16x32_fp8_fp8>(
+          loc, TypeRange{resType},
+          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
+    case MatrixCoreType::FP32_FP8_BF8_FP32:
+      return rewriter.create<ROCDL::mfma_f32_16x16x32_fp8_bf8>(
+          loc, TypeRange{resType},
+          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
+    case MatrixCoreType::FP32_BF8_FP8_FP32:
+      return rewriter.create<ROCDL::mfma_f32_16x16x32_bf8_fp8>(
+          loc, TypeRange{resType},
+          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
+    case MatrixCoreType::FP32_BF8_BF8_FP32:
+      return rewriter.create<ROCDL::mfma_f32_16x16x32_bf8_bf8>(
+          loc, TypeRange{resType},
+          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
     case MatrixCoreType::FP32_FP16_FP16_FP32:
       return rewriter.create<ROCDL::mfma_f32_16x16x16f16>(
           loc, TypeRange{resType},
@@ -157,6 +173,10 @@ struct DotOpMFMAConversionHelper {
           ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
     case MatrixCoreType::INT32_INT8_INT8_INT32:
       return rewriter.create<ROCDL::mfma_i32_16x16x16i8>(
+          loc, TypeRange{resType},
+          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
+    case MatrixCoreType::INT32_INT8_INT8_INT32_CDNA3:
+      return rewriter.create<ROCDL::mfma_i32_16x16x32_i8>(
           loc, TypeRange{resType},
           ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
     case MatrixCoreType::FP64_FP64_FP64_FP64:
