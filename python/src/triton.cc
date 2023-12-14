@@ -1914,34 +1914,12 @@ void init_triton_translation(py::module &m) {
 
   // TODO: unify
   m.def(
-      "translate_llvmir_to_hsaco",
-      [](std::string llvmIR, std::string gfx_arch, std::string gfx_triple,
-         std::string gfx_features) -> std::tuple<py::object, std::string> {
-        // std::cout << "translate_llvmir_to_hsaco" << std::endl;
-
-        llvm::LLVMContext context;
-        std::unique_ptr<llvm::MemoryBuffer> buffer =
-            llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
-        llvm::SMDiagnostic error;
-        std::unique_ptr<llvm::Module> llvmModule =
-            llvm::parseIR(buffer->getMemBufferRef(), error, context);
-
-        // translate module to HSACO
-        auto functions = llvmModule->functions();
-        // assert(functions.size()==1);
-        std::string name = functions.begin()->getName().str();
-
-        std::string hsaco = mlir::triton::translateLLVMIRToHSACO(
-            *llvmModule, gfx_arch, gfx_triple, gfx_features);
-        return std::make_tuple(std::move(py::bytes(hsaco)), name);
-      },
-      ret::take_ownership);
-
-  m.def(
-      "translate_llvmir_to_ptx",
-      [](const std::string llvmIR, int capability, int version,
-         bool enable_fp_fusion) -> std::string {
+      "translate_llvmir_to_asm",
+      [](std::string llvmIR, std::string triple, std::string proc,
+         std::string features, std::vector<std::string> flags,
+         bool enable_fp_fusion) -> std::tuple<py::object, std::string> {
         py::gil_scoped_release allow_threads;
+
         // create LLVM module from C++
         llvm::LLVMContext context;
         std::unique_ptr<llvm::MemoryBuffer> buffer =
@@ -1954,10 +1932,14 @@ void init_triton_translation(py::module &m) {
               "failed to parse IR: " + error.getMessage() +
               "lineno: " + std::to_string(error.getLineNo()));
         }
+        // Get name of kernel in the module
+        // TODO: noinline stuff; only consider kernels
+        auto functions = module->functions();
+        std::string name = functions.begin()->getName().str();
         // translate module to PTX
-        auto ptxCode = triton::translateLLVMIRToPTX(*module, capability,
-                                                    version, enable_fp_fusion);
-        return ptxCode;
+        std::string obj = mlir::triton::translateLLVMIRToASM(
+            *module, triple, proc, features, flags, enable_fp_fusion);
+        return std::make_tuple(py::bytes(obj), name);
       },
       ret::take_ownership);
 

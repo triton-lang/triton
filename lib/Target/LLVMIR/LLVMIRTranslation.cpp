@@ -30,16 +30,25 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Linker/Linker.h"
+#include "llvm/MC/TargetRegistry.h"
+#include "llvm/Pass.h"
 #include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
+#include <filesystem>
 #include <optional>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -510,6 +519,74 @@ void addExternalLibs(mlir::ModuleOp &module,
 
   DictionaryAttr dict = DictionaryAttr::get(module->getContext(), attrs);
   module.getOperation()->setAttr("triton_gpu.externs", dict);
+}
+
+static void initLLVM() {
+  static std::once_flag init_flag;
+  std::call_once(init_flag, []() {
+    LLVMInitializeNVPTXTargetInfo();
+    LLVMInitializeNVPTXTarget();
+    LLVMInitializeNVPTXTargetMC();
+    LLVMInitializeNVPTXAsmPrinter();
+  });
+}
+
+std::string translateLLVMIRToASM(llvm::Module &module,
+                                 const std::string &triple,
+                                 const std::string &proc,
+                                 const std::string &features,
+                                 const std::vector<std::string> &flags,
+                                 bool enable_fp_fusion) {
+  initLLVM();
+  // options
+  auto options = llvm::cl::getRegisteredOptions();
+  for (std::string flag : flags) {
+    auto *shortPtr = static_cast<llvm::cl::opt<bool> *>(options[flag]);
+    assert(shortPtr);
+    shortPtr->setValue(true);
+  }
+  // inline everything
+  for (llvm::Function &f : module.functions())
+    if (!f.hasFnAttribute(llvm::Attribute::NoInline))
+      f.addFnAttr(llvm::Attribute::AlwaysInline);
+  // verify and store llvm
+  llvm::legacy::PassManager pm;
+  pm.add(llvm::createAlwaysInlinerLegacyPass());
+  pm.add(llvm::createVerifierPass());
+  pm.run(module);
+  // module->print(llvm::outs(), nullptr);
+
+  // create machine
+  module.setTargetTriple(triple);
+  std::string error;
+  auto target =
+      llvm::TargetRegistry::lookupTarget(module.getTargetTriple(), error);
+  llvm::TargetOptions opt;
+  if (enable_fp_fusion)
+    opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
+  opt.UnsafeFPMath = false;
+  opt.NoInfsFPMath = false;
+  opt.NoNaNsFPMath = true;
+  opt.TrapUnreachable = true;
+  std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
+      module.getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
+      std::nullopt, llvm::CodeGenOptLevel::Aggressive)};
+  // set data layout
+  module.setDataLayout(machine->createDataLayout());
+  // emit machine code
+  std::string result;
+  {
+    llvm::raw_string_ostream stream(result);
+    llvm::buffer_ostream pstream(stream);
+    for (llvm::Function &f : module.functions())
+      f.addFnAttr(llvm::Attribute::AlwaysInline);
+    llvm::legacy::PassManager pass;
+    // emit
+    machine->addPassesToEmitFile(pass, pstream, nullptr,
+                                 llvm::CodeGenFileType::AssemblyFile);
+    pass.run(module);
+  }
+  return result;
 }
 
 } // namespace triton

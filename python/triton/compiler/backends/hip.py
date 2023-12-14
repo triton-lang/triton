@@ -1,6 +1,6 @@
 from triton.common.backend import BaseBackend
 from ..._C.libtriton.triton import ir, runtime
-from ..._C.libtriton.triton import get_num_warps, TMAInfos, translate_triton_gpu_to_llvmir, get_shared_memory_size, add_external_libs, translate_llvmir_to_hsaco
+from ..._C.libtriton.triton import get_num_warps, TMAInfos, translate_triton_gpu_to_llvmir, get_shared_memory_size, add_external_libs, translate_llvmir_to_asm
 # from ..._C.libtriton.amd_triton import amd_ir
 from dataclasses import dataclass
 from ...common.backend import get_cuda_version_key, path_to_rocm_lld
@@ -333,7 +333,7 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_hsaco(src, metadata, options):
-        hsaco, name = translate_llvmir_to_hsaco(src, options.arch, 'amdgcn-amd-amdhsa', '')
+        hsaco, name = translate_llvmir_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion)
         metadata["name"] = name
         import subprocess
         rocm_path = path_to_rocm_lld()
