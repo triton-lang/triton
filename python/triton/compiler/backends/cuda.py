@@ -8,6 +8,7 @@ from typing import Any
 from ..utils import get_ids_of_tensormaps, parse_tma_info
 from ..make_launcher import make_stub
 import hashlib
+import re
 
 
 def get_kernel_name(src: str, pattern: str) -> str:
@@ -181,15 +182,18 @@ class CUDABackend(BaseBackend):
 
     @staticmethod
     def make_ptx(src, metadata, opt, capability):
-        ptx_version = opt.ptx_version
-        if ptx_version is None:
-            _, cuda_version = path_to_ptxas()
-            ptx_version = ptx_get_version(cuda_version)
         proc = 'sm_90a' if capability == 90 else f'sm_{capability}'
         ret, name = translate_llvmir_to_asm(src, 'nvptx64-nvidia-cuda', proc, '', ['nvptx-short-ptr'],
                                             opt.enable_fp_fusion)
         metadata["name"] = name
-        # TODO: postprocess
+        # post-process
+        ptx_version = opt.ptx_version
+        if ptx_version is None:
+            _, cuda_version = path_to_ptxas()
+            ptx_version = ptx_get_version(cuda_version)
+        ptx_version = f'{ptx_version//10}.{ptx_version%10}'
+        ret = ret.decode('utf-8')
+        ret = re.sub(r'\.version \d+\.\d+', f'.version {ptx_version}', ret, flags=re.MULTILINE)
         return ret
 
     @staticmethod
