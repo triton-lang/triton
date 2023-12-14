@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file -verify-diagnostics
 
-#mma0 = #triton_gpu.mma<{versionMajor=2, warpsPerCTA=[1,1]}>
+#mma0 = #triton_gpu.nvidia_mma<{versionMajor=2, warpsPerCTA=[1,1]}>
 #dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma0, kWidth=2}>
 #dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma0, kWidth=2}>
 module attributes {"triton_gpu.num-warps" = 1 : i32} {
@@ -14,7 +14,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 
 // -----
 
-#mma0 = #triton_gpu.mma<{versionMajor=2, warpsPerCTA=[1,1]}>
+#mma0 = #triton_gpu.nvidia_mma<{versionMajor=2, warpsPerCTA=[1,1]}>
 #dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma0, kWidth=1}>
 #dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma0, kWidth=2}>
 module attributes {"triton_gpu.num-warps" = 1 : i32} {
@@ -28,7 +28,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 
 // -----
 
-#mma0 = #triton_gpu.mma<{versionMajor=2, warpsPerCTA=[1,1]}>
+#mma0 = #triton_gpu.nvidia_mma<{versionMajor=2, warpsPerCTA=[1,1]}>
 #dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma0, kWidth=1}>
 #dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma0, kWidth=2}>
 module attributes {"triton_gpu.num-warps" = 1 : i32} {

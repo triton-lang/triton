@@ -103,7 +103,7 @@ static void createTMALoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
                                          /*remoteCtaId*/ nullptr,
                                          /*trackAsyncOp*/ false, elems);
   auto allocType = alloc.getType().cast<RankedTensorType>();
-  auto insertOp = builder.create<ttng::InsertSliceAsyncV2Op>(
+  auto insertOp = builder.create<ttng::InsertSliceTMAOp>(
       loc, allocType, loadOp.getPtr(), alloc,
       /*index*/ insertIdx, barrier, loadOp.getMask(), loadOp.getOther(),
       loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile(),
@@ -450,7 +450,7 @@ static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
     insertOp.getMaskMutable().assign(mask);
     return op;
   }
-  if (auto insertOp = dyn_cast<ttng::InsertSliceAsyncV2Op>(op)) {
+  if (auto insertOp = dyn_cast<ttng::InsertSliceTMAOp>(op)) {
     rewriter.setInsertionPoint(insertOp);
     Value mask = getPredMask(
         rewriter,
@@ -541,7 +541,7 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
   // `numStages - 2`. All the other operations will go in stage `numStages - 1`.
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (isa<ttg::InsertSliceAsyncOp, ttg::AsyncCommitGroupOp,
-            ttng::MBarrierArriveOp, ttng::InsertSliceAsyncV2Op>(op))
+            ttng::MBarrierArriveOp, ttng::InsertSliceTMAOp>(op))
       insertOps.emplace_back(&op);
     if (prefetchExtract) {
       if (isa<ttg::ExtractSliceOp, ttg::AsyncWaitOp>(op))
@@ -741,7 +741,8 @@ void mlir::triton::asyncLaunchDots(scf::ForOp forOp) {
   for (Operation &op : *loop) {
     if (auto dotOp = dyn_cast<tt::DotOp>(&op)) {
       auto resTy = dotOp.getResult().getType().dyn_cast<RankedTensorType>();
-      if (auto resEnc = resTy.getEncoding().dyn_cast<ttg::MmaEncodingAttr>()) {
+      if (auto resEnc =
+              resTy.getEncoding().dyn_cast<ttg::NvidiaMmaEncodingAttr>()) {
         if (resEnc && resEnc.isHopper()) {
           auto dot = dotOp.getResult();
           bool valid = true;

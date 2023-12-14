@@ -14,7 +14,7 @@ namespace {
 using triton::DotOp;
 using triton::gpu::ConvertLayoutOp;
 using triton::gpu::DotOperandEncodingAttr;
-using triton::gpu::MmaEncodingAttr;
+using triton::gpu::NvidiaMmaEncodingAttr;
 using triton::gpu::SharedEncodingAttr;
 using triton::gpu::SliceEncodingAttr;
 
@@ -207,7 +207,7 @@ public:
     if (isa<triton::DotOp, triton::nvidia_gpu::DotAsyncOp>(dotOp)) {
       auto dotTy = dotOp->getResult(0).getType().cast<RankedTensorType>();
       auto dotEncoding =
-          dotTy.getEncoding().dyn_cast<triton::gpu::MmaEncodingAttr>();
+          dotTy.getEncoding().dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>();
       auto eltType = XType.getElementType();
       if (!dotEncoding || dotEncoding.getVersionMajor() != 3)
         return mlir::failure();
@@ -253,17 +253,18 @@ struct MMAV3UseRegOperand : public OpRewritePattern<triton::DotOp> {
     if (!getEncoding(dotOp.getOperand(0)).isa<SharedEncodingAttr>())
       return failure();
     auto srcEncoding =
-        getEncoding(convertLhs.getSrc()).dyn_cast<MmaEncodingAttr>();
+        getEncoding(convertLhs.getSrc()).dyn_cast<NvidiaMmaEncodingAttr>();
     auto dstEncoding =
-        getEncoding(dotOp.getResult()).dyn_cast<MmaEncodingAttr>();
+        getEncoding(dotOp.getResult()).dyn_cast<NvidiaMmaEncodingAttr>();
     if (!srcEncoding || srcEncoding.getVersionMajor() != 3 || !dstEncoding ||
         dstEncoding.getVersionMajor() != 3)
       return failure();
-    // We currently only support convert from f16 mma to f16 dot operand as the
-    // other types require shuffling data across threads.
+    // We currently only support convert from f16 and bf16 mma to f16 and bf16
+    // dot operand as the other types require shuffling data across threads.
     // TODO: extend it to more types.
     auto srcType = convertLhs.getSrc().getType().cast<RankedTensorType>();
-    if (!srcType.getElementType().isF16())
+    if (!(srcType.getElementType().isF16() ||
+          srcType.getElementType().isBF16()))
       return failure();
     auto dotOperandEncoding =
         DotOperandEncodingAttr::get(dotOp.getContext(), 0, srcEncoding, 0);

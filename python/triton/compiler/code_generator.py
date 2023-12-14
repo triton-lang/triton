@@ -243,6 +243,7 @@ class CodeGenerator(ast.NodeVisitor):
     builtin_namespace.update((
         ('print', language.core.device_print),
         ('min', language.minimum),
+        ('max', language.maximum),
     ))
 
     def _define_name_lookup(self):
@@ -978,7 +979,7 @@ class CodeGenerator(ast.NodeVisitor):
         # generate function def if necessary
         if not self.module.has_function(fn_name):
             prototype = language.function_type([], arg_types)
-            gscope = sys.modules[fn.fn.__module__].__dict__
+            gscope = fn.__globals__
             # If the callee is not set, we use the same debug setting as the caller
             file_name, begin_line = _get_fn_file_line(fn)
             debug = self.debug if fn.debug is None else fn.debug

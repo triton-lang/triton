@@ -7,7 +7,7 @@ using namespace mlir::triton;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::MmaEncodingAttr;
+using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
 LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                             TritonGPUToLLVMTypeConverter *typeConverter,
@@ -53,10 +53,10 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
     unsigned K = AShapePerCTA[reduceAxis];
     bool isOuter = K == 1;
 
-    MmaEncodingAttr mmaLayout = D.getType()
-                                    .cast<RankedTensorType>()
-                                    .getEncoding()
-                                    .dyn_cast<MmaEncodingAttr>();
+    NvidiaMmaEncodingAttr mmaLayout = D.getType()
+                                          .cast<RankedTensorType>()
+                                          .getEncoding()
+                                          .dyn_cast<NvidiaMmaEncodingAttr>();
     if (!isOuter && mmaLayout && supportMMA(op, mmaLayout.getVersionMajor())) {
       if (mmaLayout.isVolta())
         return convertMMA884(op, adaptor, getTypeConverter(), rewriter);
@@ -102,10 +102,10 @@ struct DotAsyncOpConversion
     unsigned K = AShapePerCTA[reduceAxis];
     bool isOuter = K == 1;
 
-    MmaEncodingAttr mmaLayout = D.getType()
-                                    .cast<RankedTensorType>()
-                                    .getEncoding()
-                                    .dyn_cast<MmaEncodingAttr>();
+    NvidiaMmaEncodingAttr mmaLayout = D.getType()
+                                          .cast<RankedTensorType>()
+                                          .getEncoding()
+                                          .dyn_cast<NvidiaMmaEncodingAttr>();
     if (!isOuter && mmaLayout &&
         supportMMA(op.getOperand(0), mmaLayout.getVersionMajor())) {
       if (mmaLayout.isHopper()) {

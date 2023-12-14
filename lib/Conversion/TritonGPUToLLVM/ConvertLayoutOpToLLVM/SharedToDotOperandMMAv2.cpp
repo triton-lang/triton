@@ -492,12 +492,14 @@ Value composeValuesToDotOperandLayoutStruct(
   return result;
 }
 
-std::function<void(int, int)> getLoadMatrixFn(
-    Value tensor, const SharedMemoryObject &smemObj, MmaEncodingAttr mmaLayout,
-    int warpsPerTile, uint32_t kOrder, int kWidth, SmallVector<int> instrShape,
-    SmallVector<int> matShape, Value warpId, Value lane, ValueTable &vals,
-    bool isA, TritonGPUToLLVMTypeConverter *typeConverter,
-    ConversionPatternRewriter &rewriter, Location loc) {
+std::function<void(int, int)>
+getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
+                NvidiaMmaEncodingAttr mmaLayout, int warpsPerTile,
+                uint32_t kOrder, int kWidth, SmallVector<int> instrShape,
+                SmallVector<int> matShape, Value warpId, Value lane,
+                ValueTable &vals, bool isA,
+                TritonGPUToLLVMTypeConverter *typeConverter,
+                ConversionPatternRewriter &rewriter, Location loc) {
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   auto shapePerCTA = getShapePerCTA(tensorTy);
   Type eltTy = tensorTy.getElementType();
@@ -567,7 +569,7 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   auto shapePerCTA = getShapePerCTA(tensorTy);
   int bitwidth = tensorTy.getElementTypeBitWidth();
-  auto mmaLayout = encoding.getParent().cast<MmaEncodingAttr>();
+  auto mmaLayout = encoding.getParent().cast<NvidiaMmaEncodingAttr>();
 
   ValueTable vals;
   int mmaInstrM = 16, mmaInstrN = 8, mmaInstrK = 4 * 64 / bitwidth;
