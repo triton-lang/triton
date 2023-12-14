@@ -46,27 +46,17 @@ static bool findAndReplace(std::string &str, const std::string &begin,
 
 std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version,
                                  bool enable_fp_fusion) {
-  // LLVM version in use may not officially support target hardware.
-  // Supported versions for LLVM 14 are here:
-  // https://github.com/llvm/llvm-project/blob/f28c006a5895fc0e329fe15fead81e37457cb1d1/clang/include/clang/Basic/BuiltinsNVPTX.def
-  int maxPTX = std::min(82, version);
-  int maxCC = std::min(90, cc);
   // options
   auto options = llvm::cl::getRegisteredOptions();
   auto *shortPtr =
       static_cast<llvm::cl::opt<bool> *>(options["nvptx-short-ptr"]);
   assert(shortPtr);
   shortPtr->setValue(true);
-  std::string sm = cc == 90 ? "sm_90a" : "sm_" + std::to_string(cc);
-  // max PTX version
-  int ptxMajor = maxPTX / 10;
-  int ptxMinor = maxPTX % 10;
   // create
   std::string triple = "nvptx64-nvidia-cuda";
-  std::string proc = "sm_" + std::to_string(maxCC);
+  std::string proc = "sm_" + std::to_string(cc);
   std::string layout = "";
   std::string features = "";
-  // std::string features = "+ptx" + std::to_string(maxPTX);
   for (llvm::Function &f : module.functions()) {
     if (!f.hasFnAttribute(llvm::Attribute::NoInline))
       f.addFnAttr(llvm::Attribute::AlwaysInline);
@@ -112,15 +102,6 @@ std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version,
                                  llvm::CodeGenFileType::AssemblyFile);
     pass.run(module);
   }
-  // post-process
-  findAndReplace(result, ".version", "\n",
-                 ".version " + std::to_string(ptxMajor) + "." +
-                     std::to_string(ptxMinor) + "\n");
-  findAndReplace(result, ".target", "\n", ".target " + sm + "\n");
-  while (findAndReplace(result, "\t// begin inline asm", "\n", ""))
-    ;
-  while (findAndReplace(result, "\t// end inline asm", "\n", ""))
-    ;
   return result;
 }
 
