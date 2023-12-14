@@ -402,12 +402,12 @@ Effects: MemoryEffects::Effect{}
 | :----: | ----------- |
 | `result` | 32-bit signless integer
 
-### `triton_nvidia_gpu.insert_slice_async_v2` (triton::nvidia_gpu::InsertSliceAsyncV2Op)
+### `triton_nvidia_gpu.insert_slice_tma` (triton::nvidia_gpu::InsertSliceTMAOp)
 
 Syntax:
 
 ```
-operation ::= `triton_nvidia_gpu.insert_slice_async_v2` operands attr-dict `:` type(operands) `->` type($result)
+operation ::= `triton_nvidia_gpu.insert_slice_tma` operands attr-dict `:` type(operands) `->` type($result)
 ```
 
 

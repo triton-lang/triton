@@ -133,7 +133,7 @@
 <li class="toctree-l4"><a class="reference internal" href="#id20">Results:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#triton-nvidia-gpu-insert-slice-async-v2-triton-nvidia-gpu-insertsliceasyncv2op"><code class="docutils literal notranslate"><span class="pre">triton_nvidia_gpu.insert_slice_async_v2</span></code> (triton::nvidia_gpu::InsertSliceAsyncV2Op)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#triton-nvidia-gpu-insert-slice-tma-triton-nvidia-gpu-insertslicetmaop"><code class="docutils literal notranslate"><span class="pre">triton_nvidia_gpu.insert_slice_tma</span></code> (triton::nvidia_gpu::InsertSliceTMAOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id21">Attributes:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id22">Operands:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id23">Results:</a></li>
@@ -698,10 +698,10 @@ The subsequent operations should not execute until this operation completes wait
 </table>
 </section>
 </section>
-<section id="triton-nvidia-gpu-insert-slice-async-v2-triton-nvidia-gpu-insertsliceasyncv2op">
-<h2><code class="docutils literal notranslate"><span class="pre">triton_nvidia_gpu.insert_slice_async_v2</span></code> (triton::nvidia_gpu::InsertSliceAsyncV2Op)<a class="headerlink" href="#triton-nvidia-gpu-insert-slice-async-v2-triton-nvidia-gpu-insertsliceasyncv2op" title="Permalink to this heading">¶</a></h2>
+<section id="triton-nvidia-gpu-insert-slice-tma-triton-nvidia-gpu-insertslicetmaop">
+<h2><code class="docutils literal notranslate"><span class="pre">triton_nvidia_gpu.insert_slice_tma</span></code> (triton::nvidia_gpu::InsertSliceTMAOp)<a class="headerlink" href="#triton-nvidia-gpu-insert-slice-tma-triton-nvidia-gpu-insertslicetmaop" title="Permalink to this heading">¶</a></h2>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.insert_slice_async_v2` operands attr-dict `:` type(operands) `-&gt;` type($result)
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.insert_slice_tma` operands attr-dict `:` type(operands) `-&gt;` type($result)
 </pre></div>
 </div>
 <p>Traits: AttrSizedOperandSegments, ResultsAreSharedEncoding, VerifyTensorLayoutsTrait</p>
