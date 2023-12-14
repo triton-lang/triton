@@ -1912,6 +1912,7 @@ void init_triton_translation(py::module &m) {
       },
       ret::take_ownership);
 
+  // TODO: unify
   m.def(
       "translate_llvmir_to_hsaco",
       [](std::string llvmIR, std::string gfx_arch, std::string gfx_triple,
@@ -1935,13 +1936,6 @@ void init_triton_translation(py::module &m) {
         return std::make_tuple(std::move(py::bytes(hsaco)), name);
       },
       ret::take_ownership);
-
-  m.def("add_external_libs_rocm",
-        [](mlir::ModuleOp &op, const std::vector<std::string> &names,
-           const std::vector<std::string> &paths) {
-          // std::cout << "add_external_libs_rocm" << std::endl;
-          ::mlir::triton::addExternalLibs(op, names, paths);
-        });
 
   m.def(
       "translate_llvmir_to_ptx",
@@ -1967,6 +1961,7 @@ void init_triton_translation(py::module &m) {
       },
       ret::take_ownership);
 
+  // TODO: move to Python
   m.def("compile_ptx_to_cubin",
         [](const std::string &ptxCode, const std::string &ptxasPath,
            int capability, bool enable_fp_fusion) -> py::object {
