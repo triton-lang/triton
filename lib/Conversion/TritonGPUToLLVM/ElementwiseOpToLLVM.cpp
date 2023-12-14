@@ -7,15 +7,15 @@ using ::mlir::triton::gpu::getTotalElemsPerThread;
 /* ----- FP8E5M2 ------ */
 // This data-type is the standard FP8E5M2 format
 
-struct Fp8ConvDesc {
+struct Fp8ConversionDesc {
   std::string ptx;
   int inVecWidthBits;
   int outVecWidthBits;
   size_t numElements;
 };
 
-static const Fp8ConvDesc Fp16_to_Fp8E5M2_RTNE(bool hasNativeFP) {
-  Fp8ConvDesc ret;
+static const Fp8ConversionDesc Fp16_to_Fp8E5M2_RTNE(bool hasNativeFP) {
+  Fp8ConversionDesc ret;
   if (!hasNativeFP) {
     ret = {"{                            \n"
            ".reg .b32 a<2>;              \n"
@@ -32,7 +32,7 @@ static const Fp8ConvDesc Fp16_to_Fp8E5M2_RTNE(bool hasNativeFP) {
   return ret;
 }
 
-const Fp8ConvDesc Fp16_to_Fp8E5M2_RTZ = {
+const Fp8ConversionDesc Fp16_to_Fp8E5M2_RTZ = {
     "{                            \n"
     ".reg .b32 a<2>;              \n"
     "and.b32 a0, $1, 0xfffefffe;  \n"   // a0 &= 0xfffefffe
@@ -41,8 +41,8 @@ const Fp8ConvDesc Fp16_to_Fp8E5M2_RTZ = {
     "}",
     32, 32, 4};
 
-static const Fp8ConvDesc Fp8E5M2_to_Fp16(bool hasNativeFP) {
-  Fp8ConvDesc ret;
+static const Fp8ConversionDesc Fp8E5M2_to_Fp16(bool hasNativeFP) {
+  Fp8ConversionDesc ret;
   if (!hasNativeFP) {
     ret = {"{                           \n"
            "prmt.b32 $0, 0, $2, 0x5140; \n\t"
@@ -55,8 +55,8 @@ static const Fp8ConvDesc Fp8E5M2_to_Fp16(bool hasNativeFP) {
   return ret;
 }
 
-static const Fp8ConvDesc Fp8E5M2_to_Bf16(bool hasNativeFP) {
-  Fp8ConvDesc ret;
+static const Fp8ConversionDesc Fp8E5M2_to_Bf16(bool hasNativeFP) {
+  Fp8ConversionDesc ret;
   if (!hasNativeFP) {
     ret = {
         "{                                        \n"
@@ -107,8 +107,8 @@ static const Fp8ConvDesc Fp8E5M2_to_Bf16(bool hasNativeFP) {
   return ret;
 }
 
-static const Fp8ConvDesc Bf16_to_Fp8E5M2(bool hasNativeFP) {
-  Fp8ConvDesc ret;
+static const Fp8ConversionDesc Bf16_to_Fp8E5M2(bool hasNativeFP) {
+  Fp8ConversionDesc ret;
   if (!hasNativeFP) {
     ret = {
         "{                                           \n" // bf16=fp8>>3 + 112<<7
@@ -172,7 +172,7 @@ static const Fp8ConvDesc Bf16_to_Fp8E5M2(bool hasNativeFP) {
 // This is the same format as FP8E4M3Nv, but:
 //   - the exponent bias is 15 instead of 7
 //   - 0xff and 0x7f are mapped to +-1.750 instead of +-nan
-const Fp8ConvDesc Fp8E4M3B15_to_Fp16 = {
+const Fp8ConversionDesc Fp8E4M3B15_to_Fp16 = {
     "{                                      \n"
     ".reg .b32 a<2>, b<2>;                  \n"
     "prmt.b32 a0, 0, $2, 0x5746;            \n"
@@ -186,7 +186,7 @@ const Fp8ConvDesc Fp8E4M3B15_to_Fp16 = {
     "}                                      \n",
     32, 32, 4};
 
-static const Fp8ConvDesc Fp16_to_Fp8E4M3B15(bool has_minx2) {
+static const Fp8ConversionDesc Fp16_to_Fp8E4M3B15(bool has_minx2) {
   std::string ret;
   ret += "{                                      \n"
          ".reg .pred p<4>;                       \n"
@@ -231,7 +231,7 @@ static const Fp8ConvDesc Fp16_to_Fp8E4M3B15(bool has_minx2) {
 // $0 = (($2 << 1) & 0x80008000u) | (($2 << 7) & 0x3f803f80u);
 // $1 = (($2 << 0) & 0x80008000u) | (($2 << 0) & 0x3f803f80u);
 // WARN: subnormal (0bs0000xxx) are not handled
-static const Fp8ConvDesc Fp8E4M3B15x4_to_Fp16 = {
+static const Fp8ConversionDesc Fp8E4M3B15x4_to_Fp16 = {
     "{                                      \n"
     ".reg .b32 a<2>;                        \n"
     "add.u32 a0, $2, $2;                    \n"
@@ -249,7 +249,7 @@ static const Fp8ConvDesc Fp8E4M3B15x4_to_Fp16 = {
 //       ((e4.y >> 0) & (0x80008000u >> 0)) |
 //       ((e4.y >> 0) & (0x3f803f80u >> 0)) ;
 // WARN: subnormal (0bs0000xxx) are not handled
-static const Fp8ConvDesc Fp16_to_Fp8E4M3B15x4 = {
+static const Fp8ConversionDesc Fp16_to_Fp8E4M3B15x4 = {
     "{                                       \n"
     ".reg .b32 a<2>;                         \n"
     "shr.b32  a0, $1, 1;                     \n"
@@ -261,20 +261,21 @@ static const Fp8ConvDesc Fp16_to_Fp8E4M3B15x4 = {
     32, 32, 4};
 
 // Fp8E4M3 (x2) -> Fp16 (x2) (packed)
-static const Fp8ConvDesc Fp8E4M3Nv_to_Fp16 = {"{ \n"
-                                              "cvt.rn.f16x2.e4m3x2 $0, $1; \n"
-                                              "}",
-                                              16, 32, 2};
+static const Fp8ConversionDesc Fp8E4M3Nv_to_Fp16 = {
+    "{ \n"
+    "cvt.rn.f16x2.e4m3x2 $0, $1; \n"
+    "}",
+    16, 32, 2};
 
 // Fp16 (x2) -> Fp8E4M3 (x2) (packed)
-static const Fp8ConvDesc Fp16_to_Fp8E4M3Nv = {
+static const Fp8ConversionDesc Fp16_to_Fp8E4M3Nv = {
     "{ \n"
     "cvt.rn.satfinite.e4m3x2.f16x2 $0, $1; \n"
     "}",
     32, 16, 2};
 
 // Fp8E4M3 (x2) -> Fp16 (x2) (packed)
-static const Fp8ConvDesc Fp8E4M3Nv_to_Bf16 = {
+static const Fp8ConversionDesc Fp8E4M3Nv_to_Bf16 = {
     "{                                       \n"
     ".reg .b32 a;                            \n"
     ".reg .f16 a<2>;                         \n"
@@ -288,7 +289,7 @@ static const Fp8ConvDesc Fp8E4M3Nv_to_Bf16 = {
     16, 32, 2};
 
 // Bf16 (x2) -> Fp8E4M3 (x2) (packed)
-static const Fp8ConvDesc Bf16_to_Fp8E4M3Nv = {
+static const Fp8ConversionDesc Bf16_to_Fp8E4M3Nv = {
     "{                                       \n"
     ".reg .b16 a<2>;                         \n"
     ".reg .f32 b<2>;                         \n"
@@ -300,9 +301,9 @@ static const Fp8ConvDesc Bf16_to_Fp8E4M3Nv = {
     32, 16, 2};
 
 // Fp32 (x2) -> Fp8 (x2) (packed)
-static const Fp8ConvDesc Fp32_to_Fp8E4M3Nv = {
+static const Fp8ConversionDesc Fp32_to_Fp8E4M3Nv = {
     "cvt.rn.satfinite.e4m3x2.f32  $0, $2, $1; \n", 32, 16, 2};
-static const Fp8ConvDesc Fp32_to_Fp8E5M2 = {
+static const Fp8ConversionDesc Fp32_to_Fp8E5M2 = {
     "cvt.rn.satfinite.e5m2x2.f32 $0, $2, $1; \n", 32, 16, 2};
 
 /* ----- Packed integer to BF16 ------ */
@@ -788,11 +789,6 @@ struct FpToFpOpConversion
     case RoundingMode::RTZ:
       ptx = "cvt.rz.bf16.f32";
       break;
-    default:
-      llvm::errs() << "WARNING: unsupported rounding mode for f32->bf16 "
-                      "conversion: "
-                   << stringifyRoundingMode(rounding) << "\n";
-      llvm_unreachable("");
     }
     auto &cvt = *builder.create(ptx.str());
     auto res = builder.newOperand("=h");
@@ -842,7 +838,7 @@ struct FpToFpOpConversion
 
     auto undefRounding = static_cast<RoundingMode>(-1);
 
-    static DenseMap<std::tuple<TypeID, TypeID, RoundingMode>, Fp8ConvDesc>
+    static DenseMap<std::tuple<TypeID, TypeID, RoundingMode>, Fp8ConversionDesc>
         srcMap = {
             // F8 -> F16
             {{F8E4M3B15TyID, F16TyID, undefRounding}, Fp8E4M3B15_to_Fp16},
@@ -870,10 +866,9 @@ struct FpToFpOpConversion
             {{F32TyID, F8E4M3TyID, RoundingMode::RTNE}, Fp32_to_Fp8E4M3Nv},
             {{F32TyID, F8E5M2TyID, RoundingMode::RTNE}, Fp32_to_Fp8E5M2},
         };
-    RoundingMode rndMode =
-        roundingMode.has_value() ? roundingMode.value() : undefRounding;
-    std::tuple<TypeID, TypeID, RoundingMode> key = {srcTy.getTypeID(),
-                                                    dstTy.getTypeID(), rndMode};
+    std::tuple<TypeID, TypeID, RoundingMode> key = {
+        srcTy.getTypeID(), dstTy.getTypeID(),
+        roundingMode.value_or(undefRounding)};
     if (srcMap.count(key) == 0) {
       llvm::errs() << "Unsupported conversion from " << srcTy << " to "
                    << dstTy;
@@ -881,7 +876,7 @@ struct FpToFpOpConversion
         llvm::errs() << " with rounding mode "
                      << stringifyRoundingMode(roundingMode.value());
       llvm::errs() << "\n";
-      llvm_unreachable("");
+      llvm::report_fatal_error("Unsupported rounding mode for conversion.");
     }
     if (computeCapability < 90 &&
         (srcTy.isFloat8E4M3FNUZ() || dstTy.isFloat8E4M3FNUZ())) {
@@ -908,7 +903,7 @@ struct FpToFpOpConversion
 
     if (dstElementType.isFloat8E5M2() || dstElementType.isFloat8E4M3FNUZ()) {
       assert(roundingMode.has_value() &&
-             "rounding mode must be specified convertsions to fp8");
+             "Rounding mode must be specified for convertsions to fp8");
 
       // For now only RTNE is supported for conversions from fp16 to fp8
       if (!srcElementType.isF32() &&
@@ -1536,7 +1531,7 @@ struct TruncFOpConversion
     if (outElemTy.isBF16()) {
       auto inElemTy = getElementType(op.getIn());
       assert(inElemTy.isF32() && "unsupported conversion");
-      return {// Trunc uses default roinding mode: RTNE
+      return {// Trunc uses the default rounding mode: RTNE
               FpToFpOpConversion::convertFp32ToBf16(
                   loc, rewriter, operands[0][0], RoundingMode::RTNE)};
     } else {

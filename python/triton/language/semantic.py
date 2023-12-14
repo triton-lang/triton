@@ -630,11 +630,7 @@ def _str_to_rounding_mode(rounding_mode: str):
         return ir.ROUNDING_MODE.RTNE
     if rounding_mode == 'rtz':
         return ir.ROUNDING_MODE.RTZ
-    if rounding_mode == 'ru':
-        return ir.ROUNDING_MODE.RU
-    if rounding_mode == 'rd':
-        return ir.ROUNDING_MODE.RD
-    raise ValueError(f"Invalid rounding mode: {rounding_mode}")
+    raise ValueError(f"Invalid rounding mode: {rounding_mode}. Supported rounding modes are 'rtne' and 'rtz'.")
 
 
 def bitcast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder) -> tl.tensor:
@@ -679,7 +675,8 @@ def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder, fp_downcast_ro
         if fp_downcast_rounding is None: fp_downcast_rounding = ir.ROUNDING_MODE.RTNE
         elif fp_downcast_rounding != ir.ROUNDING_MODE.RTNE: use_custom_rounding = True
     else:
-        assert fp_downcast_rounding is None
+        raise ValueError("fp_downcast_rounding should be set only for truncating fp conversions. "
+                         "Source scalar type is " + str(src_sca_ty) + " and destination type is " + str(dst_sca_ty))
 
     if (src_sca_ty.is_fp8e4nv() or dst_sca_ty.is_fp8e4nv()):
         assert builder.options.allow_fp8e4nv, "fp8e4nv data type is not supported on CUDA arch < 89"

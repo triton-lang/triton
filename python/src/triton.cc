@@ -246,9 +246,7 @@ void init_triton_ir(py::module &&m) {
 
   py::enum_<mlir::triton::RoundingMode>(m, "ROUNDING_MODE", py::module_local())
       .value("RTZ", mlir::triton::RoundingMode::RTZ)
-      .value("RTNE", mlir::triton::RoundingMode::RTNE)
-      .value("RU", mlir::triton::RoundingMode::RU)
-      .value("RD", mlir::triton::RoundingMode::RD);
+      .value("RTNE", mlir::triton::RoundingMode::RTNE);
 
   py::class_<mlir::MLIRContext>(m, "context", py::module_local())
       .def(py::init<>())

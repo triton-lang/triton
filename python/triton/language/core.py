@@ -779,6 +779,20 @@ class tensor:
 
     @builtin
     def to(self, dtype, fp_downcast_rounding: str = None, bitcast=False, _builder=None):
+        """
+        Casts the tensor to the given :code:`dtype`.
+        :param dtype: The target data type.
+        :type dtype: DType
+        :param fp_downcast_rounding: The rounding mode for downcasting floating-point values. \
+            This parameter is only used when self is a floating-point tensor and dtype is a floating-point type \
+            with a smaller bitwidth. Supported values are :code:`"rtne"` (round to nearest, ties to even) and \
+            :code:`"rtz"` (round towards zero).
+        :type fp_downcast_rounding: str
+        :param bitcast: If true, the tensor is bitcasted to the given :code:`dtype`, instead of being casted.
+        :type bitcast: bool
+        :param _builder: The IR builder.
+        :type _builder: ir.builder
+        """
         if isinstance(bitcast, constexpr):
             bitcast = bitcast.value
         if bitcast:
