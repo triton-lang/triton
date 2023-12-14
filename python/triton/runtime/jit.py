@@ -15,6 +15,8 @@ from ..common.backend import get_backend, get_cuda_version_key
 from .interpreter import InterpretedFunction
 from ..runtime.driver import driver
 
+TRITON_MODULE = __name__[:-len(".runtime.jit")]
+
 T = TypeVar("T")
 
 # -----------------------------------------------------------------------------
@@ -41,8 +43,7 @@ class DependenciesFinder(ast.NodeVisitor):
         lhs = self.visit(node.value)
         while isinstance(lhs, ast.Attribute):
             lhs = self.visit(lhs.value)
-        if lhs is None or (getattr(lhs, "__name__", "") == "triton"
-                           or getattr(lhs, "__name__", "").endswith(".triton")):
+        if lhs is None or (getattr(lhs, "__name__", "") == TRITON_MODULE):
             return None
         return getattr(lhs, node.attr)
 
@@ -52,7 +53,7 @@ class DependenciesFinder(ast.NodeVisitor):
             return
         if inspect.isbuiltin(func):
             return
-        if func.__module__ and (func.__module__.startswith("triton.") or ".triton." in func.__module__):
+        if func.__module__ and (func.__module__.startswith(TRITON_MODULE)):
             return
         assert isinstance(
             func, JITFunction
