@@ -788,6 +788,18 @@ mlir::LogicalResult mlir::triton::ReshapeOp::verify() {
   return mlir::success();
 }
 
+//-- FpToFpOp --
+mlir::LogicalResult mlir::triton::FpToFpOp::verify() {
+  auto dstType = getType().cast<RankedTensorType>().getElementType();
+  auto srcType =
+      getOperand().getType().cast<RankedTensorType>().getElementType();
+  if ((dstType.getIntOrFloatBitWidth() < srcType.getIntOrFloatBitWidth()) &&
+      (!getRounding().has_value())) {
+    return emitError("Rounding mode is required for FP downcast");
+  }
+  return mlir::success();
+}
+
 //-- BroadcastOp --
 LogicalResult BroadcastOp::canonicalize(BroadcastOp op,
                                         PatternRewriter &rewriter) {

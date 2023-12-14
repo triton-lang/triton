@@ -87,7 +87,7 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
     let summary = "Floating point casting for custom types";
 
     let description = [{
-        Floating point casting for custom types (F8).
+        Floating point casting for custom types (F8), and non-default rounding modes.
 
         F8 <-> FP16, BF16, FP32, FP64
     }];
@@ -98,7 +98,7 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
 
     let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
 
-    // TODO: We need a verifier here.
+    let hasVerifier = 1;
 }
 
 //
