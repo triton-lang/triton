@@ -6,24 +6,24 @@
 
 Computation times
 =================
-**02:26.467** total execution time for **getting-started_tutorials** files:
+**02:27.418** total execution time for **getting-started_tutorials** files:
 
 +-------------------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_03-matrix-multiplication.py` (``03-matrix-multiplication.py``)           | 00:41.066 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_03-matrix-multiplication.py` (``03-matrix-multiplication.py``)           | 00:41.300 | 0.0 MB |
 +-------------------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_02-fused-softmax.py` (``02-fused-softmax.py``)                           | 00:39.448 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_02-fused-softmax.py` (``02-fused-softmax.py``)                           | 00:39.283 | 0.0 MB |
 +-------------------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_05-layer-norm.py` (``05-layer-norm.py``)                                 | 00:30.245 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_05-layer-norm.py` (``05-layer-norm.py``)                                 | 00:30.284 | 0.0 MB |
 +-------------------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_06-fused-attention.py` (``06-fused-attention.py``)                       | 00:18.663 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_06-fused-attention.py` (``06-fused-attention.py``)                       | 00:19.287 | 0.0 MB |
 +-------------------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_08-experimental-block-pointer.py` (``08-experimental-block-pointer.py``) | 00:06.282 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_08-experimental-block-pointer.py` (``08-experimental-block-pointer.py``) | 00:06.484 | 0.0 MB |
 +-------------------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_01-vector-add.py` (``01-vector-add.py``)                                 | 00:06.207 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_01-vector-add.py` (``01-vector-add.py``)                                 | 00:06.085 | 0.0 MB |
 +-------------------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_11-grouped-gemm.py` (``11-grouped-gemm.py``)                             | 00:03.591 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_11-grouped-gemm.py` (``11-grouped-gemm.py``)                             | 00:03.702 | 0.0 MB |
 +-------------------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_04-low-memory-dropout.py` (``04-low-memory-dropout.py``)                 | 00:00.643 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_04-low-memory-dropout.py` (``04-low-memory-dropout.py``)                 | 00:00.658 | 0.0 MB |
 +-------------------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_07-math-functions.py` (``07-math-functions.py``)                         | 00:00.322 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_07-math-functions.py` (``07-math-functions.py``)                         | 00:00.336 | 0.0 MB |
 +-------------------------------------------------------------------------------------------------------------------+-----------+--------+

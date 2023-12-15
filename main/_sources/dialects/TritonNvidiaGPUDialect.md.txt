@@ -5,7 +5,7 @@ Triton Nvidia GPU Dialect.
 
 [TOC]
 
-## Type definition
+## Types
 
 ### MutexType
 

@@ -16,7 +16,7 @@ Dependent Dialects:
 
 [TOC]
 
-## Type constraint definition
+## Type constraints
 
 ### ptr
 
@@ -26,7 +26,7 @@ Dependent Dialects:
 
 
 
-## Type definition
+## Types
 
 ### PointerType
 
