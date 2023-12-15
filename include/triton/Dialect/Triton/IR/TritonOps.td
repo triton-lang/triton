@@ -79,7 +79,6 @@ def TT_BitcastOp : TT_Op<"bitcast", [Elementwise,
     // TODO: Add verifier
 }
 
-// FIXME: Not elementwise because scalars are not supported
 def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
                                      SameOperandsAndResultEncoding,
                                      Pure,
@@ -87,18 +86,18 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
     let summary = "Floating point casting for custom types";
 
     let description = [{
-        Floating point casting for custom types (F8).
+        Floating point casting for custom types (F8), and non-default rounding modes.
 
         F8 <-> FP16, BF16, FP32, FP64
     }];
 
-    let arguments = (ins TT_FloatLike:$from);
+    let arguments = (ins TT_FloatTensor:$from, OptionalAttr<TT_RoundingModeAttr>:$rounding);
 
-    let results = (outs TT_FloatLike:$result);
+    let results = (outs TT_FloatTensor:$result);
 
     let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
 
-    // TODO: We need a verifier here.
+    let hasVerifier = 1;
 }
 
 //

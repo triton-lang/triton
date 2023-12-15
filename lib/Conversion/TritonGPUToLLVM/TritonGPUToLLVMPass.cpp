@@ -654,6 +654,8 @@ private:
       addWSNamedAttrs(newCvt, cvtOp->getAttrs());
       auto newRet = builder.create<mlir::triton::FpToFpOp>(
           cvtOp.getLoc(), cvtOp.getType(), newCvt.getResult());
+      newRet.setRounding(
+          triton::RoundingMode::RTNE); // Downcast requires rounding mode
       addWSNamedAttrs(newRet, cvtOp->getAttrs());
       cvtOp.replaceAllUsesWith(newRet.getResult());
       cvtOp.erase();
