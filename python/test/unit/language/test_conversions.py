@@ -235,8 +235,6 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
 
     assert(torch.equal(dst, dst2))
 
-#torch.float8e4nv = torch.float8_e4m3fn
-#torch.float8e5 = torch.float8_e5m2
 
 @pytest.mark.parametrize("src_dtype, dst_dtype", [
     ('float16', 'float32'),
