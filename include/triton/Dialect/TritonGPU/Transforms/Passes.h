@@ -38,6 +38,8 @@ std::unique_ptr<Pass> createTritonGPUOptimizeDotOperandsPass();
 
 std::unique_ptr<Pass> createTritonGPUOptimizeEpiloguePass();
 
+std::unique_ptr<Pass> createTritonGPUOptimizeThreadLocalityPass();
+
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"

@@ -332,9 +332,6 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       setEncoding({afterArg, result}, info, changed, user);
       continue;
     }
-    // Workaround: don't propagate through truncI
-    if (isa<arith::TruncIOp>(user))
-      continue;
     if (user->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<mlir::OpTrait::Elementwise>() ||
         isa<triton::ReduceOp, triton::ExpandDimsOp,
@@ -755,7 +752,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
       map(oldResult, newResult);
     return newOp;
   }
-  assert(0 && "unexpected op in rewrite");
+  llvm::report_fatal_error("unexpected op in rewrite");
   return nullptr;
 }
 
@@ -770,34 +767,6 @@ static bool canBeRemat(Operation *op) {
     return false;
 
   return true;
-}
-
-// Replace ForOp with a new ForOp with extra operands. The YieldOp is not
-// updated and needs to be updated separatly for the loop to be correct.
-static scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter,
-                                               scf::ForOp loop,
-                                               ValueRange newIterOperands) {
-  OpBuilder::InsertionGuard g(rewriter);
-  rewriter.setInsertionPoint(loop);
-
-  // Create a new loop before the existing one, with the extra operands.
-  rewriter.setInsertionPoint(loop);
-  auto operands = llvm::to_vector<4>(loop.getInitArgs());
-  operands.append(newIterOperands.begin(), newIterOperands.end());
-  scf::ForOp newLoop = rewriter.create<scf::ForOp>(
-      loop.getLoc(), loop.getLowerBound(), loop.getUpperBound(), loop.getStep(),
-      operands);
-  newLoop.getBody()->erase();
-
-  newLoop.getRegion().getBlocks().splice(
-      newLoop.getRegion().getBlocks().begin(), loop.getRegion().getBlocks());
-  for (Value operand : newIterOperands)
-    newLoop.getBody()->addArgument(operand.getType(), operand.getLoc());
-
-  for (auto it : llvm::zip(loop.getResults(), newLoop.getResults().take_front(
-                                                  loop.getNumResults())))
-    std::get<0>(it).replaceAllUsesWith(std::get<1>(it));
-  return newLoop;
 }
 
 static void rewriteSlice(SetVector<Value> &slice,

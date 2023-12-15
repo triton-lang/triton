@@ -38,19 +38,6 @@ namespace ttng = ::mlir::triton::nvidia_gpu;
 
 typedef DenseMap<Operation *, triton::MakeTensorPtrOp> TensorPtrMapT;
 
-namespace mlir {
-namespace LLVM {
-
-// Helper function for using printf in LLVM conversion.
-void vprintf(StringRef msg, ValueRange args,
-             ConversionPatternRewriter &rewriter);
-
-void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
-                   std::string elem_repr, ConversionPatternRewriter &builder);
-
-} // namespace LLVM
-} // namespace mlir
-
 // FuncOpConversion/FuncOpConversionBase is borrowed from
 // https://github.com/llvm/llvm-project/blob/fae656b2dd80246c3c6f01e9c77c49560368752c/mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp#L276
 // since it is not exposed on header files in mlir v14
@@ -193,10 +180,16 @@ public:
   // Key: {layout, shape, withCTAOffset}
   struct IndexCacheInfo {
     DenseMap<IndexCacheKeyT, SmallVector<Value>, CacheKeyDenseMapInfo>
-        *baseIndexCache;
+        *baseIndexCache = nullptr;
     DenseMap<IndexCacheKeyT, SmallVector<SmallVector<Value>>,
-             CacheKeyDenseMapInfo> *indexCache;
-    OpBuilder::InsertPoint *indexInsertPoint;
+             CacheKeyDenseMapInfo> *indexCache = nullptr;
+    OpBuilder::InsertPoint *indexInsertPoint = nullptr;
+  };
+
+  struct PrintFormatting
+  {
+    Value formatStrValue;
+    size_t formatStrSize;
   };
 
   explicit ConvertTritonGPUOpToLLVMPatternBase(
@@ -837,7 +830,7 @@ public:
             emitIndicesForDistributedLayout(loc, b, slice, type, withCTAOffset);
       } else {
         llvm_unreachable(
-            "emitIndices for layouts other than blocked & slice not "
+            "emitIndices for layouts other than blocked, mma, and slice not "
             "implemented yet");
       }
       if (cache) {
@@ -1332,15 +1325,31 @@ private:
   }
 
 protected:
+  // Returns a Value for the format string, which you can reuse.
+  PrintFormatting llPrintfHIP(mlir::Location loc, mlir::ModuleOp moduleOp, StringRef msg,
+                   ValueRange args, ConversionPatternRewriter &rewriter,
+                   bool stderr = false) const {
+    assert(!msg.empty() && "printf with empty string not supported");
+    PrintFormatting formatting;
+    llvm::SmallString<32> msgNewline(msg);
+    msgNewline.push_back('\n');
+    msgNewline.push_back('\0');
+    formatting.formatStrValue =
+        LLVM::addStringToModule(loc, rewriter, "printfFormat_", msgNewline);
+    formatting.formatStrSize = msgNewline.size_in_bytes();
+    llPrintfHIP(loc, moduleOp, formatting, args, rewriter, stderr);
+    return formatting;
+  }
+
   // The code is borrowed from https://reviews.llvm.org/D110448
   // from GPUPrintfOpToHIPLowering::matchAndRewrite().
-  void llPrintfHIP(mlir::Location loc, mlir::ModuleOp moduleOp, StringRef msg,
+  void llPrintfHIP(mlir::Location loc, mlir::ModuleOp moduleOp, PrintFormatting formatting,
                    ValueRange args, ConversionPatternRewriter &rewriter,
                    bool stderr = false) const {
 
     auto typeConverter = getTypeConverter();
     mlir::Type llvmI8 = typeConverter->convertType(rewriter.getI8Type());
-    mlir::Type i8Ptr = typeConverter->getPointerType(llvmI8);
+    auto ptrType = LLVM::LLVMPointerType::get(rewriter.getContext());
     mlir::Type llvmI32 = typeConverter->convertType(rewriter.getI32Type());
     mlir::Type llvmI64 = typeConverter->convertType(rewriter.getI64Type());
 
@@ -1362,7 +1371,7 @@ protected:
         moduleOp, loc, rewriter, "__ockl_printf_append_string_n",
         LLVM::LLVMFunctionType::get(
             llvmI64,
-            {llvmI64, i8Ptr, /*length (bytes)*/ llvmI64, /*isLast*/ llvmI32}));
+            {llvmI64, {ptrType}, /*length (bytes)*/ llvmI64, /*isLast*/ llvmI32}));
 
     /// Start the printf hostcall
     Value zeroI64 = rewriter.create<LLVM::ConstantOp>(loc, llvmI64, 0);
@@ -1373,19 +1382,11 @@ protected:
     // Get a unique global name for the format.
     SmallString<16> stringConstName = getUniqueFormatGlobalName(moduleOp);
 
-    SmallString<32> formatString(msg);
-    formatString.push_back('\n'); // Triton adds CR for each print.
-    formatString.push_back('\0'); // Null terminate for C
-    size_t formatStringSize = formatString.size_in_bytes();
-
-    Value prefixString =
-        LLVM::addStringToModule(loc, rewriter, "printfFormat_", formatString);
-
     auto prefixPtrType = ocklAppendStringN.getArgumentTypes()[1];
-    prefixString = bitcast(prefixString, prefixPtrType);
+    Value prefixString = bitcast(formatting.formatStrValue, prefixPtrType);
 
     Value stringLen =
-        rewriter.create<LLVM::ConstantOp>(loc, llvmI64, formatStringSize);
+        rewriter.create<LLVM::ConstantOp>(loc, llvmI64, formatting.formatStrSize);
 
     Value oneI32 = rewriter.create<LLVM::ConstantOp>(loc, llvmI32, 1);
     Value zeroI32 = rewriter.create<LLVM::ConstantOp>(loc, llvmI32, 0);
@@ -1411,12 +1412,11 @@ protected:
         Value arg = args[i];
         if (auto floatType = arg.getType().dyn_cast<FloatType>()) {
           if (!floatType.isF64())
-            arg = rewriter.create<LLVM::FPExtOp>(
-                loc, typeConverter->convertType(rewriter.getF64Type()), arg);
-          arg = rewriter.create<LLVM::BitcastOp>(loc, llvmI64, arg);
+            arg = fpext(typeConverter->convertType(rewriter.getF64Type()), arg);
+          arg = bitcast(arg, llvmI64);
         }
         if (arg.getType().getIntOrFloatBitWidth() != 64)
-          arg = rewriter.create<LLVM::ZExtOp>(loc, llvmI64, arg);
+           arg = zext(llvmI64, arg);
 
         arguments.push_back(arg);
       }
@@ -1427,7 +1427,7 @@ protected:
 
       auto isLast = (bound == nArgs) ? oneI32 : zeroI32;
       arguments.push_back(isLast);
-      auto call = rewriter.create<LLVM::CallOp>(loc, ocklAppendArgs, arguments);
+      auto call = call(ocklAppendArgs, arguments);
       printfDesc = call.getResult();
     }
   }

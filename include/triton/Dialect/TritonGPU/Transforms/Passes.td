@@ -162,6 +162,19 @@ def TritonGPUOptimizeEpilogue : Pass<"tritongpu-optimize-epilogue", "mlir::Modul
 
 }
 
+def TritonGPUOptimizeThreadLocality : Pass<"tritongpu-optimize-thread-locality", "mlir::ModuleOp"> {
+  let summary = "Reduce the cost of synchronization between threads in an SM";
+
+  let description = [{
+    Today, this optimizes reduction yielded by loop to be thread-local until after the loop completes.
+  }];
+
+  let constructor = "mlir::createTritonGPUOptimizeThreadLocalityPass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
 def TritonGPUReorderInstructions: Pass<"tritongpu-reorder-instructions", "mlir::ModuleOp"> {
   let summary = "Reorder instructions";
 

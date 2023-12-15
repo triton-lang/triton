@@ -2,7 +2,14 @@
 [build-system]
 requires = ["setuptools>=40.8.0", "wheel", "cmake>=3.18", "ninja>=1.11.1"]
 
+# We're incrementally switching from autopep8 to ruff.
 [tool.autopep8]
 aggressive = 1
-ignore = "E501,E701,E731,W690"
+ignore = "E501,E701,E731,W690,W503"
 max_line_length = 88
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+ignore = ["E501", "E701", "E731", "E741"]

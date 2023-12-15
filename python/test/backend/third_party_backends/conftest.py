@@ -4,9 +4,7 @@ import pytest
 
 
 def pytest_addoption(parser):
-    parser.addoption(
-        "--backend", action="store", default="", help="Codegen backend"
-    )
+    parser.addoption("--backend", action="store", default="", help="Codegen backend")
 
 
 @pytest.fixture

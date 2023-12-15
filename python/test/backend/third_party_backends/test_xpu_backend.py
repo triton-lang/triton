@@ -24,10 +24,10 @@ def test_xpu_backend(cmdopt):
 
         if has_ipex:
             for _ in range(1000):
-                x = torch.randn((65536,), device="xpu", dtype=torch.float32)
-                y = torch.randn((65536,), device="xpu", dtype=torch.float32)
-                z = torch.zeros((65536,), device="xpu", dtype=torch.float32)
-                kernel[(65536,)](x, y, z, num_warps=32)
+                x = torch.randn((65536, ), device="xpu", dtype=torch.float32)
+                y = torch.randn((65536, ), device="xpu", dtype=torch.float32)
+                z = torch.zeros((65536, ), device="xpu", dtype=torch.float32)
+                kernel[(65536, )](x, y, z, num_warps=32)
                 assert torch.all(x + y == z)
     else:
         return

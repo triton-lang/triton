@@ -892,7 +892,7 @@ void buildAsyncComm(const DenseMap<Operation *, SmallVector<Channel *>> &map,
       Value result = forOp->getResult(resultIndex);
       auto dotWait = builder.createWithAgentIds<triton::nvidia_gpu::DotWaitOp>(
           forOp.getLoc(), result, 0);
-      result.replaceAllUsesExcept(dotWait.getResult(), dotWait);
+      result.replaceAllUsesExcept(dotWait.getResult(0), dotWait);
 
       // 3. insert ConsumerReleaseOp for outstanding DotAsyncOps
       zero = builder.createWithAgentIds<arith::ConstantIntOp>(loc, 0, 32);

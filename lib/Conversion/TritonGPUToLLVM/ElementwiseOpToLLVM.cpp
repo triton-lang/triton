@@ -332,7 +332,7 @@ Fp8E5M2_to_Bf16(Location loc, ConversionPatternRewriter &rewriter,
 static const std::string Fp8E5M2_to_Bf16(bool hasNativeFP) {
   std::string ret;
   if (!hasNativeFP) {
-        ret = "{                                        \n"
+    ret = "{                                        \n"
           ".reg .b32 a<2>, b<2>, c<4>, d<4>, e112;  \n" // if input = 0xf1f2f3f4
           "mov.u32 e112, 0x77800000;                \n"
           "prmt.b32 a0, 0, $2, 0x5140;              \n" // a0 = 0xf300f400
@@ -357,16 +357,23 @@ static const std::string Fp8E5M2_to_Bf16(bool hasNativeFP) {
           "lop3.b32 $1, b1, 0x80008000, a1, 0xf8;   \n" // (restore sign)
           "}";
   } else {
-    ret = "{                                       \n"
-          ".reg .b32 a;                            \n"
-          ".reg .f16 a<2>;                         \n"
-          ".reg .b16 b<2>;                         \n"
-          "cvt.rn.f16x2.e5m2x2 a, $1;              \n"
-          "mov.b32 {a0, a1}, a;                    \n"
-          "cvt.bf16.f16 b0, a0;                    \n"
-          "cvt.bf16.f16 b1, a1;                    \n"
-          "mov.b32 $0, {b0, b1};                   \n"
-          "}";
+    ret =
+        "{                                       \n"
+        ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
+        ".reg .b32 e112;                        \n"
+        "mov.u32 e112, 0x77807780;              \n" // 2**112 represented as
+                                                    // bf16x2
+        "prmt.b32 a0, 0, $2, 0x5140;            \n" // a0 = 0xf300f400
+        "prmt.b32 a1, 0, $2, 0x7362;            \n" // a1 = 0xf100f200
+        "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n" // b0 = a0 & 0x7fff7fff
+        "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
+        "shr.b32  b0, b0, 3;                    \n" // b0 >>= 3
+        "shr.b32  b1, b1, 3;                    \n" // shift into bf16 position
+        "lop3.b32 b0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
+        "lop3.b32 b1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
+        "mul.rn.bf16x2 $0, b0, e112;            \n" // b0.exp += 2**7-2**4
+        "mul.rn.bf16x2 $1, b1, e112;            \n" // exponent compensate = 112
+        "}";
   }
   return ret;
 }
@@ -492,7 +499,7 @@ static const std::string Bf16_to_Fp8E5M2(bool hasNativeFP) {
           "mov.b32 {a0, a1}, $1;                   \n"
           "cvt.f32.bf16 b0, a0;                    \n"
           "cvt.f32.bf16 b1, a1;                    \n"
-          "cvt.rn.satfinite.e5m2x2.f32 $0, b0, b1; \n"
+          "cvt.rn.satfinite.e5m2x2.f32 $0, b1, b0; \n"
           "}";
   }
   return ret;
@@ -1058,7 +1065,7 @@ static const std::string Bf16_to_Fp8E4M3Nv =
     "mov.b32 {a0, a1}, $1;                   \n"
     "cvt.f32.bf16 b0, a0;                    \n"
     "cvt.f32.bf16 b1, a1;                    \n"
-    "cvt.rn.satfinite.e4m3x2.f32 $0, b0, b1; \n"
+    "cvt.rn.satfinite.e4m3x2.f32 $0, b1, b0; \n"
     "}";
 
 /* ----- Packed integer to BF16 ------ */
@@ -1312,8 +1319,118 @@ public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
   explicit ElementwiseOpConversionBase(
-      TritonGPUToLLVMTypeConverter &typeConverter, PatternBenefit benefit = 1)
-      : ConvertTritonGPUOpToLLVMPattern<SourceOp>(typeConverter, benefit) {}
+      TritonGPUToLLVMTypeConverter &typeConverter,
+      ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern<SourceOp>(typeConverter, benefit),
+        axisAnalysisPass(axisAnalysisPass) {}
+
+  // Try to deduplicate the resultVals based on the
+  // constancy properties of the result discovered by
+  // the axis analysis pass. If possible, redundant
+  // computation is eliminated.
+  SmallVector<Value> maybeDeduplicate(SourceOp op,
+                                      SmallVector<Value> resultVals) const {
+    if (!isMemoryEffectFree(op))
+      // the op has side effects: can't dedup
+      return resultVals;
+    SmallVector<Value> results = op->getResults();
+    if (results.size() == 0 || results.size() > 1)
+      // there must be exactly 1 result
+      return resultVals;
+    Value result = results[0];
+    Type type = result.getType();
+    if (!type)
+      return resultVals;
+    RankedTensorType rtType = type.dyn_cast<RankedTensorType>();
+    if (!rtType)
+      // the result must be a tensor
+      return resultVals;
+    Attribute encoding = rtType.getEncoding();
+    if (!encoding)
+      // encoding not available
+      return resultVals;
+    if (!encoding.dyn_cast<triton::gpu::BlockedEncodingAttr>() &&
+        !encoding.dyn_cast<triton::gpu::SliceEncodingAttr>()) {
+      // TODO: constraining the ecndoing type here is necessary
+      // for avoiding crashes in the triton::gpu::getElemsPerThread
+      // call below happening in the test_core::test_fp8_dot_acc
+      return resultVals;
+    }
+
+    SmallVector<unsigned> elemsPerThread =
+        triton::gpu::getElemsPerThread(rtType);
+    int rank = elemsPerThread.size();
+    if (product<unsigned>(elemsPerThread) != resultVals.size())
+      return resultVals;
+    AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(result);
+    if (!axisInfo)
+      // axis info (e.g., constancy) not available
+      return resultVals;
+    SmallVector<unsigned> sizePerThread =
+        triton::gpu::getSizePerThread(encoding);
+    if (rank != sizePerThread.size())
+      return resultVals;
+
+    SmallVector<int64_t> constancy = axisInfo->getConstancy();
+    if (rank != constancy.size())
+      return resultVals;
+    bool hasConstancy = false;
+    for (int i = 0; i < rank; ++i) {
+      if (constancy[i] > sizePerThread[i]) {
+        if (constancy[i] % sizePerThread[i] != 0)
+          // constancy is not evenly covered by sizePerThread
+          return resultVals;
+        // can't move the values across different
+        // "sizePerThread"-sized blocks
+        constancy[i] = sizePerThread[i];
+      }
+      if (elemsPerThread[i] < 1 || constancy[i] < 1)
+        return resultVals;
+      if (!(elemsPerThread[i] % constancy[i] == 0 ||
+            constancy[i] % elemsPerThread[i] == 0))
+        // either the constancy along each dimension must fit
+        // into the elemsPerThread or the other way around
+        return resultVals;
+      if (constancy[i] > 1)
+        hasConstancy = true;
+    }
+    if (!hasConstancy)
+      // nothing to deduplicate
+      return resultVals;
+
+    if (rank > 1) {
+      // reorder the shape and constancy vectors by the axis order:
+      // from the fastest-changing to the smallest-changing axis
+      SmallVector<unsigned> order = triton::gpu::getOrder(encoding);
+      if (rank != order.size())
+        return resultVals;
+      ArrayRef<unsigned> orderRef(order);
+      elemsPerThread = reorder(ArrayRef<unsigned>(elemsPerThread), orderRef);
+      constancy = reorder(ArrayRef<int64_t>(constancy), orderRef);
+    }
+
+    SmallVector<unsigned> strides(rank, 1);
+    for (int i = 1; i < rank; ++i) {
+      strides[i] = strides[i - 1] * elemsPerThread[i - 1];
+    }
+    SmallVector<Value> dedupResultVals;
+    dedupResultVals.reserve(resultVals.size());
+    for (int i = 0; i < resultVals.size(); ++i) {
+      // each coordinate of the orig_idx is "coarsened" using the
+      // constancy along this dimension: the resulting dedup_idx
+      // points to the reused value in the original resultsVal
+      int orig_idx = i;
+      int dedup_idx = 0;
+      for (int j = 0; j < rank; ++j) {
+        int coord_j = orig_idx % elemsPerThread[j];
+        dedup_idx += (coord_j / constancy[j] * constancy[j]) * strides[j];
+        orig_idx /= elemsPerThread[j];
+      }
+      dedupResultVals.push_back(resultVals[dedup_idx]);
+    }
+
+    return dedupResultVals;
+  }
 
   LogicalResult
   matchAndRewrite(SourceOp op, OpAdaptor adaptor,
@@ -1356,6 +1473,7 @@ public:
       auto argTy = op->getOperand(0).getType();
       resultVals = reorderValues(resultVals, argTy, resultTy);
     }
+    resultVals = maybeDeduplicate(op, resultVals);
     resultVals =
         packI32(resultVals, resultTy, rewriter, loc, this->getTypeConverter());
     resultVals = this->getTypeConverter()->packMfmaOperand(resultVals, resultTy, rewriter, loc);
@@ -1366,6 +1484,9 @@ public:
 
     return success();
   }
+
+protected:
+  ModuleAxisInfoAnalysis &axisAnalysisPass;
 
 private:
   int computeCapability;
@@ -1398,8 +1519,9 @@ struct FpToFpOpConversion
       triton::FpToFpOp, FpToFpOpConversion>::ElementwiseOpConversionBase;
 
   explicit FpToFpOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+                              ModuleAxisInfoAnalysis &axisAnalysisPass,
                               int computeCapability, PatternBenefit benefit = 1)
-      : ElementwiseOpConversionBase(typeConverter, benefit),
+      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
         computeCapability(computeCapability) {}
 
   static Value convertBf16ToFp32(Location loc,
@@ -1466,14 +1588,14 @@ struct FpToFpOpConversion
 #endif
   }
 
-  static Value convertFp32ToFp16(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const Value &v) {
+  static Value convertFp32ToFp16NZ(Location loc,
+                                   ConversionPatternRewriter &rewriter,
+                                   const Value &v) {
 #ifdef USE_ROCM
     return cvtFp32ToFp16(loc, rewriter, v);
 #else
     PTXBuilder builder;
-    auto &cvt = *builder.create("cvt.rn.f16.f32");
+    auto &cvt = *builder.create("cvt.rz.f16.f32");
     auto res = builder.newOperand("=h");
     auto operand = builder.newOperand(v, "r");
     cvt(res, operand);
@@ -1557,7 +1679,7 @@ struct FpToFpOpConversion
     int inVecWidthBits = 32;
     int outVecWidthBits = 32;
     if (srcTy.isFloat8E4M3FNUZ() ||
-        (computeCapability >= 90 && srcTy.isFloat8E5M2())) {
+        (computeCapability >= 90 && srcTy.isFloat8E5M2() && dstTy.isF16())) {
       inVecWidthBits = 16;
       outVecWidthBits = 32;
     }
@@ -1596,7 +1718,9 @@ struct FpToFpOpConversion
         dstElementType.isFloat8E5M2FNUZ())
 #else
         (computeCapability >= 90 &&
-        (srcElementType.isFloat8E5M2() || dstElementType.isFloat8E5M2())))
+         ((srcElementType.isFloat8E5M2() &&
+           (dstElementType.isF16() || dstElementType.isF32())) ||
+          dstElementType.isFloat8E5M2()))) {
 #endif
     {
       numElements = 2;
@@ -1610,18 +1734,17 @@ struct FpToFpOpConversion
           (dstElementType.isFloat8E4M3FNUZ() || dstElementType.isFloat8E5M2()));
 #endif
     bool isDstFP32 = dstElementType.isF32();
-    auto cvtFunc =
-        getConversionFunc(useFP16IntermediateSrc ? f16_ty : srcElementType,
-                          isDstFP32 ? f16_ty : dstElementType);
+    Type srcType = useFP16IntermediateSrc ? f16_ty : srcElementType;
+    Type dstType = isDstFP32 ? f16_ty : dstElementType;
+    auto cvtFunc = getConversionFunc(srcType, dstType);
     SmallVector<Value> inVals;
     for (unsigned i = 0; i < std::min(numElements, operands.size()); i++) {
       inVals.push_back(operands[i][0]);
     }
     if (useFP16IntermediateSrc)
       for (Value &v : inVals)
-        v = convertFp32ToFp16(loc, rewriter, v);
-    inVals.resize(numElements,
-                  undef(typeConverter->convertType(srcElementType)));
+        v = convertFp32ToFp16NZ(loc, rewriter, v);
+    inVals.resize(numElements, undef(typeConverter->convertType(srcType)));
     SmallVector<Value> outVals = cvtFunc(loc, rewriter, inVals);
     assert(outVals.size() == inVals.size());
     outVals.resize(std::min(numElements, operands.size()));
@@ -1647,18 +1770,17 @@ Value EmitDualBF16ElementwiseOp(Location loc,
 }
 
 struct CmpIOpConversion
-    : public ElementwiseOpConversionBase<triton::gpu::CmpIOp,
-                                         CmpIOpConversion> {
-  using Base =
-      ElementwiseOpConversionBase<triton::gpu::CmpIOp, CmpIOpConversion>;
+    : public ElementwiseOpConversionBase<arith::CmpIOp, CmpIOpConversion> {
+  using Base = ElementwiseOpConversionBase<arith::CmpIOp, CmpIOpConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
   // An interface to support variant DestOp builder.
-  SmallVector<LLVM::ICmpOp>
-  createDestOps(triton::gpu::CmpIOp op, OpAdaptor adaptor,
-                ConversionPatternRewriter &rewriter, Type elemTy,
-                MultipleOperandsRange operands, Location loc) const {
+  SmallVector<LLVM::ICmpOp> createDestOps(arith::CmpIOp op, OpAdaptor adaptor,
+                                          ConversionPatternRewriter &rewriter,
+                                          Type elemTy,
+                                          MultipleOperandsRange operands,
+                                          Location loc) const {
     return {rewriter.create<LLVM::ICmpOp>(
         loc, elemTy, ArithCmpIPredicateToLLVM(op.getPredicate()),
         operands[0][0], operands[0][1])};
@@ -1689,16 +1811,14 @@ struct CmpIOpConversion
 };
 
 struct CmpFOpConversion
-    : public ElementwiseOpConversionBase<triton::gpu::CmpFOp,
-                                         CmpFOpConversion> {
-  using Base =
-      ElementwiseOpConversionBase<triton::gpu::CmpFOp, CmpFOpConversion>;
+    : public ElementwiseOpConversionBase<arith::CmpFOp, CmpFOpConversion> {
+  using Base = ElementwiseOpConversionBase<arith::CmpFOp, CmpFOpConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
   // An interface to support variant DestOp builder.
   static SmallVector<LLVM::FCmpOp>
-  createDestOps(triton::gpu::CmpFOp op, OpAdaptor adaptor,
+  createDestOps(arith::CmpFOp op, OpAdaptor adaptor,
                 ConversionPatternRewriter &rewriter, Type elemTy,
                 MultipleOperandsRange operands, Location loc) {
     return {rewriter.create<LLVM::FCmpOp>(
@@ -1890,7 +2010,7 @@ struct FDivOpConversion
     } else if (64 == bitwidth) {
       fdiv.o("rn").o("f64");
     } else {
-      assert(0 && bitwidth && "not supported");
+      llvm::report_fatal_error("Unsupported bitwidth");
     }
 
     auto res = ptxBuilder.newOperand(bitwidth == 32 ? "=r" : "=l");
@@ -2249,20 +2369,40 @@ struct IndexCastOpLowering
   }
 };
 
+struct SelectOpConversion
+    : ElementwiseOpConversionBase<mlir::arith::SelectOp, SelectOpConversion> {
+  using Base =
+      ElementwiseOpConversionBase<mlir::arith::SelectOp, SelectOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(mlir::arith::SelectOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    std::array<Value, 3> llvmOperands;
+    if (operands[0].size() == 2) {
+      // Case of scalar condition with tensor operands.
+      assert(op.getCondition().getType().isInteger(1));
+      llvmOperands = {adaptor.getCondition(), operands[0][0], operands[0][1]};
+    } else {
+      llvmOperands = {operands[0][0], operands[0][1], operands[0][2]};
+    }
+    return {rewriter.create<LLVM::SelectOp>(
+        loc, llvmOperands[1].getType(), llvmOperands,
+        adaptor.getAttributes().getValue())};
+  }
+};
+
 void populateElementwiseOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     int computeCapability, PatternBenefit benefit) {
-#define POPULATE_TERNARY_OP(SRC_OP, DST_OP)                                    \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
-  POPULATE_TERNARY_OP(triton::gpu::SelectOp, LLVM::SelectOp)
-  POPULATE_TERNARY_OP(arith::SelectOp, LLVM::SelectOp)
-#undef POPULATE_TERNARY_OP
-
 #define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
+  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
+      typeConverter, axisInfoAnalysis, benefit);
   POPULATE_BINARY_OP(arith::SubIOp, LLVM::SubOp) // -
   POPULATE_BINARY_OP(arith::AddIOp, LLVM::AddOp) // +
   POPULATE_BINARY_OP(arith::MulIOp, LLVM::MulOp) // *
@@ -2286,7 +2426,8 @@ void populateElementwiseOpToLLVMPatterns(
 #undef POPULATE_BINARY_OP
 
 #define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
+  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
+      typeConverter, axisInfoAnalysis, benefit);
   POPULATE_UNARY_OP(arith::TruncIOp, LLVM::TruncOp)
   POPULATE_UNARY_OP(arith::ExtSIOp, LLVM::SExtOp)
   POPULATE_UNARY_OP(arith::ExtUIOp, LLVM::ZExtOp)
@@ -2302,29 +2443,33 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
 
-  patterns.add<AbsIOpConversion>(typeConverter, benefit);
-  patterns.add<AbsFOpConversion>(typeConverter, benefit);
-  patterns.add<CmpIOpConversion>(typeConverter, benefit);
-  patterns.add<CmpFOpConversion>(typeConverter, benefit);
+  patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<CmpIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<CmpFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
-  patterns.add<FDivOpConversion>(typeConverter, benefit);
-  patterns.add<FSubOpConversion>(typeConverter, benefit);
-  patterns.add<FAddOpConversion>(typeConverter, benefit);
-  patterns.add<FMulOpConversion>(typeConverter, benefit);
+  patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<FSubOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<FAddOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<FMulOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
-  patterns.add<ExtFOpConversion>(typeConverter, benefit);
-  patterns.add<TruncFOpConversion>(typeConverter, benefit);
-  patterns.add<FPToSIOpConversion>(typeConverter, benefit);
-  patterns.add<SIToFPOpConversion>(typeConverter, benefit);
-  patterns.add<IndexCastOpLowering>(typeConverter, benefit);
+  patterns.add<SelectOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<IndexCastOpLowering>(typeConverter, axisInfoAnalysis, benefit);
 
-  patterns.add<FpToFpOpConversion>(typeConverter, computeCapability, benefit);
+  patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
+                                   computeCapability, benefit);
 
-  patterns.add<ExternElementwiseOpConversion>(typeConverter, benefit);
-  patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter, benefit);
+  patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
+                                              benefit);
+  patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter,
+                                                 axisInfoAnalysis, benefit);
   // ExpOpConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
   // __nv_expf for higher-precision calculation
-  patterns.add<ExpOpConversionApprox>(typeConverter, benefit);
+  patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
 }

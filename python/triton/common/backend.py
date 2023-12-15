@@ -1,5 +1,5 @@
-
 import functools
+import hashlib
 import importlib
 import importlib.util
 import os
@@ -10,8 +10,12 @@ from typing import Dict
 
 from ..runtime.driver import DriverBase
 
+TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TRITON_VERSION = "2.1.0"
+
 
 class BaseBackend:
+
     def __init__(self, device_type: str) -> None:
         self.device_type = device_type
 
@@ -104,7 +108,7 @@ def get_backend(device_type: str):
 def _path_to_binary(binary: str):
     base_dir = os.path.join(os.path.dirname(__file__), os.pardir)
     paths = [
-        os.environ.get("TRITON_PTXAS_PATH", ""),
+        os.environ.get(f"TRITON_{binary.upper()}_PATH", ""),
         os.path.join(base_dir, "third_party", "cuda", "bin", binary)
     ]
 
@@ -132,3 +136,48 @@ def path_to_cuobjdump():
 @functools.lru_cache()
 def path_to_nvdisasm():
     return _path_to_binary("nvdisasm")
+
+
+@functools.lru_cache()
+def compute_core_version_key():
+    import pkgutil
+    contents = []
+    # frontend
+    with open(__file__, "rb") as f:
+        contents += [hashlib.sha1(f.read()).hexdigest()]
+    # compiler
+    compiler_path = os.path.join(TRITON_PATH, 'compiler')
+    for lib in pkgutil.iter_modules([compiler_path]):
+        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+            contents += [hashlib.sha1(f.read()).hexdigest()]
+    # backend
+    libtriton_hash = hashlib.sha1()
+    with open(os.path.join(TRITON_PATH, "_C/libtriton.so"), "rb") as f:
+        while True:
+            chunk = f.read(1024**2)
+            if not chunk:
+                break
+            libtriton_hash.update(chunk)
+    contents.append(libtriton_hash.hexdigest())
+    # language
+    language_path = os.path.join(TRITON_PATH, 'language')
+    for lib in pkgutil.iter_modules([language_path]):
+        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+            contents += [hashlib.sha1(f.read()).hexdigest()]
+    return '-'.join(TRITON_VERSION) + '-'.join(contents)
+
+
+_cached_cuda_version_key = None
+
+
+def get_cuda_version_key():
+    global _cached_cuda_version_key
+    if _cached_cuda_version_key is None:
+        key = compute_core_version_key()
+        try:
+            ptxas = path_to_ptxas()[0]
+            ptxas_version = subprocess.check_output([ptxas, "--version"])
+        except RuntimeError:
+            ptxas_version = b"NO_PTXAS"
+        _cached_cuda_version_key = key + '-' + hashlib.sha1(ptxas_version).hexdigest()
+    return _cached_cuda_version_key

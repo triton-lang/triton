@@ -90,10 +90,10 @@ arbitrary LLVM version.
 1. Find the version of LLVM that Triton builds against.  Check `python/setup.py`
    for a line like
 
-       version = "llvmorg-18-init-7000-g76ce4736721a"
+       rev = "b1115f8c"
 
    This means that the version of Triton you have builds against
-   [LLVM](https://github.com/llvm/llvm-project) 76ce4736721a.
+   [LLVM](https://github.com/llvm/llvm-project) b1115f8c.
 
 2. `git checkout` LLVM at this revision.  Optionally, make additional
    modifications to LLVM.
@@ -129,6 +129,21 @@ arbitrary LLVM version.
 - Pass `--no-build-isolation` to `pip install` to make nop builds faster.
   Without this, every invocation of `pip install` uses a different symlink to
   cmake, and this forces ninja to rebuild most of the `.a` files.
+
+- vscode intellisense has some difficulty figuring out how to build Triton's C++
+  (probably because, in our build, users don't invoke cmake directly, but
+  instead use setup.py).  Teach vscode how to compile Triton as follows.
+
+    - Do a local build.
+    - Get the full path to the `compile_commands.json` file produced by the build:
+      `find python/build -name 'compile_commands.json | xargs readlink -f'`
+    - In vscode, install the
+      [C/C++
+      extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools),
+      then open the command palette (`Shift + Command + P` on Mac, or `Shift +
+      Ctrl + P` on Windows/Linux) and open `C/C++: Edit Configurations (UI)`.
+    - Open "Advanced Settings" and paste the full path to
+      `compile_commands.json` into the "Compile Commands" textbox.
 
 # Running tests
 

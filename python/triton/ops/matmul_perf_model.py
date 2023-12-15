@@ -5,8 +5,7 @@ import torch
 from .. import cdiv
 from .._C.libtriton.triton import runtime
 from ..runtime import driver
-from ..testing import (get_dram_gbps, get_max_simd_tflops, get_max_tensorcore_tflops,
-                       nvsmi)
+from ..testing import (get_dram_gbps, get_max_simd_tflops, get_max_tensorcore_tflops, nvsmi)
 
 
 def get_tensorcore_tflops(backend, device, num_ctas, num_warps, dtype):
@@ -14,7 +13,8 @@ def get_tensorcore_tflops(backend, device, num_ctas, num_warps, dtype):
     total_warps = num_ctas * min(num_warps, 4)
     num_subcores = driver.utils.get_device_properties(device)["multiprocessor_count"] * 4  # on recent GPUs
     cur_sm_clock = nvsmi(['clocks.current.sm'])[0]
-    tflops = min(num_subcores, total_warps) / num_subcores * get_max_tensorcore_tflops(dtype, cur_sm_clock, backend, device)
+    tflops = min(num_subcores, total_warps) / num_subcores * get_max_tensorcore_tflops(
+        dtype, cur_sm_clock, backend, device)
     return tflops
 
 
@@ -35,12 +35,12 @@ def get_tflops(backend, device, num_ctas, num_warps, dtype):
 
 
 def estimate_matmul_time(
-    # backend, device,
-    num_warps, num_stages,
-    A, B, C,
-    M, N, K,
-    BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K,
-    debug=False, **kwargs
+        # backend, device,
+        num_warps, num_stages,  #
+        A, B, C,  #
+        M, N, K,  #
+        BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K,  #
+        debug=False, **kwargs  #
 ):
     ''' return estimated running time in ms
           = max(compute, loading) + store '''
@@ -149,8 +149,9 @@ def early_config_prune(configs, named_args):
             optimal_num_stages = ldgsts_latency / mma_cycles
 
             # nearest stages, prefer large #stages
-            nearest = heapq.nsmallest(2, v, key=lambda x: 10 + abs(x[1] - optimal_num_stages)
-                                      if (x[1] - optimal_num_stages) < 0 else x[1] - optimal_num_stages)
+            nearest = heapq.nsmallest(
+                2, v, key=lambda x: 10 + abs(x[1] - optimal_num_stages)
+                if (x[1] - optimal_num_stages) < 0 else x[1] - optimal_num_stages)
 
             for n in nearest:
                 pruned_configs.append(n[0])

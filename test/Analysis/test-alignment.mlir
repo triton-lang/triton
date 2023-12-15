@@ -292,7 +292,7 @@ tt.func @select() {
   // CHECK-NEXT: contiguity = [1], divisibility = [4611686018427387904], constancy = [128], constant_value = 0
   %5 = arith.select %4, %3, %7 : tensor<128xi1>
   // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [128], constant_value = <none>
-  %8 = "triton_gpu.select"(%7, %3, %2) : (tensor<128xi1>, tensor<128xi1>, tensor<128xi1>) -> tensor<128xi1>
+  %8 = arith.select %7, %3, %2 : tensor<128xi1>, tensor<128xi1>
   tt.return
 }
 

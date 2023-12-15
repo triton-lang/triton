@@ -109,6 +109,9 @@ bool isSharedEncoding(Value value);
 
 bool isExpensiveCat(CatOp cat, Attribute targetEncoding);
 
+// Return true if a view between the two types cannot be implemented as a no-op.
+bool isExpensiveView(Type srcType, Type dstType);
+
 } // namespace gpu
 } // namespace triton
 } // namespace mlir

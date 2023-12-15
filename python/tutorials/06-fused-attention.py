@@ -29,19 +29,13 @@ if TORCH_HAS_FP8E5FNUZ:
     TORCH_HAS_FP8 = True
 
 @triton.jit
-def _attn_fwd_inner(
-    acc, l_i, m_i, q,
-    K_block_ptr, V_block_ptr,
-    start_m,
-    BLOCK_M: tl.constexpr,
-    BLOCK_DMODEL: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-    STAGE: tl.constexpr,
-    offs_m: tl.constexpr,
-    offs_n: tl.constexpr,
-    N_CTX,
-    pre_load_v: tl.constexpr,
-):
+def _attn_fwd_inner(acc, l_i, m_i, q,
+                    K_block_ptr, V_block_ptr,
+                    start_m,
+                    BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr,
+                    STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,
+                    N_CTX,
+                    pre_load_v: tl.constexpr):
     # range of values handled by this stage
     if STAGE == 1:
         lo, hi = 0, start_m * BLOCK_M
@@ -83,6 +77,7 @@ def _attn_fwd_inner(
         K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
     return acc, l_i, m_i
 
+
 # We don't run auto-tuning everytime to keep the tutorial fast. Uncommenting
 # the code below and commenting out the equivalent parameters is convenient for
 # re-tuning.
@@ -99,20 +94,19 @@ def _attn_fwd_inner(
 
 
 @triton.jit
-def _attn_fwd(
-    Q, K, V, sm_scale, M, Out,
-    stride_qz, stride_qh, stride_qm, stride_qk,
-    stride_kz, stride_kh, stride_kn, stride_kk,
-    stride_vz, stride_vh, stride_vk, stride_vn,
-    stride_oz, stride_oh, stride_om, stride_on,
-    Z, H,
-    N_CTX,
-    BLOCK_DMODEL: tl.constexpr,
-    STAGE: tl.constexpr,
-    BLOCK_M: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-    pre_load_v: tl.constexpr,
-):
+def _attn_fwd(Q, K, V, sm_scale, M, Out,
+              stride_qz, stride_qh, stride_qm, stride_qk,
+              stride_kz, stride_kh, stride_kn, stride_kk,
+              stride_vz, stride_vh, stride_vk, stride_vn,
+              stride_oz, stride_oh, stride_om, stride_on,
+              Z, H,
+              N_CTX,
+              BLOCK_DMODEL: tl.constexpr,
+              STAGE: tl.constexpr,
+              BLOCK_M: tl.constexpr,
+              BLOCK_N: tl.constexpr,
+              pre_load_v: tl.constexpr,
+              ):
     start_m = tl.program_id(0)
     off_hz = tl.program_id(1)
     qvk_offset = off_hz * stride_qh
@@ -168,25 +162,23 @@ def _attn_fwd(
     # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
     # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
     if STAGE & 1:
-        acc, l_i, m_i = _attn_fwd_inner(
-            acc, l_i, m_i, q, K_block_ptr, V_block_ptr,
-            start_m,
-            BLOCK_M, BLOCK_DMODEL, BLOCK_N,
-            4 - STAGE, offs_m, offs_n,
-            N_CTX, pre_load_v,
-        )
+        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,
+                                        start_m,
+                                        BLOCK_M, BLOCK_DMODEL, BLOCK_N,
+                                        4 - STAGE, offs_m, offs_n, N_CTX,
+                                        pre_load_v,
+                                        )
     # stage 2: on-band
     if STAGE & 2:
         # barrier makes it easier for compielr to schedule the
         # two loops independently
         tl.debug_barrier()
-        acc, l_i, m_i = _attn_fwd_inner(
-            acc, l_i, m_i, q, K_block_ptr, V_block_ptr,
-            start_m,
-            BLOCK_M, BLOCK_DMODEL, BLOCK_N,
-            2, offs_m, offs_n,
-            N_CTX, pre_load_v,
-        )
+        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,
+                                        start_m,
+                                        BLOCK_M, BLOCK_DMODEL, BLOCK_N,
+                                        2, offs_m, offs_n, N_CTX,
+                                        pre_load_v,
+                                        )
     # epilogue
     # write back m
     acc = acc / l_i[:, None]
@@ -212,18 +204,16 @@ def _attn_bwd_preprocess(O, DO,  #
 
 
 @triton.jit
-def _bwd_kernel_dk_dv(
-    Q, K, V, sm_scale, Out, DO,
-    DK, DV,
-    L,
-    D,
-    stride_qz, stride_qh, stride_qm, stride_qk,
-    stride_kz, stride_kh, stride_kn, stride_kk,
-    stride_vz, stride_vh, stride_vk, stride_vn,
-    Z, H, N_CTX,
-    BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-):
+def _bwd_kernel_dk_dv(Q, K, V, sm_scale,
+                      Out, DO,
+                      DK, DV,
+                      L, D,
+                      stride_qz, stride_qh, stride_qm, stride_qk,
+                      stride_kz, stride_kh, stride_kn, stride_kk,
+                      stride_vz, stride_vh, stride_vk, stride_vn,
+                      Z, H, N_CTX,
+                      BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
+                      BLOCK_N: tl.constexpr):
     start_m = tl.program_id(0)
     off_hz = tl.program_id(1)
     # Q is consumed depending on block ID. Every block uses
@@ -327,18 +317,16 @@ def _bwd_kernel_dk_dv(
     tl.store(DV_block_ptr, dv.to(tl.float16))
 
 @triton.jit
-def _bwd_kernel_dq(
-    Q, K, V, sm_scale, Out, DO,
-    DQ,
-    L,
-    D,
-    stride_qz, stride_qh, stride_qm, stride_qk,
-    stride_kz, stride_kh, stride_kn, stride_kk,
-    stride_vz, stride_vh, stride_vk, stride_vn,
-    Z, H, N_CTX,
-    BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-):
+def _bwd_kernel_dq(Q, K, V, sm_scale,
+                   Out, DO,
+                   DQ,
+                   L,D,
+                   stride_qz, stride_qh, stride_qm, stride_qk,
+                   stride_kz, stride_kh, stride_kn, stride_kk,
+                   stride_vz, stride_vh, stride_vk, stride_vn,
+                   Z, H, N_CTX,
+                   BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
+                   BLOCK_N: tl.constexpr):
     start_m = tl.program_id(0)
     off_hz = tl.program_id(1)
     qvk_offset = off_hz * stride_qh
@@ -427,6 +415,7 @@ empty = torch.empty(128, device="cuda")
 
 
 class _attention(torch.autograd.Function):
+
     @staticmethod
     def forward(ctx, q, k, v, causal, sm_scale, split_kernel=False):
         # shape constraints
@@ -600,9 +589,9 @@ def test_op_fwd(Z, H, N_CTX, D_HEAD, causal, dtype=torch.float16):
 def test_op_bwd(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     torch.manual_seed(20)
     causal = True
-    q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
-    k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
-    v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
+    q = (torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.0, std=0.5).requires_grad_())
+    k = (torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.0, std=0.5).requires_grad_())
+    v = (torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.0, std=0.5).requires_grad_())
 
     sm_scale = 0.5
     split_kernel = True
@@ -675,14 +664,13 @@ for mode in ['fwd', 'bwd']:
                     'D_HEAD': D_HEAD,
                     'dtype': torch.float16,
                     'mode': mode,
-                    'causal': causal})
-            )
+                    'causal': causal,
+                },
+            ))
 
 
 @triton.testing.perf_report(configs)
-def bench_flash_attention(
-    BATCH, H, N_CTX, D_HEAD, causal, mode, provider, dtype=torch.float16, device="cuda"
-):
+def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, causal, mode, provider, dtype=torch.float16, device="cuda"):
     assert mode in ["fwd", "bwd"]
     warmup = 25
     rep = 100
@@ -706,9 +694,7 @@ def bench_flash_attention(
             fn = lambda: o.backward(do, retain_graph=True)
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
     if provider == "flash":
-        qkv = torch.randn(
-            (BATCH, N_CTX, 3, H, D_HEAD), dtype=dtype, device=device, requires_grad=True
-        )
+        qkv = torch.randn((BATCH, N_CTX, 3, H, D_HEAD), dtype=dtype, device=device, requires_grad=True)
         fn = lambda: flash_attn_func(qkv, causal=causal)
         if mode == "bwd":
             o = fn()

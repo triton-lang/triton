@@ -64,8 +64,8 @@ Type TritonGPUToLLVMTypeConverter::convertTritonPointerType(
     for (size_t i = 0; i < 2 * shape.size(); ++i)
       types.push_back(IntegerType::get(ctx, 64));
 
-    types.push_back(
-        LLVM::LLVMPointerType::get(eleType, type.getAddressSpace()));
+    types.push_back(LLVM::LLVMPointerType::get(convertType(eleType),
+                                               type.getAddressSpace()));
 
     return LLVM::LLVMStructType::getLiteral(ctx, types);
   }
