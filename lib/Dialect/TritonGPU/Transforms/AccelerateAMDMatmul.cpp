@@ -398,9 +398,11 @@ class TritonAMDGPUAccelerateMatmulPass
 public:
   TritonAMDGPUAccelerateMatmulPass() = default;
   TritonAMDGPUAccelerateMatmulPass(StringRef archGen,
-                                   int matrixInstructionSize) {
+                                   int matrixInstructionSize,
+                                   bool enableWmmaTransform) {
     this->archGenerationName = archGen.data();
     this->matrixInstructionSize = matrixInstructionSize;
+    this->enableWmmaTransform = enableWmmaTransform;
   }
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -413,9 +415,9 @@ public:
         MatrixCoreVersion::CDNA_MFMA3 == matrixCoreVer) {
       patterns.add<::BlockedToMFMA>(context, getMfmaVersion(matrixCoreVer),
                                     matrixInstructionSize);
-    } /*else if (matrixCoreVer == MatrixCoreVersion::RDNA_WMMA) {
+    } else if (matrixCoreVer == MatrixCoreVersion::RDNA_WMMA) {
       patterns.add<::BlockedToWMMA>(context);
-    }*/
+    }
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }
@@ -424,7 +426,8 @@ public:
 
 std::unique_ptr<Pass>
 mlir::createTritonAMDGPUAccelerateMatmulPass(std::string archGen,
-                                             int matrixInstructionSize) {
+                                             int matrixInstructionSize,
+                                             bool enableWmmaTransform) {
   return std::make_unique<TritonAMDGPUAccelerateMatmulPass>(
-      archGen, matrixInstructionSize);
+      archGen, matrixInstructionSize, enableWmmaTransform);
 }

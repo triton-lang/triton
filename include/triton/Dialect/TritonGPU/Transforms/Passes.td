@@ -104,7 +104,10 @@ def TritonAMDGPUAccelerateMatmul : Pass<"tritonamdgpu-accelerate-matmul", "mlir:
            "GFX generation name of target device.">,
     Option<"matrixInstructionSize", "matrix-instruction-size",
            "int32_t", /*default*/"0",
-           "enforce matrix instruction MN size">
+           "enforce matrix instruction MN size">,
+    Option<"enableWmmaTransform", "enable-wmma-transform",
+           "bool", /*default*/"false",
+           "temporary option, required for lit tests only">
   ];
 }
 
