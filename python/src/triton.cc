@@ -244,6 +244,10 @@ void init_triton_ir(py::module &&m) {
       .value("UMIN", mlir::triton::RMWOp::UMIN)
       .value("UMAX", mlir::triton::RMWOp::UMAX);
 
+  py::enum_<mlir::triton::RoundingMode>(m, "ROUNDING_MODE", py::module_local())
+      .value("RTZ", mlir::triton::RoundingMode::RTZ)
+      .value("RTNE", mlir::triton::RoundingMode::RTNE);
+
   py::class_<mlir::MLIRContext>(m, "context", py::module_local())
       .def(py::init<>())
       .def("load_triton", [](mlir::MLIRContext &self) {
@@ -964,11 +968,18 @@ void init_triton_ir(py::module &&m) {
            })
 
       // Cast instructions
-      // Conversions for custom FP types (FP8)
+      // Conversions for custom FP types (FP8 and non-standard rounding modes)
       .def("create_fp_to_fp",
-           [](TritonOpBuilder &self, mlir::Value &src,
-              mlir::Type &dstType) -> mlir::Value {
-             return self.create<mlir::triton::FpToFpOp>(dstType, src);
+           [](TritonOpBuilder &self, mlir::Value &src, mlir::Type &dstType,
+              std::optional<::mlir::triton::RoundingMode> roundingMode)
+               -> mlir::Value {
+             if (roundingMode.has_value())
+               return self.create<mlir::triton::FpToFpOp>(
+                   dstType, src,
+                   mlir::triton::RoundingModeAttr::get(
+                       self.getBuilder().getContext(), roundingMode.value()));
+             else
+               return self.create<mlir::triton::FpToFpOp>(dstType, src);
            })
       // Conversions for standard LLVM builtin types
       .def("create_bitcast",

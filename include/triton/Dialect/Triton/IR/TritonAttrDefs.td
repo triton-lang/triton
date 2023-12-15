@@ -87,5 +87,15 @@ def TT_ProgramDim : I32EnumAttr<
     let cppNamespace = "::mlir::triton";
 }
 
+// Rounding mode.
+def TT_RoundingModeAttr : I32EnumAttr<
+    "RoundingMode", "",
+    [
+        I32EnumAttrCase<"RTZ", 0, "rtz">,
+        I32EnumAttrCase<"RTNE", 1, "rtne">,
+    ]> {
+    let cppNamespace = "::mlir::triton";
+}
+
 
 #endif
