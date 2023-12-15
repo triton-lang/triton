@@ -756,35 +756,29 @@ triton::MakeTensorPtrOp getMakeTensorPtrOp(Value v) {
     }
   });
 
-  if (Operation *definingOp = v.getDefiningOp()) {
+  if (Operation *definingOp = v.getDefiningOp())
     return getMakeTensorPtrOpImpl(definingOp, v);
-  } else if (BlockArgument arg = v.cast<BlockArgument>()) {
-    unsigned argNum = arg.getArgNumber();
-    Operation *argOwner = arg.getOwner()->getParentOp();
 
-    if (auto forOp = dyn_cast<scf::ForOp>(argOwner)) {
-      return getMakeTensorPtrOp(
-          forOp.getOperand(argNum + forOp.getNumControlOperands() - 1));
-    } else if (auto funcOp = dyn_cast<mlir::triton::FuncOp>(argOwner)) {
-      Block *block = arg.getOwner();
-      Operation *op;
-      int tOrF;
-      std::tie(op, tOrF) = blockToCFOps[block][0];
-      if (auto br = dyn_cast<cf::BranchOp>(op)) {
-        return getMakeTensorPtrOp(br.getDestOperands()[argNum]);
-      }
-      if (auto condBr = dyn_cast<cf::CondBranchOp>(op)) {
-        if (tOrF) {
-          return getMakeTensorPtrOp(condBr.getTrueDestOperands()[argNum]);
-        } else {
-          return getMakeTensorPtrOp(condBr.getFalseDestOperands()[argNum]);
-        }
-      }
-    } else {
-      return getMakeTensorPtrOp(argOwner->getOperand(argNum));
-    }
+  // If there is no defining op, v must be a BlockArgument.
+  BlockArgument arg = v.cast<BlockArgument>();
+  unsigned argNum = arg.getArgNumber();
+  Operation *argOwner = arg.getOwner()->getParentOp();
+
+  if (auto forOp = dyn_cast<scf::ForOp>(argOwner))
+    return getMakeTensorPtrOp(
+        forOp.getOperand(argNum + forOp.getNumControlOperands() - 1));
+  if (auto funcOp = dyn_cast<mlir::triton::FuncOp>(argOwner)) {
+    Block *block = arg.getOwner();
+    Operation *op;
+    int tOrF;
+    std::tie(op, tOrF) = blockToCFOps[block][0];
+    if (auto br = dyn_cast<cf::BranchOp>(op))
+      return getMakeTensorPtrOp(br.getDestOperands()[argNum]);
+    if (auto condBr = dyn_cast<cf::CondBranchOp>(op))
+      return getMakeTensorPtrOp(tOrF ? condBr.getTrueDestOperands()[argNum]
+                                     : condBr.getFalseDestOperands()[argNum]);
+    return getMakeTensorPtrOp(argOwner->getOperand(argNum));
   }
-
   llvm_unreachable("Unable to getMakeTensorPtr()");
 }
 
