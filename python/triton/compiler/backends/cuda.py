@@ -78,7 +78,7 @@ class CUDABackend(BaseBackend):
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts}
         args["allow_fp8e4nv"] = self.capability >= 89
-        args["max_num_imprecise_acc_default"] = 0 if self.capability >= 89 else None
+        args["max_num_imprecise_acc_default"] = 2**30 if self.capability == 90 else 0
         return CUDAOptions(**args)
 
     @staticmethod
