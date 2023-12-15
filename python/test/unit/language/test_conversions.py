@@ -7,6 +7,17 @@ import pytest
 import triton
 import triton.language as tl
 
+def matching_int(dtype):
+    if dtype.primitive_bitwidth == 8:
+        return torch.int8
+    elif dtype.primitive_bitwidth == 16:
+        return torch.int16
+    elif dtype.primitive_bitwidth == 32:
+        return torch.int32
+    elif dtype.primitive_bitwidth == 64:
+        return torch.int64
+    else:
+        raise ValueError('unsupported number of bits')
 
 @triton.jit
 def type_convert_triton(src, dst, rounding : tl.constexpr, BLOCK_SIZE : tl.constexpr):
@@ -18,10 +29,10 @@ def type_convert_triton(src, dst, rounding : tl.constexpr, BLOCK_SIZE : tl.const
     tl.store(dst + idxs, y)
 
 
-def launch_type_convert_triton(src, dst_dtype, rounding=None, BLOCK_SIZE=4096):
+def launch_type_convert_triton(src, src_dtype, dst_dtype, rounding=None, BLOCK_SIZE=4096):
 
-    dst = torch.empty(src.shape, dtype=dst_dtype, device='cuda')
-    type_convert_triton[(src.shape[0] // BLOCK_SIZE,)](src, dst, rounding, BLOCK_SIZE)
+    dst = torch.empty(src.shape, dtype=matching_int(dst_dtype), device='cuda')
+    type_convert_triton[(src.shape[0] // BLOCK_SIZE,)](triton.reinterpret(src, src_dtype), triton.reinterpret(dst, dst_dtype), rounding, BLOCK_SIZE)
     return dst
 
 
@@ -63,8 +74,8 @@ def exhaustive_populate(dst, offset, BLOCK_SIZE : tl.constexpr, force_odd : tl.c
 def launch_exhaustive_populate(dst_dtype, offset, numel, force_odd, output_bits, max_repr, BLOCK_SIZE=4096):
 
     assert(numel % BLOCK_SIZE == 0)
-    dst = torch.empty((numel,), dtype=dst_dtype, device='cuda')
-    exhaustive_populate[(numel // BLOCK_SIZE,)](dst, offset, BLOCK_SIZE, force_odd, output_bits, max_repr)
+    dst = torch.empty((numel,), dtype=matching_int(dst_dtype), device='cuda')
+    exhaustive_populate[(numel // BLOCK_SIZE,)](triton.reinterpret(dst, dst_dtype), offset, BLOCK_SIZE, force_odd, output_bits, max_repr)
     return dst
 
 
@@ -133,10 +144,11 @@ def downcast_emulated(src, dst, rounding : tl.constexpr, BLOCK_SIZE : tl.constex
     tl.store(dst + idxs, y)
 
 
-def launch_downcast_emulated(src, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, BLOCK_SIZE=4096):
+def launch_downcast_emulated(src, src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, BLOCK_SIZE=4096):
 
-    dst = torch.empty(src.shape, dtype=dst_dtype, device='cuda')
-    downcast_emulated[(src.shape[0] // BLOCK_SIZE,)](src, dst, rounding, BLOCK_SIZE, exponent_bits, mantissa_bits, exponent_bias)
+    dst = torch.empty(src.shape, dtype=matching_int(dst_dtype), device='cuda')
+    downcast_emulated[(src.shape[0] // BLOCK_SIZE,)](
+        triton.reinterpret(src, src_dtype), triton.reinterpret(dst, dst_dtype), rounding, BLOCK_SIZE, exponent_bits, mantissa_bits, exponent_bias)
     return dst
 
 
@@ -176,30 +188,18 @@ def upcast_emulated(src, dst, BLOCK_SIZE : tl.constexpr, exponent_bits : tl.cons
 
 def launch_upcast_emulated(src, exponent_bits, mantissa_bits, exponent_bias, BLOCK_SIZE=4096):
 
-    dst = torch.empty(src.shape, dtype=torch.float32, device='cuda')
-    upcast_emulated[(src.shape[0] // BLOCK_SIZE,)](src, dst, BLOCK_SIZE, exponent_bits, mantissa_bits, exponent_bias)
+    dst = torch.empty(src.shape, dtype=torch.int32, device='cuda')
+    upcast_emulated[(src.shape[0] // BLOCK_SIZE,)](src, triton.reinterpret(dst, tl.float32), BLOCK_SIZE, exponent_bits, mantissa_bits, exponent_bias)
     return dst
-
-
-def sizeof(t):
-
-    if t == torch.float64:
-        return 8
-    elif t == torch.float32:
-        return 4
-    elif t == torch.float16 or t == torch.bfloat16:
-        return 2
-    else:
-        return 1
 
 
 def downcast_test(src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, max_repr, offset):
 
-    src = launch_exhaustive_populate(src_dtype, offset << 24, 2**24, False, sizeof(src_dtype) * 8, max_repr)
-    dst = launch_type_convert_triton(src, dst_dtype, rounding)
-    src = launch_type_convert_triton(src, torch.float32)
+    src = launch_exhaustive_populate(src_dtype, offset << 24, 2**24, False, src_dtype.primitive_bitwidth, max_repr)
+    dst = launch_type_convert_triton(src, src_dtype, dst_dtype, rounding)
+    src = launch_type_convert_triton(src, src_dtype, tl.float32)
 
-    dst2 = launch_downcast_emulated(src, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias)
+    dst2 = launch_downcast_emulated(src, tl.float32, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias)
 
     dst = launch_upcast_emulated(dst, exponent_bits, mantissa_bits, exponent_bias)
     dst2 = launch_upcast_emulated(dst2, exponent_bits, mantissa_bits, exponent_bias)
@@ -228,16 +228,15 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
 
     src = launch_exhaustive_populate(src_dtype, 0, 65536, False, numbits_src, max_repr)
 
-    dst = launch_type_convert_triton(src, dst_dtype)
-    dst = launch_type_convert_triton(dst, torch.float32)
+    dst = launch_type_convert_triton(src, src_dtype, dst_dtype)
+    dst = launch_type_convert_triton(dst, dst_dtype, tl.float32)
 
     dst2 = launch_upcast_emulated(src, exponent_bits, mantissa_bits, exponent_bias)
 
     assert(torch.equal(dst, dst2))
 
-
-
-torch.float8e4nv = torch.float8_e4m3fn
+#torch.float8e4nv = torch.float8_e4m3fn
+#torch.float8e5 = torch.float8_e5m2
 
 @pytest.mark.parametrize("src_dtype, dst_dtype", [
     ('float16', 'float32'),
@@ -269,7 +268,7 @@ def test_typeconvert_upcast(src_dtype, dst_dtype):
         'bfloat16': (8, 7, 127, 0x7f7f),
     }[src_dtype]
 
-    upcast_test(getattr(torch, src_dtype), getattr(torch, dst_dtype), *stuff)
+    upcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), *stuff)
 
 @pytest.mark.parametrize("src_dtype, dst_dtype, rounding, max_repr", [
     ('float32', 'float16', 'rtne', 0x477fe000),
@@ -305,4 +304,4 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr):
     }[dst_dtype]
 
     for i in range(256):
-        downcast_test(getattr(torch, src_dtype), getattr(torch, dst_dtype), rounding, *stuff, max_repr, i)
+        downcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), rounding, *stuff, max_repr, i)
