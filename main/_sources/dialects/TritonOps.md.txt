@@ -624,7 +624,7 @@ Syntax:
 operation ::= `tt.fp_to_fp` $from attr-dict `:` type($from) `->` type($result)
 ```
 
-Floating point casting for custom types (F8).
+Floating point casting for custom types (F8), and non-default rounding modes.
 
 F8 <-> FP16, BF16, FP32, FP64
 
@@ -634,17 +634,26 @@ Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)
 
 Effects: MemoryEffects::Effect{}
 
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>rounding</code></td><td>::mlir::triton::RoundingModeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1</summary>{{% markdown %}}Enum cases:
+* rtz (`RTZ`)
+* rtne (`RTNE`){{% /markdown %}}</details></td></tr>
+</table>
+
 #### Operands:
 
 | Operand | Description |
 | :-----: | ----------- |
-| `from` | floating-point or tensor of floating-point values
+| `from` | tensor of floating-point values
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | floating-point or tensor of floating-point values
+| `result` | tensor of floating-point values
 
 ### `tt.get_num_programs` (triton::GetNumProgramsOp)
 
