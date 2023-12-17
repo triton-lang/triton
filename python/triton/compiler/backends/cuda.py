@@ -2,7 +2,7 @@ from triton.common.backend import BaseBackend
 from dataclasses import dataclass
 from ..._C.libtriton.translation import ClusterInfo, get_num_warps, TMAInfos, translate_triton_gpu_to_llvmir, get_shared_memory_size, translate_llvmir_to_asm, compile_ptx_to_cubin, add_external_libs
 from ...common.backend import get_cuda_version_key, path_to_ptxas
-from ..._C.libtriton import ir, runtime
+from ..._C.libtriton import ir, runtime, transforms
 import functools
 from typing import Any
 from ..utils import get_ids_of_tensormaps, parse_tma_info
@@ -86,13 +86,13 @@ class CUDABackend(BaseBackend):
     def make_ttir(mod, metadata, opt):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        pm.add_inliner_pass()
-        pm.add_triton_combine_pass()
-        pm.add_canonicalizer_pass()
-        pm.add_reorder_broadcast_pass()
-        pm.add_cse_pass()
-        pm.add_licm_pass()
-        pm.add_symbol_dce_pass()
+        transforms.add_inliner_pass(pm)
+        transforms.add_triton_combine_pass(pm)
+        transforms.add_canonicalizer_pass(pm)
+        transforms.add_reorder_broadcast_pass(pm)
+        transforms.add_cse_pass(pm)
+        transforms.add_licm_pass(pm)
+        transforms.add_symbol_dce_pass(pm)
         pm.run(mod)
         return mod
 
@@ -106,21 +106,21 @@ class CUDABackend(BaseBackend):
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        pm.add_convert_triton_to_tritongpu_pass(opt.num_warps, 32, opt.num_ctas, capability)
+        transforms.add_convert_triton_to_tritongpu_pass(pm, opt.num_warps, 32, opt.num_ctas, capability)
         # optimize TTGIR
-        pm.add_tritongpu_coalesce_pass()
+        transforms.add_tritongpu_coalesce_pass(pm)
         # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
-        pm.add_plan_cta_pass(cluster_info)
-        pm.add_tritongpu_rewrite_tensor_pointer_pass(capability)
-        pm.add_plan_cta_pass(cluster_info)
-        pm.add_tritongpu_remove_layout_conversions_pass()
-        pm.add_tritongpu_optimize_thread_locality_pass()
-        pm.add_tritongpu_accelerate_matmul_pass(capability)
-        pm.add_tritongpu_remove_layout_conversions_pass()
+        transforms.add_plan_cta_pass(pm, cluster_info)
+        transforms.add_tritongpu_rewrite_tensor_pointer_pass(pm, capability)
+        transforms.add_plan_cta_pass(pm, cluster_info)
+        transforms.add_tritongpu_remove_layout_conversions_pass(pm)
+        transforms.add_tritongpu_optimize_thread_locality_pass(pm)
+        transforms.add_tritongpu_accelerate_matmul_pass(pm, capability)
+        transforms.add_tritongpu_remove_layout_conversions_pass(pm)
         if opt.optimize_epilogue:
-            pm.add_tritongpu_optimize_epilogue_pass()
-        pm.add_tritongpu_optimize_dot_operands_pass()
-        pm.add_cse_pass()
+            transforms.add_tritongpu_optimize_epilogue_pass(pm)
+        transforms.add_tritongpu_optimize_dot_operands_pass(pm)
+        transforms.add_cse_pass(pm)
         ws_enabled = False
         # `num_warps` does not mean the total number of warps of a CTA when
         # warp specialization is enabled.
@@ -128,41 +128,41 @@ class CUDABackend(BaseBackend):
         # `num_warps` to use.
         # TODO: support the case where `num_warps` from user is not 4.
         if capability // 10 >= 9 and opt.enable_warp_specialization and opt.num_warps == 4:
-            pm.add_tritongpu_ws_feasibility_checking_pass(capability)
+            transforms.add_tritongpu_ws_feasibility_checking_pass(pm, capability)
             pm.run(mod)
-            ws_enabled = ir.is_ws_supported(mod)
+            ws_enabled = transforms.is_ws_supported(mod)
             pm = ir.pass_manager(mod.context)
             pm.enable_debug()
         if ws_enabled:
-            pm.add_tritongpu_wsdecomposing_pass(capability)
-            pm.add_tritongpu_wspipeline_pass(opt.num_stages, opt.num_warps, capability)
-            pm.add_tritongpu_wsmutex_pass(capability)
-            pm.add_tritongpu_wsmaterialization_pass(capability)
-            pm.add_licm_pass()
-            pm.add_cse_pass()
+            transforms.add_tritongpu_wsdecomposing_pass(pm, capability)
+            transforms.add_tritongpu_wspipeline_pass(pm, opt.num_stages, opt.num_warps, capability)
+            transforms.add_tritongpu_wsmutex_pass(pm, capability)
+            transforms.add_tritongpu_wsmaterialization_pass(pm, capability)
+            transforms.add_licm_pass(pm)
+            transforms.add_cse_pass(pm)
         else:
-            pm.add_tritongpu_pipeline_pass(opt.num_stages, opt.num_warps, opt.num_ctas, capability)
-        pm.add_tritongpu_materialize_load_store_pass(opt.num_warps, capability)
+            transforms.add_tritongpu_pipeline_pass(pm, opt.num_stages, opt.num_warps, opt.num_ctas, capability)
+        transforms.add_tritongpu_materialize_load_store_pass(pm, opt.num_warps, capability)
         if capability // 10 <= 8:
-            pm.add_tritongpu_prefetch_pass()
-        pm.add_tritongpu_optimize_dot_operands_pass()
-        pm.add_tritongpu_remove_layout_conversions_pass()
-        pm.add_tritongpu_decompose_conversions_pass()
-        pm.add_tritongpu_ws_fixup_missing_attrs_pass()
-        pm.add_tritongpu_reorder_instructions_pass()
-        pm.add_cse_pass()
-        pm.add_symbol_dce_pass()
+            transforms.add_tritongpu_prefetch_pass(pm)
+        transforms.add_tritongpu_optimize_dot_operands_pass(pm)
+        transforms.add_tritongpu_remove_layout_conversions_pass(pm)
+        transforms.add_tritongpu_decompose_conversions_pass(pm)
+        transforms.add_tritongpu_ws_fixup_missing_attrs_pass(pm)
+        transforms.add_tritongpu_reorder_instructions_pass(pm)
+        transforms.add_cse_pass(pm)
+        transforms.add_symbol_dce_pass(pm)
         if capability // 10 >= 9:
-            pm.add_tritongpu_fence_insertion_pass()
-        pm.add_tritongpu_ws_fixup_missing_attrs_pass()
-        pm.add_canonicalizer_pass()
+            transforms.add_tritongpu_fence_insertion_pass(pm)
+        transforms.add_tritongpu_ws_fixup_missing_attrs_pass(pm)
+        transforms.add_canonicalizer_pass(pm)
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         return mod
 
     @staticmethod
     def make_llir(src, metadata, options, capability):
-        metadata["enable_warp_specialization"] = ir.is_ws_supported(src)
+        metadata["enable_warp_specialization"] = transforms.is_ws_supported(src)
         metadata["num_warps"] = get_num_warps(src)
         tma_infos = TMAInfos()
         # link libraries

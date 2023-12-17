@@ -1,5 +1,4 @@
 ﻿#include "mlir/Bytecode/BytecodeWriter.h"
-#include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
@@ -15,16 +14,10 @@
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Analysis/Allocation.h"
-#include "triton/Conversion/NVGPUToLLVM/NVGPUToLLVMPass.h"
-#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
-#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
-#include "triton/Dialect/Triton/Transforms/Passes.h"
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -1568,160 +1561,12 @@ void init_triton_ir(py::module &&m) {
                  /*printAfterOnlyOnChange=*/false,
                  /*printAfterOnlyOnFailure*/ true, llvm::dbgs(), printingFlags);
            })
-      .def("run",
-           [](mlir::PassManager &self, mlir::ModuleOp &mod) {
-             // TODO: maybe dump module to file and print error for better
-             // diagnostics
-             if (mlir::failed(self.run(mod.getOperation())))
-               throw std::runtime_error("PassManager::run failed");
-           })
-      .def(
-          "add_sccp_pass",
-          [](mlir::PassManager &self) { self.addPass(mlir::createSCCPPass()); })
-      .def("add_plan_cta_pass",
-           [](mlir::PassManager &self,
-              mlir::triton::nvidia_gpu::ClusterInfo &clusterInfo) {
-             self.addPass(mlir::createTritonNvidiaGPUPlanCTAPass(&clusterInfo));
-           })
-      .def("add_tritongpu_coalesce_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::createTritonGPUCoalescePass());
-           })
-      .def("add_tritongpu_optimize_thread_locality_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::createTritonGPUOptimizeThreadLocalityPass());
-           })
-      .def("add_symbol_dce_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::createSymbolDCEPass());
-           })
-      .def("add_inliner_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::createInlinerPass());
-           })
-      .def("add_canonicalizer_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::createCanonicalizerPass());
-           })
-      .def("add_cse_pass",
-           [](mlir::PassManager &self) { self.addPass(mlir::createCSEPass()); })
-      .def("add_licm_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::createLoopInvariantCodeMotionPass());
-           })
-      .def("add_triton_combine_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::triton::createCombineOpsPass());
-           })
-      .def("add_reorder_broadcast_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::triton::createReorderBroadcastPass());
-           })
-      .def("add_rewrite_tensor_pointer_pass",
-           [](mlir::PassManager &self, int capability) {
-             self.addPass(
-                 mlir::triton::createRewriteTensorPointerPass(capability));
-           })
-      .def("add_tritongpu_ws_feasibility_checking_pass",
-           [](mlir::PassManager &self, int computeCapability) {
-             self.addPass(mlir::createTritonNvidiaGPUWSFeasibilityCheckingPass(
-                 computeCapability));
-           })
-      .def("add_tritongpu_wsdecomposing_pass",
-           [](mlir::PassManager &self, int computeCapability) {
-             self.addPass(mlir::createTritonNvidiaGPUWSDecomposingPass(
-                 computeCapability));
-           })
-      .def("add_tritongpu_wspipeline_pass",
-           [](mlir::PassManager &self, int numStages, int numWarps,
-              int computeCapability) {
-             self.addPass(mlir::createTritonNvidiaGPUWSPipelinePass(
-                 numStages, numWarps, computeCapability));
-           })
-      .def("add_tritongpu_wsmutex_pass",
-           [](mlir::PassManager &self, int computeCapability) {
-             self.addPass(
-                 mlir::createTritonNvidiaGPUWSMutexPass(computeCapability));
-           })
-      .def("add_tritongpu_wsmaterialization_pass",
-           [](mlir::PassManager &self, int computeCapability) {
-             self.addPass(mlir::createTritonNvidiaGPUWSMaterializationPass(
-                 computeCapability));
-           })
-      .def("add_tritongpu_ws_fixup_missing_attrs_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::createTritonNvidiaGPUWSFixupMissingAttrs());
-           })
-      .def(
-          "add_convert_triton_to_tritongpu_pass",
-          [](mlir::PassManager &self, int numWarps, int threadsPerWarp,
-             int numCTAs, int computeCapability) {
-            self.addPass(mlir::triton::createConvertTritonToTritonGPUPass(
-                numWarps, threadsPerWarp, numCTAs, computeCapability));
-          },
-          py::arg("numWarps") = 4, py::arg("threadsPerWarp") = 32,
-          py::arg("numCTAs") = 1, py::arg("computeCapability") = 80)
-      .def("add_tritongpu_pipeline_pass",
-           [](mlir::PassManager &self, int numStages, int numWarps, int numCTAs,
-              int computeCapability) {
-             self.addPass(mlir::createTritonGPUPipelinePass(
-                 numStages, numWarps, numCTAs, computeCapability));
-           })
-      .def("add_tritongpu_materialize_load_store_pass",
-           [](mlir::PassManager &self, int numWarps, int computeCapability) {
-             self.addPass(mlir::createTritonNvidiaGPUMaterializeLoadStorePass(
-                 numWarps, computeCapability));
-           })
-      .def("add_tritongpu_prefetch_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::createTritonGPUPrefetchPass());
-           })
-      .def("add_tritongpu_accelerate_matmul_pass",
-           [](mlir::PassManager &self, int computeCapability) {
-             self.addPass(
-                 mlir::createTritonGPUAccelerateMatmulPass(computeCapability));
-           })
-      .def("add_tritongpu_optimize_dot_operands_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::createTritonGPUOptimizeDotOperandsPass());
-           })
-      .def("add_tritongpu_remove_layout_conversions_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::createTritonGPURemoveLayoutConversionsPass());
-           })
-      .def("add_tritongpu_reorder_instructions_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::createTritonGPUReorderInstructionsPass());
-           })
-      .def("add_tritongpu_rewrite_tensor_pointer_pass",
-           [](mlir::PassManager &self, int capability) {
-             self.addPass(
-                 mlir::createTritonGPURewriteTensorPointerPass(capability));
-           })
-      .def("add_tritongpu_decompose_conversions_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::createTritonGPUDecomposeConversionsPass());
-           })
-      .def("add_tritongpu_fence_insertion_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::createTritonNvidiaGPUFenceInsertionPass());
-           })
-      .def("add_triton_gpu_to_llvm",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::triton::createConvertTritonGPUToLLVMPass());
-           })
-      .def("add_nv_gpu_to_llvm",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::triton::createConvertNVGPUToLLVMPass());
-           })
-      .def("add_scf_to_cfg", [](mlir::PassManager &self) {
-        self.addPass(mlir::createConvertSCFToCFPass());
+      .def("run", [](mlir::PassManager &self, mlir::ModuleOp &mod) {
+        // TODO: maybe dump module to file and print error for better
+        // diagnostics
+        if (mlir::failed(self.run(mod.getOperation())))
+          throw std::runtime_error("PassManager::run failed");
       });
-
-  m.def("is_ws_supported", [](mlir::ModuleOp &mod) -> bool {
-    return mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect::getWSSupportedAttr(
-        mod);
-  });
 }
 
 void init_triton_env_vars(py::module &m) {
