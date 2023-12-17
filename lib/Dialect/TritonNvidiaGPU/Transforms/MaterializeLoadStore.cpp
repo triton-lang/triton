@@ -130,7 +130,7 @@ void MaterializeLoadStorePass::materializeLoadTilePtr(mlir::triton::LoadOp load,
       b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, threadId, _0);
   b.create<ttng::MBarrierArriveOp>(loc, mBarrier, pred, /*remoteCtaId*/ nullptr,
                                    /*trackAsyncOp*/ false, elems);
-  Value inserted = b.create<ttng::InsertSliceAsyncV2Op>(
+  Value inserted = b.create<ttng::InsertSliceTMAOp>(
       loc, bufferTy, load.getPtr(), buffer,
       /*index*/ _0, mBarrier, load.getMask(), load.getOther(), load.getCache(),
       load.getEvict(), load.getIsVolatile(),

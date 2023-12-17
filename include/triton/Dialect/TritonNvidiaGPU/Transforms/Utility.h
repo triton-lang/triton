@@ -40,7 +40,7 @@ typedef int AgentId;
 SmallVector<AgentId> getAgentIds(Operation *op);
 bool hasAgentId(Operation *op, AgentId agentId);
 void setAgentIds(Operation *op, ArrayRef<AgentId> agentIds);
-SmallVector<AgentId> collectAgentIds(Operation *op);
+SmallVector<AgentId> getNestedAgentIds(Operation *op);
 void addAgentIds(Operation *op, ArrayRef<int> agents);
 SmallVector<int> getMutexBarIds(Operation *op);
 SmallVector<int> getMutexNumThreads(Operation *op);

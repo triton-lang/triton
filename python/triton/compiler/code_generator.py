@@ -6,7 +6,7 @@ import warnings
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 
 from .. import language
-from .._C.libtriton.triton import ir
+from .._C.libtriton import ir
 from ..language import constexpr, tensor
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
@@ -243,6 +243,7 @@ class CodeGenerator(ast.NodeVisitor):
     builtin_namespace.update((
         ('print', language.core.device_print),
         ('min', language.minimum),
+        ('max', language.maximum),
     ))
 
     def _define_name_lookup(self):

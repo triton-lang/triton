@@ -53,7 +53,7 @@ def byte_perm(arg0, arg1, arg2, _builder=None):
 
 
 @core.extern
-def min(arg0, arg1, propagate_nan: core.constexpr, _builder=None):
+def min(arg0, arg1, propagate_nan: core.constexpr = PropagateNan.NONE, _builder=None):
     arg0 = core._to_tensor(arg0, _builder)
     arg1 = core._to_tensor(arg1, _builder)
     arg0 = core._promote_bfloat16_to_float32(arg0, _builder=_builder)
@@ -76,7 +76,7 @@ def min(arg0, arg1, propagate_nan: core.constexpr, _builder=None):
 
 
 @core.extern
-def max(arg0, arg1, propagate_nan: core.constexpr, _builder=None):
+def max(arg0, arg1, propagate_nan: core.constexpr = PropagateNan.NONE, _builder=None):
     arg0 = core._to_tensor(arg0, _builder)
     arg1 = core._to_tensor(arg1, _builder)
     arg0 = core._promote_bfloat16_to_float32(arg0, _builder=_builder)

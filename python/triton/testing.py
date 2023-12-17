@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from typing import Any, Dict, List
 
 from . import language as tl
-from ._C.libtriton.triton import runtime
+from ._C.libtriton import runtime
 
 
 def nvsmi(attrs):
@@ -335,6 +335,8 @@ class Mark:
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
         result_dfs = []
         if save_path:
+            # Create directory if it doesn't exist
+            os.makedirs(save_path, exist_ok=True)
             html = open(os.path.join(save_path, "results.html"), "w")
             html.write("<html><body>\n")
         for bench in benchmarks:

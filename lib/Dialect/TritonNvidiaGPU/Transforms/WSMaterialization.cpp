@@ -44,7 +44,7 @@ namespace {
 enum class LoadType {
   Uninitialized,
   InsertSliceAsyncOp,
-  InsertSliceAsyncV2Op,
+  InsertSliceTMAOp,
   MultiKinds,
 };
 
@@ -131,16 +131,13 @@ LoadType scanLoadTypes(ttng::CreateTokenOp createTokenOp) {
   // TODO: Attach information of binded tensors to CreateTokenOp
   std::set<LoadType> loadTypes;
   createTokenOp->getBlock()->walk([&](Operation *op) {
-    if (auto insertOp = dyn_cast<ttg::InsertSliceOp>(op)) {
+    if (auto insertOp = dyn_cast<ttg::InsertSliceAsyncOp>(op)) {
       if (triton::isTensorPointerType(insertOp.getSrc().getType()))
-        loadTypes.insert(LoadType::InsertSliceAsyncV2Op);
+        loadTypes.insert(LoadType::InsertSliceTMAOp);
       else
         loadTypes.insert(LoadType::InsertSliceAsyncOp);
-    } else if (isa<ttg::InsertSliceAsyncOp>(op)) {
-      loadTypes.insert(LoadType::InsertSliceAsyncOp);
-    } else if (isa<ttng::InsertSliceAsyncV2Op>(op)) {
-      loadTypes.insert(LoadType::InsertSliceAsyncV2Op);
-    }
+    } else if (isa<ttng::InsertSliceTMAOp>(op))
+      loadTypes.insert(LoadType::InsertSliceTMAOp);
   });
   assert(loadTypes.size() > 0 && "InsertSliceOp not found");
   assert(loadTypes.size() == 1 &&
@@ -169,7 +166,7 @@ Value getMBarrierPhaseBit(OpBuilder &builder, Operation *op,
   return curPhase;
 }
 
-int getTxBytes(ttng::InsertSliceAsyncV2Op load) {
+int getTxBytes(ttng::InsertSliceTMAOp load) {
   // Both support ptr of tensor and tensor of ptr.
   RankedTensorType srcTensorType;
   if (auto srcType = dyn_cast<RankedTensorType>(load.getSrc().getType())) {
@@ -202,7 +199,9 @@ int applyCommit(OpBuilder &builder, ttng::ProducerCommitOp &op,
                                              OperationEquivalence::None)) {
       break;
     }
-    if (auto insertOp = dyn_cast<ttg::InsertSliceOp>(ItrOp)) {
+    if (auto insertOp = dyn_cast<ttg::InsertSliceAsyncOp>(ItrOp)) {
+      if (getNestedAgentIds(insertOp).size() == 0)
+        continue;
       deprecatedOps.push_back(&ItrOp);
       builder.setInsertionPoint(insertOp);
       if (!::mlir::triton::isTensorPointerType(insertOp.getSrc().getType())) {
@@ -218,10 +217,10 @@ int applyCommit(OpBuilder &builder, ttng::ProducerCommitOp &op,
         insertOp.getResult().replaceAllUsesWith(newSliceOp.getResult());
         setAgentIds(newSliceOp, agentIds);
       } else {
-        // Transform to InsertSliceAsyncV2Op
+        // Transform to InsertSliceTMAOp
         auto extractBarrierOp = dyn_cast<ttng::ExtractMBarrierOp>(
             builder.clone(*(mbarrier.getDefiningOp())));
-        auto newSliceOp = builder.create<ttng::InsertSliceAsyncV2Op>(
+        auto newSliceOp = builder.create<ttng::InsertSliceTMAOp>(
             /*loc=*/insertOp.getLoc(), /*result=*/insertOp.getDst().getType(),
             /*src=*/insertOp.getSrc(), /*dst=*/insertOp.getDst(),
             /*index=*/insertOp.getIndex(),
@@ -364,8 +363,7 @@ void materializeTokenOperations(Operation *parentOp, int numCTAs) {
     // Process CreateTokenOp
     OpBuilder builder(createTokenOp);
     auto tokenLoc = createTokenOp.getLoc();
-    unsigned bufferFullCount =
-        loadType == LoadType::InsertSliceAsyncV2Op ? 1 : 128;
+    unsigned bufferFullCount = loadType == LoadType::InsertSliceTMAOp ? 1 : 128;
     Value bufferFullArray = builder.create<ttng::AllocMBarrierOp>(
         tokenLoc, mBarriersTy, bufferFullCount);
     Value bufferEmptyArray =
@@ -633,8 +631,7 @@ void tryRegisterRealloc(ModuleOp mod) {
   auto isLoadAgent = [](scf::IfOp ifOp) -> bool {
     return ifOp
         ->walk([](Operation *op) {
-          if (isa<ttg::InsertSliceOp, ttg::InsertSliceAsyncOp,
-                  ttng::InsertSliceAsyncV2Op>(op))
+          if (isa<ttg::InsertSliceAsyncOp, ttng::InsertSliceTMAOp>(op))
             return WalkResult::interrupt();
           return WalkResult::advance();
         })

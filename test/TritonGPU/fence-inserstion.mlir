@@ -33,9 +33,9 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %15 = arith.cmpi eq, %14, %c0_i32 : i32
     %16 = arith.andi %15, %10 : i1
     triton_nvidia_gpu.mbarrier_arrive %13, %16 {operandSegmentSizes = array<i32: 1, 1, 0>, trackAsyncOp = false, txCount = 65536 : i32} : !tt.ptr<i64, 3>, i1
-    %17 = triton_nvidia_gpu.insert_slice_async_v2 %3, %11, %c0_i32, %13, %12 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
+    %17 = triton_nvidia_gpu.insert_slice_tma %3, %11, %c0_i32, %13, %12 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
     %18 = triton_gpu.alloc_tensor : tensor<3x128x128xf16, #shared1>
-    %19 = triton_nvidia_gpu.insert_slice_async_v2 %6, %18, %c0_i32, %13, %12 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
+    %19 = triton_nvidia_gpu.insert_slice_tma %6, %18, %c0_i32, %13, %12 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
     %20 = tt.advance %3, [%c0_i32, %c128_i32] : <tensor<128x128xf16, #blocked>, 1>
     %21 = tt.advance %6, [%c128_i32, %c0_i32] : <tensor<128x128xf16, #blocked>, 1>
     %22 = arith.cmpi sgt, %arg5, %c128_i32 : i32
@@ -43,8 +43,8 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %24 = triton_nvidia_gpu.extract_mbarrier %9[%c1_i32] : tensor<3xi64, #shared>, i32 -> <i64, 3>
     %25 = arith.andi %15, %22 : i1
     triton_nvidia_gpu.mbarrier_arrive %24, %25 {operandSegmentSizes = array<i32: 1, 1, 0>, trackAsyncOp = false, txCount = 65536 : i32} : !tt.ptr<i64, 3>, i1
-    %26 = triton_nvidia_gpu.insert_slice_async_v2 %20, %17, %c1_i32, %24, %23 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
-    %27 = triton_nvidia_gpu.insert_slice_async_v2 %21, %19, %c1_i32, %24, %23 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
+    %26 = triton_nvidia_gpu.insert_slice_tma %20, %17, %c1_i32, %24, %23 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
+    %27 = triton_nvidia_gpu.insert_slice_tma %21, %19, %c1_i32, %24, %23 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
     %28 = triton_gpu.extract_slice %26[0, 0, 0] [1, 128, 128] [1, 1, 1] : tensor<3x128x128xf16, #shared1> to tensor<128x128xf16, #shared1>
     %29 = triton_gpu.extract_slice %27[0, 0, 0] [1, 128, 128] [1, 1, 1] : tensor<3x128x128xf16, #shared1> to tensor<128x128xf16, #shared1>
     %30:15 = scf.for %arg9 = %c0_i32 to %arg5 step %c128_i32 iter_args(%arg10 = %cst, %arg11 = %3, %arg12 = %6, %arg13 = %26, %arg14 = %27, %arg15 = %28, %arg16 = %29, %arg17 = %20, %arg18 = %21, %arg19 = %c128_i32, %arg20 = %c2_i32, %arg21 = %c0_i32, %arg22 = %c0_i32, %arg23 = %false, %arg24 = %true) -> (tensor<128x128xf32, #mma>, !tt.ptr<tensor<128x128xf16, #blocked>, 1>, !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, tensor<3x128x128xf16, #shared1>, tensor<128x128xf16, #shared1>, tensor<128x128xf16, #shared1>, !tt.ptr<tensor<128x128xf16, #blocked>, 1>, !tt.ptr<tensor<128x128xf16, #blocked>, 1>, i32, i32, i32, i32, i1, i1)  : i32 {
@@ -65,9 +65,9 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
       %45 = triton_nvidia_gpu.extract_mbarrier %9[%arg20] : tensor<3xi64, #shared>, i32 -> <i64, 3>
       %46 = arith.andi %15, %38 : i1
       triton_nvidia_gpu.mbarrier_arrive %45, %46 {operandSegmentSizes = array<i32: 1, 1, 0>, trackAsyncOp = false, txCount = 65536 : i32} : !tt.ptr<i64, 3>, i1
-      %47 = triton_nvidia_gpu.insert_slice_async_v2 %42, %arg13, %arg20, %45, %44 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
+      %47 = triton_nvidia_gpu.insert_slice_tma %42, %arg13, %arg20, %45, %44 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
       %48 = triton_gpu.extract_slice %47[%41, 0, 0] [1, 128, 128] [1, 1, 1] : tensor<3x128x128xf16, #shared1> to tensor<128x128xf16, #shared1>
-      %49 = triton_nvidia_gpu.insert_slice_async_v2 %43, %arg14, %arg20, %45, %44 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
+      %49 = triton_nvidia_gpu.insert_slice_tma %43, %arg14, %arg20, %45, %44 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
       %50 = triton_gpu.extract_slice %49[%41, 0, 0] [1, 128, 128] [1, 1, 1] : tensor<3x128x128xf16, #shared1> to tensor<128x128xf16, #shared1>
       %b_48 = triton_gpu.convert_layout %48 : (tensor<128x128xf16, #shared1>) -> tensor<128x128xf16, #blocked1>
       %s_48 = triton_gpu.convert_layout %b_48 : (tensor<128x128xf16, #blocked1>) -> tensor<128x128xf16, #shared1>
@@ -134,9 +134,9 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %15 = arith.cmpi eq, %14, %c0_i32 : i32
     %16 = arith.andi %15, %10 : i1
     triton_nvidia_gpu.mbarrier_arrive %13, %16 {operandSegmentSizes = array<i32: 1, 1, 0>, trackAsyncOp = false, txCount = 65536 : i32} : !tt.ptr<i64, 3>, i1
-    %17 = triton_nvidia_gpu.insert_slice_async_v2 %3, %11, %c0_i32, %13, %12 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
+    %17 = triton_nvidia_gpu.insert_slice_tma %3, %11, %c0_i32, %13, %12 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
     %18 = triton_gpu.alloc_tensor : tensor<3x128x128xf16, #shared1>
-    %19 = triton_nvidia_gpu.insert_slice_async_v2 %6, %18, %c0_i32, %13, %12 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
+    %19 = triton_nvidia_gpu.insert_slice_tma %6, %18, %c0_i32, %13, %12 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
     %20 = tt.advance %3, [%c0_i32, %c128_i32] : <tensor<128x128xf16, #blocked>, 1>
     %21 = tt.advance %6, [%c128_i32, %c0_i32] : <tensor<128x128xf16, #blocked>, 1>
     %22 = arith.cmpi sgt, %arg5, %c128_i32 : i32
@@ -144,8 +144,8 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %24 = triton_nvidia_gpu.extract_mbarrier %9[%c1_i32] : tensor<3xi64, #shared>, i32 -> <i64, 3>
     %25 = arith.andi %15, %22 : i1
     triton_nvidia_gpu.mbarrier_arrive %24, %25 {operandSegmentSizes = array<i32: 1, 1, 0>, trackAsyncOp = false, txCount = 65536 : i32} : !tt.ptr<i64, 3>, i1
-    %26 = triton_nvidia_gpu.insert_slice_async_v2 %20, %17, %c1_i32, %24, %23 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
-    %27 = triton_nvidia_gpu.insert_slice_async_v2 %21, %19, %c1_i32, %24, %23 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
+    %26 = triton_nvidia_gpu.insert_slice_tma %20, %17, %c1_i32, %24, %23 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
+    %27 = triton_nvidia_gpu.insert_slice_tma %21, %19, %c1_i32, %24, %23 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
     %28 = triton_gpu.extract_slice %26[0, 0, 0] [1, 128, 128] [1, 1, 1] : tensor<3x128x128xf16, #shared1> to tensor<128x128xf16, #shared1>
     %29 = triton_gpu.extract_slice %27[0, 0, 0] [1, 128, 128] [1, 1, 1] : tensor<3x128x128xf16, #shared1> to tensor<128x128xf16, #shared1>
     %b_29 = triton_gpu.convert_layout %29 : (tensor<128x128xf16, #shared1>) -> tensor<128x128xf16, #blocked1>
@@ -168,9 +168,9 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
       %45 = triton_nvidia_gpu.extract_mbarrier %9[%arg20] : tensor<3xi64, #shared>, i32 -> <i64, 3>
       %46 = arith.andi %15, %38 : i1
       triton_nvidia_gpu.mbarrier_arrive %45, %46 {operandSegmentSizes = array<i32: 1, 1, 0>, trackAsyncOp = false, txCount = 65536 : i32} : !tt.ptr<i64, 3>, i1
-      %47 = triton_nvidia_gpu.insert_slice_async_v2 %42, %arg13, %arg20, %45, %44 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
+      %47 = triton_nvidia_gpu.insert_slice_tma %42, %arg13, %arg20, %45, %44 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
       %48 = triton_gpu.extract_slice %47[%41, 0, 0] [1, 128, 128] [1, 1, 1] : tensor<3x128x128xf16, #shared1> to tensor<128x128xf16, #shared1>
-      %49 = triton_nvidia_gpu.insert_slice_async_v2 %43, %arg14, %arg20, %45, %44 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
+      %49 = triton_nvidia_gpu.insert_slice_tma %43, %arg14, %arg20, %45, %44 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>} : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, i32, !tt.ptr<i64, 3>, tensor<128x128xi1, #blocked1> -> tensor<3x128x128xf16, #shared1>
       %50 = triton_gpu.extract_slice %49[%41, 0, 0] [1, 128, 128] [1, 1, 1] : tensor<3x128x128xf16, #shared1> to tensor<128x128xf16, #shared1>
       %51 = arith.addi %arg20, %c1_i32 : i32
       %52 = arith.cmpi uge, %51, %c3_i32 : i32

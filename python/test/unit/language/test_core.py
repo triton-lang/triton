@@ -1540,7 +1540,7 @@ def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
     check_type_supported(in_dtype, device)
     check_type_supported(out_dtype, device)
     if is_hip():
-        pytest.skip('test_abs_fp8 not supported on HIP.')
+        pytest.skip('test_fp8_fpN_roundtrip not supported on HIP.')
 
     @triton.jit
     def copy_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
