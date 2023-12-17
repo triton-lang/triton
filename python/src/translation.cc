@@ -25,6 +25,26 @@ namespace py = pybind11;
 
 PYBIND11_MAKE_OPAQUE(mlir::triton::gpu::TMAMetadataTy);
 
+void findKernels(llvm::Module &M, std::set<llvm::Function *> &functions) {
+  llvm::NamedMDNode *annotations = M.getNamedMetadata("nvvm.annotations");
+  assert(annotations);
+  for (auto *Node : annotations->operands()) {
+    if (Node->getNumOperands() < 3)
+      continue;
+    llvm::Metadata *Op = Node->getOperand(0).get();
+    auto *ValueAsMetadata = llvm::dyn_cast<llvm::ValueAsMetadata>(Op);
+    if (!ValueAsMetadata)
+      continue;
+    auto *F = llvm::dyn_cast<llvm::Function>(ValueAsMetadata->getValue());
+    if (!F)
+      continue;
+    llvm::Metadata *Property = Node->getOperand(1).get();
+    if (auto *MDString = llvm::dyn_cast<llvm::MDString>(Property))
+      if (MDString->getString() == "kernel")
+        functions.insert(F);
+  }
+}
+
 void init_triton_translation(py::module &&m) {
   using ret = py::return_value_policy;
 
@@ -124,9 +144,10 @@ void init_triton_translation(py::module &&m) {
         }
         // Get name of kernel in the module
         // TODO: noinline stuff; only consider kernels
-        auto functions = module->functions();
-        std::string name = functions.begin()->getName().str();
-        // translate module to PTX
+        std::set<llvm::Function *> kernels;
+        findKernels(*module, kernels);
+        assert(kernels.size() == 1);
+        std::string name = (*kernels.begin())->getName().str();
         std::string obj = mlir::triton::translateLLVMIRToASM(
             *module, triple, proc, features, flags, enable_fp_fusion, isObject);
         if (isObject)
