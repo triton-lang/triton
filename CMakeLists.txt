@@ -221,7 +221,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
     TritonGPUTransforms
     TritonNvidiaGPUTransforms
     TritonLLVMIR
-    TritonPTX
     ${dialect_libs}
     ${conversion_libs}
 

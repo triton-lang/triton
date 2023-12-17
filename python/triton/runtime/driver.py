@@ -23,6 +23,26 @@ class DriverBase(metaclass=abc.ABCMeta):
 
 
 # -----------------------------
+# Torch-GPU
+# -----------------------------
+
+
+class FrameworkGPUDriver(DriverBase):
+
+    def __init__(self):
+        # TODO: support other frameworks than torch
+        import torch
+        self.get_device_capability = torch.cuda.get_device_capability
+        try:
+            from torch._C import _cuda_getCurrentRawStream
+            self.get_current_stream = _cuda_getCurrentRawStream
+        except ImportError:
+            self.get_current_stream = lambda idx: torch.cuda.current_stream(idx).cuda_stream
+        self.get_current_device = torch.cuda.current_device
+        self.set_current_device = torch.cuda.set_device
+
+
+# -----------------------------
 # CUDA
 # -----------------------------
 
@@ -90,7 +110,7 @@ class TensorMapManager:
             driver.utils.cuMemFree(v)
 
 
-class CudaDriver(DriverBase):
+class CudaDriver(FrameworkGPUDriver):
     tensormap_manager = TensorMapManager()
 
     def __new__(cls):
@@ -102,16 +122,7 @@ class CudaDriver(DriverBase):
         self.utils = CudaUtils()
         self.backend = self.CUDA
         self.binary_ext = "cubin"
-        # TODO: support other frameworks than torch
-        import torch
-        self.get_device_capability = torch.cuda.get_device_capability
-        try:
-            from torch._C import _cuda_getCurrentRawStream
-            self.get_current_stream = _cuda_getCurrentRawStream
-        except ImportError:
-            self.get_current_stream = lambda idx: torch.cuda.current_stream(idx).cuda_stream
-        self.get_current_device = torch.cuda.current_device
-        self.set_current_device = torch.cuda.set_device
+        super().__init__()
 
     @functools.lru_cache()
     def get_current_target(self):
@@ -166,7 +177,7 @@ class HIPUtils(object):
         self.get_device_properties = mod.get_device_properties
 
 
-class HIPDriver(DriverBase):
+class HIPDriver(FrameworkGPUDriver):
 
     def __new__(cls):
         if not hasattr(cls, "instance"):
@@ -174,8 +185,18 @@ class HIPDriver(DriverBase):
         return cls.instance
 
     def __init__(self):
+        super().__init__()
         self.utils = HIPUtils()
         self.backend = self.HIP
+        self.binary_ext = "hsaco"
+
+    def get_current_target(self):
+        device = self.get_current_device()
+        arch = self.utils.get_device_properties(device)['arch']
+        return ("hip", arch.split(':')[0])
+
+    def assemble_tensormap_to_arg(self, tensormaps_info, args):
+        return args
 
 
 class UnsupportedDriver(DriverBase):
