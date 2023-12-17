@@ -149,7 +149,11 @@ endif()
 if(TRITON_BUILD_PYTHON_MODULE)
   message(STATUS "Adding Python module")
   set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
-  set(PYTHON_SRC ${PYTHON_SRC_PATH}/main.cc ${PYTHON_SRC_PATH}/triton.cc)
+  set(PYTHON_SRC ${PYTHON_SRC_PATH}/main.cc
+                ${PYTHON_SRC_PATH}/triton.cc
+                ${PYTHON_SRC_PATH}/translation.cc
+                ${PYTHON_SRC_PATH}/runtime.cc
+                ${PYTHON_SRC_PATH}/interpreter.cc)
   include_directories("." ${PYTHON_SRC_PATH})
 
   if(PYTHON_INCLUDE_DIRS)
@@ -194,7 +198,6 @@ include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
 # link_directories(${LLVM_LIBRARY_DIR})
 add_subdirectory(include)
 add_subdirectory(lib)
-add_subdirectory(bin)
 
 # find_package(PythonLibs REQUIRED)
 set(TRITON_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -275,6 +278,6 @@ if (${CODEGEN_BACKENDS_LEN} GREATER 0)
   endforeach()
 endif()
 
-add_subdirectory(test)
-
-add_subdirectory(unittest)
+# add_subdirectory(bin)
+# add_subdirectory(test)
+# add_subdirectory(unittest)
