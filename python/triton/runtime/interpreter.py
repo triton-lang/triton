@@ -4,7 +4,7 @@ import numpy as np
 
 import triton
 import triton.language as tl
-from .._C.libtriton.triton import interpreter as _interpreter
+from .._C.libtriton import interpreter as _interpreter
 
 
 # TODO: duplicate

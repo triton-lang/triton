@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-from .._C.libtriton.triton import (get_env_vars, ir)
+from .._C.libtriton import get_env_vars, ir
 # from ..runtime import driver, jit, JITFunction
 # TODO: runtime.errors
 from ..runtime.autotuner import OutOfResources

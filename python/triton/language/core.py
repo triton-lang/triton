@@ -5,7 +5,7 @@ from enum import Enum
 from functools import partial, wraps
 from typing import Union, Callable, List, Sequence, TypeVar, cast
 
-from .._C.libtriton.triton import ir
+from .._C.libtriton import ir
 from . import semantic
 
 T = TypeVar('T')
