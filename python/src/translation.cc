@@ -3,7 +3,6 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
-#include "triton/Target/PTX/PTXTranslation.h"
 #include "triton/Target/PTX/TmaMetadata.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 
@@ -25,6 +24,26 @@
 namespace py = pybind11;
 
 PYBIND11_MAKE_OPAQUE(mlir::triton::gpu::TMAMetadataTy);
+
+void findKernels(llvm::Module &M, std::set<llvm::Function *> &functions) {
+  llvm::NamedMDNode *annotations = M.getNamedMetadata("nvvm.annotations");
+  assert(annotations);
+  for (auto *Node : annotations->operands()) {
+    if (Node->getNumOperands() < 3)
+      continue;
+    llvm::Metadata *Op = Node->getOperand(0).get();
+    auto *ValueAsMetadata = llvm::dyn_cast<llvm::ValueAsMetadata>(Op);
+    if (!ValueAsMetadata)
+      continue;
+    auto *F = llvm::dyn_cast<llvm::Function>(ValueAsMetadata->getValue());
+    if (!F)
+      continue;
+    llvm::Metadata *Property = Node->getOperand(1).get();
+    if (auto *MDString = llvm::dyn_cast<llvm::MDString>(Property))
+      if (MDString->getString() == "kernel")
+        functions.insert(F);
+  }
+}
 
 void init_triton_translation(py::module &&m) {
   using ret = py::return_value_policy;
@@ -104,10 +123,13 @@ void init_triton_translation(py::module &&m) {
       ret::take_ownership);
 
   m.def(
-      "translate_llvmir_to_ptx",
-      [](const std::string llvmIR, int capability, int version,
-         bool enable_fp_fusion) -> std::string {
+      "translate_llvmir_to_asm",
+      [](std::string llvmIR, std::string triple, std::string proc,
+         std::string features, std::vector<std::string> flags,
+         bool enable_fp_fusion,
+         bool isObject) -> std::tuple<py::object, std::string> {
         py::gil_scoped_release allow_threads;
+
         // create LLVM module from C++
         llvm::LLVMContext context;
         std::unique_ptr<llvm::MemoryBuffer> buffer =
@@ -120,10 +142,18 @@ void init_triton_translation(py::module &&m) {
               "failed to parse IR: " + error.getMessage() +
               "lineno: " + std::to_string(error.getLineNo()));
         }
-        // translate module to PTX
-        auto ptxCode = triton::translateLLVMIRToPTX(*module, capability,
-                                                    version, enable_fp_fusion);
-        return ptxCode;
+        // Get name of kernel in the module
+        // TODO: noinline stuff; only consider kernels
+        std::set<llvm::Function *> kernels;
+        findKernels(*module, kernels);
+        assert(kernels.size() == 1);
+        std::string name = (*kernels.begin())->getName().str();
+        std::string obj = mlir::triton::translateLLVMIRToASM(
+            *module, triple, proc, features, flags, enable_fp_fusion, isObject);
+        if (isObject)
+          return std::make_tuple(py::bytes(obj), name);
+        else
+          return std::make_tuple(py::str(obj), name);
       },
       ret::take_ownership);
 

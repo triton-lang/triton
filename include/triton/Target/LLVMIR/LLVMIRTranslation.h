@@ -36,6 +36,13 @@ std::unique_ptr<llvm::Module>
 translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module,
                       Target target);
 
+std::string translateLLVMIRToASM(llvm::Module &module,
+                                 const std::string &triple,
+                                 const std::string &proc,
+                                 const std::string &features,
+                                 const std::vector<std::string> &flags,
+                                 bool enable_fp_fusion, bool isObject);
+
 bool linkExternLib(llvm::Module &module, llvm::StringRef name,
                    llvm::StringRef path, Target target);
 

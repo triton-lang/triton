@@ -1,6 +1,6 @@
 from triton.common.backend import BaseBackend
 from dataclasses import dataclass
-from ..._C.libtriton.translation import ClusterInfo, get_num_warps, TMAInfos, translate_triton_gpu_to_llvmir, get_shared_memory_size, translate_llvmir_to_ptx, compile_ptx_to_cubin, add_external_libs
+from ..._C.libtriton.translation import ClusterInfo, get_num_warps, TMAInfos, translate_triton_gpu_to_llvmir, get_shared_memory_size, translate_llvmir_to_asm, compile_ptx_to_cubin, add_external_libs
 from ...common.backend import get_cuda_version_key, path_to_ptxas
 from ..._C.libtriton import ir, runtime
 import functools
@@ -8,6 +8,7 @@ from typing import Any
 from ..utils import get_ids_of_tensormaps, parse_tma_info
 from ..make_launcher import make_stub
 import hashlib
+import re
 
 
 def get_kernel_name(src: str, pattern: str) -> str:
@@ -181,16 +182,23 @@ class CUDABackend(BaseBackend):
 
     @staticmethod
     def make_ptx(src, metadata, opt, capability):
+        proc = 'sm_90a' if capability == 90 else f'sm_{capability}'
+        ret, name = translate_llvmir_to_asm(src, 'nvptx64-nvidia-cuda', proc, '', ['nvptx-short-ptr'],
+                                            opt.enable_fp_fusion, False)
+        metadata["name"] = name
+        # post-process
         ptx_version = opt.ptx_version
         if ptx_version is None:
             _, cuda_version = path_to_ptxas()
             ptx_version = ptx_get_version(cuda_version)
-        return translate_llvmir_to_ptx(src, capability, ptx_version, opt.enable_fp_fusion)
+        ptx_version = f'{ptx_version//10}.{ptx_version%10}'
+        ret = re.sub(r'\.version \d+\.\d+', f'.version {ptx_version}', ret, flags=re.MULTILINE)
+        return ret
 
     @staticmethod
     def make_cubin(src, metadata, opt, capability):
-        metadata["name"] = get_kernel_name(src, pattern='// .globl')
         ptxas, _ = path_to_ptxas()
+        # TODO: move to python
         return compile_ptx_to_cubin(src, ptxas, capability, opt.enable_fp_fusion)
 
     def add_stages(self, stages, options):
