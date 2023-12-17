@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from typing import Any, Dict, List
 
 from . import language as tl
-from ._C.libtriton.triton import runtime
+from ._C.libtriton import runtime
 
 
 def nvsmi(attrs):

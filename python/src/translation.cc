@@ -17,6 +17,7 @@
 #include <string>
 
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
 #include <signal.h>
@@ -25,7 +26,7 @@ namespace py = pybind11;
 
 PYBIND11_MAKE_OPAQUE(mlir::triton::gpu::TMAMetadataTy);
 
-void init_triton_translation(py::module &m) {
+void init_triton_translation(py::module &&m) {
   using ret = py::return_value_policy;
 
   py::class_<mlir::triton::nvidia_gpu::ClusterInfo>(m, "ClusterInfo")
