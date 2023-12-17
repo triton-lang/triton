@@ -714,41 +714,6 @@ SliceEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
   return shape;
 }
 
-//
-
-SmallVector<unsigned>
-MfmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
-  size_t rank = shape.size();
-  assert(rank == 2 && "Unexpected rank of mfma layout");
-
-  SmallVector<unsigned> elemsPerThread(rank);
-  auto nonKDim = getNonKDim();
-  auto elemsPerThreadPerTile = (nonKDim == 16 ? 4 : 16);
-  if (getIsTransposed()) {
-    unsigned elemsCol =
-        ceil<unsigned>(shape[1], nonKDim * getWarpsPerCTA()[1]) *
-        elemsPerThreadPerTile;
-    unsigned elemsRow = ceil<unsigned>(shape[0], nonKDim * getWarpsPerCTA()[0]);
-    elemsPerThread[0] = elemsRow;
-    elemsPerThread[1] = elemsCol;
-  } else {
-    unsigned elemsCol = ceil<unsigned>(shape[1], nonKDim * getWarpsPerCTA()[1]);
-    unsigned elemsRow =
-        ceil<unsigned>(shape[0], nonKDim * getWarpsPerCTA()[0]) *
-        elemsPerThreadPerTile;
-    elemsPerThread[0] = elemsRow;
-    elemsPerThread[1] = elemsCol;
-  }
-  return elemsPerThread;
-}
-
-unsigned MfmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
-                                                  Type eltTy) const {
-  return product<unsigned>(getElemsPerThread(shape, eltTy));
-}
-
-//
-
 SmallVector<unsigned>
 NvidiaMmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
                                          Type eltTy) const {
@@ -831,8 +796,6 @@ unsigned NvidiaMmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
   return product<unsigned>(getElemsPerThread(shape, eltTy));
 }
 
-//
-
 SmallVector<unsigned>
 SharedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
                                       Type eltTy) const {
@@ -856,7 +819,7 @@ unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
                                                         Type eltTy) const {
   if (auto mmaParent = getParent().dyn_cast<MmaEncodingTrait>()) {
     return mmaParent.getTotalElemsPerThreadForOperands(shape, eltTy,
-                                                       getKWidth(), getOpIdx());
+                                                       getOpIdx());
   }
   if (auto blockedLayout = getParent().dyn_cast<BlockedEncodingAttr>()) {
     auto shapePerCTA = getShapePerCTA(*this, shape);
@@ -1081,70 +1044,6 @@ void NvidiaMmaEncodingAttr::print(AsmPrinter &printer) const {
 }
 
 //===----------------------------------------------------------------------===//
-// MFMA encoding
-//===----------------------------------------------------------------------===//
-
-Attribute MfmaEncodingAttr::parse(AsmParser &parser, Type type) {
-  if (parser.parseLess().failed())
-    return {};
-  DictionaryAttr dict;
-  if (parser.parseAttribute(dict).failed())
-    return {};
-  if (parser.parseGreater().failed())
-    return {};
-
-  unsigned nonKDim = 0;
-  SmallVector<unsigned> warpsPerCTA;
-  bool isTransposed;
-  SmallVector<unsigned> CTAsPerCGA;
-  SmallVector<unsigned> CTASplitNum;
-  SmallVector<unsigned> CTAOrder;
-
-  for (const NamedAttribute &attr : dict) {
-    if (attr.getName() == "nonKDim") {
-      if (parseUInt(parser, attr, nonKDim, "nonKDim").failed())
-        return {};
-    }
-    if (attr.getName() == "warpsPerCTA") {
-      if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
-        return {};
-    } else if (attr.getName() == "isTransposed") {
-      if (parseBool(parser, attr, isTransposed, "isTransposed").failed())
-        return {};
-    }
-    if (attr.getName() == "CTAsPerCGA") {
-      if (parseIntArrayAttr(parser, attr, CTAsPerCGA, "CTAsPerCGA").failed())
-        return {};
-    }
-    if (attr.getName() == "CTASplitNum") {
-      if (parseIntArrayAttr(parser, attr, CTASplitNum, "CTASplitNum").failed())
-        return {};
-    }
-    if (attr.getName() == "CTAOrder") {
-      if (parseIntArrayAttr(parser, attr, CTAOrder, "CTAOrder").failed())
-        return {};
-    }
-  }
-
-  auto CTALayout = CTALayoutAttr::get(parser.getContext(), CTAsPerCGA,
-                                      CTASplitNum, CTAOrder);
-
-  return parser.getChecked<MfmaEncodingAttr>(
-      parser.getContext(), nonKDim, warpsPerCTA, isTransposed, CTALayout);
-}
-
-void MfmaEncodingAttr::print(AsmPrinter &printer) const {
-  auto warpsPerCTA = getWarpsPerCTA();
-  printer << "<{"
-          << "nonKDim = " << getNonKDim() << ", "
-          << "warpsPerCTA = [" << llvm::ArrayRef<unsigned>(warpsPerCTA) << "], "
-          << "isTransposed = " << getIsTransposed() << ", "
-          << "CTAsPerCGA = [" << getCTALayout().getCTAsPerCGA() << "], "
-          << "CTASplitNum = [" << getCTALayout().getCTASplitNum() << "], "
-          << "CTAOrder = [" << getCTALayout().getCTAOrder() << "]}>";
-}
-
-//===----------------------------------------------------------------------===//
 // Sliced Encoding
 //===----------------------------------------------------------------------===//
 
@@ -1241,139 +1140,6 @@ void SharedEncodingAttr::print(AsmPrinter &printer) const {
           << "CTASplitNum = [" << getCTALayout().getCTASplitNum() << "], "
           << "CTAOrder = [" << getCTALayout().getCTAOrder() << "], "
           << "hasLeadingOffset = " << getHasLeadingOffset() << "}>";
-}
-
-//===----------------------------------------------------------------------===//
-// Mfma encoding
-//===----------------------------------------------------------------------===//
-// TODO: there is a lot of common code with MmaEncoding here
-
-SmallVector<unsigned>
-MfmaEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
-  auto nonKDim = getNonKDim();
-  return {nonKDim * getWarpsPerCTA()[0], nonKDim * getWarpsPerCTA()[1]};
-}
-
-SmallVector<unsigned> MfmaEncodingAttr::getCTAsPerCGA() const {
-  ArrayRef<unsigned> ref = getCTALayout().getCTAsPerCGA();
-  return SmallVector<unsigned>(ref.begin(), ref.end());
-}
-SmallVector<unsigned> MfmaEncodingAttr::getCTAOrder() const {
-  ArrayRef<unsigned> ref = getCTALayout().getCTAOrder();
-  return SmallVector<unsigned>(ref.begin(), ref.end());
-}
-SmallVector<unsigned> MfmaEncodingAttr::getCTASplitNum() const {
-  ArrayRef<unsigned> ref = getCTALayout().getCTASplitNum();
-  return SmallVector<unsigned>(ref.begin(), ref.end());
-}
-SmallVector<unsigned> MfmaEncodingAttr::getWarpsPerCTA() const {
-  return SmallVector<unsigned>(getWarpsPerCTA__().begin(),
-                               getWarpsPerCTA__().end());
-}
-SmallVector<unsigned> MfmaEncodingAttr::getWarpOrder() const {
-  return ::getOrder(*this);
-}
-SmallVector<unsigned> MfmaEncodingAttr::getThreadOrder() const {
-  return ::getOrder(*this);
-}
-SmallVector<unsigned> MfmaEncodingAttr::getThreadsPerWarp() const {
-  unsigned rows, cols;
-  if (getNonKDim() == 32) {
-    cols = 2;
-    rows = 32;
-  } else {
-    cols = 4;
-    rows = 16;
-  }
-  if (getIsTransposed()) {
-    return {rows, cols};
-  } else {
-    return {cols, rows};
-  }
-}
-
-SmallVector<unsigned> MfmaEncodingAttr::getSizePerThread() const {
-  unsigned rows, cols;
-  if (getNonKDim() == 32) {
-    rows = 16;
-    cols = 1;
-  } else if (getNonKDim() == 16) {
-    rows = 4;
-    cols = 1;
-  } else
-    llvm_unreachable("Unexpected mfma non-k dim");
-
-  if (getIsTransposed()) {
-    return {cols, rows};
-  } else {
-    return {rows, cols};
-  }
-}
-
-SmallVector<int64_t>
-MfmaEncodingAttr::getMFMAElemsPerInstrForOperands(int kWidth, int opIdx) const {
-  int64_t nonKDim = getNonKDim();
-  assert(nonKDim == 32 || nonKDim == 16);
-  int64_t kDim = kWidth * (nonKDim == 32 ? 2 : 4);
-  if (opIdx == 0)
-    return {nonKDim, kDim};
-  else {
-    assert(opIdx == 1);
-    return {kDim, nonKDim};
-  }
-}
-
-SmallVector<int64_t>
-MfmaEncodingAttr::getMFMARepForOperands(ArrayRef<int64_t> operandShape,
-                                        Type elemType, int kWidth,
-                                        int opIdx) const {
-  auto operandTileShape = getMFMAElemsPerInstrForOperands(kWidth, opIdx);
-  auto warpsPerCTA = getWarpsPerCTA();
-  if (opIdx == 0)
-    return {std::max<int64_t>(1, operandShape[0] /
-                                     (operandTileShape[0] * warpsPerCTA[0])),
-            std::max<int64_t>(1, operandShape[1] / operandTileShape[1])};
-  else {
-    assert(opIdx == 1);
-    return {std::max<int64_t>(1, operandShape[0] / operandTileShape[0]),
-            std::max<int64_t>(1, operandShape[1] /
-                                     (operandTileShape[1] * warpsPerCTA[1]))};
-  }
-}
-
-unsigned MfmaEncodingAttr::getTotalElemsPerThreadForOperands(
-    ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const {
-  int warpsPerCTAM = getWarpsPerCTA()[0];
-  int warpsPerCTAN = getWarpsPerCTA()[1];
-  constexpr int waveSize = 64;
-  auto tileSize = getMFMAElemsPerInstrForOperands(kWidth, opIdx);
-  auto rep = getMFMARepForOperands(shape, eltTy, kWidth, opIdx);
-  return rep[0] * rep[1];
-}
-
-SmallVector<unsigned>
-MfmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
-  if (opIdx == 0) {
-    return {4, 1};
-  } else if (opIdx == 1) {
-    return {1, 4};
-  } else {
-    llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
-    return {};
-  }
-}
-
-SmallVector<unsigned>
-MfmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
-                                                   int opIdx) const {
-  auto parentShapePerCTA = getShapePerCTATile(shape);
-  if (opIdx == 0) {
-    return {parentShapePerCTA[0], 32};
-  } else if (opIdx == 1) {
-    return {32, parentShapePerCTA[1]};
-  } else {
-    assert(0 && "DotOperandEncodingAttr opIdx must be 0 or 1");
-  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -1530,7 +1296,7 @@ SmallVector<int64_t> NvidiaMmaEncodingAttr::getMMAv2Rep(ArrayRef<int64_t> shape,
   }
 }
 unsigned NvidiaMmaEncodingAttr::getTotalElemsPerThreadForOperands(
-    ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const {
+    ArrayRef<int64_t> shape, Type eltTy, int opIdx) const {
   auto shapePerCTA = getShapePerCTA(*this, shape);
   int warpsPerCTAM = getWarpsPerCTA()[0];
   int warpsPerCTAN = getWarpsPerCTA()[1];
