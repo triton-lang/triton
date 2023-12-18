@@ -1,6 +1,6 @@
 from triton.common.backend import BaseBackend
 from dataclasses import dataclass
-from ..._C.libtriton.translation import ClusterInfo, get_num_warps, TMAInfos, translate_triton_gpu_to_llvmir, get_shared_memory_size, translate_llvmir_to_asm, compile_ptx_to_cubin, add_external_libs
+from ..._C.libtriton.translation import ClusterInfo, get_num_warps, TMAInfos, translate_triton_gpu_to_llvmir, get_shared_memory_size, translate_llvmir_to_asm, add_external_libs
 from ...common.backend import get_cuda_version_key, path_to_ptxas
 from ..._C.libtriton import ir, passes
 import functools
@@ -9,6 +9,10 @@ from ..utils import get_ids_of_tensormaps, parse_tma_info
 from ..make_launcher import make_stub
 import hashlib
 import re
+import tempfile
+import signal
+import os
+import subprocess
 
 
 def get_kernel_name(src: str, pattern: str) -> str:
@@ -198,8 +202,40 @@ class CUDABackend(BaseBackend):
     @staticmethod
     def make_cubin(src, metadata, opt, capability):
         ptxas, _ = path_to_ptxas()
-        # TODO: move to python
-        return compile_ptx_to_cubin(src, ptxas, capability, opt.enable_fp_fusion)
+        with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.ptx') as fsrc, \
+            tempfile.NamedTemporaryFile(delete=False, mode='r', suffix='.log') as flog:
+            fsrc.write(src)
+            fsrc.flush()
+            fbin = fsrc.name + '.o'
+
+            line_info = '' if os.environ.get('TRITON_DISABLE_LINE_INFO') else ' -lineinfo'
+            fmad = '' if opt.enable_fp_fusion else ' --fmad=false'
+            suffix = 'a ' if capability == 90 else ' '
+            cmd = f'{ptxas}{line_info}{fmad} -v --gpu-name=sm_{capability}{suffix}{fsrc.name} -o {fbin} 2> {flog.name}'
+
+            try:
+                subprocess.run(cmd, shell=True, check=True)
+            except subprocess.CalledProcessError as e:
+                with open(flog.name) as log_file:
+                    log = log_file.read()
+                if e.returncode == 255:
+                    raise RuntimeError(f'Internal Triton PTX codegen error: \n{log}')
+                elif e.returncode == 128 + signal.SIGSEGV:
+                    raise RuntimeError(
+                        f'Please run `ptxas {fsrc.name}` to confirm that this is a bug in `ptxas`\n{log}')
+                else:
+                    raise RuntimeError(f'`ptxas` failed with error code {e.returncode}: \n{log}')
+            finally:
+                if os.path.exists(fsrc.name):
+                    os.remove(fsrc.name)
+                if os.path.exists(flog.name):
+                    os.remove(flog.name)
+
+            with open(fbin, 'rb') as f:
+                cubin = f.read()
+            if os.path.exists(fbin):
+                os.remove(fbin)
+        return cubin
 
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
