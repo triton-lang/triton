@@ -15,19 +15,6 @@ import os
 import subprocess
 
 
-def get_kernel_name(src: str, pattern: str) -> str:
-    '''
-    Get kernel name from PTX code.
-    This Kernel name is required when launching the kernel.
-    '''
-    # There is a name mangling in PTX codegen, so the original kernel names in Triton IR are not available in PTX/cubin.
-    assert src
-    for line in src.split('\n'):
-        line = line.strip()
-        if line.startswith(pattern):
-            return line.split()[-1]
-
-
 @functools.lru_cache()
 def ptx_get_version(cuda_version) -> int:
     '''
