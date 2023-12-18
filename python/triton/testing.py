@@ -4,9 +4,7 @@ import subprocess
 import sys
 from contextlib import contextmanager
 from typing import Any, Dict, List
-
 from . import language as tl
-from ._C.libtriton import runtime
 
 
 def nvsmi(attrs):
@@ -364,13 +362,11 @@ def perf_report(benchmarks):
     return wrapper
 
 
-def get_dram_gbps(backend=None, device=None):
+def get_dram_gbps(device=None):
     ''' return DRAM bandwidth in GB/s '''
     import torch
 
     from .runtime import driver
-    if not backend:
-        backend = runtime.backend.CUDA
     if not device:
         device = torch.cuda.current_device()
     mem_clock_khz = driver.utils.get_device_properties(device)["mem_clock_rate"]  # in kHz
@@ -379,12 +375,10 @@ def get_dram_gbps(backend=None, device=None):
     return bw_gbps
 
 
-def get_max_tensorcore_tflops(dtype, clock_rate, backend=None, device=None):
+def get_max_tensorcore_tflops(dtype, clock_rate, device=None):
     import torch
 
     from .runtime import driver
-    if not backend:
-        backend = runtime.backend.CUDA
     if not device:
         device = torch.cuda.current_device()
 
@@ -466,12 +460,10 @@ def set_gpu_clock(ref_sm_clock=1350, ref_mem_clock=1215):
         subprocess.check_output(["nvidia-smi", "-i", "0", "-rmc"])
 
 
-def get_max_simd_tflops(dtype, clock_rate, backend=None, device=None):
+def get_max_simd_tflops(dtype, clock_rate, device=None):
     import torch
 
     from .runtime import driver
-    if not backend:
-        backend = runtime.backend.CUDA
     if not device:
         device = torch.cuda.current_device()
 

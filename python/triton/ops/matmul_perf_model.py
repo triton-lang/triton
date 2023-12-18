@@ -3,35 +3,33 @@ import heapq
 import torch
 
 from .. import cdiv
-from .._C.libtriton import runtime
 from ..runtime import driver
 from ..testing import (get_dram_gbps, get_max_simd_tflops, get_max_tensorcore_tflops, nvsmi)
 
 
-def get_tensorcore_tflops(backend, device, num_ctas, num_warps, dtype):
+def get_tensorcore_tflops(device, num_ctas, num_warps, dtype):
     ''' return compute throughput in TOPS '''
     total_warps = num_ctas * min(num_warps, 4)
     num_subcores = driver.utils.get_device_properties(device)["multiprocessor_count"] * 4  # on recent GPUs
     cur_sm_clock = nvsmi(['clocks.max.sm'])[0]
-    tflops = min(num_subcores, total_warps) / num_subcores * get_max_tensorcore_tflops(
-        dtype, cur_sm_clock, backend, device)
+    tflops = min(num_subcores, total_warps) / num_subcores * get_max_tensorcore_tflops(dtype, cur_sm_clock, device)
     return tflops
 
 
-def get_simd_tflops(backend, device, num_ctas, num_warps, dtype):
+def get_simd_tflops(device, num_ctas, num_warps, dtype):
     ''' return compute throughput in TOPS '''
     total_warps = num_ctas * min(num_warps, 4)
     num_subcores = driver.utils.get_device_properties(device)["multiprocessor_count"] * 4  # on recent GPUs
     cur_sm_clock = nvsmi(['clocks.max.sm'])[0]
-    tflops = min(num_subcores, total_warps) / num_subcores * get_max_simd_tflops(dtype, cur_sm_clock, backend, device)
+    tflops = min(num_subcores, total_warps) / num_subcores * get_max_simd_tflops(dtype, cur_sm_clock, device)
     return tflops
 
 
-def get_tflops(backend, device, num_ctas, num_warps, dtype):
+def get_tflops(device, num_ctas, num_warps, dtype):
     capability = torch.cuda.get_device_capability(device)
     if capability[0] < 8 and dtype == torch.float32:
-        return get_simd_tflops(backend, device, num_ctas, num_warps, dtype)
-    return get_tensorcore_tflops(backend, device, num_ctas, num_warps, dtype)
+        return get_simd_tflops(device, num_ctas, num_warps, dtype)
+    return get_tensorcore_tflops(device, num_ctas, num_warps, dtype)
 
 
 def estimate_matmul_time(
@@ -44,7 +42,6 @@ def estimate_matmul_time(
 ):
     ''' return estimated running time in ms
           = max(compute, loading) + store '''
-    backend = runtime.backend.CUDA
     device = torch.cuda.current_device()
     dtype = A.dtype
     dtsize = A.element_size()
@@ -59,7 +56,7 @@ def estimate_matmul_time(
 
     # time to compute
     total_ops = 2 * M * N * K / (1024 * 1024 * 1024)  # GOPS
-    tput = get_tflops(backend, device, num_ctas, num_warps, dtype)
+    tput = get_tflops(device, num_ctas, num_warps, dtype)
     compute_ms = total_ops / tput
 
     # time to load data
@@ -67,7 +64,7 @@ def estimate_matmul_time(
     active_cta_ratio = min(1, num_ctas / num_sm)
     active_cta_ratio_bw1 = min(1, num_ctas / 32)  # 32 active ctas are enough to saturate
     active_cta_ratio_bw2 = max(min(1, (num_ctas - 32) / (108 - 32)), 0)  # 32-108, remaining 5%
-    dram_bw = get_dram_gbps(backend, device) * (active_cta_ratio_bw1 * 0.95 + active_cta_ratio_bw2 * 0.05)  # in GB/s
+    dram_bw = get_dram_gbps(device) * (active_cta_ratio_bw1 * 0.95 + active_cta_ratio_bw2 * 0.05)  # in GB/s
     l2_bw = dram_bw * 4  # rough estimation (should be 4.7 for A100?)
     # assume 80% of (following) loads are in L2 cache
     load_a_dram = M * K * dtsize * (1 + 0.2 * (num_cta_n - 1))

@@ -105,8 +105,8 @@ void init_triton_translation(py::module &&m) {
   m.def(
       "translate_triton_gpu_to_llvmir",
       [](mlir::ModuleOp op, int computeCapability,
-         mlir::triton::gpu::TMAMetadataTy &tmaInfos,
-         mlir::triton::Target target) {
+         mlir::triton::gpu::TMAMetadataTy &tmaInfos) {
+        auto target = mlir::triton::NVVM;
         py::gil_scoped_release allow_threads;
         llvm::LLVMContext llvmContext;
         auto llvmModule = ::mlir::triton::translateTritonGPUToLLVMIR(
@@ -156,72 +156,6 @@ void init_triton_translation(py::module &&m) {
           return std::make_tuple(py::str(obj), name);
       },
       ret::take_ownership);
-
-  m.def("compile_ptx_to_cubin",
-        [](const std::string &ptxCode, const std::string &ptxasPath,
-           int capability, bool enable_fp_fusion) -> py::object {
-          std::string cubin;
-          {
-            py::gil_scoped_release allow_threads;
-
-            // compile ptx with ptxas
-            llvm::SmallString<64> fsrc;
-            llvm::SmallString<64> flog;
-            llvm::sys::fs::createTemporaryFile("compile-ptx-src", "", fsrc);
-            llvm::sys::fs::createTemporaryFile("compile-ptx-log", "", flog);
-            std::string fbin = std::string(fsrc) + ".o";
-            llvm::FileRemover logRemover(flog);
-            llvm::FileRemover binRemover(fbin);
-            const char *_fsrc = fsrc.c_str();
-            const char *_flog = flog.c_str();
-            const char *_fbin = fbin.c_str();
-            std::ofstream ofs(_fsrc);
-            ofs << ptxCode << std::endl;
-            ofs.close();
-
-            auto lineInfoOption =
-                triton::tools::getBoolEnv("TRITON_DISABLE_LINE_INFO")
-                    ? ""
-                    : " -lineinfo";
-            auto fmadOption = enable_fp_fusion ? "" : " --fmad=false";
-            auto capabilitySuffix = (capability == 90) ? "a " : " ";
-            auto outputFileName = std::string(_fsrc) + ".o";
-            auto logRedirect = " 2> " + std::string(_flog);
-            std::string cmd = ptxasPath + lineInfoOption + fmadOption +
-                              " -v --gpu-name=sm_" +
-                              std::to_string(capability) + capabilitySuffix +
-                              _fsrc + " -o " + outputFileName + logRedirect;
-
-            int err = system(cmd.c_str());
-            if (err != 0) {
-              err >>= 8;
-              std::ifstream _log(_flog);
-              std::string log(std::istreambuf_iterator<char>(_log), {});
-              if (err == 255) {
-                throw std::runtime_error(
-                    "Internal Triton PTX codegen error: \n" + log);
-              } else if (err == 128 + SIGSEGV) {
-                throw std::runtime_error("Please run `ptxas " +
-                                         fsrc.str().str() +
-                                         "` to confirm that this is a "
-                                         "bug in `ptxas`\n" +
-                                         log);
-              } else {
-                throw std::runtime_error("`ptxas` failed with error code " +
-                                         std::to_string(err) + ": \n" + log);
-              }
-              return {};
-            } else {
-              llvm::FileRemover srcRemover(fsrc);
-              std::ifstream _cubin(_fbin, std::ios::binary);
-              cubin = std::string(std::istreambuf_iterator<char>(_cubin), {});
-              _cubin.close();
-              // Do not return here, exit the gil scope and return below
-            }
-          }
-          py::bytes bytes(cubin);
-          return std::move(bytes);
-        });
 
   m.def("add_external_libs",
         [](mlir::ModuleOp &op, const std::vector<std::string> &names,

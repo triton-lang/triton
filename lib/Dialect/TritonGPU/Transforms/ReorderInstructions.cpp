@@ -117,6 +117,6 @@ public:
   }
 };
 
-std::unique_ptr<Pass> mlir::createTritonGPUReorderInstructionsPass() {
+std::unique_ptr<Pass> mlir::triton::gpu::createReorderInstructionsPass() {
   return std::make_unique<TritonGPUReorderInstructionsPass>();
 }

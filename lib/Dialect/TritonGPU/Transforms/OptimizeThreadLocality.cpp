@@ -425,6 +425,6 @@ private:
   }
 };
 
-std::unique_ptr<Pass> mlir::createTritonGPUOptimizeThreadLocalityPass() {
+std::unique_ptr<Pass> mlir::triton::gpu::createOptimizeThreadLocalityPass() {
   return std::make_unique<TritonGPUOptimizeThreadLocalityPass>();
 }

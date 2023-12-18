@@ -382,6 +382,6 @@ struct PrefetchPass : public TritonGPUPrefetchBase<PrefetchPass> {
 
 } // anonymous namespace
 
-std::unique_ptr<Pass> mlir::createTritonGPUPrefetchPass() {
+std::unique_ptr<Pass> mlir::triton::gpu::createPrefetchPass() {
   return std::make_unique<PrefetchPass>();
 }

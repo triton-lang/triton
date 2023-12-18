@@ -150,9 +150,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
   message(STATUS "Adding Python module")
   set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
   set(PYTHON_SRC ${PYTHON_SRC_PATH}/main.cc
-                ${PYTHON_SRC_PATH}/triton.cc
+                ${PYTHON_SRC_PATH}/ir.cc
+                ${PYTHON_SRC_PATH}/passes.cc
                 ${PYTHON_SRC_PATH}/translation.cc
-                ${PYTHON_SRC_PATH}/runtime.cc
                 ${PYTHON_SRC_PATH}/interpreter.cc)
   include_directories("." ${PYTHON_SRC_PATH})
 
