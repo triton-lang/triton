@@ -130,6 +130,6 @@ public:
   }
 };
 
-std::unique_ptr<Pass> mlir::createTritonGPUOptimizeEpiloguePass() {
+std::unique_ptr<Pass> mlir::triton::gpu::createOptimizeEpiloguePass() {
   return std::make_unique<TritonGPUOptimizeEpiloguePass>();
 }

@@ -997,6 +997,6 @@ public:
   }
 };
 
-std::unique_ptr<Pass> mlir::createTritonGPURemoveLayoutConversionsPass() {
+std::unique_ptr<Pass> mlir::triton::gpu::createRemoveLayoutConversionsPass() {
   return std::make_unique<TritonGPURemoveLayoutConversionsPass>();
 }
