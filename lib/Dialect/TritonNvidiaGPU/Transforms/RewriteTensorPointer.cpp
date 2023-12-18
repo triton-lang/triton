@@ -535,12 +535,13 @@ public:
     // Generate new `ptr`, `mask` and `other`
     auto newPtr = info.generatePtr(builder, op->getLoc());
     auto newMask = info.generateMask(builder, op->getLoc(), boundaryCheck);
-    Value newOther;
-    if (auto loadOp = dyn_cast<tt::LoadOp>(op))
-      newOther = info.generateOther(builder, op->getLoc(), loadOp.getPadding());
 
     // Create a new operation
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+      Value newOther;
+      if (newMask)
+        newOther =
+            info.generateOther(builder, op->getLoc(), loadOp.getPadding());
       auto newResult = builder.create<tt::LoadOp>(
           loadOp.getLoc(), loadOp.getResult().getType(), newPtr, newMask,
           newOther, loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),

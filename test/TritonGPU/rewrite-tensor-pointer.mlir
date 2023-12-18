@@ -119,3 +119,20 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     tt.return
   }
 }
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 16], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  // Make sure the load generated has the right number of operands when there is nomask.
+  // CHECK-LABEL: @no_mask
+  tt.func public @no_mask(%arg0: !tt.ptr<i8, 1> {tt.divisibility = 16 : i32}) -> tensor<1024x1024xi8, #blocked> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1024_i64 = arith.constant 1024 : i64
+    %0 = tt.make_tensor_ptr %arg0, [%c1024_i64, %c1024_i64], [%c1024_i64, %c1024_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<1024x1024xi8, #blocked1>, 1>
+    // CHECK: tt.load %{{.+}} {boundaryCheck = array<i32>, cache = 1 : i32, evict = 2 : i32, isVolatile = false, padding = 1 : i32} : tensor<1024x1024xi8, #{{.*}}>
+    %1 = tt.load %0 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 2 : i32, isVolatile = false, padding = 1 : i32} : !tt.ptr<tensor<1024x1024xi8, #blocked1>, 1> -> tensor<1024x1024xi8, #blocked>
+    tt.return %1 : tensor<1024x1024xi8, #blocked>
+  }
+}
