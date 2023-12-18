@@ -279,6 +279,6 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
   }
 };
 
-std::unique_ptr<Pass> mlir::createTritonGPUCoalescePass() {
+std::unique_ptr<Pass> mlir::triton::gpu::createCoalescePass() {
   return std::make_unique<CoalescePass>();
 }

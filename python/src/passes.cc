@@ -53,26 +53,24 @@ void init_triton_passes_ttir(py::module &&m) {
 }
 
 void init_triton_passes_ttgpuir(py::module &&m) {
-  ADD_PASS_WRAPPER_0("add_coalesce", mlir::createTritonGPUCoalescePass);
+  using namespace mlir::triton::gpu;
+  ADD_PASS_WRAPPER_0("add_coalesce", createCoalescePass);
   ADD_PASS_WRAPPER_0("add_optimize_thread_locality",
-                     mlir::createTritonGPUOptimizeThreadLocalityPass);
-  ADD_PASS_WRAPPER_4("add_pipeline", mlir::createTritonGPUPipelinePass, int,
-                     int, int, int);
-  ADD_PASS_WRAPPER_0("add_prefetch", mlir::createTritonGPUPrefetchPass);
-  ADD_PASS_WRAPPER_1("add_accelerate_matmul",
-                     mlir::createTritonGPUAccelerateMatmulPass, int);
-  ADD_PASS_WRAPPER_0("add_reorder_instructions",
-                     mlir::createTritonGPUReorderInstructionsPass);
-  ADD_PASS_WRAPPER_1("add_rewrite_tensor_pointer",
-                     mlir::createTritonGPURewriteTensorPointerPass, int);
+                     createOptimizeThreadLocalityPass);
+  ADD_PASS_WRAPPER_4("add_pipeline", createPipelinePass, int, int, int, int);
+  ADD_PASS_WRAPPER_0("add_prefetch", createPrefetchPass);
+  ADD_PASS_WRAPPER_1("add_accelerate_matmul", createAccelerateMatmulPass, int);
+  ADD_PASS_WRAPPER_0("add_reorder_instructions", createReorderInstructionsPass);
   ADD_PASS_WRAPPER_0("add_optimize_dot_operands",
-                     mlir::createTritonGPUOptimizeDotOperandsPass);
+                     createOptimizeDotOperandsPass);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
-                     mlir::createTritonGPURemoveLayoutConversionsPass);
+                     createRemoveLayoutConversionsPass);
   ADD_PASS_WRAPPER_0("add_decompose_conversions",
-                     mlir::createTritonGPUDecomposeConversionsPass);
+                     createDecomposeConversionsPass);
   ADD_PASS_WRAPPER_0("add_triton_gpu_to_llvm",
                      mlir::triton::createConvertTritonGPUToLLVMPass);
+  ADD_PASS_WRAPPER_1("add_rewrite_tensor_pointer",
+                     mlir::createTritonGPURewriteTensorPointerPass, int);
 }
 
 void init_triton_passes_ttnvgpuir(py::module &&m) {

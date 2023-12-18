@@ -97,10 +97,9 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
 };
 } // anonymous namespace
 
-std::unique_ptr<Pass> mlir::createTritonGPUPipelinePass(int numStages,
-                                                        int numWarps,
-                                                        int numCTAs,
-                                                        int computeCapability) {
+std::unique_ptr<Pass>
+mlir::triton::gpu::createPipelinePass(int numStages, int numWarps, int numCTAs,
+                                      int computeCapability) {
   return std::make_unique<PipelinePass>(numStages, numWarps, numCTAs,
                                         computeCapability);
 }
