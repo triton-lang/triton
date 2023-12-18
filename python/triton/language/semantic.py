@@ -977,6 +977,9 @@ def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builde
     # Check `boundary_check` argument
     boundary_check = _canonicalize_boundary_check(boundary_check, block_shape)
 
+    # Cast to target data type
+    val = cast(val, elt_ty, builder)
+
     # Build IR
     return tl.tensor(builder.create_tensor_pointer_store(ptr.handle, val.handle, boundary_check, cache, eviction),
                      tl.void)
