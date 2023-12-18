@@ -105,8 +105,8 @@ void init_triton_translation(py::module &&m) {
   m.def(
       "translate_triton_gpu_to_llvmir",
       [](mlir::ModuleOp op, int computeCapability,
-         mlir::triton::gpu::TMAMetadataTy &tmaInfos,
-         mlir::triton::Target target) {
+         mlir::triton::gpu::TMAMetadataTy &tmaInfos) {
+        auto target = mlir::triton::NVVM;
         py::gil_scoped_release allow_threads;
         llvm::LLVMContext llvmContext;
         auto llvmModule = ::mlir::triton::translateTritonGPUToLLVMIR(

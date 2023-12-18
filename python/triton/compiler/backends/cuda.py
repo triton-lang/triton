@@ -2,7 +2,7 @@ from triton.common.backend import BaseBackend
 from dataclasses import dataclass
 from ..._C.libtriton.translation import ClusterInfo, get_num_warps, TMAInfos, translate_triton_gpu_to_llvmir, get_shared_memory_size, translate_llvmir_to_asm, compile_ptx_to_cubin, add_external_libs
 from ...common.backend import get_cuda_version_key, path_to_ptxas
-from ..._C.libtriton import ir, runtime, passes
+from ..._C.libtriton import ir, passes
 import functools
 from typing import Any
 from ..utils import get_ids_of_tensormaps, parse_tma_info
@@ -111,7 +111,7 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_coalesce(pm)
         # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
         passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
-        passes.ttgpuir.add_rewrite_tensor_pointer(pm, capability)
+        passes.ttnvgpuir.add_rewrite_tensor_pointer(pm, capability)
         passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
@@ -171,7 +171,7 @@ class CUDABackend(BaseBackend):
             paths = [lib[1] for lib in options.extern_libs]
             add_external_libs(src, names, paths)
         # TritonGPU -> LLVM-IR
-        ret = translate_triton_gpu_to_llvmir(src, capability, tma_infos, runtime.TARGET.NVVM)
+        ret = translate_triton_gpu_to_llvmir(src, capability, tma_infos)
         if len(tma_infos) > 0:
             metadata["tensormaps_info"] = parse_tma_info(tma_infos, metadata["ids_of_folded_args"])
             for i, _ in enumerate(metadata["tensormaps_info"]):

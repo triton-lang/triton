@@ -69,8 +69,6 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createDecomposeConversionsPass);
   ADD_PASS_WRAPPER_0("add_triton_gpu_to_llvm",
                      mlir::triton::createConvertTritonGPUToLLVMPass);
-  ADD_PASS_WRAPPER_1("add_rewrite_tensor_pointer",
-                     mlir::createTritonGPURewriteTensorPointerPass, int);
 }
 
 void init_triton_passes_ttnvgpuir(py::module &&m) {
@@ -96,6 +94,8 @@ void init_triton_passes_ttnvgpuir(py::module &&m) {
                      mlir::triton::createConvertNVGPUToLLVMPass);
   ADD_PASS_WRAPPER_3("add_wspipeline",
                      mlir::createTritonNvidiaGPUWSPipelinePass, int, int, int);
+  ADD_PASS_WRAPPER_1("add_rewrite_tensor_pointer",
+                     mlir::createTritonGPURewriteTensorPointerPass, int);
 
   m.def("is_ws_supported", [](mlir::ModuleOp &mod) -> bool {
     return mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect::getWSSupportedAttr(
