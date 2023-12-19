@@ -60,7 +60,7 @@ public:
   void runOnOperation() override {
     ModuleOp m = getOperation();
     mlir::DominanceInfo dom(m);
-    SmallVector<std::pair<Operation *, Operation *>> opToMove;
+    DenseMap<Operation *, Operation *> opToMove;
     // sink conversion as late as possible
     // in its basic block
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
@@ -70,7 +70,7 @@ public:
         if (isa<triton::gpu::AllocTensorOp>(&*curr) || &*curr == firstUse)
           break;
       }
-      opToMove.push_back({op, &*curr});
+      opToMove.insert({op, &*curr});
     });
     for (auto &kv : opToMove)
       kv.first->moveBefore(kv.second);
@@ -96,7 +96,7 @@ public:
       if (user_begin->getParentOfType<scf::ForOp>() ==
           op->getParentOfType<scf::ForOp>())
         return;
-      opToMove.push_back({op, *user_begin});
+      opToMove.insert({op, *user_begin});
     });
     for (auto &kv : opToMove)
       kv.first->moveBefore(kv.second);
