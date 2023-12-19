@@ -5,21 +5,19 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static inline void gpuAssert(hipError_t code, const char *file, int line) {
-  {
-    if (code != HIP_SUCCESS) {
-      {
-        const char *prefix = "Triton Error [HIP]: ";
-        const char *str = hipGetErrorString(code);
-        char err[1024] = {0};
-        snprintf(err, 1024, "%s Code: %d, Messsage: %s", prefix, code, str);
-        PyGILState_STATE gil_state;
-        gil_state = PyGILState_Ensure();
-        PyErr_SetString(PyExc_RuntimeError, err);
-        PyGILState_Release(gil_state);
-      }
-    }
-  }
+static bool gpuAssert(hipError_t code, const char *file, int line) {
+    if (code == HIP_SUCCESS)
+        return true;
+
+    const char *prefix = "Triton Error [HIP]: ";
+    const char *str = hipGetErrorString(code);
+    char err[1024] = {0};
+    snprintf(err, 1024, "%s Code: %d, Messsage: %s", prefix, code, str);
+    PyGILState_STATE gil_state;
+    gil_state = PyGILState_Ensure();
+    PyErr_SetString(PyExc_RuntimeError, err);
+    PyGILState_Release(gil_state);
+    return false;
 }
 
 #define HIP_CHECK(ans)                                                         \
@@ -29,13 +27,27 @@ static inline void gpuAssert(hipError_t code, const char *file, int line) {
       return NULL;                                                             \
   }
 
+#define HIP_CHECK_AND_RETURN_NULL(ans)                                         \
+  do {                                                                         \
+    if (!gpuAssert((ans), __FILE__, __LINE__))                                 \
+      return NULL;                                                             \
+  } while (0)
+
+#define HIP_CHECK_AND_RETURN_NULL_ALLOW_THREADS(ans)                           \
+  do {                                                                         \
+    if (!gpuAssert((ans), __FILE__, __LINE__)) {                               \
+      PyEval_RestoreThread(_save);                                             \
+      return NULL;                                                             \
+    }                                                                          \
+  } while (0)
+
 static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   int device_id;
   if (!PyArg_ParseTuple(args, "i", &device_id))
     return NULL;
 
   hipDeviceProp_t props;
-  HIP_CHECK(hipGetDeviceProperties(&props, device_id));
+  HIP_CHECK_AND_RETURN_NULL(hipGetDeviceProperties(&props, device_id));
 
   // create a struct to hold device properties
   return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i}", "max_shared_mem",
@@ -86,8 +98,10 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   // launch HIP Binary
   hipModule_t mod;
   hipFunction_t fun;
-  hipModuleLoadDataEx(&mod, hsaco, 5, opt, optval);
-  hipModuleGetFunction(&fun, mod, name);
+  Py_BEGIN_ALLOW_THREADS;
+  HIP_CHECK_AND_RETURN_NULL_ALLOW_THREADS(hipModuleLoadDataEx(&mod, hsaco, 5, opt, optval));
+  HIP_CHECK_AND_RETURN_NULL_ALLOW_THREADS(hipModuleGetFunction(&fun, mod, name));
+  Py_END_ALLOW_THREADS;
   free(hsaco);
 
   // get allocated registers and spilled registers from the function

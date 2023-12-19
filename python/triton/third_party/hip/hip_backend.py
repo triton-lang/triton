@@ -112,10 +112,13 @@ static inline void gpuAssert(hipError_t code, const char *file, int line)
    if (code != HIP_SUCCESS)
    {{
       const char* prefix = "Triton Error [HIP]: ";
-       const char* str = hipGetErrorString(code);
+      const char* str = hipGetErrorString(code);
       char err[1024] = {{0}};
       snprintf(err, 1024, "%s Code: %d, Messsage: %s", prefix, code, str );
+      PyGILState_STATE gil_state;
+      gil_state = PyGILState_Ensure();
       PyErr_SetString(PyExc_RuntimeError, err);
+      PyGILState_Release(gil_state);
    }}
 }}
 
@@ -201,15 +204,14 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
 
   // raise exception asap
   {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
+  Py_BEGIN_ALLOW_THREADS;
   _launch(gridX, gridY, gridZ, num_warps, num_ctas, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function{', ' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items()) if len(signature) > 0 else ''});
+  Py_END_ALLOW_THREADS;
 
   if (launch_exit_hook != Py_None) {{
     PyObject_CallObject(launch_exit_hook, args);
   }}
 
-  if(PyErr_Occurred()) {{
-    return NULL;
-  }}
   // return None
   Py_INCREF(Py_None);
   return Py_None;
