@@ -45,9 +45,23 @@ public:
   void runOnOperation() override {
     ModuleOp m = getOperation();
     mlir::DominanceInfo dom(m);
+    DenseMap<Operation *, Operation *> opToMove;
+    // if all uses of cvt have a common ancestor
+    // sink it there
+    m.walk([&](triton::gpu::ConvertLayoutOp op) {
+      Operation *ancestor = nullptr;
+      for (auto user : op->getUsers()) {
+        if (user->getBlock() == op->getBlock())
+          return;
+        Operation *curr = op->getBlock()->findAncestorOpInBlock(*user);
+        if (ancestor && ancestor != curr)
+          return;
+        ancestor = curr;
+      }
+      opToMove.insert({op, ancestor});
+    });
     // Sink conversions into loops when they will increase
     // register pressure
-    DenseMap<Operation *, Operation *> opToMove;
     auto moveAfter = [](Operation *lhs, Operation *rhs) {
       auto lhsId = getWSRoleId(lhs);
       auto rhsId = getWSRoleId(rhs);
