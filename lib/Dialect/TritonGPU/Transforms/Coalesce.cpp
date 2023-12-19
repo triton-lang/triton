@@ -90,8 +90,7 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
 
     // Get the contiguity order of `ptr`
     SmallVector<unsigned> order;
-    LDBGS("op is:");
-    LLVM_DEBUG(op->dump());
+    LDBG("op is: " << *op);
     if (ptr.getType().isa<PointerType>()) {
       auto makeTensorPtr = getMakeTensorPtrOp(ptr);
       std::copy(makeTensorPtr.getOrder().begin(),
@@ -100,15 +99,15 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
       // Normal cases
       auto contiguity = axisInfoAnalysis.getAxisInfo(ptr)->getContiguity();
       order = argSort(contiguity);
-      LLVM_DEBUG(DBGS() << "contiguity is: "; for (const auto &O
-                                                   : contiguity) {
-        llvm::dbgs() << O << " ";
-      } llvm::dbgs() << "\n";);
+      LLVM_DEBUG(
+        DBGS() << "contiguity is: ";
+        for (const auto &O : contiguity) { llvm::dbgs() << O << " "; }
+        llvm::dbgs() << "\n";);
     }
-    LLVM_DEBUG(DBGS() << "order is: "; for (const auto &O
-                                            : order) {
-      llvm::dbgs() << O << " ";
-    } llvm::dbgs() << "\n";);
+    LLVM_DEBUG(
+      DBGS() << "order is: ";
+      for (const auto &O : order) { llvm::dbgs() << O << " "; }
+      llvm::dbgs() << "\n";);
 
     auto matchesShape = [&refTensorType](const Value &val) {
       if (val.getType() == refTensorType) {
