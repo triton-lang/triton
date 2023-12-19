@@ -42,23 +42,26 @@ class TritonGPUReorderInstructionsPass
 public:
   TritonGPUReorderInstructionsPass() = default;
 
+  Operation *getFirstUse(Operation *op) {
+    for (auto user : op->getUsers()) {
+      if (user->getBlock() == op->getBlock())
+        return user;
+      Operation *ancestor = op->getBlock()->findAncestorOpInBlock(*user);
+      if (ancestor->getBlock() == op->getBlock())
+        return ancestor;
+    }
+    return nullptr;
+  }
+
   void runOnOperation() override {
     ModuleOp m = getOperation();
     mlir::DominanceInfo dom(m);
     DenseMap<Operation *, Operation *> opToMove;
-    // if all uses of cvt have a common ancestor
-    // sink it there
+    // sink conversion as late as possible
+    // in its basic block
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
-      Operation *ancestor = nullptr;
-      for (auto user : op->getUsers()) {
-        if (user->getBlock() == op->getBlock())
-          return;
-        Operation *curr = op->getBlock()->findAncestorOpInBlock(*user);
-        if (ancestor && ancestor != curr)
-          return;
-        ancestor = curr;
-      }
-      opToMove.insert({op, ancestor});
+      if (Operation *firstUse = getFirstUse(op))
+        opToMove.insert({op, firstUse});
     });
     // Sink conversions into loops when they will increase
     // register pressure
