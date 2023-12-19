@@ -43,13 +43,9 @@ public:
   TritonGPUReorderInstructionsPass() = default;
 
   Operation *getFirstUse(Operation *op) {
-    for (auto user : op->getUsers()) {
-      if (user->getBlock() == op->getBlock())
-        return user;
-      Operation *ancestor = op->getBlock()->findAncestorOpInBlock(*user);
-      if (ancestor->getBlock() == op->getBlock())
+    for (auto user : op->getUsers())
+      if (Operation *ancestor = op->getBlock()->findAncestorOpInBlock(*user))
         return ancestor;
-    }
     return nullptr;
   }
 
@@ -63,6 +59,9 @@ public:
       if (Operation *firstUse = getFirstUse(op))
         opToMove.insert({op, firstUse});
     });
+    for (auto &kv : opToMove)
+      kv.first->moveBefore(kv.second);
+    opToMove.clear();
     // Sink conversions into loops when they will increase
     // register pressure
     auto moveAfter = [](Operation *lhs, Operation *rhs) {
@@ -71,6 +70,9 @@ public:
       if (lhsId == rhsId)
         lhs->moveAfter(rhs);
     };
+    for (auto &kv : opToMove)
+      kv.first->moveBefore(kv.second);
+    opToMove.clear();
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
       if (!willIncreaseRegisterPressure(op))
         return;
