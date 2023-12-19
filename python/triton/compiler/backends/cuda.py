@@ -184,6 +184,8 @@ class CUDABackend(BaseBackend):
             ptx_version = ptx_get_version(cuda_version)
         ptx_version = f'{ptx_version//10}.{ptx_version%10}'
         ret = re.sub(r'\.version \d+\.\d+', f'.version {ptx_version}', ret, flags=re.MULTILINE)
+        # Remove the debug flag that prevents ptxas from optimizing the code
+        ret = re.sub(r",\s*debug|debug,\s*", "", ret)
         return ret
 
     @staticmethod
