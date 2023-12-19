@@ -58,23 +58,17 @@ public:
   void runOnOperation() override {
     ModuleOp m = getOperation();
     mlir::DominanceInfo dom(m);
-    DenseMap<Operation *, Operation *> opToMove;
-    // sink conversion as late as possible
-    // in its basic block
+    // sink conversion after the last dealloc
+    // before the first use ancestor in its block
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
       auto curr = mlir::Block::iterator(op);
-      Operation *firstUse = getFirstUse(op);
-      for (; curr != op->getBlock()->end(); curr++) {
-        if (isa<triton::gpu::AllocTensorOp>(&*curr) || &*curr == firstUse)
-          break;
-      }
-      opToMove.insert({op, &*curr});
+      for (; &*curr != getFirstUse(op); curr++)
+        if (isa<triton::gpu::DeallocTensorOp>(&*curr))
+          op->moveAfter(&*curr);
     });
-    for (auto &kv : opToMove)
-      kv.first->moveBefore(kv.second);
-    opToMove.clear();
     // Sink conversions into loops when they will increase
     // register pressure
+    DenseMap<Operation *, Operation *> opToMove;
     auto moveAfter = [](Operation *lhs, Operation *rhs) {
       auto lhsId = getWSRoleId(lhs);
       auto rhsId = getWSRoleId(rhs);
