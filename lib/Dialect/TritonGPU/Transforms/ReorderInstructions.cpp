@@ -43,18 +43,16 @@ public:
   TritonGPUReorderInstructionsPass() = default;
 
   Operation *getFirstUse(Operation *op) {
-    Block *block = op->getBlock();
-    std::vector<Operation *> users(op->user_begin(), op->user_end());
-    std::sort(users.begin(), users.end(),
-              [](mlir::Operation *a, mlir::Operation *b) {
-                return a->isBeforeInBlock(b);
-              });
-    for (auto user : users) {
-      Operation *ancestor = op->getBlock()->findAncestorOpInBlock(*user);
-      if (ancestor)
-        return ancestor;
+    std::vector<Operation *> users;
+    for (auto user : op->getUsers()) {
+      if (Operation *ancestor = op->getBlock()->findAncestorOpInBlock(*user))
+        users.push_back(ancestor);
     }
-    return nullptr;
+    auto minOpIt = std::min_element(users.begin(), users.end(),
+                                    [](mlir::Operation *a, mlir::Operation *b) {
+                                      return a->isBeforeInBlock(b);
+                                    });
+    return minOpIt != users.end() ? *minOpIt : nullptr;
   }
 
   void runOnOperation() override {
