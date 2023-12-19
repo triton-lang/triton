@@ -43,21 +43,34 @@ public:
   TritonGPUReorderInstructionsPass() = default;
 
   Operation *getFirstUse(Operation *op) {
-    for (auto user : op->getUsers())
-      if (Operation *ancestor = op->getBlock()->findAncestorOpInBlock(*user))
+    Block *block = op->getBlock();
+    std::vector<Operation *> users(op->user_begin(), op->user_end());
+    std::sort(users.begin(), users.end(),
+              [](mlir::Operation *a, mlir::Operation *b) {
+                return a->isBeforeInBlock(b);
+              });
+    for (auto user : users) {
+      Operation *ancestor = op->getBlock()->findAncestorOpInBlock(*user);
+      if (ancestor)
         return ancestor;
+    }
     return nullptr;
   }
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
     mlir::DominanceInfo dom(m);
-    DenseMap<Operation *, Operation *> opToMove;
+    SmallVector<std::pair<Operation *, Operation *>> opToMove;
     // sink conversion as late as possible
     // in its basic block
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
-      if (Operation *firstUse = getFirstUse(op))
-        opToMove.insert({op, firstUse});
+      auto curr = mlir::Block::iterator(op);
+      Operation *firstUse = getFirstUse(op);
+      for (; curr != op->getBlock()->end(); curr++) {
+        if (isa<triton::gpu::AllocTensorOp>(&*curr) || &*curr == firstUse)
+          break;
+      }
+      opToMove.push_back({op, &*curr});
     });
     for (auto &kv : opToMove)
       kv.first->moveBefore(kv.second);
@@ -83,7 +96,7 @@ public:
       if (user_begin->getParentOfType<scf::ForOp>() ==
           op->getParentOfType<scf::ForOp>())
         return;
-      opToMove.insert({op, *user_begin});
+      opToMove.push_back({op, *user_begin});
     });
     for (auto &kv : opToMove)
       kv.first->moveBefore(kv.second);
