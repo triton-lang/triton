@@ -2,7 +2,7 @@ from triton.common.backend import BaseBackend
 from dataclasses import dataclass
 from ..._C.libtriton.translation import ClusterInfo, get_num_warps, TMAInfos, translate_triton_gpu_to_llvmir, get_shared_memory_size, translate_llvmir_to_asm, add_external_libs
 from ...common.backend import get_cuda_version_key, path_to_ptxas
-from ..._C.libtriton import ir, passes
+from ..._C.libtriton import ir, passes, nvidia
 import functools
 from typing import Any
 from ..utils import get_ids_of_tensormaps, parse_tma_info
@@ -101,9 +101,9 @@ class CUDABackend(BaseBackend):
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
         # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
-        passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
-        passes.ttnvgpuir.add_rewrite_tensor_pointer(pm, capability)
-        passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
+        nvidia.passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
+        nvidia.passes.ttgpuir.add_rewrite_tensor_pointer(pm, capability)
+        nvidia.passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
         passes.ttgpuir.add_accelerate_matmul(pm, capability)
@@ -119,33 +119,33 @@ class CUDABackend(BaseBackend):
         # TODO: support the case where `num_warps` from user is not 4.
         ws_enabled = False
         if capability // 10 >= 9 and opt.enable_warp_specialization and opt.num_warps == 4:
-            passes.ttnvgpuir.add_wsfeasibility_checking(pm, capability)
+            nvidia.passes.ttnvgpuir.add_wsfeasibility_checking(pm, capability)
             pm.run(mod)
-            ws_enabled = passes.ttnvgpuir.is_ws_supported(mod)
+            ws_enabled = nvidia.passes.ttnvgpuir.is_ws_supported(mod)
             pm = ir.pass_manager(mod.context)
             pm.enable_debug()
         if ws_enabled:
-            passes.ttnvgpuir.add_wsdecomposing(pm, capability)
-            passes.ttnvgpuir.add_wspipeline(pm, opt.num_stages, opt.num_warps, capability)
-            passes.ttnvgpuir.add_wsmutex(pm, capability)
-            passes.ttnvgpuir.add_wsmaterialization(pm, capability)
+            nvidia.passes.ttnvgpuir.add_wsdecomposing(pm, capability)
+            nvidia.passes.ttnvgpuir.add_wspipeline(pm, opt.num_stages, opt.num_warps, capability)
+            nvidia.passes.ttnvgpuir.add_wsmutex(pm, capability)
+            nvidia.passes.ttnvgpuir.add_wsmaterialization(pm, capability)
             passes.common.add_licm(pm)
             passes.common.add_cse(pm)
         else:
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.num_warps, opt.num_ctas, capability)
-        passes.ttnvgpuir.add_materialize_load_store(pm, opt.num_warps, capability)
+        nvidia.passes.ttnvgpuir.add_materialize_load_store(pm, opt.num_warps, capability)
         if capability // 10 <= 8:
             passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_decompose_conversions(pm)
-        passes.ttnvgpuir.add_wsfixup_missing_attrs(pm)
+        nvidia.passes.ttnvgpuir.add_wsfixup_missing_attrs(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         if capability // 10 >= 9:
-            passes.ttnvgpuir.add_fence_insertion(pm)
-        passes.ttnvgpuir.add_wsfixup_missing_attrs(pm)
+            nvidia.passes.ttnvgpuir.add_fence_insertion(pm)
+        nvidia.passes.ttnvgpuir.add_wsfixup_missing_attrs(pm)
         passes.common.add_canonicalizer(pm)
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
@@ -153,7 +153,7 @@ class CUDABackend(BaseBackend):
 
     @staticmethod
     def make_llir(src, metadata, options, capability):
-        metadata["enable_warp_specialization"] = passes.ttnvgpuir.is_ws_supported(src)
+        metadata["enable_warp_specialization"] = nvidia.passes.ttnvgpuir.is_ws_supported(src)
         metadata["num_warps"] = get_num_warps(src)
         tma_infos = TMAInfos()
         # link libraries
