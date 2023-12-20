@@ -75,9 +75,6 @@ public:
       if (lhsId == rhsId)
         lhs->moveAfter(rhs);
     };
-    for (auto &kv : opToMove)
-      kv.first->moveBefore(kv.second);
-    opToMove.clear();
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
       if (!willIncreaseRegisterPressure(op))
         return;
