@@ -58,7 +58,7 @@ static Value getMemAccessPtr(Operation *op) {
 }
 
 // TODO(Keren): integrate it into AxisInfoAnalysis
-static AxisInfo getAxisInfoForTensorPointer(const Value val) {
+static AxisInfo getAxisInfoForTensorPointer(const Value &val) {
   auto valType = val.getType();
   // TODO(Chenggang): encoding for tensor pointers is meaningless, remove
   // these later while merging into the GitHub main
@@ -138,18 +138,20 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
         auto currOrder =
             argSort(axisInfoAnalysis.getAxisInfo(val)->getContiguity());
         if (order == currOrder) {
-          LDBG("multi-root-slice: insert to memAccessesSameOrder");
-          LLVM_DEBUG(use->dump());
+          LDBG("multi-root-slice: insert to memAccessesSameOrder " << *use);
           memAccessesSameOrder.insert(use);
         }
       }
     }
 
     auto shapePerCTA = triton::gpu::getShapePerCTA(refTensorType);
-    LLVM_DEBUG(DBGS() << "shapePerCTA is "; for (const auto &O
-                                                 : shapePerCTA) {
-      llvm::dbgs() << O << " ";
-    } llvm::dbgs() << "\n";);
+    LLVM_DEBUG({
+      DBGS() << "shapePerCTA is ";
+      for (const auto &O : shapePerCTA) {
+        llvm::dbgs() << O << " ";
+      }
+      llvm::dbgs() << "\n";
+    });
     int numElems = product<int64_t>(shapePerCTA);
     int numThreads = numWarps * threadsPerWarp;
     int numElemsPerThread = std::max(numElems / numThreads, 1);
