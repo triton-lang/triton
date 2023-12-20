@@ -99,15 +99,21 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
       // Normal cases
       auto contiguity = axisInfoAnalysis.getAxisInfo(ptr)->getContiguity();
       order = argSort(contiguity);
-      LLVM_DEBUG(
+      LLVM_DEBUG({
         DBGS() << "contiguity is: ";
-        for (const auto &O : contiguity) { llvm::dbgs() << O << " "; }
-        llvm::dbgs() << "\n";);
+        for (const auto &O : contiguity) {
+          llvm::dbgs() << O << " ";
+        }
+        llvm::dbgs() << "\n";
+      });
     }
-    LLVM_DEBUG(
+    LLVM_DEBUG({
       DBGS() << "order is: ";
-      for (const auto &O : order) { llvm::dbgs() << O << " "; }
-      llvm::dbgs() << "\n";);
+      for (const auto &O : order) {
+        llvm::dbgs() << O << " ";
+      }
+      llvm::dbgs() << "\n";
+    });
 
     auto matchesShape = [&refTensorType](const Value &val) {
       if (val.getType() == refTensorType) {
