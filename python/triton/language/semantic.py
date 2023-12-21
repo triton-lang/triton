@@ -1306,10 +1306,11 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
         assert acc.type == ret_ty
 
     # max_num_imprecise_acc only applies to fp8 -> fp32 dot on sm_90
-    if lhs.dtype.is_fp8() and rhs.dtype.is_fp8() and max_num_imprecise_acc is None:
-        max_num_imprecise_acc = builder.options.max_num_imprecise_acc_default
-    else:
-        max_num_imprecise_acc = 0
+    if max_num_imprecise_acc is None:
+        if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
+            max_num_imprecise_acc = builder.options.max_num_imprecise_acc_default
+        else:
+            max_num_imprecise_acc = 0
 
     return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, acc_handle, allow_tf32, max_num_imprecise_acc), ret_ty)
 
