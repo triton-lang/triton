@@ -46,8 +46,16 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createDecomposeConversionsPass);
 }
 
+void init_triton_passes_convert(py::module &&m) {
+  using namespace mlir;
+  ADD_PASS_WRAPPER_0("add_scf_to_cf", createConvertSCFToCFPass);
+  ADD_PASS_WRAPPER_0("add_index_to_llvm", createConvertIndexToLLVMPass);
+  ADD_PASS_WRAPPER_0("add_arith_to_llvm", createArithToLLVMConversionPass);
+}
+
 void init_triton_passes(py::module &&m) {
   init_triton_passes_common(m.def_submodule("common"));
+  init_triton_passes_convert(m.def_submodule("convert"));
   init_triton_passes_ttir(m.def_submodule("ttir"));
   init_triton_passes_ttgpuir(m.def_submodule("ttgpuir"));
 }
