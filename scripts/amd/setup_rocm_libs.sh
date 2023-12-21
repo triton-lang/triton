@@ -9,11 +9,11 @@ fi
 
 # Check TRITON_ROCM_DIR is set
 if [[ -z "${TRITON_ROCM_DIR}" ]]; then
-  export TRITON_ROCM_DIR=python/triton/third_party/rocm
+  export TRITON_ROCM_DIR=python/triton/third_party/hip
 fi
 
-# Create triton lib directory
-mkdir -p $TRITON_ROCM_DIR/lib
+# Remove current libhsa included to avoid confusion
+rm $TRITON_ROCM_DIR/lib/hsa/libhsa-runtime*
 
 LIBTINFO_PATH="/usr/lib64/libtinfo.so.5"
 LIBNUMA_PATH="/usr/lib64/libnuma.so.1"
@@ -30,7 +30,7 @@ do
     cp $lib $TRITON_ROCM_DIR/lib/
 done
 
-# Required ROCm libraries - dynamically find so numbers
+# Required ROCm libraries 
 ROCM_SO=(
     "libhsa-runtime64.so.1"
     "libamdhip64.so.5"
@@ -71,3 +71,4 @@ cp -r $ROCM_HOME/include $TRITON_ROCM_DIR/
 # Copy linker
 mkdir -p $TRITON_ROCM_DIR/llvm/bin
 cp $ROCM_HOME/llvm/bin/ld.lld $TRITON_ROCM_DIR/llvm/bin/
+

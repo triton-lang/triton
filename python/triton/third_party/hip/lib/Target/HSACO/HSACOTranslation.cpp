@@ -217,7 +217,7 @@ std::string generate_hsaco(llvm::Module *module, const std::string &triple,
                                               .parent_path()
                                               .parent_path() /
                                               "triton" / "third_party" /
-                                              "rocm" / "llvm" / "bin" / "ld.lld";
+                                              "hip" / "llvm" / "bin" / "ld.lld";
   std::string lld_path = compiletime_path.string();
   if (!std::filesystem::exists(lld_path)) {
     std::string rocm_path = ::triton::tools::getenv("ROCM_PATH");

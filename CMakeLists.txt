@@ -211,17 +211,17 @@ include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
 
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/python/triton/third_party/hip/lib/hsa/libhsa-runtime64.so)
-  set(ROCM_LIBRARIES
-    ${CMAKE_CURRENT_SOURCE_DIR}/python/triton/third_party/hip/lib/hsa/libhsa-runtime64.so
-  )
-elseif(EXISTS "$ENV{ROCM_PATH}/lib/libhsa-runtime64.so" )
+if(EXISTS "$ENV{ROCM_PATH}/lib/libhsa-runtime64.so" )
   set(ROCM_LIBRARIES
     "$ENV{ROCM_PATH}/lib/libhsa-runtime64.so"
   )
 elseif(EXISTS "${ROCM_DEFAULT_DIR}/lib/libhsa-runtime64.so" )
   set(ROCM_LIBRARIES
     "${ROCM_DEFAULT_DIR}/lib/libhsa-runtime64.so"
+  )
+elseif(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/python/triton/third_party/hip/lib/hsa/libhsa-runtime64.so)
+  set(ROCM_LIBRARIES
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/triton/third_party/hip/lib/hsa/libhsa-runtime64.so
   )
 else()
   message(STATUS "WARNING: Can't find libhsa-runtime64.so")

@@ -386,7 +386,6 @@ def get_arch_default_num_stages(device_type, capability=None):
         assert _device_backend
         arch = _device_backend.get_architecture_descriptor()
         num_stages = arch["num_stages"]
-
     return num_stages
 
 

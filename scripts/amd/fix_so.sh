@@ -2,8 +2,8 @@
 #From https://github.com/pytorch/builder/blob/main/manywheel/build_common.sh
 WHEELHOUSE_DIR=/artifacts
 PATCHELF_BIN=patchelf
-ROCM_LIB=third_party/rocm/lib
-ROCM_LD=third_party/rocm/llvm/bin
+ROCM_LIB=third_party/hip/lib
+ROCM_LD=third_party/hip/llvm/bin
 PREFIX=triton
 
 fname_without_so_number() {
