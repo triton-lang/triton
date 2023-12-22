@@ -1,10 +1,12 @@
 ﻿#include "mlir/Transforms/Passes.h"
+#include "mlir/Conversion/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "passes.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "triton/Target/LLVMIR/Passes.h"
 #include <pybind11/pybind11.h>
 
 namespace py = pybind11;
@@ -51,6 +53,12 @@ void init_triton_passes_convert(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_scf_to_cf", createConvertSCFToCFPass);
   ADD_PASS_WRAPPER_0("add_index_to_llvm", createConvertIndexToLLVMPass);
   ADD_PASS_WRAPPER_0("add_arith_to_llvm", createArithToLLVMConversionPass);
+  ADD_PASS_WRAPPER_0("add_llvm_to_llvmir", createLLVMDIScopePass);
+}
+
+void init_triton_passes_llvm(py::module &&m) {
+  using namespace mlir;
+  ADD_PASS_WRAPPER_0("add_di_scope", createLLVMDIScopePass);
 }
 
 void init_triton_passes(py::module &&m) {
@@ -58,4 +66,5 @@ void init_triton_passes(py::module &&m) {
   init_triton_passes_convert(m.def_submodule("convert"));
   init_triton_passes_ttir(m.def_submodule("ttir"));
   init_triton_passes_ttgpuir(m.def_submodule("ttgpuir"));
+  init_triton_passes_ttgpuir(m.def_submodule("llvm"));
 }

@@ -152,6 +152,24 @@ class CUDABackend(BaseBackend):
         return mod
 
     @staticmethod
+    def make_llvmir(mod, metadata):
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+        passes.convert.add_scf_to_cf(pm)
+        passes.convert.add_index_to_llvmir(pm)
+        passes.convert.add_ttgir_to_llvmir(pm)
+        if metadata["has_ws"]:
+            passes.convert.add_licm(pm)
+            passes.convert.add_cse(pm)
+        passes.convert.add_ttnvgpuir_to_llvm(pm)
+        passes.convert.add_arith_to_llvm(pm)
+        passes.convert.add_canonicalize(pm)
+        passes.convert.add_cse(pm)
+        passes.convert.add_symbol_dce(pm)
+        if not os.getenv("TRITON_DISABLE_LINE_INFO"):
+            passes.llvm.add_di_scope(pm)
+
+    @staticmethod
     def make_llir(src, metadata, options, capability):
         metadata["enable_warp_specialization"] = nvidia.passes.ttnvgpuir.is_ws_supported(src)
         metadata["num_warps"] = get_num_warps(src)
