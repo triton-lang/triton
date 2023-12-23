@@ -13,8 +13,13 @@ void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton::gpu;
   ADD_PASS_WRAPPER_1("add_rewrite_tensor_pointer",
                      mlir::createTritonGPURewriteTensorPointerPass, int);
-  ADD_PASS_WRAPPER_0("add_triton_gpu_to_llvm",
-                     mlir::triton::createConvertTritonGPUToLLVMPass);
+  // TODO: it is weird to pass mlir::triton::NVVM here since the conversion is
+  // nvidia-specific
+  m.def("add_to_llvmir", [](mlir::PassManager &pm, int32_t capability,
+                            mlir::triton::gpu::TMAMetadataTy *tmaMetadata) {
+    pm.addPass(createConvertTritonGPUToLLVMPass(capability, mlir::triton::NVVM,
+                                                tmaMetadata));
+  });
 }
 
 void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {

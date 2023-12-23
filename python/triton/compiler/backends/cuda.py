@@ -1,11 +1,10 @@
 from triton.common.backend import BaseBackend
 from dataclasses import dataclass
-from ..._C.libtriton.translation import ClusterInfo, get_num_warps, TMAInfos, translate_triton_gpu_to_llvmir, get_shared_memory_size, translate_llvmir_to_asm, add_external_libs
+from ..._C.libtriton.translation import ClusterInfo, TMAInfos, add_external_libs
 from ...common.backend import get_cuda_version_key, path_to_ptxas
-from ..._C.libtriton import ir, passes, nvidia
+from ..._C.libtriton import ir, passes, nvidia, llvm
 import functools
 from typing import Any
-from ..utils import get_ids_of_tensormaps, parse_tma_info
 from ..make_launcher import make_stub
 import hashlib
 import re
@@ -124,6 +123,7 @@ class CUDABackend(BaseBackend):
             ws_enabled = nvidia.passes.ttnvgpuir.is_ws_supported(mod)
             pm = ir.pass_manager(mod.context)
             pm.enable_debug()
+        metadata["ws_enabled"] = ws_enabled
         if ws_enabled:
             nvidia.passes.ttnvgpuir.add_wsdecomposing(pm, capability)
             nvidia.passes.ttnvgpuir.add_wspipeline(pm, opt.num_stages, opt.num_warps, capability)
@@ -152,48 +152,67 @@ class CUDABackend(BaseBackend):
         return mod
 
     @staticmethod
-    def make_llvmir(mod, metadata):
-        pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
-        passes.convert.add_scf_to_cf(pm)
-        passes.convert.add_index_to_llvmir(pm)
-        passes.convert.add_ttgir_to_llvmir(pm)
-        if metadata["has_ws"]:
-            passes.convert.add_licm(pm)
-            passes.convert.add_cse(pm)
-        passes.convert.add_ttnvgpuir_to_llvm(pm)
-        passes.convert.add_arith_to_llvm(pm)
-        passes.convert.add_canonicalize(pm)
-        passes.convert.add_cse(pm)
-        passes.convert.add_symbol_dce(pm)
-        if not os.getenv("TRITON_DISABLE_LINE_INFO"):
-            passes.llvm.add_di_scope(pm)
-
-    @staticmethod
-    def make_llir(src, metadata, options, capability):
-        metadata["enable_warp_specialization"] = nvidia.passes.ttnvgpuir.is_ws_supported(src)
-        metadata["num_warps"] = get_num_warps(src)
-        tma_infos = TMAInfos()
+    def make_llir(mod, metadata, options, capability):
         # link libraries
         if options.extern_libs:
             names = [lib[0] for lib in options.extern_libs]
             paths = [lib[1] for lib in options.extern_libs]
-            add_external_libs(src, names, paths)
-        # TritonGPU -> LLVM-IR
-        ret = translate_triton_gpu_to_llvmir(src, capability, tma_infos)
-        if len(tma_infos) > 0:
-            metadata["tensormaps_info"] = parse_tma_info(tma_infos, metadata["ids_of_folded_args"])
-            for i, _ in enumerate(metadata["tensormaps_info"]):
-                metadata["tensormaps_info"][i].ids_of_folded_args = metadata["ids_of_folded_args"]
-        metadata["ids_of_tensormaps"] = get_ids_of_tensormaps(metadata.get("tensormaps_info", None))
-        metadata["shared"] = get_shared_memory_size(src)
-        return ret
+            add_external_libs(mod, names, paths)
+        # TritonGPU -> LLVM-IR (MLIR)
+        tma_infos = TMAInfos()
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+        passes.convert.add_scf_to_cf(pm)
+        passes.convert.add_index_to_llvmir(pm)
+        nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, tma_infos)
+        if metadata["ws_enabled"]:
+            passes.convert.add_licm(pm)
+            passes.convert.add_cse(pm)
+        nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
+        passes.convert.add_arith_to_llvmir(pm)
+        passes.common.add_canonicalizer(pm)
+        passes.common.add_cse(pm)
+        passes.common.add_symbol_dce(pm)
+        if "TRITON_DISABLE_LINE_INFO" not in os.environ:
+            passes.llvmir.add_di_scope(pm)
+        pm.run(mod)
+        # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
+        context = llvm.context()
+        mod = llvm.to_module(mod, context, "LLVMModule")
+        # TODO:
+        # if options.extern_libs:
+        #     names = [lib[0] for lib in options.extern_libs]
+        #     paths = [lib[1] for lib in options.extern_libs]
+        #     llvm.link_extern_lib(mod, names, paths)
+        llvm.optimize_module(mod, llvm.OPTIMIZE_O3)
+        nvidia.llvm.fix_attributes(mod)
+        return mod
+
+    # @staticmethod
+    # def make_llir(src, metadata, options, capability):
+    #     metadata["enable_warp_specialization"] = nvidia.passes.ttnvgpuir.is_ws_supported(src)
+    #     metadata["num_warps"] = get_num_warps(src)
+    #     tma_infos = TMAInfos()
+    #     # link libraries
+    #     if options.extern_libs:
+    #         names = [lib[0] for lib in options.extern_libs]
+    #         paths = [lib[1] for lib in options.extern_libs]
+    #         add_external_libs(src, names, paths)
+    #     # TritonGPU -> LLVM-IR
+    #     ret = translate_triton_gpu_to_llvmir(src, capability, tma_infos)
+    #     if len(tma_infos) > 0:
+    #         metadata["tensormaps_info"] = parse_tma_info(tma_infos, metadata["ids_of_folded_args"])
+    #         for i, _ in enumerate(metadata["tensormaps_info"]):
+    #             metadata["tensormaps_info"][i].ids_of_folded_args = metadata["ids_of_folded_args"]
+    #     metadata["ids_of_tensormaps"] = get_ids_of_tensormaps(metadata.get("tensormaps_info", None))
+    #     metadata["shared"] = get_shared_memory_size(src)
+    #     return ret
 
     @staticmethod
     def make_ptx(src, metadata, opt, capability):
         proc = 'sm_90a' if capability == 90 else f'sm_{capability}'
-        ret, name = translate_llvmir_to_asm(src, 'nvptx64-nvidia-cuda', proc, '', ['nvptx-short-ptr'],
-                                            opt.enable_fp_fusion, False)
+        ret, name = llvm.translate_to_asm(src, 'nvptx64-nvidia-cuda', proc, '', ['nvptx-short-ptr'],
+                                          opt.enable_fp_fusion, False)
         metadata["name"] = name
         # post-process
         ptx_version = opt.ptx_version
