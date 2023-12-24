@@ -150,55 +150,6 @@ std::string translateLLVMIRToASM(llvm::Module &module,
   return result;
 }
 
-//
-static void linkLibdevice(llvm::Module &module) {
-  // please check https://llvm.org/docs/NVPTXUsage.html#reflection-parameters
-  // this will enable fast math path in libdevice
-  // for example, when enable nvvm-reflect-ftz, sqrt.approx.f32 will change to
-  // sqrt.approx.ftz.f32
-  auto &ctx = module.getContext();
-  llvm::Type *i32 = llvm::Type::getInt32Ty(ctx);
-  llvm::Metadata *mdFour =
-      llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(i32, 4));
-  llvm::Metadata *mdName = llvm::MDString::get(ctx, "nvvm-reflect-ftz");
-  llvm::Metadata *mdOne =
-      llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(i32, 1));
-  llvm::MDNode *reflect = llvm::MDNode::get(ctx, {mdFour, mdName, mdOne});
-  module.addModuleFlag(reflect);
-}
-
-bool linkExternLib(llvm::Module &module, llvm::StringRef name,
-                   llvm::StringRef path) {
-  llvm::SMDiagnostic err;
-  auto &ctx = module.getContext();
-
-  auto extMod = llvm::parseIRFile(path, err, ctx);
-  if (!extMod) {
-    llvm::errs() << "Failed to load " << path;
-    return true;
-  }
-
-  extMod->setTargetTriple(module.getTargetTriple());
-  extMod->setDataLayout(module.getDataLayout());
-
-  if (llvm::Linker::linkModules(module, std::move(extMod),
-                                llvm::Linker::Flags::LinkOnlyNeeded)) {
-    llvm::errs() << "Failed to link " << path;
-    return true;
-  }
-
-  // if (target == Target::NVVM) {
-  //   if (name == "libdevice") {
-  linkLibdevice(module);
-  // }
-  // else {
-  //   assert(false && "unknown extern lib: ");
-  // }
-  // }
-
-  return false;
-}
-
 struct NVVMMetadata {
   llvm::SmallVector<int, 3> maxntid;
   bool isKernel{};
@@ -421,8 +372,36 @@ void init_triton_llvm(py::module &&m) {
     }
   });
 
+  m.def("set_nvvm_reflect_ftz", [](llvm::Module *mod) {
+    // please check https://llvm.org/docs/NVPTXUsage.html#reflection-parameters
+    // this will enable fast math path in libdevice
+    // for example, when enable nvvm-reflect-ftz, sqrt.approx.f32 will change to
+    // sqrt.approx.ftz.f32
+    using namespace llvm;
+    auto &ctx = mod->getContext();
+    Type *i32 = Type::getInt32Ty(ctx);
+    Metadata *mdFour = ConstantAsMetadata::get(ConstantInt::getSigned(i32, 4));
+    Metadata *mdName = MDString::get(ctx, "nvvm-reflect-ftz");
+    Metadata *mdOne = ConstantAsMetadata::get(ConstantInt::getSigned(i32, 1));
+    MDNode *reflect = MDNode::get(ctx, {mdFour, mdName, mdOne});
+    mod->addModuleFlag(reflect);
+  });
+
   m.def("link_extern_lib",
         [](llvm::Module *mod, std::string name, std::string path) {
-          linkExternLib(*mod, name, path);
+          llvm::SMDiagnostic err;
+          auto &ctx = mod->getContext();
+          auto extMod = llvm::parseIRFile(path, err, ctx);
+          if (!extMod) {
+            llvm::errs() << "Failed to load " << path;
+            return;
+          }
+          extMod->setTargetTriple(mod->getTargetTriple());
+          extMod->setDataLayout(mod->getDataLayout());
+          if (llvm::Linker::linkModules(*mod, std::move(extMod),
+                                        llvm::Linker::Flags::LinkOnlyNeeded)) {
+            llvm::errs() << "Failed to link " << path;
+            return;
+          }
         });
 }

@@ -177,6 +177,7 @@ class CUDABackend(BaseBackend):
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context, "LLVMModule")
+        llvm.set_nvvm_reflect_ftz(llvm_mod)
         if options.extern_libs:
             for lib in options.extern_libs:
                 llvm.link_extern_lib(llvm_mod, lib[0], lib[1])
