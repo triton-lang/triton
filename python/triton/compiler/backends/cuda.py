@@ -12,6 +12,7 @@ import tempfile
 import signal
 import os
 import subprocess
+from pathlib import Path
 
 
 @functools.lru_cache()
@@ -47,10 +48,11 @@ class CUDAOptions:
     debug: bool = False
 
     def __post_init__(self):
-        # TODO: change API
-        if isinstance(self.extern_libs, dict):
-            extern_libs = tuple([(k, v) for k, v in self.extern_libs.items() if v])
-            object.__setattr__(self, 'extern_libs', extern_libs)
+        default_libdir = Path(__file__).parent.parent.parent / 'third_party' / 'cuda' / 'lib'
+        extern_libs = dict(self.extern_libs)
+        if not extern_libs.get('libdevice', None):
+            extern_libs['libdevice'] = str(default_libdir / 'libdevice.10.bc')
+        object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
                "num_warps must be a power of 2"
 
@@ -175,7 +177,9 @@ class CUDABackend(BaseBackend):
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context, "LLVMModule")
-        llvm.link_extern_libs(src, llvm_mod)
+        if options.extern_libs:
+            for lib in options.extern_libs:
+                llvm.link_extern_lib(llvm_mod, lib[0], lib[1])
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
         llvm.fix_attributes(src, llvm_mod)
         # Get some metadata

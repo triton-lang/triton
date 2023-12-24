@@ -151,105 +151,6 @@ std::string translateLLVMIRToASM(llvm::Module &module,
 }
 
 //
-
-namespace fs = std::filesystem;
-static std::filesystem::path getThisLibraryPath() {
-#ifdef _WIN32
-  /* Get module of the specified address */
-  HMODULE hModule;
-  GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                         GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                     reinterpret_cast<LPCSTR>(&getThisLibraryPath), &hModule);
-  if (NULL == hModule) {
-    return std::filesystem::path();
-  }
-
-  char fileName[1024]; // this is way beyond Windows MAX_PATH limit.
-  DWORD dwSize = GetModuleFileNameA(hModule, fileName, sizeof(fileName));
-  if (0 == dwSize || sizeof(fileName) == dwSize) {
-    return std::filesystem::path();
-  }
-  return std::filesystem::path(fileName);
-#else
-  Dl_info fileinfo;
-  if (dladdr(reinterpret_cast<void *>(&getThisLibraryPath), &fileinfo) == 0) {
-    return std::filesystem::path();
-  }
-  return std::filesystem::path(fileinfo.dli_fname);
-#endif
-}
-
-static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
-  std::map<std::string, std::string> externLibs;
-  llvm::SmallVector<mlir::LLVM::LLVMFuncOp> funcs;
-  module.walk([&](mlir::LLVM::LLVMFuncOp func) {
-    if (func.isExternal())
-      funcs.push_back(func);
-  });
-
-  for (mlir::LLVM::LLVMFuncOp func : funcs) {
-    if (auto libnameAttr = func->getDiscardableAttr("libname")) {
-      auto name = libnameAttr.dyn_cast<mlir::StringAttr>();
-      auto path = func.getOperation()
-                      ->getDiscardableAttr("libpath")
-                      .dyn_cast<mlir::StringAttr>();
-      if (name) {
-        std::string libName = name.str();
-        externLibs[libName] = path.str();
-      }
-    }
-  }
-
-  if (auto externsAttr = module->getDiscardableAttr("triton_gpu.externs")) {
-    for (auto &attr : externsAttr.cast<mlir::DictionaryAttr>()) {
-      externLibs[attr.getName().strref().trim().str()] =
-          attr.getValue().dyn_cast<mlir::StringAttr>().strref().trim().str();
-    }
-  }
-
-  if (!funcs.empty()) {
-    static const std::string libdevice = "libdevice";
-    // first search for environmental path
-    std::string env_path = ::triton::tools::getenv("TRITON_LIBDEVICE_PATH");
-    if (!env_path.empty()) {
-      externLibs.try_emplace(libdevice, env_path);
-      return externLibs;
-    }
-    // Search for libdevice relative to its library path if used from Python
-    // Then native code is in `triton/_C/libtriton.so` and libdevice in
-    // `triton/third_party/cuda/lib/libdevice.10.bc`
-    static const auto this_library_path = getThisLibraryPath();
-    static const auto runtime_path =
-        this_library_path.parent_path().parent_path() / "third_party" / "cuda" /
-        "lib" / "libdevice.10.bc";
-    if (fs::exists(runtime_path)) {
-      externLibs.try_emplace(libdevice, runtime_path.string());
-    } else {
-      // When using the Math Dialect, it is possible that some ops (e.g., log)
-      // are lowered to a function call. In this case, we need to link libdevice
-      // using its default path:
-      // [triton root dir]/python/triton/language/libdevice.10.bc
-      // TODO(Keren): handle external linkage other than libdevice?
-      static const auto this_file_path = std::filesystem::path(__FILE__);
-      static const auto compiletime_path = this_file_path.parent_path()
-                                               .parent_path()
-                                               .parent_path()
-                                               .parent_path() /
-                                           "python" / "triton" / "third_party" /
-                                           "cuda" / "lib" / "libdevice.10.bc";
-      if (!fs::exists(compiletime_path)) {
-        std::string error_msg = "Can't find libdevice at neither " +
-                                runtime_path.string() + " nor " +
-                                compiletime_path.string();
-        llvm::report_fatal_error(error_msg.c_str());
-      }
-      externLibs.try_emplace(libdevice, compiletime_path.string());
-    }
-  }
-
-  return externLibs;
-}
-
 static void linkLibdevice(llvm::Module &module) {
   // please check https://llvm.org/docs/NVPTXUsage.html#reflection-parameters
   // this will enable fast math path in libdevice
@@ -520,10 +421,8 @@ void init_triton_llvm(py::module &&m) {
     }
   });
 
-  m.def("link_extern_libs",
-        [](mlir::ModuleOp module, llvm::Module *llvmModule) {
-          auto externLibs = getExternLibs(module);
-          for (auto &lib : externLibs)
-            linkExternLib(*llvmModule, lib.first, lib.second);
+  m.def("link_extern_lib",
+        [](llvm::Module *mod, std::string name, std::string path) {
+          linkExternLib(*mod, name, path);
         });
 }
