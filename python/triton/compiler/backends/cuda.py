@@ -1,6 +1,5 @@
 from triton.common.backend import BaseBackend
 from dataclasses import dataclass
-from ..._C.libtriton.translation import add_external_libs
 from ...common.backend import get_cuda_version_key, path_to_ptxas
 from ..._C.libtriton import ir, passes, nvidia, llvm
 import functools
@@ -155,11 +154,6 @@ class CUDABackend(BaseBackend):
     @staticmethod
     def make_llir(src, metadata, options, capability):
         mod = src
-        # link libraries
-        if options.extern_libs:
-            names = [lib[0] for lib in options.extern_libs]
-            paths = [lib[1] for lib in options.extern_libs]
-            add_external_libs(mod, names, paths)
         # TritonGPU -> LLVM-IR (MLIR)
         tma_infos = nvidia.TMAInfos()
         pm = ir.pass_manager(mod.context)

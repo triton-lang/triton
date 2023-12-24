@@ -152,7 +152,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
   set(PYTHON_SRC ${PYTHON_SRC_PATH}/main.cc
                 ${PYTHON_SRC_PATH}/ir.cc
                 ${PYTHON_SRC_PATH}/passes.cc
-                ${PYTHON_SRC_PATH}/translation.cc
                 ${PYTHON_SRC_PATH}/interpreter.cc
                 ${PYTHON_SRC_PATH}/llvm.cc
                 ${PYTHON_SRC_PATH}/nvidia.cc)
