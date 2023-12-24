@@ -299,21 +299,20 @@ void init_triton_llvm(py::module &&m) {
     mod->addModuleFlag(reflect);
   });
 
-  m.def("link_extern_lib",
-        [](llvm::Module *mod, std::string name, std::string path) {
-          llvm::SMDiagnostic err;
-          auto &ctx = mod->getContext();
-          auto extMod = llvm::parseIRFile(path, err, ctx);
-          if (!extMod) {
-            llvm::errs() << "Failed to load " << path;
-            return;
-          }
-          extMod->setTargetTriple(mod->getTargetTriple());
-          extMod->setDataLayout(mod->getDataLayout());
-          if (llvm::Linker::linkModules(*mod, std::move(extMod),
-                                        llvm::Linker::Flags::LinkOnlyNeeded)) {
-            llvm::errs() << "Failed to link " << path;
-            return;
-          }
-        });
+  m.def("link_extern_lib", [](llvm::Module *mod, std::string path) {
+    llvm::SMDiagnostic err;
+    auto &ctx = mod->getContext();
+    auto extMod = llvm::parseIRFile(path, err, ctx);
+    if (!extMod) {
+      llvm::errs() << "Failed to load " << path;
+      return;
+    }
+    extMod->setTargetTriple(mod->getTargetTriple());
+    extMod->setDataLayout(mod->getDataLayout());
+    if (llvm::Linker::linkModules(*mod, std::move(extMod),
+                                  llvm::Linker::Flags::LinkOnlyNeeded)) {
+      llvm::errs() << "Failed to link " << path;
+      return;
+    }
+  });
 }

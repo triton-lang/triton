@@ -179,8 +179,8 @@ class CUDABackend(BaseBackend):
         llvm_mod = llvm.to_module(mod, context, "LLVMModule")
         llvm.set_nvvm_reflect_ftz(llvm_mod)
         if options.extern_libs:
-            for lib in options.extern_libs:
-                llvm.link_extern_lib(llvm_mod, lib[0], lib[1])
+            for name, path in options.extern_libs:
+                llvm.link_extern_lib(llvm_mod, path)
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
         # Get some metadata
         if len(tma_infos) > 0:
