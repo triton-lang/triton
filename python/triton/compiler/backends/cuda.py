@@ -6,6 +6,7 @@ from ..._C.libtriton import ir, passes, nvidia, llvm
 import functools
 from typing import Any
 from ..make_launcher import make_stub
+from ..utils import get_ids_of_tensormaps, parse_tma_info
 import hashlib
 import re
 import tempfile
@@ -152,7 +153,8 @@ class CUDABackend(BaseBackend):
         return mod
 
     @staticmethod
-    def make_llir(mod, metadata, options, capability):
+    def make_llir(src, metadata, options, capability):
+        mod = src
         # link libraries
         if options.extern_libs:
             names = [lib[0] for lib in options.extern_libs]
@@ -178,35 +180,21 @@ class CUDABackend(BaseBackend):
         pm.run(mod)
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         context = llvm.context()
-        mod = llvm.to_module(mod, context, "LLVMModule")
-        # TODO:
-        # if options.extern_libs:
-        #     names = [lib[0] for lib in options.extern_libs]
-        #     paths = [lib[1] for lib in options.extern_libs]
-        #     llvm.link_extern_lib(mod, names, paths)
-        llvm.optimize_module(mod, llvm.OPTIMIZE_O3)
-        nvidia.llvm.fix_attributes(mod)
-        return mod
-
-    # @staticmethod
-    # def make_llir(src, metadata, options, capability):
-    #     metadata["enable_warp_specialization"] = nvidia.passes.ttnvgpuir.is_ws_supported(src)
-    #     metadata["num_warps"] = get_num_warps(src)
-    #     tma_infos = TMAInfos()
-    #     # link libraries
-    #     if options.extern_libs:
-    #         names = [lib[0] for lib in options.extern_libs]
-    #         paths = [lib[1] for lib in options.extern_libs]
-    #         add_external_libs(src, names, paths)
-    #     # TritonGPU -> LLVM-IR
-    #     ret = translate_triton_gpu_to_llvmir(src, capability, tma_infos)
-    #     if len(tma_infos) > 0:
-    #         metadata["tensormaps_info"] = parse_tma_info(tma_infos, metadata["ids_of_folded_args"])
-    #         for i, _ in enumerate(metadata["tensormaps_info"]):
-    #             metadata["tensormaps_info"][i].ids_of_folded_args = metadata["ids_of_folded_args"]
-    #     metadata["ids_of_tensormaps"] = get_ids_of_tensormaps(metadata.get("tensormaps_info", None))
-    #     metadata["shared"] = get_shared_memory_size(src)
-    #     return ret
+        llvm_mod = llvm.to_module(mod, context, "LLVMModule")
+        llvm.link_extern_libs(src, llvm_mod)
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
+        llvm.fix_attributes(src, llvm_mod)
+        # Get some metadata
+        if len(tma_infos) > 0:
+            metadata["tensormaps_info"] = parse_tma_info(tma_infos, metadata["ids_of_folded_args"])
+            for i, _ in enumerate(metadata["tensormaps_info"]):
+                metadata["tensormaps_info"][i].ids_of_folded_args = metadata["ids_of_folded_args"]
+        metadata["ids_of_tensormaps"] = get_ids_of_tensormaps(metadata.get("tensormaps_info", None))
+        metadata["shared"] = llvm.get_shared_memory_size(src)
+        ret = str(llvm_mod)
+        del llvm_mod
+        del context
+        return ret
 
     @staticmethod
     def make_ptx(src, metadata, opt, capability):

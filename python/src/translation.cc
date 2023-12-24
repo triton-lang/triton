@@ -2,7 +2,6 @@
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
-#include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 #include "triton/Target/PTX/TmaMetadata.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 
@@ -24,26 +23,6 @@
 namespace py = pybind11;
 
 PYBIND11_MAKE_OPAQUE(mlir::triton::gpu::TMAMetadataTy);
-
-void findKernels(llvm::Module &M, std::set<llvm::Function *> &functions) {
-  llvm::NamedMDNode *annotations = M.getNamedMetadata("nvvm.annotations");
-  assert(annotations);
-  for (auto *Node : annotations->operands()) {
-    if (Node->getNumOperands() < 3)
-      continue;
-    llvm::Metadata *Op = Node->getOperand(0).get();
-    auto *ValueAsMetadata = llvm::dyn_cast<llvm::ValueAsMetadata>(Op);
-    if (!ValueAsMetadata)
-      continue;
-    auto *F = llvm::dyn_cast<llvm::Function>(ValueAsMetadata->getValue());
-    if (!F)
-      continue;
-    llvm::Metadata *Property = Node->getOperand(1).get();
-    if (auto *MDString = llvm::dyn_cast<llvm::MDString>(Property))
-      if (MDString->getString() == "kernel")
-        functions.insert(F);
-  }
-}
 
 void init_triton_translation(py::module &&m) {
   using ret = py::return_value_policy;
@@ -102,64 +81,23 @@ void init_triton_translation(py::module &&m) {
     return num_warps;
   });
 
-  m.def(
-      "translate_triton_gpu_to_llvmir",
-      [](mlir::ModuleOp op, int computeCapability,
-         mlir::triton::gpu::TMAMetadataTy &tmaInfos) {
-        auto target = mlir::triton::NVVM;
-        py::gil_scoped_release allow_threads;
-        llvm::LLVMContext llvmContext;
-        auto llvmModule = ::mlir::triton::translateTritonGPUToLLVMIR(
-            &llvmContext, op, computeCapability, tmaInfos, target);
-        if (!llvmModule)
-          llvm::report_fatal_error("Failed to translate TritonGPU to LLVM IR.");
-
-        std::string str;
-        llvm::raw_string_ostream os(str);
-        llvmModule->print(os, nullptr);
-        os.flush();
-        return str;
-      },
-      ret::take_ownership);
-
-  m.def(
-      "translate_llvmir_to_asm",
-      [](std::string llvmIR, std::string triple, std::string proc,
-         std::string features, std::vector<std::string> flags,
-         bool enable_fp_fusion,
-         bool isObject) -> std::tuple<py::object, std::string> {
-        py::gil_scoped_release allow_threads;
-
-        // create LLVM module from C++
-        llvm::LLVMContext context;
-        std::unique_ptr<llvm::MemoryBuffer> buffer =
-            llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
-        llvm::SMDiagnostic error;
-        std::unique_ptr<llvm::Module> module =
-            llvm::parseIR(buffer->getMemBufferRef(), error, context);
-        if (!module) {
-          llvm::report_fatal_error(
-              "failed to parse IR: " + error.getMessage() +
-              "lineno: " + std::to_string(error.getLineNo()));
-        }
-        // Get name of kernel in the module
-        // TODO: noinline stuff; only consider kernels
-        std::set<llvm::Function *> kernels;
-        findKernels(*module, kernels);
-        assert(kernels.size() == 1);
-        std::string name = (*kernels.begin())->getName().str();
-        std::string obj = mlir::triton::translateLLVMIRToASM(
-            *module, triple, proc, features, flags, enable_fp_fusion, isObject);
-        if (isObject)
-          return std::make_tuple(py::bytes(obj), name);
-        else
-          return std::make_tuple(py::str(obj), name);
-      },
-      ret::take_ownership);
-
   m.def("add_external_libs",
-        [](mlir::ModuleOp &op, const std::vector<std::string> &names,
+        [](mlir::ModuleOp &module, const std::vector<std::string> &names,
            const std::vector<std::string> &paths) {
-          ::mlir::triton::addExternalLibs(op, names, paths);
+          if (names.empty() || names.size() != paths.size())
+            return;
+
+          llvm::SmallVector<mlir::NamedAttribute, 2> attrs;
+
+          for (size_t i = 0; i < names.size(); ++i) {
+            auto name = mlir::StringAttr::get(module->getContext(), names[i]);
+            auto path = mlir::StringAttr::get(module->getContext(), paths[i]);
+            mlir::NamedAttribute attr(name, path);
+            attrs.push_back(attr);
+          }
+
+          mlir::DictionaryAttr dict =
+              mlir::DictionaryAttr::get(module->getContext(), attrs);
+          module.getOperation()->setAttr("triton_gpu.externs", dict);
         });
 }
