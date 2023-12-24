@@ -150,84 +150,6 @@ std::string translateLLVMIRToASM(llvm::Module &module,
   return result;
 }
 
-struct NVVMMetadata {
-  llvm::SmallVector<int, 3> maxntid;
-  bool isKernel{};
-  // Free to extend with other information.
-};
-
-static void
-extractNVVMMetadata(mlir::ModuleOp module,
-                    llvm::DenseMap<llvm::StringRef, NVVMMetadata> *dic) {
-  for (auto op : module.getOps<mlir::LLVM::LLVMFuncOp>()) {
-    NVVMMetadata meta;
-    bool hasMetadata{};
-    // maxntid
-    if (auto attr = op->getAttrOfType<mlir::ArrayAttr>("nvvm.maxntid")) {
-      llvm::transform(attr.getAsValueRange<mlir::IntegerAttr>(),
-                      std::back_inserter(meta.maxntid),
-                      [](llvm::APInt value) { return value.getZExtValue(); });
-      hasMetadata = true;
-    }
-    // kernel
-    if (op->hasAttr("nvvm.kernel")) {
-      meta.isKernel = true;
-      hasMetadata = true;
-    }
-    if (hasMetadata)
-      dic->try_emplace(op.getNameAttr().strref(), std::move(meta));
-  }
-}
-
-// Add the nvvm related metadata to LLVM IR.
-static void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata) {
-  auto *module = func->getParent();
-  auto &ctx = func->getContext();
-
-  if (!metadata.maxntid.empty()) {
-    auto maxntid =
-        llvm::to_vector(llvm::map_range(metadata.maxntid, [&](int value) {
-          return llvm::ConstantInt::get(llvm::IntegerType::get(ctx, 32),
-                                        llvm::APInt(32, value));
-        }));
-
-    llvm::SmallVector<llvm::Metadata *> md_args = {
-        llvm::ValueAsMetadata::get(func)};
-    if (maxntid.size() > 0) {
-      md_args.push_back(llvm::MDString::get(ctx, "maxntidx"));
-      md_args.push_back(llvm::ValueAsMetadata::get(maxntid[0]));
-    }
-    if (maxntid.size() > 1) {
-      md_args.push_back(llvm::MDString::get(ctx, "maxntidy"));
-      md_args.push_back(llvm::ValueAsMetadata::get(maxntid[1]));
-    }
-    if (maxntid.size() > 2) {
-      md_args.push_back(llvm::MDString::get(ctx, "maxntidz"));
-      md_args.push_back(llvm::ValueAsMetadata::get(maxntid[2]));
-    }
-
-    module->getOrInsertNamedMetadata("nvvm.annotations")
-        ->addOperand(llvm::MDNode::get(ctx, md_args));
-  }
-
-  if (metadata.isKernel) {
-    // switch (target) {
-    // case Target::NVVM: {
-    llvm::Metadata *mdArgs[] = {
-        llvm::ValueAsMetadata::get(func), llvm::MDString::get(ctx, "kernel"),
-        llvm::ValueAsMetadata::get(
-            llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx), 1))};
-    module->getOrInsertNamedMetadata("nvvm.annotations")
-        ->addOperand(llvm::MDNode::get(ctx, mdArgs));
-    // } break;
-    // case Target::ROCDL: {
-    //   func->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
-    //   func->addFnAttr("amdgpu-flat-work-group-size", "1, 1024");
-    // } break;
-    // }
-  }
-}
-
 using ret = py::return_value_policy;
 
 void findKernels(llvm::Module &M, std::set<llvm::Function *> &functions) {
@@ -361,16 +283,6 @@ void init_triton_llvm(py::module &&m) {
           return std::make_tuple(py::str(obj), name);
       },
       ret::take_ownership);
-
-  m.def("fix_attributes", [](mlir::ModuleOp module, llvm::Module *llvmModule) {
-    llvm::DenseMap<llvm::StringRef, NVVMMetadata> nvvmMetadata;
-    extractNVVMMetadata(module, &nvvmMetadata);
-    for (auto &func : llvmModule->functions()) {
-      auto it = nvvmMetadata.find(func.getName());
-      if (it != nvvmMetadata.end())
-        amendLLVMFunc(&func, it->second); //, target);
-    }
-  });
 
   m.def("set_nvvm_reflect_ftz", [](llvm::Module *mod) {
     // please check https://llvm.org/docs/NVPTXUsage.html#reflection-parameters
