@@ -1,6 +1,6 @@
 from triton.common.backend import BaseBackend
 from dataclasses import dataclass
-from ..._C.libtriton.translation import ClusterInfo, TMAInfos, add_external_libs
+from ..._C.libtriton.translation import add_external_libs
 from ...common.backend import get_cuda_version_key, path_to_ptxas
 from ..._C.libtriton import ir, passes, nvidia, llvm
 import functools
@@ -89,7 +89,7 @@ class CUDABackend(BaseBackend):
 
     @staticmethod
     def make_ttgir(mod, metadata, opt, capability):
-        cluster_info = ClusterInfo()
+        cluster_info = nvidia.ClusterInfo()
         if opt.cluster_dims is not None:
             cluster_info.clusterDimX = opt.cluster_dims[0]
             cluster_info.clusterDimY = opt.cluster_dims[1]
@@ -161,7 +161,7 @@ class CUDABackend(BaseBackend):
             paths = [lib[1] for lib in options.extern_libs]
             add_external_libs(mod, names, paths)
         # TritonGPU -> LLVM-IR (MLIR)
-        tma_infos = TMAInfos()
+        tma_infos = nvidia.TMAInfos()
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.convert.add_scf_to_cf(pm)
@@ -190,7 +190,7 @@ class CUDABackend(BaseBackend):
             for i, _ in enumerate(metadata["tensormaps_info"]):
                 metadata["tensormaps_info"][i].ids_of_folded_args = metadata["ids_of_folded_args"]
         metadata["ids_of_tensormaps"] = get_ids_of_tensormaps(metadata.get("tensormaps_info", None))
-        metadata["shared"] = llvm.get_shared_memory_size(src)
+        metadata["shared"] = src.get_int_attr("triton_gpu.shared")
         ret = str(llvm_mod)
         del llvm_mod
         del context

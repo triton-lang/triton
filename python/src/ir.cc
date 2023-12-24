@@ -413,6 +413,13 @@ void init_triton_ir(py::module &&m) {
               std::string &funcName) -> mlir::triton::FuncOp {
              return self.lookupSymbol<mlir::triton::FuncOp>(funcName);
            })
+      .def("get_int_attr",
+           [](mlir::ModuleOp &self, std::string name) -> py::object {
+             auto ret = self->getAttrOfType<mlir::IntegerAttr>(name);
+             if (!ret)
+               return py::none();
+             return py::int_(ret.getInt());
+           })
       .def("get_single_function",
            [](mlir::ModuleOp &self) -> mlir::triton::FuncOp {
              llvm::SmallVector<mlir::triton::FuncOp> funcs;

@@ -526,9 +526,4 @@ void init_triton_llvm(py::module &&m) {
           for (auto &lib : externLibs)
             linkExternLib(*llvmModule, lib.first, lib.second);
         });
-
-  m.def("get_shared_memory_size", [](mlir::ModuleOp mod) {
-    auto shared = mod->getAttrOfType<mlir::IntegerAttr>("triton_gpu.shared");
-    return shared.getInt();
-  });
 }
