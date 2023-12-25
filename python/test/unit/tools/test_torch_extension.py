@@ -81,24 +81,21 @@ def load_extension(cache_dir, kernel_name):
     metadata = json.load(open(metadata_path))
     metadata_group = json.load(open(metadata_group))["child_paths"]
     cubin_path = metadata_group[f"{kernel_name}.cubin"]
-    # extension_path = cache_dir / f"{kernel_name}.cu"
 
-    # with tempfile.TemporaryDirectory() as tmp_dir:
-    from pathlib import Path
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        extension_path = os.path.join(tmp_dir, f"{kernel_name}.cu")
 
-    extension_path = os.path.join(f"{kernel_name}.cu")
-
-    codegen = TorchExtCodeGen(
-        kernel_name=kernel_name, metadata=metadata, metadata_group=metadata_group
-    )
-    codegen.generate(extension_path)
-    module = load(
-        name=f"{kernel_name}",
-        sources=[extension_path],
-        extra_cflags=["-O2"],
-        extra_ldflags=["-lcuda"],
-        verbose=True,
-    )
+        codegen = TorchExtCodeGen(
+            kernel_name=kernel_name, metadata=metadata, metadata_group=metadata_group
+        )
+        codegen.generate(extension_path)
+        module = load(
+            name=f"{kernel_name}",
+            sources=[extension_path],
+            extra_cflags=["-O2"],
+            extra_ldflags=["-lcuda"],
+            verbose=True,
+        )
     return module, cubin_path
 
 
@@ -394,15 +391,15 @@ def test_flash_attention(Z, H, N_CTX, D_HEAD, causal, dtype, cache_dir, cuda_con
         v,
         sm_scale,
         M,
-        o,  #
+        o,
         q.stride(0),
         q.stride(1),
         q.stride(2),
-        q.stride(3),  #
+        q.stride(3),
         k.stride(0),
         k.stride(1),
         k.stride(2),
-        k.stride(3),  #
+        k.stride(3),
         v.stride(0),
         v.stride(1),
         v.stride(2),
@@ -422,15 +419,15 @@ def test_flash_attention(Z, H, N_CTX, D_HEAD, causal, dtype, cache_dir, cuda_con
         v,
         sm_scale,
         M,
-        o,  #
+        o,
         q.stride(0),
         q.stride(1),
         q.stride(2),
-        q.stride(3),  #
+        q.stride(3),
         k.stride(0),
         k.stride(1),
         k.stride(2),
-        k.stride(3),  #
+        k.stride(3),
         v.stride(0),
         v.stride(1),
         v.stride(2),
