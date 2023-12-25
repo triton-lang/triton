@@ -49,7 +49,7 @@ class CUDAOptions:
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent.parent.parent / 'third_party' / 'cuda' / 'lib'
-        extern_libs = dict(self.extern_libs)
+        extern_libs = dict() if self.extern_libs is None else dict(self.extern_libs)
         if not extern_libs.get('libdevice', None):
             extern_libs['libdevice'] = str(default_libdir / 'libdevice.10.bc')
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
