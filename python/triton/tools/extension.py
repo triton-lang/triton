@@ -218,7 +218,7 @@ void test_cubin() {{
         IMPORTANT NOTES: 
             - The grid should be sized according to the same heuristics as the original kernel, as constexprs are baked into the kernel.
             E.g., if the original grid was lambda meta: (triton.cdiv(n_elements, meta[\'BLOCK_SIZE\']), 1, 1), then the grid should be (triton.cdiv(n_elements, BLOCK_SIZE), 1, 1).
-            - The kernel is launched on device 0.
+            - The kernel is launched on current device and stream using torch cuda API.
         Constants are also exposed as attributes.  
         E.g., if the kernel has a constant named BLOCK_SIZE, then the constant can be accessed as kernel.BLOCK_SIZE.)";
     """
