@@ -47,7 +47,7 @@ def add_kernel(x_ptr,  # *Pointer* to first input vector.
     # multiple of the block size.
     x = tl.load(x_ptr + offsets, mask=mask)
     y = tl.load(y_ptr + offsets, mask=mask)
-    output = x + y
+    output = tl.math.log2(x + y)
     # Write x + y back to DRAM.
     tl.store(output_ptr + offsets, output, mask=mask)
 
