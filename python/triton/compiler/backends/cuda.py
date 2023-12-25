@@ -175,7 +175,6 @@ class CUDABackend(BaseBackend):
             passes.llvmir.add_di_scope(pm)
         pm.run(mod)
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
-        # breakpoint()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context, "LLVMModule")
         llvm.set_nvvm_reflect_ftz(llvm_mod)
