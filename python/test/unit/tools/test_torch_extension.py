@@ -154,6 +154,10 @@ def test_add_kernel(cache_dir, cuda_context):
     assert torch.allclose(triton_output, extension_output)
 
 
+@pytest.mark.skipif(
+    skip_torch_extension_tests(),
+    reason="Torch extension tests skipped, set RUN_TORCH_EXTENSION_TESTS=1 to run",
+)
 @pytest.mark.parametrize("shape", [(1823, 781), (2000, 2048), (2000, 4096)])
 def test_fused_softmax(cache_dir, shape, cuda_context):
     from kernels import softmax_kernel
@@ -207,6 +211,10 @@ def test_fused_softmax(cache_dir, shape, cuda_context):
     assert torch.allclose(output, y_torch)
 
 
+@pytest.mark.skipif(
+    skip_torch_extension_tests(),
+    reason="Torch extension tests skipped, set RUN_TORCH_EXTENSION_TESTS=1 to run",
+)
 @pytest.mark.parametrize(
     "activation",
     ["", "leaky_relu"],
@@ -327,6 +335,10 @@ def test_matmul(cache_dir, config, activation, cuda_context):
     assert torch.allclose(extension_output, triton_output, atol=1e-2, rtol=0)
 
 
+@pytest.mark.skipif(
+    skip_torch_extension_tests(),
+    reason="Torch extension tests skipped, set RUN_TORCH_EXTENSION_TESTS=1 to run",
+)
 @pytest.mark.parametrize("Z, H, N_CTX, D_HEAD", [(1, 2, 1024, 64)])
 @pytest.mark.parametrize("causal", [True])
 @pytest.mark.parametrize("dtype", [torch.float16])
