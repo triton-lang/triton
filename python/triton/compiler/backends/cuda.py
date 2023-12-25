@@ -155,6 +155,10 @@ class CUDABackend(BaseBackend):
 
     @staticmethod
     def make_llir(src, metadata, options, capability):
+        # warp-specialization mutates num_warps
+        num_warp_groups = src.get_int_attr("triton_gpu.num-warp-groups-per-cta")
+        if num_warp_groups is not None:
+            metadata["num_warps"] *= num_warp_groups
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
         tma_infos = nvidia.TMAInfos()
