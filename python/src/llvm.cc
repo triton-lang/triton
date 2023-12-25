@@ -176,6 +176,7 @@ void init_triton_llvm(py::module &&m) {
 
   py::class_<llvm::LLVMContext>(m, "context", py::module_local())
       .def(py::init<>());
+
   py::class_<llvm::Module>(m, "module", py::module_local())
       .def(
           "__str__",
@@ -186,7 +187,6 @@ void init_triton_llvm(py::module &&m) {
             return os.str();
           },
           ret::take_ownership);
-  ;
 
   // optimization levels
   py::class_<llvm::OptimizationLevel>(m, "optimization_level",
