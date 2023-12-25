@@ -8,14 +8,24 @@ import os
 import textwrap
 from collections import defaultdict, namedtuple
 from functools import cached_property
-from typing import Callable, Generic, Iterable, List, Optional, TypeVar, Union, cast, overload
+from typing import (
+    Callable,
+    Generic,
+    Iterable,
+    List,
+    Optional,
+    TypeVar,
+    Union,
+    cast,
+    overload,
+)
 
 from .._C.libtriton.translation import TMAInfos
 from ..common.backend import get_backend, get_cuda_version_key
-from .interpreter import InterpretedFunction
 from ..runtime.driver import driver
+from .interpreter import InterpretedFunction
 
-TRITON_MODULE = __name__[:-len(".runtime.jit")]
+TRITON_MODULE = __name__[: -len(".runtime.jit")]
 
 T = TypeVar("T")
 
@@ -95,7 +105,10 @@ class KernelParam:
 
     @cached_property
     def annotation(self):
-        if not self._param.annotation or self._param.annotation == inspect.Parameter.empty:
+        if (
+            not self._param.annotation
+            or self._param.annotation == inspect.Parameter.empty
+        ):
             return ""
         return _normalize_ty(self._param.annotation)
 
@@ -141,7 +154,7 @@ class KernelArg:
         assert not self.param.do_not_specialize
 
         if hasattr(self.value, "data_ptr"):
-            return (self.value.data_ptr() % JITFunction.divisibility == 0, )
+            return (self.value.data_ptr() % JITFunction.divisibility == 0,)
 
         if isinstance(self.value, int):
             # bool is a subclass of int, so we don't check explicitly above.
@@ -151,7 +164,7 @@ class KernelArg:
                 self.value == 1,
             )
 
-        return (False, )
+        return (False,)
 
 
 class KernelInterface(Generic[T]):
@@ -163,7 +176,9 @@ class KernelInterface(Generic[T]):
         Hence JITFunction.__getitem__ returns a callable proxy that
         memorizes the grid.
         """
-        return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+        return lambda *args, **kwargs: self.run(
+            grid=grid, warmup=False, *args, **kwargs
+        )
         # return cast(T, functools.partial(cast(Callable, self.run), grid=grid))
 
 
@@ -203,7 +218,7 @@ class JITFunction(KernelInterface[T]):
             return arg.data_ptr() % JITFunction.divisibility == 0
         elif isinstance(arg, int):
             return (arg % 16 == 0, arg == 1)
-        return (arg is None, )
+        return (arg is None,)
 
     # TODO(jlebar): Fold this into the KernelArg class.
     def _get_config(self, *args):
@@ -238,14 +253,25 @@ class JITFunction(KernelInterface[T]):
         equal_to_1 = {
             param.num
             for param, arg in zip(self.params, args)
-            if isinstance(arg, int) and not isinstance(arg, bool) and arg == 1 and not param.do_not_specialize
+            if isinstance(arg, int)
+            and not isinstance(arg, bool)
+            and arg == 1
+            and not param.do_not_specialize
         }
         # folded equal_to_1 and None
         # TODO: method to collect all folded args
-        none_args = {param.num for param, arg in zip(self.params, args) if arg is None and not param.do_not_specialize}
+        none_args = {
+            param.num
+            for param, arg in zip(self.params, args)
+            if arg is None and not param.do_not_specialize
+        }
         ids_of_folded_args = equal_to_1 | none_args
-        return AttrsDescriptor(tuple(divisible_by_16), tuple(equal_to_1), tuple(ids_of_folded_args),
-                               tuple(divisible_by_8))
+        return AttrsDescriptor(
+            tuple(divisible_by_16),
+            tuple(equal_to_1),
+            tuple(ids_of_folded_args),
+            tuple(divisible_by_8),
+        )
         # return _triton.code_gen.instance_descriptor(divisible_by_16,
         # equal_to_1)
 
@@ -304,12 +330,13 @@ class JITFunction(KernelInterface[T]):
 
         name = self.fn.__name__
         module = self.fn.__module__
-        arg_reprs = ", ".join([f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])])
+        arg_reprs = ", ".join(
+            [f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])]
+        )
         repr = f"{name}[num_warps={num_warps}, num_ctas={num_ctas}, num_stages={num_stages}, enable_warp_specialization={enable_warp_specialization}, enable_fp_fusion={enable_fp_fusion}]({arg_reprs})"
         key = str(key)
 
         class LegacyCompiler:
-
             def __init__(self, module, name):
                 self.module = module
                 self.name = name
@@ -337,13 +364,20 @@ class JITFunction(KernelInterface[T]):
             already_compiled=False,
         )
 
-    def run(self, *args, grid, warmup, **kwargs):
-        from ..compiler import CompiledKernel, compile, ASTSource
+    def run(self, *args, grid, warmup, save_extra_meta=False, **kwargs):
+        from ..compiler import ASTSource, CompiledKernel, compile
         from ..compiler.backends import make_backend
+
         # deprecated arguments
-        assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
-        assert "device" not in kwargs, "device option is deprecated; current device will be used"
-        assert "stream" not in kwargs, "stream option is deprecated; current stream will be used"
+        assert (
+            "device_type" not in kwargs
+        ), "device_type option is deprecated; current target will be used"
+        assert (
+            "device" not in kwargs
+        ), "device option is deprecated; current device will be used"
+        assert (
+            "stream" not in kwargs
+        ), "stream option is deprecated; current stream will be used"
         # parse options
         device = driver.get_current_device()
         stream = driver.get_current_stream(device)
@@ -368,18 +402,27 @@ class JITFunction(KernelInterface[T]):
         grid_1 = grid[1] if grid_size > 1 else 1
         grid_2 = grid[2] if grid_size > 2 else 1
         # compute cache key
-        args = [KernelArg(arg_value, param) for (_, arg_value), param in zip(bound_args.arguments.items(), self.params)]
-        sig_key = tuple(arg.signature_key() for arg in args if not arg.param.is_constexpr)
-        spec_key = tuple(arg.specialization_key() for arg in args if not arg.param.do_not_specialize)
+        args = [
+            KernelArg(arg_value, param)
+            for (_, arg_value), param in zip(bound_args.arguments.items(), self.params)
+        ]
+        sig_key = tuple(
+            arg.signature_key() for arg in args if not arg.param.is_constexpr
+        )
+        spec_key = tuple(
+            arg.specialization_key() for arg in args if not arg.param.do_not_specialize
+        )
         constexpr_key = tuple(arg.value for arg in args if arg.param.is_constexpr)
         key = (get_cuda_version_key(), sig_key, constexpr_key, spec_key, options)
         # Kernel is not cached; we have to compile.
         if key not in self.cache[device]:
-            configs = (self._get_config(*[arg.value for arg in args]), )
+            configs = (self._get_config(*[arg.value for arg in args]),)
             constants = {
                 arg.param.num: arg.value
                 for arg in args
-                if arg.param.is_constexpr or arg.param.num in configs[0].equal_to_1 or arg.value is None
+                if arg.param.is_constexpr
+                or arg.param.num in configs[0].equal_to_1
+                or arg.value is None
             }
             for i, arg in constants.items():
                 if callable(arg):
@@ -392,29 +435,64 @@ class JITFunction(KernelInterface[T]):
                 if not arg.param.is_constexpr
             }
 
-            if self._call_hook(key, signature, device, constants, options.num_warps, options.num_ctas,
-                               options.num_stages, options.enable_warp_specialization, options.enable_fp_fusion,
-                               options.extern_libs, configs):
+            if self._call_hook(
+                key,
+                signature,
+                device,
+                constants,
+                options.num_warps,
+                options.num_ctas,
+                options.num_stages,
+                options.enable_warp_specialization,
+                options.enable_fp_fusion,
+                options.extern_libs,
+                configs,
+            ):
                 return None
             # compile the kernel
             src = ASTSource(self, signature, constants, configs[0])
-            self.cache[device][key] = compile(
-                src,
-                target=target,
-                options=options.__dict__,
-            )
+            if save_extra_meta:
+                self.cache[device][key] = compile(
+                    src,
+                    target=target,
+                    options=options.__dict__,
+                    arg_names=list(self.signature.parameters.keys()),
+                    save_extra_meta=True,
+                )
+            else:
+                self.cache[device][key] = compile(
+                    src,
+                    target=target,
+                    options=options.__dict__,
+                )
 
         kernel = self.cache[device][key]
         if not warmup:
             args = [arg.value for arg in args if not arg.param.is_constexpr]
-            kernel.run(grid_0, grid_1, grid_2, kernel.num_warps, kernel.num_ctas,  # number of warps/ctas per instance
-                       kernel.cluster_dims[0], kernel.cluster_dims[1], kernel.cluster_dims[2],  # cluster
-                       kernel.shared, stream, kernel.function, CompiledKernel.launch_enter_hook,
-                       CompiledKernel.launch_exit_hook, kernel,
-                       *driver.assemble_tensormap_to_arg(kernel.metadata["tensormaps_info"], args))
+            kernel.run(
+                grid_0,
+                grid_1,
+                grid_2,
+                kernel.num_warps,
+                kernel.num_ctas,  # number of warps/ctas per instance
+                kernel.cluster_dims[0],
+                kernel.cluster_dims[1],
+                kernel.cluster_dims[2],  # cluster
+                kernel.shared,
+                stream,
+                kernel.function,
+                CompiledKernel.launch_enter_hook,
+                CompiledKernel.launch_exit_hook,
+                kernel,
+                *driver.assemble_tensormap_to_arg(
+                    kernel.metadata["tensormaps_info"], args
+                ),
+            )
         return kernel
 
-    def __init__(self, fn, version=None, do_not_specialize=None, debug=None, noinline=None):
+    def __init__(
+        self, fn, version=None, do_not_specialize=None, debug=None, noinline=None
+    ):
         do_not_specialize = do_not_specialize if do_not_specialize else []
 
         self.fn = fn
@@ -426,12 +504,14 @@ class JITFunction(KernelInterface[T]):
 
         self.params = []
         for i, param in enumerate(self.signature.parameters.values()):
-            dns = do_not_specialize and (i in do_not_specialize or param.name in do_not_specialize)
+            dns = do_not_specialize and (
+                i in do_not_specialize or param.name in do_not_specialize
+            )
             self.params.append(KernelParam(i, param, dns))
 
         # function source code (without decorators)
         self.src = textwrap.dedent(inspect.getsource(fn))
-        self.src = self.src[self.src.find("def"):]
+        self.src = self.src[self.src.find("def") :]
         # cache of just-in-time compiled kernels
         self.cache = defaultdict(dict)
         self.hash = None
@@ -459,13 +539,17 @@ class JITFunction(KernelInterface[T]):
     def cache_key(self):
         # TODO : hash should be attribute of `self`
         if self.hash is None:
-            dependencies_finder = DependenciesFinder(globals=self.__globals__, src=self.src)
+            dependencies_finder = DependenciesFinder(
+                globals=self.__globals__, src=self.src
+            )
             dependencies_finder.visit(self.parse())
             self.hash = dependencies_finder.ret + str(self.starting_line_number)
         return self.hash
 
     def warmup(self, *args, grid, **kwargs):
-        return self.run(grid=grid, warmup=True, *map(MockTensor.wrap_dtype, args), **kwargs)
+        return self.run(
+            grid=grid, warmup=True, *map(MockTensor.wrap_dtype, args), **kwargs
+        )
 
     # we do not parse `src` in the constructor because
     # the user might want to monkey-patch self.src dynamically.
@@ -584,7 +668,6 @@ class MockTensor:
 
 
 class TensorWrapper:
-
     def __init__(self, base, dtype):
         self.dtype = dtype
         self.base = base

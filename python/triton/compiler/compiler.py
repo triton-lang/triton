@@ -155,7 +155,7 @@ class IRSource:
         return dict()
 
 
-def compile(src, target=None, options=None):
+def compile(src, target=None, options=None, save_extra_meta=False, arg_names=None):
     if target is None:
         target = driver.get_current_target()
     backend = make_backend(target)
@@ -184,6 +184,17 @@ def compile(src, target=None, options=None):
         **get_env_vars(),
         **src.metadata(),
     }
+    if save_extra_meta:
+    metadata = {
+        "signature": src.signature,
+        "constants": src.constants,
+        "arg_names": arg_names
+        if arg_names
+        else [f"arg_{i}" for i in range(len(src.signature))],
+        "attrs": src.attrs.serialize() if src.attrs else None,
+        **metadata,
+    }
+
     # run compilation pipeline  and populate metadata
     stages = dict()
     backend.add_stages(stages, options)
