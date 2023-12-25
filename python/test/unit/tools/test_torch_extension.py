@@ -1,16 +1,13 @@
 import json
 import os
 import shutil
-from dataclasses import dataclass
+import tempfile
 
 import pytest
 import torch
 from torch.utils.cpp_extension import load
 
 import triton
-import triton.language as tl
-from triton.compiler.compiler import CompiledKernel
-from triton.runtime.driver import driver
 from triton.tools.extension import TorchExtCodeGen
 
 torch.manual_seed(0)
@@ -39,19 +36,20 @@ def load_extension(cache_dir, kernel_name):
     metadata_group = json.load(open(metadata_group))["child_paths"]
     cubin_path = metadata_group[f"{kernel_name}.cubin"]
     # extension_path = cache_dir / f"{kernel_name}.cu"
-    extension_path = f"{kernel_name}.cu"
 
-    codegen = TorchExtCodeGen(
-        kernel_name=kernel_name, metadata=metadata, metadata_group=metadata_group
-    )
-    codegen.generate(extension_path)
-    module = load(
-        name=f"{kernel_name}",
-        sources=[extension_path],
-        extra_cflags=["-O2"],
-        extra_ldflags=["-lcuda"],
-        verbose=True,
-    )
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        codegen = TorchExtCodeGen(
+            kernel_name=kernel_name, metadata=metadata, metadata_group=metadata_group
+        )
+        extension_path = os.path.join(tmp_dir, f"{kernel_name}.cu")
+        codegen.generate(extension_path)
+        module = load(
+            name=f"{kernel_name}",
+            sources=[extension_path],
+            extra_cflags=["-O2"],
+            extra_ldflags=["-lcuda"],
+            verbose=True,
+        )
     return module, cubin_path
 
 
@@ -59,6 +57,14 @@ def run_jit(kernel, grid, *args, **kwargs):
     kernel.run(*args, grid=grid, warmup=True, save_extra_meta=True, **kwargs)
 
 
+def skip_torch_extension_tests():
+    return not os.environ.get("RUN_TORCH_EXTENSION_TEST", False)
+
+
+@pytest.mark.skipif(
+    skip_torch_extension_tests(),
+    reason="Torch extension tests skipped, set RUN_TORCH_EXTENSION_TESTS=1 to run",
+)
 def test_add_kernel(cache_dir):
     from kernels import add_kernel
 
