@@ -1536,7 +1536,7 @@ def _convert_elem_to_ir_value(builder, elem, require_i64):
         if elem.dtype != tl.int64 and require_i64:
             return builder.create_int_cast(elem.handle, builder.get_int64_ty(), elem.dtype.is_int_signed())
         elif elem.dtype != tl.int32 and not require_i64:
-            assert elem.dtype != tl.int64, "Block pointers only support 32 bit `offsets/block_shape`, " \
+            assert False, "Block pointers only support 32 bit `offsets/block_shape`, " \
                 "add a `.to(tl.int32)` or use regular indexing for 64 bit support"
         return elem.handle
     assert False, f"Unsupported element type in shape/strides/offsets: {type(elem)}"
