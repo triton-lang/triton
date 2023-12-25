@@ -1531,11 +1531,11 @@ def _convert_elem_to_ir_value(builder, elem, require_i64):
     if isinstance(elem, tl.constexpr):
         if require_i64:
             assert -2**63 <= elem.value < 2**63, f"Block pointers only support 64 bit `shape/strides`, " \
-                "got a value {elem.value} which is out of the range"
+                f"got a value {elem.value} which is out of the range"
             return builder.get_int64(elem.value)
         else:
             assert -2**31 <= elem.value < 2**31, f"Block pointers only support 32 bit `offsets/block_shape`, " \
-                "got a value {elem.value} which is out of the range"
+                f"got a value {elem.value} which is out of the range"
             return builder.get_int32(elem.value)
     elif isinstance(elem, tl.tensor):
         assert elem.numel.value == 1, "Expected a scalar in shape/strides/offsets"
