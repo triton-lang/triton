@@ -2,19 +2,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from dataclasses import dataclass
+from pathlib import Path
 
 from .._C.libtriton import get_env_vars, ir
+
 # from ..runtime import driver, jit, JITFunction
 # TODO: runtime.errors
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
 from ..runtime.driver import driver
-from .utils import InfoFromBackendForTensorMap
 from .backends import make_backend
-from dataclasses import dataclass
 from .code_generator import ast_to_ttir
-from pathlib import Path
-import re
+from .utils import InfoFromBackendForTensorMap
 
 
 @dataclass
@@ -55,7 +56,7 @@ prototype_pattern = {
     "ptx": ptx_prototype_pattern,
 }
 
-mlir_arg_type_pattern = r'%\w+: ((?:[^,\s<]+|<[^>]+>)+),?'
+mlir_arg_type_pattern = r"%\w+: ((?:[^,\s<]+|<[^>]+>)+),?"
 ptx_arg_type_pattern = r"\.param\s+\.(\w+)"
 arg_type_pattern = {
     "ttir": mlir_arg_type_pattern,
@@ -67,9 +68,9 @@ arg_type_pattern = {
 def convert_type_repr(x):
     # Currently we only capture the pointer type and assume the pointer is on global memory.
     # TODO: Capture and support shared memory space
-    match = re.search(r'!tt\.ptr<([^,]+)', x)
+    match = re.search(r"!tt\.ptr<([^,]+)", x)
     if match is not None:
-        return '*' + convert_type_repr(match.group(1))
+        return "*" + convert_type_repr(match.group(1))
     return x
 
 
@@ -84,9 +85,12 @@ def _get_num_warps_from_ir_str(src: str):
     # If warp specialization is enabled, the true number of warps from
     # the perspective of e.g. CUDA is num-warps times the number of
     # specialized groups.
-    num_warp_groups_matches = re.findall(r'"triton_gpu.num-warp-groups-per-cta"\s?=\s?(\d+)\s?:', src)
-    assert len(num_warp_groups_matches) == 0 or len(num_warp_groups_matches) == 1, \
-      "Expected triton_gpu.num-warp-groups-per-cta attribute to appear 0 or 1 times"
+    num_warp_groups_matches = re.findall(
+        r'"triton_gpu.num-warp-groups-per-cta"\s?=\s?(\d+)\s?:', src
+    )
+    assert (
+        len(num_warp_groups_matches) == 0 or len(num_warp_groups_matches) == 1
+    ), "Expected triton_gpu.num-warp-groups-per-cta attribute to appear 0 or 1 times"
     if num_warp_groups_matches:
         num_warps *= int(num_warp_groups_matches[0])
 
@@ -94,7 +98,6 @@ def _get_num_warps_from_ir_str(src: str):
 
 
 class ASTSource:
-
     def __init__(self, fn, signature, constants=None, attrs=None) -> None:
         self.fn = fn
         self.ext = "ttir"
@@ -103,7 +106,9 @@ class ASTSource:
         self.constants = constants
         self.attrs = attrs
         if isinstance(self.signature, str):
-            self.signature = {k: v.strip() for k, v in enumerate(self.signature.split(","))}
+            self.signature = {
+                k: v.strip() for k, v in enumerate(self.signature.split(","))
+            }
         if self.constants is None:
             self.constants = dict()
         if self.attrs is None:
@@ -118,14 +123,15 @@ class ASTSource:
 
     def metadata(self):
         # TODO: remove once TMA support is cleaned up
-        return {"ids_of_folded_args": tuple([int(k) for k in self.attrs.ids_of_folded_args])}
+        return {
+            "ids_of_folded_args": tuple([int(k) for k in self.attrs.ids_of_folded_args])
+        }
 
     def parse_options(self):
         return dict()
 
 
 class IRSource:
-
     def __init__(self, path):
         self.path = path
         path = Path(path)
@@ -151,7 +157,7 @@ class IRSource:
 
     def parse_options(self):
         if self.ext == "ttgir":
-            return {'num_warps': _get_num_warps_from_ir_str(self.src)}
+            return {"num_warps": _get_num_warps_from_ir_str(self.src)}
         return dict()
 
 
@@ -185,15 +191,19 @@ def compile(src, target=None, options=None, save_extra_meta=False, arg_names=Non
         **src.metadata(),
     }
     if save_extra_meta:
-    metadata = {
-        "signature": src.signature,
-        "constants": src.constants,
-        "arg_names": arg_names
-        if arg_names
-        else [f"arg_{i}" for i in range(len(src.signature))],
-        "attrs": src.attrs.serialize() if src.attrs else None,
-        **metadata,
-    }
+        from dataclasses import asdict
+
+        metadata = {
+            "signature": src.signature,
+            "constants": src.constants,
+            "arg_names": arg_names
+            if arg_names
+            else [f"arg_{i}" for i in range(len(src.signature))],
+            "attrs": {k: list(v) for k, v in asdict(src.attrs).items()}
+            if src.attrs
+            else None,
+            **metadata,
+        }
 
     # run compilation pipeline  and populate metadata
     stages = dict()
@@ -202,11 +212,14 @@ def compile(src, target=None, options=None, save_extra_meta=False, arg_names=Non
     module = src.make_ir(options)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
-        metadata_group[f"{src.name}.{ext}"] = fn_cache_manager.put(next_module, f"{src.name}.{ext}")
+        metadata_group[f"{src.name}.{ext}"] = fn_cache_manager.put(
+            next_module, f"{src.name}.{ext}"
+        )
         module = next_module
     # write-back metadata
-    metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
-                                                             binary=False)
+    metadata_group[metadata_filename] = fn_cache_manager.put(
+        json.dumps(metadata, default=vars), metadata_filename, binary=False
+    )
     fn_cache_manager.put_group(metadata_filename, metadata_group)
     so_path = backend.make_launcher_stub(src, metadata)
     # return handle to compiled kernel
@@ -214,33 +227,44 @@ def compile(src, target=None, options=None, save_extra_meta=False, arg_names=Non
 
 
 class CompiledKernel:
-
     # Hooks for external tools to monitor the execution of triton kernels
     # TODO: move out of this namespace since it's a runtime thing
     launch_enter_hook = None
     launch_exit_hook = None
 
     def __init__(self, so_path, metadata_group):
-        metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
+        metadata_path = next(
+            (Path(p) for c, p in metadata_group.items() if c.endswith(".json"))
+        )
         # initialize launcher
         import importlib.util
+
         spec = importlib.util.spec_from_file_location("__triton_launcher", so_path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         self.run = getattr(mod, "launch")
         # initialize metadata
         self.metadata = json.loads(metadata_path.read_text())
-        self.metadata['tensormaps_info'] = [InfoFromBackendForTensorMap(e) for e in self.metadata['tensormaps_info']
-                                            ] if 'tensormaps_info' in self.metadata else []
+        self.metadata["tensormaps_info"] = (
+            [InfoFromBackendForTensorMap(e) for e in self.metadata["tensormaps_info"]]
+            if "tensormaps_info" in self.metadata
+            else []
+        )
         for i, _ in enumerate(self.metadata["tensormaps_info"]):
-            self.metadata["tensormaps_info"][i].ids_of_folded_args = tuple(self.metadata["ids_of_folded_args"])
+            self.metadata["tensormaps_info"][i].ids_of_folded_args = tuple(
+                self.metadata["ids_of_folded_args"]
+            )
         self.name = self.metadata["name"]
         for key, val in self.metadata.items():
             setattr(self, key, val)
         # stores the text of each level of IR that was generated during compilation
-        asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
+        asm_files = [
+            Path(p) for c, p in metadata_group.items() if not c.endswith(".json")
+        ]
         self.asm = {
-            file.suffix[1:]: file.read_bytes() if file.suffix[1:] == driver.binary_ext else file.read_text()
+            file.suffix[1:]: file.read_bytes()
+            if file.suffix[1:] == driver.binary_ext
+            else file.read_text()
             for file in asm_files
         }
         self.kernel = self.asm[driver.binary_ext]
@@ -259,11 +283,15 @@ class CompiledKernel:
         if self.shared > max_shared:
             raise OutOfResources(self.shared, max_shared, "shared memory")
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
-        self.module, self.function, self.n_regs, self.n_spills = driver.utils.load_binary(
-            self.name, self.kernel, self.shared, device)
+        (
+            self.module,
+            self.function,
+            self.n_regs,
+            self.n_spills,
+        ) = driver.utils.load_binary(self.name, self.kernel, self.shared, device)
 
     def __getattribute__(self, name):
-        if name == 'run':
+        if name == "run":
             self._init_handles()
         return super().__getattribute__(name)
 
@@ -275,8 +303,22 @@ class CompiledKernel:
             if stream is None:
                 device = driver.get_current_device()
                 stream = driver.get_current_stream(device)
-            self.run(grid[0], grid[1], grid[2], self.num_warps, self.num_ctas, self.cluster_dims[0],
-                     self.cluster_dims[1], self.cluster_dims[2], self.shared, stream, self.function,
-                     CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args_expand)
+            self.run(
+                grid[0],
+                grid[1],
+                grid[2],
+                self.num_warps,
+                self.num_ctas,
+                self.cluster_dims[0],
+                self.cluster_dims[1],
+                self.cluster_dims[2],
+                self.shared,
+                stream,
+                self.function,
+                CompiledKernel.launch_enter_hook,
+                CompiledKernel.launch_exit_hook,
+                self,
+                *args_expand,
+            )
 
         return runner
