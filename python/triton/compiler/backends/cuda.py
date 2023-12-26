@@ -75,6 +75,10 @@ class CUDABackend(BaseBackend):
         return CUDAOptions(**args)
 
     @staticmethod
+    def load_dialects(ctx):
+        nvidia.load_dialects(ctx)
+
+    @staticmethod
     def make_ttir(mod, metadata, opt):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
@@ -179,9 +183,10 @@ class CUDABackend(BaseBackend):
             passes.llvmir.add_di_scope(pm)
         pm.run(mod)
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
+        nvidia.init_llvm()
         context = llvm.context()
-        llvm_mod = llvm.to_module(mod, context, "LLVMModule")
-        llvm.set_nvvm_reflect_ftz(llvm_mod)
+        llvm_mod = llvm.to_module(mod, context)
+        nvidia.set_nvvm_reflect_ftz(llvm_mod)
         if options.extern_libs:
             for name, path in options.extern_libs:
                 llvm.link_extern_lib(llvm_mod, path)
@@ -201,9 +206,12 @@ class CUDABackend(BaseBackend):
     @staticmethod
     def make_ptx(src, metadata, opt, capability):
         proc = 'sm_90a' if capability == 90 else f'sm_{capability}'
-        ret, name = llvm.translate_to_asm(src, 'nvptx64-nvidia-cuda', proc, '', ['nvptx-short-ptr'],
-                                          opt.enable_fp_fusion, False)
-        metadata["name"] = name
+        ret = llvm.translate_to_asm(src, 'nvptx64-nvidia-cuda', proc, '', ['nvptx-short-ptr'], opt.enable_fp_fusion,
+                                    False)
+        # Find kernel names (there should only be one)
+        names = re.findall(r".visible .entry ([a-zA-Z_][a-zA-Z0-9_]*)", ret)
+        assert len(names) == 1
+        metadata["name"] = names[0]
         # post-process
         ptx_version = opt.ptx_version
         if ptx_version is None:

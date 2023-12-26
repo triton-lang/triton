@@ -1,10 +1,14 @@
 ﻿#include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "passes.h"
 #include "triton/Conversion/NVGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
+#include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/Support/TargetSelect.h"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
@@ -18,7 +22,7 @@ void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_1("add_rewrite_tensor_pointer",
                      mlir::createTritonGPURewriteTensorPointerPass, int);
   // TODO: it is weird to pass mlir::triton::NVVM here since the conversion is
-  // nvidia-specific
+  // nvidia-specificontext
   m.def("add_to_llvmir", [](mlir::PassManager &pm, int32_t capability,
                             mlir::triton::gpu::TMAMetadataTy *tmaMetadata) {
     pm.addPass(createConvertTritonGPUToLLVMPass(capability, mlir::triton::NVVM,
@@ -98,4 +102,41 @@ void init_triton_nvidia(py::module &&m) {
       .def_readwrite("TMADescArgIdx",
                      &mlir::triton::gpu::TMAInfo::TMADescArgIdx);
   py::bind_vector<std::vector<mlir::triton::gpu::TMAInfo>>(m, "TMAInfos");
+
+  // load dialects
+  m.def("load_dialects", [](mlir::MLIRContext &context) {
+    mlir::DialectRegistry registry;
+    registry.insert<mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
+                    mlir::triton::nvgpu::NVGPUDialect>();
+    mlir::registerNVVMDialectTranslation(registry);
+    context.appendDialectRegistry(registry);
+    context.loadAllAvailableDialects();
+  });
+
+  // init llvm
+  m.def("init_llvm", []() {
+    static std::once_flag init_flag;
+    std::call_once(init_flag, []() {
+      LLVMInitializeNVPTXTargetInfo();
+      LLVMInitializeNVPTXTarget();
+      LLVMInitializeNVPTXTargetMC();
+      LLVMInitializeNVPTXAsmPrinter();
+    });
+  });
+
+  // TODO: could be done in python if we had a generic interface to set metadata
+  m.def("set_nvvm_reflect_ftz", [](llvm::Module *mod) {
+    // please check https://llvm.org/docs/NVPTXUsage.html#reflection-parameters
+    // this will enable fast math path in libdevice
+    // for example, when enable nvvm-reflect-ftz, sqrt.approx.f32 will change to
+    // sqrt.approx.ftz.f32
+    using namespace llvm;
+    auto &ctx = mod->getContext();
+    Type *i32 = Type::getInt32Ty(ctx);
+    auto *mdFour = ConstantAsMetadata::get(ConstantInt::getSigned(i32, 4));
+    auto *mdName = MDString::get(ctx, "nvvm-reflect-ftz");
+    auto *mdOne = ConstantAsMetadata::get(ConstantInt::getSigned(i32, 1));
+    auto *reflect = MDNode::get(ctx, {mdFour, mdName, mdOne});
+    mod->addModuleFlag(reflect);
+  });
 }
