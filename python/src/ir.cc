@@ -390,14 +390,6 @@ void init_triton_ir(py::module &&m) {
              self.print(os, printingFlags);
              return str;
            })
-      .def("bytecode",
-           [](mlir::ModuleOp &self) -> py::bytearray {
-             std::string bytecode;
-             llvm::raw_string_ostream os(bytecode);
-             if (failed(mlir::writeBytecodeToFile(self, os)))
-               throw std::runtime_error("Failed to write module bytecode");
-             return py::bytearray(bytecode);
-           })
       .def("push_back",
            [](mlir::ModuleOp &self, mlir::triton::FuncOp &funcOp) -> void {
              self.push_back(funcOp);
@@ -413,14 +405,12 @@ void init_triton_ir(py::module &&m) {
               std::string &funcName) -> mlir::triton::FuncOp {
              return self.lookupSymbol<mlir::triton::FuncOp>(funcName);
            })
-      .def("get_single_function",
-           [](mlir::ModuleOp &self) -> mlir::triton::FuncOp {
-             llvm::SmallVector<mlir::triton::FuncOp> funcs;
-             self.walk(
-                 [&](mlir::triton::FuncOp func) { funcs.push_back(func); });
-             if (funcs.size() != 1)
-               throw std::runtime_error("Expected a single function");
-             return funcs[0];
+      .def("get_int_attr",
+           [](mlir::ModuleOp &self, std::string name) -> py::object {
+             auto ret = self->getAttrOfType<mlir::IntegerAttr>(name);
+             if (!ret)
+               return py::none();
+             return py::int_(ret.getInt());
            });
 
   m.def("make_attr",
@@ -486,6 +476,7 @@ void init_triton_ir(py::module &&m) {
             self.setArgAttr(arg_no, name, mlir::IntegerAttr::get(attrTy, val));
           },
           ret::reference)
+      //  .def("has_attr", &mlir::::FuncOp::hasAttr)
       .def("finalize",
            [](mlir::triton::FuncOp &self) -> void {
              // Remove dead code
