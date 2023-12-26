@@ -1,8 +1,4 @@
 ﻿#include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
-#include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
-#include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
-#include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
-#include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
 #include "llvm/ADT/SmallVector.h"
@@ -198,18 +194,9 @@ void init_triton_llvm(py::module &&m) {
   m.attr("OPTIMIZE_Os") = (llvm::OptimizationLevel::Os);
   m.attr("OPTIMIZE_Oz") = (llvm::OptimizationLevel::Oz);
 
-  m.def("to_module",
-        [](mlir::ModuleOp &mod, llvm::LLVMContext &ctx, std::string name) {
-          // TODO: dialects can be registered earlier...
-          // This shouldn't depend on ROCDL or NVVM
-          mlir::DialectRegistry registry;
-          mlir::registerBuiltinDialectTranslation(registry);
-          mlir::registerLLVMDialectTranslation(registry);
-          mlir::registerROCDLDialectTranslation(registry);
-          mlir::registerNVVMDialectTranslation(registry);
-          mod->getContext()->appendDialectRegistry(registry);
-          return mlir::translateModuleToLLVMIR(mod, ctx);
-        });
+  m.def("to_module", [](mlir::ModuleOp &mod, llvm::LLVMContext &ctx) {
+    return mlir::translateModuleToLLVMIR(mod, ctx);
+  });
 
   m.def("optimize_module", [](llvm::Module *mod,
                               const llvm::OptimizationLevel &opt) {

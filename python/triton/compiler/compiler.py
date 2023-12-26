@@ -188,7 +188,8 @@ def compile(src, target=None, options=None):
     backend.add_stages(stages, options)
     first_stage = list(stages.keys()).index(src.ext)
     context = ir.context()
-    context.load_triton()
+    ir.load_dialects(context)
+    backend.load_dialects(context)
     module = src.make_ir(options, context)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
