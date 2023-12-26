@@ -209,7 +209,7 @@ class CUDABackend(BaseBackend):
         ret = llvm.translate_to_asm(src, 'nvptx64-nvidia-cuda', proc, '', ['nvptx-short-ptr'], opt.enable_fp_fusion,
                                     False)
         # Find kernel names (there should only be one)
-        names = re.findall(r"// \.globl\.?\s+(\w+)", ret)
+        names = re.findall(r".visible .entry ([a-zA-Z_][a-zA-Z0-9_]*)", ret)
         assert len(names) == 1
         metadata["name"] = names[0]
         # post-process
