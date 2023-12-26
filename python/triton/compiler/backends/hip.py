@@ -357,7 +357,6 @@ class HIPBackend(BaseBackend):
     @staticmethod
     def make_hsaco(src, metadata, options):
         hsaco = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion, True)
-        # breakpoint()
         name = "kernel_0d"
         metadata["name"] = name
         import subprocess
