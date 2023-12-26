@@ -323,6 +323,8 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_llir(src, metadata, options, capability):
+        name = "kernel_0d"
+        metadata["name"] = name
         # warp-specialization mutates num_warps
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
@@ -347,9 +349,14 @@ class HIPBackend(BaseBackend):
             for name, path in options.extern_libs:
                 llvm.link_extern_lib(llvm_mod, path)
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
+        # Set kernel attributes
+        kernel = llvm_mod.get_function(name)
+        kernel.set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
+        kernel.add_fn_attr("amdgpu-flat-work-group-size", "1, 1024")
         # Get some metadata
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")
         ret = str(llvm_mod)
+        del kernel
         del llvm_mod
         del context
         return ret
@@ -358,8 +365,6 @@ class HIPBackend(BaseBackend):
     def make_hsaco(src, metadata, options):
         # breakpoint()
         hsaco = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion, True)
-        name = "kernel_0d"
-        metadata["name"] = name
         import subprocess
         rocm_path = path_to_rocm_lld()
         with tempfile.NamedTemporaryFile() as tmp_out:
