@@ -3,45 +3,9 @@
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/Module.h"
-#include "llvm/IR/PassManager.h"
-#include "llvm/IRReader/IRReader.h"
-#include "llvm/Pass.h"
-#include "llvm/Passes/OptimizationLevel.h"
-#include "llvm/Passes/PassBuilder.h"
-#include "llvm/Support/CodeGen.h"
-#include "llvm/Target/TargetMachine.h"
-#include "llvm/Transforms/InstCombine/InstCombine.h"
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#else
-#include <dlfcn.h>
-#endif
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
-#include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
-#include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
-#include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
-#include "mlir/Target/LLVMIR/Export.h"
-#include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
-#include "llvm/Linker/Linker.h"
-#include <filesystem>
-#include <iterator>
-
-#include "llvm/ADT/APInt.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/IR/CallingConv.h"
-#include "llvm/IR/Constants.h"
-#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Linker/Linker.h"
@@ -49,14 +13,13 @@
 #include "llvm/Pass.h"
 #include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Error.h"
-#include "llvm/Support/FormatVariadic.h"
-#include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/CodeGen.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
 namespace py = pybind11;
 
