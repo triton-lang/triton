@@ -182,3 +182,8 @@ def get_cuda_version_key():
             ptxas_version = b"NO_PTXAS"
         _cached_cuda_version_key = key + '-' + hashlib.sha1(ptxas_version).hexdigest()
     return _cached_cuda_version_key
+
+
+@functools.lru_cache()
+def path_to_rocm_lld():
+    return "/opt/rocm/llvm/bin/ld.lld"
