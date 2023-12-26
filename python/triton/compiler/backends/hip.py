@@ -1,5 +1,5 @@
 from triton.common.backend import BaseBackend
-from ..._C.libtriton import ir, passes, llvm, nvidia, amd
+from ..._C.libtriton import ir, passes, llvm, amd, nvidia
 from dataclasses import dataclass
 from ...common.backend import get_cuda_version_key, path_to_rocm_lld
 from typing import Any
@@ -331,7 +331,7 @@ class HIPBackend(BaseBackend):
         pm.enable_debug()
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
-        nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, tma_infos)
+        amd.passes.ttgpuir.add_to_llvmir(pm, capability, tma_infos)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
@@ -356,6 +356,7 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_hsaco(src, metadata, options):
+        # breakpoint()
         hsaco = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion, True)
         name = "kernel_0d"
         metadata["name"] = name
