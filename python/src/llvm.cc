@@ -14,7 +14,6 @@
 #include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
@@ -31,23 +30,6 @@ struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
 } // namespace llvm
 
 using namespace llvm;
-//
-// TODO: move to python
-static void initLLVM() {
-  static std::once_flag init_flag;
-  std::call_once(init_flag, []() {
-    LLVMInitializeNVPTXTargetInfo();
-    LLVMInitializeNVPTXTarget();
-    LLVMInitializeNVPTXTargetMC();
-    LLVMInitializeNVPTXAsmPrinter();
-
-    LLVMInitializeAMDGPUTarget();
-    LLVMInitializeAMDGPUTargetInfo();
-    LLVMInitializeAMDGPUTargetMC();
-    LLVMInitializeAMDGPUAsmParser();
-    LLVMInitializeAMDGPUAsmPrinter();
-  });
-}
 
 std::string translateLLVMIRToASM(llvm::Module &module,
                                  const std::string &triple,
@@ -56,7 +38,6 @@ std::string translateLLVMIRToASM(llvm::Module &module,
                                  const std::vector<std::string> &flags,
                                  bool enable_fp_fusion, bool isObject) {
   using namespace mlir;
-  initLLVM();
   // options
   auto options = llvm::cl::getRegisteredOptions();
   for (std::string flag : flags) {
@@ -110,26 +91,6 @@ std::string translateLLVMIRToASM(llvm::Module &module,
 }
 
 using ret = py::return_value_policy;
-
-void findKernels(llvm::Module &M, std::set<llvm::Function *> &functions) {
-  llvm::NamedMDNode *annotations = M.getNamedMetadata("nvvm.annotations");
-  assert(annotations);
-  for (auto *Node : annotations->operands()) {
-    if (Node->getNumOperands() < 3)
-      continue;
-    llvm::Metadata *Op = Node->getOperand(0).get();
-    auto *ValueAsMetadata = llvm::dyn_cast<llvm::ValueAsMetadata>(Op);
-    if (!ValueAsMetadata)
-      continue;
-    auto *F = llvm::dyn_cast<llvm::Function>(ValueAsMetadata->getValue());
-    if (!F)
-      continue;
-    llvm::Metadata *Property = Node->getOperand(1).get();
-    if (auto *MDString = llvm::dyn_cast<llvm::MDString>(Property))
-      if (MDString->getString() == "kernel")
-        functions.insert(F);
-  }
-}
 
 void init_triton_llvm(py::module &&m) {
 
@@ -205,8 +166,7 @@ void init_triton_llvm(py::module &&m) {
       "translate_to_asm",
       [](std::string llvmIR, std::string triple, std::string proc,
          std::string features, std::vector<std::string> flags,
-         bool enable_fp_fusion,
-         bool isObject) -> std::tuple<py::object, std::string> {
+         bool enable_fp_fusion, bool isObject) -> py::object {
         py::gil_scoped_release allow_threads;
         // create LLVM module from C++
         llvm::LLVMContext context;
@@ -220,34 +180,14 @@ void init_triton_llvm(py::module &&m) {
               "failed to parse IR: " + error.getMessage() +
               "lineno: " + std::to_string(error.getLineNo()));
         }
-        // Get name of kernel in the module
-        std::set<llvm::Function *> kernels;
-        findKernels(*module, kernels);
-        assert(kernels.size() == 1);
-        std::string name = (*kernels.begin())->getName().str();
         std::string obj = translateLLVMIRToASM(
             *module, triple, proc, features, flags, enable_fp_fusion, isObject);
         if (isObject)
-          return std::make_tuple(py::bytes(obj), name);
+          return py::bytes(obj);
         else
-          return std::make_tuple(py::str(obj), name);
+          return py::str(obj);
       },
       ret::take_ownership);
-
-  m.def("set_nvvm_reflect_ftz", [](llvm::Module *mod) {
-    // please check https://llvm.org/docs/NVPTXUsage.html#reflection-parameters
-    // this will enable fast math path in libdevice
-    // for example, when enable nvvm-reflect-ftz, sqrt.approx.f32 will change to
-    // sqrt.approx.ftz.f32
-    using namespace llvm;
-    auto &ctx = mod->getContext();
-    Type *i32 = Type::getInt32Ty(ctx);
-    Metadata *mdFour = ConstantAsMetadata::get(ConstantInt::getSigned(i32, 4));
-    Metadata *mdName = MDString::get(ctx, "nvvm-reflect-ftz");
-    Metadata *mdOne = ConstantAsMetadata::get(ConstantInt::getSigned(i32, 1));
-    MDNode *reflect = MDNode::get(ctx, {mdFour, mdName, mdOne});
-    mod->addModuleFlag(reflect);
-  });
 
   m.def("link_extern_lib", [](llvm::Module *mod, std::string path) {
     llvm::SMDiagnostic err;

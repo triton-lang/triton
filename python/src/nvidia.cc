@@ -7,6 +7,8 @@
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/Support/TargetSelect.h"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
@@ -109,5 +111,32 @@ void init_triton_nvidia(py::module &&m) {
     mlir::registerNVVMDialectTranslation(registry);
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
+  });
+
+  // init llvm
+  m.def("init_llvm", []() {
+    static std::once_flag init_flag;
+    std::call_once(init_flag, []() {
+      LLVMInitializeNVPTXTargetInfo();
+      LLVMInitializeNVPTXTarget();
+      LLVMInitializeNVPTXTargetMC();
+      LLVMInitializeNVPTXAsmPrinter();
+    });
+  });
+
+  // TODO: could be done in python if we had a generic interface to set metadata
+  m.def("set_nvvm_reflect_ftz", [](llvm::Module *mod) {
+    // please check https://llvm.org/docs/NVPTXUsage.html#reflection-parameters
+    // this will enable fast math path in libdevice
+    // for example, when enable nvvm-reflect-ftz, sqrt.approx.f32 will change to
+    // sqrt.approx.ftz.f32
+    using namespace llvm;
+    auto &ctx = mod->getContext();
+    Type *i32 = Type::getInt32Ty(ctx);
+    auto *mdFour = ConstantAsMetadata::get(ConstantInt::getSigned(i32, 4));
+    auto *mdName = MDString::get(ctx, "nvvm-reflect-ftz");
+    auto *mdOne = ConstantAsMetadata::get(ConstantInt::getSigned(i32, 1));
+    auto *reflect = MDNode::get(ctx, {mdFour, mdName, mdOne});
+    mod->addModuleFlag(reflect);
   });
 }
