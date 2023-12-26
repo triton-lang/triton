@@ -97,6 +97,14 @@ void init_triton_llvm(py::module &&m) {
   py::class_<llvm::LLVMContext>(m, "context", py::module_local())
       .def(py::init<>());
 
+  py::class_<llvm::Module::FunctionListType>(m, "function_list")
+      .def(
+          "__iter__",
+          [](llvm::Module::FunctionListType &s) {
+            return py::make_iterator(s.begin(), s.end());
+          },
+          py::keep_alive<0, 1>());
+
   py::class_<llvm::Module>(m, "module", py::module_local())
       .def(
           "__str__",
@@ -108,16 +116,17 @@ void init_triton_llvm(py::module &&m) {
           },
           ret::take_ownership)
       .def(
-          "get_function",
-          [](llvm::Module *mod, std::string &name) {
-            return mod->getFunction(name);
+          "get_functions",
+          [](llvm::Module *mod) -> llvm::Module::FunctionListType & {
+            return mod->getFunctionList();
           },
           ret::reference_internal);
 
   py::class_<llvm::Function>(m, "function", py::module_local())
       .def("set_calling_conv", &llvm::Function::setCallingConv)
       .def("add_fn_attr", [](llvm::Function *fn, std::string &name,
-                             std::string &val) { fn->addFnAttr(name, val); });
+                             std::string &val) { fn->addFnAttr(name, val); })
+      .def("has_hidden_visibility", &llvm::Function::hasHiddenVisibility);
 
   // optimization levels
   py::class_<llvm::OptimizationLevel>(m, "optimization_level",
@@ -129,9 +138,12 @@ void init_triton_llvm(py::module &&m) {
   m.attr("OPTIMIZE_Os") = (llvm::OptimizationLevel::Os);
   m.attr("OPTIMIZE_Oz") = (llvm::OptimizationLevel::Oz);
 
-  m.def("to_module", [](mlir::ModuleOp &mod, llvm::LLVMContext &ctx) {
-    return mlir::translateModuleToLLVMIR(mod, ctx);
-  });
+  m.def(
+      "to_module",
+      [](mlir::ModuleOp &mod, llvm::LLVMContext &ctx) {
+        return mlir::translateModuleToLLVMIR(mod, ctx);
+      },
+      py::keep_alive<0, 2>());
 
   m.def("optimize_module", [](llvm::Module *mod,
                               const llvm::OptimizationLevel &opt) {
