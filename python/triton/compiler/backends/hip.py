@@ -8,6 +8,7 @@ from triton.compiler.make_launcher import get_cache_manager, make_so_cache_key
 import tempfile
 from triton.common import _build
 import os
+import re
 
 
 def make_stub(name, signature, constants, ids, **kwargs):
@@ -323,8 +324,6 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_llir(src, metadata, options, capability):
-        name = "kernel_0d"
-        metadata["name"] = name
         # warp-specialization mutates num_warps
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
@@ -350,20 +349,24 @@ class HIPBackend(BaseBackend):
                 llvm.link_extern_lib(llvm_mod, path)
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
         # Set kernel attributes
-        kernel = llvm_mod.get_function(name)
-        kernel.set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
-        kernel.add_fn_attr("amdgpu-flat-work-group-size", "1, 1024")
+        kernels = [fn for fn in llvm_mod.get_functions() if not fn.has_hidden_visibility()]
+        assert len(kernels) == 1
+        kernels[0].set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
+        kernels[0].add_fn_attr("amdgpu-flat-work-group-size", "1, 1024")
         # Get some metadata
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")
         ret = str(llvm_mod)
-        del kernel
-        del llvm_mod
-        del context
         return ret
 
     @staticmethod
     def make_hsaco(src, metadata, options):
-        # breakpoint()
+        # Find kernel names (there should only be one)
+        # We get the name at the last possible step to accomodate `triton.compile`
+        # on user-provided LLVM
+        names = re.findall(r"define amdgpu_kernel void @([a-zA-Z_][a-zA-Z0-9_]*)", src)
+        assert len(names) == 1
+        metadata["name"] = names[0]
+        # llvm -> hsaco
         hsaco = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion, True)
         import subprocess
         rocm_path = path_to_rocm_lld()
