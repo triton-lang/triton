@@ -1189,10 +1189,8 @@ def kernel_suffix(signature, specialization):
     return suffix
 
 
-def ast_to_ttir(fn, specialization, options):
+def ast_to_ttir(fn, specialization, context, options):
     attrs = specialization.attrs
-    context = ir.context()
-    context.load_triton()
     # create kernel prototype
     cst_key = lambda i: fn.arg_names.index(i) if isinstance(i, str) else i
     constants = {cst_key(key): value for key, value in specialization.constants.items()}
