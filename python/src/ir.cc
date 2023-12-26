@@ -12,12 +12,12 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/FileUtilities.h"
+#include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Analysis/Allocation.h"
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -184,17 +184,20 @@ void init_triton_ir(py::module &&m) {
       .value("RTNE", mlir::triton::RoundingMode::RTNE);
 
   py::class_<mlir::MLIRContext>(m, "context", py::module_local())
-      .def(py::init<>())
-      .def("load_triton", [](mlir::MLIRContext &self) {
-        self.getOrLoadDialect<mlir::triton::TritonDialect>();
-        self.getOrLoadDialect<mlir::index::IndexDialect>();
-        self.getOrLoadDialect<mlir::triton::TritonDialect>();
-        self.getOrLoadDialect<mlir::gpu::GPUDialect>();
-        // we load LLVM because the frontend uses LLVM.undef for
-        // some placeholders
-        self.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
-        self.getOrLoadDialect<mlir::tensor::TensorDialect>();
-      });
+      .def(py::init<>());
+
+  m.def("load_dialects", [](mlir::MLIRContext &context) {
+    mlir::DialectRegistry registry;
+    registry.insert<mlir::triton::TritonDialect,
+                    mlir::triton::gpu::TritonGPUDialect,
+                    mlir::math::MathDialect, mlir::arith::ArithDialect,
+                    mlir::index::IndexDialect, mlir::scf::SCFDialect,
+                    mlir::cf::ControlFlowDialect, mlir::LLVM::LLVMDialect>();
+    mlir::registerBuiltinDialectTranslation(registry);
+    mlir::registerLLVMDialectTranslation(registry);
+    context.appendDialectRegistry(registry);
+    context.loadAllAvailableDialects();
+  });
 
   py::class_<mlir::Type>(m, "type", py::module_local())
       .def("is_integer", &mlir::Type::isInteger)
@@ -426,19 +429,6 @@ void init_triton_ir(py::module &&m) {
   m.def(
       "parse_mlir_module",
       [](const std::string &inputFilename, mlir::MLIRContext &context) {
-        // initialize registry
-        // note: we initialize llvm for undef
-        mlir::DialectRegistry registry;
-        registry.insert<
-            mlir::triton::TritonDialect, mlir::triton::gpu::TritonGPUDialect,
-            mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
-            mlir::triton::nvgpu::NVGPUDialect, mlir::math::MathDialect,
-            mlir::arith::ArithDialect, mlir::index::IndexDialect,
-            mlir::scf::SCFDialect, mlir::cf::ControlFlowDialect,
-            mlir::LLVM::LLVMDialect>();
-        context.appendDialectRegistry(registry);
-        context.loadAllAvailableDialects();
-
         // parse module
         mlir::OwningOpRef<mlir::ModuleOp> module =
             mlir::parseSourceFile<mlir::ModuleOp>(inputFilename, &context);
