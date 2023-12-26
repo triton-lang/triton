@@ -154,7 +154,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
                 ${PYTHON_SRC_PATH}/passes.cc
                 ${PYTHON_SRC_PATH}/interpreter.cc
                 ${PYTHON_SRC_PATH}/llvm.cc
-                ${PYTHON_SRC_PATH}/nvidia.cc)
+                ${PYTHON_SRC_PATH}/nvidia.cc
+                ${PYTHON_SRC_PATH}/amd.cc
+                )
   include_directories("." ${PYTHON_SRC_PATH})
 
   if(PYTHON_INCLUDE_DIRS)
