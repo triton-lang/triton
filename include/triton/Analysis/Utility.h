@@ -125,11 +125,15 @@ bool maybeSharedAllocationOp(Operation *op);
 
 bool maybeAliasOp(Operation *op);
 
+bool supportMFMA(triton::DotOp op);
+
 bool supportMMA(triton::DotOp op, int version);
 
 bool supportMMA(Value value, int version);
 
 bool isSingleValue(Value value);
+
+bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy);
 
 bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
 

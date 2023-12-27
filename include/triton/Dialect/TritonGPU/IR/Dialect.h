@@ -31,6 +31,8 @@ SmallVector<unsigned> getElemsPerThread(Type type);
 // getThreadsPerWarpWithUniqueData.
 SmallVector<unsigned> getThreadsPerWarp(Attribute layout);
 
+unsigned getWarpSize(Attribute layout);
+
 // Returns the number of warps per CTA that may have access to replicated
 // elements. If you want non-replicated warps, use getWarpsPerCTAWithUniqueData.
 SmallVector<unsigned> getWarpsPerCTA(Attribute layout);
