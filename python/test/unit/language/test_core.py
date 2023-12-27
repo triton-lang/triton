@@ -1740,7 +1740,9 @@ def test_reduce(op, dtype_str, shape, axis, num_ctas, device):
     z_dtype_str = get_reduced_dtype(dtype_str, op)
     z_tri_dtype_str = z_dtype_str
     # triton result
-    z_shape = (1, ) if axis is None else tuple(shape_i for i, shape_i in enumerate(shape) if i != axis)
+    if axis is not None and axis < 0:
+        positive_axis = len(shape) + axis
+    z_shape = (1, ) if axis is None else tuple(shape_i for i, shape_i in enumerate(shape) if i != positive_axis)
     z_tri = to_triton(numpy_random(z_shape, dtype_str=z_dtype_str, rs=rs), device=device, dst_type=z_tri_dtype_str)
     BLOCK_K = 1 if len(shape) == 2 else shape[2]
     IS_3D = bool(len(shape) == 3)
