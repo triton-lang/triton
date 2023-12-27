@@ -307,6 +307,6 @@ public:
   }
 };
 
-std::unique_ptr<Pass> mlir::triton::gpu::createOptimizeDotOperandsPass() {
+std::unique_ptr<Pass> mlir::createTritonGPUOptimizeDotOperandsPass() {
   return std::make_unique<TritonGPUOptimizeDotOperandsPass>();
 }

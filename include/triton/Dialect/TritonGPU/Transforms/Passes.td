@@ -11,7 +11,7 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
     needed at the next iteration
   }];
 
-  let constructor = "mlir::triton::gpu::createPipelinePass()";
+  let constructor = "mlir::createTritonGPUPipelinePass()";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
@@ -42,7 +42,7 @@ def TritonGPUPrefetch : Pass<"tritongpu-prefetch", "mlir::ModuleOp"> {
     that may have their operands constructed at the end of the previous iteration
   }];
 
-  let constructor = "mlir::triton::gpu::createPrefetchPass()";
+  let constructor = "mlir::createTritonGPUPrefetchPass()";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::scf::SCFDialect",
@@ -57,7 +57,7 @@ def TritonGPUAccelerateMatmul : Pass<"tritongpu-accelerate-matmul", "mlir::Modul
     (e.g., Nvidia tensor cores)
   }];
 
-  let constructor = "mlir::triton::gpu::createAccelerateMatmulPass()";
+  let constructor = "mlir::createTritonGPUAccelerateMatmulPass()";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
@@ -78,7 +78,7 @@ def TritonGPUOptimizeDotOperands : Pass<"tritongpu-optimize-dot-operands", "mlir
     hardware-accelerated transpositions.
   }];
 
-  let constructor = "mlir::triton::gpu::createOptimizeDotOperandsPass()";
+  let constructor = "mlir::createTritonGPUOptimizeDotOperandsPass()";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
@@ -92,7 +92,7 @@ def TritonGPUCoalesce: Pass<"tritongpu-coalesce", "mlir::ModuleOp"> {
     TODO
   }];
 
-  let constructor = "mlir::triton::gpu::createCoalescePass()";
+  let constructor = "mlir::createTritonGPUCoalescePass()";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
 }
@@ -104,7 +104,7 @@ def TritonGPURemoveLayoutConversions : Pass<"tritongpu-remove-layout-conversions
   let description = [{
   }];
 
-  let constructor = "mlir::triton::gpu::createRemoveLayoutConversionsPass()";
+  let constructor = "mlir::createTritonGPURemoveLayoutConversionsPass()";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];
@@ -117,7 +117,7 @@ def TritonGPUOptimizeEpilogue : Pass<"tritongpu-optimize-epilogue", "mlir::Modul
   let description = [{
   }];
 
-  let constructor = "mlir::triton::gpu::createOptimizeEpiloguePass()";
+  let constructor = "mlir::createTritonGPUOptimizeEpiloguePass()";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];
@@ -131,7 +131,7 @@ def TritonGPUOptimizeThreadLocality : Pass<"tritongpu-optimize-thread-locality",
     Today, this optimizes reduction yielded by loop to be thread-local until after the loop completes.
   }];
 
-  let constructor = "mlir::triton::gpu::createOptimizeThreadLocalityPass()";
+  let constructor = "mlir::createTritonGPUOptimizeThreadLocalityPass()";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];
@@ -144,7 +144,7 @@ def TritonGPUReorderInstructions: Pass<"tritongpu-reorder-instructions", "mlir::
                     "conversions from shared memory before their first use) and (2) promote LLVM instruction "
                     "order more friendly to `ptxas`.";
 
-  let constructor = "mlir::triton::gpu::createReorderInstructionsPass()";
+  let constructor = "mlir::createTritonGPUReorderInstructionsPass()";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];
@@ -155,7 +155,7 @@ def TritonGPUDecomposeConversions: Pass<"tritongpu-decompose-conversions", "mlir
 
   let description = "Decomposing conversions this way makes it possible to use CSE and re-use #shared tensors";
 
-  let constructor = "mlir::triton::gpu::createDecomposeConversionsPass()";
+  let constructor = "mlir::createTritonGPUDecomposeConversionsPass()";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];

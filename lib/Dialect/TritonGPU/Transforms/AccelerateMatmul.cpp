@@ -357,6 +357,6 @@ public:
 };
 
 std::unique_ptr<Pass>
-mlir::triton::gpu::createAccelerateMatmulPass(int computeCapability) {
+mlir::createTritonGPUAccelerateMatmulPass(int computeCapability) {
   return std::make_unique<TritonGPUAccelerateMatmulPass>(computeCapability);
 }
