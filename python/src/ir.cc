@@ -188,11 +188,11 @@ void init_triton_ir(py::module &&m) {
 
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
-    registry.insert<mlir::triton::TritonDialect,
-                    mlir::triton::gpu::TritonGPUDialect,
-                    mlir::math::MathDialect, mlir::arith::ArithDialect,
-                    mlir::index::IndexDialect, mlir::scf::SCFDialect,
-                    mlir::cf::ControlFlowDialect, mlir::LLVM::LLVMDialect>();
+    registry.insert<
+        mlir::triton::TritonDialect, mlir::triton::gpu::TritonGPUDialect,
+        mlir::math::MathDialect, mlir::arith::ArithDialect,
+        mlir::index::IndexDialect, mlir::scf::SCFDialect, mlir::gpu::GPUDialect,
+        mlir::cf::ControlFlowDialect, mlir::LLVM::LLVMDialect>();
     mlir::registerBuiltinDialectTranslation(registry);
     mlir::registerLLVMDialectTranslation(registry);
     context.appendDialectRegistry(registry);

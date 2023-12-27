@@ -331,6 +331,8 @@ class HIPBackend(BaseBackend):
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         amd.passes.ttgpuir.add_to_llvmir(pm)
+        passes.convert.add_scf_to_cf(pm)
+        passes.convert.add_cf_to_llvmir(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
@@ -347,7 +349,7 @@ class HIPBackend(BaseBackend):
                 llvm.link_extern_lib(llvm_mod, path)
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
         # Set kernel attributes
-        kernels = [fn for fn in llvm_mod.get_functions() if not fn.has_hidden_visibility()]
+        kernels = [fn for fn in llvm_mod.get_functions() if not fn.has_hidden_visibility() and not fn.is_declaration()]
         assert len(kernels) == 1
         kernels[0].set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
         kernels[0].add_fn_attr("amdgpu-flat-work-group-size", "1, 1024")
