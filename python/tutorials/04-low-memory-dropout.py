@@ -163,7 +163,7 @@ print(
 #
 # 1. Extend the kernel to operate over a matrix and use a vector of seeds - one per row.
 # 2. Add support for striding.
-# 3. (challenge) Implement a kernel for sparse Johnson-Lindenstrauss transform which generates the projection matrix one the fly each time using a seed.
+# 3. (challenge) Implement a kernel for sparse Johnson-Lindenstrauss transform which generates the projection matrix on the fly each time using a seed.
 
 # %%
 # References
