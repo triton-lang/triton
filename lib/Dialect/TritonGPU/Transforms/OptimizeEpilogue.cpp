@@ -74,7 +74,7 @@ public:
              .getType()
              .cast<RankedTensorType>()
              .getEncoding()
-             .isa<triton::gpu::MmaEncodingTrait>())
+             .isa<triton::gpu::NvidiaMmaEncodingAttr>())
       return mlir::failure();
 
     if (!cvtOp.getResult().hasOneUse())
@@ -130,6 +130,6 @@ public:
   }
 };
 
-std::unique_ptr<Pass> mlir::createTritonGPUOptimizeEpiloguePass() {
+std::unique_ptr<Pass> mlir::triton::gpu::createOptimizeEpiloguePass() {
   return std::make_unique<TritonGPUOptimizeEpiloguePass>();
 }
