@@ -198,9 +198,15 @@ include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
 
+
 # link_directories(${LLVM_LIBRARY_DIR})
 add_subdirectory(include)
 add_subdirectory(lib)
+
+# 3P backend
+include_directories(${PROJECT_BINARY_DIR}/third_party/amd_hip_backend/include)
+include_directories(${PROJECT_SOURCE_DIR}/third_party/amd_hip_backend/include)
+add_subdirectory(${PROJECT_SOURCE_DIR}/third_party/amd_hip_backend/)
 
 # find_package(PythonLibs REQUIRED)
 set(TRITON_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
