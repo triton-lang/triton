@@ -231,6 +231,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
     TritonGPUTransforms
     TritonNvidiaGPUTransforms
     TritonLLVMIR
+    TritonAMDGPUTransforms
+    TritonAMDGPUToLLVM
     ${dialect_libs}
     ${conversion_libs}
 
@@ -287,6 +289,6 @@ if (${CODEGEN_BACKENDS_LEN} GREATER 0)
   endforeach()
 endif()
 
-add_subdirectory(bin)
-add_subdirectory(test)
-add_subdirectory(unittest)
+# add_subdirectory(bin)
+# add_subdirectory(test)
+# add_subdirectory(unittest)

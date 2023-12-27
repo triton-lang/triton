@@ -1,6 +1,6 @@
-﻿#include "mlir/Pass/Pass.h"
+﻿#include "TritonAMDGPUToLLVM/Passes.h"
+#include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/Support/TargetSelect.h"
 #include <mutex>
@@ -9,13 +9,9 @@
 namespace py = pybind11;
 
 void init_triton_amd_passes_ttgpuir(py::module &&m) {
-  using namespace mlir::triton::gpu;
-  m.def("add_to_llvmir", [](mlir::PassManager &pm, int32_t capability,
-                            mlir::triton::gpu::TMAMetadataTy *tmaMetadata) {
-    // func->addFnAttr("amdgpu-flat-work-group-size", "1, 1024");
-
-    pm.addPass(createConvertTritonGPUToLLVMPass(capability, mlir::triton::ROCDL,
-                                                tmaMetadata));
+  using namespace mlir::triton;
+  m.def("add_to_llvmir", [](mlir::PassManager &pm) {
+    pm.addPass(createConvertTritonAMDGPUToLLVMPass());
   });
 }
 

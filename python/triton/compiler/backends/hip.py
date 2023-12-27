@@ -1,5 +1,5 @@
 from triton.common.backend import BaseBackend
-from ..._C.libtriton import ir, passes, llvm, amd, nvidia
+from ..._C.libtriton import ir, passes, llvm, amd
 from dataclasses import dataclass
 from ...common.backend import get_cuda_version_key, path_to_rocm_lld
 from typing import Any
@@ -324,15 +324,13 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_llir(src, metadata, options, capability):
-        # warp-specialization mutates num_warps
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
-        tma_infos = nvidia.TMAInfos()
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
-        amd.passes.ttgpuir.add_to_llvmir(pm, capability, tma_infos)
+        amd.passes.ttgpuir.add_to_llvmir(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
