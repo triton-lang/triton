@@ -65,6 +65,6 @@ public:
   }
 };
 
-std::unique_ptr<Pass> mlir::triton::gpu::createDecomposeConversionsPass() {
+std::unique_ptr<Pass> mlir::createTritonGPUDecomposeConversionsPass() {
   return std::make_unique<TritonGPUDecomposeConversionsPass>();
 }
