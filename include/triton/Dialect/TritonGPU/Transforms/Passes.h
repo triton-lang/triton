@@ -5,34 +5,37 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 namespace mlir {
+namespace triton {
+namespace gpu {
 
-std::unique_ptr<Pass> createTritonGPUPipelinePass(int numStages = 3,
-                                                  int numWarps = 4,
-                                                  int numCTAs = 1,
-                                                  int computeCapability = 80);
+std::unique_ptr<Pass> createPipelinePass(int numStages = 3, int numWarps = 4,
+                                         int numCTAs = 1,
+                                         int computeCapability = 80);
 
-std::unique_ptr<Pass>
-createTritonGPUAccelerateMatmulPass(int computeCapability = 80);
+std::unique_ptr<Pass> createAccelerateMatmulPass(int computeCapability = 80);
 
-std::unique_ptr<Pass> createTritonGPUPrefetchPass();
+std::unique_ptr<Pass> createPrefetchPass();
 
-std::unique_ptr<Pass> createTritonGPUCanonicalizeLoopsPass();
+std::unique_ptr<Pass> createCanonicalizeLoopsPass();
 
-std::unique_ptr<Pass> createTritonGPUCoalescePass();
+std::unique_ptr<Pass> createCoalescePass();
 
-std::unique_ptr<Pass> createTritonGPUReorderInstructionsPass();
+std::unique_ptr<Pass> createReorderInstructionsPass();
 
-std::unique_ptr<Pass> createTritonGPUDecomposeConversionsPass();
+std::unique_ptr<Pass> createDecomposeConversionsPass();
 
-std::unique_ptr<Pass> createTritonGPURemoveLayoutConversionsPass();
+std::unique_ptr<Pass> createRemoveLayoutConversionsPass();
 
-std::unique_ptr<Pass> createTritonGPUVerifier();
+std::unique_ptr<Pass> createVerifier();
 
-std::unique_ptr<Pass> createTritonGPUOptimizeDotOperandsPass();
+std::unique_ptr<Pass> createOptimizeDotOperandsPass();
 
-std::unique_ptr<Pass> createTritonGPUOptimizeEpiloguePass();
+std::unique_ptr<Pass> createOptimizeEpiloguePass();
 
-std::unique_ptr<Pass> createTritonGPUOptimizeThreadLocalityPass();
+std::unique_ptr<Pass> createOptimizeThreadLocalityPass();
+
+} // namespace gpu
+} // namespace triton
 
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION

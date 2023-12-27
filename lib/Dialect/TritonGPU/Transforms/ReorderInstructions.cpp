@@ -42,9 +42,30 @@ class TritonGPUReorderInstructionsPass
 public:
   TritonGPUReorderInstructionsPass() = default;
 
+  Operation *getFirstUse(Operation *op) {
+    std::vector<Operation *> users;
+    for (auto user : op->getUsers()) {
+      if (Operation *ancestor = op->getBlock()->findAncestorOpInBlock(*user))
+        users.push_back(ancestor);
+    }
+    auto minOpIt = std::min_element(users.begin(), users.end(),
+                                    [](mlir::Operation *a, mlir::Operation *b) {
+                                      return a->isBeforeInBlock(b);
+                                    });
+    return minOpIt != users.end() ? *minOpIt : nullptr;
+  }
+
   void runOnOperation() override {
     ModuleOp m = getOperation();
     mlir::DominanceInfo dom(m);
+    // sink conversion after the last dealloc
+    // before the first use ancestor in its block
+    m.walk([&](triton::gpu::ConvertLayoutOp op) {
+      auto curr = mlir::Block::iterator(op);
+      for (; &*curr != getFirstUse(op); curr++)
+        if (isa<triton::gpu::DeallocTensorOp>(&*curr))
+          op->moveAfter(&*curr);
+    });
     // Sink conversions into loops when they will increase
     // register pressure
     DenseMap<Operation *, Operation *> opToMove;
@@ -117,6 +138,6 @@ public:
   }
 };
 
-std::unique_ptr<Pass> mlir::createTritonGPUReorderInstructionsPass() {
+std::unique_ptr<Pass> mlir::triton::gpu::createReorderInstructionsPass() {
   return std::make_unique<TritonGPUReorderInstructionsPass>();
 }
