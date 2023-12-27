@@ -1740,6 +1740,7 @@ def test_reduce(op, dtype_str, shape, axis, num_ctas, device):
     z_dtype_str = get_reduced_dtype(dtype_str, op)
     z_tri_dtype_str = z_dtype_str
     # triton result
+    non_negative_axis = axis
     if axis is not None and axis < 0:
         non_negative_axis = len(shape) + axis
     z_shape = (1, ) if axis is None else tuple(shape_i for i, shape_i in enumerate(shape) if i != non_negative_axis)
