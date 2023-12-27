@@ -270,16 +270,17 @@ class CMakeBuild(build_ext):
         cfg = get_build_type()
         build_args = ["--config", cfg]
 
-        codegen_backends = get_codegen_backends()
-        if len(codegen_backends) > 0:
-            all_codegen_backends = ';'.join(codegen_backends)
-            cmake_args += ["-DTRITON_CODEGEN_BACKENDS=" + all_codegen_backends]
+        # third-party backend
+
+        # codegen_backends = get_codegen_backends()
+        # if len(codegen_backends) > 0:
+        #     all_codegen_backends = ';'.join(codegen_backends)
+        #     cmake_args += ["-DTRITON_CODEGEN_BACKENDS=" + all_codegen_backends]
 
         if platform.system() == "Windows":
             cmake_args += [f"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{cfg.upper()}={extdir}"]
             if sys.maxsize > 2**32:
                 cmake_args += ["-A", "x64"]
-            build_args += ["--", "/m"]
         else:
             cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
             max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
