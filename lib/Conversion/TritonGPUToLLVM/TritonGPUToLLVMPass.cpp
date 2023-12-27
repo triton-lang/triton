@@ -74,6 +74,7 @@ public:
       break;
     case Target::ROCDL:
       addLegalDialect<ROCDL::ROCDLDialect>();
+      addLegalDialect<mlir::scf::SCFDialect>();
       break;
     }
     addLegalOp<mlir::UnrealizedConversionCastOp>();
@@ -371,6 +372,7 @@ public:
       break;
     case Target::ROCDL:
       addLegalDialect<ROCDL::ROCDLDialect>();
+      addLegalDialect<mlir::scf::SCFDialect>();
       break;
     }
     addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
