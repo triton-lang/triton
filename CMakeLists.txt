@@ -191,7 +191,7 @@ include(AddLLVM)
 include(AddMLIR)
 
 # Disable warnings that show up in external code (gtest;pybind11)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default -DUSE_ROCM")
 
 include_directories(${MLIR_INCLUDE_DIRS})
 include_directories(${LLVM_INCLUDE_DIRS})
@@ -206,7 +206,8 @@ add_subdirectory(lib)
 # 3P backend
 include_directories(${PROJECT_BINARY_DIR}/third_party/amd_hip_backend/include)
 include_directories(${PROJECT_SOURCE_DIR}/third_party/amd_hip_backend/include)
-add_subdirectory(${PROJECT_SOURCE_DIR}/third_party/amd_hip_backend/)
+add_subdirectory(${PROJECT_SOURCE_DIR}/third_party/amd_hip_backend/include)
+add_subdirectory(${PROJECT_SOURCE_DIR}/third_party/amd_hip_backend/lib)
 
 # find_package(PythonLibs REQUIRED)
 set(TRITON_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
