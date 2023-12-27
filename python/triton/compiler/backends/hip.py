@@ -244,6 +244,9 @@ class HIPOptions:
     enable_warp_specialization: bool = False
     enable_fp_fusion: bool = False
     capability: int = None
+    # TODO:
+    matrix_core_version: int = 0
+    matrix_inst_shape: int = 0
 
     def __post_init__(self):
         # TODO: change API
@@ -275,7 +278,7 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def load_dialects(ctx):
-        pass
+        amd.load_dialects(ctx)
 
     @staticmethod
     def make_ttir(mod, metadata, opt):
@@ -298,29 +301,26 @@ class HIPBackend(BaseBackend):
         # TODO: capability
         passes.ttir.add_convert_to_ttgpuir(pm, opt.num_warps, 32, opt.num_ctas, 90)
         pm.run(mod)
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+        passes.ttgpuir.add_coalesce(pm)
+        amd.passes.ttgpuir.add_accelerate_matmul(pm, opt.matrix_core_version, opt.matrix_inst_shape)
+        amd.passes.ttgpuir.add_remove_layout_conversions(pm)
+        amd.passes.ttgpuir.add_optimize_epilogue(pm)
+        passes.ttgpuir.add_optimize_dot_operands(pm)
+        if opt.num_stages == 0 and opt.matrix_core_version != 0:
+            amd.passes.ttgpuir.add_stream_pipeline(pm)
+            passes.common.add_canonicalizer(pm)
+        passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.num_warps, opt.num_ctas, 0)
+        passes.ttgpuir.add_optimize_dot_operands(pm)
+        amd.passes.ttgpuir.add_remove_layout_conversions(pm)
+        amd.passes.ttgpuir.add_decompose_conversions(pm)
+        if opt.num_stages != 0:
+            amd.passes.ttgpuir.add_reorder_instructions(pm)
+        passes.common.add_cse(pm)
+        passes.common.add_symbol_dce(pm)
+        pm.run(mod)
         return mod
-        # pm = amd_ir.pass_manager(mod.context)
-        # pm.enable_debug()
-        # pm.add_tritonamdgpu_coalesce_pass()
-        # pm.add_tritonamdgpu_accelerate_matmul_pass(gpu_matrix_core_version(), opt.matrix_inst_shape)
-        # pm.add_tritonamdgpu_remove_layout_conversions_pass()
-        # pm.add_tritonamdgpu_optimize_epilogue_pass()
-        # pm.add_tritonamdgpu_optimize_dot_operands_pass()
-        # if opt.num_stages == 0 and opt.matrix_core_version != 0:
-        #     pm.add_tritonamdgpu_stream_pipeline_pass()
-        #     pm.add_canonicalizer_pass()
-        # pm.add_tritonamdgpu_pipeline_pass(opt.num_stages, opt.num_warps, opt.num_ctas, 0)
-        # pm.add_tritonamdgpu_materialize_load_store_pass(opt.num_warps, 0)
-        # pm.add_tritonamdgpu_optimize_dot_operands_pass()
-        # pm.add_tritonamdgpu_remove_layout_conversions_pass()
-        # pm.add_tritonamdgpu_decompose_conversions_pass()
-        # # do we even need the old pipeliner anymore?
-        # if opt.num_stages != 0:
-        #     pm.add_tritonamdgpu_reorder_instructions_pass()
-        # pm.add_cse_pass()
-        # pm.add_symbol_dce_pass()
-        # pm.run(mod)
-        # return mod
 
     @staticmethod
     def make_llir(src, metadata, options, capability):
