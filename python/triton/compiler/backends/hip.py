@@ -234,12 +234,14 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
 @dataclass(frozen=True)
 class HIPOptions:
     num_warps: int = 4
+    waves_per_eu: int = 4
     num_stages: int = 3
     num_ctas: int = 1
     extern_libs: dict = None
     cluster_dims: tuple = (1, 1, 1)
     debug: bool = False
     arch: str = None
+    allow_fp8e4nv: bool = False
     # TODO: deprecate when hook interface has changed
     enable_warp_specialization: bool = False
     enable_fp_fusion: bool = False
@@ -247,6 +249,7 @@ class HIPOptions:
     # TODO:
     matrix_core_version: int = 0
     matrix_inst_shape: int = 0
+    max_num_imprecise_acc_default: int = 0
 
     def __post_init__(self):
         # TODO: change API
@@ -291,6 +294,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_licm(pm)
         passes.common.add_symbol_dce(pm)
+        passes.ttir.add_rewrite_tensor_pointer(pm)
         pm.run(mod)
         return mod
 
@@ -304,7 +308,7 @@ class HIPBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttgpuir.add_coalesce(pm)
-        amd.passes.ttgpuir.add_accelerate_matmul(pm, opt.matrix_core_version, opt.matrix_inst_shape)
+        amd.passes.ttgpuir.add_accelerate_matmul(pm, 2, 0)
         amd.passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm)
@@ -330,7 +334,11 @@ class HIPBackend(BaseBackend):
         pm.enable_debug()
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
+        pm.run(mod)
+        pm = ir.pass_manager(mod.context)
         amd.passes.ttgpuir.add_to_llvmir(pm)
+        pm.run(mod)
+        pm = ir.pass_manager(mod.context)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_cf_to_llvmir(pm)
         passes.convert.add_arith_to_llvmir(pm)
