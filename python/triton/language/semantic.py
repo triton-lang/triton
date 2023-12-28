@@ -1529,14 +1529,22 @@ def _convert_elem_to_ir_value(builder, elem, require_i64):
     if isinstance(elem, int):
         elem = tl.constexpr(elem)
     if isinstance(elem, tl.constexpr):
-        return builder.get_int64(elem.value) if require_i64 else builder.get_int32(elem.value)
+        if require_i64:
+            assert -2**63 <= elem.value < 2**63, f"Block pointers only support 64 bit `shape/strides`, " \
+                f"got a value {elem.value} which is out of the range"
+            return builder.get_int64(elem.value)
+        else:
+            assert -2**31 <= elem.value < 2**31, f"Block pointers only support 32 bit `offsets/block_shape`, " \
+                f"got a value {elem.value} which is out of the range"
+            return builder.get_int32(elem.value)
     elif isinstance(elem, tl.tensor):
         assert elem.numel.value == 1, "Expected a scalar in shape/strides/offsets"
         assert elem.dtype.is_int(), "Expected an integer scalar type in shape/strides/offsets"
         if elem.dtype != tl.int64 and require_i64:
             return builder.create_int_cast(elem.handle, builder.get_int64_ty(), elem.dtype.is_int_signed())
-        elif elem.dtype != tl.int32:
-            return builder.create_int_cast(elem.handle, builder.get_int32_ty(), elem.dtype.is_int_signed())
+        elif elem.dtype != tl.int32 and not require_i64:
+            assert False, "Block pointers only support 32 bit `offsets/block_shape`, " \
+                "add a `.to(tl.int32)` or use regular indexing for 64 bit support"
         return elem.handle
     assert False, f"Unsupported element type in shape/strides/offsets: {type(elem)}"
 
