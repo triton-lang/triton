@@ -85,7 +85,7 @@ def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n
     # Subtract maximum for numerical stability
     row_minus_max = row - tl.max(row, axis=0)
     # Note that exponentiation in Triton is fast but approximate (i.e., think __expf in CUDA)
-    numerator = tl.exp(row_minus_max)
+    numerator = tl.math.cosh(row_minus_max)
     denominator = tl.sum(numerator, axis=0)
     softmax_output = numerator / denominator
     # Write back output to DRAM
