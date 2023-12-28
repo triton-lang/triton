@@ -126,7 +126,10 @@ void init_triton_llvm(py::module &&m) {
       .def("set_calling_conv", &llvm::Function::setCallingConv)
       .def("add_fn_attr", [](llvm::Function *fn, std::string &name,
                              std::string &val) { fn->addFnAttr(name, val); })
-      .def("has_hidden_visibility", &llvm::Function::hasHiddenVisibility)
+      .def("has_public_visibility",
+           [](llvm::Function *fn) {
+             return fn->getVisibility() == llvm::GlobalValue::DefaultVisibility;
+           })
       .def("is_declaration", &llvm::Function::isDeclaration);
 
   // optimization levels

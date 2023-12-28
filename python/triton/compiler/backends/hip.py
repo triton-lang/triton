@@ -9,6 +9,7 @@ import tempfile
 from triton.common import _build
 import os
 import re
+from pathlib import Path
 
 
 def make_stub(name, signature, constants, ids, **kwargs):
@@ -252,10 +253,16 @@ class HIPOptions:
     max_num_imprecise_acc_default: int = 0
 
     def __post_init__(self):
-        # TODO: change API
-        if isinstance(self.extern_libs, dict):
-            extern_libs = tuple([(k, v) for k, v in self.extern_libs.items() if v])
-            object.__setattr__(self, 'extern_libs', extern_libs)
+        default_libdir = Path(__file__).parent.parent.parent / 'third_party' / 'hip' / 'lib'
+        extern_libs = dict() if self.extern_libs is None else dict(self.extern_libs)
+        libs = [
+            "cuda2gcn", "opencl", "ocml", "ockl", "oclc_finite_only_off", "oclc_daz_opt_off",
+            "oclc_correctly_rounded_sqrt_on", "oclc_unsafe_math_off", "oclc_wavefrontsize64_on", "oclc_abi_version_400"
+        ]
+        libs += ['oclc_isa_version_' + self.arch.replace('gfx', '')]
+        for lib in libs:
+            extern_libs[lib] = str(default_libdir / f'{lib}.bc')
+        object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
                "num_warps must be a power of 2"
 
@@ -357,7 +364,7 @@ class HIPBackend(BaseBackend):
                 llvm.link_extern_lib(llvm_mod, path)
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
         # Set kernel attributes
-        kernels = [fn for fn in llvm_mod.get_functions() if not fn.has_hidden_visibility() and not fn.is_declaration()]
+        kernels = [fn for fn in llvm_mod.get_functions() if fn.has_public_visibility() and not fn.is_declaration()]
         assert len(kernels) == 1
         kernels[0].set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
         kernels[0].add_fn_attr("amdgpu-flat-work-group-size", "1, 1024")
