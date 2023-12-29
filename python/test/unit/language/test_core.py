@@ -2424,11 +2424,12 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         off_l = tl.arange(0, BLOCK_N)
         off_k = tl.arange(0, BLOCK_K)
         Xs = X + off_m[:, None] * stride_xm + off_k[None, :] * stride_xk
-        # Ys = Y + off_k[:, None] * stride_yk + off_n[None, :] * stride_yn
-        # Ws = W + off_n[:, None] * stride_wn + off_l[None, :] * stride_wl
+        Ys = Y + off_k[:, None] * stride_yk + off_n[None, :] * stride_yn
+        Ws = W + off_n[:, None] * stride_wn + off_l[None, :] * stride_wl
+        Zs = Z + off_m[:, None] * stride_zm + off_n[None, :] * stride_zn
         x = tl.load(Xs)
-        # y = tl.load(Ys)
-        z = tl.dot(x, x, allow_tf32=ALLOW_TF32, out_dtype=out_dtype)
+        y = tl.load(Ys)
+        z = tl.dot(x, y, allow_tf32=ALLOW_TF32, out_dtype=out_dtype)
         if ADD_MATRIX:
             z += tl.load(Zs)
         if ADD_ROWS:
@@ -2444,9 +2445,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
             den = tl.sum(num, 1)
             z = num / den[:, None]
         if CHAIN_DOT:
-            # w = tl.load(Ws)
-            z = tl.dot(z.to(x.dtype), x, allow_tf32=ALLOW_TF32, out_dtype=out_dtype)
-        Zs = Z + off_m[:, None] * stride_zm + off_n[None, :] * stride_zn
+            w = tl.load(Ws)
+            z = tl.dot(z.to(w.dtype), w, allow_tf32=ALLOW_TF32, out_dtype=out_dtype)
         tl.store(Zs, z)
 
     # input
@@ -2467,9 +2467,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         x = (x.view('uint32') & np.uint32(0xffffe000)).view('float32')
         y = (y.view('uint32') & np.uint32(0xffffe000)).view('float32')
         w = (w.view('uint32') & np.uint32(0xffffe000)).view('float32')
-    x[:] = 1.
-    y[:] = 1.
-    w[:] = 1.
     x_tri = to_triton(x, device=device)
     y_tri = to_triton(y, device=device)
     w_tri = to_triton(w, device=device)
