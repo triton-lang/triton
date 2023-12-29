@@ -1526,16 +1526,24 @@ void init_triton_ir(py::module &&m) {
       .def(py::init<mlir::MLIRContext *>())
       .def("enable_debug",
            [](mlir::PassManager &self) {
+              auto *context = self.getContext();
+              context->printOpOnDiagnostic(true);
+              context->printStackTraceOnDiagnostic(true);
+              context->disableMultithreading();
+              context->getDiagEngine().registerHandler([](mlir::Diagnostic &diag) {
+                llvm::outs() << diag << "\n";
+                return mlir::success();
+              });
+
              if (!::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP"))
                return;
-             self.getContext()->disableMultithreading();
-             auto printingFlags = mlir::OpPrintingFlags();
-             printingFlags.elideLargeElementsAttrs(16);
-             printingFlags.enableDebugInfo();
-             auto print_always = [](mlir::Pass *, mlir::Operation *) {
-               return true;
-             };
-             self.enableIRPrinting(
+              auto printingFlags = mlir::OpPrintingFlags();
+              printingFlags.elideLargeElementsAttrs(16);
+              printingFlags.enableDebugInfo();
+              auto print_always = [](mlir::Pass *, mlir::Operation *) {
+                return true;
+              };
+              self.enableIRPrinting(
                  /*shouldPrintBeforePass=*/print_always,
                  /*shouldPrintAfterPass=*/print_always,
                  /*printModuleScope=*/true,
