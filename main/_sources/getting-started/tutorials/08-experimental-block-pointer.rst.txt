@@ -301,7 +301,7 @@ Still we can test our matrix multiplication with block pointers against a native
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  6.275 seconds)
+   **Total running time of the script:** ( 0 minutes  6.298 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_08-experimental-block-pointer.py:
