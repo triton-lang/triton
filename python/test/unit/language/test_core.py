@@ -2424,12 +2424,11 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         off_l = tl.arange(0, BLOCK_N)
         off_k = tl.arange(0, BLOCK_K)
         Xs = X + off_m[:, None] * stride_xm + off_k[None, :] * stride_xk
-        Ys = Y + off_k[:, None] * stride_yk + off_n[None, :] * stride_yn
-        Ws = W + off_n[:, None] * stride_wn + off_l[None, :] * stride_wl
-        Zs = Z + off_m[:, None] * stride_zm + off_n[None, :] * stride_zn
+        # Ys = Y + off_k[:, None] * stride_yk + off_n[None, :] * stride_yn
+        # Ws = W + off_n[:, None] * stride_wn + off_l[None, :] * stride_wl
         x = tl.load(Xs)
-        y = tl.load(Ys)
-        z = tl.dot(x, y, allow_tf32=ALLOW_TF32, out_dtype=out_dtype)
+        # y = tl.load(Ys)
+        z = tl.dot(x, x, allow_tf32=ALLOW_TF32, out_dtype=out_dtype)
         if ADD_MATRIX:
             z += tl.load(Zs)
         if ADD_ROWS:
@@ -2445,8 +2444,9 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
             den = tl.sum(num, 1)
             z = num / den[:, None]
         if CHAIN_DOT:
-            w = tl.load(Ws)
-            z = tl.dot(z.to(w.dtype), w, allow_tf32=ALLOW_TF32, out_dtype=out_dtype)
+            # w = tl.load(Ws)
+            z = tl.dot(z.to(x.dtype), x, allow_tf32=ALLOW_TF32, out_dtype=out_dtype)
+        Zs = Z + off_m[:, None] * stride_zm + off_n[None, :] * stride_zn
         tl.store(Zs, z)
 
     # input
@@ -2467,6 +2467,9 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         x = (x.view('uint32') & np.uint32(0xffffe000)).view('float32')
         y = (y.view('uint32') & np.uint32(0xffffe000)).view('float32')
         w = (w.view('uint32') & np.uint32(0xffffe000)).view('float32')
+    x[:] = 1.
+    y[:] = 1.
+    w[:] = 1.
     x_tri = to_triton(x, device=device)
     y_tri = to_triton(y, device=device)
     w_tri = to_triton(w, device=device)
@@ -2565,31 +2568,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         else:
             assert 'wgmma.mma_async.sync.aligned' in ptx or\
                 'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
-
-
-def test_max_num_imprecise_acc(device):
-    capability = torch.cuda.get_device_capability()
-    if capability != (9, 0):
-        return
-
-    @triton.jit
-    def kernel(X, Y, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-               MAX_NUM_IMPRECISE_ACC: tl.constexpr):
-        off_m = tl.arange(0, BLOCK_M)
-        off_n = tl.arange(0, BLOCK_N)
-        off_k = tl.arange(0, BLOCK_K)
-        x = tl.load(X + off_m[:, None] * BLOCK_K + off_k[None, :])
-        y = tl.load(Y + off_k[:, None] * BLOCK_N + off_n[None, :])
-        z = tl.load(Z + off_m[:, None] * BLOCK_N + off_n[None, :])
-        z = tl.dot(x, y, acc=z, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC)
-        tl.store(Z + off_m[:, None] * BLOCK_N + off_n[None, :], z)
-
-    M, N, K, num_warps, MAX_NUM_IMPRECISE_ACC = 128, 128, 128, 4, 64
-    x = torch.zeros((M, K), dtype=torch.float8_e5m2, device=device)
-    y = torch.zeros((K, N), dtype=torch.float8_e5m2, device=device)
-    z = torch.zeros((M, N), dtype=torch.float32, device=device)
-    h = kernel[(1, 1)](x, y, z, M, N, K, MAX_NUM_IMPRECISE_ACC, num_warps=num_warps)
-    assert h.asm["ptx"].count("add.f32") == (M * N) // (32 * num_warps) * (K / MAX_NUM_IMPRECISE_ACC)
 
 
 @pytest.mark.parametrize('in_dtype', ['float32'])

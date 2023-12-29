@@ -344,6 +344,7 @@ class HIPBackend(BaseBackend):
         passes.convert.add_index_to_llvmir(pm)
         pm.run(mod)
         pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
         amd.passes.ttgpuir.add_to_llvmir(pm)
         pm.run(mod)
         pm = ir.pass_manager(mod.context)

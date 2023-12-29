@@ -159,7 +159,10 @@ SmallVector<unsigned> getContigPerThread(Attribute layout) {
   if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
     assert(mmaLayout.isVolta() || mmaLayout.isAmpere() || mmaLayout.isHopper());
     return {1, 2};
-  } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+  } else if (layout.isa<MfmaEncodingAttr>()) {
+    return {1, 1};
+  }
+  else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parentLayout = sliceLayout.getParent();
     return getContigPerThread(parentLayout);
   } else {
@@ -272,6 +275,8 @@ SmallVector<unsigned> getCTAsPerCGA(Attribute layout) {
   ArrayRef<unsigned> ref;
   if (auto distributedLayout = layout.dyn_cast<DistributedEncodingTrait>())
     return distributedLayout.getCTAsPerCGA();
+  else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>())
+    return {1, 1};
   else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>())
     ref = sharedLayout.getCTALayout().getCTAsPerCGA();
   else
@@ -283,7 +288,11 @@ SmallVector<unsigned> getCTASplitNum(Attribute layout) {
   SmallVector<unsigned> res;
   if (auto distributedLayout = layout.dyn_cast<DistributedEncodingTrait>()) {
     return distributedLayout.getCTASplitNum();
-  } else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
+  } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
+    res.resize(2);
+    res[0] = res[1] = 1;
+  }
+  else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
     res.assign(sharedLayout.getCTALayout().getCTASplitNum().begin(),
                sharedLayout.getCTALayout().getCTASplitNum().end());
   } else {
@@ -296,7 +305,10 @@ SmallVector<unsigned> getCTAOrder(Attribute layout) {
   ArrayRef<unsigned> ref;
   if (auto distributedLayout = layout.dyn_cast<DistributedEncodingTrait>()) {
     ref = distributedLayout.getCTAOrder();
-  } else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
+  } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
+    return {0, 1};
+  }
+  else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
     ref = sharedLayout.getCTALayout().getCTAOrder();
   } else {
     llvm::report_fatal_error("Unimplemented usage of getCTAOrder");
@@ -347,7 +359,10 @@ unsigned getNumWarpsPerCTA(Attribute layout) {
     // Use the distributed layout interface to get the number of warps per CTA.
     auto distributedLayout = layout.cast<DistributedEncodingTrait>();
     warpsPerCTA = distributedLayout.getWarpsPerCTA();
-  } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>())
+  }
+  else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>())
+    warpsPerCTA = mfmaLayout.getWarpsPerCTA();
+  else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>())
     return getNumWarpsPerCTA(dotLayout.getParent());
   else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>())
     llvm::report_fatal_error("Cannot get numWarps from SharedEncodingAttr");
