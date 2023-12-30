@@ -235,7 +235,7 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
 @dataclass(frozen=True)
 class HIPOptions:
     num_warps: int = 4
-    waves_per_eu: int = 2
+    waves_per_eu: int = 1
     num_stages: int = 0
     num_ctas: int = 1
     extern_libs: dict = None
@@ -245,7 +245,7 @@ class HIPOptions:
     allow_fp8e4nv: bool = False
     # TODO: deprecate when hook interface has changed
     enable_warp_specialization: bool = False
-    enable_fp_fusion: bool = False
+    enable_fp_fusion: bool = True
     capability: int = None
     # TODO:
     matrix_core_version: int = 2
@@ -369,7 +369,9 @@ class HIPBackend(BaseBackend):
         kernels = [fn for fn in llvm_mod.get_functions() if fn.has_public_visibility() and not fn.is_declaration()]
         assert len(kernels) == 1
         kernels[0].set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
-        kernels[0].add_fn_attr("amdgpu-flat-work-group-size", "1, 1024")
+        kernels[0].add_fn_attr("amdgpu-flat-work-group-size", f"1, {options.num_warps*64}")
+        kernels[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
+        kernels[0].add_fn_attr("denormal-fp-math-f32", "preserve-sign")
         # Get some metadata
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")
         ret = str(llvm_mod)
@@ -384,6 +386,8 @@ class HIPBackend(BaseBackend):
         assert len(names) == 1
         metadata["name"] = names[0]
         # llvm -> hsaco
+        hsaco_txt = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion,
+                                          False)
         hsaco = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion, True)
         import subprocess
         rocm_path = path_to_rocm_lld()
