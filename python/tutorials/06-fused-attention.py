@@ -580,7 +580,7 @@ attention = _attention.apply
 
 
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [
-    (1, 1, 128, 64),
+    (4, 48, 1024, 64),
     # (4, 48, 2048, 64),
     # (4, 48, 4096, 64),
     # (4, 48, 1024, 128),
