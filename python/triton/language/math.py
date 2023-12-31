@@ -60,9 +60,16 @@ def min(arg0, arg1, propagate_nan: core.constexpr = PropagateNan.NONE, _builder=
     arg1 = core._promote_bfloat16_to_float32(arg1, _builder=_builder)
     arg0, arg1 = core.binary_op_type_legalization(arg0, arg1, _builder)
     dtype = arg0.dtype
+
     if dtype.is_floating():
+        native_nans = _builder is not None and _builder.options.has_native_nan_propagation
         if propagate_nan == core.constexpr(PropagateNan.ALL):
-            return core.tensor(_builder.create_minimumf(arg0.handle, arg1.handle), arg0.type)
+            if native_nans:
+                return core.tensor(_builder.create_minimumf(arg0.handle, arg1.handle), arg0.type)
+            else:
+                r = core.tensor(_builder.create_minnumf(arg0.handle, arg1.handle), arg0.type)
+                nans = isnan(arg0, _builder=_builder).__or__(isnan(arg1, _builder=_builder), _builder=_builder)
+                return  core.where(nans, core.nan(dtype, _builder=_builder), r, _builder=_builder)
         elif propagate_nan == core.constexpr(PropagateNan.NONE):
             return core.tensor(_builder.create_minnumf(arg0.handle, arg1.handle), arg0.type)
         else:
@@ -84,8 +91,14 @@ def max(arg0, arg1, propagate_nan: core.constexpr = PropagateNan.NONE, _builder=
     arg0, arg1 = core.binary_op_type_legalization(arg0, arg1, _builder)
     dtype = arg0.dtype
     if dtype.is_floating():
+        native_nans = _builder is not None and _builder.options.has_native_nan_propagation
         if propagate_nan == core.constexpr(PropagateNan.ALL):
-            return core.tensor(_builder.create_maximumf(arg0.handle, arg1.handle), arg0.type)
+            if native_nans:
+                return core.tensor(_builder.create_maximumf(arg0.handle, arg1.handle), arg0.type)
+            else:
+                r = core.tensor(_builder.create_maxnumf(arg0.handle, arg1.handle), arg0.type)
+                nans = isnan(arg0, _builder=_builder).__or__(isnan(arg1, _builder=_builder), _builder=_builder)
+                return  core.where(nans, core.nan(dtype, _builder=_builder), r, _builder=_builder)
         elif propagate_nan == core.constexpr(PropagateNan.NONE):
             return core.tensor(_builder.create_maxnumf(arg0.handle, arg1.handle), arg0.type)
         else:
