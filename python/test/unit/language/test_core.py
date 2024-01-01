@@ -1766,7 +1766,7 @@ scan_configs = [(op, type, shape, axis, num_warps)
                 for type in ['int32', 'float32']
                 for axis in [1, 0]
                 for shape in scan2d_shapes
-                for op in ['cumsum', 'cumprod', 'get_first_element']]
+                for op in ['cumsum', 'cumprod', 'get_first_element', 'linear_recurrence']]
 negative_config = [('cumsum', 'float32', (32, 32), -1, 4)]
 
 
@@ -1774,6 +1774,12 @@ negative_config = [('cumsum', 'float32', (32, 32), -1, 4)]
 # trivial associative but not commutative function
 def get_first_element(a, b):
     return a
+
+
+# Compute x_i = a_i * x_{i-1} + b_i
+@triton.jit
+def linear_recurrence(a1, b1, a2, b2):
+    return a1 * a2, b1 * a2 + b2
 
 
 @pytest.mark.parametrize("op, dtype_str, shape, axis, num_warps", scan_configs + negative_config)
@@ -1784,26 +1790,56 @@ def test_scan2d(op, dtype_str, shape, axis, num_warps, device):
 
     # triton kernel
     @triton.jit
-    def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, AXIS: tl.constexpr):
+    def kernel(X, Y, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, AXIS: tl.constexpr):
         range_m = tl.arange(0, BLOCK_M)
         range_n = tl.arange(0, BLOCK_N)
         x = tl.load(X + range_m[:, None] * BLOCK_N + range_n[None, :])
-        z = GENERATE_TEST_HERE
+        y = tl.load(Y + range_m[:, None] * BLOCK_N + range_n[None, :])
+        GENERATE_TEST_HERE
         tl.store(Z + range_m[:, None] * BLOCK_N + range_n[None, :], z)
 
     if op == 'cumsum' or op == 'cumprod':
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{op}(x, axis={axis})'})
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'z = tl.{op}(x, axis={axis})'})
+    elif op == 'get_first_element':
+        kernel = patch_kernel(kernel,
+                              {'GENERATE_TEST_HERE': f'z = tl.associative_scan(x, axis={axis}, combine_fn={op})'})
     else:
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.associative_scan(x, axis={axis}, combine_fn={op})'})
+        assert op == 'linear_recurrence'
+        kernel = patch_kernel(
+            kernel, {'GENERATE_TEST_HERE': f'_, z = tl.associative_scan((x, y), axis={axis}, combine_fn={op})'})
     # input
     rs = RandomState(17)
-    x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
+    if op == 'linear_recurrence' and dtype_str in int_dtypes:
+        # If the numbers are too large the op will overflow
+        # We sample numbers in -1, 0, 1
+        x = rs.randint(-1, 2, shape, dtype=dtype_str)
+        y = rs.randint(-1, 2, shape, dtype=dtype_str)
+    else:
+        x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
+        # y is just used in linear_recurrence
+        y = numpy_random(shape, dtype_str=dtype_str, rs=rs)
     z = np.empty_like(x)
     x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device)
     if op == 'cumsum' or op == 'cumprod':
         numpy_op = {'cumsum': np.cumsum, 'cumprod': np.cumprod}[op]
         z_dtype_str = dtype_str
         z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
+    elif op == 'linear_recurrence':
+        # Simplify to the axis=1 case
+        x_ref = x.T if axis == 0 else x
+        y_ref = y.T if axis == 0 else y
+        result = []
+        for x_refi, y_refi in zip(x_ref, y_ref):
+            li = []
+            acc = 0
+            for xi, yi in zip(x_refi, y_refi):
+                acc = xi * acc + yi
+                li.append(acc)
+            result.append(li)
+        z_ref = np.array(result)
+        if axis == 0:
+            z_ref = z_ref.T
     else:
         assert op == 'get_first_element'
         z_ref = x
@@ -1813,7 +1849,7 @@ def test_scan2d(op, dtype_str, shape, axis, num_warps, device):
             z_ref[:, 1:] = x[:, 0:1]
     # triton result
     z_tri = to_triton(z, device=device)
-    kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis, num_warps=num_warps)
+    kernel[(1, )](x_tri, y_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis, num_warps=num_warps)
     z_tri = to_numpy(z_tri)
     # compare
     if dtype_str == 'float32':

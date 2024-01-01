@@ -538,15 +538,17 @@ mlir::LogicalResult mlir::triton::ReduceOp::verify() {
   return success();
 }
 
-mlir::LogicalResult mlir::triton::ReduceOp::verifyRegions() {
-  auto argElementTypes = this->getElementTypes();
-  const auto &operands = this->getOperands();
+// Helpers for Reductions and Scans
+template <class ReturnOp, class Op>
+static mlir::LogicalResult verifyRegionsImpl(Op &op) {
+  auto argElementTypes = op.getElementTypes();
+  const auto &operands = op.getOperands();
   const auto numArgs = 2 * operands.size();
-  auto &block = *this->getBody();
+  auto &block = *op.getBody();
   if (block.getNumArguments() != numArgs) {
-    return this->emitOpError() << "nested block must take " << numArgs
-                               << " arguments, but given block with "
-                               << block.getNumArguments() << " arguments";
+    return op.emitOpError() << "nested block must take " << numArgs
+                            << " arguments, but given block with "
+                            << block.getNumArguments() << " arguments";
   }
   unsigned i = 0;
   const auto &blockArgTypes = block.getArgumentTypes();
@@ -554,22 +556,21 @@ mlir::LogicalResult mlir::triton::ReduceOp::verifyRegions() {
     const auto &blockArgTy = blockArgTypes[i];
     const auto &argElemTy = argElementTypes[i % operands.size()];
     if (blockArgTy != argElemTy) {
-      return this->emitOpError()
+      return op.emitOpError()
              << "type mismatch on combine operation. Expected argument " << i
              << " to have type " << argElemTy << " but got " << blockArgTy;
     }
   }
 
-  auto terminator =
-      dyn_cast<mlir::triton::ReduceReturnOp>(block.getTerminator());
+  auto terminator = dyn_cast<ReturnOp>(block.getTerminator());
   if (!terminator) {
-    return this->emitOpError()
+    return op.emitOpError()
            << "combine operation must be terminated "
            << "with a ReduceReturnOp but got " << block.getTerminator();
   }
   const auto &combineResults = terminator->getOperands();
   if (combineResults.size() != operands.size()) {
-    return this->emitOpError()
+    return op.emitOpError()
            << "expected combine operation to return " << operands.size()
            << " values but got " << combineResults.size();
   }
@@ -577,7 +578,7 @@ mlir::LogicalResult mlir::triton::ReduceOp::verifyRegions() {
     const auto &resultTy = combineResults[i].getType();
     const auto &argElemTy = argElementTypes[i];
     if (resultTy != argElemTy) {
-      return this->emitOpError()
+      return op.emitOpError()
              << "type mismatch on combine operation. Expected argument " << i
              << " to have type " << argElemTy << " but got " << resultTy;
     }
@@ -585,23 +586,38 @@ mlir::LogicalResult mlir::triton::ReduceOp::verifyRegions() {
   return mlir::success();
 }
 
-llvm::SmallVector<mlir::RankedTensorType> ReduceOp::getInputTypes() {
+static llvm::SmallVector<mlir::RankedTensorType>
+getInputTypesImpl(const mlir::Operation::operand_range &operands) {
   llvm::SmallVector<RankedTensorType> srcTys;
-  srcTys.reserve(this->getNumOperands());
-  for (const auto &ty : this->getOperands().getTypes()) {
+  srcTys.reserve(operands.size());
+  for (const auto &ty : operands.getTypes()) {
     srcTys.push_back(ty.cast<RankedTensorType>());
   }
   return srcTys;
 }
 
-llvm::SmallVector<Type> ReduceOp::getElementTypes() {
+static llvm::SmallVector<Type>
+getElementTypesImpl(const mlir::Operation::operand_range &operands) {
   llvm::SmallVector<Type> srcElemTys;
-  srcElemTys.reserve(this->getNumOperands());
-  for (const auto &op : this->getOperands()) {
+  srcElemTys.reserve(operands.size());
+  for (const auto &op : operands) {
     srcElemTys.push_back(
         op.getType().cast<RankedTensorType>().getElementType());
   }
   return srcElemTys;
+}
+
+mlir::LogicalResult mlir::triton::ReduceOp::verifyRegions() {
+  using ReturnOp = mlir::triton::ReduceReturnOp;
+  return verifyRegionsImpl<ReturnOp>(*this);
+}
+
+llvm::SmallVector<mlir::RankedTensorType> ReduceOp::getInputTypes() {
+  return getInputTypesImpl(this->getOperands());
+}
+
+llvm::SmallVector<Type> ReduceOp::getElementTypes() {
+  return getElementTypesImpl(this->getOperands());
 }
 
 unsigned ReduceOp::getNumOperands() { return this->getOperands().size(); }
@@ -635,6 +651,21 @@ mlir::LogicalResult mlir::triton::ScanOp::verify() {
   }
   return success();
 }
+
+mlir::LogicalResult mlir::triton::ScanOp::verifyRegions() {
+  using ReturnOp = mlir::triton::ScanReturnOp;
+  return verifyRegionsImpl<ReturnOp>(*this);
+}
+
+llvm::SmallVector<mlir::RankedTensorType> ScanOp::getInputTypes() {
+  return getInputTypesImpl(this->getOperands());
+}
+
+llvm::SmallVector<Type> ScanOp::getElementTypes() {
+  return getElementTypesImpl(this->getOperands());
+}
+
+unsigned ScanOp::getNumOperands() { return this->getOperands().size(); }
 
 //-- SplatOp --
 OpFoldResult SplatOp::fold(FoldAdaptor adaptor) {
