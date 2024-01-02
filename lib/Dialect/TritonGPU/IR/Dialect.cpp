@@ -691,6 +691,59 @@ bool isaDistributedLayout(Attribute layout) {
          layout.isa<MfmaEncodingAttr>() || layout.isa<SliceEncodingAttr>();
 }
 
+bool sameBlockedEncodings(BlockedEncodingAttr blockedA,
+                          BlockedEncodingAttr blockedB) {
+  auto sizePerThreadA = blockedA.getSizePerThread();
+  auto threadsPerWarpA = blockedA.getThreadsPerWarp();
+  auto warpsPerCTAA = blockedA.getWarpsPerCTA();
+  auto orderA = blockedA.getOrder();
+  size_t rankA = orderA.size();
+
+  auto sizePerThreadB = blockedB.getSizePerThread();
+  auto threadsPerWarpB = blockedB.getThreadsPerWarp();
+  auto warpsPerCTAB = blockedB.getWarpsPerCTA();
+  auto orderB = blockedB.getOrder();
+  size_t rankB = orderB.size();
+
+  if (rankA != rankB) {
+    return false;
+  }
+  for (size_t i = 0; i < rankA; ++i) {
+    if (sizePerThreadA[i] != sizePerThreadB[i] ||
+        threadsPerWarpA[i] != threadsPerWarpB[i] ||
+        warpsPerCTAA[i] != warpsPerCTAB[i] || orderA[i] != orderB[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool sameMfmaEncodings(MfmaEncodingAttr mfmaA, MfmaEncodingAttr mfmaB) {
+  auto nonKDimA = mfmaA.getNonKDim();
+  auto warpsPerCTAA = mfmaA.getWarpsPerCTA();
+  auto isTransposedA = mfmaA.getIsTransposed();
+
+  auto nonKDimB = mfmaB.getNonKDim();
+  auto warpsPerCTAB = mfmaB.getWarpsPerCTA();
+  auto isTransposedB = mfmaB.getIsTransposed();
+
+  if (nonKDimA != nonKDimB || isTransposedA != isTransposedB) {
+    return false;
+  }
+
+  if (warpsPerCTAA.size() != warpsPerCTAB.size()) {
+    return false;
+  }
+
+  auto rank = warpsPerCTAA.size();
+  for (size_t i = 0; i < rank; ++i) {
+    if (warpsPerCTAA[i] != warpsPerCTAB[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool isSharedEncoding(Value value) {
   auto type = value.getType();
   if (auto tensorType = type.dyn_cast<RankedTensorType>()) {

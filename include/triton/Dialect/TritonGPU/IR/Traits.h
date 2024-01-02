@@ -14,6 +14,7 @@ namespace OpTrait {
 // instantiated/duplicated.
 namespace impl {
 LogicalResult verifyResultsAreSharedEncoding(Operation *op);
+LogicalResult verifyOperandAndResultHaveSameEncoding(Operation *op);
 } // namespace impl
 
 template <typename ConcreteType>
@@ -25,6 +26,14 @@ public:
   }
 };
 
+template <typename ConcreteType>
+class OperandAndResultHaveSameEncoding
+    : public TraitBase<ConcreteType, OperandAndResultHaveSameEncoding> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return impl::verifyOperandAndResultHaveSameEncoding(op);
+  }
+};
 } // namespace OpTrait
 } // namespace mlir
 

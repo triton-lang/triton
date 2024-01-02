@@ -14,6 +14,7 @@ include "mlir/Interfaces/DestinationStyleOpInterface.td"
 include "mlir/Interfaces/ViewLikeInterface.td"
 
 def ResultsAreSharedEncoding: NativeOpTrait<"ResultsAreSharedEncoding">;
+def OperandAndResultHaveSameEncoding: NativeOpTrait<"OperandAndResultHaveSameEncoding">;
 
 class TTG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonGPU_Dialect, mnemonic, traits>;
@@ -176,6 +177,67 @@ def TTG_InsertSliceOp : TTG_Op<"insert_slice",
   }];
 
   let hasCustomAssemblyFormat = 1;
+}
+
+
+def TTG_ViewSliceOp : TTG_Op<"view_slice",
+                                [AttrSizedOperandSegments,
+                                 OperandAndResultHaveSameEncoding,
+                                 Pure,
+                                 OffsetSizeAndStrideOpInterface
+                                 ]> {
+  let summary = "view slice operation";
+  let description = [{
+    Represents view of the slice of the tensor in registers. Syntax of the operation is the same
+    as for extract_slice op. However, unlike 'extract_slice' which slices in shared memory,
+    'view_slice' specifically slices within registers.
+    Slice of the tensor is required to have the same layout as the original tensor.
+    In a way, semantics of the 'view_slice' operation is a combination of the 'extract_slice' and 'view' operations semantics.
+    }];
+
+  let arguments = (ins
+    AnyRankedTensor:$source,
+    Variadic<I32>:$offsets,
+    Variadic<I32>:$sizes,
+    Variadic<I32>:$strides,
+    DenseI64ArrayAttr:$static_offsets,
+    DenseI64ArrayAttr:$static_sizes,
+    DenseI64ArrayAttr:$static_strides
+  );
+  let results = (outs AnyRankedTensor:$result);
+
+  let builders = [
+    // Build an ExtractSliceOp with mixed static and dynamic entries and custom
+    // result type. If the type passed is nullptr, it is inferred.
+    OpBuilder<(ins "RankedTensorType":$resultType, "Value":$source,
+      "ArrayRef<OpFoldResult>":$offsets, "ArrayRef<OpFoldResult>":$sizes,
+      "ArrayRef<OpFoldResult>":$strides,
+      CArg<"ArrayRef<NamedAttribute>", "{}">:$attrs)>,
+  ];
+
+  let extraClassDeclaration = [{
+    /// Return the number of leading operands before the `offsets`, `sizes` and
+    /// and `strides` operands.
+    static unsigned getOffsetSizeAndStrideStartOperandIndex() { return 1; }
+
+    /// Returns the type of the base tensor operand.
+    RankedTensorType getSourceType() {
+      return getSource().getType().cast<RankedTensorType>();
+    }
+
+    std::array<unsigned, 3> getArrayAttrMaxRanks() {
+      unsigned rank = getSourceType().getRank();
+      return {rank, rank, rank};
+    }
+  }];
+
+  let assemblyFormat = [{
+    $source ``
+    custom<DynamicIndexList>($offsets, $static_offsets)
+    custom<DynamicIndexList>($sizes, $static_sizes)
+    custom<DynamicIndexList>($strides, $static_strides)
+    attr-dict `:` type($source) `to` type($result)
+  }];
 }
 
 

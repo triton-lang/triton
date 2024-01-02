@@ -849,6 +849,135 @@ struct ExtractSliceOpConversion
   }
 };
 
+// clang-format off
+/***
+   # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+   # WO   #  W1 #                                     |                                #
+   #      #     #                                     |                                #
+   #  #   #  #  #                                     |                                #
+   # W2   # W3  #   ....                              |                                #
+   #      #     #                                     |  SkipElems                     #
+   #  #   #  #  #                                     |                                #
+   #                                                  |                                #
+   #                                        Slice     |                                #
+   #    .                                 /        \  |                                #
+   #    .                                /          \ |                                #
+   #    .                               /            \|                                #
+   #                                    #   #  #  #  #                                 #
+   #                                    #  W0  #  W1 #                                 #
+   #                                    #      #     #                                 #
+   #                                    #  #   #  #  #    tensorStride                 #
+   #                                    #  W2  #  W3 # --------------------------------#
+   #                                    #      #     #                                 #
+   #                                    #  #   #  #  #                                 #
+   #          tensorStride              #  W0  #  W1 #                                 #
+   # ---------------------------------- #      #     #                                 #
+   #                                    #  #   #  #  #                                 #
+   #                                    #  W2  #  W3 #                                 #
+   #                                    #      #     #                                 #
+   #                                    #  #   #  #  # ---> lastIdx                    #
+   #                                         .                                         #
+   #                                         .                                         #
+   #                                         .                                         #
+   #                                                                                   #
+   #                                                                                   #
+   #                                                                                   #
+   #                                                                                   #
+   # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+***/
+// clang-format on
+struct ViewSliceOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::ViewSliceOp> {
+  using OpAdaptor = typename triton::gpu::ViewSliceOp::Adaptor;
+  explicit ViewSliceOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+                                 PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern<triton::gpu::ViewSliceOp>(typeConverter,
+                                                                  benefit) {}
+
+  LogicalResult
+  processBlockedLayout(triton::gpu::ViewSliceOp op, OpAdaptor adaptor,
+                       ConversionPatternRewriter &rewriter) const {
+    Location loc = op->getLoc();
+    auto srcTy = op.getSource().getType().dyn_cast<RankedTensorType>();
+    auto srcLayout = srcTy.getEncoding().dyn_cast<BlockedEncodingAttr>();
+    assert(
+        srcLayout &&
+        "Currently only blocked layout is supported in view_slice instruction");
+    auto srcShape = srcTy.getShape();
+    auto resultTy = op.getType().template cast<RankedTensorType>();
+    auto vals = this->getTypeConverter()->unpackLLElements(
+        loc, adaptor.getSource(), rewriter, srcTy);
+
+    auto elemsPerThread = mlir::triton::gpu::getElemsPerThread(srcTy);
+    auto sizePerThread = srcLayout.getSizePerThread();
+    auto totalSizePerThread = sizePerThread[0] * sizePerThread[1];
+    auto order = srcLayout.getOrder();
+    auto shapePerCTA = getShapePerCTATile(srcLayout, srcShape);
+    shapePerCTA[0] = std::min(srcShape[0], (long)shapePerCTA[0]);
+    shapePerCTA[1] = std::min(srcShape[1], (long)shapePerCTA[1]);
+
+    auto offsets = op.getStaticOffsets();
+    auto sizes = op.getStaticSizes();
+
+    // ViewSlice only supports slicing where offsets and sizes are multiples of
+    // shapePerCTA. This condition ensures that slice has the same layout as the
+    // original tensor.
+    assert(offsets[0] % shapePerCTA[0] == 0);
+    assert(offsets[1] % shapePerCTA[1] == 0);
+    assert(sizes[0] % shapePerCTA[0] == 0);
+    assert(sizes[1] % shapePerCTA[1] == 0);
+    assert(op.hasUnitStride() &&
+           "Only unit stride supported by ViewSliceOpConversion");
+
+    // Calculate offsets and sizes in terms of CTA units.
+    std::vector<long int> CTAOffsets{offsets[0] / shapePerCTA[0],
+                                     offsets[1] / shapePerCTA[1]};
+    std::vector<long int> CTASizes{sizes[0] / shapePerCTA[0],
+                                   sizes[1] / shapePerCTA[1]};
+    std::vector<long int> CTAPerShape{srcShape[0] / shapePerCTA[0],
+                                      srcShape[1] / shapePerCTA[1]};
+
+    SmallVector<Value> resultVals;
+    // The diagram above illustrates the graphical representation of the
+    // skipElems, tensorStride, and lastIdx variables.
+    auto skipElems = CTAOffsets[order[1]] *
+                         (elemsPerThread[order[0]] * sizePerThread[order[1]]) +
+                     CTAOffsets[order[0]] * totalSizePerThread;
+    auto tensorStride =
+        (CTAPerShape[order[0]] - CTASizes[order[0]]) * totalSizePerThread;
+    auto lastIdx =
+        (CTAOffsets[order[1]] + CTASizes[order[1]] - 1) *
+            elemsPerThread[order[0]] * sizePerThread[order[1]] +
+        (CTAOffsets[order[0]] + CTASizes[order[0]]) * totalSizePerThread;
+
+    assert(lastIdx <= vals.size());
+    for (int i = skipElems; i < lastIdx; i += tensorStride) {
+      for (int j = 0; j < totalSizePerThread * CTASizes[order[0]]; ++j, ++i) {
+        assert(i < lastIdx);
+        resultVals.push_back(vals[i]);
+      }
+    }
+
+    Value ret = this->getTypeConverter()->packLLElements(loc, resultVals,
+                                                         rewriter, resultTy);
+    rewriter.replaceOp(op, ret);
+    return success();
+  }
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::ViewSliceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+
+    auto srcTy = op.getSource().getType().dyn_cast<RankedTensorType>();
+    if (srcTy.getEncoding().dyn_cast<BlockedEncodingAttr>()) {
+      return processBlockedLayout(op, adaptor, rewriter);
+    } else {
+      assert(false && "unsupported layout in viewSlice");
+      return failure();
+    }
+  }
+};
+
 struct AsyncWaitOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::AsyncWaitOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -954,6 +1083,7 @@ void populateTritonGPUToLLVMPatterns(
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
   patterns.add<ExtractSliceOpConversion>(typeConverter, moduleAllocation,
                                          benefit);
+  patterns.add<ViewSliceOpConversion>(typeConverter, benefit);
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
   patterns.add<GetNumProgramsOpConversion>(typeConverter, benefit);
   patterns.add<GetThreadIdOpConversion>(typeConverter, benefit);
