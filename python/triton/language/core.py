@@ -1384,62 +1384,49 @@ def fdiv(x, y, ieee_rounding=False, _builder=None):
 
 
 @builtin
-def min(arg0, arg1, propagate_nan: constexpr = PropagateNan.NONE, _builder=None):
+def minimum(arg0, arg1, propagate_nan: constexpr = PropagateNan.NONE, _builder=None):
+    """
+    Computes the element-wise minimum of :code:`x` and :code:`y`.
+
+    :param x: the first input tensor
+    :type x: Block
+    :param y: the second input tensor
+    :type y: Block
+    :param propagate_nan: whether to propagate NaN values.
+    :type propagate_nan: tl.PropagateNan
+
+    .. seealso:: :class:`tl.PropagateNan`
+    """
     arg0 = _to_tensor(arg0, _builder)
     arg1 = _to_tensor(arg1, _builder)
     arg0 = _promote_bfloat16_to_float32(arg0, _builder=_builder)
     arg1 = _promote_bfloat16_to_float32(arg1, _builder=_builder)
-    arg0, arg1 = binary_op_type_legalization(arg0, arg1, _builder)
-    dtype = arg0.dtype
+    propagate_nan = _constexpr_to_value(propagate_nan)
 
-    if dtype.is_floating():
-        native_nans = _builder is not None and _builder.options.has_native_nan_propagation
-        if propagate_nan == constexpr(PropagateNan.ALL):
-            if native_nans:
-                return tensor(_builder.create_minimumf(arg0.handle, arg1.handle), arg0.type)
-            else:
-                r = tensor(_builder.create_minnumf(arg0.handle, arg1.handle), arg0.type)
-                nans = isnan(arg0, _builder=_builder).__or__(isnan(arg1, _builder=_builder), _builder=_builder)
-                return  where(nans, nan(dtype, _builder=_builder), r, _builder=_builder)
-        elif propagate_nan == constexpr(PropagateNan.NONE):
-            return tensor(_builder.create_minnumf(arg0.handle, arg1.handle), arg0.type)
-        else:
-            assert False, f"Unexpected propagate_nan {propagate_nan}"
-    elif dtype.is_int_signed():
-        return tensor(_builder.create_minsi(arg0.handle, arg1.handle), arg0.type)
-    elif dtype.is_int_unsigned():
-        return tensor(_builder.create_minui(arg0.handle, arg1.handle), arg0.dtype)
-    else:
-        assert False, f"Unexpected dtype {dtype}"
+    return semantic.min(arg0, arg1, propagate_nan, _builder)
 
 
 @builtin
-def max(arg0, arg1, propagate_nan: constexpr = PropagateNan.NONE, _builder=None):
+def maximum(arg0, arg1, propagate_nan: constexpr = PropagateNan.NONE, _builder=None):
+    """
+    Computes the element-wise maximum of :code:`x` and :code:`y`.
+
+    :param x: the first input tensor
+    :type x: Block
+    :param y: the second input tensor
+    :type y: Block
+    :param propagate_nan: whether to propagate NaN values.
+    :type propagate_nan: tl.PropagateNan
+
+    .. seealso:: :class:`tl.PropagateNan`
+    """
     arg0 = _to_tensor(arg0, _builder)
     arg1 = _to_tensor(arg1, _builder)
     arg0 = _promote_bfloat16_to_float32(arg0, _builder=_builder)
     arg1 = _promote_bfloat16_to_float32(arg1, _builder=_builder)
-    arg0, arg1 = binary_op_type_legalization(arg0, arg1, _builder)
-    dtype = arg0.dtype
-    if dtype.is_floating():
-        native_nans = _builder is not None and _builder.options.has_native_nan_propagation
-        if propagate_nan == constexpr(PropagateNan.ALL):
-            if native_nans:
-                return tensor(_builder.create_maximumf(arg0.handle, arg1.handle), arg0.type)
-            else:
-                r = tensor(_builder.create_maxnumf(arg0.handle, arg1.handle), arg0.type)
-                nans = isnan(arg0, _builder=_builder).__or__(isnan(arg1, _builder=_builder), _builder=_builder)
-                return  where(nans, nan(dtype, _builder=_builder), r, _builder=_builder)
-        elif propagate_nan == constexpr(PropagateNan.NONE):
-            return tensor(_builder.create_maxnumf(arg0.handle, arg1.handle), arg0.type)
-        else:
-            assert False, f"Unexpected propagate_nan {propagate_nan}"
-    elif dtype.is_int_signed():
-        return tensor(_builder.create_maxsi(arg0.handle, arg1.handle), arg0.type)
-    elif dtype.is_int_unsigned():
-        return tensor(_builder.create_maxui(arg0.handle, arg1.handle), arg0.dtype)
-    else:
-        assert False, f"Unexpected dtype {dtype}"
+    propagate_nan = _constexpr_to_value(propagate_nan)
+
+    return semantic.max(arg0, arg1, propagate_nan, _builder)
 
 
 def _add_math_1arg_docstr(name: str) -> Callable[[T], T]:
