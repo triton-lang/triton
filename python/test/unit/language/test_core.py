@@ -1688,10 +1688,11 @@ reduce_configs3 = [(op, 'float32', shape, axis)
                    for shape in reduce3d_shapes
                    for axis in [0, 1, 2]]
 invalid_config = [('sum', 'float32', (32, 32), axis) for axis in [2, 3]]
+negative_config = [('sum', 'float32', (32, 32), -1)]
 
 
 @pytest.mark.parametrize("op, dtype_str, shape, axis",
-                         reduce_configs1 + reduce_configs2 + reduce_configs3 + invalid_config)
+                         reduce_configs1 + reduce_configs2 + reduce_configs3 + invalid_config + negative_config)
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_reduce(op, dtype_str, shape, axis, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
@@ -1739,8 +1740,8 @@ def test_reduce(op, dtype_str, shape, axis, num_ctas, device):
     z_dtype_str = get_reduced_dtype(dtype_str, op)
     z_tri_dtype_str = z_dtype_str
     # triton result
-    ret_numel = 1 if axis is None else shape[1 - axis]
-    z_shape = (1, ) if axis is None else tuple(shape_i for i, shape_i in enumerate(shape) if i != axis)
+    non_negative_axis = axis if axis is None or axis >= 0 else len(shape) + axis
+    z_shape = (1, ) if axis is None else tuple(shape_i for i, shape_i in enumerate(shape) if i != non_negative_axis)
     z_tri = to_triton(numpy_random(z_shape, dtype_str=z_dtype_str, rs=rs), device=device, dst_type=z_tri_dtype_str)
     BLOCK_K = 1 if len(shape) == 2 else shape[2]
     IS_3D = bool(len(shape) == 3)
@@ -1787,6 +1788,7 @@ scan_configs = [(op, type, shape, axis, num_warps)
                 for axis in [1, 0]
                 for shape in scan2d_shapes
                 for op in ['cumsum', 'cumprod', 'get_first_element']]
+negative_config = [('cumsum', 'float32', (32, 32), -1, 4)]
 
 
 @triton.jit
@@ -1795,7 +1797,7 @@ def get_first_element(a, b):
     return a
 
 
-@pytest.mark.parametrize("op, dtype_str, shape, axis, num_warps", scan_configs)
+@pytest.mark.parametrize("op, dtype_str, shape, axis, num_warps", scan_configs + negative_config)
 def test_scan2d(op, dtype_str, shape, axis, num_warps, device):
     if is_hip():
         pytest.skip("test_scan2d is not supported in HIP")
@@ -2565,6 +2567,31 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         else:
             assert 'wgmma.mma_async.sync.aligned' in ptx or\
                 'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
+
+
+def test_max_num_imprecise_acc(device):
+    capability = torch.cuda.get_device_capability()
+    if capability != (9, 0):
+        return
+
+    @triton.jit
+    def kernel(X, Y, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+               MAX_NUM_IMPRECISE_ACC: tl.constexpr):
+        off_m = tl.arange(0, BLOCK_M)
+        off_n = tl.arange(0, BLOCK_N)
+        off_k = tl.arange(0, BLOCK_K)
+        x = tl.load(X + off_m[:, None] * BLOCK_K + off_k[None, :])
+        y = tl.load(Y + off_k[:, None] * BLOCK_N + off_n[None, :])
+        z = tl.load(Z + off_m[:, None] * BLOCK_N + off_n[None, :])
+        z = tl.dot(x, y, acc=z, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC)
+        tl.store(Z + off_m[:, None] * BLOCK_N + off_n[None, :], z)
+
+    M, N, K, num_warps, MAX_NUM_IMPRECISE_ACC = 128, 128, 128, 4, 64
+    x = torch.zeros((M, K), dtype=torch.float8_e5m2, device=device)
+    y = torch.zeros((K, N), dtype=torch.float8_e5m2, device=device)
+    z = torch.zeros((M, N), dtype=torch.float32, device=device)
+    h = kernel[(1, 1)](x, y, z, M, N, K, MAX_NUM_IMPRECISE_ACC, num_warps=num_warps)
+    assert h.asm["ptx"].count("add.f32") == (M * N) // (32 * num_warps) * (K / MAX_NUM_IMPRECISE_ACC)
 
 
 @pytest.mark.parametrize('in_dtype', ['float32'])
