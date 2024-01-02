@@ -2,7 +2,6 @@ import functools
 import os
 from enum import IntEnum
 
-from .._C.libtriton import ir
 from ..common.build import is_hip
 from . import core
 

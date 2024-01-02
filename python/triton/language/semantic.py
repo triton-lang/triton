@@ -260,9 +260,8 @@ def min(arg0: tl.tensor, arg1: tl.tensor, propagate_nan: tl.PropagateNan, builde
     dtype = arg0.dtype
 
     if dtype.is_floating():
-        native_nans = builder.options.has_native_nan_propagation
         if propagate_nan == tl.PropagateNan.ALL:
-            if native_nans:
+            if builder.options.has_native_nan_propagation:
                 return tl.tensor(builder.create_minimumf(arg0.handle, arg1.handle), arg0.type)
             else:
                 r = tl.tensor(builder.create_minnumf(arg0.handle, arg1.handle), arg0.type)
@@ -285,9 +284,8 @@ def max(arg0: tl.tensor, arg1: tl.tensor, propagate_nan: tl.PropagateNan, builde
     dtype = arg0.dtype
 
     if dtype.is_floating():
-        native_nans = builder.options.has_native_nan_propagation
         if propagate_nan == tl.PropagateNan.ALL:
-            if native_nans:
+            if builder.options.has_native_nan_propagation:
                 return tl.tensor(builder.create_maximumf(arg0.handle, arg1.handle), arg0.type)
             else:
                 r = tl.tensor(builder.create_maxnumf(arg0.handle, arg1.handle), arg0.type)
