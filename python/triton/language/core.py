@@ -14,6 +14,7 @@ TRITON_MAX_TENSOR_NUMEL = 1048576
 
 TRITON_BUILTIN = "__triton_builtin__"
 
+PropagateNan = ir.PROPAGATE_NAN
 
 def builtin(fn: T) -> T:
     """Mark a function as a builtin."""
