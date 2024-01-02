@@ -114,7 +114,7 @@ def minimum(x, y, propagate_nan: core.constexpr = PropagateNan.NONE):
 
     .. seealso:: :class:`tl.PropagateNan`
     """
-    return math.min(x, y, propagate_nan)
+    return core.min(x, y, propagate_nan)
 
 
 @jit
@@ -131,7 +131,7 @@ def maximum(x, y, propagate_nan: core.constexpr = PropagateNan.NONE):
 
     .. seealso:: :class:`tl.PropagateNan`
     """
-    return math.max(x, y, propagate_nan)
+    return core.max(x, y, propagate_nan)
 
 
 # max and argmax
