@@ -1384,19 +1384,7 @@ def fdiv(x, y, ieee_rounding=False, _builder=None):
 
 
 @builtin
-def minimum(arg0, arg1, propagate_nan: constexpr = PropagateNan.NONE, _builder=None):
-    """
-    Computes the element-wise minimum of :code:`x` and :code:`y`.
-
-    :param x: the first input tensor
-    :type x: Block
-    :param y: the second input tensor
-    :type y: Block
-    :param propagate_nan: whether to propagate NaN values.
-    :type propagate_nan: tl.PropagateNan
-
-    .. seealso:: :class:`tl.PropagateNan`
-    """
+def min(arg0, arg1, propagate_nan: constexpr = PropagateNan.NONE, _builder=None):
     arg0 = _to_tensor(arg0, _builder)
     arg1 = _to_tensor(arg1, _builder)
     arg0 = _promote_bfloat16_to_float32(arg0, _builder=_builder)
@@ -1407,19 +1395,7 @@ def minimum(arg0, arg1, propagate_nan: constexpr = PropagateNan.NONE, _builder=N
 
 
 @builtin
-def maximum(arg0, arg1, propagate_nan: constexpr = PropagateNan.NONE, _builder=None):
-    """
-    Computes the element-wise maximum of :code:`x` and :code:`y`.
-
-    :param x: the first input tensor
-    :type x: Block
-    :param y: the second input tensor
-    :type y: Block
-    :param propagate_nan: whether to propagate NaN values.
-    :type propagate_nan: tl.PropagateNan
-
-    .. seealso:: :class:`tl.PropagateNan`
-    """
+def max(arg0, arg1, propagate_nan: constexpr = PropagateNan.NONE, _builder=None):
     arg0 = _to_tensor(arg0, _builder)
     arg1 = _to_tensor(arg1, _builder)
     arg0 = _promote_bfloat16_to_float32(arg0, _builder=_builder)
