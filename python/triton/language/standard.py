@@ -75,7 +75,7 @@ def swizzle2d(i, j, size_i, size_j, size_g):
     # row-index of the first element of this group
     off_i = group_id * size_g
     # last group may have fewer rows
-    size_g = core.minimum(size_i - off_i, size_g)
+    size_g = minimum(size_i - off_i, size_g)
     # new row and column indices
     new_i = off_i + (ij % size_g)
     new_j = (ij % size_gj) // size_g
@@ -98,6 +98,40 @@ def zeros(shape, dtype):
 @jit
 def zeros_like(input):
     return zeros(input.shape, input.dtype)
+
+
+@jit
+def minimum(x, y, propagate_nan: core.constexpr = PropagateNan.NONE):
+    """
+    Computes the element-wise minimum of :code:`x` and :code:`y`.
+
+    :param x: the first input tensor
+    :type x: Block
+    :param y: the second input tensor
+    :type y: Block
+    :param propagate_nan: whether to propagate NaN values.
+    :type propagate_nan: tl.PropagateNan
+
+    .. seealso:: :class:`tl.PropagateNan`
+    """
+    return core.min(x, y, propagate_nan)
+
+
+@jit
+def maximum(x, y, propagate_nan: core.constexpr = PropagateNan.NONE):
+    """
+    Computes the element-wise maximum of :code:`x` and :code:`y`.
+
+    :param x: the first input tensor
+    :type x: Block
+    :param y: the second input tensor
+    :type y: Block
+    :param propagate_nan: whether to propagate NaN values.
+    :type propagate_nan: tl.PropagateNan
+
+    .. seealso:: :class:`tl.PropagateNan`
+    """
+    return core.max(x, y, propagate_nan)
 
 
 # max and argmax
@@ -142,7 +176,7 @@ def max(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
             else:
                 assert input.dtype.is_integer_type()
                 input = input.to(core.int32)
-        return core.reduce(input, axis, core.maximum)
+        return core.reduce(input, axis, maximum)
 
 
 @jit
@@ -194,7 +228,7 @@ def min(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
             else:
                 assert input.dtype.is_integer_type()
                 input = input.to(core.int32)
-        return core.reduce(input, axis, core.minimum)
+        return core.reduce(input, axis, minimum)
 
 
 @jit
