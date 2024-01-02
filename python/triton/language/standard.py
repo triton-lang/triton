@@ -7,7 +7,7 @@ from . import core, math
 # Standard library
 # -----------------------
 
-from .math import PropagateNan
+from .core import PropagateNan
 
 
 @jit

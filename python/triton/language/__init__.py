@@ -4,7 +4,6 @@
 from . import math
 from . import extra
 from .standard import (
-    PropagateNan,
     argmax,
     argmin,
     cdiv,
@@ -25,6 +24,7 @@ from .standard import (
     zeros_like,
 )
 from .core import (
+    PropagateNan,
     TRITON_MAX_TENSOR_NUMEL,
     abs,
     advance,

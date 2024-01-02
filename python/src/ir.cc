@@ -183,6 +183,10 @@ void init_triton_ir(py::module &&m) {
       .value("RTZ", mlir::triton::RoundingMode::RTZ)
       .value("RTNE", mlir::triton::RoundingMode::RTNE);
 
+  py::enum_<mlir::triton::PropagateNan>(m, "PROPAGATE_NAN", py::module_local())
+      .value("NONE", mlir::triton::PropagateNan::NONE)
+      .value("ALL", mlir::triton::PropagateNan::ALL);
+
   py::class_<mlir::MLIRContext>(m, "context", py::module_local())
       .def(py::init<>())
       .def("load_triton", [](mlir::MLIRContext &self) {

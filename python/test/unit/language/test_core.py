@@ -4275,26 +4275,24 @@ def test_enable_fp_fusion(enable_fp_fusion):
 # test propagate_nan
 # -----------------------
 
-
-@pytest.mark.parametrize("propagate_nan", ['tl.PropagateNan.NONE', 'tl.PropagateNan.ALL'])
-@pytest.mark.parametrize("func", ['tl.minimum', 'tl.maximum'])
-def test_propagate_nan(propagate_nan, func):
+@pytest.mark.parametrize("dtype", ['float16', 'float32'])
+@pytest.mark.parametrize("propagate_nan", ['NONE', 'ALL'])
+@pytest.mark.parametrize("func", ['minimum', 'maximum'])
+def test_propagate_nan(dtype, propagate_nan, func):
 
     @triton.jit
-    def kernel(A, B, C):
-        tl.store(C, FUNC(tl.load(A), tl.load(B), propagate_nan=PROPAGATE_NAN))
-
-    kernel = patch_kernel(kernel, {'FUNC': func, 'PROPAGATE_NAN': propagate_nan})
+    def kernel(A, B, C, propagate_nan: tl.constexpr, func: tl.constexpr):
+        tl.store(C, getattr(tl, func)(tl.load(A), tl.load(B), propagate_nan=getattr(tl.PropagateNan, propagate_nan)))
 
     for mode in ['A', 'B', 'both']:
-        A = torch.randn((1, ), device='cuda', dtype=torch.float32)
+        A = torch.randn((1, ), device='cuda', dtype=getattr(torch, dtype))
         if mode == 'A' or mode == 'both': A[0] = torch.nan
-        B = torch.randn((1, ), device='cuda', dtype=torch.float32)
+        B = torch.randn((1, ), device='cuda', dtype=getattr(torch, dtype))
         if mode == 'B' or mode == 'both': B[0] = torch.nan
-        C = torch.zeros_like(A, device='cuda', dtype=torch.float32)
-        kernel[(1, )](A, B, C)
+        C = torch.zeros_like(A, device='cuda', dtype=getattr(torch, dtype))
+        kernel[(1, )](A, B, C, propagate_nan, func)
 
-        if mode == 'both' or eval(propagate_nan) == tl.PropagateNan.ALL:
+        if mode == 'both' or propagate_nan == 'ALL':
             assert torch.isnan(C[0])
         else:
             assert not torch.isnan(C[0])
