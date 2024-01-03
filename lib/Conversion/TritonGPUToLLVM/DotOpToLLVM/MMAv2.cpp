@@ -58,7 +58,7 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     ConversionPatternRewriter &rewriter, Value value, int n0, int n1,
     RankedTensorType type) {
 
-  auto elems = typeConverter->unpackLLElements(loc, value, rewriter, type);
+  auto elems = typeConverter->unpackLLElements(loc, value, rewriter);
   int offset{};
   ValueTableV2 vals;
   for (int i = 0; i < n0; ++i) {
@@ -303,7 +303,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   auto hb = getValuesFromDotOperandLayoutStruct(typeConverter, loc, rewriter,
                                                 loadedB, std::max(repN / 2, 1),
                                                 repK, bTensorTy);
-  auto fc = typeConverter->unpackLLElements(loc, loadedC, rewriter, dTensorTy);
+  auto fc = typeConverter->unpackLLElements(loc, loadedC, rewriter);
   auto numMmaRets = dTensorTy.getElementType().getIntOrFloatBitWidth() / 8;
   int numCPackedElem = 4 / numMmaRets;
 

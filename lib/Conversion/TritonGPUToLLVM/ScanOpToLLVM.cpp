@@ -402,7 +402,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   auto axisNumWarps = helper.getAxisNumWarpsWithUniqueData();
   warpIdAxis = urem(warpIdAxis, i32_val(axisNumWarps));
   SmallVector<Value> srcValues =
-      getTypeConverter()->unpackLLElements(loc, input, rewriter, type);
+      getTypeConverter()->unpackLLElements(loc, input, rewriter);
 
   // Scan contigous elements in a thread and update `srcValues`.
   scanThreadContiguousElements(srcValues, rewriter, helper);
