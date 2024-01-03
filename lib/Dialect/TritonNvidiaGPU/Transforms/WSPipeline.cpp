@@ -790,7 +790,7 @@ void buildAsyncComm(const DenseMap<Operation *, SmallVector<Channel *>> &map,
               resTy.getEncoding().dyn_cast<ttg::NvidiaMmaEncodingAttr>())
         if (resEnc.isHopper() && dot.hasOneUse() &&
             isa<scf::YieldOp>(*dot.getUsers().begin()) && cArg &&
-            cArg.hasOneUse())
+            cArg.hasOneUse() && numStages > 1)
           return dotOp.getOperation();
     }
     return nullptr;
