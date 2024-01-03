@@ -43,6 +43,7 @@ class CUDAOptions:
     optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
     allow_fp8e4nv: bool = False
+    has_native_nan_propagation: bool = False
     max_num_imprecise_acc_default: bool = None
     extern_libs: dict = None
     debug: bool = False
@@ -71,6 +72,7 @@ class CUDABackend(BaseBackend):
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts}
         args["allow_fp8e4nv"] = self.capability >= 89
+        args["has_native_nan_propagation"] = self.capability >= 80
         args["max_num_imprecise_acc_default"] = 2**30 if self.capability == 90 else 0
         return CUDAOptions(**args)
 

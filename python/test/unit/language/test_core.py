@@ -4303,28 +4303,103 @@ def test_enable_fp_fusion(enable_fp_fusion):
 # -----------------------
 
 
-@pytest.mark.parametrize("propagate_nan", ['tl.PropagateNan.NONE', 'tl.PropagateNan.ALL'])
-@pytest.mark.parametrize("func", ['tl.minimum', 'tl.maximum'])
-def test_propagate_nan(propagate_nan, func):
+@pytest.mark.parametrize("dtype", ['float16', 'float32'])
+@pytest.mark.parametrize("propagate_nan", ['NONE', 'ALL'])
+@pytest.mark.parametrize("func", ['minimum', 'maximum', 'clamp'])
+def test_propagate_nan(dtype, propagate_nan, func):
 
     @triton.jit
-    def kernel(A, B, C):
-        tl.store(C, FUNC(tl.load(A), tl.load(B), propagate_nan=PROPAGATE_NAN))
-
-    kernel = patch_kernel(kernel, {'FUNC': func, 'PROPAGATE_NAN': propagate_nan})
+    def kernel(A, B, C, propagate_nan: tl.constexpr, func: tl.constexpr):
+        if func == 'clamp':
+            tl.store(
+                C,
+                getattr(tl, func)(tl.load(A), -tl.load(B), tl.load(B),
+                                  propagate_nan=getattr(tl.PropagateNan, propagate_nan)))
+        else:
+            tl.store(C,
+                     getattr(tl, func)(tl.load(A), tl.load(B), propagate_nan=getattr(tl.PropagateNan, propagate_nan)))
 
     for mode in ['A', 'B', 'both']:
-        A = torch.randn((1, ), device='cuda', dtype=torch.float32)
+        A = torch.randn((1, ), device='cuda', dtype=getattr(torch, dtype))
         if mode == 'A' or mode == 'both': A[0] = torch.nan
-        B = torch.randn((1, ), device='cuda', dtype=torch.float32)
+        B = torch.randn((1, ), device='cuda', dtype=getattr(torch, dtype))
         if mode == 'B' or mode == 'both': B[0] = torch.nan
-        C = torch.zeros_like(A, device='cuda', dtype=torch.float32)
-        kernel[(1, )](A, B, C)
+        C = torch.zeros_like(A, device='cuda', dtype=getattr(torch, dtype))
+        kernel[(1, )](A, B, C, propagate_nan, func)
 
-        if mode == 'both' or eval(propagate_nan) == tl.PropagateNan.ALL:
+        if mode == 'both' or propagate_nan == 'ALL':
             assert torch.isnan(C[0])
         else:
             assert not torch.isnan(C[0])
+
+
+# -----------------------
+# test clamp
+# -----------------------
+
+
+@pytest.mark.parametrize("dtype", ['float16', 'float32'])
+def test_clamp(dtype):
+
+    @triton.jit
+    def kernel(x_ptr, min_ptr, max_ptr, out_ptr, ref_ptr, N, BLOCK_SIZE: tl.constexpr):
+
+        off = tl.arange(0, BLOCK_SIZE)
+        mask = off < N
+        x = tl.load(x_ptr + off, mask=mask)
+        min = tl.load(min_ptr + off, mask=mask)
+        max = tl.load(max_ptr + off, mask=mask)
+        out = out_ptr + off
+        ref = ref_ptr + off
+
+        tl.store(out, tl.clamp(x, min, max), mask=mask)
+        ref_val = tl.minimum(tl.maximum(x, min), max)
+        tl.store(ref, ref_val, mask=mask)
+
+    size = 128
+
+    x = torch.randn((size, ), device='cuda', dtype=getattr(torch, dtype))
+    a = torch.randn((size, ), device='cuda', dtype=getattr(torch, dtype))
+    b = torch.randn((size, ), device='cuda', dtype=getattr(torch, dtype))
+    min = torch.min(a, b)
+    max = torch.max(a, b)
+    out = torch.zeros_like(x, device='cuda', dtype=getattr(torch, dtype))
+    ref = torch.zeros_like(x, device='cuda', dtype=getattr(torch, dtype))
+
+    kernel[(size, )](x, min, max, out, ref, x.numel(), BLOCK_SIZE=size)
+
+    torch.testing.assert_close(out, ref)
+
+
+# Test for symmetric clamp(x, -limit, limit), as it may go through optimized
+# codegen in the backends
+@pytest.mark.parametrize("dtype", ['float16', 'float32'])
+def test_clamp_symmetric(dtype):
+
+    @triton.jit
+    def kernel(x_ptr, limit_ptr, out_ptr, ref_ptr, N, BLOCK_SIZE: tl.constexpr):
+
+        off = tl.arange(0, BLOCK_SIZE)
+        mask = off < N
+        x = tl.load(x_ptr + off, mask=mask)
+        limit = tl.load(limit_ptr + off, mask=mask)
+        out = out_ptr + off
+        ref = ref_ptr + off
+
+        tl.store(out, tl.clamp(x, -limit, limit), mask=mask)
+        ref_val = tl.minimum(tl.maximum(x, -limit), limit)
+        tl.store(ref, ref_val, mask=mask)
+
+    size = 128
+
+    x = torch.randn((size, ), device='cuda', dtype=getattr(torch, dtype))
+    limit = torch.randn((size, ), device='cuda', dtype=getattr(torch, dtype)).abs()
+    out = torch.zeros_like(x, device='cuda', dtype=getattr(torch, dtype))
+    ref = torch.zeros_like(x, device='cuda', dtype=getattr(torch, dtype))
+
+    kernel[(size, )](x, limit, out, ref, x.numel(), BLOCK_SIZE=size)
+
+    torch.testing.assert_close(out, ref)
 
 
 # -----------------------

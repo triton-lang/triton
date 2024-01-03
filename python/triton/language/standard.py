@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 from ..runtime.jit import jit
-from . import core, math
+from . import core
 
 # -----------------------
 # Standard library
 # -----------------------
-
-from .math import PropagateNan
 
 
 @jit
@@ -101,7 +99,7 @@ def zeros_like(input):
 
 
 @jit
-def minimum(x, y, propagate_nan: core.constexpr = PropagateNan.NONE):
+def minimum(x, y, propagate_nan: core.constexpr = core.PropagateNan.NONE):
     """
     Computes the element-wise minimum of :code:`x` and :code:`y`.
 
@@ -114,11 +112,11 @@ def minimum(x, y, propagate_nan: core.constexpr = PropagateNan.NONE):
 
     .. seealso:: :class:`tl.PropagateNan`
     """
-    return math.min(x, y, propagate_nan)
+    return core.minimum(x, y, propagate_nan)
 
 
 @jit
-def maximum(x, y, propagate_nan: core.constexpr = PropagateNan.NONE):
+def maximum(x, y, propagate_nan: core.constexpr = core.PropagateNan.NONE):
     """
     Computes the element-wise maximum of :code:`x` and :code:`y`.
 
@@ -131,7 +129,7 @@ def maximum(x, y, propagate_nan: core.constexpr = PropagateNan.NONE):
 
     .. seealso:: :class:`tl.PropagateNan`
     """
-    return math.max(x, y, propagate_nan)
+    return core.maximum(x, y, propagate_nan)
 
 
 # max and argmax

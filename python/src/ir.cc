@@ -183,6 +183,10 @@ void init_triton_ir(py::module &&m) {
       .value("RTZ", mlir::triton::RoundingMode::RTZ)
       .value("RTNE", mlir::triton::RoundingMode::RTNE);
 
+  py::enum_<mlir::triton::PropagateNan>(m, "PROPAGATE_NAN", py::module_local())
+      .value("NONE", mlir::triton::PropagateNan::NONE)
+      .value("ALL", mlir::triton::PropagateNan::ALL);
+
   py::class_<mlir::MLIRContext>(m, "context", py::module_local())
       .def(py::init<>());
 
@@ -1035,6 +1039,13 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
              return mlir::Value(self.create<mlir::arith::MaxNumFOp>(lhs, rhs));
+           })
+      .def("create_clampf",
+           [](TritonOpBuilder &self, mlir::Value &input, mlir::Value &min,
+              mlir::Value &max,
+              mlir::triton::PropagateNan propagateNan) -> mlir::Value {
+             return mlir::Value(self.create<mlir::triton::ClampFOp>(
+                 input, min, max, propagateNan));
            })
       // AddPtr (similar to GEP)
       .def("create_addptr",

@@ -1611,6 +1611,115 @@ struct AbsFOpConversion
   }
 };
 
+struct ClampFOpConversion
+    : ElementwiseOpConversionBase<mlir::triton::ClampFOp, ClampFOpConversion> {
+  using Base =
+      ElementwiseOpConversionBase<mlir::triton::ClampFOp, ClampFOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  explicit ClampFOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+                              ModuleAxisInfoAnalysis &axisAnalysisPass,
+                              int computeCapability, PatternBenefit benefit = 1)
+      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
+        computeCapability(computeCapability) {}
+
+  SmallVector<Value> createDestOps(mlir::triton::ClampFOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    bool xorsignAbsAvailable = (computeCapability >= 90);
+    // Pattern matching the sequence of clamp(x, -limit, limit) to generate more
+    // efficient PTX code.
+    // NOTE: This pattern matching is not general enough, but it is sufficient.
+    // We detect only the case where the "-limit" is computed as 0 - limit.
+    // example MLIR that we want to match:
+    // %cst = arith.constant dense<0.000000e+00>
+    // %8 = tt.load %7, %2
+    // %11 = arith.subf %cst, %8
+    // %12 = tt.clamp %5, %11, %8
+    int negatedOperandIndex = -1;
+    if (xorsignAbsAvailable) {
+      if (auto subOp =
+              llvm::dyn_cast<arith::SubFOp>(op.getOperand(1).getDefiningOp())) {
+        if (subOp.getOperand(1) == op.getOperand(2)) {
+          negatedOperandIndex = 1;
+        }
+      }
+      if (auto subOp =
+              llvm::dyn_cast<arith::SubFOp>(op.getOperand(2).getDefiningOp())) {
+        if (subOp.getOperand(1) == op.getOperand(1)) {
+          negatedOperandIndex = 2;
+        }
+      }
+    }
+
+    bool clipPatternFound = false;
+    if (negatedOperandIndex != -1) {
+      auto subOp = llvm::cast<arith::SubFOp>(
+          op.getOperand(negatedOperandIndex).getDefiningOp());
+      if (auto constOp = llvm::dyn_cast<arith::ConstantOp>(
+              subOp.getOperand(0).getDefiningOp())) {
+        if (auto attr = constOp.getValueAttr()
+                            .dyn_cast<mlir::DenseIntOrFPElementsAttr>()) {
+          if (attr.isSplat() &&
+              attr.getSplatValue<APFloat>().convertToDouble() == 0.0) {
+            clipPatternFound = true;
+          }
+        } else if (auto attr =
+                       constOp.getValueAttr().dyn_cast<mlir::FloatAttr>()) {
+          if (attr.getValueAsDouble() == 0.0) {
+            clipPatternFound = true;
+          }
+        }
+      }
+    }
+
+    assert(elemTy.isF32() || elemTy.isF16());
+
+    if (clipPatternFound) {
+      // min.xorsign.abs
+      PTXBuilder ptxBuilder;
+      bool propNan = (op.getPropagateNan() == mlir::triton::PropagateNan::ALL);
+      auto &minXorsign = ptxBuilder.create<PTXInstr>("min")
+                             ->o("NaN", propNan)
+                             .o("xorsign")
+                             .o("abs");
+      const char *outType = nullptr;
+      const char *inType = nullptr;
+      if (elemTy.isF32()) {
+        minXorsign.o("f32");
+        outType = "=f";
+        inType = "f";
+      } else if (elemTy.isF16()) {
+        minXorsign.o("f16");
+        outType = "=h";
+        inType = "h";
+      }
+      auto output = ptxBuilder.newOperand(outType);
+      auto inputA = ptxBuilder.newOperand(operands[0][0], inType);
+      auto inputB = ptxBuilder.newOperand(operands[0][2], inType);
+      minXorsign(output, inputA, inputB);
+
+      return {ptxBuilder.launch(rewriter, loc, elemTy, false)};
+    } else {
+      if (op.getPropagateNan() == triton::PropagateNan::ALL) {
+        auto v = rewriter.create<LLVM::MaximumOp>(loc, elemTy, operands[0][0],
+                                                  operands[0][1]);
+        return {rewriter.create<LLVM::MinimumOp>(loc, v, operands[0][2])};
+      } else {
+        assert(op.getPropagateNan() == triton::PropagateNan::NONE);
+        auto v = rewriter.create<LLVM::MaxNumOp>(loc, elemTy, operands[0][0],
+                                                 operands[0][1]);
+        return {rewriter.create<LLVM::MinNumOp>(loc, v, operands[0][2])};
+      }
+    }
+  }
+
+private:
+  int computeCapability;
+};
+
 /// The lowering of index_cast becomes an integer conversion since index
 /// becomes an integer.  If the bit width of the source and target integer
 /// types is the same, just erase the cast.  If the target type is wider,
@@ -1752,4 +1861,6 @@ void populateElementwiseOpToLLVMPatterns(
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
   // __nv_expf for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
+                                   computeCapability);
 }

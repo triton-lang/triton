@@ -251,6 +251,78 @@ def mod(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
 
 
 ##############
+# other arithmetic ops
+##############
+
+
+def minimum(arg0: tl.tensor, arg1: tl.tensor, propagate_nan: tl.PropagateNan, builder: ir.builder):
+    arg0, arg1 = binary_op_type_checking_impl(arg0, arg1, builder)
+    dtype = arg0.dtype
+
+    if dtype.is_floating():
+        if propagate_nan == tl.PropagateNan.ALL:
+            if builder.options.has_native_nan_propagation:
+                return tl.tensor(builder.create_minimumf(arg0.handle, arg1.handle), arg0.type)
+            else:
+                r = tl.tensor(builder.create_minnumf(arg0.handle, arg1.handle), arg0.type)
+                nans = tl.isnan(arg0, _builder=builder).__or__(tl.isnan(arg1, _builder=builder), _builder=builder)
+                return where(nans, tl.nan(dtype, _builder=builder), r, _builder=builder)
+        elif propagate_nan == tl.PropagateNan.NONE:
+            return tl.tensor(builder.create_minnumf(arg0.handle, arg1.handle), arg0.type)
+        else:
+            assert False, f"Unexpected propagate_nan {propagate_nan}"
+    elif dtype.is_int_signed():
+        return tl.tensor(builder.create_minsi(arg0.handle, arg1.handle), arg0.type)
+    elif dtype.is_int_unsigned():
+        return tl.tensor(builder.create_minui(arg0.handle, arg1.handle), arg0.dtype)
+    else:
+        assert False, f"Unexpected dtype {dtype}"
+
+
+def maximum(arg0: tl.tensor, arg1: tl.tensor, propagate_nan: tl.PropagateNan, builder: ir.builder):
+    arg0, arg1 = binary_op_type_checking_impl(arg0, arg1, builder)
+    dtype = arg0.dtype
+
+    if dtype.is_floating():
+        if propagate_nan == tl.PropagateNan.ALL:
+            if builder.options.has_native_nan_propagation:
+                return tl.tensor(builder.create_maximumf(arg0.handle, arg1.handle), arg0.type)
+            else:
+                r = tl.tensor(builder.create_maxnumf(arg0.handle, arg1.handle), arg0.type)
+                nans = tl.isnan(arg0, _builder=builder).__or__(tl.isnan(arg1, _builder=builder), _builder=builder)
+                return where(nans, tl.nan(dtype, _builder=builder), r, _builder=builder)
+        elif propagate_nan == tl.PropagateNan.NONE:
+            return tl.tensor(builder.create_maxnumf(arg0.handle, arg1.handle), arg0.type)
+        else:
+            assert False, f"Unexpected propagate_nan {propagate_nan}"
+    elif dtype.is_int_signed():
+        return tl.tensor(builder.create_maxsi(arg0.handle, arg1.handle), arg0.type)
+    elif dtype.is_int_unsigned():
+        return tl.tensor(builder.create_maxui(arg0.handle, arg1.handle), arg0.dtype)
+    else:
+        assert False, f"Unexpected dtype {dtype}"
+
+
+def clamp(x: tl.tensor, min: tl.tensor, max: tl.tensor, propagate_nan: tl.PropagateNan, builder: ir.builder):
+    min, max = binary_op_type_checking_impl(min, max, builder)
+    x, min = binary_op_type_checking_impl(x, min, builder)
+    x, max = binary_op_type_checking_impl(x, max, builder)
+
+    dtype = x.dtype
+    if dtype.is_floating():
+        if propagate_nan == tl.PropagateNan.ALL:
+            if builder.options.has_native_nan_propagation:
+                return tl.tensor(builder.create_clampf(x.handle, min.handle, max.handle, propagate_nan), x.type)
+            else:
+                r = tl.tensor(builder.create_clampf(x.handle, min.handle, max.handle, tl.PropagateNan.NONE), x.type)
+                nans = tl.isnan(x, _builder=builder)
+                return where(nans, tl.nan(dtype, _builder=builder), r, _builder=builder)
+        return tl.tensor(builder.create_clampf(x.handle, min.handle, max.handle, propagate_nan), x.type)
+    else:
+        assert False, f"Unexpected dtype {dtype}. Only floating point clamp is supported"
+
+
+##############
 # bitwise ops
 ##############
 
