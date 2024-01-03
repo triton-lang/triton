@@ -87,7 +87,7 @@ struct BroadcastOpConversion
     auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
     auto resultOffsets = emitOffsetForLayout(resultLayout, resultTy);
     SmallVector<Value> srcVals =
-        getTypeConverter()->unpackLLElements(loc, src, rewriter, srcTy);
+        getTypeConverter()->unpackLLElements(loc, src, rewriter);
 
     DenseMap<SmallVector<unsigned>, Value, SmallVectorKeyInfo> srcValues;
     for (size_t i = 0; i < srcOffsets.size(); i++) {
@@ -144,8 +144,7 @@ struct PrintOpConversion
       for (size_t i = 0; i < op.getNumOperands(); i++) {
         // Elements of the tensor that are resident in this GPU thread.
         auto elems = getTypeConverter()->unpackLLElements(
-            loc, adaptor.getOperands()[i], rewriter,
-            op.getOperand(i).getType());
+            loc, adaptor.getOperands()[i], rewriter);
 
         // Get the indices of `elems` within the tensor.  Note that if `elems`
         // has an "interesting" layout, then these will not be in any
@@ -412,7 +411,7 @@ struct AssertOpConversion
     auto loc = op.getLoc();
     auto ctx = rewriter.getContext();
     auto elems = getTypeConverter()->unpackLLElements(
-        loc, adaptor.getCondition(), rewriter, op.getCondition().getType());
+        loc, adaptor.getCondition(), rewriter);
     auto elemTy = elems[0].getType();
     Value condition = int_val(elemTy.getIntOrFloatBitWidth(), 0);
     for (auto elem : elems) {
@@ -644,10 +643,10 @@ struct AddPtrOpConversion
                                               .getPointeeType());
       Type ptrTy =
           getTypeConverter()->convertType(resultTensorTy.getElementType());
-      auto ptrs = getTypeConverter()->unpackLLElements(loc, adaptor.getPtr(),
-                                                       rewriter, ptrTy);
+      auto ptrs =
+          getTypeConverter()->unpackLLElements(loc, adaptor.getPtr(), rewriter);
       auto offsets = getTypeConverter()->unpackLLElements(
-          loc, adaptor.getOffset(), rewriter, offsetTy);
+          loc, adaptor.getOffset(), rewriter);
       SmallVector<Value> resultVals(elems);
       for (unsigned i = 0; i < elems; ++i) {
         resultVals[i] = gep(ptrTy, elemTy, ptrs[i], offsets[i]);

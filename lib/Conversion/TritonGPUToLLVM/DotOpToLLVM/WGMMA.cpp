@@ -415,13 +415,12 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
     aLoader =
         loadA(typeConverter, rewriter, loc, mmaEncoding, a, baseA, thread);
   } else {
-    structA =
-        typeConverter->unpackLLElements(loc, loadedA, rewriter, aTensorTy);
+    structA = typeConverter->unpackLLElements(loc, loadedA, rewriter);
   }
   DotOpMmaV3SmemLoader bLoader =
       loadB(typeConverter, rewriter, loc, mmaEncoding, b, baseB, thread);
 
-  auto fc = typeConverter->unpackLLElements(loc, loadedC, rewriter, dTensorTy);
+  auto fc = typeConverter->unpackLLElements(loc, loadedC, rewriter);
 
   triton::nvgpu::WGMMAEltType eltTypeC = getMmaRetType(d);
   triton::nvgpu::WGMMAEltType eltTypeA = getMmaOperandType(a, allowTF32);
@@ -499,7 +498,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
           partialAcc = Value();
         }
       }
-      auto acc = typeConverter->unpackLLElements(loc, d, rewriter, accTy);
+      auto acc = typeConverter->unpackLLElements(loc, d, rewriter);
       for (int i = 0; i < acc.size(); ++i) {
         mmaResults.push_back(acc[i]);
       }

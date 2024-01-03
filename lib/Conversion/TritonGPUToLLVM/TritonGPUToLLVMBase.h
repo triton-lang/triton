@@ -530,8 +530,7 @@ public:
     unsigned minVec = std::min(outVec, inVec);
     unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
     assert(numElems == srcIndices.size());
-    auto inVals =
-        getTypeConverter()->unpackLLElements(loc, llSrc, rewriter, srcTy);
+    auto inVals = getTypeConverter()->unpackLLElements(loc, llSrc, rewriter);
     auto wordTy = vec_ty(elemTy, minVec);
     Value word;
 
