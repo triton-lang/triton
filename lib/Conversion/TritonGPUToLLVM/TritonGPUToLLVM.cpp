@@ -894,25 +894,22 @@ struct ViewSliceOpConversion
       : ConvertTritonGPUOpToLLVMPattern<triton::gpu::ViewSliceOp>(typeConverter,
                                                                   benefit) {}
 
-  LogicalResult
-  processBlockedLayout(triton::gpu::ViewSliceOp op, OpAdaptor adaptor,
-                       ConversionPatternRewriter &rewriter) const {
+  LogicalResult processLayout(triton::gpu::ViewSliceOp op, OpAdaptor adaptor,
+                              ConversionPatternRewriter &rewriter) const {
     Location loc = op->getLoc();
     auto srcTy = op.getSource().getType().dyn_cast<RankedTensorType>();
-    auto srcLayout = srcTy.getEncoding().dyn_cast<BlockedEncodingAttr>();
-    assert(
-        srcLayout &&
-        "Currently only blocked layout is supported in view_slice instruction");
+    auto srcLayout = srcTy.getEncoding();
     auto srcShape = srcTy.getShape();
     auto resultTy = op.getType().template cast<RankedTensorType>();
     auto vals = this->getTypeConverter()->unpackLLElements(
         loc, adaptor.getSource(), rewriter, srcTy);
 
     auto elemsPerThread = mlir::triton::gpu::getElemsPerThread(srcTy);
-    auto sizePerThread = srcLayout.getSizePerThread();
+    auto sizePerThread = mlir::triton::gpu::getSizePerThread(srcLayout);
     auto totalSizePerThread = sizePerThread[0] * sizePerThread[1];
-    auto order = srcLayout.getOrder();
-    auto shapePerCTA = getShapePerCTATile(srcLayout, srcShape);
+    auto order = mlir::triton::gpu::getOrder(srcLayout);
+    auto shapePerCTA =
+        mlir::triton::gpu::getShapePerCTATile(srcLayout, srcShape);
     shapePerCTA[0] = std::min(srcShape[0], (long)shapePerCTA[0]);
     shapePerCTA[1] = std::min(srcShape[1], (long)shapePerCTA[1]);
 
@@ -969,10 +966,11 @@ struct ViewSliceOpConversion
                   ConversionPatternRewriter &rewriter) const override {
 
     auto srcTy = op.getSource().getType().dyn_cast<RankedTensorType>();
-    if (srcTy.getEncoding().dyn_cast<BlockedEncodingAttr>()) {
-      return processBlockedLayout(op, adaptor, rewriter);
+    if (srcTy.getEncoding().isa<BlockedEncodingAttr>() ||
+        srcTy.getEncoding().isa<MfmaEncodingAttr>()) {
+      return processLayout(op, adaptor, rewriter);
     } else {
-      assert(false && "unsupported layout in viewSlice");
+      assert(false && "Unsupported layout in viewSlice.");
       return failure();
     }
   }
