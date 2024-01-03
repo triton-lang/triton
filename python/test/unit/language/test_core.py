@@ -4302,6 +4302,7 @@ def test_enable_fp_fusion(enable_fp_fusion):
 # test propagate_nan
 # -----------------------
 
+
 @pytest.mark.parametrize("dtype", ['float16', 'float32'])
 @pytest.mark.parametrize("propagate_nan", ['NONE', 'ALL'])
 @pytest.mark.parametrize("func", ['minimum', 'maximum'])

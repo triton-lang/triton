@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..runtime.jit import jit
-from . import core, math
+from . import core
 
 # -----------------------
 # Standard library

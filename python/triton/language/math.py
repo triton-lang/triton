@@ -1,10 +1,8 @@
 import functools
 import os
-from enum import IntEnum
 
 from ..common.build import is_hip
 from . import core
-
 
 
 @functools.lru_cache()

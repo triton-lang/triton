@@ -16,6 +16,7 @@ TRITON_BUILTIN = "__triton_builtin__"
 
 PropagateNan = ir.PROPAGATE_NAN
 
+
 def builtin(fn: T) -> T:
     """Mark a function as a builtin."""
     assert callable(fn)
@@ -1349,7 +1350,7 @@ def isnan(x, _builder=None):
     """
     x = _to_tensor(x, _builder)
     return x.__ne__(x, _builder=_builder)
-    
+
 
 @builtin
 def umulhi(x, y, _builder=None):
