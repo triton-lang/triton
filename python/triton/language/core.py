@@ -1523,8 +1523,9 @@ def reduce(input, axis, combine_fn, _builder=None, _generator=None):
                 handles = [r.handle for r in results]
             _builder.create_reduce_ret(*handles)
 
+    axis = _constexpr_to_value(axis)
     if axis is not None:
-        axis = _constexpr_to_value(axis)
+        axis = _wrap_axis(axis, len(input[0].shape))
     return semantic.reduction(input, axis, make_combine_region, _builder)
 
 
@@ -1603,6 +1604,8 @@ def associative_scan(input, axis, combine_fn, _builder=None, _generator=None):
             _builder.create_scan_ret(*handles)
 
     axis = _constexpr_to_value(axis)
+    if axis is not None:
+        axis = _wrap_axis(axis, len(input[0].shape))
     return semantic.associative_scan(input, axis, make_combine_region, _builder)
 
 

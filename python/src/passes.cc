@@ -1,36 +1,15 @@
 ﻿#include "mlir/Transforms/Passes.h"
+#include "mlir/Conversion/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
-#include "triton/Conversion/NVGPUToLLVM/Passes.h"
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
+#include "passes.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
+#include "triton/Target/LLVMIR/Passes.h"
 #include <pybind11/pybind11.h>
 
 namespace py = pybind11;
-
-#define ADD_PASS_WRAPPER_0(name, builder)                                      \
-  m.def(name, [](mlir::PassManager &pm) { pm.addPass(builder()); })
-
-#define ADD_PASS_WRAPPER_1(name, builder, ty0)                                 \
-  m.def(name,                                                                  \
-        [](mlir::PassManager &pm, ty0 val0) { pm.addPass(builder(val0)); })
-
-#define ADD_PASS_WRAPPER_2(name, builder, ty0, ty1)                            \
-  m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1) {                  \
-    pm.addPass(builder(val0, val1));                                           \
-  })
-
-#define ADD_PASS_WRAPPER_3(name, builder, ty0, ty1, ty2)                       \
-  m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2) {        \
-    pm.addPass(builder(val0, val1, val2));                                     \
-  })
-
-#define ADD_PASS_WRAPPER_4(name, builder, ty0, ty1, ty2, ty3)                  \
-  m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2,          \
-                 ty3 val3) { pm.addPass(builder(val0, val1, val2, val3)); })
 
 void init_triton_passes_common(py::module &&m) {
   using namespace mlir;
@@ -67,45 +46,24 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createRemoveLayoutConversionsPass);
   ADD_PASS_WRAPPER_0("add_decompose_conversions",
                      createDecomposeConversionsPass);
-  ADD_PASS_WRAPPER_0("add_triton_gpu_to_llvm",
-                     mlir::triton::createConvertTritonGPUToLLVMPass);
 }
 
-void init_triton_passes_ttnvgpuir(py::module &&m) {
+void init_triton_passes_convert(py::module &&m) {
+  using namespace mlir;
+  ADD_PASS_WRAPPER_0("add_scf_to_cf", createConvertSCFToCFPass);
+  ADD_PASS_WRAPPER_0("add_index_to_llvmir", createConvertIndexToLLVMPass);
+  ADD_PASS_WRAPPER_0("add_arith_to_llvmir", createArithToLLVMConversionPass);
+}
 
-  ADD_PASS_WRAPPER_1("add_plan_cta", mlir::createTritonNvidiaGPUPlanCTAPass,
-                     mlir::triton::nvidia_gpu::ClusterInfo *);
-  ADD_PASS_WRAPPER_1("add_wsfeasibility_checking",
-                     mlir::createTritonNvidiaGPUWSFeasibilityCheckingPass, int);
-  ADD_PASS_WRAPPER_1("add_wsdecomposing",
-                     mlir::createTritonNvidiaGPUWSDecomposingPass, int);
-  ADD_PASS_WRAPPER_1("add_wsmutex", mlir::createTritonNvidiaGPUWSMutexPass,
-                     int);
-  ADD_PASS_WRAPPER_1("add_wsmaterialization",
-                     mlir::createTritonNvidiaGPUWSMaterializationPass, int);
-  ADD_PASS_WRAPPER_0("add_wsfixup_missing_attrs",
-                     mlir::createTritonNvidiaGPUWSFixupMissingAttrs);
-  ADD_PASS_WRAPPER_2("add_materialize_load_store",
-                     mlir::createTritonNvidiaGPUMaterializeLoadStorePass, int,
-                     int);
-  ADD_PASS_WRAPPER_0("add_fence_insertion",
-                     mlir::createTritonNvidiaGPUFenceInsertionPass);
-  ADD_PASS_WRAPPER_0("add_nvgpu_to_llvm",
-                     mlir::triton::createConvertNVGPUToLLVMPass);
-  ADD_PASS_WRAPPER_3("add_wspipeline",
-                     mlir::createTritonNvidiaGPUWSPipelinePass, int, int, int);
-  ADD_PASS_WRAPPER_1("add_rewrite_tensor_pointer",
-                     mlir::createTritonGPURewriteTensorPointerPass, int);
-
-  m.def("is_ws_supported", [](mlir::ModuleOp &mod) -> bool {
-    return mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect::getWSSupportedAttr(
-        mod);
-  });
+void init_triton_passes_llvmir(py::module &&m) {
+  using namespace mlir;
+  ADD_PASS_WRAPPER_0("add_di_scope", createLLVMDIScopePass);
 }
 
 void init_triton_passes(py::module &&m) {
   init_triton_passes_common(m.def_submodule("common"));
+  init_triton_passes_convert(m.def_submodule("convert"));
   init_triton_passes_ttir(m.def_submodule("ttir"));
   init_triton_passes_ttgpuir(m.def_submodule("ttgpuir"));
-  init_triton_passes_ttnvgpuir(m.def_submodule("ttnvgpuir"));
+  init_triton_passes_llvmir(m.def_submodule("llvmir"));
 }
