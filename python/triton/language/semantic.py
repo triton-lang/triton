@@ -253,7 +253,7 @@ def mod(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
 ##############
 # other arithmetic ops
 ##############
-    
+
 
 def minimum(arg0: tl.tensor, arg1: tl.tensor, propagate_nan: tl.PropagateNan, builder: ir.builder):
     arg0, arg1 = binary_op_type_checking_impl(arg0, arg1, builder)
@@ -266,7 +266,7 @@ def minimum(arg0: tl.tensor, arg1: tl.tensor, propagate_nan: tl.PropagateNan, bu
             else:
                 r = tl.tensor(builder.create_minnumf(arg0.handle, arg1.handle), arg0.type)
                 nans = tl.isnan(arg0, _builder=builder).__or__(tl.isnan(arg1, _builder=builder), _builder=builder)
-                return  where(nans, tl.nan(dtype, _builder=builder), r, _builder=builder)
+                return where(nans, tl.nan(dtype, _builder=builder), r, _builder=builder)
         elif propagate_nan == tl.PropagateNan.NONE:
             return tl.tensor(builder.create_minnumf(arg0.handle, arg1.handle), arg0.type)
         else:
@@ -290,7 +290,7 @@ def maximum(arg0: tl.tensor, arg1: tl.tensor, propagate_nan: tl.PropagateNan, bu
             else:
                 r = tl.tensor(builder.create_maxnumf(arg0.handle, arg1.handle), arg0.type)
                 nans = tl.isnan(arg0, _builder=builder).__or__(tl.isnan(arg1, _builder=builder), _builder=builder)
-                return  where(nans, tl.nan(dtype, _builder=builder), r, _builder=builder)
+                return where(nans, tl.nan(dtype, _builder=builder), r, _builder=builder)
         elif propagate_nan == tl.PropagateNan.NONE:
             return tl.tensor(builder.create_maxnumf(arg0.handle, arg1.handle), arg0.type)
         else:
