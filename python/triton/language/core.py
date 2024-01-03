@@ -14,6 +14,7 @@ TRITON_MAX_TENSOR_NUMEL = 1048576
 
 TRITON_BUILTIN = "__triton_builtin__"
 
+PropagateNan = ir.PROPAGATE_NAN
 
 def builtin(fn: T) -> T:
     """Mark a function as a builtin."""
@@ -1328,6 +1329,29 @@ def where(condition, x, y, _builder=None):
 
 
 @builtin
+def nan(dtype, _builder=None):
+    """
+    Returns a floating-point NaN value of the given :code:`dtype`.
+
+    :param dtype: The data type of the returned tensor.
+    :type dtype: DType
+    """
+    return _to_tensor(float('nan'), _builder).to(dtype, _builder=_builder)
+
+
+@builtin
+def isnan(x, _builder=None):
+    """
+    Returns a boolean tensor of the same shape as :code:`x`, with :code:`True` elements where :code:`x` is NaN.
+
+    :param x: The input tensor.
+    :type x: Block
+    """
+    x = _to_tensor(x, _builder)
+    return x.__ne__(x, _builder=_builder)
+    
+
+@builtin
 def umulhi(x, y, _builder=None):
     """
     Returns the most significant 32 bits of the product of x and y.
@@ -1357,6 +1381,28 @@ def fdiv(x, y, ieee_rounding=False, _builder=None):
     x = _to_tensor(x, _builder)
     y = _to_tensor(y, _builder)
     return semantic.fdiv(x, y, ieee_rounding, _builder)
+
+
+@builtin
+def minimum(arg0, arg1, propagate_nan, _builder=None):
+    arg0 = _to_tensor(arg0, _builder)
+    arg1 = _to_tensor(arg1, _builder)
+    arg0 = _promote_bfloat16_to_float32(arg0, _builder=_builder)
+    arg1 = _promote_bfloat16_to_float32(arg1, _builder=_builder)
+    propagate_nan = _constexpr_to_value(propagate_nan)
+
+    return semantic.minimum(arg0, arg1, propagate_nan, _builder)
+
+
+@builtin
+def maximum(arg0, arg1, propagate_nan, _builder=None):
+    arg0 = _to_tensor(arg0, _builder)
+    arg1 = _to_tensor(arg1, _builder)
+    arg0 = _promote_bfloat16_to_float32(arg0, _builder=_builder)
+    arg1 = _promote_bfloat16_to_float32(arg1, _builder=_builder)
+    propagate_nan = _constexpr_to_value(propagate_nan)
+
+    return semantic.maximum(arg0, arg1, propagate_nan, _builder)
 
 
 def _add_math_1arg_docstr(name: str) -> Callable[[T], T]:

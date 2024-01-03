@@ -4,7 +4,6 @@
 from . import math
 from . import extra
 from .standard import (
-    PropagateNan,
     argmax,
     argmin,
     cdiv,
@@ -25,6 +24,7 @@ from .standard import (
     zeros_like,
 )
 from .core import (
+    PropagateNan,
     TRITON_MAX_TENSOR_NUMEL,
     abs,
     advance,
@@ -68,12 +68,14 @@ from .core import (
     int32,
     int64,
     int8,
+    isnan,
     load,
     log,
     make_block_ptr,
     max_constancy,
     max_contiguous,
     multiple_of,
+    nan,
     num_programs,
     pi32_t,
     pointer_type,
@@ -165,6 +167,7 @@ __all__ = [
     "int64",
     "int8",
     "ir",
+    "isnan",
     "math",
     "load",
     "log",
@@ -176,6 +179,7 @@ __all__ = [
     "min",
     "minimum",
     "multiple_of",
+    "nan",
     "num_programs",
     "pair_uniform_to_normal",
     "philox",
