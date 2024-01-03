@@ -1384,25 +1384,25 @@ def fdiv(x, y, ieee_rounding=False, _builder=None):
 
 
 @builtin
-def min(arg0, arg1, propagate_nan, _builder=None):
+def minimum(arg0, arg1, propagate_nan, _builder=None):
     arg0 = _to_tensor(arg0, _builder)
     arg1 = _to_tensor(arg1, _builder)
     arg0 = _promote_bfloat16_to_float32(arg0, _builder=_builder)
     arg1 = _promote_bfloat16_to_float32(arg1, _builder=_builder)
     propagate_nan = _constexpr_to_value(propagate_nan)
 
-    return semantic.min(arg0, arg1, propagate_nan, _builder)
+    return semantic.minimum(arg0, arg1, propagate_nan, _builder)
 
 
 @builtin
-def max(arg0, arg1, propagate_nan, _builder=None):
+def maximum(arg0, arg1, propagate_nan, _builder=None):
     arg0 = _to_tensor(arg0, _builder)
     arg1 = _to_tensor(arg1, _builder)
     arg0 = _promote_bfloat16_to_float32(arg0, _builder=_builder)
     arg1 = _promote_bfloat16_to_float32(arg1, _builder=_builder)
     propagate_nan = _constexpr_to_value(propagate_nan)
 
-    return semantic.max(arg0, arg1, propagate_nan, _builder)
+    return semantic.maximum(arg0, arg1, propagate_nan, _builder)
 
 
 def _add_math_1arg_docstr(name: str) -> Callable[[T], T]:
