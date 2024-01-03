@@ -255,7 +255,7 @@ def mod(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
 ##############
     
 
-def min(arg0: tl.tensor, arg1: tl.tensor, propagate_nan: tl.PropagateNan, builder: ir.builder):
+def minimum(arg0: tl.tensor, arg1: tl.tensor, propagate_nan: tl.PropagateNan, builder: ir.builder):
     arg0, arg1 = binary_op_type_checking_impl(arg0, arg1, builder)
     dtype = arg0.dtype
 
@@ -279,7 +279,7 @@ def min(arg0: tl.tensor, arg1: tl.tensor, propagate_nan: tl.PropagateNan, builde
         assert False, f"Unexpected dtype {dtype}"
 
 
-def max(arg0: tl.tensor, arg1: tl.tensor, propagate_nan: tl.PropagateNan, builder: ir.builder):
+def maximum(arg0: tl.tensor, arg1: tl.tensor, propagate_nan: tl.PropagateNan, builder: ir.builder):
     arg0, arg1 = binary_op_type_checking_impl(arg0, arg1, builder)
     dtype = arg0.dtype
 
