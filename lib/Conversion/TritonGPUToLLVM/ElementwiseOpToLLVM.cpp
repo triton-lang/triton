@@ -1632,45 +1632,48 @@ struct ClampFOpConversion
     // Pattern matching the sequence of clamp(x, -limit, limit) to generate more
     // efficient PTX code.
     // NOTE: This pattern matching is not general enough, but it is sufficient.
-    // We detect only the case where the "-limit" is computed as 0 - limit.
-    // example MLIR that we want to match:
-    // %cst = arith.constant dense<0.000000e+00>
-    // %8 = tt.load %7, %2
-    // %11 = arith.subf %cst, %8
-    // %12 = tt.clamp %5, %11, %8
-    int negatedOperandIndex = -1;
+    // We detect only two cases here:
+    // 1. where the "-limit" is computed as 0 - limit:
+    //   %cst = arith.constant dense<0.000000e+00>
+    //   %8 = tt.load %7, %2
+    //   %11 = arith.subf %cst, %8
+    //   %12 = tt.clamp %5, %11, %8
+    // 2. where "-limit" and "limit" are constants.
+    //   %cst_6 = arith.constant dense<-6.0000e+00>
+    //   %cst_7 = arith.constant dense<6.0000e+00>
+    //   %160 = tt.clamp %158, %cst_6, %cst_7
+    bool clipPatternFound = false;
+
+    auto getSplatInitializer = [](Value v) -> std::optional<double> {
+      if (auto constOp = llvm::dyn_cast<arith::ConstantOp>(v.getDefiningOp())) {
+        if (auto attr = constOp.getValueAttr()
+                            .dyn_cast<mlir::DenseIntOrFPElementsAttr>()) {
+          if (attr.isSplat()) {
+            return attr.getSplatValue<APFloat>().convertToDouble();
+          }
+        }
+      }
+      return std::nullopt;
+    };
+
     if (xorsignAbsAvailable) {
       if (auto subOp =
               llvm::dyn_cast<arith::SubFOp>(op.getOperand(1).getDefiningOp())) {
         if (subOp.getOperand(1) == op.getOperand(2)) {
-          negatedOperandIndex = 1;
-        }
-      }
-      if (auto subOp =
-              llvm::dyn_cast<arith::SubFOp>(op.getOperand(2).getDefiningOp())) {
-        if (subOp.getOperand(1) == op.getOperand(1)) {
-          negatedOperandIndex = 2;
-        }
-      }
-    }
-
-    bool clipPatternFound = false;
-    if (negatedOperandIndex != -1) {
-      auto subOp = llvm::cast<arith::SubFOp>(
-          op.getOperand(negatedOperandIndex).getDefiningOp());
-      if (auto constOp = llvm::dyn_cast<arith::ConstantOp>(
-              subOp.getOperand(0).getDefiningOp())) {
-        if (auto attr = constOp.getValueAttr()
-                            .dyn_cast<mlir::DenseIntOrFPElementsAttr>()) {
-          if (attr.isSplat() &&
-              attr.getSplatValue<APFloat>().convertToDouble() == 0.0) {
+          auto initializer = getSplatInitializer(subOp.getOperand(0));
+          if (initializer.has_value() && initializer.value() == 0.0) {
             clipPatternFound = true;
           }
-        } else if (auto attr =
-                       constOp.getValueAttr().dyn_cast<mlir::FloatAttr>()) {
-          if (attr.getValueAsDouble() == 0.0) {
-            clipPatternFound = true;
-          }
+        }
+      } else if (llvm::isa<arith::ConstantOp>(
+                     op.getOperand(1).getDefiningOp()) &&
+                 llvm::isa<arith::ConstantOp>(
+                     op.getOperand(2).getDefiningOp())) {
+        auto initializer1 = getSplatInitializer(op.getOperand(1));
+        auto initializer2 = getSplatInitializer(op.getOperand(2));
+        if (initializer1.has_value() && initializer2.has_value() &&
+            initializer1.value() == -initializer2.value()) {
+          clipPatternFound = true;
         }
       }
     }
