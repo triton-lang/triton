@@ -68,7 +68,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
     return acc, l_i, m_i
 
 
-# We don't run auto-tuning everytime to keep the tutorial fast. Uncommenting
+# We don't run auto-tuning every time to keep the tutorial fast. Uncommenting
 # the code below and commenting out the equivalent parameters is convenient for
 # re-tuning.
 # @triton.autotune(

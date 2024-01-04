@@ -884,7 +884,7 @@ private:
       return getArgIdx(v.getDefiningOp()->getOperand(0));
     } else if (v.getParentBlock()->isEntryBlock() && v.isa<BlockArgument>()) {
       // in entryblock and is BlockArgument; Because argument of func are
-      // arugments of entryblock bb0 in MLIR
+      // arguments of entryblock bb0 in MLIR
       return v.cast<BlockArgument>().getArgNumber();
     } else if (v.getParentBlock()->isEntryBlock() &&
                (!v.isa<BlockArgument>())) {
@@ -1780,7 +1780,7 @@ private:
       return getArgIdx(v.getDefiningOp()->getOperand(0));
     } else if (v.getParentBlock()->isEntryBlock() && v.isa<BlockArgument>()) {
       // in entryblock and is BlockArgument; Because argument of func are
-      // arugments of entryblock bb0 in MLIR
+      // arguments of entryblock bb0 in MLIR
       return v.cast<BlockArgument>().getArgNumber();
     } else if (v.getParentBlock()->isEntryBlock() &&
                (!v.isa<BlockArgument>())) {

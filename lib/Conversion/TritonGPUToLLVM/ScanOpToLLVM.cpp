@@ -404,7 +404,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   SmallVector<Value> srcValues =
       getTypeConverter()->unpackLLElements(loc, input, rewriter);
 
-  // Scan contigous elements in a thread and update `srcValues`.
+  // Scan contiguous elements in a thread and update `srcValues`.
   scanThreadContiguousElements(srcValues, rewriter, helper);
   // Apply warp level scan to the last element of each chunk of contiguous
   // elements.

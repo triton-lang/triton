@@ -404,7 +404,7 @@ private:
   /// allocated, but is used to store intermediate results.
   void resolveScratchBufferLiveness(
       const DenseMap<Operation *, size_t> &operationId) {
-    // Analyze liveness of scratch buffers and vritual buffers.
+    // Analyze liveness of scratch buffers and virtual buffers.
     auto processScratchMemory = [&](const auto &container) {
       for (auto opScratchIter : container) {
         // Any scratch memory's live range is the current operation's live

@@ -215,7 +215,7 @@ def _bwd_kernel_one_col_block(Q, K, V, sm_scale, qk_scale,  #
             if MMA_V3:
                 dq = tl.dot(ds, k, allow_tf32=True)
             else:
-                # not work with mma v3, becuase M % 64 != 0
+                # not work with mma v3, because M % 64 != 0
                 dq = tl.trans(tl.dot(tl.trans(k), tl.trans(ds), allow_tf32=True))
             tl.store(DQ_block_ptr, dq.to(Q.dtype.element_ty))
 

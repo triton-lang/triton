@@ -193,7 +193,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
     if (!allocation.isRoot(funcOp))
       amendedFuncOp = amendFuncOp(funcOp, rewriter);
 
-    // Collect TMA informations.
+    // Collect TMA information.
     unsigned numTMALoad = 0;
     funcOp.walk(
         [&numTMALoad](triton::nvidia_gpu::InsertSliceTMAOp insertSliceOp) {

@@ -519,7 +519,7 @@ static void addDep(Operation *op, DenseSet<Operation *> &deps,
   }
 }
 
-// Add operations to the shedule with the given stage based on the filter
+// Add operations to the schedule with the given stage based on the filter
 // function.
 static void addOps(scf::ForOp forOp, int stage,
                    std::vector<std::pair<Operation *, unsigned>> &schedule,
@@ -553,7 +553,7 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
     addDep(op, insertAndDeps, false);
   }
 
-  // Find depenencies with distance of 1.
+  // Find dependencies with distance of 1.
   SmallVector<Operation *> distanceOneUsers;
   for (Operation *op : insertAndDeps) {
     for (Value operand : op->getOperands()) {
@@ -789,7 +789,7 @@ void mlir::triton::asyncLaunchDots(scf::ForOp forOp) {
   OpBuilder builder(forOp);
   // 0. insert dot_wait after the last dot in the loop as we implicitly pipeline
   // wgmma ops by one stage.
-  // This is needed to prevent shared memory inputs to be overriden before the
+  // This is needed to prevent shared memory inputs to be overridden before the
   // operation is completed.
   // TODO: merge this with the rest of the pipelining transformation and look at
   // a better representation for async dots.
@@ -830,7 +830,7 @@ void mlir::triton::asyncLaunchDots(scf::ForOp forOp) {
     }
   }
 
-  // 3. potentially remove redundant dot_wait after dot_async if having mutiple
+  // 3. potentially remove redundant dot_wait after dot_async if having multiple
   // DotOp in the loop
   removeExtraWait(dotWait, hasDotWait0);
 }

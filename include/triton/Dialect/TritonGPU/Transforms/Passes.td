@@ -153,7 +153,7 @@ def TritonGPUReorderInstructions: Pass<"tritongpu-reorder-instructions", "mlir::
 def TritonGPUDecomposeConversions: Pass<"tritongpu-decompose-conversions", "mlir::ModuleOp"> {
   let summary = "Decompose convert[distributed -> dotOperand] into convert[distributed -> shared -> dotOperand]";
 
-  let description = "Decomposing conversions this way makes it possible to use CSE and re-use #shared tensors";
+  let description = "Decomposing conversions this way makes it possible to use CSE and reuse #shared tensors";
 
   let constructor = "mlir::triton::gpu::createDecomposeConversionsPass()";
 

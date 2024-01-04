@@ -1029,7 +1029,7 @@ def expand_dims(input, axis, _builder=None):
     axes = [_wrap_axis(_constexpr_to_value(d), new_ndim) for d in axes]
 
     if len(set(axes)) != len(axes):
-        raise ValueError(f"expand_dims recieved duplicate axes, normalized axes = {axes}")
+        raise ValueError(f"expand_dims received duplicate axes, normalized axes = {axes}")
 
     ret = input
     for a in sorted(axes):

@@ -245,7 +245,7 @@ private:
                   unsigned numLaneToReduce, unsigned interleave) const {
     if (auto kind = matchReduxKind(op)) {
       // Based on benchmarking on A100 redux op gives a speed up only when doing
-      // a single reduction (not partioned) and when the mask is static.
+      // a single reduction (not partitioned) and when the mask is static.
       // Therefore we currently only enable it to reduce across all the lanes.
       if (numLaneToReduce == 32) {
         assert(acc.size() == 1);
@@ -253,7 +253,7 @@ private:
         // Even though we currently don't use redux for partitioned reduction
         // the code below supports it in case we want to tweak the heuristic.
         if (numLaneToReduce < 32) {
-          // For partitioned reduction we need to caluclate the mask so that
+          // For partitioned reduction we need to calculate the mask so that
           // each group of numLaneToReduce threads has the correct mask.
           unsigned bitmask = (1 << numLaneToReduce) - 1;
           Value threadId = getThreadId(rewriter, loc);
@@ -304,7 +304,7 @@ private:
     }
   }
 
-  // Pack the accumualtor values and replace the reduce op with the result.
+  // Pack the accumulator values and replace the reduce op with the result.
   void packResults(ReduceOpHelper &helper,
                    std::map<SmallVector<unsigned>, SmallVector<Value>> &accs,
                    ConversionPatternRewriter &rewriter) const {
