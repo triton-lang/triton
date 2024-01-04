@@ -225,6 +225,8 @@ class Config:
     :type num_warps: int
     :ivar num_stages: the number of stages that the compiler should use when software-pipelining loops.
                        Mostly useful for matrix multiplication workloads on SM80+ GPUs.
+    :type num_ctas: int
+    :ivar num_ctas: number of blocks in a block cluster. SM90+ only.
     :type enable_warp_specialization: bool
     :ivar enable_warp_specialization: enable specialization (spatial partitioning) or not. See https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#spatial-partitioning-also-known-as-warp-specialization
     :ivar pre_hook: a function that will be called before the kernel is called. Parameters of this
