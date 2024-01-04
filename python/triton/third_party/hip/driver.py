@@ -2,7 +2,7 @@ import os
 import hashlib
 import tempfile
 from pathlib import Path
-from triton.common.build import _build
+from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.third_party.driver import GPUDriver
 

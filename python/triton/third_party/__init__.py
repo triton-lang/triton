@@ -6,13 +6,13 @@ from dataclasses import dataclass
 from .driver import DriverBase
 from .compiler import BaseBackend
 
-def load_module(name, path):
+def _load_module(name, path):
     spec = importlib.util.spec_from_file_location(name[:-3], path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
-def find_concrete_subclasses(module, base_class):
+def _find_concrete_subclasses(module, base_class):
     ret = []
     for attr_name in dir(module):
         attr = getattr(module, attr_name)
@@ -30,7 +30,7 @@ class Backend:
     driver: DriverBase = None
 
 
-def initialize():
+def _discover_backends():
     backends = []
     root = os.path.dirname(__file__)
     for backend in os.listdir(root):
@@ -38,12 +38,12 @@ def initialize():
             continue
         if backend.startswith('__'):
             continue
-        compiler = load_module(backend[:-3], os.path.join(root, backend, 'compiler.py'))
-        driver = load_module(backend[:-3], os.path.join(root, backend, 'driver.py'))
-        backends.append(Backend(find_concrete_subclasses(compiler, BaseBackend),
-                                find_concrete_subclasses(driver, DriverBase)))
+        compiler = _load_module(backend[:-3], os.path.join(root, backend, 'compiler.py'))
+        driver = _load_module(backend[:-3], os.path.join(root, backend, 'driver.py'))
+        backends.append(Backend(_find_concrete_subclasses(compiler, BaseBackend),
+                                _find_concrete_subclasses(driver, DriverBase)))
     return backends
     
 
-backends = initialize()
+backends = _discover_backends()
 

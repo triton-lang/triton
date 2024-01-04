@@ -9,11 +9,11 @@ from .. import __version__
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
 from ..runtime.driver import driver
+from ..runtime.build import _build
 # TODO: this shouldn't be here
 from ..third_party.cuda.compiler import InfoFromBackendForTensorMap
 from dataclasses import dataclass
 from .code_generator import ast_to_ttir
-from triton.common import _build
 from pathlib import Path
 import re
 import functools
