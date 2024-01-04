@@ -253,14 +253,14 @@ class HIPOptions:
 
 class HIPBackend(BaseBackend):
 
-    name = 'hip'
+    @staticmethod
+    def supports_target(target: tuple):
+        return target[0] == 'hip'
 
     def __init__(self, target: tuple) -> None:
         super().__init__(target)
         assert isinstance(target, tuple) and len(target) == 2
-        assert target[0] == self.name
         assert isinstance(target[1], str)
-        self.target = target
 
     def parse_options(self, opts) -> Any:
         args = {'arch': self.target[1]}

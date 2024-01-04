@@ -605,11 +605,13 @@ class CUDAOptions:
 
 class CUDABackend(BaseBackend):
 
-    name = 'cuda'
+    @staticmethod
+    def supports_target(target: tuple):
+        return target[0] == 'cuda'
 
-    def __init__(self, device_type: tuple) -> None:
-        super().__init__(device_type)
-        self.capability = device_type[1]
+    def __init__(self, target: tuple) -> None:
+        super().__init__(target)
+        self.capability = target[1]
         assert isinstance(self.capability, int)
 
     def parse_options(self, opts) -> Any:

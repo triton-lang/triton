@@ -53,6 +53,3 @@ class HIPDriver(GPUDriver):
         device = self.get_current_device()
         arch = self.utils.get_device_properties(device)['arch']
         return ("hip", arch.split(':')[0])
-
-    def assemble_tensormap_to_arg(self, tensormaps_info, args):
-        return args

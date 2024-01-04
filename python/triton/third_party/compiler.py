@@ -6,8 +6,9 @@ import re
 
 class BaseBackend(metaclass=ABCMeta):
 
-    def __init__(self, device_type: str) -> None:
-        self.device_type = device_type
+    def __init__(self, target: tuple) -> None:
+        self.target = target
+        assert self.supports_target(target)
     
     @staticmethod
     def _path_to_binary(binary: str):
@@ -16,7 +17,6 @@ class BaseBackend(metaclass=ABCMeta):
             os.environ.get(f"TRITON_{binary.upper()}_PATH", ""),
             os.path.join(base_dir, "third_party", "cuda", "bin", binary),
         ]
-
         for p in paths:
             bin = p.split(" ")[0]
             if os.path.exists(bin) and os.path.isfile(bin):
@@ -26,6 +26,10 @@ class BaseBackend(metaclass=ABCMeta):
                     if version is not None:
                         return p, version.group(1)
         raise RuntimeError(f"Cannot find {binary}")
+
+    @abstractclassmethod
+    def supports_target(target: tuple):
+        raise NotImplementedError
 
     @abstractmethod
     def hash(self) -> str:
