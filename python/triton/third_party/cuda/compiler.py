@@ -298,29 +298,6 @@ class InfoFromBackendForTensorMap:
 
 # ----------------------------------------------------
 
-# ---------------- Launcher stuff --------------------
-
-
-def make_stub(name, signature, constants, ids, **kwargs):
-    # name of files that are cached
-    so_cache_key = make_so_cache_key('', signature, constants, ids, **kwargs)
-    so_cache_manager = get_cache_manager(so_cache_key)
-    so_name = f"{name}.so"
-    # retrieve stub from cache if it exists
-    cache_path = so_cache_manager.get_file(so_name)
-    if cache_path is None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            src = generate_launcher(constants, signature, ids)
-            src_path = os.path.join(tmpdir, "main.c")
-            with open(src_path, "w") as f:
-                f.write(src)
-            so = _build(name, src_path, tmpdir)
-            with open(so, "rb") as f:
-                return so_cache_manager.put(f.read(), so_name, binary=True)
-    else:
-        return cache_path
-
-
 # ----- source code generation --------
 
 
@@ -343,7 +320,7 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-def generate_launcher(constants, signature, ids):
+def make_launcher(constants, signature, ids):
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
     signature, desc_start_idx = generate_cu_signature(constants, signature, ids)
@@ -841,12 +818,10 @@ class CUDABackend(BaseBackend):
 
     def make_launcher(self, src, metadata):
         ids = {
-            "ids_of_tensormaps": metadata.get("ids_of_tensormaps", tuple()), "ids_of_folded_args":
-            metadata.get("ids_of_folded_args",
-                         tuple()), "ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()
+            "ids_of_folded_args": metadata.get("ids_of_folded_args", tuple()), "ids_of_const_exprs":
+            src.fn.constexprs if hasattr(src, "fn") else tuple()
         }
         constants = src.constants if hasattr(src, "constants") else dict()
-        enable_warp_specialization = False
-
-        # set constant
-        return make_stub(src.name, src.signature, constants, ids, enable_warp_specialization=enable_warp_specialization)
+        key = make_so_cache_key('', src.signature, constants, ids)
+        src = make_launcher(constants, src.signature, ids)
+        return key, src
