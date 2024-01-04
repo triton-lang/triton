@@ -72,7 +72,10 @@ class CUDABackend(BaseBackend):
         args = {k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts}
         args["allow_fp8e4nv"] = self.capability >= 89
         args["max_num_imprecise_acc_default"] = 2**30 if self.capability == 90 else 0
-        return CUDAOptions(**args)
+        options = CUDAOptions(**args)
+        assert options.num_ctas == 1 or self.capability >= 90, \
+               f"num_ctas > 1 supported only on SM90+. Got num_ctas={options.num_ctas}, SM{self.capability}"
+        return options
 
     @staticmethod
     def load_dialects(ctx):
