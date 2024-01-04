@@ -1,11 +1,11 @@
 from triton.common.backend import BaseBackend
+from triton.common.backend import get_cuda_version_key, path_to_ptxas
+from triton.compiler.make_launcher import make_stub
+from triton.compiler.utils import get_ids_of_tensormaps, parse_tma_info
+from triton._C.libtriton import ir, passes, nvidia, llvm
 from dataclasses import dataclass
-from ...common.backend import get_cuda_version_key, path_to_ptxas
-from ..._C.libtriton import ir, passes, nvidia, llvm
 import functools
 from typing import Any
-from ..make_launcher import make_stub
-from ..utils import get_ids_of_tensormaps, parse_tma_info
 import hashlib
 import re
 import tempfile
@@ -62,6 +62,8 @@ class CUDAOptions:
 
 
 class CUDABackend(BaseBackend):
+
+    name = 'cuda'
 
     def __init__(self, device_type: tuple) -> None:
         super().__init__(device_type)
@@ -283,6 +285,5 @@ class CUDABackend(BaseBackend):
         # set constant
         return make_stub(src.name, src.signature, constants, ids, enable_warp_specialization=enable_warp_specialization)
 
-    @classmethod
-    def create_backend(cls, device_type: str):
-        return cls(device_type)
+
+backend = CUDABackend

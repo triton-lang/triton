@@ -1,7 +1,7 @@
 from triton.common.backend import BaseBackend
-from ..._C.libtriton import ir, passes, llvm, amd
+from triton._C.libtriton import ir, passes, llvm, amd
 from dataclasses import dataclass
-from ...common.backend import get_cuda_version_key, path_to_rocm_lld
+from triton.common.backend import get_cuda_version_key, path_to_rocm_lld
 from typing import Any
 import hashlib
 from triton.compiler.make_launcher import get_cache_manager, make_so_cache_key
@@ -273,16 +273,17 @@ class HIPOptions:
 
 class HIPBackend(BaseBackend):
 
-    def __init__(self, device_type: tuple) -> None:
-        super().__init__(device_type)
-        assert isinstance(device_type, tuple) and len(device_type) == 2
-        assert device_type[0] == 'hip'
-        assert isinstance(device_type[1], str)
-        self.device_type = device_type
+    name = 'hip'
+
+    def __init__(self, target: tuple) -> None:
+        super().__init__(target)
+        assert isinstance(target, tuple) and len(target) == 2
+        assert target[0] == self.name
+        assert isinstance(target[1], str)
+        self.target = target
 
     def parse_options(self, opts) -> Any:
-        device_type = self.device_type
-        args = {'arch': device_type[1]}
+        args = {'arch': self.target[1]}
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts})
         return HIPOptions(**args)
 
@@ -386,8 +387,6 @@ class HIPBackend(BaseBackend):
         assert len(names) == 1
         metadata["name"] = names[0]
         # llvm -> hsaco
-        hsaco_txt = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion,
-                                          False)
         hsaco = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion, True)
         import subprocess
         rocm_path = path_to_rocm_lld()
@@ -409,7 +408,7 @@ class HIPBackend(BaseBackend):
         stages["hsaco"] = lambda src, metadata: self.make_hsaco(src, metadata, options)
 
     def hash(self):
-        return f'{get_cuda_version_key()}-{self.device_type}'
+        return f'{get_cuda_version_key()}-{self.target}'
 
     def make_launcher_stub(self, src, metadata):
         ids = {
@@ -421,6 +420,5 @@ class HIPBackend(BaseBackend):
         # set constant
         return make_stub(src.name, src.signature, constants, ids)
 
-    @classmethod
-    def create_backend(cls, device_type: str):
-        return cls(device_type)
+
+backend = HIPBackend
