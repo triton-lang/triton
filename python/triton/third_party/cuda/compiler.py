@@ -1,5 +1,4 @@
-from triton.common.backend import BaseBackend
-from triton.common.backend import path_to_ptxas
+from triton.third_party.compiler import BaseBackend
 from triton.runtime.cache import get_cache_manager, make_so_cache_key
 from triton.common import _build
 from triton._C.libtriton import ir, passes, nvidia, llvm
@@ -642,7 +641,6 @@ class CUDABackend(BaseBackend):
         args["max_num_imprecise_acc_default"] = 2**30 if self.capability == 90 else 0
         return CUDAOptions(**args)
 
-    @staticmethod
     def load_dialects(ctx):
         nvidia.load_dialects(ctx)
 
@@ -841,7 +839,7 @@ class CUDABackend(BaseBackend):
         version = subprocess.check_output([path_to_ptxas()[0], "--version"])
         return f'{version}-{self.capability}'
 
-    def make_launcher_stub(self, src, metadata):
+    def make_launcher(self, src, metadata):
         ids = {
             "ids_of_tensormaps": metadata.get("ids_of_tensormaps", tuple()), "ids_of_folded_args":
             metadata.get("ids_of_folded_args",
@@ -852,6 +850,3 @@ class CUDABackend(BaseBackend):
 
         # set constant
         return make_stub(src.name, src.signature, constants, ids, enable_warp_specialization=enable_warp_specialization)
-
-
-backend = CUDABackend

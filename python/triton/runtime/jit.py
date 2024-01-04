@@ -1,7 +1,5 @@
 from __future__ import annotations, division
-
 import ast
-import functools
 import hashlib
 import inspect
 import os
@@ -335,8 +333,7 @@ class JITFunction(KernelInterface[T]):
         )
 
     def run(self, *args, grid, warmup, **kwargs):
-        from ..compiler import CompiledKernel, compile, ASTSource
-        from ..compiler.backends import make_backend
+        from ..compiler import CompiledKernel, compile, ASTSource, make_backend
         # deprecated arguments
         assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
         assert "device" not in kwargs, "device option is deprecated; current device will be used"

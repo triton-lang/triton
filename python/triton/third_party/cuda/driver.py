@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 from triton.common.build import _build
 from triton.runtime.cache import get_cache_manager
-from triton.runtime.driver import GPUDriver
+from triton.third_party.driver import GPUDriver
 
 
 class CudaUtils(object):
@@ -16,7 +16,7 @@ class CudaUtils(object):
 
     def __init__(self):
         dirname = os.path.dirname(os.path.realpath(__file__))
-        src = Path(os.path.join(dirname, "cuda.c")).read_text()
+        src = Path(os.path.join(dirname, "driver.c")).read_text()
         key = hashlib.md5(src.encode("utf-8")).hexdigest()
         cache = get_cache_manager(key)
         fname = "cuda_utils.so"
@@ -99,6 +99,3 @@ class CudaDriver(GPUDriver):
             for i, e in enumerate(tensormaps_info):
                 args_with_tma.append(CudaDriver.tensormap_manager[(e, args_ptr)])
         return args_with_tma
-
-
-driver = CudaDriver

@@ -4,14 +4,13 @@ import hashlib
 import json
 
 from .._C.libtriton import get_env_vars, ir
-# from ..runtime import driver, jit, JITFunction
-# TODO: runtime.errors
+from ..third_party import backends
 from .. import __version__
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
 from ..runtime.driver import driver
-from .utils import InfoFromBackendForTensorMap
-from .backends import make_backend
+# TODO: this shouldn't be here
+from ..third_party.cuda.compiler import InfoFromBackendForTensorMap
 from dataclasses import dataclass
 from .code_generator import ast_to_ttir
 from triton.common import _build
@@ -227,8 +226,7 @@ def compile(src, target=None, options=None):
     if metadata_path is not None:
         # cache hit!
         metadata = json.loads(Path(metadata_path).read_text())
-        launcher_key, launcher_src = backend.make_launcher_stub(src, metadata)
-        launcher_path = build_launcher(launcher_key, launcher_src)
+        launcher_path = get_cache_manager(metadata["launcher"]).get_file('launcher.so')
         return CompiledKernel(launcher_path, metadata_group)
     # initialize metadata
     metadata = {
@@ -250,7 +248,7 @@ def compile(src, target=None, options=None):
         metadata_group[f"{src.name}.{ext}"] = fn_cache_manager.put(next_module, f"{src.name}.{ext}")
         module = next_module
     # make kernel launcher
-    launcher_key, launcher_src = backend.make_launcher_stub(src, metadata)
+    launcher_key, launcher_src = backend.make_launcher(src, metadata)
     launcher_path = build_launcher(launcher_key, launcher_src)
     # write-back metadata
     metadata["launcher"] = launcher_key
@@ -259,6 +257,13 @@ def compile(src, target=None, options=None):
     fn_cache_manager.put_group(metadata_filename, metadata_group)
     # return handle to compiled kernel
     return CompiledKernel(launcher_path, metadata_group)
+
+
+def make_backend(target):
+    actives = [x.compiler for x in backends if x.compiler.name == target[0]]
+    if len(actives) != 1:
+        raise RuntimeError(f"{len(actives)} compatible backends ({actives}). There should only be one.")
+    return actives[0](target)
 
 
 class CompiledKernel:
