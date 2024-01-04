@@ -1,36 +1,16 @@
-from triton.common.backend import BaseBackend
 from triton._C.libtriton import ir, passes, llvm, amd
+from triton.common.backend import BaseBackend
+from triton.common.backend import path_to_rocm_lld
+from triton.runtime.cache import make_so_cache_key
 from dataclasses import dataclass
-from triton.common.backend import get_cuda_version_key, path_to_rocm_lld
 from typing import Any
 import hashlib
-from triton.compiler.make_launcher import get_cache_manager, make_so_cache_key
 import tempfile
-from triton.common import _build
 import os
 import re
+import subprocess
+import functools
 from pathlib import Path
-
-
-def make_stub(name, signature, constants, ids, **kwargs):
-    # name of files that are cached
-    version_key = 'TODO'
-    so_cache_key = make_so_cache_key(version_key, signature, constants, ids, **kwargs)
-    so_cache_manager = get_cache_manager(so_cache_key)
-    so_name = f"{name}.so"
-    # retrieve stub from cache if it exists
-    cache_path = so_cache_manager.get_file(so_name)
-    if cache_path is None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            src = generate_launcher_hip(constants, signature, ids)
-            src_path = os.path.join(tmpdir, "main.c")
-            with open(src_path, "w") as f:
-                f.write(src)
-            so = _build(name, src_path, tmpdir)
-            with open(so, "rb") as f:
-                return so_cache_manager.put(f.read(), so_name, binary=True)
-    else:
-        return cache_path
 
 
 def ty_to_cpp(ty):
@@ -52,7 +32,7 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-def generate_launcher_hip(constants, signature, ids):
+def make_launcher(constants, signature, ids):
     start_desc = len(signature)
     #signature = generate_cu_signature(constants, signature, ids)
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
@@ -407,18 +387,20 @@ class HIPBackend(BaseBackend):
         # stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)
         stages["hsaco"] = lambda src, metadata: self.make_hsaco(src, metadata, options)
 
+    @functools.lru_cache()
     def hash(self):
-        return f'{get_cuda_version_key()}-{self.target}'
+        version = subprocess.check_output([path_to_rocm_lld(), "--version"])
+        return f'{version}-{self.target}'
 
     def make_launcher_stub(self, src, metadata):
         ids = {
-            "ids_of_tensormaps": metadata.get("ids_of_tensormaps", tuple()), "ids_of_folded_args":
-            metadata.get("ids_of_folded_args",
-                         tuple()), "ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()
+            "ids_of_folded_args": metadata.get("ids_of_folded_args", tuple()), "ids_of_const_exprs":
+            src.fn.constexprs if hasattr(src, "fn") else tuple()
         }
         constants = src.constants if hasattr(src, "constants") else dict()
-        # set constant
-        return make_stub(src.name, src.signature, constants, ids)
+        key = make_so_cache_key('', src.signature, constants, ids)
+        src = make_launcher(constants, src.signature, ids)
+        return key, src
 
 
 backend = HIPBackend

@@ -6,6 +6,7 @@ import json
 from .._C.libtriton import get_env_vars, ir
 # from ..runtime import driver, jit, JITFunction
 # TODO: runtime.errors
+from .. import __version__
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
 from ..runtime.driver import driver
@@ -13,8 +14,12 @@ from .utils import InfoFromBackendForTensorMap
 from .backends import make_backend
 from dataclasses import dataclass
 from .code_generator import ast_to_ttir
+from triton.common import _build
 from pathlib import Path
 import re
+import functools
+import os
+import tempfile
 
 
 @dataclass
@@ -154,6 +159,54 @@ class IRSource:
         return dict()
 
 
+@functools.lru_cache()
+def triton_key():
+    import pkgutil
+    TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    contents = []
+    # frontend
+    with open(__file__, "rb") as f:
+        contents += [hashlib.sha1(f.read()).hexdigest()]
+    # compiler
+    compiler_path = os.path.join(TRITON_PATH, 'compiler')
+    backends_path = os.path.join(TRITON_PATH, 'compiler', 'backends')
+    for lib in pkgutil.iter_modules([compiler_path, backends_path]):
+        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+            contents += [hashlib.sha1(f.read()).hexdigest()]
+    # backend
+    libtriton_hash = hashlib.sha1()
+    with open(os.path.join(TRITON_PATH, "_C/libtriton.so"), "rb") as f:
+        while True:
+            chunk = f.read(1024**2)
+            if not chunk:
+                break
+            libtriton_hash.update(chunk)
+    contents.append(libtriton_hash.hexdigest())
+    # language
+    language_path = os.path.join(TRITON_PATH, 'language')
+    for lib in pkgutil.iter_modules([language_path]):
+        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+            contents += [hashlib.sha1(f.read()).hexdigest()]
+    return f'{__version__}' + '-'.join(contents)
+
+
+def build_launcher(key, src):
+    name = "launcher"
+    so_cache_manager = get_cache_manager(key)
+    # retrieve stub from cache if it exists
+    cache_path = so_cache_manager.get_file(f'{name}.so')
+    if cache_path is None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src_path = os.path.join(tmpdir, "main.c")
+            with open(src_path, "w") as f:
+                f.write(src)
+            so = _build(name, src_path, tmpdir)
+            with open(so, "rb") as f:
+                return so_cache_manager.put(f.read(), f'{name}.so', binary=True)
+    else:
+        return cache_path
+
+
 def compile(src, target=None, options=None):
     if target is None:
         target = driver.get_current_target()
@@ -165,7 +218,7 @@ def compile(src, target=None, options=None):
     extra_options = src.parse_options()
     options = backend.parse_options(dict(options or dict(), **extra_options))
     # create cache manager
-    key = f"{src.hash()}-{backend.hash()}-{options.hash()}-{str(sorted(get_env_vars().items()))}"
+    key = f"{triton_key()}-{src.hash()}-{backend.hash()}-{options.hash()}-{str(sorted(get_env_vars().items()))}"
     hash = hashlib.md5(key.encode("utf-8")).hexdigest()
     fn_cache_manager = get_cache_manager(hash)
     metadata_filename = f"{src.name}.json"
@@ -174,8 +227,9 @@ def compile(src, target=None, options=None):
     if metadata_path is not None:
         # cache hit!
         metadata = json.loads(Path(metadata_path).read_text())
-        so_path = backend.make_launcher_stub(src, metadata)
-        return CompiledKernel(so_path, metadata_group)
+        launcher_key, launcher_src = backend.make_launcher_stub(src, metadata)
+        launcher_path = build_launcher(launcher_key, launcher_src)
+        return CompiledKernel(launcher_path, metadata_group)
     # initialize metadata
     metadata = {
         "target": target,
@@ -195,13 +249,16 @@ def compile(src, target=None, options=None):
         next_module = compile_ir(module, metadata)
         metadata_group[f"{src.name}.{ext}"] = fn_cache_manager.put(next_module, f"{src.name}.{ext}")
         module = next_module
+    # make kernel launcher
+    launcher_key, launcher_src = backend.make_launcher_stub(src, metadata)
+    launcher_path = build_launcher(launcher_key, launcher_src)
     # write-back metadata
+    metadata["launcher"] = launcher_key
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
                                                              binary=False)
     fn_cache_manager.put_group(metadata_filename, metadata_group)
-    so_path = backend.make_launcher_stub(src, metadata)
     # return handle to compiled kernel
-    return CompiledKernel(so_path, metadata_group)
+    return CompiledKernel(launcher_path, metadata_group)
 
 
 class CompiledKernel:
