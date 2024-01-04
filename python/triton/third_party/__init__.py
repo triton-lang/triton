@@ -31,17 +31,17 @@ class Backend:
 
 
 def _discover_backends():
-    backends = []
+    backends = dict()
     root = os.path.dirname(__file__)
-    for backend in os.listdir(root):
-        if not os.path.isdir(os.path.join(root, backend)):
+    for name in os.listdir(root):
+        if not os.path.isdir(os.path.join(root, name)):
             continue
-        if backend.startswith('__'):
+        if name.startswith('__'):
             continue
-        compiler = _load_module(backend[:-3], os.path.join(root, backend, 'compiler.py'))
-        driver = _load_module(backend[:-3], os.path.join(root, backend, 'driver.py'))
-        backends.append(Backend(_find_concrete_subclasses(compiler, BaseBackend),
-                                _find_concrete_subclasses(driver, DriverBase)))
+        compiler = _load_module(name, os.path.join(root, name, 'compiler.py'))
+        driver = _load_module(name, os.path.join(root, name, 'driver.py'))
+        backends[name] = Backend(_find_concrete_subclasses(compiler, BaseBackend),
+                                    _find_concrete_subclasses(driver, DriverBase))
     return backends
     
 

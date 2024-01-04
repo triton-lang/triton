@@ -260,9 +260,10 @@ def compile(src, target=None, options=None):
 
 
 def make_backend(target):
-    actives = [x.compiler for x in backends if x.compiler.name == target[0]]
+    actives = [x.compiler for x in backends.values() if x.compiler.supports_target(target)]
     if len(actives) != 1:
-        raise RuntimeError(f"{len(actives)} compatible backends ({actives}). There should only be one.")
+        raise RuntimeError(
+            f"{len(actives)} compatible backends for target ({target[0]}) ({actives}). There should only be one.")
     return actives[0](target)
 
 
