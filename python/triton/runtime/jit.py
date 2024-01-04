@@ -9,7 +9,6 @@ import textwrap
 from collections import defaultdict, namedtuple
 from functools import cached_property
 from typing import Callable, Generic, Iterable, List, Optional, TypeVar, Union, cast, overload
-from ..common.backend import get_backend, get_cuda_version_key
 from .interpreter import InterpretedFunction
 from ..runtime.driver import driver
 
@@ -370,7 +369,7 @@ class JITFunction(KernelInterface[T]):
         sig_key = tuple(arg.signature_key() for arg in args if not arg.param.is_constexpr)
         spec_key = tuple(arg.specialization_key() for arg in args if not arg.param.do_not_specialize)
         constexpr_key = tuple(arg.value for arg in args if arg.param.is_constexpr)
-        key = (get_cuda_version_key(), sig_key, constexpr_key, spec_key, options)
+        key = (sig_key, constexpr_key, spec_key, options)
         # Kernel is not cached; we have to compile.
         if key not in self.cache[device]:
             configs = (self._get_config(*[arg.value for arg in args]), )
