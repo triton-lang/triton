@@ -4,8 +4,7 @@ import tempfile
 from pathlib import Path
 from triton.common.build import _build
 from triton.runtime.cache import get_cache_manager
-from triton.runtime.driver import GPUDriver
-
+from triton.third_party.driver import GPUDriver
 
 class HIPUtils(object):
 
@@ -16,7 +15,7 @@ class HIPUtils(object):
 
     def __init__(self):
         dirname = os.path.dirname(os.path.realpath(__file__))
-        src = Path(os.path.join(dirname, "hip.c")).read_text()
+        src = Path(os.path.join(dirname, "driver.c")).read_text()
         key = hashlib.md5(src.encode("utf-8")).hexdigest()
         cache = get_cache_manager(key)
         fname = "hip_utils.so"
@@ -57,6 +56,3 @@ class HIPDriver(GPUDriver):
 
     def assemble_tensormap_to_arg(self, tensormaps_info, args):
         return args
-
-
-driver = HIPDriver

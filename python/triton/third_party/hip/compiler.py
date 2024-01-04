@@ -1,6 +1,5 @@
+from triton.third_party.compiler import BaseBackend
 from triton._C.libtriton import ir, passes, llvm, amd
-from triton.common.backend import BaseBackend
-from triton.common.backend import path_to_rocm_lld
 from triton.runtime.cache import make_so_cache_key
 from dataclasses import dataclass
 from typing import Any
@@ -11,6 +10,7 @@ import re
 import subprocess
 import functools
 from pathlib import Path
+
 
 
 def ty_to_cpp(ty):
@@ -267,9 +267,12 @@ class HIPBackend(BaseBackend):
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts})
         return HIPOptions(**args)
 
-    @staticmethod
-    def load_dialects(ctx):
+    def load_dialects(self, ctx):
         amd.load_dialects(ctx)
+
+    @staticmethod
+    def path_to_rocm_lld():
+        return "/opt/rocm/llvm/bin/ld.lld"
 
     @staticmethod
     def make_ttir(mod, metadata, opt):
@@ -369,7 +372,7 @@ class HIPBackend(BaseBackend):
         # llvm -> hsaco
         hsaco = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion, True)
         import subprocess
-        rocm_path = path_to_rocm_lld()
+        rocm_path = HIPBackend.path_to_rocm_lld()
         with tempfile.NamedTemporaryFile() as tmp_out:
             with tempfile.NamedTemporaryFile() as tmp_in:
                 with open(tmp_in.name, 'wb') as fd_in:
@@ -389,10 +392,10 @@ class HIPBackend(BaseBackend):
 
     @functools.lru_cache()
     def hash(self):
-        version = subprocess.check_output([path_to_rocm_lld(), "--version"])
+        version = subprocess.check_output([HIPBackend.path_to_rocm_lld(), "--version"])
         return f'{version}-{self.target}'
 
-    def make_launcher_stub(self, src, metadata):
+    def make_launcher(self, src, metadata):
         ids = {
             "ids_of_folded_args": metadata.get("ids_of_folded_args", tuple()), "ids_of_const_exprs":
             src.fn.constexprs if hasattr(src, "fn") else tuple()
@@ -401,6 +404,3 @@ class HIPBackend(BaseBackend):
         key = make_so_cache_key('', src.signature, constants, ids)
         src = make_launcher(constants, src.signature, ids)
         return key, src
-
-
-backend = HIPBackend
