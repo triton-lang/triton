@@ -118,6 +118,7 @@
 cooperatively execute using <cite>8 * 32 = 256</cite> threads.</p></li>
 <li><p><strong>num_stages</strong> – the number of stages that the compiler should use when software-pipelining loops.
 Mostly useful for matrix multiplication workloads on SM80+ GPUs.</p></li>
+<li><p><strong>num_ctas</strong> – number of blocks in a block cluster. SM90+ only.</p></li>
 <li><p><strong>enable_warp_specialization</strong> – enable specialization (spatial partitioning) or not. See <a class="reference external" href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#spatial-partitioning-also-known-as-warp-specialization">https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#spatial-partitioning-also-known-as-warp-specialization</a></p></li>
 <li><p><strong>pre_hook</strong> – a function that will be called before the kernel is called. Parameters of this
 function are args.</p></li>
