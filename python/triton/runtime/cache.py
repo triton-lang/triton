@@ -116,7 +116,7 @@ class FileCacheManager(CacheManager):
         filepath = self._make_path(filename)
         # Random ID to avoid any collisions
         rnd_id = random.randint(0, 1000000)
-        # we use the PID incase a bunch of these around so we can see what PID made it
+        # we use the PID in case a bunch of these around so we can see what PID made it
         pid = os.getpid()
         # use tempfile to be robust against program interruptions
         temp_path = f"{filepath}.tmp.pid_{pid}_{rnd_id}"
