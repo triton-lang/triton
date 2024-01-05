@@ -1,15 +1,12 @@
 from __future__ import annotations
-
 import hashlib
 import json
-
 from .._C.libtriton import get_env_vars, ir
 from ..third_party import backends
 from .. import __version__
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
 from ..runtime.driver import driver
-from ..runtime.build import _build
 # TODO: this shouldn't be here
 from ..third_party.cuda.compiler import InfoFromBackendForTensorMap
 from dataclasses import dataclass
@@ -18,7 +15,6 @@ from pathlib import Path
 import re
 import functools
 import os
-import tempfile
 
 
 @dataclass
@@ -189,23 +185,6 @@ def triton_key():
     return f'{__version__}' + '-'.join(contents)
 
 
-def build_launcher(key, src):
-    name = "launcher"
-    so_cache_manager = get_cache_manager(key)
-    # retrieve stub from cache if it exists
-    cache_path = so_cache_manager.get_file(f'{name}.so')
-    if cache_path is None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            src_path = os.path.join(tmpdir, "main.c")
-            with open(src_path, "w") as f:
-                f.write(src)
-            so = _build(name, src_path, tmpdir)
-            with open(so, "rb") as f:
-                return so_cache_manager.put(f.read(), f'{name}.so', binary=True)
-    else:
-        return cache_path
-
-
 def compile(src, target=None, options=None):
     if target is None:
         target = driver.get_current_target()
@@ -226,8 +205,7 @@ def compile(src, target=None, options=None):
     if metadata_path is not None:
         # cache hit!
         metadata = json.loads(Path(metadata_path).read_text())
-        launcher_path = get_cache_manager(metadata["launcher"]).get_file('launcher.so')
-        return CompiledKernel(launcher_path, metadata_group)
+        return CompiledKernel(src, metadata_group)
     # initialize metadata
     metadata = {
         "target": target,
@@ -247,16 +225,12 @@ def compile(src, target=None, options=None):
         next_module = compile_ir(module, metadata)
         metadata_group[f"{src.name}.{ext}"] = fn_cache_manager.put(next_module, f"{src.name}.{ext}")
         module = next_module
-    # make kernel launcher
-    launcher_key, launcher_src = backend.make_launcher(src, metadata)
-    launcher_path = build_launcher(launcher_key, launcher_src)
     # write-back metadata
-    metadata["launcher"] = launcher_key
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
                                                              binary=False)
     fn_cache_manager.put_group(metadata_filename, metadata_group)
     # return handle to compiled kernel
-    return CompiledKernel(launcher_path, metadata_group)
+    return CompiledKernel(src, metadata_group)
 
 
 def make_backend(target):
@@ -274,15 +248,8 @@ class CompiledKernel:
     launch_enter_hook = None
     launch_exit_hook = None
 
-    def __init__(self, so_path, metadata_group):
+    def __init__(self, src, metadata_group):
         metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
-        # initialize launcher
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("__triton_launcher", so_path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        self.run = getattr(mod, "launch")
-        # initialize metadata
         self.metadata = json.loads(metadata_path.read_text())
         self.metadata['tensormaps_info'] = [InfoFromBackendForTensorMap(e) for e in self.metadata['tensormaps_info']
                                             ] if 'tensormaps_info' in self.metadata else []
@@ -291,6 +258,8 @@ class CompiledKernel:
         self.name = self.metadata["name"]
         for key, val in self.metadata.items():
             setattr(self, key, val)
+        # create launcher
+        self.run = driver.launcher_cls(src, self.metadata)
         # stores the text of each level of IR that was generated during compilation
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
         self.asm = {

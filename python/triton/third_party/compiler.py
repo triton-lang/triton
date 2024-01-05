@@ -57,10 +57,6 @@ class BaseBackend(metaclass=ABCMeta):
         raise NotImplementedError
     
     @abstractmethod
-    def make_launcher(self, src: object, metadata: dict) -> tuple:
-        raise NotImplementedError
-    
-    @abstractmethod
     def load_dialects(self, context):
         """
         Load additional MLIR dialects into the provided `context`
