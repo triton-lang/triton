@@ -11,6 +11,7 @@ include_dir = [os.path.join(dirname, "include")]
 library_dir = [os.path.join(dirname, "lib")]
 libraries = ['amdhip64']
 
+
 def compile_module_from_src(src, name):
     key = hashlib.md5(src.encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
@@ -29,6 +30,7 @@ def compile_module_from_src(src, name):
     spec.loader.exec_module(mod)
     return mod
 
+
 class HIPUtils(object):
 
     def __new__(cls):
@@ -40,6 +42,7 @@ class HIPUtils(object):
         mod = compile_module_from_src(Path(os.path.join(dirname, "driver.c")).read_text(), "hip_utils")
         self.load_binary = mod.load_binary
         self.get_device_properties = mod.get_device_properties
+
 
 # -------------------- Launcher ----------------------------
 def ty_to_cpp(ty):
@@ -242,7 +245,7 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
 
 
 class HIPLauncher(object):
-    
+
     def __init__(self, src, metadata):
         ids = {
             "ids_of_folded_args": metadata.get("ids_of_folded_args", tuple()), "ids_of_const_exprs":
@@ -252,7 +255,7 @@ class HIPLauncher(object):
         src = make_launcher(constants, src.signature, ids)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
-    
+
     def __call__(self, *args, **kwargs):
         self.launch(*args, **kwargs)
 

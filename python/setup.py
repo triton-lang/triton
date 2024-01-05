@@ -354,7 +354,6 @@ setup(
     packages=[
         "triton",
         "triton/_C",
-        "triton/common",
         "triton/compiler",
         "triton/language",
         "triton/language/extra",

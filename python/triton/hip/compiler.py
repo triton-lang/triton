@@ -10,6 +10,7 @@ import subprocess
 import functools
 from pathlib import Path
 
+
 @dataclass(frozen=True)
 class HIPOptions:
     num_warps: int = 4

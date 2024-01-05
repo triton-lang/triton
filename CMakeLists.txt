@@ -155,7 +155,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
                 ${PYTHON_SRC_PATH}/interpreter.cc
                 ${PYTHON_SRC_PATH}/llvm.cc
                 ${PYTHON_SRC_PATH}/nvidia.cc
-                ${PYTHON_SRC_PATH}/amd.cc
+                # ${PYTHON_SRC_PATH}/amd.cc
                 )
   include_directories("." ${PYTHON_SRC_PATH})
 
@@ -204,10 +204,10 @@ add_subdirectory(include)
 add_subdirectory(lib)
 
 # 3P backend
-include_directories(${PROJECT_BINARY_DIR}/third_party/amd_hip_backend/include)
-include_directories(${PROJECT_SOURCE_DIR}/third_party/amd_hip_backend/include)
-add_subdirectory(${PROJECT_SOURCE_DIR}/third_party/amd_hip_backend/include)
-add_subdirectory(${PROJECT_SOURCE_DIR}/third_party/amd_hip_backend/lib)
+# include_directories(${PROJECT_BINARY_DIR}/third_party/amd_hip_backend/include)
+# include_directories(${PROJECT_SOURCE_DIR}/third_party/amd_hip_backend/include)
+# add_subdirectory(${PROJECT_SOURCE_DIR}/third_party/amd_hip_backend/include)
+# add_subdirectory(${PROJECT_SOURCE_DIR}/third_party/amd_hip_backend/lib)
 
 # find_package(PythonLibs REQUIRED)
 set(TRITON_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -231,8 +231,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
     TritonGPUTransforms
     TritonNvidiaGPUTransforms
     TritonLLVMIR
-    TritonAMDGPUTransforms
-    TritonAMDGPUToLLVM
+    # TritonAMDGPUTransforms
+    # TritonAMDGPUToLLVM
     ${dialect_libs}
     ${conversion_libs}
 
@@ -282,12 +282,12 @@ if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
 endif()
 
 list(LENGTH TRITON_CODEGEN_BACKENDS CODEGEN_BACKENDS_LEN)
-if (${CODEGEN_BACKENDS_LEN} GREATER 0)
-  set(PYTHON_THIRD_PARTY_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/triton/third_party)
-  foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
-    add_subdirectory(third_party/${CODEGEN_BACKEND})
-  endforeach()
-endif()
+# if (${CODEGEN_BACKENDS_LEN} GREATER 0)
+#   set(PYTHON_THIRD_PARTY_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/triton/third_party)
+#   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
+#     add_subdirectory(third_party/${CODEGEN_BACKEND})
+#   endforeach()
+# endif()
 
 # add_subdirectory(bin)
 # add_subdirectory(test)
