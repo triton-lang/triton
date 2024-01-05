@@ -51,7 +51,7 @@ class TTNG_Op<string mnemonic, list<Trait> traits = []> :
 //    (3), mbarrier.complete_tx
 //    (4), mbarrier.inval
 //
-// 2, The mbarriers is supported to be created in vector, and accessed in seperate via tensor.extract.
+// 2, The mbarriers is supported to be created in vector, and accessed in separate via tensor.extract.
 //    The mbarriers created in vector will have counters initialized in the same configuration. A
 //    typical example to demonstrate this:
 //

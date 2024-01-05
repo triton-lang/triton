@@ -12,7 +12,7 @@ static inline void gpuAssert(hipError_t code, const char *file, int line) {
         const char *prefix = "Triton Error [HIP]: ";
         const char *str = hipGetErrorString(code);
         char err[1024] = {0};
-        snprintf(err, 1024, "%s Code: %d, Messsage: %s", prefix, code, str);
+        snprintf(err, 1024, "%s Code: %d, Message: %s", prefix, code, str);
         PyGILState_STATE gil_state;
         gil_state = PyGILState_Ensure();
         PyErr_SetString(PyExc_RuntimeError, err);

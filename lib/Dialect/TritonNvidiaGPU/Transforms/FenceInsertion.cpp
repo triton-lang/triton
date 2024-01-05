@@ -9,7 +9,7 @@
 //===----------------------------------------------------------------------===//
 //
 // This pass works after all other passes, inserting fences to ensure that
-// memory operations are properly ordered acorss genric and async proxy.
+// memory operations are properly ordered across generic and async proxy.
 //
 //===----------------------------------------------------------------------===//
 
@@ -88,7 +88,7 @@ private:
     if (BlockArgument arg = dyn_cast<BlockArgument>(operand)) {
       unsigned argNum = arg.getArgNumber();
       Operation *argOwner = arg.getOwner()->getParentOp();
-      // suport ForOp only
+      // support ForOp only
       if (auto forOp = dyn_cast<scf::ForOp>(argOwner)) {
         // prologue
         auto iterOperands = forOp.getInitArgs();

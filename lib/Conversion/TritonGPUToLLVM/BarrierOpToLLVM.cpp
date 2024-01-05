@@ -51,7 +51,7 @@ struct BarrierOpConversion
 };
 
 // --------------------------------------------------------------------------
-// -- MBarrier related Ops lowering, to be moved to a seperate file ---------
+// -- MBarrier related Ops lowering, to be moved to a separate file ---------
 // --------------------------------------------------------------------------
 struct AllocMBarrierOpConversion : public ConvertTritonGPUOpToLLVMPattern<
                                        triton::nvidia_gpu::AllocMBarrierOp> {

@@ -582,7 +582,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 // particular while predicating the operations scheduled to be emitted
 // in the prologue.
 //
-// We check that there is no allocation before the first occurance of
+// We check that there is no allocation before the first occurrence of
 // scf.for because that would mean that the first load `%a = load()`
 // would be pipelined.
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>

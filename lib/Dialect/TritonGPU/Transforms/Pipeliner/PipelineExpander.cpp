@@ -80,7 +80,7 @@ protected:
   std::pair<Operation *, int64_t> getDefiningOpAndDistance(Value value);
 
 public:
-  /// Initalize the information for the given `op`, return true if it
+  /// Initialize the information for the given `op`, return true if it
   /// satisfies the pre-condition to apply pipelining.
   bool initializeLoopInfo(ForOp op, const triton::PipeliningOption &options);
   /// Emits the prologue, this creates `maxStage - 1` part which will contain
@@ -206,7 +206,7 @@ bool LoopPipelinerInternal::initializeLoopInfo(
   return true;
 }
 
-/// Clone `op` and call `callback` on the cloned op's oeprands as well as any
+/// Clone `op` and call `callback` on the cloned op's operands as well as any
 /// operands of nested ops that:
 /// 1) aren't defined within the new op or
 /// 2) are block arguments.

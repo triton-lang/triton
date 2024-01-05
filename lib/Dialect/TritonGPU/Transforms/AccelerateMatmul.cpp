@@ -20,7 +20,7 @@ using ttg::DotOperandEncodingAttr;
 using ttg::NvidiaMmaEncodingAttr;
 using ttg::SliceEncodingAttr;
 
-// higher mma version is prefered, will fallback to lower version if not
+// higher mma version is preferred, will fallback to lower version if not
 // supported
 static int getMMAVersionSafe(int computeCapability, tt::DotOp op) {
   int baseVersion = 0;

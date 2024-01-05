@@ -143,10 +143,10 @@ def TritonGPUWSPipeline : Pass<"triton-nvidia-gpu-ws-pipeline", "mlir::ModuleOp"
 }
 
 def TritonGPUWSMutex : Pass<"triton-nvidia-gpu-ws-mutex", "mlir::ModuleOp"> {
-  let summary = "Warp specialization mutex syncronization";
+  let summary = "Warp specialization mutex synchronization";
 
   let description = [{
-    create mutex syncronization for persistent kernel. (as "2 Math WG" persistent kernel in cutlass)
+    create mutex synchronization for persistent kernel. (as "2 Math WG" persistent kernel in cutlass)
     For example, the agent containing dot and store will be divided into two sub-agent,
     which execute dot and store alternately. i.e.:
       sub-agent-0: dot | store |  dot  | ... | store

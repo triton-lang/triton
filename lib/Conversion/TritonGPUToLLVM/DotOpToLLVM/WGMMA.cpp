@@ -213,7 +213,7 @@ DotOpMmaV3SmemLoader loadA(TritonGPUToLLVMTypeConverter *typeConverter,
   // warpgroup.
   Value warp = and_(udiv(thread, i32_val(32)), i32_val(0xFFFFFFFC));
   // Workaround for a bug in ptxas 12.3 that cause a failure in
-  // test_core.py::test_dot. The shuffle will force the compiler to treate the
+  // test_core.py::test_dot. The shuffle will force the compiler to treat the
   // value as uniform and prevent wrong optimizations.
   warp = mlir::LLVM::shflIdxSync(loc, rewriter, warp, 0);
   Value warpM = urem(warp, i32_val(wpt[0]));
@@ -306,7 +306,7 @@ SmallVector<Value> unpackAccumulator(ConversionPatternRewriter &rewriter,
                                      RankedTensorType tensorTy) {
   if (!tensorTy.getElementType().isF16())
     return packed;
-  // For fp16 the accumualtor is pack into 32-bit integers so we need to unpack
+  // For fp16 the accumulator is pack into 32-bit integers so we need to unpack
   // it.
   SmallVector<Value> results;
   for (Value elem : packed) {
@@ -490,7 +490,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
           partialAcc = mmaAcc;
         else
           d = mmaAcc;
-        // If we need accumulate separately to have higer precision, insert
+        // If we need accumulate separately to have higher precision, insert
         // adds.
         if (requireAddAccumulator) {
           d = faddAccumulate(rewriter, loc, d, partialAcc);
