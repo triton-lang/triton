@@ -1,5 +1,5 @@
 from triton.third_party.compiler import BaseBackend
-from triton._C.libtriton import ir, passes, nvidia, llvm
+from triton._C.libtriton import ir, passes, llvm
 from triton.runtime import driver
 from dataclasses import dataclass
 import functools

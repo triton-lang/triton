@@ -1,5 +1,6 @@
 from triton.third_party.compiler import BaseBackend
-from triton._C.libtriton import ir, passes, llvm, amd
+from triton._C.libtriton import ir, passes, llvm
+import triton._C.libtriton_amd as amd
 from dataclasses import dataclass
 from typing import Any
 import hashlib
