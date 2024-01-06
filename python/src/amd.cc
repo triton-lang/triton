@@ -30,7 +30,7 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
                      mlir::createTritonAMDGPUStreamPipelinePass);
 }
 
-void init_triton_amd(py::module &&m) {
+PYBIND11_MODULE(libtriton_amd, m) {
   auto passes = m.def_submodule("passes");
   init_triton_amd_passes_ttgpuir(passes.def_submodule("ttgpuir"));
 
