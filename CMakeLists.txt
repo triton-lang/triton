@@ -54,91 +54,6 @@ include_directories(${PYBIND11_INCLUDE_DIR})
 # LLVM
 # #########
 if(NOT MLIR_DIR)
-  if(NOT LLVM_LIBRARY_DIR)
-    if(WIN32)
-      find_package(LLVM 13 REQUIRED COMPONENTS nvptx amdgpu)
-
-      include_directories(${LLVM_INCLUDE_DIRS})
-      separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
-      add_definitions(${LLVM_DEFINITIONS_LIST})
-
-      llvm_map_components_to_libnames(LLVM_LIBRARIES support core
-        NVPTXInfo nvptxcodegen
-        AMDGPUInfo AMDGPUcodegen
-      )
-    else()
-      find_package(LLVM 11 REQUIRED COMPONENTS "nvptx;amdgpu")
-    endif()
-
-    message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
-
-    # FindLLVM outputs LLVM_LIBRARY_DIRS but we expect LLVM_LIBRARY_DIR here
-    set(LLVM_LIBRARY_DIR ${LLVM_LIBRARY_DIRS})
-
-    if(APPLE)
-      set(CMAKE_OSX_DEPLOYMENT_TARGET "10.14")
-    endif()
-
-  # sometimes we don't want to use llvm-config, since it may have been downloaded for some specific linux distros
-  else()
-    set(LLVM_LDFLAGS "-L${LLVM_LIBRARY_DIR}")
-    set(LLVM_LIBRARIES
-      LLVMNVPTXCodeGen
-      LLVMNVPTXDesc
-      LLVMNVPTXInfo
-      LLVMAMDGPUDisassembler
-      LLVMMCDisassembler
-      LLVMAMDGPUCodeGen
-      LLVMMIRParser
-      LLVMGlobalISel
-      LLVMSelectionDAG
-      LLVMipo
-      LLVMInstrumentation
-      LLVMVectorize
-      LLVMLinker
-      LLVMIRReader
-      LLVMAsmParser
-      LLVMFrontendOpenMP
-      LLVMAsmPrinter
-      LLVMDebugInfoDWARF
-      LLVMCodeGen
-      LLVMTarget
-      LLVMScalarOpts
-      LLVMInstCombine
-      LLVMAggressiveInstCombine
-      LLVMTransformUtils
-      LLVMBitWriter
-      LLVMAnalysis
-      LLVMProfileData
-      LLVMObject
-      LLVMTextAPI
-      LLVMBitReader
-      LLVMAMDGPUAsmParser
-      LLVMMCParser
-      LLVMAMDGPUDesc
-      LLVMAMDGPUUtils
-      LLVMMC
-      LLVMDebugInfoCodeView
-      LLVMDebugInfoMSF
-      LLVMCore
-      LLVMRemarks
-      LLVMBitstreamReader
-      LLVMBinaryFormat
-      LLVMAMDGPUInfo
-      LLVMSupport
-      LLVMDemangle
-      LLVMPasses
-      LLVMAnalysis
-      LLVMTransformUtils
-      LLVMScalarOpts
-      LLVMTransformUtils
-      LLVMipo
-      LLVMObjCARCOpts
-      LLVMCoroutines
-      LLVMAnalysis
-    )
-  endif()
-
   set(MLIR_DIR ${LLVM_LIBRARY_DIR}/cmake/mlir)
 endif()
 
@@ -205,14 +120,20 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
 
   set(TRITON_LIBRARIES
+    TritonIR
     TritonAnalysis
     TritonTransforms
+    TritonToTritonGPU
+    TritonGPUIR
     TritonGPUTransforms
     TritonLLVMIR
-    ${dialect_libs}
-    ${conversion_libs}
+    # TODO: shouldn't be here
+    TritonNvidiaGPUIR
+    MLIRAMDGPUDialect
+    TritonAnalysis
 
     # optimizations
+    MLIRControlFlowToLLVM
     MLIRBytecodeWriter
     MLIRPass
     MLIRTransforms
@@ -220,13 +141,13 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRSupport
     MLIRTargetLLVMIRExport
     MLIRMathToLLVM
-    MLIRNVVMToLLVMIRTranslation
     MLIRROCDLToLLVMIRTranslation
+    MLIRGPUDialect
     MLIRIR
 
-    ${LLVM_LIBRARIES}
-  )
+    LLVMPasses
 
+  )
 
   # Define triton library
   add_library(triton SHARED ${PYTHON_SRC_PATH}/main.cc
@@ -238,7 +159,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
                   # ${PYTHON_SRC_PATH}/amd.cc)
 
   # Link triton with its dependencies
-  target_link_libraries(triton PRIVATE ${TRITON_LIBRARIES})
+  target_link_libraries(triton PUBLIC ${TRITON_LIBRARIES})
   if(WIN32)
     target_link_libraries(triton PRIVATE ${CMAKE_DL_LIBS})
   else()
@@ -248,16 +169,44 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   # Define triton_nvidia library
   add_library(triton_nvidia SHARED ${PYTHON_SRC_PATH}/nvidia.cc)
+  set(TRITON_NVIDIA_LIBRARIES
+    NVGPUIR
+    NVGPUToLLVM
+    TritonNvidiaGPUTransforms
+    LLVMNVPTXCodeGen
+    LLVMNVPTXDesc
+    LLVMNVPTXInfo
+    MLIRNVVMToLLVMIRTranslation
+    TritonGPUToLLVM
+    # shouldn't be here
+    MLIRROCDLDialect
+    MLIRGPUToNVVMTransforms
+    MLIRGPUToROCDLTransforms
 
-  # Link triton_nvidia only with triton, not its transitive dependencies
-  target_link_libraries(triton_nvidia PRIVATE TritonNvidiaGPUTransforms "-Wl,--no-as-needed" triton)
-  target_link_libraries(triton_amd PRIVATE TritonAMDGPUToLLVM TritonAMDGPUTransforms "-Wl,--no-as-needed" triton)
-  set_target_properties(triton PROPERTIES INTERFACE_LINK_LIBRARIES "")
+  )
+  target_link_libraries(triton_nvidia PRIVATE ${TRITON_NVIDIA_LIBRARIES} "-Wl,--no-as-needed" triton)
+
+  set(TRITON_AMD_LIBRARIES
+    MLIRROCDLToLLVMIRTranslation
+    TritonAMDGPUToLLVM
+    TritonAMDGPUTransforms
+    TritonNvidiaGPUTransforms
+    NVGPUIR
+    #
+    LLVMAMDGPUCodeGen
+    LLVMAMDGPUAsmParser
+    MLIRGPUToNVVMTransforms
+    MLIRGPUToROCDLTransforms
+  )
+  target_link_libraries(triton_amd PRIVATE ${TRITON_AMD_LIBRARIES} "-Wl,--no-as-needed" triton)
+
+
+  # set_target_properties(triton PROPERTIES INTERFACE_LINK_LIBRARIES "")
 endif()
 
-if(UNIX AND NOT APPLE)
-  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS}")
-endif()
+# if(UNIX AND NOT APPLE)
+#   set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS}")
+# endif()
 
 if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
   set(CMAKE_SHARED_LIBRARY_SUFFIX ".so")
@@ -267,7 +216,9 @@ if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
     set(PYTHON_LDFLAGS "-undefined dynamic_lookup -flto")
   endif()
 
-  target_link_libraries(triton ${CUTLASS_LIBRARIES} ${PYTHON_LDFLAGS})
+  target_link_libraries(triton ${PYTHON_LDFLAGS})
+  target_link_libraries(triton_amd ${PYTHON_LDFLAGS})
+  target_link_libraries(triton_nvidia ${PYTHON_LDFLAGS})
 endif()
 
 # add_subdirectory(bin)

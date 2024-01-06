@@ -31,6 +31,8 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
 }
 
 PYBIND11_MODULE(libtriton_amd, m) {
+  m.doc() = "Python bindings to the AMD Triton backend";
+
   auto passes = m.def_submodule("passes");
   init_triton_amd_passes_ttgpuir(passes.def_submodule("ttgpuir"));
 
