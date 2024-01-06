@@ -54,7 +54,7 @@
 <li class="toctree-l2 current"><a class="current reference internal" href="#">Matrix Multiplication</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#motivations">Motivations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#compute-kernel">Compute Kernel</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#pointer-arithmetics">Pointer Arithmetics</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#pointer-arithmetic">Pointer Arithmetic</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#l2-cache-optimizations">L2 Cache Optimizations</a></li>
 </ul>
 </li>
@@ -124,11 +124,11 @@ to download the full example code</p>
 <section class="sphx-glr-example-title" id="matrix-multiplication">
 <span id="sphx-glr-getting-started-tutorials-03-matrix-multiplication-py"></span><h1>Matrix Multiplication<a class="headerlink" href="#matrix-multiplication" title="Permalink to this heading">¶</a></h1>
 <p>In this tutorial, you will write a very short high-performance FP16 matrix multiplication kernel that achieves
-performance on parallel with cuBLAS.</p>
+performance on par with cuBLAS.</p>
 <p>You will specifically learn about:</p>
 <ul class="simple">
 <li><p>Block-level matrix multiplications.</p></li>
-<li><p>Multi-dimensional pointer arithmetics.</p></li>
+<li><p>Multi-dimensional pointer arithmetic.</p></li>
 <li><p>Program re-ordering for improved L2 cache hit rate.</p></li>
 <li><p>Automatic performance tuning.</p></li>
 </ul>
@@ -164,11 +164,11 @@ algorithm to multiply a (M, K) by a (K, N) matrix:</p>
 <p>The above algorithm is, actually, fairly straightforward to implement in Triton.
 The main difficulty comes from the computation of the memory locations at which blocks
 of <code class="code docutils literal notranslate"><span class="pre">A</span></code> and <code class="code docutils literal notranslate"><span class="pre">B</span></code> must be read in the inner loop. For that, we need
-multi-dimensional pointer arithmetics.</p>
-<section id="pointer-arithmetics">
-<h3>Pointer Arithmetics<a class="headerlink" href="#pointer-arithmetics" title="Permalink to this heading">¶</a></h3>
-<p>For a row-major 2D tensor <code class="code docutils literal notranslate"><span class="pre">X</span></code>, the memory location of <code class="code docutils literal notranslate"><span class="pre">X[i,</span> <span class="pre">j]</span></code> is given b
-y <code class="code docutils literal notranslate"><span class="pre">&amp;X[i,</span> <span class="pre">j]</span> <span class="pre">=</span> <span class="pre">X</span> <span class="pre">+</span> <span class="pre">i*stride_xi</span> <span class="pre">+</span> <span class="pre">j*stride_xj</span></code>.
+multi-dimensional pointer arithmetic.</p>
+<section id="pointer-arithmetic">
+<h3>Pointer Arithmetic<a class="headerlink" href="#pointer-arithmetic" title="Permalink to this heading">¶</a></h3>
+<p>For a row-major 2D tensor <code class="code docutils literal notranslate"><span class="pre">X</span></code>, the memory location of <code class="code docutils literal notranslate"><span class="pre">X[i,</span> <span class="pre">j]</span></code> is given
+by <code class="code docutils literal notranslate"><span class="pre">&amp;X[i,</span> <span class="pre">j]</span> <span class="pre">=</span> <span class="pre">X</span> <span class="pre">+</span> <span class="pre">i*stride_xi</span> <span class="pre">+</span> <span class="pre">j*stride_xj</span></code>.
 Therefore, blocks of pointers for <code class="code docutils literal notranslate"><span class="pre">A[m</span> <span class="pre">:</span> <span class="pre">m+BLOCK_SIZE_M,</span> <span class="pre">k:k+BLOCK_SIZE_K]</span></code> and
 <code class="code docutils literal notranslate"><span class="pre">B[k</span> <span class="pre">:</span> <span class="pre">k+BLOCK_SIZE_K,</span> <span class="pre">n</span> <span class="pre">:</span> <span class="pre">n+BLOCK_SIZE_N]</span></code> can be defined in pseudo-code as:</p>
 <blockquote>
@@ -204,8 +204,8 @@ using masking load semantics.</p>
 <p>As mentioned above, each program instance computes a <code class="code docutils literal notranslate"><span class="pre">[BLOCK_SIZE_M,</span> <span class="pre">BLOCK_SIZE_N]</span></code>
 block of <code class="code docutils literal notranslate"><span class="pre">C</span></code>.
 It is important to remember that the order in which these blocks are computed does
-matter, since it affects the L2 cache hit rate of our program. and unfortunately, a
-a simple row-major ordering</p>
+matter, since it affects the L2 cache hit rate of our program, and unfortunately, a
+simple row-major ordering</p>
 <blockquote>
 <div><div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">pid</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
 <span class="n">grid_m</span> <span class="o">=</span> <span class="p">(</span><span class="n">M</span> <span class="o">+</span> <span class="n">BLOCK_SIZE_M</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">//</span> <span class="n">BLOCK_SIZE_M</span><span class="p">;</span>
@@ -327,7 +327,7 @@ more than 10% on some hardware architecture (e.g., 220 to 245 TFLOPS on A100).</
     <span class="c1"># and accumulate</span>
     <span class="c1"># `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers</span>
     <span class="c1"># `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers</span>
-    <span class="c1"># See above `Pointer Arithmetics` section for details</span>
+    <span class="c1"># See above `Pointer Arithmetic` section for details</span>
     <span class="n">offs_am</span> <span class="o">=</span> <span class="p">(</span><span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_M</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">))</span> <span class="o">%</span> <span class="n">M</span>
     <span class="n">offs_bn</span> <span class="o">=</span> <span class="p">(</span><span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">))</span> <span class="o">%</span> <span class="n">N</span>
     <span class="n">offs_k</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">)</span>
@@ -471,40 +471,40 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
 </div>
 <img src="../../_images/sphx_glr_03-matrix-multiplication_001.png" srcset="../../_images/sphx_glr_03-matrix-multiplication_001.png" alt="03 matrix multiplication" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>matmul-performance:
          M       N       K      cuBLAS      Triton
-0    256.0   256.0   256.0    4.096000    1.310720
-1    384.0   384.0   384.0   11.059200    5.026909
-2    512.0   512.0   512.0   26.214401   11.397565
+0    256.0   256.0   256.0    4.681143    1.365333
+1    384.0   384.0   384.0   12.288000    3.686400
+2    512.0   512.0   512.0   26.214401   11.915636
 3    640.0   640.0   640.0   42.666665   22.260869
-4    768.0   768.0   768.0   63.195428   38.466782
-5    896.0   896.0   896.0   78.051553   63.860363
-6   1024.0  1024.0  1024.0  110.376426   87.381330
-7   1152.0  1152.0  1152.0  135.726544  129.825388
-8   1280.0  1280.0  1280.0  163.840004  163.840004
-9   1408.0  1408.0  1408.0  155.765024  129.804192
-10  1536.0  1536.0  1536.0  181.484314  153.867127
-11  1664.0  1664.0  1664.0  183.651271  179.978245
+4    768.0   768.0   768.0   68.056616   35.389441
+5    896.0   896.0   896.0   78.051553   58.538665
+6   1024.0  1024.0  1024.0  110.376426   80.659693
+7   1152.0  1152.0  1152.0  135.726544  106.642284
+8   1280.0  1280.0  1280.0  157.538463  128.000000
+9   1408.0  1408.0  1408.0  155.765024  132.970149
+10  1536.0  1536.0  1536.0  181.484314  157.286398
+11  1664.0  1664.0  1664.0  183.651271  183.651271
 12  1792.0  1792.0  1792.0  175.616000  212.064605
 13  1920.0  1920.0  1920.0  203.294114  168.585369
-14  2048.0  2048.0  2048.0  226.719125  192.841562
+14  2048.0  2048.0  2048.0  226.719125  195.083907
 15  2176.0  2176.0  2176.0  211.827867  214.081356
-16  2304.0  2304.0  2304.0  227.503545  231.921091
-17  2432.0  2432.0  2432.0  205.069087  205.069087
+16  2304.0  2304.0  2304.0  229.691080  234.194828
+17  2432.0  2432.0  2432.0  205.069087  203.583068
 18  2560.0  2560.0  2560.0  225.986210  219.919464
-19  2688.0  2688.0  2688.0  199.647657  201.771569
-20  2816.0  2816.0  2816.0  213.795141  212.752230
-21  2944.0  2944.0  2944.0  220.513412  223.479969
-22  3072.0  3072.0  3072.0  208.173173  209.715208
-23  3200.0  3200.0  3200.0  216.949149  222.996514
-24  3328.0  3328.0  3328.0  211.118166  210.500857
-25  3456.0  3456.0  3456.0  216.724640  217.896133
-26  3584.0  3584.0  3584.0  221.466479  212.064605
-27  3712.0  3712.0  3712.0  213.000737  221.501871
-28  3840.0  3840.0  3840.0  209.454544  211.053446
-29  3968.0  3968.0  3968.0  210.749463  219.862957
-30  4096.0  4096.0  4096.0  222.214781  218.595642
+19  2688.0  2688.0  2688.0  200.704002  200.704002
+20  2816.0  2816.0  2816.0  213.795141  213.795141
+21  2944.0  2944.0  2944.0  223.479969  223.479969
+22  3072.0  3072.0  3072.0  208.173173  206.653671
+23  3200.0  3200.0  3200.0  219.178074  221.453296
+24  3328.0  3328.0  3328.0  209.277023  211.118166
+25  3456.0  3456.0  3456.0  220.880999  220.880999
+26  3584.0  3584.0  3584.0  219.842034  213.069643
+27  3712.0  3712.0  3712.0  213.455857  219.554602
+28  3840.0  3840.0  3840.0  211.862062  213.086708
+29  3968.0  3968.0  3968.0  212.585252  221.459047
+30  4096.0  4096.0  4096.0  222.583299  218.952244
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  41.463 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  41.437 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-03-matrix-multiplication-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/d5fee5b55a64e47f1b5724ec39adf171/03-matrix-multiplication.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">03-matrix-multiplication.py</span></code></a></p>

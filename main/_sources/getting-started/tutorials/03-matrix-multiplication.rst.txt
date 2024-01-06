@@ -21,13 +21,13 @@
 Matrix Multiplication
 =====================
 In this tutorial, you will write a very short high-performance FP16 matrix multiplication kernel that achieves
-performance on parallel with cuBLAS.
+performance on par with cuBLAS.
 
 You will specifically learn about:
 
 * Block-level matrix multiplications.
 
-* Multi-dimensional pointer arithmetics.
+* Multi-dimensional pointer arithmetic.
 
 * Program re-ordering for improved L2 cache hit rate.
 
@@ -72,13 +72,13 @@ Compute Kernel
 The above algorithm is, actually, fairly straightforward to implement in Triton.
 The main difficulty comes from the computation of the memory locations at which blocks
 of :code:`A` and :code:`B` must be read in the inner loop. For that, we need
-multi-dimensional pointer arithmetics.
+multi-dimensional pointer arithmetic.
 
-Pointer Arithmetics
+Pointer Arithmetic
 ~~~~~~~~~~~~~~~~~~~
 
-For a row-major 2D tensor :code:`X`, the memory location of :code:`X[i, j]` is given b
-y :code:`&X[i, j] = X + i*stride_xi + j*stride_xj`.
+For a row-major 2D tensor :code:`X`, the memory location of :code:`X[i, j]` is given
+by :code:`&X[i, j] = X + i*stride_xi + j*stride_xj`.
 Therefore, blocks of pointers for :code:`A[m : m+BLOCK_SIZE_M, k:k+BLOCK_SIZE_K]` and
 :code:`B[k : k+BLOCK_SIZE_K, n : n+BLOCK_SIZE_N]` can be defined in pseudo-code as:
 
@@ -115,8 +115,8 @@ L2 Cache Optimizations
 As mentioned above, each program instance computes a :code:`[BLOCK_SIZE_M, BLOCK_SIZE_N]`
 block of :code:`C`.
 It is important to remember that the order in which these blocks are computed does
-matter, since it affects the L2 cache hit rate of our program. and unfortunately, a
-a simple row-major ordering
+matter, since it affects the L2 cache hit rate of our program, and unfortunately, a
+simple row-major ordering
 
  .. code-block:: Python
 
@@ -247,7 +247,7 @@ Final Result
         # and accumulate
         # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
         # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
-        # See above `Pointer Arithmetics` section for details
+        # See above `Pointer Arithmetic` section for details
         offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
         offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
         offs_k = tl.arange(0, BLOCK_SIZE_K)
@@ -452,37 +452,37 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
 
     matmul-performance:
              M       N       K      cuBLAS      Triton
-    0    256.0   256.0   256.0    4.096000    1.310720
-    1    384.0   384.0   384.0   11.059200    5.026909
-    2    512.0   512.0   512.0   26.214401   11.397565
+    0    256.0   256.0   256.0    4.681143    1.365333
+    1    384.0   384.0   384.0   12.288000    3.686400
+    2    512.0   512.0   512.0   26.214401   11.915636
     3    640.0   640.0   640.0   42.666665   22.260869
-    4    768.0   768.0   768.0   63.195428   38.466782
-    5    896.0   896.0   896.0   78.051553   63.860363
-    6   1024.0  1024.0  1024.0  110.376426   87.381330
-    7   1152.0  1152.0  1152.0  135.726544  129.825388
-    8   1280.0  1280.0  1280.0  163.840004  163.840004
-    9   1408.0  1408.0  1408.0  155.765024  129.804192
-    10  1536.0  1536.0  1536.0  181.484314  153.867127
-    11  1664.0  1664.0  1664.0  183.651271  179.978245
+    4    768.0   768.0   768.0   68.056616   35.389441
+    5    896.0   896.0   896.0   78.051553   58.538665
+    6   1024.0  1024.0  1024.0  110.376426   80.659693
+    7   1152.0  1152.0  1152.0  135.726544  106.642284
+    8   1280.0  1280.0  1280.0  157.538463  128.000000
+    9   1408.0  1408.0  1408.0  155.765024  132.970149
+    10  1536.0  1536.0  1536.0  181.484314  157.286398
+    11  1664.0  1664.0  1664.0  183.651271  183.651271
     12  1792.0  1792.0  1792.0  175.616000  212.064605
     13  1920.0  1920.0  1920.0  203.294114  168.585369
-    14  2048.0  2048.0  2048.0  226.719125  192.841562
+    14  2048.0  2048.0  2048.0  226.719125  195.083907
     15  2176.0  2176.0  2176.0  211.827867  214.081356
-    16  2304.0  2304.0  2304.0  227.503545  231.921091
-    17  2432.0  2432.0  2432.0  205.069087  205.069087
+    16  2304.0  2304.0  2304.0  229.691080  234.194828
+    17  2432.0  2432.0  2432.0  205.069087  203.583068
     18  2560.0  2560.0  2560.0  225.986210  219.919464
-    19  2688.0  2688.0  2688.0  199.647657  201.771569
-    20  2816.0  2816.0  2816.0  213.795141  212.752230
-    21  2944.0  2944.0  2944.0  220.513412  223.479969
-    22  3072.0  3072.0  3072.0  208.173173  209.715208
-    23  3200.0  3200.0  3200.0  216.949149  222.996514
-    24  3328.0  3328.0  3328.0  211.118166  210.500857
-    25  3456.0  3456.0  3456.0  216.724640  217.896133
-    26  3584.0  3584.0  3584.0  221.466479  212.064605
-    27  3712.0  3712.0  3712.0  213.000737  221.501871
-    28  3840.0  3840.0  3840.0  209.454544  211.053446
-    29  3968.0  3968.0  3968.0  210.749463  219.862957
-    30  4096.0  4096.0  4096.0  222.214781  218.595642
+    19  2688.0  2688.0  2688.0  200.704002  200.704002
+    20  2816.0  2816.0  2816.0  213.795141  213.795141
+    21  2944.0  2944.0  2944.0  223.479969  223.479969
+    22  3072.0  3072.0  3072.0  208.173173  206.653671
+    23  3200.0  3200.0  3200.0  219.178074  221.453296
+    24  3328.0  3328.0  3328.0  209.277023  211.118166
+    25  3456.0  3456.0  3456.0  220.880999  220.880999
+    26  3584.0  3584.0  3584.0  219.842034  213.069643
+    27  3712.0  3712.0  3712.0  213.455857  219.554602
+    28  3840.0  3840.0  3840.0  211.862062  213.086708
+    29  3968.0  3968.0  3968.0  212.585252  221.459047
+    30  4096.0  4096.0  4096.0  222.583299  218.952244
 
 
 
@@ -490,7 +490,7 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  41.463 seconds)
+   **Total running time of the script:** ( 0 minutes  41.437 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_03-matrix-multiplication.py:
