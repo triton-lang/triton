@@ -43,15 +43,12 @@ endif()
 
 # Compiler flags
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17")
 
 # Third-party
 include_directories(${PYBIND11_INCLUDE_DIR})
 
-set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17 -fvisibility=hidden -fvisibility-inlines-hidden")
 
-if(APPLE)
-  set(CMAKE_OSX_DEPLOYMENT_TARGET 11.6)
-endif()
 
 # #########
 # LLVM
@@ -145,31 +142,6 @@ if(NOT MLIR_DIR)
   set(MLIR_DIR ${LLVM_LIBRARY_DIR}/cmake/mlir)
 endif()
 
-# Python module
-if(TRITON_BUILD_PYTHON_MODULE)
-  message(STATUS "Adding Python module")
-  set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
-  set(PYTHON_SRC ${PYTHON_SRC_PATH}/main.cc
-                ${PYTHON_SRC_PATH}/ir.cc
-                ${PYTHON_SRC_PATH}/passes.cc
-                ${PYTHON_SRC_PATH}/interpreter.cc
-                ${PYTHON_SRC_PATH}/llvm.cc
-                ${PYTHON_SRC_PATH}/nvidia.cc
-                # ${PYTHON_SRC_PATH}/amd.cc
-                )
-  include_directories("." ${PYTHON_SRC_PATH})
-
-  if(PYTHON_INCLUDE_DIRS)
-    include_directories(${PYTHON_INCLUDE_DIRS})
-  else()
-    find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
-    include_directories(${Python3_INCLUDE_DIRS})
-    link_directories(${Python3_LIBRARY_DIRS})
-    link_libraries(${Python3_LIBRARIES})
-    add_link_options(${Python3_LINK_OPTIONS})
-  endif()
-endif()
-
 # MLIR
 find_package(MLIR REQUIRED CONFIG PATHS ${MLIR_DIR})
 
@@ -181,23 +153,17 @@ include(AddLLVM)
 include(AddMLIR)
 
 # Disable warnings that show up in external code (gtest;pybind11)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default -DUSE_ROCM")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default")
 
+include_directories(".")
 include_directories(${MLIR_INCLUDE_DIRS})
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
 
-
 # link_directories(${LLVM_LIBRARY_DIR})
 add_subdirectory(include)
 add_subdirectory(lib)
-
-# 3P backend
-# include_directories(${PROJECT_BINARY_DIR}/third_party/amd_hip_backend/include)
-# include_directories(${PROJECT_SOURCE_DIR}/third_party/amd_hip_backend/include)
-# add_subdirectory(${PROJECT_SOURCE_DIR}/third_party/amd_hip_backend/include)
-# add_subdirectory(${PROJECT_SOURCE_DIR}/third_party/amd_hip_backend/lib)
 
 # find_package(PythonLibs REQUIRED)
 set(TRITON_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -213,15 +179,36 @@ if (NOT WIN32 AND NOT APPLE)
   link_libraries(stdc++fs)
 endif()
 
+
+# -----
+
+# ------
 if(TRITON_BUILD_PYTHON_MODULE)
-  add_library(triton SHARED ${PYTHON_SRC})
+  message(STATUS "Adding Python module")
+  set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
+  include_directories(${PYTHON_SRC_PATH})
+
+  if(PYTHON_INCLUDE_DIRS)
+    include_directories(${PYTHON_INCLUDE_DIRS})
+  else()
+    find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
+    include_directories(${Python3_INCLUDE_DIRS})
+    link_directories(${Python3_LIBRARY_DIRS})
+    link_libraries(${Python3_LIBRARIES})
+    add_link_options(${Python3_LINK_OPTIONS})
+  endif()
+
+  set(TRITON_CODEGEN_BACKENDS "amd_hip_backend")
+  foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
+    add_subdirectory(third_party/${CODEGEN_BACKEND}/src)
+  endforeach()
+
+
   set(TRITON_LIBRARIES
     TritonAnalysis
     TritonTransforms
     TritonGPUTransforms
-    TritonNvidiaGPUTransforms
     TritonLLVMIR
-    TritonAMD
     ${dialect_libs}
     ${conversion_libs}
 
@@ -236,27 +223,40 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRNVVMToLLVMIRTranslation
     MLIRROCDLToLLVMIRTranslation
     MLIRIR
+
+    ${LLVM_LIBRARIES}
   )
 
-  if(WIN32)
-    target_link_libraries(triton PRIVATE ${LLVM_LIBRARIES} ${CMAKE_DL_LIBS}
-      ${TRITON_LIBRARIES}
-    )
-  elseif(APPLE)
-    target_link_libraries(triton ${LLVM_LIBRARIES} z
-      ${TRITON_LIBRARIES}
-    )
-  else()
-    target_link_libraries(triton ${LLVM_LIBRARIES} z
-      ${TRITON_LIBRARIES}
-    )
-  endif()
 
+  # Define triton library
+  add_library(triton SHARED ${PYTHON_SRC_PATH}/main.cc
+                  ${PYTHON_SRC_PATH}/ir.cc
+                  ${PYTHON_SRC_PATH}/passes.cc
+                  ${PYTHON_SRC_PATH}/interpreter.cc
+                  ${PYTHON_SRC_PATH}/llvm.cc)
+                  # ${PYTHON_SRC_PATH}/nvidia.cc)
+                  # ${PYTHON_SRC_PATH}/amd.cc)
+
+  # Link triton with its dependencies
+  target_link_libraries(triton PRIVATE ${TRITON_LIBRARIES})
+  if(WIN32)
+    target_link_libraries(triton PRIVATE ${CMAKE_DL_LIBS})
+  else()
+    target_link_libraries(triton PRIVATE z)
+  endif()
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
+
+  # Define triton_nvidia library
+  add_library(triton_nvidia SHARED ${PYTHON_SRC_PATH}/nvidia.cc)
+
+  # Link triton_nvidia only with triton, not its transitive dependencies
+  target_link_libraries(triton_nvidia PRIVATE TritonNvidiaGPUTransforms "-Wl,--no-as-needed" triton)
+  target_link_libraries(triton_amd PRIVATE TritonAMDGPUToLLVM TritonAMDGPUTransforms "-Wl,--no-as-needed" triton)
+  set_target_properties(triton PROPERTIES INTERFACE_LINK_LIBRARIES "")
 endif()
 
 if(UNIX AND NOT APPLE)
-  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--exclude-libs,ALL")
+  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS}")
 endif()
 
 if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
@@ -269,11 +269,6 @@ if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
 
   target_link_libraries(triton ${CUTLASS_LIBRARIES} ${PYTHON_LDFLAGS})
 endif()
-
-set(TRITON_CODEGEN_BACKENDS "amd_hip_backend")
-foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
-  add_subdirectory(third_party/${CODEGEN_BACKEND}/src)
-endforeach()
 
 # add_subdirectory(bin)
 # add_subdirectory(test)
