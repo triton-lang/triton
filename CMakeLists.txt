@@ -170,16 +170,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
   endif()
 endif()
 
-# # Triton
-# file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
-# if (WIN32 AND TRITON_BUILD_PYTHON_MODULE)
-# Python3_add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
-# set_target_properties(triton PROPERTIES SUFFIX ".pyd")
-# set_target_properties(triton PROPERTIES PREFIX "lib")
-# else()
-# add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
-# endif()
-
 # MLIR
 find_package(MLIR REQUIRED CONFIG PATHS ${MLIR_DIR})
 
@@ -231,8 +221,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     TritonGPUTransforms
     TritonNvidiaGPUTransforms
     TritonLLVMIR
-    # TritonAMDGPUTransforms
-    # TritonAMDGPUToLLVM
+    TritonAMD
     ${dialect_libs}
     ${conversion_libs}
 
@@ -281,13 +270,10 @@ if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
   target_link_libraries(triton ${CUTLASS_LIBRARIES} ${PYTHON_LDFLAGS})
 endif()
 
-list(LENGTH TRITON_CODEGEN_BACKENDS CODEGEN_BACKENDS_LEN)
-# if (${CODEGEN_BACKENDS_LEN} GREATER 0)
-#   set(PYTHON_THIRD_PARTY_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/triton/third_party)
-#   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
-#     add_subdirectory(third_party/${CODEGEN_BACKEND})
-#   endforeach()
-# endif()
+set(TRITON_CODEGEN_BACKENDS "amd_hip_backend")
+foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
+  add_subdirectory(third_party/${CODEGEN_BACKEND}/src)
+endforeach()
 
 # add_subdirectory(bin)
 # add_subdirectory(test)
