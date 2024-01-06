@@ -388,9 +388,9 @@ tt.func @cross_iter_dep(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
                         %arg6: i32 {tt.divisibility = 16 : i32},
                         %arg7: i32 {tt.divisibility = 16 : i32},
                         %arg8: i32 {tt.divisibility = 16 : i32}) -> tensor<32x32xf32, #C> {
-  %c0_i32 = arith.constant 0 : index
+  %c0 = arith.constant 0 : index
   %118 = arith.constant 32 : index
-  %c1_i32 = arith.constant 1 : index
+  %c1 = arith.constant 1 : index
   %c2_i32 = arith.constant 2 : i32
   %c32_i32 = arith.constant 32 : i32
   %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #C>
@@ -403,7 +403,7 @@ tt.func @cross_iter_dep(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
   %65 = tt.splat %arg3 : (i32) -> tensor<1x32xi32, #AL>
   %88 = tt.splat %arg4 : (i32) -> tensor<32x1xi32, #AL>
   %80 = tt.splat %arg2 : (!tt.ptr<f32>) -> tensor<32x32x!tt.ptr<f32>, #AL>
-  %119:5 = scf.for %arg9 = %c0_i32 to %118 step %c1_i32 iter_args(%arg10 = %cst, %arg11 = %78, %arg12 = %110, %arg13 = %113, %arg14 = %116) -> (tensor<32x32xf32, #C>, tensor<32x32x!tt.ptr<f32>, #AL>, tensor<32x32x!tt.ptr<f32>, #AL>, tensor<32x32x!tt.ptr<f32>, #AL>, tensor<32x32x!tt.ptr<f32>, #AL>)  {
+  %119:5 = scf.for %arg9 = %c0 to %118 step %c1 iter_args(%arg10 = %cst, %arg11 = %78, %arg12 = %110, %arg13 = %113, %arg14 = %116) -> (tensor<32x32xf32, #C>, tensor<32x32x!tt.ptr<f32>, #AL>, tensor<32x32x!tt.ptr<f32>, #AL>, tensor<32x32x!tt.ptr<f32>, #AL>, tensor<32x32x!tt.ptr<f32>, #AL>)  {
     %161 = arith.index_cast %arg9 : index to i32
     %141 = arith.muli %161, %c32_i32 : i32
     %142 = arith.subi %arg5, %141 : i32

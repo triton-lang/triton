@@ -1206,9 +1206,9 @@ module attributes {"triton_gpu.num-warps" = 2 : i32, "triton_gpu.num-ctas" = 1 :
 module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32} {
   tt.func public @reduce_cvt2(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}) {
     %cst = arith.constant dense<0.000000e+00> : tensor<1x256xf32, #blocked>
-    %c3136_i32 = arith.constant 3136 : index
-    %c256_i32 = arith.constant 256 : index
-    %c0_i32 = arith.constant 0 : index
+    %c3136 = arith.constant 3136 : index
+    %c256 = arith.constant 256 : index
+    %c0 = arith.constant 0 : index
     %cst_0 = arith.constant dense<3.136000e+03> : tensor<1x1xf32, #blocked>
     %cst_1 = arith.constant dense<50176> : tensor<1x256xi32, #blocked>
     %cst_2 = arith.constant dense<196> : tensor<1x1xi32, #blocked>
@@ -1230,7 +1230,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 :
     %12 = tt.broadcast %11 : (tensor<1x1xi32, #blocked>) -> tensor<1x256xi32, #blocked>
     %13 = tt.splat %arg1 : (!tt.ptr<f32>) -> tensor<1x256x!tt.ptr<f32>, #blocked>
     %14 = tt.broadcast %7 : (tensor<1x1xi1, #blocked>) -> tensor<1x256xi1, #blocked>
-    %15 = scf.for %arg5 = %c0_i32 to %c3136_i32 step %c256_i32 iter_args(%arg6 = %cst) -> (tensor<1x256xf32, #blocked>) {
+    %15 = scf.for %arg5 = %c0 to %c3136 step %c256 iter_args(%arg6 = %cst) -> (tensor<1x256xf32, #blocked>) {
       %42 = arith.index_cast %arg5 : index to i32
       %43 = tt.splat %42 : (i32) -> tensor<1x256xi32, #blocked>
       %44 = arith.addi %43, %10 : tensor<1x256xi32, #blocked>
