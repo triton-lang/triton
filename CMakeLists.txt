@@ -113,11 +113,10 @@ if(TRITON_BUILD_PYTHON_MODULE)
     add_link_options(${Python3_LINK_OPTIONS})
   endif()
 
-  set(TRITON_CODEGEN_BACKENDS "amd_hip_backend")
+  set(TRITON_CODEGEN_BACKENDS "hip;cuda")
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
     add_subdirectory(third_party/${CODEGEN_BACKEND}/src)
   endforeach()
-
 
   set(TRITON_LIBRARIES
     TritonIR
@@ -162,8 +161,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
                   ${PYTHON_SRC_PATH}/passes.cc
                   ${PYTHON_SRC_PATH}/interpreter.cc
                   ${PYTHON_SRC_PATH}/llvm.cc)
-                  # ${PYTHON_SRC_PATH}/nvidia.cc)
-                  # ${PYTHON_SRC_PATH}/amd.cc)
 
   # Link triton with its dependencies
   target_link_libraries(triton PUBLIC ${TRITON_LIBRARIES})
@@ -173,61 +170,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
     target_link_libraries(triton PRIVATE z)
   endif()
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
-
-  # Define triton_nvidia library
-  add_library(triton_nvidia SHARED ${PYTHON_SRC_PATH}/nvidia.cc)
-  set(TRITON_NVIDIA_LIBRARIES
-    NVGPUIR
-    NVGPUToLLVM
-    TritonNvidiaGPUTransforms
-    TritonGPUToLLVM
-    MLIRNVVMDialect
-    ${LLVM_LIBRARY_DIR}/libMLIRNVVMToLLVMIRTranslation.a
-    ${LLVM_LIBRARY_DIR}/libMLIRGPUToNVVMTransforms.a
-    ${LLVM_LIBRARY_DIR}/libMLIRGPUToGPURuntimeTransforms.a
-    ${LLVM_LIBRARY_DIR}/libMLIRGPUTransforms.a
-    MLIRMathToLLVM
-    # MLIRMemRefToLLVM
-    MLIRArithTransforms
-    MLIRVectorDialect
-    MLIRVectorToLLVM
-    MLIRFuncToLLVM
-
-  )
-  target_link_libraries(triton_nvidia PRIVATE ${TRITON_NVIDIA_LIBRARIES} "-Wl,--no-as-needed" triton)
-
-  set(TRITON_AMD_LIBRARIES
-    TritonAMDGPUToLLVM
-    TritonAMDGPUTransforms
-    ${LLVM_LIBRARY_DIR}/libMLIRNVVMToLLVMIRTranslation.a
-    ${LLVM_LIBRARY_DIR}/libMLIRGPUToNVVMTransforms.a
-    ${LLVM_LIBRARY_DIR}/libMLIRGPUToROCDLTransforms.a
-    ${LLVM_LIBRARY_DIR}/libMLIRGPUToGPURuntimeTransforms.a
-    ${LLVM_LIBRARY_DIR}/libMLIRROCDLToLLVMIRTranslation.a
-    ${LLVM_LIBRARY_DIR}/libMLIRGPUTransforms.a
-    ${LLVM_LIBRARY_DIR}/libMLIRAMDGPUToROCDL.a
-    ${LLVM_LIBRARY_DIR}/libMLIRAMDGPUUtils.a
-    ${LLVM_LIBRARY_DIR}/libMLIRAMDGPUTransforms.a
-    MLIRMemRefToLLVM
-    MLIRArithTransforms
-    MLIRVectorDialect
-    MLIRVectorToLLVM
-    MLIRFuncToLLVM
-    MLIRROCDLDialect
-    MLIRAMDGPUDialect
-    MLIRMathToLLVM
-    # TODO: shouldn't be there
-    TritonNvidiaGPUTransforms
-    NVGPUIR
-)
-
-  target_link_libraries(triton_amd PRIVATE ${TRITON_AMD_LIBRARIES} "-Wl,--no-as-needed" triton)
   set_target_properties(triton PROPERTIES INTERFACE_LINK_LIBRARIES "")
 endif()
-
-# if(UNIX AND NOT APPLE)
-#   set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS}")
-# endif()
 
 if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
   set(CMAKE_SHARED_LIBRARY_SUFFIX ".so")
@@ -238,8 +182,6 @@ if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
   endif()
 
   target_link_libraries(triton ${PYTHON_LDFLAGS})
-  target_link_libraries(triton_amd ${PYTHON_LDFLAGS})
-  target_link_libraries(triton_nvidia ${PYTHON_LDFLAGS})
 endif()
 
 # add_subdirectory(bin)
