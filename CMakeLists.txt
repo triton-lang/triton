@@ -130,6 +130,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     # TODO: shouldn't be here
     TritonNvidiaGPUIR
     MLIRAMDGPUDialect
+    MLIRROCDLDialect
     TritonAnalysis
 
     # optimizations
@@ -145,7 +146,23 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRGPUDialect
     MLIRIR
 
+    # Backends
+
+    # TODO: shouldn't be there
+    TritonGPUToLLVM
+    TritonAnalysis
+    MLIRMathToLLVM
+
+    # LLVM
     LLVMPasses
+    #
+    LLVMNVPTXCodeGen
+    LLVMNVPTXDesc
+    LLVMNVPTXInfo
+    # AMD
+    LLVMAMDGPUCodeGen
+    LLVMAMDGPUCodeGen
+    LLVMAMDGPUAsmParser
 
   )
 
@@ -155,8 +172,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
                   ${PYTHON_SRC_PATH}/passes.cc
                   ${PYTHON_SRC_PATH}/interpreter.cc
                   ${PYTHON_SRC_PATH}/llvm.cc)
-                  # ${PYTHON_SRC_PATH}/nvidia.cc)
-                  # ${PYTHON_SRC_PATH}/amd.cc)
 
   # Link triton with its dependencies
   target_link_libraries(triton PUBLIC ${TRITON_LIBRARIES})
@@ -165,7 +180,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
   else()
     target_link_libraries(triton PRIVATE z)
   endif()
-  target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
+  target_link_options(triton PUBLIC ${LLVM_LDFLAGS})
+  set_target_properties(triton PROPERTIES INTERFACE_LINK_LIBRARIES "")
 
   # Define triton_nvidia library
   add_library(triton_nvidia SHARED ${PYTHON_SRC_PATH}/nvidia.cc)
@@ -173,35 +189,22 @@ if(TRITON_BUILD_PYTHON_MODULE)
     NVGPUIR
     NVGPUToLLVM
     TritonNvidiaGPUTransforms
-    LLVMNVPTXCodeGen
-    LLVMNVPTXDesc
-    LLVMNVPTXInfo
     MLIRNVVMToLLVMIRTranslation
     TritonGPUToLLVM
-    # shouldn't be here
-    MLIRROCDLDialect
     MLIRGPUToNVVMTransforms
-    MLIRGPUToROCDLTransforms
+    TritonAnalysis
+    MLIRMathToLLVM
+    #
 
   )
   target_link_libraries(triton_nvidia PRIVATE ${TRITON_NVIDIA_LIBRARIES} "-Wl,--no-as-needed" triton)
 
   set(TRITON_AMD_LIBRARIES
-    MLIRROCDLToLLVMIRTranslation
     TritonAMDGPUToLLVM
     TritonAMDGPUTransforms
-    TritonNvidiaGPUTransforms
-    NVGPUIR
-    #
-    LLVMAMDGPUCodeGen
-    LLVMAMDGPUAsmParser
-    MLIRGPUToNVVMTransforms
-    MLIRGPUToROCDLTransforms
   )
+
   target_link_libraries(triton_amd PRIVATE ${TRITON_AMD_LIBRARIES} "-Wl,--no-as-needed" triton)
-
-
-  # set_target_properties(triton PROPERTIES INTERFACE_LINK_LIBRARIES "")
 endif()
 
 # if(UNIX AND NOT APPLE)
