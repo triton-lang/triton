@@ -1,4 +1,4 @@
-from ..third_party import backends
+from ..backends import backends
 
 
 def _create_driver():

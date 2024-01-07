@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
-from triton.third_party.driver import GPUDriver
+from triton.backends.driver import GPUDriver
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir = [os.path.join(dirname, "include")]
