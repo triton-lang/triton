@@ -5,5 +5,5 @@
 	path = third_party/triton_shared
 	url = https://github.com/microsoft/triton-shared
 [submodule "third_party/amd_hip_backend"]
-	path = third_party/amd_hip_backend
+	path = third_party/hip
 	url = https://github.com/ptillet/triton.git
