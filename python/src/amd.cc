@@ -5,7 +5,6 @@
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "passes.h"
 #include "llvm/IR/Constants.h"
-#include "llvm/Support/TargetSelect.h"
 #include <mutex>
 #include <pybind11/pybind11.h>
 
@@ -43,18 +42,6 @@ PYBIND11_MODULE(libtriton_amd, m) {
     mlir::registerROCDLDialectTranslation(registry);
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
-  });
-
-  // init llvm
-  m.def("init_llvm", []() {
-    static std::once_flag init_flag;
-    std::call_once(init_flag, []() {
-      LLVMInitializeAMDGPUTargetInfo();
-      LLVMInitializeAMDGPUTarget();
-      LLVMInitializeAMDGPUTargetMC();
-      LLVMInitializeAMDGPUAsmParser();
-      LLVMInitializeAMDGPUAsmPrinter();
-    });
   });
 
   // calling convention

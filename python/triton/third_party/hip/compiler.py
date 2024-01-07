@@ -141,7 +141,7 @@ class HIPBackend(BaseBackend):
             passes.llvmir.add_di_scope(pm)
         pm.run(mod)
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
-        amd.init_llvm()
+        llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
         if options.extern_libs:

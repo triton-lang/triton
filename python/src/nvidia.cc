@@ -59,7 +59,7 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
   });
 }
 
-void init_triton_nvidia(py::module &&m) {
+PYBIND11_MODULE(libtriton_nvidia, m) {
   auto passes = m.def_submodule("passes");
   init_triton_nvidia_passes_ttgpuir(passes.def_submodule("ttgpuir"));
   init_triton_nvidia_passes_ttnvgpuir(passes.def_submodule("ttnvgpuir"));
@@ -111,17 +111,6 @@ void init_triton_nvidia(py::module &&m) {
     mlir::registerNVVMDialectTranslation(registry);
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
-  });
-
-  // init llvm
-  m.def("init_llvm", []() {
-    static std::once_flag init_flag;
-    std::call_once(init_flag, []() {
-      LLVMInitializeNVPTXTargetInfo();
-      LLVMInitializeNVPTXTarget();
-      LLVMInitializeNVPTXTargetMC();
-      LLVMInitializeNVPTXAsmPrinter();
-    });
   });
 
   // TODO: could be done in python if we had a generic interface to set metadata
