@@ -4,7 +4,7 @@ First of all, thank you for considering contributing to the Triton programming l
 
 ## General Guidelines
 
-1. **Quality Contributions:** We value meaningful contributions that aim to improve the project and help it grow. Please refrain from submitting low-effort pull requests (PR) -- such as minor formatting/typo fixes -- solely for the purpose of appearing in the commit history. Maintainers have limited bandwidth, and may decline to review such work.
+1. **Quality Contributions:** We value meaningful contributions that aim to improve the project and help it grow. Please refrain from submitting pull requests (PRs) that are minor improvements, such as minor formatting/typo fixes. Maintainers have limited bandwidth, and may decline to review such work.
 
 2. **Code Formatting:** Our Continuous Integration (CI) pipeline uses autopep8, isort, and clang-format to check code formatting. To avoid failing the CI workflow due to formatting issues, please utilize the provided `.pre-commit-config.yaml` pre-commit configuration file.
 
