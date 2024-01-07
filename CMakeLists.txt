@@ -220,7 +220,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     # TODO: shouldn't be there
     TritonNvidiaGPUTransforms
     NVGPUIR
-    TritonGPUToLLVM
+    # TritonGPUToLLVM
     TritonAnalysis
 )
 
