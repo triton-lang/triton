@@ -186,7 +186,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
     ${LLVM_LIBRARY_DIR}/libMLIRGPUToNVVMTransforms.a
     ${LLVM_LIBRARY_DIR}/libMLIRGPUToGPURuntimeTransforms.a
     ${LLVM_LIBRARY_DIR}/libMLIRGPUTransforms.a
-    TritonAnalysis
     MLIRMathToLLVM
     # MLIRMemRefToLLVM
     MLIRArithTransforms
@@ -220,8 +219,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
     # TODO: shouldn't be there
     TritonNvidiaGPUTransforms
     NVGPUIR
-    # TritonGPUToLLVM
-    TritonAnalysis
 )
 
   target_link_libraries(triton_amd PRIVATE ${TRITON_AMD_LIBRARIES} "-Wl,--no-as-needed" triton)
