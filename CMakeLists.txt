@@ -182,13 +182,13 @@ if(TRITON_BUILD_PYTHON_MODULE)
     TritonNvidiaGPUTransforms
     TritonGPUToLLVM
     MLIRNVVMDialect
-    /home/phil/.triton/llvm/llvm-66886578-ubuntu-x64/lib/libMLIRNVVMToLLVMIRTranslation.a
-    /home/phil/.triton/llvm/llvm-66886578-ubuntu-x64/lib/libMLIRGPUToNVVMTransforms.a
-    /home/phil/.triton/llvm/llvm-66886578-ubuntu-x64/lib/libMLIRGPUToGPURuntimeTransforms.a
-    /home/phil/.triton/llvm/llvm-66886578-ubuntu-x64/lib/libMLIRGPUTransforms.a
+    ${LLVM_LIBRARY_DIR}/libMLIRNVVMToLLVMIRTranslation.a
+    ${LLVM_LIBRARY_DIR}/libMLIRGPUToNVVMTransforms.a
+    ${LLVM_LIBRARY_DIR}/libMLIRGPUToGPURuntimeTransforms.a
+    ${LLVM_LIBRARY_DIR}/libMLIRGPUTransforms.a
     TritonAnalysis
     MLIRMathToLLVM
-    MLIRMemRefToLLVM
+    # MLIRMemRefToLLVM
     MLIRArithTransforms
     MLIRVectorDialect
     MLIRVectorToLLVM
@@ -198,20 +198,15 @@ if(TRITON_BUILD_PYTHON_MODULE)
   target_link_libraries(triton_nvidia PRIVATE ${TRITON_NVIDIA_LIBRARIES} "-Wl,--no-as-needed" triton)
 
   set(TRITON_AMD_LIBRARIES
-    /home/phil/.triton/llvm/llvm-66886578-ubuntu-x64/lib/libMLIRROCDLToLLVMIRTranslation.a
-    #
     TritonAMDGPUToLLVM
     TritonAMDGPUTransforms
-    TritonNvidiaGPUTransforms
-    NVGPUIR
-    #
-    /home/phil/.triton/llvm/llvm-66886578-ubuntu-x64/lib/libMLIRGPUToNVVMTransforms.a
-    /home/phil/.triton/llvm/llvm-66886578-ubuntu-x64/lib/libMLIRGPUToROCDLTransforms.a
-    /home/phil/.triton/llvm/llvm-66886578-ubuntu-x64/lib/libMLIRGPUToGPURuntimeTransforms.a
-    /home/phil/.triton/llvm/llvm-66886578-ubuntu-x64/lib/libMLIRGPUTransforms.a
-    /home/phil/.triton/llvm/llvm-66886578-ubuntu-x64/lib/libMLIRAMDGPUToROCDL.a
-    /home/phil/.triton/llvm/llvm-66886578-ubuntu-x64/lib/libMLIRAMDGPUUtils.a
-    /home/phil/.triton/llvm/llvm-66886578-ubuntu-x64/lib/libMLIRAMDGPUTransforms.a
+    ${LLVM_LIBRARY_DIR}/libMLIRGPUToROCDLTransforms.a
+    ${LLVM_LIBRARY_DIR}/libMLIRGPUToGPURuntimeTransforms.a
+    ${LLVM_LIBRARY_DIR}/libMLIRROCDLToLLVMIRTranslation.a
+    ${LLVM_LIBRARY_DIR}/libMLIRGPUTransforms.a
+    ${LLVM_LIBRARY_DIR}/libMLIRAMDGPUToROCDL.a
+    ${LLVM_LIBRARY_DIR}/libMLIRAMDGPUUtils.a
+    ${LLVM_LIBRARY_DIR}/libMLIRAMDGPUTransforms.a
     MLIRMemRefToLLVM
     MLIRArithTransforms
     MLIRVectorDialect
@@ -219,10 +214,12 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRFuncToLLVM
     MLIRROCDLDialect
     MLIRAMDGPUDialect
+    MLIRMathToLLVM
     # TODO: shouldn't be there
+    TritonNvidiaGPUTransforms
+    NVGPUIR
     TritonGPUToLLVM
     TritonAnalysis
-    MLIRMathToLLVM
 )
 
   target_link_libraries(triton_amd PRIVATE ${TRITON_AMD_LIBRARIES} "-Wl,--no-as-needed" triton)
