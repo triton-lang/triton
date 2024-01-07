@@ -235,8 +235,7 @@ class CMakeBuild(build_ext):
         plugins = ["hip", "cuda"]
         for plugin in plugins:
             src_path = os.path.join(os.pardir, "third_party", plugin, "backend")
-            dst_path = os.path.join(os.path.dirname(__file__), "triton", "third_party", plugin)
-            # os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
+            dst_path = os.path.join(os.path.dirname(__file__), "triton", "backends", plugin)
             if os.path.exists(dst_path):
                 shutil.rmtree(dst_path)
             shutil.copytree(src_path, dst_path)

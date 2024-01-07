@@ -1,4 +1,4 @@
-from triton.third_party.compiler import BaseBackend
+from triton.backends.compiler import BaseBackend
 from triton._C.libtriton import ir, passes, llvm
 import triton._C.libtriton_nvidia as nvidia
 from triton.runtime import driver

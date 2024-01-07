@@ -9,7 +9,7 @@ class BaseBackend(metaclass=ABCMeta):
     def __init__(self, target: tuple) -> None:
         self.target = target
         assert self.supports_target(target)
-    
+
     @staticmethod
     def _path_to_binary(binary: str):
         base_dir = os.path.join(os.path.dirname(__file__), os.pardir)
@@ -35,7 +35,7 @@ class BaseBackend(metaclass=ABCMeta):
     def hash(self) -> str:
         """Returns a unique identifier for this backend"""
         raise NotImplementedError
-    
+
     @abstractmethod
     def parse_options(self, options: dict) -> object:
         """
@@ -50,12 +50,12 @@ class BaseBackend(metaclass=ABCMeta):
         Populates `stages` dictionary with entries of the form:
         ir_name [str] => Function[(src: str, metadata: dict) -> str|bytes]
         The value of each entry may populate a `metadata` dictionary.
-        Stages will be run sequentially (in inseriton order) and can communicate using `metadata`. 
-        All stages are expected to return a `str` object, except for the last stage which returns 
+        Stages will be run sequentially (in inseriton order) and can communicate using `metadata`.
+        All stages are expected to return a `str` object, except for the last stage which returns
         a `bytes` object for execution by the launcher.
         """
         raise NotImplementedError
-    
+
     @abstractmethod
     def load_dialects(self, context):
         """
