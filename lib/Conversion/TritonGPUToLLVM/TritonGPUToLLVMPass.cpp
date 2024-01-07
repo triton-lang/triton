@@ -4,7 +4,6 @@
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
-#include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
 #include "mlir/Conversion/LLVMCommon/VectorPattern.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
@@ -12,7 +11,6 @@
 #include "mlir/Dialect/Index/IR/IndexOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
-#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Allocation.h"
@@ -68,15 +66,7 @@ public:
       : ConversionTarget(ctx) {
     addLegalDialect<index::IndexDialect>();
     addLegalDialect<LLVM::LLVMDialect>();
-    switch (target) {
-    case Target::NVVM:
-      addLegalDialect<NVVM::NVVMDialect>();
-      break;
-    case Target::ROCDL:
-      addLegalDialect<ROCDL::ROCDLDialect>();
-      addLegalDialect<mlir::scf::SCFDialect>();
-      break;
-    }
+    addLegalDialect<NVVM::NVVMDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
 };
@@ -366,15 +356,7 @@ public:
   explicit TritonLLVMConversionTarget(MLIRContext &ctx, Target target)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
-    switch (target) {
-    case Target::NVVM:
-      addLegalDialect<NVVM::NVVMDialect>();
-      break;
-    case Target::ROCDL:
-      addLegalDialect<ROCDL::ROCDLDialect>();
-      addLegalDialect<mlir::scf::SCFDialect>();
-      break;
-    }
+    addLegalDialect<NVVM::NVVMDialect>();
     addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
@@ -563,18 +545,7 @@ struct ConvertTritonGPUToLLVM
     // to help convert scalar expression to LLVM.
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
-
-    // Native lowering patterns
-    switch (target) {
-    case Target::NVVM:
-      mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
-      break;
-    case Target::ROCDL:
-      mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
-                                                 mlir::gpu::amd::HIP);
-      break;
-    }
-
+    mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
