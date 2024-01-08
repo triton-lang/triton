@@ -373,7 +373,8 @@ setup(
     ],
     install_requires=["filelock"],
     package_data={
-        "triton/tools": ["compile.h", "compile.c"], "triton/backends/cuda": ["driver.c", "bin/*", "lib/*", "include/*"]
+        "triton/tools": ["compile.h", "compile.c"],
+        "triton/backends/cuda": ["driver.c", "bin/*", "lib/*", "include/*"],
     },
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
