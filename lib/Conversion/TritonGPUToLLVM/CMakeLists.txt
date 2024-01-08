@@ -1,7 +1,6 @@
 # Separate out PTX/GCN builders to avoid cyclic dependencies as TritonAnalysis
 # depends on it.
 set(LLVM_OPTIONAL_SOURCES
-    GCNAsmFormat.cpp
     PTXAsmFormat.cpp
   )
 
@@ -56,7 +55,6 @@ add_mlir_conversion_library(TritonGPUToLLVM
 )
 
 add_mlir_library(ASMBuilder
-  GCNAsmFormat.cpp
   PTXAsmFormat.cpp
 
   DEPENDS
