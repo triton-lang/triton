@@ -146,9 +146,7 @@ def download_and_copy(src_path, variable, version, url_func):
     if arch == "x86_64":
         arch = "64"
     url = url_func(arch, version)
-    dst_prefix = os.path.join(base_dir, "triton")
-    dst_suffix = os.path.join("third_party", "cuda", src_path)
-    dst_path = os.path.join(dst_prefix, dst_suffix)
+    dst_path = os.path.join(base_dir, os.pardir, "third_party", "cuda", "backend", src_path)
     is_linux = platform.system() == "Linux"
     download = False
     if is_linux:
@@ -164,6 +162,7 @@ def download_and_copy(src_path, variable, version, url_func):
             file.extractall(path=temp_dir)
             src_path = os.path.join(temp_dir, src_path)
             os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
+            print(f'copy {src_path} to {dst_path} ...')
             shutil.copy(src_path, dst_path)
 
 
@@ -270,16 +269,17 @@ class CMakeBuild(build_ext):
         cfg = get_build_type()
         build_args = ["--config", cfg]
 
-        codegen_backends = get_codegen_backends()
-        if len(codegen_backends) > 0:
-            all_codegen_backends = ';'.join(codegen_backends)
-            cmake_args += ["-DTRITON_CODEGEN_BACKENDS=" + all_codegen_backends]
+        # third-party backend
+
+        # codegen_backends = get_codegen_backends()
+        # if len(codegen_backends) > 0:
+        #     all_codegen_backends = ';'.join(codegen_backends)
+        #     cmake_args += ["-DTRITON_CODEGEN_BACKENDS=" + all_codegen_backends]
 
         if platform.system() == "Windows":
             cmake_args += [f"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{cfg.upper()}={extdir}"]
             if sys.maxsize > 2**32:
                 cmake_args += ["-A", "x64"]
-            build_args += ["--", "/m"]
         else:
             cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
             max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
@@ -343,6 +343,14 @@ download_and_copy(
     f"https://anaconda.org/nvidia/cuda-nvdisasm/12.3.52/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
 
+plugins = ["cuda"]
+for plugin in plugins:
+    src_path = os.path.join(os.pardir, "third_party", plugin, "backend")
+    dst_path = os.path.join(os.path.dirname(__file__), "triton", "backends", plugin)
+    if os.path.exists(dst_path):
+        shutil.rmtree(dst_path)
+    shutil.copytree(src_path, dst_path)
+
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
     version="2.1.0" + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
@@ -353,19 +361,21 @@ setup(
     packages=[
         "triton",
         "triton/_C",
-        "triton/common",
         "triton/compiler",
-        "triton/compiler/backends",
         "triton/language",
         "triton/language/extra",
         "triton/ops",
         "triton/ops/blocksparse",
         "triton/runtime",
-        "triton/runtime/backends",
-        "triton/third_party",
+        "triton/backends",
+        "triton/backends/cuda",
         "triton/tools",
     ],
     install_requires=["filelock"],
+    package_data={
+        "triton/tools": ["compile.h", "compile.c"],
+        "triton/backends/cuda": ["driver.c", "bin/*", "lib/*", "include/*"],
+    },
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={"build_ext": CMakeBuild, "build_py": CMakeBuildPy, "clean": CMakeClean},

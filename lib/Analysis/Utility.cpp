@@ -557,19 +557,6 @@ bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
          !srcTy.getElementType().isF32();
 }
 
-bool isSingleValue(Value value) {
-  // Don't consider load as expensive if it is loading a scalar.
-  if (auto tensorTy = value.getType().dyn_cast<RankedTensorType>())
-    return tensorTy.getNumElements() == 1;
-  // TODO: Handle other cases.
-  // For example, when ptr is a tensor of single value.
-  // It means that ptr is a resultant of broadcast or generated through
-  // a chain of broadcast and other operations.
-  // Rematerialize it without considering contiguous memory access pattern is
-  // fine.
-  return true;
-}
-
 namespace {
 
 /// A data structure similar to SetVector but maintains

@@ -268,19 +268,8 @@ class Libdevice(ExternLibrary):
         #   arg_type_symbol_dict = {[arg_type]: {(symbol, ret_type)}}
         #   return core.extern_elementwise("libdevice", <path>, <args>, <arg_type_symbol_dict>, _builder)
         import_str = "from . import core\n"
-        import_str += "import os\n"
-        import_str += "import functools\n"
 
         header_str = ""
-        header_str += "@functools.lru_cache()\n"
-        header_str += "def libdevice_path():\n"
-        header_str += "    import torch\n"
-        header_str += "    third_party_dir =  os.path.join(os.path.dirname(os.path.abspath(__file__)), \"..\", \"third_party\")\n"
-        header_str += "    if torch.version.hip is None:\n"
-        header_str += "        default = os.path.join(third_party_dir, \"cuda\", \"lib\", \"libdevice.10.bc\")\n"
-        header_str += "    else:\n"
-        header_str += "        default = ''\n"
-        header_str += "    return os.getenv(\"TRITON_LIBDEVICE_PATH\", default)\n"
         func_str = ""
         for symbols in self._symbol_groups.values():
             func_str += "@core.extern\n"
