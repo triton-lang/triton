@@ -126,10 +126,17 @@ if(TRITON_BUILD_PYTHON_MODULE)
     TritonGPUIR
     TritonGPUTransforms
     TritonLLVMIR
-    # TODO: shouldn't be here
     TritonNvidiaGPUIR
     MLIRAMDGPUDialect
     TritonAnalysis
+    NVGPUToLLVM
+    TritonNvidiaGPUTransforms
+    TritonGPUToLLVM
+    MLIRNVVMDialect
+    MLIRNVVMToLLVMIRTranslation
+    MLIRGPUToNVVMTransforms
+    MLIRGPUToGPURuntimeTransforms
+    MLIRGPUTransforms
 
     # optimizations
     MLIRControlFlowToLLVM
@@ -160,7 +167,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
                   ${PYTHON_SRC_PATH}/ir.cc
                   ${PYTHON_SRC_PATH}/passes.cc
                   ${PYTHON_SRC_PATH}/interpreter.cc
-                  ${PYTHON_SRC_PATH}/llvm.cc)
+                  ${PYTHON_SRC_PATH}/llvm.cc
+                  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cuda/triton_nvidia.cc)
 
   # Link triton with its dependencies
   target_link_libraries(triton PUBLIC ${TRITON_LIBRARIES})

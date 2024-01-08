@@ -6,4 +6,10 @@ add_mlir_dialect_library(TritonIR
 
   DEPENDS
   TritonTableGen
+
+  LINK_LIBS PUBLIC
+  MLIRIR
+  MLIRArithDialect
+  MLIRMathDialect
+  MLIRSCFDialect
 )

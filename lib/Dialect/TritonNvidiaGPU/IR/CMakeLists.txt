@@ -7,4 +7,8 @@ add_mlir_dialect_library(TritonNvidiaGPUIR
   DEPENDS
   TritonNvidiaGPUTableGen
   TritonNvidiaGPUAttrDefsIncGen
+
+  LINK_LIBS PUBLIC
+  TritonIR
+  TritonGPUIR
 )
