@@ -7,7 +7,7 @@ import tempfile
 import numpy as np
 
 import triton
-from triton.common import cuda_include_dir, libcuda_dirs
+from triton.backends.cuda.driver import include_dir, library_dir
 
 kernel_utils_src = """
 import triton
@@ -99,13 +99,13 @@ static void read_csv_to_buffer(char *filename, int16_t *buffer, int size) {
 def gen_kernel_library(dir, libname):
     c_files = glob.glob(os.path.join(dir, "*.c"))
     subprocess.run(
-        ["gcc"] + c_files + ["-I", cuda_include_dir(), "-c", "-fPIC"],
+        ["gcc"] + c_files + ["-I", include_dir[0], "-c", "-fPIC"],
         check=True,
         cwd=dir,
     )
     o_files = glob.glob(os.path.join(dir, "*.o"))
     subprocess.run(
-        ["gcc"] + o_files + ["-shared", "-o", libname, "-L", libcuda_dirs()[0]],
+        ["gcc"] + o_files + ["-shared", "-o", libname, "-L", library_dir[0]],
         check=True,
         cwd=dir,
     )
@@ -176,9 +176,9 @@ int main(int argc, char **argv) {{
         ["gcc"] + [
             "test.c",
             "-I",
-            cuda_include_dir(),
+            include_dir[0],
             "-L",
-            libcuda_dirs()[0],
+            library_dir[0],
             "-l",
             "cuda",
             "-L",
