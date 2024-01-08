@@ -39,7 +39,7 @@ namespace gpu {
 
 struct TMAInfo {
   // --------------------------------------------
-  // informations to be filled into CUtensorMaps
+  // information to be filled into CUtensorMaps
   int tensorDataType;
 
   uint32_t tensorRank;

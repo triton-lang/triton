@@ -343,6 +343,7 @@ class Mark:
                 html.write(f"<image src=\"{bench.plot_name}.png\"/>\n")
         if save_path:
             html.write("</body></html>\n")
+            html.close()
         if return_df:
             if has_single_bench:
                 return result_dfs[0]

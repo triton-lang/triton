@@ -293,7 +293,7 @@ public:
                         ConversionPatternRewriter &rewriter,
                         SmallVectorImpl<Value> &offsetVals,
                         SmallVectorImpl<Value> &srcStrides) const {
-    // This utililty computes the pointers for accessing the provided swizzled
+    // This utility computes the pointers for accessing the provided swizzled
     // shared memory layout `resSharedLayout`. More specifically, it computes,
     // for all indices (row, col) of `srcEncoding` such that idx % inVec = 0,
     // the pointer: ptr[(row, col)] = base + (rowOff * strides[ord[1]] +
@@ -530,8 +530,7 @@ public:
     unsigned minVec = std::min(outVec, inVec);
     unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
     assert(numElems == srcIndices.size());
-    auto inVals =
-        getTypeConverter()->unpackLLElements(loc, llSrc, rewriter, srcTy);
+    auto inVals = getTypeConverter()->unpackLLElements(loc, llSrc, rewriter);
     auto wordTy = vec_ty(elemTy, minVec);
     Value word;
 

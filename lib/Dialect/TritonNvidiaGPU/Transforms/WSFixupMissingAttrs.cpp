@@ -34,7 +34,7 @@ public:
         Block *roleIdBlock = nullptr;
         op.walk<WalkOrder::PreOrder>([&](Operation *subOp) {
           setAgentIds(subOp, agentIds);
-          // Find the outter most common block that has roleId.
+          // Find the outermost common block that has roleId.
           // The below implementation assumes that:
           // - all lock/unlock ops are in the same block (denoted as B).
           // - there is always one scf.if op in the front of `B` which has

@@ -36,7 +36,7 @@ namespace ttng = mlir::triton::nvidia_gpu;
 
 class Heuristics {
   //===--------------------------Label rules--------------------------===//
-  //  - Op without agent attr: opeations shared by all agents but will NOT
+  //  - Op without agent attr: operations shared by all agents but will NOT
   //    be copied into each agent region
   //  - Op with one agent: exclusive for one agent
   //  - Op with agents: shared by agents and will be copied into each agent
@@ -68,7 +68,7 @@ protected:
     return isa<triton::StoreOp>(op);
   }
 
-  /// Becuase we set some special filter rules in populateAgentRegion,
+  /// Because we set some special filter rules in populateAgentRegion,
   /// there may be unlabeled Ops, e.g. YieldOps, some definingOps of ForOps.
   /// or Ops without relations to agentOps
   virtual void populateUnlabledOpsAtLast(ArrayRef<int> allAgents) {

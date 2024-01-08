@@ -1029,7 +1029,7 @@ def expand_dims(input, axis, _builder=None):
     axes = [_wrap_axis(_constexpr_to_value(d), new_ndim) for d in axes]
 
     if len(set(axes)) != len(axes):
-        raise ValueError(f"expand_dims recieved duplicate axes, normalized axes = {axes}")
+        raise ValueError(f"expand_dims received duplicate axes, normalized axes = {axes}")
 
     ret = input
     for a in sorted(axes):
@@ -1477,8 +1477,9 @@ def reduce(input, axis, combine_fn, _builder=None, _generator=None):
                 handles = [r.handle for r in results]
             _builder.create_reduce_ret(*handles)
 
+    axis = _constexpr_to_value(axis)
     if axis is not None:
-        axis = _constexpr_to_value(axis)
+        axis = _wrap_axis(axis, len(input[0].shape))
     return semantic.reduction(input, axis, make_combine_region, _builder)
 
 
@@ -1557,6 +1558,8 @@ def associative_scan(input, axis, combine_fn, _builder=None, _generator=None):
             _builder.create_scan_ret(*handles)
 
     axis = _constexpr_to_value(axis)
+    if axis is not None:
+        axis = _wrap_axis(axis, len(input[0].shape))
     return semantic.associative_scan(input, axis, make_combine_region, _builder)
 
 
