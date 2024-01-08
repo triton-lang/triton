@@ -27,6 +27,9 @@ def libcuda_dirs():
     # libcuda.so.1 (libc6,x86-64) => /lib/x86_64-linux-gnu/libcuda.so.1
     locs = [line.split()[-1] for line in libs.splitlines() if "libcuda.so" in line]
     dirs = [os.path.dirname(loc) for loc in locs]
+    env_ld_library_path = os.getenv("LD_LIBRARY_PATH")
+    if env_ld_library_path and not dirs:
+        dirs = [dir for dir in env_ld_library_path.split(":") if os.path.exists(os.path.join(dir, "libcuda.so"))]
     msg = 'libcuda.so cannot found!\n'
     if locs:
         msg += 'Possible files are located at %s.' % str(locs)
