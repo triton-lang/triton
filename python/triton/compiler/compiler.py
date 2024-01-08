@@ -1,20 +1,20 @@
 from __future__ import annotations
-
 import hashlib
 import json
-
 from .._C.libtriton import get_env_vars, ir
-# from ..runtime import driver, jit, JITFunction
-# TODO: runtime.errors
+from ..backends import backends
+from .. import __version__
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
 from ..runtime.driver import driver
-from .utils import InfoFromBackendForTensorMap
-from .backends import make_backend
+# TODO: this shouldn't be here
+from ..backends.cuda.compiler import InfoFromBackendForTensorMap
 from dataclasses import dataclass
 from .code_generator import ast_to_ttir
 from pathlib import Path
 import re
+import functools
+import os
 
 
 @dataclass
@@ -154,6 +154,37 @@ class IRSource:
         return dict()
 
 
+@functools.lru_cache()
+def triton_key():
+    import pkgutil
+    TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    contents = []
+    # frontend
+    with open(__file__, "rb") as f:
+        contents += [hashlib.sha1(f.read()).hexdigest()]
+    # compiler
+    compiler_path = os.path.join(TRITON_PATH, 'compiler')
+    backends_path = os.path.join(TRITON_PATH, 'compiler', 'backends')
+    for lib in pkgutil.iter_modules([compiler_path, backends_path]):
+        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+            contents += [hashlib.sha1(f.read()).hexdigest()]
+    # backend
+    libtriton_hash = hashlib.sha1()
+    with open(os.path.join(TRITON_PATH, "_C/libtriton.so"), "rb") as f:
+        while True:
+            chunk = f.read(1024**2)
+            if not chunk:
+                break
+            libtriton_hash.update(chunk)
+    contents.append(libtriton_hash.hexdigest())
+    # language
+    language_path = os.path.join(TRITON_PATH, 'language')
+    for lib in pkgutil.iter_modules([language_path]):
+        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+            contents += [hashlib.sha1(f.read()).hexdigest()]
+    return f'{__version__}' + '-'.join(contents)
+
+
 def compile(src, target=None, options=None):
     if target is None:
         target = driver.get_current_target()
@@ -165,7 +196,7 @@ def compile(src, target=None, options=None):
     extra_options = src.parse_options()
     options = backend.parse_options(dict(options or dict(), **extra_options))
     # create cache manager
-    key = f"{src.hash()}-{backend.hash()}-{options.hash()}-{str(sorted(get_env_vars().items()))}"
+    key = f"{triton_key()}-{src.hash()}-{backend.hash()}-{options.hash()}-{str(sorted(get_env_vars().items()))}"
     hash = hashlib.md5(key.encode("utf-8")).hexdigest()
     fn_cache_manager = get_cache_manager(hash)
     metadata_filename = f"{src.name}.json"
@@ -174,8 +205,7 @@ def compile(src, target=None, options=None):
     if metadata_path is not None:
         # cache hit!
         metadata = json.loads(Path(metadata_path).read_text())
-        so_path = backend.make_launcher_stub(src, metadata)
-        return CompiledKernel(so_path, metadata_group)
+        return CompiledKernel(src, metadata_group)
     # initialize metadata
     metadata = {
         "target": target,
@@ -199,9 +229,16 @@ def compile(src, target=None, options=None):
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
                                                              binary=False)
     fn_cache_manager.put_group(metadata_filename, metadata_group)
-    so_path = backend.make_launcher_stub(src, metadata)
     # return handle to compiled kernel
-    return CompiledKernel(so_path, metadata_group)
+    return CompiledKernel(src, metadata_group)
+
+
+def make_backend(target):
+    actives = [x.compiler for x in backends.values() if x.compiler.supports_target(target)]
+    if len(actives) != 1:
+        raise RuntimeError(
+            f"{len(actives)} compatible backends for target ({target[0]}) ({actives}). There should only be one.")
+    return actives[0](target)
 
 
 class CompiledKernel:
@@ -211,15 +248,8 @@ class CompiledKernel:
     launch_enter_hook = None
     launch_exit_hook = None
 
-    def __init__(self, so_path, metadata_group):
+    def __init__(self, src, metadata_group):
         metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
-        # initialize launcher
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("__triton_launcher", so_path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        self.run = getattr(mod, "launch")
-        # initialize metadata
         self.metadata = json.loads(metadata_path.read_text())
         self.metadata['tensormaps_info'] = [InfoFromBackendForTensorMap(e) for e in self.metadata['tensormaps_info']
                                             ] if 'tensormaps_info' in self.metadata else []
@@ -228,6 +258,8 @@ class CompiledKernel:
         self.name = self.metadata["name"]
         for key, val in self.metadata.items():
             setattr(self, key, val)
+        # create launcher
+        self.run = driver.launcher_cls(src, self.metadata)
         # stores the text of each level of IR that was generated during compilation
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
         self.asm = {

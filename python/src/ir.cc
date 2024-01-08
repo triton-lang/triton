@@ -188,11 +188,11 @@ void init_triton_ir(py::module &&m) {
 
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
-    registry.insert<mlir::triton::TritonDialect,
-                    mlir::triton::gpu::TritonGPUDialect,
-                    mlir::math::MathDialect, mlir::arith::ArithDialect,
-                    mlir::index::IndexDialect, mlir::scf::SCFDialect,
-                    mlir::cf::ControlFlowDialect, mlir::LLVM::LLVMDialect>();
+    registry.insert<
+        mlir::triton::TritonDialect, mlir::triton::gpu::TritonGPUDialect,
+        mlir::math::MathDialect, mlir::arith::ArithDialect,
+        mlir::index::IndexDialect, mlir::scf::SCFDialect, mlir::gpu::GPUDialect,
+        mlir::cf::ControlFlowDialect, mlir::LLVM::LLVMDialect>();
     mlir::registerBuiltinDialectTranslation(registry);
     mlir::registerLLVMDialectTranslation(registry);
     context.appendDialectRegistry(registry);
@@ -1526,9 +1526,18 @@ void init_triton_ir(py::module &&m) {
       .def(py::init<mlir::MLIRContext *>())
       .def("enable_debug",
            [](mlir::PassManager &self) {
+             auto *context = self.getContext();
+             context->printOpOnDiagnostic(true);
+             context->printStackTraceOnDiagnostic(true);
+             context->disableMultithreading();
+             context->getDiagEngine().registerHandler(
+                 [](mlir::Diagnostic &diag) {
+                   llvm::outs() << diag << "\n";
+                   return mlir::success();
+                 });
+
              if (!::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP"))
                return;
-             self.getContext()->disableMultithreading();
              auto printingFlags = mlir::OpPrintingFlags();
              printingFlags.elideLargeElementsAttrs(16);
              printingFlags.enableDebugInfo();

@@ -10,8 +10,12 @@ from numpy.random import RandomState
 
 import triton
 import triton.language as tl
-from triton.common.build import is_hip
 from triton.runtime.jit import JITFunction, TensorWrapper, reinterpret
+
+
+def is_hip():
+    return triton.runtime.driver.get_current_target()[0] == "hip"
+
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
 uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
@@ -3300,9 +3304,8 @@ def test_num_warps_pow2(device):
 
 
 @pytest.mark.parametrize("dtype_str, expr, lib_path", [('int32', 'math.ffs', ''), ('float32', 'math.log2', ''),
-                                                       ('float32', 'math.scalbn', ''),
-                                                       ('float32', 'math.pow', tl.math.libdevice_path()),
-                                                       ('float64', 'math.pow_dtype', tl.math.libdevice_path()),
+                                                       ('float32', 'math.scalbn', ''), ('float32', 'math.pow', ''),
+                                                       ('float64', 'math.pow_dtype', ''),
                                                        ('float64', 'math.norm4d', '')])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_math_tensor(dtype_str, expr, lib_path, num_ctas, device):
@@ -3361,7 +3364,7 @@ def test_math_tensor(dtype_str, expr, lib_path, num_ctas, device):
 
 
 @pytest.mark.parametrize("dtype_str, expr, lib_path", [('float32', 'math.pow', ''), ('float64', 'math.pow_dtype', ''),
-                                                       ('float64', 'math.pow', tl.math.libdevice_path())])
+                                                       ('float64', 'math.pow', '')])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_math_scalar(dtype_str, expr, lib_path, num_ctas, device):
 
