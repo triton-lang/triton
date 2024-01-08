@@ -157,7 +157,7 @@ def _bwd_kernel_one_col_block(Q, K, V, sm_scale, qk_scale,  #
     K_offset = (off_z * stride_kz + off_h * stride_kh) // stride_kn
     V_offset = (off_z * stride_vz + off_h * stride_vh) // stride_vn
     if SEQUENCE_PARALLEL:
-        DQ_offset += stride_dqa.to(tl.int64) * start_n
+        DQ_offset += stride_dqa * start_n
     DQ_offset = DQ_offset // stride_qm
 
     Q_block_ptr = tl.advance(Q_block_ptr, (lo + Q_offset, 0))
@@ -215,7 +215,7 @@ def _bwd_kernel_one_col_block(Q, K, V, sm_scale, qk_scale,  #
             if MMA_V3:
                 dq = tl.dot(ds, k, allow_tf32=True)
             else:
-                # not work with mma v3, becuase M % 64 != 0
+                # not work with mma v3, because M % 64 != 0
                 dq = tl.trans(tl.dot(tl.trans(k), tl.trans(ds), allow_tf32=True))
             tl.store(DQ_block_ptr, dq.to(Q.dtype.element_ty))
 

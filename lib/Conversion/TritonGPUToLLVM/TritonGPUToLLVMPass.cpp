@@ -184,7 +184,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
     if (!allocation.isRoot(funcOp))
       amendedFuncOp = amendFuncOp(funcOp, rewriter);
 
-    // Collect TMA informations.
+    // Collect TMA information.
     unsigned numTMALoad = 0;
     funcOp.walk(
         [&numTMALoad](triton::nvidia_gpu::InsertSliceTMAOp insertSliceOp) {
@@ -405,7 +405,6 @@ struct ConvertTritonGPUToLLVM
     decomposeMmaToDotOperand(mod, numWarps, threadsPerWarp, numCTAs);
     decomposeBlockedToDotOperand(mod);
     decomposeInsertSliceAsyncOp(mod);
-    decomposeMixedModeDotOp(mod);
 
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
@@ -838,44 +837,6 @@ private:
         operand.getType().cast<RankedTensorType>().cloneWith(std::nullopt,
                                                              promotedType);
     return builder.create<triton::FpToFpOp>(loc, tensorPromotedType, operand);
-  }
-
-  // promote operands of dot op if the existing combination is not natively
-  // supported.
-  void decomposeMixedModeDotOp(ModuleOp mod) const {
-    mod.walk([](triton::DotOp dotOp) -> void {
-      Value D = dotOp.getResult();
-      OpBuilder builder(dotOp);
-      Type AElType =
-          dotOp.getA().getType().cast<RankedTensorType>().getElementType();
-      Type promoteType;
-      NvidiaMmaEncodingAttr mmaLayout = D.getType()
-                                            .cast<RankedTensorType>()
-                                            .getEncoding()
-                                            .dyn_cast<NvidiaMmaEncodingAttr>();
-      if (mmaLayout) {
-        bool isNativeHopperFP8 =
-            AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
-        bool isFP8 = isNativeHopperFP8 || AElType.isFloat8E5M2FNUZ() ||
-                     AElType.isFloat8E4M3FN() || AElType.isFloat8E4M3B11FNUZ();
-        if (!isFP8 || (isNativeHopperFP8 && mmaLayout.isHopper()))
-          return;
-        promoteType = builder.getF16Type();
-      } else {
-        // FMA case.
-        Type AElType =
-            dotOp.getA().getType().cast<RankedTensorType>().getElementType();
-        Type DElType = D.getType().cast<RankedTensorType>().getElementType();
-        if (AElType == DElType)
-          return;
-        promoteType = DElType;
-      }
-      Location loc = dotOp.getLoc();
-      Value promotedA = promoteOperand(builder, loc, dotOp.getA(), promoteType);
-      Value promotedB = promoteOperand(builder, loc, dotOp.getB(), promoteType);
-      dotOp.setOperand(0, promotedA);
-      dotOp.setOperand(1, promotedB);
-    });
   }
 };
 

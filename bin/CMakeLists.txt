@@ -53,6 +53,7 @@ add_llvm_executable(triton-llvm-opt
 target_link_libraries(triton-llvm-opt PRIVATE
   TritonLLVMIR
 
+  LLVMAnalysis
   LLVMCore
   LLVMSupport
   LLVMOption

@@ -440,7 +440,7 @@ class JITFunction(KernelInterface[T]):
         self.arg_names = [p.name for p in self.params]
         self.constexprs = [p.num for p in self.params if p.is_constexpr]
 
-        # re-use docs of wrapped function
+        # reuse docs of wrapped function
         self.__doc__ = fn.__doc__
         self.__name__ = fn.__name__
         self.__globals__ = fn.__globals__

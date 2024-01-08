@@ -86,7 +86,7 @@ SmallVector<unsigned> getCTAOrder(Attribute layout);
  *     WarpsPerCTA in each dimension and is independent from the tensor shape.
  * (2) ShapePerCTA is defined by shape / CTASplitNum in each dimension.
  * (3) In the implementation of emitIndices, ShapePerCTATile will
- *     be replicated or wraped to fit ShapePerCTA.
+ *     be replicated or wrapped to fit ShapePerCTA.
  */
 SmallVector<unsigned>
 getShapePerCTATile(Attribute layout,

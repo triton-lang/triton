@@ -71,3 +71,25 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     tt.return %r : tensor<64x128xf32, #blocked1>
   }
 }
+
+// -----
+
+// CHECK-80: #[[MMA:.+]] = #triton_gpu.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 2], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0], instrShape = [16, 8]}>
+#blocked = #triton_gpu.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#blocked2 = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  // CHECK-80-LABEL: mixed_mode_dot
+  tt.func public @mixed_mode_dot(
+    %arg0: tensor<64x128xf8E4M3B11FNUZ, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}>>,
+    %arg1: tensor<128x64xf8E5M2, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>>,
+    %arg2: tensor<64x128xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked1}>>) -> tensor<64x64xf32, #blocked> {
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked>
+  // CHECK-80: tt.fp_to_fp {{.*}} : tensor<64x128xf8E4M3B11FNUZ, #triton_gpu.dot_op<{opIdx = 0, parent = #[[MMA]], kWidth = 4}>> -> tensor<64x128xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #[[MMA]], kWidth = 4}>>
+  // CHECK-80: tt.fp_to_fp {{.*}} : tensor<128x64xf8E5M2, #triton_gpu.dot_op<{opIdx = 1, parent = #[[MMA]], kWidth = 4}>> -> tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #[[MMA]], kWidth = 4}>>
+  // CHECK-80: tt.dot {{.*}} -> tensor<64x64xf32, #[[MMA]]>
+    %d = tt.dot %arg0, %arg1, %cst_0 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} :
+      tensor<64x128xf8E4M3B11FNUZ, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x64xf8E5M2, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x64xf32, #blocked>
+    tt.return %d : tensor<64x64xf32, #blocked>
+  }
+}

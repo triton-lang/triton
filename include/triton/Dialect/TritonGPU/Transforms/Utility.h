@@ -112,7 +112,7 @@ bool isExpensiveLoadOrStore(Operation *op);
 bool canFoldIntoConversion(Operation *op, Attribute targetEncoding);
 
 // Replace ForOp with a new ForOp with extra operands. The YieldOp is not
-// updated and needs to be updated separatly for the loop to be correct.
+// updated and needs to be updated separately for the loop to be correct.
 scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
                                         ValueRange newIterOperands);
 

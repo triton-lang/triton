@@ -161,7 +161,7 @@ def compareMatchingFiles(name: str, nameToHashes1: Dict[str, List[str]], nameToH
             # check whether both paths have:
             # 1. json files that match
             # 2. ttir files that match (if they exist), otherwise ttgir files that match (if they exist)
-            # if any of these contraints is not met, then we can skip this pair of hashes since they are not a match
+            # if any of these constraints are not met, then we can skip this pair of hashes since they are not a match
             if not doFilesMatch(path1, path2):
                 continue
             numComparisons += 1

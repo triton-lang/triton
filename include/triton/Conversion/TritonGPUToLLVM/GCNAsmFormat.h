@@ -28,7 +28,7 @@ class GCNInstrExecution;
 // string and C++ if-else code.
 //
 // Usage:
-// To create a multiplcation operation
+// To create a multiplication operation
 //
 //
 // GCNBuilder gcnBuilder;

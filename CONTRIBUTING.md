@@ -99,7 +99,7 @@ triton
 │   │	│
 │   │	├──common: Has interface for CUDA hardware backend
 │   │	│
-│   │	├──compiler: contains code for compiling source code to IR and lauching GPU kernels
+│   │	├──compiler: contains code for compiling source code to IR and launching GPU kernels
 │   │	│
 │   │	├──interpreter: memory-map for tensors, converting primitives to tensors, and arethmetic ops for tensors
 │   │	│

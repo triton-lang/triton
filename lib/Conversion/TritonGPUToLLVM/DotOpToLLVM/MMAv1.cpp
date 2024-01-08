@@ -21,8 +21,8 @@ extractLoadedOperand(Value llStruct, int NK,
                      ConversionPatternRewriter &rewriter,
                      TritonGPUToLLVMTypeConverter *typeConverter, Type type) {
   ValueTable rcds;
-  SmallVector<Value> elems = typeConverter->unpackLLElements(
-      llStruct.getLoc(), llStruct, rewriter, type);
+  SmallVector<Value> elems =
+      typeConverter->unpackLLElements(llStruct.getLoc(), llStruct, rewriter);
 
   int offset = 0;
   for (int i = 0; offset < elems.size(); ++i) {
@@ -84,7 +84,7 @@ LogicalResult convertMMA884(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   // DotOp, we can call the order of the values the accumulator-internal
   // order.
   SmallVector<Value> acc =
-      typeConverter->unpackLLElements(loc, adaptor.getC(), rewriter, DTensorTy);
+      typeConverter->unpackLLElements(loc, adaptor.getC(), rewriter);
   size_t resSize = acc.size();
 
   // The resVals holds the final result of the DotOp.
