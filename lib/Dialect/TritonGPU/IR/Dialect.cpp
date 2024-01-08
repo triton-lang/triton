@@ -1928,6 +1928,28 @@ struct CanonicalizeConvertFromView
   }
 };
 
+struct CanonicalizeConvertFromHistogram
+    : public mlir::OpRewritePattern<triton::HistogramOp> {
+
+  CanonicalizeConvertFromHistogram(MLIRContext *context)
+      : OpRewritePattern<triton::HistogramOp>(context, 1) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(triton::HistogramOp op,
+                  PatternRewriter &rewriter) const override {
+    Operation *arg = op->getOperand(0).getDefiningOp();
+    if (!arg)
+      return mlir::failure();
+    auto convert = dyn_cast<ConvertLayoutOp>(arg);
+    if (!convert)
+      return failure();
+    // histogram(cvt)->histogram
+    rewriter.replaceOpWithNewOp<triton::HistogramOp>(
+        op, op->getResult(0).getType(), convert.getOperand());
+    return mlir::success();
+  }
+};
+
 struct CanonicalizeConvertFromConvert
     : public mlir::OpRewritePattern<ConvertLayoutOp> {
 
@@ -1985,6 +2007,14 @@ struct CanonicalizeConvertFromConvert
       rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
           op, op->getResult(0).getType(), reshape.getResult(),
           reshape.getAllowReorder());
+      return mlir::success();
+    }
+    // cvt(histogram) -> histogram
+    if (auto histogram = dyn_cast<triton::HistogramOp>(arg)) {
+      // For histogram ops the input and output layouts are independent so we
+      // can always fold convert into the histogram op.
+      rewriter.replaceOpWithNewOp<triton::HistogramOp>(
+          op, op->getResult(0).getType(), histogram.getOperand());
       return mlir::success();
     }
     // cvt(cat) -> cat
@@ -2109,6 +2139,7 @@ void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
                                                   MLIRContext *context) {
   patterns.add<CanonicalizeConvertFromConvert>(context);
   patterns.add<CanonicalizeConvertFromView>(context);
+  patterns.add<CanonicalizeConvertFromHistogram>(context);
 }
 
 //===----------------------------------------------------------------------===//

@@ -27,6 +27,7 @@
 #include "ConvertLayoutOpToLLVM.h"
 #include "DotOpToLLVM.h"
 #include "ElementwiseOpToLLVM.h"
+#include "HistogramOpToLLVM.h"
 #include "LoadStoreOpToLLVM.h"
 #include "ReduceOpToLLVM.h"
 #include "RegReallocOpToLLVM.h"
@@ -538,6 +539,7 @@ struct ConvertTritonGPUToLLVM
     populatePatterns2(populateTensorPtrOpsToLLVMPatterns);
     populatePatterns2(populateClusterOpsToLLVMPatterns);
     populatePatterns2(populateRegReallocOpToLLVMPatterns);
+    populatePatterns1(populateHistogramOpToLLVMPatterns);
 
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
