@@ -1010,7 +1010,7 @@ void AxisInfoAnalysis::visitForOpInductionVar(
   knownDivisibility[0] = gcd(lb.getDivisibility(0), step.getDivisibility(0));
   auto inductionVar =
       AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
-  argLattices[0]->join(inductionVar);
+  (void)argLattices[0]->join(inductionVar);
 }
 
 unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
