@@ -113,9 +113,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
     add_link_options(${Python3_LINK_OPTIONS})
   endif()
 
-  set(TRITON_CODEGEN_BACKENDS "hip;cuda")
+  set(TRITON_CODEGEN_BACKENDS "cuda")
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
-    add_subdirectory(third_party/${CODEGEN_BACKEND}/src)
+    add_subdirectory(third_party/${CODEGEN_BACKEND})
   endforeach()
 
   set(TRITON_LIBRARIES
