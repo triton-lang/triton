@@ -59,7 +59,7 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
   });
 }
 
-PYBIND11_MODULE(libtriton_nvidia, m) {
+void init_triton_nvidia(py::module &&m){
   auto passes = m.def_submodule("passes");
   init_triton_nvidia_passes_ttgpuir(passes.def_submodule("ttgpuir"));
   init_triton_nvidia_passes_ttnvgpuir(passes.def_submodule("ttnvgpuir"));

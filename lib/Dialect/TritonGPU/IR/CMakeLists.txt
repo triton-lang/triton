@@ -6,4 +6,8 @@ add_mlir_dialect_library(TritonGPUIR
   DEPENDS
   TritonGPUTableGen
   TritonGPUAttrDefsIncGen
+
+  LINK_LIBS PUBLIC
+  MLIRGPUDialect
+  TritonIR
 )

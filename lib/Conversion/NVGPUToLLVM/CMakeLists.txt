@@ -10,4 +10,18 @@ add_mlir_conversion_library(NVGPUToLLVM
 
     LINK_COMPONENTS
     Core
+
+    LINK_LIBS PUBLIC
+    MLIRIR
+    MLIRPass
+    MLIRGPUDialect
+    MLIRGPUToNVVMTransforms
+    MLIRGPUToROCDLTransforms
+    MLIRGPUTransforms
+    TritonAnalysis
+    TritonIR
+    TritonGPUIR
+    TritonGPUTransforms
+    TritonNvidiaGPUTransforms
+    NVGPUIR
 )
