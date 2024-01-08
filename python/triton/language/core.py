@@ -1563,6 +1563,18 @@ def associative_scan(input, axis, combine_fn, _builder=None, _generator=None):
     return semantic.associative_scan(input, axis, make_combine_region, _builder)
 
 
+@builtin
+def histogram(input, num_bins, _builder=None, _generator=None):
+    """computes an histogram based on input tensor with num_bins bins the bins have a width of 1 and start at 0.
+
+    :param input: the input tensor
+    :param num_bins: number of histogram bins
+
+    """
+    num_bins = _constexpr_to_value(num_bins)
+    return semantic.histogram(input, num_bins, _builder)
+
+
 # -----------------------
 # Compiler Hint Ops
 # -----------------------

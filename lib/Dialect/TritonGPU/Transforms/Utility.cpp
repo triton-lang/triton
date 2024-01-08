@@ -418,7 +418,7 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
                                          newDstType);
   }
   return isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
-             triton::MakeRangeOp, triton::SplatOp>(op);
+             triton::MakeRangeOp, triton::SplatOp, triton::HistogramOp>(op);
 }
 
 scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
