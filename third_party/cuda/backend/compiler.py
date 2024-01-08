@@ -339,7 +339,7 @@ class CUDAOptions:
     debug: bool = False
 
     def __post_init__(self):
-        default_libdir = Path(__file__).parent.parent.parent / 'third_party' / 'cuda' / 'lib'
+        default_libdir = Path(__file__).parent / 'lib'
         extern_libs = dict() if self.extern_libs is None else dict(self.extern_libs)
         if not extern_libs.get('libdevice', None):
             extern_libs['libdevice'] = str(default_libdir / 'libdevice.10.bc')
@@ -477,7 +477,7 @@ class CUDABackend(BaseBackend):
             passes.llvmir.add_di_scope(pm)
         pm.run(mod)
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
-        nvidia.init_llvm()
+        llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
         nvidia.set_nvvm_reflect_ftz(llvm_mod)

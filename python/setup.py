@@ -146,9 +146,7 @@ def download_and_copy(src_path, variable, version, url_func):
     if arch == "x86_64":
         arch = "64"
     url = url_func(arch, version)
-    dst_prefix = os.path.join(base_dir, "triton")
-    dst_suffix = os.path.join("third_party", "cuda", src_path)
-    dst_path = os.path.join(dst_prefix, dst_suffix)
+    dst_path = os.path.join(base_dir, os.pardir, "third_party", "cuda", "backend", src_path)
     is_linux = platform.system() == "Linux"
     download = False
     if is_linux:
@@ -164,6 +162,7 @@ def download_and_copy(src_path, variable, version, url_func):
             file.extractall(path=temp_dir)
             src_path = os.path.join(temp_dir, src_path)
             os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
+            print(f'copy {src_path} to {dst_path} ...')
             shutil.copy(src_path, dst_path)
 
 
@@ -232,7 +231,7 @@ class CMakeBuild(build_ext):
         for ext in self.extensions:
             self.build_extension(ext)
 
-        plugins = ["hip", "cuda"]
+        plugins = ["cuda"]
         for plugin in plugins:
             src_path = os.path.join(os.pardir, "third_party", plugin, "backend")
             dst_path = os.path.join(os.path.dirname(__file__), "triton", "backends", plugin)
@@ -368,7 +367,7 @@ setup(
         "triton/ops",
         "triton/ops/blocksparse",
         "triton/runtime",
-        "triton/third_party",
+        "triton/backends",
         "triton/tools",
     ],
     install_requires=["filelock"],
