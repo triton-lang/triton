@@ -161,8 +161,7 @@ SmallVector<unsigned> getContigPerThread(Attribute layout) {
     return {1, 2};
   } else if (layout.isa<MfmaEncodingAttr>()) {
     return {1, 1};
-  }
-  else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+  } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parentLayout = sliceLayout.getParent();
     return getContigPerThread(parentLayout);
   } else {
@@ -291,8 +290,7 @@ SmallVector<unsigned> getCTASplitNum(Attribute layout) {
   } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
     res.resize(2);
     res[0] = res[1] = 1;
-  }
-  else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
+  } else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
     res.assign(sharedLayout.getCTALayout().getCTASplitNum().begin(),
                sharedLayout.getCTALayout().getCTASplitNum().end());
   } else {
@@ -307,8 +305,7 @@ SmallVector<unsigned> getCTAOrder(Attribute layout) {
     ref = distributedLayout.getCTAOrder();
   } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
     return {0, 1};
-  }
-  else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
+  } else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
     ref = sharedLayout.getCTALayout().getCTAOrder();
   } else {
     llvm::report_fatal_error("Unimplemented usage of getCTAOrder");
@@ -359,8 +356,7 @@ unsigned getNumWarpsPerCTA(Attribute layout) {
     // Use the distributed layout interface to get the number of warps per CTA.
     auto distributedLayout = layout.cast<DistributedEncodingTrait>();
     warpsPerCTA = distributedLayout.getWarpsPerCTA();
-  }
-  else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>())
+  } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>())
     warpsPerCTA = mfmaLayout.getWarpsPerCTA();
   else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>())
     return getNumWarpsPerCTA(dotLayout.getParent());
