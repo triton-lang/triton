@@ -231,14 +231,6 @@ class CMakeBuild(build_ext):
         for ext in self.extensions:
             self.build_extension(ext)
 
-        plugins = ["cuda"]
-        for plugin in plugins:
-            src_path = os.path.join(os.pardir, "third_party", plugin, "backend")
-            dst_path = os.path.join(os.path.dirname(__file__), "triton", "backends", plugin)
-            if os.path.exists(dst_path):
-                shutil.rmtree(dst_path)
-            shutil.copytree(src_path, dst_path)
-
     def build_extension(self, ext):
         lit_dir = shutil.which('lit')
         ninja_dir = shutil.which('ninja')
@@ -351,6 +343,14 @@ download_and_copy(
     f"https://anaconda.org/nvidia/cuda-nvdisasm/12.3.52/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
 
+plugins = ["cuda"]
+for plugin in plugins:
+    src_path = os.path.join(os.pardir, "third_party", plugin, "backend")
+    dst_path = os.path.join(os.path.dirname(__file__), "triton", "backends", plugin)
+    if os.path.exists(dst_path):
+        shutil.rmtree(dst_path)
+    shutil.copytree(src_path, dst_path)
+
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
     version="2.1.0" + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
@@ -368,9 +368,11 @@ setup(
         "triton/ops/blocksparse",
         "triton/runtime",
         "triton/backends",
+        "triton/backends/cuda",
         "triton/tools",
     ],
     install_requires=["filelock"],
+    package_data={"triton/backends/cuda": ["driver.c", "bin/*", "lib/*", "include/*"]},
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={"build_ext": CMakeBuild, "build_py": CMakeBuildPy, "clean": CMakeClean},
