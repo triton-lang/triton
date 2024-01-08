@@ -1500,6 +1500,15 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, mlir::Type &type) -> mlir::Value {
              return self.create<::mlir::LLVM::UndefOp>(type);
            })
+      .def("create_histogram",
+           [](TritonOpBuilder &self, mlir::Value operand,
+              int numBins) -> mlir::OpState {
+             return self.create<mlir::triton::HistogramOp>(
+                 mlir::RankedTensorType::get(
+                     {static_cast<int64_t>(numBins)},
+                     mlir::IntegerType::get(operand.getContext(), 32)),
+                 operand);
+           })
       // Force GPU barrier
       .def("create_barrier",
            [](TritonOpBuilder &self) { self.create<mlir::gpu::BarrierOp>(); })

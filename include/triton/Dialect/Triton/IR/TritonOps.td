@@ -557,6 +557,25 @@ def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [Elementwise,
 }
 
 //
+// Histogram Op
+//
+def TT_HistogramOp : TT_Op<"histogram", [Pure]> {
+  let summary = "return a histgram of the inputs.";
+  let description = [{
+    Return the histogram of the input tensor. The number of bins is equal to
+    the dimension of the output tensor. Each bins has a width of 1 and bins
+    start at 0.
+  }];
+
+  let arguments = (ins TT_IntTensor:$input);
+  let results = (outs TT_IntTensor:$result);
+
+  let assemblyFormat = [{
+    $input attr-dict `:` type($input) `->` type($result)
+  }];
+}
+
+//
 // Print Op
 //
 def TT_PrintOp : TT_Op<"print", [MemoryEffects<[MemWrite]>]>,

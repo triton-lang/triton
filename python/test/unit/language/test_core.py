@@ -1859,6 +1859,29 @@ scan_layouts = [
     BlockedLayout([2, 2], [8, 4], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
 ]
 
+# ---------------
+# test histogram
+# ---------------
+
+
+@pytest.mark.parametrize("M, N", [[2048, 2], [1024, 8], [1024, 128], [256, 512], [32, 512], [8, 512], [8, 2]])
+def test_histogram(M, N, device):
+
+    @triton.jit
+    def histogram_kernel(x_ptr, z_ptr, M: tl.constexpr, N: tl.constexpr):
+        offset1 = tl.arange(0, M)
+        offset2 = tl.arange(0, N)
+        x = tl.load(x_ptr + offset1)
+        z = tl.histogram(x, N)
+        tl.store(z_ptr + offset2, z)
+
+    torch.manual_seed(17)
+    x = torch.randint(0, N, (M, ), device=device, dtype=torch.int32)
+    z = torch.empty(N, dtype=torch.int32, device=device)
+    z_torch = torch.histc(x, bins=N, min=0, max=N - 1)
+    histogram_kernel[(1, )](x, z, M=M, N=N)
+    assert (z_torch == z).all()
+
 
 @pytest.mark.parametrize("op", ['sum', 'max', 'min'])
 @pytest.mark.parametrize("BLOCK_N", [32, 64, 128])
