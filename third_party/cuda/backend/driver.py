@@ -398,5 +398,5 @@ class CudaDriver(GPUDriver):
             # tuple for hashable
             args_ptr = tuple([arg.data_ptr() if hasattr(arg, 'data_ptr') else arg for arg in args])
             for i, e in enumerate(tensormaps_info):
-                args_with_tma.append(CudaDriver.tensormap_manager[(e, args_ptr)])
+                args_with_tma.append(self.tensormap_manager[(e, args_ptr)])
         return args_with_tma
