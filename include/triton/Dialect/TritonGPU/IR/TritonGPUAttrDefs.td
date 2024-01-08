@@ -155,6 +155,48 @@ compared to 1*64 when the hasLeadingOffset is false.
                      "CTALayoutAttr":$CTALayout,
                      "unsigned":$typeWidthInBit,
                      "bool":$needTrans), [{
+
+        // ---- begin GFX908/GFX90A ----
+        auto mfmaEnc = dotOpEnc.getParent().dyn_cast<MfmaEncodingAttr>();
+
+        if (mfmaEnc) {
+          int kDimNum = dotOpEnc.getOpIdx() == 0 ? 1 : 0;
+          bool isKDimInner = (order[0] == kDimNum);
+          if (isKDimInner) {
+            const int numBanks = 32;
+            const int bankBitWidth = 32;
+            const int SIMDWidth = 16;
+
+            // number of inner dimension rows per one pattern repeat
+            int innerDimLength = shape[order[0]];
+            int elemsPerOneBanksRow = (numBanks * bankBitWidth) / typeWidthInBit;
+
+            int perPhase = std::max(1, elemsPerOneBanksRow / innerDimLength);
+            // Note: the following settings is customized to avoid
+            // **load** bank conflicts
+            //
+            // vecSize is set to k_base, which is the number of elements each
+            // workitem loads for one mfma instruction.
+            // For now, the k_base rules are as follows
+            // 1. All selected mfma instructions produce a single block
+            // 2. For f16 data type, 2 VGPRs are used for operand A --> k_base = 4
+            // 3. For non-f16 data types, 1 VGPR are used for operand A
+            //    k_base = 32 / elemTypeInBits
+            // 4. TODO: what about f64?
+            //
+            // maxPhase is set to SIMDWidth / perPhase
+            int vecSize = ((typeWidthInBit == 16) ? 64 : 32 ) / typeWidthInBit;
+            int maxPhase = SIMDWidth / perPhase;
+
+            return get(context, vecSize, perPhase, maxPhase, order, CTALayout);
+          } else {
+            // Do not swizzle in case k dimension is not innermost.
+            // In this case accesses will go in different banks even without swizzling.
+            return get(context, 1, 1, 1, order, CTALayout);
+          }
+        }
+
+
         auto mmaEnc = dotOpEnc.getParent().dyn_cast<NvidiaMmaEncodingAttr>();
 
         if(!mmaEnc)
@@ -572,12 +614,110 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
     InterfaceMethod<"Return total element size per thread for dot operands.", "unsigned",
       "getTotalElemsPerThreadForOperands", (ins "ArrayRef<int64_t>":$tensorShape,
                                                 "Type":$eltTy,
+                                                "unsigned":$kWidth,
                                                 "unsigned":$opIdx)>,
 
     InterfaceMethod<"Return size per thread for dot operands.", "SmallVector<unsigned>",
       "getSizePerThreadForOperands", (ins "unsigned":$opIdx)>,
   ];
 }
+
+def MfmaEncodingAttr : DistributedEncoding<"MfmaEncoding", [MmaEncodingTrait]> {
+  let mnemonic = "mfma";
+
+  let description = [{
+An encoding for tensors that have been produced by MI100 && MI200 tensor cores.
+It is characterized by parameters `warpsPerCTA` and `nonKDim` that indicates how data should be partitioned
+between waves (analogous to the term 'warp' used in NVIDIA's CUDA programming model).
+
+Example 1:
+Suppose we have a tensor with a shape of [32, 64], warpsPerCTA set to [1, 2] and nonKDim set to 32.
+The data will be distributed between threads as follows:
+
+                wave 0                                 wave 1
+-----------------/\--------------      -----------------/\--------------
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+
+Example 2:
+Suppose we have a tensor with a shape of [16, 32], warpsPerCTA set to [1, 2] and nonKDim set to 16.
+The data will be distributed between threads as follows:
+
+                wave 0                                 wave 1
+-----------------/\-------------      ------------------/\---------------
+[ 0   1   2   3  ...... 14  15 ]      [ 64  65  66  67  ...... 78   79  ]
+[ 0   1   2   3  ...... 14  15 ]      [ 64  65  66  67  ...... 78   79  ]
+[ 0   1   2   3  ...... 14  15 ]      [ 64  65  66  67  ...... 78   79  ]
+[ 0   1   2   3  ...... 14  15 ]      [ 64  65  66  67  ...... 78   79  ]
+[ 16  17  18  19 ...... 30  31 ]      [ 80  81  82  83  ...... 94   95  ]
+[ 16  17  18  19 ...... 30  31 ]      [ 80  81  82  83  ...... 94   95  ]
+[ 16  17  18  19 ...... 30  31 ]      [ 80  81  82  83  ...... 94   95  ]
+[ 16  17  18  19 ...... 30  31 ]      [ 80  81  82  83  ...... 94   95  ]
+[ 32  33  34  35 ...... 46  47 ]      [ 96  97  98  99  ...... 110  111 ]
+[ 32  33  34  35 ...... 46  47 ]      [ 96  97  98  99  ...... 110  111 ]
+[ 32  33  34  35 ...... 46  47 ]      [ 96  97  98  99  ...... 110  111 ]
+[ 32  33  34  35 ...... 46  47 ]      [ 96  97  98  99  ...... 110  111 ]
+[ 48  49  50  51 ...... 62  63 ]      [ 112 113 114 115 ...... 126  127 ]
+[ 48  49  50  51 ...... 62  63 ]      [ 112 113 114 115 ...... 126  127 ]
+[ 48  49  50  51 ...... 62  63 ]      [ 112 113 114 115 ...... 126  127 ]
+[ 48  49  50  51 ...... 62  63 ]      [ 112 113 114 115 ...... 126  127 ]
+}];
+
+  let parameters = (
+    ins
+    "unsigned":$nonKDim,
+    ArrayRefParameter<"unsigned">:$warpsPerCTA__,
+    "bool":$isTransposed,
+    "CTALayoutAttr":$CTALayout
+  );
+
+  let extraClassDeclaration = extraDistributedDeclaration # [{
+    bool supportReduction() const {
+      return true;
+    }
+    SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx) const;
+    SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int opIdx) const;
+    unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
+    SmallVector<int64_t> getMFMAElemsPerInstrForOperands(int kWidth, int opIdx) const;
+    SmallVector<int64_t> getMFMARepForOperands(ArrayRef<int64_t> operandShape,
+                                      Type elemType, int kWidth, int opIdx) const;
+
+
+  }];
+
+  let hasCustomAssemblyFormat = 1;
+}
+
 
 def NvidiaMmaEncodingAttr : DistributedEncoding<"NvidiaMmaEncoding", [MmaEncodingTrait]> {
   let mnemonic = "nvidia_mma";
@@ -767,7 +907,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     };
     SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx) const;
     SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int opIdx) const;
-    unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int opIdx) const;
+    unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
   }];
 
   let hasCustomAssemblyFormat = 1;
