@@ -1,0 +1,6 @@
+[submodule "third_party/triton"]
+	path = third_party/triton
+	url = https://github.com/ptillet/triton.git
+[submodule "third_party/hip"]
+	path = third_party/hip
+	url = https://github.com/ptillet/triton.git

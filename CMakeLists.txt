@@ -73,7 +73,7 @@ include(AddMLIR)
 set_property(GLOBAL PROPERTY MLIR_DIALECT_LIBS "@TRITON_LIBS@")
 function(add_triton_library name)
 cmake_parse_arguments(ARG "" "" "DEPENDS;LINK_LIBS" ${ARGN})
-add_library(${name} STATIC ${ARG_UNPARSED_ARGUMENTS})
+add_library(${name} OBJECT ${ARG_UNPARSED_ARGUMENTS})
 add_dependencies(${name} ${ARG_DEPENDS})
 link_libraries(${name} ${ARG_LINK_LIBS})
 llvm_update_compile_flags(${name})
@@ -125,7 +125,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     add_link_options(${Python3_LINK_OPTIONS})
   endif()
 
-  set(TRITON_CODEGEN_BACKENDS "cuda")
+  set(TRITON_CODEGEN_BACKENDS "cuda;hip")
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
     add_subdirectory(third_party/${CODEGEN_BACKEND})
   endforeach()
@@ -149,6 +149,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRGPUToNVVMTransforms
     MLIRGPUToGPURuntimeTransforms
     MLIRGPUTransforms
+    TritonAMDGPUToLLVM
+    TritonAMDGPUTransforms
 
     # optimizations
     MLIRIR
