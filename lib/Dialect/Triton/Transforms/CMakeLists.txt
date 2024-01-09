@@ -2,7 +2,7 @@ set(LLVM_TARGET_DEFINITIONS Combine.td)
 mlir_tablegen(TritonCombine.inc -gen-rewriters)
 add_public_tablegen_target(TritonCombineIncGen)
 
-add_mlir_dialect_library(TritonTransforms
+add_triton_library(TritonTransforms
   Combine.cpp
   ReorderBroadcast.cpp
   RewriteTensorPointer.cpp

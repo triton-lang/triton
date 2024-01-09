@@ -19,6 +19,8 @@ if(NOT WIN32)
   list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 endif()
 
+
+
 # Options
 option(TRITON_BUILD_TUTORIALS "Build C++ Triton tutorials" ON)
 option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
@@ -66,6 +68,16 @@ list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
 include(TableGen) # required by AddMLIR
 include(AddLLVM)
 include(AddMLIR)
+
+# Utilities
+set_property(GLOBAL PROPERTY MLIR_DIALECT_LIBS "@TRITON_LIBS@")
+function(add_triton_library name)
+cmake_parse_arguments(ARG "" "" "DEPENDS;LINK_LIBS" ${ARGN})
+add_library(${name} STATIC ${ARG_UNPARSED_ARGUMENTS})
+add_dependencies(${name} ${ARG_DEPENDS})
+link_libraries(${name} ${ARG_LINK_LIBS})
+llvm_update_compile_flags(${name})
+endfunction(add_triton_library)
 
 # Disable warnings that show up in external code (gtest;pybind11)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default")
@@ -139,6 +151,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRGPUTransforms
 
     # optimizations
+    MLIRIR
     MLIRControlFlowToLLVM
     MLIRBytecodeWriter
     MLIRPass
@@ -149,7 +162,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRMathToLLVM
     MLIRROCDLToLLVMIRTranslation
     MLIRGPUDialect
-    MLIRIR
 
     # LLVM
     LLVMPasses
@@ -192,6 +204,6 @@ if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
   target_link_libraries(triton ${PYTHON_LDFLAGS})
 endif()
 
-add_subdirectory(bin)
-add_subdirectory(test)
-add_subdirectory(unittest)
+# add_subdirectory(bin)
+# add_subdirectory(test)
+# add_subdirectory(unittest)

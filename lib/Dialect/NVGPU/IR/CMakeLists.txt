@@ -1,4 +1,4 @@
-add_mlir_dialect_library(NVGPUIR
+add_triton_library(NVGPUIR
   Dialect.cpp
 
   DEPENDS
