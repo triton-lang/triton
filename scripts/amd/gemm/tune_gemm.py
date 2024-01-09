@@ -68,6 +68,9 @@ def prune_configs(M, N, K, configs):
             continue
         if N <= mfma and BLOCK_SIZE_N != mfma:
             continue
+        # Skip BLOCK_SIZE that is too large compare to M/N
+        if BLOCK_SIZE_M > M * 2 or BLOCK_SIZE_N > N * 2:
+            continue
         # skip large split_k when not necessary
         if SPLIT_K != 1 and not need_split_k(M, N, K):
             continue
