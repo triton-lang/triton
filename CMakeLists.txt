@@ -182,6 +182,10 @@ if(TRITON_BUILD_PYTHON_MODULE)
   )
 
   # Define triton library
+  string(JOIN "," TRITON_BACKENDS_TUPLE ${TRITON_CODEGEN_BACKENDS})
+  set(TRITON_BACKENDS_TUPLE "(${TRITON_BACKENDS_TUPLE})")
+  add_compile_definitions(TRITON_BACKENDS_TUPLE=${TRITON_BACKENDS_TUPLE})
+  message(STATUS ${TRITON_BACKENDS_TUPLE})
   add_library(triton SHARED ${PYTHON_SRC_PATH}/main.cc
                   ${PYTHON_SRC_PATH}/ir.cc
                   ${PYTHON_SRC_PATH}/passes.cc
