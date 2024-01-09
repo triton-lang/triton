@@ -80,7 +80,7 @@ llvm_update_compile_flags(${name})
 endfunction(add_triton_library)
 
 # Disable warnings that show up in external code (gtest;pybind11)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default -fvisibility=hidden")
 
 include_directories(".")
 include_directories(${MLIR_INCLUDE_DIRS})
@@ -137,18 +137,20 @@ if(TRITON_BUILD_PYTHON_MODULE)
     TritonToTritonGPU
     TritonGPUIR
     TritonGPUTransforms
+    TritonGPUToLLVM
     TritonLLVMIR
     TritonNvidiaGPUIR
     MLIRAMDGPUDialect
     TritonAnalysis
+    NVGPUIR
     NVGPUToLLVM
     TritonNvidiaGPUTransforms
-    TritonGPUToLLVM
     MLIRNVVMDialect
     MLIRNVVMToLLVMIRTranslation
     MLIRGPUToNVVMTransforms
     MLIRGPUToGPURuntimeTransforms
     MLIRGPUTransforms
+    TritonAMD
     TritonAMDGPUToLLVM
     TritonAMDGPUTransforms
 
@@ -164,6 +166,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRMathToLLVM
     MLIRROCDLToLLVMIRTranslation
     MLIRGPUDialect
+    MLIRGPUToROCDLTransforms
 
     # LLVM
     LLVMPasses

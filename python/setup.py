@@ -343,7 +343,7 @@ download_and_copy(
     f"https://anaconda.org/nvidia/cuda-nvdisasm/12.3.52/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
 
-plugins = ["cuda"]
+plugins = ["cuda", "hip"]
 for plugin in plugins:
     src_path = os.path.join(os.pardir, "third_party", plugin, "backend")
     dst_path = os.path.join(os.path.dirname(__file__), "triton", "backends", plugin)
