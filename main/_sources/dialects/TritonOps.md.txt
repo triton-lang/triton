@@ -714,6 +714,39 @@ Effects: MemoryEffects::Effect{}
 | :----: | ----------- |
 | `result` | 32-bit signless integer
 
+### `tt.histogram` (triton::HistogramOp)
+
+_Return a histgram of the inputs._
+
+
+Syntax:
+
+```
+operation ::= `tt.histogram` $input attr-dict `:` type($input) `->` type($result)
+```
+
+Return the histogram of the input tensor. The number of bins is equal to
+the dimension of the output tensor. Each bins has a width of 1 and bins
+start at 0.
+
+Traits: AlwaysSpeculatableImplTrait, TensorSizeTrait, VerifyTensorLayoutsTrait
+
+Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)
+
+Effects: MemoryEffects::Effect{}
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `input` | tensor of integer values
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | tensor of integer values
+
 ### `tt.int_to_ptr` (triton::IntToPtrOp)
 
 _Cast int64 to pointer_
