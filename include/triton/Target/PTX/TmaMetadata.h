@@ -24,7 +24,7 @@
 #ifndef TRITON_TARGET_PTX_TMAMETADATA_H
 #define TRITON_TARGET_PTX_TMAMETADATA_H
 
-#include "third_party/cuda/backend/include/cuda.h"
+#include "third_party/nvidia/backend/include/cuda.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"

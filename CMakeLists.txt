@@ -125,7 +125,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
     add_link_options(${Python3_LINK_OPTIONS})
   endif()
 
-  set(TRITON_CODEGEN_BACKENDS "cuda;hip")
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
     add_subdirectory(third_party/${CODEGEN_BACKEND})
   endforeach()
@@ -151,6 +150,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRGPUToGPURuntimeTransforms
     MLIRGPUTransforms
     TritonAMD
+    TritonNVIDIA
     TritonAMDGPUToLLVM
     TritonAMDGPUTransforms
 
@@ -166,6 +166,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRMathToLLVM
     MLIRROCDLToLLVMIRTranslation
     MLIRGPUDialect
+    MLIRSCFToControlFlow
+    MLIRIndexToLLVM
     MLIRGPUToROCDLTransforms
 
     # LLVM
@@ -184,8 +186,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
                   ${PYTHON_SRC_PATH}/ir.cc
                   ${PYTHON_SRC_PATH}/passes.cc
                   ${PYTHON_SRC_PATH}/interpreter.cc
-                  ${PYTHON_SRC_PATH}/llvm.cc
-                  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cuda/triton_nvidia.cc)
+                  ${PYTHON_SRC_PATH}/llvm.cc)
 
   # Link triton with its dependencies
   target_link_libraries(triton PUBLIC ${TRITON_LIBRARIES})
