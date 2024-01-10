@@ -115,7 +115,7 @@ def TT_ClampFOp : TT_Op<"clampf", [Elementwise,
 
     let results = (outs TT_FloatLike:$result);
 
-    let assemblyFormat = "$x `,` $min `,` $max attr-dict `->` type($result)";
+    let assemblyFormat = "$x `,` $min `,` $max attr-dict `:` type($result)";
 }
 
 //
