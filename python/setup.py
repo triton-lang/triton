@@ -37,6 +37,14 @@ def _copy_backends(active):
         assert os.path.exists(backend_path), f"{backend_path} does not exist!"
         for file in ["compiler.py", "driver.py"]:
             assert os.path.exists(os.path.join(backend_path, file))
+        # initialize submodule if there is one
+        try:
+            subprocess.run(["git", "submodule", "update", "--init", f"{backend}"], check=True,
+                           stdout=subprocess.DEVNULL, cwd=root_dir)
+        except subprocess.CalledProcessError:
+            pass
+        except FileNotFoundError:
+            pass
         # copy backend over
         dst_path = os.path.join(os.path.dirname(__file__), "triton", "backends", backend)
         if os.path.exists(dst_path):
@@ -369,7 +377,7 @@ download_and_copy(
     url_func=lambda arch, version:
     f"https://anaconda.org/nvidia/cuda-nvdisasm/12.3.52/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
-backends = _copy_backends(["nvidia", "amd"])
+backends = _copy_backends(["nvidia"])
 
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
