@@ -217,3 +217,10 @@ tt.func @reshape(%0: tensor<512xi32>) {
   %1 = tt.reshape %0 {allow_reorder = false} : tensor<512xi32> -> tensor<16x32xi32>
   tt.return
 }
+
+// CHECK-LABEL: histogram
+tt.func @histogram(%0: tensor<512xi32>) {
+  // CHECK: tt.histogram %{{.+}} : tensor<512xi32> -> tensor<16xi32>
+  %1 = tt.histogram %0 : tensor<512xi32> -> tensor<16xi32>
+  tt.return
+}

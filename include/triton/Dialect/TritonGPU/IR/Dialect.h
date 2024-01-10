@@ -31,6 +31,8 @@ SmallVector<unsigned> getElemsPerThread(Type type);
 // getThreadsPerWarpWithUniqueData.
 SmallVector<unsigned> getThreadsPerWarp(Attribute layout);
 
+unsigned getWarpSize(Attribute layout);
+
 // Returns the number of warps per CTA that may have access to replicated
 // elements. If you want non-replicated warps, use getWarpsPerCTAWithUniqueData.
 SmallVector<unsigned> getWarpsPerCTA(Attribute layout);
@@ -84,7 +86,7 @@ SmallVector<unsigned> getCTAOrder(Attribute layout);
  *     WarpsPerCTA in each dimension and is independent from the tensor shape.
  * (2) ShapePerCTA is defined by shape / CTASplitNum in each dimension.
  * (3) In the implementation of emitIndices, ShapePerCTATile will
- *     be replicated or wraped to fit ShapePerCTA.
+ *     be replicated or wrapped to fit ShapePerCTA.
  */
 SmallVector<unsigned>
 getShapePerCTATile(Attribute layout,

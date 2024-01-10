@@ -4,6 +4,7 @@ import random
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, Optional
+import hashlib
 
 
 def default_cache_dir():
@@ -116,7 +117,7 @@ class FileCacheManager(CacheManager):
         filepath = self._make_path(filename)
         # Random ID to avoid any collisions
         rnd_id = random.randint(0, 1000000)
-        # we use the PID incase a bunch of these around so we can see what PID made it
+        # we use the PID in case a bunch of these around so we can see what PID made it
         pid = os.getpid()
         # use tempfile to be robust against program interruptions
         temp_path = f"{filepath}.tmp.pid_{pid}_{rnd_id}"
@@ -157,3 +158,13 @@ def get_override_manager(key) -> CacheManager:
 
 def get_dump_manager(key) -> CacheManager:
     return __cache_cls(key, dump=True)
+
+
+def make_so_cache_key(version_hash, signature, constants, ids, **kwargs):
+    # Get unique key for the compiled code
+    signature = {k: 'ptr' if v[0] == '*' else v for k, v in signature.items()}
+    key = f"{version_hash}-{''.join(signature.values())}-{constants}-{ids}"
+    for kw in kwargs:
+        key = f"{key}-{kwargs.get(kw)}"
+    key = hashlib.md5(key.encode("utf-8")).hexdigest()
+    return key

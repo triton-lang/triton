@@ -2,13 +2,13 @@
 Matrix Multiplication
 =====================
 In this tutorial, you will write a very short high-performance FP16 matrix multiplication kernel that achieves
-performance on parallel with cuBLAS.
+performance on par with cuBLAS.
 
 You will specifically learn about:
 
 * Block-level matrix multiplications.
 
-* Multi-dimensional pointer arithmetics.
+* Multi-dimensional pointer arithmetic.
 
 * Program re-ordering for improved L2 cache hit rate.
 
@@ -53,13 +53,13 @@ You will specifically learn about:
 # The above algorithm is, actually, fairly straightforward to implement in Triton.
 # The main difficulty comes from the computation of the memory locations at which blocks
 # of :code:`A` and :code:`B` must be read in the inner loop. For that, we need
-# multi-dimensional pointer arithmetics.
+# multi-dimensional pointer arithmetic.
 #
-# Pointer Arithmetics
+# Pointer Arithmetic
 # ~~~~~~~~~~~~~~~~~~~
 #
-# For a row-major 2D tensor :code:`X`, the memory location of :code:`X[i, j]` is given b
-# y :code:`&X[i, j] = X + i*stride_xi + j*stride_xj`.
+# For a row-major 2D tensor :code:`X`, the memory location of :code:`X[i, j]` is given
+# by :code:`&X[i, j] = X + i*stride_xi + j*stride_xj`.
 # Therefore, blocks of pointers for :code:`A[m : m+BLOCK_SIZE_M, k:k+BLOCK_SIZE_K]` and
 # :code:`B[k : k+BLOCK_SIZE_K, n : n+BLOCK_SIZE_N]` can be defined in pseudo-code as:
 #
@@ -96,8 +96,8 @@ You will specifically learn about:
 # As mentioned above, each program instance computes a :code:`[BLOCK_SIZE_M, BLOCK_SIZE_N]`
 # block of :code:`C`.
 # It is important to remember that the order in which these blocks are computed does
-# matter, since it affects the L2 cache hit rate of our program. and unfortunately, a
-# a simple row-major ordering
+# matter, since it affects the L2 cache hit rate of our program, and unfortunately, a
+# simple row-major ordering
 #
 #  .. code-block:: Python
 #
@@ -222,7 +222,7 @@ def matmul_kernel(
     # and accumulate
     # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
     # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
-    # See above `Pointer Arithmetics` section for details
+    # See above `Pointer Arithmetic` section for details
     offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
     offs_k = tl.arange(0, BLOCK_SIZE_K)

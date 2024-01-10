@@ -246,8 +246,8 @@ int applyCommit(OpBuilder &builder, ttng::ProducerCommitOp &op,
 void processProducerAcquireOp(OpBuilder &builder, ttng::ProducerAcquireOp op,
                               Value bufferEmpty) {
   auto loc = op.getLoc();
-  // The first producer_aquire should be met immediately, so initailly producer
-  // skips the fisrt wait
+  // The first producer_aquire should be met immediately, so initially producer
+  // skips the first wait
   Value phase = getMBarrierPhaseBit(builder, op, true);
   auto waitOp = builder.create<ttng::MBarrierWaitOp>(loc, bufferEmpty, phase);
   assert(op.getOperation()->hasAttr("async_agent"));
@@ -446,7 +446,7 @@ void materializeTokenOperations(Operation *parentOp, int numCTAs) {
 void mutexSyncPingPang(Operation *parentOp, int numAgents, int &nameBarrierId,
                        int &globalNumRoles) {
   // ping-pang mutex sync: using named barrier and only suitable for two roles.
-  // Take mutex syncronization between dot and store as an example:
+  // Take mutex synchronization between dot and store as an example:
   // * For dot loop:
   //   * role 0 waits for named barrier 15 (loop enter), arrives named barrier
   //   14 (loop leave)
@@ -463,7 +463,7 @@ void mutexSyncPingPang(Operation *parentOp, int numAgents, int &nameBarrierId,
   globalNumRoles += numRoles;
   Value roleId;
   parentOp->walk([&](ttng::GetMutexRoleIdOp getMutexRoleIdOp) {
-    // GetMutexRoleIdOp only occures once.
+    // GetMutexRoleIdOp only occurs once.
     assert(times == 0);
     OpBuilder builder(getMutexRoleIdOp);
     numRoles = getMutexRoleIdOp.getNum();

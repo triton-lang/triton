@@ -24,7 +24,7 @@
 #ifndef TRITON_TARGET_PTX_TMAMETADATA_H
 #define TRITON_TARGET_PTX_TMAMETADATA_H
 
-#include "python/triton/third_party/cuda/include/cuda.h"
+#include "third_party/nvidia/backend/include/cuda.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
@@ -39,7 +39,7 @@ namespace gpu {
 
 struct TMAInfo {
   // --------------------------------------------
-  // informations to be filled into CUtensorMaps
+  // information to be filled into CUtensorMaps
   int tensorDataType;
 
   uint32_t tensorRank;

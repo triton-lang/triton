@@ -1,4 +1,4 @@
-add_mlir_dialect_library(TritonIR
+add_triton_library(TritonIR
   Dialect.cpp
   Ops.cpp
   Types.cpp

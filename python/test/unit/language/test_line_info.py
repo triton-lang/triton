@@ -6,7 +6,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton.common.backend import path_to_nvdisasm
+from triton.backends.nvidia.compiler import _path_to_binary
 
 
 @triton.jit
@@ -76,7 +76,7 @@ def kernel_dot_combine(x):
 
 
 def extract_file_lines(asm):
-    nvdisasm, _ = path_to_nvdisasm()
+    nvdisasm, _ = _path_to_binary("nvdisasm")
     fd, path = tempfile.mkstemp()
     with open(fd, 'wb') as cubin:
         cubin.write(asm)
@@ -115,7 +115,7 @@ func_types = ["single", "call", "call_noinline", "multi_files", "autotune", "dot
 @pytest.mark.parametrize("func", func_types)
 def test_line_info(func: str):
     try:
-        _, _ = path_to_nvdisasm()
+        _, _ = _path_to_binary("nvdisasm")
     except BaseException:
         pytest.skip("nvdisasm is not available")
 

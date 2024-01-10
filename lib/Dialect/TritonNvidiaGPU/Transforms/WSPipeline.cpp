@@ -605,8 +605,8 @@ void collectAsyncChannels(SmallVector<std::unique_ptr<Channel>> &channels,
 void reduceChannels(SmallVector<Channel *> &channels,
 
                     DenseMap<Operation *, SmallVector<Channel *>> &map) {
-  // If producers or their consumers has the same convergent comsumer,
-  // and those producers, producers' consumers and the convergent comsumer are
+  // If producers or their consumers has the same convergent consumer,
+  // and those producers, producers' consumers and the convergent consumer are
   // in the same block, They share the same token.
   auto checkConverge = [](Operation *op1, Operation *op2) -> Operation * {
     // Only check level-0 and level-1 convergence, e.g.
@@ -736,7 +736,7 @@ void buildAsyncComm(const DenseMap<Operation *, SmallVector<Channel *>> &map,
       }
       c = c->getParentOp();
     }
-    llvm_unreachable("Falied to find consumer's same level Op with producer");
+    llvm_unreachable("Failed to find consumer's same level Op with producer");
   };
 
   auto consumerReleaseHeutistic = [&](Operation *p,
@@ -790,7 +790,7 @@ void buildAsyncComm(const DenseMap<Operation *, SmallVector<Channel *>> &map,
               resTy.getEncoding().dyn_cast<ttg::NvidiaMmaEncodingAttr>())
         if (resEnc.isHopper() && dot.hasOneUse() &&
             isa<scf::YieldOp>(*dot.getUsers().begin()) && cArg &&
-            cArg.hasOneUse())
+            cArg.hasOneUse() && numStages > 1)
           return dotOp.getOperation();
     }
     return nullptr;
@@ -992,9 +992,9 @@ void buildAsyncComm(const DenseMap<Operation *, SmallVector<Channel *>> &map,
 DenseMap<AgentId, Operation *> agentDivision(Operation *backbone) {
   // A general agent division in backbone could be:
   // *  If opWithRegion has results, e.g. scf.for, this opWithRegion will be
-  //    splitted into several new operations, each agent has one, which
+  //    split into several new operations, each agent has one, which
   //    has the part of results related to this agent. One agent could own
-  //    all orginal results or none of them, but one result must belong to
+  //    all original results or none of them, but one result must belong to
   //    one and only one agent.
   // *  if opWithRegions doesn't have result. Simply split for every agent.
   // *  So does operands of opWithRegions
@@ -1147,7 +1147,7 @@ struct WSPipelinePass : public TritonGPUWSPipelineBase<WSPipelinePass> {
       SmallVector<Operation *> backbone = getBackbone(funcOp, channels);
       appendPipelineIdxArgs(backbone, numStages);
 
-      // Create token, buffer and data tranfer between async agents
+      // Create token, buffer and data transfer between async agents
       DenseMap<Channel *, Value> tokenMap = createToken(map, funcOp, numStages);
       DenseMap<Channel *, Value> bufferMap =
           createBuffer(channels, funcOp, numStages);

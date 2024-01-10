@@ -192,11 +192,11 @@ void init_triton_ir(py::module &&m) {
 
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
-    registry.insert<mlir::triton::TritonDialect,
-                    mlir::triton::gpu::TritonGPUDialect,
-                    mlir::math::MathDialect, mlir::arith::ArithDialect,
-                    mlir::index::IndexDialect, mlir::scf::SCFDialect,
-                    mlir::cf::ControlFlowDialect, mlir::LLVM::LLVMDialect>();
+    registry.insert<
+        mlir::triton::TritonDialect, mlir::triton::gpu::TritonGPUDialect,
+        mlir::math::MathDialect, mlir::arith::ArithDialect,
+        mlir::index::IndexDialect, mlir::scf::SCFDialect, mlir::gpu::GPUDialect,
+        mlir::cf::ControlFlowDialect, mlir::LLVM::LLVMDialect>();
     mlir::registerBuiltinDialectTranslation(registry);
     mlir::registerLLVMDialectTranslation(registry);
     context.appendDialectRegistry(registry);
@@ -1511,6 +1511,15 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, mlir::Type &type) -> mlir::Value {
              return self.create<::mlir::LLVM::UndefOp>(type);
            })
+      .def("create_histogram",
+           [](TritonOpBuilder &self, mlir::Value operand,
+              int numBins) -> mlir::OpState {
+             return self.create<mlir::triton::HistogramOp>(
+                 mlir::RankedTensorType::get(
+                     {static_cast<int64_t>(numBins)},
+                     mlir::IntegerType::get(operand.getContext(), 32)),
+                 operand);
+           })
       // Force GPU barrier
       .def("create_barrier",
            [](TritonOpBuilder &self) { self.create<mlir::gpu::BarrierOp>(); })
@@ -1537,9 +1546,18 @@ void init_triton_ir(py::module &&m) {
       .def(py::init<mlir::MLIRContext *>())
       .def("enable_debug",
            [](mlir::PassManager &self) {
+             auto *context = self.getContext();
+             context->printOpOnDiagnostic(true);
+             context->printStackTraceOnDiagnostic(true);
+             context->disableMultithreading();
+             context->getDiagEngine().registerHandler(
+                 [](mlir::Diagnostic &diag) {
+                   llvm::outs() << diag << "\n";
+                   return mlir::success();
+                 });
+
              if (!::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP"))
                return;
-             self.getContext()->disableMultithreading();
              auto printingFlags = mlir::OpPrintingFlags();
              printingFlags.elideLargeElementsAttrs(16);
              printingFlags.enableDebugInfo();

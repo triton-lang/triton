@@ -384,6 +384,68 @@ bool maybeAliasOp(Operation *op) {
              triton::nvidia_gpu::StoreAsyncOp, tensor::InsertSliceOp>(op);
 }
 
+static bool supportMFMAGranularity(int m, int n, int k) {
+  // these limitations are dtype dependent, in future we may relax them
+  const static std::pair<int, int> mfmaTypes[2] = {{32, 8}, {16, 16}};
+  for (const auto &mfmaType : mfmaTypes) {
+    auto [granularityMN, granularityK] = mfmaType;
+    if (m % granularityMN != 0 || n % granularityMN != 0)
+      continue;
+    if (k % granularityK != 0)
+      continue;
+    return true;
+  }
+  return false;
+}
+
+bool supportMFMATypes(Type a, Type b) {
+  if (a.getIntOrFloatBitWidth() != b.getIntOrFloatBitWidth())
+    return false;
+
+  auto F8E4M3FNUZ = TypeID::get<mlir::Float8E4M3FNUZType>();
+  auto F8E5M2FNUZ = TypeID::get<mlir::Float8E5M2FNUZType>();
+  auto F16 = TypeID::get<mlir::Float16Type>();
+  auto BF16 = TypeID::get<mlir::BFloat16Type>();
+  auto F32 = TypeID::get<mlir::Float32Type>();
+  auto Int = TypeID::get<mlir::IntegerType>();
+  DenseSet<std::pair<mlir::TypeID, mlir::TypeID>> supportedTypes = {
+      {F32, F32},
+      {F16, F16},
+      {BF16, BF16},
+      {F8E4M3FNUZ, F8E4M3FNUZ},
+      {F8E4M3FNUZ, F8E5M2FNUZ},
+      {F8E5M2FNUZ, F8E4M3FNUZ},
+      {F8E5M2FNUZ, F8E5M2FNUZ},
+      {Int, Int}};
+
+  if (!supportedTypes.contains({a.getTypeID(), b.getTypeID()}))
+    return false;
+
+  if (a.isIntOrIndex() && a.getIntOrFloatBitWidth() != 8)
+    return false;
+  return true;
+}
+
+bool supportMFMA(triton::DotOp op) {
+  auto aTy = op.getA().getType().cast<RankedTensorType>();
+  auto bTy = op.getB().getType().cast<RankedTensorType>();
+
+  auto aElemTy = aTy.getElementType();
+  auto bElemTy = bTy.getElementType();
+
+  if (!supportMFMATypes(aElemTy, bElemTy))
+    return false;
+
+  auto aShape = aTy.getShape();
+  auto bShape = bTy.getShape();
+
+  assert(aShape[1] == bShape[0]);
+  if (!supportMFMAGranularity(aShape[0], bShape[1], aShape[1]))
+    return false;
+
+  return true;
+}
+
 bool supportMMA(triton::DotOp op, int version) {
   // Refer to mma section for the data type supported by Volta and Hopper
   // Tensor Core in
@@ -434,6 +496,22 @@ bool supportMMA(Value value, int version) {
          (elemTy.isInteger(8) && version >= 2);
 }
 
+bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
+  auto srcLayout = srcTy.getEncoding();
+  auto dstLayout = dstTy.getEncoding();
+  auto mfmaLayout = srcLayout.cast<triton::gpu::MfmaEncodingAttr>();
+  auto dotOperandLayout = dstLayout.cast<triton::gpu::DotOperandEncodingAttr>();
+  // TODO: Remove the restriction on the warpsPerCTA once chain dot testing is
+  // improved. In addition, we can enable this shortcut for regular MFMA
+  // layout when opIdx == 1.
+  return mfmaLayout.getWarpsPerCTA()[1] == 1 &&
+         dotOperandLayout.getOpIdx() == 0 &&
+         dotOperandLayout.getKWidth() == 4 &&
+         dotOperandLayout.getParent() == mfmaLayout &&
+         mfmaLayout.getNonKDim() == 32 && mfmaLayout.getIsTransposed() &&
+         (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16());
+}
+
 static bool isMmaToMmaShortcut(Attribute srcEncoding, Attribute dstEncoding) {
   auto src = srcEncoding.dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>();
   auto dst = dstEncoding.dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>();
@@ -477,19 +555,6 @@ bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
          dotOperandLayout.getOpIdx() == 0 &&
          dotOperandLayout.getParent() == mmaLayout &&
          !srcTy.getElementType().isF32();
-}
-
-bool isSingleValue(Value value) {
-  // Don't consider load as expensive if it is loading a scalar.
-  if (auto tensorTy = value.getType().dyn_cast<RankedTensorType>())
-    return tensorTy.getNumElements() == 1;
-  // TODO: Handle other cases.
-  // For example, when ptr is a tensor of single value.
-  // It means that ptr is a resultant of broadcast or generated through
-  // a chain of broadcast and other operations.
-  // Rematerialize it without considering contiguous memory access pattern is
-  // fine.
-  return true;
 }
 
 namespace {

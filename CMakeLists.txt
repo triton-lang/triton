@@ -19,6 +19,8 @@ if(NOT WIN32)
   list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 endif()
 
+
+
 # Options
 option(TRITON_BUILD_TUTORIALS "Build C++ Triton tutorials" ON)
 option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
@@ -43,140 +45,19 @@ endif()
 
 # Compiler flags
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17")
 
 # Third-party
 include_directories(${PYBIND11_INCLUDE_DIR})
 
-set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17 -fvisibility=hidden -fvisibility-inlines-hidden")
 
-if(APPLE)
-  set(CMAKE_OSX_DEPLOYMENT_TARGET 11.6)
-endif()
 
 # #########
 # LLVM
 # #########
 if(NOT MLIR_DIR)
-  if(NOT LLVM_LIBRARY_DIR)
-    if(WIN32)
-      find_package(LLVM 13 REQUIRED COMPONENTS nvptx amdgpu)
-
-      include_directories(${LLVM_INCLUDE_DIRS})
-      separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
-      add_definitions(${LLVM_DEFINITIONS_LIST})
-
-      llvm_map_components_to_libnames(LLVM_LIBRARIES support core
-        NVPTXInfo nvptxcodegen
-        AMDGPUInfo AMDGPUcodegen
-      )
-    else()
-      find_package(LLVM 11 REQUIRED COMPONENTS "nvptx;amdgpu")
-    endif()
-
-    message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
-
-    # FindLLVM outputs LLVM_LIBRARY_DIRS but we expect LLVM_LIBRARY_DIR here
-    set(LLVM_LIBRARY_DIR ${LLVM_LIBRARY_DIRS})
-
-    if(APPLE)
-      set(CMAKE_OSX_DEPLOYMENT_TARGET "10.14")
-    endif()
-
-  # sometimes we don't want to use llvm-config, since it may have been downloaded for some specific linux distros
-  else()
-    set(LLVM_LDFLAGS "-L${LLVM_LIBRARY_DIR}")
-    set(LLVM_LIBRARIES
-      LLVMNVPTXCodeGen
-      LLVMNVPTXDesc
-      LLVMNVPTXInfo
-      LLVMAMDGPUDisassembler
-      LLVMMCDisassembler
-      LLVMAMDGPUCodeGen
-      LLVMMIRParser
-      LLVMGlobalISel
-      LLVMSelectionDAG
-      LLVMipo
-      LLVMInstrumentation
-      LLVMVectorize
-      LLVMLinker
-      LLVMIRReader
-      LLVMAsmParser
-      LLVMFrontendOpenMP
-      LLVMAsmPrinter
-      LLVMDebugInfoDWARF
-      LLVMCodeGen
-      LLVMTarget
-      LLVMScalarOpts
-      LLVMInstCombine
-      LLVMAggressiveInstCombine
-      LLVMTransformUtils
-      LLVMBitWriter
-      LLVMAnalysis
-      LLVMProfileData
-      LLVMObject
-      LLVMTextAPI
-      LLVMBitReader
-      LLVMAMDGPUAsmParser
-      LLVMMCParser
-      LLVMAMDGPUDesc
-      LLVMAMDGPUUtils
-      LLVMMC
-      LLVMDebugInfoCodeView
-      LLVMDebugInfoMSF
-      LLVMCore
-      LLVMRemarks
-      LLVMBitstreamReader
-      LLVMBinaryFormat
-      LLVMAMDGPUInfo
-      LLVMSupport
-      LLVMDemangle
-      LLVMPasses
-      LLVMAnalysis
-      LLVMTransformUtils
-      LLVMScalarOpts
-      LLVMTransformUtils
-      LLVMipo
-      LLVMObjCARCOpts
-      LLVMCoroutines
-      LLVMAnalysis
-    )
-  endif()
-
   set(MLIR_DIR ${LLVM_LIBRARY_DIR}/cmake/mlir)
 endif()
-
-# Python module
-if(TRITON_BUILD_PYTHON_MODULE)
-  message(STATUS "Adding Python module")
-  set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
-  set(PYTHON_SRC ${PYTHON_SRC_PATH}/main.cc
-                ${PYTHON_SRC_PATH}/ir.cc
-                ${PYTHON_SRC_PATH}/passes.cc
-                ${PYTHON_SRC_PATH}/interpreter.cc
-                ${PYTHON_SRC_PATH}/llvm.cc
-                ${PYTHON_SRC_PATH}/nvidia.cc)
-  include_directories("." ${PYTHON_SRC_PATH})
-
-  if(PYTHON_INCLUDE_DIRS)
-    include_directories(${PYTHON_INCLUDE_DIRS})
-  else()
-    find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
-    include_directories(${Python3_INCLUDE_DIRS})
-    link_directories(${Python3_LIBRARY_DIRS})
-    link_libraries(${Python3_LIBRARIES})
-    add_link_options(${Python3_LINK_OPTIONS})
-  endif()
-endif()
-
-# # Triton
-# file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
-# if (WIN32 AND TRITON_BUILD_PYTHON_MODULE)
-# Python3_add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
-# set_target_properties(triton PROPERTIES SUFFIX ".pyd")
-# set_target_properties(triton PROPERTIES PREFIX "lib")
-# else()
-# add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
-# endif()
 
 # MLIR
 find_package(MLIR REQUIRED CONFIG PATHS ${MLIR_DIR})
@@ -188,9 +69,43 @@ include(TableGen) # required by AddMLIR
 include(AddLLVM)
 include(AddMLIR)
 
-# Disable warnings that show up in external code (gtest;pybind11)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default")
+# Utilities
+function(add_triton_object name)
+  cmake_parse_arguments(ARG "" "" "DEPENDS;LINK_LIBS" ${ARGN})
+  add_library(${name} OBJECT)
+  target_sources(${name}
+    PRIVATE ${ARG_UNPARSED_ARGUMENTS}
+    INTERFACE $<TARGET_OBJECTS:${name}>
+  )
 
+
+  # add_library(${name} OBJECT ${ARG_UNPARSED_ARGUMENTS})
+  if(ARG_DEPENDS)
+    add_dependencies(${name} ${ARG_DEPENDS})
+  endif()
+  if(ARG_LINK_LIBS)
+    target_link_libraries(${name} PUBLIC ${ARG_LINK_LIBS})
+  endif()
+endfunction(add_triton_object)
+
+set_property(GLOBAL PROPERTY TRITON_LIBS "")
+function(add_triton_library name)
+  set_property(GLOBAL APPEND PROPERTY TRITON_LIBS ${name})
+  add_triton_object(${name} ${ARGN})
+  llvm_update_compile_flags(${name})
+endfunction()
+
+set_property(GLOBAL PROPERTY TRITON_PLUGINS "")
+function(add_triton_plugin name)
+  set_property(GLOBAL APPEND PROPERTY TRITON_PLUGINS ${name})
+  add_triton_object(${name} ${ARGN})
+endfunction()
+
+
+# Disable warnings that show up in external code (gtest;pybind11)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default -fvisibility=hidden")
+
+include_directories(".")
 include_directories(${MLIR_INCLUDE_DIRS})
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR}/include)
@@ -204,9 +119,6 @@ add_subdirectory(lib)
 set(TRITON_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(TRITON_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
 
-get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
-get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
-
 # TODO: Figure out which target is sufficient to fix errors; triton is
 # apparently not enough. Currently set linking libstdc++fs for all targets
 # to support some old version GCC compilers like 8.3.0.
@@ -214,18 +126,45 @@ if (NOT WIN32 AND NOT APPLE)
   link_libraries(stdc++fs)
 endif()
 
-if(TRITON_BUILD_PYTHON_MODULE)
-  add_library(triton SHARED ${PYTHON_SRC})
-  set(TRITON_LIBRARIES
-    TritonAnalysis
-    TritonTransforms
-    TritonGPUTransforms
-    TritonNvidiaGPUTransforms
-    TritonLLVMIR
-    ${dialect_libs}
-    ${conversion_libs}
 
-    # optimizations
+# -----
+
+# ------
+if(TRITON_BUILD_PYTHON_MODULE)
+  message(STATUS "Adding Python module")
+  set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
+  include_directories(${PYTHON_SRC_PATH})
+
+  if(PYTHON_INCLUDE_DIRS)
+    include_directories(${PYTHON_INCLUDE_DIRS})
+  else()
+    find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
+    include_directories(${Python3_INCLUDE_DIRS})
+    link_directories(${Python3_LIBRARY_DIRS})
+    link_libraries(${Python3_LIBRARIES})
+    add_link_options(${Python3_LINK_OPTIONS})
+  endif()
+
+  foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
+    add_subdirectory(third_party/${CODEGEN_BACKEND})
+  endforeach()
+
+
+  get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
+  get_property(triton_plugins GLOBAL PROPERTY TRITON_PLUGINS)
+  set(TRITON_LIBRARIES
+    ${triton_libs}
+    ${triton_plugins}
+
+    # mlir
+    MLIRAMDGPUDialect
+    MLIRNVVMDialect
+    MLIRNVVMToLLVMIRTranslation
+    MLIRGPUToNVVMTransforms
+    MLIRGPUToGPURuntimeTransforms
+    MLIRGPUTransforms
+    MLIRIR
+    MLIRControlFlowToLLVM
     MLIRBytecodeWriter
     MLIRPass
     MLIRTransforms
@@ -233,30 +172,41 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRSupport
     MLIRTargetLLVMIRExport
     MLIRMathToLLVM
-    MLIRNVVMToLLVMIRTranslation
     MLIRROCDLToLLVMIRTranslation
-    MLIRIR
+    MLIRGPUDialect
+    MLIRSCFToControlFlow
+    MLIRIndexToLLVM
+    MLIRGPUToROCDLTransforms
+
+    # LLVM
+    LLVMPasses
+    LLVMX86CodeGen
+    LLVMX86AsmParser
+    LLVMNVPTXCodeGen
+    # LLVMNVPTXAsmPrinter
+    LLVMAMDGPUCodeGen
+    LLVMAMDGPUAsmParser
+
   )
 
+  # Define triton library
+  string(JOIN "," TRITON_BACKENDS_TUPLE ${TRITON_CODEGEN_BACKENDS})
+  set(TRITON_BACKENDS_TUPLE "(${TRITON_BACKENDS_TUPLE})")
+  add_compile_definitions(TRITON_BACKENDS_TUPLE=${TRITON_BACKENDS_TUPLE})
+  add_library(triton SHARED ${PYTHON_SRC_PATH}/main.cc
+                  ${PYTHON_SRC_PATH}/ir.cc
+                  ${PYTHON_SRC_PATH}/passes.cc
+                  ${PYTHON_SRC_PATH}/interpreter.cc
+                  ${PYTHON_SRC_PATH}/llvm.cc)
+
+  # Link triton with its dependencies
+  target_link_libraries(triton PUBLIC ${TRITON_LIBRARIES})
   if(WIN32)
-    target_link_libraries(triton PRIVATE ${LLVM_LIBRARIES} ${CMAKE_DL_LIBS}
-      ${TRITON_LIBRARIES}
-    )
-  elseif(APPLE)
-    target_link_libraries(triton ${LLVM_LIBRARIES} z
-      ${TRITON_LIBRARIES}
-    )
+    target_link_libraries(triton PRIVATE ${CMAKE_DL_LIBS})
   else()
-    target_link_libraries(triton ${LLVM_LIBRARIES} z
-      ${TRITON_LIBRARIES}
-    )
+    target_link_libraries(triton PRIVATE z)
   endif()
-
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
-endif()
-
-if(UNIX AND NOT APPLE)
-  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--exclude-libs,ALL")
 endif()
 
 if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
@@ -267,15 +217,7 @@ if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
     set(PYTHON_LDFLAGS "-undefined dynamic_lookup -flto")
   endif()
 
-  target_link_libraries(triton ${CUTLASS_LIBRARIES} ${PYTHON_LDFLAGS})
-endif()
-
-list(LENGTH TRITON_CODEGEN_BACKENDS CODEGEN_BACKENDS_LEN)
-if (${CODEGEN_BACKENDS_LEN} GREATER 0)
-  set(PYTHON_THIRD_PARTY_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/triton/third_party)
-  foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
-    add_subdirectory(third_party/${CODEGEN_BACKEND})
-  endforeach()
+  target_link_libraries(triton ${PYTHON_LDFLAGS})
 endif()
 
 add_subdirectory(bin)

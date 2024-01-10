@@ -293,7 +293,7 @@ public:
                         ConversionPatternRewriter &rewriter,
                         SmallVectorImpl<Value> &offsetVals,
                         SmallVectorImpl<Value> &srcStrides) const {
-    // This utililty computes the pointers for accessing the provided swizzled
+    // This utility computes the pointers for accessing the provided swizzled
     // shared memory layout `resSharedLayout`. More specifically, it computes,
     // for all indices (row, col) of `srcEncoding` such that idx % inVec = 0,
     // the pointer: ptr[(row, col)] = base + (rowOff * strides[ord[1]] +
@@ -530,8 +530,7 @@ public:
     unsigned minVec = std::min(outVec, inVec);
     unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
     assert(numElems == srcIndices.size());
-    auto inVals =
-        getTypeConverter()->unpackLLElements(loc, llSrc, rewriter, srcTy);
+    auto inVals = getTypeConverter()->unpackLLElements(loc, llSrc, rewriter);
     auto wordTy = vec_ty(elemTy, minVec);
     Value word;
 
@@ -876,23 +875,6 @@ private:
     for (unsigned k = 0; k < rank; ++k)
       tilesPerDim[k] = ceil<unsigned>(shapePerCTA[k], shapePerCTATile[k]);
 
-    SmallVector<SmallVector<unsigned>> offset(rank);
-    for (unsigned k = 0; k < rank; ++k) {
-      // 1 CTA tile in minimum if shapePerCTA[k] is less than shapePerCTATile[k]
-      for (unsigned blockOffset = 0; blockOffset < tilesPerDim[k];
-           ++blockOffset)
-        for (unsigned warpOffset = 0; warpOffset < warpsPerCTA[k]; ++warpOffset)
-          for (unsigned threadOffset = 0; threadOffset < threadsPerWarp[k];
-               ++threadOffset)
-            for (unsigned elemOffset = 0; elemOffset < sizePerThread[k];
-                 ++elemOffset)
-              offset[k].push_back(blockOffset * sizePerThread[k] *
-                                      threadsPerWarp[k] * warpsPerCTA[k] +
-                                  warpOffset * sizePerThread[k] *
-                                      threadsPerWarp[k] +
-                                  threadOffset * sizePerThread[k] + elemOffset);
-    }
-
     unsigned elemsPerThread = triton::gpu::getTotalElemsPerThread(type);
     unsigned totalSizePerThread = product<unsigned>(sizePerThread);
     SmallVector<SmallVector<unsigned>> reorderedOffset(elemsPerThread);
@@ -908,7 +890,7 @@ private:
             multiDimNanoTileId[k] *
                 (sizePerThread[k] * threadsPerWarp[k] * warpsPerCTA[k]) +
             multiDimNanoTileElemId[k];
-        reorderedOffset[n].push_back(offset[k][reorderedMultiDimId]);
+        reorderedOffset[n].push_back(reorderedMultiDimId);
       }
     }
     return reorderedOffset;

@@ -1,10 +1,3 @@
-[submodule "third_party/intel_xpu_backend"]
-	path = third_party/intel_xpu_backend
-	url = http://github.com/intel/intel-xpu-backend-for-triton
-[submodule "third_party/amd_hip_backend"]
-	path = third_party/amd_hip_backend
-	url = https://github.com/ROCmSoftwarePlatform/triton
-	branch = third_party_backend_2
-[submodule "third_party/triton_shared"]
-	path = third_party/triton_shared
-	url = https://github.com/microsoft/triton-shared
+[submodule "third_party/amd"]
+	path = third_party/amd
+	url = https://github.com/ptillet/triton.git

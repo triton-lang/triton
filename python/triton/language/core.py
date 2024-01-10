@@ -1031,7 +1031,7 @@ def expand_dims(input, axis, _builder=None):
     axes = [_wrap_axis(_constexpr_to_value(d), new_ndim) for d in axes]
 
     if len(set(axes)) != len(axes):
-        raise ValueError(f"expand_dims recieved duplicate axes, normalized axes = {axes}")
+        raise ValueError(f"expand_dims received duplicate axes, normalized axes = {axes}")
 
     ret = input
     for a in sorted(axes):
@@ -1638,6 +1638,18 @@ def associative_scan(input, axis, combine_fn, _builder=None, _generator=None):
     if axis is not None:
         axis = _wrap_axis(axis, len(input[0].shape))
     return semantic.associative_scan(input, axis, make_combine_region, _builder)
+
+
+@builtin
+def histogram(input, num_bins, _builder=None, _generator=None):
+    """computes an histogram based on input tensor with num_bins bins the bins have a width of 1 and start at 0.
+
+    :param input: the input tensor
+    :param num_bins: number of histogram bins
+
+    """
+    num_bins = _constexpr_to_value(num_bins)
+    return semantic.histogram(input, num_bins, _builder)
 
 
 # -----------------------
