@@ -33,7 +33,7 @@ def _copy_backends(active):
         backend_path = os.path.join(curr_path, "backend")
         # check conditions
         assert backend in os.listdir(root_dir), f"{backend} is requested for install but not present in {root_dir}"
-        assert os.listdir(curr_path), f"{curr_path} if empty!"
+        assert os.listdir(curr_path), f"{curr_path} is empty!"
         assert os.path.exists(backend_path), f"{backend_path} does not exist!"
         for file in ["compiler.py", "driver.py"]:
             assert os.path.exists(os.path.join(backend_path, file))
@@ -46,9 +46,6 @@ def _copy_backends(active):
         package_data = [f"{p}/*" for p, _, _, in os.walk(backend_path)]
         ret.append(Backend(name=backend, package_data=package_data, src_dir=curr_path))
     return ret
-
-
-backends = _copy_backends(["nvidia", "amd"])
 
 
 # Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
@@ -180,7 +177,7 @@ def download_and_copy(src_path, variable, version, url_func):
     if arch == "x86_64":
         arch = "64"
     url = url_func(arch, version)
-    dst_path = os.path.join(base_dir, os.pardir, "third_party", "cuda", "backend", src_path)
+    dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", src_path)
     is_linux = platform.system() == "Linux"
     download = False
     if is_linux:
@@ -372,6 +369,7 @@ download_and_copy(
     url_func=lambda arch, version:
     f"https://anaconda.org/nvidia/cuda-nvdisasm/12.3.52/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
+backends = _copy_backends(["nvidia", "amd"])
 
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
