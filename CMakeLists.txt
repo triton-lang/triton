@@ -119,9 +119,6 @@ add_subdirectory(lib)
 set(TRITON_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(TRITON_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
 
-get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
-get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
-
 # TODO: Figure out which target is sufficient to fix errors; triton is
 # apparently not enough. Currently set linking libstdc++fs for all targets
 # to support some old version GCC compilers like 8.3.0.
@@ -153,30 +150,19 @@ if(TRITON_BUILD_PYTHON_MODULE)
   endforeach()
 
 
+  get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
   get_property(triton_plugins GLOBAL PROPERTY TRITON_PLUGINS)
   set(TRITON_LIBRARIES
-    TritonIR
-    TritonAnalysis
-    TritonTransforms
-    TritonToTritonGPU
-    TritonGPUIR
-    TritonGPUTransforms
-    TritonGPUToLLVM
-    TritonLLVMIR
-    TritonNvidiaGPUIR
+    ${triton_libs}
+    ${triton_plugins}
+
+    # mlir
     MLIRAMDGPUDialect
-    TritonAnalysis
-    NVGPUIR
-    NVGPUToLLVM
-    TritonNvidiaGPUTransforms
     MLIRNVVMDialect
     MLIRNVVMToLLVMIRTranslation
     MLIRGPUToNVVMTransforms
     MLIRGPUToGPURuntimeTransforms
     MLIRGPUTransforms
-    ${triton_plugins}
-
-    # optimizations
     MLIRIR
     MLIRControlFlowToLLVM
     MLIRBytecodeWriter
@@ -234,6 +220,6 @@ if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
   target_link_libraries(triton ${PYTHON_LDFLAGS})
 endif()
 
-# add_subdirectory(bin)
-# add_subdirectory(test)
-# add_subdirectory(unittest)
+add_subdirectory(bin)
+add_subdirectory(test)
+add_subdirectory(unittest)
