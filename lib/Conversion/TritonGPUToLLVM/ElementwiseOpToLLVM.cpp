@@ -1708,12 +1708,12 @@ struct ClampFOpConversion
       auto v = rewriter.create<LLVM::MaximumOp>(loc, elemTy, operands[0][0],
                                                 operands[0][1]);
       return {rewriter.create<LLVM::MinimumOp>(loc, v, operands[0][2])};
-    } else {
-      assert(op.getPropagateNan() == triton::PropagateNan::NONE);
-      auto v = rewriter.create<LLVM::MaxNumOp>(loc, elemTy, operands[0][0],
-                                               operands[0][1]);
-      return {rewriter.create<LLVM::MinNumOp>(loc, v, operands[0][2])};
     }
+
+    assert(op.getPropagateNan() == triton::PropagateNan::NONE);
+    auto v = rewriter.create<LLVM::MaxNumOp>(loc, elemTy, operands[0][0],
+                                              operands[0][1]);
+    return {rewriter.create<LLVM::MinNumOp>(loc, v, operands[0][2])};
   }
 
 private:
