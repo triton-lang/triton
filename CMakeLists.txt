@@ -70,14 +70,31 @@ include(AddLLVM)
 include(AddMLIR)
 
 # Utilities
-set_property(GLOBAL PROPERTY MLIR_DIALECT_LIBS "@TRITON_LIBS@")
+function(add_triton_object name)
+  cmake_parse_arguments(ARG "" "" "DEPENDS;LINK_LIBS" ${ARGN})
+  add_library(${name} OBJECT ${ARG_UNPARSED_ARGUMENTS})
+  if(ARG_DEPENDS)
+    add_dependencies(${name} ${ARG_DEPENDS})
+  endif()
+  if(ARG_LINK_LIBS)
+    link_libraries(${name} ${ARG_LINK_LIBS})
+  endif()
+endfunction(add_triton_object)
+
+set_property(GLOBAL PROPERTY TRITON_LIBS "")
 function(add_triton_library name)
-cmake_parse_arguments(ARG "" "" "DEPENDS;LINK_LIBS" ${ARGN})
-add_library(${name} OBJECT ${ARG_UNPARSED_ARGUMENTS})
-add_dependencies(${name} ${ARG_DEPENDS})
-link_libraries(${name} ${ARG_LINK_LIBS})
-llvm_update_compile_flags(${name})
-endfunction(add_triton_library)
+  set_property(GLOBAL APPEND PROPERTY TRITON_LIBS ${name})
+  add_triton_object(${name} ${ARGN})
+  llvm_update_compile_flags(${name})
+endfunction()
+
+set_property(GLOBAL PROPERTY TRITON_PLUGINS "")
+function(add_triton_plugin name)
+  message(STATUS ${name})
+  set_property(GLOBAL APPEND PROPERTY TRITON_PLUGINS ${name})
+  add_triton_object(${name} ${ARGN})
+endfunction()
+
 
 # Disable warnings that show up in external code (gtest;pybind11)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default -fvisibility=hidden")
@@ -129,6 +146,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
     add_subdirectory(third_party/${CODEGEN_BACKEND})
   endforeach()
 
+
+  get_property(triton_plugins GLOBAL PROPERTY TRITON_PLUGINS)
   set(TRITON_LIBRARIES
     TritonIR
     TritonAnalysis
@@ -149,10 +168,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRGPUToNVVMTransforms
     MLIRGPUToGPURuntimeTransforms
     MLIRGPUTransforms
-    TritonAMD
-    TritonNVIDIA
-    TritonAMDGPUToLLVM
-    TritonAMDGPUTransforms
+    ${triton_plugins}
 
     # optimizations
     MLIRIR
@@ -185,7 +201,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
   string(JOIN "," TRITON_BACKENDS_TUPLE ${TRITON_CODEGEN_BACKENDS})
   set(TRITON_BACKENDS_TUPLE "(${TRITON_BACKENDS_TUPLE})")
   add_compile_definitions(TRITON_BACKENDS_TUPLE=${TRITON_BACKENDS_TUPLE})
-  message(STATUS ${TRITON_BACKENDS_TUPLE})
   add_library(triton SHARED ${PYTHON_SRC_PATH}/main.cc
                   ${PYTHON_SRC_PATH}/ir.cc
                   ${PYTHON_SRC_PATH}/passes.cc
