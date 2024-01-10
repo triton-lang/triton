@@ -6,7 +6,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton.backends.cuda.compiler import _path_to_binary
+from triton.backends.nvidia.compiler import _path_to_binary
 
 
 @triton.jit

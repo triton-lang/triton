@@ -7,7 +7,7 @@ import tempfile
 import numpy as np
 
 import triton
-from triton.backends.cuda.driver import include_dir, library_dir
+from triton.backends.nvidia.driver import include_dir, library_dir
 
 kernel_utils_src = """
 import triton
