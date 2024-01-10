@@ -51,7 +51,7 @@ def _copy_backends(active):
             shutil.rmtree(dst_path)
         shutil.copytree(backend_path, dst_path)
         # update
-        package_data = [f"{p}/*" for p, _, _, in os.walk(backend_path)]
+        package_data = [f"{os.path.relpath(p, backend_path)}/*" for p, _, _, in os.walk(backend_path)]
         ret.append(Backend(name=backend, package_data=package_data, src_dir=curr_path))
     return ret
 
@@ -381,7 +381,7 @@ backends = _copy_backends(["nvidia", "amd"])
 
 package_data = dict()
 package_data["triton/tools"] = ["compile.h", "compile.c"]
-package_data.update({f"triton/{b.name}": b.package_data for b in backends})
+package_data.update({f"triton/backends/{b.name}": b.package_data for b in backends})
 
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
