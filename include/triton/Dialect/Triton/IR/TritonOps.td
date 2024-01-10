@@ -100,7 +100,7 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
     let hasVerifier = 1;
 }
 
-def TT_ClampFOp : TT_Op<"clamp", [Elementwise,
+def TT_ClampFOp : TT_Op<"clampf", [Elementwise,
                                   SameOperandsAndResultType,
                                   Pure]> {
     let summary = "Clamp operation for floating point types";
@@ -115,7 +115,7 @@ def TT_ClampFOp : TT_Op<"clamp", [Elementwise,
 
     let results = (outs TT_FloatLike:$result);
 
-    let assemblyFormat = "$x `,` $min `,` $max attr-dict `:` type($x) `->` type($result)";
+    let assemblyFormat = "$x `,` $min `,` $max attr-dict `->` type($result)";
 }
 
 //

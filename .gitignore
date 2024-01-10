@@ -8,8 +8,10 @@ python/triton/_C/libtriton.pyd
 python/triton/_C/libtriton.so
 
 # Backends copied from submodules
-python/triton/backends/amd/
-python/triton/backends/nvidia/
+python/triton/backends/
+!python/triton/backends/__init__.py
+!python/triton/backends/compiler.py
+!python/triton/backends/driver.py
 
 # Python caches
 __pycache__/

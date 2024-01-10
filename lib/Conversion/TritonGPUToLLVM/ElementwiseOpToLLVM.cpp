@@ -1645,7 +1645,7 @@ struct ClampFOpConversion
     bool clipPatternFound = false;
 
     auto getSplatInitializer = [](Value v) -> std::optional<double> {
-      if (auto constOp = llvm::dyn_cast<arith::ConstantOp>(v.getDefiningOp())) {
+      if (auto constOp = v.getDefiningOp<arith::ConstantOp>()) {
         if (auto attr = constOp.getValueAttr()
                             .dyn_cast<mlir::DenseIntOrFPElementsAttr>()) {
           if (attr.isSplat()) {
@@ -1657,18 +1657,14 @@ struct ClampFOpConversion
     };
 
     if (xorsignAbsAvailable) {
-      if (auto subOp =
-              llvm::dyn_cast<arith::SubFOp>(op.getOperand(1).getDefiningOp())) {
+      if (auto subOp = op.getOperand(1).getDefiningOp<arith::SubFOp>()) {
         if (subOp.getOperand(1) == op.getOperand(2)) {
           auto initializer = getSplatInitializer(subOp.getOperand(0));
           if (initializer.has_value() && initializer.value() == 0.0) {
             clipPatternFound = true;
           }
         }
-      } else if (llvm::isa<arith::ConstantOp>(
-                     op.getOperand(1).getDefiningOp()) &&
-                 llvm::isa<arith::ConstantOp>(
-                     op.getOperand(2).getDefiningOp())) {
+      } else {
         auto initializer1 = getSplatInitializer(op.getOperand(1));
         auto initializer2 = getSplatInitializer(op.getOperand(2));
         if (initializer1.has_value() && initializer2.has_value() &&
@@ -1705,17 +1701,18 @@ struct ClampFOpConversion
       minXorsign(output, inputA, inputB);
 
       return {ptxBuilder.launch(rewriter, loc, elemTy, false)};
+    }
+
+    // Clip pattern not found, use min/max.
+    if (op.getPropagateNan() == triton::PropagateNan::ALL) {
+      auto v = rewriter.create<LLVM::MaximumOp>(loc, elemTy, operands[0][0],
+                                                operands[0][1]);
+      return {rewriter.create<LLVM::MinimumOp>(loc, v, operands[0][2])};
     } else {
-      if (op.getPropagateNan() == triton::PropagateNan::ALL) {
-        auto v = rewriter.create<LLVM::MaximumOp>(loc, elemTy, operands[0][0],
-                                                  operands[0][1]);
-        return {rewriter.create<LLVM::MinimumOp>(loc, v, operands[0][2])};
-      } else {
-        assert(op.getPropagateNan() == triton::PropagateNan::NONE);
-        auto v = rewriter.create<LLVM::MaxNumOp>(loc, elemTy, operands[0][0],
-                                                 operands[0][1]);
-        return {rewriter.create<LLVM::MinNumOp>(loc, v, operands[0][2])};
-      }
+      assert(op.getPropagateNan() == triton::PropagateNan::NONE);
+      auto v = rewriter.create<LLVM::MaxNumOp>(loc, elemTy, operands[0][0],
+                                               operands[0][1]);
+      return {rewriter.create<LLVM::MinNumOp>(loc, v, operands[0][2])};
     }
   }
 
