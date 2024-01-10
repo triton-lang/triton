@@ -28,7 +28,6 @@ add_triton_library(TritonGPUToLLVM
     TritonGPUConversionPassIncGen
 
     LINK_LIBS PUBLIC
-    ASMBuilder
     MLIRIR
     MLIRPass
     MLIRGPUDialect

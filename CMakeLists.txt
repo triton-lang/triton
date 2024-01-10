@@ -72,12 +72,19 @@ include(AddMLIR)
 # Utilities
 function(add_triton_object name)
   cmake_parse_arguments(ARG "" "" "DEPENDS;LINK_LIBS" ${ARGN})
-  add_library(${name} OBJECT ${ARG_UNPARSED_ARGUMENTS})
+  add_library(${name} OBJECT)
+  target_sources(${name}
+    PRIVATE ${ARG_UNPARSED_ARGUMENTS}
+    INTERFACE $<TARGET_OBJECTS:${name}>
+  )
+
+
+  # add_library(${name} OBJECT ${ARG_UNPARSED_ARGUMENTS})
   if(ARG_DEPENDS)
     add_dependencies(${name} ${ARG_DEPENDS})
   endif()
   if(ARG_LINK_LIBS)
-    link_libraries(${name} ${ARG_LINK_LIBS})
+    target_link_libraries(${name} PUBLIC ${ARG_LINK_LIBS})
   endif()
 endfunction(add_triton_object)
 
@@ -90,7 +97,6 @@ endfunction()
 
 set_property(GLOBAL PROPERTY TRITON_PLUGINS "")
 function(add_triton_plugin name)
-  message(STATUS ${name})
   set_property(GLOBAL APPEND PROPERTY TRITON_PLUGINS ${name})
   add_triton_object(${name} ${ARGN})
 endfunction()
@@ -215,7 +221,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
     target_link_libraries(triton PRIVATE z)
   endif()
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
-  set_target_properties(triton PROPERTIES INTERFACE_LINK_LIBRARIES "")
 endif()
 
 if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
