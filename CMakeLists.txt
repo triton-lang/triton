@@ -217,7 +217,7 @@ if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
     set(PYTHON_LDFLAGS "-undefined dynamic_lookup -flto")
   endif()
 
-  target_link_libraries(triton ${PYTHON_LDFLAGS})
+  target_link_libraries(triton PRIVATE ${PYTHON_LDFLAGS})
 endif()
 
 add_subdirectory(bin)
