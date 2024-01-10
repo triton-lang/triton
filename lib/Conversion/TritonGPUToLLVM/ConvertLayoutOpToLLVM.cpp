@@ -637,7 +637,13 @@ private:
           processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ true, srcTy,
                                  multiDimRepId, inVec, paddedRepShape, outOrd,
                                  vals, smemBase, shape);
-        else
+        else if (isStMatrixCompatible(srcTy) && accumNumReplicates == 1 &&
+                 outOrd[0] == 1) {
+          Value llvmSrc = adaptor.getSrc();
+          storeDistributedToSharedWithStMatrix(srcTy, llvmSrc, smemBase,
+                                               paddedRepShape, origRepShape,
+                                               loc, rewriter);
+        } else
           processReplica(loc, rewriter, /*stNotRd*/ true, srcTy,
                          inNumCTAsEachRep, multiDimRepId, inVec, paddedRepShape,
                          origRepShape, outOrd, vals, smemBase);
@@ -725,6 +731,104 @@ private:
     return success();
   }
 
+  Value computeStMatrixAddr(Value laneId, int matStride, Location loc,
+                            ConversionPatternRewriter &rewriter) const {
+    Value rowInMat = urem(laneId, i32_val(8)); // row in the 8x8 matrix
+    // linear index of the matrix in the 2x2 matrices
+    // Decompose matIndex => s_0, s_1, that is the coordinate in 2x2 matrices in
+    // a warp.
+    Value matIndex = udiv(laneId, i32_val(8));
+    Value s0 = urem(matIndex, i32_val(2));
+    Value s1 = udiv(matIndex, i32_val(2));
+    Value mIndex = add(rowInMat, mul(s0, i32_val(8)));
+    int m8n8Stride = 8;
+    Value offset =
+        add(mul(mIndex, i32_val(matStride)), mul(s1, i32_val(m8n8Stride)));
+    return offset;
+  }
+
+  void stMatrixm8n8x4(Value offset, ArrayRef<Value> vals, int indexOffset,
+                      Value smemBase, Type elemTy, Location loc,
+                      ConversionPatternRewriter &rewriter) const {
+    SmallVector<Value> inputs;
+    auto prTy = ptr_ty(rewriter.getContext(), 3);
+    // Pack the input into 2xf16
+    Type packedTy = vec_ty(vals[0].getType(), 2);
+    for (int i = 0; i < 4; i++) {
+      Value input = undef(packedTy);
+      for (int j = 0; j < 2; j++) {
+        input = insert_element(packedTy, input, vals[indexOffset + i * 2 + j],
+                               i32_val(j));
+      }
+      inputs.push_back(bitcast(input, i32_ty));
+    }
+    Value addr = gep(smemBase.getType(),
+                     getTypeConverter()->convertType(elemTy), smemBase, offset);
+    rewriter.create<triton::nvgpu::StoreMatrixOp>(loc, addr, inputs);
+  }
+
+  void storeDistributedToSharedWithStMatrix(
+      RankedTensorType tensorTy, Value llvmSrc, Value smemBase,
+      ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
+      Location loc, ConversionPatternRewriter &rewriter) const {
+    auto shapePerCTA = getShapePerCTA(tensorTy);
+    auto mmaLayout = tensorTy.getEncoding().cast<NvidiaMmaEncodingAttr>();
+    auto order = triton::gpu::getOrder(mmaLayout);
+    auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
+    auto shapePerCTATile = getShapePerCTATile(mmaLayout);
+    ArrayRef<unsigned> mmaShape = mmaLayout.getInstrShape();
+    // 4xm8n8 matches exactly the size of 1 warp of wgmma layout for 16bit type
+    // and has a shape of 16x16.
+    int instrN = mmaShape[1] * warpsPerCTA[1];
+    int instrM = mmaShape[0] * warpsPerCTA[0];
+    std::array<int, 2> numRep = {ceil((int)origRepShape[0], instrM),
+                                 ceil((int)origRepShape[1], instrN)};
+
+    Value thread = getThreadId(rewriter, loc);
+    Value warp = udiv(thread, i32_val(32));
+    Value lane = urem(thread, i32_val(32));
+
+    SmallVector<Value> multiDimWarpId =
+        delinearize(rewriter, loc, warp, warpsPerCTA);
+
+    auto inVals = getTypeConverter()->unpackLLElements(loc, llvmSrc, rewriter);
+    // Compute the relative offset for each lane.
+    Value stMatrixLaneOffset =
+        computeStMatrixAddr(lane, paddedRepShape[1], loc, rewriter);
+    multiDimWarpId[0] = mul(multiDimWarpId[0], i32_val(mmaShape[0]));
+    multiDimWarpId[1] = mul(multiDimWarpId[1], i32_val(mmaShape[1]));
+    SmallVector<Value> multiDimOffsetWrapped =
+        getWrappedMultiDimOffset(rewriter, loc, multiDimWarpId, origRepShape,
+                                 shapePerCTATile, shapePerCTA);
+    Value relativeOffset =
+        linearize(rewriter, loc, multiDimOffsetWrapped, paddedRepShape, order);
+    relativeOffset = add(relativeOffset, stMatrixLaneOffset);
+    int indexOffset = 0;
+    int m8n8x4Stride = 16;
+    int numNChunk = mmaShape[1] / m8n8x4Stride;
+    for (int m = 0; m < numRep[0]; m++) {
+      for (int n = 0; n < numRep[1]; n++) {
+        for (int k = 0; k < numNChunk; k++) {
+          Value addr =
+              add(relativeOffset, i32_val(k * m8n8x4Stride + n * instrN +
+                                          m * instrM * paddedRepShape[1]));
+          stMatrixm8n8x4(addr, inVals, indexOffset, smemBase,
+                         tensorTy.getElementType(), loc, rewriter);
+          indexOffset += 8;
+        }
+      }
+    }
+  }
+
+  bool isStMatrixCompatible(RankedTensorType tensorTy) const {
+    auto mmaLayout = tensorTy.getEncoding().dyn_cast<NvidiaMmaEncodingAttr>();
+    if (!mmaLayout || !mmaLayout.isHopper())
+      return false;
+    if (tensorTy.getElementType().getIntOrFloatBitWidth() != 16)
+      return false;
+    return true;
+  }
+
   // blocked -> shared.
   // Swizzling in shared memory to avoid bank conflict. Normally used for
   // A/B operands of dots.
@@ -752,97 +856,11 @@ private:
     int32_t elemSize = elemTy.getIntOrFloatBitWidth();
     auto mmaLayout = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>();
     unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
-    if (mmaLayout && mmaLayout.isHopper() && elemSize == 16 &&
-        inOrd == outOrd && numElems >= 16) {
-      auto inVals =
-          getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(), rewriter);
-
-      auto srcShapePerCTA = getShapePerCTA(mmaLayout, srcShape);
-      auto instrShape = mmaLayout.getInstrShape();
-      auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
-      uint32_t repM =
-          ceil<unsigned>(srcShapePerCTA[0], instrShape[0] * warpsPerCTA[0]);
-      uint32_t numElemsPerRep = numElems / repM;
-      // rowStride in bytes
-      uint32_t rowStrideInBytes = dstShapePerCTA[outOrd[0]] * 2;
-      uint32_t swizzlingByteWidth = rowStrideInBytes;
-      if (swizzlingByteWidth > 128)
-        swizzlingByteWidth = 128;
-
-      unsigned numElemsPerSwizzlingRow = swizzlingByteWidth * 8 / elemSize;
-      unsigned leadingDimOffset =
-          numElemsPerSwizzlingRow * srcShapePerCTA[outOrd[1]];
-
-      auto ptrSharedTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
-
-      uint32_t rowsPerRep = getShapePerCTATile(mmaLayout)[0];
-
-      Value threadId = getThreadId(rewriter, loc);
-      Value warpId = udiv(threadId, i32_val(32));
-      Value warpId0 = urem(urem(warpId, i32_val(warpsPerCTA[0])),
-                           i32_val(srcShape[0] / instrShape[0]));
-
-      unsigned inVec =
-          inOrd == outOrd ? triton::gpu::getContigPerThread(mmaLayout)[inOrd[0]]
-                          : 1;
-      unsigned outVec = dstSharedLayout.getVec();
-      unsigned minVec = std::min(outVec, inVec);
-      assert(minVec == 2);
-      auto wordTy = vec_ty(elemTy, minVec);
-
-      for (int rep = 0; rep < repM; ++rep) {
-        Value rowOfWarp = add(mul(warpId0, i32_val(instrShape[0])),
-                              i32_val(rep * rowsPerRep));
-        uint32_t elemIdxOffset = rep * numElemsPerRep;
-
-        for (unsigned idx = 0; idx < numElemsPerRep; idx += 8) {
-          uint32_t elemIdx = elemIdxOffset + idx;
-
-          Value offset = rewriter.create<triton::nvgpu::OffsetOfStmatrixV4Op>(
-              loc, i32_ty, threadId, rowOfWarp, i32_val(idx), leadingDimOffset,
-              numElemsPerSwizzlingRow, true);
-
-          Value addr = gep(elemPtrTy, getTypeConverter()->convertType(elemTy),
-                           smemBase, offset);
-
-          Value words[4];
-          for (unsigned i = 0; i < 8; ++i) {
-            if (i % minVec == 0)
-              words[i / 2] = undef(wordTy);
-            words[i / 2] = insert_element(
-                wordTy, words[i / 2], inVals[elemIdx + i], i32_val(i % minVec));
-          }
-
-          rewriter.create<triton::nvgpu::StoreMatrixOp>(
-              loc, bitcast(addr, ptrSharedTy),
-              ValueRange{bitcast(words[0], i32_ty), bitcast(words[1], i32_ty),
-                         bitcast(words[2], i32_ty), bitcast(words[3], i32_ty)});
-        }
-      }
-      // TODO[shuhaoj]: change hard code style of numThreads. Hide async_agent
-      // attr.  Better way to determine barId (number of agents are limited).
-      if (auto optionalAgentId = getWSAgentId(op)) {
-        int agentId = *optionalAgentId, roleId = 0;
-        if (auto optionalRoleId = getWSRoleId(op))
-          roleId = *optionalRoleId;
-        int barId = agentId + roleId + nameBarrierIdBegin;
-        assert(barId < nameBarrierIdEnd);
-        auto bar = rewriter.create<LLVM::ConstantOp>(
-            loc, i32_ty, rewriter.getI32IntegerAttr(barId));
-        auto kNumThreads = rewriter.create<LLVM::ConstantOp>(
-            loc, i32_ty, rewriter.getI32IntegerAttr(128));
-        rewriter.create<triton::nvgpu::NamedBarrierWaitOp>(loc, bar,
-                                                           kNumThreads);
-      } else {
-        barrier();
-      }
-    } else {
-      auto dstStrides =
-          getStridesFromShapeAndOrder(dstShapePerCTA, outOrd, loc, rewriter);
-      auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy, false);
-      storeDistributedToShared(src, adaptor.getSrc(), dstStrides, srcIndices,
-                               dst, smemBase, elemTy, loc, rewriter);
-    }
+    auto dstStrides =
+        getStridesFromShapeAndOrder(dstShapePerCTA, outOrd, loc, rewriter);
+    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy, false);
+    storeDistributedToShared(src, adaptor.getSrc(), dstStrides, srcIndices, dst,
+                             smemBase, elemTy, loc, rewriter);
     auto smemObj = SharedMemoryObject(smemBase, elemTy, dstShapePerCTA, outOrd,
                                       loc, rewriter);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
