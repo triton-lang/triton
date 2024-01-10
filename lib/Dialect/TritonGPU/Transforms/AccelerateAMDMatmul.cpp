@@ -418,7 +418,8 @@ public:
         MatrixCoreVersion::CDNA_MFMA3 == matrixCoreVer) {
       patterns.add<::BlockedToMFMA>(context, getMfmaVersion(matrixCoreVer),
                                     matrixInstructionSize);
-    } else if (matrixCoreVer == MatrixCoreVersion::RDNA_WMMA) {
+    } else if (MatrixCoreVersion::RDNA_WMMA == matrixCoreVer &&
+               enableWmmaTransform) {
       patterns.add<::BlockedToWMMA>(context);
     }
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
