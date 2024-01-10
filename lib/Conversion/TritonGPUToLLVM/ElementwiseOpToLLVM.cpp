@@ -1712,7 +1712,7 @@ struct ClampFOpConversion
 
     assert(op.getPropagateNan() == triton::PropagateNan::NONE);
     auto v = rewriter.create<LLVM::MaxNumOp>(loc, elemTy, operands[0][0],
-                                              operands[0][1]);
+                                             operands[0][1]);
     return {rewriter.create<LLVM::MinNumOp>(loc, v, operands[0][2])};
   }
 
