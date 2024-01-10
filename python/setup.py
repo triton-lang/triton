@@ -379,6 +379,10 @@ download_and_copy(
 )
 backends = _copy_backends(["nvidia", "amd"])
 
+package_data = dict()
+package_data["triton/tools"] = ["compile.h", "compile.c"]
+package_data.update({f"triton/{b.name}": b.package_data for b in backends})
+
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
     version="2.1.0" + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
@@ -399,10 +403,7 @@ setup(
         "triton/tools",
     ] + [f'triton/backends/{backend.name}' for backend in backends],
     install_requires=["filelock"],
-    package_data={
-        "triton/tools": ["compile.h", "compile.c"],
-    } | {f"triton/{b.name}": b.package_data
-         for b in backends},
+    package_data=package_data,
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={"build_ext": CMakeBuild, "build_py": CMakeBuildPy, "clean": CMakeClean},
