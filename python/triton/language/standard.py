@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..runtime.jit import jit
-from . import core
+from . import core, math
 
 # -----------------------
 # Standard library
@@ -112,7 +112,7 @@ def minimum(x, y, propagate_nan: core.constexpr = core.PropagateNan.NONE):
 
     .. seealso:: :class:`tl.PropagateNan`
     """
-    return core.minimum(x, y, propagate_nan)
+    return math.minimum(x, y, propagate_nan)
 
 
 @jit
@@ -129,7 +129,7 @@ def maximum(x, y, propagate_nan: core.constexpr = core.PropagateNan.NONE):
 
     .. seealso:: :class:`tl.PropagateNan`
     """
-    return core.maximum(x, y, propagate_nan)
+    return math.maximum(x, y, propagate_nan)
 
 
 # max and argmax
