@@ -638,7 +638,7 @@ private:
                                  multiDimRepId, inVec, paddedRepShape, outOrd,
                                  vals, smemBase, shape);
         else if (isStMatrixCompatible(srcTy) && accumNumReplicates == 1 &&
-                 outOrd[0] == 1) {
+                 outOrd[0] == 1 && paddedRepShape[1] % 8 == 0) {
           Value llvmSrc = adaptor.getSrc();
           storeDistributedToSharedWithStMatrix(srcTy, llvmSrc, smemBase,
                                                paddedRepShape, origRepShape,
