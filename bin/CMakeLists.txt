@@ -12,6 +12,7 @@ target_link_libraries(triton-opt PRIVATE
   TritonNvidiaGPUTransforms
   ${dialect_libs}
   ${conversion_libs}
+  ${triton_libs}
   # tests
   TritonTestAnalysis
   # MLIR core
@@ -33,6 +34,7 @@ target_link_libraries(triton-reduce PRIVATE
   TritonNvidiaGPUTransforms
   ${dialect_libs}
   ${conversion_libs}
+  ${triton_libs}
   # tests
   TritonTestAnalysis
   # MLIR core

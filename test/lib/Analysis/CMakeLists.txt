@@ -6,6 +6,5 @@ add_mlir_library(TritonTestAnalysis
 
   LINK_LIBS PUBLIC
   MLIRPass
-  TritonAnalysis
-  ${dialect_libs}
+  ${triton_libs}
 )

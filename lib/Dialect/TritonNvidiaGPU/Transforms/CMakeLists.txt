@@ -1,4 +1,4 @@
-add_mlir_dialect_library(TritonNvidiaGPUTransforms
+add_triton_library(TritonNvidiaGPUTransforms
   MaterializeLoadStore.cpp
   PlanCTA.cpp
   WSDecomposing.cpp
