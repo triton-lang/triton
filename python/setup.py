@@ -31,12 +31,6 @@ def _copy_backends(active):
     for backend in active:
         curr_path = os.path.join(root_dir, backend)
         backend_path = os.path.join(curr_path, "backend")
-        # check conditions
-        assert backend in os.listdir(root_dir), f"{backend} is requested for install but not present in {root_dir}"
-        assert os.listdir(curr_path), f"{curr_path} is empty!"
-        assert os.path.exists(backend_path), f"{backend_path} does not exist!"
-        for file in ["compiler.py", "driver.py"]:
-            assert os.path.exists(os.path.join(backend_path, file))
         # initialize submodule if there is one
         try:
             subprocess.run(["git", "submodule", "update", "--init", f"{backend}"], check=True,
@@ -45,6 +39,11 @@ def _copy_backends(active):
             pass
         except FileNotFoundError:
             pass
+        # check conditions
+        assert backend in os.listdir(root_dir), f"{backend} is requested for install but not present in {root_dir}"
+        assert os.path.exists(backend_path), f"{backend_path} does not exist!"
+        for file in ["compiler.py", "driver.py"]:
+            assert os.path.exists(os.path.join(backend_path, file))
         # copy backend over
         dst_path = os.path.join(os.path.dirname(__file__), "triton", "backends", backend)
         if os.path.exists(dst_path):
