@@ -15,6 +15,45 @@ from typing import NamedTuple
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build_py import build_py
+from dataclasses import dataclass
+
+
+@dataclass
+class Backend:
+    name: str
+    package_data: dict
+    src_dir: str
+
+
+def _copy_backends(active):
+    ret = []
+    root_dir = os.path.join(os.pardir, "third_party")
+    for backend in active:
+        curr_path = os.path.join(root_dir, backend)
+        backend_path = os.path.join(curr_path, "backend")
+        # check conditions
+        assert backend in os.listdir(root_dir), f"{backend} is requested for install but not present in {root_dir}"
+        assert os.listdir(curr_path), f"{curr_path} is empty!"
+        assert os.path.exists(backend_path), f"{backend_path} does not exist!"
+        for file in ["compiler.py", "driver.py"]:
+            assert os.path.exists(os.path.join(backend_path, file))
+        # initialize submodule if there is one
+        try:
+            subprocess.run(["git", "submodule", "update", "--init", f"{backend}"], check=True,
+                           stdout=subprocess.DEVNULL, cwd=root_dir)
+        except subprocess.CalledProcessError:
+            pass
+        except FileNotFoundError:
+            pass
+        # copy backend over
+        dst_path = os.path.join(os.path.dirname(__file__), "triton", "backends", backend)
+        if os.path.exists(dst_path):
+            shutil.rmtree(dst_path)
+        shutil.copytree(backend_path, dst_path)
+        # update
+        package_data = [f"{os.path.relpath(p, backend_path)}/*" for p, _, _, in os.walk(backend_path)]
+        ret.append(Backend(name=backend, package_data=package_data, src_dir=curr_path))
+    return ret
 
 
 # Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
@@ -106,6 +145,9 @@ def open_url(url):
     return urllib.request.urlopen(request)
 
 
+# ---- package data ---
+
+
 def get_thirdparty_packages(triton_cache_path):
     packages = [get_pybind11_package_info(), get_llvm_package_info()]
     thirdparty_cmake_args = []
@@ -135,9 +177,6 @@ def get_thirdparty_packages(triton_cache_path):
     return thirdparty_cmake_args
 
 
-# ---- package data ---
-
-
 def download_and_copy(src_path, variable, version, url_func):
     if variable in os.environ:
         return
@@ -146,7 +185,7 @@ def download_and_copy(src_path, variable, version, url_func):
     if arch == "x86_64":
         arch = "64"
     url = url_func(arch, version)
-    dst_path = os.path.join(base_dir, os.pardir, "third_party", "cuda", "backend", src_path)
+    dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", src_path)
     is_linux = platform.system() == "Linux"
     download = False
     if is_linux:
@@ -248,18 +287,14 @@ class CMakeBuild(build_ext):
         # python directories
         python_include_dir = sysconfig.get_path("platinclude")
         cmake_args = [
-            "-G",
-            "Ninja",  # Ninja is much faster than make
+            "-G", "Ninja",  # Ninja is much faster than make
             "-DCMAKE_MAKE_PROGRAM=" +
             ninja_dir,  # Pass explicit path to ninja otherwise cmake may cache a temporary path
-            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
-            "-DLLVM_ENABLE_WERROR=ON",
-            "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
-            "-DTRITON_BUILD_TUTORIALS=OFF",
-            "-DTRITON_BUILD_PYTHON_MODULE=ON",
-            "-DPython3_EXECUTABLE:FILEPATH=" + sys.executable,
-            "-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON",
-            "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON", "-DLLVM_ENABLE_WERROR=ON",
+            "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir, "-DTRITON_BUILD_TUTORIALS=OFF",
+            "-DTRITON_BUILD_PYTHON_MODULE=ON", "-DPython3_EXECUTABLE:FILEPATH=" + sys.executable,
+            "-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON", "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
+            "-DTRITON_CODEGEN_BACKENDS=" + ';'.join([b.name for b in backends])
         ]
         if lit_dir is not None:
             cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
@@ -342,14 +377,11 @@ download_and_copy(
     url_func=lambda arch, version:
     f"https://anaconda.org/nvidia/cuda-nvdisasm/12.3.52/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
+backends = _copy_backends(["nvidia", "amd"])
 
-plugins = ["cuda"]
-for plugin in plugins:
-    src_path = os.path.join(os.pardir, "third_party", plugin, "backend")
-    dst_path = os.path.join(os.path.dirname(__file__), "triton", "backends", plugin)
-    if os.path.exists(dst_path):
-        shutil.rmtree(dst_path)
-    shutil.copytree(src_path, dst_path)
+package_data = dict()
+package_data["triton/tools"] = ["compile.h", "compile.c"]
+package_data.update({f"triton/backends/{b.name}": b.package_data for b in backends})
 
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
@@ -368,14 +400,10 @@ setup(
         "triton/ops/blocksparse",
         "triton/runtime",
         "triton/backends",
-        "triton/backends/cuda",
         "triton/tools",
-    ],
+    ] + [f'triton/backends/{backend.name}' for backend in backends],
     install_requires=["filelock"],
-    package_data={
-        "triton/tools": ["compile.h", "compile.c"],
-        "triton/backends/cuda": ["driver.c", "bin/*", "lib/*", "include/*"],
-    },
+    package_data=package_data,
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={"build_ext": CMakeBuild, "build_py": CMakeBuildPy, "clean": CMakeClean},

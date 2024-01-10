@@ -8,7 +8,7 @@ from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
 from ..runtime.driver import driver
 # TODO: this shouldn't be here
-from ..backends.cuda.compiler import InfoFromBackendForTensorMap
+from ..backends.nvidia.compiler import InfoFromBackendForTensorMap
 from dataclasses import dataclass
 from .code_generator import ast_to_ttir
 from pathlib import Path

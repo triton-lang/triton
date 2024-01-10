@@ -1,4 +1,4 @@
-add_mlir_dialect_library(TritonGPUIR
+add_triton_library(TritonGPUIR
   Dialect.cpp
   Traits.cpp
   Types.cpp
