@@ -1,5 +1,6 @@
 from . import core
 
+
 @core.extern
 def clz(arg0, _builder=None):
     return core.extern_elementwise(
