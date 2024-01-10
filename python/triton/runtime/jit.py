@@ -7,7 +7,6 @@ import textwrap
 from collections import defaultdict, namedtuple
 from functools import cached_property
 from typing import Callable, Generic, Iterable, List, Optional, TypeVar, Union, cast, overload
-from .interpreter import InterpretedFunction
 from ..runtime.driver import driver
 
 TRITON_MODULE = __name__[:-len(".runtime.jit")]
@@ -532,6 +531,7 @@ def jit(
     def decorator(fn: T) -> JITFunction[T]:
         assert callable(fn)
         if os.getenv("TRITON_INTERPRET", "0") == "1":
+            from .interpreter import InterpretedFunction
             return InterpretedFunction(fn)
         else:
             return JITFunction(
