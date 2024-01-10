@@ -377,7 +377,7 @@ download_and_copy(
     url_func=lambda arch, version:
     f"https://anaconda.org/nvidia/cuda-nvdisasm/12.3.52/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
-backends = _copy_backends(["nvidia"])
+backends = _copy_backends(["nvidia", "amd"])
 
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
