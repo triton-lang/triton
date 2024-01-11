@@ -6,7 +6,6 @@ add_triton_library(TritonGPUTransforms
   OptimizeEpilogue.cpp
   OptimizeThreadLocality.cpp
   Pipeliner/MatmulLoopPipeline.cpp
-  Pipeliner/PipelineExpander.cpp
   Pipeliner/SoftwarePipeliner.cpp
   Prefetch.cpp
   RemoveLayoutConversions.cpp
@@ -18,6 +17,7 @@ add_triton_library(TritonGPUTransforms
   TritonGPUTransformsIncGen
 
   LINK_LIBS PUBLIC
+  MLIRSCFTransforms
   MLIRTransforms
   MLIRTransformUtils
   TritonAnalysis

@@ -1,5 +1,5 @@
-#include "PipelineExpander.h"
 #include "Schedule.h"
+#include "mlir/Dialect/SCF/Transforms/Transforms.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -482,7 +482,7 @@ static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
 }
 
 static void setWaitNum(Operation *op,
-                       mlir::triton::PipeliningOption::PipelinerPart part,
+                       mlir::scf::PipeliningOption::PipelinerPart part,
                        unsigned iteration, unsigned numLoadsInStage) {
   if (auto waitOp = dyn_cast<ttg::AsyncWaitOp>(op)) {
     waitOp.setNum(numLoadsInStage);
@@ -612,7 +612,7 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
 }
 
 bool mlir::triton::preProcessLoopAndGetSchedule(
-    scf::ForOp &forOp, int numStages, mlir::triton::PipeliningOption &options) {
+    scf::ForOp &forOp, int numStages, mlir::scf::PipeliningOption &options) {
   // 1. First collect "interesting" operations with a stage where to schedule
   // them. This gives a coarse scheduling for the loop.
   SmallVector<LoadDotOperand> loads;
@@ -643,7 +643,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   unsigned numLoadsInStage = (numStages - 2) * loads.size();
   options.annotateFn =
       [numLoadsInStage](Operation *op,
-                        mlir::triton::PipeliningOption::PipelinerPart part,
+                        mlir::scf::PipeliningOption::PipelinerPart part,
                         unsigned iteration) {
         return setWaitNum(op, part, iteration, numLoadsInStage);
       };

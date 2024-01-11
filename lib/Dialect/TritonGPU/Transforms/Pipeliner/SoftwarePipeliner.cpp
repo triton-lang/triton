@@ -1,5 +1,5 @@
-#include "PipelineExpander.h"
 #include "Schedule.h"
+#include "mlir/Dialect/SCF/Transforms/Transforms.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -30,7 +30,7 @@ using namespace mlir;
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
 // Return true if the preconditions for pipelining the loop are met.
-bool preCondition(scf::ForOp forOp) {
+static bool preCondition(scf::ForOp forOp) {
   // Skip loop with distance > 1 for now.
   // TODO: relax the constraint in the expander.
   if (llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
@@ -54,12 +54,13 @@ bool preCondition(scf::ForOp forOp) {
 }
 
 static void pipelineLoop(scf::ForOp forOp, int numStages) {
-  mlir::triton::PipeliningOption options;
+  mlir::scf::PipeliningOption options;
   if (!preCondition(forOp))
     return;
 
   bool foundSchedule = false;
-  foundSchedule = preProcessLoopAndGetSchedule(forOp, numStages, options);
+  foundSchedule =
+      mlir::triton::preProcessLoopAndGetSchedule(forOp, numStages, options);
 
   // TODO: add more pipelines strategy.
   if (!foundSchedule)
@@ -68,7 +69,7 @@ static void pipelineLoop(scf::ForOp forOp, int numStages) {
   IRRewriter rewriter(forOp->getContext());
   rewriter.setInsertionPoint(forOp);
   FailureOr<scf::ForOp> newForOp =
-      mlir::triton::pipelineForLoop(rewriter, forOp, options);
+      mlir::scf::pipelineForLoop(rewriter, forOp, options);
 
   if (succeeded(newForOp))
     mlir::triton::asyncLaunchDots(newForOp.value());

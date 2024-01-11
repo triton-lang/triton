@@ -1,8 +1,8 @@
 #ifndef TRITON_TRITONGPU_TRANSFORM_PIPELINE_SCHEDULE_H_
 #define TRITON_TRITONGPU_TRANSFORM_PIPELINE_SCHEDULE_H_
 
-#include "PipelineExpander.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/SCF/Transforms/Transforms.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/ArrayRef.h"
 #include <vector>
@@ -14,7 +14,7 @@ namespace triton {
 /// wait ops. This also does pre-processing by converting some of the loads into
 /// async loads so that the IR is ready to be pipelined.
 bool preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
-                                  mlir::triton::PipeliningOption &options);
+                                  mlir::scf::PipeliningOption &options);
 
 /// This does post-processing on the pipelined loop to try to pipeline wgmma
 /// ops.
