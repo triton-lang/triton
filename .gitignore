@@ -50,3 +50,6 @@ docs/getting-started/tutorials
 /compile_commands.json
 .vscode
 .vs
+
+# Vim
+*.swp
