@@ -787,7 +787,7 @@ def test_where_broadcast(num_ctas, device):
 
 
 # TODO: Tests with unsigned integers failed at compilation stage.
-@pytest.mark.parametrize("dtype", int_dtypes + float_dtypes + ["bfloat16"])
+@pytest.mark.parametrize("dtype", int_dtypes + uint_dtypes + float_dtypes + ["bfloat16"])
 @pytest.mark.parametrize("op", ["maximum", "minimum"])
 def test_maximum_minium(dtype, op):
     expr = f'tl.{op}(x, y)'
