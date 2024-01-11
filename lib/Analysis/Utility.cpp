@@ -612,7 +612,7 @@ bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
          dotOperandLayout.getOpIdx() == 0 &&
          dotOperandLayout.getKWidth() == 4 &&
          dotOperandLayout.getParent() == mfmaLayout &&
-         mfmaLayout.getNonKDim() == 32 && mfmaLayout.getIsTransposed() &&
+         (mfmaLayout.getNonKDim() == 32 || mfmaLayout.getNonKDim() == 16) && mfmaLayout.getIsTransposed() &&
          (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16());
 }
 #endif
