@@ -70,7 +70,7 @@ def min(arg0, arg1, propagate_nan: core.constexpr = PropagateNan.NONE, _builder=
     elif dtype.is_int_signed():
         return core.tensor(_builder.create_minsi(arg0.handle, arg1.handle), arg0.type)
     elif dtype.is_int_unsigned():
-        return core.tensor(_builder.create_minui(arg0.handle, arg1.handle), arg0.dtype)
+        return core.tensor(_builder.create_minui(arg0.handle, arg1.handle), arg0.type)
     else:
         assert False, f"Unexpected dtype {dtype}"
 
@@ -93,7 +93,7 @@ def max(arg0, arg1, propagate_nan: core.constexpr = PropagateNan.NONE, _builder=
     elif dtype.is_int_signed():
         return core.tensor(_builder.create_maxsi(arg0.handle, arg1.handle), arg0.type)
     elif dtype.is_int_unsigned():
-        return core.tensor(_builder.create_maxui(arg0.handle, arg1.handle), arg0.dtype)
+        return core.tensor(_builder.create_maxui(arg0.handle, arg1.handle), arg0.type)
     else:
         assert False, f"Unexpected dtype {dtype}"
 
