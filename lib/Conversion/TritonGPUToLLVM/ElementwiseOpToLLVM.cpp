@@ -1761,11 +1761,25 @@ struct ClampFOpConversion
 
     // Clip pattern not found, use min/max.
     if (op.getPropagateNan() == triton::PropagateNan::ALL) {
-      auto v = rewriter.create<LLVM::MaximumOp>(loc, elemTy, operands[0][0],
+      if (computeCapability >= 90) {
+        auto v = rewriter.create<LLVM::MaximumOp>(loc, elemTy, operands[0][0],
                                                 operands[0][1]);
-      return {rewriter.create<LLVM::MinimumOp>(loc, v, operands[0][2])};
+        return {rewriter.create<LLVM::MinimumOp>(loc, v, operands[0][2])};
+      }
+      // On pre-90 compute capability, we need to handle NaN propagation
+      // manually. We need to check only the first operand for clamp.
+      auto lhs = operands[0][0];
+      auto isNan =
+          rewriter.create<LLVM::FCmpOp>(loc, LLVM::FCmpPredicate::une, lhs, lhs);
+      auto v = rewriter.create<LLVM::MaxNumOp>(loc, elemTy, operands[0][0],
+                                             operands[0][1]);
+      auto nonNanRes = rewriter.create<LLVM::MinNumOp>(loc, v, operands[0][2]);
+      auto nan = LLVM::createNaNConstant(loc, rewriter, elemTy);
+      // Select the result based on the isNan flag.
+      return {rewriter.create<LLVM::SelectOp>(loc, isNan, nan, nonNanRes)};
     }
 
+    // No NaN propagation.
     assert(op.getPropagateNan() == triton::PropagateNan::NONE);
     auto v = rewriter.create<LLVM::MaxNumOp>(loc, elemTy, operands[0][0],
                                              operands[0][1]);
