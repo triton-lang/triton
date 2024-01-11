@@ -1,4 +1,4 @@
-#include "../DotOpToLLVM.h"
+#include "../TritonGPUToLLVMBase.h"
 #include "../Utility.h"
 
 using namespace mlir;

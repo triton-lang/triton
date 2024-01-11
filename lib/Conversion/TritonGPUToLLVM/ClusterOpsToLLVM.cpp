@@ -21,10 +21,11 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "ClusterOpsToLLVM.h"
+#include "Patterns.h"
 using namespace mlir;
 using namespace mlir::triton;
 
+namespace {
 struct ClusterArriveOpConversion : public ConvertTritonGPUOpToLLVMPattern<
                                        triton::nvidia_gpu::ClusterArriveOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -51,8 +52,9 @@ struct ClusterWaitOpConversion : public ConvertTritonGPUOpToLLVMPattern<
     return success();
   }
 };
+} // namespace
 
-void populateClusterOpsToLLVMPatterns(
+void mlir::triton::populateClusterOpsToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation, PatternBenefit benefit) {

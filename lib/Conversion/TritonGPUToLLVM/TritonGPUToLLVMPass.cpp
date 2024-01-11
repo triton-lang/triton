@@ -22,21 +22,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetPlatform.hpp"
 
-#include "BarrierOpToLLVM.h"
-#include "ClusterOpsToLLVM.h"
-#include "ConvertLayoutOpToLLVM.h"
-#include "DotOpToLLVM.h"
-#include "ElementwiseOpToLLVM.h"
-#include "HistogramOpToLLVM.h"
-#include "LoadStoreOpToLLVM.h"
-#include "ReduceOpToLLVM.h"
-#include "RegReallocOpToLLVM.h"
-#include "ScanOpToLLVM.h"
-#include "TensorPtrOpsToLLVM.h"
-#include "TritonGPUToLLVM.h"
-#include "TritonGPUToLLVMBase.h"
-#include "TypeConverter.h"
-#include "ViewOpToLLVM.h"
+#include "Patterns.h"
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 

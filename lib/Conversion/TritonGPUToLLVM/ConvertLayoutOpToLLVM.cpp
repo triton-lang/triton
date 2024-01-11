@@ -1,4 +1,4 @@
-#include "ConvertLayoutOpToLLVM.h"
+#include "Patterns.h"
 #include "Utility.h"
 
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -55,6 +55,7 @@ Value convertLayout(int opIdx, Value B, Value llB, BlockedEncodingAttr dLayout,
                     ConversionPatternRewriter &rewriter);
 }
 
+namespace {
 struct ConvertLayoutOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
 public:
@@ -1066,8 +1067,9 @@ private:
     return res;
   }
 };
+} // namespace
 
-void populateConvertLayoutOpToLLVMPatterns(
+void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation,

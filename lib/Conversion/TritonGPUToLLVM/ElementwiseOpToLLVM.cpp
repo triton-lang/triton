@@ -1,9 +1,10 @@
-#include "ElementwiseOpToLLVM.h"
+#include "Patterns.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
+namespace {
 /* ----- FP8E5M2 ------ */
 // This data-type is the standard FP8E5M2 format
 
@@ -1775,8 +1776,9 @@ struct SelectOpConversion
         adaptor.getAttributes().getValue())};
   }
 };
+} // namespace
 
-void populateElementwiseOpToLLVMPatterns(
+void mlir::triton::populateElementwiseOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation,
