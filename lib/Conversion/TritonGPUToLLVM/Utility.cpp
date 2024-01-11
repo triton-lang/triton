@@ -30,7 +30,7 @@ Value createNaNConstant(Location loc, OpBuilder &rewriter, Type type) {
     llvm::report_fatal_error("Creating NaN constant for non-float type!");
   }
   return rewriter.create<LLVM::ConstantOp>(
-    loc, type, APFloat::getNaN(type.cast<FloatType>().getFloatSemantics()));
+      loc, type, APFloat::getNaN(type.cast<FloatType>().getFloatSemantics()));
 }
 
 // Create an index type constant.
