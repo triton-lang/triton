@@ -4300,6 +4300,9 @@ def test_propagate_nan(dtype, propagate_nan, func):
                      getattr(tl, func)(tl.load(A), tl.load(B), propagate_nan=getattr(tl.PropagateNan, propagate_nan)))
 
     for mode in ['A', 'B', 'both']:
+        if func == 'clamp' and mode == 'B':
+            # clamp does not guarantee propagation from 'min' and 'max' args
+            continue
         A = torch.randn((1, ), device='cuda', dtype=getattr(torch, dtype))
         if mode == 'A' or mode == 'both': A[0] = torch.nan
         B = torch.randn((1, ), device='cuda', dtype=getattr(torch, dtype))

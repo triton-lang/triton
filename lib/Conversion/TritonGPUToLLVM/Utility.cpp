@@ -19,10 +19,18 @@ Value createConstantF32(Location loc, OpBuilder &rewriter, float v) {
                                            rewriter.getF32FloatAttr(v));
 }
 
-Value createConstantF64(Location loc, OpBuilder &rewriter, float v) {
+Value createConstantF64(Location loc, OpBuilder &rewriter, double v) {
   auto type = type::f64Ty(rewriter.getContext());
   return rewriter.create<LLVM::ConstantOp>(loc, type,
                                            rewriter.getF64FloatAttr(v));
+}
+
+Value createNaNConstant(Location loc, OpBuilder &rewriter, Type type) {
+  if (!type.isa<FloatType>()) {
+    llvm::report_fatal_error("Creating NaN constant for non-float type!");
+  }
+  return rewriter.create<LLVM::ConstantOp>(
+      loc, type, APFloat::getNaN(type.cast<FloatType>().getFloatSemantics()));
 }
 
 // Create an index type constant.
