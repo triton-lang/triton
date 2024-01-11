@@ -288,45 +288,31 @@ public:
     return base;
   }
 
-  // Pass in a cache that maps from Value to id, if Value is in cache, use x_id
-  // At the end, print all values in cache
-  std::string printPtrExpr(Value val, DenseMap<Value, unsigned> &cache,
-                           DenseMap<unsigned, std::string> &strCache,
-                           std::set<unsigned> &used) const {
-    // Assume getDefiningOp is a binary operation or a gep.
-    // xor(udiv(t1, t2), t3) --> first op is xor --> print xor(printLhs,
-    // printRhs) printLhs will return udiv(t1, t2)
+  // Generate a pretty string for basic pointer calculation via GEP and binary
+  // operations.
+  std::string printPtrExpr(Value val) const {
     std::string retStr;
     if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(val.getDefiningOp())) {
       unsigned cst =
           _cst.getValue().cast<IntegerAttr>().getValue().getSExtValue();
-      retStr = std::to_string(cst); // LLVM_DEBUG(llvm::dbgs() << cst);
+      retStr = std::to_string(cst);
       return retStr;
     }
     if (auto gep = dyn_cast_or_null<LLVM::GEPOp>(val.getDefiningOp())) {
-      retStr = "gep("; // LLVM_DEBUG(llvm::dbgs() << "gep(");
-      retStr += printPtrExpr(gep.getBase(), cache, strCache, used);
-      // How to get the indices?
+      retStr = "gep(";
+      retStr += printPtrExpr(gep.getBase());
       auto baseOffsets = llvm::to_vector(gep.getIndices());
       for (auto index : baseOffsets) {
-        // LLVM_DEBUG(llvm::dbgs() << ", ");
         retStr += ", ";
         if (auto iVal = dyn_cast<Value>(index))
-          retStr += printPtrExpr(iVal, cache, strCache, used);
+          retStr += printPtrExpr(iVal);
         if (auto iAtt = dyn_cast<IntegerAttr>(index))
-          retStr += "attr"; // LLVM_DEBUG(llvm::dbgs() << "attr");
+          retStr += "attr";
       }
-      retStr += ")"; // LLVM_DEBUG(llvm::dbgs() << ")");
+      retStr += ")";
       return retStr;
     }
 
-    if (cache.count(val)) {
-      unsigned id = cache.lookup(val);
-      retStr =
-          "x_" + std::to_string(id); // LLVM_DEBUG(llvm::dbgs() << "x_" << id);
-      used.insert(id);
-      return retStr;
-    }
     std::string opcode = "";
     Value lhs, rhs;
     if (auto bop = dyn_cast_or_null<LLVM::AddOp>(val.getDefiningOp())) {
@@ -355,76 +341,16 @@ public:
       rhs = bop.getRhs();
     }
     if (opcode == "") {
-      unsigned id = cache.size();
-      cache.insert(std::make_pair(val, id));
-      retStr =
-          "x_" + std::to_string(id); // LLVM_DEBUG(llvm::dbgs() << "x_" << id);
-      strCache.insert(std::make_pair(id, retStr));
+      llvm::raw_string_ostream os(retStr);
+      os << val;
       return retStr;
     }
-    retStr = opcode + "("; // LLVM_DEBUG(llvm::dbgs() << opcode << "(");
-    retStr += printPtrExpr(lhs, cache, strCache, used);
-    retStr += ", "; // LLVM_DEBUG(llvm::dbgs() << ", ");
-    retStr += printPtrExpr(rhs, cache, strCache, used);
-    retStr += ")"; // LLVM_DEBUG(llvm::dbgs() << ")");
-    unsigned id = cache.size();
-    cache.insert(std::make_pair(val, id));
-    strCache.insert(std::make_pair(id, retStr));
+    retStr = opcode + "(";
+    retStr += printPtrExpr(lhs);
+    retStr += ", ";
+    retStr += printPtrExpr(rhs);
+    retStr += ")";
     return retStr;
-  }
-
-  void printPtrExprGroup(DenseMap<unsigned, Value> &group,
-                         SmallVector<Value> &bases,
-                         DenseMap<Value, std::string> &baseNames) const {
-    DenseMap<Value, unsigned> cache;
-    DenseMap<unsigned, std::string> strCache; // from id to pretty string
-    std::set<unsigned> used;
-    for (auto val : bases) {
-      printPtrExpr(val, cache, strCache, used);
-    }
-    SmallVector<unsigned> sorted;
-    for (auto pair : group)
-      sorted.push_back(pair.first);
-    sort(sorted);
-    for (auto idx : sorted) {
-      LLVM_DEBUG(DBGS() << "elemIdx " << idx << ": ");
-      auto str = printPtrExpr(group.lookup(idx), cache, strCache, used);
-      LLVM_DEBUG(llvm::dbgs() << str << '\n');
-    }
-    // print all used values in cache, sort according to id.
-    // dump values in bases first.
-    SmallVector<unsigned> usedSorted;
-    DenseMap<unsigned, Value> idToBase;
-    for (auto val : bases)
-      if (cache.count(val)) {
-        auto id = cache.lookup(val);
-        if (used.count(id)) {
-          idToBase.insert(std::make_pair(id, val));
-          usedSorted.push_back(id);
-        }
-      }
-    for (auto id : used)
-      if (!idToBase.count(id))
-        usedSorted.push_back(id);
-    for (auto id : usedSorted) {
-      // find string for the given id.
-      LLVM_DEBUG(DBGS() << "  x_" << id << ": ");
-      if (idToBase.count(id))
-        LLVM_DEBUG(llvm::dbgs()
-                   << baseNames.lookup(idToBase.lookup(id)) << " ");
-      auto str = strCache.lookup(id);
-      if (str.rfind("x_", 0) == 0) {
-        // Find Value for the id.
-        for (auto pair : cache) {
-          if (pair.second == id) {
-            LLVM_DEBUG(llvm::dbgs() << pair.first << '\n');
-            break;
-          }
-        }
-      } else {
-        LLVM_DEBUG(llvm::dbgs() << str << '\n');
-      }
-    }
   }
 
   DenseMap<unsigned, Value>
@@ -517,8 +443,6 @@ public:
                       << " inVec = " << inVec << " outVec = " << outVec
                       << " strideRow " << strideRow << " strideCol "
                       << strideCol << "\n");
-    SmallVector<Value> bases;
-    DenseMap<Value, std::string> baseNames;
     for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
       Value offset = i32_val(0);
       // Extract multi dimensional index for current element
@@ -533,15 +457,6 @@ public:
       }
       // compute phase = (row // perPhase) % maxPhase
       Value phase = urem(udiv(idxRow, i32_val(perPhase)), i32_val(maxPhase));
-      bases.push_back(idxRow);
-      baseNames.insert(
-          std::make_pair(idxRow, "idxRow_" + std::to_string(elemIdx)));
-      bases.push_back(idxCol);
-      baseNames.insert(
-          std::make_pair(idxCol, "idxCol_" + std::to_string(elemIdx)));
-      bases.push_back(phase);
-      baseNames.insert(
-          std::make_pair(phase, "phase_" + std::to_string(elemIdx)));
       // extract dynamic/static offset for immediate offsetting
       unsigned immedateOffCol = 0;
       unsigned immedateOffRow = 0;
@@ -604,7 +519,6 @@ public:
       ret[elemIdx] = gep(dstPtrTy, getTypeConverter()->convertType(resElemTy),
                          currPtr, immediateOff);
     }
-    // printPtrExprGroup(ret, bases, baseNames);
     return ret;
   }
 
@@ -1288,11 +1202,8 @@ private:
     auto multiDimBase =
         emitBaseIndexForLayout(loc, rewriter, layout, type, withCTAOffset);
     for (unsigned d = 0; d < rank; ++d) {
-      DenseMap<Value, unsigned> cache;
-      DenseMap<unsigned, std::string> strCache; // from id to pretty string
-      std::set<unsigned> used;
       LLVM_DEBUG(DBGS() << "emitOffsetForLayout base " << d << ": ");
-      auto str = printPtrExpr(multiDimBase[d], cache, strCache, used);
+      auto str = printPtrExpr(multiDimBase[d]);
       LLVM_DEBUG(llvm::dbgs() << str << "\n");
     }
     // step 2, get offset of each element
@@ -1311,8 +1222,6 @@ private:
     // step 3, add offset to base, and reorder the sequence
     // of indices to guarantee that elems in the same
     // sizePerThread are adjacent in order
-    // auto shape = type.getShape();
-    // unsigned rank = shape.size();
     unsigned elemsPerThread = offset.size();
     SmallVector<SmallVector<Value>> multiDimIdx(elemsPerThread,
                                                 SmallVector<Value>(rank));

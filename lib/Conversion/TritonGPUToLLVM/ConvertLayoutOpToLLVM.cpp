@@ -3,11 +3,6 @@
 
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
-#include "llvm/Support/Debug.h"
-
-// #define DEBUG_TYPE "lower-convert-layout"
-// #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
-// #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
@@ -293,7 +288,6 @@ private:
 
     auto llvmElemTy = getTypeConverter()->convertType(elemTy);
     auto vecTy = vec_ty(llvmElemTy, vec);
-    // accumNumCTAsEachRep * (accumSizePerThread / vec) * size of vecTy
     LLVM_DEBUG(DBGS() << "processReplica: accumNumCTAsEachRep = "
                       << accumNumCTAsEachRep
                       << " accumSizePerThread = " << accumSizePerThread
@@ -301,8 +295,6 @@ private:
                       << " vecTy " << vecTy << " estimated "
                       << (accumNumCTAsEachRep * (accumSizePerThread / vec))
                       << "\n");
-    assert(accumSizePerThread % vec == 0 &&
-           "accumSizePerThread needs to be divisible by vec");
     for (unsigned ctaId = 0; ctaId < accumNumCTAsEachRep; ++ctaId) {
       auto multiDimCTAInRepId =
           getMultiDimIndex<unsigned>(ctaId, numCTAsEachRep, order);
@@ -635,7 +627,6 @@ private:
     auto outOrd = getOrder(dstLayout);
     SmallVector<Value> outVals(outElems);
 
-    unsigned memRefBytes = 0;
     for (unsigned repId = 0; repId < accumNumReplicates; ++repId) {
       auto multiDimRepId =
           getMultiDimIndex<unsigned>(repId, numReplicates, outOrd);
