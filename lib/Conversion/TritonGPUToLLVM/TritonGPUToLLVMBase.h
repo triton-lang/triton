@@ -17,6 +17,8 @@
 #include <set>
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 constexpr ::llvm::StringLiteral kAttrNumTMALoadDescsName =
     "triton_gpu.num-tma-load";
@@ -286,6 +288,145 @@ public:
     return base;
   }
 
+  // Pass in a cache that maps from Value to id, if Value is in cache, use x_id
+  // At the end, print all values in cache
+  std::string printPtrExpr(Value val, DenseMap<Value, unsigned> &cache,
+                           DenseMap<unsigned, std::string> &strCache,
+                           std::set<unsigned> &used) const {
+    // Assume getDefiningOp is a binary operation or a gep.
+    // xor(udiv(t1, t2), t3) --> first op is xor --> print xor(printLhs,
+    // printRhs) printLhs will return udiv(t1, t2)
+    std::string retStr;
+    if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(val.getDefiningOp())) {
+      unsigned cst =
+          _cst.getValue().cast<IntegerAttr>().getValue().getSExtValue();
+      retStr = std::to_string(cst); // LLVM_DEBUG(llvm::dbgs() << cst);
+      return retStr;
+    }
+    if (auto gep = dyn_cast_or_null<LLVM::GEPOp>(val.getDefiningOp())) {
+      retStr = "gep("; // LLVM_DEBUG(llvm::dbgs() << "gep(");
+      retStr += printPtrExpr(gep.getBase(), cache, strCache, used);
+      // How to get the indices?
+      auto baseOffsets = llvm::to_vector(gep.getIndices());
+      for (auto index : baseOffsets) {
+        // LLVM_DEBUG(llvm::dbgs() << ", ");
+        retStr += ", ";
+        if (auto iVal = dyn_cast<Value>(index))
+          retStr += printPtrExpr(iVal, cache, strCache, used);
+        if (auto iAtt = dyn_cast<IntegerAttr>(index))
+          retStr += "attr"; // LLVM_DEBUG(llvm::dbgs() << "attr");
+      }
+      retStr += ")"; // LLVM_DEBUG(llvm::dbgs() << ")");
+      return retStr;
+    }
+
+    if (cache.count(val)) {
+      unsigned id = cache.lookup(val);
+      retStr =
+          "x_" + std::to_string(id); // LLVM_DEBUG(llvm::dbgs() << "x_" << id);
+      used.insert(id);
+      return retStr;
+    }
+    std::string opcode = "";
+    Value lhs, rhs;
+    if (auto bop = dyn_cast_or_null<LLVM::AddOp>(val.getDefiningOp())) {
+      opcode = "add";
+      lhs = bop.getLhs();
+      rhs = bop.getRhs();
+    }
+    if (auto bop = dyn_cast_or_null<LLVM::UDivOp>(val.getDefiningOp())) {
+      opcode = "udiv";
+      lhs = bop.getLhs();
+      rhs = bop.getRhs();
+    }
+    if (auto bop = dyn_cast_or_null<LLVM::URemOp>(val.getDefiningOp())) {
+      opcode = "urem";
+      lhs = bop.getLhs();
+      rhs = bop.getRhs();
+    }
+    if (auto bop = dyn_cast_or_null<LLVM::MulOp>(val.getDefiningOp())) {
+      opcode = "mul";
+      lhs = bop.getLhs();
+      rhs = bop.getRhs();
+    }
+    if (auto bop = dyn_cast_or_null<LLVM::XOrOp>(val.getDefiningOp())) {
+      opcode = "xor";
+      lhs = bop.getLhs();
+      rhs = bop.getRhs();
+    }
+    if (opcode == "") {
+      unsigned id = cache.size();
+      cache.insert(std::make_pair(val, id));
+      retStr =
+          "x_" + std::to_string(id); // LLVM_DEBUG(llvm::dbgs() << "x_" << id);
+      strCache.insert(std::make_pair(id, retStr));
+      return retStr;
+    }
+    retStr = opcode + "("; // LLVM_DEBUG(llvm::dbgs() << opcode << "(");
+    retStr += printPtrExpr(lhs, cache, strCache, used);
+    retStr += ", "; // LLVM_DEBUG(llvm::dbgs() << ", ");
+    retStr += printPtrExpr(rhs, cache, strCache, used);
+    retStr += ")"; // LLVM_DEBUG(llvm::dbgs() << ")");
+    unsigned id = cache.size();
+    cache.insert(std::make_pair(val, id));
+    strCache.insert(std::make_pair(id, retStr));
+    return retStr;
+  }
+
+  void printPtrExprGroup(DenseMap<unsigned, Value> &group,
+                         SmallVector<Value> &bases,
+                         DenseMap<Value, std::string> &baseNames) const {
+    DenseMap<Value, unsigned> cache;
+    DenseMap<unsigned, std::string> strCache; // from id to pretty string
+    std::set<unsigned> used;
+    for (auto val : bases) {
+      printPtrExpr(val, cache, strCache, used);
+    }
+    SmallVector<unsigned> sorted;
+    for (auto pair : group)
+      sorted.push_back(pair.first);
+    sort(sorted);
+    for (auto idx : sorted) {
+      LLVM_DEBUG(DBGS() << "elemIdx " << idx << ": ");
+      auto str = printPtrExpr(group.lookup(idx), cache, strCache, used);
+      LLVM_DEBUG(llvm::dbgs() << str << '\n');
+    }
+    // print all used values in cache, sort according to id.
+    // dump values in bases first.
+    SmallVector<unsigned> usedSorted;
+    DenseMap<unsigned, Value> idToBase;
+    for (auto val : bases)
+      if (cache.count(val)) {
+        auto id = cache.lookup(val);
+        if (used.count(id)) {
+          idToBase.insert(std::make_pair(id, val));
+          usedSorted.push_back(id);
+        }
+      }
+    for (auto id : used)
+      if (!idToBase.count(id))
+        usedSorted.push_back(id);
+    for (auto id : usedSorted) {
+      // find string for the given id.
+      LLVM_DEBUG(DBGS() << "  x_" << id << ": ");
+      if (idToBase.count(id))
+        LLVM_DEBUG(llvm::dbgs()
+                   << baseNames.lookup(idToBase.lookup(id)) << " ");
+      auto str = strCache.lookup(id);
+      if (str.rfind("x_", 0) == 0) {
+        // Find Value for the id.
+        for (auto pair : cache) {
+          if (pair.second == id) {
+            LLVM_DEBUG(llvm::dbgs() << pair.first << '\n');
+            break;
+          }
+        }
+      } else {
+        LLVM_DEBUG(llvm::dbgs() << str << '\n');
+      }
+    }
+  }
+
   DenseMap<unsigned, Value>
   getSwizzledSharedPtrs(Location loc, unsigned inVec, RankedTensorType srcTy,
                         triton::gpu::SharedEncodingAttr resSharedLayout,
@@ -368,22 +509,39 @@ public:
     // cache for non-immediate offsets
     DenseMap<unsigned, Value> cacheCol, cacheRow;
     unsigned minVec = std::min(outVec, inVec);
+    Value strideRow =
+        outOrder.size() == 2 ? srcStrides[outOrder[1]] : i32_val(0);
+    Value strideCol = srcStrides[outOrder[0]];
+    LLVM_DEBUG(DBGS() << "getSwizzledSharedPtrs: perPhase = " << perPhase
+                      << " maxPhase = " << maxPhase << " minVec = " << minVec
+                      << " inVec = " << inVec << " outVec = " << outVec
+                      << " strideRow " << strideRow << " strideCol "
+                      << strideCol << "\n");
+    SmallVector<Value> bases;
+    DenseMap<Value, std::string> baseNames;
     for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
       Value offset = i32_val(0);
       // Extract multi dimensional index for current element
       auto idx = srcIndices[elemIdx];
       Value idxCol = idx[outOrder[0]]; // contiguous dimension
-      Value idxRow, strideRow;
+      Value idxRow;
       if (outOrder.size() == 2) {
         idxRow = idx[outOrder[1]]; // discontiguous dimension
-        strideRow = srcStrides[outOrder[1]];
+
       } else {
         idxRow = i32_val(0);
-        strideRow = i32_val(0);
       }
-      Value strideCol = srcStrides[outOrder[0]];
       // compute phase = (row // perPhase) % maxPhase
       Value phase = urem(udiv(idxRow, i32_val(perPhase)), i32_val(maxPhase));
+      bases.push_back(idxRow);
+      baseNames.insert(
+          std::make_pair(idxRow, "idxRow_" + std::to_string(elemIdx)));
+      bases.push_back(idxCol);
+      baseNames.insert(
+          std::make_pair(idxCol, "idxCol_" + std::to_string(elemIdx)));
+      bases.push_back(phase);
+      baseNames.insert(
+          std::make_pair(phase, "phase_" + std::to_string(elemIdx)));
       // extract dynamic/static offset for immediate offsetting
       unsigned immedateOffCol = 0;
       unsigned immedateOffRow = 0;
@@ -446,6 +604,7 @@ public:
       ret[elemIdx] = gep(dstPtrTy, getTypeConverter()->convertType(resElemTy),
                          currPtr, immediateOff);
     }
+    // printPtrExprGroup(ret, bases, baseNames);
     return ret;
   }
 
@@ -488,6 +647,8 @@ public:
     unsigned numVecs = outElems / minVec;
     auto wordTy = vec_ty(elemTy, minVec);
     SmallVector<Value> outVals(outElems);
+    LLVM_DEBUG(DBGS() << "loadSharedToDistributed: numVecs = " << numVecs
+                      << " minVec = " << minVec << " " << wordTy << "\n");
     for (unsigned i = 0; i < numVecs; ++i) {
       Value smemAddr = sharedPtrs[i * minVec];
       smemAddr = bitcast(smemAddr, ptr_ty(rewriter.getContext(), 3));
@@ -542,6 +703,8 @@ public:
         getSwizzledSharedPtrs(loc, inVec, srcTy, dstSharedLayout, dstElemTy,
                               smemObj, rewriter, offsetVals, srcStrides);
 
+    LLVM_DEBUG(DBGS() << "storeDistributedToShared: numElems = " << numElems
+                      << " minVec = " << minVec << " " << wordTy << "\n");
     for (unsigned i = 0; i < numElems; ++i) {
       if (i % minVec == 0)
         word = undef(wordTy);
@@ -1120,15 +1283,36 @@ private:
       Location loc, ConversionPatternRewriter &rewriter, Attribute layout,
       RankedTensorType type, bool withCTAOffset) const {
     // step 1, delinearize threadId to get the base index
+    auto shape = type.getShape();
+    unsigned rank = shape.size();
     auto multiDimBase =
         emitBaseIndexForLayout(loc, rewriter, layout, type, withCTAOffset);
+    for (unsigned d = 0; d < rank; ++d) {
+      DenseMap<Value, unsigned> cache;
+      DenseMap<unsigned, std::string> strCache; // from id to pretty string
+      std::set<unsigned> used;
+      LLVM_DEBUG(DBGS() << "emitOffsetForLayout base " << d << ": ");
+      auto str = printPtrExpr(multiDimBase[d], cache, strCache, used);
+      LLVM_DEBUG(llvm::dbgs() << str << "\n");
+    }
     // step 2, get offset of each element
     auto offset = emitOffsetForLayout(layout, type);
+    LDBG("emitOffsetForLayout offsetSize = " << offset.size() << " " << type);
+    LLVM_DEBUG(DBGS() << "  ");
+    for (unsigned k = 0; k < offset.size(); ++k)
+      LLVM_DEBUG({
+        llvm::dbgs() << k << ":";
+        for (unsigned d = 0; d < rank; ++d) {
+          llvm::dbgs() << " " << offset[k][d];
+        }
+        llvm::dbgs() << "; ";
+      });
+    LLVM_DEBUG(llvm::dbgs() << "\n");
     // step 3, add offset to base, and reorder the sequence
     // of indices to guarantee that elems in the same
     // sizePerThread are adjacent in order
-    auto shape = type.getShape();
-    unsigned rank = shape.size();
+    // auto shape = type.getShape();
+    // unsigned rank = shape.size();
     unsigned elemsPerThread = offset.size();
     SmallVector<SmallVector<Value>> multiDimIdx(elemsPerThread,
                                                 SmallVector<Value>(rank));
