@@ -195,7 +195,10 @@ Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v);
 Value createConstantF32(Location loc, OpBuilder &rewriter, float v);
 
 /// Create a 64-bit float constant.
-Value createConstantF64(Location loc, OpBuilder &rewriter, float v);
+Value createConstantF64(Location loc, OpBuilder &rewriter, double v);
+
+/// Create NaN constant of specified type.
+Value createNaNConstant(Location loc, OpBuilder &rewriter, Type type);
 
 /// Create an index type constant.
 Value createIndexConstant(OpBuilder &builder, Location loc,
