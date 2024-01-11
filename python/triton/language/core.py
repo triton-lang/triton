@@ -14,6 +14,8 @@ TRITON_MAX_TENSOR_NUMEL = 1048576
 
 TRITON_BUILTIN = "__triton_builtin__"
 
+PropagateNan = ir.PROPAGATE_NAN
+
 
 def builtin(fn: T) -> T:
     """Mark a function as a builtin."""
@@ -1357,6 +1359,36 @@ def fdiv(x, y, ieee_rounding=False, _builder=None):
     x = _to_tensor(x, _builder)
     y = _to_tensor(y, _builder)
     return semantic.fdiv(x, y, ieee_rounding, _builder)
+
+
+@builtin
+def clamp(x, min, max, propagate_nan: constexpr = PropagateNan.NONE, _builder=None):
+    """
+    Clamps the input tensor :code:`x` within the range [min, max].
+    Behavior when :code:`min` > :code:`max` is undefined.
+
+    :param x: the input tensor
+    :type x: Block
+    :param min: the lower bound for clamping
+    :type min: Block
+    :param max: the upper bound for clamping
+    :type max: Block
+    :param propagate_nan: whether to propagate NaN values. Applies only to the :code:`x` tensor.
+        If either :code:`min` or :code:`max` is NaN, the result is undefined.
+    :type propagate_nan: tl.PropagateNan
+
+    .. seealso:: :class:`tl.PropagateNan`
+    """
+    x = _to_tensor(x, _builder)
+    min = _to_tensor(min, _builder)
+    max = _to_tensor(max, _builder)
+    x = _promote_bfloat16_to_float32(x, _builder=_builder)
+    min = _promote_bfloat16_to_float32(min, _builder=_builder)
+    max = _promote_bfloat16_to_float32(max, _builder=_builder)
+
+    propagate_nan = _constexpr_to_value(propagate_nan)
+
+    return semantic.clamp(x, min, max, propagate_nan, _builder)
 
 
 def _add_math_1arg_docstr(name: str) -> Callable[[T], T]:

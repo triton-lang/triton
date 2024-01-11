@@ -100,6 +100,24 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
     let hasVerifier = 1;
 }
 
+def TT_ClampFOp : TT_Op<"clampf", [Elementwise,
+                                  SameOperandsAndResultType,
+                                  Pure]> {
+    let summary = "Clamp operation for floating point types";
+
+    let description = [{
+        Clamp operation for floating point types.
+
+        The operation takes three arguments: x, min, and max. It returns a tensor of the same shape as x with its values clamped to the range [min, max].
+    }];
+
+    let arguments = (ins TT_FloatLike:$x, TT_FloatLike:$min, TT_FloatLike:$max, TT_PropagateNanAttr:$propagateNan);
+
+    let results = (outs TT_FloatLike:$result);
+
+    let assemblyFormat = "$x `,` $min `,` $max attr-dict `:` type($result)";
+}
+
 //
 // Pointer Arith Ops
 //
