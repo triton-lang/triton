@@ -1,15 +1,4 @@
-from enum import IntEnum
 from . import core
-
-
-class PropagateNan(IntEnum):
-    """
-    PropagateNan is an enum class that specifies how NaNs are handled in min/max operations.
-    PropagateNan.ALL means that if either input is NaN, the result is NaN. PropagateNan.NONE
-    means that if either input is NaN, the result is the non-NaN input. This is the default.
-    """
-    ALL = 0xFFFFFFFF
-    NONE = 0x00000000
 
 
 @core.extern
@@ -38,7 +27,7 @@ def byte_perm(arg0, arg1, arg2, _builder=None):
 
 
 @core.extern
-def min(arg0, arg1, propagate_nan: core.constexpr = PropagateNan.NONE, _builder=None):
+def min(arg0, arg1, propagate_nan: core.constexpr = core.PropagateNan.NONE, _builder=None):
     arg0 = core._to_tensor(arg0, _builder)
     arg1 = core._to_tensor(arg1, _builder)
     arg0 = core._promote_bfloat16_to_float32(arg0, _builder=_builder)
@@ -46,9 +35,9 @@ def min(arg0, arg1, propagate_nan: core.constexpr = PropagateNan.NONE, _builder=
     arg0, arg1 = core.binary_op_type_legalization(arg0, arg1, _builder)
     dtype = arg0.dtype
     if dtype.is_floating():
-        if propagate_nan == core.constexpr(PropagateNan.ALL):
+        if propagate_nan == core.constexpr(core.PropagateNan.ALL):
             return core.tensor(_builder.create_minimumf(arg0.handle, arg1.handle), arg0.type)
-        elif propagate_nan == core.constexpr(PropagateNan.NONE):
+        elif propagate_nan == core.constexpr(core.PropagateNan.NONE):
             return core.tensor(_builder.create_minnumf(arg0.handle, arg1.handle), arg0.type)
         else:
             assert False, f"Unexpected propagate_nan {propagate_nan}"
@@ -61,7 +50,7 @@ def min(arg0, arg1, propagate_nan: core.constexpr = PropagateNan.NONE, _builder=
 
 
 @core.extern
-def max(arg0, arg1, propagate_nan: core.constexpr = PropagateNan.NONE, _builder=None):
+def max(arg0, arg1, propagate_nan: core.constexpr = core.PropagateNan.NONE, _builder=None):
     arg0 = core._to_tensor(arg0, _builder)
     arg1 = core._to_tensor(arg1, _builder)
     arg0 = core._promote_bfloat16_to_float32(arg0, _builder=_builder)
@@ -69,9 +58,9 @@ def max(arg0, arg1, propagate_nan: core.constexpr = PropagateNan.NONE, _builder=
     arg0, arg1 = core.binary_op_type_legalization(arg0, arg1, _builder)
     dtype = arg0.dtype
     if dtype.is_floating():
-        if propagate_nan == core.constexpr(PropagateNan.ALL):
+        if propagate_nan == core.constexpr(core.PropagateNan.ALL):
             return core.tensor(_builder.create_maximumf(arg0.handle, arg1.handle), arg0.type)
-        elif propagate_nan == core.constexpr(PropagateNan.NONE):
+        elif propagate_nan == core.constexpr(core.PropagateNan.NONE):
             return core.tensor(_builder.create_maxnumf(arg0.handle, arg1.handle), arg0.type)
         else:
             assert False, f"Unexpected propagate_nan {propagate_nan}"

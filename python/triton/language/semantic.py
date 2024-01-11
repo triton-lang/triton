@@ -250,6 +250,25 @@ def mod(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
 
 
 ##############
+# other arithmetic ops
+##############
+
+
+def clamp(x: tl.tensor, min: tl.tensor, max: tl.tensor, propagate_nan: tl.PropagateNan, builder: ir.builder):
+    min, max = binary_op_type_checking_impl(min, max, builder)
+    x, min = binary_op_type_checking_impl(x, min, builder)
+    x, max = binary_op_type_checking_impl(x, max, builder)
+
+    dtype = x.dtype
+    if dtype.is_floating():
+        if propagate_nan == tl.PropagateNan.ALL:
+            return tl.tensor(builder.create_clampf(x.handle, min.handle, max.handle, propagate_nan), x.type)
+        return tl.tensor(builder.create_clampf(x.handle, min.handle, max.handle, propagate_nan), x.type)
+    else:
+        assert False, f"Unexpected dtype {dtype}. Only floating point clamp is supported"
+
+
+##############
 # bitwise ops
 ##############
 

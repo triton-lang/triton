@@ -4,7 +4,6 @@
 from . import math
 from . import extra
 from .standard import (
-    PropagateNan,
     argmax,
     argmin,
     cdiv,
@@ -25,6 +24,7 @@ from .standard import (
     zeros_like,
 )
 from .core import (
+    PropagateNan,
     TRITON_MAX_TENSOR_NUMEL,
     abs,
     advance,
@@ -45,6 +45,7 @@ from .core import (
     cat,
     constexpr,
     cos,
+    clamp,
     debug_barrier,
     device_assert,
     device_print,
@@ -137,6 +138,7 @@ __all__ = [
     "builtin",
     "cat",
     "cdiv",
+    "clamp",
     "constexpr",
     "cos",
     "cumprod",
