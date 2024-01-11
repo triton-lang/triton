@@ -10,8 +10,12 @@ from numpy.random import RandomState
 
 import triton
 import triton.language as tl
-from triton.common.build import is_hip
 from triton.runtime.jit import JITFunction, TensorWrapper, reinterpret
+
+
+def is_hip():
+    return triton.runtime.driver.get_current_target()[0] == "hip"
+
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
 uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
@@ -783,7 +787,7 @@ def test_where_broadcast(num_ctas, device):
 
 
 # TODO: Tests with unsigned integers failed at compilation stage.
-@pytest.mark.parametrize("dtype", int_dtypes + float_dtypes + ["bfloat16"])
+@pytest.mark.parametrize("dtype", int_dtypes + uint_dtypes + float_dtypes + ["bfloat16"])
 @pytest.mark.parametrize("op", ["maximum", "minimum"])
 def test_maximum_minium(dtype, op):
     expr = f'tl.{op}(x, y)'
@@ -1528,52 +1532,6 @@ def deserialize_fp8(np_data, in_dtype):
         return np_data
 
 
-@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4b15x4, tl.float8e4nv, tl.float8e5])
-@pytest.mark.parametrize("out_dtype", [torch.float16, torch.float32])
-def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
-    """
-    For all possible float8 values (ref_fp8 = range(0, 256)), test that:
-        - conversion tri_fp16 = convert(input=ref_fp8, out=out_dtype) matches the reference
-        - conversion tri_fp8 = convert(input=tri_fp16, out=out_dtype) matches the original
-    this is only possible if both conversions are correct
-    """
-    check_type_supported(in_dtype, device)
-    check_type_supported(out_dtype, device)
-    if is_hip():
-        pytest.skip('test_fp8_fpN_roundtrip not supported on HIP.')
-
-    @triton.jit
-    def copy_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-        offsets = tl.program_id(axis=0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-        mask = offsets < n_elements
-        input = tl.load(input_ptr + offsets, mask=mask)
-        output = input
-        tl.store(output_ptr + offsets, output, mask=mask)
-
-    # initialize array containing all possible f8 values except NaN
-    ref_fp8 = np.array(range(-128, 128), dtype=np.int8)
-    exp_mask = 0b01111111 ^ ((1 << in_dtype.fp_mantissa_width) - 1)
-    is_nan = (ref_fp8 & 0b01111100) == 128 - 2**in_dtype.fp_mantissa_width
-    is_subnormal = np.logical_or((ref_fp8 & exp_mask) == 0, (ref_fp8 & exp_mask) == exp_mask)
-    tri_fp8 = torch.from_numpy(serialize_fp8(ref_fp8, in_dtype)).cuda()
-    # check that non-subnormal fp8 are correctly converted to fp16
-    tri_fp16 = torch.empty(256, dtype=out_dtype, device="cuda")
-    copy_kernel[(1, )](triton.reinterpret(tri_fp8, in_dtype), tri_fp16, tri_fp16.shape[0], BLOCK_SIZE=1024)
-    ref_fp8 = torch.from_numpy(ref_fp8).cuda()
-    ref_fp16 = convert_float_to_float32(ref_fp8, in_dtype)
-    assert torch.all(tri_fp16[~is_subnormal] == ref_fp16[~is_subnormal])
-    # check that values are properly converted back to float8
-    ref_fp8 = torch.empty_like(tri_fp16, dtype=torch.int8)
-    copy_kernel[(1, )](tri_fp16, triton.reinterpret(ref_fp8, in_dtype), tri_fp16.shape[0], BLOCK_SIZE=1024)
-    if in_dtype == tl.float8e4b15:
-        assert torch.all(tri_fp8[:127] == ref_fp8[:127])
-        assert torch.all(tri_fp8[128:255] == ref_fp8[128:255])
-        assert ref_fp8[126] == ref_fp8[127]  # -1.875 saturates to -1.75
-        assert ref_fp8[254] == ref_fp8[255]  # 1.875 saturates to  1.75
-    else:
-        assert torch.all(tri_fp8[~is_subnormal] == ref_fp8[~is_subnormal])
-
-
 # ---------------
 # test reduce
 # ---------------
@@ -1858,6 +1816,29 @@ scan_layouts = [
     BlockedLayout([2, 2], [4, 8], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([2, 2], [8, 4], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
 ]
+
+# ---------------
+# test histogram
+# ---------------
+
+
+@pytest.mark.parametrize("M, N", [[2048, 2], [1024, 8], [1024, 128], [256, 512], [32, 512], [8, 512], [8, 2]])
+def test_histogram(M, N, device):
+
+    @triton.jit
+    def histogram_kernel(x_ptr, z_ptr, M: tl.constexpr, N: tl.constexpr):
+        offset1 = tl.arange(0, M)
+        offset2 = tl.arange(0, N)
+        x = tl.load(x_ptr + offset1)
+        z = tl.histogram(x, N)
+        tl.store(z_ptr + offset2, z)
+
+    torch.manual_seed(17)
+    x = torch.randint(0, N, (M, ), device=device, dtype=torch.int32)
+    z = torch.empty(N, dtype=torch.int32, device=device)
+    z_torch = torch.histc(x, bins=N, min=0, max=N - 1)
+    histogram_kernel[(1, )](x, z, M=M, N=N)
+    assert (z_torch == z).all()
 
 
 @pytest.mark.parametrize("op", ['sum', 'max', 'min'])
@@ -3300,9 +3281,8 @@ def test_num_warps_pow2(device):
 
 
 @pytest.mark.parametrize("dtype_str, expr, lib_path", [('int32', 'math.ffs', ''), ('float32', 'math.log2', ''),
-                                                       ('float32', 'math.scalbn', ''),
-                                                       ('float32', 'math.pow', tl.math.libdevice_path()),
-                                                       ('float64', 'math.pow_dtype', tl.math.libdevice_path()),
+                                                       ('float32', 'math.scalbn', ''), ('float32', 'math.pow', ''),
+                                                       ('float64', 'math.pow_dtype', ''),
                                                        ('float64', 'math.norm4d', '')])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_math_tensor(dtype_str, expr, lib_path, num_ctas, device):
@@ -3361,7 +3341,7 @@ def test_math_tensor(dtype_str, expr, lib_path, num_ctas, device):
 
 
 @pytest.mark.parametrize("dtype_str, expr, lib_path", [('float32', 'math.pow', ''), ('float64', 'math.pow_dtype', ''),
-                                                       ('float64', 'math.pow', tl.math.libdevice_path())])
+                                                       ('float64', 'math.pow', '')])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_math_scalar(dtype_str, expr, lib_path, num_ctas, device):
 
@@ -4303,28 +4283,103 @@ def test_enable_fp_fusion(enable_fp_fusion):
 # -----------------------
 
 
-@pytest.mark.parametrize("propagate_nan", ['tl.PropagateNan.NONE', 'tl.PropagateNan.ALL'])
-@pytest.mark.parametrize("func", ['tl.minimum', 'tl.maximum'])
-def test_propagate_nan(propagate_nan, func):
+@pytest.mark.parametrize("dtype", ['float16', 'float32'])
+@pytest.mark.parametrize("propagate_nan", ['NONE', 'ALL'])
+@pytest.mark.parametrize("func", ['minimum', 'maximum', 'clamp'])
+def test_propagate_nan(dtype, propagate_nan, func):
 
     @triton.jit
-    def kernel(A, B, C):
-        tl.store(C, FUNC(tl.load(A), tl.load(B), propagate_nan=PROPAGATE_NAN))
-
-    kernel = patch_kernel(kernel, {'FUNC': func, 'PROPAGATE_NAN': propagate_nan})
+    def kernel(A, B, C, propagate_nan: tl.constexpr, func: tl.constexpr):
+        if func == 'clamp':
+            tl.store(
+                C,
+                getattr(tl, func)(tl.load(A), -tl.load(B), tl.load(B),
+                                  propagate_nan=getattr(tl.PropagateNan, propagate_nan)))
+        else:
+            tl.store(C,
+                     getattr(tl, func)(tl.load(A), tl.load(B), propagate_nan=getattr(tl.PropagateNan, propagate_nan)))
 
     for mode in ['A', 'B', 'both']:
-        A = torch.randn((1, ), device='cuda', dtype=torch.float32)
+        A = torch.randn((1, ), device='cuda', dtype=getattr(torch, dtype))
         if mode == 'A' or mode == 'both': A[0] = torch.nan
-        B = torch.randn((1, ), device='cuda', dtype=torch.float32)
+        B = torch.randn((1, ), device='cuda', dtype=getattr(torch, dtype))
         if mode == 'B' or mode == 'both': B[0] = torch.nan
-        C = torch.zeros_like(A, device='cuda', dtype=torch.float32)
-        kernel[(1, )](A, B, C)
+        C = torch.zeros_like(A, device='cuda', dtype=getattr(torch, dtype))
+        kernel[(1, )](A, B, C, propagate_nan, func)
 
-        if mode == 'both' or eval(propagate_nan) == tl.PropagateNan.ALL:
+        if mode == 'both' or propagate_nan == 'ALL':
             assert torch.isnan(C[0])
         else:
             assert not torch.isnan(C[0])
+
+
+# -----------------------
+# test clamp
+# -----------------------
+
+
+@pytest.mark.parametrize("dtype", ['float16', 'float32'])
+def test_clamp(dtype):
+
+    @triton.jit
+    def kernel(x_ptr, min_ptr, max_ptr, out_ptr, ref_ptr, N, BLOCK_SIZE: tl.constexpr):
+
+        off = tl.arange(0, BLOCK_SIZE)
+        mask = off < N
+        x = tl.load(x_ptr + off, mask=mask)
+        min = tl.load(min_ptr + off, mask=mask)
+        max = tl.load(max_ptr + off, mask=mask)
+        out = out_ptr + off
+        ref = ref_ptr + off
+
+        tl.store(out, tl.clamp(x, min, max), mask=mask)
+        ref_val = tl.minimum(tl.maximum(x, min), max)
+        tl.store(ref, ref_val, mask=mask)
+
+    size = 128
+
+    x = torch.randn((size, ), device='cuda', dtype=getattr(torch, dtype))
+    a = torch.randn((size, ), device='cuda', dtype=getattr(torch, dtype))
+    b = torch.randn((size, ), device='cuda', dtype=getattr(torch, dtype))
+    min = torch.min(a, b)
+    max = torch.max(a, b)
+    out = torch.zeros_like(x, device='cuda', dtype=getattr(torch, dtype))
+    ref = torch.zeros_like(x, device='cuda', dtype=getattr(torch, dtype))
+
+    kernel[(size, )](x, min, max, out, ref, x.numel(), BLOCK_SIZE=size)
+
+    torch.testing.assert_close(out, ref)
+
+
+# Test for symmetric clamp(x, -limit, limit), as it may go through optimized
+# codegen in the backends
+@pytest.mark.parametrize("dtype", ['float16', 'float32'])
+def test_clamp_symmetric(dtype):
+
+    @triton.jit
+    def kernel(x_ptr, limit_ptr, out_ptr, ref_ptr, N, BLOCK_SIZE: tl.constexpr):
+
+        off = tl.arange(0, BLOCK_SIZE)
+        mask = off < N
+        x = tl.load(x_ptr + off, mask=mask)
+        limit = tl.load(limit_ptr + off, mask=mask)
+        out = out_ptr + off
+        ref = ref_ptr + off
+
+        tl.store(out, tl.clamp(x, -limit, limit), mask=mask)
+        ref_val = tl.minimum(tl.maximum(x, -limit), limit)
+        tl.store(ref, ref_val, mask=mask)
+
+    size = 128
+
+    x = torch.randn((size, ), device='cuda', dtype=getattr(torch, dtype))
+    limit = torch.randn((size, ), device='cuda', dtype=getattr(torch, dtype)).abs()
+    out = torch.zeros_like(x, device='cuda', dtype=getattr(torch, dtype))
+    ref = torch.zeros_like(x, device='cuda', dtype=getattr(torch, dtype))
+
+    kernel[(size, )](x, limit, out, ref, x.numel(), BLOCK_SIZE=size)
+
+    torch.testing.assert_close(out, ref)
 
 
 # -----------------------

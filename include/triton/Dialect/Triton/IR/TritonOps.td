@@ -100,6 +100,24 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
     let hasVerifier = 1;
 }
 
+def TT_ClampFOp : TT_Op<"clampf", [Elementwise,
+                                  SameOperandsAndResultType,
+                                  Pure]> {
+    let summary = "Clamp operation for floating point types";
+
+    let description = [{
+        Clamp operation for floating point types.
+
+        The operation takes three arguments: x, min, and max. It returns a tensor of the same shape as x with its values clamped to the range [min, max].
+    }];
+
+    let arguments = (ins TT_FloatLike:$x, TT_FloatLike:$min, TT_FloatLike:$max, TT_PropagateNanAttr:$propagateNan);
+
+    let results = (outs TT_FloatLike:$result);
+
+    let assemblyFormat = "$x `,` $min `,` $max attr-dict `:` type($result)";
+}
+
 //
 // Pointer Arith Ops
 //
@@ -553,6 +571,25 @@ def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [Elementwise,
 
   let assemblyFormat = [{
     $asm_string attr-dict ($args^ `:` type($args))? `->` type($result)
+  }];
+}
+
+//
+// Histogram Op
+//
+def TT_HistogramOp : TT_Op<"histogram", [Pure]> {
+  let summary = "return a histgram of the inputs.";
+  let description = [{
+    Return the histogram of the input tensor. The number of bins is equal to
+    the dimension of the output tensor. Each bins has a width of 1 and bins
+    start at 0.
+  }];
+
+  let arguments = (ins TT_IntTensor:$input);
+  let results = (outs TT_IntTensor:$result);
+
+  let assemblyFormat = [{
+    $input attr-dict `:` type($input) `->` type($result)
   }];
 }
 

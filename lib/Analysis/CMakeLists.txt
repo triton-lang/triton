@@ -1,4 +1,4 @@
-add_mlir_library(TritonAnalysis
+add_triton_library(TritonAnalysis
   AxisInfo.cpp
   Allocation.cpp
   Membar.cpp
@@ -10,7 +10,6 @@ add_mlir_library(TritonAnalysis
   TritonGPUAttrDefsIncGen
 
   LINK_LIBS PUBLIC
-  ASMBuilder
   MLIRAnalysis
   MLIRLLVMDialect
   TritonIR

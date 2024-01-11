@@ -300,17 +300,17 @@ SmallVector<unsigned> getCTASplitNum(Attribute layout) {
 }
 
 SmallVector<unsigned> getCTAOrder(Attribute layout) {
-  ArrayRef<unsigned> ref;
+  SmallVector<unsigned> res;
   if (auto distributedLayout = layout.dyn_cast<DistributedEncodingTrait>()) {
-    ref = distributedLayout.getCTAOrder();
+    res = distributedLayout.getCTAOrder();
   } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
     return {0, 1};
   } else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
-    ref = sharedLayout.getCTALayout().getCTAOrder();
+    res = SmallVector<unsigned>(sharedLayout.getCTALayout().getCTAOrder());
   } else {
     llvm::report_fatal_error("Unimplemented usage of getCTAOrder");
   }
-  return SmallVector<unsigned>(ref.begin(), ref.end());
+  return res;
 }
 
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
@@ -1928,6 +1928,28 @@ struct CanonicalizeConvertFromView
   }
 };
 
+struct CanonicalizeConvertFromHistogram
+    : public mlir::OpRewritePattern<triton::HistogramOp> {
+
+  CanonicalizeConvertFromHistogram(MLIRContext *context)
+      : OpRewritePattern<triton::HistogramOp>(context, 1) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(triton::HistogramOp op,
+                  PatternRewriter &rewriter) const override {
+    Operation *arg = op->getOperand(0).getDefiningOp();
+    if (!arg)
+      return mlir::failure();
+    auto convert = dyn_cast<ConvertLayoutOp>(arg);
+    if (!convert)
+      return failure();
+    // histogram(cvt)->histogram
+    rewriter.replaceOpWithNewOp<triton::HistogramOp>(
+        op, op->getResult(0).getType(), convert.getOperand());
+    return mlir::success();
+  }
+};
+
 struct CanonicalizeConvertFromConvert
     : public mlir::OpRewritePattern<ConvertLayoutOp> {
 
@@ -1985,6 +2007,14 @@ struct CanonicalizeConvertFromConvert
       rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
           op, op->getResult(0).getType(), reshape.getResult(),
           reshape.getAllowReorder());
+      return mlir::success();
+    }
+    // cvt(histogram) -> histogram
+    if (auto histogram = dyn_cast<triton::HistogramOp>(arg)) {
+      // For histogram ops the input and output layouts are independent so we
+      // can always fold convert into the histogram op.
+      rewriter.replaceOpWithNewOp<triton::HistogramOp>(
+          op, op->getResult(0).getType(), histogram.getOperand());
       return mlir::success();
     }
     // cvt(cat) -> cat
@@ -2109,6 +2139,7 @@ void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
                                                   MLIRContext *context) {
   patterns.add<CanonicalizeConvertFromConvert>(context);
   patterns.add<CanonicalizeConvertFromView>(context);
+  patterns.add<CanonicalizeConvertFromHistogram>(context);
 }
 
 //===----------------------------------------------------------------------===//

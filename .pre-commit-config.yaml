@@ -46,11 +46,11 @@ repos:
         exclude: |
           (?x)(
             ^include/triton/external/|
-            ^python/triton/third_party/
+            ^third_party/
           )
 
 exclude: |
   (?x)(
     ^include/triton/external/|
-    ^python/triton/third_party/
+    ^third_party/
   )

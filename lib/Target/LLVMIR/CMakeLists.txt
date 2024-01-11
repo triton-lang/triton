@@ -1,9 +1,6 @@
-add_mlir_translation_library(TritonLLVMIR
+add_triton_library(TritonLLVMIR
         LLVMDIScope.cpp
         LLVMIRBreakPhiStruct.cpp
-
-        LINK_COMPONENTS
-        Core
 
         DEPENDS
         LLVMIRIncGen
