@@ -13,12 +13,6 @@ Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v) {
                                            IntegerAttr::get(i32ty, v));
 }
 
-Value createConstantF16(Location loc, OpBuilder &rewriter, float v) {
-  auto type = type::f16Ty(rewriter.getContext());
-  return rewriter.create<LLVM::ConstantOp>(loc, type,
-                                           rewriter.getF16FloatAttr(v));
-}
-
 Value createConstantF32(Location loc, OpBuilder &rewriter, float v) {
   auto type = type::f32Ty(rewriter.getContext());
   return rewriter.create<LLVM::ConstantOp>(loc, type,
@@ -32,13 +26,11 @@ Value createConstantF64(Location loc, OpBuilder &rewriter, double v) {
 }
 
 Value createNaNConstant(Location loc, OpBuilder &rewriter, Type type) {
-  if (type.isF16())
-    return createConstantF16(loc, rewriter, std::nanf(""));
-  if (type.isF32())
-    return createConstantF32(loc, rewriter, std::nanf(""));
-  if (type.isF64())
-    return createConstantF64(loc, rewriter, std::nan(""));
-  llvm_unreachable("unsupported type");
+  if (!type.isa<FloatType>()) {
+    llvm::report_fatal_error("Creating NaN constant for non-float type!");
+  }
+  return rewriter.create<LLVM::ConstantOp>(
+    loc, type, APFloat::getNaN(type.cast<FloatType>().getFloatSemantics()));
 }
 
 // Create an index type constant.

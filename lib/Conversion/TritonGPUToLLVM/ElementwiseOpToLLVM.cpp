@@ -1642,11 +1642,11 @@ struct MinMaxFOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    if (computeCapability >= 90) {
+    if (computeCapability >= 80) {
       return {rewriter.create<DestOpNanProp>(loc, elemTy, operands[0][0],
                                              operands[0][1])};
     }
-    // Handle pre-90 compute capability.
+    // Handle pre-80 compute capability.
     // If any of the operands is NaN, return NaN.
     auto lhs = operands[0][0];
     auto rhs = operands[0][1];
@@ -1761,18 +1761,18 @@ struct ClampFOpConversion
 
     // Clip pattern not found, use min/max.
     if (op.getPropagateNan() == triton::PropagateNan::ALL) {
-      if (computeCapability >= 90) {
+      if (computeCapability >= 80) {
         auto v = rewriter.create<LLVM::MaximumOp>(loc, elemTy, operands[0][0],
-                                                  operands[0][1]);
+                                                operands[0][1]);
         return {rewriter.create<LLVM::MinimumOp>(loc, v, operands[0][2])};
       }
-      // On pre-90 compute capability, we need to handle NaN propagation
+      // On pre-80 compute capability, we need to handle NaN propagation
       // manually. We need to check only the first operand for clamp.
       auto lhs = operands[0][0];
-      auto isNan = rewriter.create<LLVM::FCmpOp>(loc, LLVM::FCmpPredicate::une,
-                                                 lhs, lhs);
+      auto isNan =
+          rewriter.create<LLVM::FCmpOp>(loc, LLVM::FCmpPredicate::une, lhs, lhs);
       auto v = rewriter.create<LLVM::MaxNumOp>(loc, elemTy, operands[0][0],
-                                               operands[0][1]);
+                                             operands[0][1]);
       auto nonNanRes = rewriter.create<LLVM::MinNumOp>(loc, v, operands[0][2]);
       auto nan = LLVM::createNaNConstant(loc, rewriter, elemTy);
       // Select the result based on the isNan flag.
