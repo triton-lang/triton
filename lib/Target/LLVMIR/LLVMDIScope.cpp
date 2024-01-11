@@ -107,7 +107,7 @@ struct LLVMDIScopePass : public LLVMDIScopeBase<LLVMDIScopePass> {
         llvm::sys::path::parent_path(calleeFileName));
     auto lexicalBlockFileAttr = LLVM::DILexicalBlockFileAttr::get(
         context, scopeAttr, calleeFileAttr, /*discriminator=*/0);
-    Location loc = op->getLoc();
+    Location loc = calleeLoc;
     if (calleeLoc.isa<CallSiteLoc>()) {
       auto nestedLoc = calleeLoc.cast<CallSiteLoc>().getCallee();
       loc = getNestedLoc(op, lexicalBlockFileAttr, nestedLoc);
@@ -126,7 +126,8 @@ struct LLVMDIScopePass : public LLVMDIScopeBase<LLVMDIScopePass> {
       auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
       auto funcOpLoc = funcOp.getLoc().cast<FusedLoc>();
       scopeAttr = funcOpLoc.getMetadata().cast<LLVM::DISubprogramAttr>();
-      auto loc = getNestedLoc(op, scopeAttr, calleeLoc);
+      auto loc =
+          CallSiteLoc::get(getNestedLoc(op, scopeAttr, calleeLoc), callerLoc);
       op->setLoc(loc);
     }
   }
