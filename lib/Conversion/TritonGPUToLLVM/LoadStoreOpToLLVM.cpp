@@ -1,8 +1,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 
-#include "ConvertLayoutOpToLLVM.h"
-#include "LoadStoreOpToLLVM.h"
+#include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -36,6 +35,7 @@ static CUtensorMapDataType getCUtensorMapDataType(Type ty) {
   }
 }
 
+namespace {
 // Contains some helper functions for both Load and Store conversions.
 struct LoadStoreConversionBase {
   explicit LoadStoreConversionBase(ModuleAxisInfoAnalysis &axisAnalysisPass)
@@ -1815,8 +1815,9 @@ private:
 
   const TensorPtrMapT *tensorPtrMap;
 };
+} // namespace
 
-void populateLoadStoreOpToLLVMPatterns(
+void mlir::triton::populateLoadStoreOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation,

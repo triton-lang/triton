@@ -11,7 +11,6 @@ add_triton_library(TritonGPUTransforms
   Prefetch.cpp
   RemoveLayoutConversions.cpp
   ReorderInstructions.cpp
-  TritonGPUConversion.cpp
   Utility.cpp
 
   DEPENDS

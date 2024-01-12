@@ -1,4 +1,4 @@
-#include "../ConvertLayoutOpToLLVM.h"
+#include "../TritonGPUToLLVMBase.h"
 #include "../Utility.h"
 
 using namespace mlir;
