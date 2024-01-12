@@ -74,7 +74,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
     %c0 = arith.constant 0 : i32
     %dst = tt.make_tensor_ptr %basePtr, [%dim0, %dim1], [%stride0, %stride1], [%coord0, %coord1] {order = array<i32: 1, 0>} : !tt.ptr<tensor<64x64xf32, #blocked>, 1>
     // CHECK: nvgpu.tma_store_tiled %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}} : !llvm.ptr<1>, !llvm.ptr<3>, i1, i32, i32
-    triton_nvidia_gpu.store_async %dst, %src {cache = 1 : i32} : !tt.ptr<tensor<64x64xf32, #blocked>, 1>, tensor<64x64xf32, #shared>
+    triton_nvidia_gpu.store_async_tma %dst, %src {cache = 1 : i32} : !tt.ptr<tensor<64x64xf32, #blocked>, 1>, tensor<64x64xf32, #shared>
     tt.return
   }
 }
