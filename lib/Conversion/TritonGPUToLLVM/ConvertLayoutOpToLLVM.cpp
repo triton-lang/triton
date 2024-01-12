@@ -295,6 +295,16 @@ private:
                       << " vecTy " << vecTy << " estimated "
                       << (accumNumCTAsEachRep * (accumSizePerThread / vec))
                       << "\n");
+    // get size of vecTy
+    unsigned vecSize = 1;
+    if (vecTy.getElementType().isIntOrFloat()) {
+      for (auto shape : vecTy.getShape())
+        vecSize = vecSize * shape;
+      unsigned elemInBytes = vecTy.getElementType().getIntOrFloatBitWidth() / 8;
+      vecSize = vecSize * elemInBytes;
+    }
+    (*pStat)["memXferBytesWithSMem"] +=
+        accumNumCTAsEachRep * (accumSizePerThread / vec) * vecSize;
     for (unsigned ctaId = 0; ctaId < accumNumCTAsEachRep; ++ctaId) {
       auto multiDimCTAInRepId =
           getMultiDimIndex<unsigned>(ctaId, numCTAsEachRep, order);
@@ -490,6 +500,7 @@ private:
           DBGS()
           << "lowerDistToDistWithDistSmem: store to shared memory numStores = "
           << inIndices.size() << " llvmElemTy " << llvmElemTy << "\n");
+      (*pStat)["memXferBytesWithSMem"] += inIndices.size();
       for (unsigned i = 0; i < inIndices.size(); ++i) {
         Value offset = linearize(rewriter, loc, inIndices[i], smemShape);
         Value ptr = gep(elemPtrTy, llvmElemTy, smemBase, offset);
@@ -515,6 +526,7 @@ private:
           DBGS()
           << "lowerDistToDistWithDistSmem: load from shared memory numLoads = "
           << outIndices.size() << " llvmElemTy " << llvmElemTy << "\n");
+      (*pStat)["memXferBytesWithSMem"] += outIndices.size();
       for (unsigned i = 0; i < outIndices.size(); ++i) {
         auto coord = outIndices[i];
         assert(coord.size() == rank && "Unexpected rank of index emitted");
@@ -1089,12 +1101,15 @@ private:
   }
 };
 
+// Pass in a DenseMap that maps from a string to an integer. This can be
+// added to ConvertTritonGPUOpToLLVMPattern. Inside the pass
+// ConvertTritonGPUToLLVM, it will convert from the DenseMap to the statistics.
 void populateConvertLayoutOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-    PatternBenefit benefit) {
+    PatternBenefit benefit, std::map<std::string, int> *pStat) {
   patterns.add<ConvertLayoutOpConversion>(typeConverter, allocation,
-                                          indexCacheInfo, benefit);
+                                          indexCacheInfo, benefit, pStat);
 }

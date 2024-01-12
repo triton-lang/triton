@@ -202,9 +202,10 @@ public:
 
   explicit ConvertTritonGPUOpToLLVMPatternBase(
       TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
-      IndexCacheInfo indexCacheInfo)
+      IndexCacheInfo indexCacheInfo,
+      std::map<std::string, int> *pStat = nullptr)
       : converter(&typeConverter), allocation(&allocation),
-        indexCacheInfo(indexCacheInfo) {}
+        indexCacheInfo(indexCacheInfo), pStat(pStat) {}
 
   explicit ConvertTritonGPUOpToLLVMPatternBase(
       TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
@@ -1261,6 +1262,7 @@ protected:
   ModuleAllocation *allocation;
   IndexCacheInfo indexCacheInfo;
   mlir::triton::gpu::TMAMetadataTy *tmaMetadata;
+  std::map<std::string, int> *pStat;
 };
 
 template <typename SourceOp>
@@ -1289,10 +1291,11 @@ public:
 
   explicit ConvertTritonGPUOpToLLVMPattern(
       TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
-      IndexCacheInfo indexCacheInfo, PatternBenefit benefit = 1)
+      IndexCacheInfo indexCacheInfo, PatternBenefit benefit = 1,
+      std::map<std::string, int> *pStat = nullptr)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         ConvertTritonGPUOpToLLVMPatternBase(typeConverter, allocation,
-                                            indexCacheInfo) {}
+                                            indexCacheInfo, pStat) {}
 
   explicit ConvertTritonGPUOpToLLVMPattern(
       TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,

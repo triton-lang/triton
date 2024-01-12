@@ -527,8 +527,14 @@ struct ConvertTritonGPUToLLVM
                    /*benefit*/ 10);
     };
 
+    auto populatePatterns5 = [&](auto populateFunc) {
+      populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
+                   allocation, indexCacheInfo,
+                   /*benefit*/ 10, &lowerStats);
+    };
+
     populatePatterns1(populateTritonGPUToLLVMPatterns);
-    populatePatterns1(populateConvertLayoutOpToLLVMPatterns);
+    populatePatterns5(populateConvertLayoutOpToLLVMPatterns);
     populatePatterns2(populateDotOpToLLVMPatterns);
     populatePatterns4(populateElementwiseOpToLLVMPatterns);
     populatePatterns3(populateLoadStoreOpToLLVMPatterns);
@@ -560,6 +566,13 @@ struct ConvertTritonGPUToLLVM
         id.replaceAllUsesWith(zero);
       });
     }
+    // Update Stats.
+    if (lowerStats.find("memXferBytesWithSMem") != lowerStats.end()) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "prior value " << memXferBytesWithSMem << '\n');
+      memXferBytesWithSMem += lowerStats["memXferBytesWithSMem"];
+      LLVM_DEBUG(llvm::dbgs() << "post value " << memXferBytesWithSMem << '\n');
+    }
   }
 
 private:
@@ -569,6 +582,7 @@ private:
            CacheKeyDenseMapInfo>
       indexCache;
   mlir::triton::gpu::TMAMetadataTy *tmaMetadata = nullptr;
+  std::map<std::string, int> lowerStats;
 
   void initSharedMemory(ModuleAllocation &allocation,
                         TritonGPUToLLVMTypeConverter &typeConverter) {

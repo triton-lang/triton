@@ -34,6 +34,11 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
                "clEnumValN(mlir::triton::Target::ROCDL, \"rocdl\", \"compile for "
                "ROCDL-compatible LLVM\"))">,
     ];
+    let statistics = [
+        Statistic<"numMemXfer", "num-mem-xfer", "Number of memory tranfer ops">,
+        Statistic<"memXferBytesWithSMem", "mem-xfer-bytes-smem", "Bytes of memory tranfer involving smem">,
+        Statistic<"memXferBytesWithGlobal", "mem-xfer-bytes-global", "Bytes of memory tranfer involving global mem">,
+  ];
 }
 
 #endif

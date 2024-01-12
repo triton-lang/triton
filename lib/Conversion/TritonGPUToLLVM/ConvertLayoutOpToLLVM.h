@@ -13,6 +13,6 @@ void populateConvertLayoutOpToLLVMPatterns(
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-    PatternBenefit benefit);
+    PatternBenefit benefit, std::map<std::string, int> *pStat = nullptr);
 
 #endif
