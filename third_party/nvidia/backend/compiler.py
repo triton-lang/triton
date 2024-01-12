@@ -483,8 +483,7 @@ class CUDABackend(BaseBackend):
         if options.extern_libs:
             for name, path in options.extern_libs:
                 llvm.link_extern_lib(llvm_mod, path)
-        if os.environ.get('DISABLE_LLVM_OPT', '0') == "0":
-            llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
         # Get some metadata
         if len(tma_infos) > 0:
             metadata["tensormaps_info"] = parse_tma_info(tma_infos, metadata["ids_of_folded_args"])
