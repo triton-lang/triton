@@ -1689,14 +1689,14 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
         if IS_3D:
             if AXIS == 0:
                 z_ptr = Z + range_n[:, None] * BLOCK_K + range_k[None, :]
-            elif AXIS == 1:
+            elif AXIS == 1 or AXIS == -2:
                 z_ptr = Z + range_m[:, None] * BLOCK_K + range_k[None, :]
-            elif AXIS == 2:
+            elif AXIS == 2 or AXIS == -1:
                 z_ptr = Z + range_m[:, None] * BLOCK_N + range_n[None, :]
         else:
             if AXIS == 0:
                 z_ptr = Z + range_n
-            elif AXIS == 1:
+            elif AXIS == 1 or AXIS == -1:
                 z_ptr = Z + range_m
         if KEEP_DIMS and AXIS is not None:
             z_ptr = tl.expand_dims(z_ptr, axis=AXIS)
