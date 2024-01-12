@@ -40,7 +40,7 @@ void SharedMemoryAliasAnalysis::visitOperation(
       // insert_slice %src into %dst[%offsets]
       aliasInfo = AliasInfo(operands[1]->getValue());
       pessimistic = false;
-    } else if (isa<triton::nvidia_gpu::StoreAsyncOp>(op)) {
+    } else if (isa<triton::nvidia_gpu::StoreAsyncTMAOp>(op)) {
       aliasInfo = AliasInfo(operands[0]->getValue());
       pessimistic = false;
     } else if (triton::gpu::hasSharedEncoding(result)) {

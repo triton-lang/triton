@@ -381,7 +381,7 @@ bool maybeAliasOp(Operation *op) {
   return isa<triton::gpu::ExtractSliceOp, triton::TransOp,
              triton::gpu::InsertSliceAsyncOp,
              triton::nvidia_gpu::InsertSliceTMAOp,
-             triton::nvidia_gpu::StoreAsyncOp, tensor::InsertSliceOp>(op);
+             triton::nvidia_gpu::StoreAsyncTMAOp, tensor::InsertSliceOp>(op);
 }
 
 static bool supportMFMAGranularity(int m, int n, int k) {
