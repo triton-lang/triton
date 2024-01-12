@@ -160,13 +160,13 @@ def _argmax_combine_tie_break_fast(value1, index1, value2, index2):
 @jit
 @core._add_reduction_docstr("maximum", return_indices_arg="return_indices",
                             tie_break_arg="return_indices_tie_break_left")
-def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True):
+def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False):
     input = core._promote_bfloat16_to_float32(input)
     if return_indices:
         if return_indices_tie_break_left:
-            return core._reduce_with_indices(input, axis, _argmax_combine_tie_break_left)
+            return core._reduce_with_indices(input, axis, _argmax_combine_tie_break_left, keep_dims=keep_dims)
         else:
-            return core._reduce_with_indices(input, axis, _argmax_combine_tie_break_fast)
+            return core._reduce_with_indices(input, axis, _argmax_combine_tie_break_fast, keep_dims=keep_dims)
     else:
         if core.constexpr(input.dtype.primitive_bitwidth) < core.constexpr(32):
             if core.constexpr(input.dtype.is_floating()):
@@ -174,13 +174,13 @@ def max(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
             else:
                 assert input.dtype.is_integer_type()
                 input = input.to(core.int32)
-        return core.reduce(input, axis, maximum)
+        return core.reduce(input, axis, maximum, keep_dims=keep_dims)
 
 
 @jit
 @core._add_reduction_docstr("maximum index", tie_break_arg="tie_break_left")
-def argmax(input, axis, tie_break_left=True):
-    (_, ret) = max(input, axis, return_indices=True, return_indices_tie_break_left=tie_break_left)
+def argmax(input, axis, tie_break_left=True, keep_dims=False):
+    (_, ret) = max(input, axis, return_indices=True, return_indices_tie_break_left=tie_break_left, keep_dims=keep_dims)
     return ret
 
 
@@ -212,13 +212,13 @@ def _argmin_combine_tie_break_fast(value1, index1, value2, index2):
 @jit
 @core._add_reduction_docstr("minimum", return_indices_arg="return_indices",
                             tie_break_arg="return_indices_tie_break_left")
-def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True):
+def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False):
     input = core._promote_bfloat16_to_float32(input)
     if return_indices:
         if return_indices_tie_break_left:
-            return core._reduce_with_indices(input, axis, _argmin_combine_tie_break_left)
+            return core._reduce_with_indices(input, axis, _argmin_combine_tie_break_left, keep_dims=keep_dims)
         else:
-            return core._reduce_with_indices(input, axis, _argmin_combine_tie_break_fast)
+            return core._reduce_with_indices(input, axis, _argmin_combine_tie_break_fast, keep_dims=keep_dims)
     else:
         if core.constexpr(input.dtype.primitive_bitwidth) < 32:
             if core.constexpr(input.dtype.is_floating()):
@@ -226,13 +226,13 @@ def min(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
             else:
                 assert input.dtype.is_integer_type()
                 input = input.to(core.int32)
-        return core.reduce(input, axis, minimum)
+        return core.reduce(input, axis, minimum, keep_dims=keep_dims)
 
 
 @jit
 @core._add_reduction_docstr("minimum index", tie_break_arg="tie_break_left")
-def argmin(input, axis, tie_break_left=True):
-    _, ret = min(input, axis, return_indices=True, return_indices_tie_break_left=tie_break_left)
+def argmin(input, axis, tie_break_left=True, keep_dims=False):
+    _, ret = min(input, axis, return_indices=True, return_indices_tie_break_left=tie_break_left, keep_dims=keep_dims)
     return ret
 
 
@@ -246,9 +246,9 @@ def _sum_combine(a, b):
 
 @jit
 @core._add_reduction_docstr("sum")
-def sum(input, axis=None):
+def sum(input, axis=None, keep_dims=False):
     input = core._promote_bfloat16_to_float32(input)
-    return core.reduce(input, axis, _sum_combine)
+    return core.reduce(input, axis, _sum_combine, keep_dims=keep_dims)
 
 
 @jit
@@ -261,13 +261,13 @@ def _xor_combine(a, b):
 
 @core.builtin
 @core._add_reduction_docstr("xor sum")
-def xor_sum(input, axis=None, _builder=None, _generator=None):
+def xor_sum(input, axis=None, keep_dims=False, _builder=None, _generator=None):
     scalar_ty = input.type.scalar
     if not scalar_ty.is_int():
         raise ValueError("xor_sum only supported for integers")
 
     input = core._promote_bfloat16_to_float32(input, _builder=_builder)
-    return core.reduce(input, axis, _xor_combine, _builder=_builder, _generator=_generator)
+    return core.reduce(input, axis, _xor_combine, keep_dims=keep_dims, _builder=_builder, _generator=_generator)
 
 
 # cumsum
