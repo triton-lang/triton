@@ -228,6 +228,8 @@ private:
       elemSize = std::max<unsigned int>(
           1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
     }
+    assert((rhs.getDivisibility(dim) <= std::numeric_limits<int64_t>::max() / elemSize)
+           && "Next line will overflow!");
     return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim) * elemSize);
   }
 
