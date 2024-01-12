@@ -132,7 +132,7 @@ if __name__ == "__main__":
         "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names]),
         "num_args": len(arg_names),
         "kernel_docstring": doc_string,
-        "shared": ccinfo.shared,
+        "shared": ccinfo.metadata.shared,
         "num_warps": args.num_warps,
         "algo_info": '_'.join([const_sig, meta_sig]),
         "gridX": grid[0],
