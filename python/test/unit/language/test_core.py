@@ -1647,13 +1647,18 @@ reduce_configs3 = [(op, 'float32', shape, axis, False)
                    for axis in [0, 1, 2]]
 invalid_config = [('sum', 'float32', (32, 32), axis, False) for axis in [2, 3]]
 negative_config = [('sum', 'float32', (32, 32), -1, False)]
-keep_dims_2d_configs = [(op, 'float32', (32, 32), axis, True) 
+keep_dims_2d_configs = [(op, 'float32', (32, 32), axis, True)
                         for op in ['min', 'max', 'sum', 'argmin', 'argmax']
-                        for axis in [0, 1, None]]
+                        for axis in [0, 1]] + [(op, 'float32', (32, 32), None, True) for op in ['min', 'max', 'sum']]
+keep_dims_3d_configs = [(op, 'float32', (32, 2, 16), axis, True)
+                        for op in ['min', 'max', 'sum', 'argmin', 'argmax']
+                        for axis in [0, 1, 2]] + [(op, 'float32', (32, 2, 16), None, True)
+                                                  for op in ['min', 'max', 'sum']]
 
 
-@pytest.mark.parametrize("op, dtype_str, shape, axis, keep_dims",
-                         reduce_configs1 + reduce_configs2 + reduce_configs3 + invalid_config + negative_config + keep_dims_2d_configs)
+@pytest.mark.parametrize(
+    "op, dtype_str, shape, axis, keep_dims", reduce_configs1 + reduce_configs2 + reduce_configs3 + invalid_config +
+    negative_config + keep_dims_2d_configs + keep_dims_3d_configs)
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
@@ -1661,7 +1666,7 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     if is_hip():
         pytest.skip("test_reduce2d not supported on HIP")
     # triton kernel
-    
+
     @triton.jit
     def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, IS_3D: tl.constexpr,
                AXIS: tl.constexpr, KEEP_DIMS: tl.constexpr):
@@ -1674,39 +1679,27 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
         else:
             x = tl.load(X + range_m[:, None] * BLOCK_N + range_n[None, :])
         z = GENERATE_TEST_HERE
-        
+
+        z_ptr = Z
+        if KEEP_DIMS and AXIS is None:
+            if IS_3D:
+                z_ptr = z_ptr[None, None, None, :]
+            else:
+                z_ptr = z_ptr[None, None, :]
         if IS_3D:
-            if AXIS is None:
-                z_ptr = Z
-                if KEEP_DIMS:
-                    for _ in range(3):
-                        z_ptr = tl.expand_dims(z_ptr, axis=0)
-            elif AXIS == 0:
+            if AXIS == 0:
                 z_ptr = Z + range_n[:, None] * BLOCK_K + range_k[None, :]
-                if KEEP_DIMS:
-                    z_ptr = tl.expand_dims(z_ptr, axis=0)
             elif AXIS == 1:
                 z_ptr = Z + range_m[:, None] * BLOCK_K + range_k[None, :]
-                if KEEP_DIMS:
-                    z_ptr = tl.expand_dims(z_ptr, axis=1)
-            else:
+            elif AXIS == 2:
                 z_ptr = Z + range_m[:, None] * BLOCK_N + range_n[None, :]
-                if KEEP_DIMS:
-                    z_ptr = tl.expand_dims(z_ptr, axis=2)
         else:
-            if AXIS is None:
-                z_ptr = Z
-                if KEEP_DIMS:
-                    for _ in range(2):
-                        z_ptr = tl.expand_dims(z_ptr, axis=0)
-            elif AXIS == 0:
+            if AXIS == 0:
                 z_ptr = Z + range_n
-                if KEEP_DIMS:
-                    z_ptr = tl.expand_dims(z_ptr, axis=0)
-            else:
+            elif AXIS == 1:
                 z_ptr = Z + range_m
-                if KEEP_DIMS:
-                    z_ptr = tl.expand_dims(z_ptr, axis=1)
+        if KEEP_DIMS and AXIS is not None:
+            z_ptr = tl.expand_dims(z_ptr, axis=AXIS)
         tl.store(z_ptr, z)
 
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{op}(x, axis=AXIS, keep_dims=KEEP_DIMS)'})
@@ -1730,7 +1723,7 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
         z_ref = (z_ref.view('uint32') & np.uint32(0xffff0000)).view('float32')
     else:
         z_ref = numpy_op(x, axis=np_axis, keepdims=keep_dims).astype(getattr(np, z_dtype_str))
-        
+
     # triton result
     z_shape = z_ref.shape
     z_tri = to_triton(numpy_random(z_shape, dtype_str=z_dtype_str, rs=rs), device=device, dst_type=z_tri_dtype_str)
@@ -1738,15 +1731,15 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     IS_3D = bool(len(shape) == 3)
     if axis is not None and axis >= len(shape):
         with pytest.raises(triton.CompilationError):
-            kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis, KEEP_DIMS=keep_dims,
-                          num_ctas=num_ctas)
+            kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
+                          KEEP_DIMS=keep_dims, num_ctas=num_ctas)
         return
     else:
-        kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis, KEEP_DIMS=keep_dims,
-                      num_ctas=num_ctas)
+        kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
+                      KEEP_DIMS=keep_dims, num_ctas=num_ctas)
 
     z_tri = to_numpy(z_tri)
-    
+
     # compare
     if op == 'sum':
         np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
