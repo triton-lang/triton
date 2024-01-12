@@ -1,4 +1,4 @@
-#include "ViewOpToLLVM.h"
+#include "PatternTritonGPUOpToLLVM.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -6,6 +6,7 @@ using namespace mlir::triton;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
+namespace {
 struct SplatOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::SplatOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -289,12 +290,12 @@ struct TransOpConversion
     return success();
   }
 };
+} // namespace
 
-void populateViewOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
-                                  RewritePatternSet &patterns, int numWarps,
-                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                  ModuleAllocation &allocation,
-                                  PatternBenefit benefit) {
+void mlir::triton::populateViewOpToLLVMPatterns(
+    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    ModuleAllocation &allocation, PatternBenefit benefit) {
   patterns.add<ReshapeOpConversion>(typeConverter, benefit);
   patterns.add<ExpandDimsOpConversion>(typeConverter, benefit);
   patterns.add<SplatOpConversion>(typeConverter, benefit);

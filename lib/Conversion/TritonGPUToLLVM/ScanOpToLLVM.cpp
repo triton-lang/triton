@@ -1,4 +1,4 @@
-#include "ScanOpToLLVM.h"
+#include "PatternTritonGPUOpToLLVM.h"
 #include "TritonGPUToLLVMBase.h"
 #include "triton/Analysis/Utility.h"
 
@@ -445,7 +445,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
 }
 } // namespace
 
-void populateScanOpToLLVMPatterns(
+void mlir::triton::populateScanOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation,

@@ -1,5 +1,4 @@
-#include "HistogramOpToLLVM.h"
-#include "TritonGPUToLLVMBase.h"
+#include "PatternTritonGPUOpToLLVM.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Analysis/Utility.h"
 
@@ -187,7 +186,7 @@ public:
 };
 } // namespace
 
-void populateHistogramOpToLLVMPatterns(
+void mlir::triton::populateHistogramOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation,

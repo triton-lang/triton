@@ -20,11 +20,12 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
+#include "PatternTritonGPUOpToLLVM.h"
 
-#include "TensorPtrOpsToLLVM.h"
 using namespace mlir;
 using namespace mlir::triton;
 
+namespace {
 struct MakeTensorPtrOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::MakeTensorPtrOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -92,8 +93,9 @@ struct AdvanceOpConversion
     return success();
   }
 };
+} // namespace
 
-void populateTensorPtrOpsToLLVMPatterns(
+void mlir::triton::populateTensorPtrOpsToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation, PatternBenefit benefit) {
