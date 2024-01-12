@@ -148,7 +148,7 @@ class IRSource:
         return module
 
     def metadata(self):
-        return dict()
+        return {"ids_of_folded_args": tuple()}
 
     def parse_options(self):
         if self.ext == "ttgir":
