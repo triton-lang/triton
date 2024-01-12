@@ -1460,7 +1460,8 @@ def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_a
     Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
 
     :param input: the input values
-    :param axis: the dimension along which the reduction should be done"""
+    :param axis: the dimension along which the reduction should be done
+    :param keep_dims: if true, keep the reduced dimensions with length 1"""
         if return_indices_arg is not None:
             docstr += f"""
     :param {return_indices_arg}: if true, return index corresponding to the {name} value"""
@@ -1482,16 +1483,17 @@ def _insertion_guard(builder):
 
 
 @builtin
-def reduce(input, axis, combine_fn, _builder=None, _generator=None):
+def reduce(input, axis, combine_fn, keep_dims=False, _builder=None, _generator=None):
     """Applies the combine_fn to all elements in :code:`input` tensors along the provided :code:`axis`
 
     :param input: the input tensor, or tuple of tensors
-    :param axis: the dimension along which the reduction should be done
+    :param axis: the dimension along which the reduction should be done. If None, reduce all dimensions
     :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit)
+    :param keep_dims: if true, keep the reduced dimensions with length 1
 
     """
     if isinstance(input, tensor):
-        return reduce((input, ), axis, combine_fn, _builder=_builder, _generator=_generator)[0]
+        return reduce((input, ), axis, combine_fn, keep_dims=keep_dims, _builder=_builder, _generator=_generator)[0]
 
     def make_combine_region(reduce_op):
         in_scalar_tys = [t.type.scalar for t in input]
@@ -1509,10 +1511,22 @@ def reduce(input, axis, combine_fn, _builder=None, _generator=None):
                 handles = [r.handle for r in results]
             _builder.create_reduce_ret(*handles)
 
+    def expand_ndims(t, ndims):
+        for _ in range(ndims):
+            t = expand_dims(t, 0, _builder=_builder)
+        return t
+
     axis = _constexpr_to_value(axis)
+    keep_dims = _constexpr_to_value(keep_dims)
     if axis is not None:
         axis = _wrap_axis(axis, len(input[0].shape))
-    return semantic.reduction(input, axis, make_combine_region, _builder)
+    ret = semantic.reduction(input, axis, make_combine_region, _builder)
+    if keep_dims:
+        if axis is not None:
+            ret = tuple(expand_dims(t, axis, _builder=_builder) for t in ret)
+        else:
+            ret = tuple(expand_ndims(t, len(input[0].shape)) for t in ret)
+    return ret
 
 
 @builtin
@@ -1526,7 +1540,7 @@ def _promote_bfloat16_to_float32(t, _builder=None):
 
 
 @builtin
-def _reduce_with_indices(input, axis, combine_fn, _builder=None, _generator=None):
+def _reduce_with_indices(input, axis, combine_fn, keep_dims=False, _builder=None, _generator=None):
     axis = _constexpr_to_value(axis)
     n = input.shape[axis]
     index = arange(0, n, _builder=_builder)
@@ -1538,7 +1552,8 @@ def _reduce_with_indices(input, axis, combine_fn, _builder=None, _generator=None
         index = expand_dims(index, axes_to_expand, _builder=_builder)
         index = broadcast_to(index, input.shape, _builder=_builder)
 
-    rvalue, rindices = reduce((input, index), axis, combine_fn, _builder=_builder, _generator=_generator)
+    rvalue, rindices = reduce((input, index), axis, combine_fn, keep_dims=keep_dims, _builder=_builder,
+                              _generator=_generator)
     return rvalue, rindices
 
 
