@@ -118,7 +118,9 @@ class ASTSource:
 
     def metadata(self):
         # TODO: remove once TMA support is cleaned up
-        return {"ids_of_folded_args": tuple([int(k) for k in self.attrs.ids_of_folded_args])}
+        return {
+            "ids_of_folded_args": tuple([int(k) for k in self.attrs.ids_of_folded_args]),
+        }
 
     def parse_options(self):
         return dict()
@@ -146,7 +148,7 @@ class IRSource:
         return module
 
     def metadata(self):
-        return dict()
+        return {"ids_of_folded_args": tuple()}
 
     def parse_options(self):
         if self.ext == "ttgir":
@@ -208,6 +210,7 @@ def compile(src, target=None, options=None):
         return CompiledKernel(src, metadata_group)
     # initialize metadata
     metadata = {
+        "hash": hash,
         "target": target,
         **options.__dict__,
         **get_env_vars(),
@@ -249,15 +252,18 @@ class CompiledKernel:
     launch_exit_hook = None
 
     def __init__(self, src, metadata_group):
+        from collections import namedtuple
         metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
         self.metadata = json.loads(metadata_path.read_text())
         self.metadata['tensormaps_info'] = [InfoFromBackendForTensorMap(e) for e in self.metadata['tensormaps_info']
                                             ] if 'tensormaps_info' in self.metadata else []
         for i, _ in enumerate(self.metadata["tensormaps_info"]):
             self.metadata["tensormaps_info"][i].ids_of_folded_args = tuple(self.metadata["ids_of_folded_args"])
-        self.name = self.metadata["name"]
-        for key, val in self.metadata.items():
-            setattr(self, key, val)
+        self.metadata["tensormaps_info"] = tuple(self.metadata["tensormaps_info"])
+        KernelMetadata = namedtuple('KernelMetadata', sorted(list(self.metadata.keys())))
+        self.metadata = KernelMetadata(**self.metadata)
+
+        self.name = self.metadata.name
         # create launcher
         self.run = driver.launcher_cls(src, self.metadata)
         # stores the text of each level of IR that was generated during compilation
@@ -279,11 +285,11 @@ class CompiledKernel:
         device = driver.get_current_device()
         # not enough shared memory to run the kernel
         max_shared = driver.utils.get_device_properties(device)["max_shared_mem"]
-        if self.shared > max_shared:
-            raise OutOfResources(self.shared, max_shared, "shared memory")
+        if self.metadata.shared > max_shared:
+            raise OutOfResources(self.metadata.shared, max_shared, "shared memory")
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills = driver.utils.load_binary(
-            self.name, self.kernel, self.shared, device)
+            self.name, self.kernel, self.metadata.shared, device)
 
     def __getattribute__(self, name):
         if name == 'run':
@@ -294,12 +300,13 @@ class CompiledKernel:
         self._init_handles()
 
         def runner(*args, stream=None):
-            args_expand = driver.assemble_tensormap_to_arg(self.tensormaps_info, args)
             if stream is None:
                 device = driver.get_current_device()
                 stream = driver.get_current_stream(device)
-            self.run(grid[0], grid[1], grid[2], self.num_warps, self.num_ctas, self.cluster_dims[0],
-                     self.cluster_dims[1], self.cluster_dims[2], self.shared, stream, self.function,
-                     CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args_expand)
+            md = self.metadata
+            args_expand = driver.assemble_tensormap_to_arg(md.tensormaps_info, args)
+            self.run(grid[0], grid[1], grid[2], md.num_warps, md.num_ctas, md.cluster_dims[0], md.cluster_dims[1],
+                     md.cluster_dims[2], md.shared, stream, self.function, CompiledKernel.launch_enter_hook,
+                     CompiledKernel.launch_exit_hook, md, *args_expand)
 
         return runner
