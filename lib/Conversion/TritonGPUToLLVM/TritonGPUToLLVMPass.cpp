@@ -192,9 +192,10 @@ struct FuncOpConversion : public FuncOpConversionBase {
           numTMALoad++;
         });
     unsigned numTMAStore = 0;
-    funcOp.walk([&numTMAStore](triton::nvidia_gpu::StoreAsyncOp storeAsyncOp) {
-      numTMAStore++;
-    });
+    funcOp.walk(
+        [&numTMAStore](triton::nvidia_gpu::StoreAsyncTMAOp storeAsyncOp) {
+          numTMAStore++;
+        });
     unsigned numTMA = numTMALoad + numTMAStore;
 
     auto newFuncOp = convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter);
@@ -424,14 +425,15 @@ struct ConvertTritonGPUToLLVM
           }
         });
 
-    mod.walk([&tensorPtrMap](mlir::triton::nvidia_gpu::StoreAsyncOp storeOp) {
-      auto dst = storeOp.getDst();
-      auto ptrTy = dst.getType().dyn_cast<triton::PointerType>();
-      if (ptrTy && ptrTy.getPointeeType().isa<RankedTensorType>()) {
-        auto makeTensorPtrOp = getMakeTensorPtrOp(storeOp.getDst());
-        tensorPtrMap[storeOp.getOperation()] = makeTensorPtrOp;
-      }
-    });
+    mod.walk(
+        [&tensorPtrMap](mlir::triton::nvidia_gpu::StoreAsyncTMAOp storeOp) {
+          auto dst = storeOp.getDst();
+          auto ptrTy = dst.getType().dyn_cast<triton::PointerType>();
+          if (ptrTy && ptrTy.getPointeeType().isa<RankedTensorType>()) {
+            auto makeTensorPtrOp = getMakeTensorPtrOp(storeOp.getDst());
+            tensorPtrMap[storeOp.getOperation()] = makeTensorPtrOp;
+          }
+        });
 
     // Hack: cleanup
     {

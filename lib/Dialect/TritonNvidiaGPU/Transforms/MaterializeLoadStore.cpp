@@ -183,7 +183,7 @@ void MaterializeLoadStorePass::materializeStoreTilePtr(
     if (srcMmaLayout && srcMmaLayout.isHopper() && dstBlockedLayout &&
         truncFOP && elemTy.getIntOrFloatBitWidth() == 16 && numElems >= 16 &&
         inOrd == outOrd) {
-      builder.create<ttng::StoreAsyncOp>(loc, dst, cvtOp.getOperand());
+      builder.create<ttng::StoreAsyncTMAOp>(loc, dst, cvtOp.getOperand());
       builder.create<ttg::AsyncBulkCommitGroupOp>(loc);
       builder.create<ttg::AsyncBulkWaitOp>(loc, 0);
       store->erase();
@@ -210,7 +210,7 @@ void MaterializeLoadStorePass::materializeStoreTilePtr(
   auto bufferTy =
       RankedTensorType::get(bufferShape, storeElemTy, sharedEncoding);
   Value cvt = builder.create<ttg::ConvertLayoutOp>(loc, bufferTy, value);
-  builder.create<ttng::StoreAsyncOp>(loc, dst, cvt);
+  builder.create<ttng::StoreAsyncTMAOp>(loc, dst, cvt);
   builder.create<mlir::triton::gpu::AsyncBulkCommitGroupOp>(loc);
   builder.create<mlir::triton::gpu::AsyncBulkWaitOp>(loc, 0);
   store->erase();

@@ -293,7 +293,7 @@ def TTNG_DotWaitOp : TTNG_Op<"dot_wait", [DeclareOpInterfaceMethods<InferTypeOpI
   let assemblyFormat = "$inputs attr-dict `:` type($inputs)";
 }
 
-def TTNG_StoreAsyncOp : TTNG_Op<"store_async",
+def TTNG_StoreAsyncTMAOp : TTNG_Op<"store_async_tma",
                               [MemoryEffects<[MemWrite]>]> {
   let summary = "store asynchronous by a tensor pointer";
   let arguments = (ins TT_TensorPtr:$dst, TT_Tensor:$src,
