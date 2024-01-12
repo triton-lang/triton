@@ -1354,7 +1354,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 // -----
 
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#shared0 = #triton_gpu.shared<{vec = 1, perPhase=1, maxPhase=1, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#shared0 = #triton_gpu.shared<{vec = 4, perPhase=2, maxPhase=8, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#shared1 = #triton_gpu.shared<{vec = 1, perPhase=1, maxPhase=1, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #mfma0 = #triton_gpu.mfma<{nonKDim = 32, warpsPerCTA=[1,1], isTranspose=false}>
 #dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mfma0, kWidth = 4}>
 #dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mfma0, kWidth = 4}>
@@ -1362,11 +1363,11 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
   // CHECK-LABEL: convert_dot_mfma
   tt.func @convert_dot_mfma(%A: tensor<32x32xf16, #blocked0>, %B: tensor<32x32xf16, #blocked0>) {
     %AA = triton_gpu.convert_layout %A : (tensor<32x32xf16, #blocked0>) -> tensor<32x32xf16, #shared0>
-    %BB = triton_gpu.convert_layout %B : (tensor<32x32xf16, #blocked0>) -> tensor<32x32xf16, #shared0>
+    %BB = triton_gpu.convert_layout %B : (tensor<32x32xf16, #blocked0>) -> tensor<32x32xf16, #shared1>
     // GCN-COUNT-4:  llvm.load {{.*}} : !llvm.ptr<vector<4xf16>, 3>
     // GCN-COUNT-16:  llvm.load {{.*}} : !llvm.ptr<vector<1xf16>, 3>
     %AA_DOT = triton_gpu.convert_layout %AA : (tensor<32x32xf16, #shared0>) -> tensor<32x32xf16, #dot_operand_a>
-    %BB_DOT = triton_gpu.convert_layout %BB : (tensor<32x32xf16, #shared0>) -> tensor<32x32xf16, #dot_operand_b>
+    %BB_DOT = triton_gpu.convert_layout %BB : (tensor<32x32xf16, #shared1>) -> tensor<32x32xf16, #dot_operand_b>
     %cst0 = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mfma0>
 
     // GCN-COUNT-4: rocdl.mfma.f32.32x32x8f16

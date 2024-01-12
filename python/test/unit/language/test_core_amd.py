@@ -1714,7 +1714,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         if non_k_dim == 4 and (K < 64):
             pytest.skip("incompatible non_k_dim == 4 with K size")
         if non_k_dim == 4 and (M > 16 or N > 16):
-            pytest.skip("skipping lage matrices for non_k_dim == 4 to speedup testing")
+            pytest.skip("skipping large matrices for non_k_dim == 4 to speedup testing")
 
     if capability[0] < 7:
         pytest.skip("Only test tl.dot() on devices with sm >= 70")
