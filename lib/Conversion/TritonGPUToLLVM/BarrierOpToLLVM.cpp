@@ -21,12 +21,13 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "BarrierOpToLLVM.h"
+#include "PatternTritonGPUOpToLLVM.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 
+namespace {
 struct BarrierOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<mlir::gpu::BarrierOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -228,8 +229,9 @@ struct FenceAsyncSharedOpConversion
     return success();
   }
 };
+} // namespace
 
-void populateBarrierOpToLLVMPatterns(
+void mlir::triton::populateBarrierOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation, PatternBenefit benefit) {

@@ -21,7 +21,7 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "../DotOpToLLVM.h"
+#include "../TritonGPUToLLVMBase.h"
 #include "../Utility.h"
 
 using namespace mlir;
