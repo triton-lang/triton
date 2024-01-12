@@ -300,11 +300,11 @@ class CompiledKernel:
         self._init_handles()
 
         def runner(*args, stream=None):
-            args_expand = driver.assemble_tensormap_to_arg(self.tensormaps_info, args)
             if stream is None:
                 device = driver.get_current_device()
                 stream = driver.get_current_stream(device)
             md = self.metadata
+            args_expand = driver.assemble_tensormap_to_arg(md.tensormaps_info, args)
             self.run(grid[0], grid[1], grid[2], md.num_warps, md.num_ctas, md.cluster_dims[0], md.cluster_dims[1],
                      md.cluster_dims[2], md.shared, stream, self.function, CompiledKernel.launch_enter_hook,
                      CompiledKernel.launch_exit_hook, md, *args_expand)
