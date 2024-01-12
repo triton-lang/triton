@@ -1552,7 +1552,8 @@ def _reduce_with_indices(input, axis, combine_fn, keep_dims=False, _builder=None
         index = expand_dims(index, axes_to_expand, _builder=_builder)
         index = broadcast_to(index, input.shape, _builder=_builder)
 
-    rvalue, rindices = reduce((input, index), axis, combine_fn, keep_dims=keep_dims, _builder=_builder, _generator=_generator)
+    rvalue, rindices = reduce((input, index), axis, combine_fn, keep_dims=keep_dims, _builder=_builder,
+                              _generator=_generator)
     return rvalue, rindices
 
 
