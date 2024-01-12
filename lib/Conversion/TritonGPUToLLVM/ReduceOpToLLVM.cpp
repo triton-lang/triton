@@ -1,4 +1,4 @@
-#include "Patterns.h"
+#include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"

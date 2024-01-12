@@ -1,4 +1,4 @@
-#include "Patterns.h"
+#include "PatternTritonGPUOpToLLVM.h"
 #include "TritonGPUToLLVMBase.h"
 #include "triton/Analysis/Utility.h"
 

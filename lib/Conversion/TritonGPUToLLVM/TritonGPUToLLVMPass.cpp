@@ -22,7 +22,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetPlatform.hpp"
 
-#include "Patterns.h"
+#include "PatternTritonGPUOpToLLVM.h"
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 

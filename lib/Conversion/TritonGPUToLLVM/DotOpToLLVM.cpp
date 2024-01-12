@@ -1,4 +1,4 @@
-#include "Patterns.h"
+#include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 
 using namespace mlir;
