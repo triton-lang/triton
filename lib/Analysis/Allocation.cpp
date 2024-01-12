@@ -136,7 +136,7 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
 }
 
 SmallVector<unsigned>
-getScratchConfigForStoreAsync(triton::nvidia_gpu::StoreAsyncOp op) {
+getScratchConfigForStoreAsync(triton::nvidia_gpu::StoreAsyncTMAOp op) {
   auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
   return convertType<unsigned, int64_t>(getShapePerCTA(srcTy));
 }
@@ -285,7 +285,7 @@ private:
       maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
                                                           scratchAlignment);
     } else if (auto storeAsyncOp =
-                   dyn_cast<triton::nvidia_gpu::StoreAsyncOp>(op)) {
+                   dyn_cast<triton::nvidia_gpu::StoreAsyncTMAOp>(op)) {
       auto srcTy = storeAsyncOp.getSrc().getType().cast<RankedTensorType>();
       auto srcEncoding = srcTy.getEncoding();
       if (!srcEncoding.isa<NvidiaMmaEncodingAttr>()) {
