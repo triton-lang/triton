@@ -14,7 +14,7 @@ jobs:
       - name: Prepare runner matrix
         id: set-matrix
         run: |
-          echo '::set-output name=matrix::[["self-hosted", "A100"]]'
+          echo "matrix=[["self-hosted", "A100"]]" >> $GITHUB_OUTPUT
 
   Integration-Tests:
     needs: Runner-Preparation
