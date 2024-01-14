@@ -568,7 +568,7 @@ download_and_copy(
       f"https://anaconda.org/nvidia/cuda-cupti/{version}/download/{system}-{arch}/cuda-cupti-{version}-0.tar.bz2")
      (*version.split('.'))))
 
-backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
+backends = [*BackendInstaller.copy(["nvidia", "amd"] if os.name != "nt" else ["nvidia"]), *BackendInstaller.copy_externals()]
 
 
 def add_link_to_backends():
