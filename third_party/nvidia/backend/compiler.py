@@ -280,16 +280,19 @@ class CUDABackend(BaseBackend):
             fsrc.flush()
             fbin = fsrc.name + '.o'
 
-            line_info = '' if os.environ.get('TRITON_DISABLE_LINE_INFO') else ' -lineinfo'
-            fmad = '' if opt.enable_fp_fusion else ' --fmad=false'
-            suffix = 'a ' if capability == 90 else ' '
+            line_info = '' if os.environ.get('TRITON_DISABLE_LINE_INFO') else '-lineinfo'
+            fmad = '' if opt.enable_fp_fusion else '--fmad=false'
+            suffix = 'a' if capability == 90 else ''
+            cmd = [ptxas]
+            cmd += [line_info] if line_info != '' else []
+            cmd += [fmad] if fmad != '' else []
+            cmd += ['-v']
             if os.environ.get("DISABLE_PTXAS_OPT", "0") == "1":
-                cmd = f'{ptxas}{line_info}{fmad} -v --opt-level 0 --gpu-name=sm_{capability}{suffix}{fsrc.name} -o {fbin} 2> {flog.name}'
-            else:
-                cmd = f'{ptxas}{line_info}{fmad} -v --gpu-name=sm_{capability}{suffix}{fsrc.name} -o {fbin} 2> {flog.name}'
+              cmd += ["-opt-level", "0"]
+            cmd += [f'--gpu-name=sm_{capability}{suffix}', fsrc.name, '-o', fbin]
 
             try:
-                subprocess.run(cmd, shell=True, check=True)
+                subprocess.run(cmd, check=True, stderr=flog)
             except subprocess.CalledProcessError as e:
                 with open(flog.name) as log_file:
                     log = log_file.read()
@@ -300,16 +303,17 @@ class CUDABackend(BaseBackend):
                         f'Please run `ptxas {fsrc.name}` to confirm that this is a bug in `ptxas`\n{log}')
                 else:
                     raise RuntimeError(f'`ptxas` failed with error code {e.returncode}: \n{log}')
-            finally:
-                if os.path.exists(fsrc.name):
-                    os.remove(fsrc.name)
-                if os.path.exists(flog.name):
-                    os.remove(flog.name)
 
             with open(fbin, 'rb') as f:
                 cubin = f.read()
             if os.path.exists(fbin):
                 os.remove(fbin)
+
+        if os.path.exists(fsrc.name):
+            os.remove(fsrc.name)
+        if os.path.exists(flog.name):
+            os.remove(flog.name)
+
         return cubin
 
     def add_stages(self, stages, options):
