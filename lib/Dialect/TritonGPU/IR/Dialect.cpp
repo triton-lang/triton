@@ -1725,6 +1725,7 @@ AMDMfmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
       return {parentShapePerCTATile[0], 32, parentShapePerCTATile[rank - 1]};
   } else {
     llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
+    return {};
   }
   llvm_unreachable("DotOperandEncodingAttr opIdx must be 0 or 1");
 }
