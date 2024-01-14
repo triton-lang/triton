@@ -1,6 +1,7 @@
 import functools
 import os
 import hashlib
+import sysconfig
 import subprocess
 import tempfile
 from pathlib import Path
@@ -14,12 +15,20 @@ include_dir = [os.path.join(dirname, "include")]
 libdevice_dir = os.path.join(dirname, "lib")
 libraries = ['cuda']
 
+if os.name == "nt":
+    include_dir += [os.path.join(os.environ.get("CUDA_PATH"), "include")]
+
 
 @functools.lru_cache()
 def libcuda_dirs():
     env_libcuda_path = os.getenv("TRITON_LIBCUDA_PATH")
     if env_libcuda_path:
         return [env_libcuda_path]
+    if os.name == "nt":
+        installed_base = sysconfig.get_config_var('installed_base')
+        dirs = [os.path.join(os.environ.get("CUDA_PATH"), "lib", "x64")]
+        dirs += [os.getenv("PYTHON_LIB_DIRS", os.path.join(installed_base, "libs"))]
+        return dirs
 
     libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode()
     # each line looks like the following:
