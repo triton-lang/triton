@@ -261,7 +261,8 @@ class Mark:
         self.fn = fn
         self.benchmarks = benchmarks
 
-    def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False, **kwrags):
+    def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False,
+             save_precision=6, **kwrags):
         import os
 
         import matplotlib.pyplot as plt
@@ -325,7 +326,8 @@ class Mark:
             print(bench.plot_name + ':')
             print(df)
         if save_path:
-            df.to_csv(os.path.join(save_path, f"{bench.plot_name}.csv"), float_format='%.1f', index=False)
+            df.to_csv(os.path.join(save_path, f"{bench.plot_name}.csv"), float_format=f"%.{save_precision}f",
+                      index=False)
         return df
 
     def run(self, show_plots=False, print_data=False, save_path='', return_df=False, **kwargs):
