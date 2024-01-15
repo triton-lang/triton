@@ -1,4 +1,4 @@
-﻿#include "mlir/Bytecode/BytecodeWriter.h"
+#include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
@@ -1574,6 +1574,14 @@ void init_triton_ir(py::module &&m) {
       .def("run", [](mlir::PassManager &self, mlir::ModuleOp &mod) {
         // TODO: maybe dump module to file and print error for better
         // diagnostics
+        auto reproducerPath = ::triton::tools::getenv("TRITON_REPRODUCER_PATH");
+        if (!reproducerPath.empty()) {
+          auto anchorName = self.getOpAnchorName();
+          auto passes = self.getPasses();
+          mlir::Operation *op = mod.getOperation();
+          mlir::makeReproducer(anchorName, passes, op, reproducerPath);
+        }
+
         if (mlir::failed(self.run(mod.getOperation())))
           throw std::runtime_error("PassManager::run failed");
       });

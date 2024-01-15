@@ -6,6 +6,7 @@ add_llvm_executable(triton-opt triton-opt.cpp PARTIAL_SOURCES_INTENDED)
 # TODO: what's this?
 llvm_update_compile_flags(triton-opt)
 target_link_libraries(triton-opt PRIVATE
+  TritonLLVMIR
   TritonAnalysis
   TritonTransforms
   TritonGPUTransforms
@@ -28,6 +29,7 @@ mlir_check_all_link_libraries(triton-reduce)
 
 llvm_update_compile_flags(triton-reduce)
 target_link_libraries(triton-reduce PRIVATE
+  TritonLLVMIR
   TritonAnalysis
   TritonTransforms
   TritonGPUTransforms
