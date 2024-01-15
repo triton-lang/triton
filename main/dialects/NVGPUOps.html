@@ -240,9 +240,9 @@
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvgpu.canonical_warp_id` attr-dict
 </pre></div>
 </div>
-<p>Traits: AlwaysSpeculatableImplTrait</p>
-<p>Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{}</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="results">
 <h3>Results:<a class="headerlink" href="#results" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -279,9 +279,9 @@
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvgpu.cluster_id` attr-dict
 </pre></div>
 </div>
-<p>Traits: AlwaysSpeculatableImplTrait</p>
-<p>Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{}</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id1">
 <h3>Results:<a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -332,8 +332,8 @@
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvgpu.load_dsmem` operands attr-dict `:` functional-type(operands, results)
 </pre></div>
 </div>
-<p>Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource}</p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
 <section id="id3">
 <h3>Attributes:<a class="headerlink" href="#id3" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -422,8 +422,8 @@
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvgpu.mbarrier_init` $mbarrier `,` $pred attr-dict `:` type($mbarrier)
 </pre></div>
 </div>
-<p>Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}</p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
 <section id="id7">
 <h3>Attributes:<a class="headerlink" href="#id7" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -531,7 +531,7 @@
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvgpu.offset_of_stmatrix_v4` operands attr-dict `:` type(operands) `-&gt;` type($offset)
 </pre></div>
 </div>
-<p>Interfaces: InferTypeOpInterface</p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
 <section id="id12">
 <h3>Attributes:<a class="headerlink" href="#id12" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -584,7 +584,7 @@
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvgpu.offset_of_sts64` operands attr-dict `:` type(operands) `-&gt;` type($offset)
 </pre></div>
 </div>
-<p>Interfaces: InferTypeOpInterface</p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
 <section id="id15">
 <h3>Attributes:<a class="headerlink" href="#id15" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -665,8 +665,8 @@
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvgpu.store_dsmem` operands attr-dict `:` type(operands)
 </pre></div>
 </div>
-<p>Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}</p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
 <section id="id20">
 <h3>Operands:<a class="headerlink" href="#id20" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -698,8 +698,8 @@
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvgpu.stmatrix` operands attr-dict `:` type(operands)
 </pre></div>
 </div>
-<p>Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}</p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
 <section id="id21">
 <h3>Operands:<a class="headerlink" href="#id21" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -725,8 +725,8 @@
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvgpu.sts64` operands attr-dict `:` type(operands)
 </pre></div>
 </div>
-<p>Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}</p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
 <section id="id22">
 <h3>Operands:<a class="headerlink" href="#id22" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -802,7 +802,7 @@
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvgpu.tma_load_tiled` operands attr-dict `:` type(operands)
 </pre></div>
 </div>
-<p>Traits: AttrSizedOperandSegments</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code></p>
 <section id="id25">
 <h3>Operands:<a class="headerlink" href="#id25" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -843,8 +843,8 @@
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvgpu.tma_store_tiled` operands attr-dict `:` type(operands)
 </pre></div>
 </div>
-<p>Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}</p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
 <section id="id26">
 <h3>Operands:<a class="headerlink" href="#id26" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -975,7 +975,7 @@
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvgpu.wgmma_wait_group` $input attr-dict `:` type($input)
 </pre></div>
 </div>
-<p>Interfaces: InferTypeOpInterface</p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
 <section id="id30">
 <h3>Attributes:<a class="headerlink" href="#id30" title="Permalink to this heading">¶</a></h3>
 <table>

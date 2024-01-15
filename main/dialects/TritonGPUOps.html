@@ -149,9 +149,9 @@
 </div>
 <p>This operation defines a tensor of a particular shape.
 The contents of the tensor are supposed to be in shared memory.</p>
-<p>Traits: ResultsAreSharedEncoding, VerifyTensorLayoutsTrait</p>
-<p>Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{MemoryEffects::Allocate on ::mlir::SideEffects::DefaultResource}</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">ResultsAreSharedEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Allocate</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
 <section id="results">
 <h3>Results:<a class="headerlink" href="#results" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -175,7 +175,7 @@ The contents of the tensor are supposed to be in shared memory.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_gpu.async_bulk_commit_group` attr-dict
 </pre></div>
 </div>
-<p>Traits: VerifyTensorLayoutsTrait</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 </section>
 <section id="triton-gpu-async-bulk-wait-triton-gpu-asyncbulkwaitop">
 <h2><code class="docutils literal notranslate"><span class="pre">triton_gpu.async_bulk_wait</span></code> (triton::gpu::AsyncBulkWaitOp)<a class="headerlink" href="#triton-gpu-async-bulk-wait-triton-gpu-asyncbulkwaitop" title="Permalink to this heading">¶</a></h2>
@@ -184,7 +184,7 @@ The contents of the tensor are supposed to be in shared memory.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_gpu.async_bulk_wait` attr-dict
 </pre></div>
 </div>
-<p>Traits: VerifyTensorLayoutsTrait</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="attributes">
 <h3>Attributes:<a class="headerlink" href="#attributes" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -200,7 +200,7 @@ The contents of the tensor are supposed to be in shared memory.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_gpu.async_commit_group` attr-dict
 </pre></div>
 </div>
-<p>Traits: VerifyTensorLayoutsTrait</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 </section>
 <section id="triton-gpu-async-wait-triton-gpu-asyncwaitop">
 <h2><code class="docutils literal notranslate"><span class="pre">triton_gpu.async_wait</span></code> (triton::gpu::AsyncWaitOp)<a class="headerlink" href="#triton-gpu-async-wait-triton-gpu-asyncwaitop" title="Permalink to this heading">¶</a></h2>
@@ -209,7 +209,7 @@ The contents of the tensor are supposed to be in shared memory.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_gpu.async_wait` attr-dict
 </pre></div>
 </div>
-<p>Traits: VerifyTensorLayoutsTrait</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id1">
 <h3>Attributes:<a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -225,9 +225,9 @@ The contents of the tensor are supposed to be in shared memory.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_gpu.convert_layout` $src attr-dict `:` functional-type(operands, results)
 </pre></div>
 </div>
-<p>Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, SameOperandsAndResultShape, VerifyTensorLayoutsTrait</p>
-<p>Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{}</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultElementType</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultShape</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="operands">
 <h3>Operands:<a class="headerlink" href="#operands" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -268,9 +268,9 @@ The contents of the tensor are supposed to be in shared memory.</p>
 </div>
 <p>This operation deallocate a tensor explicitly.
 The contents of the tensor are supposed to be in shared memory.</p>
-<p>Traits: OperandsAreSharedEncoding, VerifyTensorLayoutsTrait</p>
-<p>Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{MemoryEffects::Free on ::mlir::SideEffects::DefaultResource}</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">OperandsAreSharedEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Free</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
 <section id="id3">
 <h3>Operands:<a class="headerlink" href="#id3" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -305,9 +305,9 @@ We reimplement ExtractSliceOp with int32 index, because:</p>
 <li><p>we still want to use indexWidth = 64 when lowering to LLVM because our loops can have
 64-bit induction variables and scf.for uses indexType for bounds/ivs</p></li>
 </ul>
-<p>Traits: AlwaysSpeculatableImplTrait, AttrSizedOperandSegments, ResultsAreSharedEncoding, VerifyTensorLayoutsTrait</p>
-<p>Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface), OffsetSizeAndStrideOpInterface</p>
-<p>Effects: MemoryEffects::Effect{}</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">ResultsAreSharedEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code>, <code class="docutils literal notranslate"><span class="pre">OffsetSizeAndStrideOpInterface</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id4">
 <h3>Attributes:<a class="headerlink" href="#id4" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -390,9 +390,9 @@ element of the <code class="docutils literal notranslate"><span class="pre">$mas
 triiton_gpu.async_wait { num = 0 : i32 }
 </pre></div>
 </div>
-<p>Traits: AttrSizedOperandSegments, ResultsAreSharedEncoding, VerifyTensorLayoutsTrait</p>
-<p>Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource, MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">ResultsAreSharedEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource,</span> <span class="pre">MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
 <section id="id7">
 <h3>Attributes:<a class="headerlink" href="#id7" title="Permalink to this heading">¶</a></h3>
 <table>

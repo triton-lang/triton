@@ -35,11 +35,11 @@ operation ::= `nvgpu.canonical_warp_id` attr-dict
 ```
 
 
-Traits: AlwaysSpeculatableImplTrait
+Traits: `AlwaysSpeculatableImplTrait`
 
-Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Results:
 
@@ -72,11 +72,11 @@ operation ::= `nvgpu.cluster_id` attr-dict
 ```
 
 
-Traits: AlwaysSpeculatableImplTrait
+Traits: `AlwaysSpeculatableImplTrait`
 
-Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Results:
 
@@ -127,9 +127,9 @@ operation ::= `nvgpu.load_dsmem` operands attr-dict `:` functional-type(operands
 ```
 
 
-Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource}
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource}`
 
 #### Attributes:
 
@@ -190,9 +190,9 @@ operation ::= `nvgpu.mbarrier_init` $mbarrier `,` $pred attr-dict `:` type($mbar
 ```
 
 
-Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
 
 #### Attributes:
 
@@ -265,7 +265,7 @@ operation ::= `nvgpu.offset_of_stmatrix_v4` operands attr-dict `:` type(operands
 ```
 
 
-Interfaces: InferTypeOpInterface
+Interfaces: `InferTypeOpInterface`
 
 #### Attributes:
 
@@ -299,7 +299,7 @@ operation ::= `nvgpu.offset_of_sts64` operands attr-dict `:` type(operands) `->`
 ```
 
 
-Interfaces: InferTypeOpInterface
+Interfaces: `InferTypeOpInterface`
 
 #### Attributes:
 
@@ -365,9 +365,9 @@ operation ::= `nvgpu.store_dsmem` operands attr-dict `:` type(operands)
 ```
 
 
-Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
 
 #### Operands:
 
@@ -387,9 +387,9 @@ operation ::= `nvgpu.stmatrix` operands attr-dict `:` type(operands)
 ```
 
 
-Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
 
 #### Operands:
 
@@ -407,9 +407,9 @@ operation ::= `nvgpu.sts64` operands attr-dict `:` type(operands)
 ```
 
 
-Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
 
 #### Operands:
 
@@ -456,7 +456,7 @@ operation ::= `nvgpu.tma_load_tiled` operands attr-dict `:` type(operands)
 ```
 
 
-Traits: AttrSizedOperandSegments
+Traits: `AttrSizedOperandSegments`
 
 #### Operands:
 
@@ -479,9 +479,9 @@ operation ::= `nvgpu.tma_store_tiled` operands attr-dict `:` type(operands)
 ```
 
 
-Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
 
 #### Operands:
 
@@ -584,7 +584,7 @@ operation ::= `nvgpu.wgmma_wait_group` $input attr-dict `:` type($input)
 ```
 
 
-Interfaces: InferTypeOpInterface
+Interfaces: `InferTypeOpInterface`
 
 #### Attributes:
 

@@ -21,9 +21,9 @@ Example:
 %2 = tt.call @my_add(%0, %1) : (f32, f32) -> f32
 ```
 
-Traits: TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: CallOpInterface, SymbolUserOpInterface
+Interfaces: `CallOpInterface`, `SymbolUserOpInterface`
 
 #### Attributes:
 
@@ -84,9 +84,9 @@ tt.func @example_fn_result() -> (f64 {dialectName.attrName = 0 : i64})
 tt.func @example_fn_attr() attributes {dialectName.attrName = false}
 ```
 
-Traits: AffineScope, AutomaticAllocationScope, IsolatedFromAbove, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `AffineScope`, `AutomaticAllocationScope`, `IsolatedFromAbove`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: CallableOpInterface, FunctionOpInterface, OpAsmOpInterface, Symbol
+Interfaces: `CallableOpInterface`, `FunctionOpInterface`, `OpAsmOpInterface`, `Symbol`
 
 #### Attributes:
 
@@ -124,11 +124,11 @@ tt.func @foo() : (i32, f8) {
 }
 ```
 
-Traits: AlwaysSpeculatableImplTrait, HasParent<FuncOp>, ReturnLike, TensorSizeTrait, Terminator, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `HasParent<FuncOp>`, `ReturnLike`, `TensorSizeTrait`, `Terminator`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface), RegionBranchTerminatorOpInterface
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`, `RegionBranchTerminatorOpInterface`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Operands:
 
@@ -145,11 +145,11 @@ operation ::= `tt.addptr` $ptr `,` $offset attr-dict `:` type($result) `,` type(
 ```
 
 
-Traits: AlwaysSpeculatableImplTrait, Elementwise, SameOperandsAndResultEncoding, SameOperandsAndResultShape, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `Elementwise`, `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Operands:
 
@@ -176,11 +176,11 @@ operation ::= `tt.advance` $ptr `,` `[` $offsets `]` attr-dict `:` type($result)
 ```
 
 
-Traits: AlwaysSpeculatableImplTrait, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Operands:
 
@@ -209,11 +209,11 @@ operation ::= `tt.assert` $condition `,` $message `,` $file `,` $func `,` $line 
 `tt.assert` takes a condition tensor, a message string, a file string, a function string, and a line number.
 If the condition is false, the message is printed, and the program is aborted.
 
-Traits: TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
 
 #### Attributes:
 
@@ -243,11 +243,11 @@ else store $old to $ptr,
 
 return $old
 
-Traits: SameOperandsAndResultEncoding, SameOperandsAndResultShape, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource}, MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource}`, `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
 
 #### Attributes:
 
@@ -286,11 +286,11 @@ load data at $ptr, do $rmw_op with $val, and store result to $ptr.
 
 return old value at $ptr
 
-Traits: SameOperandsAndResultEncoding, SameOperandsAndResultShape, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource}, MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource}`, `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
 
 #### Attributes:
 
@@ -344,11 +344,11 @@ operation ::= `tt.bitcast` $from attr-dict `:` type($from) `->` type($result)
 ```
 
 
-Traits: AlwaysSpeculatableImplTrait, Elementwise, SameOperandsAndResultEncoding, SameOperandsAndResultShape, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `Elementwise`, `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Operands:
 
@@ -374,11 +374,11 @@ operation ::= `tt.broadcast` $src attr-dict `:` functional-type(operands, result
 ```
 
 
-Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, SameOperandsAndResultEncoding, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultElementType`, `SameOperandsAndResultEncoding`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Operands:
 
@@ -404,11 +404,11 @@ operation ::= `tt.cat` $lhs `,` $rhs attr-dict `:` functional-type(operands, res
 ```
 
 
-Traits: SameOperandsAndResultElementType, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `SameOperandsAndResultElementType`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Operands:
 
@@ -423,6 +423,50 @@ Effects: MemoryEffects::Effect{}
 | :----: | ----------- |
 | `result` | tensor of floating-point values or tensor of integer values or tensor of ptr values
 
+### `tt.clampf` (triton::ClampFOp)
+
+_Clamp operation for floating point types_
+
+
+Syntax:
+
+```
+operation ::= `tt.clampf` $x `,` $min `,` $max attr-dict `:` type($result)
+```
+
+Clamp operation for floating point types.
+
+The operation takes three arguments: x, min, and max. It returns a tensor of the same shape as x with its values clamped to the range [min, max].
+
+Traits: `AlwaysSpeculatableImplTrait`, `Elementwise`, `SameOperandsAndResultType`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>propagateNan</code></td><td>::mlir::triton::PropagateNanAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 65535</summary>{{% markdown %}}Enum cases:
+* none (`NONE`)
+* all (`ALL`){{% /markdown %}}</details></td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `x` | floating-point or tensor of floating-point values
+| `min` | floating-point or tensor of floating-point values
+| `max` | floating-point or tensor of floating-point values
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | floating-point or tensor of floating-point values
+
 ### `tt.dot` (triton::DotOp)
 
 _Dot_
@@ -436,11 +480,11 @@ operation ::= `tt.dot` $a`,` $b`,` $c attr-dict `:` type($a) `*` type($b) `->` t
 
 $d = matrix_multiply($a, $b) + $c
 
-Traits: AlwaysSpeculatableImplTrait, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Attributes:
 
@@ -480,9 +524,9 @@ Runs an inline asm block to generate one or more tensors.
 The asm block is given `packed_element` elements at a time.  Exactly which
 elems it receives is unspecified.
 
-Traits: Elementwise, SameOperandsAndResultEncoding, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `Elementwise`, `SameOperandsAndResultEncoding`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: MemoryEffectOpInterface
+Interfaces: `MemoryEffectOpInterface`
 
 #### Attributes:
 
@@ -518,11 +562,11 @@ operation ::= `tt.expand_dims` $src attr-dict `:` functional-type(operands, resu
 ```
 
 
-Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultElementType`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Attributes:
 
@@ -557,11 +601,11 @@ operation ::= `tt.experimental_interleave` $lhs `,` $rhs attr-dict `:` type($lhs
 For example, if the two input tensors are [1,2,3] and [4,5,6],
 interleaving them returns [1,4,2,5,3,6].
 
-Traits: SameOperandsAndResultElementType, SameTypeOperands, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `SameOperandsAndResultElementType`, `SameTypeOperands`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Operands:
 
@@ -587,9 +631,9 @@ operation ::= `tt.extern_elementwise` operands attr-dict `:` functional-type(ope
 call an external function $symbol implemented in $libpath/$libname with $args
 return $libpath/$libname:$symbol($args...)
 
-Traits: Elementwise, SameOperandsAndResultEncoding, SameVariadicOperandSize, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `Elementwise`, `SameOperandsAndResultEncoding`, `SameVariadicOperandSize`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: MemoryEffectOpInterface
+Interfaces: `MemoryEffectOpInterface`
 
 #### Attributes:
 
@@ -628,11 +672,11 @@ Floating point casting for custom types (F8), and non-default rounding modes.
 
 F8 <-> FP16, BF16, FP32, FP64
 
-Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultEncoding, SameOperandsAndResultShape, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Attributes:
 
@@ -664,11 +708,11 @@ operation ::= `tt.get_num_programs` attr-dict `:` type($result)
 ```
 
 
-Traits: AlwaysSpeculatableImplTrait, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Attributes:
 
@@ -692,11 +736,11 @@ operation ::= `tt.get_program_id` $axis attr-dict `:` type($result)
 ```
 
 
-Traits: AlwaysSpeculatableImplTrait, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Attributes:
 
@@ -729,11 +773,11 @@ Return the histogram of the input tensor. The number of bins is equal to
 the dimension of the output tensor. Each bins has a width of 1 and bins
 start at 0.
 
-Traits: AlwaysSpeculatableImplTrait, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Operands:
 
@@ -759,11 +803,11 @@ operation ::= `tt.int_to_ptr` $from attr-dict `:` type($from) `->` type($result)
 ```
 
 
-Traits: AlwaysSpeculatableImplTrait, Elementwise, SameOperandsAndResultEncoding, SameOperandsAndResultShape, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `Elementwise`, `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Operands:
 
@@ -782,9 +826,9 @@ Effects: MemoryEffects::Effect{}
 _Load from a tensor of pointers or from a tensor pointer_
 
 
-Traits: AttrSizedOperandSegments, SameLoadStoreOperandsAndResultEncoding, SameLoadStoreOperandsAndResultShape, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsAndResultEncoding`, `SameLoadStoreOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: MemoryEffectOpInterface
+Interfaces: `MemoryEffectOpInterface`
 
 #### Attributes:
 
@@ -837,11 +881,11 @@ Returns an 1D int32 tensor.
 
 Values span from $start to $end (exclusive), with step = 1
 
-Traits: AlwaysSpeculatableImplTrait, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Attributes:
 
@@ -871,11 +915,11 @@ operation ::= `tt.make_tensor_ptr` $base `,` `[` $shape `]` `,` `[` $strides `]`
 `tt.make_tensor_ptr` takes both meta information of the parent tensor and the block tensor, then it returns a
 pointer to the block tensor, e.g. returns a type of `tt.ptr<tensor<8x8xf16>>`.
 
-Traits: AlwaysSpeculatableImplTrait, SameVariadicOperandSize, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `SameVariadicOperandSize`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Attributes:
 
@@ -913,11 +957,11 @@ operation ::= `tt.print` $prefix attr-dict (`:` $args^ `:` type($args))?
 `tt.print` takes a literal string prefix and an arbitrary number of scalar or tensor arguments that should be printed.
 format are generated automatically from the arguments.
 
-Traits: TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
 
 #### Attributes:
 
@@ -944,11 +988,11 @@ operation ::= `tt.ptr_to_int` $from attr-dict `:` type($from) `->` type($result)
 ```
 
 
-Traits: AlwaysSpeculatableImplTrait, Elementwise, SameOperandsAndResultEncoding, SameOperandsAndResultShape, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `Elementwise`, `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Operands:
 
@@ -967,11 +1011,11 @@ Effects: MemoryEffects::Effect{}
 _Reduction using generic combination algorithm_
 
 
-Traits: AlwaysSpeculatableImplTrait, SameOperandsEncoding, SingleBlock, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsEncoding`, `SingleBlock`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Attributes:
 
@@ -1004,11 +1048,11 @@ operation ::= `tt.reduce.return` $result attr-dict `:` type($result)
 ```
 
 
-Traits: AlwaysSpeculatableImplTrait, HasParent<ReduceOp>, ReturnLike, TensorSizeTrait, Terminator, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `HasParent<ReduceOp>`, `ReturnLike`, `TensorSizeTrait`, `Terminator`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface), RegionBranchTerminatorOpInterface
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`, `RegionBranchTerminatorOpInterface`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Operands:
 
@@ -1035,11 +1079,11 @@ elements to generate more efficient code.
 If efficient_layout is set, this is a hint that the destination layout should be kept for performance reason.
 The compiler is still free to change it for better performance.
 
-Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultElementType`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Attributes:
 
@@ -1066,11 +1110,11 @@ Effects: MemoryEffects::Effect{}
 _Reduction using generic combination algorithm_
 
 
-Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, SameOperandsAndResultEncoding, SingleBlock, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultElementType`, `SameOperandsAndResultEncoding`, `SingleBlock`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Attributes:
 
@@ -1103,11 +1147,11 @@ operation ::= `tt.scan.return` $result attr-dict `:` type($result)
 ```
 
 
-Traits: AlwaysSpeculatableImplTrait, HasParent<ScanOp>, ReturnLike, TensorSizeTrait, Terminator, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `HasParent<ScanOp>`, `ReturnLike`, `TensorSizeTrait`, `Terminator`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface), RegionBranchTerminatorOpInterface
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`, `RegionBranchTerminatorOpInterface`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Operands:
 
@@ -1127,11 +1171,11 @@ operation ::= `tt.splat` $src attr-dict `:` functional-type(operands, results)
 ```
 
 
-Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, SameOperandsAndResultEncoding, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultElementType`, `SameOperandsAndResultEncoding`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Operands:
 
@@ -1150,11 +1194,11 @@ Effects: MemoryEffects::Effect{}
 _Store by a tensor of pointers or by a tensor pointer_
 
 
-Traits: SameLoadStoreOperandsEncoding, SameLoadStoreOperandsShape, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `SameLoadStoreOperandsEncoding`, `SameLoadStoreOperandsShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
 
 #### Attributes:
 
@@ -1194,11 +1238,11 @@ operation ::= `tt.trans` $src attr-dict `:` functional-type(operands, results)
 ```
 
 
-Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, TensorSizeTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultElementType`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Operands:
 

@@ -125,14 +125,15 @@
 <h1>triton.language.reduce<a class="headerlink" href="#triton-language-reduce" title="Permalink to this heading">¶</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.language.reduce">
-<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">reduce</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">axis</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">combine_fn</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.reduce" title="Permalink to this definition">¶</a></dt>
+<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">reduce</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">axis</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">combine_fn</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">keep_dims</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.reduce" title="Permalink to this definition">¶</a></dt>
 <dd><p>Applies the combine_fn to all elements in <code class="code docutils literal notranslate"><span class="pre">input</span></code> tensors along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>input</strong> – the input tensor, or tuple of tensors</p></li>
-<li><p><strong>axis</strong> – the dimension along which the reduction should be done</p></li>
+<li><p><strong>axis</strong> – the dimension along which the reduction should be done. If None, reduce all dimensions</p></li>
 <li><p><strong>combine_fn</strong> – a function to combine two groups of scalar tensors (must be marked with &#64;triton.jit)</p></li>
+<li><p><strong>keep_dims</strong> – if true, keep the reduced dimensions with length 1</p></li>
 </ul>
 </dd>
 </dl>

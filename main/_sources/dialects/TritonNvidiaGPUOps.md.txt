@@ -26,11 +26,11 @@ case b. when created in scalar:
 %1 = triton_nvidia_gpu.alloc_mbarrier { count = 1 } : !tt.ptr<i64>
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
-Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{MemoryEffects::Allocate on ::mlir::SideEffects::DefaultResource}
+Effects: `MemoryEffects::Effect{MemoryEffects::Allocate on ::mlir::SideEffects::DefaultResource}`
 
 #### Attributes:
 
@@ -54,7 +54,7 @@ operation ::= `triton_nvidia_gpu.cluster_arrive` attr-dict
 ```
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
@@ -72,7 +72,7 @@ operation ::= `triton_nvidia_gpu.cluster_wait` attr-dict
 ```
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
 ### `triton_nvidia_gpu.consumer_release` (triton::nvidia_gpu::ConsumerReleaseOp)
 
@@ -83,7 +83,7 @@ operation ::= `triton_nvidia_gpu.consumer_release` $token `,` $idx attr-dict `:`
 ```
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
 #### Operands:
 
@@ -101,7 +101,7 @@ operation ::= `triton_nvidia_gpu.consumer_wait` $token `,` $idx attr-dict `:` ty
 ```
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
 #### Operands:
 
@@ -119,9 +119,9 @@ operation ::= `triton_nvidia_gpu.create_mutex` attr-dict `:` type($result)
 ```
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
-Interfaces: InferTypeOpInterface
+Interfaces: `InferTypeOpInterface`
 
 #### Results:
 
@@ -138,7 +138,7 @@ operation ::= `triton_nvidia_gpu.create_token` attr-dict `:` type($result)
 ```
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
@@ -166,11 +166,11 @@ operation ::= `triton_nvidia_gpu.dot_async` $a`,` $b`,` $c attr-dict `:` type($a
 
 $d = matrix_multiply($a, $b) + $c
 
-Traits: AlwaysSpeculatableImplTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Attributes:
 
@@ -208,9 +208,9 @@ operation ::= `triton_nvidia_gpu.dot_wait` $inputs attr-dict `:` type($inputs)
 This operation defining the waiting action for a async dot, MMAv3 .e.g.
 The subsequent operations should not execute until this operation completes waiting.
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
-Interfaces: InferTypeOpInterface
+Interfaces: `InferTypeOpInterface`
 
 #### Attributes:
 
@@ -249,11 +249,11 @@ Example:
 %1 = triton_nvidia_gpu.extract_mbarrier %mbarriers[%idx] : tensor<4xi64>, index -> !tt.ptr<i64>
 
 
-Traits: AlwaysSpeculatableImplTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Operands:
 
@@ -280,7 +280,7 @@ operation ::= `triton_nvidia_gpu.fence_async_shared` attr-dict
 ```
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
@@ -298,11 +298,11 @@ operation ::= `triton_nvidia_gpu.get_agent_id` attr-dict `:` type($result)
 ```
 
 
-Traits: AlwaysSpeculatableImplTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Results:
 
@@ -320,11 +320,11 @@ operation ::= `triton_nvidia_gpu.get_canonical_warp_id` attr-dict `:` type($resu
 
 Returns the one dimensional warpId when it's used for producing warp uniform values.
 
-Traits: AlwaysSpeculatableImplTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Results:
 
@@ -342,11 +342,11 @@ operation ::= `triton_nvidia_gpu.get_cluster_cta_id` attr-dict `:` type($result)
 
 Returns the one dimensional cluster_cta_id.
 
-Traits: AlwaysSpeculatableImplTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Results:
 
@@ -363,9 +363,9 @@ operation ::= `triton_nvidia_gpu.get_mutex_role_id` attr-dict `:` type($result)
 ```
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
-Interfaces: InferTypeOpInterface
+Interfaces: `InferTypeOpInterface`
 
 #### Attributes:
 
@@ -390,11 +390,11 @@ operation ::= `triton_nvidia_gpu.get_thread_id` attr-dict `:` type($result)
 
 Returns the one dimensional threadId.
 
-Traits: AlwaysSpeculatableImplTrait, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Results:
 
@@ -411,11 +411,11 @@ operation ::= `triton_nvidia_gpu.insert_slice_tma` operands attr-dict `:` type(o
 ```
 
 
-Traits: AttrSizedOperandSegments, ResultsAreSharedEncoding, VerifyTensorLayoutsTrait
+Traits: `AttrSizedOperandSegments`, `ResultsAreSharedEncoding`, `VerifyTensorLayoutsTrait`
 
-Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource, MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource, MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
 
 #### Attributes:
 
@@ -462,7 +462,7 @@ operation ::= `triton_nvidia_gpu.lock` $mutex attr-dict `:` type(operands)
 ```
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
 #### Operands:
 
@@ -497,11 +497,11 @@ Example:
 triton_nvidia_gpu.mbarrier_arrive %0 {trackAsyncOp = false} : !tt.ptr<i64>
 
 
-Traits: AttrSizedOperandSegments, VerifyTensorLayoutsTrait
+Traits: `AttrSizedOperandSegments`, `VerifyTensorLayoutsTrait`
 
-Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
 
 #### Attributes:
 
@@ -538,11 +538,11 @@ Example:
 triton_nvidia_gpu.mbarrier_wait %0, %1 : !tt.ptr<i64>
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
-Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource, MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource, MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
 
 #### Operands:
 
@@ -563,7 +563,7 @@ operation ::= `triton_nvidia_gpu.bar_arrive` $bar `,` $numThreads attr-dict `:` 
 ```
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
 #### Operands:
 
@@ -584,7 +584,7 @@ operation ::= `triton_nvidia_gpu.bar_wait` $bar `,` $numThreads attr-dict `:` ty
 ```
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
 #### Operands:
 
@@ -602,7 +602,7 @@ operation ::= `triton_nvidia_gpu.producer_acquire` $token `,` $idx attr-dict `:`
 ```
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
 #### Operands:
 
@@ -620,7 +620,7 @@ operation ::= `triton_nvidia_gpu.producer_commit` $token `,` $idx attr-dict `:` 
 ```
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
 #### Operands:
 
@@ -641,7 +641,7 @@ operation ::= `triton_nvidia_gpu.reg_alloc` $regCount attr-dict
 ```
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
@@ -662,7 +662,7 @@ operation ::= `triton_nvidia_gpu.reg_dealloc` $regCount attr-dict
 ```
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
@@ -671,7 +671,7 @@ Traits: VerifyTensorLayoutsTrait
 <tr><td><code>regCount</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 
-### `triton_nvidia_gpu.store_async` (triton::nvidia_gpu::StoreAsyncOp)
+### `triton_nvidia_gpu.store_async_tma` (triton::nvidia_gpu::StoreAsyncTMAOp)
 
 _Store asynchronous by a tensor pointer_
 
@@ -679,15 +679,15 @@ _Store asynchronous by a tensor pointer_
 Syntax:
 
 ```
-operation ::= `triton_nvidia_gpu.store_async` operands attr-dict `:` type(operands)
+operation ::= `triton_nvidia_gpu.store_async_tma` operands attr-dict `:` type(operands)
 ```
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
-Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
 
 #### Attributes:
 
@@ -718,7 +718,7 @@ operation ::= `triton_nvidia_gpu.unlock` $mutex attr-dict `:` type(operands)
 ```
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
 #### Operands:
 

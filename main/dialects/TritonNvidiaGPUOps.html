@@ -176,7 +176,7 @@
 <li class="toctree-l4"><a class="reference internal" href="#id33">Attributes:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#triton-nvidia-gpu-store-async-triton-nvidia-gpu-storeasyncop"><code class="docutils literal notranslate"><span class="pre">triton_nvidia_gpu.store_async</span></code> (triton::nvidia_gpu::StoreAsyncOp)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#triton-nvidia-gpu-store-async-tma-triton-nvidia-gpu-storeasynctmaop"><code class="docutils literal notranslate"><span class="pre">triton_nvidia_gpu.store_async_tma</span></code> (triton::nvidia_gpu::StoreAsyncTMAOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id34">Attributes:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id35">Operands:</a></li>
 </ul>
@@ -242,9 +242,9 @@ Each mbarrier is initialized as:
 <p>Example:</p>
 <p>case a. when created in vector:</p>
 <p>case b. when created in scalar:</p>
-<p>Traits: VerifyTensorLayoutsTrait</p>
-<p>Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{MemoryEffects::Allocate on ::mlir::SideEffects::DefaultResource}</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Allocate</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
 <section id="attributes">
 <h3>Attributes:<a class="headerlink" href="#attributes" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -274,7 +274,7 @@ Each mbarrier is initialized as:
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.cluster_arrive` attr-dict
 </pre></div>
 </div>
-<p>Traits: VerifyTensorLayoutsTrait</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id1">
 <h3>Attributes:<a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -289,7 +289,7 @@ Each mbarrier is initialized as:
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.cluster_wait` attr-dict
 </pre></div>
 </div>
-<p>Traits: VerifyTensorLayoutsTrait</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 </section>
 <section id="triton-nvidia-gpu-consumer-release-triton-nvidia-gpu-consumerreleaseop">
 <h2><code class="docutils literal notranslate"><span class="pre">triton_nvidia_gpu.consumer_release</span></code> (triton::nvidia_gpu::ConsumerReleaseOp)<a class="headerlink" href="#triton-nvidia-gpu-consumer-release-triton-nvidia-gpu-consumerreleaseop" title="Permalink to this heading">¶</a></h2>
@@ -297,7 +297,7 @@ Each mbarrier is initialized as:
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.consumer_release` $token `,` $idx attr-dict `:` type(operands)
 </pre></div>
 </div>
-<p>Traits: VerifyTensorLayoutsTrait</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="operands">
 <h3>Operands:<a class="headerlink" href="#operands" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -323,7 +323,7 @@ Each mbarrier is initialized as:
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.consumer_wait` $token `,` $idx attr-dict `:` type(operands)
 </pre></div>
 </div>
-<p>Traits: VerifyTensorLayoutsTrait</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id2">
 <h3>Operands:<a class="headerlink" href="#id2" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -349,8 +349,8 @@ Each mbarrier is initialized as:
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.create_mutex` attr-dict `:` type($result)
 </pre></div>
 </div>
-<p>Traits: VerifyTensorLayoutsTrait</p>
-<p>Interfaces: InferTypeOpInterface</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
 <section id="id3">
 <h3>Results:<a class="headerlink" href="#id3" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -373,7 +373,7 @@ Each mbarrier is initialized as:
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.create_token` attr-dict `:` type($result)
 </pre></div>
 </div>
-<p>Traits: VerifyTensorLayoutsTrait</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id4">
 <h3>Attributes:<a class="headerlink" href="#id4" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -405,9 +405,9 @@ Each mbarrier is initialized as:
 </pre></div>
 </div>
 <p>$d = matrix_multiply($a, $b) + $c</p>
-<p>Traits: AlwaysSpeculatableImplTrait, VerifyTensorLayoutsTrait</p>
-<p>Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{}</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id6">
 <h3>Attributes:<a class="headerlink" href="#id6" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -462,8 +462,8 @@ Each mbarrier is initialized as:
 </div>
 <p>This operation defining the waiting action for a async dot, MMAv3 .e.g.
 The subsequent operations should not execute until this operation completes waiting.</p>
-<p>Traits: VerifyTensorLayoutsTrait</p>
-<p>Interfaces: InferTypeOpInterface</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
 <section id="id9">
 <h3>Attributes:<a class="headerlink" href="#id9" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -511,9 +511,9 @@ The subsequent operations should not execute until this operation completes wait
 </div>
 <p>Extract a mbarrier from a vector of mbarriers</p>
 <p>Example:</p>
-<p>Traits: AlwaysSpeculatableImplTrait, VerifyTensorLayoutsTrait</p>
-<p>Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{}</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id12">
 <h3>Operands:<a class="headerlink" href="#id12" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -555,7 +555,7 @@ The subsequent operations should not execute until this operation completes wait
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.fence_async_shared` attr-dict
 </pre></div>
 </div>
-<p>Traits: VerifyTensorLayoutsTrait</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id14">
 <h3>Attributes:<a class="headerlink" href="#id14" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -570,9 +570,9 @@ The subsequent operations should not execute until this operation completes wait
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.get_agent_id` attr-dict `:` type($result)
 </pre></div>
 </div>
-<p>Traits: AlwaysSpeculatableImplTrait, VerifyTensorLayoutsTrait</p>
-<p>Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{}</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id15">
 <h3>Results:<a class="headerlink" href="#id15" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -596,9 +596,9 @@ The subsequent operations should not execute until this operation completes wait
 </pre></div>
 </div>
 <p>Returns the one dimensional warpId when it’s used for producing warp uniform values.</p>
-<p>Traits: AlwaysSpeculatableImplTrait, VerifyTensorLayoutsTrait</p>
-<p>Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{}</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id16">
 <h3>Results:<a class="headerlink" href="#id16" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -622,9 +622,9 @@ The subsequent operations should not execute until this operation completes wait
 </pre></div>
 </div>
 <p>Returns the one dimensional cluster_cta_id.</p>
-<p>Traits: AlwaysSpeculatableImplTrait, VerifyTensorLayoutsTrait</p>
-<p>Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{}</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id17">
 <h3>Results:<a class="headerlink" href="#id17" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -647,8 +647,8 @@ The subsequent operations should not execute until this operation completes wait
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.get_mutex_role_id` attr-dict `:` type($result)
 </pre></div>
 </div>
-<p>Traits: VerifyTensorLayoutsTrait</p>
-<p>Interfaces: InferTypeOpInterface</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
 <section id="id18">
 <h3>Attributes:<a class="headerlink" href="#id18" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -679,9 +679,9 @@ The subsequent operations should not execute until this operation completes wait
 </pre></div>
 </div>
 <p>Returns the one dimensional threadId.</p>
-<p>Traits: AlwaysSpeculatableImplTrait, VerifyTensorLayoutsTrait</p>
-<p>Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{}</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id20">
 <h3>Results:<a class="headerlink" href="#id20" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -704,9 +704,9 @@ The subsequent operations should not execute until this operation completes wait
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.insert_slice_tma` operands attr-dict `:` type(operands) `-&gt;` type($result)
 </pre></div>
 </div>
-<p>Traits: AttrSizedOperandSegments, ResultsAreSharedEncoding, VerifyTensorLayoutsTrait</p>
-<p>Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource, MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">ResultsAreSharedEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource,</span> <span class="pre">MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
 <section id="id21">
 <h3>Attributes:<a class="headerlink" href="#id21" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -778,7 +778,7 @@ The subsequent operations should not execute until this operation completes wait
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.lock` $mutex attr-dict `:` type(operands)
 </pre></div>
 </div>
-<p>Traits: VerifyTensorLayoutsTrait</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id24">
 <h3>Operands:<a class="headerlink" href="#id24" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -814,9 +814,9 @@ remoteCtaId:
 if set, perform an remote arrive action.</p>
 <p>Example:</p>
 <p>triton_nvidia_gpu.mbarrier_arrive %0 {trackAsyncOp = false} : !tt.ptr<i64></p>
-<p>Traits: AttrSizedOperandSegments, VerifyTensorLayoutsTrait</p>
-<p>Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
 <section id="id25">
 <h3>Attributes:<a class="headerlink" href="#id25" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -858,9 +858,9 @@ if set, perform an remote arrive action.</p>
 The subsequent operations should not execute until this operation completes waiting.</p>
 <p>Example:</p>
 <p>triton_nvidia_gpu.mbarrier_wait %0, %1 : !tt.ptr<i64></p>
-<p>Traits: VerifyTensorLayoutsTrait</p>
-<p>Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource, MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource,</span> <span class="pre">MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
 <section id="id27">
 <h3>Operands:<a class="headerlink" href="#id27" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -887,7 +887,7 @@ The subsequent operations should not execute until this operation completes wait
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.bar_arrive` $bar `,` $numThreads attr-dict `:` type(operands)
 </pre></div>
 </div>
-<p>Traits: VerifyTensorLayoutsTrait</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id28">
 <h3>Operands:<a class="headerlink" href="#id28" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -914,7 +914,7 @@ The subsequent operations should not execute until this operation completes wait
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.bar_wait` $bar `,` $numThreads attr-dict `:` type(operands)
 </pre></div>
 </div>
-<p>Traits: VerifyTensorLayoutsTrait</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id29">
 <h3>Operands:<a class="headerlink" href="#id29" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -940,7 +940,7 @@ The subsequent operations should not execute until this operation completes wait
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.producer_acquire` $token `,` $idx attr-dict `:` type(operands)
 </pre></div>
 </div>
-<p>Traits: VerifyTensorLayoutsTrait</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id30">
 <h3>Operands:<a class="headerlink" href="#id30" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -966,7 +966,7 @@ The subsequent operations should not execute until this operation completes wait
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.producer_commit` $token `,` $idx attr-dict `:` type(operands)
 </pre></div>
 </div>
-<p>Traits: VerifyTensorLayoutsTrait</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id31">
 <h3>Operands:<a class="headerlink" href="#id31" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -993,7 +993,7 @@ The subsequent operations should not execute until this operation completes wait
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.reg_alloc` $regCount attr-dict
 </pre></div>
 </div>
-<p>Traits: VerifyTensorLayoutsTrait</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id32">
 <h3>Attributes:<a class="headerlink" href="#id32" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -1009,7 +1009,7 @@ The subsequent operations should not execute until this operation completes wait
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.reg_dealloc` $regCount attr-dict
 </pre></div>
 </div>
-<p>Traits: VerifyTensorLayoutsTrait</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id33">
 <h3>Attributes:<a class="headerlink" href="#id33" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -1018,16 +1018,16 @@ The subsequent operations should not execute until this operation completes wait
 </table>
 </section>
 </section>
-<section id="triton-nvidia-gpu-store-async-triton-nvidia-gpu-storeasyncop">
-<h2><code class="docutils literal notranslate"><span class="pre">triton_nvidia_gpu.store_async</span></code> (triton::nvidia_gpu::StoreAsyncOp)<a class="headerlink" href="#triton-nvidia-gpu-store-async-triton-nvidia-gpu-storeasyncop" title="Permalink to this heading">¶</a></h2>
+<section id="triton-nvidia-gpu-store-async-tma-triton-nvidia-gpu-storeasynctmaop">
+<h2><code class="docutils literal notranslate"><span class="pre">triton_nvidia_gpu.store_async_tma</span></code> (triton::nvidia_gpu::StoreAsyncTMAOp)<a class="headerlink" href="#triton-nvidia-gpu-store-async-tma-triton-nvidia-gpu-storeasynctmaop" title="Permalink to this heading">¶</a></h2>
 <p><em>Store asynchronous by a tensor pointer</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.store_async` operands attr-dict `:` type(operands)
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.store_async_tma` operands attr-dict `:` type(operands)
 </pre></div>
 </div>
-<p>Traits: VerifyTensorLayoutsTrait</p>
-<p>Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)</p>
-<p>Effects: MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
 <section id="id34">
 <h3>Attributes:<a class="headerlink" href="#id34" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -1066,7 +1066,7 @@ The subsequent operations should not execute until this operation completes wait
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.unlock` $mutex attr-dict `:` type(operands)
 </pre></div>
 </div>
-<p>Traits: VerifyTensorLayoutsTrait</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id36">
 <h3>Operands:<a class="headerlink" href="#id36" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">

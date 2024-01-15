@@ -13,11 +13,11 @@ operation ::= `triton_gpu.alloc_tensor` attr-dict `:` type($result)
 This operation defines a tensor of a particular shape.
 The contents of the tensor are supposed to be in shared memory.
 
-Traits: ResultsAreSharedEncoding, VerifyTensorLayoutsTrait
+Traits: `ResultsAreSharedEncoding`, `VerifyTensorLayoutsTrait`
 
-Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{MemoryEffects::Allocate on ::mlir::SideEffects::DefaultResource}
+Effects: `MemoryEffects::Effect{MemoryEffects::Allocate on ::mlir::SideEffects::DefaultResource}`
 
 #### Results:
 
@@ -37,7 +37,7 @@ operation ::= `triton_gpu.async_bulk_commit_group` attr-dict
 ```
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
 ### `triton_gpu.async_bulk_wait` (triton::gpu::AsyncBulkWaitOp)
 
@@ -51,7 +51,7 @@ operation ::= `triton_gpu.async_bulk_wait` attr-dict
 ```
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
@@ -72,7 +72,7 @@ operation ::= `triton_gpu.async_commit_group` attr-dict
 ```
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
 ### `triton_gpu.async_wait` (triton::gpu::AsyncWaitOp)
 
@@ -86,7 +86,7 @@ operation ::= `triton_gpu.async_wait` attr-dict
 ```
 
 
-Traits: VerifyTensorLayoutsTrait
+Traits: `VerifyTensorLayoutsTrait`
 
 #### Attributes:
 
@@ -107,11 +107,11 @@ operation ::= `triton_gpu.convert_layout` $src attr-dict `:` functional-type(ope
 ```
 
 
-Traits: AlwaysSpeculatableImplTrait, SameOperandsAndResultElementType, SameOperandsAndResultShape, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultElementType`, `SameOperandsAndResultShape`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Operands:
 
@@ -139,11 +139,11 @@ operation ::= `triton_gpu.dealloc_tensor` $src attr-dict `:` type($src)
 This operation deallocate a tensor explicitly.
 The contents of the tensor are supposed to be in shared memory.
 
-Traits: OperandsAreSharedEncoding, VerifyTensorLayoutsTrait
+Traits: `OperandsAreSharedEncoding`, `VerifyTensorLayoutsTrait`
 
-Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{MemoryEffects::Free on ::mlir::SideEffects::DefaultResource}
+Effects: `MemoryEffects::Effect{MemoryEffects::Free on ::mlir::SideEffects::DefaultResource}`
 
 #### Operands:
 
@@ -172,11 +172,11 @@ We reimplement ExtractSliceOp with int32 index, because:
 - we still want to use indexWidth = 64 when lowering to LLVM because our loops can have
   64-bit induction variables and scf.for uses indexType for bounds/ivs
 
-Traits: AlwaysSpeculatableImplTrait, AttrSizedOperandSegments, ResultsAreSharedEncoding, VerifyTensorLayoutsTrait
+Traits: `AlwaysSpeculatableImplTrait`, `AttrSizedOperandSegments`, `ResultsAreSharedEncoding`, `VerifyTensorLayoutsTrait`
 
-Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface), OffsetSizeAndStrideOpInterface
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`, `OffsetSizeAndStrideOpInterface`
 
-Effects: MemoryEffects::Effect{}
+Effects: `MemoryEffects::Effect{}`
 
 #### Attributes:
 
@@ -241,11 +241,11 @@ Example:
 triiton_gpu.async_wait { num = 0 : i32 }
 ```
 
-Traits: AttrSizedOperandSegments, ResultsAreSharedEncoding, VerifyTensorLayoutsTrait
+Traits: `AttrSizedOperandSegments`, `ResultsAreSharedEncoding`, `VerifyTensorLayoutsTrait`
 
-Interfaces: MemoryEffectOpInterface (MemoryEffectOpInterface)
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource, MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource, MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
 
 #### Attributes:
 
