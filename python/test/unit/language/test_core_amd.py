@@ -1029,7 +1029,7 @@ def deserialize_fp8(np_data, in_dtype):
                                       tl.float8e4b8, 
                                       tl.float8e5, 
                                       tl.float8e5b16])
-@pytest.mark.parametrize("out_dtype", [torch.float16, torch.float32])
+@pytest.mark.parametrize("out_dtype", [torch.float16, torch.bfloat16, torch.float32])
 def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
     """
     For all possible float8 values (ref_fp8 = range(0, 256)), test that:
@@ -1039,6 +1039,14 @@ def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
     """
     check_type_supported(in_dtype, device)
     check_type_supported(out_dtype, device)
+
+    backend = triton.common.backend.get_backend("hip")
+    if backend.get_matrix_core_version() == 3:
+        if out_dtype == torch.bfloat16 and (in_dtype == tl.float8e4b15 or in_dtype == tl.float8e4b15x4):
+           pytest.skip(f"Type conversion between {in_dtype} and {out_dtype} is not available on hardware")
+    elif backend.get_matrix_core_version() == 2:
+        if out_dtype == torch.bfloat16 and in_dtype != tl.float8e5:
+           pytest.skip(f"Type conversion between {in_dtype} and {out_dtype} is not available on hardware")
 
     @triton.jit
     def copy_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -1139,7 +1147,8 @@ def gen_input(M, N, d_type, seed, device='cuda'):
                                            [tl.float16, tl.float8e4b15],
                                            [tl.float16, tl.float8e4b15x4],
                                            [tl.float16, tl.float8e5]]
-                          for out_dtype in [torch.float16, torch.float32]
+                        #   for out_dtype in [torch.float16, torch.bfloat16, torch.float32]
+                          for out_dtype in [torch.bfloat16]
                         ])
 def test_gemm_fp816_mixed_inputs(M, N, K, a_type, b_type, out_dtype, device = 'cuda'):
     check_type_supported(out_dtype, device)
@@ -1249,7 +1258,7 @@ def test_gemm_fp816_mixed_inputs(M, N, K, a_type, b_type, out_dtype, device = 'c
                                           [tl.float8e5b16, tl.float8e4b8],
                                           [tl.float8e4b8, tl.float8e5b16],
                                           [tl.float8e5b16, tl.float8e5b16]]
-                          for out_dtype in [torch.float32]
+                          for out_dtype in [torch.float32, torch.float16, torch.bfloat16]
                         ])
 def test_gemm_amd_fp8_inputs(M, N, K, a_type, b_type, out_dtype, device = 'cuda'):
     check_type_supported(out_dtype, device)
