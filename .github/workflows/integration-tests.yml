@@ -77,6 +77,12 @@ jobs:
           python3 -m pip install cmake==3.24 ninja pytest-xdist
           sudo apt-get update -y
           sudo apt-get install -y ccache clang lld
+
+          # Do a clean build.  We are hoping that this will fix the non-hermetic
+          # failures we're seeing when we try to bump the version number (i.e.
+          # CI fails if it sees builds with different version numbers).
+          rm -rf build
+
           TRITON_BUILD_WITH_CLANG_LLD=true TRITON_BUILD_WITH_CCACHE=true python3 -m pip install --no-build-isolation -vvv '.[tests]'
 
       - name: Run lit tests
