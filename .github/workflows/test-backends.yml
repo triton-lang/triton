@@ -59,7 +59,6 @@ jobs:
   Integration-Tests-AMD:
     needs: Runner-Preparation
     timeout-minutes: 20
-    if: false
 
     runs-on: ${{ matrix.runner }}
 
@@ -69,7 +68,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: Set ROCM ENV
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'gfx908')}}
@@ -77,36 +76,41 @@ jobs:
           echo "BACKEND=ROCM" >> "${GITHUB_ENV}"
 
       - name: Clear cache
+        if: ${{ env.BACKEND == 'ROCM'}}
         run: |
           rm -rf ~/.triton
+          rm -rf python/triton.egg-info
+          rm -rf python/.pytest_cache
+          rm -rf python/tests/__pycache__
+          rm -rf python/build
+          rm -rf /tmp/tmp*
+          rm -rf /tmp/triton_upstream
+          rm -rf .pytest_cache
+          rm -rf ./venv_triton_upstream
+      
+      - name: Clear Docker images
+        if: ${{ env.BACKEND == 'ROCM'}}
+        run: |
+          docker stop triton_container || true && docker rm triton_container || true
+          docker image prune -a -f
 
       - name: Update PATH
+        if: ${{ env.BACKEND == 'ROCM'}}
         run: |
           echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
 
-      - name: Check pre-commit
-        if: ${{ matrix.runner != 'macos-10.15' && (matrix.runner[1] != 'arc770') }}
-        run: |
-          python3 -m pip install --upgrade pre-commit
-          python3 -m pre_commit run --all-files --verbose
-
-      - name: Install Triton on ROCM
+      - name: Docker Test
         if: ${{ env.BACKEND == 'ROCM'}}
         run: |
-          git submodule update --init --recursive
-          cd python
-          python3 -m pip install --upgrade pip
-          python3 -m pip install cmake==3.24
-          python3 -m pip install torch==1.13.1 --index-url https://download.pytorch.org/whl/rocm5.2
-          export TRITON_CODEGEN_AMD_HIP_BACKEND=1
-          python3 -m pip install --no-build-isolation -vvv '.[tests]'
+          set -x
 
+          docker build -t triton .
 
-      - name: Run python tests on ROCM
-        if: ${{ env.BACKEND == 'ROCM'}}
-        run: |
-          cd python/test/unit/language
-          python3 -m pytest --capture=tee-sys -rfs --verbose "test_core.py"
+          sudo docker run -it --rm --network=host --user root --group-add video --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --ipc=host --shm-size 16G --device=/dev/kfd --device=/dev/dri -w /tmp/triton --name triton_container -d triton
+          
+          docker exec triton_container sh -c "python -m pytest -n 32 --capture=tee-sys -rfs --verbose "python/test/unit/language/test_core.py""
+          
+          docker stop triton_container
 
   Integration-Tests-Intel:
     needs: Runner-Preparation
