@@ -431,8 +431,6 @@ public:
       return rewriteAdvanceOp(builder, advanceOp, eraser);
     } else if (isa<triton::LoadOp>(op) || isa<triton::StoreOp>(op)) {
       return rewriteLoadStoreOp(builder, op, eraser);
-    } else if (auto storeOp = dyn_cast<triton::StoreOp>(op)) {
-      return rewriteLoadStoreOp(builder, op, eraser);
     } else if (op->getDialect()->getNamespace() == "scf" ||
                op->getDialect()->getNamespace() == "cf") {
       if (!needRewrite(op))
