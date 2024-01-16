@@ -1861,6 +1861,10 @@ void init_triton_ir(py::module &&m) {
            [](mlir::PassManager &self) {
              self.addPass(mlir::createTritonGPUStreamPipelinePass());
            })
+      .def("add_tritonamdgpu_dot_slicing_pass",
+           [](mlir::PassManager &self, int slice_k_tile) {
+             self.addPass(mlir::createTritonAMDGPUDotSlicingPass(slice_k_tile));
+           })
       .def("add_tritongpu_prefetch_pass",
            [](mlir::PassManager &self) {
              self.addPass(mlir::createTritonGPUPrefetchPass());

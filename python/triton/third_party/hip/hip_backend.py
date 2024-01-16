@@ -449,10 +449,11 @@ class HIPBackend(BaseBackend):
             optimize_epilogue = other["optimize_epilogue"]
             tma_infos = other["tma_infos"]
             waves_per_eu = other["waves_per_eu"]
+            slice_k_tile = other["slice_k_tile"]
             matrix_instr_nonkdim = other["matrix_instr_nonkdim"]
 
             stages["ttgir"] = (lambda path: parse_mlir_module(path, context),
-                               lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, warp_size, num_ctas, arch), num_stages, num_warps, num_ctas, arch, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue, matrix_instr_nonkdim))
+                               lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, warp_size, num_ctas, arch), num_stages, num_warps, num_ctas, arch, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue, matrix_instr_nonkdim, slice_k_tile))
             stages["llir"] = (lambda path: Path(path).read_text(),
                               lambda src: ttgir_to_llir(src, extern_libs, arch, tma_infos, waves_per_eu))
 
