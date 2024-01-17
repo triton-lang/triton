@@ -1,3 +1,4 @@
 [submodule "third_party/amd"]
 	path = third_party/amd
-	url = https://github.com/ptillet/triton.git
+	url = https://github.com/ROCmSoftwarePlatform/triton
+	branch = main
