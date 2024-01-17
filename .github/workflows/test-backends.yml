@@ -59,20 +59,20 @@ jobs:
   Integration-Tests-AMD:
     needs: Runner-Preparation
     timeout-minutes: 20
-    if: false
 
     runs-on: ${{ matrix.runner }}
 
     strategy:
       matrix:
-        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-optional)}}
+        runner: ["gfx908"]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
+        with:
+          submodules: 'true'
 
       - name: Set ROCM ENV
-        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'gfx908')}}
         run: |
           echo "BACKEND=ROCM" >> "${GITHUB_ENV}"
 
@@ -84,29 +84,26 @@ jobs:
         run: |
           echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
 
+      - name: Install Dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install ninja wheel pytest pytest-xdist numpy lit autopep8 flake8 isort
+          python3 -m pip install scipy>=1.7.1
+          python3 -m pip install cmake==3.24
+          python3 -m pip install torch==1.13.1 --index-url https://download.pytorch.org/whl/rocm5.2 # important for detecting ROCM!
+
       - name: Check pre-commit
-        if: ${{ matrix.runner != 'macos-10.15' && (matrix.runner[1] != 'arc770') }}
         run: |
           python3 -m pip install --upgrade pre-commit
           python3 -m pre_commit run --all-files --verbose
 
       - name: Install Triton on ROCM
-        if: ${{ env.BACKEND == 'ROCM'}}
         run: |
-          git submodule update --init --recursive
           cd python
-          python3 -m pip install --upgrade pip
-          python3 -m pip install cmake==3.24
-          python3 -m pip install torch==1.13.1 --index-url https://download.pytorch.org/whl/rocm5.2
-          export TRITON_CODEGEN_AMD_HIP_BACKEND=1
-          python3 -m pip install --no-build-isolation -vvv '.[tests]'
-
-
+          python3 -m pip install .
       - name: Run python tests on ROCM
-        if: ${{ env.BACKEND == 'ROCM'}}
         run: |
-          cd python/test/unit/language
-          python3 -m pytest --capture=tee-sys -rfs --verbose "test_core.py"
+          python3 -m pytest -n 32 --capture=tee-sys -rfs --verbose "python/test/unit/language/test_core.py"
 
   Integration-Tests-Intel:
     needs: Runner-Preparation
