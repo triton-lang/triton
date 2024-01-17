@@ -382,7 +382,7 @@ package_data.update({f"triton/backends/{b.name}": b.package_data for b in backen
 
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
-    version="2.1.0" + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
+    version="3.0.0" + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
     author="Philippe Tillet",
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
@@ -432,13 +432,11 @@ setup(
             "numpy",
             "pytest",
             "scipy>=1.7.1",
-            "torch",
         ],
         "tutorials": [
             "matplotlib",
             "pandas",
             "tabulate",
-            "torch",
         ],
     },
 )
