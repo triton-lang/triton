@@ -205,7 +205,8 @@ struct FuncOpConversion : public FuncOpConversionBase {
     }
     // Set an attribute for maxntidx, it could be used in latter LLVM codegen
     // for `nvvm.annotation` metadata.
-    newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
+    newFuncOp->setAttr("nvvm.maxntid",
+                       rewriter.getDenseI32ArrayAttr(32 * numWarps));
     // The call graph is updated by mapping the old function to the new one.
     allocation.mapFuncOp(funcOp, newFuncOp);
 
