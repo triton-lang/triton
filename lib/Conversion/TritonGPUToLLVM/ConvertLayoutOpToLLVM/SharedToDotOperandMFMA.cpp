@@ -395,7 +395,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   int nonKDimIdx = opIdx == 0 ? 0 : 1;
 
   auto mfmaLayout = encoding.getParent().cast<MfmaEncodingAttr>();
-  auto nonKDim = mfmaLayout.getNonKDim();
+  int nonKDim = mfmaLayout.getMDim();
   assert(nonKDim == 32 || nonKDim == 16 || nonKDim == 4);
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 
