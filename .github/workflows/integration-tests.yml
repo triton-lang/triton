@@ -99,24 +99,24 @@ jobs:
         if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '1'}}
         run: |
           cd python/test/unit
-          python3 -m pytest -n 8 --ignore=runtime --ignore=operators --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
-          python3 -m pytest -n 8 language/test_subprocess.py
+          python3 -m pytest -vvv -n 8 --ignore=runtime --ignore=operators --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+          python3 -m pytest -vvv -n 8 language/test_subprocess.py
           # run runtime tests serially to avoid race condition with cache handling.
-          python3 -m pytest runtime/
+          python3 -m pytest -vvv runtime/
           # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest language/test_line_info.py
+          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -vvv language/test_line_info.py
           #run hopper/test_flashattention.py to avoid out of gpu memory
-          python3 -m pytest hopper/test_flashattention.py
+          python3 -m pytest -vvv hopper/test_flashattention.py
 
       - name: Run python tests on CUDA with ENABLE_TMA=0
         if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '0'}}
         run: |
           cd python/test/unit
-          python3 -m pytest -n 8 --ignore=runtime --ignore=hopper --ignore=operators --ignore=language/test_line_info.py
+          python3 -m pytest -vvv -n 8 --ignore=runtime --ignore=hopper --ignore=operators --ignore=language/test_line_info.py
           # run runtime tests serially to avoid race condition with cache handling.
-          python3 -m pytest runtime/
+          python3 -m pytest -vvv runtime/
           # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest language/test_line_info.py
+          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -vvv language/test_line_info.py
 
       - name: Clear cache
         run: |
@@ -128,19 +128,19 @@ jobs:
           CUA_VISIBLE_DEVICES: ""
         run: |
           cd python/test/unit
-          python3 -m pytest -vs operators/test_flash_attention.py
+          python3 -m pytest -vvv -s operators/test_flash_attention.py
 
       - name: Run partial tests on CUDA with ENABLE_TMA=1
         if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '1'}}
         run: |
           cd python/test/unit
-          python3 -m pytest -n 8 operators
+          python3 -m pytest -vvv -n 8 operators
 
       - name: Run partial tests on CUDA with ENABLE_TMA=0
         if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '0'}}
         run: |
           cd python/test/unit
-          python3 -m pytest -n 8 operators
+          python3 -m pytest -vvv -n 8 operators
 
       - name: Create artifacts archive
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
@@ -169,7 +169,7 @@ jobs:
           cd python/test/regression
           sudo nvidia-smi -i 0 -pm 1
           sudo nvidia-smi -i 0 --lock-gpu-clocks=1280,1280
-          python3 -m pytest -vs . --reruns 10
+          python3 -m pytest -vvv -s . --reruns 10
           sudo nvidia-smi -i 0 -rgc
 
   Compare-artifacts:
