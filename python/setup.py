@@ -434,13 +434,11 @@ setup(
             "numpy",
             "pytest",
             "scipy>=1.7.1",
-            "torch",
         ],
         "tutorials": [
             "matplotlib",
             "pandas",
             "tabulate",
-            "torch",
         ],
     },
 )
