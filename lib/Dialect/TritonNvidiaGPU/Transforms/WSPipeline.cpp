@@ -1054,7 +1054,7 @@ void cloneBackboneForEachAgentId(SmallVector<Operation *> &backbone) {
     // First, agent division
     DenseMap<AgentId, Operation *> agentBackbone = agentDivision(op);
 
-    // Second, remove irrelavant Ops
+    // Second, remove irrelevant Ops
     for (auto kv : agentBackbone) {
       SmallVector<Operation *> deleteOps;
       AgentId targetId = kv.first;
@@ -1111,11 +1111,11 @@ struct WSPipelinePass : public TritonGPUWSPipelineBase<WSPipelinePass> {
        *  | buffer1 = alloc_buffer()                |
        *  | if agent0:                              |
        *  |   scf.for:                              |
-       *  |     producer_aquire token0              |
+       *  |     producer_acquire token0              |
        *  |     buffer0 = tt.load           (load A)|
        *  |     producer_commit token0              |
        *  |     scf.for:                            |
-       *  |       producer_aquire token1            |
+       *  |       producer_acquire token1            |
        *  |       buffer1 = tt.load         (load B)|
        *  |       producer_commit token1            |
        *  | if agent1:                              |
