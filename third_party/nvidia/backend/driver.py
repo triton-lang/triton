@@ -330,9 +330,9 @@ class CudaLauncher(object):
 
     def __init__(self, src, metadata):
         ids = {
-            "ids_of_tensormaps": metadata.get("ids_of_tensormaps", tuple()), "ids_of_folded_args":
-            metadata.get("ids_of_folded_args",
-                         tuple()), "ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()
+            "ids_of_tensormaps": metadata.ids_of_tensormaps, 
+            "ids_of_folded_args": metadata.ids_of_folded_args,
+            "ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()
         }
         constants = src.constants if hasattr(src, "constants") else dict()
         enable_warp_specialization = False
