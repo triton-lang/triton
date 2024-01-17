@@ -177,6 +177,7 @@ def get_thirdparty_packages(triton_cache_path):
 
 
 def download_and_copy(src_path, variable, version, url_func):
+    triton_tmp_path = os.path.join(tempfile.gettempdir(), 'triton')
     if variable in os.environ:
         return
     base_dir = os.path.dirname(__file__)
@@ -184,24 +185,21 @@ def download_and_copy(src_path, variable, version, url_func):
     if arch == "x86_64":
         arch = "64"
     url = url_func(arch, version)
-    dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", src_path)
-    is_linux = platform.system() == "Linux"
-    download = False
-    if is_linux:
-        download = True
-        if os.path.exists(dst_path):
-            curr_version = subprocess.check_output([dst_path, "--version"]).decode("utf-8").strip()
-            curr_version = re.search(r"V([.|\d]+)", curr_version).group(1)
-            download = curr_version != version
+    tmp_path = os.path.join(triton_tmp_path, "nvidia")  # path to cache the download
+    dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", src_path)  # final binary path
+    src_path = os.path.join(tmp_path, src_path)
+    download = not os.path.exists(src_path)
+    if os.path.exists(dst_path):
+        curr_version = subprocess.check_output([dst_path, "--version"]).decode("utf-8").strip()
+        curr_version = re.search(r"V([.|\d]+)", curr_version).group(1)
+        download = download or curr_version != version
     if download:
         print(f'downloading and extracting {url} ...')
         file = tarfile.open(fileobj=open_url(url), mode="r|*")
-        with tempfile.TemporaryDirectory() as temp_dir:
-            file.extractall(path=temp_dir)
-            src_path = os.path.join(temp_dir, src_path)
-            os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
-            print(f'copy {src_path} to {dst_path} ...')
-            shutil.copy(src_path, dst_path)
+        file.extractall(path=tmp_path)
+    print(f'copy {src_path} to {dst_path} ...')
+    os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
+    shutil.copy(src_path, dst_path)
 
 
 # ---- cmake extension ----
