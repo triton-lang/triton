@@ -415,6 +415,7 @@ def sort(x, dim=None, descending: core.constexpr = 0):
     x = core.reshape(y, x.shape)
     return x
 
+
 def _get_flip_dim(dim, shape):
     dim = _unwrap_if_constexpr(dim)
     shape = _unwrap_if_constexpr(shape)
@@ -426,6 +427,14 @@ def _get_flip_dim(dim, shape):
 
 @jit
 def flip(x, dim=None):
+    """
+    Flips a tensor `x` along the dimension `dim`.
+
+    :param x: the first input tensor
+    :type x: Block
+    :param dim: the dimension to flip along (currently only final dimension supported)
+    :type dim: int
+    """
     core.static_assert(_is_power_of_two(x.shape[_get_flip_dim(dim, x.shape)]))
     core.static_assert(_is_power_of_two(x.numel))
     # # reshape the tensor to have all dimensions be 2.
