@@ -31,7 +31,7 @@ python tune_gemm.py -m 16 -n 16 -k 16
 
 3. Choose the file to store tuning results
 ```bash
-python tune_gemm.py --gemm_size_file input_gemm_sizes.yaml --tuning_results_file output_tuning.yaml
+python tune_gemm.py --gemm_size_file input_gemm_sizes.yaml --o output_tuning.yaml
 ```
 
 4. Only check correctness given the tuning results
@@ -50,7 +50,8 @@ Workflow of the tuning process
     - When split-k is not needed, i.e. both M and N are large, it must be 1
     - GROUP_M * BLOCK_SIZE_M must be smaller than M. Otherwise, GROUP_M must be 1
     - When BLOCK_SIZE_K = 128, neither BLOCK_SIZE_M or BLOCK_SIZE_N can be 128. Otherwise too much LDS will be required. **Needs further investigation**
-3. Open a file `generated_kernel{M}{N}{K}.py` and write the following into the file
+    - Skip BLOCK_SIZE_M or BLOCK_SIZE_N if they are over 2 times larger than M or N.
+3. Open a file `generated_kernel{M}-{N}-{K}-{gpuid}.py` and write the following into the file
     1. For each config in the pruned space, generate a kernel with name `matmul_kernel_{configStr}`, where `configStr` contains the gemm size and the tuning parameters.
     2. Generate `matmul` function for each config in a similar way
     3. Generate `try_config` functions for each `matmul` function.
@@ -62,13 +63,62 @@ Workflow of the tuning process
 5. Invoke `rocprof` on the generated script
 6. Post process `results.csv` by extract the execution time of the last instance of each kernel. Pick the best one, write to file, and return.
 
-### Known issues
-On some node, I saw the following runtime error
+# GEMM Tuning Script v3
+
+### API changes
+
+- Input and output data types can be provided as `-dtype_a`, `-dtype_b`, and `-dtype_c`.
+The provided types must be one of ['fp32', 'fp16', 'bf16', 'fp8', 'bf8', 'int8'].
+- Row/col major-ness of operand a and b can be provided as `-col_a` and `-col_b`.
+If set, it means the corresponding operand is column major.
+The major-ness is considered as problem input. 
+So they should be included in the input yaml file. However, in the yaml file, user should
+set `rowMajowA` and `rowMajorB` as shown in the example below.
+- `--benchmark` is used to control if the perf config in the input yaml file is used as the tuning space.
+- `--jobs` is used to control the number of .py files for generated kernels.
+Note that this can be different from `ngpus`. This usually means multiple kernel files
+will be profiled on each GPU.
+This is necessary to keep each file "small" in terms of execution time.
+
+### Implementation changes
+- `gen_input` is used to generate matmul inputs.
+- Time measurement
+    - In benchmark mode, the kernel is executed 1000 times.
+    - In tuning mode, each kernel is executed 200 times. We cannot afford to larger runs since rocprof hangs if the session takes too long.
+    - In both tuning and benchmark mode, kernel time is measured as the average execution time of the last 100 instances.
+- Added error recovery. This helps when rocprof crashes in multi-processing mode. 
+
+
+### Example Usage
+
+Let's say we have an input yaml file, named `gemm_input.yaml`, that contains the following configs
+```yaml
+- {'M': 4864, 'N': 4096, 'K': 8192, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 8192, 'N': 8192, 'K': 8192, 'rowMajorA': 'T', 'rowMajorB': 'N'}
 ```
-:0:rocdevice.cpp            :2776: 7321835745146 us: 1401 : [tid:0x7fc930830700] Callback: Queue 0x7fc9b7200000 aborting with error : HSA_STATUS_ERROR_INVALID_ISA: The instruction set architecture is invalid. code: 0x100f
+1. Tuning with bf8 input types with gpu 4,5,6,7, and save output to `output.yaml`
+```bash
+python ./tune_gemm.py --gemm_size_file gemm_input.yaml -dtype_a bf8 -dtype_b bf8 --gpu_ids 4,5,6,7 --o output.yaml
 ```
-It's hard to reproduce the error. **Needs further investigation**
-- https://github.com/ROCmSoftwarePlatform/frameworks-internal/issues/6011
+
+2. Check the correctness of the tuned configs
+```bash
+python ./tune_gemm.py --gemm_size_file output.yaml -dtype_a bf8 -dtype_b bf8 --compare_wo_tuning
+```
+
+3. Run benchmark of the tuned configs
+```bash
+python ./tune_gemm.py --gemm_size_file output.yaml -dtype_a bf8 -dtype_b bf8 --benchmark
+```
+
+A sample output from `benchmark` looks like
+```bash
+Benchmarking gemm with bf8 inputs (peak tflops: 1298)
+trans    M     N     K    TFLOPS  Efficiency
+NT    4864  4096  8192    841.22         65%
+NT    8192  8192  8192    745.31         57%
+```
+
 
 # One config running script
 
