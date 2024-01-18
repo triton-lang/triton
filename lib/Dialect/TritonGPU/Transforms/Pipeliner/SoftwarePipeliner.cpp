@@ -72,6 +72,9 @@ static void pipelineLoop(scf::ForOp forOp, int numStages) {
 
   if (succeeded(newForOp))
     mlir::triton::asyncLaunchDots(newForOp.value());
+
+  // schedule the waits
+  mlir::triton::scheduleWaits(rewriter, forOp, options);
 }
 
 namespace {
