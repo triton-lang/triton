@@ -1,6 +1,7 @@
 #include "triton/Target/LLVMIR/Passes.h"
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/Support/Debug.h"
@@ -73,11 +74,12 @@ struct LLVMDIScopePass : public LLVMDIScopeBase<LLVMDIScopePass> {
           context, llvm::sys::path::filename(inputFilePath),
           llvm::sys::path::parent_path(inputFilePath));
     }
+    auto distinctId = mlir::DistinctAttr::create(mlir::UnitAttr::get(context));
     if (!compileUnitAttr) {
       compileUnitAttr = LLVM::DICompileUnitAttr::get(
-          context, llvm::dwarf::DW_LANG_C, fileAttr,
-          StringAttr::get(context, "triton"), /*isOptimized=*/true,
-          LLVM::DIEmissionKind::LineTablesOnly);
+          context, distinctId, llvm::dwarf::DW_LANG_C, fileAttr,
+          StringAttr::get(context, "triton"),
+          /*isOptimized=*/true, LLVM::DIEmissionKind::LineTablesOnly);
     }
     auto subroutineTypeAttr =
         LLVM::DISubroutineTypeAttr::get(context, llvm::dwarf::DW_CC_normal, {});
@@ -86,14 +88,14 @@ struct LLVMDIScopePass : public LLVMDIScopeBase<LLVMDIScopePass> {
     // Note that scopeline is set differently from LLVM's
     // DIScopeForLLVMFuncOpPass. I don't find reasons why scopeline should be
     // the column offset
-    auto subprogramAttr =
-        LLVM::DISubprogramAttr::get(context, compileUnitAttr, fileAttr,
-                                    funcNameAttr, funcNameAttr, fileAttr,
-                                    /*line=*/line,
-                                    /*scopeline=*/line,
-                                    LLVM::DISubprogramFlags::Definition |
-                                        LLVM::DISubprogramFlags::Optimized,
-                                    subroutineTypeAttr);
+    auto subprogramAttr = LLVM::DISubprogramAttr::get(
+        context, distinctId, compileUnitAttr, fileAttr, funcNameAttr,
+        funcNameAttr, fileAttr,
+        /*line=*/line,
+        /*scopeline=*/line,
+        LLVM::DISubprogramFlags::Definition |
+            LLVM::DISubprogramFlags::Optimized,
+        subroutineTypeAttr);
     funcOp->setLoc(FusedLoc::get(context, {loc}, subprogramAttr));
   }
 
