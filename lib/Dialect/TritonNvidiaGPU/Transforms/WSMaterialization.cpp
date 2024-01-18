@@ -246,7 +246,7 @@ int applyCommit(OpBuilder &builder, ttng::ProducerCommitOp &op,
 void processProducerAcquireOp(OpBuilder &builder, ttng::ProducerAcquireOp op,
                               Value bufferEmpty) {
   auto loc = op.getLoc();
-  // The first producer_aquire should be met immediately, so initially producer
+  // The first producer_acquire should be met immediately, so initially producer
   // skips the first wait
   Value phase = getMBarrierPhaseBit(builder, op, true);
   auto waitOp = builder.create<ttng::MBarrierWaitOp>(loc, bufferEmpty, phase);

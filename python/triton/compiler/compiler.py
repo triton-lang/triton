@@ -5,7 +5,7 @@ from .._C.libtriton import get_env_vars, ir
 from ..backends import backends
 from .. import __version__
 from ..runtime.autotuner import OutOfResources
-from ..runtime.cache import get_cache_manager
+from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
 # TODO: this shouldn't be here
 from ..backends.nvidia.compiler import InfoFromBackendForTensorMap
@@ -187,6 +187,18 @@ def triton_key():
     return f'{__version__}' + '-'.join(contents)
 
 
+def parse(full_name, ext):
+    if ext == "ttir" or ext == "ttgir":
+        context = ir.context()
+        module = ir.parse_mlir_module(full_name, context)
+        module.context = context
+        return module
+    if ext == "llir" or ext == "ptx":
+        return Path(full_name).read_text()
+    if ext == "cubin":
+        return Path(full_name).read_bytes()
+
+
 def compile(src, target=None, options=None):
     if target is None:
         target = driver.get_current_target()
@@ -201,6 +213,12 @@ def compile(src, target=None, options=None):
     key = f"{triton_key()}-{src.hash()}-{backend.hash()}-{options.hash()}-{str(sorted(get_env_vars().items()))}"
     hash = hashlib.md5(key.encode("utf-8")).hexdigest()
     fn_cache_manager = get_cache_manager(hash)
+    # For dumping/overriding only hash the source as we want it to be independent of triton
+    # core changes to make it easier to track kernels by hash.
+    enable_override = os.environ.get("TRITON_KERNEL_OVERRIDE", "0") == "1"
+    enable_ir_dump = os.environ.get("TRITON_KERNEL_DUMP", "0") == "1"
+    fn_override_manager = get_override_manager(src.hash()) if enable_override else None
+    fn_dump_manager = get_dump_manager(src.hash()) if enable_ir_dump else None
     metadata_filename = f"{src.name}.json"
     metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
     metadata_path = metadata_group.get(metadata_filename)
@@ -226,7 +244,14 @@ def compile(src, target=None, options=None):
     module = src.make_ir(options, context)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
-        metadata_group[f"{src.name}.{ext}"] = fn_cache_manager.put(next_module, f"{src.name}.{ext}")
+        ir_filename = f"{src.name}.{ext}"
+        metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
+        if fn_dump_manager is not None:
+            fn_dump_manager.put(next_module, ir_filename)
+        if (fn_override_manager is not None and fn_override_manager.has_file(ir_filename)):
+            print(f"\nOverriding kernel with file {ir_filename}")
+            full_name = fn_override_manager.get_file(ir_filename)
+            next_module = parse(full_name, ext)
         module = next_module
     # write-back metadata
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
