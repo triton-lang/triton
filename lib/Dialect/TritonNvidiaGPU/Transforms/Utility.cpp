@@ -115,9 +115,6 @@ LogicalResult getDependentPointers(Value ptr, DenseSet<Value> &dependentSet,
     return getDependentPointers(advanceOp.getPtr(), dependentSet, processedSet);
   } else if (auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>()) {
     return getDependentPointers(addPtrOp.getPtr(), dependentSet, processedSet);
-  } else if (auto loadOp = ptr.getDefiningOp<triton::AddPtrOp>()) {
-    // not support load dependent ptr
-    return failure();
   } else if (auto forOp = ptr.getDefiningOp<scf::ForOp>()) {
     unsigned idx = ptr.cast<OpResult>().getResultNumber();
     return getDependentPointers(
