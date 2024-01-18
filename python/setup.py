@@ -6,7 +6,6 @@ import subprocess
 import sys
 import sysconfig
 import tarfile
-import tempfile
 import urllib.request
 from distutils.command.clean import clean
 from pathlib import Path
@@ -147,7 +146,16 @@ def open_url(url):
 # ---- package data ---
 
 
-def get_thirdparty_packages(triton_cache_path):
+def get_triton_cache_path():
+    user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or \
+            os.getenv("HOMEPATH") or None
+    if not user_home:
+        raise RuntimeError("Could not find user home directory")
+    return os.path.join(user_home, ".triton")
+
+
+def get_thirdparty_packages():
+    triton_cache_path = get_triton_cache_path()
     packages = [get_pybind11_package_info(), get_llvm_package_info()]
     thirdparty_cmake_args = []
     for p in packages:
@@ -177,19 +185,20 @@ def get_thirdparty_packages(triton_cache_path):
 
 
 def download_and_copy(src_path, variable, version, url_func):
-    triton_tmp_path = os.path.join(tempfile.gettempdir(), 'triton')
+    triton_cache_path = get_triton_cache_path()
     if variable in os.environ:
         return
     base_dir = os.path.dirname(__file__)
+    system = platform.system()
     arch = platform.machine()
     if arch == "x86_64":
         arch = "64"
     url = url_func(arch, version)
-    tmp_path = os.path.join(triton_tmp_path, "nvidia")  # path to cache the download
+    tmp_path = os.path.join(triton_cache_path, "nvidia")  # path to cache the download
     dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", src_path)  # final binary path
     src_path = os.path.join(tmp_path, src_path)
     download = not os.path.exists(src_path)
-    if os.path.exists(dst_path):
+    if os.path.exists(dst_path) and system == "Linux":
         curr_version = subprocess.check_output([dst_path, "--version"]).decode("utf-8").strip()
         curr_version = re.search(r"V([.|\d]+)", curr_version).group(1)
         download = download or curr_version != version
@@ -270,13 +279,8 @@ class CMakeBuild(build_ext):
     def build_extension(self, ext):
         lit_dir = shutil.which('lit')
         ninja_dir = shutil.which('ninja')
-        user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or \
-            os.getenv("HOMEPATH") or None
-        if not user_home:
-            raise RuntimeError("Could not find user home directory")
-        triton_cache_path = os.path.join(user_home, ".triton")
         # lit is used by the test suite
-        thirdparty_cmake_args = get_thirdparty_packages(triton_cache_path)
+        thirdparty_cmake_args = get_thirdparty_packages()
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
         if not os.path.exists(self.build_temp):
