@@ -463,6 +463,10 @@ def test_bitwise_op(dtype_x, dtype_y, op, num_ctas, device):
 ])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_shift_op(dtype_x, dtype_y, op, num_ctas, device):
+    if is_hip():
+        pytest.skip(
+            'test_shift_op for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
+        )
     expr = f'x {op} y'
     bw = max(_bitwidth(dtype_x), _bitwidth(dtype_y))
     if dtype_x.startswith('int'):
@@ -1036,8 +1040,10 @@ def noinline_multi_values_fn(x, y, Z):
 
 @pytest.mark.parametrize("mode", ["simple", "call_graph", "shared", "dynamic", "multi_values"])
 def test_noinline(mode, device):
-    if is_hip() and mode == "shared":
-        pytest.skip('test_noinline["shared"] not supported on HIP.')
+    if is_hip():
+        pytest.skip(
+            'test_noinline for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
+        )
 
     @triton.jit
     def kernel(X, Y, Z):
@@ -1092,6 +1098,11 @@ def test_noinline(mode, device):
                                    for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']
                                    for sem in [None, 'acquire', 'release', 'acq_rel', 'relaxed']]))
 def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
+    if is_hip():
+        pytest.skip(
+            'test_atomic_rmw for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
+        )
+
     check_cuda_only(device)
 
     capability = torch.cuda.get_device_capability()
@@ -1166,6 +1177,11 @@ def test_atomic_rmw_predicate(num_ctas, device):
                                                    for axis in [0, 1]
                                                    for num_ctas in num_ctas_list])
 def test_tensor_atomic_rmw(shape, axis, num_ctas, device):
+    if is_hip():
+        pytest.skip(
+            'test_tensor_atomic_rmw for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
+        )
+
     shape0, shape1 = shape
     # triton kernel
 
@@ -1194,6 +1210,10 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, device):
 
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_tensor_atomic_rmw_block(num_ctas, device):
+    if is_hip():
+        pytest.skip(
+            'test_tensor_atomic_rmw_block for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
+        )
     shape = (8, 8)
 
     @triton.jit
@@ -1249,6 +1269,10 @@ def test_atomic_cas(sem, num_ctas, device):
 @pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_tensor_atomic_cas(sem, num_ctas, device):
+    if is_hip():
+        pytest.skip(
+            'test_tensor_atomic_cas for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
+        )
 
     @triton.jit
     def change_value(X, BLOCK_SIZE: tl.constexpr):
@@ -1881,6 +1905,10 @@ scan_layouts = [
 
 @pytest.mark.parametrize("M, N", [[2048, 2], [1024, 8], [1024, 128], [256, 512], [32, 512], [8, 512], [8, 2]])
 def test_histogram(M, N, device):
+    if is_hip():
+        pytest.skip(
+            'test_histogram for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
+        )
 
     @triton.jit
     def histogram_kernel(x_ptr, z_ptr, M: tl.constexpr, N: tl.constexpr):
@@ -1903,6 +1931,10 @@ def test_histogram(M, N, device):
 @pytest.mark.parametrize("N", [512, 1024, 2048])
 @pytest.mark.parametrize("num_pid_n", [2, 4])
 def test_locality(op, BLOCK_N, N, num_pid_n):
+    if is_hip():
+        pytest.skip(
+            'test_locality for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
+        )
 
     @triton.jit
     def kernel(X, Y, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
@@ -2299,6 +2331,10 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis):
 
 
 def test_generic_reduction(device):
+    if is_hip():
+        pytest.skip(
+            'test_generic_reduction for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
+        )
 
     @triton.jit
     def var_mean_kernel(X, out_mean, out_var, BLOCK: tl.constexpr):
@@ -2414,14 +2450,9 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
     capability = torch.cuda.get_device_capability()
 
     if is_hip():
-        # set capability to large number to jump over check below
-        # check are not relevant to amd gpu, left them for smaller diff between test_core.py and test_core_amd.py tests
-        capability = (100, 100)
-        if out_dtype is None:
-            if in_dtype in float_dtypes:
-                out_dtype = "float32"
-            else:
-                out_dtype = "int32"
+        pytest.skip(
+            'test_dot for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
+        )
 
     if capability[0] < 7:
         pytest.skip("Only test tl.dot() on devices with sm >= 70")
@@ -2608,6 +2639,12 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
 
 
 def test_max_num_imprecise_acc(device):
+
+    if is_hip():
+        pytest.skip(
+            'test_max_num_imprecise_acc for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
+        )
+
     capability = torch.cuda.get_device_capability()
     if capability != (9, 0):
         return
@@ -3755,6 +3792,8 @@ def add_fn_static_cond(x, cond: tl.constexpr):
     "call_type",
     ["attribute", "attribute_jit", "jit", "jit_if", "jit_expr", "jit_static_cond", "jit_noinline", "jit_extern"])
 def test_if_call(call_type, device):
+    if is_hip():
+        pytest.skip('test_if_call for HIP currently broken in upstream.')
 
     @triton.jit
     def kernel(Out, call_type: tl.constexpr):
@@ -4289,6 +4328,9 @@ def matmul_kernel(  #
 @pytest.mark.parametrize("in_type_str", ['float8e5', 'float8e4nv'])
 @pytest.mark.parametrize("low_precision_acc", [0, 32, 64, 128])
 def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
+    if is_hip():
+        pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
+
     check_type_supported(in_type_str, device)
     M, N, K = 128, 256, 256
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 128
@@ -4322,6 +4364,11 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
 
 @pytest.mark.parametrize("enable_fp_fusion", [False, True])
 def test_enable_fp_fusion(enable_fp_fusion):
+    if is_hip():
+        pytest.skip(
+            'test_enable_fp_fusion for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
+        )
+
     # Sequential multiply add can be fused by backend
     @triton.jit
     def mul_add(data):
@@ -4344,6 +4391,10 @@ def test_enable_fp_fusion(enable_fp_fusion):
 @pytest.mark.parametrize("propagate_nan", ['NONE', 'ALL'])
 @pytest.mark.parametrize("func", ['minimum', 'maximum', 'clamp'])
 def test_propagate_nan(dtype, propagate_nan, func):
+    if is_hip():
+        pytest.skip(
+            'test_propagate_nan for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
+        )
 
     @triton.jit
     def kernel(A, B, C, propagate_nan: tl.constexpr, func: tl.constexpr):
@@ -4380,6 +4431,10 @@ def test_propagate_nan(dtype, propagate_nan, func):
 
 @pytest.mark.parametrize("dtype", ['float16', 'float32'])
 def test_clamp(dtype):
+    if is_hip():
+        pytest.skip(
+            'test_clamp for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
+        )
 
     @triton.jit
     def kernel(x_ptr, min_ptr, max_ptr, out_ptr, ref_ptr, N, BLOCK_SIZE: tl.constexpr):
@@ -4415,6 +4470,10 @@ def test_clamp(dtype):
 # codegen in the backends
 @pytest.mark.parametrize("dtype", ['float16', 'float32'])
 def test_clamp_symmetric(dtype):
+    if is_hip():
+        pytest.skip(
+            'test_clamp_symmetric for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
+        )
 
     @triton.jit
     def kernel(x_ptr, limit_ptr, out_ptr, ref_ptr, N, BLOCK_SIZE: tl.constexpr):
@@ -4451,6 +4510,10 @@ def test_clamp_symmetric(dtype):
 @pytest.mark.parametrize("descending", [False, True])
 @pytest.mark.parametrize("dtype_str", ['int32', 'float16', 'float32'])
 def test_sort(M, N, descending, dtype_str, device):
+    if is_hip():
+        pytest.skip(
+            'test_propagate_nan for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
+        )
 
     @triton.jit
     def sort_kernel(X, Z, N: tl.constexpr, M: tl.constexpr, descending: tl.constexpr):
