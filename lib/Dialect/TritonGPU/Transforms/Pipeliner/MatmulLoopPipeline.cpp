@@ -709,7 +709,45 @@ static void removeExtraWait(tt::nvidia_gpu::DotWaitOp dotWaitOp,
 
 void mlir::triton::scheduleWaits(RewriterBase &rewriter, scf::ForOp forOp, mlir::triton::PipeliningOption &options)
 {
-  
+  std::function<void(Value val)> dfs = [&dfs](Value val){
+    if (auto defOp = val.getDefiningOp()) {
+      if (auto insertOp = dyn_cast<ttg::InsertSliceAsyncOp>(defOp)) {
+        return; // we have found insert slice!
+      }
+    }
+    if (auto arg = val.dyn_cast<BlockArgument>()) {
+      auto block = arg.getOwner();
+      /*block->getArgument(arg.getArgNumber() - 1);
+      auto yieldOp = block->getTerminator();
+      auto operand = yieldOp->getOperand(arg.getArgNumber() - 1);
+      dfs(operand);*/
+    }
+    
+  };
+  // For each extract slice (that signifies the use of the data),
+  // traverse its def chain to find the corresponding insert slice.
+  // All the paths leading to the insert needs to be traversed, and 
+  // among all the different paths we need to count the number of
+  // async_commit_group ops. The minimum number of async_commit_group
+  // encountered between the insert and the extract is the number that
+  // we need to wait for.
+  forOp.walk([&](Operation *op) {
+    // Find the insert slice.
+    if (!isa<ttg::ExtractSliceOp>(op))
+      return;
+    auto extractSlice = cast<ttg::ExtractSliceOp>(op);
+    auto extractSliceOperand = extractSlice.getOperand(0);
+    // Check if the operand comes from a forOp argument.
+    dfs(extractSliceOperand);
+    if (!isa<BlockArgument>(extractSliceOperand))
+      return;
+
+    auto extractSliceOperandDef = extractSliceOperand.getDefiningOp();
+    if (!isa<ttg::InsertSliceAsyncOp>(extractSliceOperandDef))
+      return;
+    
+  });
+    
 }
 
 void mlir::triton::asyncLaunchDots(scf::ForOp forOp) {
