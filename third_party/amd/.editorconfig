@@ -1,0 +1,41 @@
+# https://editorconfig.org/
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 4
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+[*.py]
+indent_size = 4
+src_paths=python
+
+[*.{yaml,yml}]
+indent_size = 2
+
+[*.md]
+indent_size = 2
+x-soft-wrap-text = true
+
+[*.rst]
+indent_size = 4
+x-soft-wrap-text = true
+
+[CMakeLists.txt,*.cmake]
+indent_size = 2
+
+[Makefile]
+indent_style = tab
+
+[*.{c,cc,cpp,h,hpp,cu,cuh}]
+indent_size = 2
+
+[*.mlir]
+indent_size = 2
+
+[*.td]
+indent_size = 4

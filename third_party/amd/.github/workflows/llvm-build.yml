@@ -1,0 +1,195 @@
+name: LLVM Build
+
+on:
+  push:
+    branches:
+      - llvm-head
+    paths:
+      - llvm-hash.txt
+  workflow_dispatch:
+
+env:
+  SCCACHE_DIR: ${{ github.workspace }}/sccache
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+
+  build:
+
+    strategy:
+      fail-fast: true
+
+      matrix:
+        platform: [
+          ubuntu-20.04-x64,
+          ubuntu-22.04-x64,
+          centos-7-x64,
+          macos-x64,
+          macos-arm64
+        ]
+
+        include:
+          # Specify OS versions
+          - platform: ubuntu-20.04-x64
+            host-os: ubuntu-20.04
+            target-os: ubuntu
+            arch: x64
+          - platform: ubuntu-22.04-x64
+            host-os: ubuntu-22.04
+            target-os: ubuntu
+            arch: x64
+          - platform: centos-7-x64
+            host-os: ubuntu-22.04
+            target-os: centos
+            arch: x64
+          - platform: macos-x64
+            host-os: macos-12
+            target-os: macos
+            arch: x64
+          - platform: macos-arm64
+            host-os: macos-12
+            target-os: macos
+            arch: arm64
+
+    runs-on: ${{ matrix.host-os }}
+
+    steps:
+
+    - name: Checkout Repo
+      uses: actions/checkout@v3
+      with:
+        path: llvm-build
+
+    - name: Fetch LLVM Commit Hash
+      run: |
+        LLVM_COMMIT_HASH="$(cat llvm-build/llvm-hash.txt)"
+        echo "Found LLVM commit hash: ${LLVM_COMMIT_HASH}"
+        echo "llvm_commit_hash=${LLVM_COMMIT_HASH}" >> ${GITHUB_ENV}
+
+        SHORT_LLVM_COMMIT_HASH="${LLVM_COMMIT_HASH:0:8}"
+        echo "Short LLVM commit hash: ${SHORT_LLVM_COMMIT_HASH}"
+        echo "short_llvm_commit_hash=${SHORT_LLVM_COMMIT_HASH}" >> ${GITHUB_ENV}
+
+        INSTALL_DIR="llvm-${SHORT_LLVM_COMMIT_HASH}-${{ matrix.platform }}"
+        echo "LLVM installation directory name: ${INSTALL_DIR}"
+        echo "llvm_install_dir=${INSTALL_DIR}" >> ${GITHUB_ENV}
+
+    - name: Checkout LLVM
+      uses: actions/checkout@v3
+      with:
+        repository: llvm/llvm-project
+        path: llvm-project
+        ref: ${{ env.llvm_commit_hash }}
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.11
+
+    - name: Install Prerequisites
+      run: |
+        python3 -m pip install cmake ninja sccache
+        mkdir -p ${{ env.SCCACHE_DIR }}
+        rm -rf ${{ env.SCCACHE_DIR }}/*
+
+    - name: Enable Cache
+      uses: actions/cache@v3
+      with:
+        path: ${{ env.SCCACHE_DIR }}
+        key: ${{ matrix.platform }}-${{ env.short_llvm_commit_hash }}
+        restore-keys: ${{ matrix.platform }}-
+
+    - name: Configure, Build, Test, and Install LLVM (Ubuntu and macOS x64)
+      if: matrix.arch == 'x64' && contains(fromJSON('["ubuntu", "macos"]'), matrix.target-os)
+      run: >
+        python3 -m pip install -r llvm-project/mlir/python/requirements.txt
+
+        cmake -GNinja -Bllvm-project/build
+        -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+        -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+        -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}"
+        -DCMAKE_LINKER=lld
+        -DLLVM_BUILD_UTILS=ON
+        -DLLVM_ENABLE_ASSERTIONS=ON
+        -DMLIR_ENABLE_BINDINGS_PYTHON=ON
+        -DLLVM_ENABLE_PROJECTS=mlir
+        -DLLVM_INSTALL_UTILS=ON
+        -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
+        llvm-project/llvm
+
+        ninja -C llvm-project/build check-mlir install
+
+        tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
+
+    - name: Configure, Build, and Install LLVM (macOS arm64)
+      if: matrix.arch == 'arm64' && matrix.target-os == 'macos'
+      run: >
+        python3 -m pip install -r llvm-project/mlir/python/requirements.txt
+
+        cmake -GNinja -Bllvm-project/build
+        -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+        -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+        -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}"
+        -DCMAKE_LINKER=lld
+        -DCMAKE_OSX_ARCHITECTURES=arm64
+        -DLLVM_BUILD_UTILS=ON
+        -DLLVM_ENABLE_ASSERTIONS=ON
+        -DMLIR_ENABLE_BINDINGS_PYTHON=ON
+        -DLLVM_ENABLE_PROJECTS=mlir
+        -DLLVM_ENABLE_ZSTD=OFF
+        -DLLVM_INSTALL_UTILS=ON
+        -DLLVM_TARGETS_TO_BUILD="AArch64"
+        -DLLVM_USE_HOST_TOOLS=ON
+        llvm-project/llvm
+
+        ninja -C llvm-project/build install
+
+        tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
+
+    - name: Configure, Build, Test, and Install LLVM (CentOS)
+      if: matrix.target-os == 'centos'
+      run: |
+        docker build --tag llvm-build --build-arg llvm_dir=llvm-project \
+          -f llvm-build/.github/workflows/Dockerfile .
+
+        # Create temporary container to copy cache and installed artifacts.
+        CONTAINER_ID=$(docker create llvm-build)
+        docker cp "${CONTAINER_ID}:/install" "${{ env.llvm_install_dir }}"
+        tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
+
+        # We remove the existing directory, otherwise docker will
+        # create a subdirectory inside the existing directory.
+        rm -rf "${{ env.SCCACHE_DIR }}"
+        docker cp "${CONTAINER_ID}:/sccache" "${{ env.SCCACHE_DIR }}"
+        sudo chown -R "$(id -u -n):$(id -g -n)" "${{ env.SCCACHE_DIR }}"
+
+        docker rm "${CONTAINER_ID}"
+
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        client-id: ${{ secrets.AZURE_CLIENT_ID }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+    - name: Upload LLVM Artifacts to Azure
+      run: |
+        az storage blob upload --account-name tritonlang --auth-mode login --container-name llvm-builds --file "${{ env.llvm_install_dir }}.tar.gz" --name "${{ env.llvm_install_dir }}.tar.gz" --overwrite
+
+        URL=$(az storage blob url --account-name tritonlang --auth-mode login --container-name llvm-builds --name "${{ env.llvm_install_dir }}.tar.gz")
+        echo "Blob URL: ${URL}"
+
+    - name: Azure Logout
+      run: |
+        az logout
+        az cache purge
+        az account clear
+      if: always()
+
+    - name: Dump Sccache Statistics
+      run: sccache --show-stats

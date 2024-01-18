@@ -1,0 +1,84 @@
+name: Wheels
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "20 2 * * *"
+
+jobs:
+
+  Build-Wheels:
+
+    runs-on: [self-hosted, V100]
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      # The LATEST_DATE here should be kept in sync with the one in Patch setup.py
+      - id: check-version
+        name: Check latest version
+        run: |
+          export PACKAGE_DATE=$(python3 -m pip install --user --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/ --dry-run triton-nightly== |& grep -oP '(?<=, )[0-9\.]+dev[0-9]+(?=\))' | grep -oP '(?<=dev)[0-9]+')
+          export LATEST_DATE=$(TZ=UTC0 git show --quiet --date='format-local:%Y%m%d%H%M%S' --format="%cd")
+          if cmp -s <(echo $PACKAGE_DATE) <(echo $LATEST_DATE); then
+            echo "new_commit=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new_commit=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Patch setup.py
+        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
+        run: |
+          sed -i 's/name\=\"triton\"/name="triton-nightly"/g' python/setup.py
+          export LATEST_DATE=$(TZ=UTC0 git show --quiet --date='format-local:%Y%m%d%H%M%S' --format="%cd")
+          sed -i -r "s/version\=\"(.*)\"/version=\"\1-dev"$LATEST_DATE"\"/g" python/setup.py
+          echo "" >> python/setup.cfg
+          echo "[build_ext]" >> python/setup.cfg
+          echo "base-dir=/project" >> python/setup.cfg
+
+      - name: Build wheels
+        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
+        run: |
+          export CIBW_MANYLINUX_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
+          #export CIBW_MANYLINUX_PYPY_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
+          export CIBW_BEFORE_BUILD="pip install cmake;"
+          export CIBW_SKIP="cp{35,36}-*"
+          export CIBW_BUILD="cp3*-manylinux_x86_64"
+          python3 -m cibuildwheel python --output-dir wheelhouse
+
+      - name: Install Azure CLI
+        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
+        run: |
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+
+      - name: Azure login
+        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - id: generate-token
+        name: Generate token
+        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
+        run: |
+          AZ_TOKEN=$(az account get-access-token --query accessToken)
+          echo "::add-mask::$AZ_TOKEN"
+          echo "access_token=$AZ_TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Publish wheels to Azure DevOps
+        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
+        run: |
+          python3 -m twine upload -r Triton-Nightly -u TritonArtifactsSP -p ${{ steps.generate-token.outputs.access_token }} --config-file utils/nightly.pypirc --non-interactive --verbose wheelhouse/*
+
+      - name: Azure Logout
+        if: ${{ steps.check-version.outputs.new_commit == 'true' && (success() || failure()) }}
+        run: |
+          az logout
+          az cache purge
+          az account clear

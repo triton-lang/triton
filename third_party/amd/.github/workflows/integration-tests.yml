@@ -1,0 +1,445 @@
+name: Integration Tests
+
+on:
+  workflow_dispatch:
+  # NOTE: this repo is a backend so upstream tests don't work.
+  # pull_request:
+  #   branches: [main]
+  merge_group:
+    branches: [main]
+    types: [checks_requested]
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+env:
+  TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
+
+jobs:
+  Runner-Preparation:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix-required: ${{ steps.set-matrix.outputs.matrix-required }}
+      matrix-optional: ${{ steps.set-matrix.outputs.matrix-optional }}
+    steps:
+      - name: Prepare runner matrix
+        id: set-matrix
+        run: |
+          if [ x"${{ github.repository }}" == x"openai/triton" ]; then
+            echo '::set-output name=matrix-required::[["self-hosted", "A100"], ["self-hosted", "H100"]]'
+            echo '::set-output name=matrix-optional::[["self-hosted", "gfx908"], ["self-hosted", "arc770"]]'
+          else
+            echo '::set-output name=matrix-required::["ubuntu-latest"]'
+            echo '::set-output name=matrix-optional::["ubuntu-latest"]'
+          fi
+
+
+  Integration-Tests-Nvidia:
+    needs: Runner-Preparation
+
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      matrix:
+        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-required)}}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: 'true'
+      - name: Set CUDA ENV
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
+        run: |
+          echo "BACKEND=CUDA" >> "${GITHUB_ENV}"
+          echo "ENABLE_TMA=0" >> "${GITHUB_ENV}"
+          echo "TRITON_DISABLE_LINE_INFO=1" >> "${GITHUB_ENV}"
+
+      - name: Clear cache
+        run: |
+          rm -rf ~/.triton
+
+      - name: Update PATH
+        run: |
+          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
+
+      - name: Check pre-commit
+        run: |
+          python3 -m pip install --upgrade pre-commit
+          python3 -m pre_commit run --all-files --verbose
+
+      - name: Install Triton
+        if: ${{ env.BACKEND == 'CUDA'}}
+        run: |
+          cd python
+          python3 -m pip install --upgrade pip
+          python3 -m pip install cmake==3.24
+          python3 -m pip install ninja
+          python3 -m pip install --no-build-isolation -vvv '.[tests]'
+          python3 -m pip install pytest-xdist
+
+      - name: Run lit tests
+        if: ${{ env.BACKEND == 'CUDA'}}
+        run: |
+          python3 -m pip install lit
+          cd python
+          LIT_TEST_DIR="build/$(ls build | grep -i cmake)/test"
+          if [ ! -d "${LIT_TEST_DIR}" ]; then
+            echo "Coult not find '${LIT_TEST_DIR}'" ; exit -1
+          fi
+          lit -v "${LIT_TEST_DIR}"
+
+      - name: Enable TMA
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'H100')}}
+        run: |
+          echo "ENABLE_TMA=1" >> "${GITHUB_ENV}"
+
+      - name: Run python tests on CUDA with ENABLE_TMA=1
+        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '1'}}
+        run: |
+          cd python/test/unit
+          python3 -m pytest -n 8 --ignore=runtime --ignore=operators --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+          python3 -m pytest -n 8 language/test_subprocess.py
+          # run runtime tests serially to avoid race condition with cache handling.
+          python3 -m pytest runtime/
+          # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest language/test_line_info.py
+          #run hopper/test_flashattention.py to avoid out of gpu memory
+          python3 -m pytest hopper/test_flashattention.py
+
+      - name: Run python tests on CUDA with ENABLE_TMA=0
+        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '0'}}
+        run: |
+          cd python/test/unit
+          python3 -m pytest -n 8 --ignore=runtime --ignore=hopper --ignore=operators --ignore=language/test_line_info.py
+          # run runtime tests serially to avoid race condition with cache handling.
+          python3 -m pytest runtime/
+          # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest language/test_line_info.py
+
+      - name: Clear cache
+        run: |
+          rm -rf ~/.triton
+
+      - name: Run interpreter tests
+        env:
+          # TRITON_INTERPRET: "1"
+          CUA_VISIBLE_DEVICES: ""
+        run: |
+          cd python/test/unit
+          python3 -m pytest -vs operators/test_flash_attention.py
+
+      - name: Run partial tests on CUDA with ENABLE_TMA=1
+        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '1'}}
+        run: |
+          cd python/test/unit
+          python3 -m pytest -n 8 operators
+
+      - name: Run partial tests on CUDA with ENABLE_TMA=0
+        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '0'}}
+        run: |
+          cd python/test/unit
+          python3 -m pytest -n 8 operators
+
+      - name: Create artifacts archive
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
+        run: |
+          cd ~/.triton
+          tar -czf artifacts.tar.gz cache
+
+      - name: Upload artifacts archive
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
+        uses: actions/upload-artifact@v2
+        with:
+          name: artifacts ${{ matrix.runner[1] }}
+          path: ~/.triton/artifacts.tar.gz
+
+      - name: Run CXX unittests
+        if: ${{ env.BACKEND == 'CUDA'}}
+        run: |
+          cd python
+          cd "build/$(ls build | grep -i cmake)"
+          ctest
+
+      - name: Regression tests
+        if: ${{ contains(matrix.runner, 'A100') }}
+        run: |
+          python3 -m pip install pytest-rerunfailures
+          cd python/test/regression
+          sudo nvidia-smi -i 0 -pm 1
+          sudo nvidia-smi -i 0 --lock-gpu-clocks=1280,1280
+          python3 -m pytest -vs . --reruns 10
+          sudo nvidia-smi -i 0 -rgc
+
+  Integration-Tests-Shared-Middle-Layer:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Clear cache
+        run: |
+          rm -rf ~/.triton
+
+      - name: Update PATH
+        run: |
+          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
+
+      - name: Check pre-commit
+        run: |
+          python3 -m pip install --upgrade pre-commit
+          python3 -m pre_commit run --all-files --verbose
+
+      - name: Install Triton
+        run: |
+          export TRITON_CODEGEN_TRITON_SHARED=1
+          git submodule update --init --recursive
+          cd python
+          python3 -m pip install --upgrade pip
+          python3 -m pip install cmake==3.24
+          python3 -m pip install ninja
+          python3 -m pip uninstall -y triton
+          python3 setup.py build
+          python3 -m pip install --no-build-isolation -vvv '.[tests]'
+
+      - name: Run shared middle-layer lit tests
+        run: |
+          python3 -m pip install lit
+          cd python
+          LIT_TEST_DIR="build/$(ls build | grep -i cmake)/third_party/triton_shared/test"
+          if [ ! -d "${LIT_TEST_DIR}" ]; then
+            echo "Coult not find '${LIT_TEST_DIR}'" ; exit -1
+          fi
+          lit -v "${LIT_TEST_DIR}"
+
+
+  Integration-Tests-Third-Party:
+    needs: Runner-Preparation
+    if: false
+
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      matrix:
+        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-optional)}}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Set ROCM ENV
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'gfx908')}}
+        run: |
+          echo "BACKEND=ROCM" >> "${GITHUB_ENV}"
+
+      - name: Set XPU ENV
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'arc770')}}
+        run: |
+          echo "BACKEND=XPU" >> "${GITHUB_ENV}"
+
+      - name: Clear cache
+        run: |
+          rm -rf ~/.triton
+
+      - name: Update PATH
+        run: |
+          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
+
+      - name: Check pre-commit
+        if: ${{ matrix.runner != 'macos-10.15' && (matrix.runner[1] != 'arc770') }}
+        run: |
+          python3 -m pip install --upgrade pre-commit
+          python3 -m pre_commit run --all-files --verbose
+
+      - name: Check pre-commit arc770
+        if: ${{ matrix.runner != 'macos-10.15' && (matrix.runner[1] == 'arc770') }}
+        run: |
+          source ${HOME}/triton_vars.sh
+          source ${HOME}/miniconda3/bin/activate
+          conda activate triton-xpu-ci
+          python3 -m pip install --upgrade pre-commit
+          python3 -m pre_commit run --all-files
+
+      - name: Install Triton on ROCM
+        if: ${{ env.BACKEND == 'ROCM'}}
+        run: |
+          git submodule update --init --recursive
+          cd python
+          python3 -m pip install --upgrade pip
+          python3 -m pip install cmake==3.24
+          python3 -m pip install torch==1.13.1 --index-url https://download.pytorch.org/whl/rocm5.2
+          export TRITON_CODEGEN_AMD_HIP_BACKEND=1
+          python3 -m pip install --no-build-isolation -vvv '.[tests]'
+
+      - name: Install Triton on XPU
+        if: ${{ env.BACKEND == 'XPU'}}
+        run: |
+          source ${HOME}/triton_vars.sh
+          source ${HOME}/miniconda3/bin/activate
+          conda activate triton-xpu-ci
+          git submodule update --init --recursive
+          cd python
+          python3 -m pip install --upgrade pip
+          python3 -m pip install cmake==3.24
+          export TRITON_CODEGEN_INTEL_XPU_BACKEND=1
+          python3 -m pip uninstall -y triton
+          python3 setup.py build
+          python3 -m pip install --no-build-isolation -vvv '.[tests]'
+
+      - name: Run python tests on ROCM
+        if: ${{ env.BACKEND == 'ROCM'}}
+        run: |
+          cd python/test/unit/language
+          python3 -m pytest --capture=tee-sys -rfs --verbose "test_core.py"
+
+      - name: Run python tests on XPU
+        if: ${{ env.BACKEND == 'XPU'}}
+        run: |
+          source ${HOME}/triton_vars.sh
+          source ${HOME}/miniconda3/bin/activate
+          conda activate triton-xpu-ci
+          cd python/test/backend/third_party_backends
+          python3 -m pytest --capture=tee-sys -rfs --verbose --backend xpu
+
+  Compare-artifacts:
+    needs: Integration-Tests-Nvidia
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Install gh CLI
+        run: |
+          sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-key 23F3D4EA75716059
+          echo "deb [arch=$(dpkg --print-architecture)] https://cli.github.com/packages focal main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update
+          sudo apt install gh
+
+      - name: Save PR number to a file
+        env:
+          PR_NUMBER: ${{ github.event.number }}
+        run: |
+          echo $PR_NUMBER > pr_number
+      - name: Upload PR number to artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: pr_number
+          path: pr_number
+
+      - name: Download latest main artifacts
+        env:
+          ARTIFACT_NAME: artifacts A100
+          ARTIFACT_JOB_NAME: Integration-Tests-Nvidia
+          MAX_NUM_ACTIONS_PAGES: 30
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          OWNER_REPO="${{ github.repository }}"
+          echo "OWNER_REPO: $OWNER_REPO"
+          PR_NUMBERS=($(gh api --method GET repos/$OWNER_REPO/pulls -f state=closed | jq -r ".[] | select(.merged_at != null) | .number"))
+
+          # Not all PRs go through integration tests
+          success=0
+          for PR_NUMBER in "${PR_NUMBERS[@]}"
+          do
+            echo "Last merged PR number: $PR_NUMBER"
+            BRANCH_NAME=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER --jq '.head.ref')
+            echo "BRANCH_NAME: $BRANCH_NAME"
+            USER_ID=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER --jq '.user.id')
+            echo "USER_ID: $USER_ID"
+
+            run_id_found=false
+            page=1
+            while true; do
+              if [ "$page" -gt $MAX_NUM_ACTIONS_PAGES ]; then
+                break
+              fi
+
+              run_id=$(gh api --method GET "repos/$OWNER_REPO/actions/runs?page=$page&per_page=100" | jq --arg branch_name "$BRANCH_NAME" --arg run_name "Integration Tests" --arg user_id "$USER_ID" '.workflow_runs[] | select(.head_branch == $branch_name and .name == $run_name and .actor.id == ($user_id | tonumber))' | jq '.id' | head -1)
+              if [ "$run_id" != "" ]; then
+                echo "First run ID on branch $BRANCH_NAME is: $run_id"
+                WORKFLOW_RUN_ID=$run_id
+                run_id_found=true
+                break
+              fi
+
+              ((page++))
+            done
+            if ! $run_id_found; then
+              echo "No run_id found for PR ${PR_NUMBER}, moving to the next PR."
+              continue
+            fi
+            echo "WORKFLOW_RUN_ID: $WORKFLOW_RUN_ID"
+            ARTIFACT_URL=$(gh api repos/$OWNER_REPO/actions/runs/$WORKFLOW_RUN_ID/artifacts | jq --arg artifact_name "$ARTIFACT_NAME" '.artifacts[] | select(.name == $artifact_name).archive_download_url' --raw-output)
+            echo "ARTIFACT_URL: $ARTIFACT_URL"
+
+            if [ -n "$ARTIFACT_URL" ]; then
+              echo "Downloading artifact: $ARTIFACT_URL"
+              curl --location --remote-header-name -H "Authorization: token $GH_TOKEN" -o reference.zip "$ARTIFACT_URL"
+              # Print the size of the downloaded artifact
+              echo "Artifact size (stat): $(stat --printf="%s bytes" reference.zip)"
+              echo "Artifact size (du): $(du -sh reference.zip)"
+              unzip reference.zip
+              tar -xzf artifacts.tar.gz
+              rm reference.zip
+              rm artifacts.tar.gz
+              mv cache reference
+              success=1
+              break
+            fi
+          done
+
+          if [ $success -eq 0 ]; then
+            echo "No artifact found with the name: $ARTIFACT_NAME"
+            exit 1
+          fi
+      - name: Download current job artifacts
+        uses: actions/download-artifact@v2
+        with:
+          name: artifacts A100
+      - name: Unzip current job artifacts
+        run: |
+          # Print the size of the downloaded artifact
+          echo "Artifact size (stat): $(stat --printf="%s bytes" artifacts.tar.gz)"
+          echo "Artifact size (du): $(du -sh artifacts.tar.gz)"
+          tar -xzf artifacts.tar.gz
+          rm artifacts.tar.gz
+          mv cache current
+      - name: Compare artifacts
+        run: |
+          set +e
+          python3 python/test/tools/compare_files.py --path1 reference --path2 current
+          exit_code=$?
+          set -e
+          echo $exit_code
+          if [ $exit_code -eq 0 ]; then
+            echo "Artifacts are identical"
+            echo "COMPARISON_RESULT=true" >> $GITHUB_ENV
+          elif [ $exit_code -eq 1 ]; then
+            echo "Artifacts are different"
+            echo "COMPARISON_RESULT=false" >> $GITHUB_ENV
+          else
+            echo "Error while comparing artifacts"
+            echo "COMPARISON_RESULT=error" >> $GITHUB_ENV
+          fi
+      - name: Check comparison result and write to file
+        run: |
+          if [ "${{ env.COMPARISON_RESULT }}" = "true" ]; then
+            echo "SUCCESS" > comparison_result
+          else
+            echo "FAILED" > comparison_result
+          fi
+      - name: Upload comparison result to artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: comparison_result
+          path: comparison_result
+      - name: Upload results as artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: kernels-reference-check
+          path: kernels_reference_check.txt
