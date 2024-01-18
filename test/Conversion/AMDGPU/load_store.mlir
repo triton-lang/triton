@@ -10,9 +10,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     %2 = tt.load %1 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : f16
     // GCN-NOT: llvm.bitcast {{.*}} : {{.*}}32{{.*}}16
     // GCN-NOT: llvm.bitcast {{.*}} : {{.*}}16{{.*}}32
-    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f16, 1> to !llvm.ptr<i16>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<i16>
-    // GCN: llvm.bitcast {{.*}} : i16 to vector<1xf16>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f16, 1> to !llvm.ptr<vector<1xf16>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<vector<1xf16>
     // GCN: llvm.bitcast {{.*}} : f16 to f16
     // GCN: llvm.bitcast {{.*}} : vector<1xf16> to i16
     // GCN: llvm.store {{.*}} : !llvm.ptr<f16, 1>

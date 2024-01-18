@@ -156,44 +156,46 @@ struct LoadOpConversion
 
 #ifdef USE_ROCM
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
-      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
-        size_t elemOffset = vecStart + wordIdx * wordNElems;
-        Value ptr =
-            addrspacecast(ptrElems[elemOffset],
-                          ptr_ty(IntegerType::get(getContext(), width)));
-        auto loaded = rewriter.create<scf::IfOp>(
-            loc, pred,
-            [&](OpBuilder &builder, Location loc) {
-              auto loadVal = builder.create<LLVM::LoadOp>(loc, ptr);
-              builder.create<mlir::scf::YieldOp>(loc, ValueRange({loadVal}));
-            },
-            [&](OpBuilder &builder, Location loc) {
-              Value zeroVal = int_val(width, 0);
-              Value otherVal;
-              if (other) {
-                auto vecTy = LLVM::getFixedVectorType(valueElemTy, wordNElems);
-                Value v = undef(vecTy);
-                for (size_t s = 0; s < wordNElems; ++s) {
-                  Value falseVal = otherElems[elemOffset + s];
-                  Value sVal = createIndexAttrConstant(
-                      rewriter, loc, this->getTypeConverter()->getIndexType(),
-                      s);
-                  v = insert_element(vecTy, v, falseVal, sVal);
-                }
-                otherVal = bitcast(v, IntegerType::get(getContext(), width));
+      auto vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
+      auto loaded = rewriter.create<scf::IfOp>(
+          loc,
+          pred,
+          [&](OpBuilder& builder, Location loc) {
+
+            Value ptr = addrspacecast(ptrElems[vecStart], ptr_ty(vecTy));
+            auto loadVal = rewriter.create<LLVM::LoadOp>(loc, ptr);
+            builder.create<mlir::scf::YieldOp>(loc, ValueRange({loadVal}));
+          },
+          [&](OpBuilder& builder, Location loc) {
+            mlir::Attribute zero = builder.getZeroAttr(valueElemTy);
+            auto denseValue =
+                DenseElementsAttr::get(vecTy.cast<mlir::ShapedType>(), zero);
+            Value zeroVal =
+                rewriter.create<LLVM::ConstantOp>(loc, vecTy, denseValue);
+            Value otherVal;
+            if (other) {
+              Value v = undef(vecTy);
+              for (size_t s = 0; s < vec; ++s) {
+                Value falseVal = otherElems[vecStart + s];
+                Value sVal = createIndexAttrConstant(
+                    rewriter, loc, this->getTypeConverter()->getIndexType(), s);
+                v = insert_element(vecTy, v, falseVal, sVal);
               }
-              Value falseVal = other ? otherVal : zeroVal;
-              builder.create<mlir::scf::YieldOp>(loc, ValueRange({falseVal}));
-            });
-        Value loadVal =
-            bitcast(loaded->getResult(0),
-                    LLVM::getFixedVectorType(valueElemTy, wordNElems));
-        for (size_t ii = 0; ii < wordNElems; ++ii) {
-          Value vecIdx = createIndexAttrConstant(
-              rewriter, loc, this->getTypeConverter()->getIndexType(), ii % wordNElems);
-          Value loaded = extract_element(valueElemTy, loadVal, vecIdx);
-          loadedVals.push_back(loaded);
-        }
+              otherVal = v;
+            }
+            Value falseVal = other ? otherVal : zeroVal;
+            builder.create<mlir::scf::YieldOp>(loc, ValueRange({falseVal}));
+          });
+
+      Value loadVal = bitcast(loaded->getResult(0), vecTy);
+      for (size_t ii = 0; ii < vec; ++ii) {
+        Value vecIdx = createIndexAttrConstant(
+            rewriter,
+            loc,
+            this->getTypeConverter()->getIndexType(),
+            ii % vec);
+        Value loaded = extract_element(valueElemTy, loadVal, vecIdx);
+        loadedVals.push_back(loaded);
       }
 #else
       // TODO(Superjomn) Add cache policy fields to StoreOp.
@@ -1074,7 +1076,7 @@ struct AtomicCASOpConversion
 
         // Extract the new_loaded value from the pair.
         Value ret = extract_val(valueElemTy, cmpxchg, i);
-        
+
         for (int ii = 0; ii < vec; ++ii) {
           resultVals[i + ii] =
               vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
