@@ -488,7 +488,7 @@ def TT_ScanOp: TT_Op<"scan",
                         SameOperandsAndResultElementType,
                         SingleBlock,
                         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
-    let summary = "Reduction using generic combination algorithm";
+    let summary = "Associatve scan using generic combination algorithm";
     let arguments = (ins Variadic<TT_Tensor>:$operands, I32Attr:$axis);
     let results = (outs Variadic<TT_Tensor>:$result);
     let regions = (region SizedRegion<1>:$combineOp);
@@ -496,6 +496,12 @@ def TT_ScanOp: TT_Op<"scan",
         OpBuilder<(ins "ValueRange":$operands, "int":$axis)>,
     ];
     let hasVerifier = 1;
+    let hasRegionVerifier = 1;
+    let extraClassDeclaration = [{
+      llvm::SmallVector<RankedTensorType> getInputTypes();
+      llvm::SmallVector<Type> getElementTypes();
+      unsigned getNumOperands();
+    }];
 }
 
 def TT_ScanReturnOp: TT_Op<"scan.return",

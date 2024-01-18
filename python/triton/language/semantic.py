@@ -1383,9 +1383,16 @@ def reduction(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, builder
 
 def associative_scan(inputs: Sequence[tl.tensor], axis: int, region_builder_fn,
                      builder: ir.builder) -> Tuple[tl.tensor, ...]:
-    if len(inputs) != 1:
-        raise ValueError("Current implementation only support single tensor input")
     shape = inputs[0].type.shape
+    rank = len(shape)
+
+    assert -rank <= axis < rank, f"scan axis {axis} must be < inputs rank ({rank})"
+
+    if axis < 0:
+        axis += rank
+
+    for t in inputs:
+        assert t.type.shape == shape, "all scan inputs must have the same shape"
 
     def wrap_tensor(x, scalar_ty):
         res_ty = tl.block_type(scalar_ty, shape)

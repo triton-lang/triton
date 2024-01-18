@@ -293,35 +293,34 @@ unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
 bool ScanLoweringHelper::isSupported() {
   // TODO: Support the following cases:
   // 1. Scan on non-blocking encodings
-  // 2. Scan with multiple operands
   if (!isa<triton::gpu::BlockedEncodingAttr>(getEncoding()))
     return false;
-  if (scanOp.getNumOperands() != 1)
-    return false;
   return true;
+}
+
+unsigned ScanLoweringHelper::getScratchSizeInElems() {
+  auto mod = scanOp->getParentOfType<ModuleOp>();
+  unsigned numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+  unsigned numNonAxisElementsPerWarp =
+      getNonAxisNumThreadsPerWarp() * getNonAxisNumElementsPerThread();
+  unsigned numElements = numWarps * numNonAxisElementsPerWarp *
+                         getAxisNumBlocks() * getNonAxisNumBlocks();
+  return numElements;
 }
 
 unsigned ScanLoweringHelper::getScratchSizeInBytes() {
   unsigned axisNumWarps = getAxisNumWarpsWithUniqueData();
   if (axisNumWarps == 1)
     return 0;
-  auto type = scanOp.getOperand(0).getType().cast<RankedTensorType>();
-  unsigned elementSizeInBytes = type.getElementTypeBitWidth() / 8;
-  auto mod = scanOp->getParentOfType<ModuleOp>();
-  unsigned numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-  unsigned numNonAxisElementsPerWapr =
-      getNonAxisNumThreadsPerWarp() * getNonAxisNumElementsPerThread();
-  unsigned numElements = numWarps * numNonAxisElementsPerWapr *
-                         getAxisNumBlocks() * getNonAxisNumBlocks();
-  return elementSizeInBytes * numElements;
+  unsigned elementSizeInBytes = 0;
+  for (const auto &ty : srcElementTypes) {
+    elementSizeInBytes += ceil<unsigned>(ty.getIntOrFloatBitWidth(), 8);
+  }
+  return elementSizeInBytes * getScratchSizeInElems();
 }
 
 triton::gpu::BlockedEncodingAttr ScanLoweringHelper::getEncoding() {
   return srcEncoding.cast<triton::gpu::BlockedEncodingAttr>();
-}
-
-llvm::ArrayRef<int64_t> ScanLoweringHelper::getShape() {
-  return scanOp.getOperand(0).getType().cast<RankedTensorType>().getShape();
 }
 
 unsigned ScanLoweringHelper::getAxisElementStride() {
