@@ -838,9 +838,6 @@ void mlir::triton::populateTritonGPUToLLVMPatterns(
                                          benefit);
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
   patterns.add<GetNumProgramsOpConversion>(typeConverter, benefit);
-  patterns.add<GetThreadIdOpConversion>(typeConverter, benefit);
-  patterns.add<GetCanonicalWarpIdConversion>(typeConverter, benefit);
-  patterns.add<GetClusterCTAIdOpConversion>(typeConverter, benefit);
   patterns.add<MakeRangeOpConversion>(typeConverter, indexCacheInfo, benefit);
   patterns.add<ReturnOpConversion>(typeConverter, benefit);
   patterns.add<PrintOpConversion>(typeConverter, benefit);

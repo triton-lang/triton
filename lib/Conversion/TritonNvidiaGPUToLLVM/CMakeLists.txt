@@ -1,5 +1,10 @@
 add_triton_library(TritonNvidiaGPUToLLVM
     TritonNvidiaGPUToLLVMPass.cpp
+    # DotOpToLLVM/WGMMA.cpp
+    # ClusterOpsToLLVM.cpp
+    # RegReallocOpToLLVM.cpp
+    # TensorPtrOpsToLLVM.cpp
+    # BarrierOpToLLVM.cpp
 
     DEPENDS
     TritonNvidiaGPUConversionPassIncGen

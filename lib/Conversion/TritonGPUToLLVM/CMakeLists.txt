@@ -6,12 +6,10 @@ add_triton_library(TritonGPUToLLVM
     DotOpToLLVM/FMA.cpp
     DotOpToLLVM/MMAv1.cpp
     DotOpToLLVM/MMAv2.cpp
-    DotOpToLLVM/WGMMA.cpp
     DotOpToLLVM.cpp
     HistogramOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
-    BarrierOpToLLVM.cpp
     TritonGPUToLLVM.cpp
     TritonGPUToLLVMPass.cpp
     ReduceOpToLLVM.cpp
@@ -19,9 +17,6 @@ add_triton_library(TritonGPUToLLVM
     TypeConverter.cpp
     Utility.cpp
     ViewOpToLLVM.cpp
-    TensorPtrOpsToLLVM.cpp
-    ClusterOpsToLLVM.cpp
-    RegReallocOpToLLVM.cpp
     PTXAsmFormat.cpp
 
     DEPENDS

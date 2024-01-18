@@ -470,11 +470,11 @@ class CUDABackend(BaseBackend):
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, tma_infos)
+        nvidia.passes.ttnvgpuir.add_tritonnvidiagpu_to_llvm(pm)
         if metadata["ws_enabled"]:
             passes.common.add_licm(pm)
             passes.common.add_cse(pm)
         nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
-        nvidia.passes.ttnvgpuir.add_tritonnvidiagpu_to_llvm(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)

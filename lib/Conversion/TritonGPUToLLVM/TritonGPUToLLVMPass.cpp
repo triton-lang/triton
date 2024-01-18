@@ -179,11 +179,6 @@ struct FuncOpConversion : public FuncOpConversionBase {
                                   funcTy.getParams().end());
     newFuncOp.setType(
         LLVM::LLVMFunctionType::get(funcTy.getReturnType(), newInputsTy));
-    // required by AxisInfoAnalysis
-    for (unsigned i = 0; i < numTMA; ++i) {
-      newFuncOp.setArgAttr(numArgs + i, "tt.divisibility",
-                           rewriter.getIntegerAttr(i32_ty, 1));
-    }
     rewriter.eraseOp(funcOp);
     return success();
   }
@@ -316,10 +311,8 @@ struct ConvertTritonGPUToLLVM
                     NVVM::NVVMDialect>();
   }
 
-  ConvertTritonGPUToLLVM(int32_t computeCapability, Target target,
-                         mlir::triton::gpu::TMAMetadataTy *tmaMetadata)
-      : ConvertTritonGPUToLLVMBase({computeCapability, target}),
-        tmaMetadata(tmaMetadata) {}
+  ConvertTritonGPUToLLVM(int32_t computeCapability, Target target)
+      : ConvertTritonGPUToLLVMBase({computeCapability, target}) {}
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -400,12 +393,6 @@ struct ConvertTritonGPUToLLVM
       indexCacheInfo = {nullptr, nullptr, nullptr};
     }
 
-    // tmaMetadata is absent in a triton-opt unit test, in this case, create a
-    // local one and dump it after this pass is done.
-    mlir::triton::gpu::TMAMetadataTy tmaMetaDataDebug;
-    if (tmaMetadata == nullptr)
-      tmaMetadata = &tmaMetaDataDebug;
-
     RewritePatternSet patterns(context);
 
     auto populatePatterns1 = [&](auto populateFunc) {
@@ -421,7 +408,7 @@ struct ConvertTritonGPUToLLVM
 
     auto populatePatterns3 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, indexCacheInfo, tmaMetadata, &tensorPtrMap,
+                   allocation, indexCacheInfo,
                    /*benefit*/ 10);
     };
 
@@ -439,10 +426,6 @@ struct ConvertTritonGPUToLLVM
     populatePatterns4(populateReduceOpToLLVMPatterns);
     populatePatterns1(populateScanOpToLLVMPatterns);
     populatePatterns2(populateViewOpToLLVMPatterns);
-    populatePatterns2(populateBarrierOpToLLVMPatterns);
-    populatePatterns2(populateTensorPtrOpsToLLVMPatterns);
-    populatePatterns2(populateClusterOpsToLLVMPatterns);
-    populatePatterns2(populateRegReallocOpToLLVMPatterns);
     populatePatterns1(populateHistogramOpToLLVMPatterns);
 
     // TODO(thomas): this should probably be done in a separate step to not
@@ -472,7 +455,6 @@ private:
   DenseMap<IndexCacheKeyT, SmallVector<SmallVector<Value>>,
            CacheKeyDenseMapInfo>
       indexCache;
-  mlir::triton::gpu::TMAMetadataTy *tmaMetadata = nullptr;
 
   void initSharedMemory(ModuleAllocation &allocation,
                         TritonGPUToLLVMTypeConverter &typeConverter) {
@@ -754,11 +736,9 @@ namespace triton {
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass() {
   return std::make_unique<ConvertTritonGPUToLLVM>();
 }
-std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass(
-    int32_t computeCapability, Target target,
-    mlir::triton::gpu::TMAMetadataTy *tmaMetadata) {
-  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability, target,
-                                                  tmaMetadata);
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertTritonGPUToLLVMPass(int32_t computeCapability, Target target) {
+  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability, target);
 }
 
 } // namespace triton
