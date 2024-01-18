@@ -1,3 +1,4 @@
 add_subdirectory(TritonToTritonGPU)
 add_subdirectory(TritonGPUToLLVM)
+add_subdirectory(TritonNvidiaGPUToLLVM)
 add_subdirectory(NVGPUToLLVM)

@@ -578,51 +578,6 @@ struct GetNumProgramsOpConversion
   }
 };
 
-// TODO[goostavz]: GetThreadIdOp/GetClusterCTAIdOp is a temporary solution
-// before async dialect is done. These concepts should appear in ttgpu
-// level, and they are planned to be deprecated along with ttgpu.mbarrier_xxx
-// ops.
-struct GetThreadIdOpConversion : public ConvertTritonGPUOpToLLVMPattern<
-                                     triton::nvidia_gpu::GetThreadIdOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::GetThreadIdOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::GetThreadIdOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOp(op, getThreadId(rewriter, op->getLoc()));
-    return success();
-  }
-};
-
-struct GetCanonicalWarpIdConversion
-    : public ConvertTritonGPUOpToLLVMPattern<
-          triton::nvidia_gpu::GetCanonicalWarpId> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::GetCanonicalWarpId>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::GetCanonicalWarpId op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOp(op, GetCanonicalWarpId(rewriter, op->getLoc()));
-    return success();
-  }
-};
-
-struct GetClusterCTAIdOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<
-          triton::nvidia_gpu::GetClusterCTAIdOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::GetClusterCTAIdOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::GetClusterCTAIdOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOp(op, getClusterCTAId(rewriter, op->getLoc()));
-    return success();
-  }
-};
-
 struct AddPtrOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::AddPtrOp> {
   using ConvertTritonGPUOpToLLVMPattern<

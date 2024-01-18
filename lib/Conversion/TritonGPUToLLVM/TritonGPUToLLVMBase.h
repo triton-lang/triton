@@ -33,7 +33,6 @@ using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 using ::mlir::triton::gpu::TMAMetadataTy;
-namespace ttng = ::mlir::triton::nvidia_gpu;
 
 typedef DenseMap<Operation *, triton::MakeTensorPtrOp> TensorPtrMapT;
 
@@ -241,11 +240,6 @@ public:
   // Returns agent level thread idx for ws mode.
   Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) const {
     Value tid = getThreadIdInCTA(rewriter, loc);
-    auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    if (ttng::TritonNvidiaGPUDialect::getWSSupportedAttr(mod)) {
-      Value _128 = rewriter.create<arith::ConstantIntOp>(loc, 128, 32);
-      tid = rewriter.create<arith::RemSIOp>(loc, tid, _128);
-    }
     return tid;
   }
 

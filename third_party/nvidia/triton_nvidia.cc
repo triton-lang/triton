@@ -3,6 +3,7 @@
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "passes.h"
 #include "triton/Conversion/NVGPUToLLVM/Passes.h"
+#include "triton/Conversion/TritonNvidiaGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -50,6 +51,8 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      mlir::createTritonNvidiaGPUFenceInsertionPass);
   ADD_PASS_WRAPPER_0("add_nvgpu_to_llvm",
                      mlir::triton::createConvertNVGPUToLLVMPass);
+  ADD_PASS_WRAPPER_0("add_tritonnvidiagpu_to_llvm",
+                     mlir::triton::createConvertTritonNvidiaGPUToLLVMPass);
   ADD_PASS_WRAPPER_3("add_wspipeline",
                      mlir::createTritonNvidiaGPUWSPipelinePass, int, int, int);
 

@@ -19,7 +19,6 @@
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetPlatform.hpp"
 
 #include "PatternTritonGPUOpToLLVM.h"
@@ -35,7 +34,6 @@ namespace triton {
 
 using namespace mlir;
 using namespace mlir::triton;
-namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace {
 
@@ -55,30 +53,6 @@ public:
     addLegalDialect<LLVM::LLVMDialect>();
     addLegalDialect<NVVM::NVVMDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
-  }
-};
-
-class FoldSplatMaskInInsertAsync : public mlir::RewritePattern {
-
-public:
-  FoldSplatMaskInInsertAsync(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            triton::nvidia_gpu::InsertSliceTMAOp::getOperationName(), 1,
-            context) {}
-
-  LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto insertOp = cast<triton::nvidia_gpu::InsertSliceTMAOp>(op);
-    if (!insertOp.getMask())
-      return failure();
-    auto splatOp = insertOp.getMask().getDefiningOp<triton::SplatOp>();
-    if (!splatOp)
-      return failure();
-    rewriter.updateRootInPlace(insertOp, [&]() {
-      insertOp.getMaskMutable().assign(splatOp->getOperand(0));
-    });
-    return mlir::success();
   }
 };
 
@@ -171,19 +145,6 @@ struct FuncOpConversion : public FuncOpConversionBase {
     if (!allocation.isRoot(funcOp))
       amendedFuncOp = amendFuncOp(funcOp, rewriter);
 
-    // Collect TMA information.
-    unsigned numTMALoad = 0;
-    funcOp.walk(
-        [&numTMALoad](triton::nvidia_gpu::InsertSliceTMAOp insertSliceOp) {
-          numTMALoad++;
-        });
-    unsigned numTMAStore = 0;
-    funcOp.walk(
-        [&numTMAStore](triton::nvidia_gpu::StoreAsyncTMAOp storeAsyncOp) {
-          numTMAStore++;
-        });
-    unsigned numTMA = numTMALoad + numTMAStore;
-
     auto newFuncOp = convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter);
     if (!newFuncOp) {
       return failure();
@@ -216,10 +177,6 @@ struct FuncOpConversion : public FuncOpConversionBase {
     auto funcTy = newFuncOp.getFunctionType().cast<LLVM::LLVMFunctionType>();
     SmallVector<Type> newInputsTy(funcTy.getParams().begin(),
                                   funcTy.getParams().end());
-    for (unsigned i = 0; i < numTMA; ++i) {
-      newFuncOp.getBody().front().addArgument(ptrTy, funcOp.getLoc());
-      newInputsTy.push_back(ptrTy);
-    }
     newFuncOp.setType(
         LLVM::LLVMFunctionType::get(funcTy.getReturnType(), newInputsTy));
     // required by AxisInfoAnalysis
@@ -227,12 +184,6 @@ struct FuncOpConversion : public FuncOpConversionBase {
       newFuncOp.setArgAttr(numArgs + i, "tt.divisibility",
                            rewriter.getIntegerAttr(i32_ty, 1));
     }
-
-    newFuncOp->setAttr(kAttrNumTMALoadDescsName,
-                       rewriter.getIntegerAttr(i32_ty, numTMALoad));
-    newFuncOp->setAttr(kAttrNumTMAStoreDescsName,
-                       rewriter.getIntegerAttr(i32_ty, numTMAStore));
-
     rewriter.eraseOp(funcOp);
     return success();
   }
@@ -349,7 +300,7 @@ public:
     addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
-    addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
+    addLegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
@@ -400,40 +351,6 @@ struct ConvertTritonGPUToLLVM
     ModuleMembarAnalysis membarPass(&allocation);
     membarPass.run();
 
-    /* Get tensorPtrMap before conversion */
-    TensorPtrMapT tensorPtrMap;
-    mod.walk(
-        [&tensorPtrMap](mlir::triton::nvidia_gpu::InsertSliceTMAOp insertOp) {
-          auto src = insertOp.getSrc();
-          auto ptrTy = src.getType().dyn_cast<triton::PointerType>();
-          if (ptrTy && ptrTy.getPointeeType().isa<RankedTensorType>()) {
-            auto makeTensorPtrOp = getMakeTensorPtrOp(insertOp.getSrc());
-            tensorPtrMap[insertOp.getOperation()] = makeTensorPtrOp;
-          }
-        });
-
-    mod.walk(
-        [&tensorPtrMap](mlir::triton::nvidia_gpu::StoreAsyncTMAOp storeOp) {
-          auto dst = storeOp.getDst();
-          auto ptrTy = dst.getType().dyn_cast<triton::PointerType>();
-          if (ptrTy && ptrTy.getPointeeType().isa<RankedTensorType>()) {
-            auto makeTensorPtrOp = getMakeTensorPtrOp(storeOp.getDst());
-            tensorPtrMap[storeOp.getOperation()] = makeTensorPtrOp;
-          }
-        });
-
-    // Hack: cleanup
-    {
-      RewritePatternSet patterns(context);
-      patterns.add<FoldSplatMaskInInsertAsync>(context);
-      SmallVector<Operation *> insertSlices;
-      mod.walk([&insertSlices](triton::nvidia_gpu::InsertSliceTMAOp op) {
-        insertSlices.push_back(op);
-      });
-      if (applyOpPatternsAndFold(insertSlices, std::move(patterns)).failed())
-        signalPassFailure();
-    }
-
     // Lower functions
     {
       mlir::LowerToLLVMOptions option(context);
@@ -475,8 +392,6 @@ struct ConvertTritonGPUToLLVM
     // currently implemented via inline asm, and thus cannot be CSEed.
     // clusterCTAId will be emitted only when numCTAs is larger than 1, and
     // other values will be DCEed if not used hereafter.
-    bool isWarpSpecialization =
-        ttng::TritonNvidiaGPUDialect::getWSSupportedAttr(mod);
     OpBuilder::InsertPoint indexInsertPoint;
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo indexCacheInfo{
         &baseIndexCache, &indexCache, &indexInsertPoint};
