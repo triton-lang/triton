@@ -150,6 +150,9 @@ compared to 1*64 when the hasLeadingOffset is false.
         return get(context, dotOpEnc, shape, order, CTALayout, typeWidthInBit, needTrans);
     }]>,
 
+    // TODO(jlebar): This should not be an overload of
+    // SharedEncodingAttr::get().  It's misleading, because it does a bunch of
+    // nontrivial work based on the given dotOpEnc.
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
@@ -954,9 +957,13 @@ def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding", "dot_oper
   let mnemonic = "dot_op";
 
   let description = [{
-In TritonGPU dialect, considering `d = tt.dot a, b, c`
-tt.dot's operands a and b must be of DotOperandEncodingAttr layout.
+In the TritonGPU dialect, given `d = tt.dot a, b, c` tt.dot's operands a and b
+must be of DotOperandEncodingAttr layout, if the dot is MMA v1 or v2 (i.e.
+pre-Hopper).  For MMA v3, the operands are *almost always* in a regular shared
+encoding, but sometimes the LHS is also a dot-operand enc.
+
 a's opIdx is 0, b's opIdx is 1.
+
 The parend field in DotOperandEncodingAttr is the layout of d.
 
 For MMA v1, an additional attribute `isMMAv1Row` determines whether e.g. the a operand is used

@@ -60,7 +60,7 @@ tt.func @trans(%A : !tt.ptr<f16>) {
   // CHECK: %cst -> %cst
   %tensor = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #A_SHARED>
   // CHECK: %0 -> %cst
-  %b = tt.trans %tensor : (tensor<16x32xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED_T>
+  %b = tt.trans %tensor {order=array<i32: 1,0>} : (tensor<16x32xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED_T>
   tt.return
 }
 

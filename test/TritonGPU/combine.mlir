@@ -69,6 +69,7 @@ tt.func @remat_single_value(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   tt.return
 }
 
+// CHECK-LABEL: remat_fast_load
 tt.func @remat_fast_load(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   %0 = tt.splat %arg : (!tt.ptr<i32>) -> tensor<16x!tt.ptr<i32>, #layout1>
   %1 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #layout1>
@@ -1542,7 +1543,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     %21 = tt.load %20 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32xf16, #blocked4>
     %22 = triton_gpu.convert_layout %21 : (tensor<32x32xf16, #blocked4>) -> tensor<32x32xf16, #blocked>
     %23 = triton_gpu.convert_layout %22 : (tensor<32x32xf16, #blocked>) -> tensor<32x32xf16, #shared>
-    %24 = tt.trans %23 : (tensor<32x32xf16, #shared>) -> tensor<32x32xf16, #shared1>
+    %24 = tt.trans %23 {order=array<i32: 1,0>} : (tensor<32x32xf16, #shared>) -> tensor<32x32xf16, #shared1>
     %25 = triton_gpu.convert_layout %24 : (tensor<32x32xf16, #shared1>) -> tensor<32x32xf16, #blocked>
     %26 = triton_gpu.convert_layout %19 : (tensor<32x32xf16, #blocked>) -> tensor<32x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked5}>>
     %27 = triton_gpu.convert_layout %25 : (tensor<32x32xf16, #blocked>) -> tensor<32x32xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked5}>>
@@ -1924,7 +1925,7 @@ tt.func public @yield_outside_loop2(%arg0: i32, %arg1: i32) -> (i32, i32) {
 #blocked3 = #triton_gpu.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #mma = #triton_gpu.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 4], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0], instrShape = [16, 8]}>
 #shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], hasLeadingOffset = false}>
-#shared1 = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], hasLeadingOffset = false}>
+#shared1 = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0], hasLeadingOffset = false}>
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
 // CHECK: [[$BLOCKED:#.*]] = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 // CHECK: [[$MMA:#.*]] = #triton_gpu.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 4], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0], instrShape = [16, 8]}>
@@ -1973,7 +1974,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       %68 = tt.addptr %17, %65 : tensor<256x64x!tt.ptr<f16, 1>, #blocked>, tensor<256x64xi32, #blocked>
       %69 = tt.load %68 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256x64xf16, #blocked>
       %70 = triton_gpu.convert_layout %69 : (tensor<256x64xf16, #blocked>) -> tensor<256x64xf16, #shared>
-      %71 = tt.trans %70 : (tensor<256x64xf16, #shared>) -> tensor<64x256xf16, #shared1>
+      %71 = tt.trans %70 {order=array<i32: 1,0>} : (tensor<256x64xf16, #shared>) -> tensor<64x256xf16, #shared1>
       %72 = triton_gpu.convert_layout %67 : (tensor<32x64xf16, #blocked>) -> tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked3}>>
       %73 = triton_gpu.convert_layout %71 : (tensor<64x256xf16, #shared1>) -> tensor<64x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked3}>>
       %74 = triton_gpu.convert_layout %arg8 : (tensor<32x256xf32, #blocked3>) -> tensor<32x256xf32, #mma>

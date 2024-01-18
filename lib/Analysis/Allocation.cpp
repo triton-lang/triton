@@ -115,14 +115,28 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
       return {};
 
   auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
-  unsigned srcContigPerThread =
-      getUniqueContigPerThread(srcLayout, srcTy.getShape())[inOrd[0]];
-  unsigned dstContigPerThread =
-      getUniqueContigPerThread(dstLayout, dstTy.getShape())[outOrd[0]];
-  // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
-  //       that we cannot do vectorization.
-  inVec = outOrd[0] == 0 ? 1 : inOrd[0] == 0 ? 1 : srcContigPerThread;
-  outVec = outOrd[0] == 0 ? 1 : dstContigPerThread;
+  auto srcContigPerThread =
+      getUniqueContigPerThread(srcLayout, srcTy.getShape());
+  auto dstContigPerThread =
+      getUniqueContigPerThread(dstLayout, dstTy.getShape());
+
+  // We're going to do two shared memory operations:
+  //
+  //  - write from src into scratch (vectorized according to inVec)
+  //  - read from scratch into dst (vectorized according to outVec)
+  //
+  // scratch has the same layout as dst, so the reads (outVec) can be vectorized
+  // if we have N consecutive elements in dst/scratch.
+  //
+  // But writes to scratch (inVec) can be vectorized only if we have N
+  // consecutive elements in src *and* those elements go into N consecutive
+  // elements in scratch.
+  //
+  // TODO(jlebar): This is suboptimal if repShape[in/outOrd[0]] is small.  We
+  // might be able to merge the few most-minor dimensions and get a larger
+  // vector.
+  inVec = std::min(srcContigPerThread[inOrd[0]], dstContigPerThread[inOrd[0]]);
+  outVec = dstContigPerThread[outOrd[0]];
 
   if (repShape.size() <= 1)
     return repShape;
