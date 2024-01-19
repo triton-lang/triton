@@ -36,7 +36,6 @@ include "mlir/Interfaces/ViewLikeInterface.td"
 
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
-def MBarrier : Resource<"::mlir::triton::nvidia_gpu::MBarrier">;
 
 def Source1IsSharedEncoding: NativeOpTrait<"Source1IsSharedEncoding">;
 
@@ -72,7 +71,7 @@ class TTNG_Op<string mnemonic, list<Trait> traits = []> :
 //      triton_nvidia_gpu.mbarrier_wait %2, %c0 : !tt.ptr<i64>, i1 -> ()
 //    }
 
-def TTNG_AllocMBarrierOp : TTNG_Op<"alloc_mbarrier", [MemoryEffects<[MemAlloc]>]> {
+def TTNG_AllocMBarrierOp : TTNG_Op<"alloc_mbarrier", [MemoryEffects<[MemAlloc<SharedMemory>]>]> {
   let summary = "allocate a vector of mbarriers";
 
   let description = [{
@@ -119,7 +118,7 @@ def TTNG_ExtractMBarrierOp : TTNG_Op<"extract_mbarrier", [Pure]> {
   let results = (outs TT_Ptr:$result);
 }
 
-def TTNG_MBarrierWaitOp : TTNG_Op<"mbarrier_wait", [MemoryEffects<[MemRead<MBarrier>, MemWrite<MBarrier>]>]> {
+def TTNG_MBarrierWaitOp : TTNG_Op<"mbarrier_wait", [MemoryEffects<[MemRead<SharedMemory>, MemWrite<SharedMemory>]>]> {
   let summary = "mbarrier wait";
 
   let description = [{
@@ -138,7 +137,7 @@ def TTNG_MBarrierWaitOp : TTNG_Op<"mbarrier_wait", [MemoryEffects<[MemRead<MBarr
 }
 
 def TTNG_MBarrierArriveOp : TTNG_Op<"mbarrier_arrive", [AttrSizedOperandSegments,
-                                                      MemoryEffects<[MemWrite<MBarrier>]>]> {
+                                                      MemoryEffects<[MemWrite<SharedMemory>]>]> {
   let summary = "mbarrier arrive";
 
   let description = [{
