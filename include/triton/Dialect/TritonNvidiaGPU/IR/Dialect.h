@@ -52,13 +52,6 @@ std::optional<int> getWSAgentId(Operation *op);
 std::optional<int> getWSRoleId(Operation *op);
 void setRoleId(Operation *op, int roleId);
 
-namespace triton {
-namespace nvidia_gpu {
-struct MBarrier : public SideEffects::Resource::Base<MBarrier> {
-  StringRef getName() final { return "<MBarrier>"; }
-};
-} // namespace nvidia_gpu
-} // namespace triton
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONNVIDIAGPU_IR_DIALECT_H_
