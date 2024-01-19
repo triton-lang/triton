@@ -31,6 +31,7 @@
 
 // TritonNvidiaGPU depends on Triton
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Traits.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h.inc"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Traits.h"
@@ -51,6 +52,13 @@ std::optional<int> getWSAgentId(Operation *op);
 std::optional<int> getWSRoleId(Operation *op);
 void setRoleId(Operation *op, int roleId);
 
+namespace triton {
+namespace nvidia_gpu {
+struct MBarrier : public SideEffects::Resource::Base<MBarrier> {
+  StringRef getName() final { return "<MBarrier>"; }
+};
+} // namespace nvidia_gpu
+} // namespace triton
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONNVIDIAGPU_IR_DIALECT_H_

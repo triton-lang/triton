@@ -13,6 +13,12 @@ include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 include "mlir/Interfaces/DestinationStyleOpInterface.td"
 include "mlir/Interfaces/ViewLikeInterface.td"
 
+//
+// Interfaces
+//
+def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
+def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
+
 def ResultsAreSharedEncoding: NativeOpTrait<"ResultsAreSharedEncoding">;
 
 def OperandsAreSharedEncoding: NativeOpTrait<"OperandsAreSharedEncoding">;
@@ -156,7 +162,7 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
                                     [AttrSizedOperandSegments,
                                      ResultsAreSharedEncoding,
                                      // TODO: Check if MemWrite will degrade performance of non-warp-specialized kernel
-                                     MemoryEffects<[MemRead, MemWrite]>,
+                                     MemoryEffects<[MemRead<GlobalMemory>, MemWrite<SharedMemory>]>,
                                      TypesMatchWith<"infer mask type from src type",
                                                     "src", "mask", "getI1SameShape($_self)",
                                                     "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
@@ -241,7 +247,7 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
   let hasCustomAssemblyFormat = 1;
 }
 
-def TTG_AllocTensorOp : TTG_Op<"alloc_tensor", [MemoryEffects<[MemAlloc]>,  // Allocate shared memory
+def TTG_AllocTensorOp : TTG_Op<"alloc_tensor", [MemoryEffects<[MemAlloc<SharedMemory>]>,  // Allocate shared memory
                                                 ResultsAreSharedEncoding]> {
   let summary = "allocate tensor";
 
@@ -255,7 +261,7 @@ def TTG_AllocTensorOp : TTG_Op<"alloc_tensor", [MemoryEffects<[MemAlloc]>,  // A
   let results = (outs TT_Tensor:$result);
 }
 
-def TTG_DeallocTensorOp : TTG_Op<"dealloc_tensor", [MemoryEffects<[MemFree]>,  // Deallocate shared memory
+def TTG_DeallocTensorOp : TTG_Op<"dealloc_tensor", [MemoryEffects<[MemFree<SharedMemory>]>,  // Deallocate shared memory
                                                     OperandsAreSharedEncoding]> {
   let summary = "dealloc tensor";
 
