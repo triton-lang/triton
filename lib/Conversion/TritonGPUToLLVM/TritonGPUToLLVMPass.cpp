@@ -714,34 +714,34 @@ private:
         asyncCommitGroupOp.erase();
     });
     mod.walk([&](triton::gpu::AsyncWaitOp asyncWaitOp) -> void {
-      if (!triton::gpu::AsyncWaitOp::isSupported(computeCapability)) {
+      if (!triton::gpu::AsyncWaitOp::isSupported(computeCapability))
         asyncWaitOp.erase();
-      });
+    });
   }
 
   static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
                               Type promotedType) {
-      Type tensorPromotedType =
-          operand.getType().cast<RankedTensorType>().cloneWith(std::nullopt,
-                                                               promotedType);
-      return builder.create<triton::FpToFpOp>(loc, tensorPromotedType, operand);
+    Type tensorPromotedType =
+        operand.getType().cast<RankedTensorType>().cloneWith(std::nullopt,
+                                                             promotedType);
+    return builder.create<triton::FpToFpOp>(loc, tensorPromotedType, operand);
   }
-  };
+};
 
 } // anonymous namespace
 
 namespace mlir {
-  namespace triton {
+namespace triton {
 
-  std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass() {
-    return std::make_unique<ConvertTritonGPUToLLVM>();
-  }
-  std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass(
-      int32_t computeCapability, Target target,
-      mlir::triton::gpu::TMAMetadataTy *tmaMetadata) {
-    return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability, target,
-                                                    tmaMetadata);
-  }
+std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass() {
+  return std::make_unique<ConvertTritonGPUToLLVM>();
+}
+std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass(
+    int32_t computeCapability, Target target,
+    mlir::triton::gpu::TMAMetadataTy *tmaMetadata) {
+  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability, target,
+                                                  tmaMetadata);
+}
 
-  } // namespace triton
+} // namespace triton
 } // namespace mlir
