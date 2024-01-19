@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from ..backends import backends
 
 
@@ -43,4 +44,9 @@ class LazyProxy:
         return str(self._obj)
 
 
-driver = LazyProxy(_create_driver)
+@dataclass()
+class Driver:
+    active = LazyProxy(_create_driver)
+
+
+driver = Driver()
