@@ -390,7 +390,7 @@ class CudaDriver(GPUDriver):
     @staticmethod
     def is_active():
         import torch
-        return torch.version.hip is None
+        return torch.cuda.is_available() and (torch.version.hip is None)
 
     def assemble_tensormap_to_arg(self, tensormaps_info, args):
         args_with_tma = list(args)
