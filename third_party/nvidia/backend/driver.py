@@ -330,7 +330,7 @@ class CudaLauncher(object):
 
     def __init__(self, src, metadata):
         ids = {
-            "ids_of_tensormaps": metadata.ids_of_tensormaps, 
+            "ids_of_tensormaps": metadata.ids_of_tensormaps,
             "ids_of_folded_args": metadata.ids_of_folded_args,
             "ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()
         }
@@ -385,10 +385,14 @@ class CudaDriver(GPUDriver):
         device = self.get_current_device()
         capability = self.get_device_capability(device)
         capability = capability[0] * 10 + capability[1]
-        return ("cuda", capability)
+        return (CudaDriver.target_name(), capability)
 
     @staticmethod
-    def is_active():
+    def target_name():
+        return "cuda"
+
+    @staticmethod
+    def should_activate():
         import torch
         return torch.version.hip is None
 

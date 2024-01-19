@@ -242,7 +242,7 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
 
 
 class HIPLauncher(object):
-    
+
     def __init__(self, src, metadata):
         ids = {
             "ids_of_folded_args": metadata.ids_of_folded_args,
@@ -252,7 +252,7 @@ class HIPLauncher(object):
         src = make_launcher(constants, src.signature, ids)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
-    
+
     def __call__(self, *args, **kwargs):
         self.launch(*args, **kwargs)
 
@@ -266,11 +266,15 @@ class HIPDriver(GPUDriver):
         self.launcher_cls = HIPLauncher
 
     @staticmethod
-    def is_active():
+    def target_name():
+        return "hip"
+
+    @staticmethod
+    def should_activate():
         import torch
         return torch.version.hip is not None
 
     def get_current_target(self):
         device = self.get_current_device()
         arch = self.utils.get_device_properties(device)['arch']
-        return ("hip", arch.split(':')[0])
+        return (HIPDriver.target_name(), arch.split(':')[0])

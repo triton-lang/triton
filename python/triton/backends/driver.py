@@ -1,10 +1,19 @@
 from abc import ABCMeta, abstractmethod, abstractclassmethod
+import os
 
 
 class DriverBase(metaclass=ABCMeta):
 
-    @abstractclassmethod
-    def is_active(self):
+    @classmethod
+    def is_active(cls):
+        active_driver = os.environ.get("TRITON_ACTIVE_DRIVER")
+        if active_driver is not None:
+            return active_driver == cls.target_name()
+        return cls.should_activate()
+
+    @staticmethod
+    @abstractmethod
+    def target_name():
         pass
 
     @abstractmethod
