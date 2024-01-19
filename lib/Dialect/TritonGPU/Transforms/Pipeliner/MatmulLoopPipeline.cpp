@@ -401,14 +401,14 @@ static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
   // Insert a waitOp after the first async copy. This does make the assumption
   // that the wait will be scheduled in a different stage that all the async
   // copy but we cannot guarantee that one wait is enough otherwise.
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    if (isa<ttg::InsertSliceAsyncOp>(op)) {
-      OpBuilder builder(op.getContext());
-      builder.setInsertionPointAfter(&op);
-      builder.create<ttg::AsyncWaitOp>(op.getLoc(), 0);
-      break;
-    }
-  }
+  // for (auto &op : forOp.getBody()->without_terminator()) {
+  //   if (isa<ttg::InsertSliceAsyncOp>(op)) {
+  //     OpBuilder builder(op.getContext());
+  //     builder.setInsertionPointAfter(&op);
+  //     builder.create<ttg::AsyncWaitOp>(op.getLoc(), 0);
+  //     break;
+  //   }
+  // }
   SmallVector<Value> newYieldOperands = {insertIdx, extractIdx};
   if (needsMbarrierPhase)
     newYieldOperands.push_back(phase);
@@ -641,12 +641,12 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   options.predicateFn = predicateOp;
   options.supportDynamicLoops = true;
   unsigned numLoadsInStage = (numStages - 2) * loads.size();
-  options.annotateFn =
-      [numLoadsInStage](Operation *op,
-                        mlir::triton::PipeliningOption::PipelinerPart part,
-                        unsigned iteration) {
-        return setWaitNum(op, part, iteration, numLoadsInStage);
-      };
+  // options.annotateFn =
+  //     [numLoadsInStage](Operation *op,
+  //                       mlir::triton::PipeliningOption::PipelinerPart part,
+  //                       unsigned iteration) {
+  //       return setWaitNum(op, part, iteration, numLoadsInStage);
+  //     };
 
   if (hasAsynCp) {
     // Insert a wait 0 after the loop
@@ -709,20 +709,51 @@ static void removeExtraWait(tt::nvidia_gpu::DotWaitOp dotWaitOp,
 
 void mlir::triton::scheduleWaits(RewriterBase &rewriter, scf::ForOp forOp, mlir::triton::PipeliningOption &options)
 {
-  std::function<void(Value val)> dfs = [&dfs](Value val){
+  auto countInsertsBetween = [](Operation *op1, Operation *op2) {
+    int count = 0;
+    Operation *op = op1->getNextNode();
+    // if op1 is a block op, traverse the ops in the block
+    if (auto blockOp = dyn_cast<scf::ForOp>(op1)) {
+      op = &*blockOp.getBody()->begin();
+    }
+
+    for (; op != op2; op = op->getNextNode()) {
+      if (isa<ttg::InsertSliceAsyncOp>(op))
+        count++;
+    }
+    return count;
+  };
+
+  std::function<int(Value, Operation*, int, int)> minOverHistories = 
+    [&minOverHistories, &forOp, &countInsertsBetween](Value val, Operation* sinkOp, int thisHistorySum, int currMin){
     if (auto defOp = val.getDefiningOp()) {
       if (auto insertOp = dyn_cast<ttg::InsertSliceAsyncOp>(defOp)) {
-        return; // we have found insert slice!
+        auto insertsBetween = countInsertsBetween(insertOp, sinkOp);
+        thisHistorySum += insertsBetween;
+        currMin = std::min(currMin, thisHistorySum);
+        return currMin;
       }
     }
     if (auto arg = val.dyn_cast<BlockArgument>()) {
+      auto insertsBetween = countInsertsBetween(arg.getOwner()->getParentOp(), sinkOp);
+      thisHistorySum += insertsBetween;
+      if (thisHistorySum >= currMin)
+        return currMin;
+
       auto block = arg.getOwner();
-      /*block->getArgument(arg.getArgNumber() - 1);
+      // get the value value assigned to the argument coming from outside the loop
+      // TODO: Should we get the forOp from block->getParentOp()?
+      auto incomingVal = forOp.getInitArgs()[arg.getArgNumber() - 1];
+      int min1 = minOverHistories(incomingVal, forOp, thisHistorySum, currMin);
+
+      // get the value value assigned to the argument coming from the previous iteration
       auto yieldOp = block->getTerminator();
-      auto operand = yieldOp->getOperand(arg.getArgNumber() - 1);
-      dfs(operand);*/
+      auto prevVal = yieldOp->getOperand(arg.getArgNumber() - 1);
+      int min2 = minOverHistories(prevVal, yieldOp, thisHistorySum, currMin);
+      return std::min(std::min(min1, min2), currMin);
     }
-    
+    llvm_unreachable("Unexpected operation type");
+    return currMin;
   };
   // For each extract slice (that signifies the use of the data),
   // traverse its def chain to find the corresponding insert slice.
@@ -738,13 +769,17 @@ void mlir::triton::scheduleWaits(RewriterBase &rewriter, scf::ForOp forOp, mlir:
     auto extractSlice = cast<ttg::ExtractSliceOp>(op);
     auto extractSliceOperand = extractSlice.getOperand(0);
     // Check if the operand comes from a forOp argument.
-    dfs(extractSliceOperand);
-    if (!isa<BlockArgument>(extractSliceOperand))
+    auto minInsertsFromSource = minOverHistories(extractSliceOperand, op, 0, INT_MAX);
+
+    OpBuilder builder(op->getContext());
+    builder.setInsertionPoint(op);
+    builder.create<ttg::AsyncWaitOp>(op->getLoc(), minInsertsFromSource);
+    /*if (!isa<BlockArgument>(extractSliceOperand))
       return;
 
     auto extractSliceOperandDef = extractSliceOperand.getDefiningOp();
     if (!isa<ttg::InsertSliceAsyncOp>(extractSliceOperandDef))
-      return;
+      return;*/
     
   });
     
