@@ -24,29 +24,27 @@ void SharedMemoryAliasAnalysis::visitOperation(
     ArrayRef<dataflow::Lattice<AliasInfo> *> results) {
   AliasInfo aliasInfo;
   bool pessimistic = true;
-  if (maybeSharedAllocationOp(op)) {
-    // These ops may allocate a new shared memory buffer.
-    auto result = op->getResult(0);
-    // XXX(Keren): the following ops are always aliasing for now
-    if (isa<triton::gpu::ExtractSliceOp, triton::TransOp,
-            triton::nvidia_gpu::ExtractMBarrierOp>(op)) {
-      // extract_slice %src
-      // trans %src
-      aliasInfo = AliasInfo(operands[0]->getValue());
-      pessimistic = false;
-    } else if (isa<tensor::InsertSliceOp, triton::gpu::InsertSliceAsyncOp,
-                   triton::nvidia_gpu::InsertSliceTMAOp>(op)) {
-      // insert_slice_async %src, %dst, %index
-      // insert_slice %src into %dst[%offsets]
-      aliasInfo = AliasInfo(operands[1]->getValue());
-      pessimistic = false;
-    } else if (isa<triton::nvidia_gpu::StoreAsyncTMAOp>(op)) {
-      aliasInfo = AliasInfo(operands[0]->getValue());
-      pessimistic = false;
-    } else if (triton::gpu::hasSharedEncoding(result)) {
-      aliasInfo.insert(result);
-      pessimistic = false;
-    }
+  // These ops may allocate a new shared memory buffer.
+  auto result = op->getResult(0);
+  // XXX(Keren): the following ops are always aliasing for now
+  if (isa<triton::gpu::ExtractSliceOp, triton::TransOp,
+          triton::nvidia_gpu::ExtractMBarrierOp>(op)) {
+    // extract_slice %src
+    // trans %src
+    aliasInfo = AliasInfo(operands[0]->getValue());
+    pessimistic = false;
+  } else if (isa<tensor::InsertSliceOp, triton::gpu::InsertSliceAsyncOp,
+                 triton::nvidia_gpu::InsertSliceTMAOp>(op)) {
+    // insert_slice_async %src, %dst, %index
+    // insert_slice %src into %dst[%offsets]
+    aliasInfo = AliasInfo(operands[1]->getValue());
+    pessimistic = false;
+  } else if (isa<triton::nvidia_gpu::StoreAsyncTMAOp>(op)) {
+    aliasInfo = AliasInfo(operands[0]->getValue());
+    pessimistic = false;
+  } else if (triton::gpu::hasSharedEncoding(result)) {
+    aliasInfo.insert(result);
+    pessimistic = false;
   }
 
   if (pessimistic) {
