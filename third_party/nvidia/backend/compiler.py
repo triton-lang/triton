@@ -308,9 +308,15 @@ def _path_to_binary(binary: str):
 
 
 @functools.lru_cache()
+def get_ptxas_version():
+    version = subprocess.check_output([_path_to_binary("ptxas")[0], "--version"])
+    return version
+
+
+@functools.lru_cache()
 def ptx_get_version(cuda_version) -> int:
     '''
-    Get the highest PTX version supported by the current CUDA self.
+    Get the highest PTX version supported by the current CUDA driver.
     '''
     assert isinstance(cuda_version, str)
     major, minor = map(int, cuda_version.split('.'))
