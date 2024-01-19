@@ -1,6 +1,5 @@
 from triton.backends.compiler import BaseBackend
 from triton._C.libtriton import ir, passes, llvm, nvidia
-# from triton.backends.nvidia.driver import CudaUtils
 from triton.runtime import driver
 
 from dataclasses import dataclass
