@@ -361,21 +361,6 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
   llvm_unreachable("Axis not found in order");
 }
 
-bool maybeSharedAllocationOp(Operation *op) {
-  // TODO(Keren): This function can be replaced by adding
-  // MemoryEffectOpInterface. We can then use the MemoryEffectOpInterface to
-  // query the memory effects of the op.
-  auto *dialect = op->getDialect();
-  return dialect &&
-         (dialect->getTypeID() ==
-              mlir::TypeID::get<triton::gpu::TritonGPUDialect>() ||
-          dialect->getTypeID() ==
-              mlir::TypeID::get<triton::nvidia_gpu::TritonNvidiaGPUDialect>() ||
-          dialect->getTypeID() == mlir::TypeID::get<triton::TritonDialect>() ||
-          dialect->getTypeID() == mlir::TypeID::get<arith::ArithDialect>() ||
-          dialect->getTypeID() == mlir::TypeID::get<tensor::TensorDialect>());
-}
-
 bool maybeAliasOp(Operation *op) {
   return isa<triton::gpu::ExtractSliceOp, triton::TransOp,
              triton::gpu::InsertSliceAsyncOp,
