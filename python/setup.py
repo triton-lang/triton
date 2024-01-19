@@ -190,7 +190,8 @@ def download_and_copy(src_path, variable, version, url_func):
         return
     base_dir = os.path.dirname(__file__)
     system = platform.system()
-    url = url_func("64", version)
+    arch = {"x86_64": "64", "arm64": "aarch64"}[platform.machine()]
+    url = url_func(arch, version)
     tmp_path = os.path.join(triton_cache_path, "nvidia")  # path to cache the download
     dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", src_path)  # final binary path
     src_path = os.path.join(tmp_path, src_path)
