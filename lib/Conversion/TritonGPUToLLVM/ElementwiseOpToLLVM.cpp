@@ -1871,10 +1871,6 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   POPULATE_BINARY_OP(arith::ShLIOp, LLVM::ShlOp)   // <<
   POPULATE_BINARY_OP(arith::ShRSIOp, LLVM::AShrOp) // >>
   POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp) // >>
-  POPULATE_BINARY_OP(arith::MinimumFOp,
-                     LLVM::MinimumOp) // min (return NaN if either op is Nan)
-  POPULATE_BINARY_OP(arith::MaximumFOp,
-                     LLVM::MaximumOp) // max  (return NaN if either op is Nan)
   POPULATE_BINARY_OP(
       arith::MinNumFOp,
       LLVM::MinNumOp) // fmin (return non-NaN if either op is non-NaN)
@@ -1934,9 +1930,9 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   // __nv_expf for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
-                                   computeCapability);
+                                   computeCapability, benefit);
   patterns.add<MinMaxFOpConversion<arith::MinimumFOp>>(
-      typeConverter, axisInfoAnalysis, computeCapability);
+      typeConverter, axisInfoAnalysis, computeCapability, benefit);
   patterns.add<MinMaxFOpConversion<arith::MaximumFOp>>(
-      typeConverter, axisInfoAnalysis, computeCapability);
+      typeConverter, axisInfoAnalysis, computeCapability, benefit);
 }

@@ -6,7 +6,6 @@ import subprocess
 import sys
 import sysconfig
 import tarfile
-import tempfile
 import urllib.request
 from distutils.command.clean import clean
 from pathlib import Path
@@ -147,7 +146,16 @@ def open_url(url):
 # ---- package data ---
 
 
-def get_thirdparty_packages(triton_cache_path):
+def get_triton_cache_path():
+    user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or \
+            os.getenv("HOMEPATH") or None
+    if not user_home:
+        raise RuntimeError("Could not find user home directory")
+    return os.path.join(user_home, ".triton")
+
+
+def get_thirdparty_packages():
+    triton_cache_path = get_triton_cache_path()
     packages = [get_pybind11_package_info(), get_llvm_package_info()]
     thirdparty_cmake_args = []
     for p in packages:
@@ -177,31 +185,28 @@ def get_thirdparty_packages(triton_cache_path):
 
 
 def download_and_copy(src_path, variable, version, url_func):
+    triton_cache_path = get_triton_cache_path()
     if variable in os.environ:
         return
     base_dir = os.path.dirname(__file__)
-    arch = platform.machine()
-    if arch == "x86_64":
-        arch = "64"
+    system = platform.system()
+    arch = {"x86_64": "64", "arm64": "aarch64"}[platform.machine()]
     url = url_func(arch, version)
-    dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", src_path)
-    is_linux = platform.system() == "Linux"
-    download = False
-    if is_linux:
-        download = True
-        if os.path.exists(dst_path):
-            curr_version = subprocess.check_output([dst_path, "--version"]).decode("utf-8").strip()
-            curr_version = re.search(r"V([.|\d]+)", curr_version).group(1)
-            download = curr_version != version
+    tmp_path = os.path.join(triton_cache_path, "nvidia")  # path to cache the download
+    dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", src_path)  # final binary path
+    src_path = os.path.join(tmp_path, src_path)
+    download = not os.path.exists(src_path)
+    if os.path.exists(dst_path) and system == "Linux":
+        curr_version = subprocess.check_output([dst_path, "--version"]).decode("utf-8").strip()
+        curr_version = re.search(r"V([.|\d]+)", curr_version).group(1)
+        download = download or curr_version != version
     if download:
         print(f'downloading and extracting {url} ...')
         file = tarfile.open(fileobj=open_url(url), mode="r|*")
-        with tempfile.TemporaryDirectory() as temp_dir:
-            file.extractall(path=temp_dir)
-            src_path = os.path.join(temp_dir, src_path)
-            os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
-            print(f'copy {src_path} to {dst_path} ...')
-            shutil.copy(src_path, dst_path)
+        file.extractall(path=tmp_path)
+    print(f'copy {src_path} to {dst_path} ...')
+    os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
+    shutil.copy(src_path, dst_path)
 
 
 # ---- cmake extension ----
@@ -272,13 +277,8 @@ class CMakeBuild(build_ext):
     def build_extension(self, ext):
         lit_dir = shutil.which('lit')
         ninja_dir = shutil.which('ninja')
-        user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or \
-            os.getenv("HOMEPATH") or None
-        if not user_home:
-            raise RuntimeError("Could not find user home directory")
-        triton_cache_path = os.path.join(user_home, ".triton")
         # lit is used by the test suite
-        thirdparty_cmake_args = get_thirdparty_packages(triton_cache_path)
+        thirdparty_cmake_args = get_thirdparty_packages()
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
         if not os.path.exists(self.build_temp):
@@ -384,7 +384,7 @@ package_data.update({f"triton/backends/{b.name}": b.package_data for b in backen
 
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
-    version="2.1.0" + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
+    version="3.0.0" + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
     author="Philippe Tillet",
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
@@ -434,13 +434,11 @@ setup(
             "numpy",
             "pytest",
             "scipy>=1.7.1",
-            "torch",
         ],
         "tutorials": [
             "matplotlib",
             "pandas",
             "tabulate",
-            "torch",
         ],
     },
 )

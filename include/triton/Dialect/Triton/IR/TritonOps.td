@@ -19,6 +19,11 @@ include "mlir/Interfaces/CastInterfaces.td" // CastOpInterface
 include "mlir/Interfaces/CallInterfaces.td" // CallOpInterface
 
 //
+// Interfaces
+//
+def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
+
+//
 // Op Base
 //
 class TT_Op<string mnemonic, list<Trait> traits = []> :
@@ -205,7 +210,7 @@ def TT_LoadOp : TT_Op<"load",
 def TT_StoreOp : TT_Op<"store",
                        [SameLoadStoreOperandsShape,
                         SameLoadStoreOperandsEncoding,
-                        MemoryEffects<[MemWrite]>,
+                        MemoryEffects<[MemWrite<GlobalMemory>]>,
                         TypesMatchWith<"infer ptr type from value type",
                                        "value", "ptr", "$_self",
                                        "mlir::OpTrait::impl::verifyLoadStorePointerAndValueType">,
@@ -242,8 +247,8 @@ def TT_StoreOp : TT_Op<"store",
 //
 def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
                                           SameOperandsAndResultEncoding,
-                                          MemoryEffects<[MemRead]>,
-                                          MemoryEffects<[MemWrite]>,
+                                          MemoryEffects<[MemRead<GlobalMemory>]>,
+                                          MemoryEffects<[MemWrite<GlobalMemory>]>,
                                           TypesMatchWith<"infer ptr type from value type",
                                                          "val", "ptr",
                                                          "getPointerTypeSameShape($_self)">,
@@ -265,8 +270,8 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
     let results = (outs TT_Type:$result);
 }
 
-def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead]>,
-                                          MemoryEffects<[MemWrite]>,
+def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead<GlobalMemory>]>,
+                                          MemoryEffects<[MemWrite<GlobalMemory>]>,
                                           SameOperandsAndResultShape,
                                           SameOperandsAndResultEncoding]> {
     let summary = "atomic cas";
@@ -488,7 +493,7 @@ def TT_ScanOp: TT_Op<"scan",
                         SameOperandsAndResultElementType,
                         SingleBlock,
                         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
-    let summary = "Reduction using generic combination algorithm";
+    let summary = "Associatve scan using generic combination algorithm";
     let arguments = (ins Variadic<TT_Tensor>:$operands, I32Attr:$axis);
     let results = (outs Variadic<TT_Tensor>:$result);
     let regions = (region SizedRegion<1>:$combineOp);
@@ -496,6 +501,12 @@ def TT_ScanOp: TT_Op<"scan",
         OpBuilder<(ins "ValueRange":$operands, "int":$axis)>,
     ];
     let hasVerifier = 1;
+    let hasRegionVerifier = 1;
+    let extraClassDeclaration = [{
+      llvm::SmallVector<RankedTensorType> getInputTypes();
+      llvm::SmallVector<Type> getElementTypes();
+      unsigned getNumOperands();
+    }];
 }
 
 def TT_ScanReturnOp: TT_Op<"scan.return",
@@ -596,7 +607,7 @@ def TT_HistogramOp : TT_Op<"histogram", [Pure]> {
 //
 // Print Op
 //
-def TT_PrintOp : TT_Op<"print", [MemoryEffects<[MemWrite]>]>,
+def TT_PrintOp : TT_Op<"print", [MemoryEffects<[MemWrite<GlobalMemory>]>]>,
   Arguments<(ins StrAttr:$prefix, Variadic<AnyTypeOf<[TT_Type]>>:$args)> {
   let summary = "Device-side print, as in CUDA for debugging";
   let description = [{
@@ -611,7 +622,7 @@ def TT_PrintOp : TT_Op<"print", [MemoryEffects<[MemWrite]>]>,
 //
 // Assert Op
 //
-def TT_AssertOp : TT_Op<"assert", [MemoryEffects<[MemWrite]>]> {
+def TT_AssertOp : TT_Op<"assert", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Device-side assert, as in CUDA for correctness checking";
   let description = [{
     `tt.assert` takes a condition tensor, a message string, a file string, a function string, and a line number.
