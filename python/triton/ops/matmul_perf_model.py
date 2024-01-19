@@ -10,7 +10,7 @@ from ..testing import (get_dram_gbps, get_max_simd_tflops, get_max_tensorcore_tf
 def get_tensorcore_tflops(device, num_ctas, num_warps, dtype):
     ''' return compute throughput in TOPS '''
     total_warps = num_ctas * min(num_warps, 4)
-    num_subcores = driver.utils.get_device_properties(device)["multiprocessor_count"] * 4  # on recent GPUs
+    num_subcores = driver.active.utils.get_device_properties(device)["multiprocessor_count"] * 4  # on recent GPUs
     cur_sm_clock = nvsmi(['clocks.max.sm'])[0]
     tflops = min(num_subcores, total_warps) / num_subcores * get_max_tensorcore_tflops(dtype, cur_sm_clock, device)
     return tflops
@@ -19,7 +19,7 @@ def get_tensorcore_tflops(device, num_ctas, num_warps, dtype):
 def get_simd_tflops(device, num_ctas, num_warps, dtype):
     ''' return compute throughput in TOPS '''
     total_warps = num_ctas * min(num_warps, 4)
-    num_subcores = driver.utils.get_device_properties(device)["multiprocessor_count"] * 4  # on recent GPUs
+    num_subcores = driver.active.utils.get_device_properties(device)["multiprocessor_count"] * 4  # on recent GPUs
     cur_sm_clock = nvsmi(['clocks.max.sm'])[0]
     tflops = min(num_subcores, total_warps) / num_subcores * get_max_simd_tflops(dtype, cur_sm_clock, device)
     return tflops
@@ -60,7 +60,7 @@ def estimate_matmul_time(
     compute_ms = total_ops / tput
 
     # time to load data
-    num_sm = driver.utils.get_device_properties(device)["multiprocessor_count"]
+    num_sm = driver.active.utils.get_device_properties(device)["multiprocessor_count"]
     active_cta_ratio = min(1, num_ctas / num_sm)
     active_cta_ratio_bw1 = min(1, num_ctas / 32)  # 32 active ctas are enough to saturate
     active_cta_ratio_bw2 = max(min(1, (num_ctas - 32) / (108 - 32)), 0)  # 32-108, remaining 5%
@@ -111,7 +111,7 @@ def early_config_prune(configs, named_args):
         BLOCK_M, BLOCK_N, BLOCK_K, num_stages = \
             kw['BLOCK_M'], kw['BLOCK_N'], kw['BLOCK_K'], config.num_stages
 
-        max_shared_memory = driver.utils.get_device_properties(device)["max_shared_mem"]
+        max_shared_memory = driver.active.utils.get_device_properties(device)["max_shared_mem"]
         required_shared_memory = (BLOCK_M + BLOCK_N) * BLOCK_K * num_stages * dtsize
         if required_shared_memory <= max_shared_memory:
             pruned_configs.append(config)
