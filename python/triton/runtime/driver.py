@@ -45,8 +45,8 @@ class LazyProxy:
 
 
 @dataclass()
-class Driver:
-    active = _create_driver()
+class DriverConfig:
+    active = LazyProxy(_create_driver)
 
 
-driver = Driver()
+driver = DriverConfig()
