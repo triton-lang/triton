@@ -55,8 +55,8 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createOptimizeDotOperandsPass);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
                      createRemoveLayoutConversionsPass);
-  ADD_PASS_WRAPPER_0("add_decompose_conversions",
-                     createDecomposeConversionsPass);
+  ADD_PASS_WRAPPER_0("add_reduce_data_duplication",
+                     createReduceDataDuplicationPass);
   ADD_PASS_WRAPPER_0("add_decompose_unsupported_conversions",
                      createDecomposeUnsupportedConversionsPass);
 }
