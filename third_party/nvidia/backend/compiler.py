@@ -75,10 +75,11 @@ def get_ids_of_tensormaps(tensormaps_info):
 # please ignore the naming style, xx_yy is compiler.py style, xxYy is to comply with cuda tensormap style
 # mixing style is for readability
 class InfoFromBackendForTensorMap:
+    _cuda_utils = None
+
     N = 2
     n = 0
     ntma = 0
-    utils = CudaUtils()
 
     def __init__(self, infos=None, dummy=False):
         self.dummy = dummy
@@ -90,36 +91,44 @@ class InfoFromBackendForTensorMap:
         elif dummy:
             self._dummy()
 
+    # Lazy load cuda utils to prevent running cuda specific code when another
+    # backend is active
+    @staticmethod
+    def utils():
+        if InfoFromBackendForTensorMap._cuda_utils is None:
+            InfoFromBackendForTensorMap._cuda_utils = CudaUtils()
+        return InfoFromBackendForTensorMap._cuda_utils
+
     def _dummy(self):
         assert InfoFromBackendForTensorMap.n < InfoFromBackendForTensorMap.N
         if InfoFromBackendForTensorMap.n == 0:
-            self.tensorDataType = InfoFromBackendForTensorMap.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_FLOAT16"]
+            self.tensorDataType = InfoFromBackendForTensorMap.utils().CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_FLOAT16"]
             self.tensorRank = 4
             self.globalAddressArgIdx = 0
             self.globalStridesArgIdx = [7, 6, -1, -1]
             self.globalDimsArgIdx = [5, 3, -1, -1]
             self.boxDims = [16, 64, 1, 1]
             self.elementStrides = [1, 1, 1, 1]
-            self.interleave = InfoFromBackendForTensorMap.utils.CUtensorMapInterleave["CU_TENSOR_MAP_INTERLEAVE_NONE"]
-            self.swizzle = InfoFromBackendForTensorMap.utils.CUtensorMapSwizzle["CU_TENSOR_MAP_SWIZZLE_32B"]
-            self.l2Promotion = InfoFromBackendForTensorMap.utils.CUtensorMapL2promotion["CU_TENSOR_MAP_L2_PROMOTION_L2_128B"]
+            self.interleave = InfoFromBackendForTensorMap.utils().CUtensorMapInterleave["CU_TENSOR_MAP_INTERLEAVE_NONE"]
+            self.swizzle = InfoFromBackendForTensorMap.utils().CUtensorMapSwizzle["CU_TENSOR_MAP_SWIZZLE_32B"]
+            self.l2Promotion = InfoFromBackendForTensorMap.utils().CUtensorMapL2promotion["CU_TENSOR_MAP_L2_PROMOTION_L2_128B"]
             self.TMADescArgIdx = 11
-            self.oobFill = InfoFromBackendForTensorMap.utils.CUtensorMapFloatOOBfill["CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE"]
+            self.oobFill = InfoFromBackendForTensorMap.utils().CUtensorMapFloatOOBfill["CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE"]
             InfoFromBackendForTensorMap.n += 1
             return
         if InfoFromBackendForTensorMap.n == 1:
-            self.tensorDataType = InfoFromBackendForTensorMap.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_FLOAT16"]
+            self.tensorDataType = InfoFromBackendForTensorMap.utils().CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_FLOAT16"]
             self.tensorRank = 4
             self.globalAddressArgIdx = 1
             self.globalStridesArgIdx = [7, 6, -1, -1]
             self.globalDimsArgIdx = [5, 3, -1, -1]
             self.boxDims = [16, 64, 1, 1]
             self.elementStrides = [1, 1, 1, 1]
-            self.interleave = InfoFromBackendForTensorMap.utils.CUtensorMapInterleave["CU_TENSOR_MAP_INTERLEAVE_NONE"]
-            self.swizzle = InfoFromBackendForTensorMap.utils.CUtensorMapSwizzle["CU_TENSOR_MAP_SWIZZLE_32B"]
-            self.l2Promotion = InfoFromBackendForTensorMap.utils.CUtensorMapL2promotion["CU_TENSOR_MAP_L2_PROMOTION_L2_128B"]
+            self.interleave = InfoFromBackendForTensorMap.utils().CUtensorMapInterleave["CU_TENSOR_MAP_INTERLEAVE_NONE"]
+            self.swizzle = InfoFromBackendForTensorMap.utils().CUtensorMapSwizzle["CU_TENSOR_MAP_SWIZZLE_32B"]
+            self.l2Promotion = InfoFromBackendForTensorMap.utils().CUtensorMapL2promotion["CU_TENSOR_MAP_L2_PROMOTION_L2_128B"]
             self.TMADescArgIdx = 12
-            self.oobFill = InfoFromBackendForTensorMap.utils.CUtensorMapFloatOOBfill["CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE"]
+            self.oobFill = InfoFromBackendForTensorMap.utils().CUtensorMapFloatOOBfill["CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE"]
             InfoFromBackendForTensorMap.n += 1
             return
 
@@ -164,19 +173,19 @@ class InfoFromBackendForTensorMap:
     # dtype:cuda.CUtensorMapDataType | int
     def bytes_from_type(self, dtype):
         return {
-            InfoFromBackendForTensorMap.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_UINT8"]: 1,
-            InfoFromBackendForTensorMap.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_UINT16"]: 2,
-            InfoFromBackendForTensorMap.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_UINT32"]: 4,
-            InfoFromBackendForTensorMap.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_INT32"]: 4,
-            InfoFromBackendForTensorMap.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_UINT64"]: 8,
-            InfoFromBackendForTensorMap.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_INT64"]: 8,
-            InfoFromBackendForTensorMap.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_FLOAT16"]: 2,
-            InfoFromBackendForTensorMap.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_FLOAT32"]: 4,
-            InfoFromBackendForTensorMap.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_FLOAT64"]: 8,
-            InfoFromBackendForTensorMap.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_BFLOAT16"]: 2,
-            InfoFromBackendForTensorMap.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_FLOAT32_FTZ"]: 4,
-            InfoFromBackendForTensorMap.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_TFLOAT32"]: 4,
-            InfoFromBackendForTensorMap.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_TFLOAT32_FTZ"]: 4
+            InfoFromBackendForTensorMap.utils().CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_UINT8"]: 1,
+            InfoFromBackendForTensorMap.utils().CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_UINT16"]: 2,
+            InfoFromBackendForTensorMap.utils().CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_UINT32"]: 4,
+            InfoFromBackendForTensorMap.utils().CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_INT32"]: 4,
+            InfoFromBackendForTensorMap.utils().CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_UINT64"]: 8,
+            InfoFromBackendForTensorMap.utils().CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_INT64"]: 8,
+            InfoFromBackendForTensorMap.utils().CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_FLOAT16"]: 2,
+            InfoFromBackendForTensorMap.utils().CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_FLOAT32"]: 4,
+            InfoFromBackendForTensorMap.utils().CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_FLOAT64"]: 8,
+            InfoFromBackendForTensorMap.utils().CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_BFLOAT16"]: 2,
+            InfoFromBackendForTensorMap.utils().CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_FLOAT32_FTZ"]: 4,
+            InfoFromBackendForTensorMap.utils().CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_TFLOAT32"]: 4,
+            InfoFromBackendForTensorMap.utils().CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_TFLOAT32_FTZ"]: 4
         }[dtype]
 
     def getTensorMapDataType(self):
@@ -255,7 +264,7 @@ class InfoFromBackendForTensorMap:
             return idx
 
     def tensormap(self, args):
-        return InfoFromBackendForTensorMap.utils.cuTensorMapEncodeTiled(
+        return InfoFromBackendForTensorMap.utils().cuTensorMapEncodeTiled(
             self.getTensorMapDataType(),
             self.getTensorRank(),
             self.getGlobalAddress(args),
