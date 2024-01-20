@@ -11,7 +11,6 @@ tt.func @dead_load(%ptr: tensor<32x128x!tt.ptr<f16>>) {
   tt.return
 }
 
-
 // CHECK-LABEL: make_range
 tt.func @make_range() -> (tensor<128x1xi32>, tensor<1xi32>) {
   // CHECK-DAG: %[[c:.*]] = arith.constant dense<0> : tensor<128x1xi32>
@@ -25,3 +24,39 @@ tt.func @make_range() -> (tensor<128x1xi32>, tensor<1xi32>) {
   // CHECK-DAG: tt.return %[[c]], %[[d]] : tensor<128x1xi32>, tensor<1xi32>
   tt.return %c, %d : tensor<128x1xi32>, tensor<1xi32>
 }
+
+// -----
+
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#sliced0 = #triton_gpu.slice<{dim = 1, parent = #blocked0}>
+
+// This doesn't get changed from expand_dims(broadcast(x)) to
+// broadcast(expand_dims(x)) because x is a scalar, and the input to expand_dims
+// must be a tensor.  Check that it doesn't crash.
+//
+// CHECK-LABEL: fn
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
+tt.func @fn(%arg0: f32) -> (tensor<32x1xf32, #blocked0>){
+  // CHECK: %[[a:.*]] = tt.broadcast
+  // CHECK: tt.expand_dims %[[a]]
+  %a = tt.broadcast %arg0 : (f32) -> tensor<32xf32, #sliced0>
+  %b = tt.expand_dims %a {axis = 1 : i32} : (tensor<32xf32, #sliced0>) -> tensor<32x1xf32, #blocked0>
+  tt.return %b : tensor<32x1xf32, #blocked0>
+}
+}  // end module
+
+// -----
+
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#sliced0 = #triton_gpu.slice<{dim = 1, parent = #blocked0}>
+
+// CHECK-LABEL: fn
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
+tt.func @fn(%arg0: tensor<1xf32, #sliced0>) -> (tensor<32x1xf32, #blocked0>){
+  // CHECK: %[[a:.*]] = tt.expand_dims
+  // CHECK: tt.broadcast %[[a]]
+  %a = tt.broadcast %arg0 : (tensor<1xf32, #sliced0>) -> tensor<32xf32, #sliced0>
+  %b = tt.expand_dims %a {axis = 1 : i32} : (tensor<32xf32, #sliced0>) -> tensor<32x1xf32, #blocked0>
+  tt.return %b : tensor<32x1xf32, #blocked0>
+}
+}  // end module
