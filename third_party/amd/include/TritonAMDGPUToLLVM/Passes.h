@@ -2,7 +2,7 @@
 #define TRITONAMDGPU_CONVERSION_PASSES_H
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
+#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 
 namespace mlir {
 class Pass;
