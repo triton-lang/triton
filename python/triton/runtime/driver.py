@@ -47,10 +47,14 @@ class LazyProxy:
 class DriverConfig:
 
     def __init__(self):
-        self.active = LazyProxy(_create_driver)
+        self.default = LazyProxy(_create_driver)
+        self.active = self.default
 
     def set_active_driver(self, driver: DriverBase):
         self.active = driver
+
+    def reset_active_driver(self):
+        self.active = self.default
 
 
 driver = DriverConfig()
