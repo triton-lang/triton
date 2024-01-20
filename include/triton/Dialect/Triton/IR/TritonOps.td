@@ -352,7 +352,22 @@ def TT_ReshapeOp : TT_Op<"reshape", [Pure,
 def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
                                          SameOperandsAndResultElementType,
                                          SameOperandsAndResultEncoding]> {
-    let summary = "broadcast. No left-padding as of now.";
+    let summary = "broadcast a tensor or a scalar";
+
+    let description = [{
+      If given a tensor, broadcast changes one or more dimensions with size 1 to
+      a new size, e.g. tensor<1x32x1xf32> -> tensor<2x32x4xf32>.
+
+      If given a scalar, broadcast converts it to a tensor with arbitrary size,
+      e.g. f32 -> tensor<2x4xf32> (identical to tt.splat).
+
+      Note that many other Triton ops only accept tensors, so it's common to do
+      op.getType().cast<RankedTensorType>.  Don't make that mistake if op is a
+      broadcast!
+
+      TODO(jlebar): Change broadcast so it only works on tensors -- splat is
+      sufficient for scalars.
+    }];
 
     let arguments = (ins TT_Type:$src);
 
