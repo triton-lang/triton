@@ -391,7 +391,6 @@ struct ConvertTritonGPUToLLVM
     decomposeSplatToSharedLayout(mod, numWarps, threadsPerWarp, numCTAs);
     decomposeMmaToDotOperand(mod, numWarps, threadsPerWarp, numCTAs);
     decomposeBlockedToDotOperand(mod);
-    decomposeInsertSliceAsyncOp(mod);
 
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
@@ -705,17 +704,6 @@ private:
         cvtOp.replaceAllUsesWith(newConvert.getResult());
         cvtOp.erase();
       }
-    });
-  }
-
-  void decomposeInsertSliceAsyncOp(ModuleOp mod) const {
-    mod.walk([&](triton::gpu::AsyncCommitGroupOp asyncCommitGroupOp) -> void {
-      if (!triton::gpu::AsyncCommitGroupOp::isSupported(computeCapability))
-        asyncCommitGroupOp.erase();
-    });
-    mod.walk([&](triton::gpu::AsyncWaitOp asyncWaitOp) -> void {
-      if (!triton::gpu::AsyncWaitOp::isSupported(computeCapability))
-        asyncWaitOp.erase();
     });
   }
 
