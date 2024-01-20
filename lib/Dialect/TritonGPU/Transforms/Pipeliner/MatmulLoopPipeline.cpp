@@ -774,13 +774,6 @@ void mlir::triton::scheduleWaits(RewriterBase &rewriter, scf::ForOp forOp, mlir:
     OpBuilder builder(op->getContext());
     builder.setInsertionPoint(op);
     builder.create<ttg::AsyncWaitOp>(op->getLoc(), minInsertsFromSource);
-    /*if (!isa<BlockArgument>(extractSliceOperand))
-      return;
-
-    auto extractSliceOperandDef = extractSliceOperand.getDefiningOp();
-    if (!isa<ttg::InsertSliceAsyncOp>(extractSliceOperandDef))
-      return;*/
-    
   });
     
 }
