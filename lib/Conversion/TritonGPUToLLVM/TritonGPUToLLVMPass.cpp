@@ -386,7 +386,6 @@ struct ConvertTritonGPUToLLVM
       numWarps *= attr.cast<IntegerAttr>().getInt();
     }
 
-
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
     ModuleMembarAnalysis membarPass(&allocation);
@@ -582,32 +581,6 @@ private:
     mod->setAttr("triton_gpu.shared",
                  mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32),
                                         allocation.getSharedMemorySize()));
-  }
-
-
-  void decomposeSplatToSharedLayout(ModuleOp mod, int numWarps,
-                                    int threadsPerWarp, int numCTAs) const {
-    // Replace `splat -> shared` with `splat -> blocked -> shared`.
-    mod.walk([&](triton::SplatOp splatOp) -> void {
-      auto dstType = splatOp.getType().cast<RankedTensorType>();
-      auto shared =
-          dstType.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
-      if (shared) {
-        OpBuilder builder(splatOp);
-        SmallVector<unsigned, 4> sizePerThread(dstType.getRank(), 1);
-        auto newType = RankedTensorType::get(
-            dstType.getShape(), dstType.getElementType(),
-            triton::gpu::BlockedEncodingAttr::get(
-                mod.getContext(), dstType.getShape(), sizePerThread,
-                getOrder(shared), numWarps, threadsPerWarp, numCTAs));
-        auto newSplat = builder.create<triton::SplatOp>(
-            splatOp.getLoc(), newType, splatOp.getOperand());
-        auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
-            splatOp.getLoc(), dstType, newSplat.getResult());
-        splatOp.replaceAllUsesWith(newConvert.getResult());
-        splatOp.erase();
-      }
-    });
   }
 
   static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
