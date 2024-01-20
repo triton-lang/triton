@@ -1,5 +1,5 @@
-from dataclasses import dataclass
 from ..backends import backends
+from ..backends import DriverBase
 
 
 def _create_driver():
@@ -44,9 +44,12 @@ class LazyProxy:
         return str(self._obj)
 
 
-@dataclass()
 class DriverConfig:
-    active = LazyProxy(_create_driver)
+    def __init__(self) -> None:
+        self.active = LazyProxy(_create_driver)
+
+    def set_active_driver(self, driver: DriverBase):
+        self.active = driver
 
 
 driver = DriverConfig()
