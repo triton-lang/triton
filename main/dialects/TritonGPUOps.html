@@ -151,7 +151,7 @@
 The contents of the tensor are supposed to be in shared memory.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">ResultsAreSharedEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Allocate</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Allocate</span> <span class="pre">on</span> <span class="pre">::mlir::triton::gpu::SharedMemory}</span></code></p>
 <section id="results">
 <h3>Results:<a class="headerlink" href="#results" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -270,7 +270,7 @@ The contents of the tensor are supposed to be in shared memory.</p>
 The contents of the tensor are supposed to be in shared memory.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">OperandsAreSharedEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Free</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Free</span> <span class="pre">on</span> <span class="pre">::mlir::triton::gpu::SharedMemory}</span></code></p>
 <section id="id3">
 <h3>Operands:<a class="headerlink" href="#id3" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -392,7 +392,7 @@ triiton_gpu.async_wait { num = 0 : i32 }
 </div>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">ResultsAreSharedEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource,</span> <span class="pre">MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory,</span> <span class="pre">MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::gpu::SharedMemory}</span></code></p>
 <section id="id7">
 <h3>Attributes:<a class="headerlink" href="#id7" title="Permalink to this heading">¶</a></h3>
 <table>

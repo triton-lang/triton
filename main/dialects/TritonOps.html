@@ -529,7 +529,7 @@ that contains the operation.</p>
 If the condition is false, the message is printed, and the program is aborted.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
 <section id="id7">
 <h3>Attributes:<a class="headerlink" href="#id7" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -565,7 +565,7 @@ If the condition is false, the message is printed, and the program is aborted.</
 <p>return $old</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultShape</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
 <section id="id9">
 <h3>Attributes:<a class="headerlink" href="#id9" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -625,7 +625,7 @@ If the condition is false, the message is printed, and the program is aborted.</
 <p>return old value at $ptr</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultShape</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
 <section id="id12">
 <h3>Attributes:<a class="headerlink" href="#id12" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -1501,7 +1501,7 @@ pointer to the block tensor, e.g. returns a type of <code class="docutils litera
 format are generated automatically from the arguments.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
 <section id="id57">
 <h3>Attributes:<a class="headerlink" href="#id57" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -1692,7 +1692,7 @@ The compiler is still free to change it for better performance.</p>
 </section>
 <section id="tt-scan-triton-scanop">
 <h2><code class="docutils literal notranslate"><span class="pre">tt.scan</span></code> (triton::ScanOp)<a class="headerlink" href="#tt-scan-triton-scanop" title="Permalink to this heading">¶</a></h2>
-<p><em>Reduction using generic combination algorithm</em></p>
+<p><em>Associatve scan using generic combination algorithm</em></p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultElementType</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">SingleBlock</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
@@ -1806,7 +1806,7 @@ The compiler is still free to change it for better performance.</p>
 <p><em>Store by a tensor of pointers or by a tensor pointer</em></p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsShape</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
 <section id="id74">
 <h3>Attributes:<a class="headerlink" href="#id74" title="Permalink to this heading">¶</a></h3>
 <table>

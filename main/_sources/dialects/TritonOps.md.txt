@@ -213,7 +213,7 @@ Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
 
 #### Attributes:
 
@@ -247,7 +247,7 @@ Traits: `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSi
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource}`, `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory}`, `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
 
 #### Attributes:
 
@@ -290,7 +290,7 @@ Traits: `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSi
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource}`, `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory}`, `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
 
 #### Attributes:
 
@@ -961,7 +961,7 @@ Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
 
 #### Attributes:
 
@@ -1107,7 +1107,7 @@ Effects: `MemoryEffects::Effect{}`
 
 ### `tt.scan` (triton::ScanOp)
 
-_Reduction using generic combination algorithm_
+_Associatve scan using generic combination algorithm_
 
 
 Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultElementType`, `SameOperandsAndResultEncoding`, `SingleBlock`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
@@ -1198,7 +1198,7 @@ Traits: `SameLoadStoreOperandsEncoding`, `SameLoadStoreOperandsShape`, `TensorSi
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
 
 #### Attributes:
 

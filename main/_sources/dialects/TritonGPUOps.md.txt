@@ -17,7 +17,7 @@ Traits: `ResultsAreSharedEncoding`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: `MemoryEffects::Effect{MemoryEffects::Allocate on ::mlir::SideEffects::DefaultResource}`
+Effects: `MemoryEffects::Effect{MemoryEffects::Allocate on ::mlir::triton::gpu::SharedMemory}`
 
 #### Results:
 
@@ -143,7 +143,7 @@ Traits: `OperandsAreSharedEncoding`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: `MemoryEffects::Effect{MemoryEffects::Free on ::mlir::SideEffects::DefaultResource}`
+Effects: `MemoryEffects::Effect{MemoryEffects::Free on ::mlir::triton::gpu::SharedMemory}`
 
 #### Operands:
 
@@ -245,7 +245,7 @@ Traits: `AttrSizedOperandSegments`, `ResultsAreSharedEncoding`, `VerifyTensorLay
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource, MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory, MemoryEffects::Write on ::mlir::triton::gpu::SharedMemory}`
 
 #### Attributes:
 

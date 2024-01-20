@@ -30,7 +30,7 @@ Traits: `VerifyTensorLayoutsTrait`
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: `MemoryEffects::Effect{MemoryEffects::Allocate on ::mlir::SideEffects::DefaultResource}`
+Effects: `MemoryEffects::Effect{MemoryEffects::Allocate on ::mlir::triton::gpu::SharedMemory}`
 
 #### Attributes:
 
@@ -415,7 +415,7 @@ Traits: `AttrSizedOperandSegments`, `ResultsAreSharedEncoding`, `VerifyTensorLay
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource, MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory, MemoryEffects::Write on ::mlir::triton::gpu::SharedMemory}`
 
 #### Attributes:
 
@@ -501,7 +501,7 @@ Traits: `AttrSizedOperandSegments`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::gpu::SharedMemory}`
 
 #### Attributes:
 
@@ -542,7 +542,7 @@ Traits: `VerifyTensorLayoutsTrait`
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource, MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::gpu::SharedMemory, MemoryEffects::Write on ::mlir::triton::gpu::SharedMemory}`
 
 #### Operands:
 
@@ -687,7 +687,7 @@ Traits: `VerifyTensorLayoutsTrait`
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::gpu::SharedMemory, MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
 
 #### Attributes:
 

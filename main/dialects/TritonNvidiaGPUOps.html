@@ -244,7 +244,7 @@ Each mbarrier is initialized as:
 <p>case b. when created in scalar:</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Allocate</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Allocate</span> <span class="pre">on</span> <span class="pre">::mlir::triton::gpu::SharedMemory}</span></code></p>
 <section id="attributes">
 <h3>Attributes:<a class="headerlink" href="#attributes" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -706,7 +706,7 @@ The subsequent operations should not execute until this operation completes wait
 </div>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">ResultsAreSharedEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource,</span> <span class="pre">MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory,</span> <span class="pre">MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::gpu::SharedMemory}</span></code></p>
 <section id="id21">
 <h3>Attributes:<a class="headerlink" href="#id21" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -816,7 +816,7 @@ if set, perform an remote arrive action.</p>
 <p>triton_nvidia_gpu.mbarrier_arrive %0 {trackAsyncOp = false} : !tt.ptr<i64></p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::gpu::SharedMemory}</span></code></p>
 <section id="id25">
 <h3>Attributes:<a class="headerlink" href="#id25" title="Permalink to this heading">¶</a></h3>
 <table>
@@ -860,7 +860,7 @@ The subsequent operations should not execute until this operation completes wait
 <p>triton_nvidia_gpu.mbarrier_wait %0, %1 : !tt.ptr<i64></p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource,</span> <span class="pre">MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::triton::gpu::SharedMemory,</span> <span class="pre">MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::gpu::SharedMemory}</span></code></p>
 <section id="id27">
 <h3>Operands:<a class="headerlink" href="#id27" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -1027,7 +1027,7 @@ The subsequent operations should not execute until this operation completes wait
 </div>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::triton::gpu::SharedMemory,</span> <span class="pre">MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
 <section id="id34">
 <h3>Attributes:<a class="headerlink" href="#id34" title="Permalink to this heading">¶</a></h3>
 <table>

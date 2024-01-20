@@ -135,7 +135,7 @@ We can also customize the libdevice library path by passing the path to the `lib
 
     tensor([0.4105, 0.5430, 0.0249,  ..., 0.0424, 0.5351, 0.8149], device='cuda:0')
     tensor([0.4105, 0.5430, 0.0249,  ..., 0.0424, 0.5351, 0.8149], device='cuda:0')
-    The maximum difference between torch and triton is 0.0
+    The maximum difference between torch and triton is 2.384185791015625e-07
 
 
 
@@ -143,7 +143,7 @@ We can also customize the libdevice library path by passing the path to the `lib
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  0.446 seconds)
+   **Total running time of the script:** ( 0 minutes  0.634 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_07-math-functions.py:
