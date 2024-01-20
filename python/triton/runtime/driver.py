@@ -50,10 +50,10 @@ class DriverConfig:
         self.default = LazyProxy(_create_driver)
         self.active = self.default
 
-    def set_active_driver(self, driver: DriverBase):
+    def set_active(self, driver: DriverBase):
         self.active = driver
 
-    def reset_active_driver(self):
+    def reset_active(self):
         self.active = self.default
 
 
