@@ -45,6 +45,7 @@ class LazyProxy:
 
 
 class DriverConfig:
+
     def __init__(self) -> None:
         self.active = LazyProxy(_create_driver)
 
