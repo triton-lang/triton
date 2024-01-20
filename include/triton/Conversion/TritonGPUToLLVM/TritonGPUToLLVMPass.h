@@ -19,6 +19,11 @@ enum Target { NVVM, ROCDL, Default = NVVM };
 #define GEN_PASS_DECL
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
 
+namespace gpu {
+std::unique_ptr<OperationPass<ModuleOp>>
+createDecomposeUnsupportedConversionsPass();
+} // namespace gpu
+
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass();
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonGPUToLLVMPass(int32_t computeCapability, Target target,

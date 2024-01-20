@@ -467,6 +467,7 @@ class CUDABackend(BaseBackend):
         tma_infos = nvidia.TMAInfos()
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        passes.ttgpuir.add_decompose_unsupported_conversions(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, tma_infos)
