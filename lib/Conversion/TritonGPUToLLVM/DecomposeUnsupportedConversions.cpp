@@ -1,4 +1,5 @@
 #include "mlir/Pass/Pass.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -30,7 +31,7 @@ struct DecomposeUnsupportedConversions
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
     /* ---------------- */
-    /* Convert Fp8E4B15 */
+    // Convert Fp8E4B15
     /* ---------------- */
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
@@ -63,8 +64,8 @@ struct DecomposeUnsupportedConversions
       cvtOp.erase();
     });
     /* -------------------------------- */
-    /* Replace `splat -> shared         */
-    /* with `splat -> blocked -> shared */
+    // Replace `splat -> shared
+    // with `splat -> blocked -> shared
     /* -------------------------------- */
     mod.walk([&](triton::SplatOp splatOp) -> void {
       auto dstType = splatOp.getType().cast<RankedTensorType>();
@@ -84,6 +85,63 @@ struct DecomposeUnsupportedConversions
             splatOp.getLoc(), dstType, newSplat.getResult());
         splatOp.replaceAllUsesWith(newConvert.getResult());
         splatOp.erase();
+      }
+    });
+    /* -------------------------------- */
+    // Replace `mma -> dot_op` with `mma -> blocked -> dot_op`
+    // unless certain conditions are met
+    /* -------------------------------- */
+    mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
+      OpBuilder builder(cvtOp);
+      auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
+      auto dstType = cvtOp.getType().cast<RankedTensorType>();
+      auto srcMma =
+          srcType.getEncoding().dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>();
+      auto dstDotOp =
+          dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+      if (srcMma && dstDotOp && !isMmaToDotShortcut(srcType, dstType)) {
+        auto tmpType = RankedTensorType::get(
+            dstType.getShape(), dstType.getElementType(),
+            triton::gpu::BlockedEncodingAttr::get(
+                mod.getContext(), srcType.getShape(), getSizePerThread(srcMma),
+                getOrder(srcMma), numWarps, threadsPerWarp, numCTAs));
+        auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
+            cvtOp.getLoc(), tmpType, cvtOp.getOperand());
+        addAttrs(tmp, cvtOp->getAttrs());
+        auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
+            cvtOp.getLoc(), dstType, tmp);
+        addAttrs(newConvert, cvtOp->getAttrs());
+        cvtOp.replaceAllUsesWith(newConvert.getResult());
+        cvtOp.erase();
+      }
+    });
+    /* -------------------------------- */
+    // Replace `blocked -> dot_op` with `blocked -> shared -> dot_op`
+    // because the codegen doesn't handle `blocked -> dot_op` directly
+    /* -------------------------------- */
+    mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
+      OpBuilder builder(cvtOp);
+      auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
+      auto dstType = cvtOp.getType().cast<RankedTensorType>();
+      auto srcBlocked =
+          srcType.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
+      auto dstDotOp =
+          dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+      if (srcBlocked && dstDotOp) {
+        auto tmpType = RankedTensorType::get(
+            dstType.getShape(), dstType.getElementType(),
+            triton::gpu::SharedEncodingAttr::get(
+                mod.getContext(), dstDotOp, srcType.getShape(),
+                srcBlocked.getOrder(), srcBlocked.getCTALayout(),
+                srcType.getElementType()));
+        auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
+            cvtOp.getLoc(), tmpType, cvtOp.getOperand());
+        addAttrs(tmp, cvtOp->getAttrs());
+        auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
+            cvtOp.getLoc(), dstType, tmp);
+        addAttrs(newConvert, cvtOp->getAttrs());
+        cvtOp.replaceAllUsesWith(newConvert.getResult());
+        cvtOp.erase();
       }
     });
   }
