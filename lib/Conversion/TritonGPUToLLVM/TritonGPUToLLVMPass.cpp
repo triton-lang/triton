@@ -500,6 +500,8 @@ struct ConvertTritonGPUToLLVM
     populatePatterns2(populateClusterOpsToLLVMPatterns);
     populatePatterns2(populateRegReallocOpToLLVMPatterns);
     populatePatterns1(populateHistogramOpToLLVMPatterns);
+    mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
+    mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
