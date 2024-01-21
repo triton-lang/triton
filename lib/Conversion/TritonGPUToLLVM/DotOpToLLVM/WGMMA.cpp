@@ -431,7 +431,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   triton::nvgpu::WGMMALayout layoutB = transB ? triton::nvgpu::WGMMALayout::row
                                               : triton::nvgpu::WGMMALayout::col;
 
-  auto func = op->getParentOfType<LLVM::LLVMFuncOp>();
+  auto func = op->getParentOfType<triton::FuncOp>();
   int numTMADescs =
       func->getAttr(kAttrNumTMALoadDescsName).cast<IntegerAttr>().getInt();
   Operation *startSequence = nullptr;
