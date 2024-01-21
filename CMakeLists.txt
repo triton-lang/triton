@@ -222,4 +222,4 @@ endif()
 
 add_subdirectory(bin)
 add_subdirectory(test)
-# add_subdirectory(unittest)
+add_subdirectory(unittest)
