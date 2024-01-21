@@ -476,6 +476,7 @@ class CUDABackend(BaseBackend):
             passes.common.add_cse(pm)
         nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
         passes.convert.add_arith_to_llvmir(pm)
+        passes.convert.add_math_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
