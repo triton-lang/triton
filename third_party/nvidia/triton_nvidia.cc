@@ -15,10 +15,6 @@
 
 namespace py = pybind11;
 
-/* ---------------------- */
-// TMA passes
-/* ---------------------- */
-
 PYBIND11_MAKE_OPAQUE(mlir::triton::gpu::TMAMetadataTy);
 
 void init_triton_nvidia_passes_ttgpuir(py::module &&m) {

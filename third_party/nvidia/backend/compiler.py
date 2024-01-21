@@ -493,10 +493,10 @@ class CUDABackend(BaseBackend):
                 llvm.link_extern_lib(llvm_mod, path)
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
         # Set kernel attributes
-        kernels = [fn for fn in llvm_mod.get_functions() if fn.has_public_visibility() and not fn.is_declaration()]
-        assert len(kernels) == 1
-        kernels[0].add_fn_attr("nvvm.maxntid", f"1, {options.num_warps*32}")
-        kernels[0].add_fn_attr("nvvm.kernel", "1")
+        # kernels = [fn for fn in llvm_mod.get_functions() if fn.has_public_visibility() and not fn.is_declaration()]
+        # assert len(kernels) == 1
+        # kernels[0].add_fn_attr("nvvm.maxntid", f"1, {options.num_warps*32}")
+        # kernels[0].add_fn_attr("nvvm.kernel", "1")
 
         # Get some metadata
         if len(tma_infos) > 0:
