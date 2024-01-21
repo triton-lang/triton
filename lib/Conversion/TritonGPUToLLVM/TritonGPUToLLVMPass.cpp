@@ -349,6 +349,10 @@ public:
     addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
+    // TODO: remove when we use Func dialect
+    addLegalOp<mlir::triton::FuncOp>();
+    addLegalOp<mlir::triton::CallOp>();
+    addLegalOp<mlir::triton::ReturnOp>();
   }
 };
 
@@ -424,40 +428,10 @@ struct ConvertTritonGPUToLLVM
         signalPassFailure();
     }
 
-    // Lower functions
-    {
-      mlir::LowerToLLVMOptions option(context);
-      TritonGPUToLLVMTypeConverter typeConverter(context, option);
-      TritonLLVMFunctionConversionTarget funcTarget(*context, target);
-      RewritePatternSet funcPatterns(context);
-      funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, allocation,
-                                         /*benefit=*/1);
-      mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
-                                                            funcPatterns);
-      if (failed(
-              applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
-        return signalPassFailure();
-    }
-
     // initSharedMemory is run before the conversion of call and ret ops,
     // because the call op has to know the shared memory base address of each
     // function
     initSharedMemory(allocation, typeConverter);
-
-    // Convert call and ret ops
-    {
-      mlir::LowerToLLVMOptions option(context);
-      TritonGPUToLLVMTypeConverter typeConverter(context, option);
-      TritonLLVMFunctionConversionTarget funcTarget(*context, target);
-      RewritePatternSet funcPatterns(context);
-      funcPatterns.add<CallOpConversion>(typeConverter, numWarps, allocation,
-                                         /*benefit=*/1);
-      funcPatterns.add<ReturnOpConversion>(typeConverter, /*benefit=*/1);
-      if (failed(
-              applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
-        return signalPassFailure();
-    }
-
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
 
     // Emit logics to get threadId/blockIds/linearized clusterCTAId etc. and
@@ -526,10 +500,27 @@ struct ConvertTritonGPUToLLVM
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
-    mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
-                                                          patterns);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
+
+    // Lower functions
+    {
+      mlir::LowerToLLVMOptions option(context);
+      TritonGPUToLLVMTypeConverter typeConverter(context, option);
+      TritonLLVMFunctionConversionTarget funcTarget(*context, target);
+      RewritePatternSet funcPatterns(context);
+      funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, allocation,
+                                         /*benefit=*/1);
+
+      funcPatterns.add<CallOpConversion>(typeConverter, numWarps, allocation,
+                                         20);
+      funcPatterns.add<ReturnOpConversion>(typeConverter, 20);
+      mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
+                                                            funcPatterns);
+      if (failed(
+              applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
+        return signalPassFailure();
+    }
 
     // Fold CTAId when there is only 1 CTA.
     if (numCTAs == 1) {
