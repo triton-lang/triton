@@ -1,4 +1,5 @@
 add_triton_library(TritonNvidiaGPUTransforms
+  AddDescriptorArgs.cpp
   MaterializeLoadStore.cpp
   PlanCTA.cpp
   WSDecomposing.cpp

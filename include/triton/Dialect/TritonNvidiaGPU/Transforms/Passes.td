@@ -242,5 +242,9 @@ def TritonGPUWSFixupMissingAttrs : Pass<"triton-nvidia-gpu-ws-fixup-missing-attr
                            "mlir::arith::ArithDialect"];
 }
 
+def TritonGPUAddDescriptorArgs : Pass<"triton-nvidia-gpu-add-descriptor-args", "mlir::ModuleOp"> {
+  let constructor = "mlir::createTritonNvidiaGPUAddDescriptorArgs()";
+}
+
 
 #endif
