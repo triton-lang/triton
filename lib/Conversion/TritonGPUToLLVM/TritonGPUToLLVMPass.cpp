@@ -168,19 +168,6 @@ struct FuncOpConversion : public FuncOpConversionBase {
     if (!allocation.isRoot(funcOp))
       amendedFuncOp = amendFuncOp(funcOp, rewriter);
 
-    // Collect TMA information.
-    unsigned numTMALoad = 0;
-    funcOp.walk(
-        [&numTMALoad](triton::nvidia_gpu::InsertSliceTMAOp insertSliceOp) {
-          numTMALoad++;
-        });
-    unsigned numTMAStore = 0;
-    funcOp.walk(
-        [&numTMAStore](triton::nvidia_gpu::StoreAsyncTMAOp storeAsyncOp) {
-          numTMAStore++;
-        });
-    unsigned numTMA = numTMALoad + numTMAStore;
-
     auto newFuncOp = convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter);
     if (!newFuncOp) {
       return failure();
@@ -207,29 +194,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
     // The call graph is updated by mapping the old function to the new one.
     allocation.mapFuncOp(funcOp, newFuncOp);
 
-    // Append arguments to receive TMADesc in global memory in the runtime
-    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 1);
-    auto numArgs = newFuncOp.getBody().front().getNumArguments();
-    auto funcTy = newFuncOp.getFunctionType().cast<LLVM::LLVMFunctionType>();
-    SmallVector<Type> newInputsTy(funcTy.getParams().begin(),
-                                  funcTy.getParams().end());
-    for (unsigned i = 0; i < numTMA; ++i) {
-      newFuncOp.getBody().front().addArgument(ptrTy, funcOp.getLoc());
-      newInputsTy.push_back(ptrTy);
-    }
-    newFuncOp.setType(
-        LLVM::LLVMFunctionType::get(funcTy.getReturnType(), newInputsTy));
     // required by AxisInfoAnalysis
-    for (unsigned i = 0; i < numTMA; ++i) {
-      newFuncOp.setArgAttr(numArgs + i, "tt.divisibility",
-                           rewriter.getIntegerAttr(i32_ty, 1));
-    }
-
-    newFuncOp->setAttr(kAttrNumTMALoadDescsName,
-                       rewriter.getIntegerAttr(i32_ty, numTMALoad));
-    newFuncOp->setAttr(kAttrNumTMAStoreDescsName,
-                       rewriter.getIntegerAttr(i32_ty, numTMAStore));
-
     rewriter.eraseOp(funcOp);
     return success();
   }
@@ -374,6 +339,48 @@ struct ConvertTritonGPUToLLVM
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
+    // ---------------------------------------------
+    // TODO: MOVE TO NVIDIA-SPECIFIC FOLDER
+    // ---------------------------------------------
+    // Set TMA Attributes
+    {
+      mod.walk([&](triton::FuncOp funcOp) {
+        // Collect TMA information.
+        unsigned numTMALoad = 0;
+        funcOp.walk(
+            [&numTMALoad](triton::nvidia_gpu::InsertSliceTMAOp insertSliceOp) {
+              numTMALoad++;
+            });
+        unsigned numTMAStore = 0;
+        funcOp.walk(
+            [&numTMAStore](triton::nvidia_gpu::StoreAsyncTMAOp storeAsyncOp) {
+              numTMAStore++;
+            });
+        unsigned numTMA = numTMALoad + numTMAStore;
+        // Append arguments to receive TMADesc in global memory in the runtime
+        auto ptrTy = LLVM::LLVMPointerType::get(context, 1);
+        auto numArgs = funcOp.getBody().front().getNumArguments();
+        auto funcTy = funcOp.getFunctionType().cast<FunctionType>();
+        SmallVector<Type> newInputsTy(funcTy.getInputs().begin(),
+                                      funcTy.getInputs().end());
+        for (unsigned i = 0; i < numTMA; ++i) {
+          funcOp.getBody().front().addArgument(ptrTy, funcOp.getLoc());
+          newInputsTy.push_back(ptrTy);
+        }
+        funcOp.setType(
+            FunctionType::get(context, newInputsTy, funcTy.getResults()));
+        Type int32_ty = IntegerType::get(context, 32);
+        for (unsigned i = 0; i < numTMA; ++i) {
+          funcOp.setArgAttr(numArgs + i, "tt.divisibility",
+                            IntegerAttr::get(int32_ty, 1));
+        }
+        funcOp->setAttr(kAttrNumTMALoadDescsName,
+                        IntegerAttr::get(int32_ty, numTMALoad));
+        funcOp->setAttr(kAttrNumTMAStoreDescsName,
+                        IntegerAttr::get(int32_ty, numTMAStore));
+      });
+    }
+
     // Analysis
     ModuleAllocation allocation(mod);
     ModuleMembarAnalysis membarPass(&allocation);

@@ -448,7 +448,7 @@ struct StoreAsyncTMAOpConversion : public ConvertTritonGPUOpToLLVMPattern<
     auto moduleOp = op->getParentOfType<ModuleOp>();
     assert(moduleOp && "Parent ModuleOp not found for StoreAsyncTMAOp");
 
-    auto llFuncOp = op->getParentOfType<LLVM::LLVMFuncOp>();
+    auto llFuncOp = op->getParentOfType<triton::FuncOp>();
     assert(llFuncOp && "LLVMFuncOp not found for StoreAsyncTMAOp");
 
     int numTMADescs = getNumTMADescs(llFuncOp);
@@ -633,7 +633,7 @@ struct StoreAsyncTMAOpConversion : public ConvertTritonGPUOpToLLVMPattern<
     auto moduleOp = op->getParentOfType<ModuleOp>();
     assert(moduleOp && "Parent ModuleOp not found for StoreAsyncTMAOp");
 
-    auto llFuncOp = op->getParentOfType<LLVM::LLVMFuncOp>();
+    auto llFuncOp = op->getParentOfType<triton::FuncOp>();
     assert(llFuncOp && "LLVMFuncOp not found for StoreAsyncTMAOp");
 
     int numTMADescs = getNumTMADescs(llFuncOp);
@@ -900,7 +900,7 @@ private:
     }
   }
 
-  int getNumTMADescs(LLVM::LLVMFuncOp func) const {
+  int getNumTMADescs(triton::FuncOp func) const {
     if (!func->hasAttr(kAttrNumTMALoadDescsName)) {
       llvm::report_fatal_error("TritonGPU module should contain a "
                                "triton_gpu.num-tma-load attribute");
@@ -1481,7 +1481,7 @@ struct InsertSliceTMAOpConversion : public ConvertTritonGPUOpToLLVMPattern<
     auto axis = op->getAttrOfType<IntegerAttr>("axis").getInt();
     auto moduleOp = op->getParentOfType<ModuleOp>();
     assert(moduleOp && "Parent ModuleOp not found for InsertSliceTMAOp");
-    auto llFuncOp = op->getParentOfType<LLVM::LLVMFuncOp>();
+    auto llFuncOp = op->getParentOfType<triton::FuncOp>();
     assert(llFuncOp && "LLVMFuncOp not found for InsertSliceTMAOp");
     int numTMADescs = getNumTMADescs(llFuncOp);
     assert(numTMADescs > 0);
@@ -1796,7 +1796,7 @@ private:
     }
   }
 
-  int getNumTMADescs(LLVM::LLVMFuncOp func) const {
+  int getNumTMADescs(triton::FuncOp func) const {
     if (!func->hasAttr(kAttrNumTMALoadDescsName)) {
       llvm::report_fatal_error("TritonGPU module should contain a "
                                "triton_gpu.num-tma-load attribute");
