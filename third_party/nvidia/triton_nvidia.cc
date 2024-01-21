@@ -15,6 +15,50 @@
 
 namespace py = pybind11;
 
+/* ---------------------- */
+// TMA passes
+/* ---------------------- */
+
+void preprocess_tma(mlir::ModuleOp& mod){
+      using namespace mlir;
+      mod.walk([&](triton::FuncOp funcOp) {
+        // Collect TMA information.
+        unsigned numTMALoad = 0;
+        funcOp.walk(
+            [&numTMALoad](triton::nvidia_gpu::InsertSliceTMAOp insertSliceOp) {
+              numTMALoad++;
+            });
+        unsigned numTMAStore = 0;
+        funcOp.walk(
+            [&numTMAStore](triton::nvidia_gpu::StoreAsyncTMAOp storeAsyncOp) {
+              numTMAStore++;
+            });
+        unsigned numTMA = numTMALoad + numTMAStore;
+        // Append arguments to receive TMADesc in global memory in the runtime
+        auto ptrTy = LLVM::LLVMPointerType::get(mod.getContext(), 1);
+        auto numArgs = funcOp.getBody().front().getNumArguments();
+        auto funcTy = funcOp.getFunctionType().cast<FunctionType>();
+        SmallVector<Type> newInputsTy(funcTy.getInputs().begin(),
+                                      funcTy.getInputs().end());
+        for (unsigned i = 0; i < numTMA; ++i) {
+          funcOp.getBody().front().addArgument(ptrTy, funcOp.getLoc());
+          newInputsTy.push_back(ptrTy);
+        }
+        funcOp.setType(
+            FunctionType::get(mod.getContext(), newInputsTy, funcTy.getResults()));
+        Type int32_ty = IntegerType::get(mod.getContext(), 32);
+        for (unsigned i = 0; i < numTMA; ++i) {
+          funcOp.setArgAttr(numArgs + i, "tt.divisibility",
+                            IntegerAttr::get(int32_ty, 1));
+        }
+        funcOp->setAttr("triton_gpu.num-tma-load",
+                        IntegerAttr::get(int32_ty, numTMALoad));
+        funcOp->setAttr("triton_gpu.num-tma-store",
+                        IntegerAttr::get(int32_ty, numTMAStore));
+      });
+    
+}
+
 PYBIND11_MAKE_OPAQUE(mlir::triton::gpu::TMAMetadataTy);
 
 void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
@@ -23,6 +67,7 @@ void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
                      mlir::createTritonGPURewriteTensorPointerPass, int);
   // TODO: it is weird to pass mlir::triton::NVVM here since the conversion is
   // nvidia-specificontext
+  m.def("preprocess_tma", &preprocess_tma);
   m.def("add_to_llvmir", [](mlir::PassManager &pm, int32_t capability,
                             mlir::triton::gpu::TMAMetadataTy *tmaMetadata) {
     pm.addPass(createConvertTritonGPUToLLVMPass(capability, mlir::triton::NVVM,

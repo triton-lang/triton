@@ -464,6 +464,7 @@ class CUDABackend(BaseBackend):
             metadata["num_warps"] *= num_warp_groups
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
+        nvidia.passes.ttgpuir.preprocess_tma(mod)
         tma_infos = nvidia.TMAInfos()
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
