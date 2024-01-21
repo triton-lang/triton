@@ -441,8 +441,12 @@ setup(
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={
-        "build_ext": CMakeBuild, "build_py": CMakeBuildPy, "clean": CMakeClean, "install": plugin_install, "develop":
-        plugin_develop, "egg_info": plugin_egginfo
+        "build_ext": CMakeBuild,
+        "build_py": CMakeBuildPy,
+        "clean": CMakeClean,
+        "install": plugin_install,
+        "develop": plugin_develop,
+        "egg_info": plugin_egginfo,
     },
     zip_safe=False,
     # for PyPI
