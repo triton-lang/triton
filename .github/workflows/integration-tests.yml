@@ -112,7 +112,7 @@ jobs:
         if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '0'}}
         run: |
           cd python/test/unit
-          python3 -m pytest -vvv -n 8 --ignore=runtime --ignore=hopper --ignore=operators --ignore=language/test_line_info.py
+          python3 -bb -m pytest -vvv -n 8 --ignore=runtime --ignore=hopper --ignore=operators --ignore=language/test_line_info.py
           # run runtime tests serially to avoid race condition with cache handling.
           python3 -m pytest -vvv runtime/
           # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
