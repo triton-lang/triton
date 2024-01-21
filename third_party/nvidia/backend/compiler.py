@@ -467,6 +467,7 @@ class CUDABackend(BaseBackend):
         tma_infos = nvidia.TMAInfos()
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        nvidia.passes.ttnvgpuir.add_tma_descriptor_args(pm)
         passes.ttgpuir.add_decompose_unsupported_conversions(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
@@ -491,6 +492,12 @@ class CUDABackend(BaseBackend):
             for name, path in options.extern_libs:
                 llvm.link_extern_lib(llvm_mod, path)
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
+        # Set kernel attributes
+        # kernels = [fn for fn in llvm_mod.get_functions() if fn.has_public_visibility() and not fn.is_declaration()]
+        # assert len(kernels) == 1
+        # kernels[0].add_fn_attr("nvvm.maxntid", f"1, {options.num_warps*32}")
+        # kernels[0].add_fn_attr("nvvm.kernel", "1")
+
         # Get some metadata
         if len(tma_infos) > 0:
             metadata["tensormaps_info"] = parse_tma_info(tma_infos, metadata["ids_of_folded_args"])
