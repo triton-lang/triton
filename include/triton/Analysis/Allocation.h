@@ -209,7 +209,7 @@ private:
 /// as an argument to the callee.
 class ModuleAllocation : public CallGraph<Allocation> {
 public:
-  using FuncOffsetMapT = DenseMap<FunctionOpInterface, Value>;
+  using FuncOffsetMapT = DenseMap<llvm::StringRef, Value>;
 
   explicit ModuleAllocation(ModuleOp moduleOp)
       : CallGraph<Allocation>(moduleOp) {
@@ -238,11 +238,11 @@ public:
   }
 
   void setFunctionSharedMemoryValue(FunctionOpInterface funcOp, Value value) {
-    sharedMemoryValue[funcOp] = value;
+    sharedMemoryValue[funcOp.getName()] = value;
   }
 
   Value getFunctionSharedMemoryBase(FunctionOpInterface funcOp) {
-    return sharedMemoryValue[funcOp];
+    return sharedMemoryValue[funcOp.getName()];
   }
 
 private:

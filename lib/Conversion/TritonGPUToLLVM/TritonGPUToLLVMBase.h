@@ -281,9 +281,8 @@ public:
     assert(bufferId != Allocation::InvalidBufferId && "BufferId not found");
     size_t offset = funcAllocation->getOffset(bufferId);
     Value offVal = i32_val(offset);
-    Value base =
-        gep(ptrTy, this->getTypeConverter()->convertType(rewriter.getI8Type()),
-            smem, offVal);
+    Type int8_ty = this->getTypeConverter()->convertType(rewriter.getI8Type());
+    Value base = gep(ptrTy, int8_ty, smem, offVal);
     return base;
   }
 
@@ -808,7 +807,7 @@ private:
       rewriter.restoreInsertionPoint(*insertPt);
     } else {
       auto func =
-          rewriter.getInsertionPoint()->getParentOfType<LLVM::LLVMFuncOp>();
+          rewriter.getInsertionPoint()->getParentOfType<triton::FuncOp>();
       rewriter.setInsertionPointToStart(&func.getBody().front());
     }
   }
