@@ -374,6 +374,12 @@ struct ConvertTritonGPUToLLVM
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
+    // Analysis
+    ModuleAllocation allocation(mod);
+    ModuleMembarAnalysis membarPass(&allocation);
+    ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+    membarPass.run();
+    // Options
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
     TritonGPUToLLVMTypeConverter typeConverter(context, option);
@@ -388,11 +394,6 @@ struct ConvertTritonGPUToLLVM
     if (Attribute attr = mod->getAttr("triton_gpu.num-warp-groups-per-cta")) {
       numWarps *= attr.cast<IntegerAttr>().getInt();
     }
-
-    // Allocate shared memory and set barrier
-    ModuleAllocation allocation(mod);
-    ModuleMembarAnalysis membarPass(&allocation);
-    membarPass.run();
 
     /* Get tensorPtrMap before conversion */
     TensorPtrMapT tensorPtrMap;
@@ -432,7 +433,6 @@ struct ConvertTritonGPUToLLVM
     // because the call op has to know the shared memory base address of each
     // function
     initSharedMemory(allocation, typeConverter);
-    ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
 
     // Emit logics to get threadId/blockIds/linearized clusterCTAId etc. and
     // cache the values. The reason to do it here is that cluster_ctaid is
@@ -493,12 +493,6 @@ struct ConvertTritonGPUToLLVM
     populatePatterns2(populateClusterOpsToLLVMPatterns);
     populatePatterns2(populateRegReallocOpToLLVMPatterns);
     populatePatterns1(populateHistogramOpToLLVMPatterns);
-
-    // TODO(thomas): this should probably be done in a separate step to not
-    // interfere with our own lowering of arith ops. Add arith/math's patterns
-    // to help convert scalar expression to LLVM.
-    mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
-    mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
@@ -510,11 +504,10 @@ struct ConvertTritonGPUToLLVM
       TritonLLVMFunctionConversionTarget funcTarget(*context, target);
       RewritePatternSet funcPatterns(context);
       funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, allocation,
-                                         /*benefit=*/1);
-
+                                         1);
       funcPatterns.add<CallOpConversion>(typeConverter, numWarps, allocation,
-                                         20);
-      funcPatterns.add<ReturnOpConversion>(typeConverter, 20);
+                                         1);
+      funcPatterns.add<ReturnOpConversion>(typeConverter, 1);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
       if (failed(
