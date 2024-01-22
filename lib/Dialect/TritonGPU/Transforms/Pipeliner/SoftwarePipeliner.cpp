@@ -59,7 +59,8 @@ static void pipelineLoop(scf::ForOp forOp, int numStages) {
     return;
 
   bool foundSchedule = false;
-  foundSchedule = preProcessLoopAndGetSchedule(forOp, numStages, options);
+  mlir::triton::MatmulPipelineSchedule schedule;
+  foundSchedule = schedule.preProcessLoopAndGetSchedule(forOp, numStages, options);
 
   // TODO: add more pipelines strategy.
   if (!foundSchedule)
@@ -74,7 +75,7 @@ static void pipelineLoop(scf::ForOp forOp, int numStages) {
     mlir::triton::asyncLaunchDots(newForOp.value());
 
   // schedule the waits
-  mlir::triton::scheduleWaits(rewriter, newForOp.value(), options);
+  schedule.insertWaits(rewriter, newForOp.value());
 }
 
 namespace {
