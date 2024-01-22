@@ -674,6 +674,9 @@ static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp,
     if (auto arg = val.dyn_cast<BlockArgument>()) {
       auto block = arg.getOwner();
       auto currForOp = dyn_cast<scf::ForOp>(block->getParentOp());
+
+      // We cannot track further. Conservatively return 0, and assert in debug,
+      // so that we can easier find unsupported cases.
       assert(currForOp == forOp && "Unexpected forOp in minOverHistories.");
       if (currForOp != forOp)
         return 0;
