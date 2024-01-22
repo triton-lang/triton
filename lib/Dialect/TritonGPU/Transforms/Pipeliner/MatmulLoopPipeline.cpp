@@ -633,15 +633,15 @@ bool mlir::triton::MatmulPipelineSchedule::preProcessLoopAndGetSchedule(
   options.predicateFn = predicateOp;
   options.supportDynamicLoops = true;
   unsigned numLoadsInStage = (numStages - 2) * loads.size();
-  auto& extractOps = this->extractOps;
-  options.annotateFn = 
-    [&extractOps](Operation *op,
-                  mlir::triton::PipeliningOption::PipelinerPart part,
-                  unsigned iteration) {
-      if (isa<ttg::ExtractSliceOp>(op)) {
-        extractOps.push_back(op);
-      }
-    };
+  auto &extractOps = this->extractOps;
+  options.annotateFn =
+      [&extractOps](Operation *op,
+                    mlir::triton::PipeliningOption::PipelinerPart part,
+                    unsigned iteration) {
+        if (isa<ttg::ExtractSliceOp>(op)) {
+          extractOps.push_back(op);
+        }
+      };
 
   if (hasAsynCp) {
     // Insert a wait 0 after the loop
@@ -657,7 +657,8 @@ bool mlir::triton::MatmulPipelineSchedule::preProcessLoopAndGetSchedule(
 
 /// Find the minimum number of insert_clide ops between the extract
 /// and the insert. We could count async_commit_group ops instead.
-static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp, scf::ForOp forOp) {
+static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp,
+                                   scf::ForOp forOp) {
   auto countInsertsBetween = [](Operation *op1, Operation *op2) {
     int count = 0;
     for (auto op = op1; op != op2; op = op->getNextNode()) {
@@ -672,24 +673,25 @@ static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp, scf::ForOp for
   // DFS the def chain of the extract op to find the insert op. On each path
   // we calculate the number of insert ops. Then we select the minimum number
   // of insert ops among all the paths.
-  std::function<int(Value, Operation*, int)> minOverHistories = 
-    [&](Value val, Operation* sinkOp, int thisHistorySum) -> int{
+  std::function<int(Value, Operation *, int)> minOverHistories =
+      [&](Value val, Operation *sinkOp, int thisHistorySum) -> int {
     if (auto defOp = val.getDefiningOp()) {
       if (auto insertOp = dyn_cast<ttg::InsertSliceAsyncOp>(defOp)) {
-        auto insertsBetween = countInsertsBetween(insertOp->getNextNode(), sinkOp);
+        auto insertsBetween =
+            countInsertsBetween(insertOp->getNextNode(), sinkOp);
         thisHistorySum += insertsBetween;
         minWaitNumber = std::min(minWaitNumber, thisHistorySum);
         return minWaitNumber;
       }
-      // Unexpected case, return 0 conservatively. We can still continue, but in the debug
-      // mode we will assert to make it easier to find this case.
-      assert (false && "Unexpected  Op case in minOverHistories.");
+      // Unexpected case, return 0 conservatively. We can still continue, but in
+      // the debug mode we will assert to make it easier to find this case.
+      assert(false && "Unexpected  Op case in minOverHistories.");
       return 0;
     }
     if (auto arg = val.dyn_cast<BlockArgument>()) {
       auto block = arg.getOwner();
       auto currForOp = dyn_cast<scf::ForOp>(block->getParentOp());
-      assert (currForOp == forOp && "Unexpected forOp in minOverHistories.");
+      assert(currForOp == forOp && "Unexpected forOp in minOverHistories.");
       if (currForOp != forOp)
         return 0;
 
@@ -699,17 +701,19 @@ static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp, scf::ForOp for
       if (thisHistorySum >= minWaitNumber)
         return minWaitNumber;
 
-      // get the value value assigned to the argument coming from outside the loop
+      // get the value value assigned to the argument coming from outside the
+      // loop
       auto incomingVal = currForOp.getInitArgs()[arg.getArgNumber() - 1];
       int min1 = minOverHistories(incomingVal, currForOp, thisHistorySum);
 
-      // get the value value assigned to the argument coming from the previous iteration
+      // get the value value assigned to the argument coming from the previous
+      // iteration
       auto yieldOp = block->getTerminator();
       auto prevVal = yieldOp->getOperand(arg.getArgNumber() - 1);
       int min2 = minOverHistories(prevVal, yieldOp, thisHistorySum);
       return std::min(std::min(min1, min2), minWaitNumber);
     }
-    assert (false && "Unexpected Op case in minOverHistories.");
+    assert(false && "Unexpected Op case in minOverHistories.");
     return 0;
   };
 
@@ -717,7 +721,8 @@ static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp, scf::ForOp for
 }
 
 /// Insert wait ops after the extract_slice ops.
-void mlir::triton::MatmulPipelineSchedule::insertWaits(RewriterBase &rewriter, scf::ForOp forOp) {
+void mlir::triton::MatmulPipelineSchedule::insertWaits(RewriterBase &rewriter,
+                                                       scf::ForOp forOp) {
   for (auto op : extractOps) {
     auto extractSlice = cast<ttg::ExtractSliceOp>(op);
     auto minInsertsFromSource = minWaitNumberForExtract(extractSlice, forOp);
