@@ -60,7 +60,8 @@ static void pipelineLoop(scf::ForOp forOp, int numStages) {
 
   bool foundSchedule = false;
   mlir::triton::MatmulPipelineSchedule schedule;
-  foundSchedule = schedule.preProcessLoopAndGetSchedule(forOp, numStages, options);
+  foundSchedule =
+      schedule.preProcessLoopAndGetSchedule(forOp, numStages, options);
 
   // TODO: add more pipelines strategy.
   if (!foundSchedule)
