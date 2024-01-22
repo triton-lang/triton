@@ -133,7 +133,8 @@ public:
   /// @brief Choose MFMA instruction parameters
   /// @param dot target dot operation
   /// @return pair {nonKDim, kDim} sizes of one MFMA instruction arguments
-  std::pair<unsigned, unsigned> chooseMfmaDimensions(tt::DotOp dot) const {
+  std::tuple<int64_t, int64_t, int64_t>
+  chooseMfmaDimensions(tt::DotOp dot) const {
     // number of matrix elements along k dim per one MFMA intruction
     unsigned kDim = 0;
     auto opType = dot.getA().getType().cast<RankedTensorType>();
@@ -145,32 +146,50 @@ public:
     auto resType = dot.getD().getType().cast<RankedTensorType>();
     auto resShape = resType.getShape();
 
-    unsigned nonKDim = 0;
+    unsigned mDim = 0;
+    unsigned nDim = 0;
     if (enforcedNonKDim != 0) {
-      nonKDim = enforcedNonKDim;
+      mDim = enforcedNonKDim;
+      nDim = enforcedNonKDim;
     } else {
-      nonKDim = 0;
       int minSize = std::min(resShape[0], resShape[1]);
-      if (minSize >= 32)
-        nonKDim = 32;
-      if (minSize >= 16 && minSize < 32)
-        nonKDim = 16;
-      if (minSize < 16)
-        nonKDim = 4;
-      assert(nonKDim != 0);
+      if (minSize >= 32) {
+        mDim = 32;
+        nDim = 32;
+      }
+      if (minSize >= 16 && minSize < 32) {
+        mDim = 16;
+        nDim = 16;
+      }
+      if (minSize < 16) {
+        if (resShape[0] < 16 && resShape[1] >= 64) {
+          mDim = 4;
+          nDim = 64;
+        } else if (resShape[0] >= 64 && resShape[1] < 16) {
+          mDim = 64;
+          nDim = 4;
+        } else {
+          assert(opType.getShape()[1] >= 64 &&
+                 "k should be at least 64 to use this layout");
+          mDim = 4;
+          nDim = 4;
+        }
+      }
+      assert(mDim != 0);
+      assert(nDim != 0);
     }
 
     auto maybeMfmaInsn =
-        MfmaInsn::selectMfma(nonKDim, dataTypeA, dataTypeB, mfmaVersion);
+        MfmaInsn::selectMfma(mDim, nDim, dataTypeA, dataTypeB, mfmaVersion);
     if (failed(maybeMfmaInsn))
       llvm::report_fatal_error("No match found in MFMA database\n");
     else
       kDim = (*maybeMfmaInsn).getKDim();
     assert(kDim != 0);
-    assert(nonKDim != 0);
-    assert(resShape[0] % nonKDim == 0 && resShape[1] % nonKDim == 0);
+    assert(mDim != 0 && nDim != 0);
+    assert(resShape[0] % mDim == 0 && resShape[1] % nDim == 0);
     assert(opType.getShape()[1] % kDim == 0);
-    return {nonKDim, kDim};
+    return {mDim, nDim, kDim};
   }
 
   mlir::LogicalResult
@@ -205,16 +224,16 @@ public:
 
     ttg::MfmaEncodingAttr mfmaEnc;
 
-    auto [nonKDim, kDim] = chooseMfmaDimensions(dotOp);
+    auto [mDim, nDim, kDim] = chooseMfmaDimensions(dotOp);
 
     auto warpsPerTile =
-        warpsPerTileMFMA(dotOp, retShape, numWarps, {nonKDim, nonKDim});
+        warpsPerTileMFMA(dotOp, retShape, numWarps, {mDim, nDim});
 
     bool isTransposed = isChainDot(dotOp);
     mfmaEnc = ttg::MfmaEncodingAttr::get(
         oldRetType.getContext(),
         /*versionMajor*/ mfmaVersion, /*versionMinor*/ 0, warpsPerTile,
-        /*instrShape*/ nonKDim, nonKDim, isTransposed);
+        /*instrShape*/ mDim, nDim, isTransposed);
 
     auto newRetType =
         RankedTensorType::get(retShape, oldRetType.getElementType(), mfmaEnc);
@@ -236,23 +255,19 @@ public:
 
     // kWidth is a number of consecutive elements per one instruction per one
     // thread
-    auto kWidth = kDim;
+    auto kWidth = -1;
     // in mfma 32x32 case argument matrix groups elements in 2 groups
     // in mfma 16x16 case argument matrix groups elements in 4 groups
-    // in mfma 4x4 case arguemnt matrix groups in 16 groups
-    switch (nonKDim) {
-    case 32:
-      kWidth /= 2;
-      break;
-    case 16:
-      kWidth /= 4;
-      break;
-    case 4:
-      kWidth /= 16;
-      break;
-    default:
-      llvm::report_fatal_error("unsupported kDim in mfma dot");
-    }
+    // in mfma 4x4 case argument matrix groups in 16 groups
+    if (mDim == 32 && nDim == 32)
+      kWidth = kDim / 2;
+    if (mDim == 16 && nDim == 16)
+      kWidth = kDim / 4;
+    if (mDim == 4 && nDim == 4)
+      kWidth = kDim / 16;
+    if (mDim == 4 && nDim == 64 || mDim == 64 && nDim == 4)
+      kWidth = kDim;
+    assert(kWidth != -1);
     auto newAType = RankedTensorType::get(
         oldAType.getShape(), oldAType.getElementType(),
         ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth));

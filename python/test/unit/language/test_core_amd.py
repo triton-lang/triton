@@ -1690,7 +1690,9 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                                            [8, 32, 128, 2],
                                            [4, 32, 64, 4],
                                            [32, 4, 64, 2],
-                                           [16, 4, 64, 8]
+                                           [16, 4, 64, 8],
+                                           [64, 4, 16, 1],
+                                           [4, 64, 16, 1],
                                            ]
                           for allow_tf32 in [False, True]
                           for col_a in [True, False]
@@ -1913,12 +1915,25 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         backend = triton.common.backend.get_backend("hip")
         if backend.get_matrix_core_version() > 0:
             ttgir = pgm.asm['ttgir']
-            if non_k_dim == 16:
+            if non_k_dim == 0 and ((M == 4 and N == 64) or (M == 64 and N == 4)):
+                m64n4 = "instrShape = [64, 4]"
+                m4n64 = "instrShape = [4, 64]"
+                assert (m64n4 in ttgir) or (m4n64 in ttgir)
+                assert "instrShape = [4, 4]" not in ttgir
+                assert "instrShape = [16, 16]" not in ttgir
+                assert "instrShape = [32, 32]" not in ttgir
+            if non_k_dim == 4:
+                assert "instrShape = [4, 4]" in ttgir
+                assert "instrShape = [16, 16]" not in ttgir
+                assert "instrShape = [32, 32]" not in ttgir
+            elif non_k_dim == 16:
+                assert "instrShape = [4, 4]" not in ttgir
                 assert "instrShape = [16, 16]" in ttgir
                 assert "instrShape = [32, 32]" not in ttgir
             elif non_k_dim == 32:
-                assert "instrShape = [32, 32]" in ttgir
+                assert "instrShape = [4, 4]" not in ttgir
                 assert "instrShape = [16, 16]" not in ttgir
+                assert "instrShape = [32, 32]" in ttgir
         gcn = pgm.asm['amdgcn']
         if backend.get_matrix_core_version() == 3 and effective_in_dtype == tl.float8e5b16:
             assert "v_mfma_f32_32x32x16_bf8_bf8" in gcn or "v_mfma_f32_16x16x32_bf8_bf8" in gcn

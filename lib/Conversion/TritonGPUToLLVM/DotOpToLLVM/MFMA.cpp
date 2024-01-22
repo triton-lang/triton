@@ -70,8 +70,11 @@ struct DotOpMFMAConversionHelper {
     return rewriter.create(loweredOp)->getResult(0);
   }
 
-  int getNumSubmatrices(Type elementType, int nonKDim) const {
-    switch (nonKDim) {
+  int getNumSubmatrices(Type elementType, int mDim, int nDim) const {
+    if (mDim == 64 && nDim == 4 || mDim == 4 && nDim == 64)
+      return 1;
+    assert(mDim == nDim);
+    switch (mDim) {
     case 32:
     case 16:
       return 1;
@@ -162,9 +165,11 @@ struct DotOpMFMAConversionHelper {
   // Conduct the Dot conversion.
   LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor) const {
     auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
-    auto nonKDim = mfmaLayout.getMDim();
+    auto mDim = mfmaLayout.getMDim();
+    auto nDim = mfmaLayout.getNDim();
     auto mfmaVersion = mfmaLayout.getVersionMajor();
-    assert(nonKDim == 32 || nonKDim == 16 || nonKDim == 4);
+    assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
+           (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
 
     Value a = op.getA();
     Value b = op.getB();
@@ -177,7 +182,7 @@ struct DotOpMFMAConversionHelper {
 
     StringRef mfmaInsnName;
     auto maybeMfmaInsn =
-        MfmaInsn::selectMfma(nonKDim, elemTyA, elemTyB, mfmaVersion);
+        MfmaInsn::selectMfma(mDim, nDim, elemTyA, elemTyB, mfmaVersion);
     if (failed(maybeMfmaInsn))
       llvm::report_fatal_error("No match found in MFMA database\n");
     else
@@ -214,8 +219,8 @@ struct DotOpMFMAConversionHelper {
     // compute number of output elements that each thread holds for one MFMA
     // instruction. subBlocks
     const int subBlocks =
-        getNumSubmatrices(aTensorTy.getElementType(), nonKDim);
-    auto elemsPerVec = nonKDim * nonKDim * subBlocks / warpSize;
+        getNumSubmatrices(aTensorTy.getElementType(), mDim, nDim);
+    auto elemsPerVec = mDim * nDim * subBlocks / warpSize;
 
     auto vecTy = vec_ty(dstElemTy, elemsPerVec);
     for (int m = 0; m < numRepM; ++m) {

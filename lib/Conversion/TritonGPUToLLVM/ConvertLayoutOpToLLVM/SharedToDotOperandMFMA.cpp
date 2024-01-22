@@ -132,6 +132,7 @@ swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
  * @param smemStrides strides in LDS tensor
  * @param loadVecSize number of elements loaded by one operation
  * @param iNonKDim non-K dimension of dot operand
+ * @param iKDim non-K dimension of dot operand
  * @return vector (i-th element corresponds to i-th load instruction) of
  * 2-element vectors(tensor row and col).
  */
@@ -140,7 +141,7 @@ computeTensorElemMapping(ConversionPatternRewriter &rewriter, Location loc,
                          const ArrayRef<int64_t> &elemsPerInstr, Value waveId,
                          Value laneId, int warpsPerGroup, int numOfElems,
                          ArrayRef<int64_t> reps, ArrayRef<Value> smemOffsets,
-                         int loadVecSize, unsigned iNonKDim) {
+                         int loadVecSize, unsigned iNonKDim, unsigned iKDim) {
   auto numM = reps[0];
   auto numK = reps[1];
   const int loadsPerThread = numOfElems / loadVecSize;
@@ -159,8 +160,16 @@ computeTensorElemMapping(ConversionPatternRewriter &rewriter, Location loc,
     Value laneHOffset;
     if (iNonKDim == 32)
       laneHOffset = select(icmp_uge(laneId, _32), i32_val(numOfElems), _0);
-    else
-      laneHOffset = mul(udiv(laneId, nonKDim), i32_val(numOfElems));
+    else {
+      // In this configuration wave contains 16 copies of same data
+      if ((iKDim == 1 || iKDim == 4) && iNonKDim == 4) {
+        laneHOffset = i32_val(0);
+      } else {
+        assert(iKDim * iNonKDim / numOfElems == 64 &&
+               "seems no all threads in wave contain unique elements");
+        laneHOffset = mul(udiv(laneId, nonKDim), i32_val(numOfElems));
+      }
+    }
 
     for (int loadId = 0; loadId < loadsPerThread; ++loadId) {
       Value elemVOffset = _0;
@@ -197,7 +206,8 @@ computeOffsetsAType(ConversionPatternRewriter &rewriter, Location loc,
                     const ArrayRef<int64_t> &elemsPerInstr, Value waveId,
                     Value laneId, int warpsPerGroup, int numOfElems,
                     ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
-                    SharedEncodingAttr srcLayout, unsigned nonKDim) {
+                    SharedEncodingAttr srcLayout, unsigned nonKDim,
+                    unsigned kDim) {
   SmallVector<Value> strides{smemObj.strides[0], smemObj.strides[1]};
   SmallVector<Value> offsets{smemObj.offsets[0], smemObj.offsets[1]};
 
@@ -209,9 +219,9 @@ computeOffsetsAType(ConversionPatternRewriter &rewriter, Location loc,
       vectorSize = numOfElems;
   }
 
-  auto mapping = computeTensorElemMapping(rewriter, loc, elemsPerInstr, waveId,
-                                          laneId, warpsPerGroup, numOfElems,
-                                          reps, offsets, vectorSize, nonKDim);
+  auto mapping = computeTensorElemMapping(
+      rewriter, loc, elemsPerInstr, waveId, laneId, warpsPerGroup, numOfElems,
+      reps, offsets, vectorSize, nonKDim, kDim);
   llvm::SmallVector<Value> aOffsets(mapping.size());
   for (int i = 0; i < mapping.size(); ++i) {
     Value row = mapping[i][0];
@@ -226,7 +236,8 @@ computeOffsetsBType(ConversionPatternRewriter &rewriter, Location loc,
                     const ArrayRef<int64_t> &elemsPerInstr, Value waveId,
                     Value laneId, int warpsPerGroup, int numOfElems,
                     ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
-                    SharedEncodingAttr srcLayout, unsigned nonKDim) {
+                    SharedEncodingAttr srcLayout, unsigned nonKDim,
+                    unsigned kDim) {
   // transpose reps and offsets, because operand B has layout equal to
   // transposed operand A layout
   SmallVector<int64_t> tElemsPerInstr{elemsPerInstr[1], elemsPerInstr[0]};
@@ -241,9 +252,9 @@ computeOffsetsBType(ConversionPatternRewriter &rewriter, Location loc,
       vectorSize = numOfElems;
   }
 
-  auto mapping = computeTensorElemMapping(rewriter, loc, tElemsPerInstr, waveId,
-                                          laneId, warpsPerGroup, numOfElems,
-                                          tReps, toffsets, vectorSize, nonKDim);
+  auto mapping = computeTensorElemMapping(
+      rewriter, loc, tElemsPerInstr, waveId, laneId, warpsPerGroup, numOfElems,
+      tReps, toffsets, vectorSize, nonKDim, kDim);
   llvm::SmallVector<Value> bOffsets(mapping.size());
   for (int i = 0; i < mapping.size(); ++i) {
     // swap row and col, because operand B layout is a transposed operand A
@@ -333,7 +344,8 @@ bool fastPathAvailable(const SharedMemoryObject &smemObj,
 // Computes offsets for operand B or transposed operand A
 // @param rewriter
 // @param loc
-// @param elemsPerInstr operand tile shape consumed by one MFMA instruction
+// @param elemsPerInstr operand tile shape [K, nonK] consumed by one MFMA
+// instruction
 // @param waveId wave id for the "non K" axis
 // @param laneId lane id in warp [0..63]
 // @param warpsPerGroup number of warps per horizontal axis
@@ -349,18 +361,36 @@ fastPathComputeOffsets(ConversionPatternRewriter &rewriter, Location loc,
   auto numN = reps[1];
   SmallVector<Value> offsets(numK * numN * numOfElems);
 
-  int lineSize = warpsPerGroup * elemsPerInstr[1] * numN;
-  Value _nonKDim = i32_val(elemsPerInstr[1]);
-  Value waveOffset = mul(waveId, i32_val(elemsPerInstr[1]));
+  auto iKDim = elemsPerInstr[0];
+  auto iNonKDim = elemsPerInstr[1];
+  int lineSize = warpsPerGroup * iNonKDim * numN;
+  Value _nonKDim = i32_val(iNonKDim);
+  Value waveOffset = mul(waveId, i32_val(iNonKDim));
   Value colOffset = urem(laneId, _nonKDim);
 
   for (int block = 0; block < numN; ++block) {
-    Value blockOffset = i32_val(block * elemsPerInstr[1] * warpsPerGroup);
+    Value blockOffset = i32_val(block * iNonKDim * warpsPerGroup);
     for (int tile = 0; tile < numK; ++tile) {
-      Value tileOffset = i32_val(tile * elemsPerInstr[0] * lineSize);
+      Value tileOffset = i32_val(tile * iKDim * lineSize);
       for (int elem = 0; elem < numOfElems; ++elem) {
-        Value halfOffset =
-            mul(udiv(laneId, _nonKDim), i32_val(numOfElems * lineSize));
+        // halfOffset is an offset related to wrapping of wave in the tile.
+        // for example, mfma 32 case (mapping of tensor elements to lane ids in
+        // wave):
+        //
+        //  0  1  2  3 ... 31
+        //  0  1  2  3 ... 31
+        //  0  1  2  3 ... 31
+        //  0  1  2  3 ... 31
+        // 32 33 34 35 ... 63  <- at this point wave is wrapping
+        // 32 33 34 35 ... 63
+        // 32 33 34 35 ... 63
+        // 32 33 34 35 ... 63
+        Value halfOffset;
+        if ((iKDim == 1 || iKDim == 4) && iNonKDim == 4)
+          halfOffset = i32_val(0);
+        else
+          halfOffset =
+              mul(udiv(laneId, _nonKDim), i32_val(numOfElems * lineSize));
         Value rowOffset = add(i32_val(elem * lineSize), halfOffset);
         Value elemOffset = add(rowOffset, colOffset);
         Value offset =
@@ -395,8 +425,10 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   int nonKDimIdx = opIdx == 0 ? 0 : 1;
 
   auto mfmaLayout = encoding.getParent().cast<MfmaEncodingAttr>();
-  int nonKDim = mfmaLayout.getMDim();
-  assert(nonKDim == 32 || nonKDim == 16 || nonKDim == 4);
+  auto mDim = mfmaLayout.getMDim();
+  auto nDim = mfmaLayout.getNDim();
+  assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
+         (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 
   auto aTensorTy = tensor.getType().cast<RankedTensorType>();
@@ -422,7 +454,12 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   Value spatialWaveId =
       getWaveIdInBlock(rewriter, loc, linearWaveId, warpsPerCTA, mfmaInstrNonK,
                        shape[nonKDimIdx], nonKDimIdx);
-  int numOfElems = mfmaInstrNonK * mfmaInstrK / iWaveSize;
+  // number of duplicates of elements in wave
+  // In case of 64x4 x 4x4 multiplication, 4x4 B operand is duplicated 16 times
+  int numSubBlocks = 1;
+  if ((mfmaInstrK == 4 || mfmaInstrK == 1) && mfmaInstrNonK == 4)
+    numSubBlocks = 16;
+  int numOfElems = mfmaInstrNonK * mfmaInstrK * numSubBlocks / iWaveSize;
   assert(numOfElems >= 1);
 
   unsigned int maxNumWarps = shape[nonKDimIdx] / mfmaInstrNonK;
@@ -465,14 +502,14 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     // Normal path handles tensors that are k-major, in which case swizzling
     // is enabled and it requires a 2-step method to compute the offsets.
     if (opIdx == 0) {
-      offsets = computeOffsetsAType(rewriter, loc, elemsPerInstr, spatialWaveId,
-                                    lane, warpsPerGroupNonK, numOfElems,
-                                    numReps, smemObj, sharedLayout, nonKDim);
+      offsets = computeOffsetsAType(
+          rewriter, loc, elemsPerInstr, spatialWaveId, lane, warpsPerGroupNonK,
+          numOfElems, numReps, smemObj, sharedLayout, mDim, mfmaInstrK);
     } else {
       assert(opIdx == 1);
-      offsets = computeOffsetsBType(rewriter, loc, elemsPerInstr, spatialWaveId,
-                                    lane, warpsPerGroupNonK, numOfElems,
-                                    numReps, smemObj, sharedLayout, nonKDim);
+      offsets = computeOffsetsBType(
+          rewriter, loc, elemsPerInstr, spatialWaveId, lane, warpsPerGroupNonK,
+          numOfElems, numReps, smemObj, sharedLayout, nDim, mfmaInstrK);
     }
     smemBase = computeBasePtr(rewriter, loc, smemObj);
   }
@@ -485,8 +522,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   assert(numOfElems % loadsPerThread == 0);
 
   for (int nonK = 0; nonK < numRepNonK; ++nonK) {
-    Value blockVOffset = i32_val(nonK * mfmaInstrNonK * warpsPerGroupNonK);
-    Value offAdjust = mul(blockVOffset, i32_val(shape[order[0]]));
+    int blockNonKOffset = nonK * mfmaInstrNonK * warpsPerGroupNonK;
+    Value offAdjust = i32_val(blockNonKOffset * shape[order[0]]);
     for (int k = 0; k < numRepK; ++k) {
       auto vecTy = vec_ty(resElemTy, numOfElems);
       Value valVec = undef(vecTy);

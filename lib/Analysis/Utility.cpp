@@ -426,10 +426,11 @@ bool supportMMA(triton::DotOp op, int version) {
 #ifdef USE_ROCM
 static bool supportMFMAGranularity(int m, int n, int k) {
   // these limitations are dtype dependent, in future we may relax them
-  const static std::pair<int, int> mfmaTypes[] = {{32, 8}, {16, 16}, {4, 64}};
+  const static std::tuple<int, int, int> mfmaTypes[] = {
+      {32, 32, 8}, {16, 16, 16}, {4, 4, 64}, {64, 4, 4}, {4, 64, 4}};
   for (const auto &mfmaType : mfmaTypes) {
-    auto [granularityMN, granularityK] = mfmaType;
-    if (m % granularityMN != 0 || n % granularityMN != 0)
+    auto [granularityM, granularityN, granularityK] = mfmaType;
+    if (m % granularityM != 0 || n % granularityN != 0)
       continue;
     if (k % granularityK != 0)
       continue;

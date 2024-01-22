@@ -161,7 +161,7 @@ enum class MfmaTypeId : uint32_t {
 };
 
 struct MfmaInsnGroupSelectKey {
-  unsigned nonKDim;
+  unsigned mDim, nDim;
   MfmaTypeId elemType;
   int mfmaVersion;
 };
@@ -187,23 +187,24 @@ constexpr typename std::underlying_type<T>::type cast_as_underlying(T t) {
 struct MfmaInsnGroupSelectKeyInfo
     : public llvm::DenseMapInfo<MfmaInsnGroupSelectKey> {
   static inline MfmaInsnGroupSelectKey getEmptyKey() {
-    return {32, MfmaTypeId::Fp32TyId, 0};
+    return {32, 32, MfmaTypeId::Fp32TyId, 0};
   }
 
   static inline MfmaInsnGroupSelectKey getTombstoneKey() {
-    return {32, MfmaTypeId::Fp32TyId, -1};
+    return {32, 32, MfmaTypeId::Fp32TyId, -1};
   }
 
   static inline bool isEqual(const MfmaInsnGroupSelectKey &lhs,
                              const MfmaInsnGroupSelectKey &rhs) {
-    return lhs.nonKDim == rhs.nonKDim && lhs.elemType == rhs.elemType &&
-           lhs.mfmaVersion == rhs.mfmaVersion;
+    return lhs.mDim == rhs.mDim && lhs.nDim == rhs.nDim &&
+           lhs.elemType == rhs.elemType && lhs.mfmaVersion == rhs.mfmaVersion;
   }
 
   static unsigned getHashValue(const MfmaInsnGroupSelectKey &key) {
-    return llvm::detail::combineHashValue(
-        cast_as_underlying(key.elemType),
-        llvm::detail::combineHashValue(key.nonKDim, key.mfmaVersion));
+    auto dimHash = llvm::detail::combineHashValue(key.mDim, key.nDim);
+    auto verHash = llvm::detail::combineHashValue(dimHash, key.mfmaVersion);
+    auto elemHash = cast_as_underlying(key.elemType);
+    return llvm::detail::combineHashValue(elemHash, verHash);
   }
 };
 
@@ -214,8 +215,9 @@ private:
   MfmaInsnAttr attr;
 
 public:
-  static FailureOr<MfmaInsn> selectMfma(unsigned nonKDim, Type elementTypeA,
-                                        Type elementTypeB, int mfmaVersion);
+  static FailureOr<MfmaInsn> selectMfma(unsigned mDim, unsigned nDim,
+                                        Type elementTypeA, Type elementTypeB,
+                                        int mfmaVersion);
   MfmaInsn(Type elementTypeA, Type elementTypeB, const MfmaInsnAttr &attr);
   unsigned getKDim();
   unsigned getMDim();

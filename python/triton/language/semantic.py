@@ -1190,10 +1190,10 @@ def is_hip():
 
 def mfma_supported_granularity(m, n, k) -> bool:
     # todo make this gran_type matrix element type sensitive
-    for gran_type in [(32, 8), (16, 16), (4, 64)]:
-        granularity_mn, granularity_k = gran_type
+    for gran_type in [(32, 32, 8), (16, 16, 16), (4, 4, 64), (64, 4, 4), (4, 64, 4)]:
+        granularity_m, granularity_n, granularity_k = gran_type
 
-        if m % granularity_mn != 0 or n % granularity_mn != 0:
+        if m % granularity_m != 0 or n % granularity_n != 0:
             continue
         if k % granularity_k != 0:
             continue
