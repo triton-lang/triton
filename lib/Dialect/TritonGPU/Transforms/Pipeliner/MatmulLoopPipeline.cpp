@@ -398,17 +398,6 @@ static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
                     extractIdx, phase);
     firstLoad = false;
   }
-  // Insert a waitOp after the first async copy. This does make the assumption
-  // that the wait will be scheduled in a different stage that all the async
-  // copy but we cannot guarantee that one wait is enough otherwise.
-  // for (auto &op : forOp.getBody()->without_terminator()) {
-  //   if (isa<ttg::InsertSliceAsyncOp>(op)) {
-  //     OpBuilder builder(op.getContext());
-  //     builder.setInsertionPointAfter(&op);
-  //     builder.create<ttg::AsyncWaitOp>(op.getLoc(), 0);
-  //     break;
-  //   }
-  // }
   SmallVector<Value> newYieldOperands = {insertIdx, extractIdx};
   if (needsMbarrierPhase)
     newYieldOperands.push_back(phase);
@@ -655,8 +644,8 @@ bool mlir::triton::MatmulPipelineSchedule::preProcessLoopAndGetSchedule(
   return true;
 }
 
-/// Find the minimum number of insert_clide ops between the extract
-/// and the insert. We could count async_commit_group ops instead.
+/// Find the minimum number of insert_slice ops between the extract
+/// and the insert. This is equivalent to counting async_commit_group ops
 static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp,
                                    scf::ForOp forOp) {
   auto countInsertsBetween = [](Operation *op1, Operation *op2) {
@@ -664,6 +653,8 @@ static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp,
     for (auto op = op1; op != op2; op = op->getNextNode()) {
       if (isa<ttg::InsertSliceAsyncOp>(op))
         count++;
+      // Intentionally skip block ops' children. This will give us
+      // convervatively low number of insert ops.
     }
     return count;
   };
@@ -675,18 +666,10 @@ static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp,
   // of insert ops among all the paths.
   std::function<int(Value, Operation *, int)> minOverHistories =
       [&](Value val, Operation *sinkOp, int thisHistorySum) -> int {
-    if (auto defOp = val.getDefiningOp()) {
-      if (auto insertOp = dyn_cast<ttg::InsertSliceAsyncOp>(defOp)) {
-        auto insertsBetween =
-            countInsertsBetween(insertOp->getNextNode(), sinkOp);
-        thisHistorySum += insertsBetween;
-        minWaitNumber = std::min(minWaitNumber, thisHistorySum);
-        return minWaitNumber;
-      }
-      // Unexpected case, return 0 conservatively. We can still continue, but in
-      // the debug mode we will assert to make it easier to find this case.
-      assert(false && "Unexpected  Op case in minOverHistories.");
-      return 0;
+    if (auto insertOp = val.getDefiningOp<ttg::InsertSliceAsyncOp>()) {
+      thisHistorySum += countInsertsBetween(insertOp->getNextNode(), sinkOp);
+      minWaitNumber = std::min(minWaitNumber, thisHistorySum);
+      return minWaitNumber;
     }
     if (auto arg = val.dyn_cast<BlockArgument>()) {
       auto block = arg.getOwner();
