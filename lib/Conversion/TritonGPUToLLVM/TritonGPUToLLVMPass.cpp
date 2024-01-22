@@ -72,7 +72,7 @@ public:
     auto splatOp = insertOp.getMask().getDefiningOp<triton::SplatOp>();
     if (!splatOp)
       return failure();
-    rewriter.updateRootInPlace(insertOp, [&]() {
+    rewriter.modifyOpInPlace(insertOp, [&]() {
       insertOp.getMaskMutable().assign(splatOp->getOperand(0));
     });
     return mlir::success();
