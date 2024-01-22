@@ -187,6 +187,11 @@ def gen_input(M, N, ty_name, needTrans, seed, device='cuda'):
         raw_data = torch.randn((N, M), dtype=torch.float32, device='cuda').T
     else:
         raw_data = torch.randn((M, N), dtype=torch.float32, device='cuda')
+    # avoid type conversion rounding errors of subnormal values
+    raw_data += 0.1
+    if d_type == tl.float8e4b8:
+        raw_data += torch.sign(raw_data)
+
     if (d_type == tl.float8e4b8 and TORCH_HAS_FP8E4B8) or \
         (d_type == tl.float8e5b16 and TORCH_HAS_FP8E5B16) or not d_type.is_fp8():
         input = raw_data.to(tl_to_torch_types[d_type])
@@ -249,9 +254,9 @@ def test_correctness(M, N, K, col_a, col_b, in_dtype, out_dtype):
     #print(f"torch_output={torch_output}")
     rtol = 0 if torch.version.hip is None else 1e-2
     if in_dtype == 'int8':
-        torch.testing.assert_close(c.to(torch.float16), torch_output, atol=5e-2, rtol=rtol)
+        torch.testing.assert_close(c.to(torch.float16), torch_output, atol=1e-3, rtol=rtol)
     else:
-        torch.testing.assert_close(c, torch_output.to(torch_out_dtype), atol=5e-2, rtol=rtol)
+        torch.testing.assert_close(c, torch_output.to(torch_out_dtype), atol=5e-3, rtol=rtol)
 
 
 # %%
