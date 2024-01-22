@@ -34,6 +34,9 @@ include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 include "mlir/Interfaces/DestinationStyleOpInterface.td"
 include "mlir/Interfaces/ViewLikeInterface.td"
 
+def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
+def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
+
 def Source1IsSharedEncoding: NativeOpTrait<"Source1IsSharedEncoding">;
 
 def ResultsAreSharedEncoding: NativeOpTrait<"ResultsAreSharedEncoding">;
@@ -68,7 +71,7 @@ class TTNG_Op<string mnemonic, list<Trait> traits = []> :
 //      triton_nvidia_gpu.mbarrier_wait %2, %c0 : !tt.ptr<i64>, i1 -> ()
 //    }
 
-def TTNG_AllocMBarrierOp : TTNG_Op<"alloc_mbarrier", [MemoryEffects<[MemAlloc]>]> {
+def TTNG_AllocMBarrierOp : TTNG_Op<"alloc_mbarrier", [MemoryEffects<[MemAlloc<SharedMemory>]>]> {
   let summary = "allocate a vector of mbarriers";
 
   let description = [{
@@ -115,7 +118,7 @@ def TTNG_ExtractMBarrierOp : TTNG_Op<"extract_mbarrier", [Pure]> {
   let results = (outs TT_Ptr:$result);
 }
 
-def TTNG_MBarrierWaitOp : TTNG_Op<"mbarrier_wait", [MemoryEffects<[MemRead, MemWrite]>]> {
+def TTNG_MBarrierWaitOp : TTNG_Op<"mbarrier_wait", [MemoryEffects<[MemRead<SharedMemory>, MemWrite<SharedMemory>]>]> {
   let summary = "mbarrier wait";
 
   let description = [{
@@ -134,7 +137,7 @@ def TTNG_MBarrierWaitOp : TTNG_Op<"mbarrier_wait", [MemoryEffects<[MemRead, MemW
 }
 
 def TTNG_MBarrierArriveOp : TTNG_Op<"mbarrier_arrive", [AttrSizedOperandSegments,
-                                                      MemoryEffects<[MemWrite]>]> {
+                                                      MemoryEffects<[MemWrite<SharedMemory>]>]> {
   let summary = "mbarrier arrive";
 
   let description = [{
@@ -228,7 +231,7 @@ def TTNG_InsertSliceTMAOp : TTNG_Op<"insert_slice_tma",
                                      [AttrSizedOperandSegments,
                                       ResultsAreSharedEncoding,
                                       // TODO: Check if MemWrite will degrade performance of non-warp-specialized kernel
-                                      MemoryEffects<[MemRead, MemWrite]>]> {
+                                      MemoryEffects<[MemRead<GlobalMemory>, MemWrite<SharedMemory>]>]> {
 
   let arguments = (ins AnyTypeOf<[TT_Ptr, TT_PtrTensor]>:$src, TT_Tensor:$dst,
                        I32:$index, TT_Ptr:$mbar,
@@ -294,7 +297,7 @@ def TTNG_DotWaitOp : TTNG_Op<"dot_wait", [DeclareOpInterfaceMethods<InferTypeOpI
 }
 
 def TTNG_StoreAsyncTMAOp : TTNG_Op<"store_async_tma",
-                              [MemoryEffects<[MemWrite]>]> {
+                              [MemoryEffects<[MemRead<SharedMemory>, MemWrite<GlobalMemory>]>]> {
   let summary = "store asynchronous by a tensor pointer";
   let arguments = (ins TT_TensorPtr:$dst, TT_Tensor:$src,
                        DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache);
