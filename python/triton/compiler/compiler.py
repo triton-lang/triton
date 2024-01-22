@@ -201,7 +201,7 @@ def parse(full_name, ext):
 
 def compile(src, target=None, options=None):
     if target is None:
-        target = driver.get_current_target()
+        target = driver.active.get_current_target()
     backend = make_backend(target)
     # create backend
     if not isinstance(src, ASTSource):
@@ -290,14 +290,14 @@ class CompiledKernel:
 
         self.name = self.metadata.name
         # create launcher
-        self.run = driver.launcher_cls(src, self.metadata)
+        self.run = driver.active.launcher_cls(src, self.metadata)
         # stores the text of each level of IR that was generated during compilation
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
         self.asm = {
-            file.suffix[1:]: file.read_bytes() if file.suffix[1:] == driver.binary_ext else file.read_text()
+            file.suffix[1:]: file.read_bytes() if file.suffix[1:] == driver.active.binary_ext else file.read_text()
             for file in asm_files
         }
-        self.kernel = self.asm[driver.binary_ext]
+        self.kernel = self.asm[driver.active.binary_ext]
         # binaries are lazily initialized
         # because it involves doing runtime things
         # (e.g., checking amount of shared memory on current device)
@@ -307,13 +307,13 @@ class CompiledKernel:
     def _init_handles(self):
         if self.module is not None:
             return
-        device = driver.get_current_device()
+        device = driver.active.get_current_device()
         # not enough shared memory to run the kernel
-        max_shared = driver.utils.get_device_properties(device)["max_shared_mem"]
+        max_shared = driver.active.utils.get_device_properties(device)["max_shared_mem"]
         if self.metadata.shared > max_shared:
             raise OutOfResources(self.metadata.shared, max_shared, "shared memory")
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
-        self.module, self.function, self.n_regs, self.n_spills = driver.utils.load_binary(
+        self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
 
     def __getattribute__(self, name):
@@ -326,10 +326,10 @@ class CompiledKernel:
 
         def runner(*args, stream=None):
             if stream is None:
-                device = driver.get_current_device()
-                stream = driver.get_current_stream(device)
+                device = driver.active.get_current_device()
+                stream = driver.active.get_current_stream(device)
             md = self.metadata
-            args_expand = driver.assemble_tensormap_to_arg(md.tensormaps_info, args)
+            args_expand = driver.active.assemble_tensormap_to_arg(md.tensormaps_info, args)
             self.run(grid[0], grid[1], grid[2], md.num_warps, md.num_ctas, md.cluster_dims[0], md.cluster_dims[1],
                      md.cluster_dims[2], md.shared, stream, self.function, CompiledKernel.launch_enter_hook,
                      CompiledKernel.launch_exit_hook, md, *args_expand)
