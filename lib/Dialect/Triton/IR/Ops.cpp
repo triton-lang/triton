@@ -719,29 +719,44 @@ LogicalResult ExpandDimsOp::canonicalize(ExpandDimsOp op,
                                                  splat.getOperand());
     return mlir::success();
   }
-  // expand_dims(broadcast) -> broadcast(expand_dims)
+  // expand_dims(broadcast(x)) -> broadcast(expand_dims(x))
   //
-  // On it's own this doesn't do much, but consider
+  // On its own this doesn't do much, but consider
   //    broadcast(expand_dims(broadcast))
   // -> broadcast(broadcast(expand_dims))
   // -> broadcast(expand_dims)
+  //
+  // Note we can't do this if x is a scalar, because expandDims requires a
+  // tensor input.  (We could change it to broadcast(expand_dims(splat(x))), but
+  // it's unclear that's better.)  broadcast currently accepts scalar inputs,
+  // but it probably shouldn't (just use splat instead).
   if (auto broadcast = dyn_cast<triton::BroadcastOp>(definingOp)) {
     auto src = broadcast.getSrc();
-    auto srcTy = src.getType().dyn_cast<RankedTensorType>();
-    auto elemTy = srcTy.getElementType();
-    auto srcShape = srcTy.getShape();
+    if (auto srcTy = src.getType().dyn_cast<RankedTensorType>()) {
+      SmallVector<int64_t> newExpandShape(srcTy.getShape());
+      newExpandShape.insert(newExpandShape.begin() + op.getAxis(), 1);
 
-    llvm::SmallVector<int64_t, 4> newExpandShape(srcShape.begin(),
-                                                 srcShape.end());
-    newExpandShape.insert(newExpandShape.begin() + op.getAxis(), 1);
-    auto newExpandTy = RankedTensorType::get(newExpandShape, elemTy);
+      // Infer the encoding of the new expand op, if encodings are present.
+      Attribute newExpandEnc;
+      if (auto srcEnc = srcTy.getEncoding()) {
+        if (dyn_cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+                ->inferExpandDimsOpEncoding(srcEnc, op.getAxis(), newExpandEnc,
+                                            op.getLoc())
+                .failed()) {
+          return emitOptionalError(op.getLoc(),
+                                   "failed to infer layout for ExpandDimsOp");
+        }
+      }
 
-    auto newExpand = rewriter.create<triton::ExpandDimsOp>(
-        op.getLoc(), newExpandTy, src, op.getAxis());
-    auto newBroadcast = rewriter.create<triton::BroadcastOp>(
-        broadcast.getLoc(), op.getType(), newExpand.getResult());
-    rewriter.replaceOp(op, {newBroadcast.getResult()});
-    return mlir::success();
+      auto newExpandTy = RankedTensorType::get(
+          newExpandShape, srcTy.getElementType(), newExpandEnc);
+      auto newExpand = rewriter.create<triton::ExpandDimsOp>(
+          op.getLoc(), newExpandTy, src, op.getAxis());
+      auto newBroadcast = rewriter.create<triton::BroadcastOp>(
+          broadcast.getLoc(), op.getType(), newExpand.getResult());
+      rewriter.replaceOp(op, {newBroadcast.getResult()});
+      return mlir::success();
+    }
   }
 
   return mlir::failure();

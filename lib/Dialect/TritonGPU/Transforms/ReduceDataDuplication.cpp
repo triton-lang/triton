@@ -21,11 +21,11 @@
 
 using namespace mlir;
 
-class TritonGPUDecomposeConversionsPass
-    : public TritonGPUDecomposeConversionsBase<
-          TritonGPUDecomposeConversionsPass> {
+class TritonGPUReduceDataDuplicationPass
+    : public TritonGPUReduceDataDuplicationBase<
+          TritonGPUReduceDataDuplicationPass> {
 public:
-  TritonGPUDecomposeConversionsPass() = default;
+  TritonGPUReduceDataDuplicationPass() = default;
 
   void runOnOperation() override {
     ModuleOp mod = getOperation();
@@ -65,6 +65,6 @@ public:
   }
 };
 
-std::unique_ptr<Pass> mlir::triton::gpu::createDecomposeConversionsPass() {
-  return std::make_unique<TritonGPUDecomposeConversionsPass>();
+std::unique_ptr<Pass> mlir::triton::gpu::createReduceDataDuplicationPass() {
+  return std::make_unique<TritonGPUReduceDataDuplicationPass>();
 }

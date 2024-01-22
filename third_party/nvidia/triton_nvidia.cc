@@ -31,6 +31,7 @@ void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
 }
 
 void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
+  ADD_PASS_WRAPPER_0("add_tma_descriptor_args", mlir::createTritonNvidiaGPUAddDescriptorArgs);
   ADD_PASS_WRAPPER_1("add_plan_cta", mlir::createTritonNvidiaGPUPlanCTAPass,
                      mlir::triton::nvidia_gpu::ClusterInfo *);
   ADD_PASS_WRAPPER_1("add_wsfeasibility_checking",

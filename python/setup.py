@@ -16,12 +16,18 @@ from setuptools.command.build_ext import build_ext
 from setuptools.command.build_py import build_py
 from dataclasses import dataclass
 
+from distutils.command.install import install
+from setuptools.command.develop import develop
+from setuptools.command.egg_info import egg_info
+
 
 @dataclass
 class Backend:
     name: str
     package_data: dict
     src_dir: str
+    backend_dir: str
+    install_dir: str
 
 
 def _copy_backends(active):
@@ -29,7 +35,8 @@ def _copy_backends(active):
     root_dir = os.path.join(os.pardir, "third_party")
     for backend in active:
         curr_path = os.path.join(root_dir, backend)
-        backend_path = os.path.join(curr_path, "backend")
+        backend_path = os.path.abspath(os.path.join(curr_path, "backend"))
+        install_dir = os.path.join(os.path.dirname(__file__), "triton", "backends", backend)
         # initialize submodule if there is one
         try:
             subprocess.run(["git", "submodule", "update", "--init", f"{backend}"], check=True,
@@ -43,14 +50,11 @@ def _copy_backends(active):
         assert os.path.exists(backend_path), f"{backend_path} does not exist!"
         for file in ["compiler.py", "driver.py"]:
             assert os.path.exists(os.path.join(backend_path, file))
-        # copy backend over
-        dst_path = os.path.join(os.path.dirname(__file__), "triton", "backends", backend)
-        if os.path.exists(dst_path):
-            shutil.rmtree(dst_path)
-        shutil.copytree(backend_path, dst_path)
         # update
         package_data = [f"{os.path.relpath(p, backend_path)}/*" for p, _, _, in os.walk(backend_path)]
-        ret.append(Backend(name=backend, package_data=package_data, src_dir=curr_path))
+        ret.append(
+            Backend(name=backend, package_data=package_data, src_dir=curr_path, backend_dir=backend_path,
+                    install_dir=install_dir))
     return ret
 
 
@@ -378,6 +382,37 @@ download_and_copy(
 )
 backends = _copy_backends(["nvidia", "amd"])
 
+
+def add_link_to_backends():
+    for backend in backends:
+        if os.path.islink(backend.install_dir):
+            os.unlink(backend.install_dir)
+        if os.path.exists(backend.install_dir):
+            shutil.rmtree(backend.install_dir)
+        os.symlink(backend.backend_dir, backend.install_dir)
+
+
+class plugin_install(install):
+
+    def run(self):
+        add_link_to_backends()
+        install.run(self)
+
+
+class plugin_develop(develop):
+
+    def run(self):
+        add_link_to_backends()
+        develop.run(self)
+
+
+class plugin_egginfo(egg_info):
+
+    def run(self):
+        add_link_to_backends()
+        egg_info.run(self)
+
+
 package_data = dict()
 package_data["triton/tools"] = ["compile.h", "compile.c"]
 package_data.update({f"triton/backends/{b.name}": b.package_data for b in backends})
@@ -405,7 +440,14 @@ setup(
     package_data=package_data,
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
-    cmdclass={"build_ext": CMakeBuild, "build_py": CMakeBuildPy, "clean": CMakeClean},
+    cmdclass={
+        "build_ext": CMakeBuild,
+        "build_py": CMakeBuildPy,
+        "clean": CMakeClean,
+        "install": plugin_install,
+        "develop": plugin_develop,
+        "egg_info": plugin_egginfo,
+    },
     zip_safe=False,
     # for PyPI
     keywords=["Compiler", "Deep Learning"],

@@ -901,9 +901,9 @@ def test_full_static_persistent_matmul_kernel(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WAR
         src = triton.compiler.ASTSource(fn=empty_kernel, signature="i32", constants={"BLOCK_M": 64, "BLOCK_N": 64})
         null_kernel = triton.compile(src)
         null_kernel._init_handles()
-        device = driver.get_current_device()
-        max_shared_mem = driver.utils.get_device_properties(device)["max_shared_mem"]
-        NUM_SMS = driver.utils.cuOccupancyMaxActiveClusters(null_kernel.function, max_shared_mem, NUM_CTAS, 1, 1)
+        device = driver.active.get_current_device()
+        max_shared_mem = driver.active.utils.get_device_properties(device)["max_shared_mem"]
+        NUM_SMS = driver.active.utils.cuOccupancyMaxActiveClusters(null_kernel.function, max_shared_mem, NUM_CTAS, 1, 1)
 
     def grid(META):
         return (min(NUM_SMS, triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N'])), )

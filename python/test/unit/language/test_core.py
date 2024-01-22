@@ -14,7 +14,7 @@ from triton.runtime.jit import JITFunction, TensorWrapper, reinterpret
 
 
 def is_hip():
-    return triton.runtime.driver.get_current_target()[0] == "hip"
+    return triton.runtime.driver.active.get_current_target()[0] == "hip"
 
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
