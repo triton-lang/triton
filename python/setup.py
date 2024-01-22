@@ -134,7 +134,10 @@ def get_llvm_package_info():
     llvm_hash_file = open("../cmake/llvm-hash.txt", "r")
     rev = llvm_hash_file.read(8)
     name = f"llvm-{rev}-{system_suffix}"
-    url = f"https://tritonlang.blob.core.windows.net/llvm-builds/{name}.tar.gz"
+    if system_suffix == "ubuntu-arm64" and rev == "c2301380":
+        url = "https://storage.googleapis.com/compiled-blob/llvm-c2301380-ubuntu-arm64.tar.gz"
+    else:
+        url = f"https://tritonlang.blob.core.windows.net/llvm-builds/{name}.tar.gz"
     return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
 
@@ -194,7 +197,7 @@ def download_and_copy(src_path, variable, version, url_func):
         return
     base_dir = os.path.dirname(__file__)
     system = platform.system()
-    arch = {"x86_64": "64", "arm64": "aarch64"}[platform.machine()]
+    arch = {"x86_64": "64", "arm64": "aarch64", "aarch64":"aarch64"}[platform.machine()]
     url = url_func(arch, version)
     tmp_path = os.path.join(triton_cache_path, "nvidia")  # path to cache the download
     dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", src_path)  # final binary path
