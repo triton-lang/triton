@@ -330,7 +330,7 @@ class CudaLauncher(object):
 
     def __init__(self, src, metadata):
         ids = {
-            "ids_of_tensormaps": metadata.ids_of_tensormaps, 
+            "ids_of_tensormaps": metadata.ids_of_tensormaps,
             "ids_of_folded_args": metadata.ids_of_folded_args,
             "ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()
         }
@@ -390,7 +390,7 @@ class CudaDriver(GPUDriver):
     @staticmethod
     def is_active():
         import torch
-        return torch.version.hip is None
+        return torch.cuda.is_available() and (torch.version.hip is None)
 
     def assemble_tensormap_to_arg(self, tensormaps_info, args):
         args_with_tma = list(args)

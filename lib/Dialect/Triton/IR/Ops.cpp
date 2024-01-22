@@ -538,15 +538,17 @@ mlir::LogicalResult mlir::triton::ReduceOp::verify() {
   return success();
 }
 
-mlir::LogicalResult mlir::triton::ReduceOp::verifyRegions() {
-  auto argElementTypes = this->getElementTypes();
-  const auto &operands = this->getOperands();
+// Helpers for Reductions and Scans
+template <class ReturnOp, class Op>
+static mlir::LogicalResult verifyRegionsImpl(Op &op) {
+  auto argElementTypes = op.getElementTypes();
+  const auto &operands = op.getOperands();
   const auto numArgs = 2 * operands.size();
-  auto &block = *this->getBody();
+  auto &block = *op.getBody();
   if (block.getNumArguments() != numArgs) {
-    return this->emitOpError() << "nested block must take " << numArgs
-                               << " arguments, but given block with "
-                               << block.getNumArguments() << " arguments";
+    return op.emitOpError() << "nested block must take " << numArgs
+                            << " arguments, but given block with "
+                            << block.getNumArguments() << " arguments";
   }
   unsigned i = 0;
   const auto &blockArgTypes = block.getArgumentTypes();
@@ -554,22 +556,21 @@ mlir::LogicalResult mlir::triton::ReduceOp::verifyRegions() {
     const auto &blockArgTy = blockArgTypes[i];
     const auto &argElemTy = argElementTypes[i % operands.size()];
     if (blockArgTy != argElemTy) {
-      return this->emitOpError()
+      return op.emitOpError()
              << "type mismatch on combine operation. Expected argument " << i
              << " to have type " << argElemTy << " but got " << blockArgTy;
     }
   }
 
-  auto terminator =
-      dyn_cast<mlir::triton::ReduceReturnOp>(block.getTerminator());
+  auto terminator = dyn_cast<ReturnOp>(block.getTerminator());
   if (!terminator) {
-    return this->emitOpError()
+    return op.emitOpError()
            << "combine operation must be terminated "
            << "with a ReduceReturnOp but got " << block.getTerminator();
   }
   const auto &combineResults = terminator->getOperands();
   if (combineResults.size() != operands.size()) {
-    return this->emitOpError()
+    return op.emitOpError()
            << "expected combine operation to return " << operands.size()
            << " values but got " << combineResults.size();
   }
@@ -577,7 +578,7 @@ mlir::LogicalResult mlir::triton::ReduceOp::verifyRegions() {
     const auto &resultTy = combineResults[i].getType();
     const auto &argElemTy = argElementTypes[i];
     if (resultTy != argElemTy) {
-      return this->emitOpError()
+      return op.emitOpError()
              << "type mismatch on combine operation. Expected argument " << i
              << " to have type " << argElemTy << " but got " << resultTy;
     }
@@ -585,23 +586,38 @@ mlir::LogicalResult mlir::triton::ReduceOp::verifyRegions() {
   return mlir::success();
 }
 
-llvm::SmallVector<mlir::RankedTensorType> ReduceOp::getInputTypes() {
+static llvm::SmallVector<mlir::RankedTensorType>
+getInputTypesImpl(const mlir::Operation::operand_range &operands) {
   llvm::SmallVector<RankedTensorType> srcTys;
-  srcTys.reserve(this->getNumOperands());
-  for (const auto &ty : this->getOperands().getTypes()) {
+  srcTys.reserve(operands.size());
+  for (const auto &ty : operands.getTypes()) {
     srcTys.push_back(ty.cast<RankedTensorType>());
   }
   return srcTys;
 }
 
-llvm::SmallVector<Type> ReduceOp::getElementTypes() {
+static llvm::SmallVector<Type>
+getElementTypesImpl(const mlir::Operation::operand_range &operands) {
   llvm::SmallVector<Type> srcElemTys;
-  srcElemTys.reserve(this->getNumOperands());
-  for (const auto &op : this->getOperands()) {
+  srcElemTys.reserve(operands.size());
+  for (const auto &op : operands) {
     srcElemTys.push_back(
         op.getType().cast<RankedTensorType>().getElementType());
   }
   return srcElemTys;
+}
+
+mlir::LogicalResult mlir::triton::ReduceOp::verifyRegions() {
+  using ReturnOp = mlir::triton::ReduceReturnOp;
+  return verifyRegionsImpl<ReturnOp>(*this);
+}
+
+llvm::SmallVector<mlir::RankedTensorType> ReduceOp::getInputTypes() {
+  return getInputTypesImpl(this->getOperands());
+}
+
+llvm::SmallVector<Type> ReduceOp::getElementTypes() {
+  return getElementTypesImpl(this->getOperands());
 }
 
 unsigned ReduceOp::getNumOperands() { return this->getOperands().size(); }
@@ -635,6 +651,21 @@ mlir::LogicalResult mlir::triton::ScanOp::verify() {
   }
   return success();
 }
+
+mlir::LogicalResult mlir::triton::ScanOp::verifyRegions() {
+  using ReturnOp = mlir::triton::ScanReturnOp;
+  return verifyRegionsImpl<ReturnOp>(*this);
+}
+
+llvm::SmallVector<mlir::RankedTensorType> ScanOp::getInputTypes() {
+  return getInputTypesImpl(this->getOperands());
+}
+
+llvm::SmallVector<Type> ScanOp::getElementTypes() {
+  return getElementTypesImpl(this->getOperands());
+}
+
+unsigned ScanOp::getNumOperands() { return this->getOperands().size(); }
 
 //-- SplatOp --
 OpFoldResult SplatOp::fold(FoldAdaptor adaptor) {
@@ -688,29 +719,44 @@ LogicalResult ExpandDimsOp::canonicalize(ExpandDimsOp op,
                                                  splat.getOperand());
     return mlir::success();
   }
-  // expand_dims(broadcast) -> broadcast(expand_dims)
+  // expand_dims(broadcast(x)) -> broadcast(expand_dims(x))
   //
-  // On it's own this doesn't do much, but consider
+  // On its own this doesn't do much, but consider
   //    broadcast(expand_dims(broadcast))
   // -> broadcast(broadcast(expand_dims))
   // -> broadcast(expand_dims)
+  //
+  // Note we can't do this if x is a scalar, because expandDims requires a
+  // tensor input.  (We could change it to broadcast(expand_dims(splat(x))), but
+  // it's unclear that's better.)  broadcast currently accepts scalar inputs,
+  // but it probably shouldn't (just use splat instead).
   if (auto broadcast = dyn_cast<triton::BroadcastOp>(definingOp)) {
     auto src = broadcast.getSrc();
-    auto srcTy = src.getType().dyn_cast<RankedTensorType>();
-    auto elemTy = srcTy.getElementType();
-    auto srcShape = srcTy.getShape();
+    if (auto srcTy = src.getType().dyn_cast<RankedTensorType>()) {
+      SmallVector<int64_t> newExpandShape(srcTy.getShape());
+      newExpandShape.insert(newExpandShape.begin() + op.getAxis(), 1);
 
-    llvm::SmallVector<int64_t, 4> newExpandShape(srcShape.begin(),
-                                                 srcShape.end());
-    newExpandShape.insert(newExpandShape.begin() + op.getAxis(), 1);
-    auto newExpandTy = RankedTensorType::get(newExpandShape, elemTy);
+      // Infer the encoding of the new expand op, if encodings are present.
+      Attribute newExpandEnc;
+      if (auto srcEnc = srcTy.getEncoding()) {
+        if (dyn_cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+                ->inferExpandDimsOpEncoding(srcEnc, op.getAxis(), newExpandEnc,
+                                            op.getLoc())
+                .failed()) {
+          return emitOptionalError(op.getLoc(),
+                                   "failed to infer layout for ExpandDimsOp");
+        }
+      }
 
-    auto newExpand = rewriter.create<triton::ExpandDimsOp>(
-        op.getLoc(), newExpandTy, src, op.getAxis());
-    auto newBroadcast = rewriter.create<triton::BroadcastOp>(
-        broadcast.getLoc(), op.getType(), newExpand.getResult());
-    rewriter.replaceOp(op, {newBroadcast.getResult()});
-    return mlir::success();
+      auto newExpandTy = RankedTensorType::get(
+          newExpandShape, srcTy.getElementType(), newExpandEnc);
+      auto newExpand = rewriter.create<triton::ExpandDimsOp>(
+          op.getLoc(), newExpandTy, src, op.getAxis());
+      auto newBroadcast = rewriter.create<triton::BroadcastOp>(
+          broadcast.getLoc(), op.getType(), newExpand.getResult());
+      rewriter.replaceOp(op, {newBroadcast.getResult()});
+      return mlir::success();
+    }
   }
 
   return mlir::failure();

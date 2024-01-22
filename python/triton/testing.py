@@ -372,8 +372,8 @@ def get_dram_gbps(device=None):
     from .runtime import driver
     if not device:
         device = torch.cuda.current_device()
-    mem_clock_khz = driver.utils.get_device_properties(device)["mem_clock_rate"]  # in kHz
-    bus_width = driver.utils.get_device_properties(device)["mem_bus_width"]
+    mem_clock_khz = driver.active.utils.get_device_properties(device)["mem_clock_rate"]  # in kHz
+    bus_width = driver.active.utils.get_device_properties(device)["mem_bus_width"]
     bw_gbps = mem_clock_khz * bus_width * 2 / 1e6 / 8  # In GB/s
     return bw_gbps
 
@@ -385,7 +385,7 @@ def get_max_tensorcore_tflops(dtype, clock_rate, device=None):
     if not device:
         device = torch.cuda.current_device()
 
-    num_subcores = driver.utils.get_device_properties(device)["multiprocessor_count"] * 4
+    num_subcores = driver.active.utils.get_device_properties(device)["multiprocessor_count"] * 4
     capability = torch.cuda.get_device_capability(device)
     if capability[0] < 8:
         assert dtype == torch.float16
@@ -470,7 +470,7 @@ def get_max_simd_tflops(dtype, clock_rate, device=None):
     if not device:
         device = torch.cuda.current_device()
 
-    num_subcores = driver.utils.get_device_properties(device)["multiprocessor_count"] * 4
+    num_subcores = driver.active.utils.get_device_properties(device)["multiprocessor_count"] * 4
     capability = torch.cuda.get_device_capability()
     if capability[0] < 8:
         if dtype == torch.float32:

@@ -11,6 +11,7 @@
 #include "mlir/IR/Dialect.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Dialect/Triton/IR/Dialect.h.inc"
 #include "triton/Dialect/Triton/IR/OpsEnums.h.inc"
 #include "triton/Dialect/Triton/IR/Traits.h"
@@ -21,6 +22,10 @@
 
 namespace mlir {
 namespace triton {
+
+struct GlobalMemory : public SideEffects::Resource::Base<GlobalMemory> {
+  StringRef getName() final { return "<GlobalMemory>"; }
+};
 
 class DialectInferLayoutInterface
     : public DialectInterface::Base<DialectInferLayoutInterface> {
