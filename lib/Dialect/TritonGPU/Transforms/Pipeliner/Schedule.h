@@ -10,19 +10,26 @@
 namespace mlir {
 namespace triton {
 
-/// This fill out the pipelining options including schedule and annotations for
-/// wait ops. This also does pre-processing by converting some of the loads into
-/// async loads so that the IR is ready to be pipelined.
-bool preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
-                                  mlir::triton::PipeliningOption &options);
+class MatmulPipelineSchedule {
+public:
 
-void scheduleWaits(RewriterBase &rewriter, scf::ForOp forOp, mlir::triton::PipeliningOption &options);
+    /// This fill out the pipelining options including schedule and annotations for
+    /// wait ops. This also does pre-processing by converting some of the loads into
+    /// async loads so that the IR is ready to be pipelined.
+    bool preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
+                                    mlir::triton::PipeliningOption &options);
+
+    void insertWaits(RewriterBase &rewriter, scf::ForOp forOp);
+private:
+    llvm::SmallVector<mlir::Operation *, 4> extractOps;
+};
 
 /// This does post-processing on the pipelined loop to try to pipeline wgmma
 /// ops.
 // TODO: this should be included as part of the pipeline but currently the wgmma
 // wait modeling is problematic.
 void asyncLaunchDots(scf::ForOp forOp);
+
 
 } // namespace triton
 } // namespace mlir
