@@ -588,5 +588,5 @@ class CUDABackend(BaseBackend):
 
     @functools.lru_cache()
     def hash(self):
-        version = subprocess.check_output([_path_to_binary("ptxas")[0], "--version"])
+        version = subprocess.check_output([_path_to_binary("ptxas")[0], "--version"]).decode("utf-8")
         return f'{version}-{self.capability}'
