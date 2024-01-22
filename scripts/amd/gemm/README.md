@@ -119,6 +119,12 @@ NT    4864  4096  8192    841.22         65%
 NT    8192  8192  8192    745.31         57%
 ```
 
+# GEMM Tuning Script v3.1
+
+### API changes
+
+- Added `matrix_instr_nonkdim` into the tuning space. Now we can tune mfma instruction size.
+
 
 # One config running script
 

@@ -29,6 +29,7 @@ def get_full_tuning_space():
     # other values in the future
     num_stage_range = [0]
     waves_per_eu_range = [0]
+    matrix_instr_nonkdim_range = [16, 32]
 
     for block_m in block_mn_range:
         for block_n in block_mn_range:
@@ -38,7 +39,8 @@ def get_full_tuning_space():
                         for split_k in split_k_range:
                             for num_stages in num_stage_range:
                                 for waves_per_eu in waves_per_eu_range:
-                                    configs.append({'BLOCK_SIZE_M': block_m, 'BLOCK_SIZE_N': block_n, 'BLOCK_SIZE_K': block_k, 'GROUP_SIZE_M': group_m, 'SPLIT_K': split_k, 'num_warps': num_warps, 'num_stages': num_stages, 'waves_per_eu': waves_per_eu})
+                                    for matrix_instr_nonkdim in matrix_instr_nonkdim_range:
+                                        configs.append({'BLOCK_SIZE_M': block_m, 'BLOCK_SIZE_N': block_n, 'BLOCK_SIZE_K': block_k, 'GROUP_SIZE_M': group_m, 'SPLIT_K': split_k, 'num_warps': num_warps, 'num_stages': num_stages, 'waves_per_eu': waves_per_eu, 'matrix_instr_nonkdim': matrix_instr_nonkdim})
 
     return configs
 
@@ -61,6 +63,9 @@ def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
         BLOCK_SIZE_N = config.get("BLOCK_SIZE_N")
         BLOCK_SIZE_K = config.get("BLOCK_SIZE_K")
         num_warps = config.get("num_warps")
+        matrix_instr_nonkdim = config.get("matrix_instr_nonkdim")
+        if matrix_instr_nonkdim > mfma:
+            continue
         if mfma == 4 and BLOCK_SIZE_K < 64:
             continue
         # some layouts could not work properly in case
@@ -69,11 +74,11 @@ def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
             continue
         SPLIT_K = config.get("SPLIT_K")
         GROUP_M = config.get("GROUP_SIZE_M")
-        if BLOCK_SIZE_M < mfma or BLOCK_SIZE_N < mfma:
+        if BLOCK_SIZE_M < matrix_instr_nonkdim or BLOCK_SIZE_N < matrix_instr_nonkdim:
             continue
-        if M <= mfma and BLOCK_SIZE_M != mfma:
+        if M <= matrix_instr_nonkdim and BLOCK_SIZE_M != matrix_instr_nonkdim:
             continue
-        if N <= mfma and BLOCK_SIZE_N != mfma:
+        if N <= matrix_instr_nonkdim and BLOCK_SIZE_N != matrix_instr_nonkdim:
             continue
         # Skip BLOCK_SIZE that is too large compare to M/N
         if BLOCK_SIZE_M > M * 2 or BLOCK_SIZE_N > N * 2:
@@ -137,22 +142,30 @@ def read_config(config):
     num_warps = config.get('num_warps')
     num_stages = config.get('num_stages')
     waves_per_eu = config.get('waves_per_eu')
-    return block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu
+    mfma_instr_size = config.get('matrix_instr_nonkdim')
+    return block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfma_instr_size
 
 
-def gen_kernel_and_configStr_from_config(M, N, K, config):
-    block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu = read_config(config)
-    configStr = f"M{M}_N{N}_K{K}_BM{block_m}_BN{block_n}_BK{block_k}_GM{group_m}_SK{split_k}_nW{num_warps}_nS{num_stages}_EU{waves_per_eu}"
+def gen_kernel_and_configStr_from_config(M, N, K, config, dtype_a, dtype_b, dtype_c):
+    block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize = read_config(config)
+    torch_dtype_a = 'fp16'
+    torch_dtype_b = 'fp16'
+    torch_dtype_c = 'fp16'
+    if dtype_a:
+        torch_dtype_a = tl_to_torch_types[name_to_tl_types[dtype_a]]
+    if dtype_b:
+        torch_dtype_b = tl_to_torch_types[name_to_tl_types[dtype_b]]
+    if dtype_c:
+        torch_dtype_c = tl_to_torch_types[name_to_tl_types[dtype_c]]
+    configStr = f"M{M}_N{N}_K{K}_BM{block_m}_BN{block_n}_BK{block_k}_GM{group_m}_SK{split_k}_nW{num_warps}_nS{num_stages}_EU{waves_per_eu}_mfma{mfmaInstrSize}"
 
     matmul_def_str = f"""
 def matmul_{configStr}(a, b, c, M, N, K, am, ak, bk, bn, cm, cn, warmup=False):
-    #M, K = a.shape
-    #K, N = b.shape
     grid = triton.cdiv(M, {block_m}) * triton.cdiv(N, {block_n}), {split_k}
     #print(f'config: matmul_kernel_{configStr}', flush=True)
     if warmup:
         matmul_kernel_{configStr}.warmup(
-            torch.float16, torch.float16, torch.float16,
+            {torch_dtype_a}, {torch_dtype_b}, {torch_dtype_c},
             M, N, K,
             am, ak, bk, bn, cm, cn,
             BLOCK_SIZE_M = {block_m},
@@ -163,6 +176,7 @@ def matmul_{configStr}(a, b, c, M, N, K, am, ak, bk, bn, cm, cn, warmup=False):
             num_warps = {num_warps},
             num_stages = {num_stages},
             waves_per_eu = {waves_per_eu},
+            matrix_instr_nonkdim = {mfmaInstrSize},
             grid=(1,)
         )
         return None
@@ -178,7 +192,8 @@ def matmul_{configStr}(a, b, c, M, N, K, am, ak, bk, bn, cm, cn, warmup=False):
             SPLIT_K = {split_k},
             num_warps = {num_warps},
             num_stages = {num_stages},
-            waves_per_eu = {waves_per_eu}
+            waves_per_eu = {waves_per_eu},
+            matrix_instr_nonkdim = {mfmaInstrSize},
         )
         return c
 
@@ -231,7 +246,7 @@ from tune_gemm import gen_input
     idx = 0
     for config in configs:
         file_idx = idx % jobs
-        configStr, matmul_def_str = gen_kernel_and_configStr_from_config(M, N, K, config)
+        configStr, matmul_def_str = gen_kernel_and_configStr_from_config(M, N, K, config, dtype_a, dtype_b, dtype_c)
         # Copy the matmul_kernel with name replaced
         matmul_kernel_config = matmul_kernel_code.replace("matmul_kernel", f"matmul_kernel_{configStr}")
         matmul_kernel_config = matmul_kernel_config.replace("import triton.language as tl", "")
@@ -262,7 +277,7 @@ from tune_gemm import gen_input
     # warm up call of all matmul functions in parallel
     idx = 0
     for config in configs:
-        configStr, _ = gen_kernel_and_configStr_from_config(M, N, K, config)
+        configStr, _ = gen_kernel_and_configStr_from_config(M, N, K, config, None, None, None)
         task_str = f"        results += [thread_pool.apply_async(try_config_{configStr}, args=task_args)]\n" + \
                    f"        config_names += ['{configStr}']\n"
         f_kernel[idx % jobs].write(task_str)
@@ -293,7 +308,7 @@ from tune_gemm import gen_input
     idx = 0
     runs = 1000 if run_bench else 200
     for config in configs:
-        configStr, _ = gen_kernel_and_configStr_from_config(M, N, K, config)
+        configStr, _ = gen_kernel_and_configStr_from_config(M, N, K, config, None, None, None)
         matmul_call_str = f"""
         if '{configStr}' not in failed_configs:
             for i in range({runs}):
@@ -324,7 +339,7 @@ def main():
 
 
 def extract_kernel_time(M, N, K, config, df):
-    configStr, _ = gen_kernel_and_configStr_from_config(M, N, K, config)
+    configStr, _ = gen_kernel_and_configStr_from_config(M, N, K, config, None, None, None)
     df = df[df['KernelName'].str.contains(configStr)]
     meanTime = df['DurationNs'].tail(100).mean()
     return config, meanTime
@@ -353,6 +368,7 @@ def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, configs, 
 
     # precompile the kernels in parallel
     start_time = datetime.now()
+    #if not run_bench:
     for i in range(jobs):
         run_bash_command(f"python {generated_kernel_name(M, N, K, i)} -n {num_threads}", capture=(verbose < 2))
     compile_end = datetime.now()
@@ -435,7 +451,7 @@ def gen_input(M, N, ty_name, needTrans, seed, device='cuda'):
 
     return input, input_f16
 
-def matmul(a, b, c, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu):
+def matmul(a, b, c, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     #assert a.is_contiguous(), "Matrix A must be contiguous"
@@ -462,12 +478,13 @@ def matmul(a, b, c, block_m, block_n, block_k, group_m, split_k, num_warps, num_
         num_warps=num_warps,
         num_stages=num_stages,
         waves_per_eu=waves_per_eu,
+        matrix_instr_nonkdim = mfmaInstrSize
     )
     return c
 
 
 def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, config, verbose):
-    block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu = read_config(config)
+    block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize = read_config(config)
 
     torch.manual_seed(0)
     #a = torch.randn((M, K), device='cuda', dtype=datatype)
@@ -476,7 +493,7 @@ def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, config, v
     b, b_fp16 = gen_input(K, N, dtype_b, col_b, 2, device='cuda')
     # Allocates output.
     c = torch.zeros((M, N), device=a.device, dtype=tl_to_torch_types[name_to_tl_types[dtype_c]])
-    triton_output = matmul(a, b, c, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu)
+    triton_output = matmul(a, b, c, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize)
     torch_output = torch.matmul(a_fp16, b_fp16)
     # print(f"triton_output={triton_output}")
     # print(f"torch_output={torch_output}")
@@ -528,7 +545,7 @@ def parse_args():
     parser.add_argument("--time_breakdown", action='store_true', default=False, help="Show detailed time breakdown of each step during the tuning")
     parser.add_argument("--verbose", action='store_true', default=False, help="enables time_breakdown and additional logging messages")
     parser.add_argument("--num_threads", type=int, default=16, help="number of threads to use for kernel compilation and post processing")
-    parser.add_argument("--jobs", type=int, default=16, help="number of generated files")
+    parser.add_argument("--jobs", type=int, default=1, help="number of generated files")
     args = parser.parse_args()
 
     return args
@@ -634,7 +651,7 @@ def main():
         K = args.k
         col_a = args.col_a
         col_b = args.col_b
-        mnks = [(M, N, K, col_a, col_b)]
+        mnks = [(M, N, K, col_a, col_b, None)]
     else:
         with open(matrix_size_file) as file:
             matrix_sizes = yaml.safe_load(file)
@@ -686,7 +703,7 @@ def main():
         if not run_bench:
             print(f'TFLOPS: {formatted_tflops} time(us): {minTime}', end=" ", flush=True)
 
-        bestConfig_compact_str, _ = gen_kernel_and_configStr_from_config(M, N, K, bestConfig)
+        bestConfig_compact_str, _ = gen_kernel_and_configStr_from_config(M, N, K, bestConfig, None, None, None)
         if not run_bench:
             print(f'best_config: {bestConfig_compact_str}', end=" ", flush=True)
 
