@@ -272,8 +272,7 @@ struct MMAV3UseRegOperand : public OpRewritePattern<triton::DotOp> {
         srcType.getShape(), srcType.getElementType(), dotOperandEncoding);
     Value newOperand = rewriter.create<ConvertLayoutOp>(dotOp.getLoc(), newType,
                                                         convertLhs.getSrc());
-    rewriter.updateRootInPlace(dotOp,
-                               [&]() { dotOp.setOperand(0, newOperand); });
+    rewriter.modifyOpInPlace(dotOp, [&]() { dotOp.setOperand(0, newOperand); });
     return success();
   }
 };
