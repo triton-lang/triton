@@ -18,6 +18,7 @@ public:
   bool preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
                                     mlir::triton::PipeliningOption &options);
 
+  /// Post process the pipelined loop by inserting sync operations if necessary
   void insertWaits(RewriterBase &rewriter, scf::ForOp forOp);
 
 private:
