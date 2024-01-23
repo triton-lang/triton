@@ -592,6 +592,8 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
   return schedule;
 }
 
+constexpr static char kNeedWaitAttrName[] = "triton.pipeline.needs_wait";
+
 bool mlir::triton::preProcessLoopAndGetSchedule(
     scf::ForOp &forOp, int numStages, mlir::triton::PipeliningOption &options) {
   // 1. First collect "interesting" operations with a stage where to schedule
@@ -626,7 +628,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
                           mlir::triton::PipeliningOption::PipelinerPart part,
                           unsigned iteration) {
     if (isa<ttg::ExtractSliceOp>(op)) {
-      op->setAttr("triton.pipeline.need_wait", UnitAttr::get(op->getContext()));
+      op->setAttr(kNeedWaitAttrName, UnitAttr::get(op->getContext()));
     }
   };
 
@@ -664,7 +666,7 @@ static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
   // If the wait is not needed (when insert is a TMA insert), we return -1.
   std::function<int(Value, Operation *, int)> minOverHistories =
       [&](Value val, Operation *sinkOp, int thisHistorySum) -> int {
-    if (auto defOp = val.getDefiningOp()) {
+    if (Operation *defOp = val.getDefiningOp()) {
       if (isa<ttg::InsertSliceAsyncOp>(defOp)) {
         thisHistorySum += countCommitsBetween(defOp->getNextNode(), sinkOp);
         minCommitNumber = std::min(minCommitNumber, thisHistorySum);
@@ -678,28 +680,28 @@ static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
       return 1;
     }
     if (auto arg = val.dyn_cast<BlockArgument>()) {
-      auto block = arg.getOwner();
+      Block *block = arg.getOwner();
       auto forOp = dyn_cast<scf::ForOp>(block->getParentOp());
 
       // Failed to track, return 1 conservatively.
       if (!forOp)
         return 1;
 
-      auto firstForInst = &*forOp.getBody()->begin();
-      auto insertsBetween = countCommitsBetween(firstForInst, sinkOp);
+      Operation *firstForInst = &*forOp.getBody()->begin();
+      int insertsBetween = countCommitsBetween(firstForInst, sinkOp);
       thisHistorySum += insertsBetween;
       if (thisHistorySum >= minCommitNumber)
         return minCommitNumber;
 
       // get the value value assigned to the argument coming from outside the
       // loop
-      auto incomingVal = forOp.getInitArgs()[arg.getArgNumber() - 1];
+      Value incomingVal = forOp.getInitArgs()[arg.getArgNumber() - 1];
       int min1 = minOverHistories(incomingVal, forOp, thisHistorySum);
 
       // get the value value assigned to the argument coming from the previous
       // iteration
-      auto yieldOp = block->getTerminator();
-      auto prevVal = yieldOp->getOperand(arg.getArgNumber() - 1);
+      Operation *yieldOp = block->getTerminator();
+      Value prevVal = yieldOp->getOperand(arg.getArgNumber() - 1);
       int min2 = minOverHistories(prevVal, yieldOp, thisHistorySum);
       return std::min(std::min(min1, min2), minCommitNumber);
     }
@@ -707,7 +709,7 @@ static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
     return 1;
   };
 
-  auto minCommits = minOverHistories(extractOp.getOperand(0), extractOp, 0);
+  int minCommits = minOverHistories(extractOp.getOperand(0), extractOp, 0);
   if (minCommits == -1)
     return -1;
   if (minCommits == 0)
@@ -718,7 +720,7 @@ static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
 /// Insert wait ops after the extract_slice ops.
 void mlir::triton::insertWaits(ModuleOp module) {
   module.walk([&](ttg::ExtractSliceOp firstExtractOp) {
-    if (!firstExtractOp->hasAttr("triton.pipeline.need_wait"))
+    if (!firstExtractOp->hasAttr(kNeedWaitAttrName))
       return;
 
     Operation *extractOp = firstExtractOp;
@@ -731,7 +733,7 @@ void mlir::triton::insertWaits(ModuleOp module) {
       lastExtractOp = cast<ttg::ExtractSliceOp>(extractOp);
       minWaitNumber =
           std::min(minWaitNumber, minWaitNumberForExtract(lastExtractOp));
-      extractOp->removeAttr("triton.pipeline.need_wait");
+      extractOp->removeAttr(kNeedWaitAttrName);
       extractOp = dyn_cast<ttg::ExtractSliceOp>(extractOp->getNextNode());
     }
 
