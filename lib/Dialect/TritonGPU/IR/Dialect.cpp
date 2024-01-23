@@ -1434,8 +1434,8 @@ Attribute MfmaEncodingAttr::parse(AsmParser &parser, Type type) {
 
 void MfmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
-          << "version = " << getVersionMajor() << "." << getVersionMinor()
-          << ", "
+          << "versionMajor = " << getVersionMajor() << ", "
+          << "versionMinor = " << getVersionMinor() << ", "
           << "warpsPerCTA = [" << getWarpsPerCTA() << "], "
           << "instrShape = [" << getMDim() << ", " << getNDim() << "], "
           << "isTransposed = " << getIsTransposed() << "}>";

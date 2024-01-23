@@ -131,8 +131,8 @@ swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
  * @param reps number of instructions repretition to fully cover dot operand
  * @param smemStrides strides in LDS tensor
  * @param loadVecSize number of elements loaded by one operation
- * @param iNonKDim non-K dimension of dot operand
- * @param iKDim non-K dimension of dot operand
+ * @param iNonKDim non-K dimension size of one MFMA instruction
+ * @param iKDim K dimension size of one MFMA instruction
  * @return vector (i-th element corresponds to i-th load instruction) of
  * 2-element vectors(tensor row and col).
  */
