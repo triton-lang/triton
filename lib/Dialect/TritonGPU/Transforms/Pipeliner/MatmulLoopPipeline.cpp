@@ -592,7 +592,7 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
   return schedule;
 }
 
-bool mlir::triton::MatmulPipelineSchedule::preProcessLoopAndGetSchedule(
+bool mlir::triton::preProcessLoopAndGetSchedule(
     scf::ForOp &forOp, int numStages, mlir::triton::PipeliningOption &options) {
   // 1. First collect "interesting" operations with a stage where to schedule
   // them. This gives a coarse scheduling for the loop.
@@ -622,13 +622,11 @@ bool mlir::triton::MatmulPipelineSchedule::preProcessLoopAndGetSchedule(
   options.predicateFn = predicateOp;
   options.supportDynamicLoops = true;
   unsigned numLoadsInStage = (numStages - 2) * loads.size();
-  auto &extractOps = this->extractOps;
   options.annotateFn =
-      [&extractOps](Operation *op,
+      [](Operation *op,
                     mlir::triton::PipeliningOption::PipelinerPart part,
                     unsigned iteration) {
         if (isa<ttg::ExtractSliceOp>(op)) {
-          extractOps.push_back(op);
           op->setAttr("triton.pipeline.need_wait", UnitAttr::get(op->getContext()));
         }
       };
@@ -647,6 +645,7 @@ bool mlir::triton::MatmulPipelineSchedule::preProcessLoopAndGetSchedule(
 
 /// Find the minimum number of insert_slice ops between the extract
 /// and the insert. This is equivalent to counting async_commit_group ops
+/// (unless we will start emitting multiple insert_slice ops per commit_group).
 static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
   auto countInsertsBetween = [](Operation *op1, Operation *op2) {
     int count = 0;
@@ -677,18 +676,14 @@ static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
         // We don't need to wait for TMA inserts.
         return -1;
       }
-      // We cannot track further. Conservatively return 0, and assert in debug,
-      // so that we can easier find unsupported cases.
-      assert(false && "Found source op that is not InsertSlice.");
+      // Failed to track, return 0 conservatively.
       return 0;
     }
     if (auto arg = val.dyn_cast<BlockArgument>()) {
       auto block = arg.getOwner();
       auto forOp = dyn_cast<scf::ForOp>(block->getParentOp());
 
-      // We cannot track further. Conservatively return 0, and assert in debug,
-      // so that we can easier find unsupported cases.
-      assert(forOp && "Unexpected block type in minOverHistories.");
+      // Failed to track, return 0 conservatively.
       if (!forOp)
         return 0;
 
@@ -710,7 +705,7 @@ static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
       int min2 = minOverHistories(prevVal, yieldOp, thisHistorySum);
       return std::min(std::min(min1, min2), minWaitNumber);
     }
-    assert(false && "Unexpected Op case in minOverHistories.");
+    // Failed to track, return 0 conservatively.
     return 0;
   };
 
