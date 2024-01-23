@@ -14,6 +14,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
@@ -160,6 +161,15 @@ void init_triton_llvm(py::module &&m) {
     FunctionAnalysisManager fam;
     CGSCCAnalysisManager cgam;
     ModuleAnalysisManager mam;
+
+    PassInstrumentationCallbacks *instr_cb = nullptr;
+    PassInstrumentationCallbacks PIC;
+    StandardInstrumentations SI(mod->getContext(), /*DebugLogging*/ true);
+    if (triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
+      SI.registerCallbacks(PIC, &mam);
+      instr_cb = &PIC;
+    }
+
     PipelineTuningOptions tuningOptions;
     tuningOptions.LoopUnrolling = true;
     tuningOptions.LoopInterleaving = true;
@@ -172,7 +182,7 @@ void init_triton_llvm(py::module &&m) {
     // some scheduling solution.
     tuningOptions.SLPVectorization = true;
 
-    PassBuilder pb(nullptr /*targetMachine*/, tuningOptions);
+    PassBuilder pb(nullptr /*targetMachine*/, tuningOptions, std::nullopt, instr_cb);
 
     pb.registerModuleAnalyses(mam);
     pb.registerCGSCCAnalyses(cgam);
