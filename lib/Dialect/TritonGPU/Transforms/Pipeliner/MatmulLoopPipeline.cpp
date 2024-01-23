@@ -622,14 +622,13 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   options.predicateFn = predicateOp;
   options.supportDynamicLoops = true;
   unsigned numLoadsInStage = (numStages - 2) * loads.size();
-  options.annotateFn =
-      [](Operation *op,
-                    mlir::triton::PipeliningOption::PipelinerPart part,
-                    unsigned iteration) {
-        if (isa<ttg::ExtractSliceOp>(op)) {
-          op->setAttr("triton.pipeline.need_wait", UnitAttr::get(op->getContext()));
-        }
-      };
+  options.annotateFn = [](Operation *op,
+                          mlir::triton::PipeliningOption::PipelinerPart part,
+                          unsigned iteration) {
+    if (isa<ttg::ExtractSliceOp>(op)) {
+      op->setAttr("triton.pipeline.need_wait", UnitAttr::get(op->getContext()));
+    }
+  };
 
   if (hasAsynCp) {
     // Insert a wait 0 after the loop
@@ -718,15 +717,16 @@ void mlir::triton::insertWaits(ModuleOp module) {
     if (!firstExtractOp->hasAttr("triton.pipeline.need_wait"))
       return;
 
-    Operation* extractOp = firstExtractOp;
+    Operation *extractOp = firstExtractOp;
     ttg::ExtractSliceOp lastExtractOp = firstExtractOp;
 
-    // If there is no meaningful work between the extracts, don't insert multiple
-    // waits. Insert just one wait per group of extracts.
+    // If there is no meaningful work between the extracts, don't insert
+    // multiple waits. Insert just one wait per group of extracts.
     int minWaitNumber = INT_MAX;
     while (extractOp) {
       lastExtractOp = cast<ttg::ExtractSliceOp>(extractOp);
-      minWaitNumber = std::min(minWaitNumber, minWaitNumberForExtract(lastExtractOp));
+      minWaitNumber =
+          std::min(minWaitNumber, minWaitNumberForExtract(lastExtractOp));
       extractOp->removeAttr("triton.pipeline.need_wait");
       extractOp = dyn_cast<ttg::ExtractSliceOp>(extractOp->getNextNode());
     }
