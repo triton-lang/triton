@@ -642,14 +642,13 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   return true;
 }
 
-/// Find the minimum number of insert_slice ops between the extract
-/// and the insert. This is equivalent to counting async_commit_group ops
-/// (unless we will start emitting multiple insert_slice ops per commit_group).
+/// Find the minimum number of async_commit_group ops between the extract
+/// and the insert. Wait number is the number of commits-1.
 static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
-  auto countInsertsBetween = [](Operation *op1, Operation *op2) {
+  auto countCommitsBetween = [](Operation *op1, Operation *op2) {
     int count = 0;
     for (auto op = op1; op != op2; op = op->getNextNode()) {
-      if (isa<ttg::InsertSliceAsyncOp>(op))
+      if (isa<ttg::AsyncCommitGroupOp>(op))
         count++;
       // Intentionally skip block ops' children. This will give us
       // convervatively low number of insert ops.
@@ -657,7 +656,7 @@ static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
     return count;
   };
 
-  int minWaitNumber = INT_MAX;
+  int minCommitNumber = INT_MAX;
 
   // DFS the def chain of the extract op to find the insert op. On each path
   // we calculate the number of insert ops. Then we select the minimum number
@@ -667,30 +666,30 @@ static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
       [&](Value val, Operation *sinkOp, int thisHistorySum) -> int {
     if (auto defOp = val.getDefiningOp()) {
       if (isa<ttg::InsertSliceAsyncOp>(defOp)) {
-        thisHistorySum += countInsertsBetween(defOp->getNextNode(), sinkOp);
-        minWaitNumber = std::min(minWaitNumber, thisHistorySum);
-        return minWaitNumber;
+        thisHistorySum += countCommitsBetween(defOp->getNextNode(), sinkOp);
+        minCommitNumber = std::min(minCommitNumber, thisHistorySum);
+        return minCommitNumber;
       }
       if (isa<ttng::InsertSliceTMAOp>(defOp)) {
         // We don't need to wait for TMA inserts.
         return -1;
       }
-      // Failed to track, return 0 conservatively.
-      return 0;
+      // Failed to track, return 1 conservatively.
+      return 1;
     }
     if (auto arg = val.dyn_cast<BlockArgument>()) {
       auto block = arg.getOwner();
       auto forOp = dyn_cast<scf::ForOp>(block->getParentOp());
 
-      // Failed to track, return 0 conservatively.
+      // Failed to track, return 1 conservatively.
       if (!forOp)
-        return 0;
+        return 1;
 
       auto firstForInst = &*forOp.getBody()->begin();
-      auto insertsBetween = countInsertsBetween(firstForInst, sinkOp);
+      auto insertsBetween = countCommitsBetween(firstForInst, sinkOp);
       thisHistorySum += insertsBetween;
-      if (thisHistorySum >= minWaitNumber)
-        return minWaitNumber;
+      if (thisHistorySum >= minCommitNumber)
+        return minCommitNumber;
 
       // get the value value assigned to the argument coming from outside the
       // loop
@@ -702,13 +701,18 @@ static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
       auto yieldOp = block->getTerminator();
       auto prevVal = yieldOp->getOperand(arg.getArgNumber() - 1);
       int min2 = minOverHistories(prevVal, yieldOp, thisHistorySum);
-      return std::min(std::min(min1, min2), minWaitNumber);
+      return std::min(std::min(min1, min2), minCommitNumber);
     }
-    // Failed to track, return 0 conservatively.
-    return 0;
+    // Failed to track, return 1 conservatively.
+    return 1;
   };
 
-  return minOverHistories(extractOp.getOperand(0), extractOp, 0);
+  auto minCommits = minOverHistories(extractOp.getOperand(0), extractOp, 0);
+  if (minCommits == -1)
+    return -1;
+  if (minCommits == 0)
+    llvm::report_fatal_error("No commits between insert and extract!");
+  return minOverHistories(extractOp.getOperand(0), extractOp, 0) - 1;
 }
 
 /// Insert wait ops after the extract_slice ops.
