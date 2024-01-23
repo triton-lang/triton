@@ -28,9 +28,10 @@ class Backend:
     src_dir: str
     backend_dir: str
     install_dir: str
+    is_external: bool
 
 
-def _copy_backends(active):
+def _copy_in_tree_backends(active):
     ret = []
     root_dir = os.path.join(os.pardir, "third_party")
     for backend in active:
@@ -54,7 +55,40 @@ def _copy_backends(active):
         package_data = [f"{os.path.relpath(p, backend_path)}/*" for p, _, _, in os.walk(backend_path)]
         ret.append(
             Backend(name=backend, package_data=package_data, src_dir=curr_path, backend_dir=backend_path,
-                    install_dir=install_dir))
+                    install_dir=install_dir, is_external=False))
+    return ret
+
+def _copy_out_of_tree_backends():
+    # name1,dir1;name2,dir2
+    backends = os.getenv('TRITON_EXTERNAL_CODEGEN_BACKENDS')
+    backend_dirs = os.getenv('TRITON_EXTERNAL_CODEGEN_BACKEND_DIRS')
+
+    if backends is None or backend_dirs is None:
+        return []
+
+    backends = backends.strip().split(';')
+    backend_dirs = backend_dirs.strip().split(';')
+
+    if len(backends) != len(backend_dirs):
+        raise Exception(f"External backend names and directories mismatch")
+
+    ret = []
+
+    for backend, root_dir in zip(backends, backend_dirs):
+        curr_path = os.path.join(root_dir, backend)
+        backend_path = os.path.abspath(os.path.join(curr_path, "backend"))
+        install_dir = os.path.join(os.path.dirname(__file__), "triton", "backends", backend)
+
+        # check conditions
+        assert backend in os.listdir(root_dir), f"{backend} is requested for install but not present in {root_dir}"
+        assert os.path.exists(backend_path), f"{backend_path} does not exist!"
+        for file in ["compiler.py", "driver.py"]:
+            assert os.path.exists(os.path.join(backend_path, file))
+        # update
+        package_data = [f"{os.path.relpath(p, backend_path)}/*" for p, _, _, in os.walk(backend_path)]
+        ret.append(
+            Backend(name=backend, package_data=package_data, src_dir=curr_path, backend_dir=backend_path,
+                    install_dir=install_dir, is_external=True))
     return ret
 
 
@@ -73,16 +107,6 @@ def get_build_type():
     else:
         # TODO: change to release when stable enough
         return "TritonRelBuildWithAsserts"
-
-
-def get_codegen_backends():
-    backends = []
-    env_prefix = "TRITON_CODEGEN_"
-    for name, _ in os.environ.items():
-        if name.startswith(env_prefix) and check_env_flag(name):
-            assert name.count(env_prefix) <= 1
-            backends.append(name.replace(env_prefix, '').lower())
-    return backends
 
 
 # --- third party packages -----
@@ -297,7 +321,9 @@ class CMakeBuild(build_ext):
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir, "-DTRITON_BUILD_TUTORIALS=OFF",
             "-DTRITON_BUILD_PYTHON_MODULE=ON", "-DPython3_EXECUTABLE:FILEPATH=" + sys.executable,
             "-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON", "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
-            "-DTRITON_CODEGEN_BACKENDS=" + ';'.join([b.name for b in backends])
+            "-DTRITON_CODEGEN_BACKENDS=" + ';'.join([b.name for b in backends if not b.is_external]),
+            # "-DTRITON_EXTERNAL_CODEGEN_BACKENDS=" + ';'.join([b.name for b in backends if b.is_external])
+            "-DTRITON_EXTERNAL_CODEGEN_BACKEND_DIRS=" + ';'.join([b.src_dir for b in backends if b.is_external])
         ]
         if lit_dir is not None:
             cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
@@ -380,8 +406,8 @@ download_and_copy(
     url_func=lambda arch, version:
     f"https://anaconda.org/nvidia/cuda-nvdisasm/12.3.52/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
-backends = _copy_backends(["nvidia", "amd"])
 
+backends = [*_copy_in_tree_backends(["nvidia", "amd"]), *_copy_out_of_tree_backends()]
 
 def add_link_to_backends():
     for backend in backends:
