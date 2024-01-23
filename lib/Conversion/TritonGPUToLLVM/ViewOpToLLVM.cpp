@@ -193,6 +193,7 @@ struct ReshapeOpConversion : public ConvertTritonGPUOpToLLVMPattern<ReshapeOp> {
   matchAndRewrite(ReshapeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
+    LLVM_DEBUG(DBGS() << "Lower ReshapeOp " << op << '\n');
     assert(!triton::gpu::isExpensiveView(op.getSrc().getType(), op.getType()) &&
            "expensive view not supported");
     auto resultTy = op.getType().template cast<RankedTensorType>();
@@ -218,6 +219,7 @@ struct ReshapeOpConversion : public ConvertTritonGPUOpToLLVMPattern<ReshapeOp> {
         loc, adaptor.getSrc(), rewriter);
     Value ret =
         this->getTypeConverter()->packLLElements(loc, vals, rewriter, resultTy);
+    LLVM_DEBUG(DBGS() << " replaced with " << ret << '\n');
     rewriter.replaceOp(op, ret);
     return success();
   }
@@ -275,6 +277,7 @@ struct TransOpConversion
   matchAndRewrite(triton::TransOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
+    LLVM_DEBUG(DBGS() << "Lower TransOp " << op << '\n');
     auto llvmElemTy = getTypeConverter()->convertType(
         op.getType().cast<RankedTensorType>().getElementType());
     auto srcSmemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
@@ -286,6 +289,7 @@ struct TransOpConversion
     auto dstSmemObj = SharedMemoryObject(
         srcSmemObj.base, srcSmemObj.baseElemType, dstStrides, dstOffsets);
     auto retVal = getStructFromSharedMemoryObject(loc, dstSmemObj, rewriter);
+    LLVM_DEBUG(DBGS() << " replaced with " << retVal << '\n');
     rewriter.replaceOp(op, retVal);
     return success();
   }

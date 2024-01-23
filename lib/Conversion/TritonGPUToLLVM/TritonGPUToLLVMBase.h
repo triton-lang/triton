@@ -18,6 +18,8 @@
 #include <type_traits>
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 constexpr ::llvm::StringLiteral kAttrNumTMALoadDescsName =
     "triton_gpu.num-tma-load";
@@ -280,6 +282,8 @@ public:
     auto bufferId = funcAllocation->getBufferId(value);
     assert(bufferId != Allocation::InvalidBufferId && "BufferId not found");
     size_t offset = funcAllocation->getOffset(bufferId);
+    LLVM_DEBUG(DBGS() << "getSharedMemoryBase " << smem << " " << offset
+                      << '\n');
     Value offVal = i32_val(offset);
     Value base =
         gep(ptrTy, this->getTypeConverter()->convertType(rewriter.getI8Type()),
@@ -369,20 +373,26 @@ public:
     // cache for non-immediate offsets
     DenseMap<unsigned, Value> cacheCol, cacheRow;
     unsigned minVec = std::min(outVec, inVec);
+    Value strideRow =
+        outOrder.size() == 2 ? srcStrides[outOrder[1]] : i32_val(0);
+    Value strideCol = srcStrides[outOrder[0]];
+    LLVM_DEBUG(DBGS() << "getSwizzledSharedPtrs: perPhase = " << perPhase
+                      << " maxPhase = " << maxPhase << " minVec = " << minVec
+                      << " inVec = " << inVec << " outVec = " << outVec
+                      << " strideRow " << strideRow << " strideCol "
+                      << strideCol << "\n");
     for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
       Value offset = i32_val(0);
       // Extract multi dimensional index for current element
       auto idx = srcIndices[elemIdx];
       Value idxCol = idx[outOrder[0]]; // contiguous dimension
-      Value idxRow, strideRow;
+      Value idxRow;
       if (outOrder.size() == 2) {
         idxRow = idx[outOrder[1]]; // discontiguous dimension
-        strideRow = srcStrides[outOrder[1]];
+
       } else {
         idxRow = i32_val(0);
-        strideRow = i32_val(0);
       }
-      Value strideCol = srcStrides[outOrder[0]];
       // compute phase = (row // perPhase) % maxPhase
       Value phase = urem(udiv(idxRow, i32_val(perPhase)), i32_val(maxPhase));
       // extract dynamic/static offset for immediate offsetting
@@ -489,6 +499,8 @@ public:
     unsigned numVecs = outElems / minVec;
     auto wordTy = vec_ty(elemTy, minVec);
     SmallVector<Value> outVals(outElems);
+    LLVM_DEBUG(DBGS() << "loadSharedToDistributed: numVecs = " << numVecs
+                      << " minVec = " << minVec << " " << wordTy << "\n");
     for (unsigned i = 0; i < numVecs; ++i) {
       Value smemAddr = sharedPtrs[i * minVec];
       smemAddr = bitcast(smemAddr, ptr_ty(rewriter.getContext(), 3));
@@ -543,6 +555,8 @@ public:
         getSwizzledSharedPtrs(loc, inVec, srcTy, dstSharedLayout, dstElemTy,
                               smemObj, rewriter, offsetVals, srcStrides);
 
+    LLVM_DEBUG(DBGS() << "storeDistributedToShared: numElems = " << numElems
+                      << " minVec = " << minVec << " " << wordTy << "\n");
     for (unsigned i = 0; i < numElems; ++i) {
       if (i % minVec == 0)
         word = undef(wordTy);
@@ -1121,15 +1135,28 @@ private:
       Location loc, ConversionPatternRewriter &rewriter, Attribute layout,
       RankedTensorType type, bool withCTAOffset) const {
     // step 1, delinearize threadId to get the base index
+    auto shape = type.getShape();
+    unsigned rank = shape.size();
     auto multiDimBase =
         emitBaseIndexForLayout(loc, rewriter, layout, type, withCTAOffset);
     // step 2, get offset of each element
     auto offset = emitOffsetForLayout(layout, type);
+#if 0
+    LDBG("emitOffsetForLayout offsetSize = " << offset.size() << " " << type);
+    LLVM_DEBUG(DBGS() << "  ");
+    for (unsigned k = 0; k < offset.size(); ++k)
+      LLVM_DEBUG({
+        llvm::dbgs() << k << ":";
+        for (unsigned d = 0; d < rank; ++d) {
+          llvm::dbgs() << " " << offset[k][d];
+        }
+        llvm::dbgs() << "; ";
+      });
+    LLVM_DEBUG(llvm::dbgs() << "\n");
+#endif
     // step 3, add offset to base, and reorder the sequence
     // of indices to guarantee that elems in the same
     // sizePerThread are adjacent in order
-    auto shape = type.getShape();
-    unsigned rank = shape.size();
     unsigned elemsPerThread = offset.size();
     SmallVector<SmallVector<Value>> multiDimIdx(elemsPerThread,
                                                 SmallVector<Value>(rank));

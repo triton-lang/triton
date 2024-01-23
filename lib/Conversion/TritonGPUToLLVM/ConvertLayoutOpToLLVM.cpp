@@ -71,6 +71,7 @@ public:
     auto dstTy = dst.getType().cast<RankedTensorType>();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
+    LDBG(" Lower ConvertLayoutOp " << op);
     if (isaDistributedLayout(srcLayout) &&
         dstLayout.isa<SharedEncodingAttr>()) {
       return lowerDistributedToShared(op, adaptor, rewriter);
@@ -288,7 +289,14 @@ private:
       elemTy = IntegerType::get(elemTy.getContext(), 64);
 
     auto llvmElemTy = getTypeConverter()->convertType(elemTy);
-
+    auto vecTy = vec_ty(llvmElemTy, vec);
+    LLVM_DEBUG(DBGS() << "processReplica: accumNumCTAsEachRep = "
+                      << accumNumCTAsEachRep
+                      << " accumSizePerThread = " << accumSizePerThread
+                      << " vec = " << vec << " stNotRd = " << stNotRd
+                      << " vecTy " << vecTy << " estimated "
+                      << (accumNumCTAsEachRep * (accumSizePerThread / vec))
+                      << "\n");
     for (unsigned ctaId = 0; ctaId < accumNumCTAsEachRep; ++ctaId) {
       auto multiDimCTAInRepId =
           getMultiDimIndex<unsigned>(ctaId, numCTAsEachRep, order);
@@ -314,7 +322,6 @@ private:
                                  paddedRepShape, outOrd);
         auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
         Value ptr = gep(elemPtrTy, llvmElemTy, smemBase, offset);
-        auto vecTy = vec_ty(llvmElemTy, vec);
         ptr = bitcast(ptr, ptr_ty(rewriter.getContext(), 3));
         if (stNotRd) {
           Value valVec = undef(vecTy);
@@ -418,6 +425,9 @@ private:
       }
     }
 
+    LLVM_DEBUG(DBGS() << "processReplicaForMMAV1: accumSizePerThread = "
+                      << accumSizePerThread << " vec = " << vec << " stNotRd = "
+                      << stNotRd << " needTrans = " << needTrans << "\n");
     // Now the coord2valT has the transposed and contiguous elements(with
     // vec=2), the original vals is not needed.
     for (unsigned elemId = 0; elemId < accumSizePerThread; elemId += vec) {
@@ -478,6 +488,10 @@ private:
       assert(inIndices.size() == inVals.size() &&
              "Unexpected number of indices emitted");
 
+      LLVM_DEBUG(
+          DBGS()
+          << "lowerDistToDistWithDistSmem: store to shared memory numStores = "
+          << inIndices.size() << " llvmElemTy " << llvmElemTy << "\n");
       for (unsigned i = 0; i < inIndices.size(); ++i) {
         Value offset = linearize(rewriter, loc, inIndices[i], smemShape);
         Value ptr = gep(elemPtrTy, llvmElemTy, smemBase, offset);
@@ -499,6 +513,10 @@ private:
       auto outIndices =
           emitIndices(loc, rewriter, dstLayout, dstTy, /*withCTAOffset*/ true);
 
+      LLVM_DEBUG(
+          DBGS()
+          << "lowerDistToDistWithDistSmem: load from shared memory numLoads = "
+          << outIndices.size() << " llvmElemTy " << llvmElemTy << "\n");
       for (unsigned i = 0; i < outIndices.size(); ++i) {
         auto coord = outIndices[i];
         assert(coord.size() == rank && "Unexpected rank of index emitted");
@@ -558,6 +576,8 @@ private:
     auto srcShapePerCTATile = getShapePerCTATile(srcLayout, srcTy.getShape());
     auto dstShapePerCTATile = getShapePerCTATile(dstLayout, shape);
     auto shapePerCTA = getShapePerCTA(srcLayout, shape);
+    LDBG("lowerDistributedToDistributed: " << srcTy);
+    LDBG("  " << dstTy);
 
     // For Volta, all the coords for a CTA are calculated.
     bool isSrcMmaV1{}, isDstMmaV1{};
@@ -853,6 +873,9 @@ private:
     auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     smemBase = bitcast(smemBase, elemPtrTy);
+
+    // LDBG("lowerDistributedToShared: " << srcTy);
+    // LDBG("  " << dstTy);
 
     int32_t elemSize = elemTy.getIntOrFloatBitWidth();
     auto mmaLayout = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>();

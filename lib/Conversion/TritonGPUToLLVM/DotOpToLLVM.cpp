@@ -43,6 +43,7 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
+    LLVM_DEBUG(DBGS() << "Lower DotOp " << op << '\n');
     // D = A * B + C
     Value A = op.getA();
     Value D = op.getResult();
@@ -92,6 +93,7 @@ struct DotAsyncOpConversion
   matchAndRewrite(triton::nvidia_gpu::DotAsyncOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
+    LLVM_DEBUG(DBGS() << "Lower DotAsyncOp " << op << '\n');
     // D = A * B + C
     Value A = op.getA();
     Value D = op.getResult();
@@ -132,6 +134,7 @@ struct DotWaitOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto pendings = op.getPendings();
     Location loc = op.getLoc();
+    LLVM_DEBUG(DBGS() << "Lower DotWaitOp " << op << '\n');
     if (adaptor.getInputs().size() <= 1) {
       Value intput =
           adaptor.getInputs().size() == 1 ? adaptor.getInputs()[0] : Value();

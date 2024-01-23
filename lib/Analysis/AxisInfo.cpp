@@ -1,10 +1,15 @@
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+
+#define DEBUG_TYPE "axis-info"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir {
 
@@ -994,6 +999,7 @@ unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
   assert(order[0] < uniqueContigPerThread.size() &&
          "Unexpected uniqueContigPerThread size");
   unsigned contiguity = uniqueContigPerThread[order[0]];
+  LDBG("getPtrContiguity uniqueContigPerThread = " << contiguity);
   contiguity = std::min(align, contiguity);
 
   return contiguity;
@@ -1013,6 +1019,29 @@ void AxisInfoAnalysis::visitForOpInductionVar(
   (void)argLattices[0]->join(inductionVar);
 }
 
+// Generate a pretty string for basic pointer calculation via GEP and binary
+// operations.
+// print val + AxisInfo
+// print [  ]lhs + AxisInfo
+static void printPtrExpr(ModuleAxisInfoAnalysis *analysis, Value val,
+                         std::string ident) {
+  std::string retStr;
+  std::string axisStr;
+  auto *axisInfo = analysis->getAxisInfo(val);
+  if (axisInfo) {
+    llvm::raw_string_ostream os(axisStr);
+    axisInfo->print(os);
+  }
+  LLVM_DEBUG(llvm::dbgs() << ident << val << " AxisInfo " << axisStr << "\n");
+  if (val.getDefiningOp()) {
+    auto ij = val.getDefiningOp()->getNumOperands();
+    for (auto opIdx = 0; opIdx < ij; ++opIdx) {
+      printPtrExpr(analysis, val.getDefiningOp()->getOperand(opIdx),
+                   ident + "  ");
+    }
+  }
+}
+
 unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
   auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
   if (!tensorTy)
@@ -1028,6 +1057,18 @@ unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
   auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
   auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
   unsigned alignment = std::min(maxMultiple, maxContig);
+  LDBG("getPtrAlignment order[0] "
+       << order[0] << " maxMultipleBytes = " << maxMultipleBytes
+       << " maxContig = " << maxContig << " elemNumBits = " << elemNumBits
+       << " maxMultiple = " << maxMultiple << " alignment " << alignment);
+  {
+    std::string axisStr;
+    llvm::raw_string_ostream os(axisStr);
+    axisInfo->print(os);
+    LDBG("-- " << axisStr);
+  }
+  // pretty print ptr
+  // printPtrExpr(this, ptr, "  ");
   return alignment;
 }
 
@@ -1069,6 +1110,16 @@ void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp) {
       updateAxisInfoMap(value);
     }
   });
+#if 0
+  // Dump contents of axisInfoMap, which maps from Value to AxisInfo.
+  LDBG("dump axisInfoMap----------------------");
+  for (auto p : *axisInfoMap) {
+    std::string axisStr;
+    llvm::raw_string_ostream os(axisStr);
+    p.second.print(os);
+    LLVM_DEBUG(llvm::dbgs() << p.first << " AxisInfo " << axisStr << '\n');
+  }
+#endif
 }
 
 void ModuleAxisInfoAnalysis::update(CallOpInterface callOp,

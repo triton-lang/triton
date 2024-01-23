@@ -54,6 +54,8 @@ struct LoadStoreConversionBase {
       return 1;
     auto contiguity = getContiguity(ptr);
     auto pointeeBitWidth = triton::getPointeeBitWidth(tensorTy);
+    LLVM_DEBUG(DBGS() << "getVectorSize contiguity = " << contiguity
+                      << " pointeeBitWidth = " << pointeeBitWidth << '\n');
     // The maximum vector size is 128 bits on NVIDIA GPUs.
     return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
   }
@@ -87,6 +89,7 @@ struct LoadOpConversion
     Value ptr = op.getPtr();
     Value mask = op.getMask();
     Value other = op.getOther();
+    LLVM_DEBUG(DBGS() << "Lower LoadOp for " << ptr << '\n');
 
     // adaptor values
     assert(!isTensorPointerType(ptr.getType()) &&
@@ -138,6 +141,9 @@ struct LoadOpConversion
         std::max(8u, valueElemTy.getIntOrFloatBitWidth());
     const int numVecs = numElems / vec;
 
+    LLVM_DEBUG(DBGS() << "LoadOp numElems = " << numElems << " vec = " << vec
+                      << " valueElemNBits = " << valueElemNBits << " "
+                      << valueTy << '\n');
     SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       // TODO: optimization when ptr is GEP with constant offset
@@ -294,6 +300,7 @@ struct StoreOpConversion
     Value llPtr = adaptor.getPtr();
     Value llMask = adaptor.getMask();
     Value llValue = adaptor.getValue();
+    LLVM_DEBUG(DBGS() << "Lower StoreOp for " << ptr << '\n');
 
     auto loc = op->getLoc();
     MLIRContext *ctx = rewriter.getContext();
@@ -421,6 +428,7 @@ struct StoreAsyncTMAOpConversion : public ConvertTritonGPUOpToLLVMPattern<
                   ConversionPatternRewriter &rewriter) const override {
     auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
     auto srcEncoding = srcTy.getEncoding();
+    LLVM_DEBUG(DBGS() << "Lower StoreAsyncTMAOp for " << op << '\n');
     if (srcEncoding.isa<NvidiaMmaEncodingAttr>()) {
       return lowerStoreAsyncWithSlice(op, adaptor, rewriter);
     } else {
@@ -951,6 +959,7 @@ struct AtomicCASOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     MLIRContext *ctx = rewriter.getContext();
+    LLVM_DEBUG(DBGS() << "Lower AtomicCASOp for " << op << '\n');
 
     auto moduleOp = op->getParentOfType<ModuleOp>();
     assert(moduleOp && "Parent ModuleOp not found for AtomicCASOp");
@@ -1071,6 +1080,7 @@ struct AtomicRMWOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     MLIRContext *ctx = rewriter.getContext();
+    LLVM_DEBUG(DBGS() << "Lower AtomicRMWOp for " << op << '\n');
 
     auto moduleOp = op->getParentOfType<ModuleOp>();
     assert(moduleOp && "Parent ModuleOp not found for AtomicRMWOp");
@@ -1233,6 +1243,7 @@ struct InsertSliceOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     // %dst = insert_slice %src into %dst[%offsets]
     Location loc = op->getLoc();
+    LLVM_DEBUG(DBGS() << "Lower InsertSliceOp for " << op << '\n');
     Value dst = op.getDest();
     Value src = op.getSource();
     Value res = op.getResult();
@@ -1282,6 +1293,7 @@ struct InsertSliceOpConversion
 
     auto llSrc = adaptor.getSource();
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy);
+    LLVM_DEBUG(DBGS() << "-- call storeDistributedToShared\n");
     storeDistributedToShared(src, llSrc, srcStrides, srcIndices, dst, smemBase,
                              elemTy, loc, rewriter);
     // Barrier is not necessary.
@@ -1311,6 +1323,7 @@ struct InsertSliceAsyncOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     // insert_slice_async %src, %dst, %index, %mask, %other
     auto loc = op.getLoc();
+    LLVM_DEBUG(DBGS() << "Lower InsertSliceAsyncOp for " << op << '\n');
     Value src = op.getSrc();
     Value dst = op.getDst();
     Value res = op.getResult();
@@ -1468,6 +1481,7 @@ struct InsertSliceTMAOpConversion : public ConvertTritonGPUOpToLLVMPattern<
                   ConversionPatternRewriter &rewriter) const override {
 
     Location loc = op->getLoc();
+    LLVM_DEBUG(DBGS() << "Lower InsertSliceTMAOp for " << op << '\n');
     auto resultTy = op.getResult().getType().cast<RankedTensorType>();
     auto elemTy = resultTy.getElementType();
     auto rank = resultTy.getRank() - 1;
