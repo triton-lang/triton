@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from distutils.command.install import install
 from setuptools.command.develop import develop
 from setuptools.command.egg_info import egg_info
+from wheel.bdist_wheel import bdist_wheel
 
 
 @dataclass
@@ -406,6 +407,13 @@ class plugin_develop(develop):
         develop.run(self)
 
 
+class plugin_bdist_wheel(bdist_wheel):
+
+    def run(self):
+        add_link_to_backends()
+        bdist_wheel.run(self)
+
+
 class plugin_egginfo(egg_info):
 
     def run(self):
@@ -446,6 +454,7 @@ setup(
         "clean": CMakeClean,
         "install": plugin_install,
         "develop": plugin_develop,
+        "bdist_wheel": plugin_bdist_wheel,
         "egg_info": plugin_egginfo,
     },
     zip_safe=False,
