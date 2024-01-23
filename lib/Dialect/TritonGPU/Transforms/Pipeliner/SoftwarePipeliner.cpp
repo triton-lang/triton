@@ -74,9 +74,6 @@ static void pipelineLoop(scf::ForOp forOp, int numStages) {
 
   if (succeeded(newForOp))
     mlir::triton::asyncLaunchDots(newForOp.value());
-
-  // schedule the waits
-  schedule.insertWaits(rewriter, newForOp.value());
 }
 
 namespace {
@@ -98,6 +95,9 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
     for (scf::ForOp forOp : loops) {
       pipelineLoop(forOp, numStages);
     }
+
+  // schedule the waits
+  mlir::triton::insertWaits(getOperation());
   }
 };
 } // anonymous namespace
