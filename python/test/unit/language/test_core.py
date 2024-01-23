@@ -785,7 +785,6 @@ def test_where_broadcast(num_ctas, device):
     assert (z == to_numpy(z_tri)).all()
 
 
-
 # ---------------
 # test unary ops
 # ---------------

@@ -3,13 +3,12 @@ import pytest
 import torch
 import triton.language as tl
 
-
 from test_core import _test_binary, int_dtypes, uint_dtypes, float_dtypes, is_hip, numpy_random
-
 
 # ---------------
 # test maximum/minimum ops
 # ---------------
+
 
 # TODO: Tests with unsigned integers failed at compilation stage.
 @pytest.mark.parametrize("dtype", int_dtypes + uint_dtypes + float_dtypes + ["bfloat16"])
@@ -23,6 +22,7 @@ def test_maximum_minium(dtype, op):
 # ---------------
 # test sort op
 # ---------------
+
 
 @pytest.mark.parametrize("M, N", [[1, 512], [8, 64], [256, 16], [512, 8]])
 @pytest.mark.parametrize("descending", [False, True])
@@ -53,6 +53,7 @@ def test_sort(M, N, descending, dtype_str, device):
 # ---------------
 # test flip op
 # ---------------
+
 
 @pytest.mark.parametrize("M, N", [[1, 512], [8, 64], [256, 16], [512, 8]])
 @pytest.mark.parametrize("dtype_str", ['int32', 'float16', 'float32'])
