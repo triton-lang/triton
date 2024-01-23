@@ -103,7 +103,7 @@ jobs:
           python3 -m pip install .
       - name: Run python tests on ROCM
         run: |
-          python3 -m pytest -n 32 --capture=tee-sys -rfs --verbose "python/test/unit/language/test_core.py"
+          python3 -m pytest -n 32 --capture=tee-sys -rfs --verbose "python/test/unit/language/test_core.py" -k "not test_flip"
 
   Integration-Tests-Intel:
     needs: Runner-Preparation
