@@ -18,12 +18,12 @@ public:
   bool preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
                                     mlir::triton::PipeliningOption &options);
 
-  /// Post process the pipelined loop by inserting sync operations if necessary
-  void insertWaits(RewriterBase &rewriter, scf::ForOp forOp);
-
 private:
   llvm::SmallVector<mlir::Operation *, 4> extractOps;
 };
+
+/// Post process the pipelined loop by inserting sync operations if necessary
+void insertWaits(ModuleOp module);
 
 /// This does post-processing on the pipelined loop to try to pipeline wgmma
 /// ops.
