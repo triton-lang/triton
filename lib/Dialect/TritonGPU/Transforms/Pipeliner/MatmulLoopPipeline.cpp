@@ -666,10 +666,16 @@ static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp,
   // of insert ops among all the paths.
   std::function<int(Value, Operation *, int)> minOverHistories =
       [&](Value val, Operation *sinkOp, int thisHistorySum) -> int {
-    if (auto insertOp = val.getDefiningOp<ttg::InsertSliceAsyncOp>()) {
-      thisHistorySum += countInsertsBetween(insertOp->getNextNode(), sinkOp);
-      minWaitNumber = std::min(minWaitNumber, thisHistorySum);
-      return minWaitNumber;
+    if (auto defOp = val.getDefiningOp()) {
+      if (isa<ttg::InsertSliceAsyncOp, ttng::InsertSliceTMAOp>(defOp)) {
+        thisHistorySum += countInsertsBetween(defOp->getNextNode(), sinkOp);
+        minWaitNumber = std::min(minWaitNumber, thisHistorySum);
+        return minWaitNumber;
+      }
+      // We cannot track further. Conservatively return 0, and assert in debug,
+      // so that we can easier find unsupported cases.
+      assert(false && "Found source op that is not InsertSlice.");
+      return 0;
     }
     if (auto arg = val.dyn_cast<BlockArgument>()) {
       auto block = arg.getOwner();
