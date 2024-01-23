@@ -322,7 +322,7 @@ class CMakeBuild(build_ext):
             "-DTRITON_BUILD_PYTHON_MODULE=ON", "-DPython3_EXECUTABLE:FILEPATH=" + sys.executable,
             "-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON", "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
             "-DTRITON_CODEGEN_BACKENDS=" + ';'.join([b.name for b in backends if not b.is_external]),
-            "-DTRITON_EXTERNAL_CODEGEN_BACKENDS=" + ';'.join([b.name for b in backends if b.is_external])
+            "-DTRITON_EXTERNAL_CODEGEN_BACKENDS=" + ';'.join([b.name for b in backends if b.is_external]),
             "-DTRITON_EXTERNAL_CODEGEN_BACKEND_DIRS=" + ';'.join([b.src_dir for b in backends if b.is_external])
         ]
         if lit_dir is not None:
