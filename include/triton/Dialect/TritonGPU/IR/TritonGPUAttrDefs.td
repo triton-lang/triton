@@ -131,6 +131,8 @@ compared to 1*64 when the hasLeadingOffset is false.
 
         if (mfmaEnc) {
           int kDimNum = dotOpEnc.getOpIdx() == 0 ? 1 : 0;
+          if (needTrans)
+            kDimNum = 1 - kDimNum;
           bool isKDimInner = (order[0] == kDimNum);
           if (isKDimInner) {
             const int numBanks = 32;
