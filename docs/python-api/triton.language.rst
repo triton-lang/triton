@@ -72,6 +72,7 @@ Indexing Ops
     :toctree: generated
     :nosignatures:
 
+    flip
     where
 
 

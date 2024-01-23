@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from warnings import warn
 from contextlib import contextmanager
 from enum import Enum
 from functools import partial, wraps
@@ -535,6 +536,15 @@ class constexpr:
         return self.value(*args, **kwds)
 
 
+def check_bit_width(value, shift_value):
+    if isinstance(value, tensor) and isinstance(shift_value, constexpr):
+        bitwidth = value.type.scalar.primitive_bitwidth
+        if shift_value.value >= bitwidth:
+            warn(
+                f"Value {shift_value.value} exceeds the maximum bitwidth ({bitwidth}) for type '{value.dtype}'. This may result in undefined behavior."
+            )
+
+
 class tensor:
 
     def __init__(self, handle, type: dtype):
@@ -656,16 +666,19 @@ class tensor:
 
     @builtin
     def __lshift__(self, other, _builder=None):
+        check_bit_width(self, other)
         other = _to_tensor(other, _builder)
         return semantic.shl(self, other, _builder)
 
     @builtin
     def __rlshift__(self, other, _builder=None):
+        check_bit_width(other, self)
         other = _to_tensor(other, _builder)
         return semantic.shl(other, self, _builder)
 
     @builtin
     def __rshift__(self, other, _builder=None):
+        check_bit_width(self, other)
         other = _to_tensor(other, _builder)
         if self.dtype.is_int_signed():
             return semantic.ashr(self, other, _builder)
@@ -674,6 +687,7 @@ class tensor:
 
     @builtin
     def __rrshift__(self, other, _builder=None):
+        check_bit_width(other, self)
         other = _to_tensor(other, _builder)
         if self.dtype.is_int_signed():
             return semantic.ashr(other, self, _builder)
