@@ -43,7 +43,7 @@ static int getMMAVersionSafe(int computeCapability, tt::DotOp op) {
   return 0;
 }
 
-SmallVector<unsigned, 2>
+SmallVector<unsigned, 3>
 warpsPerTileV2(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion() &&
@@ -64,7 +64,10 @@ warpsPerTileV2(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
       hasChainedDot = true;
     }
   }
+  auto rank = shape.size();
   if (hasChainedDot) {
+    if (rank == 3)
+      return {(unsigned)numWarps, 1, 1};
     if (shape[0] >= shape[1]) {
       return {(unsigned)numWarps, 1};
     } else {
@@ -72,8 +75,10 @@ warpsPerTileV2(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
     }
   }
 
-  SmallVector<unsigned, 2> ret = {1, 1};
-  SmallVector<int64_t, 2> shapePerWarp = {16, 8};
+  SmallVector<unsigned, 3> ret(rank, 1);
+  SmallVector<int64_t> shapePerWarp(rank, 1);
+  shapePerWarp[rank - 1] = 8;
+  shapePerWarp[rank - 2] = 16;
   // TODO (@daadaada): double-check.
   // original logic in
   // https://github.com/openai/triton/blob/master/lib/codegen/analysis/layout.cc#L252

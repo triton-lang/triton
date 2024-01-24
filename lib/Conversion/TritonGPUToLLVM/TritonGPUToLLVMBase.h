@@ -357,7 +357,7 @@ public:
         swizzlingByteWidth * 8 / resElemTy.getIntOrFloatBitWidth();
     Value numElemsPerSwizzlingRowVal = i32_val(numElemsPerSwizzlingRow);
     unsigned leadingDimOffset;
-    if (outOrder.size() == 2) {
+    if (outOrder.size() >= 2) {
       leadingDimOffset = numElemsPerSwizzlingRow * srcShapePerCTA[outOrder[1]];
     } else {
       leadingDimOffset = numElemsPerSwizzlingRow;
@@ -375,7 +375,7 @@ public:
       auto idx = srcIndices[elemIdx];
       Value idxCol = idx[outOrder[0]]; // contiguous dimension
       Value idxRow, strideRow;
-      if (outOrder.size() == 2) {
+      if (outOrder.size() >= 2) {
         idxRow = idx[outOrder[1]]; // discontiguous dimension
         strideRow = srcStrides[outOrder[1]];
       } else {
@@ -431,12 +431,14 @@ public:
       colOffOrdered = mul(colOffOrdered, i32_val(minVec));
       Value colOff = add(colOffSwizzled, colOffOrdered);
       // compute non-immediate offset
+      if (outOrder.size() == 3)
+        offset = add(offset, mul(idx[outOrder[2]], srcStrides[outOrder[2]]));
       offset = add(offset, add(rowOff, mul(colOff, strideCol)));
       Value currPtr = gep(dstPtrTy, getTypeConverter()->convertType(resElemTy),
                           dstPtrBase, offset);
       // compute immediate offset
       Value immediateOff;
-      if (outOrder.size() == 2) {
+      if (outOrder.size() >= 2) {
         immediateOff =
             add(mul(i32_val(immedateOffRow), srcStrides[outOrder[1]]),
                 i32_val(immedateOffCol));
@@ -509,8 +511,9 @@ public:
                                 ConversionPatternRewriter &rewriter) const {
     auto srcTy = src.getType().cast<RankedTensorType>();
     auto srcShape = srcTy.getShape();
-    assert(srcShape.size() == 2 &&
-           "Unexpected rank of storeDistributedToShared");
+    auto rank = srcShape.size();
+    assert(rank == 2 ||
+           rank == 3 && "Unexpected rank of storeDistributedToShared");
     auto dstTy = dst.getType().cast<RankedTensorType>();
     auto srcDistributedLayout = srcTy.getEncoding();
     if (auto mmaLayout =
@@ -535,8 +538,11 @@ public:
     auto wordTy = vec_ty(elemTy, minVec);
     Value word;
 
-    SmallVector<Value> srcStrides = {dstStrides[0], dstStrides[1]};
-    SmallVector<Value> offsetVals = {i32_val(0), i32_val(0)};
+    SmallVector<Value> srcStrides;
+    SmallVector<Value> offsetVals(rank, i32_val(0));
+    for (auto i = 0; i < rank; i++) {
+      srcStrides.push_back(dstStrides[i]);
+    }
     SharedMemoryObject smemObj(smemBase, elemTy, srcStrides, offsetVals);
 
     DenseMap<unsigned, Value> sharedPtrs =
@@ -1022,17 +1028,25 @@ private:
     auto shape = type.getShape();
     auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
     SmallVector<SmallVector<unsigned>> ret;
-
-    for (unsigned i = 0; i < shapePerCTA[0];
-         i += getShapePerCTATile(mmaLayout)[0]) {
-      for (unsigned j = 0; j < shapePerCTA[1];
-           j += getShapePerCTATile(mmaLayout)[1]) {
-        ret.push_back({i, j});
-        ret.push_back({i, j + 1});
-        ret.push_back({i + 8, j});
-        ret.push_back({i + 8, j + 1});
+    auto rank = shape.size();
+    for (unsigned i = 0; i < shapePerCTA[rank - 2];
+         i += getShapePerCTATile(mmaLayout)[rank - 2]) {
+      for (unsigned j = 0; j < shapePerCTA[rank - 1];
+           j += getShapePerCTATile(mmaLayout)[rank - 1]) {
+        if (rank == 3) {
+          ret.push_back({0, i, j});
+          ret.push_back({0, i, j + 1});
+          ret.push_back({0, i + 8, j});
+          ret.push_back({0, i + 8, j + 1});
+        } else {
+          ret.push_back({i, j});
+          ret.push_back({i, j + 1});
+          ret.push_back({i + 8, j});
+          ret.push_back({i + 8, j + 1});
+        }
       }
     }
+
     return ret;
   }
 
@@ -1041,11 +1055,13 @@ private:
       const NvidiaMmaEncodingAttr &mmaLayout, RankedTensorType type) const {
     auto shape = type.getShape();
     auto _warpsPerCTA = mmaLayout.getWarpsPerCTA();
-    assert(_warpsPerCTA.size() == 2);
+    auto rank = shape.size();
+    assert(rank == 2 || rank == 3);
     auto order = triton::gpu::getOrder(mmaLayout);
     ArrayRef<unsigned int> instrShape = mmaLayout.getInstrShape();
-    SmallVector<Value> warpsPerCTA = {i32_val(_warpsPerCTA[0]),
-                                      i32_val(_warpsPerCTA[1])};
+    SmallVector<Value> warpsPerCTA;
+    for (unsigned i = 0; i < rank; ++i)
+      warpsPerCTA.push_back(i32_val(_warpsPerCTA[i]));
     auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
 
     Value threadId = getThreadId(rewriter, loc);
@@ -1053,42 +1069,52 @@ private:
     Value laneId = urem(threadId, warpSize);
     Value warpId = udiv(threadId, warpSize);
 
-    uint32_t repM = (_warpsPerCTA[0] * instrShape[0]) / shapePerCTA[0];
-    uint32_t repN = (_warpsPerCTA[1] * instrShape[1]) / shapePerCTA[1];
+    uint32_t repM =
+        (_warpsPerCTA[rank - 2] * instrShape[rank - 2]) / shapePerCTA[rank - 2];
+    uint32_t repN =
+        (_warpsPerCTA[rank - 1] * instrShape[rank - 1]) / shapePerCTA[rank - 1];
 
     uint32_t warpsM;
     if (repM > 1)
-      warpsM = _warpsPerCTA[0] / repM;
+      warpsM = _warpsPerCTA[rank - 2] / repM;
     else
-      warpsM = shape[0] / instrShape[0];
+      warpsM = shape[rank - 2] / instrShape[rank - 2];
 
     uint32_t warpsN;
     if (repN > 1)
-      warpsN = _warpsPerCTA[1] / repN;
+      warpsN = _warpsPerCTA[rank - 1] / repN;
     else
-      warpsN = shape[1] / instrShape[1];
+      warpsN = shape[rank - 1] / instrShape[rank - 1];
 
-    SmallVector<Value> multiDimWarpId(2);
+    SmallVector<Value> multiDimWarpId(rank);
     if (mmaLayout.isHopper()) {
-      // TODO[goostavz]: the tiling order from CTA->warp level is different for
-      // MMAv2/3. This is a workaround since we don't explicitly have warpGrp
-      // level in the layout definition, and the tiling order of warpGrp->warp
-      // must be fixed to meet the HW's needs. We may need to consider to
-      // explicitly define warpGrpPerCTA for MMAv3 layout.
-      multiDimWarpId[0] = urem(warpId, warpsPerCTA[0]);
-      multiDimWarpId[1] = urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]);
+      // TODO[goostavz]: the tiling order from CTA->warp level is different
+      // for MMAv2/3. This is a workaround since we don't explicitly have
+      // warpGrp level in the layout definition, and the tiling order of
+      // warpGrp->warp must be fixed to meet the HW's needs. We may need to
+      // consider to explicitly define warpGrpPerCTA for MMAv3 layout.
+      if (rank == 3) {
+        // TODO(ZM)
+        assert(false);
+      }
+      multiDimWarpId[rank - 2] = urem(warpId, warpsPerCTA[rank - 2]);
+      multiDimWarpId[rank - 1] =
+          urem(udiv(warpId, warpsPerCTA[rank - 2]), warpsPerCTA[rank - 1]);
     } else {
       multiDimWarpId = delinearize(rewriter, loc, warpId, _warpsPerCTA, order);
     }
-    Value warpId0 = urem(multiDimWarpId[0], i32_val(warpsM));
-    Value warpId1 = urem(multiDimWarpId[1], i32_val(warpsN));
+    Value warpId1 = urem(multiDimWarpId[rank - 2], i32_val(warpsM));
+    Value warpId2 = urem(multiDimWarpId[rank - 1], i32_val(warpsN));
 
-    Value offWarp0 = mul(warpId0, i32_val(instrShape[0]));
-    Value offWarp1 = mul(warpId1, i32_val(instrShape[1]));
+    Value offWarp1 = mul(warpId1, i32_val(instrShape[rank - 2]));
+    Value offWarp2 = mul(warpId2, i32_val(instrShape[rank - 1]));
 
-    SmallVector<Value> multiDimBase(2);
-    multiDimBase[0] = add(udiv(laneId, i32_val(4)), offWarp0);
-    multiDimBase[1] = add(mul(i32_val(2), urem(laneId, i32_val(4))), offWarp1);
+    SmallVector<Value> multiDimBase(rank);
+    if (rank == 3)
+      multiDimBase[0] = multiDimWarpId[0];
+    multiDimBase[rank - 2] = add(udiv(laneId, i32_val(4)), offWarp1);
+    multiDimBase[rank - 1] =
+        add(mul(i32_val(2), urem(laneId, i32_val(4))), offWarp2);
     return multiDimBase;
   }
 
