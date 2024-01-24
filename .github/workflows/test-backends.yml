@@ -4,6 +4,8 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+  issue_comment:
+      types: [created]
 
 jobs:
   Runner-Preparation:
@@ -57,6 +59,7 @@ jobs:
 
 
   Integration-Tests-AMD:
+    if: github.event.issue.pull_request && contains(github.event.comment.body, '/run-amd-tests')
     needs: Runner-Preparation
     timeout-minutes: 20
 
