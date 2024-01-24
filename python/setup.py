@@ -111,6 +111,16 @@ def get_build_type():
         return "TritonRelBuildWithAsserts"
 
 
+def get_codegen_backends():
+    backends = []
+    env_prefix = "TRITON_CODEGEN_"
+    for name, _ in os.environ.items():
+        if name.startswith(env_prefix) and check_env_flag(name):
+            assert name.count(env_prefix) <= 1
+            backends.append(name.replace(env_prefix, '').lower())
+    return backends
+
+
 # --- third party packages -----
 
 
