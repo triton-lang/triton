@@ -514,19 +514,6 @@ private:
         "global_smem", /*value=*/Attribute(), /*alignment=*/0,
         // Add ROCm support.
         static_cast<unsigned>(NVVM::NVVMMemorySpace::kSharedMemorySpace));
-    mod.walk([&](FunctionOpInterface funcOp) {
-      Value funcSmem;
-      b.setInsertionPointToStart(&funcOp.getFunctionBody().front());
-      if (LLVM::isKernel(funcOp)) {
-        funcSmem = b.create<LLVM::AddressOfOp>(loc, global);
-      } else {
-        funcSmem = funcOp.getArgument(funcOp.getNumArguments() - 1);
-      }
-      auto ptrTy = LLVM::LLVMPointerType::get(
-          ctx, NVVM::NVVMMemorySpace::kSharedMemorySpace);
-      funcSmem = b.create<LLVM::BitcastOp>(loc, ptrTy, funcSmem);
-      allocation.setFunctionSharedMemoryValue(funcOp, funcSmem);
-    });
     mod->setAttr("triton_gpu.shared",
                  mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32),
                                         allocation.getSharedMemorySize()));
