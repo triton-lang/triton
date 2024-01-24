@@ -745,7 +745,8 @@ struct StoreAsyncTMAOpConversion : public ConvertTritonGPUOpToLLVMPattern<
     Value llSrc = adaptor.getSrc();
     auto srcShape = srcTy.getShape();
     auto dstElemPtrTy = ptr_ty(ctx, 3);
-    Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
+    Value smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
     smemBase = bitcast(smemBase, dstElemPtrTy);
 
     SmallVector<Value> offsetVals;
@@ -1024,7 +1025,8 @@ struct AtomicCASOpConversion
       } else {
         auto old = ptxBuilderAtomicCAS.launch(rewriter, loc, valueElemTy);
         createBarrier(rewriter, loc, numCTAs);
-        Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+        Value atomPtr =
+            LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
         atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
         // Only threads with mask = True store the result
         PTXBuilder ptxBuilderStore;
@@ -1197,7 +1199,8 @@ struct AtomicRMWOpConversion
           rewriter.replaceOp(op, {old});
           return success();
         }
-        Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+        Value atomPtr =
+            LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
         atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
         // Only threads with rmwMask = True store the result
         PTXBuilder ptxBuilderStore;

@@ -165,7 +165,7 @@ public:
     // generate the right layout. Currently the warp level histogram generates
     // data in the default blocked layout.
     Value baseSharedMemPtr =
-        getSharedMemoryBase(loc, rewriter, op.getOperation());
+        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
     auto dstType = op.getResult().getType().cast<RankedTensorType>();
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);

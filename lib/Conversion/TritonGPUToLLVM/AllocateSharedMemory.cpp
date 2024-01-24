@@ -33,11 +33,16 @@ struct AllocateSharedMemory
           value.getParentRegion()
               ->template getParentOfType<FunctionOpInterface>();
       auto *funcAllocation = allocation.getFuncData(funcOp);
-      auto smem = allocation.getFunctionSharedMemoryBase(funcOp);
-      auto bufferId = funcAllocation->getBufferId(value);
-      if (bufferId == Allocation::InvalidBufferId)
+      auto vBufferId = funcAllocation->getBufferId(value);
+      auto oBufferId = funcAllocation->getBufferId(op);
+      int offset = -1;
+      if (vBufferId != Allocation::InvalidBufferId)
+        offset = funcAllocation->getOffset(vBufferId);
+      else if (oBufferId != Allocation::InvalidBufferId)
+        offset = funcAllocation->getOffset(oBufferId);
+      else
         return;
-      size_t offset = funcAllocation->getOffset(bufferId);
+      assert(offset != -1);
       op->setAttr("allocation.offset",
                   IntegerAttr::get(IntegerType::get(ctx, 32), offset));
     });

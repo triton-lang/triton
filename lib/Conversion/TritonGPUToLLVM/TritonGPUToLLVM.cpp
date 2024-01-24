@@ -676,7 +676,8 @@ struct AllocTensorOpConversion
   matchAndRewrite(triton::gpu::AllocTensorOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    Value smemBase = getSharedMemoryBase(loc, rewriter, op);
+    Value smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
     auto resultTy = op.getType().dyn_cast<RankedTensorType>();
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     smemBase = bitcast(smemBase, elemPtrTy);
@@ -738,8 +739,8 @@ struct ExtractSliceOpConversion
 
     // newBase = base + offset
     // Triton supports either static and dynamic offsets
-    auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSource(),
-                                                   llvmElemTy, rewriter);
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getSource(), llvmElemTy, rewriter);
     SmallVector<Value, 4> opOffsetVals;
     SmallVector<Value, 4> offsetVals;
     auto mixedOffsets = op.getMixedOffsets();

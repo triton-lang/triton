@@ -63,7 +63,8 @@ struct AllocMBarrierOpConversion : public ConvertTritonGPUOpToLLVMPattern<
   matchAndRewrite(triton::nvidia_gpu::AllocMBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    Value smemBase = getSharedMemoryBase(loc, rewriter, op.getResult());
+    Value smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
     auto resultTy = op.getType();
     auto resultTensorTy = resultTy.dyn_cast<RankedTensorType>();
     Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
