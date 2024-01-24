@@ -32,7 +32,8 @@ tt.func @test_combine_dot_add_pattern() -> (tensor<128x128xf32>) {
 
     %dot_out = tt.dot %a, %b, %zero {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<128x128xf32> * tensor<128x128xf32> -> tensor<128x128xf32>
 
-    // CHECK-NEXT: %[[res0:.*]] = tt.dot %[[a]], %[[b]], %[[d]] {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x128xf32> * tensor<128x128xf32> -> tensor<128x128xf32>
+    // CHECK-NEXT: %[[res:.*]] = tt.dot %[[a]], %[[b]], %[[d]] {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x128xf32> * tensor<128x128xf32> -> tensor<128x128xf32>
+    // CHECK-NEXT: tt.return %[[res]] : tensor<128x128xf32>
     %res = arith.addf %dot_out, %d : tensor<128x128xf32>
 
     tt.return %res : tensor<128x128xf32>
