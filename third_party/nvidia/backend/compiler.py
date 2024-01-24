@@ -558,7 +558,6 @@ class CUDABackend(BaseBackend):
               cmd = f'{ptxas}{line_info}{fmad} -v --opt-level 0 --gpu-name=sm_{capability}{suffix}{fsrc.name} -o {fbin} 2> {flog.name}'
             else:
               cmd = f'{ptxas}{line_info}{fmad} -v --gpu-name=sm_{capability}{suffix}{fsrc.name} -o {fbin} 2> {flog.name}'
-            print("RUN ptxas", cmd)
 
             try:
                 subprocess.run(cmd, shell=True, check=True)
