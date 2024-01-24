@@ -1141,19 +1141,6 @@ private:
         emitBaseIndexForLayout(loc, rewriter, layout, type, withCTAOffset);
     // step 2, get offset of each element
     auto offset = emitOffsetForLayout(layout, type);
-#if 0
-    LDBG("emitOffsetForLayout offsetSize = " << offset.size() << " " << type);
-    LLVM_DEBUG(DBGS() << "  ");
-    for (unsigned k = 0; k < offset.size(); ++k)
-      LLVM_DEBUG({
-        llvm::dbgs() << k << ":";
-        for (unsigned d = 0; d < rank; ++d) {
-          llvm::dbgs() << " " << offset[k][d];
-        }
-        llvm::dbgs() << "; ";
-      });
-    LLVM_DEBUG(llvm::dbgs() << "\n");
-#endif
     // step 3, add offset to base, and reorder the sequence
     // of indices to guarantee that elems in the same
     // sizePerThread are adjacent in order

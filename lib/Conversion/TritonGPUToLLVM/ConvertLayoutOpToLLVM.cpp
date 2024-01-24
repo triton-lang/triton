@@ -874,9 +874,6 @@ private:
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     smemBase = bitcast(smemBase, elemPtrTy);
 
-    // LDBG("lowerDistributedToShared: " << srcTy);
-    // LDBG("  " << dstTy);
-
     int32_t elemSize = elemTy.getIntOrFloatBitWidth();
     auto mmaLayout = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>();
     unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);

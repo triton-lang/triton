@@ -1019,29 +1019,6 @@ void AxisInfoAnalysis::visitForOpInductionVar(
   (void)argLattices[0]->join(inductionVar);
 }
 
-// Generate a pretty string for basic pointer calculation via GEP and binary
-// operations.
-// print val + AxisInfo
-// print [  ]lhs + AxisInfo
-static void printPtrExpr(ModuleAxisInfoAnalysis *analysis, Value val,
-                         std::string ident) {
-  std::string retStr;
-  std::string axisStr;
-  auto *axisInfo = analysis->getAxisInfo(val);
-  if (axisInfo) {
-    llvm::raw_string_ostream os(axisStr);
-    axisInfo->print(os);
-  }
-  LLVM_DEBUG(llvm::dbgs() << ident << val << " AxisInfo " << axisStr << "\n");
-  if (val.getDefiningOp()) {
-    auto ij = val.getDefiningOp()->getNumOperands();
-    for (auto opIdx = 0; opIdx < ij; ++opIdx) {
-      printPtrExpr(analysis, val.getDefiningOp()->getOperand(opIdx),
-                   ident + "  ");
-    }
-  }
-}
-
 unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
   auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
   if (!tensorTy)
@@ -1067,8 +1044,6 @@ unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
     axisInfo->print(os);
     LDBG("-- " << axisStr);
   }
-  // pretty print ptr
-  // printPtrExpr(this, ptr, "  ");
   return alignment;
 }
 
@@ -1110,16 +1085,6 @@ void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp) {
       updateAxisInfoMap(value);
     }
   });
-#if 0
-  // Dump contents of axisInfoMap, which maps from Value to AxisInfo.
-  LDBG("dump axisInfoMap----------------------");
-  for (auto p : *axisInfoMap) {
-    std::string axisStr;
-    llvm::raw_string_ostream os(axisStr);
-    p.second.print(os);
-    LLVM_DEBUG(llvm::dbgs() << p.first << " AxisInfo " << axisStr << '\n');
-  }
-#endif
 }
 
 void ModuleAxisInfoAnalysis::update(CallOpInterface callOp,
