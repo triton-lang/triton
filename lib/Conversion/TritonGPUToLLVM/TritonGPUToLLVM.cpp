@@ -676,7 +676,7 @@ struct AllocTensorOpConversion
   matchAndRewrite(triton::gpu::AllocTensorOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    Value smemBase = getSharedMemoryBase(loc, rewriter, op.getResult());
+    Value smemBase = getSharedMemoryBase(loc, rewriter, op);
     auto resultTy = op.getType().dyn_cast<RankedTensorType>();
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     smemBase = bitcast(smemBase, elemPtrTy);

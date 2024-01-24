@@ -14,7 +14,6 @@ add_triton_library(TritonGPUToLLVM
     BarrierOpToLLVM.cpp
     TritonGPUToLLVM.cpp
     TritonGPUToLLVMPass.cpp
-    DecomposeUnsupportedConversions.cpp
     ReduceOpToLLVM.cpp
     ScanOpToLLVM.cpp
     TypeConverter.cpp
@@ -24,6 +23,9 @@ add_triton_library(TritonGPUToLLVM
     ClusterOpsToLLVM.cpp
     RegReallocOpToLLVM.cpp
     PTXAsmFormat.cpp
+
+    DecomposeUnsupportedConversions.cpp
+    AllocateSharedMemory.cpp
 
     DEPENDS
     TritonGPUConversionPassIncGen
