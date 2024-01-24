@@ -1280,30 +1280,6 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
     M = lhs.type.shape[0]
     N = rhs.type.shape[1]
 
-    # Cast operands of types f16 and i8 for configurations where FMA only supported.
-    # TODO: builder should contain target information
-    # if is_hip() and not mfma_supported(M, N, lhs.type.shape[1], allow_tf32, ret_scalar_ty):
-    #     ret_cast_scalar_ty = tl.float32 if lhs.type.scalar.is_int() else ret_scalar_ty
-    #     lhs = cast(lhs, ret_cast_scalar_ty, builder)
-    #     rhs = cast(rhs, ret_cast_scalar_ty, builder)
-    #     if ret_cast_scalar_ty == tl.float16:
-    #         _0 = builder.create_splat(builder.get_fp16(0), [M, N])
-    #     else:
-    #         _0 = builder.create_splat(builder.get_fp32(0), [M, N])
-    #     ret_ty = tl.block_type(ret_cast_scalar_ty, [M, N])
-    #     ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32), ret_ty)
-    #     return cast(ret, ret_scalar_ty, builder)
-    # if is_hip() and mfma_supported(M, N, lhs.type.shape[1], allow_tf32,
-    #                                ret_scalar_ty) and ret_scalar_ty.primitive_bitwidth < 32:
-    #     if lhs.type.scalar.is_int():
-    #         ret_dot_scalar_ty = tl.int32
-    #         _0 = builder.create_splat(builder.get_int32(0), [M, N])
-    #     else:
-    #         ret_dot_scalar_ty = tl.float32
-    #         _0 = builder.create_splat(builder.get_fp32(0), [M, N])
-    #     ret_ty = tl.block_type(ret_dot_scalar_ty, [M, N])
-    #     ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32), ret_ty)
-    #     return cast(ret, ret_scalar_ty, builder)
     ret_ty = tl.block_type(ret_scalar_ty, [M, N])
     if acc is None:
         acc_handle = builder.create_splat(_0, [M, N])
