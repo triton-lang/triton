@@ -1223,75 +1223,6 @@ struct AtomicRMWOpConversion
   }
 };
 
-struct InsertSliceOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<tensor::InsertSliceOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      tensor::InsertSliceOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(tensor::InsertSliceOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    // %dst = insert_slice %src into %dst[%offsets]
-    Location loc = op->getLoc();
-    Value dst = op.getDest();
-    Value src = op.getSource();
-    Value res = op.getResult();
-    auto funcOp = op->getParentOfType<FunctionOpInterface>();
-    auto *funcAllocation = allocation->getFuncData(funcOp);
-    assert(funcAllocation->getBufferId(res) == Allocation::InvalidBufferId &&
-           "Only support in-place insert_slice for now");
-
-    auto srcTy = src.getType().dyn_cast<RankedTensorType>();
-    auto srcLayout = srcTy.getEncoding().dyn_cast<BlockedEncodingAttr>();
-    auto srcShape = srcTy.getShape();
-    assert(srcLayout && "Unexpected srcLayout in InsertSliceOpConversion");
-
-    auto dstTy = dst.getType().dyn_cast<RankedTensorType>();
-    auto dstLayout = dstTy.getEncoding().dyn_cast<SharedEncodingAttr>();
-    auto llDst = adaptor.getDest();
-    assert(dstLayout && "Unexpected dstLayout in InsertSliceOpConversion");
-    assert(op.hasUnitStride() &&
-           "Only unit stride supported by InsertSliceOpConversion");
-
-    // newBase = base + offset
-    // Triton support either static and dynamic offsets
-    auto smemObj = getSharedMemoryObjectFromStruct(
-        loc, llDst, dstTy.getElementType(), rewriter);
-    SmallVector<Value, 4> offsets;
-    SmallVector<Value, 4> srcStrides;
-    auto mixedOffsets = op.getMixedOffsets();
-    for (auto i = 0; i < mixedOffsets.size(); ++i) {
-      if (op.isDynamicOffset(i)) {
-        offsets.emplace_back(adaptor.getOffsets()[i]);
-      } else {
-        offsets.emplace_back(i32_val(op.getStaticOffset(i)));
-      }
-      // Like insert_slice_async, we only support slice from one dimension,
-      // which has a slice size of 1
-      if (op.getStaticSize(i) != 1) {
-        srcStrides.emplace_back(smemObj.strides[i]);
-      }
-    }
-
-    // Compute the offset based on the original strides of the shared memory
-    // object
-    auto offset = dot(rewriter, loc, offsets, smemObj.strides);
-    auto elemTy = getTypeConverter()->convertType(dstTy.getElementType());
-    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-    auto smemBase = gep(elemPtrTy, elemTy, smemObj.base, offset);
-
-    auto llSrc = adaptor.getSource();
-    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy);
-    storeDistributedToShared(src, llSrc, srcStrides, srcIndices, dst, smemBase,
-                             elemTy, loc, rewriter);
-    // Barrier is not necessary.
-    // The membar pass knows that it writes to shared memory and will handle it
-    // properly.
-    rewriter.replaceOp(op, llDst);
-    return success();
-  }
-};
-
 struct InsertSliceAsyncOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::InsertSliceAsyncOp>,
       public LoadStoreConversionBase {
@@ -1830,8 +1761,6 @@ void mlir::triton::populateLoadStoreOpToLLVMPatterns(
                                       axisInfoAnalysis, benefit);
   patterns.add<AtomicRMWOpConversion>(typeConverter, allocation,
                                       axisInfoAnalysis, benefit);
-  patterns.add<InsertSliceOpConversion>(typeConverter, allocation,
-                                        indexCacheInfo, benefit);
   patterns.add<InsertSliceAsyncOpConversion>(
       typeConverter, allocation, indexCacheInfo, axisInfoAnalysis, benefit);
   patterns.add<InsertSliceTMAOpConversion>(typeConverter, allocation,
