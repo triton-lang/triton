@@ -102,7 +102,7 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   auto repShape = getRepShapeForCvtLayout(op);
   if (repShape.empty())
     return repShape;
-
+  auto rank = repShape.size();
   auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
   auto dstTy = op.getResult().getType().cast<RankedTensorType>();
   Attribute srcLayout = srcTy.getEncoding();
@@ -138,9 +138,10 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   inVec = std::min(srcContigPerThread[inOrd[0]], dstContigPerThread[inOrd[0]]);
   outVec = dstContigPerThread[outOrd[0]];
 
-  if (repShape.size() <= 1)
+  if (rank <= 1)
     return repShape;
-  unsigned paddedDim = 1;
+  // pad the last dimension
+  unsigned paddedDim = rank - 1;
   if (auto dstBlockedLayout = dstLayout.dyn_cast<BlockedEncodingAttr>()) {
     paddedDim = dstBlockedLayout.getOrder()[0];
   }
