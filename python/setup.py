@@ -31,7 +31,7 @@ class Backend:
     is_external: bool
 
 
-def _copy_in_tree_backends(active):
+def _copy_backends(active):
     ret = []
     root_dir = os.path.join(os.pardir, "third_party")
     for backend in active:
@@ -58,8 +58,10 @@ def _copy_in_tree_backends(active):
                     install_dir=install_dir, is_external=False))
     return ret
 
-def _copy_out_of_tree_backends():
-    # name1,dir1;name2,dir2
+def _copy_external_backends():
+    # TRITON_EXTERNAL_CODEGEN_BACKENDS is a semicolon-separated list of backend names
+    # TRITON_EXTERNAL_CODEGEN_BACKEND_DIRS is a semicolon-separated list of paths to the backends
+    # Note that the paths have to include the provided backend names as a subfolder
     backends = os.getenv('TRITON_EXTERNAL_CODEGEN_BACKENDS')
     backend_dirs = os.getenv('TRITON_EXTERNAL_CODEGEN_BACKEND_DIRS')
 
@@ -407,7 +409,7 @@ download_and_copy(
     f"https://anaconda.org/nvidia/cuda-nvdisasm/12.3.52/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
 
-backends = [*_copy_in_tree_backends(["nvidia", "amd"]), *_copy_out_of_tree_backends()]
+backends = [*_copy_backends(["nvidia", "amd"]), *_copy_external_backends()]
 
 def add_link_to_backends():
     for backend in backends:
