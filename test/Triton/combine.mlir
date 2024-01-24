@@ -1,7 +1,27 @@
 // RUN: triton-opt %s -split-input-file -canonicalize -triton-combine | FileCheck %s
 
+// We don't combine if the dot result is used by more than one op.
+// CHECK-LABEL: @test_combine_dot_add_invalid_pattern
+tt.func @test_combine_dot_add_invalid_pattern() -> (tensor<128x128xf32>, tensor<128x128xf32>) {
+    %a = arith.constant dense<1.0> : tensor<128x128xf32>
+    %b = arith.constant dense<2.0> : tensor<128x128xf32>
+    %zero = arith.constant dense<0.0> : tensor<128x128xf32>
+    %d = arith.constant dense<3.0> : tensor<128x128xf32>
+
+    %dot_out = tt.dot %a, %b, %zero {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<128x128xf32> * tensor<128x128xf32> -> tensor<128x128xf32>
+
+    // CHECK: arith.addf
+    %res0 = arith.addf %dot_out, %d : tensor<128x128xf32>
+
+    // CHECK-NEXT: arith.addf
+    %res1 = arith.addf %d, %dot_out : tensor<128x128xf32>
+
+    tt.return %res0, %res1 : tensor<128x128xf32>, tensor<128x128xf32>
+}
+
+
 // CHECK-LABEL: @test_combine_dot_add_pattern
-tt.func @test_combine_dot_add_pattern() -> (tensor<128x128xf32>, tensor<128x128xf32>) {
+tt.func @test_combine_dot_add_pattern() -> (tensor<128x128xf32>) {
     // CHECK-DAG: %[[d:.*]] = arith.constant dense<3.000000e+00> : tensor<128x128xf32>
     // CHECK-DAG: %[[b:.*]] = arith.constant dense<2.000000e+00> : tensor<128x128xf32>
     // CHECK-DAG: %[[a:.*]] = arith.constant dense<1.000000e+00> : tensor<128x128xf32>
@@ -13,12 +33,9 @@ tt.func @test_combine_dot_add_pattern() -> (tensor<128x128xf32>, tensor<128x128x
     %dot_out = tt.dot %a, %b, %zero {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<128x128xf32> * tensor<128x128xf32> -> tensor<128x128xf32>
 
     // CHECK-NEXT: %[[res0:.*]] = tt.dot %[[a]], %[[b]], %[[d]] {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x128xf32> * tensor<128x128xf32> -> tensor<128x128xf32>
-    %res0 = arith.addf %dot_out, %d : tensor<128x128xf32>
+    %res = arith.addf %dot_out, %d : tensor<128x128xf32>
 
-    // CHECK-NEXT: %[[res1:.*]] = tt.dot %[[a]], %[[b]], %[[d]] {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x128xf32> * tensor<128x128xf32> -> tensor<128x128xf32>
-    %res1 = arith.addf %d, %dot_out : tensor<128x128xf32>
-
-    tt.return %res0, %res1 : tensor<128x128xf32>, tensor<128x128xf32>
+    tt.return %res : tensor<128x128xf32>
 }
 
 
