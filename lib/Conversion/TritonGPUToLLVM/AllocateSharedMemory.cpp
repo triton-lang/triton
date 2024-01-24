@@ -46,6 +46,10 @@ struct AllocateSharedMemory
       op->setAttr("allocation.offset",
                   IntegerAttr::get(IntegerType::get(ctx, 32), offset));
     });
+
+    mod->setAttr("triton_gpu.shared",
+                 mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32),
+                                        allocation.getSharedMemorySize()));
   }
 };
 

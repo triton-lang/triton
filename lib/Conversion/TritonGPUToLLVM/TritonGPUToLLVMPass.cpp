@@ -393,7 +393,7 @@ struct ConvertTritonGPUToLLVM
     // initSharedMemory is run before the conversion of call and ret ops,
     // because the call op has to know the shared memory base address of each
     // function
-    initSharedMemory(allocation, typeConverter);
+    initSharedMemory(typeConverter);
 
     // Convert call and ret ops
     {
@@ -499,8 +499,7 @@ private:
       indexCache;
   mlir::triton::gpu::TMAMetadataTy *tmaMetadata = nullptr;
 
-  void initSharedMemory(ModuleAllocation &allocation,
-                        TritonGPUToLLVMTypeConverter &typeConverter) {
+  void initSharedMemory(TritonGPUToLLVMTypeConverter &typeConverter) {
     ModuleOp mod = getOperation();
     OpBuilder b(mod.getBodyRegion());
     auto ctx = mod.getContext();
@@ -514,9 +513,6 @@ private:
         "global_smem", /*value=*/Attribute(), /*alignment=*/0,
         // Add ROCm support.
         static_cast<unsigned>(NVVM::NVVMMemorySpace::kSharedMemorySpace));
-    mod->setAttr("triton_gpu.shared",
-                 mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32),
-                                        allocation.getSharedMemorySize()));
   }
 
   static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
