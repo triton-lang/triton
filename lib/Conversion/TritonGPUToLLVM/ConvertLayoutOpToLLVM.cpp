@@ -1075,9 +1075,8 @@ private:
 void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     PatternBenefit benefit) {
-  patterns.add<ConvertLayoutOpConversion>(typeConverter, allocation,
-                                          indexCacheInfo, benefit);
+  patterns.add<ConvertLayoutOpConversion>(typeConverter, indexCacheInfo,
+                                          benefit);
 }

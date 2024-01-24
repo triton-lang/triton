@@ -344,6 +344,10 @@ Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr);
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content);
 
+static bool isKernel(FunctionOpInterface funcOp) {
+  return funcOp.getVisibility() == SymbolTable::Visibility::Public;
+}
+
 static Value getStackPointer(PatternRewriter &rewriter,
                              FunctionOpInterface funcOp) {
   auto mod = funcOp->getParentOfType<ModuleOp>();
@@ -353,7 +357,7 @@ static Value getStackPointer(PatternRewriter &rewriter,
       globalBase = op;
   });
   assert(globalBase);
-  if (funcOp.getVisibility() == SymbolTable::Visibility::Public)
+  if (isKernel(funcOp))
     return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
   else
     return funcOp.getArgument(funcOp.getNumArguments() - 1);

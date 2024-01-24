@@ -126,9 +126,8 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
 /// information.
 struct FuncOpConversion : public FuncOpConversionBase {
   FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
-                   ModuleAllocation &allocation, PatternBenefit benefit)
-      : FuncOpConversionBase(converter, benefit), numWarps(numWarps),
-        allocation(allocation) {}
+                   PatternBenefit benefit)
+      : FuncOpConversionBase(converter, benefit), numWarps(numWarps) {}
 
   triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
                              ConversionPatternRewriter &rewriter) const {
@@ -165,7 +164,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
                   ConversionPatternRewriter &rewriter) const override {
     // Prevent LLVM's inliner to inline this function
     auto amendedFuncOp = funcOp;
-    if (!allocation.isRoot(funcOp))
+    if (!LLVM::isKernel(funcOp))
       amendedFuncOp = amendFuncOp(funcOp, rewriter);
 
     auto newFuncOp = convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter);
@@ -175,7 +174,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
 
     auto ctx = funcOp->getContext();
 
-    if (allocation.isRoot(funcOp)) {
+    if (LLVM::isKernel(funcOp)) {
       // Set an attribute to indicate this function is a kernel entry.
       newFuncOp->setAttr("nvvm.kernel",
                          rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
@@ -191,8 +190,6 @@ struct FuncOpConversion : public FuncOpConversionBase {
     // for `nvvm.annotation` metadata.
     newFuncOp->setAttr("nvvm.maxntid",
                        rewriter.getDenseI32ArrayAttr(32 * numWarps));
-    // The call graph is updated by mapping the old function to the new one.
-    allocation.mapFuncOp(funcOp, newFuncOp);
 
     // required by AxisInfoAnalysis
     rewriter.eraseOp(funcOp);
@@ -201,16 +198,15 @@ struct FuncOpConversion : public FuncOpConversionBase {
 
 private:
   int numWarps{0};
-  ModuleAllocation &allocation;
 };
 
 // CallOpInterfaceLowering is adapted from
 // https://github.com/llvm/llvm-project/blob/fae656b2dd80246c3c6f01e9c77c49560368752c/mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp#L485
 struct CallOpConversion : public ConvertOpToLLVMPattern<triton::CallOp> {
   CallOpConversion(LLVMTypeConverter &converter, int numWarps,
-                   ModuleAllocation &allocation, PatternBenefit benefit)
+                   PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::CallOp>(converter, benefit),
-        numWarps(numWarps), allocation(allocation) {}
+        numWarps(numWarps) {}
 
   LogicalResult
   matchAndRewrite(triton::CallOp callOp,
@@ -221,7 +217,6 @@ struct CallOpConversion : public ConvertOpToLLVMPattern<triton::CallOp> {
         convertCallOpToLLVMCallOp(callOp, promotedOperands, rewriter);
     if (!newCallOp)
       return failure();
-    allocation.mapCallOp(callOp, newCallOp);
     auto results = getCallOpResults(callOp, newCallOp, rewriter);
     rewriter.replaceOp(callOp, results);
     return success();
@@ -290,7 +285,6 @@ private:
   }
 
   int numWarps{0};
-  ModuleAllocation &allocation;
 };
 
 class TritonLLVMConversionTarget : public ConversionTarget {
@@ -387,7 +381,7 @@ struct ConvertTritonGPUToLLVM
       TritonGPUToLLVMTypeConverter typeConverter(context, option);
       TritonLLVMFunctionConversionTarget funcTarget(*context, target);
       RewritePatternSet funcPatterns(context);
-      funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, allocation,
+      funcPatterns.add<FuncOpConversion>(typeConverter, numWarps,
                                          /*benefit=*/1);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
@@ -407,9 +401,8 @@ struct ConvertTritonGPUToLLVM
       TritonGPUToLLVMTypeConverter typeConverter(context, option);
       TritonLLVMFunctionConversionTarget funcTarget(*context, target);
       RewritePatternSet funcPatterns(context);
-      funcPatterns.add<CallOpConversion>(typeConverter, numWarps, allocation,
-                                         /*benefit=*/1);
-      funcPatterns.add<ReturnOpConversion>(typeConverter, /*benefit=*/1);
+      funcPatterns.add<CallOpConversion>(typeConverter, numWarps, 1);
+      funcPatterns.add<ReturnOpConversion>(typeConverter, 1);
       if (failed(
               applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
         return signalPassFailure();
@@ -442,24 +435,24 @@ struct ConvertTritonGPUToLLVM
 
     auto populatePatterns1 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, indexCacheInfo,
+                   indexCacheInfo,
                    /*benefit*/ 10);
     };
 
     auto populatePatterns2 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, /*benefit*/ 10);
+                   /*benefit*/ 10);
     };
 
     auto populatePatterns3 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, indexCacheInfo, tmaMetadata, &tensorPtrMap,
+                   indexCacheInfo, tmaMetadata, &tensorPtrMap,
                    /*benefit*/ 10);
     };
 
     auto populatePatterns4 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, indexCacheInfo, computeCapability,
+                   indexCacheInfo, computeCapability,
                    /*benefit*/ 10);
     };
 
@@ -524,7 +517,7 @@ private:
     mod.walk([&](FunctionOpInterface funcOp) {
       Value funcSmem;
       b.setInsertionPointToStart(&funcOp.getFunctionBody().front());
-      if (allocation.isRoot(funcOp)) {
+      if (LLVM::isKernel(funcOp)) {
         funcSmem = b.create<LLVM::AddressOfOp>(loc, global);
       } else {
         funcSmem = funcOp.getArgument(funcOp.getNumArguments() - 1);

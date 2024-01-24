@@ -235,16 +235,13 @@ struct FenceAsyncSharedOpConversion
 void mlir::triton::populateBarrierOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation, PatternBenefit benefit) {
-  patterns.add<BarrierOpConversion>(typeConverter, allocation, benefit);
-  patterns.add<AllocMBarrierOpConversion>(typeConverter, allocation, benefit);
-  patterns.add<MBarrierArriveOpConversion>(typeConverter, allocation, benefit);
-  patterns.add<MBarrierWaitOpConversion>(typeConverter, allocation, benefit);
-  patterns.add<ExtractMBarrierOpConversion>(typeConverter, allocation, benefit);
-  patterns.add<NamedBarrierArriveOpConversion>(typeConverter, allocation,
-                                               benefit);
-  patterns.add<NamedBarrierWaitOpConversion>(typeConverter, allocation,
-                                             benefit);
-  patterns.add<FenceAsyncSharedOpConversion>(typeConverter, allocation,
-                                             benefit);
+    PatternBenefit benefit) {
+  patterns.add<BarrierOpConversion>(typeConverter, benefit);
+  patterns.add<AllocMBarrierOpConversion>(typeConverter, benefit);
+  patterns.add<MBarrierArriveOpConversion>(typeConverter, benefit);
+  patterns.add<MBarrierWaitOpConversion>(typeConverter, benefit);
+  patterns.add<ExtractMBarrierOpConversion>(typeConverter, benefit);
+  patterns.add<NamedBarrierArriveOpConversion>(typeConverter, benefit);
+  patterns.add<NamedBarrierWaitOpConversion>(typeConverter, benefit);
+  patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
 }
