@@ -71,7 +71,7 @@ public:
     auto dstTy = dst.getType().cast<RankedTensorType>();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    LDBG(" Lower ConvertLayoutOp " << op);
+    LDBG("Lower ConvertLayoutOp " << op);
     if (isaDistributedLayout(srcLayout) &&
         dstLayout.isa<SharedEncodingAttr>()) {
       return lowerDistributedToShared(op, adaptor, rewriter);

@@ -34,7 +34,7 @@ public:
     assert(helper.isSupportedLayout() &&
            "Unexpected srcLayout in ReduceOpConversion");
     Location loc = op->getLoc();
-    LDBG(" Lower ReduceOp " << op);
+    LDBG("Lower ReduceOp " << op);
 
     auto srcValues = unpackInputs(loc, op, adaptor, rewriter);
     std::map<SmallVector<unsigned>, SmallVector<Value>> accs;
