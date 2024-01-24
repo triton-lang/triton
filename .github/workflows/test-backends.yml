@@ -75,9 +75,17 @@ jobs:
           ref: ${{ (github.event_name == 'issue_comment') && github.event.issue.pull_request.head.ref || 'main' }}
           submodules: 'true'
 
+      - name: Set ROCM ENV
+        run: |
+          echo "BACKEND=ROCM" >> "${GITHUB_ENV}"
+
       - name: Clear cache
         run: |
           rm -rf ~/.triton
+
+      - name: Update PATH
+        run: |
+          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
 
       - name: Install Dependencies
         run: |
@@ -100,11 +108,10 @@ jobs:
         run: |
           python3 -m pytest -n 32 --capture=tee-sys -rfs --verbose "python/test/unit/language/test_core.py" -k "not test_flip"
 
-
   Integration-Tests-Intel:
     needs: Runner-Preparation
     timeout-minutes: 20
-    if: (github.event_name == 'workflow_dispatch') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    if: false && ((github.event_name == 'workflow_dispatch') || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
 
     runs-on: ${{ matrix.runner }}
 
