@@ -646,7 +646,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
 
 /// Find the minimum number of async_commit_group ops between the extract
 /// and the insert. Wait number is the number of commits-1.
-static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
+static std::optional<int> minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
   auto countCommitsBetween = [](Operation *op1, Operation *op2) {
     int count = 0;
     for (auto op = op1; op != op2; op = op->getNextNode()) {
@@ -661,11 +661,11 @@ static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
   int minCommitNumber = INT_MAX;
 
   // DFS the def chain of the extract op to find the insert op. On each path
-  // we calculate the number of insert ops. Then we select the minimum number
-  // of insert ops among all the paths.
-  // If the wait is not needed (when insert is a TMA insert), we return -1.
-  std::function<int(Value, Operation *, int)> minOverHistories =
-      [&](Value val, Operation *sinkOp, int thisHistorySum) -> int {
+  // we calculate the number of async_commit. Then we select the minimum number
+  // of async_commit ops among all the paths.
+  // If the wait is not needed (when insert is a TMA insert), return std::nullopt.
+  std::function<std::optional<int>(Value, Operation *, int)> minOverHistories =
+      [&](Value val, Operation *sinkOp, int thisHistorySum) -> std::optional<int> {
     if (Operation *defOp = val.getDefiningOp()) {
       if (isa<ttg::InsertSliceAsyncOp>(defOp)) {
         thisHistorySum += countCommitsBetween(defOp->getNextNode(), sinkOp);
@@ -674,7 +674,7 @@ static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
       }
       if (isa<ttng::InsertSliceTMAOp>(defOp)) {
         // We don't need to wait for TMA inserts.
-        return -1;
+        return std::nullopt;
       }
       // Failed to track, return 1 conservatively.
       return 1;
@@ -696,25 +696,29 @@ static int minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
       // get the value value assigned to the argument coming from outside the
       // loop
       Value incomingVal = forOp.getInitArgs()[arg.getArgNumber() - 1];
-      int min1 = minOverHistories(incomingVal, forOp, thisHistorySum);
+      std::optional<int> min1 = minOverHistories(incomingVal, forOp, thisHistorySum);
+      if (!min1.has_value())
+        return std::nullopt;
 
       // get the value value assigned to the argument coming from the previous
       // iteration
       Operation *yieldOp = block->getTerminator();
       Value prevVal = yieldOp->getOperand(arg.getArgNumber() - 1);
-      int min2 = minOverHistories(prevVal, yieldOp, thisHistorySum);
-      return std::min(std::min(min1, min2), minCommitNumber);
+      std::optional<int> min2 = minOverHistories(prevVal, yieldOp, thisHistorySum);
+      if (!min1.has_value())
+        return std::nullopt;
+      return std::min(std::min(min1, min2).value(), minCommitNumber);
     }
     // Failed to track, return 1 conservatively.
     return 1;
   };
 
-  int minCommits = minOverHistories(extractOp.getOperand(0), extractOp, 0);
-  if (minCommits == -1)
-    return -1;
+  std::optional<int> minCommits = minOverHistories(extractOp.getOperand(0), extractOp, 0);
+  if (minCommits == std::nullopt)
+    return std::nullopt;
   if (minCommits == 0)
     llvm::report_fatal_error("No commits between insert and extract!");
-  return minOverHistories(extractOp.getOperand(0), extractOp, 0) - 1;
+  return minCommits.value() - 1;
 }
 
 /// Insert wait ops after the extract_slice ops.
@@ -728,21 +732,22 @@ void mlir::triton::insertWaits(ModuleOp module) {
 
     // If there is no meaningful work between the extracts, don't insert
     // multiple waits. Insert just one wait per group of extracts.
-    int minWaitNumber = INT_MAX;
+    std::optional<int> minWaitNumber = std::nullopt;
     while (extractOp) {
       lastExtractOp = cast<ttg::ExtractSliceOp>(extractOp);
-      minWaitNumber =
-          std::min(minWaitNumber, minWaitNumberForExtract(lastExtractOp));
+      std::optional<int> currMin = minWaitNumberForExtract(lastExtractOp);
+      if (currMin.has_value())
+        minWaitNumber = std::min(minWaitNumber.value_or(INT_MAX), currMin.value());
+      
       extractOp->removeAttr(kNeedWaitAttrName);
       extractOp = dyn_cast<ttg::ExtractSliceOp>(extractOp->getNextNode());
     }
 
-    assert(minWaitNumber != INT_MAX && "minWaitNumber not set.");
-    if (minWaitNumber == -1)
+    if (!minWaitNumber.has_value())
       return; // Wait is not needed.
     OpBuilder builder(lastExtractOp);
     builder.setInsertionPointAfter(lastExtractOp);
-    builder.create<ttg::AsyncWaitOp>(lastExtractOp.getLoc(), minWaitNumber);
+    builder.create<ttg::AsyncWaitOp>(lastExtractOp.getLoc(), minWaitNumber.value());
   });
 }
 
