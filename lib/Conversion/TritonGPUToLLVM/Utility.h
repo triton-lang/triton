@@ -270,6 +270,11 @@ struct SharedMemoryObject {
     offsets.append(order.size(), i32_val(0));
   }
 
+  SmallVector<Value> getStrides() const { return strides; }
+  SmallVector<Value> getOffsets() const { return offsets; }
+  Value getBase() const { return base; }
+  Type getBaseElemType() const { return baseElemType; }
+
   SmallVector<Value> getElems() const {
     SmallVector<Value> elems;
     elems.push_back(base);
