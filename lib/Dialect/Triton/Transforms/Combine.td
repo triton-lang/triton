@@ -14,22 +14,26 @@ include "mlir/IR/PatternBase.td"
 def CombineDotAddIPattern : Pat<
         (Arith_AddIOp $d, (TT_DotOp:$res $a, $b, $c, $allowTF32, $maxNumImpreciseAcc)),
         (TT_DotOp $a, $b, $d, $allowTF32, $maxNumImpreciseAcc, (location $res)),
-        [(Constraint<CPred<"isZero($0)">> $c)]>;
+        [(Constraint<CPred<"isZero($0)">> $c),
+         (Constraint<CPred<"res->hasOneUse()">, "dot result has a single use">)]>;
 def CombineDotAddFPattern : Pat<
         (Arith_AddFOp $d, (TT_DotOp:$res $a, $b, $c, $allowTF32, $maxNumImpreciseAcc), $fastmath),
         (TT_DotOp $a, $b, $d, $allowTF32, $maxNumImpreciseAcc, (location $res)),
         [(Constraint<CPred<"isZero($0)">> $c),
-         (Constraint<CPred<"::llvm::cast<::mlir::IntegerAttr>($0).getInt() == 0">> $maxNumImpreciseAcc)]>;
+         (Constraint<CPred<"::llvm::cast<::mlir::IntegerAttr>($0).getInt() == 0">> $maxNumImpreciseAcc),
+         (Constraint<CPred<"res->hasOneUse()">, "dot result has a single use">)]>;
 
 def CombineDotAddIRevPattern : Pat<
         (Arith_AddIOp (TT_DotOp:$res $a, $b, $c, $allowTF32, $maxNumImpreciseAcc), $d),
         (TT_DotOp $a, $b, $d, $allowTF32, $maxNumImpreciseAcc, (location $res)),
-        [(Constraint<CPred<"isZero($0)">> $c)]>;
+        [(Constraint<CPred<"isZero($0)">> $c),
+         (Constraint<CPred<"res->hasOneUse()">, "dot result has a single use">)]>;
 def CombineDotAddFRevPattern : Pat<
         (Arith_AddFOp (TT_DotOp:$res $a, $b, $c, $allowTF32, $maxNumImpreciseAcc), $d, $fastmath),
         (TT_DotOp $a, $b, $d, $allowTF32, $maxNumImpreciseAcc, (location $res)),
         [(Constraint<CPred<"isZero($0)">> $c),
-         (Constraint<CPred<"::llvm::cast<::mlir::IntegerAttr>($0).getInt() == 0">> $maxNumImpreciseAcc)]>;
+         (Constraint<CPred<"::llvm::cast<::mlir::IntegerAttr>($0).getInt() == 0">> $maxNumImpreciseAcc),
+         (Constraint<CPred<"res->hasOneUse()">, "dot result has a single use">)]>;
 
 // TODO: this fails for addptr(addptr(ptr, i32), i64)
 // Commented out until fixed
