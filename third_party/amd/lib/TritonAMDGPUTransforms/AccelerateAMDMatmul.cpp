@@ -190,6 +190,50 @@ public:
     return {nonKDim, kDim};
   }
 
+  Value convertAndPromoteDotOperand(mlir::PatternRewriter &rewriter,
+                                    Value oldDotOperand,
+                                    ::mlir::Attribute encoding,
+                                    Type promotedElemType) const {
+    assert(promotedElemType.isIntOrFloat());
+
+    auto loc = oldDotOperand.getLoc();
+    auto oldType = oldDotOperand.getType().cast<RankedTensorType>();
+    auto oldElemType = oldType.getElementType();
+
+    assert(oldElemType.isIntOrFloat());
+    assert(oldElemType.isIntOrIndex() == promotedElemType.isIntOrIndex());
+
+    auto convertedType =
+        RankedTensorType::get(oldType.getShape(), oldElemType, encoding);
+
+    Value convertedDotOperand = rewriter.create<ttg::ConvertLayoutOp>(
+        loc, convertedType, oldDotOperand);
+
+    if (promotedElemType == oldElemType)
+      return convertedDotOperand;
+
+    Type promotedType = convertedType.cloneWith(std::nullopt, promotedElemType);
+
+    Value promotedDotOperand;
+
+    if (promotedElemType.isIntOrIndex()) {
+      // TODO Implement integer casting
+      assert(!promotedElemType.isIntOrIndex() &&
+             "need to implement integer promotion");
+    } else {
+      if (oldElemType.isF16() && promotedElemType.isF32())
+        promotedDotOperand = rewriter.create<mlir::arith::ExtFOp>(
+            loc, promotedType, convertedDotOperand);
+      else if (oldElemType.isF32() && promotedElemType.isF16())
+        promotedDotOperand = rewriter.create<mlir::arith::TruncFOp>(
+            loc, promotedType, convertedDotOperand);
+      else
+        promotedDotOperand = rewriter.create<tt::FpToFpOp>(loc, promotedType,
+                                                           convertedDotOperand);
+    }
+    return promotedDotOperand;
+  }
+
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
@@ -227,23 +271,16 @@ public:
     mfmaEnc = ttg::MfmaEncodingAttr::get(oldRetType.getContext(), nonKDim,
                                          warpsPerTile, isTransposed, CTALayout);
 
-    auto newRetType =
-        RankedTensorType::get(retShape, oldRetType.getElementType(), mfmaEnc);
+    Type mfmaAccType;
+    if (oldRetType.getElementType().isIntOrIndex())
+      mfmaAccType = rewriter.getIntegerType(32);
+    else
+      mfmaAccType = rewriter.getF32Type();
 
     // convert accumulator
     auto oldAcc = dotOp.getOperand(2);
-    auto newAcc = rewriter.create<ttg::ConvertLayoutOp>(oldAcc.getLoc(),
-                                                        newRetType, oldAcc);
-    auto oldAOrder = oldAType.getEncoding()
-                         .cast<ttg::DotOperandEncodingAttr>()
-                         .getParent()
-                         .cast<ttg::BlockedEncodingAttr>()
-                         .getOrder();
-    auto oldBOrder = oldBType.getEncoding()
-                         .cast<ttg::DotOperandEncodingAttr>()
-                         .getParent()
-                         .cast<ttg::BlockedEncodingAttr>()
-                         .getOrder();
+    auto newAcc =
+        convertAndPromoteDotOperand(rewriter, oldAcc, mfmaEnc, mfmaAccType);
 
     // kWidth is a number of consecutive elements per one instruction per one
     // thread
@@ -272,12 +309,16 @@ public:
         ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth));
     a = rewriter.create<ttg::ConvertLayoutOp>(a.getLoc(), newAType, a);
     b = rewriter.create<ttg::ConvertLayoutOp>(b.getLoc(), newBType, b);
-    auto newDot = rewriter.create<tt::DotOp>(dotOp.getLoc(), newRetType, a, b,
-                                             newAcc, dotOp.getAllowTF32(),
-					     dotOp.getMaxNumImpreciseAcc());
+    auto newDot = rewriter.create<tt::DotOp>(dotOp.getLoc(), newAcc.getType(),
+                                             a, b, newAcc, dotOp.getAllowTF32(),
+                                             dotOp.getMaxNumImpreciseAcc());
 
-    rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(op, oldRetType,
-                                                      newDot.getResult());
+    Value dotOutput =
+        convertAndPromoteDotOperand(rewriter, newDot, oldRetType.getEncoding(),
+                                    oldRetType.getElementType());
+
+    rewriter.replaceOp(op, dotOutput);
+
     return success();
   }
 };
