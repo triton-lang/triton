@@ -722,7 +722,7 @@ private:
 
     auto srcStrides =
         getStridesFromShapeAndOrder(srcShape, inOrd, loc, rewriter);
-    auto dstIndices = emitIndices(loc, rewriter, dstLayout, dstTy);
+    auto dstIndices = emitIndices(loc, rewriter, dstLayout, dstTy, true);
 
     SmallVector<Value> outVals = loadSharedToDistributed(
         dst, dstIndices, src, smemObj, elemTy, loc, rewriter);
@@ -1075,8 +1075,6 @@ private:
 void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     PatternBenefit benefit) {
-  patterns.add<ConvertLayoutOpConversion>(typeConverter, indexCacheInfo,
-                                          benefit);
+  patterns.add<ConvertLayoutOpConversion>(typeConverter, benefit);
 }
