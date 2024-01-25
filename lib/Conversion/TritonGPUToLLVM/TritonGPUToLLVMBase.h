@@ -668,29 +668,29 @@ public:
     llvm_unreachable("unsupported emitOffsetForLayout");
   }
 
-  // -----------------------------------------------------------------------
-  // Emit indices
-  // -----------------------------------------------------------------------
+  // Emit indices calculation within each ConversionPattern, and returns a
+  // [elemsPerThread X rank] index matrix.
   SmallVector<SmallVector<Value>>
-  emitIndices(Location loc, ConversionPatternRewriter &b, Attribute layout,
-              RankedTensorType type, bool withCTAOffset = true) const {
-    ConversionPatternRewriter::InsertionGuard guard(b);
-    SmallVector<SmallVector<Value>> result;
-    if (auto blocked = layout.dyn_cast<BlockedEncodingAttr>()) {
-      result =
-          emitIndicesForDistributedLayout(loc, b, blocked, type, withCTAOffset);
-    } else if (auto mma = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
-      result =
-          emitIndicesForDistributedLayout(loc, b, mma, type, withCTAOffset);
-    } else if (auto slice = layout.dyn_cast<SliceEncodingAttr>()) {
-      result =
-          emitIndicesForDistributedLayout(loc, b, slice, type, withCTAOffset);
-    } else {
-      llvm_unreachable(
-          "emitIndices for layouts other than blocked, mma, and slice not "
-          "implemented yet");
-    }
-    return result;
+  emitIndices(Location loc, ConversionPatternRewriter &rewriter,
+              Attribute layout, RankedTensorType type,
+              bool withCTAOffset) const {
+    // step 1, delinearize threadId to get the base index
+    auto multiDimBase =
+        emitBaseIndexForLayout(loc, rewriter, layout, type, withCTAOffset);
+    // step 2, get offset of each element
+    auto offset = emitOffsetForLayout(layout, type);
+    // step 3, add offset to base, and reorder the sequence
+    // of indices to guarantee that elems in the same
+    // sizePerThread are adjacent in order
+    auto shape = type.getShape();
+    unsigned rank = shape.size();
+    unsigned elemsPerThread = offset.size();
+    SmallVector<SmallVector<Value>> multiDimIdx(elemsPerThread,
+                                                SmallVector<Value>(rank));
+    for (unsigned n = 0; n < elemsPerThread; ++n)
+      for (unsigned k = 0; k < rank; ++k)
+        multiDimIdx[n][k] = add(multiDimBase[k], i32_val(offset[n][k]));
+    return multiDimIdx;
   }
 
 private:
@@ -1005,30 +1005,6 @@ private:
       }
     }
     return ret;
-  }
-
-  // Emit indices calculation within each ConversionPattern, and returns a
-  // [elemsPerThread X rank] index matrix.
-  SmallVector<SmallVector<Value>> emitIndicesForDistributedLayout(
-      Location loc, ConversionPatternRewriter &rewriter, Attribute layout,
-      RankedTensorType type, bool withCTAOffset) const {
-    // step 1, delinearize threadId to get the base index
-    auto multiDimBase =
-        emitBaseIndexForLayout(loc, rewriter, layout, type, withCTAOffset);
-    // step 2, get offset of each element
-    auto offset = emitOffsetForLayout(layout, type);
-    // step 3, add offset to base, and reorder the sequence
-    // of indices to guarantee that elems in the same
-    // sizePerThread are adjacent in order
-    auto shape = type.getShape();
-    unsigned rank = shape.size();
-    unsigned elemsPerThread = offset.size();
-    SmallVector<SmallVector<Value>> multiDimIdx(elemsPerThread,
-                                                SmallVector<Value>(rank));
-    for (unsigned n = 0; n < elemsPerThread; ++n)
-      for (unsigned k = 0; k < rank; ++k)
-        multiDimIdx[n][k] = add(multiDimBase[k], i32_val(offset[n][k]));
-    return multiDimIdx;
   }
 
   SmallVector<SmallVector<unsigned>>

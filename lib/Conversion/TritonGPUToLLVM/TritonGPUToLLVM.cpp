@@ -156,8 +156,8 @@ struct PrintOpConversion
         SmallVector<SmallVector<Value>> indices;
         if (auto rankedTy =
                 op.getOperand(i).getType().dyn_cast<RankedTensorType>()) {
-          indices =
-              emitIndices(loc, rewriter, rankedTy.getEncoding(), rankedTy);
+          indices = emitIndices(loc, rewriter, rankedTy.getEncoding(), rankedTy,
+                                true);
           for (int64_t dim : rankedTy.getShape()) {
             if (dim > 0) {
               dimWidths.push_back(static_cast<int>(std::ceil(std::log10(dim))));
@@ -517,7 +517,7 @@ struct MakeRangeOpConversion
     auto elemTy = rankedTy.getElementType();
     assert(elemTy.isInteger(32));
     Value start = createIndexAttrConstant(rewriter, loc, elemTy, op.getStart());
-    auto idxs = emitIndices(loc, rewriter, layout, rankedTy);
+    auto idxs = emitIndices(loc, rewriter, layout, rankedTy, true);
     unsigned elems = idxs.size();
     SmallVector<Value> retVals(elems);
     // TODO: slice layout has more elements than expected.

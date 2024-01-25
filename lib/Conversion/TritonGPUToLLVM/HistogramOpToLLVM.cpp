@@ -170,7 +170,8 @@ public:
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     Attribute dstEncoding = dstType.getEncoding();
-    auto indices = emitIndices(op.getLoc(), rewriter, dstEncoding, dstType);
+    auto indices =
+        emitIndices(op.getLoc(), rewriter, dstEncoding, dstType, true);
     SmallVector<Value> innerDimIndices;
     for (int i = 0; i < indices.size(); ++i)
       innerDimIndices.push_back(indices[i][0]);
