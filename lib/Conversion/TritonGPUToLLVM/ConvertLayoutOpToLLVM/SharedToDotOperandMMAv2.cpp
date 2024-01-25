@@ -23,19 +23,19 @@ public:
                      ArrayRef<uint32_t> warpsPerCTA, uint32_t kOrder,
                      int kWidth, ArrayRef<Value> smemStrides,
                      ArrayRef<int64_t> tileShape, ArrayRef<int> instrShape,
-                     ArrayRef<int> matShape, int perPhase, int maxPhase,
-                     int elemBytes, ConversionPatternRewriter &rewriter,
+                     ArrayRef<int> matShape, SmallVector<Value> multiDimWarpId,
+                     int perPhase, int maxPhase, int elemBytes,
+                     ConversionPatternRewriter &rewriter,
                      TritonGPUToLLVMTypeConverter *typeConverter,
                      const Location &loc);
 
   // lane = thread % 32
   // warpOff = (thread/32) % warpsPerTile(0)
-  llvm::SmallVector<Value> computeOffsets(Value warpB, Value warpOff,
-                                          Value lane, Value cSwizzleOffset) {
+  llvm::SmallVector<Value> computeOffsets(Value lane, Value cSwizzleOffset) {
     if (canUseLdmatrix)
-      return computeLdmatrixMatOffs(warpB, warpOff, lane, cSwizzleOffset);
+      return computeLdmatrixMatOffs(lane, cSwizzleOffset);
     else
-      return computeLdsMatOffs(warpOff, lane, cSwizzleOffset);
+      return computeLdsMatOffs(lane, cSwizzleOffset);
     return {};
   }
 
@@ -43,11 +43,9 @@ public:
 
   // Compute the offset to the matrix this thread(indexed by warpOff and lane)
   // mapped to.
-  SmallVector<Value> computeLdmatrixMatOffs(Value warpB, Value warpId,
-                                            Value lane, Value cSwizzleOffset);
+  SmallVector<Value> computeLdmatrixMatOffs(Value lane, Value cSwizzleOffset);
   // compute 8-bit matrix offset.
-  SmallVector<Value> computeLdsMatOffs(Value warpOff, Value lane,
-                                       Value cSwizzleOffset);
+  SmallVector<Value> computeLdsMatOffs(Value lane, Value cSwizzleOffset);
 
   // Load 4 matrices and returns 4 vec<2> elements.
   std::tuple<Value, Value, Value, Value> loadX4(int mat0, int mat1,
@@ -65,6 +63,7 @@ private:
   SmallVector<int64_t> tileShape;
   SmallVector<int> instrShape;
   SmallVector<int> matShape;
+  SmallVector<Value> multiDimWarpId;
   int perPhase;
   int maxPhase;
   int elemBytes;
@@ -99,8 +98,9 @@ private:
 };
 
 SmallVector<Value>
-MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpB, Value warpId,
-                                           Value lane, Value cSwizzleOffset) {
+MMA16816SmemLoader::computeLdmatrixMatOffs(Value lane, Value cSwizzleOffset) {
+  Value warpB = multiDimWarpId[0];
+  Value warpId = kOrder == 2 ? multiDimWarpId[1] : multiDimWarpId[2];
   // 4x4 matrices
   Value rowInMat = urem(lane, i32_val(8)); // row in the 8x8 matrix
   Value matIndex =
@@ -176,14 +176,18 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpB, Value warpId,
       contiguousIndex = urem(contiguousIndex, i32_val(contiguousTileNumMats));
     contiguousIndex = add(contiguousIndex, contiguousSliceMatOffset);
     Value contiguousIndexSwizzled = xor_(contiguousIndex, phase);
-    // TODO (ZM): avoid this when 2D expanded to 3D
     if (instrShape.size() == 3)
-      offs[i] = mul(warpB, i32_val(tileShape[order[0]] * tileShape[order[1]]));
-    else
-      offs[i] = i32_val(0);
-    offs[i] = add(offs[i],
-                  add(mul(contiguousIndexSwizzled, i32_val(contiguousMatShape)),
-                      mul(rowOffset, stridedSmemOffset)));
+      if (warpsPerCTA[0] != 1) {
+        Value batchOffset =
+            mul(warpB, i32_val(tileShape[order[0]] * tileShape[order[1]]));
+        offs[i] =
+            add(batchOffset,
+                add(mul(contiguousIndexSwizzled, i32_val(contiguousMatShape)),
+                    mul(rowOffset, stridedSmemOffset)));
+      } else {
+        offs[i] = add(mul(contiguousIndexSwizzled, i32_val(contiguousMatShape)),
+                      mul(rowOffset, stridedSmemOffset));
+      }
   }
 
   return offs;
@@ -213,9 +217,9 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpB, Value warpId,
 // along the row (resp. col) dimension.
 // clang-format on
 
-SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
-                                                         Value lane,
+SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value lane,
                                                          Value cSwizzleOffset) {
+  Value warpOff = kOrder == 2 ? multiDimWarpId[1] : multiDimWarpId[2];
   int cTileShape = tileShape[order[0]];
   int sTileShape = tileShape[order[1]];
   if (!needTrans) {
@@ -410,16 +414,18 @@ MMA16816SmemLoader::MMA16816SmemLoader(
     int nPerWarp, int warpsPerTile, ArrayRef<uint32_t> order,
     ArrayRef<uint32_t> warpsPerCTA, uint32_t kOrder, int kWidth,
     ArrayRef<Value> smemStrides, ArrayRef<int64_t> tileShape,
-    ArrayRef<int> instrShape, ArrayRef<int> matShape, int perPhase,
-    int maxPhase, int elemBytes, ConversionPatternRewriter &rewriter,
+    ArrayRef<int> instrShape, ArrayRef<int> matShape,
+    SmallVector<Value> multiDimWarpId, int perPhase, int maxPhase,
+    int elemBytes, ConversionPatternRewriter &rewriter,
     TritonGPUToLLVMTypeConverter *typeConverter, const Location &loc)
     : nPerWarp(nPerWarp), order(order.begin(), order.end()),
       warpsPerCTA(warpsPerCTA.begin(), warpsPerCTA.end()), kOrder(kOrder),
       kWidth(kWidth), tileShape(tileShape.begin(), tileShape.end()),
       instrShape(instrShape.begin(), instrShape.end()),
-      matShape(matShape.begin(), matShape.end()), perPhase(perPhase),
-      maxPhase(maxPhase), elemBytes(elemBytes), rewriter(rewriter), loc(loc),
-      ctx(rewriter.getContext()) {
+      matShape(matShape.begin(), matShape.end()),
+      multiDimWarpId(multiDimWarpId.begin(), multiDimWarpId.end()),
+      perPhase(perPhase), maxPhase(maxPhase), elemBytes(elemBytes),
+      rewriter(rewriter), loc(loc), ctx(rewriter.getContext()) {
   contiguousMatShape = matShape[order[0]];
   stridedMatShape = matShape[order[1]];
   stridedSmemOffset = smemStrides[order[1]];
@@ -503,7 +509,7 @@ std::function<void(int, int)>
 getLoadMatrixFn(RankedTensorType tensorTy, const SharedMemoryObject &smemObj,
                 NvidiaMmaEncodingAttr mmaLayout, int warpsPerTile,
                 uint32_t kOrder, int kWidth, SmallVector<int> instrShape,
-                SmallVector<int> matShape, Value warpB, Value warpId,
+                SmallVector<int> matShape, SmallVector<Value> multiDimWarpId,
                 Value lane, ValueTable &vals, bool isA,
                 TritonGPUToLLVMTypeConverter *typeConverter,
                 ConversionPatternRewriter &rewriter, Location loc) {
@@ -525,15 +531,14 @@ getLoadMatrixFn(RankedTensorType tensorTy, const SharedMemoryObject &smemObj,
 
   // (a, b) is the coordinate.
   auto load = [=, &rewriter, &vals](int a, int b) {
-    MMA16816SmemLoader loader(nPerWarp, warpsPerTile, sharedLayout.getOrder(),
-                              mmaLayout.getWarpsPerCTA(), kOrder, kWidth,
-                              smemObj.strides, shapePerCTA /*tileShape*/,
-                              instrShape, matShape, perPhase, maxPhase,
-                              elemBytes, rewriter, typeConverter, loc);
+    MMA16816SmemLoader loader(
+        nPerWarp, warpsPerTile, sharedLayout.getOrder(),
+        mmaLayout.getWarpsPerCTA(), kOrder, kWidth, smemObj.strides,
+        shapePerCTA /*tileShape*/, instrShape, matShape, multiDimWarpId,
+        perPhase, maxPhase, elemBytes, rewriter, typeConverter, loc);
     // Offset of a slice within the original tensor in shared memory
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
-    SmallVector<Value> offs =
-        loader.computeOffsets(warpB, warpId, lane, cSwizzleOffset);
+    SmallVector<Value> offs = loader.computeOffsets(lane, cSwizzleOffset);
     // initialize pointers
     const int numPtrs = loader.getNumPtrs();
     SmallVector<Value> ptrs(numPtrs);
@@ -604,16 +609,18 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
     loadFn = getLoadMatrixFn(
         tensorTy, smemObj, mmaLayout, warpsPerTile /*warpsPerTile*/,
         2 /*kOrder*/, kWidth, {1, mmaInstrM, mmaInstrK} /*instrShape*/,
-        {1, matShapeM, matShapeK} /*matShape*/, warpB, warpM /*warpId*/,
-        lane /*laneId*/, vals /*vals*/, isA /*isA*/,
-        typeConverter /* typeConverter */, rewriter /*rewriter*/, loc /*loc*/);
+        {1, matShapeM, matShapeK} /*matShape*/,
+        {warpB, warpM, warpN} /*multiDimWarpId*/, lane /*laneId*/,
+        vals /*vals*/, isA /*isA*/, typeConverter /* typeConverter */,
+        rewriter /*rewriter*/, loc /*loc*/);
   else
     loadFn = getLoadMatrixFn(
         tensorTy, smemObj, mmaLayout, warpsPerTile /*warpsPerTile*/,
         1 /*kOrder*/, kWidth, {1, mmaInstrK, mmaInstrN} /*instrShape*/,
-        {1, matShapeK, matShapeN} /*matShape*/, warpB, warpN /*warpId*/,
-        lane /*laneId*/, vals /*vals*/, isA /*isA*/,
-        typeConverter /* typeConverter */, rewriter /*rewriter*/, loc /*loc*/);
+        {1, matShapeK, matShapeN} /*matShape*/,
+        {warpB, warpM, warpN} /*multiDimWarpId*/, lane /*laneId*/,
+        vals /*vals*/, isA /*isA*/, typeConverter /* typeConverter */,
+        rewriter /*rewriter*/, loc /*loc*/);
 
   // Perform loading.
   int numRepOuter = isA ? numRep[0] : std::max<int>(numRep[1] / 2, 1);
