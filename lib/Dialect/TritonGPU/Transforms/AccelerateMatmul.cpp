@@ -45,6 +45,11 @@ static int getMMAVersionSafe(int computeCapability, tt::DotOp op) {
 
 SmallVector<unsigned, 3>
 warpsPerTileV2(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
+  auto rank = shape.size();
+  // Early exit for batched matmul
+  if (rank == 3)
+    return {(unsigned)numWarps, 1, 1};
+
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion() &&
            !isa<tt::TransOp>(op);
@@ -64,10 +69,7 @@ warpsPerTileV2(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
       hasChainedDot = true;
     }
   }
-  auto rank = shape.size();
   if (hasChainedDot) {
-    if (rank == 3)
-      return {(unsigned)numWarps, 1, 1};
     if (shape[0] >= shape[1]) {
       return {(unsigned)numWarps, 1};
     } else {
