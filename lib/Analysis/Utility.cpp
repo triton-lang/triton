@@ -437,6 +437,8 @@ bool supportMFMA(triton::DotOp op) {
 
   auto aShape = aTy.getShape();
   auto bShape = bTy.getShape();
+  if (aShape.size() != 2 || bShape.size() != 2)
+    return false;
 
   assert(aShape[1] == bShape[0]);
   if (!supportMFMAGranularity(aShape[0], bShape[1], aShape[1]))
