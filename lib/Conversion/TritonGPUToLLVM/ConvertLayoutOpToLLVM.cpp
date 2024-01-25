@@ -643,6 +643,8 @@ private:
         else if (isStMatrixCompatible(srcTy) && accumNumReplicates == 1 &&
                  outOrd[0] == 1 && paddedRepShape[1] % 8 == 0) {
           Value llvmSrc = adaptor.getSrc();
+          auto inVals =
+              getTypeConverter()->unpackLLElements(loc, llvmSrc, rewriter);
           storeDistributedToSharedWithStMatrix(srcTy, llvmSrc, smemBase,
                                                paddedRepShape, origRepShape,
                                                loc, rewriter);
@@ -863,8 +865,10 @@ private:
     auto dstStrides =
         getStridesFromShapeAndOrder(dstShapePerCTA, outOrd, loc, rewriter);
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy, false);
-    storeDistributedToShared(src, adaptor.getSrc(), dstStrides, srcIndices, dst,
-                             smemBase, elemTy, loc, rewriter);
+    auto inVals =
+        getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    storeDistributedToShared(src, inVals, dstStrides, srcIndices, dst, smemBase,
+                             elemTy, loc, rewriter);
     auto smemObj = SharedMemoryObject(smemBase, elemTy, dstShapePerCTA, outOrd,
                                       loc, rewriter);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);

@@ -419,7 +419,7 @@ public:
     return outVals;
   }
 
-  void storeDistributedToShared(Value src, Value llSrc,
+  void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
                                 ArrayRef<Value> dstStrides,
                                 ArrayRef<SmallVector<Value>> srcIndices,
                                 Value dst, Value smemBase, Type elemTy,
@@ -449,7 +449,6 @@ public:
     unsigned minVec = std::min(outVec, inVec);
     unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
     assert(numElems == srcIndices.size());
-    auto inVals = getTypeConverter()->unpackLLElements(loc, llSrc, rewriter);
     auto wordTy = vec_ty(elemTy, minVec);
     Value word;
 
@@ -694,17 +693,6 @@ public:
   }
 
 private:
-  void restoreInsertionPointIfSet(OpBuilder::InsertPoint *insertPt,
-                                  ConversionPatternRewriter &rewriter) const {
-    if (insertPt->isSet()) {
-      rewriter.restoreInsertionPoint(*insertPt);
-    } else {
-      auto func =
-          rewriter.getInsertionPoint()->getParentOfType<LLVM::LLVMFuncOp>();
-      rewriter.setInsertionPointToStart(&func.getBody().front());
-    }
-  }
-
   // -----------------------------------------------------------------------
   // Blocked layout indices
   // -----------------------------------------------------------------------
