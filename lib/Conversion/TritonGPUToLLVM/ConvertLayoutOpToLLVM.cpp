@@ -699,6 +699,58 @@ private:
     return success();
   }
 
+  /*-------*/
+  SmallVector<Value>
+  loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
+                          Value src, SharedMemoryObject smemObj, Type elemTy,
+                          Location loc,
+                          ConversionPatternRewriter &rewriter) const {
+    auto dstTy = dst.getType().cast<RankedTensorType>();
+    auto dstShape = dstTy.getShape();
+    assert(dstShape.size() == 2 &&
+           "Unexpected rank of loadSharedToDistributed");
+    auto srcTy = src.getType().cast<RankedTensorType>();
+    auto dstDistributedLayout = dstTy.getEncoding();
+    if (auto mmaLayout =
+            dstDistributedLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+      assert((!mmaLayout.isVolta()) &&
+             "ConvertLayout Shared->MMAv1 is not supported yet");
+    }
+    auto srcSharedLayout =
+        srcTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
+    auto srcElemTy = srcTy.getElementType();
+    auto dstElemTy = dstTy.getElementType();
+    auto inOrd = triton::gpu::getOrder(srcSharedLayout);
+    auto outOrd = triton::gpu::getOrder(dstDistributedLayout);
+    unsigned outVec = inOrd == outOrd
+                          ? triton::gpu::getUniqueContigPerThread(
+                                dstDistributedLayout, dstShape)[outOrd[0]]
+                          : 1;
+    unsigned inVec = srcSharedLayout.getVec();
+    unsigned minVec = std::min(outVec, inVec);
+    unsigned outElems = triton::gpu::getTotalElemsPerThread(dstTy);
+    SmallVector<Value> offsetVals = {i32_val(0), i32_val(0)};
+    assert(outElems == dstIndices.size());
+
+    DenseMap<unsigned, Value> sharedPtrs =
+        getSwizzledSharedPtrs(loc, outVec, dstTy, srcSharedLayout, srcElemTy,
+                              smemObj, rewriter, offsetVals, smemObj.strides);
+    assert(outElems % minVec == 0 && "Unexpected number of elements");
+    unsigned numVecs = outElems / minVec;
+    auto wordTy = vec_ty(elemTy, minVec);
+    SmallVector<Value> outVals(outElems);
+    for (unsigned i = 0; i < numVecs; ++i) {
+      Value smemAddr = sharedPtrs[i * minVec];
+      smemAddr = bitcast(smemAddr, ptr_ty(rewriter.getContext(), 3));
+      Value valVec = load(wordTy, smemAddr);
+      for (unsigned v = 0; v < minVec; ++v) {
+        Value currVal = extract_element(dstElemTy, valVec, i32_val(v));
+        outVals[i * minVec + v] = currVal;
+      }
+    }
+    return outVals;
+  }
+
   LogicalResult
   lowerSharedToDistributed(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                            ConversionPatternRewriter &rewriter) const {
@@ -1075,8 +1127,6 @@ private:
 void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     PatternBenefit benefit) {
-  patterns.add<ConvertLayoutOpConversion>(typeConverter, indexCacheInfo,
-                                          benefit);
+  patterns.add<ConvertLayoutOpConversion>(typeConverter, benefit);
 }

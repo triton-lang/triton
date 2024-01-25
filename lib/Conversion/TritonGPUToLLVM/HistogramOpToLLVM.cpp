@@ -189,7 +189,6 @@ public:
 void mlir::triton::populateHistogramOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     PatternBenefit benefit) {
-  patterns.add<HistogramOpConversion>(typeConverter, indexCacheInfo, benefit);
+  patterns.add<HistogramOpConversion>(typeConverter, benefit);
 }

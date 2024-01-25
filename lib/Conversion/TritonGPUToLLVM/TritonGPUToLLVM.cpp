@@ -501,12 +501,10 @@ struct AssertOpConversion
 struct MakeRangeOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::MakeRangeOp> {
 
-  MakeRangeOpConversion(
-      TritonGPUToLLVMTypeConverter &converter,
-      ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-      PatternBenefit benefit)
-      : ConvertTritonGPUOpToLLVMPattern<triton::MakeRangeOp>(
-            converter, indexCacheInfo, benefit) {}
+  MakeRangeOpConversion(TritonGPUToLLVMTypeConverter &converter,
+                        PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<triton::MakeRangeOp>(converter,
+                                                             benefit) {}
 
   LogicalResult
   matchAndRewrite(triton::MakeRangeOp op, OpAdaptor adaptor,
@@ -868,7 +866,6 @@ struct AsyncBulkCommitGroupOpConversion
 void mlir::triton::populateTritonGPUToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     PatternBenefit benefit) {
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
   patterns.add<AllocTensorOpConversion>(typeConverter, benefit);
@@ -884,7 +881,7 @@ void mlir::triton::populateTritonGPUToLLVMPatterns(
   patterns.add<GetThreadIdOpConversion>(typeConverter, benefit);
   patterns.add<GetCanonicalWarpIdConversion>(typeConverter, benefit);
   patterns.add<GetClusterCTAIdOpConversion>(typeConverter, benefit);
-  patterns.add<MakeRangeOpConversion>(typeConverter, indexCacheInfo, benefit);
+  patterns.add<MakeRangeOpConversion>(typeConverter, benefit);
   patterns.add<ReturnOpConversion>(typeConverter, benefit);
   patterns.add<PrintOpConversion>(typeConverter, benefit);
   patterns.add<AssertOpConversion>(typeConverter, benefit);
