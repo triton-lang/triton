@@ -47,19 +47,16 @@ class BackendInstaller:
                 raise Exception(f"${file} does not exist in ${backend_dir}")
         return backend_dir
 
-
     # Given a valid path to a backend directory returned by `get_backend_dir`,
     # return all the files to be packaged as part of this backend data.
     @staticmethod
     def create_backend_package_data(backend_dir: str):
         return [f"{os.path.relpath(p, backend_dir)}/*" for p, _, _, in os.walk(backend_dir)]
 
-
     # Given a backend name, return its install location.
     @staticmethod
     def get_backend_install_dir(backend_name: str):
         return os.path.join(os.path.dirname(__file__), "triton", "backends", backend_name)
-
 
     # Initialize in-tree backend if it's a submodule.
     @staticmethod
@@ -70,14 +67,13 @@ class BackendInstaller:
         # initialize submodule if there is one
         try:
             subprocess.run(["git", "submodule", "update", "--init", f"{backend}"], check=True,
-                        stdout=subprocess.DEVNULL, cwd=root_dir)
+                           stdout=subprocess.DEVNULL, cwd=root_dir)
         except subprocess.CalledProcessError:
             pass
         except FileNotFoundError:
             pass
 
         return os.path.join(root_dir, backend)
-
 
     # Copy all in-tree backends under triton/third_party
     @staticmethod
@@ -94,7 +90,6 @@ class BackendInstaller:
                         install_dir=install_dir, is_external=False))
         return ret
 
-
     # Copy all external backends provided by the `TRITON_PLUGIN_DIRS` environment
     # variable.
     # TRITON_PLUGIN_DIRS is a semicolon-separated list of paths to the plugins.
@@ -102,15 +97,16 @@ class BackendInstaller:
     # contain a "backend" folder.
     @staticmethod
     def copy_external_backends():
+
         def get_backend_name(dir):
             from pathlib import Path
             if dir.strip()[-1] == '/':
                 raise Exception(f"Path ${dir} must not end with a forward slash")
             name = Path(dir).name
             if not name.isidentifier():
-                raise Exception(f"Cannot use ${name} as a python module, please rename the directory to a valid python identifier")
+                raise Exception(
+                    f"Cannot use ${name} as a python module, please rename the directory to a valid python identifier")
             return name
-
 
         backend_dirs = os.getenv('TRITON_PLUGIN_DIRS')
         if backend_dirs is None:
@@ -363,13 +359,18 @@ class CMakeBuild(build_ext):
         # python directories
         python_include_dir = sysconfig.get_path("platinclude")
         cmake_args = [
-            "-G", "Ninja",  # Ninja is much faster than make
+            "-G",
+            "Ninja",  # Ninja is much faster than make
             "-DCMAKE_MAKE_PROGRAM=" +
             ninja_dir,  # Pass explicit path to ninja otherwise cmake may cache a temporary path
-            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON", "-DLLVM_ENABLE_WERROR=ON",
-            "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir, "-DTRITON_BUILD_TUTORIALS=OFF",
-            "-DTRITON_BUILD_PYTHON_MODULE=ON", "-DPython3_EXECUTABLE:FILEPATH=" + sys.executable,
-            "-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON", "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+            "-DLLVM_ENABLE_WERROR=ON",
+            "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
+            "-DTRITON_BUILD_TUTORIALS=OFF",
+            "-DTRITON_BUILD_PYTHON_MODULE=ON",
+            "-DPython3_EXECUTABLE:FILEPATH=" + sys.executable,
+            "-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON",
+            "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
             "-DTRITON_CODEGEN_BACKENDS=" + ';'.join([b.name for b in backends if not b.is_external]),
             "-DTRITON_PLUGIN_DIRS=" + ';'.join([b.src_dir for b in backends if b.is_external])
         ]
@@ -455,10 +456,8 @@ download_and_copy(
     f"https://anaconda.org/nvidia/cuda-nvdisasm/12.3.52/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
 
-backends = [
-    *BackendInstaller.copy_backends(["nvidia", "amd"]),
-    *BackendInstaller.copy_external_backends()
-]
+backends = [*BackendInstaller.copy_backends(["nvidia", "amd"]), *BackendInstaller.copy_external_backends()]
+
 
 def add_link_to_backends():
     for backend in backends:
