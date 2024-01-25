@@ -295,40 +295,27 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
   auto ty = loadOp.getType().cast<RankedTensorType>();
   Attribute sharedEnc;
   auto CTALayout = ttg::getCTALayout(ty.getEncoding());
+  auto blockedOrder = ttg::getOrder(ty.getEncoding());
+  SmallVector<unsigned> sharedOrder;
+  if (blockedOrder.size() == 3) {
+    for (unsigned i = 0; i < blockedOrder.size(); ++i) {
+      if (blockedOrder[i] == 0)
+        continue;
+      sharedOrder.push_back(blockedOrder[i]);
+    }
+    sharedOrder.push_back(0);
+  } else {
+    sharedOrder = blockedOrder;
+  }
+  ArrayRef<unsigned> order = sharedOrder;
   if (dotOpEnc) {
     unsigned bitWidth = ty.getElementType().getIntOrFloatBitWidth();
-    auto blockedOrder = ttg::getOrder(ty.getEncoding());
-    SmallVector<unsigned> sharedOrder;
-    if (blockedOrder.size() == 3) {
-      for (unsigned i = 0; i < blockedOrder.size(); ++i) {
-        if (blockedOrder[i] == 0)
-          continue;
-        sharedOrder.push_back(blockedOrder[i]);
-      }
-      sharedOrder.push_back(0);
-    } else {
-      sharedOrder = blockedOrder;
-    }
-    ArrayRef<unsigned> order = sharedOrder;
     // set needTrans to avoid unnecessary conversion between shared encodings.
     sharedEnc =
         ttg::SharedEncodingAttr::get(ty.getContext(), dotOpEnc, ty.getShape(),
                                      order, CTALayout, bitWidth, needTrans);
   } else {
     // MMAv3
-    auto blockedOrder = ttg::getOrder(ty.getEncoding());
-    SmallVector<unsigned> sharedOrder;
-    if (blockedOrder.size() == 3) {
-      for (unsigned i = 0; i < blockedOrder.size(); ++i) {
-        if (blockedOrder[i] == 0)
-          continue;
-        sharedOrder.push_back(blockedOrder[i]);
-      }
-      sharedOrder.push_back(0);
-    } else {
-      sharedOrder = blockedOrder;
-    }
-    ArrayRef<unsigned> order = sharedOrder;
     sharedEnc = ttg::SharedEncodingAttr::get(
         ty.getContext(), ty.getShape(), order, CTALayout, ty.getElementType());
   }
