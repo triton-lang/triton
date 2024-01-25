@@ -647,7 +647,22 @@ SmallVector<T> insertValue(const SmallVector<T> &vec, unsigned index, T value) {
   return res;
 }
 
+CTALayoutAttr getExpandedCTALayout(MLIRContext *ctx,
+                                   CTALayoutAttr ctaLayoutAttr) {
+  auto rank = ctaLayoutAttr.getCTAsPerCGA().size();
+  auto ctasPerCGA3d =
+      insertValue<unsigned>(ctaLayoutAttr.getCTAsPerCGA(), rank, 1);
+  auto ctasSplitNum3d =
+      insertValue<unsigned>(ctaLayoutAttr.getCTASplitNum(), rank, 1);
+  auto ctaOrder3d =
+      insertValue<unsigned>(ctaLayoutAttr.getCTAOrder(), rank, rank);
+  auto expandedCTALayout = triton::gpu::CTALayoutAttr::get(
+      ctx, ctasPerCGA3d, ctasSplitNum3d, ctaOrder3d);
+  return expandedCTALayout;
+}
+
 Attribute getExpandedEncoding(Attribute encoding) {
+  auto ctx = encoding.getContext();
   if (auto sharedEncoding = encoding.dyn_cast<SharedEncodingAttr>()) {
     auto order = sharedEncoding.getOrder();
     auto rank = order.size();
@@ -658,19 +673,10 @@ Attribute getExpandedEncoding(Attribute encoding) {
     expandedOrder[0] = order[0] + 1;
     expandedOrder[1] = order[1] + 1;
     ArrayRef<unsigned> expandedOrderArr(expandedOrder);
-    auto CTALayout = sharedEncoding.getCTALayout();
-    auto ctasPerCGA3d =
-        insertValue<unsigned>(CTALayout.getCTAsPerCGA(), rank, 1);
-    auto ctasSplitNum3d =
-        insertValue<unsigned>(CTALayout.getCTASplitNum(), rank, 1);
-    auto ctaOrder3d =
-        insertValue<unsigned>(CTALayout.getCTAOrder(), rank, rank);
-    auto expandedCTALayout = triton::gpu::CTALayoutAttr::get(
-        encoding.getContext(), ctasPerCGA3d, ctasSplitNum3d, ctaOrder3d);
     auto expandedEncoding = SharedEncodingAttr::get(
-        encoding.getContext(), sharedEncoding.getVec(),
-        sharedEncoding.getPerPhase(), sharedEncoding.getMaxPhase(),
-        expandedOrderArr, expandedCTALayout,
+        ctx, sharedEncoding.getVec(), sharedEncoding.getPerPhase(),
+        sharedEncoding.getMaxPhase(), expandedOrderArr,
+        getExpandedCTALayout(ctx, sharedEncoding.getCTALayout()),
         sharedEncoding.getHasLeadingOffset());
     return expandedEncoding;
   } else if (auto mmaEncoding = encoding.dyn_cast<NvidiaMmaEncodingAttr>()) {
@@ -680,25 +686,27 @@ Attribute getExpandedEncoding(Attribute encoding) {
       return encoding;
     }
     auto expandedWarpsPerCTA = insertValue<unsigned>(warpsPerCTA, 0, 1);
-    auto CTALayout = mmaEncoding.getCTALayout();
-    auto ctasPerCGA3d =
-        insertValue<unsigned>(CTALayout.getCTAsPerCGA(), rank, 1);
-    auto ctasSplitNum3d =
-        insertValue<unsigned>(CTALayout.getCTASplitNum(), rank, 1);
-    auto ctaOrder3d =
-        insertValue<unsigned>(CTALayout.getCTAOrder(), rank, rank);
-    auto expandedCTALayout = triton::gpu::CTALayoutAttr::get(
-        encoding.getContext(), ctasPerCGA3d, ctasSplitNum3d, ctaOrder3d);
     auto instrShape = mmaEncoding.getInstrShape();
     auto expandedInstrShape = insertValue<unsigned>(instrShape, 0, 1);
     auto expandedMmaEncoding = NvidiaMmaEncodingAttr::get(
-        encoding.getContext(), mmaEncoding.getVersionMajor(),
-        mmaEncoding.getVersionMinor(), expandedWarpsPerCTA, expandedCTALayout,
+        ctx, mmaEncoding.getVersionMajor(), mmaEncoding.getVersionMinor(),
+        expandedWarpsPerCTA,
+        getExpandedCTALayout(ctx, mmaEncoding.getCTALayout()),
         expandedInstrShape);
     return expandedMmaEncoding;
+  } else if (auto dotOperandEncoding =
+                 encoding.dyn_cast<DotOperandEncodingAttr>()) {
+    auto mmaEncoding =
+        dotOperandEncoding.getParent().cast<NvidiaMmaEncodingAttr>();
+    auto expandedMMAEncoding = getExpandedEncoding(mmaEncoding);
+    auto expandedEncoding = DotOperandEncodingAttr::get(
+        ctx, dotOperandEncoding.getOpIdx(), expandedMMAEncoding,
+        dotOperandEncoding.getKWidth());
+    return expandedEncoding;
   } else
     llvm_unreachable("unsupported encoding");
 }
+
 RankedTensorType getExpandedTensorType(RankedTensorType tensorTy) {
   auto shapePerCTA = getShapePerCTA(tensorTy);
   auto rank = shapePerCTA.size();
@@ -715,15 +723,6 @@ RankedTensorType getExpandedTensorType(RankedTensorType tensorTy) {
   auto expandedTensor =
       RankedTensorType::get(expandedShape, elTy, expandedEncoding);
   return expandedTensor;
-}
-
-DotOperandEncodingAttr getExpandedEncoding(DotOperandEncodingAttr encoding) {
-  auto mmaEncoding = encoding.getParent().cast<NvidiaMmaEncodingAttr>();
-  auto expandedMMAEncoding = getExpandedEncoding(mmaEncoding);
-  auto expandedEncoding =
-      DotOperandEncodingAttr::get(encoding.getContext(), encoding.getOpIdx(),
-                                  expandedMMAEncoding, encoding.getKWidth());
-  return expandedEncoding;
 }
 
 SharedMemoryObject
@@ -749,7 +748,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     TritonGPUToLLVMTypeConverter *typeConverter, Value thread) {
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   auto expandedTensorTy = getExpandedTensorType(tensorTy);
-  auto expandedEncoding = getExpandedEncoding(encoding);
+  auto expandedEncoding =
+      getExpandedEncoding(encoding).cast<DotOperandEncodingAttr>();
   auto expandedSmemObj = getExpandedSharedMemoryObject(rewriter, loc, smemObj);
   if (opIdx == 0)
     return loadArg(rewriter, loc, expandedTensorTy, expandedEncoding,
