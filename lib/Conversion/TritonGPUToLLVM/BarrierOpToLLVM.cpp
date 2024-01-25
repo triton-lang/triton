@@ -63,7 +63,8 @@ struct AllocMBarrierOpConversion : public ConvertTritonGPUOpToLLVMPattern<
   matchAndRewrite(triton::nvidia_gpu::AllocMBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    Value smemBase = getSharedMemoryBase(loc, rewriter, op.getResult());
+    Value smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
     auto resultTy = op.getType();
     auto resultTensorTy = resultTy.dyn_cast<RankedTensorType>();
     Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
@@ -234,16 +235,13 @@ struct FenceAsyncSharedOpConversion
 void mlir::triton::populateBarrierOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation, PatternBenefit benefit) {
-  patterns.add<BarrierOpConversion>(typeConverter, allocation, benefit);
-  patterns.add<AllocMBarrierOpConversion>(typeConverter, allocation, benefit);
-  patterns.add<MBarrierArriveOpConversion>(typeConverter, allocation, benefit);
-  patterns.add<MBarrierWaitOpConversion>(typeConverter, allocation, benefit);
-  patterns.add<ExtractMBarrierOpConversion>(typeConverter, allocation, benefit);
-  patterns.add<NamedBarrierArriveOpConversion>(typeConverter, allocation,
-                                               benefit);
-  patterns.add<NamedBarrierWaitOpConversion>(typeConverter, allocation,
-                                             benefit);
-  patterns.add<FenceAsyncSharedOpConversion>(typeConverter, allocation,
-                                             benefit);
+    PatternBenefit benefit) {
+  patterns.add<BarrierOpConversion>(typeConverter, benefit);
+  patterns.add<AllocMBarrierOpConversion>(typeConverter, benefit);
+  patterns.add<MBarrierArriveOpConversion>(typeConverter, benefit);
+  patterns.add<MBarrierWaitOpConversion>(typeConverter, benefit);
+  patterns.add<ExtractMBarrierOpConversion>(typeConverter, benefit);
+  patterns.add<NamedBarrierArriveOpConversion>(typeConverter, benefit);
+  patterns.add<NamedBarrierWaitOpConversion>(typeConverter, benefit);
+  patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
 }

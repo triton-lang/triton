@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm="target=nvvm" | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-gpu-to-llvm="target=nvvm" | FileCheck %s
 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i64, %arg1: !llvm.ptr<1>)
@@ -443,10 +443,9 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   // CHECK-LABEL: basic_alloc_tensor
   tt.func @basic_alloc_tensor() {
     // CHECK: llvm.mlir.addressof @global_smem
-    // CHECK-NEXT: llvm.bitcast
-    // CHECK-NEXT: llvm.mlir.constant
     // CHECK-NEXT: llvm.getelementptr
     // CHECK-NEXT: llvm.bitcast
+    // CHECK-NEXT: llvm.mlir.constant
     %0 = triton_gpu.alloc_tensor : tensor<16x16xf16, #shared0>
     tt.return
   }
