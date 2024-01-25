@@ -733,7 +733,7 @@ getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
   auto rank = strides.size();
   if (rank == 3)
     return smemObj;
-  auto expandedStrides = insertValue(strides, 0, i32_val(64 * 64));
+  auto expandedStrides = insertValue(strides, 0, i32_val(1));
   auto expandedOffsets = insertValue(offsets, 0, i32_val(0));
   auto expandedSmemObj =
       SharedMemoryObject(smemObj.getBase(), smemObj.getBaseElemType(),
@@ -746,6 +746,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor, DotOperandEncodingAttr encoding,
                     const SharedMemoryObject &smemObj,
                     TritonGPUToLLVMTypeConverter *typeConverter, Value thread) {
+  // Expand shared/dotOp to 3D before calling loadArg.
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   auto expandedTensorTy = getExpandedTensorType(tensorTy);
   auto expandedEncoding =
