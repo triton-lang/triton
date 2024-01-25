@@ -732,11 +732,20 @@ If the condition is false, the message is printed, and the program is aborted.</
 </section>
 <section id="tt-broadcast-triton-broadcastop">
 <h2><code class="docutils literal notranslate"><span class="pre">tt.broadcast</span></code> (triton::BroadcastOp)<a class="headerlink" href="#tt-broadcast-triton-broadcastop" title="Permalink to this heading">¶</a></h2>
-<p><em>Broadcast. No left-padding as of now.</em></p>
+<p><em>Broadcast a tensor or a scalar</em></p>
 <p>Syntax:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.broadcast` $src attr-dict `:` functional-type(operands, results)
 </pre></div>
 </div>
+<p>If given a tensor, broadcast changes one or more dimensions with size 1 to
+a new size, e.g. tensor&lt;1x32x1xf32&gt; -&gt; tensor&lt;2x32x4xf32&gt;.</p>
+<p>If given a scalar, broadcast converts it to a tensor with arbitrary size,
+e.g. f32 -&gt; tensor&lt;2x4xf32&gt; (identical to tt.splat).</p>
+<p>Note that many other Triton ops only accept tensors, so it’s common to do
+op.getType().cast<RankedTensorType>.  Don’t make that mistake if op is a
+broadcast!</p>
+<p>TODO(jlebar): Change broadcast so it only works on tensors – splat is
+sufficient for scalars.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultElementType</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>

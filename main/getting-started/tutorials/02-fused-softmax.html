@@ -283,15 +283,15 @@ We will then compare its performance against (1) <code class="code docutils lite
           N       Triton  Torch (native)  Torch (jit)
 0     256.0   682.666643      744.727267   264.258068
 1     384.0   877.714274      819.200021   332.108094
-2     512.0   910.222190      963.764689   372.363633
-3     640.0  1024.000026      975.238103   401.568635
-4     768.0  1068.521715     1023.999964   431.157886
+2     512.0   910.222190      910.222190   372.363633
+3     640.0  1024.000026      975.238103   409.600010
+4     768.0  1068.521715     1023.999964   438.857137
 ..      ...          ...             ...          ...
-93  12160.0  1594.754129     1066.082150   593.170741
-94  12288.0  1604.963246     1016.061996   593.085987
-95  12416.0  1595.630495     1031.979242   589.483671
+93  12160.0  1594.754129     1066.082150   594.076353
+94  12288.0  1604.963246     1018.694301   593.085987
+95  12416.0  1595.630495     1029.305700   589.483671
 96  12544.0  1599.235121     1016.222759   592.921736
-97  12672.0  1602.782573     1008.716405   591.113716
+97  12672.0  1602.782573     1006.213368   591.976662
 
 [98 rows x 4 columns]
 </pre></div>
@@ -304,7 +304,7 @@ Note however that the PyTorch <cite>softmax</cite> operation is more general and
 </ul>
 </dd>
 </dl>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  40.321 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  43.876 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-02-fused-softmax-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/d91442ac2982c4e0cc3ab0f43534afbc/02-fused-softmax.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">02-fused-softmax.py</span></code></a></p>

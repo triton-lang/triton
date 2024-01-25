@@ -364,7 +364,7 @@ Effects: `MemoryEffects::Effect{}`
 
 ### `tt.broadcast` (triton::BroadcastOp)
 
-_Broadcast. No left-padding as of now._
+_Broadcast a tensor or a scalar_
 
 
 Syntax:
@@ -373,6 +373,18 @@ Syntax:
 operation ::= `tt.broadcast` $src attr-dict `:` functional-type(operands, results)
 ```
 
+If given a tensor, broadcast changes one or more dimensions with size 1 to
+a new size, e.g. tensor<1x32x1xf32> -> tensor<2x32x4xf32>.
+
+If given a scalar, broadcast converts it to a tensor with arbitrary size,
+e.g. f32 -> tensor<2x4xf32> (identical to tt.splat).
+
+Note that many other Triton ops only accept tensors, so it's common to do
+op.getType().cast<RankedTensorType>.  Don't make that mistake if op is a
+broadcast!
+
+TODO(jlebar): Change broadcast so it only works on tensors -- splat is
+sufficient for scalars.
 
 Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultElementType`, `SameOperandsAndResultEncoding`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
