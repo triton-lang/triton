@@ -398,17 +398,6 @@ static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
                     extractIdx, phase);
     firstLoad = false;
   }
-  // Insert a waitOp after the first async copy. This does make the assumption
-  // that the wait will be scheduled in a different stage that all the async
-  // copy but we cannot guarantee that one wait is enough otherwise.
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    if (isa<ttg::InsertSliceAsyncOp>(op)) {
-      OpBuilder builder(op.getContext());
-      builder.setInsertionPointAfter(&op);
-      builder.create<ttg::AsyncWaitOp>(op.getLoc(), 0);
-      break;
-    }
-  }
   SmallVector<Value> newYieldOperands = {insertIdx, extractIdx};
   if (needsMbarrierPhase)
     newYieldOperands.push_back(phase);
@@ -479,14 +468,6 @@ static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
 
   assert("don't know how to predicate this op" && false);
   return op;
-}
-
-static void setWaitNum(Operation *op,
-                       mlir::triton::PipeliningOption::PipelinerPart part,
-                       unsigned iteration, unsigned numLoadsInStage) {
-  if (auto waitOp = dyn_cast<ttg::AsyncWaitOp>(op)) {
-    waitOp.setNum(numLoadsInStage);
-  }
 }
 
 /// Helper to recursively add dependencies to the same stage.
@@ -611,6 +592,8 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
   return schedule;
 }
 
+constexpr static char kNeedWaitAttrName[] = "triton.pipeline.needs_wait";
+
 bool mlir::triton::preProcessLoopAndGetSchedule(
     scf::ForOp &forOp, int numStages, mlir::triton::PipeliningOption &options) {
   // 1. First collect "interesting" operations with a stage where to schedule
@@ -641,12 +624,13 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   options.predicateFn = predicateOp;
   options.supportDynamicLoops = true;
   unsigned numLoadsInStage = (numStages - 2) * loads.size();
-  options.annotateFn =
-      [numLoadsInStage](Operation *op,
-                        mlir::triton::PipeliningOption::PipelinerPart part,
-                        unsigned iteration) {
-        return setWaitNum(op, part, iteration, numLoadsInStage);
-      };
+  options.annotateFn = [](Operation *op,
+                          mlir::triton::PipeliningOption::PipelinerPart part,
+                          unsigned iteration) {
+    if (isa<ttg::ExtractSliceOp>(op)) {
+      op->setAttr(kNeedWaitAttrName, UnitAttr::get(op->getContext()));
+    }
+  };
 
   if (hasAsynCp) {
     // Insert a wait 0 after the loop
@@ -658,6 +642,121 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
       builder.create<ttg::DeallocTensorOp>(forOp.getLoc(), alloc);
   }
   return true;
+}
+
+/// Find the minimum number of async_commit_group ops between the extract
+/// and the insert. Wait number is the number of commits-1.
+static std::optional<int>
+minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
+  auto countCommitsBetween = [](Operation *op1, Operation *op2) {
+    int count = 0;
+    for (auto op = op1; op != op2; op = op->getNextNode()) {
+      if (isa<ttg::AsyncCommitGroupOp>(op))
+        count++;
+      // Intentionally skip block ops' children. This will give us
+      // convervatively low number of insert ops.
+    }
+    return count;
+  };
+
+  int minCommitNumber = INT_MAX;
+
+  // DFS the def chain of the extract op to find the insert op. On each path
+  // we calculate the number of async_commit. Then we select the minimum number
+  // of async_commit ops among all the paths.
+  // If the wait is not needed (when insert is a TMA insert), return
+  // std::nullopt.
+  std::function<std::optional<int>(Value, Operation *, int)> minOverHistories =
+      [&](Value val, Operation *sinkOp,
+          int thisHistorySum) -> std::optional<int> {
+    if (Operation *defOp = val.getDefiningOp()) {
+      if (isa<ttg::InsertSliceAsyncOp>(defOp)) {
+        thisHistorySum += countCommitsBetween(defOp->getNextNode(), sinkOp);
+        minCommitNumber = std::min(minCommitNumber, thisHistorySum);
+        return minCommitNumber;
+      }
+      if (isa<ttng::InsertSliceTMAOp>(defOp)) {
+        // We don't need to wait for TMA inserts.
+        return std::nullopt;
+      }
+      // Failed to track, return 1 conservatively.
+      return 1;
+    }
+    if (auto arg = val.dyn_cast<BlockArgument>()) {
+      Block *block = arg.getOwner();
+      auto forOp = dyn_cast<scf::ForOp>(block->getParentOp());
+
+      // Failed to track, return 1 conservatively.
+      if (!forOp)
+        return 1;
+
+      Operation *firstForInst = &*forOp.getBody()->begin();
+      int insertsBetween = countCommitsBetween(firstForInst, sinkOp);
+      thisHistorySum += insertsBetween;
+      if (thisHistorySum >= minCommitNumber)
+        return minCommitNumber;
+
+      // get the value value assigned to the argument coming from outside the
+      // loop
+      Value incomingVal = forOp.getInitArgs()[arg.getArgNumber() - 1];
+      std::optional<int> min1 =
+          minOverHistories(incomingVal, forOp, thisHistorySum);
+      if (!min1.has_value())
+        return std::nullopt;
+
+      // get the value value assigned to the argument coming from the previous
+      // iteration
+      Operation *yieldOp = block->getTerminator();
+      Value prevVal = yieldOp->getOperand(arg.getArgNumber() - 1);
+      std::optional<int> min2 =
+          minOverHistories(prevVal, yieldOp, thisHistorySum);
+      if (!min1.has_value())
+        return std::nullopt;
+      return std::min(std::min(min1, min2).value(), minCommitNumber);
+    }
+    // Failed to track, return 1 conservatively.
+    return 1;
+  };
+
+  std::optional<int> minCommits =
+      minOverHistories(extractOp.getOperand(0), extractOp, 0);
+  if (minCommits == std::nullopt)
+    return std::nullopt;
+  if (minCommits == 0)
+    llvm::report_fatal_error("No commits between insert and extract!");
+  return minCommits.value() - 1;
+}
+
+/// Insert wait ops after the extract_slice ops.
+void mlir::triton::insertWaits(ModuleOp module) {
+  module.walk([&](ttg::ExtractSliceOp firstExtractOp) {
+    if (!firstExtractOp->hasAttr(kNeedWaitAttrName))
+      return;
+
+    Operation *extractOp = firstExtractOp;
+    ttg::ExtractSliceOp lastExtractOp = firstExtractOp;
+
+    // If there is no meaningful work between the extracts, don't insert
+    // multiple waits. Insert just one wait per group of extracts.
+    std::optional<int> minWaitNumber = std::nullopt;
+    while (extractOp) {
+      lastExtractOp = cast<ttg::ExtractSliceOp>(extractOp);
+      std::optional<int> currMin = minWaitNumberForExtract(lastExtractOp);
+      if (currMin.has_value())
+        minWaitNumber =
+            std::min(minWaitNumber.value_or(INT_MAX), currMin.value());
+
+      extractOp->removeAttr(kNeedWaitAttrName);
+      extractOp = dyn_cast<ttg::ExtractSliceOp>(extractOp->getNextNode());
+    }
+
+    if (!minWaitNumber.has_value())
+      return; // Wait is not needed.
+    OpBuilder builder(lastExtractOp);
+    builder.setInsertionPointAfter(lastExtractOp);
+    builder.create<ttg::AsyncWaitOp>(lastExtractOp.getLoc(),
+                                     minWaitNumber.value());
+  });
 }
 
 /// MMA V3 post-processing.
