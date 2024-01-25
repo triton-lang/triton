@@ -460,10 +460,8 @@ def matmul(a, b, c, block_m, block_n, block_k, group_m, split_k, num_warps, num_
     K, N = b.shape
     # 1D launch kernel where each block gets its own program.
 
-    grid = lambda META: (
-        triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
-        META['SPLIT_K']
-    )
+    grid = triton.cdiv(M, block_m) * triton.cdiv(N, block_n), split_k
+
     matmul_kernel[grid](
         a, b, c,
         M, N, K,
@@ -503,7 +501,7 @@ def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, config, v
     size_str = ''
     if verbose:
         size_str = f'SIZE M: {M}, N: {N}, K: {K}, trans: {row_a_str}{row_b_str}'
-    if torch.allclose(triton_output.to(torch.float16), torch_output, atol=1e-1, rtol=rtol):
+    if torch.allclose(triton_output.to(torch.float16), torch_output, atol=1e-3, rtol=rtol):
         print(f'{size_str} Correct✅')
     else:
         print(f'{size_str} Incorrect❌')

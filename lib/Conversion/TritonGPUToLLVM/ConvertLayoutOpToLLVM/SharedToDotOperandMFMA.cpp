@@ -323,22 +323,8 @@ std::optional<int> findConstValue(Value val) {
   return intAttr.getInt();
 }
 
-bool fastPathAvailable(const SharedMemoryObject &smemObj,
-                       const SharedEncodingAttr &srcEncoding,
-                       const MfmaEncodingAttr &dstEncoding) {
-  if (srcEncoding.getMaxPhase() > 1)
-    return false;
-  auto stride0 = findConstValue(smemObj.strides[0]);
-  auto stride1 = findConstValue(smemObj.strides[1]);
-  auto offset0 = findConstValue(smemObj.offsets[0]);
-  auto offset1 = findConstValue(smemObj.offsets[1]);
-  bool allValuesDefined = stride0.has_value() && stride1.has_value() &&
-                          offset0.has_value() && offset1.has_value();
-  if (!allValuesDefined)
-    return false;
-  if (offset0.value() != 0 || offset1.value() != 0)
-    return false;
-  return true;
+bool hasSwizzleEnabled(const SharedEncodingAttr &srcEncoding) {
+  return srcEncoding.getMaxPhase() > 1;
 }
 
 // Computes offsets for operand B or transposed operand A
@@ -469,10 +455,10 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   SmallVector<Value> loadedValues;
   SmallVector<Value> offsets;
   Value smemBase;
-  bool isFastPath = fastPathAvailable(smemObj, sharedLayout, mfmaLayout);
-  if (!isKMajor(order, opIdx) && isFastPath) {
-    // fast path handles tensors that are not k-major, in which case swizzling
-    // is disabled and offsets computation can be simplified
+  bool isFastPath = !isKMajor(order, opIdx) && !hasSwizzleEnabled(sharedLayout);
+  if (isFastPath) {
+    // fast path handles tensors that are not k-major and have swizzling
+    // disabled, in which case offsets computation can be simplified
     // TODO (zhanglx): later when we enable vector access to LDS for non k-major
     // tensors, we'll refactor the scope of fast and normal path
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
@@ -499,8 +485,14 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     }
     smemBase = smemObj.getBaseBeforeSlice(order[0], loc, rewriter);
   } else { // normal path
-    // Normal path handles tensors that are k-major, in which case swizzling
-    // is enabled and it requires a 2-step method to compute the offsets.
+    // Normal path handles tensors that fall into either of the following three
+    // cases:
+    //   1. k-major + swizzling is enabled <-- this should be the most
+    //   performant case
+    //   2. k-major + swizzling is disabled <-- for testing purpose only
+    //   3. non k-major + swizzling is enabled <-- for testing purpose only
+    //
+    // In this path, it requires a 2-step method to compute the offsets.
     if (opIdx == 0) {
       offsets = computeOffsetsAType(
           rewriter, loc, elemsPerInstr, spatialWaveId, lane, warpsPerGroupNonK,

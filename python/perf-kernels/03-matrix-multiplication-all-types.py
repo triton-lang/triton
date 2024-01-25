@@ -228,8 +228,8 @@ def get_x_vals():
     # Only test k-major tensors because
     # 1. This is the most preformant config and the current focus
     # 2. Other case does not work with num_stages=0 (TODO (zhanglx))
-    for col_a in [False]
-    for col_b in [True]]
+    for col_a in [True, False]
+    for col_b in [True, False]]
 )
 def test_correctness(M, N, K, col_a, col_b, in_dtype, out_dtype):
     a, a_fp16 = gen_input(M, K, in_dtype, col_a, 1, device='cuda')
