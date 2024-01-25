@@ -25,28 +25,25 @@ struct AllocateSharedMemory
     MLIRContext *ctx = &getContext();
     ModuleAllocation allocation(mod);
 
-    mod.walk([&](Operation *op) {
-      if (op->getNumResults() == 0)
-        return;
-      Value value = op->getResult(0);
-      FunctionOpInterface funcOp =
-          value.getParentRegion()
-              ->template getParentOfType<FunctionOpInterface>();
-      auto *funcAllocation = allocation.getFuncData(funcOp);
-      auto vBufferId = funcAllocation->getBufferId(value);
-      auto oBufferId = funcAllocation->getBufferId(op);
-      int offset = -1;
-      if (vBufferId != Allocation::InvalidBufferId)
-        offset = funcAllocation->getOffset(vBufferId);
-      else if (oBufferId != Allocation::InvalidBufferId)
-        offset = funcAllocation->getOffset(oBufferId);
-      else
-        return;
-      assert(offset != -1);
-      op->setAttr("allocation.offset",
-                  IntegerAttr::get(IntegerType::get(ctx, 32), offset));
+    mod.walk([&](FunctionOpInterface funcOp) {
+      funcOp.walk([&](Operation *op) {
+        auto *funcAllocation = allocation.getFuncData(funcOp);
+        auto oBufferId = funcAllocation->getBufferId(op);
+        int offset = -1;
+        if (oBufferId != Allocation::InvalidBufferId)
+          offset = funcAllocation->getOffset(oBufferId);
+        else if (op->getNumResults() == 1) {
+          Value value = op->getResult(0);
+          auto vBufferId = funcAllocation->getBufferId(value);
+          if (vBufferId != Allocation::InvalidBufferId)
+            offset = funcAllocation->getOffset(vBufferId);
+        }
+        if (offset == -1)
+          return;
+        op->setAttr("allocation.offset",
+                    IntegerAttr::get(IntegerType::get(ctx, 32), offset));
+      });
     });
-
     mod->setAttr("triton_gpu.shared",
                  mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32),
                                         allocation.getSharedMemorySize()));

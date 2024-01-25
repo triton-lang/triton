@@ -369,6 +369,7 @@ static Value getSharedMemoryBase(Location loc,
   auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
   FunctionOpInterface func =
       op->template getParentOfType<FunctionOpInterface>();
+  assert(op->hasAttr("allocation.offset"));
   size_t offset = op->getAttr("allocation.offset")
                       .cast<IntegerAttr>()
                       .getValue()
