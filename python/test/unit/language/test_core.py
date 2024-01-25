@@ -2625,7 +2625,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
                 'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
 
 
-@pytest.mark.parametrize("B", [2, 4, 8])
+@pytest.mark.parametrize("B", [1, 2, 4, 8])
 @pytest.mark.parametrize("M, N, K", [(256, 256, 256), (128, 128, 128), (64, 64, 64), (32, 32, 32), (16, 16, 16)])
 def test_dot3d(B, M, N, K):
 
