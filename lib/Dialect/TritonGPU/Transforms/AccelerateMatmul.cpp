@@ -304,8 +304,14 @@ public:
     } else {
 
       // convert operands
-      int minBitwidth =
-          std::min(computeOrigBitWidth(a), computeOrigBitWidth(b));
+      int aBitWidth = computeOrigBitWidth(a);
+      int bBitWidth = computeOrigBitWidth(b);
+      int minBitwidth = std::min(aBitWidth, bBitWidth);
+      // TODO: remove s8xf32 matmul special case when issue is fixed.
+      // https://github.com/openai/triton/issues/2853
+      if (minBitwidth == 8 && std::max(aBitWidth, bBitWidth) == 32) {
+        minBitwidth = 0;
+      }
       Type minType = IntegerType::get(ctx, minBitwidth);
       // convert A operand
       auto newAEncoding = ttg::DotOperandEncodingAttr::get(
