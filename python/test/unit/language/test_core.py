@@ -2625,6 +2625,89 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
                 'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
 
 
+@pytest.mark.parametrize("B", [2, 4, 8])
+@pytest.mark.parametrize("M, N, K", [(256, 256, 256), (128, 128, 128), (64, 64, 64), (32, 32, 32), (16, 16, 16)])
+def test_dot3d(B, M, N, K):
+
+    @triton.jit
+    def kernel(
+        q_ptr,
+        k_ptr,
+        o_ptr,
+        stride_qb,
+        stride_qm,
+        stride_qk,
+        stride_kb,
+        stride_kk,
+        stride_kn,
+        stride_ob,
+        stride_om,
+        stride_on,
+        BLOCK_B: tl.constexpr,
+        BLOCK_M: tl.constexpr,
+        BLOCK_N: tl.constexpr,
+        BLOCK_K: tl.constexpr,
+    ):
+        startm = tl.program_id(0) * BLOCK_M
+        startn = tl.program_id(1) * BLOCK_N
+        offs_b = tl.arange(0, BLOCK_B)
+        offs_m = startm + tl.arange(0, BLOCK_M)
+        offs_n = startn + tl.arange(0, BLOCK_N)
+        offs_k = tl.arange(0, BLOCK_K)
+        q_ptrs = q_ptr + offs_b[:, None, None] * stride_qb + offs_m[None, :, None] * stride_qm + offs_k[
+            None, None, :] * stride_qk
+        k_ptrs = k_ptr + offs_b[:, None, None] * stride_kb + offs_k[None, :, None] * stride_kk + offs_n[
+            None, None, :] * stride_kn
+        q = tl.load(q_ptrs)
+        k = tl.load(k_ptrs)
+        qk = tl.dot(q, k)
+
+        o_ptrs = o_ptr + offs_b[:, None, None] * stride_ob + offs_m[None, :, None] * stride_om + offs_n[
+            None, None, :] * stride_on
+        tl.store(o_ptrs, qk)
+
+    dtype_str = 'float16'
+    rs = RandomState(17)
+    x = numpy_random((B, M, K), dtype_str=dtype_str, rs=rs)
+    y = numpy_random((B, K, N), dtype_str=dtype_str, rs=rs)
+    out = numpy_random((B, M, N), dtype_str=dtype_str, rs=rs)
+
+    x_tri = to_triton(x)
+    y_tri = to_triton(y)
+    out_tri = to_triton(out)
+
+    BLOCK_B = B
+    BLOCK_M, BLOCK_N = 16, 16
+    BLOCK_K = K
+
+    grid = (
+        triton.cdiv(M, BLOCK_M),
+        triton.cdiv(N, BLOCK_N),
+    )
+    kernel[grid](
+        x_tri,
+        y_tri,
+        out_tri,  #
+        x_tri.stride(0),
+        x_tri.stride(1),  #
+        x_tri.stride(2),
+        y_tri.stride(0),
+        y_tri.stride(1),  #
+        y_tri.stride(2),
+        out_tri.stride(0),
+        out_tri.stride(1),  #
+        out_tri.stride(2),
+        BLOCK_B=BLOCK_B,
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        BLOCK_K=BLOCK_K,  #
+        num_warps=B,
+    )
+
+    out_ref = np.matmul(x, y)
+    np.testing.assert_allclose(out_ref, to_numpy(out_tri), rtol=0.01, atol=1e-2)
+
+
 def test_max_num_imprecise_acc(device):
 
     if is_hip():
