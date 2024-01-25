@@ -550,6 +550,9 @@ static void recursiveHelper(Operation *op, DenseSet<Operation *> &seen,
   unsigned d = distance;
   if (isa<ttg::InsertSliceAsyncOp, ttng::InsertSliceTMAOp>(op)) {
     insertOpToDistance[op] = distance;
+    if (auto asyncCommit = dyn_cast<ttg::AsyncCommitGroupOp>(op->getNextNode())) {
+      insertOpToDistance[asyncCommit] = distance;
+    }
     d = distance + 1;
   }
   for (Value operand : op->getOperands()) {
@@ -624,7 +627,8 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
     if (isa<ttng::MBarrierArriveOp>(op)) {
       assert(false && "MBarrierArriveOp has not been supported yet!");
     }
-    if (isa<ttg::InsertSliceAsyncOp, ttng::InsertSliceTMAOp>(op)) {
+    if (isa<ttg::InsertSliceAsyncOp, ttng::InsertSliceTMAOp,
+            ttg::AsyncCommitGroupOp>(op)) {
       insertOps.insert(&op);
     }
     if (prefetchExtract) {
