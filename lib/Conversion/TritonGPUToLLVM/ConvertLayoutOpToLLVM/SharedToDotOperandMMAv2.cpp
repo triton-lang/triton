@@ -176,18 +176,17 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value lane, Value cSwizzleOffset) {
       contiguousIndex = urem(contiguousIndex, i32_val(contiguousTileNumMats));
     contiguousIndex = add(contiguousIndex, contiguousSliceMatOffset);
     Value contiguousIndexSwizzled = xor_(contiguousIndex, phase);
-    if (instrShape.size() == 3)
-      if (warpsPerCTA[0] != 1) {
-        Value batchOffset =
-            mul(warpB, i32_val(tileShape[order[0]] * tileShape[order[1]]));
-        offs[i] =
-            add(batchOffset,
-                add(mul(contiguousIndexSwizzled, i32_val(contiguousMatShape)),
-                    mul(rowOffset, stridedSmemOffset)));
-      } else {
-        offs[i] = add(mul(contiguousIndexSwizzled, i32_val(contiguousMatShape)),
-                      mul(rowOffset, stridedSmemOffset));
-      }
+    if (warpsPerCTA[0] != 1) {
+      Value batchOffset =
+          mul(warpB, i32_val(tileShape[order[0]] * tileShape[order[1]]));
+      offs[i] =
+          add(batchOffset,
+              add(mul(contiguousIndexSwizzled, i32_val(contiguousMatShape)),
+                  mul(rowOffset, stridedSmemOffset)));
+    } else {
+      offs[i] = add(mul(contiguousIndexSwizzled, i32_val(contiguousMatShape)),
+                    mul(rowOffset, stridedSmemOffset));
+    }
   }
 
   return offs;
