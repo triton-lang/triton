@@ -3153,10 +3153,6 @@ def test_value_specialization_overflow(value: int, overflow: bool, device) -> No
 @pytest.mark.parametrize("is_lhs_constexpr", [False, True])
 @pytest.mark.parametrize("is_rhs_constexpr", [True, False])
 def test_bin_op_constexpr(op, is_lhs_constexpr, is_rhs_constexpr, device):
-    if is_hip():
-        if (is_rhs_constexpr, is_lhs_constexpr, op) in [(False, False, "<<"), (False, False, ">>"),
-                                                        (False, True, "<<")]:
-            pytest.skip(f"test_bin_op_constexpr[{is_lhs_constexpr}-{is_rhs_constexpr}-{op}] is not supported in HIP")
 
     @triton.jit
     def kernel(Z, X, Y):
@@ -3169,7 +3165,12 @@ def test_bin_op_constexpr(op, is_lhs_constexpr, is_rhs_constexpr, device):
         x_str = "3" if is_lhs_constexpr else "x"
         y_str = "4" if is_rhs_constexpr else "y"
         x = numpy_random((1, ), dtype_str="int32")
-        y = numpy_random((1, ), dtype_str="int32")
+
+        # NOTE: bitshifting beyond bitwidth can lead to undefined behavior
+        if op in ['<<', '>>']:
+            y = numpy_random((1, ), dtype_str="int32", low=0, high=_bitwidth("int32"))
+        else:
+            y = numpy_random((1, ), dtype_str="int32")
     else:
         x_str = "3.14" if is_lhs_constexpr else "x"
         y_str = "4.13" if is_rhs_constexpr else "y"
