@@ -148,7 +148,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
   if (DEFINED TRITON_PLUGIN_DIRS)
     foreach(PLUGIN_DIR ${TRITON_PLUGIN_DIRS})
       # Generate a list of plugin names by getting the last component of the provided paths.
-      #
       # Note that each path must not end with a slash, otherwise cmake_path will return empty
       # string as the name.
       cmake_path(GET PLUGIN_DIR FILENAME PLUGIN_NAME)
