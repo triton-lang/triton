@@ -57,7 +57,7 @@ struct ClusterWaitOpConversion : public ConvertTritonGPUOpToLLVMPattern<
 void mlir::triton::populateClusterOpsToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation, PatternBenefit benefit) {
+    PatternBenefit benefit) {
   patterns.add<ClusterArriveOpConversion>(typeConverter, benefit);
   patterns.add<ClusterWaitOpConversion>(typeConverter, benefit);
   return;

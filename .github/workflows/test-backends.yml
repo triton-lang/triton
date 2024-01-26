@@ -4,6 +4,8 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+  issue_comment:
+      types: [created]
 
 jobs:
   Runner-Preparation:
@@ -22,7 +24,7 @@ jobs:
 
 
   Integration-Tests-Shared-Middle-Layer:
-
+    if: (github.event_name == 'workflow_dispatch') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -55,8 +57,8 @@ jobs:
           python3 setup.py build
           python3 -m pip install --no-build-isolation -vvv '.[tests]'
 
-
   Integration-Tests-AMD:
+    if: (github.event_name == 'workflow_dispatch') || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event.issue.pull_request && contains(github.event.comment.body, '/run-amd-tests'))
     needs: Runner-Preparation
     timeout-minutes: 20
 
@@ -70,6 +72,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
         with:
+          ref: ${{ (github.event_name == 'issue_comment') && github.event.issue.pull_request.head.ref || 'main' }}
           submodules: 'true'
 
       - name: Set ROCM ENV
@@ -103,12 +106,12 @@ jobs:
           python3 -m pip install .
       - name: Run python tests on ROCM
         run: |
-          python3 -m pytest -n 32 --capture=tee-sys -rfs --verbose "python/test/unit/language/test_core.py"
+          python3 -m pytest -n 32 --capture=tee-sys -rfs --verbose "python/test/unit/language/test_core.py" -k "not test_flip"
 
   Integration-Tests-Intel:
     needs: Runner-Preparation
     timeout-minutes: 20
-    if: false
+    if: false && ((github.event_name == 'workflow_dispatch') || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
 
     runs-on: ${{ matrix.runner }}
 

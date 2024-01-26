@@ -93,6 +93,9 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
     for (scf::ForOp forOp : loops) {
       pipelineLoop(forOp, numStages);
     }
+
+    // schedule the waits
+    mlir::triton::insertWaits(getOperation());
   }
 };
 } // anonymous namespace

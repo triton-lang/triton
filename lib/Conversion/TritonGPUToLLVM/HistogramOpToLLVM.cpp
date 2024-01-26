@@ -165,12 +165,13 @@ public:
     // generate the right layout. Currently the warp level histogram generates
     // data in the default blocked layout.
     Value baseSharedMemPtr =
-        getSharedMemoryBase(loc, rewriter, op.getOperation());
+        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
     auto dstType = op.getResult().getType().cast<RankedTensorType>();
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     Attribute dstEncoding = dstType.getEncoding();
-    auto indices = emitIndices(op.getLoc(), rewriter, dstEncoding, dstType);
+    auto indices =
+        emitIndices(op.getLoc(), rewriter, dstEncoding, dstType, true);
     SmallVector<Value> innerDimIndices;
     for (int i = 0; i < indices.size(); ++i)
       innerDimIndices.push_back(indices[i][0]);
@@ -189,9 +190,6 @@ public:
 void mlir::triton::populateHistogramOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation,
-    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     PatternBenefit benefit) {
-  patterns.add<HistogramOpConversion>(typeConverter, allocation, indexCacheInfo,
-                                      benefit);
+  patterns.add<HistogramOpConversion>(typeConverter, benefit);
 }

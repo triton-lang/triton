@@ -1,7 +1,30 @@
 // RUN: triton-opt %s -split-input-file -canonicalize -triton-combine | FileCheck %s
 
+// We don't combine if the dot result is used by more than one op.
+// CHECK-LABEL: @test_combine_dot_add_invalid_pattern
+tt.func @test_combine_dot_add_invalid_pattern() -> (tensor<128x128xf32>, tensor<128x128xf32>) {
+    // CHECK-DAG: %[[d:.*]] = arith.constant dense<3.000000e+00> : tensor<128x128xf32>
+    // CHECK-DAG: %[[e:.*]] = arith.constant dense<4.000000e+00> : tensor<128x128xf32>
+    %a = arith.constant dense<1.0> : tensor<128x128xf32>
+    %b = arith.constant dense<2.0> : tensor<128x128xf32>
+    %zero = arith.constant dense<0.0> : tensor<128x128xf32>
+    %d = arith.constant dense<3.0> : tensor<128x128xf32>
+    %e = arith.constant dense<4.0> : tensor<128x128xf32>
+
+    %dot_out = tt.dot %a, %b, %zero {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<128x128xf32> * tensor<128x128xf32> -> tensor<128x128xf32>
+
+    // CHECK: arith.addf %{{.*}}, %[[d]] : tensor<128x128xf32>
+    %res0 = arith.addf %dot_out, %d : tensor<128x128xf32>
+
+    // CHECK-NEXT: arith.addf %{{.*}}, %[[e]]  : tensor<128x128xf32>
+    %res1 = arith.addf %dot_out, %e : tensor<128x128xf32>
+
+    tt.return %res0, %res1 : tensor<128x128xf32>, tensor<128x128xf32>
+}
+
+
 // CHECK-LABEL: @test_combine_dot_add_pattern
-tt.func @test_combine_dot_add_pattern() -> (tensor<128x128xf32>, tensor<128x128xf32>) {
+tt.func @test_combine_dot_add_pattern() -> (tensor<128x128xf32>) {
     // CHECK-DAG: %[[d:.*]] = arith.constant dense<3.000000e+00> : tensor<128x128xf32>
     // CHECK-DAG: %[[b:.*]] = arith.constant dense<2.000000e+00> : tensor<128x128xf32>
     // CHECK-DAG: %[[a:.*]] = arith.constant dense<1.000000e+00> : tensor<128x128xf32>
@@ -12,13 +35,31 @@ tt.func @test_combine_dot_add_pattern() -> (tensor<128x128xf32>, tensor<128x128x
 
     %dot_out = tt.dot %a, %b, %zero {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<128x128xf32> * tensor<128x128xf32> -> tensor<128x128xf32>
 
-    // CHECK-NEXT: %[[res0:.*]] = tt.dot %[[a]], %[[b]], %[[d]] {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x128xf32> * tensor<128x128xf32> -> tensor<128x128xf32>
-    %res0 = arith.addf %dot_out, %d : tensor<128x128xf32>
+    // CHECK-NEXT: %[[res:.*]] = tt.dot %[[a]], %[[b]], %[[d]] {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x128xf32> * tensor<128x128xf32> -> tensor<128x128xf32>
+    // CHECK-NEXT: tt.return %[[res]] : tensor<128x128xf32>
+    %res = arith.addf %dot_out, %d : tensor<128x128xf32>
 
-    // CHECK-NEXT: %[[res1:.*]] = tt.dot %[[a]], %[[b]], %[[d]] {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x128xf32> * tensor<128x128xf32> -> tensor<128x128xf32>
-    %res1 = arith.addf %d, %dot_out : tensor<128x128xf32>
+    tt.return %res : tensor<128x128xf32>
+}
 
-    tt.return %res0, %res1 : tensor<128x128xf32>, tensor<128x128xf32>
+
+// CHECK-LABEL: @test_combine_dot_add_rev_pattern
+tt.func @test_combine_dot_add_rev_pattern() -> (tensor<128x128xf32>) {
+    // CHECK-DAG: %[[d:.*]] = arith.constant dense<3.000000e+00> : tensor<128x128xf32>
+    // CHECK-DAG: %[[b:.*]] = arith.constant dense<2.000000e+00> : tensor<128x128xf32>
+    // CHECK-DAG: %[[a:.*]] = arith.constant dense<1.000000e+00> : tensor<128x128xf32>
+    %a = arith.constant dense<1.0> : tensor<128x128xf32>
+    %b = arith.constant dense<2.0> : tensor<128x128xf32>
+    %zero = arith.constant dense<0.0> : tensor<128x128xf32>
+    %d = arith.constant dense<3.0> : tensor<128x128xf32>
+
+    %dot_out = tt.dot %a, %b, %zero {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<128x128xf32> * tensor<128x128xf32> -> tensor<128x128xf32>
+
+    // CHECK-NEXT: %[[res:.*]] = tt.dot %[[a]], %[[b]], %[[d]] {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x128xf32> * tensor<128x128xf32> -> tensor<128x128xf32>
+    // CHECK-NEXT: tt.return %[[res]] : tensor<128x128xf32>
+    %res = arith.addf %d, %dot_out : tensor<128x128xf32>
+
+    tt.return %res : tensor<128x128xf32>
 }
 
 
@@ -30,12 +71,12 @@ tt.func @test_combine_addptr_pattern(%base: !tt.ptr<f32>) -> tensor<8x!tt.ptr<f3
     // 10 + 15 = 25
     // COM: CHECK-NEXT: %[[cst:.*]] = arith.constant dense<25> : tensor<8xi32>
 
-    %base_ = tt.broadcast %base : (!tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>>
+    %base_ = tt.splat %base : (!tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>>
 
-    // COM: CHECK-NEXT: %[[tmp0:.*]] = tt.broadcast %{{.*}} : (!tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>>
+    // COM: CHECK-NEXT: %[[tmp0:.*]] = tt.splat %{{.*}} : (!tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>>
 
-    %idx0 = tt.broadcast %off0 : (i32) -> tensor<8xi32>
-    %idx1 = tt.broadcast %off1 : (i32) -> tensor<8xi32>
+    %idx0 = tt.splat %off0 : (i32) -> tensor<8xi32>
+    %idx1 = tt.splat %off1 : (i32) -> tensor<8xi32>
 
     // COM: CHECK-NEXT: %1 = tt.addptr %[[tmp0]], %[[cst]] : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
     %ptr0 = tt.addptr %base_, %idx0 : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
@@ -47,7 +88,7 @@ tt.func @test_combine_addptr_pattern(%base: !tt.ptr<f32>) -> tensor<8x!tt.ptr<f3
 
 // CHECK-LABEL: @test_combine_select_masked_load_pattern
 tt.func @test_combine_select_masked_load_pattern(%ptr: tensor<8x!tt.ptr<f32>>, %cond: i1) -> (tensor<8xf32>, tensor<8xf32>) {
-    %mask = tt.broadcast %cond : (i1) -> tensor<8xi1>
+    %mask = tt.splat %cond : (i1) -> tensor<8xi1>
     %false_val = arith.constant dense<0.0> : tensor<8xf32>
 
     // CHECK: %[[res1:.*]] = tt.load %{{.*}}, %{{.*}}, %{{.*}} {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<8xf32>
@@ -76,7 +117,7 @@ tt.func @test_combine_select_masked_load_fail_pattern(%ptr: tensor<8x!tt.ptr<f32
     %1 = arith.select %cond0, %real_load0, %false_val : tensor<8xf32>
 
     // Case 3: condition of "broadcast" is not the same as the condition of "select".  Select should not be canonicalized.
-    %cond0_ = tt.broadcast %cond0 : (i1) -> tensor<8xi1>
+    %cond0_ = tt.splat %cond0 : (i1) -> tensor<8xi1>
     %real_load1 = tt.load %ptr, %cond0_, %false_val {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<8xf32>
     // CHECK: %{{.*}} = arith.select %{{.*}}, %{{.*}}, %{{.*}} : tensor<8xf32>
     %2 = arith.select %cond1, %real_load1, %false_val : tensor<8xf32>
