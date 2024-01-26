@@ -222,7 +222,9 @@ private:
                 i32_val(multiDimCTAInRepId[1] * shapePerCTATile[1]));
       } else if (mmaLayout.isAmpere()) {
         if (rank == 3)
-          multiDimOffset[0] = multiDimWarpId[0];
+          multiDimOffset[0] =
+              add(i32_val(multiDimCTAInRepId[0] * warpsPerCTA[0]),
+                  multiDimWarpId[0]);
         multiDimOffset[rank - 2] = elemId < 2 ? mmaRowIdx[0] : mmaRowIdx[1];
         multiDimOffset[rank - 1] =
             elemId % 2 == 0 ? mmaColIdx[0] : mmaColIdx[1];

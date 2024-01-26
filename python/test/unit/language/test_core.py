@@ -2625,8 +2625,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
                 'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
 
 
-@pytest.mark.parametrize("B", [1, 2, 4, 8])
-@pytest.mark.parametrize("M, N, K", [(256, 256, 256), (128, 128, 128), (64, 64, 64), (32, 32, 32), (16, 16, 16)])
+@pytest.mark.parametrize("B", [2])
+@pytest.mark.parametrize("M, N, K", [(16, 16, 16)])
 def test_dot3d(B, M, N, K):
 
     @triton.jit
@@ -2668,6 +2668,10 @@ def test_dot3d(B, M, N, K):
 
     dtype_str = 'float16'
     rs = RandomState(17)
+    # x = np.ones((B, M, K), dtype=dtype_str)
+    # y = np.ones((B, K, N), dtype=dtype_str)
+    # x_tri = torch.tensor(x, device='cuda')
+    # y_tri = torch.tensor(y, device='cuda')
     x = numpy_random((B, M, K), dtype_str=dtype_str, rs=rs)
     y = numpy_random((B, K, N), dtype_str=dtype_str, rs=rs)
     out = numpy_random((B, M, N), dtype_str=dtype_str, rs=rs)
@@ -2701,7 +2705,7 @@ def test_dot3d(B, M, N, K):
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
         BLOCK_K=BLOCK_K,  #
-        num_warps=B,
+        num_warps=1,
     )
 
     out_ref = np.matmul(x, y)

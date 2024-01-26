@@ -3,7 +3,7 @@
 
 using namespace mlir;
 
-using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
+using ValueTable = std::map<std::tuple<unsigned, unsigned, unsigned>, Value>;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
@@ -48,7 +48,7 @@ public:
   SmallVector<Value> computeLdsMatOffs(Value lane, Value cSwizzleOffset);
 
   // Load 4 matrices and returns 4 vec<2> elements.
-  std::tuple<Value, Value, Value, Value> loadX4(int mat0, int mat1,
+  std::tuple<Value, Value, Value, Value> loadX4(int batch, int mat0, int mat1,
                                                 ArrayRef<Value> ptrs,
                                                 Type matTy,
                                                 Type shemPtrTy) const;
@@ -291,8 +291,8 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value lane,
 }
 
 std::tuple<Value, Value, Value, Value>
-MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> ptrs, Type matTy,
-                           Type shemTy) const {
+MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
+                           Type matTy, Type shemTy) const {
   assert(mat0 % 2 == 0 && mat1 % 2 == 0 && "smem matrix load must be aligned");
   int matIdx[3] = {0, mat0, mat1};
 
@@ -331,6 +331,8 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> ptrs, Type matTy,
     Value stridedOffset =
         mul(i32_val(matIdx[order[1]] * stridedLoadMatOffset * stridedMatShape),
             stridedSmemOffset);
+    if (batch != 0)
+      stridedOffset = add(stridedOffset, i32_val(batch * 16 * 16));
     Value readPtr = gep(ptr_ty(ctx, 3), shemTy, ptr, stridedOffset);
 
     PTXBuilder builder;
@@ -482,18 +484,18 @@ Type getSharedMemTy(Type argType) {
 }
 
 Value composeValuesToDotOperandLayoutStruct(
-    const ValueTable &vals, int n0, int n1,
+    const ValueTable &vals, int batch, int n0, int n1,
     TritonGPUToLLVMTypeConverter *typeConverter, Location loc,
     ConversionPatternRewriter &rewriter) {
   std::vector<Value> elems;
-  for (int m = 0; m < n0; ++m)
-    for (int k = 0; k < n1; ++k) {
-      elems.push_back(vals.at({2 * m, 2 * k}));
-      elems.push_back(vals.at({2 * m, 2 * k + 1}));
-      elems.push_back(vals.at({2 * m + 1, 2 * k}));
-      elems.push_back(vals.at({2 * m + 1, 2 * k + 1}));
-    }
-
+  for (int b = 0; b < batch; ++b)
+    for (int m = 0; m < n0; ++m)
+      for (int k = 0; k < n1; ++k) {
+        elems.push_back(vals.at({b, 2 * m, 2 * k}));
+        elems.push_back(vals.at({b, 2 * m, 2 * k + 1}));
+        elems.push_back(vals.at({b, 2 * m + 1, 2 * k}));
+        elems.push_back(vals.at({b, 2 * m + 1, 2 * k + 1}));
+      }
   assert(!elems.empty());
 
   Type elemTy = elems[0].getType();
@@ -504,7 +506,7 @@ Value composeValuesToDotOperandLayoutStruct(
   return result;
 }
 
-std::function<void(int, int)>
+std::function<void(int, int, int)>
 getLoadMatrixFn(RankedTensorType tensorTy, const SharedMemoryObject &smemObj,
                 NvidiaMmaEncodingAttr mmaLayout, int warpsPerTile,
                 uint32_t kOrder, int kWidth, SmallVector<int> instrShape,
@@ -529,7 +531,7 @@ getLoadMatrixFn(RankedTensorType tensorTy, const SharedMemoryObject &smemObj,
       std::max<int>(shapePerCTA[2] / mmaLayout.getWarpsPerCTA()[2], 8);
 
   // (a, b) is the coordinate.
-  auto load = [=, &rewriter, &vals](int a, int b) {
+  auto load = [=, &rewriter, &vals](int batch, int a, int b) {
     MMA16816SmemLoader loader(
         nPerWarp, warpsPerTile, sharedLayout.getOrder(),
         mmaLayout.getWarpsPerCTA(), kOrder, kWidth, smemObj.strides,
@@ -550,8 +552,8 @@ getLoadMatrixFn(RankedTensorType tensorTy, const SharedMemoryObject &smemObj,
     auto matTy = LLVM::LLVMStructType::getLiteral(eltTy.getContext(),
                                                   SmallVector<Type>(4, i32_ty));
     auto [ha0, ha1, ha2, ha3] = loader.loadX4(
-        (kOrder == 2) ? a : b /*mat0*/, (kOrder == 2) ? b : a /*mat1*/, ptrs,
-        matTy, getSharedMemTy(eltTy));
+        batch, (kOrder == 2) ? a : b /*mat0*/, (kOrder == 2) ? b : a /*mat1*/,
+        ptrs, matTy, getSharedMemTy(eltTy));
     if (!isA)
       std::swap(ha1, ha2);
     // the following is incorrect
@@ -561,10 +563,10 @@ getLoadMatrixFn(RankedTensorType tensorTy, const SharedMemoryObject &smemObj,
     // if(isA)
     //   std::swap(ha1, ha2);
     // update user-provided values in-place
-    vals[{a, b}] = ha0;
-    vals[{a + 1, b}] = ha1;
-    vals[{a, b + 1}] = ha2;
-    vals[{a + 1, b + 1}] = ha3;
+    vals[{batch, a, b}] = ha0;
+    vals[{batch, a + 1, b}] = ha1;
+    vals[{batch, a, b + 1}] = ha2;
+    vals[{batch, a + 1, b + 1}] = ha3;
   };
 
   return load;
@@ -603,7 +605,7 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
     warpsPerTile = std::min<int>(warpsPerCTA[1], shapePerCTA[1] / 16);
   else
     warpsPerTile = std::min<int>(warpsPerCTA[2], shapePerCTA[2] / 16);
-  std::function<void(int, int)> loadFn;
+  std::function<void(int, int, int)> loadFn;
   if (isA)
     loadFn = getLoadMatrixFn(
         tensorTy, smemObj, mmaLayout, warpsPerTile /*warpsPerTile*/,
@@ -622,15 +624,17 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
         rewriter /*rewriter*/, loc /*loc*/);
 
   // Perform loading.
-  int numRepOuter = isA ? numRep[0] : std::max<int>(numRep[1] / 2, 1);
-  int numRepK = isA ? numRep[1] : numRep[0];
-  for (int m = 0; m < numRepOuter; ++m)
-    for (int k = 0; k < numRepK; ++k)
-      loadFn(2 * m, 2 * k);
+  int numRepBatch = numRep[0];
+  int numRepOuter = isA ? numRep[1] : std::max<int>(numRep[2] / 2, 1);
+  int numRepK = isA ? numRep[2] : numRep[1];
+  for (int b = 0; b < numRepBatch; ++b)
+    for (int m = 0; m < numRepOuter; ++m)
+      for (int k = 0; k < numRepK; ++k)
+        loadFn(b, 2 * m, 2 * k);
 
   // Format the values to LLVM::Struct to passing to mma codegen.
-  return composeValuesToDotOperandLayoutStruct(vals, numRepOuter, numRepK,
-                                               typeConverter, loc, rewriter);
+  return composeValuesToDotOperandLayoutStruct(
+      vals, numRepBatch, numRepOuter, numRepK, typeConverter, loc, rewriter);
 }
 
 template <typename T>
