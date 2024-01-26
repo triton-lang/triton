@@ -67,10 +67,10 @@ class BackendInstaller:
     def copy(active):
         return [BackendInstaller.prepare(backend) for backend in active]
 
-    # Copy all external backends provided by the `TRITON_PLUGIN_DIRS` env var.
+    # Copy all external plugins provided by the `TRITON_PLUGIN_DIRS` env var.
     # TRITON_PLUGIN_DIRS is a semicolon-separated list of paths to the plugins.
-    # There must be no trailing forward slash in the paths, and the folder names
-    # must be valid python identifiders.
+    # There must be no trailing forward slash in the paths, and the last folder
+    # names must be valid python identifiders.
     @staticmethod
     def copy_externals():
 
