@@ -35,7 +35,7 @@ class BackendInstaller:
 
     @staticmethod
     def prepare(backend_name: str, backend_src_dir: str = None, is_external: bool = False):
-        # initialize submodule if there is one for in-tree backends
+        # Initialize submodule if there is one for in-tree backends.
         if not is_external:
             root_dir = os.path.join(os.pardir, "third_party")
             if backend_name not in os.listdir(root_dir):
@@ -63,24 +63,21 @@ class BackendInstaller:
         return Backend(name=backend_name, package_data=package_data, src_dir=backend_src_dir, backend_dir=backend_dir,
                        install_dir=install_dir, is_external=is_external)
 
-    # Copy all in-tree backends under triton/third_party
+    # Copy all in-tree backends under triton/third_party.
+    @staticmethod
     def copy(active):
         return [BackendInstaller.prepare(backend) for backend in active]
 
     # Copy all external plugins provided by the `TRITON_PLUGIN_DIRS` env var.
     # TRITON_PLUGIN_DIRS is a semicolon-separated list of paths to the plugins.
-    # There must be no trailing forward slash in the paths, and the last folder
-    # names must be valid python identifiders.
+    # The last components of the paths must be valid python identifiders.
     @staticmethod
     def copy_externals():
 
-        def get_backend_name(dir):
-            from pathlib import Path
-            if dir.strip()[-1] == '/':
-                raise Exception(f"${dir} must not end with a forward slash")
+        def get_backend_name(dir: str):
             name = Path(dir).name
             if not name.isidentifier():
-                raise Exception(f"{dir} must be a valid python identifier")
+                raise Exception(f"{name} must be a valid python identifier")
             return name
 
         backend_dirs = os.getenv("TRITON_PLUGIN_DIRS")
