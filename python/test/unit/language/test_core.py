@@ -2523,12 +2523,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
     if is_hip():
         if (M, N, K) in [(64, 128, 128)]:
             pytest.skip(f"test_dot{(M, N, K)} not supported on HIP: memory out of resource.")
-        if (M, N, K, num_warps) in [(128, 256, 32, 8), (128, 128, 64, 4)]:
-            pytest.skip(f"test_dot{(M, N, K)} not supported on HIP. Reduce Warp to work")
-        if M == 16 or N == 16 or K == 16:
-            pytest.skip(f"test_dot{(M, N, K)} segfaults on HIP")
-        if epilogue == "softmax":
-            pytest.skip(f"test_dot{epilogue} segfaults on HIP")
 
     torch.backends.cuda.matmul.allow_tf32 = allow_tf32
 
