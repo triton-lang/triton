@@ -1578,18 +1578,22 @@ int NvidiaMmaEncodingAttr::getMMAv1Vec(int opIdx) const {
 SmallVector<int64_t> NvidiaMmaEncodingAttr::getMMAv2Rep(ArrayRef<int64_t> shape,
                                                         int bitwidth,
                                                         int opIdx) const {
-  SmallVector<int> shapePerWarp = {16, 8, 4 * 64 / bitwidth};
-  auto warpsPerCTA = getWarpsPerCTA();
-  assert(isAmpere());
   auto rank = shape.size();
+  auto warpsPerCTA = getWarpsPerCTA();
+  int numRepBatch = rank == 3 ? shape[0] / warpsPerCTA[0] : 1;
+  SmallVector<int> shapePerWarp = {numRepBatch, 16, 8, 4 * 64 / bitwidth};
+  assert(isAmpere());
+
   if (opIdx == 0)
-    return {std::max<int64_t>(1, shape[rank - 2] /
-                                     (shapePerWarp[0] * warpsPerCTA[rank - 2])),
-            std::max<int64_t>(1, shape[rank - 1] / shapePerWarp[2])};
+    return {numRepBatch,
+            std::max<int64_t>(1, shape[rank - 2] /
+                                     (shapePerWarp[1] * warpsPerCTA[rank - 2])),
+            std::max<int64_t>(1, shape[rank - 1] / shapePerWarp[3])};
   else {
     assert(opIdx == 1);
-    return {std::max<int64_t>(1, shape[rank - 2] / shapePerWarp[2]),
-            std::max<int64_t>(1, shape[rank - 1] / (shapePerWarp[1] *
+    return {numRepBatch,
+            std::max<int64_t>(1, shape[rank - 2] / shapePerWarp[3]),
+            std::max<int64_t>(1, shape[rank - 1] / (shapePerWarp[2] *
                                                     warpsPerCTA[rank - 1]))};
   }
 }
@@ -1607,9 +1611,9 @@ unsigned NvidiaMmaEncodingAttr::getTotalElemsPerThreadForOperands(
   if (isAmpere()) {
     auto rep = getMMAv2Rep(shapePerCTA, eltTy.getIntOrFloatBitWidth(), opIdx);
     if (opIdx == 0)
-      return 4 * rep[0] * rep[1];
+      return 4 * rep[0] * rep[1] * rep[2];
     if (opIdx == 1)
-      return 4 * rep[0] * std::max<int>(rep[1] / 2, 1);
+      return 4 * rep[0] * rep[1] * std::max<int>(rep[2] / 2, 1);
   }
   // V100
   if (isVolta()) {
@@ -1678,10 +1682,17 @@ NvidiaMmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
                                                         int opIdx) const {
   assert(isAmpere() && "mmaLayout version = 1 is not implemented yet");
   auto parentShapePerCTATile = getShapePerCTATile(shape);
+  auto rank = parentShapePerCTATile.size();
   if (opIdx == 0) {
-    return {parentShapePerCTATile[0], 16};
+    if (rank == 2)
+      return {parentShapePerCTATile[rank - 2], 16};
+    else
+      return {parentShapePerCTATile[0], parentShapePerCTATile[rank - 2], 16};
   } else if (opIdx == 1) {
-    return {16, parentShapePerCTATile[1]};
+    if (rank == 2)
+      return {16, parentShapePerCTATile[rank - 1]};
+    else
+      return {parentShapePerCTATile[0], 16, parentShapePerCTATile[rank - 1]};
   } else {
     llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
   }
