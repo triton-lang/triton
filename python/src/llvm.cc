@@ -162,12 +162,12 @@ void init_triton_llvm(py::module &&m) {
     CGSCCAnalysisManager cgam;
     ModuleAnalysisManager mam;
 
-    PassInstrumentationCallbacks *instr_cb = nullptr;
-    PassInstrumentationCallbacks PIC;
-    StandardInstrumentations SI(mod->getContext(), /*DebugLogging*/ true);
+    PassInstrumentationCallbacks *instrCbPtr = nullptr;
+    PassInstrumentationCallbacks passInstrCb;
+    StandardInstrumentations standardInstr(mod->getContext(), /*DebugLogging*/ true);
     if (triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
-      SI.registerCallbacks(PIC, &mam);
-      instr_cb = &PIC;
+      standardInstr.registerCallbacks(passInstrCb, &mam);
+      instrCbPtr = &passInstrCb;
     }
 
     PipelineTuningOptions tuningOptions;
@@ -182,7 +182,7 @@ void init_triton_llvm(py::module &&m) {
     // some scheduling solution.
     tuningOptions.SLPVectorization = true;
 
-    PassBuilder pb(nullptr /*targetMachine*/, tuningOptions, std::nullopt, instr_cb);
+    PassBuilder pb(nullptr /*targetMachine*/, tuningOptions, std::nullopt, instrCbPtr);
 
     pb.registerModuleAnalyses(mam);
     pb.registerCGSCCAnalyses(cgam);
