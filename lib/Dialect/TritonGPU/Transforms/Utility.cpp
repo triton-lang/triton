@@ -369,13 +369,6 @@ std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
   if (auto trans = dyn_cast<triton::TransOp>(op))
     return inferSrcEncoding(trans, encoding);
 
-  // We have to return `encoding` for ConvertLayoutOp or we get spurrious
-  // conversion ops in the final compiled result.  I think this is due to a
-  // quirk in the impl of RemoveLayoutConversions.  I suppose ConvertLayoutOp
-  // *can* accept the same src and dst encodings, though why would you want to?
-  if (isa<triton::gpu::ConvertLayoutOp>(op))
-    return encoding;
-
   return std::nullopt;
 }
 
@@ -393,11 +386,6 @@ std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
     return inferDstEncoding(interleave, encoding);
   if (auto trans = dyn_cast<triton::TransOp>(op))
     return inferDstEncoding(trans, encoding);
-
-  // As in inferSrcEncoding, we have to return `encoding` for ConvertLayoutOp.
-  if (isa<triton::gpu::ConvertLayoutOp>(op))
-    return encoding;
-
   return std::nullopt;
 }
 
