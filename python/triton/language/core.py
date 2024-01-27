@@ -941,12 +941,28 @@ def broadcast_to(input, shape, _builder=None):
 @builtin
 def trans(input, _builder=None):
     """
-    Returns a transposed tensor.
+    Transposes a 2D tensor.
 
     :param input: The input tensor.
     :type input:
     """
-    return semantic.trans(input, _builder)
+    if len(input.shape) != 2:
+        raise ValueError("Only 2D tensors can be transposed")
+    return semantic.permute(input, (1, 0), _builder)
+
+
+@builtin
+def permute(input, dims, _builder=None):
+    """
+    Permutes the dimensions of a tensor.
+
+    :param input: The input tensor.
+    :type input:
+    :param dims: The desired ordering of dimensions.  For example,
+        :code:`(2, 1, 0)` reverses the order dims in a a 3D tensor.
+    :type dims: Tuple[int]
+    """
+    return semantic.permute(input, dims, _builder)
 
 
 @builtin
