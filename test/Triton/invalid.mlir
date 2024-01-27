@@ -1,5 +1,23 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+tt.func public @fn(%arg0: tensor<128xf32>) {
+    // expected-error @+1 {{packed_element}}
+    %a = tt.elementwise_inline_asm ""
+      {constraints = "=r,r", packed_element=3:i32, pure=true} %arg0 : tensor<128xf32> -> tensor<128xf32>
+    tt.return
+}
+
+// -----
+
+tt.func public @fn(%arg0: tensor<128xf32>, %arg1: tensor<64xf32>) {
+    // expected-error @+1 {{same shape}}
+    %a = tt.elementwise_inline_asm ""
+      {constraints = "=r,r,r", packed_element=1:i32, pure=true}
+      %arg0, %arg1: tensor<128xf32>, tensor<64xf32> -> tensor<128xf32>
+    tt.return
+}
+// -----
+
 tt.func public @reshape_different_num_elements(%arg0: tensor<32x128xf16>) {
     // expected-error @+1 {{number of src and dst elements of reshape must be the same}}
     %a = tt.reshape %arg0 {allow_reorder = false} : tensor<32x128xf16> -> tensor<64x32xf16>
