@@ -1098,6 +1098,20 @@ void ElementwiseInlineAsmOp::getEffects(
                        SideEffects::DefaultResource::get());
 }
 
+LogicalResult ElementwiseInlineAsmOp::verify() {
+  if (getNumOperands() >= 1) {
+    size_t numInputElems =
+        getOperand(0).getType().cast<RankedTensorType>().getNumElements();
+    if (numInputElems % this->getPackedElement() != 0) {
+      return emitError("number of input elements ")
+             << numInputElems
+             << " must be a multiple of the op's packed_element attribute, "
+             << getPackedElement();
+    }
+  }
+  return success();
+}
+
 // -- ExternElementwiseOp --
 void ExternElementwiseOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>

@@ -604,9 +604,11 @@ def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
 //
 // ElementwiseInlineAsm Op
 //
-def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [Elementwise,
-                                                                 SameOperandsAndResultEncoding,
-                                                                 DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [
+  Elementwise,
+  SameOperandsAndResultEncoding,
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+]> {
   let summary = "inline assembly applying an elementwise operation to a group of packed elements.";
   let description = [{
     Runs an inline asm block to generate one or more tensors.
@@ -621,6 +623,8 @@ def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [Elementwise,
   let assemblyFormat = [{
     $asm_string attr-dict ($args^ `:` type($args))? `->` type($result)
   }];
+
+  let hasVerifier = 1;
 }
 
 //
