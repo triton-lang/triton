@@ -247,9 +247,11 @@
 <li class="toctree-l4"><a class="reference internal" href="#id75">Operands:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#tt-trans-triton-transop"><code class="docutils literal notranslate"><span class="pre">tt.trans</span></code> (triton::TransOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id76">Operands:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id77">Results:</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#tt-trans-triton-transop"><code class="docutils literal notranslate"><span class="pre">tt.trans</span></code> (triton::TransOp)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#implementation-note-on-encodings">Implementation note on encodings:</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id76">Attributes:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id77">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id78">Results:</a></li>
 </ul>
 </li>
 </ul>
@@ -732,20 +734,14 @@ If the condition is false, the message is printed, and the program is aborted.</
 </section>
 <section id="tt-broadcast-triton-broadcastop">
 <h2><code class="docutils literal notranslate"><span class="pre">tt.broadcast</span></code> (triton::BroadcastOp)<a class="headerlink" href="#tt-broadcast-triton-broadcastop" title="Permalink to this heading">¶</a></h2>
-<p><em>Broadcast a tensor or a scalar</em></p>
+<p><em>Broadcast a tensor</em></p>
 <p>Syntax:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.broadcast` $src attr-dict `:` functional-type(operands, results)
 </pre></div>
 </div>
-<p>If given a tensor, broadcast changes one or more dimensions with size 1 to
-a new size, e.g. tensor&lt;1x32x1xf32&gt; -&gt; tensor&lt;2x32x4xf32&gt;.</p>
-<p>If given a scalar, broadcast converts it to a tensor with arbitrary size,
-e.g. f32 -&gt; tensor&lt;2x4xf32&gt; (identical to tt.splat).</p>
-<p>Note that many other Triton ops only accept tensors, so it’s common to do
-op.getType().cast<RankedTensorType>.  Don’t make that mistake if op is a
-broadcast!</p>
-<p>TODO(jlebar): Change broadcast so it only works on tensors – splat is
-sufficient for scalars.</p>
+<p>For a given tensor, broadcast changes one or more dimensions with size 1
+to a new size, e.g. tensor&lt;1x32x1xf32&gt; -&gt; tensor&lt;2x32x4xf32&gt;.  You cannot
+change the size of a non-1 dimension.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultElementType</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
@@ -759,7 +755,7 @@ sufficient for scalars.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
-<td><p>floating-point or tensor of floating-point values or integer or tensor of integer values or ptr or tensor of ptr values or ptr</p></td>
+<td><p>tensor of floating-point values or tensor of integer values or tensor of ptr values</p></td>
 </tr>
 </tbody>
 </table>
@@ -774,7 +770,7 @@ sufficient for scalars.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>floating-point or tensor of floating-point values or integer or tensor of integer values or ptr or tensor of ptr values or ptr</p></td>
+<td><p>tensor of floating-point values or tensor of integer values or tensor of ptr values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1858,16 +1854,44 @@ The compiler is still free to change it for better performance.</p>
 </section>
 <section id="tt-trans-triton-transop">
 <h2><code class="docutils literal notranslate"><span class="pre">tt.trans</span></code> (triton::TransOp)<a class="headerlink" href="#tt-trans-triton-transop" title="Permalink to this heading">¶</a></h2>
-<p><em>Transpose a tensor</em></p>
+<p><em>Rearrange the dimensions of a tensor</em></p>
 <p>Syntax:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.trans` $src attr-dict `:` functional-type(operands, results)
 </pre></div>
 </div>
+<p>For example, given a tensor x with shape [1,2,4], transpose(x) with
+order=[2,0,1] rearranges the tensor to have shape [4,1,2].</p>
+<p>Although this op is called “trans”, it implements both tl.trans() and
+tl.permute().  (“permute” might be a better name, but it’s called “trans”
+because originally it only supported 2D tensors.)</p>
+</section>
+<section id="implementation-note-on-encodings">
+<h2>Implementation note on encodings:<a class="headerlink" href="#implementation-note-on-encodings" title="Permalink to this heading">¶</a></h2>
+<p>In the TritonGPU dialect (and probably others), an encoding is chosen for
+this op’s output so it’s a nop from the perspective of code generation.</p>
+<p>For example, suppose tensor x has an encoding such that GPU thread [i,j,k]
+has a register containing element [i,j,k] of the tensor.  Now we transpose
+x with order [2,1,0], i.e. we reverse the order of its dimensions.  In
+TritonGPU, we will choose a layout for the output of the transpose so that
+GPU thread [i,j,k] has element [k,j,i] of transpose(x).  But this is the
+same element it had before!  All we’ve done is “rename” the element that
+thread [i,j,k] has.</p>
+<p>The “real” transpose – i.e. moving data between GPU threads – occurs in
+convertLayout ops that appear before and/or after the operation.</p>
+<p>We do this so that you can chain multiple data-movement ops (e.g.
+transpose+reshape+concat) without going to shared memory after each one.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultElementType</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id76">
-<h3>Operands:<a class="headerlink" href="#id76" title="Permalink to this heading">¶</a></h3>
+<h3>Attributes:<a class="headerlink" href="#id76" title="Permalink to this heading">¶</a></h3>
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>order</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
+</table>
+</section>
+<section id="id77">
+<h3>Operands:<a class="headerlink" href="#id77" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -1881,8 +1905,8 @@ The compiler is still free to change it for better performance.</p>
 </tbody>
 </table>
 </section>
-<section id="id77">
-<h3>Results:<a class="headerlink" href="#id77" title="Permalink to this heading">¶</a></h3>
+<section id="id78">
+<h3>Results:<a class="headerlink" href="#id78" title="Permalink to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
