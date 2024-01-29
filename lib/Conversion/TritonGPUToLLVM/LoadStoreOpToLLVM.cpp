@@ -37,6 +37,78 @@ static CUtensorMapDataType getCUtensorMapDataType(Type ty) {
 }
 
 namespace {
+
+Value getMask(Type valueTy, ConversionPatternRewriter &rewriter, Location loc) {
+  auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
+  Value mask = int_val(1, 1);
+  auto tid = tid_val();
+  auto clusterCTAId = getClusterCTAId(rewriter, loc);
+  if (tensorTy) {
+    auto layout = tensorTy.getEncoding();
+    auto shape = tensorTy.getShape();
+    unsigned rank = shape.size();
+    auto sizePerThread = triton::gpu::getSizePerThread(layout);
+    auto threadsPerWarp = triton::gpu::getThreadsPerWarp(layout);
+    auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
+    auto order = triton::gpu::getOrder(layout);
+    auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout, shape);
+    Value warpSize = i32_val(32);
+    Value laneId = urem(tid, warpSize);
+    Value warpId = udiv(tid, warpSize);
+    SmallVector<Value> multiDimWarpId =
+        delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+    SmallVector<Value> multiDimThreadId =
+        delinearize(rewriter, loc, laneId, threadsPerWarp, order);
+    for (unsigned dim = 0; dim < rank; ++dim) {
+      // if there is no data replication across threads on this dimension
+      if (shape[dim] >= shapePerCTATile[dim])
+        continue;
+      // Otherwise, we need to mask threads that will replicate data on this
+      // dimension. Calculate the thread index on this dimension for the CTA
+      Value threadDim =
+          add(mul(multiDimWarpId[dim], i32_val(threadsPerWarp[dim])),
+              multiDimThreadId[dim]);
+      mask = and_(mask, icmp_slt(mul(threadDim, i32_val(sizePerThread[dim])),
+                                 i32_val(shape[dim])));
+    }
+    // Do not write duplicated data when multicast is enabled
+    if (triton::gpu::getNumCTAs(layout) > 1) {
+      auto _0 = i32_val(0);
+      auto CTAsPerCGA = triton::gpu::getCTAsPerCGA(layout);
+      auto CTASplitNum = triton::gpu::getCTASplitNum(layout);
+      auto CTAOrder = triton::gpu::getCTAOrder(layout);
+
+      auto multiDimClusterCTAId =
+          delinearize(rewriter, loc, clusterCTAId, CTAsPerCGA, CTAOrder);
+
+      for (unsigned dim = 0; dim < rank; ++dim) {
+        // Skip when multicast is not enabled in this dimension
+        if (CTAsPerCGA[dim] == CTASplitNum[dim])
+          continue;
+        // This wrapping rule must be consistent with emitCTAOffsetForLayout
+        unsigned splitNum = std::min<unsigned>(shape[dim], CTASplitNum[dim]);
+        Value repId = udiv(multiDimClusterCTAId[dim], i32_val(splitNum));
+        // Consider the example where CTAsPerCGA = [4] and CTASplitNum = [2]:
+        //     CTA0 and CTA2 holds data of block0,
+        //     CTA1 and CTA3 holds data of block1.
+        // Only CTA0 and CTA1 are expected to write while CTA2 and CTA3 should
+        // be masked. We add the following mask:
+        //     multiDimClusterCTAId[dim] / splitNum == 0
+        // Actually in all existing cases of multicast, splitNum is always 1.
+        // The mask is equivalent to:
+        //     multiDimClusterCTAId[dim] == 0
+        mask = and_(mask, icmp_eq(repId, _0));
+      }
+    }
+  } else {
+    // If the tensor is not ranked, then it is a scalar and only thread 0 of
+    // CTA0 can write
+    mask = and_(mask, icmp_eq(clusterCTAId, i32_val(0)));
+    mask = and_(mask, icmp_eq(tid, i32_val(0)));
+  }
+  return mask;
+}
+
 // Contains some helper functions for both Load and Store conversions.
 struct LoadStoreConversionBase {
   explicit LoadStoreConversionBase(ModuleAxisInfoAnalysis &axisAnalysisPass)
@@ -107,13 +179,13 @@ struct LoadOpConversion
       vec = std::min<size_t>(vec, getMaskAlignment(mask));
 
     // Get the LLVM values for pointers
-    auto ptrElems = getTypeConverter()->unpackLLElements(loc, llPtr, rewriter);
+    auto ptrElems = unpackLLElements(loc, llPtr, rewriter);
     assert(ptrElems.size() == numElems);
 
     // Get the LLVM values for mask
     SmallVector<Value> maskElems;
     if (llMask) {
-      maskElems = getTypeConverter()->unpackLLElements(loc, llMask, rewriter);
+      maskElems = unpackLLElements(loc, llMask, rewriter);
       assert(maskElems.size() == numElems);
     }
 
@@ -131,7 +203,7 @@ struct LoadOpConversion
     }
     SmallVector<Value> otherElems;
     if (other) {
-      otherElems = getTypeConverter()->unpackLLElements(loc, llOther, rewriter);
+      otherElems = unpackLLElements(loc, llOther, rewriter);
     }
 
     // vectorized iteration through all the pointer/mask/other elements
@@ -306,16 +378,15 @@ struct StoreOpConversion
     unsigned vec = getVectorSize(ptr);
     unsigned elemsPerThread = getTotalElemsPerThread(ptr.getType());
 
-    auto ptrElems = getTypeConverter()->unpackLLElements(loc, llPtr, rewriter);
-    auto valueElems =
-        getTypeConverter()->unpackLLElements(loc, llValue, rewriter);
+    auto ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    auto valueElems = unpackLLElements(loc, llValue, rewriter);
     assert(ptrElems.size() == valueElems.size());
 
     // Determine the vectorization size
     SmallVector<Value> maskElems;
     if (llMask) {
       Value mask = op.getMask();
-      maskElems = getTypeConverter()->unpackLLElements(loc, llMask, rewriter);
+      maskElems = unpackLLElements(loc, llMask, rewriter);
       assert(valueElems.size() == maskElems.size());
 
       unsigned maskAlign = getMaskAlignment(mask);
@@ -562,7 +633,7 @@ struct StoreAsyncTMAOpConversion : public ConvertTritonGPUOpToLLVMPattern<
     auto threadId = getThreadId(rewriter, loc);
     Value pred = icmp_eq(threadId, i32_val(0));
 
-    auto llCoord = getTypeConverter()->unpackLLElements(loc, llDst, rewriter);
+    auto llCoord = unpackLLElements(loc, llDst, rewriter);
     uint32_t boxStride = std::accumulate(boxDims.begin(), boxDims.end(), 1,
                                          std::multiplies<uint32_t>());
 
@@ -761,7 +832,7 @@ struct StoreAsyncTMAOpConversion : public ConvertTritonGPUOpToLLVMPattern<
     auto threadId = getThreadId(rewriter, loc);
     Value pred = int_val(1, 1);
 
-    auto llCoord = getTypeConverter()->unpackLLElements(loc, llDst, rewriter);
+    auto llCoord = unpackLLElements(loc, llDst, rewriter);
     uint32_t boxStride = std::accumulate(boxDims.begin(), boxDims.end(), 1,
                                          std::multiplies<uint32_t>());
     boxStride = boxStride * repM * warpsPerCTA[0];
@@ -795,8 +866,7 @@ struct StoreAsyncTMAOpConversion : public ConvertTritonGPUOpToLLVMPattern<
 
     auto wordTy = vec_ty(dstElemTy, minVec);
 
-    auto inVals =
-        getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     for (uint32_t b = 0; b < numBox; ++b) {
       for (int rep = 0; rep < repM; ++rep) {
         Value rowOfWarp = add(mul(warpId0, i32_val(instrShape[0])),
@@ -961,12 +1031,9 @@ struct AtomicCASOpConversion
     Value llCmp = adaptor.getCmp();
     Value llVal = adaptor.getVal();
 
-    auto ptrElements =
-        getTypeConverter()->unpackLLElements(loc, llPtr, rewriter);
-    auto cmpElements =
-        getTypeConverter()->unpackLLElements(loc, llCmp, rewriter);
-    auto valElements =
-        getTypeConverter()->unpackLLElements(loc, llVal, rewriter);
+    auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
+    auto cmpElements = unpackLLElements(loc, llCmp, rewriter);
+    auto valElements = unpackLLElements(loc, llVal, rewriter);
 
     auto valueTy = op.getResult().getType();
     auto TensorTy = valueTy.dyn_cast<RankedTensorType>();
@@ -1086,14 +1153,11 @@ struct AtomicRMWOpConversion
     Value llVal = adaptor.getVal();
     Value llMask = adaptor.getMask();
 
-    auto valElements =
-        getTypeConverter()->unpackLLElements(loc, llVal, rewriter);
-    auto ptrElements =
-        getTypeConverter()->unpackLLElements(loc, llPtr, rewriter);
+    auto valElements = unpackLLElements(loc, llVal, rewriter);
+    auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
     SmallVector<Value> maskElements;
     if (llMask)
-      maskElements =
-          getTypeConverter()->unpackLLElements(loc, llMask, rewriter);
+      maskElements = unpackLLElements(loc, llMask, rewriter);
 
     auto valueTy = op.getResult().getType();
     auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
@@ -1268,7 +1332,7 @@ struct InsertSliceAsyncOpConversion
     Value llIndex = adaptor.getIndex();
 
     // %src
-    auto srcElems = getTypeConverter()->unpackLLElements(loc, llSrc, rewriter);
+    auto srcElems = unpackLLElements(loc, llSrc, rewriter);
 
     // %dst
     auto dstTy = dst.getType().cast<RankedTensorType>();
@@ -1295,7 +1359,7 @@ struct InsertSliceAsyncOpConversion
     // %mask
     SmallVector<Value> maskElems;
     if (llMask) {
-      maskElems = getTypeConverter()->unpackLLElements(loc, llMask, rewriter);
+      maskElems = unpackLLElements(loc, llMask, rewriter);
       assert(srcElems.size() == maskElems.size());
     }
 
@@ -1306,7 +1370,7 @@ struct InsertSliceAsyncOpConversion
       // It's not necessary for now because the pipeline pass will skip
       // generating insert_slice_async if the load op has any "other" tensor.
       // assert(false && "insert_slice_async: Other value not supported yet");
-      otherElems = getTypeConverter()->unpackLLElements(loc, llOther, rewriter);
+      otherElems = unpackLLElements(loc, llOther, rewriter);
       assert(srcElems.size() == otherElems.size());
     }
 
@@ -1573,8 +1637,7 @@ struct InsertSliceTMAOpConversion : public ConvertTritonGPUOpToLLVMPattern<
     auto ptrSharedTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
 
     SmallVector<Value> coordCommon;
-    auto llCoord =
-        getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    auto llCoord = unpackLLElements(loc, adaptor.getSrc(), rewriter);
 
     for (int i = 0; i < rank; ++i) {
       auto dim = getDimOfOrder(inOrder, i);

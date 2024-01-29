@@ -99,23 +99,6 @@ Value TritonGPUToLLVMTypeConverter::packLLElements(
   return llvmStruct;
 }
 
-SmallVector<Value> TritonGPUToLLVMTypeConverter::unpackLLElements(
-    Location loc, Value llvmStruct, ConversionPatternRewriter &rewriter) {
-  assert(bool(llvmStruct) && "can not unpack null values");
-  if (llvmStruct.getType().isIntOrIndexOrFloat() ||
-      llvmStruct.getType().isa<triton::PointerType>() ||
-      llvmStruct.getType().isa<LLVM::LLVMPointerType>())
-    return {llvmStruct};
-  ArrayRef<Type> types =
-      llvmStruct.getType().cast<LLVM::LLVMStructType>().getBody();
-  SmallVector<Value> results(types.size());
-  for (unsigned i = 0; i < types.size(); ++i) {
-    Type type = types[i];
-    results[i] = extract_val(type, llvmStruct, i);
-  }
-  return results;
-}
-
 Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
     RankedTensorType type) {
   auto ctx = type.getContext();

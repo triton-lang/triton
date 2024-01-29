@@ -121,8 +121,7 @@ private:
     unsigned srcElems = getTotalElemsPerThread(types[0]);
     SmallVector<SmallVector<Value>> srcValues(srcElems);
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      auto values =
-          getTypeConverter()->unpackLLElements(loc, operands[i], rewriter);
+      auto values = unpackLLElements(loc, operands[i], rewriter);
 
       assert(values.size() == srcValues.size());
       for (unsigned j = 0; j < srcValues.size(); ++j) {

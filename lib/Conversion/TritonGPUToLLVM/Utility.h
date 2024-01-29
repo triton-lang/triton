@@ -1143,6 +1143,40 @@ static void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
   }
 }
 
+static Value
+getStructFromSharedMemoryObject(Location loc, const SharedMemoryObject &smemObj,
+                                ConversionPatternRewriter &rewriter) {
+  auto elems = smemObj.getElems();
+  auto types = smemObj.getTypes();
+  auto structTy =
+      LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
+  // pack into struct
+  Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
+  for (const auto &v : llvm::enumerate(elems)) {
+    assert(v.value() && "can not insert null values");
+    llvmStruct = insert_val(structTy, llvmStruct, v.value(), v.index());
+  }
+  return llvmStruct;
+}
+
+static SmallVector<Value>
+unpackLLElements(Location loc, Value llvmStruct,
+                 ConversionPatternRewriter &rewriter) {
+  assert(bool(llvmStruct) && "can not unpack null values");
+  if (llvmStruct.getType().isIntOrIndexOrFloat() ||
+      llvmStruct.getType().isa<triton::PointerType>() ||
+      llvmStruct.getType().isa<LLVM::LLVMPointerType>())
+    return {llvmStruct};
+  ArrayRef<Type> types =
+      llvmStruct.getType().cast<LLVM::LLVMStructType>().getBody();
+  SmallVector<Value> results(types.size());
+  for (unsigned i = 0; i < types.size(); ++i) {
+    Type type = types[i];
+    results[i] = extract_val(type, llvmStruct, i);
+  }
+  return results;
+}
+
 } // namespace mlir
 
 #endif

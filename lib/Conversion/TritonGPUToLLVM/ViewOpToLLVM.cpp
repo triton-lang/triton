@@ -53,8 +53,9 @@ struct SplatOpConversion
                                 ConversionPatternRewriter &rewriter) const {
     auto loc = op->getLoc();
     auto src = adaptor.getSrc();
+    auto typeConverter = getTypeConverter();
     auto llStruct = convertSplatLikeOp(src.getType(), op.getType(), src,
-                                       getTypeConverter(), rewriter, loc);
+                                       typeConverter, rewriter, loc);
     rewriter.replaceOp(op, {llStruct});
     return success();
   }
@@ -93,8 +94,9 @@ struct ArithConstantSplatOpConversion
     }
 
     auto constOp = rewriter.create<LLVM::ConstantOp>(loc, elemType, val);
+    auto typeConverter = getTypeConverter();
     auto llStruct = SplatOpConversion::convertSplatLikeOp(
-        elemType, op.getType(), constOp, getTypeConverter(), rewriter, loc);
+        elemType, op.getType(), constOp, typeConverter, rewriter, loc);
     rewriter.replaceOp(op, llStruct);
 
     return success();
@@ -115,14 +117,12 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
     Location loc = op->getLoc();
     auto resultTy = op.getType().template cast<RankedTensorType>();
     unsigned elems = getTotalElemsPerThread(resultTy);
-    Type elemTy =
-        this->getTypeConverter()->convertType(resultTy.getElementType());
+    auto typeConverter = getTypeConverter();
+    Type elemTy = typeConverter->convertType(resultTy.getElementType());
     SmallVector<Type> types(elems, elemTy);
     // unpack input values
-    auto lhsVals =
-        getTypeConverter()->unpackLLElements(loc, adaptor.getLhs(), rewriter);
-    auto rhsVals =
-        getTypeConverter()->unpackLLElements(loc, adaptor.getRhs(), rewriter);
+    auto lhsVals = unpackLLElements(loc, adaptor.getLhs(), rewriter);
+    auto rhsVals = unpackLLElements(loc, adaptor.getRhs(), rewriter);
     // concatenate (and potentially reorder) values
     SmallVector<Value> retVals;
     for (Value v : lhsVals)
@@ -130,8 +130,7 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
     for (Value v : rhsVals)
       retVals.push_back(v);
     // pack and replace
-    Value ret =
-        getTypeConverter()->packLLElements(loc, retVals, rewriter, resultTy);
+    Value ret = typeConverter->packLLElements(loc, retVals, rewriter, resultTy);
     rewriter.replaceOp(op, ret);
     return success();
   }
@@ -162,11 +161,12 @@ struct InterleaveOpConversion
     // element from lhs, followed by the i'th elem from rhs.
     Location loc = op->getLoc();
     auto resultTy = op.getType().cast<RankedTensorType>();
+    auto typeConverter = getTypeConverter();
 
     SmallVector<Value> lhsVals =
-        getTypeConverter()->unpackLLElements(loc, adaptor.getLhs(), rewriter);
+        unpackLLElements(loc, adaptor.getLhs(), rewriter);
     SmallVector<Value> rhsVals =
-        getTypeConverter()->unpackLLElements(loc, adaptor.getRhs(), rewriter);
+        unpackLLElements(loc, adaptor.getRhs(), rewriter);
     assert(lhsVals.size() == rhsVals.size());
 
     SmallVector<Value> interleavedVals;
@@ -175,8 +175,8 @@ struct InterleaveOpConversion
       interleavedVals.push_back(rhsVals[i]);
     }
 
-    Value ret = getTypeConverter()->packLLElements(loc, interleavedVals,
-                                                   rewriter, resultTy);
+    Value ret =
+        typeConverter->packLLElements(loc, interleavedVals, rewriter, resultTy);
     rewriter.replaceOp(op, ret);
     return success();
   }
@@ -214,10 +214,9 @@ struct ReshapeOpConversion : public ConvertTritonGPUOpToLLVMPattern<ReshapeOp> {
              "ReshapeOp lowering only support block encoding right now.");
     }
 
-    auto vals = this->getTypeConverter()->unpackLLElements(
-        loc, adaptor.getSrc(), rewriter);
-    Value ret =
-        this->getTypeConverter()->packLLElements(loc, vals, rewriter, resultTy);
+    auto typeConverter = getTypeConverter();
+    auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    Value ret = typeConverter->packLLElements(loc, vals, rewriter, resultTy);
     rewriter.replaceOp(op, ret);
     return success();
   }
@@ -235,8 +234,8 @@ struct ExpandDimsOpConversion
   matchAndRewrite(ExpandDimsOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto srcVals = this->getTypeConverter()->unpackLLElements(
-        loc, adaptor.getSrc(), rewriter);
+    auto typeConverter = getTypeConverter();
+    auto srcVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
 
     auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
     auto resultTy = op.getType().template cast<RankedTensorType>();
@@ -248,7 +247,7 @@ struct ExpandDimsOpConversion
 
     auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
     auto resultOffsets = emitOffsetForLayout(resultLayout, resultTy);
-    DenseMap<SmallVector<unsigned>, Value, SmallVectorKeyInfo> srcValues;
+    std::map<SmallVector<unsigned>, Value> srcValues;
     for (size_t i = 0; i < srcOffsets.size(); i++) {
       srcValues[srcOffsets[i]] = srcVals[i];
     }
@@ -257,10 +256,10 @@ struct ExpandDimsOpConversion
     for (size_t i = 0; i < resultOffsets.size(); i++) {
       auto offset = resultOffsets[i];
       offset.erase(offset.begin() + srcLayout.getDim());
-      resultVals.push_back(srcValues.lookup(offset));
+      resultVals.push_back(srcValues.at(offset));
     }
-    Value ret = this->getTypeConverter()->packLLElements(loc, resultVals,
-                                                         rewriter, resultTy);
+    Value ret =
+        typeConverter->packLLElements(loc, resultVals, rewriter, resultTy);
     rewriter.replaceOp(op, ret);
     return success();
   }
@@ -275,7 +274,7 @@ struct TransOpConversion
   matchAndRewrite(triton::TransOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto llvmElemTy = getTypeConverter()->convertType(
+    auto llvmElemTy = typeConverter->convertType(
         op.getType().cast<RankedTensorType>().getElementType());
     auto srcSmemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                       llvmElemTy, rewriter);

@@ -75,7 +75,7 @@ struct AdvanceOpConversion
     auto tensorPtr = adaptor.getPtr();
 
     auto offsets = adaptor.getOffsets();
-    auto elems = getTypeConverter()->unpackLLElements(loc, tensorPtr, rewriter);
+    auto elems = unpackLLElements(loc, tensorPtr, rewriter);
 
     SmallVector<Value, 2> newOffsets;
 

@@ -145,8 +145,8 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     Value input = adaptor.getInput();
-    SmallVector<Value> srcValues =
-        getTypeConverter()->unpackLLElements(loc, input, rewriter);
+    auto typeConverter = getTypeConverter();
+    SmallVector<Value> srcValues = unpackLLElements(loc, input, rewriter);
     int numBins =
         op.getResult().getType().cast<RankedTensorType>().getDimSize(0);
     int numThreadsPerWarp = 32;
@@ -179,8 +179,8 @@ public:
         loc, rewriter, srcType, baseSharedMemPtr, warpLevelHistogram, numBins,
         numThreadsPerWarp, innerDimIndices, threadId, numWarps);
 
-    Value results = getTypeConverter()->packLLElements(
-        loc, histogramValue, rewriter, op.getResult().getType());
+    Value results = typeConverter->packLLElements(loc, histogramValue, rewriter,
+                                                  op.getResult().getType());
     rewriter.replaceOp(op, results);
     return success();
   }

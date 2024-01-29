@@ -81,15 +81,15 @@ struct BroadcastOpConversion
     auto srcShape = srcTy.getShape();
     auto resultShape = resultTy.getShape();
     unsigned rank = srcTy.getRank();
+    auto typeConverter = getTypeConverter();
 
     assert(rank == resultTy.getRank());
     auto order = triton::gpu::getOrder(srcLayout);
     auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
     auto resultOffsets = emitOffsetForLayout(resultLayout, resultTy);
-    SmallVector<Value> srcVals =
-        getTypeConverter()->unpackLLElements(loc, src, rewriter);
+    SmallVector<Value> srcVals = unpackLLElements(loc, src, rewriter);
 
-    DenseMap<SmallVector<unsigned>, Value, SmallVectorKeyInfo> srcValues;
+    std::map<SmallVector<unsigned>, Value> srcValues;
     for (size_t i = 0; i < srcOffsets.size(); i++) {
       srcValues[srcOffsets[i]] = srcVals[i];
     }
@@ -100,11 +100,11 @@ struct BroadcastOpConversion
       for (size_t j = 0; j < srcShape.size(); j++)
         if (srcShape[j] == 1)
           offset[j] = 0;
-      resultVals.push_back(srcValues.lookup(offset));
+      resultVals.push_back(srcValues.at(offset));
     }
 
     Value resultStruct =
-        getTypeConverter()->packLLElements(loc, resultVals, rewriter, resultTy);
+        typeConverter->packLLElements(loc, resultVals, rewriter, resultTy);
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -124,6 +124,7 @@ struct PrintOpConversion
   LogicalResult
   matchAndRewrite(triton::PrintOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto typeConverter = getTypeConverter();
     auto loc = op->getLoc();
     Value prefixStr =
         LLVM::addStringToModule(loc, rewriter, "printfPrefix_", op.getPrefix());
@@ -143,8 +144,7 @@ struct PrintOpConversion
     } else {
       for (size_t i = 0; i < op.getNumOperands(); i++) {
         // Elements of the tensor that are resident in this GPU thread.
-        auto elems = getTypeConverter()->unpackLLElements(
-            loc, adaptor.getOperands()[i], rewriter);
+        auto elems = unpackLLElements(loc, adaptor.getOperands()[i], rewriter);
 
         // Get the indices of `elems` within the tensor.  Note that if `elems`
         // has an "interesting" layout, then these will not be in any
@@ -410,8 +410,8 @@ struct AssertOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto ctx = rewriter.getContext();
-    auto elems = getTypeConverter()->unpackLLElements(
-        loc, adaptor.getCondition(), rewriter);
+    auto typeConverter = getTypeConverter();
+    auto elems = unpackLLElements(loc, adaptor.getCondition(), rewriter);
     auto elemTy = elems[0].getType();
     Value condition = int_val(elemTy.getIntOrFloatBitWidth(), 0);
     for (auto elem : elems) {
@@ -527,8 +527,9 @@ struct MakeRangeOpConversion
       assert(multiDim.value().size() == 1);
       retVals[multiDim.index()] = add(multiDim.value()[0], start);
     }
+    auto typeConverter = getTypeConverter();
     Value result =
-        getTypeConverter()->packLLElements(loc, retVals, rewriter, rankedTy);
+        typeConverter->packLLElements(loc, retVals, rewriter, rankedTy);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -632,30 +633,27 @@ struct AddPtrOpConversion
     Location loc = op->getLoc();
     auto resultTy = op.getType();
     auto offsetTy = op.getOffset().getType();
+    auto typeConverter = getTypeConverter();
     auto resultTensorTy = resultTy.dyn_cast<RankedTensorType>();
     if (resultTensorTy) {
       unsigned elems = getTotalElemsPerThread(resultTy);
-      Type elemTy =
-          getTypeConverter()->convertType(resultTensorTy.getElementType()
-                                              .cast<triton::PointerType>()
-                                              .getPointeeType());
-      Type ptrTy =
-          getTypeConverter()->convertType(resultTensorTy.getElementType());
-      auto ptrs =
-          getTypeConverter()->unpackLLElements(loc, adaptor.getPtr(), rewriter);
-      auto offsets = getTypeConverter()->unpackLLElements(
-          loc, adaptor.getOffset(), rewriter);
+      Type elemTy = typeConverter->convertType(resultTensorTy.getElementType()
+                                                   .cast<triton::PointerType>()
+                                                   .getPointeeType());
+      Type ptrTy = typeConverter->convertType(resultTensorTy.getElementType());
+      auto ptrs = unpackLLElements(loc, adaptor.getPtr(), rewriter);
+      auto offsets = unpackLLElements(loc, adaptor.getOffset(), rewriter);
       SmallVector<Value> resultVals(elems);
       for (unsigned i = 0; i < elems; ++i) {
         resultVals[i] = gep(ptrTy, elemTy, ptrs[i], offsets[i]);
       }
-      Value view = getTypeConverter()->packLLElements(loc, resultVals, rewriter,
-                                                      resultTy);
+      Value view =
+          typeConverter->packLLElements(loc, resultVals, rewriter, resultTy);
       rewriter.replaceOp(op, view);
     } else {
       assert(resultTy.isa<triton::PointerType>());
-      auto resultPtrTy = getTypeConverter()->convertType(resultTy);
-      auto resultElemTy = getTypeConverter()->convertType(
+      auto resultPtrTy = typeConverter->convertType(resultTy);
+      auto resultElemTy = typeConverter->convertType(
           resultTy.cast<triton::PointerType>().getPointeeType());
       Value result =
           gep(resultPtrTy, resultElemTy, adaptor.getPtr(), adaptor.getOffset());
@@ -678,6 +676,7 @@ struct AllocTensorOpConversion
         LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
     auto resultTy = op.getType().dyn_cast<RankedTensorType>();
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+    auto typeConverter = getTypeConverter();
     smemBase = bitcast(smemBase, elemPtrTy);
     auto sharedLayout = resultTy.getEncoding().cast<SharedEncodingAttr>();
     auto order = sharedLayout.getOrder();
@@ -693,8 +692,7 @@ struct AllocTensorOpConversion
       newOrder = SmallVector<unsigned>(order.begin(), order.end());
     }
 
-    auto llvmElemTy =
-        getTypeConverter()->convertType(resultTy.getElementType());
+    auto llvmElemTy = typeConverter->convertType(resultTy.getElementType());
     auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
     auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, shapePerCTA,
                                       newOrder, loc, rewriter);
@@ -733,7 +731,8 @@ struct ExtractSliceOpConversion
     assert(op.hasUnitStride() &&
            "Only unit stride supported by ExtractSliceOpConversion");
 
-    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+    auto typeConverter = getTypeConverter();
+    auto llvmElemTy = typeConverter->convertType(srcTy.getElementType());
 
     // newBase = base + offset
     // Triton supports either static and dynamic offsets

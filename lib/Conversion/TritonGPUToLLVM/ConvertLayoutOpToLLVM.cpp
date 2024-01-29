@@ -356,6 +356,7 @@ private:
                               ArrayRef<int64_t> shape,
                               bool isDestMma = false) const {
     unsigned accumNumCTAsEachRep = 1;
+    auto typeConverter = getTypeConverter();
     auto layout = type.getEncoding();
     NvidiaMmaEncodingAttr mma = layout.dyn_cast<NvidiaMmaEncodingAttr>();
     auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>();
@@ -370,7 +371,7 @@ private:
     SmallVector<unsigned> numCTAsEachRep(rank, 1);
     SmallVector<unsigned> shapePerCTATile = getShapePerCTATile(layout, shape);
     SmallVector<int64_t> shapePerCTA = getShapePerCTA(layout, shape);
-    auto elemTy = getTypeConverter()->convertType(type.getElementType());
+    auto elemTy = typeConverter->convertType(type.getElementType());
 
     int ctaId = 0;
 
@@ -449,7 +450,7 @@ private:
                               OpAdaptor adaptor,
                               ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
-
+    auto typeConverter = getTypeConverter();
     Value src = op.getSrc();
     Value dst = op.getResult();
     auto srcTy = src.getType().cast<RankedTensorType>();
@@ -461,7 +462,7 @@ private:
     auto srcCTAOrder = triton::gpu::getCTAOrder(srcLayout);
     unsigned rank = srcShapePerCTA.size();
 
-    auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
+    auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
 
     Value smemBase =
@@ -471,8 +472,7 @@ private:
 
     // Store to local shared memory
     {
-      auto inVals =
-          getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(), rewriter);
+      auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
       auto inIndices =
           emitIndices(loc, rewriter, srcLayout, srcTy, /*withCTAOffset*/ false);
 
@@ -519,7 +519,7 @@ private:
       }
 
       Value result =
-          getTypeConverter()->packLLElements(loc, outVals, rewriter, dstTy);
+          typeConverter->packLLElements(loc, outVals, rewriter, dstTy);
       rewriter.replaceOp(op, result);
     }
 
@@ -539,6 +539,7 @@ private:
     auto loc = op.getLoc();
     Value src = op.getSrc();
     Value dst = op.getResult();
+    auto typeConverter = getTypeConverter();
     auto srcTy = src.getType().cast<RankedTensorType>();
     auto dstTy = dst.getType().cast<RankedTensorType>();
     Attribute srcLayout = srcTy.getEncoding();
@@ -595,8 +596,7 @@ private:
     }
     // Potentially we need to store for multiple CTAs in this replication
     auto accumNumReplicates = product<unsigned>(numReplicates);
-    auto vals =
-        getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     unsigned inVec = 0;
     unsigned outVec = 0;
     auto origRepShape = getRepShapeForCvtLayout(op);
@@ -643,8 +643,7 @@ private:
         else if (isStMatrixCompatible(srcTy) && accumNumReplicates == 1 &&
                  outOrd[0] == 1 && paddedRepShape[1] % 8 == 0) {
           Value llvmSrc = adaptor.getSrc();
-          auto inVals =
-              getTypeConverter()->unpackLLElements(loc, llvmSrc, rewriter);
+          auto inVals = unpackLLElements(loc, llvmSrc, rewriter);
           storeDistributedToSharedWithStMatrix(srcTy, llvmSrc, smemBase,
                                                paddedRepShape, origRepShape,
                                                loc, rewriter);
@@ -694,8 +693,7 @@ private:
       }
     }
 
-    Value result =
-        getTypeConverter()->packLLElements(loc, outVals, rewriter, dstTy);
+    Value result = typeConverter->packLLElements(loc, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
 
     return success();
@@ -704,6 +702,7 @@ private:
   LogicalResult
   lowerSharedToDistributed(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                            ConversionPatternRewriter &rewriter) const {
+    auto typeConverter = getTypeConverter();
     auto loc = op.getLoc();
     Value src = op.getSrc();
     Value dst = op.getResult();
@@ -719,8 +718,8 @@ private:
 
     auto smemObj = getSharedMemoryObjectFromStruct(
         loc, adaptor.getSrc(),
-        getTypeConverter()->convertType(srcTy.getElementType()), rewriter);
-    auto elemTy = getTypeConverter()->convertType(dstTy.getElementType());
+        typeConverter->convertType(srcTy.getElementType()), rewriter);
+    auto elemTy = typeConverter->convertType(dstTy.getElementType());
 
     auto srcStrides =
         getStridesFromShapeAndOrder(srcShape, inOrd, loc, rewriter);
@@ -729,8 +728,7 @@ private:
     SmallVector<Value> outVals = loadSharedToDistributed(
         dst, dstIndices, src, smemObj, elemTy, loc, rewriter);
 
-    Value result =
-        getTypeConverter()->packLLElements(loc, outVals, rewriter, dstTy);
+    Value result = typeConverter->packLLElements(loc, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
 
     return success();
@@ -796,7 +794,7 @@ private:
     SmallVector<Value> multiDimWarpId =
         delinearize(rewriter, loc, warp, warpsPerCTA);
 
-    auto inVals = getTypeConverter()->unpackLLElements(loc, llvmSrc, rewriter);
+    auto inVals = unpackLLElements(loc, llvmSrc, rewriter);
     // Compute the relative offset for each lane.
     Value stMatrixLaneOffset =
         computeStMatrixAddr(lane, paddedRepShape[1], loc, rewriter);
@@ -865,8 +863,7 @@ private:
     auto dstStrides =
         getStridesFromShapeAndOrder(dstShapePerCTA, outOrd, loc, rewriter);
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy, false);
-    auto inVals =
-        getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     storeDistributedToShared(src, inVals, dstStrides, srcIndices, dst, smemBase,
                              elemTy, loc, rewriter);
     auto smemObj = SharedMemoryObject(smemBase, elemTy, dstShapePerCTA, outOrd,
@@ -933,8 +930,7 @@ private:
 
     if (isMmaToDotShortcut(srcTy, dstTy)) {
       // get source values
-      auto vals =
-          getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(), rewriter);
+      auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
       unsigned elems = getTotalElemsPerThread(srcTy);
       Type elemTy =
           this->getTypeConverter()->convertType(srcTy.getElementType());
@@ -1005,8 +1001,7 @@ private:
       return success();
     }
     // get source values
-    auto vals =
-        getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     SmallVector<Value> retVals;
     SmallVector<unsigned> dstElementPerThread =
         triton::gpu::getElemsPerThread(dstTy);
