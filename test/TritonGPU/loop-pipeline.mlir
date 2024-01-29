@@ -98,15 +98,15 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 // CHECK-DAG: %[[CONSTANT_0:.*]] = arith.constant 0 : i32
 // CHECK-DAG: %[[CONSTANT_1:.*]] = arith.constant 1 : i32
 // CHECK-DAG: %[[CONSTANT_2:.*]] = arith.constant 2 : i32
-// CHECK: scf.for
 // CHECK:   %[[ABUFFER:.*]] = triton_gpu.alloc_tensor
 // CHECK:   %[[BBUFFER:.*]] = triton_gpu.alloc_tensor
 // CHECK:   %[[A0BUFFER:.*]] = triton_gpu.insert_slice_async {{.*}}, {{.*}}, %[[CONSTANT_0]]
 // CHECK:   %[[B0BUFFER:.*]] = triton_gpu.insert_slice_async {{.*}}, {{.*}}, %[[CONSTANT_0]]
 // CHECK:   %[[A1BUFFER:.*]] = triton_gpu.insert_slice_async {{.*}}, {{.*}}, %[[CONSTANT_1]]
 // CHECK:   %[[B1BUFFER:.*]] = triton_gpu.insert_slice_async {{.*}}, {{.*}}, %[[CONSTANT_1]]
-// CHECK-DAG:   %[[A0:.*]] = triton_gpu.extract_slice %[[A0BUFFER]][%[[CONSTANT_0]], 0, 0]
-// CHECK-DAG:   %[[B0:.*]] = triton_gpu.extract_slice %[[B0BUFFER]][%[[CONSTANT_0]], 0, 0]
+// CHECK: scf.for {{.*}} iter_args({{.*}}, %[[A2BUFFER:.*]] = %[[A0BUFFER]], %[[B2BUFFER:.*]] = %[[B0BUFFER]], {{.*}}, %[[A3BUFFER:.*]] = %[[A1BUFFER]], %[[B3BUFFER:.*]] = %[[B1BUFFER]]
+// CHECK-DAG:   %[[A0:.*]] = triton_gpu.extract_slice %[[A2BUFFER]][%[[CONSTANT_0]], 0, 0]
+// CHECK-DAG:   %[[B0:.*]] = triton_gpu.extract_slice %[[B2BUFFER]][%[[CONSTANT_0]], 0, 0]
 // CHECK:   triton_gpu.async_wait {num = 2 : i32}
 // CHECK:   scf.for {{.*}} iter_args({{.*}}, %[[INS_IDX:.*]] = %[[CONSTANT_1]], %[[EXT_IDX:.*]] = %[[CONSTANT_0]]{{.*}}, %[[arg_a0:.*]] = %[[A0]], %[[arg_b0:.*]] = %[[B0]]
 // CHECK:   %[[arg_a0_dot_op:.*]] = triton_gpu.convert_layout %[[arg_a0]]
@@ -124,6 +124,12 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 // CHECK:   %[[NEXT_B:.*]] = triton_gpu.extract_slice %{{.+}}[%[[EXT_IDX_3]], 0, 0]
 // CHECK:   triton_gpu.async_wait {num = 2 : i32}
 // CHECK:   scf.yield {{.*}}, %[[NEXT_A_BUFFER]], %[[NEXT_B_BUFFER]], %[[INS_IDX_3]], %[[EXT_IDX_3]], %[[NEXT_A]], %[[NEXT_B]]
+// CHECK:   triton_gpu.async_wait {num = 0 : i32}
+// CHECK:   %[[A3BUFFER:.*]] = triton_gpu.insert_slice_async {{.*}}, {{.*}}, %[[CONSTANT_0]]
+// CHECK:   %[[B3BUFFER:.*]] = triton_gpu.insert_slice_async {{.*}}, {{.*}}, %[[CONSTANT_0]]
+// CHECK:   %[[A4BUFFER:.*]] = triton_gpu.insert_slice_async {{.*}}, {{.*}}, %[[CONSTANT_1]]
+// CHECK:   %[[B4BUFFER:.*]] = triton_gpu.insert_slice_async {{.*}}, {{.*}}, %[[CONSTANT_1]]
+// CHECK    scf.yield {{.*}}, %[[A3BUFFER]], %[[B3BUFFER]], {{.*}}, %[[A4BUFFER]], %[[B4BUFFER]]
 tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
                          %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
                          %B : !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #C>{
@@ -560,10 +566,18 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 
 // -----
 
-// CHECK-NOT: triton_gpu.alloc_tensor
-// CHECK: scf.for
+// CHECK-LABEL: nested_loops
 // CHECK: triton_gpu.alloc_tensor
 // CHECK: scf.for
+// CHECK-NOT: triton_gpu.alloc_tensor
+// CHECK:   scf.for
+// CHECK:     scf.yield
+// CHECK:   triton_gpu.async_wait {num = 0 : i32}
+// CHECK:   triton_gpu.insert_slice_async
+// CHECK:   triton_gpu.async_commit_group
+// CHECK:   triton_gpu.insert_slice_async
+// CHECK:   triton_gpu.async_commit_group
+// CHECK:   scf.yield
 //
 // The following code has the structure:
 //
@@ -576,19 +590,11 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 //   }
 // }
 // ```
-//
-// Only the outer for should be pipelined. The regression this tests
-// causes an assertion to fail while pipelining the outer `for`, in
-// particular while predicating the operations scheduled to be emitted
-// in the prologue.
-//
-// We check that there is no allocation before the first occurrence of
-// scf.for because that would mean that the first load `%a = load()`
-// would be pipelined.
+// We pipeline the inner loop first then pipeline the outer loop to prefetch the async copy after the inner loop.
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 #mma = #triton_gpu.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 2], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0], instrShape = [16, 8]}>
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
-  tt.func public @_kernel(%arg0: !tt.ptr<f32, 1> {tt.divisibility = 16 : i32} loc(unknown), %arg1: !tt.ptr<f32, 1> {tt.divisibility = 16 : i32} loc(unknown), %arg2: !tt.ptr<i32, 1> {tt.divisibility = 16 : i32} loc(unknown), %arg3: !tt.ptr<f32, 1> {tt.divisibility = 16 : i32} loc(unknown)) attributes {noinline = false} {
+  tt.func public @nested_loops(%arg0: !tt.ptr<f32, 1> {tt.divisibility = 16 : i32} loc(unknown), %arg1: !tt.ptr<f32, 1> {tt.divisibility = 16 : i32} loc(unknown), %arg2: !tt.ptr<i32, 1> {tt.divisibility = 16 : i32} loc(unknown), %arg3: !tt.ptr<f32, 1> {tt.divisibility = 16 : i32} loc(unknown)) attributes {noinline = false} {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mma>
     %cst_0 = arith.constant dense<320> : tensor<32x1xi32, #blocked>
     %c0_i32 = arith.constant 0 : i32
@@ -639,7 +645,6 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     tt.return
   }
 }  // end module
-
 
 // -----
 
