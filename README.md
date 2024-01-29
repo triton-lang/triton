@@ -83,7 +83,7 @@ arbitrary LLVM version.
 
 4. Grab a snack, this will take a while.
 
-5. Build Triton as above, but set the following environment variables.
+5. Build Triton as above, but set the following environment variables:
 
        # Modify as appropriate to point to your LLVM build.
        $ export LLVM_BUILD_DIR=$HOME/llvm-project/build
@@ -97,7 +97,7 @@ arbitrary LLVM version.
 # Tips for building
 
 - Set `TRITON_BUILD_WITH_CLANG_LLD=true` as an environment variable to use clang
-  and lld.  lld in particular results in faster builds.
+  and lld. lld in particular results in faster builds.
 
 - Set `TRITON_BUILD_WITH_CCACHE=true` to build with ccache.
 
@@ -107,7 +107,7 @@ arbitrary LLVM version.
 
 - vscode intellisense has some difficulty figuring out how to build Triton's C++
   (probably because, in our build, users don't invoke cmake directly, but
-  instead use setup.py).  Teach vscode how to compile Triton as follows.
+  instead use setup.py). Teach vscode how to compile Triton as follows.
 
     - Do a local build.
     - Get the full path to the `compile_commands.json` file produced by the build:
