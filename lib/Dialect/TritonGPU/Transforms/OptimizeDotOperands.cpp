@@ -132,8 +132,12 @@ public:
         src->getDialect()->getTypeID() != TypeID::get<arith::ArithDialect>())
       return failure();
 
-    // TODO(jlebar): Why do we exclude these two ops specifically?
-    if (isa<arith::TruncIOp, arith::TruncFOp>(src))
+    // TODO(jlebar): Why do we exclude arith trunc ops specifically?
+    // arith.select needs to be excluded because dot_operand layout hoisting
+    // will go through the mask, which is i1 type. Mask parents are most likely
+    // of integer types. When lowering shared -> dot_operand layout, integer
+    // types are not supported. 
+    if (isa<arith::TruncIOp, arith::TruncFOp, arith::SelectOp>(src))
       return failure();
 
     // Check that the conversion is transitively dependent on a load, and all
