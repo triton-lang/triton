@@ -164,7 +164,8 @@ void init_triton_llvm(py::module &&m) {
 
     PassInstrumentationCallbacks *instrCbPtr = nullptr;
     PassInstrumentationCallbacks passInstrCb;
-    StandardInstrumentations standardInstr(mod->getContext(), /*DebugLogging*/ true);
+    StandardInstrumentations standardInstr(mod->getContext(),
+                                           /*DebugLogging*/ true);
     if (triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
       standardInstr.registerCallbacks(passInstrCb, &mam);
       instrCbPtr = &passInstrCb;
@@ -182,7 +183,8 @@ void init_triton_llvm(py::module &&m) {
     // some scheduling solution.
     tuningOptions.SLPVectorization = true;
 
-    PassBuilder pb(nullptr /*targetMachine*/, tuningOptions, std::nullopt, instrCbPtr);
+    PassBuilder pb(nullptr /*targetMachine*/, tuningOptions, std::nullopt,
+                   instrCbPtr);
 
     pb.registerModuleAnalyses(mam);
     pb.registerCGSCCAnalyses(cgam);
