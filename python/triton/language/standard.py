@@ -183,6 +183,7 @@ def _argmax_combine_tie_break_fast(value1, index1, value2, index2):
                             tie_break_arg="return_indices_tie_break_left")
 def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False):
     input = core._promote_bfloat16_to_float32(input)
+    # input = core._promote_reduction_input(input)
     if return_indices:
         if return_indices_tie_break_left:
             return core._reduce_with_indices(input, axis, _argmax_combine_tie_break_left, keep_dims=keep_dims)
@@ -235,6 +236,7 @@ def _argmin_combine_tie_break_fast(value1, index1, value2, index2):
                             tie_break_arg="return_indices_tie_break_left")
 def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False):
     input = core._promote_bfloat16_to_float32(input)
+    # input = core._promote_reduction_input(input)
     if return_indices:
         if return_indices_tie_break_left:
             return core._reduce_with_indices(input, axis, _argmin_combine_tie_break_left, keep_dims=keep_dims)

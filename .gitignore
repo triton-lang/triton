@@ -53,3 +53,9 @@ docs/getting-started/tutorials
 
 # Vim
 *.swp
+
+# amd
+log*
+scripts
+third_party/amd/lib/TritonAMDGPUToLLVM/ReduceOpToLLVM_rocm_fork.cpp
+core
