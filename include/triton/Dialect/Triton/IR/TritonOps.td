@@ -437,6 +437,7 @@ def TT_TransOp : TT_Op<"trans", [Pure,
 
     let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
 
+    let hasFolder = 1;
     let hasVerifier = 1;
 }
 

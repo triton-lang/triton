@@ -418,6 +418,16 @@ inline SmallVector<Value> applyPermutation(ArrayRef<Value> vec,
 [[nodiscard]] SmallVector<int32_t>
 inversePermutation(ArrayRef<int32_t> permutation);
 
+// Is `vec` [0, 1, ..., n]?  Returns true on empty list.
+template <typename T> bool isIota(ArrayRef<T> vec) {
+  for (T i = 0; i < vec.size(); ++i) {
+    if (vec[i] != i) {
+      return false;
+    }
+  }
+  return true;
+}
+
 } // namespace triton
 } // namespace mlir
 

@@ -187,42 +187,6 @@ public:
   }
 };
 
-// transpose(x, order=[0, 1, ...]) -> x
-class CombineNopTransPattern : public OpRewritePattern<TransOp> {
-public:
-  CombineNopTransPattern(mlir::MLIRContext *context)
-      : OpRewritePattern(context) {}
-
-  LogicalResult matchAndRewrite(TransOp trans,
-                                PatternRewriter &rewriter) const {
-    auto order = trans.getOrder();
-    for (int32_t i = 0; i < order.size(); i++) {
-      if (order[i] != i)
-        return failure();
-    }
-    rewriter.replaceAllUsesWith(trans, trans.getOperand());
-    return success();
-  }
-};
-
-// transpose(transpose(x)) -> transpose(x)
-class CombineNestedTransPattern : public OpRewritePattern<TransOp> {
-public:
-  CombineNestedTransPattern(MLIRContext *context) : OpRewritePattern(context) {}
-
-  mlir::LogicalResult matchAndRewrite(TransOp outer,
-                                      PatternRewriter &rewriter) const {
-    auto inner = outer.getOperand().getDefiningOp<TransOp>();
-    if (!inner)
-      return failure();
-
-    auto order = rewriter.replaceOpWithNewOp<TransOp>(
-        outer, inner.getOperand(),
-        applyPermutation(inner.getOrder(), outer.getOrder()));
-    return success();
-  }
-};
-
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
 
@@ -243,8 +207,6 @@ public:
     // patterns.add<CombineAddPtrPattern>(context);
     patterns.add<CombineBroadcastConstantPattern>(context);
     patterns.add<CombineBroadcastMulReducePattern>(context);
-    patterns.add<CombineNopTransPattern>(context);
-    patterns.add<CombineNestedTransPattern>(context);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
