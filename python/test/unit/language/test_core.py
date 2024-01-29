@@ -2520,10 +2520,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
             # TODO: support out_dtype=float16 for tl.dot on V100
             pytest.skip("Only test out_dtype=float16 on devices with sm >=80")
 
-    if is_hip():
-        if (M, N, K) in [(64, 128, 128)]:
-            pytest.skip(f"test_dot{(M, N, K)} not supported on HIP: memory out of resource.")
-
     torch.backends.cuda.matmul.allow_tf32 = allow_tf32
 
     if num_ctas > 1 and in_dtype == 'int8':
