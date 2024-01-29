@@ -201,6 +201,8 @@ allTransitiveUsesHaveDotEncoding(Value val, bool &needTrans) {
 }
 
 // Return the transitive use of the load which is a dot operand.
+// TODO pawel: perhaps change the name since it is no longer only
+// a dot operand.
 static std::optional<LoadDotOperand> loadDotOperand(tt::LoadOp loadOp,
                                                     bool &hasMMAV3) {
   bool isCandidate = false;
@@ -541,6 +543,20 @@ static void addOps(scf::ForOp forOp, int stage,
   }
 }
 
+static void printSchedule(std::vector<std::pair<Operation *, unsigned>> &schedule, int numStages) {
+  llvm::outs() << "Schedule:\n";
+  for (int i = 0; i < numStages; i++) {
+    llvm::outs() << "Stage " << i << ":\n";
+    for (auto &pair : schedule) {
+      if (pair.second == i) {
+       pair.first->dump();
+      }
+    }
+    llvm::outs() << "\n";
+  }
+
+}
+
 // TODO: check if we can consolidate this with the addDep function.
 static void recursiveHelper(Operation *op, DenseSet<Operation *> &seen,
                             DenseMap<Operation *, unsigned> &insertOpToDistance,
@@ -618,6 +634,9 @@ isScheduleValid(scf::ForOp forOp,
 // matmul loops should be pipelined and is not a generic scheduler.
 static std::vector<std::pair<Operation *, unsigned>>
 createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
+  llvm::outs() << "For loop:\n";
+  forOp.dump();
+
   auto groupedInsertOps = groupInsertOpsByDistanceToDotOp(forOp);
   DenseSet<Operation *> insertOps;
   DenseSet<Operation *> extractOps;
@@ -636,6 +655,12 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
         extractOps.insert(&op);
     }
   }
+  auto printDenseSet = [](DenseSet<Operation *> &set) {
+    for (auto op : set) {
+      op->dump();
+    }
+  };
+
   SmallVector<DenseSet<Operation *>> insertAndDeps;
   DenseSet<Operation *> seen;
   for (unsigned i = 0; i < groupedInsertOps.size(); i++) {
@@ -644,6 +669,9 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
       addDep(op, insertAndDeps.back(), false, &seen);
     }
     seen.insert(insertAndDeps.back().begin(), insertAndDeps.back().end());
+
+    llvm::outs() << "\ninsertAndDeps " << i << ":\n";
+    printDenseSet(insertAndDeps.back());
   }
 
   // Find dependencies with distance of 1.
@@ -665,6 +693,9 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
         }
       }
     }
+
+    llvm::outs() << "\ndistanceOneUsers " << i << ":\n";
+    printDenseSet(distanceOneUsers.back());
   }
   // Schedule loads with a distance of 1 in stage 0
   for (unsigned i = 0; i < groupedInsertOps.size(); i++) {
@@ -684,6 +715,9 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
       if (!isa<tt::LoadOp>(op))
         addDep(op, stage1deps.back(), true, &insertAndDeps[i]);
     }
+
+    llvm::outs() << "\nstage1deps " << i << ":\n";
+    printDenseSet(stage1deps.back());
   }
   DenseSet<Operation *> allInsertAndDeps;
   for (auto &set : insertAndDeps) {
@@ -699,34 +733,45 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
   for (Operation *op : extractOps) {
     addDep(op, extractAndDeps, true, &allInsertAndDeps);
   }
+
+  llvm::outs() << "\nextractAndDeps:\n";
+  printDenseSet(extractAndDeps);
+
   std::vector<std::pair<Operation *, unsigned>> schedule;
   // Schedule stage `numStage - 1` first.
   addOps(forOp, numStages - 1, schedule, [&](Operation *op) {
-    return allInsertAndDeps.count(op) == 0 && allStage1Deps.count(op) == 0 &&
-           extractAndDeps.count(op) == 0;
+    return allInsertAndDeps.count(op) == 0 && allStage1Deps.count(op) == 0/* &&
+           extractAndDeps.count(op) == 0*/;
   });
 
   // Schedule some dependencies with distance of 1 into stage 1 to reduce
   // pressure.
-  unsigned stageIdx = 0;
+  unsigned stageIdx = numStages - 2;
   unsigned stageIncrement =
       ceil<unsigned>(numStages - 2, groupedInsertOps.size());
-  
-  for (int i = 0; i < groupedInsertOps.size(); i++) {
-    auto &group = insertAndDeps[i];
+
+  for (int i = groupedInsertOps.size()-1; i >= 0; i--) {
     auto &group1 = stage1deps[i];
     addOps(forOp, stageIdx + 1, schedule,
            [&](Operation *op) { return group1.count(op); });
+    stageIdx -= stageIncrement;
+  }
 
+  stageIdx = numStages - 2;
+  
+  for (int i = groupedInsertOps.size()-1; i >= 0; i--) {
+    auto &group = insertAndDeps[i];
     addOps(forOp, stageIdx, schedule,
            [&](Operation *op) { return group.count(op); });
-    stageIdx += stageIncrement;
+    stageIdx -= stageIncrement;
   }
 
   // Finally schedule the extract ops in stage `numStage - 2` so that they get
   // pre-fetched and play well with pretech pass.
-  addOps(forOp, numStages - 2, schedule,
-         [&](Operation *op) { return extractAndDeps.count(op); });
+  /*addOps(forOp, numStages - 2, schedule,
+         [&](Operation *op) { return extractAndDeps.count(op); });*/
+  
+  printSchedule(schedule, numStages);
   assert(isScheduleValid(forOp, schedule) && "Invalid schedule.");
   return schedule;
 }
@@ -746,7 +791,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     return !isLoadFromTensorPtr(load.load);
   });
   // 2. Convert the loads into async loads and create the allocs.
-  SmallVector<Value> allocs = createAsynOps(forOp, loads, numStages, hasMMAV3);
+  SmallVector<Value> allocs = createAsynOps(forOp, loads, 2, hasMMAV3);
 
   // 3. Create the final schedule for the kernel loop. This will dictate the
   // stages and order of operations to the pipeline expander.
