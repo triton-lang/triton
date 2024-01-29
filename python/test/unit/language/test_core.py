@@ -2417,7 +2417,7 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
 @pytest.mark.parametrize("perm", list(itertools.permutations([0, 1])))
 def test_trans_2d(dtype_str, shape, perm, device):
     if is_hip():
-        pytest.skip('test_dot for HIP currently broken')
+        pytest.skip('test_trans_2d for HIP currently broken')
 
     @triton.jit
     def kernel(In, Out, in_shape1: tl.constexpr, in_shape2: tl.constexpr, ou_shape1: tl.constexpr,
@@ -2441,7 +2441,7 @@ def test_trans_2d(dtype_str, shape, perm, device):
 @pytest.mark.parametrize("perm", list(itertools.permutations([0, 1, 2, 3])))
 def test_trans_4d(dtype_str, shape, perm, device):
     if is_hip():
-        pytest.skip('test_dot for HIP currently broken')
+        pytest.skip('test_trans_4d for HIP currently broken')
 
     @triton.jit
     def kernel(In, Out,  #
