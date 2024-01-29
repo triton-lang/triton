@@ -79,7 +79,7 @@ static ValueTable getValueTableFromStruct(Value val, int K, int n0, int shapePer
                                    TritonGPUToLLVMTypeConverter *typeConverter,
                                    Type type) {
   ValueTable res;
-  auto elems = typeConverter->unpackLLElements(loc, val, rewriter, type);
+  auto elems = typeConverter->unpackLLElements(loc, val, rewriter);
   int index = 0;
   for (unsigned k = 0; k < K; ++k) {
     for (unsigned m = 0; m < n0; m += shapePerCTA)
