@@ -27,7 +27,7 @@ public:
                                 PatternRewriter &rewriter) const override {
     // Match outerCvt(trans(innerCvt(x))).
     auto trans = outerCvt.getSrc().getDefiningOp<TransOp>();
-    if (!trans)
+    if (!trans || trans.getOrder() != ArrayRef<int32_t>{1, 0})
       return failure();
     auto innerCvt = trans.getSrc().getDefiningOp<ConvertLayoutOp>();
     if (!innerCvt)
@@ -65,7 +65,8 @@ public:
         RankedTensorType::get(innerCvtTy.getShape(),
                               innerCvtTy.getElementType(), newInnerCvtEnc),
         innerCvt.getSrc());
-    auto newTrans = rewriter.create<TransOp>(trans.getLoc(), newInnerCvt);
+    auto newTrans = rewriter.create<TransOp>(trans.getLoc(), newInnerCvt,
+                                             ArrayRef<int32_t>({1, 0}));
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(outerCvt, outerCvtTy,
                                                  newTrans);
     return success();
@@ -220,7 +221,7 @@ public:
 
     // Match outerCvt(trans(innerCvt(x))).
     auto trans = outerCvt.getSrc().getDefiningOp<TransOp>();
-    if (!trans)
+    if (!trans || trans.getOrder() != ArrayRef<int32_t>({1, 0}))
       return failure();
     auto innerCvt = trans.getSrc().getDefiningOp<ConvertLayoutOp>();
     if (!innerCvt)
@@ -258,7 +259,8 @@ public:
 
     auto newInnerCvt = rewriter.create<ConvertLayoutOp>(
         innerCvt.getLoc(), newInnerCvtTy, innerCvt.getSrc());
-    rewriter.replaceOpWithNewOp<TransOp>(outerCvt, newInnerCvt);
+    rewriter.replaceOpWithNewOp<TransOp>(outerCvt, newInnerCvt,
+                                         ArrayRef<int32_t>({1, 0}));
     return success();
   }
 };
