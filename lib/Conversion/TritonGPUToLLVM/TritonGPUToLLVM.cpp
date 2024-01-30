@@ -2,7 +2,7 @@
 #include "Utility.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 
-// namespace {
+namespace {
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -862,17 +862,7 @@ struct AsyncBulkCommitGroupOpConversion
   }
 };
 
-// } // namespace
-namespace mlir {
-namespace LLVM {
-
-void vprintf(StringRef msg, ValueRange args,
-             ConversionPatternRewriter &rewriter) {
-  PrintOpConversion::llPrintf(msg, args, rewriter);
-}
-
-} // namespace LLVM
-} // namespace mlir
+} // namespace
 
 void mlir::triton::populateTritonGPUToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
