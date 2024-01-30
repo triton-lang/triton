@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu -tritongpu-remove-layout-conversions -tritongpu-pipeline=num-stages=3 -canonicalize -test-print-allocation 2>&1 | FileCheck %s
 
-// CHECK: offset = 5, size = 32768
+// CHECK: offset = 0, size = 32768
 // CHECK: offset = 32768, size = 32768
 // CHECK: size = 65536
 module {
