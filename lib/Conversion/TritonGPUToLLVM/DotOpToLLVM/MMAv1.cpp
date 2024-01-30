@@ -16,10 +16,10 @@ static Type getMmaRetType(TensorType operand) {
   return struct_ty(SmallVector<Type>{8, fp32Ty});
 }
 
-static ValueTable
-extractLoadedOperand(Value llStruct, int NK,
-                     ConversionPatternRewriter &rewriter,
-                     TritonGPUToLLVMTypeConverter *typeConverter, Type type) {
+static ValueTable extractLoadedOperand(Value llStruct, int NK,
+                                       ConversionPatternRewriter &rewriter,
+                                       LLVMTypeConverter *typeConverter,
+                                       Type type) {
   ValueTable rcds;
   SmallVector<Value> elems =
       unpackLLElements(llStruct.getLoc(), llStruct, rewriter);
@@ -36,7 +36,7 @@ extractLoadedOperand(Value llStruct, int NK,
 }
 
 LogicalResult convertMMA884(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                            TritonGPUToLLVMTypeConverter *typeConverter,
+                            LLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter) {
   auto *ctx = op.getContext();
   auto loc = op.getLoc();

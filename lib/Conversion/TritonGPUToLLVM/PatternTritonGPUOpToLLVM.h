@@ -7,69 +7,67 @@
 namespace mlir {
 namespace triton {
 
-void populateBarrierOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit);
+void populateBarrierOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                     RewritePatternSet &patterns, int numWarps,
+                                     ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                     PatternBenefit benefit);
 
-void populateClusterOpsToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit);
+void populateClusterOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                      RewritePatternSet &patterns, int numWarps,
+                                      ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                      PatternBenefit benefit);
 
 void populateConvertLayoutOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit);
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit);
 
-void populateDotOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
+void populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns, int numWarps,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                  PatternBenefit benefit);
 
 void populateElementwiseOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    int computeCapability, PatternBenefit benefit);
-
-void populateHistogramOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
     PatternBenefit benefit);
 
+void populateHistogramOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                       RewritePatternSet &patterns,
+                                       int numWarps,
+                                       ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                       PatternBenefit benefit);
+
 void populateLoadStoreOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis,
     mlir::triton::gpu::TMAMetadataTy *tmaMetadata,
     const TensorPtrMapT *tensorPtrMap, PatternBenefit benefit);
 
-void populateReduceOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
+void populateReduceOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                     RewritePatternSet &patterns, int numWarps,
                                     ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                     int computeCapability,
                                     PatternBenefit benefit);
 
 void populateRegReallocOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit);
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit);
 
-void populateScanOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
+void populateScanOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns, int numWarps,
                                   ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                   PatternBenefit benefit);
 
 void populateTensorPtrOpsToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit);
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit);
 
-void populateTritonGPUToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit);
+void populateTritonGPUToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                     RewritePatternSet &patterns, int numWarps,
+                                     ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                     PatternBenefit benefit);
 
-void populateViewOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
+void populateViewOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns, int numWarps,
                                   ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                   PatternBenefit benefit);

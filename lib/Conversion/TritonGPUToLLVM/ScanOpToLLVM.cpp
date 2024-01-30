@@ -423,7 +423,7 @@ ScanOpConversion::getDelinearizedIds(ConversionPatternRewriter &rewriter,
 SmallVector<SmallVector<Value>>
 unpackInputs(Location loc, triton::ScanOp op, triton::ScanOpAdaptor adaptor,
              ConversionPatternRewriter &rewriter,
-             TritonGPUToLLVMTypeConverter &converter) {
+             const LLVMTypeConverter &converter) {
   auto types = op.getInputTypes();
   auto operands = adaptor.getOperands();
   unsigned srcElems = getTotalElemsPerThread(types[0]);
@@ -525,8 +525,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
 } // namespace
 
 void mlir::triton::populateScanOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit) {
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
   patterns.add<ScanOpConversion>(typeConverter, benefit);
 }

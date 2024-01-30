@@ -1177,7 +1177,8 @@ unpackLLElements(Location loc, Value llvmStruct,
   return results;
 }
 
-static Value packLLElements(Location loc, TypeConverter *typeConverter,
+static Value packLLElements(Location loc,
+                            const LLVMTypeConverter *typeConverter,
                             ValueRange resultVals,
                             ConversionPatternRewriter &rewriter, Type type) {
   auto structType =

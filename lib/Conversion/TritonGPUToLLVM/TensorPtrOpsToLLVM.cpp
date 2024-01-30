@@ -27,9 +27,8 @@ using namespace mlir::triton;
 
 namespace {
 struct MakeTensorPtrOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::MakeTensorPtrOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::MakeTensorPtrOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::MakeTensorPtrOp> {
+  using ConvertOpToLLVMPattern<triton::MakeTensorPtrOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::MakeTensorPtrOp op, OpAdaptor adaptor,
@@ -60,10 +59,8 @@ struct MakeTensorPtrOpConversion
   }
 };
 
-struct AdvanceOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::AdvanceOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::AdvanceOp>::ConvertTritonGPUOpToLLVMPattern;
+struct AdvanceOpConversion : public ConvertOpToLLVMPattern<triton::AdvanceOp> {
+  using ConvertOpToLLVMPattern<triton::AdvanceOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::AdvanceOp op, OpAdaptor adaptor,
@@ -96,9 +93,8 @@ struct AdvanceOpConversion
 } // namespace
 
 void mlir::triton::populateTensorPtrOpsToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit) {
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
   patterns.add<MakeTensorPtrOpConversion>(typeConverter, benefit);
   patterns.add<AdvanceOpConversion>(typeConverter, benefit);
   return;

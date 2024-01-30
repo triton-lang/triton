@@ -51,9 +51,8 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
 };
 
 struct BroadcastOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::BroadcastOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::BroadcastOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::BroadcastOp> {
+  using ConvertOpToLLVMPattern<triton::BroadcastOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::BroadcastOp op, OpAdaptor adaptor,
@@ -116,10 +115,8 @@ struct BroadcastOpConversion
 //
 // For each operand, we print all of the values contained in this GPU thread,
 // one per line, along with the index of the value in its tensor.
-struct PrintOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::PrintOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::PrintOp>::ConvertTritonGPUOpToLLVMPattern;
+struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
+  using ConvertOpToLLVMPattern<triton::PrintOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::PrintOp op, OpAdaptor adaptor,
@@ -400,10 +397,8 @@ struct PrintOpConversion
   }
 };
 
-struct AssertOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::AssertOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::AssertOp>::ConvertTritonGPUOpToLLVMPattern;
+struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
+  using ConvertOpToLLVMPattern<triton::AssertOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::AssertOp op, OpAdaptor adaptor,
@@ -499,12 +494,10 @@ struct AssertOpConversion
 };
 
 struct MakeRangeOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::MakeRangeOp> {
+    : public ConvertOpToLLVMPattern<triton::MakeRangeOp> {
 
-  MakeRangeOpConversion(TritonGPUToLLVMTypeConverter &converter,
-                        PatternBenefit benefit)
-      : ConvertTritonGPUOpToLLVMPattern<triton::MakeRangeOp>(converter,
-                                                             benefit) {}
+  MakeRangeOpConversion(LLVMTypeConverter &converter, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::MakeRangeOp>(converter, benefit) {}
 
   LogicalResult
   matchAndRewrite(triton::MakeRangeOp op, OpAdaptor adaptor,
@@ -536,9 +529,8 @@ struct MakeRangeOpConversion
 };
 
 struct GetProgramIdOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::GetProgramIdOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::GetProgramIdOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::GetProgramIdOp> {
+  using ConvertOpToLLVMPattern<triton::GetProgramIdOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
@@ -551,9 +543,9 @@ struct GetProgramIdOpConversion
 };
 
 struct GetNumProgramsOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::GetNumProgramsOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::GetNumProgramsOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::GetNumProgramsOp> {
+  using ConvertOpToLLVMPattern<
+      triton::GetNumProgramsOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::GetNumProgramsOp op, OpAdaptor adaptor,
@@ -581,10 +573,10 @@ struct GetNumProgramsOpConversion
 // before async dialect is done. These concepts should appear in ttgpu
 // level, and they are planned to be deprecated along with ttgpu.mbarrier_xxx
 // ops.
-struct GetThreadIdOpConversion : public ConvertTritonGPUOpToLLVMPattern<
-                                     triton::nvidia_gpu::GetThreadIdOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::GetThreadIdOp>::ConvertTritonGPUOpToLLVMPattern;
+struct GetThreadIdOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::GetThreadIdOp> {
+  using ConvertOpToLLVMPattern<
+      triton::nvidia_gpu::GetThreadIdOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::GetThreadIdOp op, OpAdaptor adaptor,
@@ -595,10 +587,9 @@ struct GetThreadIdOpConversion : public ConvertTritonGPUOpToLLVMPattern<
 };
 
 struct GetCanonicalWarpIdConversion
-    : public ConvertTritonGPUOpToLLVMPattern<
-          triton::nvidia_gpu::GetCanonicalWarpId> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::GetCanonicalWarpId>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::GetCanonicalWarpId> {
+  using ConvertOpToLLVMPattern<
+      triton::nvidia_gpu::GetCanonicalWarpId>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::GetCanonicalWarpId op, OpAdaptor adaptor,
@@ -609,10 +600,9 @@ struct GetCanonicalWarpIdConversion
 };
 
 struct GetClusterCTAIdOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<
-          triton::nvidia_gpu::GetClusterCTAIdOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::GetClusterCTAIdOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::GetClusterCTAIdOp> {
+  using ConvertOpToLLVMPattern<
+      triton::nvidia_gpu::GetClusterCTAIdOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::GetClusterCTAIdOp op, OpAdaptor adaptor,
@@ -622,10 +612,8 @@ struct GetClusterCTAIdOpConversion
   }
 };
 
-struct AddPtrOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::AddPtrOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::AddPtrOp>::ConvertTritonGPUOpToLLVMPattern;
+struct AddPtrOpConversion : public ConvertOpToLLVMPattern<triton::AddPtrOp> {
+  using ConvertOpToLLVMPattern<triton::AddPtrOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::AddPtrOp op, OpAdaptor adaptor,
@@ -664,9 +652,9 @@ struct AddPtrOpConversion
 };
 
 struct AllocTensorOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::AllocTensorOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::AllocTensorOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::gpu::AllocTensorOp> {
+  using ConvertOpToLLVMPattern<
+      triton::gpu::AllocTensorOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::gpu::AllocTensorOp op, OpAdaptor adaptor,
@@ -703,9 +691,9 @@ struct AllocTensorOpConversion
 };
 
 struct DeallocTensorOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::DeallocTensorOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::DeallocTensorOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::gpu::DeallocTensorOp> {
+  using ConvertOpToLLVMPattern<
+      triton::gpu::DeallocTensorOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::gpu::DeallocTensorOp op, OpAdaptor adaptor,
@@ -716,9 +704,9 @@ struct DeallocTensorOpConversion
 };
 
 struct ExtractSliceOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::ExtractSliceOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::ExtractSliceOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::gpu::ExtractSliceOp> {
+  using ConvertOpToLLVMPattern<
+      triton::gpu::ExtractSliceOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::gpu::ExtractSliceOp op, OpAdaptor adaptor,
@@ -776,9 +764,9 @@ struct ExtractSliceOpConversion
 };
 
 struct AsyncWaitOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::AsyncWaitOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::AsyncWaitOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::gpu::AsyncWaitOp> {
+  using ConvertOpToLLVMPattern<
+      triton::gpu::AsyncWaitOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::gpu::AsyncWaitOp op, OpAdaptor adaptor,
@@ -800,9 +788,9 @@ struct AsyncWaitOpConversion
 };
 
 struct AsyncCommitGroupOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::AsyncCommitGroupOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::AsyncCommitGroupOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::gpu::AsyncCommitGroupOp> {
+  using ConvertOpToLLVMPattern<
+      triton::gpu::AsyncCommitGroupOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::gpu::AsyncCommitGroupOp op, OpAdaptor adaptor,
@@ -818,9 +806,9 @@ struct AsyncCommitGroupOpConversion
 };
 
 struct AsyncBulkWaitOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::AsyncBulkWaitOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::AsyncBulkWaitOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::gpu::AsyncBulkWaitOp> {
+  using ConvertOpToLLVMPattern<
+      triton::gpu::AsyncBulkWaitOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::gpu::AsyncBulkWaitOp op, OpAdaptor adaptor,
@@ -842,10 +830,9 @@ struct AsyncBulkWaitOpConversion
 };
 
 struct AsyncBulkCommitGroupOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<
-          triton::gpu::AsyncBulkCommitGroupOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::AsyncBulkCommitGroupOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::gpu::AsyncBulkCommitGroupOp> {
+  using ConvertOpToLLVMPattern<
+      triton::gpu::AsyncBulkCommitGroupOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::gpu::AsyncBulkCommitGroupOp op, OpAdaptor adaptor,
@@ -863,9 +850,8 @@ struct AsyncBulkCommitGroupOpConversion
 } // namespace
 
 void mlir::triton::populateTritonGPUToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit) {
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
   patterns.add<AllocTensorOpConversion>(typeConverter, benefit);
   patterns.add<DeallocTensorOpConversion>(typeConverter, benefit);

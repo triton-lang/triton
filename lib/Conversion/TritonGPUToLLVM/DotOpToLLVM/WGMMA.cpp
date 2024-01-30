@@ -193,7 +193,7 @@ private:
   Value descriptor;
 };
 
-DotOpMmaV3SmemLoader loadA(TritonGPUToLLVMTypeConverter *typeConverter,
+DotOpMmaV3SmemLoader loadA(LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Location loc,
                            const NvidiaMmaEncodingAttr &mmaEncoding,
                            Value tensor, Value smemObjBase, Value thread) {
@@ -230,7 +230,7 @@ DotOpMmaV3SmemLoader loadA(TritonGPUToLLVMTypeConverter *typeConverter,
           loc};
 }
 
-DotOpMmaV3SmemLoader loadB(TritonGPUToLLVMTypeConverter *typeConverter,
+DotOpMmaV3SmemLoader loadB(LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Location loc,
                            NvidiaMmaEncodingAttr &mmaEncoding, Value tensor,
                            Value base, Value thread) {
@@ -367,7 +367,7 @@ static SmallVector<Value> emitWait(ConversionPatternRewriter &rewriter,
   return results;
 }
 
-LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
+LogicalResult convertDot(LLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, Location loc,
                          Operation *op, Value a, Value b, Value c, Value d,
                          Value loadedA, Value loadedB, Value loadedC,
@@ -522,7 +522,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
 }
 
 LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                           TritonGPUToLLVMTypeConverter *typeConverter,
+                           LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Value thread) {
   auto loc = op.getLoc();
   Value A = op.getA();
@@ -548,7 +548,7 @@ LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
 LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
                                 triton::nvidia_gpu::DotAsyncOp::Adaptor adaptor,
-                                TritonGPUToLLVMTypeConverter *typeConverter,
+                                LLVMTypeConverter *typeConverter,
                                 ConversionPatternRewriter &rewriter,
                                 Value thread) {
   auto loc = op.getLoc();

@@ -143,39 +143,6 @@ protected:
   }
 };
 
-class ConvertTritonGPUOpToLLVMPatternBase {
-public:
-  explicit ConvertTritonGPUOpToLLVMPatternBase(
-      TritonGPUToLLVMTypeConverter &typeConverter)
-      : converter(&typeConverter) {}
-
-  TritonGPUToLLVMTypeConverter *getTypeConverter() const { return converter; }
-
-private:
-protected:
-  TritonGPUToLLVMTypeConverter *converter;
-};
-
-template <typename SourceOp>
-class ConvertTritonGPUOpToLLVMPattern
-    : public ConvertOpToLLVMPattern<SourceOp>,
-      public ConvertTritonGPUOpToLLVMPatternBase {
-public:
-  using OpAdaptor = typename SourceOp::Adaptor;
-
-  explicit ConvertTritonGPUOpToLLVMPattern(
-      TritonGPUToLLVMTypeConverter &typeConverter, PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
-        ConvertTritonGPUOpToLLVMPatternBase(typeConverter) {}
-
-protected:
-  TritonGPUToLLVMTypeConverter *getTypeConverter() const {
-    LLVMTypeConverter *ret =
-        ((ConvertTritonGPUOpToLLVMPatternBase *)this)->getTypeConverter();
-    return (TritonGPUToLLVMTypeConverter *)ret;
-  }
-};
-
 namespace mlir::triton {
 class ReduceOp;
 class ScanOp;
@@ -183,15 +150,14 @@ class ScanOp;
 
 template <typename SourceOp>
 class ConvertTritonGPUReduceScanToLLVMPattern
-    : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
+    : public ConvertOpToLLVMPattern<SourceOp> {
 public:
   // Make sure the class is only instantiated with Reduce and Scan
   static_assert(std::is_same_v<SourceOp, ReduceOp> ||
                 std::is_same_v<SourceOp, ScanOp>);
 
-  using ConvertTritonGPUOpToLLVMPatternBase::getTypeConverter;
-  using ConvertTritonGPUOpToLLVMPattern<
-      SourceOp>::ConvertTritonGPUOpToLLVMPattern;
+  using ConvertOpToLLVMPattern<SourceOp>::getTypeConverter;
+  using ConvertOpToLLVMPattern<SourceOp>::ConvertOpToLLVMPattern;
 
   // Return the pointee type of the shared memory pointer for operand i.
   Type getElementType(SourceOp op, int i) const {

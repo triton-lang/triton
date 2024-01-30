@@ -135,10 +135,9 @@ static SmallVector<Value> computeCrossWarpHistogram(
 
 namespace {
 struct HistogramOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::HistogramOp> {
+    : public ConvertOpToLLVMPattern<triton::HistogramOp> {
 public:
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::HistogramOp>::ConvertTritonGPUOpToLLVMPattern;
+  using ConvertOpToLLVMPattern<triton::HistogramOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::HistogramOp op, OpAdaptor adaptor,
@@ -188,8 +187,7 @@ public:
 } // namespace
 
 void mlir::triton::populateHistogramOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit) {
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
   patterns.add<HistogramOpConversion>(typeConverter, benefit);
 }

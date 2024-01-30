@@ -35,7 +35,7 @@ SmallVector<CoordTy> getMNCoords(Value thread, Location loc,
 
 Value convertLayout(int opIdx, Value tensor, const SharedMemoryObject &smemObj,
                     Value thread, Location loc,
-                    TritonGPUToLLVMTypeConverter *typeConverter,
+                    const LLVMTypeConverter *typeConverter,
                     ConversionPatternRewriter &rewriter, Type resultTy);
 
 } // namespace SharedToDotOperandMMAv1
@@ -45,22 +45,22 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor,
                     DotOperandEncodingAttr bEncoding,
                     const SharedMemoryObject &smemObj,
-                    TritonGPUToLLVMTypeConverter *typeConverter, Value thread);
+                    const LLVMTypeConverter *typeConverter, Value thread);
 }
 
 namespace SharedToDotOperandFMA {
 Value convertLayout(int opIdx, Value B, Value llB, BlockedEncodingAttr dLayout,
                     Value thread, Location loc,
-                    TritonGPUToLLVMTypeConverter *typeConverter,
+                    const LLVMTypeConverter *typeConverter,
                     ConversionPatternRewriter &rewriter);
 }
 
 namespace {
 struct ConvertLayoutOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
+    : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
 public:
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::ConvertLayoutOp>::ConvertTritonGPUOpToLLVMPattern;
+  using ConvertOpToLLVMPattern<
+      triton::gpu::ConvertLayoutOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
@@ -1072,8 +1072,7 @@ private:
 } // namespace
 
 void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit) {
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
   patterns.add<ConvertLayoutOpConversion>(typeConverter, benefit);
 }

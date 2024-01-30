@@ -323,7 +323,7 @@ struct ConvertTritonGPUToLLVM
 
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
-    TritonGPUToLLVMTypeConverter typeConverter(context, option);
+    LLVMTypeConverter typeConverter(context, option);
     TritonLLVMConversionTarget convTarget(*context, target);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
@@ -398,7 +398,7 @@ struct ConvertTritonGPUToLLVM
     // Convert call and ret ops
     {
       mlir::LowerToLLVMOptions option(context);
-      TritonGPUToLLVMTypeConverter typeConverter(context, option);
+      LLVMTypeConverter typeConverter(context, option);
       TritonLLVMFunctionConversionTarget funcTarget(*context, target);
       RewritePatternSet funcPatterns(context);
       funcPatterns.add<CallOpConversion>(typeConverter, numWarps, 1);
@@ -487,7 +487,7 @@ struct ConvertTritonGPUToLLVM
 private:
   mlir::triton::gpu::TMAMetadataTy *tmaMetadata = nullptr;
 
-  void initSharedMemory(TritonGPUToLLVMTypeConverter &typeConverter) {
+  void initSharedMemory(LLVMTypeConverter &typeConverter) {
     ModuleOp mod = getOperation();
     OpBuilder b(mod.getBodyRegion());
     auto ctx = mod.getContext();
