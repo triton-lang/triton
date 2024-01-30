@@ -43,7 +43,7 @@ unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape,
   if (auto tritonGPUAttr = layout.dyn_cast<TritonGPU_AttrTrait>()) {
     return tritonGPUAttr.getTotalElemsPerThread(shape, eltTy);
   } else {
-    llvm::report_fatal_error("getElemsPerThread not implemented");
+    llvm::report_fatal_error("getTotalElemsPerThread not implemented");
     return 0;
   }
 }
@@ -199,7 +199,7 @@ SmallVector<unsigned> getShapePerCTATile(Attribute layout,
   if (auto distributedLayout = layout.dyn_cast<DistributedEncodingTrait>()) {
     return distributedLayout.getShapePerCTATile(tensorShape);
   } else {
-    llvm::report_fatal_error("getThreadsPerWarp not implemented");
+    llvm::report_fatal_error("getShapePerCTATile not implemented");
     return SmallVector<unsigned>();
   }
 }
