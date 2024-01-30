@@ -267,7 +267,7 @@ struct ExpandDimsOpConversion : public ConvertOpToLLVMPattern<ExpandDimsOp> {
   }
 };
 
-struct TransOpConversion : public ConvertTritonGPUOpToLLVMPattern<TransOp> {
+struct TransOpConversion : public ConvertOpToLLVMPattern<TransOp> {
   using ConvertTritonGPUOpToLLVMPattern::ConvertTritonGPUOpToLLVMPattern;
 
   LogicalResult
