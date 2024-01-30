@@ -38,7 +38,7 @@ static constexpr int log2Int(int64_t num) {
   return (num > 1) ? 1 + log2Int(num / 2) : 0;
 }
 
-// If lhs * rhs overflows, return max value
+// if lhs * rhs overflows, return max value
 static int64_t multiplyDivisor(IntegerType intTy, int64_t lhs, int64_t rhs) {
   // Use a single byte as the minimum divisor
   int64_t maxDivisor = 1 << (std::max<int64_t>(8, intTy.getWidth()) - 2);
@@ -238,8 +238,7 @@ public:
     return multiplyDivisor(intTy, lhsDivisibility, rhsDivisibility);
   }
 
-  static std::optional<int64_t> getConstantValue(IntegerType intTy,
-                                                 const AxisInfo &lhs,
+  static std::optional<int64_t> getConstantValue(const AxisInfo &lhs,
                                                  const AxisInfo &rhs) {
     if (lhs.getConstantValue().has_value() &&
         rhs.getConstantValue().has_value())
@@ -276,8 +275,7 @@ private:
 
   std::optional<int64_t> getConstantValue(arith::MulIOp op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
-    IntegerType intTy = getElementIntegerType(op.getResult().getType());
-    return getConstantValue(intTy, lhs, rhs);
+    return getConstantValue(lhs, rhs);
   }
 };
 

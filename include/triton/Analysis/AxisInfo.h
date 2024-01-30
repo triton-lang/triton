@@ -220,7 +220,15 @@ public:
         contiguity.push_back(1);
         constancy.push_back(
             std::max(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
-        divisibility.push_back(highestPowOf2Divisor(constantValue.value()));
+        auto intTy =
+            op->getNumResults() > 0
+                ? op->getResult(0).getType().template dyn_cast<IntegerType>()
+                : nullptr;
+        int64_t divisor = highestPowOf2Divisor(constantValue.value());
+        int64_t intTyDivisor =
+            intTy ? (1 << (std::max<int64_t>(8, intTy.getWidth()) - 2))
+                  : divisor;
+        divisibility.push_back(std::min<int64_t>(divisor, intTyDivisor));
       } else {
         contiguity.push_back(getContiguity(op, lhsInfo, rhsInfo, d));
         constancy.push_back(getConstancy(op, lhsInfo, rhsInfo, d));
