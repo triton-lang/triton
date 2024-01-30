@@ -312,18 +312,20 @@ public:
       if (minBitwidth == 8 && std::max(aBitWidth, bBitWidth) == 32) {
         minBitwidth = 0;
       }
-      Type minType = IntegerType::get(ctx, minBitwidth);
+      Type aEltType = oldAType.getElementType();
+      Type bEltType = oldBType.getElementType();
+      if (minBitwidth > 0) {
+        aEltType = bEltType = IntegerType::get(ctx, minBitwidth);
+      }
       // convert A operand
       auto newAEncoding = ttg::DotOperandEncodingAttr::get(
-          oldAType.getContext(), 0, newRetType.getEncoding(),
-          minBitwidth > 0 ? minType : oldAType.getElementType());
+          oldAType.getContext(), 0, newRetType.getEncoding(), aEltType);
       auto newAType = RankedTensorType::get(
           oldAType.getShape(), oldAType.getElementType(), newAEncoding);
       a = rewriter.create<ttg::ConvertLayoutOp>(a.getLoc(), newAType, a);
       // convert B operand
       auto newBEncoding = ttg::DotOperandEncodingAttr::get(
-          oldBType.getContext(), 1, newRetType.getEncoding(),
-          minBitwidth > 0 ? minType : oldBType.getElementType());
+          oldBType.getContext(), 1, newRetType.getEncoding(), bEltType);
       auto newBType = RankedTensorType::get(
           oldBType.getShape(), oldBType.getElementType(), newBEncoding);
       b = rewriter.create<ttg::ConvertLayoutOp>(b.getLoc(), newBType, b);

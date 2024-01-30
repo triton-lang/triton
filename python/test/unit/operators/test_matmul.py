@@ -72,7 +72,6 @@ import triton.ops
             ("float8e4nv", "float16"),
             ("float16", "float8e5"),
             ("int8", "bfloat16"),
-            ("int8", "float32"),
             ("float16", "int8"),
             ("float16", "float32"),
             ("float32", "float16"),
@@ -92,6 +91,10 @@ import triton.ops
             ("bfloat16", "float32"),
             ("float32", "bfloat16"),
         ] for AT in [False, True] for BT in [False, True]],
+        # mixed-precision no pipelining
+        *[[
+            (32, 32, 32, 1, 1, 1, None, None, None, AT, BT, "int8", "float32", True, FASTACCUM, None, None),
+        ] for AT in [False, True] for BT in [False, True] for FASTACCUM in [True, False]],
         # acc-out-dtype and output_dtype
         *[[
             (32, 32, 32, 1, 1, 2, None, None, None, False, False, "float16", "float16", True, True, ACC_DTYPE,
