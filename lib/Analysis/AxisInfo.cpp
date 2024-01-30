@@ -217,67 +217,6 @@ public:
   }
 };
 
-class MulIOpAxisInfoVisitor final : public BinaryOpVisitorImpl<arith::MulIOp> {
-public:
-  using BinaryOpVisitorImpl<arith::MulIOp>::BinaryOpVisitorImpl;
-
-  static int64_t getDivisibility(IntegerType intTy, const AxisInfo &lhs,
-                                 const AxisInfo &rhs, int dim) {
-    auto lhsDivisibility = lhs.getDivisibility(dim);
-    if (lhs.getContiguity(dim) > 1 &&
-        !(rhs.getConstantValue().has_value() && rhs.getConstantValue() == 1)) {
-      // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
-      lhsDivisibility = 1;
-    }
-    auto rhsDivisibility = rhs.getDivisibility(dim);
-    if (rhs.getContiguity(dim) > 1 &&
-        !(lhs.getConstantValue().has_value() && lhs.getConstantValue() == 1)) {
-      // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
-      rhsDivisibility = 1;
-    }
-    return multiplyDivisor(intTy, lhsDivisibility, rhsDivisibility);
-  }
-
-  static std::optional<int64_t> getConstantValue(const AxisInfo &lhs,
-                                                 const AxisInfo &rhs) {
-    if (lhs.getConstantValue().has_value() &&
-        rhs.getConstantValue().has_value())
-      return {lhs.getConstantValue().value() * rhs.getConstantValue().value()};
-    return {};
-  }
-
-private:
-  int64_t getContiguity(arith::MulIOp op, const AxisInfo &lhs,
-                        const AxisInfo &rhs, int dim) override {
-    // lhs * 1 = lhs
-    auto lhsContiguity =
-        rhs.getConstantValue().has_value() && rhs.getConstantValue() == 1
-            ? lhs.getContiguity(dim)
-            : 1;
-    // 1 * rhs = rhs
-    auto rhsContiguity =
-        lhs.getConstantValue().has_value() && lhs.getConstantValue() == 1
-            ? rhs.getContiguity(dim)
-            : 1;
-    return std::max(lhsContiguity, rhsContiguity);
-  }
-
-  int64_t getConstancy(arith::MulIOp op, const AxisInfo &lhs,
-                       const AxisInfo &rhs, int dim) override {
-    return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
-  }
-
-  int64_t getDivisibility(arith::MulIOp op, const AxisInfo &lhs,
-                          const AxisInfo &rhs, int dim) override {
-    IntegerType intTy = getElementIntegerType(op.getResult().getType());
-    return getDivisibility(intTy, lhs, rhs, dim);
-  }
-
-  std::optional<int64_t> getConstantValue(arith::MulIOp op, const AxisInfo &lhs,
-                                          const AxisInfo &rhs) override {
-    return getConstantValue(lhs, rhs);
-  }
-};
 
 template <typename OpTy>
 class AddSubOpAxisInfoVisitor final : public BinaryOpVisitorImpl<OpTy> {
@@ -303,15 +242,20 @@ private:
       // is equivalent to
       //  %0 = mul %rhs, %elemSize
       //  %ptr = add %lhs, %0
+      // The result will still be contiguous in terms of elements but not bytes
+      // For example:
+      // addptr [16] : !ptr<i32>, [0, 1, 2, 3] : i32 -> !ptr<i32>
+      // returns:
+      // [16, 20, 24, 28] : !ptr<i32>
+      // with element locations:
+      // [4, 5, 6, 7]
+      // It is "strided contiguous" with a divisilibity of 16 bytes
       auto rank = lhs.getRank();
       auto elemSize = std::max<int64_t>(
           1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
-      auto elemSizeAxisInfo = AxisInfo(AxisInfo::DimVectorT(rank, 1),
-                                       AxisInfo::DimVectorT(rank, elemSize),
-                                       AxisInfo::DimVectorT(rank, 1), elemSize);
       auto intTy = getElementIntegerType(op.getResult().getType());
-      rhsDivisibility = MulIOpAxisInfoVisitor::getDivisibility(
-          intTy, rhs, elemSizeAxisInfo, dim);
+      rhsDivisibility =
+          multiplyDivisor(intTy, rhs.getDivisibility(dim), elemSize);
     }
     return gcd(lhs.getDivisibility(dim), rhsDivisibility);
   }
@@ -336,14 +280,62 @@ private:
         auto rank = lhs.getRank();
         auto elemSize = std::max<int64_t>(
             1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
-        auto elemSizeAxisInfo = AxisInfo(
-            AxisInfo::DimVectorT(rank, 1), AxisInfo::DimVectorT(rank, elemSize),
-            AxisInfo::DimVectorT(rank, 1), elemSize);
-        auto rhsConstantValue =
-            MulIOpAxisInfoVisitor::getConstantValue(rhs, elemSizeAxisInfo);
-        return {lhs.getConstantValue().value() + rhsConstantValue.value()};
+        auto rhsValue = rhs.getConstantValue().value() * elemSize;
+        return {lhs.getConstantValue().value() + rhsValue};
       }
     }
+    return {};
+  }
+};
+
+class MulIOpAxisInfoVisitor final : public BinaryOpVisitorImpl<arith::MulIOp> {
+public:
+  using BinaryOpVisitorImpl<arith::MulIOp>::BinaryOpVisitorImpl;
+
+private:
+  int64_t getContiguity(arith::MulIOp op, const AxisInfo &lhs,
+                        const AxisInfo &rhs, int dim) override {
+    // lhs * 1 = lhs
+    auto lhsContiguity =
+        rhs.getConstantValue().has_value() && rhs.getConstantValue() == 1
+            ? lhs.getContiguity(dim)
+            : 1;
+    // 1 * rhs = rhs
+    auto rhsContiguity =
+        lhs.getConstantValue().has_value() && lhs.getConstantValue() == 1
+            ? rhs.getContiguity(dim)
+            : 1;
+    return std::max(lhsContiguity, rhsContiguity);
+  }
+
+  int64_t getConstancy(arith::MulIOp op, const AxisInfo &lhs,
+                       const AxisInfo &rhs, int dim) override {
+    return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
+  }
+
+  int64_t getDivisibility(arith::MulIOp op, const AxisInfo &lhs,
+                          const AxisInfo &rhs, int dim) override {
+    IntegerType intTy = getElementIntegerType(op.getResult().getType());
+    auto lhsDivisibility = lhs.getDivisibility(dim);
+    if (lhs.getContiguity(dim) > 1 &&
+        !(rhs.getConstantValue().has_value() && rhs.getConstantValue() == 1)) {
+      // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
+      lhsDivisibility = 1;
+    }
+    auto rhsDivisibility = rhs.getDivisibility(dim);
+    if (rhs.getContiguity(dim) > 1 &&
+        !(lhs.getConstantValue().has_value() && lhs.getConstantValue() == 1)) {
+      // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
+      rhsDivisibility = 1;
+    }
+    return multiplyDivisor(intTy, lhsDivisibility, rhsDivisibility);
+  }
+
+  std::optional<int64_t> getConstantValue(arith::MulIOp op, const AxisInfo &lhs,
+                                          const AxisInfo &rhs) override {
+    if (lhs.getConstantValue().has_value() &&
+        rhs.getConstantValue().has_value())
+      return {lhs.getConstantValue().value() * rhs.getConstantValue().value()};
     return {};
   }
 };
@@ -949,8 +941,6 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   CastOpAxisInfoVisitor<arith::ExtUIOp>,
                   CastOpAxisInfoVisitor<arith::TruncIOp>,
                   CastOpAxisInfoVisitor<arith::IndexCastOp>,
-                  CastOpAxisInfoVisitor<triton::PtrToIntOp>,
-                  CastOpAxisInfoVisitor<triton::IntToPtrOp>,
                   CastOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
                   CastOpAxisInfoVisitor<mlir::UnrealizedConversionCastOp>,
                   CastOpAxisInfoVisitor<triton::BitcastOp>>();
