@@ -29,6 +29,8 @@ using namespace mlir;
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
+static const char *kNumStagesAttrName = "tt.num_stages";
+
 // Return true if the preconditions for pipelining the loop are met.
 bool preCondition(scf::ForOp forOp) {
   // Skip loop with distance > 1 for now.
@@ -85,13 +87,22 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
     this->computeCapability = computeCapability;
   }
 
+  int getNumStagesOrDefault(scf::ForOp forOp) {
+    // Use the attribute attached to the loop if it exists otherwise use the
+    // global control.
+    if (!forOp->hasAttr(kNumStagesAttrName))
+      return numStages;
+    return forOp->getAttr(kNumStagesAttrName).cast<IntegerAttr>().getInt();
+  }
+
   void runOnOperation() override {
     if (this->numStages <= 1)
       return;
     SmallVector<scf::ForOp> loops;
     getOperation()->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
     for (scf::ForOp forOp : loops) {
-      pipelineLoop(forOp, numStages);
+      int loopNumStages = getNumStagesOrDefault(forOp);
+      pipelineLoop(forOp, loopNumStages);
     }
 
     // schedule the waits
