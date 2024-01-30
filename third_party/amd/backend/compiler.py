@@ -100,7 +100,7 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_accelerate_matmul(pm, opt.matrix_core_version, opt.matrix_inst_shape)
         amd.passes.ttgpuir.add_remove_layout_conversions(pm)
-        # amd.passes.ttgpuir.add_optimize_epilogue(pm)
+        amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm)
         if opt.num_stages == 0 and opt.matrix_core_version != 0:
             amd.passes.ttgpuir.add_stream_pipeline(pm)

@@ -2,6 +2,7 @@
 import itertools
 import re
 from typing import Optional, Union
+import math
 
 import numpy as np
 import pytest
@@ -2411,6 +2412,70 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
     assert 'st.global.v4' in ptx
 
 
+@pytest.mark.parametrize("dtype_str", ["int32", "int8"])
+@pytest.mark.parametrize("shape", [(2, 4), (16, 16)])
+@pytest.mark.parametrize("perm", list(itertools.permutations([0, 1])))
+def test_trans_2d(dtype_str, shape, perm, device):
+    if is_hip():
+        pytest.skip('test_trans_2d for HIP currently broken')
+
+    @triton.jit
+    def kernel(In, Out, in_shape1: tl.constexpr, in_shape2: tl.constexpr, ou_shape1: tl.constexpr,
+               ou_shape2: tl.constexpr, trans1: tl.constexpr, trans2: tl.constexpr):
+        in_offs = tl.arange(0, in_shape1)[:, None] * in_shape2 + tl.arange(0, in_shape2)[None, :]
+        ou_offs = tl.arange(0, ou_shape1)[:, None] * ou_shape2 + tl.arange(0, ou_shape2)[None, :]
+        tl.store(Out + ou_offs, tl.permute(tl.load(In + in_offs), (trans1, trans2)))
+
+    input = torch.arange(math.prod(shape), dtype=getattr(torch, dtype_str), device=device).reshape(shape)
+    expected = torch.permute(input, perm)
+    # Don't do zeros_like -- that copies the layout, which we don't want.
+    actual = torch.zeros(expected.shape, dtype=getattr(torch, dtype_str), device=device)
+
+    kernel[(1, )](input, actual, *shape, *[shape[i] for i in perm], *perm)
+
+    np.testing.assert_equal(to_numpy(expected), to_numpy(actual))
+
+
+@pytest.mark.parametrize("dtype_str", ["int32", "int8"])
+@pytest.mark.parametrize("shape", [(2, 2, 8, 64), (4, 4, 4, 4)])
+@pytest.mark.parametrize("perm", list(itertools.permutations([0, 1, 2, 3])))
+def test_trans_4d(dtype_str, shape, perm, device):
+    if is_hip():
+        pytest.skip('test_trans_4d for HIP currently broken')
+
+    @triton.jit
+    def kernel(In, Out,  #
+               in_shape1: tl.constexpr, in_shape2: tl.constexpr, in_shape3: tl.constexpr, in_shape4: tl.constexpr,
+               ou_shape1: tl.constexpr, ou_shape2: tl.constexpr, ou_shape3: tl.constexpr, ou_shape4: tl.constexpr,
+               trans1: tl.constexpr, trans2: tl.constexpr, trans3: tl.constexpr, trans4: tl.constexpr):
+        in_ptr = tl.make_block_ptr(
+            base=In,
+            shape=(in_shape1, in_shape2, in_shape3, in_shape4),
+            strides=(in_shape4 * in_shape3 * in_shape2, in_shape4 * in_shape3, in_shape4, 1),
+            offsets=(0, 0, 0, 0),
+            block_shape=(in_shape1, in_shape2, in_shape3, in_shape4),
+            order=(3, 2, 1, 0),
+        )
+        out_ptr = tl.make_block_ptr(
+            base=Out,
+            shape=(ou_shape1, ou_shape2, ou_shape3, ou_shape4),
+            strides=(ou_shape4 * ou_shape3 * ou_shape2, ou_shape4 * ou_shape3, ou_shape4, 1),
+            offsets=(0, 0, 0, 0),
+            block_shape=(ou_shape1, ou_shape2, ou_shape3, ou_shape4),
+            order=(3, 2, 1, 0),
+        )
+        tl.store(out_ptr, tl.permute(tl.load(in_ptr), (trans1, trans2, trans3, trans4)))
+
+    input = torch.arange(math.prod(shape), dtype=getattr(torch, dtype_str), device=device).reshape(shape)
+    expected = torch.permute(input, perm)
+    # Don't do zeros_like -- that copies the layout, which we don't want.
+    actual = torch.zeros(expected.shape, dtype=getattr(torch, dtype_str), device=device)
+
+    kernel[(1, )](input, actual, *shape, *[shape[i] for i in perm], *perm, num_warps=8)
+
+    np.testing.assert_equal(to_numpy(expected), to_numpy(actual))
+
+
 # ---------------
 # test dot
 # ---------------
@@ -2455,15 +2520,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
             # TODO: support out_dtype=float16 for tl.dot on V100
             pytest.skip("Only test out_dtype=float16 on devices with sm >=80")
 
-    if is_hip():
-        if (M, N, K) in [(64, 128, 128)]:
-            pytest.skip(f"test_dot{(M, N, K)} not supported on HIP: memory out of resource.")
-        if (M, N, K, num_warps) in [(128, 256, 32, 8), (128, 128, 64, 4)]:
-            pytest.skip(f"test_dot{(M, N, K)} not supported on HIP. Reduce Warp to work")
-        if M == 16 or N == 16 or K == 16:
-            pytest.skip(f"test_dot{(M, N, K)} segfaults on HIP")
-        if epilogue == "softmax":
-            pytest.skip(f"test_dot{epilogue} segfaults on HIP")
+    if (M, N, K, num_warps) in [(128, 256, 32, 8)]:
+        pytest.skip(f"test_dot{(M, N, K)} not supported on HIP: memory out of resource")
 
     torch.backends.cuda.matmul.allow_tf32 = allow_tf32
 
@@ -3237,10 +3295,6 @@ def test_value_specialization_overflow(value: int, overflow: bool, device) -> No
 @pytest.mark.parametrize("is_lhs_constexpr", [False, True])
 @pytest.mark.parametrize("is_rhs_constexpr", [True, False])
 def test_bin_op_constexpr(op, is_lhs_constexpr, is_rhs_constexpr, device):
-    if is_hip():
-        if (is_rhs_constexpr, is_lhs_constexpr, op) in [(False, False, "<<"), (False, False, ">>"),
-                                                        (False, True, "<<")]:
-            pytest.skip(f"test_bin_op_constexpr[{is_lhs_constexpr}-{is_rhs_constexpr}-{op}] is not supported in HIP")
 
     @triton.jit
     def kernel(Z, X, Y):
@@ -3253,7 +3307,12 @@ def test_bin_op_constexpr(op, is_lhs_constexpr, is_rhs_constexpr, device):
         x_str = "3" if is_lhs_constexpr else "x"
         y_str = "4" if is_rhs_constexpr else "y"
         x = numpy_random((1, ), dtype_str="int32")
-        y = numpy_random((1, ), dtype_str="int32")
+
+        # NOTE: bitshifting beyond bitwidth can lead to undefined behavior
+        if op in ['<<', '>>']:
+            y = numpy_random((1, ), dtype_str="int32", low=0, high=_bitwidth("int32"))
+        else:
+            y = numpy_random((1, ), dtype_str="int32")
     else:
         x_str = "3.14" if is_lhs_constexpr else "x"
         y_str = "4.13" if is_rhs_constexpr else "y"
@@ -4372,7 +4431,8 @@ def matmul_kernel(  #
         stride_bk, stride_bn,  #
         stride_cm, stride_cn,  #
         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,  #
-        low_precision_acc: tl.constexpr  #
+        low_precision_acc: tl.constexpr,  #
+        num_pipeline_stages: tl.constexpr = 3  #
 ):
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -4384,7 +4444,7 @@ def matmul_kernel(  #
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+    for k in tl.range(0, tl.cdiv(K, BLOCK_SIZE_K), num_stages=num_pipeline_stages):
         a = tl.load(a_ptrs)
         b = tl.load(b_ptrs)
         accumulator = tl.dot(a, b, acc=accumulator, max_num_imprecise_acc=low_precision_acc)
@@ -4622,3 +4682,47 @@ def test_flip(M, N, dtype_str, device):
     z = torch.empty_like(x)
     flip_kernel[(1, )](x, z, N, M, num_warps=8)
     assert (y == z).all(), (y, z)
+
+
+# -----------------------
+# test iterators
+# -----------------------
+
+
+def test_static_range(device):
+
+    @triton.jit
+    def loop_kernel(Z, N: tl.constexpr, step: tl.constexpr):
+        acc = 0
+        for i in tl.static_range(0, N, step=step):
+            acc += i
+        tl.store(Z, acc)
+
+    N = 100
+    step = 7
+    Out = torch.empty(1, dtype=torch.int32, device=device)
+    loop_kernel[(1, )](Out, N, step)
+    Acc = torch.tensor([0], dtype=torch.int32, device=device)
+    for i in range(0, N, step):
+        Acc += i
+    assert (Out == Acc).all(), (Out, Acc)
+
+
+def test_tl_range(device):
+    M, N, K = 64, 64, 512
+    BLOCK_M, BLOCK_N, BLOCK_K = M, N, 64
+    a = torch.randn((M, K), device=device, dtype=torch.float16)
+    b = torch.randn((K, N), device=device, dtype=torch.float16)
+    c = torch.empty((M, N), dtype=torch.float32, device=device)
+    pgm = matmul_kernel[
+        1,
+    ](a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_M, BLOCK_N,
+      BLOCK_K, 0, num_pipeline_stages=5)
+    ref_out = torch.matmul(a, b).to(torch.float32)
+    torch.testing.assert_close(ref_out, c, rtol=1e-3, atol=1e-3)
+    if device in ['cuda']:
+        capability = torch.cuda.get_device_capability()
+        if capability[0] >= 8:
+            ptx = pgm.asm['ptx']
+            # check that the loop got pipelined with the right number of stages.
+            assert 'cp.async.wait_group 0x6' in ptx

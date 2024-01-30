@@ -23,6 +23,9 @@ enum Target { NVVM, ROCDL, Default = NVVM };
 namespace gpu {
 std::unique_ptr<OperationPass<ModuleOp>>
 createDecomposeUnsupportedConversionsPass();
+
+std::unique_ptr<OperationPass<ModuleOp>> createAllocateSharedMemoryPass();
+
 } // namespace gpu
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass();

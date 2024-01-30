@@ -5,14 +5,16 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 
 #include <memory>
 
-using namespace mlir;
-
 namespace {
+
+using namespace mlir;
+using namespace mlir::triton;
 
 bool isZero(mlir::Value val) {
   if (mlir::matchPattern(val, mlir::m_Zero()) ||
@@ -52,10 +54,8 @@ using FastMathFlags = arith::FastMathFlags;
 
 #include "TritonCombine.inc"
 
-} // anonymous namespace
-
-// select(cond, load(ptrs, broadcast(cond), ???), other)
-//   => load(ptrs, broadcast(cond), other)
+// select(cond, load(ptrs, splat(cond), ???), other)
+//   => load(ptrs, splat(cond), other)
 class CombineSelectMaskedLoadPattern : public mlir::RewritePattern {
 public:
   CombineSelectMaskedLoadPattern(mlir::MLIRContext *context)
@@ -82,14 +82,13 @@ public:
     if (!mask)
       return mlir::failure();
 
-    auto *broadcastOpCandidate = mask.getDefiningOp();
-    auto broadcastOp =
-        llvm::dyn_cast_or_null<triton::BroadcastOp>(broadcastOpCandidate);
-    if (!broadcastOp)
+    auto *splatOpCandidate = mask.getDefiningOp();
+    auto splatOp = llvm::dyn_cast_or_null<triton::SplatOp>(splatOpCandidate);
+    if (!splatOp)
       return mlir::failure();
 
-    auto broadcastCond = broadcastOp.getSrc();
-    if (broadcastCond != condSelect)
+    auto splatCond = splatOp.getSrc();
+    if (splatCond != condSelect)
       return mlir::failure();
 
     rewriter.replaceOpWithNewOp<triton::LoadOp>(
@@ -213,6 +212,8 @@ public:
       signalPassFailure();
   }
 };
+
+} // anonymous namespace
 
 std::unique_ptr<mlir::Pass> mlir::triton::createCombineOpsPass() {
   return std::make_unique<CombineOpsPass>();

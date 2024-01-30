@@ -556,11 +556,14 @@ def interleave(a: tl.tensor, b: tl.tensor, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_interleave(a.handle, b.handle), ret_type)
 
 
-def trans(input: tl.tensor, builder: ir.builder) -> tl.tensor:
-    if len(input.shape) != 2:
-        raise ValueError("Only 2D tensors can be transposed")
-    ret_type = tl.block_type(input.type.scalar, [input.shape[1], input.shape[0]])
-    return tl.tensor(builder.create_trans(input.handle), ret_type)
+def permute(input: tl.tensor, dims: Tuple[int], builder: ir.builder) -> tl.tensor:
+    if len(input.shape) != len(dims):
+        raise ValueError("permute dims must have the same length as input shape")
+    if sorted(tl._constexpr_to_value(d) for d in dims) != list(range(len(dims))):
+        raise ValueError(f"permute dims must be a permutation of 0, 1, ..., n-1, but were {dims}")
+
+    ret_type = tl.block_type(input.type.scalar, [input.shape[d] for d in dims])
+    return tl.tensor(builder.create_trans(input.handle, dims), ret_type)
 
 
 def broadcast_impl_shape(input: tl.tensor, shape: List[int], builder: ir.builder) -> tl.tensor:
