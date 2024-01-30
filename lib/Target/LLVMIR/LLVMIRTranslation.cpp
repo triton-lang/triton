@@ -199,6 +199,14 @@ static void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata,
         func->addFnAttr("amdgpu-waves-per-eu", std::to_string(wavesPerEU));
       func->addFnAttr("denormal-fp-math-f32", "preserve-sign");
       func->addFnAttr("amdgpu-unsafe-fp-atomics", "true");
+      for (unsigned I = 0; I < func->arg_size(); ++I) {
+        Argument &Arg = *func->getArg(I);
+        // Check for incompatible attributes.
+        if (Arg.hasByRefAttr() || Arg.hasNestAttr())
+          break;
+
+        Arg.addAttr(llvm::Attribute::InReg);
+      }
     } break;
     }
   }

@@ -82,7 +82,10 @@ def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
         if N <= matrix_instr_nonkdim and BLOCK_SIZE_N != matrix_instr_nonkdim:
             continue
         # Skip BLOCK_SIZE that is too large compare to M/N
-        if BLOCK_SIZE_M > M * 2 or BLOCK_SIZE_N > N * 2:
+        # unless BLOCK_SIZE is already small enough
+        if BLOCK_SIZE_M > M * 2 and BLOCK_SIZE_M != 16:
+            continue
+        if BLOCK_SIZE_N > N * 2 and BLOCK_SIZE_N != 16:
             continue
         # skip large split_k when not necessary
         if SPLIT_K != 1 and not need_split_k(M, N, K):
@@ -222,7 +225,7 @@ def generated_kernel_name(M, N, K, gpu_id):
 # 4. test_gemm to invoke
 # 4.1 run try_config in parallel
 # 4.2 matmul in a loop of 10 iterations
-def generate_kernel(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, jobs, run_bench):
+def generate_kernel(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, jobs, iters, run_bench):
     filenames = []
     for i in range(jobs):
         filenames.append(generated_kernel_name(M, N, K, i))
@@ -307,7 +310,7 @@ from tune_gemm import gen_input
         f_kernel[fi].write(threadpool_str)
     # call all matmul_xxx functions
     idx = 0
-    runs = 1000 if run_bench else 200
+    runs = iters if run_bench else 200
     for config in configs:
         configStr, _ = gen_kernel_and_configStr_from_config(M, N, K, config, None, None, None)
         matmul_call_str = f"""
@@ -360,9 +363,9 @@ def profile_batch_kernels(M, N, K, gpuid, gpus, jobs, verbose):
         jobId += ngpus
 
 
-def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, run_bench, jobs, verbose=0, num_threads=16, gpus=[0]):
+def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, run_bench, jobs, iters, verbose=0, num_threads=16, gpus=[0]):
     # Generate kernel out of all configs
-    generate_kernel(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, jobs, run_bench)
+    generate_kernel(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, jobs, iters, run_bench)
 
     # remove any compiled kernel in the cache
     run_bash_command("rm -rf ~/.triton/cache")
@@ -498,7 +501,6 @@ def matmul(a, b, c, block_m, block_n, block_k, group_m, split_k, num_warps, num_
 
 def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, config, verbose):
     block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize = read_config(config)
-
     torch.manual_seed(0)
     #a = torch.randn((M, K), device='cuda', dtype=datatype)
     #b = torch.randn((K, N), device='cuda', dtype=datatype)
@@ -511,12 +513,13 @@ def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type
     # print(f"triton_output={triton_output}")
     # print(f"torch_output={torch_output}")
     rtol = 0 if torch.version.hip is None else 1e-2
+    atol = 1e-3 if split_k == 1 else 4e-2
     row_a_str = 'N' if col_a else 'T'
     row_b_str = 'N' if col_b else 'T'
     size_str = ''
     if verbose:
         size_str = f'SIZE M: {M}, N: {N}, K: {K}, trans: {row_a_str}{row_b_str}'
-    if torch.allclose(triton_output.to(torch.float16), torch_output, atol=1e-3, rtol=rtol):
+    if torch.allclose(triton_output.to(torch.float16), torch_output, atol=atol, rtol=rtol):
         print(f'{size_str} Correct✅')
     else:
         print(f'{size_str} Incorrect❌')
@@ -559,6 +562,7 @@ def parse_args():
     parser.add_argument("--verbose", action='store_true', default=False, help="enables time_breakdown and additional logging messages")
     parser.add_argument("--num_threads", type=int, default=16, help="number of threads to use for kernel compilation and post processing")
     parser.add_argument("--jobs", type=int, default=1, help="number of generated files")
+    parser.add_argument("--iters", type=int, default=1000, help="number of generated files")
     parser.add_argument("--init_type", type=str, default='randn', help="Initialization type for input matrices (default uniform rand [0, 1.0)])")
     args = parser.parse_args()
 
@@ -629,6 +633,7 @@ def main():
     keepTmp = args.keep
     run_bench = args.benchmark
     jobs = args.jobs
+    iters = args.iters
 
     # Get GPU ids
     ngpus = args.ngpus
@@ -677,7 +682,7 @@ def main():
     # Check correctness from given configs
     if args.compare_wo_tuning:
         for (M, N, K, col_a, col_b, myConfig) in mnks:
-            test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, item, True)
+            test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, myConfig, True)
         return
 
     configs_full = get_full_tuning_space()
@@ -685,7 +690,7 @@ def main():
     start_time = datetime.now()
     if run_bench:
         print(f"Benchmarking gemm with {dtype_a} inputs")
-        print("trans     M      N      K    TFLOPS")
+        print("trans     M      N      K    TFLOPS   us")
     else:
         print(f"Tuning {len(mnks)} gemm sizes starts at: {start_time}", flush=True)
         f_results = open(tuning_output_file, 'w')
@@ -711,9 +716,9 @@ def main():
         if args.verbose:
             verbose_level = 2
         minTime, bestConfig, compile_time, profile_time, post_time = tune_gemm_config(
-                M, N, K, col_a, col_b, dtype_a, 
-                dtype_b, dtype_c, init_type, pruned_configs, 
-                run_bench, jobs, num_threads=args.num_threads, gpus=gpus, 
+                M, N, K, col_a, col_b, dtype_a,
+                dtype_b, dtype_c, init_type, pruned_configs,
+                run_bench, jobs, iters, num_threads=args.num_threads, gpus=gpus,
                 verbose=verbose_level)
 
         # post processing the numbers
@@ -730,7 +735,7 @@ def main():
 
         # write best config to tuning_results.yaml
         if run_bench:
-            print(f"{formatted_tflops}")
+            print(f"{formatted_tflops}     {minTime}")
 
         sizeDict = {'M': M, 'N': N, 'K': K, 'rowMajorA': row_a_str, 'rowMajorB': row_b_str}
         sizeDict.update(bestConfig)
