@@ -786,7 +786,8 @@ SmallVector<unsigned>
 NvidiaMmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
                                          Type eltTy) const {
   size_t rank = shape.size();
-  assert(rank == 2 || rank == 3 && "Unexpected rank of mma layout");
+  assert(rank == 2 ||
+         (rank == 3 && isAmpere()) && "Unexpected rank of mma layout");
   assert((isVolta() || isAmpere() || isHopper()) &&
          "For NvidiaMmaEncodingAttr only version 1~3 is supported");
 
@@ -1581,9 +1582,11 @@ SmallVector<int64_t> NvidiaMmaEncodingAttr::getMMAv2Rep(ArrayRef<int64_t> shape,
                                                         int opIdx) const {
   auto rank = shape.size();
   auto warpsPerCTA = getWarpsPerCTA();
+  SmallVector<int> shapePerWarp = {1, 16, 8, 4 * 64 / bitwidth};
   int numRepBatch =
-      rank == 3 ? std::max<int64_t>(shape[0] / warpsPerCTA[0], 1) : 1;
-  SmallVector<int> shapePerWarp = {numRepBatch, 16, 8, 4 * 64 / bitwidth};
+      rank == 3
+          ? std::max<int64_t>(1, shape[0] / (shapePerWarp[0] * warpsPerCTA[0]))
+          : 1;
   assert(isAmpere());
 
   if (opIdx == 0)

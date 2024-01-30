@@ -456,11 +456,8 @@ public:
     auto wordTy = vec_ty(elemTy, minVec);
     Value word;
 
-    SmallVector<Value> srcStrides;
-    SmallVector<Value> offsetVals(rank, i32_val(0));
-    for (auto i = 0; i < rank; i++) {
-      srcStrides.push_back(dstStrides[i]);
-    }
+    SmallVector<Value, 3> srcStrides(dstStrides);
+    SmallVector<Value, 3> offsetVals(rank, i32_val(0));
     SharedMemoryObject smemObj(smemBase, elemTy, srcStrides, offsetVals);
 
     DenseMap<unsigned, Value> sharedPtrs =
@@ -985,28 +982,25 @@ private:
       // warpGrp level in the layout definition, and the tiling order of
       // warpGrp->warp must be fixed to meet the HW's needs. We may need to
       // consider to explicitly define warpGrpPerCTA for MMAv3 layout.
-      if (rank == 3) {
-        // TODO(ZM)
-        assert(false);
-      }
+      assert(rank == 2 && "MMAv3 layout is does not support 3D tensor yet");
       multiDimWarpId[rank - 2] = urem(warpId, warpsPerCTA[rank - 2]);
       multiDimWarpId[rank - 1] =
           urem(udiv(warpId, warpsPerCTA[rank - 2]), warpsPerCTA[rank - 1]);
     } else {
       multiDimWarpId = delinearize(rewriter, loc, warpId, _warpsPerCTA, order);
     }
-    Value warpId1 = urem(multiDimWarpId[rank - 2], i32_val(warpsM));
-    Value warpId2 = urem(multiDimWarpId[rank - 1], i32_val(warpsN));
+    Value warpIdM = urem(multiDimWarpId[rank - 2], i32_val(warpsM));
+    Value warpIdN = urem(multiDimWarpId[rank - 1], i32_val(warpsN));
 
-    Value offWarp1 = mul(warpId1, i32_val(instrShape[rank - 2]));
-    Value offWarp2 = mul(warpId2, i32_val(instrShape[rank - 1]));
+    Value offWarpM = mul(warpIdM, i32_val(instrShape[rank - 2]));
+    Value offWarpN = mul(warpIdN, i32_val(instrShape[rank - 1]));
 
     SmallVector<Value> multiDimBase(rank);
     if (rank == 3)
       multiDimBase[0] = multiDimWarpId[0];
-    multiDimBase[rank - 2] = add(udiv(laneId, i32_val(4)), offWarp1);
+    multiDimBase[rank - 2] = add(udiv(laneId, i32_val(4)), offWarpM);
     multiDimBase[rank - 1] =
-        add(mul(i32_val(2), urem(laneId, i32_val(4))), offWarp2);
+        add(mul(i32_val(2), urem(laneId, i32_val(4))), offWarpN);
     return multiDimBase;
   }
 
