@@ -78,6 +78,7 @@ private:
   // Offset in shared memory to increment on the strided axis
   // This would be different than the tile shape in the case of a sliced tensor
   Value stridedSmemOffset;
+  Value smemBatchOffset;
 
   bool needTrans;
   bool canUseLdmatrix;
@@ -332,7 +333,9 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
         mul(i32_val(matIdx[order[1]] * stridedLoadMatOffset * stridedMatShape),
             stridedSmemOffset);
     if (batch != 0)
-      stridedOffset = add(stridedOffset, i32_val(batch * 16 * 16));
+      stridedOffset = add(
+          stridedOffset, mul(i32_val(batch * warpsPerCTA[0]), smemBatchOffset));
+
     Value readPtr = gep(ptr_ty(ctx, 3), shemTy, ptr, stridedOffset);
 
     PTXBuilder builder;
@@ -430,6 +433,7 @@ MMA16816SmemLoader::MMA16816SmemLoader(
   contiguousMatShape = matShape[order[0]];
   stridedMatShape = matShape[order[1]];
   stridedSmemOffset = smemStrides[order[1]];
+  smemBatchOffset = smemStrides[order[2]];
   vecWidth = 4 / elemBytes;
   // rule: k must be the fast-changing axis.
   needTrans = kOrder != order[0];
@@ -596,7 +600,7 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
 
   SmallVector<Value> multiDimWarpId =
       delinearize(rewriter, loc, warp, warpsPerCTA, order);
-  Value warpB = multiDimWarpId[0];
+  Value warpB = urem(multiDimWarpId[0], i32_val(shapePerCTA[0]));
   int warpsPerTile;
   auto rank = shapePerCTA.size();
   Value warpM = urem(multiDimWarpId[1], i32_val(shapePerCTA[1] / 16));
@@ -710,7 +714,7 @@ Attribute getExpandedEncoding(Attribute encoding) {
     llvm_unreachable("unsupported encoding");
 }
 
-RankedTensorType getExpandedTensorType(RankedTensorType tensorTy) {
+RankedTensorType getExpandedTensor(RankedTensorType tensorTy) {
   auto shapePerCTA = getShapePerCTA(tensorTy);
   auto rank = shapePerCTA.size();
   if (rank == 3)
@@ -730,13 +734,15 @@ RankedTensorType getExpandedTensorType(RankedTensorType tensorTy) {
 
 SharedMemoryObject
 getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
-                              SharedMemoryObject smemObj) {
+                              SharedMemoryObject smemObj,
+                              ArrayRef<int64_t> shape) {
   auto strides = smemObj.getStrides();
   auto offsets = smemObj.getOffsets();
   auto rank = strides.size();
   if (rank == 3)
     return smemObj;
-  auto expandedStrides = insertValue(strides, 0, i32_val(1));
+  // TODO: is this wrong ?
+  auto expandedStrides = insertValue(strides, 0, i32_val(shape[0] * shape[1]));
   auto expandedOffsets = insertValue(offsets, 0, i32_val(0));
   auto expandedSmemObj =
       SharedMemoryObject(smemObj.getBase(), smemObj.getBaseElemType(),
@@ -751,10 +757,11 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     TritonGPUToLLVMTypeConverter *typeConverter, Value thread) {
   // Expand shared/dotOp to 3D before calling loadArg.
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
-  auto expandedTensorTy = getExpandedTensorType(tensorTy);
+  auto expandedTensorTy = getExpandedTensor(tensorTy);
   auto expandedEncoding =
       getExpandedEncoding(encoding).cast<DotOperandEncodingAttr>();
-  auto expandedSmemObj = getExpandedSharedMemoryObject(rewriter, loc, smemObj);
+  auto expandedSmemObj = getExpandedSharedMemoryObject(rewriter, loc, smemObj,
+                                                       tensorTy.getShape());
   if (opIdx == 0)
     return loadArg(rewriter, loc, expandedTensorTy, expandedEncoding,
                    expandedSmemObj, typeConverter, thread, true);

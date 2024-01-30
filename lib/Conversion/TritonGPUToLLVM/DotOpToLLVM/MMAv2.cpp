@@ -250,15 +250,16 @@ static void callMmaTuringFp16(PTXBuilder &builder, unsigned m, unsigned n,
 static void callMmaAmpere(PTXBuilder &builder, unsigned b, unsigned m,
                           unsigned n, unsigned k, mlir::triton::PTXInstr &mma,
                           unsigned numMmaRets, unsigned colsPerThread,
-                          int numCPackedElem, ValueTableV2 &ha,
-                          ValueTableV2 &hb, const SmallVector<Value> &fc,
-                          bool isAccF16, bool isIntMMA) {
+                          int numCPackedElem, unsigned totalBatch,
+                          ValueTableV2 &ha, ValueTableV2 &hb,
+                          const SmallVector<Value> &fc, bool isAccF16,
+                          bool isIntMMA) {
   auto retArgs =
       builder.newListOperand(numMmaRets, isIntMMA || isAccF16 ? "=r" : "=f");
   auto cArgs = builder.newListOperand();
   for (int i = 0; i < numMmaRets; ++i) {
     cArgs->listAppend(builder.newOperand(
-        fc[(m * colsPerThread + 4 * n) / numCPackedElem + i + 8 * b],
+        fc[(m * colsPerThread + 4 * n) / numCPackedElem + i + totalBatch * b],
         std::to_string(i)));
     // reuse the output registers
   }
@@ -317,6 +318,9 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
 
   auto callMma = [&](unsigned b, unsigned m, unsigned n, unsigned k) {
     unsigned colsPerThread = repN * 2;
+    unsigned totalBatch =
+        ((repM - 1) * 2 * colsPerThread + 4 * (repN - 1)) / numCPackedElem +
+        numMmaRets;
     PTXBuilder builder;
     auto &mma = *builder.create(mmaInstructions.at(mmaType));
     // using =r for float32 works but leads to less readable ptx.
@@ -332,7 +336,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
                           numCPackedElem, ha, hb, fc, isAccF16);
     } else { // Ampere
       callMmaAmpere(builder, b, m, n, k, mma, numMmaRets, colsPerThread,
-                    numCPackedElem, ha, hb, fc, isAccF16, isIntMMA);
+                    numCPackedElem, totalBatch, ha, hb, fc, isAccF16, isIntMMA);
     }
 
     Value mmaOut =
@@ -340,7 +344,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
 
     Type elemTy = mmaOut.getType().cast<LLVM::LLVMStructType>().getBody()[0];
     for (int i = 0; i < numMmaRets; ++i) {
-      fc[(m * colsPerThread + 4 * n) / numCPackedElem + i + 8 * b] =
+      fc[(m * colsPerThread + 4 * n) / numCPackedElem + i + totalBatch * b] =
           extract_val(elemTy, mmaOut, i);
     }
   };

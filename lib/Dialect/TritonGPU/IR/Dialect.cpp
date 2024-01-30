@@ -1580,7 +1580,8 @@ SmallVector<int64_t> NvidiaMmaEncodingAttr::getMMAv2Rep(ArrayRef<int64_t> shape,
                                                         int opIdx) const {
   auto rank = shape.size();
   auto warpsPerCTA = getWarpsPerCTA();
-  int numRepBatch = rank == 3 ? shape[0] / warpsPerCTA[0] : 1;
+  int numRepBatch =
+      rank == 3 ? std::max<int64_t>(shape[0] / warpsPerCTA[0], 1) : 1;
   SmallVector<int> shapePerWarp = {numRepBatch, 16, 8, 4 * 64 / bitwidth};
   assert(isAmpere());
 
