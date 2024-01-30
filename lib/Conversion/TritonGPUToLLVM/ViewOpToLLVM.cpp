@@ -268,7 +268,7 @@ struct ExpandDimsOpConversion : public ConvertOpToLLVMPattern<ExpandDimsOp> {
 };
 
 struct TransOpConversion : public ConvertOpToLLVMPattern<TransOp> {
-  using ConvertTritonGPUOpToLLVMPattern::ConvertTritonGPUOpToLLVMPattern;
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(TransOp op, OpAdaptor adaptor,
@@ -296,10 +296,9 @@ struct TransOpConversion : public ConvertOpToLLVMPattern<TransOp> {
       //  - the translation from src to dst is just a "renaming" of the
       //    registers, i.e. each thread has exactly the same values.
       // Thus the transpose op simply returns the same values it got.
-      auto vals = this->getTypeConverter()->unpackLLElements(
-          loc, adaptor.getSrc(), rewriter);
-      Value ret = this->getTypeConverter()->packLLElements(loc, vals, rewriter,
-                                                           resultTy);
+      auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+      Value ret = packLLElements(loc, this->getTypeConverter(), vals, rewriter,
+                                 resultTy);
       rewriter.replaceOp(op, ret);
       return success();
     }
