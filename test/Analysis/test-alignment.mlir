@@ -129,7 +129,7 @@ tt.func @mul(%arg0: i32 {tt.divisibility = 16 : i32}) {
   // CHECK-NEXT: contiguity = [1], divisibility = [1073741824], constancy = [1], constant_value = 1073741824
   %7 = arith.constant 1073741824 : i32
   // CHECK-NEXT: contiguity = [1], divisibility = [1073741824], constancy = [1], constant_value = <none>
-  %8 = arith.muli %arg0, %7 : i32 
+  %8 = arith.muli %arg0, %7 : i32
   tt.return
 }
 
