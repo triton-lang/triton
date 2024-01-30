@@ -599,7 +599,7 @@ SmallVector<Value> delinearize(OpBuilder &b, Location loc, Value linear,
                                ArrayRef<unsigned> order) {
   unsigned rank = shape.size();
   assert(rank == order.size());
-  auto reordered = reorder(shape, order);
+  auto reordered = triton::applyPermutation(shape, order);
   auto reorderedMultiDim = delinearize(b, loc, linear, reordered);
   SmallVector<Value> multiDim(rank);
   for (unsigned i = 0; i < rank; ++i) {
@@ -629,8 +629,8 @@ SmallVector<Value> delinearize(OpBuilder &b, Location loc, Value linear,
 
 Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape, ArrayRef<unsigned> order) {
-  return linearize(b, loc, reorder<Value>(multiDim, order),
-                   reorder<unsigned>(shape, order));
+  return linearize(b, loc, triton::applyPermutation(multiDim, order),
+                   triton::applyPermutation(shape, order));
 }
 
 Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,

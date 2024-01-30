@@ -1354,9 +1354,8 @@ public:
       SmallVector<unsigned> order = triton::gpu::getOrder(encoding);
       if (rank != order.size())
         return resultVals;
-      ArrayRef<unsigned> orderRef(order);
-      elemsPerThread = reorder(ArrayRef<unsigned>(elemsPerThread), orderRef);
-      constancy = reorder(ArrayRef<int64_t>(constancy), orderRef);
+      elemsPerThread = applyPermutation(elemsPerThread, order);
+      constancy = applyPermutation(constancy, order);
     }
 
     SmallVector<unsigned> strides(rank, 1);
