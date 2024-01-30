@@ -765,7 +765,7 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
     }
     if (deadArg.empty())
       return failure();
-    rewriter.updateRootInPlace(forOp, [&]() {
+    rewriter.modifyOpInPlace(forOp, [&]() {
       // For simplicity we just change the dead yield operand to use the
       // associated argument and leave the operations and argument removal to
       // dead code elimination.
