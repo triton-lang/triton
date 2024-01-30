@@ -15,7 +15,7 @@ This is the development repository of Triton, a language and compiler for writin
 
 The foundations of this project are described in the following MAPL2019 publication: [Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations](http://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf). Please consider citing this work if you use Triton!
 
-The [official documentation](https://triton-lang.org) contains installation instructions and tutorials.
+The [official documentation](https://triton-lang.org/main/index.html) contains installation instructions and tutorials.
 
 # Quick Installation
 
@@ -105,14 +105,14 @@ arbitrary LLVM version.
   Without this, every invocation of `pip install` uses a different symlink to
   cmake, and this forces ninja to rebuild most of the `.a` files.
 
-- vscode intellisense has some difficulty figuring out how to build Triton's C++
+- VS Code IntelliSense has some difficulty figuring out how to build Triton's C++
   (probably because, in our build, users don't invoke cmake directly, but
-  instead use setup.py).  Teach vscode how to compile Triton as follows.
+  instead use setup.py).Teach VS Code how to compile Triton as follows.
 
     - Do a local build.
     - Get the full path to the `compile_commands.json` file produced by the build:
       `find python/build -name 'compile_commands.json | xargs readlink -f'`
-    - In vscode, install the
+    - In VS Code, install the
       [C/C++
       extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools),
       then open the command palette (`Shift + Command + P` on Mac, or `Shift +
@@ -154,8 +154,8 @@ Version 2.0 is out! New features include:
 
 # Contributing
 
-Community contributions are more than welcome, whether it be to fix bugs or to add new features at [github](https://github.com/openai/triton/). For more detailed instructions, please visit our [contributor's guide](CONTRIBUTING.md).
-
+Community contributions are more than welcome, whether it be to fix Bugs or to Add New Features at [github](https://github.com/openai/triton/).
+For more detailed instructions, please visit our [contributor's guide](CONTRIBUTING.md).
 
 # Compatibility
 
