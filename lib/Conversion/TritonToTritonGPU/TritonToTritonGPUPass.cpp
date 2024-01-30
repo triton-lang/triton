@@ -49,7 +49,7 @@ template <class Op> struct GenericOpPattern : public OpConversionPattern<Op> {
 
 class ArithConstantPattern : public OpConversionPattern<arith::ConstantOp> {
 public:
-  using OpConversionPattern<arith::ConstantOp>::OpConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(arith::ConstantOp op, OpAdaptor adaptor,
@@ -134,7 +134,7 @@ void populateMathPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
 //
 struct TritonExpandDimsPattern
     : public OpConversionPattern<triton::ExpandDimsOp> {
-  using OpConversionPattern<triton::ExpandDimsOp>::OpConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(triton::ExpandDimsOp op, OpAdaptor adaptor,
@@ -207,7 +207,7 @@ private:
 };
 
 struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
-  using OpConversionPattern<triton::DotOp>::OpConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
@@ -274,8 +274,7 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
 };
 
 struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
-
-  using OpConversionPattern<triton::CatOp>::OpConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(triton::CatOp op, OpAdaptor adaptor,
@@ -324,8 +323,7 @@ struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
 
 struct TritonInterleaveOpPattern
     : public OpConversionPattern<triton::ExperimentalInterleaveOp> {
-  using OpConversionPattern<
-      triton::ExperimentalInterleaveOp>::OpConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
 
   LogicalResult matchAndRewrite(ExperimentalInterleaveOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const {
@@ -363,7 +361,7 @@ struct TritonInterleaveOpPattern
 };
 
 struct TritonTransPattern : public OpConversionPattern<TransOp> {
-  using OpConversionPattern<TransOp>::OpConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(TransOp op, OpAdaptor adaptor,
@@ -407,7 +405,7 @@ struct TritonTransPattern : public OpConversionPattern<TransOp> {
 
 struct TritonBroadcastPattern
     : public OpConversionPattern<triton::BroadcastOp> {
-  using OpConversionPattern<triton::BroadcastOp>::OpConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
 
   // This creates a tensor with the new shape but the argument's layout
   LogicalResult
@@ -429,7 +427,7 @@ struct TritonBroadcastPattern
 };
 
 struct TritonReducePattern : public OpConversionPattern<triton::ReduceOp> {
-  using OpConversionPattern<triton::ReduceOp>::OpConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
@@ -447,7 +445,7 @@ struct TritonReducePattern : public OpConversionPattern<triton::ReduceOp> {
 };
 
 struct TritonScanPattern : public OpConversionPattern<triton::ScanOp> {
-  using OpConversionPattern<triton::ScanOp>::OpConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(triton::ScanOp op, OpAdaptor adaptor,
@@ -466,7 +464,7 @@ struct TritonScanPattern : public OpConversionPattern<triton::ScanOp> {
 
 class TritonFuncOpPattern : public OpConversionPattern<triton::FuncOp> {
 public:
-  using OpConversionPattern<triton::FuncOp>::OpConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(triton::FuncOp op, OpAdaptor adaptor,
@@ -486,7 +484,7 @@ public:
 
 class TritonCallOpPattern : public OpConversionPattern<triton::CallOp> {
 public:
-  using OpConversionPattern<triton::CallOp>::OpConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(triton::CallOp op, OpAdaptor adaptor,
@@ -500,7 +498,7 @@ public:
 
 class TritonReturnOpPattern : public OpConversionPattern<ReturnOp> {
 public:
-  using OpConversionPattern<ReturnOp>::OpConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(ReturnOp op, ReturnOp::Adaptor adaptor,
@@ -543,7 +541,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
 // This is borrowed from ConvertForOpTypes in
 //    SCF/Transforms/StructuralTypeConversions.cpp
 struct SCFForPattern : public OpConversionPattern<scf::ForOp> {
-  using OpConversionPattern<scf::ForOp>::OpConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
   // Ref: ConvertForOpTypes
   LogicalResult
   matchAndRewrite(scf::ForOp op, OpAdaptor adaptor,
@@ -588,7 +586,7 @@ struct SCFForPattern : public OpConversionPattern<scf::ForOp> {
 //    SCF/Transforms/StructuralTypeConversions.cpp
 class SCFIfPattern : public OpConversionPattern<scf::IfOp> {
 public:
-  using OpConversionPattern<scf::IfOp>::OpConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
   LogicalResult
   matchAndRewrite(scf::IfOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -632,7 +630,7 @@ public:
 //    SCF/Transforms/StructuralTypeConversions.cpp
 class SCFWhilePattern : public OpConversionPattern<scf::WhileOp> {
 public:
-  using OpConversionPattern<scf::WhileOp>::OpConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(scf::WhileOp op, OpAdaptor adaptor,
@@ -658,7 +656,7 @@ public:
 
 class SCFConditionPattern : public OpConversionPattern<scf::ConditionOp> {
 public:
-  using OpConversionPattern<scf::ConditionOp>::OpConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
   LogicalResult
   matchAndRewrite(scf::ConditionOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -679,7 +677,7 @@ void populateSCFPatterns(TritonGPUTypeConverter &typeConverter,
 
 class CFBranchPattern : public OpConversionPattern<cf::BranchOp> {
 public:
-  using OpConversionPattern<cf::BranchOp>::OpConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(cf::BranchOp op, cf::BranchOp::Adaptor adaptor,
@@ -696,7 +694,7 @@ public:
 
 class CFCondBranchPattern : public OpConversionPattern<cf::CondBranchOp> {
 public:
-  using OpConversionPattern<cf::CondBranchOp>::OpConversionPattern;
+  using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(cf::CondBranchOp op, cf::CondBranchOp::Adaptor adaptor,
