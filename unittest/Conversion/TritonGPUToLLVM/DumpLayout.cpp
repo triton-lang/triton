@@ -23,7 +23,8 @@
 
 #include "DumpLayout.h"
 
-#include "../../../lib/Conversion/TritonGPUToLLVM/TritonGPUToLLVMBase.h"
+#include "../../../lib/Conversion/TritonGPUToLLVM/TypeConverter.h"
+#include "../../../lib/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace mlir {
 namespace triton {
@@ -39,7 +40,7 @@ class IndexEmitter {
 public:
   IndexEmitter(MLIRContext *context_)
       : context(context_), option(context), typeConverter(context, option),
-        base(typeConverter), rewriter(context), loc(UnknownLoc::get(context)) {
+        rewriter(context), loc(UnknownLoc::get(context)) {
     rewriter.setInsertionPointToStart(&block);
   }
 
@@ -47,7 +48,7 @@ public:
   emitIndices(Attribute layout, llvm::ArrayRef<int64_t> shape,
               bool withCTAOffset) {
     auto type = RankedTensorType::get(shape, rewriter.getF16Type(), layout);
-    return base.emitIndices(loc, rewriter, layout, type, withCTAOffset);
+    return mlir::emitIndices(loc, rewriter, layout, type, withCTAOffset);
   }
 
   llvm::DenseMap<unsigned, Value>
@@ -57,9 +58,9 @@ public:
     auto srcTy = RankedTensorType::get(shape, elemTy, srcLayout);
     SharedMemoryObject smemObj(getMockSmemBase(), elemTy, shape,
                                sharedLayout.getOrder(), loc, rewriter);
-    return base.getSwizzledSharedPtrs(loc, /*inVec=*/1, srcTy, sharedLayout,
-                                      elemTy, smemObj, rewriter,
-                                      smemObj.offsets, smemObj.strides);
+    return getSwizzledSharedPtrs(loc, /*inVec=*/1, srcTy, sharedLayout, elemTy,
+                                 smemObj, rewriter, smemObj.offsets,
+                                 smemObj.strides);
   }
 
 private:
@@ -76,7 +77,6 @@ private:
   MLIRContext *context;
   LowerToLLVMOptions option;
   TritonGPUToLLVMTypeConverter typeConverter;
-  ConvertTritonGPUOpToLLVMPatternBase base;
   Block block;
   ConversionPatternRewriter rewriter;
   Location loc;

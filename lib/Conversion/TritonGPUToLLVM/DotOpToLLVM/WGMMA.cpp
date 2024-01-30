@@ -192,7 +192,7 @@ private:
   Value descriptor;
 };
 
-DotOpMmaV3SmemLoader loadA(LLVMTypeConverter *typeConverter,
+DotOpMmaV3SmemLoader loadA(const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Location loc,
                            const NvidiaMmaEncodingAttr &mmaEncoding,
                            Value tensor, Value smemObjBase, Value thread) {
@@ -229,7 +229,7 @@ DotOpMmaV3SmemLoader loadA(LLVMTypeConverter *typeConverter,
           loc};
 }
 
-DotOpMmaV3SmemLoader loadB(LLVMTypeConverter *typeConverter,
+DotOpMmaV3SmemLoader loadB(const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Location loc,
                            NvidiaMmaEncodingAttr &mmaEncoding, Value tensor,
                            Value base, Value thread) {
@@ -366,7 +366,7 @@ static SmallVector<Value> emitWait(ConversionPatternRewriter &rewriter,
   return results;
 }
 
-LogicalResult convertDot(LLVMTypeConverter *typeConverter,
+LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, Location loc,
                          Operation *op, Value a, Value b, Value c, Value d,
                          Value loadedA, Value loadedB, Value loadedC,
@@ -521,7 +521,7 @@ LogicalResult convertDot(LLVMTypeConverter *typeConverter,
 }
 
 LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                           LLVMTypeConverter *typeConverter,
+                           const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Value thread) {
   auto loc = op.getLoc();
   Value A = op.getA();
@@ -547,7 +547,7 @@ LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
 LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
                                 triton::nvidia_gpu::DotAsyncOp::Adaptor adaptor,
-                                LLVMTypeConverter *typeConverter,
+                                const LLVMTypeConverter *typeConverter,
                                 ConversionPatternRewriter &rewriter,
                                 Value thread) {
   auto loc = op.getLoc();

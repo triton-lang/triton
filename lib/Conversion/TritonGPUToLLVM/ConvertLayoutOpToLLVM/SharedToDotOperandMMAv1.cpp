@@ -88,7 +88,8 @@ computeOffsets(Value threadId, bool isARow, bool isBRow, ArrayRef<int> fpw,
 }
 
 static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
-                   Value thread, Location loc, LLVMTypeConverter *typeConverter,
+                   Value thread, Location loc,
+                   const LLVMTypeConverter *typeConverter,
                    ConversionPatternRewriter &rewriter, Type resultTy) {
   static constexpr std::array<int, 3> fpw{{2, 2, 1}};
   auto mmaEncoding = resultTy.cast<RankedTensorType>()
@@ -214,7 +215,8 @@ static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
 }
 
 static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
-                   Value thread, Location loc, LLVMTypeConverter *typeConverter,
+                   Value thread, Location loc,
+                   const LLVMTypeConverter *typeConverter,
                    ConversionPatternRewriter &rewriter, Type resultTy) {
   static constexpr std::array<int, 3> fpw{{2, 2, 1}};
   auto mmaEncoding = resultTy.cast<RankedTensorType>()
@@ -446,7 +448,7 @@ SmallVector<CoordTy> getMNCoords(Value thread, Location loc,
 
 Value convertLayout(int opIdx, Value tensor, const SharedMemoryObject &smemObj,
                     Value thread, Location loc,
-                    LLVMTypeConverter *typeConverter,
+                    const LLVMTypeConverter *typeConverter,
                     ConversionPatternRewriter &rewriter, Type resultTy) {
   if (opIdx == 0)
     return loadA(tensor, smemObj, thread, loc, typeConverter, rewriter,

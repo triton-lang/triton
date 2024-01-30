@@ -1,6 +1,3 @@
-#include "PatternTritonGPUOpToLLVM.h"
-#include "TypeConverter.h"
-#include "Utility.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
@@ -24,6 +21,10 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetPlatform.hpp"
+
+#include "PatternTritonGPUOpToLLVM.h"
+#include "TypeConverter.h"
+#include "Utility.h"
 
 namespace mlir {
 namespace triton {

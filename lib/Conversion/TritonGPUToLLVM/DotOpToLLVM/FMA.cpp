@@ -13,7 +13,7 @@ static ValueTableFMA
 getValueTableFromStructFMA(Value val, int K, int n0, int shapePerCTATile,
                            int sizePerThread,
                            ConversionPatternRewriter &rewriter, Location loc,
-                           LLVMTypeConverter *typeConverter, Type type) {
+                           const LLVMTypeConverter *typeConverter, Type type) {
   ValueTableFMA res;
   auto elems = unpackLLElements(loc, val, rewriter);
   int index = 0;
@@ -27,7 +27,7 @@ getValueTableFromStructFMA(Value val, int K, int n0, int shapePerCTATile,
 }
 
 LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                            LLVMTypeConverter *typeConverter,
+                            const LLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter) {
   auto *ctx = rewriter.getContext();
   auto loc = op.getLoc();

@@ -8,8 +8,9 @@ using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
 using ValueTableV2 = std::map<std::pair<unsigned, unsigned>, Value>;
 
-Value loadC(Value tensor, Value llTensor, LLVMTypeConverter *typeConverter,
-            Location loc, ConversionPatternRewriter &rewriter) {
+Value loadC(Value tensor, Value llTensor,
+            const LLVMTypeConverter *typeConverter, Location loc,
+            ConversionPatternRewriter &rewriter) {
   MLIRContext *ctx = tensor.getContext();
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   size_t fcSize = triton::gpu::getTotalElemsPerThread(tensor.getType());
@@ -52,7 +53,7 @@ Value loadC(Value tensor, Value llTensor, LLVMTypeConverter *typeConverter,
 }
 
 ValueTableV2 getValuesFromDotOperandLayoutStruct(
-    LLVMTypeConverter *typeConverter, Location loc,
+    const LLVMTypeConverter *typeConverter, Location loc,
     ConversionPatternRewriter &rewriter, Value value, int n0, int n1,
     RankedTensorType type) {
 
@@ -270,7 +271,7 @@ static void callMmaAmpere(PTXBuilder &builder, unsigned m, unsigned n,
   mma(retArgs, aArgs, bArgs, cArgs);
 }
 
-LogicalResult convertDot(LLVMTypeConverter *typeConverter,
+LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, Location loc,
                          Value a, Value b, Value c, Value d, Value loadedA,
                          Value loadedB, Value loadedC, DotOp op,
@@ -367,7 +368,7 @@ LogicalResult convertDot(LLVMTypeConverter *typeConverter,
 }
 
 LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                         LLVMTypeConverter *typeConverter,
+                         const LLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, bool isTuring) {
   auto loc = op.getLoc();
   auto mmaLayout = op.getResult()
@@ -399,14 +400,14 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
 // Convert to mma.m16n8k8
 LogicalResult convertMMA1688(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                             LLVMTypeConverter *typeConverter,
+                             const LLVMTypeConverter *typeConverter,
                              ConversionPatternRewriter &rewriter) {
   return convertMMA(op, adaptor, typeConverter, rewriter, true /*isTuring*/);
 }
 
 // Convert to mma.m16n8k16
 LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                              LLVMTypeConverter *typeConverter,
+                              const LLVMTypeConverter *typeConverter,
                               ConversionPatternRewriter &rewriter) {
   return convertMMA(op, adaptor, typeConverter, rewriter, false /*isTuring*/);
 }
