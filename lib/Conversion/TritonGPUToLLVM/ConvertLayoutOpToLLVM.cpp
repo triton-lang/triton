@@ -154,6 +154,8 @@ private:
       return multiDimOffset;
     }
     if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+      assert(rank == 2 ||
+             (rank == 3 && mmaLayout.isAmpere()) && "Unexpected rank");
       auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
       auto instrShape = mmaLayout.getInstrShape();
       SmallVector<Value> mmaColIdx(2);
@@ -206,7 +208,6 @@ private:
         llvm_unreachable("Unexpected MMALayout version");
       }
 
-      assert(rank <= 3);
       SmallVector<Value> multiDimOffset(rank);
       if (mmaLayout.isHopper()) {
         unsigned elemIdRem4 = elemId % 4;
@@ -223,8 +224,8 @@ private:
       } else if (mmaLayout.isAmpere()) {
         if (rank == 3)
           multiDimOffset[0] =
-              add(i32_val(multiDimCTAInRepId[0] * warpsPerCTA[0]),
-                  multiDimWarpId[0]);
+              add(multiDimWarpId[0],
+                  i32_val(multiDimCTAInRepId[0] * shapePerCTATile[0]));
         multiDimOffset[rank - 2] = elemId < 2 ? mmaRowIdx[0] : mmaRowIdx[1];
         multiDimOffset[rank - 1] =
             elemId % 2 == 0 ? mmaColIdx[0] : mmaColIdx[1];
@@ -854,12 +855,13 @@ private:
     auto srcShape = srcTy.getShape();
     auto dstTy = dst.getType().cast<RankedTensorType>();
     auto dstShapePerCTA = triton::gpu::getShapePerCTA(dstTy);
-    assert(srcShape.size() <= 3 &&
-           "Unexpected rank of ConvertLayout(blocked->shared)");
     auto srcLayout = srcTy.getEncoding();
     auto dstSharedLayout = dstTy.getEncoding().cast<SharedEncodingAttr>();
     auto inOrd = getOrder(srcLayout);
     auto outOrd = dstSharedLayout.getOrder();
+    assert(srcShape.size() == 2 ||
+           (srcShape.size() <= 3 && outOrd[2] == 0) &&
+               "Unexpected rank of ConvertLayout(blocked->shared)");
     Value smemBase =
         LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
     auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
