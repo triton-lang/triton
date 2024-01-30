@@ -187,7 +187,6 @@ def triton_key():
     return f'{__version__}' + '-'.join(contents)
 
 
-
 def parse(full_name, ext, context):
     if ext == "ttir" or ext == "ttgir":
         module = ir.parse_mlir_module(full_name, context)
