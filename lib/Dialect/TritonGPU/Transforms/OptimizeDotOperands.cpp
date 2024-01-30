@@ -137,6 +137,10 @@ public:
     // will go through the mask, which is i1 type. Mask parents are most likely
     // of integer types. When lowering shared -> dot_operand layout, integer
     // types are not supported. 
+
+    // Currently, these instructions are not supported during lowering of
+    // shared -> dot_operand layout. Not all types and type conversions are
+    // supported.
     if (isa<arith::TruncIOp, arith::TruncFOp, arith::SelectOp>(src))
       return failure();
 
