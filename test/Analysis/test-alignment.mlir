@@ -59,10 +59,14 @@ tt.func @addptr(%arg0: !tt.ptr<i1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<
   // CHECK-NEXT: contiguity = [1], divisibility = [16], constancy = [1], constant_value = <none>
   %9 = tt.addptr %arg4, %cst4 : !tt.ptr<i64>, i32
   // CHECK-NEXT: contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>
-  %10 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
-  // CHECK-NEXT: contiguity = [1, 128], divisibility = [1, 1073741824], constancy = [1, 1], constant_value = <none>
+  %_10 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  // CHECK-NEXT: contiguity = [1], divisibility = [4], constancy = [128], constant_value = 4
+  %cst4_splat = tt.splat %cst4 : (i32) -> tensor<128xi32>
+  // CHECK-NEXT: contiguity = [1], divisibility = [4], constancy = [1], constant_value = <none>
+  %10 = arith.muli %_10, %cst4_splat : tensor<128xi32>
+  // CHECK-NEXT: contiguity = [1, 1], divisibility = [4, 4], constancy = [1, 1], constant_value = <none>
   %11 = tt.expand_dims %10 {axis = 0: i32} : (tensor<128xi32>) -> tensor<1x128xi32>
-  // CHECK-NEXT: contiguity = [1, 128], divisibility = [1, 1073741824], constancy = [128, 1], constant_value = <none>
+  // CHECK-NEXT: contiguity = [1, 1], divisibility = [4, 4], constancy = [128, 1], constant_value = <none>
   %12 = tt.broadcast %11 : (tensor<1x128xi32>) -> tensor<128x128xi32>
   // CHECK-NEXT: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 128], constant_value = <none>
   %13 = tt.splat %arg0 : (!tt.ptr<i1>) -> tensor<128x128x!tt.ptr<i1>>
@@ -74,15 +78,15 @@ tt.func @addptr(%arg0: !tt.ptr<i1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<
   %16 = tt.splat %arg3 : (!tt.ptr<i32>) -> tensor<128x128x!tt.ptr<i32>>
   // CHECK-NEXT: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 128], constant_value = <none>
   %17 = tt.splat %arg4 : (!tt.ptr<i64>) -> tensor<128x128x!tt.ptr<i64>>
-  // CHECK-NEXT: contiguity = [1, 128], divisibility = [1, 16], constancy = [128, 1], constant_value = <none>
+  // CHECK-NEXT: contiguity = [1, 1], divisibility = [4, 4], constancy = [128, 1], constant_value = <none>
   %18 = tt.addptr %13, %12 : tensor<128x128x!tt.ptr<i1>>, tensor<128x128xi32>
-  // CHECK-NEXT: contiguity = [1, 128], divisibility = [1, 16], constancy = [128, 1], constant_value = <none>
+  // CHECK-NEXT: contiguity = [1, 1], divisibility = [4, 4], constancy = [128, 1], constant_value = <none>
   %19 = tt.addptr %14, %12 : tensor<128x128x!tt.ptr<i8>>, tensor<128x128xi32>
-  // CHECK-NEXT: contiguity = [1, 128], divisibility = [2, 16], constancy = [128, 1], constant_value = <none>
+  // CHECK-NEXT: contiguity = [1, 1], divisibility = [8, 8], constancy = [128, 1], constant_value = <none>
   %20 = tt.addptr %15, %12 : tensor<128x128x!tt.ptr<i16>>, tensor<128x128xi32>
-  // CHECK-NEXT: contiguity = [1, 128], divisibility = [4, 16], constancy = [128, 1], constant_value = <none>
+  // CHECK-NEXT: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 1], constant_value = <none>
   %21 = tt.addptr %16, %12 : tensor<128x128x!tt.ptr<i32>>, tensor<128x128xi32>
-  // CHECK-NEXT: contiguity = [1, 128], divisibility = [8, 16], constancy = [128, 1], constant_value = <none>
+  // CHECK-NEXT: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 1], constant_value = <none>
   %22 = tt.addptr %17, %12 : tensor<128x128x!tt.ptr<i64>>, tensor<128x128xi32>
   tt.return
 }
@@ -416,13 +420,13 @@ tt.func @permute_2d(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32
   %8 = tt.broadcast %6 : (tensor<128x1x!tt.ptr<f32>>) -> tensor<128x128x!tt.ptr<f32>>
   // CHECK-NEXT: contiguity = [1, 128], divisibility = [1, 1073741824], constancy = [128, 1], constant_value = <none>
   %9 = tt.broadcast %7 : (tensor<1x128xi32>) -> tensor<128x128xi32>
-  // CHECK-NEXT: contiguity = [1, 128], divisibility = [4, 16], constancy = [1, 1], constant_value = <none>
+  // CHECK-NEXT: contiguity = [1, 128], divisibility = [4, 4], constancy = [1, 1], constant_value = <none>
   %10 = tt.addptr %8, %9 : tensor<128x128x!tt.ptr<f32>>, tensor<128x128xi32>
   // CHECK-NEXT: contiguity = [128, 1], divisibility = [1073741824, 1], constancy = [1, 1], constant_value = <none>
   %11 = tt.expand_dims %0 {axis = 1 : i32}: (tensor<128xi32>) -> tensor<128x1xi32>
   // CHECK-NEXT: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 1], constant_value = <none>
   %12 = tt.splat %arg2 : (!tt.ptr<f32>) -> tensor<128x1x!tt.ptr<f32>>
-  // CHECK-NEXT: contiguity = [128, 1], divisibility = [16, 4], constancy = [1, 1], constant_value = <none>
+  // CHECK-NEXT: contiguity = [128, 1], divisibility = [4, 4], constancy = [1, 1], constant_value = <none>
   %13 = tt.addptr %12, %11 : tensor<128x1x!tt.ptr<f32>>, tensor<128x1xi32>
   // CHECK-NEXT: contiguity = [1, 128], divisibility = [1, 1073741824], constancy = [1, 1], constant_value = <none>
   %14 = tt.expand_dims %1 {axis = 0 : i32} : (tensor<128xi32>) -> tensor<1x128xi32>
@@ -430,11 +434,11 @@ tt.func @permute_2d(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32
   %15 = tt.splat %arg3 : (i32) -> tensor<1x128xi32>
   // CHECK-NEXT: contiguity = [1, 1], divisibility = [16, 16], constancy = [1, 1], constant_value = <none>
   %16 = arith.muli %14, %15 : tensor<1x128xi32>
-  // CHECK-NEXT: contiguity = [128, 1], divisibility = [16, 4], constancy = [1, 128], constant_value = <none>
+  // CHECK-NEXT: contiguity = [128, 1], divisibility = [4, 4], constancy = [1, 128], constant_value = <none>
   %17 = tt.broadcast %13 : (tensor<128x1x!tt.ptr<f32>>) -> tensor<128x128x!tt.ptr<f32>>
   // CHECK-NEXT: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 1], constant_value = <none>
   %18 = tt.broadcast %16 : (tensor<1x128xi32>) -> tensor<128x128xi32>
-  // CHECK-NEXT: contiguity = [128, 1], divisibility = [16, 4], constancy = [1, 1], constant_value = <none>
+  // CHECK-NEXT: contiguity = [128, 1], divisibility = [4, 4], constancy = [1, 1], constant_value = <none>
   %19 = tt.addptr %17, %18 : tensor<128x128x!tt.ptr<f32>>, tensor<128x128xi32>
   // CHECK-NEXT: contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
   %20 = tt.load %10, %cst, %cst_0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x128xf32>
@@ -490,7 +494,7 @@ tt.func @store_constant_align(%addr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, 
   %4 = arith.addi %3, %2 : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [16], constancy = [128], constant_value = <none>
   %5 = tt.splat %addr : (!tt.ptr<f32>) -> tensor<128x!tt.ptr<f32>>
-  // CHECK-NEXT: contiguity = [128], divisibility = [16], constancy = [1], constant_value = <none>
+  // CHECK-NEXT: contiguity = [128], divisibility = [4], constancy = [1], constant_value = <none>
   %6 = tt.addptr %5, %4 : tensor<128x!tt.ptr<f32>>, tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [16], constancy = [128], constant_value = <none>
   %9 = tt.splat %n : (i32) -> tensor<128xi32>
@@ -525,7 +529,7 @@ tt.func @vecadd_mask_align_16(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, 
   %12 = tt.load %8, %mask {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64xf32>
   %13 = arith.addf %11, %12 : tensor<64xf32>
   %14 = tt.splat %arg2 : (!tt.ptr<f32>) -> tensor<64x!tt.ptr<f32>>
-  // CHECK: tt.addptr %{{.*}} => contiguity = [64], divisibility = [16], constancy = [1], constant_value = <none>
+  // CHECK: tt.addptr %{{.*}} => contiguity = [64], divisibility = [4], constancy = [1], constant_value = <none>
   %15 = tt.addptr %14, %4 : tensor<64x!tt.ptr<f32>>, tensor<64xi32>
   tt.store %15, %13, %mask : tensor<64xf32>
   tt.return
