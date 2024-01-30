@@ -71,15 +71,18 @@ static void hoistAllocAndConst(scf::ForOp forOp) {
   }
 }
 
-static bool preConddition(scf::ForOp forOp) {
+static bool preCondition(scf::ForOp forOp) {
   // Check if there is a dependency from the loop to the async copy op. In this
   // case we cannot pipeline the async copy.
   SmallVector<Operation *> insertOps;
+  int numForOps = 0;
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (isa<ttg::InsertSliceAsyncOp, ttg::AsyncCommitGroupOp>(op))
       insertOps.emplace_back(&op);
+    if (isa<scf::ForOp>(op))
+      numForOps++;
   }
-  if (insertOps.empty())
+  if (insertOps.empty() || numForOps != 1)
     return false;
   DenseSet<Operation *> insertAndDeps;
   for (Operation *op : insertOps) {
@@ -98,7 +101,7 @@ bool mlir::triton::getOuterLoopSchedule(
     scf::ForOp &forOp, int numStages, mlir::triton::PipeliningOption &options) {
   assert(numStages == 2 && "only support 2 stage pipelining for now");
   // 1. Check precondition, we cannot have a recurrence involving async cp ops
-  if (!preConddition(forOp))
+  if (!preCondition(forOp))
     return false;
 
   // 2. pre-process the loop by hosting allocations.

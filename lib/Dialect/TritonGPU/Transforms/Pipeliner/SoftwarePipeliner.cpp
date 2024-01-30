@@ -58,6 +58,7 @@ static bool preCondition(scf::ForOp forOp) {
 static void tryAndPipelineOuterLoop(scf::ForOp forOp) {
   mlir::triton::PipeliningOption options;
   bool foundSchedule = false;
+  // Limit 2 stages to not require extra shared memory.
   foundSchedule = getOuterLoopSchedule(forOp, /*numStage=*/2, options);
   if (!foundSchedule)
     return;
@@ -115,19 +116,20 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
     SmallVector<scf::ForOp> loops;
     getOperation()->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
 
-    SmallVector<scf::ForOp> outerLoops;
+    llvm::SmallSetVector<scf::ForOp, 8> outerLoops;
     for (scf::ForOp forOp : loops) {
       auto outerLoop = dyn_cast<scf::ForOp>(forOp->getParentOp());
       int loopNumStages = getNumStagesOrDefault(forOp);
       bool pipelined = pipelineLoop(forOp, loopNumStages);
       if (pipelined && outerLoop)
-        outerLoops.push_back(outerLoop);
+        outerLoops.insert(outerLoop);
     }
 
     // schedule the waits
     mlir::triton::insertWaits(getOperation());
 
-    // Clean up arithmetic before applying the next level of pipelining.
+    // Clean up arithmetic before applying the next level of pipelining to
+    // simplify the IR.
     auto arithDialect =
         getOperation().getContext()->getLoadedDialect<arith::ArithDialect>();
     RewritePatternSet patterns(getOperation().getContext());
