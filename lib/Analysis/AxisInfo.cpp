@@ -217,7 +217,6 @@ public:
   }
 };
 
-
 template <typename OpTy>
 class AddSubOpAxisInfoVisitor final : public BinaryOpVisitorImpl<OpTy> {
 public:
