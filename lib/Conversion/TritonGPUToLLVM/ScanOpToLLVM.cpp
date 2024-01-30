@@ -1,5 +1,5 @@
 #include "PatternTritonGPUOpToLLVM.h"
-#include "TritonGPUToLLVMBase.h"
+#include "ReduceScanCommon.h"
 #include "triton/Analysis/Utility.h"
 
 using namespace mlir;

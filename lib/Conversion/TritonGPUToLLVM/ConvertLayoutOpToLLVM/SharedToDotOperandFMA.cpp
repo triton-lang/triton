@@ -1,4 +1,3 @@
-#include "../TritonGPUToLLVMBase.h"
 #include "../Utility.h"
 
 using ValueTable = std::map<std::pair<int, int>, Value>;

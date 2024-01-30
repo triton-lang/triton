@@ -1,8 +1,11 @@
 #include "PatternTritonGPUOpToLLVM.h"
+#include "Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
+using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
+using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
 namespace {
 /* ----- FP8E5M2 ------ */

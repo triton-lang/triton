@@ -1,8 +1,12 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_PATTERNS_TRITON_GPU_OP_TO_LLVM_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_PATTERNS_TRITON_GPU_OP_TO_LLVM_H
 
-#include "TritonGPUToLLVMBase.h"
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "triton/Analysis/AxisInfo.h"
 #include "triton/Target/PTX/TmaMetadata.h"
+
+typedef llvm::DenseMap<mlir::Operation *, mlir::triton::MakeTensorPtrOp>
+    TensorPtrMapT;
 
 namespace mlir {
 namespace triton {

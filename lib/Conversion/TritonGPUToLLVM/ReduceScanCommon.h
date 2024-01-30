@@ -1,5 +1,5 @@
-#ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_BASE_H
-#define TRITON_CONVERSION_TRITONGPU_TO_LLVM_BASE_H
+#ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_REDUCESCANCOMMON_H
+#define TRITON_CONVERSION_TRITONGPU_TO_LLVM_REDUCESCANCOMMON_H
 
 // TODO: refactor so that it doesn't fail if Allocation.h
 // is included after utility.h (due to conflict in `store` macro
@@ -18,10 +18,6 @@
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
 
-constexpr ::llvm::StringLiteral kAttrNumTMALoadDescsName =
-    "triton_gpu.num-tma-load";
-constexpr ::llvm::StringLiteral kAttrNumTMAStoreDescsName =
-    "triton_gpu.num-tma-store";
 using namespace mlir;
 using namespace mlir::triton;
 
@@ -33,8 +29,6 @@ using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 namespace ttng = ::mlir::triton::nvidia_gpu;
-
-typedef DenseMap<Operation *, triton::MakeTensorPtrOp> TensorPtrMapT;
 
 namespace mlir::triton {
 class ReduceOp;

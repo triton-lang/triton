@@ -1,4 +1,3 @@
-#include "../TritonGPUToLLVMBase.h"
 #include "../Utility.h"
 
 using CoordTy = SmallVector<Value>;

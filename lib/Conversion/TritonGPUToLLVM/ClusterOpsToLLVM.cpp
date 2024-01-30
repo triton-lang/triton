@@ -22,6 +22,10 @@
  */
 
 #include "PatternTritonGPUOpToLLVM.h"
+#include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "triton/Dialect/NVGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+
 using namespace mlir;
 using namespace mlir::triton;
 
