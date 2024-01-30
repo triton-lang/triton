@@ -1803,8 +1803,6 @@ def linear_recurrence(a1, b1, a2, b2):
 
 @pytest.mark.parametrize("op, dtype_str, shape, axis, num_warps", scan_configs + negative_config)
 def test_scan2d(op, dtype_str, shape, axis, num_warps, device):
-    if is_hip():
-        pytest.skip("test_scan2d is not supported in HIP")
     check_type_supported(dtype_str, device)
 
     # triton kernel
