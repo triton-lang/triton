@@ -32,6 +32,13 @@ namespace triton {
 } // namespace triton
 } // namespace mlir
 
+namespace mlir {
+FailureOr<LLVM::LLVMFuncOp>
+convertFuncOpToLLVMFuncOp(FunctionOpInterface funcOp,
+                          ConversionPatternRewriter &rewriter,
+                          const LLVMTypeConverter &converter);
+}
+
 using namespace mlir;
 using namespace mlir::triton;
 namespace ttng = mlir::triton::nvidia_gpu;
@@ -124,10 +131,11 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
 /// FuncOp legalization pattern that converts MemRef arguments to pointers to
 /// MemRef descriptors (LLVM struct data types) containing all the MemRef type
 /// information.
-struct FuncOpConversion : public FuncOpConversionBase {
+
+struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
                    PatternBenefit benefit)
-      : FuncOpConversionBase(converter, benefit), numWarps(numWarps) {}
+      : ConvertOpToLLVMPattern(converter, benefit), numWarps(numWarps) {}
 
   triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
                              ConversionPatternRewriter &rewriter) const {
@@ -144,7 +152,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
                                            funcTy.getResults());
     // 2. Modify the argument attributes to add the new argument.
     SmallVector<NamedAttribute> amendedAttrs;
-    filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, amendedAttrs);
+    // filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, amendedAttrs);
     auto amendedArgAttrs = llvm::to_vector<4>(funcOp.getAllArgAttrs());
     amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
     amendedAttrs.push_back(rewriter.getNamedAttr(
@@ -167,7 +175,8 @@ struct FuncOpConversion : public FuncOpConversionBase {
     if (!LLVM::isKernel(funcOp))
       amendedFuncOp = amendFuncOp(funcOp, rewriter);
 
-    auto newFuncOp = convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter);
+    LLVM::LLVMFuncOp newFuncOp = *mlir::convertFuncOpToLLVMFuncOp(
+        amendedFuncOp, rewriter, *getTypeConverter());
     if (!newFuncOp) {
       return failure();
     }
