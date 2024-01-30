@@ -349,6 +349,41 @@ Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr);
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content);
 
+static bool isKernel(FunctionOpInterface funcOp) {
+  return funcOp.getVisibility() == SymbolTable::Visibility::Public;
+}
+
+static Value getStackPointer(PatternRewriter &rewriter,
+                             FunctionOpInterface funcOp) {
+  auto mod = funcOp->getParentOfType<ModuleOp>();
+  LLVM::GlobalOp globalBase = nullptr;
+  mod.walk([&](LLVM::GlobalOp op) {
+    if (op.getSymName() == "global_smem")
+      globalBase = op;
+  });
+  assert(globalBase);
+  if (isKernel(funcOp))
+    return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
+  else
+    return funcOp.getArgument(funcOp.getNumArguments() - 1);
+}
+
+static Value getSharedMemoryBase(Location loc,
+                                 ConversionPatternRewriter &rewriter,
+                                 Operation *op) {
+  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
+  FunctionOpInterface func =
+      op->template getParentOfType<FunctionOpInterface>();
+  assert(op->hasAttr("allocation.offset"));
+  size_t offset = op->getAttr("allocation.offset")
+                      .cast<IntegerAttr>()
+                      .getValue()
+                      .getZExtValue();
+  Value offVal = i32_val(offset);
+  Value base = gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func), offVal);
+  return base;
+}
+
 } // namespace LLVM
 } // namespace mlir
 

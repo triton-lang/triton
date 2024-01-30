@@ -74,15 +74,28 @@ struct LLVMDIScopePass : public LLVMDIScopeBase<LLVMDIScopePass> {
           context, llvm::sys::path::filename(inputFilePath),
           llvm::sys::path::parent_path(inputFilePath));
     }
-    auto distinctId = mlir::DistinctAttr::create(mlir::UnitAttr::get(context));
-    if (!compileUnitAttr) {
-      compileUnitAttr = LLVM::DICompileUnitAttr::get(
-          context, distinctId, llvm::dwarf::DW_LANG_C, fileAttr,
-          StringAttr::get(context, "triton"),
-          /*isOptimized=*/true, LLVM::DIEmissionKind::LineTablesOnly);
-    }
     auto subroutineTypeAttr =
         LLVM::DISubroutineTypeAttr::get(context, llvm::dwarf::DW_CC_normal, {});
+
+    // Figure out debug information (`subprogramFlags` and `compileUnitAttr`) to
+    // attach to the function definition / declaration. External functions are
+    // declarations only, and are defined in a different compile unit, so mark
+    // them appropriately in `subprogramFlags`, and set an empty
+    // `compileUnitAttr`.
+    DistinctAttr distinctId;
+    auto subprogramFlags = LLVM::DISubprogramFlags::Optimized;
+    if (!funcOp.isExternal()) {
+      distinctId = mlir::DistinctAttr::create(mlir::UnitAttr::get(context));
+      if (!compileUnitAttr) {
+        compileUnitAttr = LLVM::DICompileUnitAttr::get(
+            context, distinctId, llvm::dwarf::DW_LANG_C, fileAttr,
+            StringAttr::get(context, "triton"),
+            /*isOptimized=*/true, LLVM::DIEmissionKind::LineTablesOnly);
+      }
+      subprogramFlags = subprogramFlags | LLVM::DISubprogramFlags::Definition;
+    } else {
+      compileUnitAttr = {};
+    }
 
     StringAttr funcNameAttr = funcOp.getNameAttr();
     // Note that scopeline is set differently from LLVM's
@@ -92,10 +105,7 @@ struct LLVMDIScopePass : public LLVMDIScopeBase<LLVMDIScopePass> {
         context, distinctId, compileUnitAttr, fileAttr, funcNameAttr,
         funcNameAttr, fileAttr,
         /*line=*/line,
-        /*scopeline=*/line,
-        LLVM::DISubprogramFlags::Definition |
-            LLVM::DISubprogramFlags::Optimized,
-        subroutineTypeAttr);
+        /*scopeline=*/line, subprogramFlags, subroutineTypeAttr);
     funcOp->setLoc(FusedLoc::get(context, {loc}, subprogramAttr));
   }
 

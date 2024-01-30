@@ -849,4 +849,12 @@ triton::MakeTensorPtrOp getMakeTensorPtrOp(Value v) {
   llvm_unreachable("Unable to getMakeTensorPtr()");
 }
 
+SmallVector<int32_t> triton::inversePermutation(ArrayRef<int32_t> permutation) {
+  SmallVector<int32_t> ret(permutation.size());
+  for (int i = 0; i < permutation.size(); ++i) {
+    ret[permutation[i]] = i;
+  }
+  return ret;
+}
+
 } // namespace mlir

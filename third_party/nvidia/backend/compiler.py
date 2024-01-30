@@ -482,6 +482,7 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_decompose_unsupported_conversions(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
+        passes.ttgpuir.add_allocate_shared_memory(pm)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, tma_infos)
         if metadata["ws_enabled"]:
             passes.common.add_licm(pm)
