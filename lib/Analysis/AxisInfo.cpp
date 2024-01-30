@@ -38,6 +38,22 @@ static constexpr int log2Int(int64_t num) {
   return (num > 1) ? 1 + log2Int(num / 2) : 0;
 }
 
+// If lhs * rhs overflows, return max value
+static int64_t multiplyDivisor(IntegerType intTy, int64_t lhs, int64_t rhs) {
+  // Use a single byte as the minimum divisor
+  int64_t maxDivisor = 1 << (std::max<int64_t>(8, intTy.getWidth()) - 2);
+  if (lhs > maxDivisor / rhs)
+    return maxDivisor;
+  return lhs * rhs;
+}
+
+static IntegerType getElementIntegerType(Type type) {
+  auto elementTy = getElementTypeOrSelf(type);
+  auto intTy = elementTy.template dyn_cast<IntegerType>();
+  // If null because of a pointer type, use 64-bit integer type
+  return intTy ? intTy : IntegerType::get(elementTy.getContext(), 64);
+}
+
 //===----------------------------------------------------------------------===//
 // AxisInfo
 //===----------------------------------------------------------------------===//
@@ -205,8 +221,8 @@ class MulIOpAxisInfoVisitor final : public BinaryOpVisitorImpl<arith::MulIOp> {
 public:
   using BinaryOpVisitorImpl<arith::MulIOp>::BinaryOpVisitorImpl;
 
-  static int64_t getDivisibility(const AxisInfo &lhs, const AxisInfo &rhs,
-                                 int dim) {
+  static int64_t getDivisibility(IntegerType intTy, const AxisInfo &lhs,
+                                 const AxisInfo &rhs, int dim) {
     auto lhsDivisibility = lhs.getDivisibility(dim);
     if (lhs.getContiguity(dim) > 1 &&
         !(rhs.getConstantValue().has_value() && rhs.getConstantValue() == 1)) {
@@ -219,11 +235,21 @@ public:
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       rhsDivisibility = 1;
     }
-    return lhsDivisibility * rhsDivisibility;
+    return multiplyDivisor(intTy, lhsDivisibility, rhsDivisibility);
   }
 
-  static int64_t getContiguity(const AxisInfo &lhs, const AxisInfo &rhs,
-                               int dim) {
+  static std::optional<int64_t> getConstantValue(IntegerType intTy,
+                                                 const AxisInfo &lhs,
+                                                 const AxisInfo &rhs) {
+    if (lhs.getConstantValue().has_value() &&
+        rhs.getConstantValue().has_value())
+      return {lhs.getConstantValue().value() * rhs.getConstantValue().value()};
+    return {};
+  }
+
+private:
+  int64_t getContiguity(arith::MulIOp op, const AxisInfo &lhs,
+                        const AxisInfo &rhs, int dim) override {
     // lhs * 1 = lhs
     auto lhsContiguity =
         rhs.getConstantValue().has_value() && rhs.getConstantValue() == 1
@@ -237,38 +263,21 @@ public:
     return std::max(lhsContiguity, rhsContiguity);
   }
 
-  static int64_t getConstancy(const AxisInfo &lhs, const AxisInfo &rhs,
-                              int dim) {
-    return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
-  }
-
-  static std::optional<int64_t> getConstantValue(const AxisInfo &lhs,
-                                                 const AxisInfo &rhs) {
-    if (lhs.getConstantValue().has_value() &&
-        rhs.getConstantValue().has_value())
-      return {lhs.getConstantValue().value() * rhs.getConstantValue().value()};
-    return {};
-  }
-
-private:
-  int64_t getContiguity(arith::MulIOp op, const AxisInfo &lhs,
-                        const AxisInfo &rhs, int dim) override {
-    return getContiguity(lhs, rhs, dim);
-  }
-
   int64_t getConstancy(arith::MulIOp op, const AxisInfo &lhs,
                        const AxisInfo &rhs, int dim) override {
-    return getConstancy(lhs, rhs, dim);
+    return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
   }
 
   int64_t getDivisibility(arith::MulIOp op, const AxisInfo &lhs,
                           const AxisInfo &rhs, int dim) override {
-    return getDivisibility(lhs, rhs, dim);
+    IntegerType intTy = getElementIntegerType(op.getResult().getType());
+    return getDivisibility(intTy, lhs, rhs, dim);
   }
 
   std::optional<int64_t> getConstantValue(arith::MulIOp op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
-    return getConstantValue(lhs, rhs);
+    IntegerType intTy = getElementIntegerType(op.getResult().getType());
+    return getConstantValue(intTy, lhs, rhs);
   }
 };
 
@@ -302,8 +311,9 @@ private:
       auto elemSizeAxisInfo = AxisInfo(AxisInfo::DimVectorT(rank, 1),
                                        AxisInfo::DimVectorT(rank, elemSize),
                                        AxisInfo::DimVectorT(rank, 1), elemSize);
-      rhsDivisibility =
-          MulIOpAxisInfoVisitor::getDivisibility(rhs, elemSizeAxisInfo, dim);
+      auto intTy = getElementIntegerType(op.getResult().getType());
+      rhsDivisibility = MulIOpAxisInfoVisitor::getDivisibility(
+          intTy, rhs, elemSizeAxisInfo, dim);
     }
     return gcd(lhs.getDivisibility(dim), rhsDivisibility);
   }
@@ -824,10 +834,8 @@ private:
     }
     auto numBits = log2Int(lhsDivisibility);
     auto maxBits = log2Int(highestPowOf2Divisor<int64_t>(0));
-    // Make sure the return value doesn't exceed highestPowOf2Divisor<int64>(0)
-    if (shift + numBits > maxBits)
-      return highestPowOf2Divisor<int64_t>(0);
-    return lhsDivisibility << shift;
+    auto intTy = getElementIntegerType(op.getResult().getType());
+    return multiplyDivisor(intTy, lhsDivisibility, 1 << shift);
   }
 
   int64_t getConstancy(arith::ShLIOp op, const AxisInfo &lhs,

@@ -111,7 +111,7 @@ tt.func @sub() {
 // -----
 
 // CHECK-LABEL: @mul
-tt.func @mul() {
+tt.func @mul(%arg0: i32 {tt.divisibility = 16 : i32}) {
   // CHECK: contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>
   %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [128], constant_value = 1
@@ -126,6 +126,10 @@ tt.func @mul() {
   %5 = arith.constant dense<2> : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [256], constancy = [128], constant_value = 256
   %6 = arith.muli %4, %5 : tensor<128xi32>
+  // CHECK-NEXT: contiguity = [1], divisibility = [1073741824], constancy = [1], constant_value = 1073741824
+  %7 = arith.constant 1073741824 : i32
+  // CHECK-NEXT: contiguity = [1], divisibility = [1073741824], constancy = [1], constant_value = <none>
+  %8 = arith.muli %arg0, %7 : i32 
   tt.return
 }
 
