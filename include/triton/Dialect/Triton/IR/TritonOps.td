@@ -356,7 +356,8 @@ def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
 
     let description = [{
       For a given tensor, broadcast changes one or more dimensions with size 1
-      to a new size, e.g. tensor<1x32x1xf32> -> tensor<2x32x4xf32>.
+      to a new size, e.g. tensor<1x32x1xf32> -> tensor<2x32x4xf32>.  You cannot
+      change the size of a non-1 dimension.
     }];
 
     let arguments = (ins TT_Tensor:$src);
@@ -398,13 +399,46 @@ def TT_TransOp : TT_Op<"trans", [Pure,
                                  DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                  SameOperandsAndResultElementType]> {
 
-    let summary = "transpose a tensor";
+    let summary = "rearrange the dimensions of a tensor";
+    let description = [{
+      For example, given a tensor x with shape [1,2,4], transpose(x) with
+      order=[2,0,1] rearranges the tensor to have shape [4,1,2].
 
-    let arguments = (ins TT_Tensor:$src);
+      Although this op is called "trans", it implements both tl.trans() and
+      tl.permute().  ("permute" might be a better name, but it's called "trans"
+      because originally it only supported 2D tensors.)
+
+      ## Implementation note on encodings:
+
+      In the TritonGPU dialect (and probably others), an encoding is chosen for
+      this op's output so it's a nop from the perspective of code generation.
+
+      For example, suppose tensor x has an encoding such that GPU thread [i,j,k]
+      has a register containing element [i,j,k] of the tensor.  Now we transpose
+      x with order [2,1,0], i.e. we reverse the order of its dimensions.  In
+      TritonGPU, we will choose a layout for the output of the transpose so that
+      GPU thread [i,j,k] has element [k,j,i] of transpose(x).  But this is the
+      same element it had before!  All we've done is "rename" the element that
+      thread [i,j,k] has.
+
+      The "real" transpose -- i.e. moving data between GPU threads -- occurs in
+      convertLayout ops that appear before and/or after the operation.
+
+      We do this so that you can chain multiple data-movement ops (e.g.
+      transpose+reshape+concat) without going to shared memory after each one.
+    }];
+
+    let arguments = (
+      ins TT_Tensor:$src,
+      DenseI32ArrayAttr:$order
+    );
 
     let results = (outs TT_Tensor:$result);
 
     let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
+
+    let hasFolder = 1;
+    let hasVerifier = 1;
 }
 
 //
@@ -571,9 +605,11 @@ def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
 //
 // ElementwiseInlineAsm Op
 //
-def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [Elementwise,
-                                                                 SameOperandsAndResultEncoding,
-                                                                 DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [
+  Elementwise,
+  SameOperandsAndResultEncoding,
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+]> {
   let summary = "inline assembly applying an elementwise operation to a group of packed elements.";
   let description = [{
     Runs an inline asm block to generate one or more tensors.
@@ -588,6 +624,8 @@ def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [Elementwise,
   let assemblyFormat = [{
     $asm_string attr-dict ($args^ `:` type($args))? `->` type($result)
   }];
+
+  let hasVerifier = 1;
 }
 
 //

@@ -187,9 +187,8 @@ def triton_key():
     return f'{__version__}' + '-'.join(contents)
 
 
-def parse(full_name, ext):
+def parse(full_name, ext, context):
     if ext == "ttir" or ext == "ttgir":
-        context = ir.context()
         module = ir.parse_mlir_module(full_name, context)
         module.context = context
         return module
@@ -251,7 +250,7 @@ def compile(src, target=None, options=None):
         if (fn_override_manager is not None and fn_override_manager.has_file(ir_filename)):
             print(f"\nOverriding kernel with file {ir_filename}")
             full_name = fn_override_manager.get_file(ir_filename)
-            next_module = parse(full_name, ext)
+            next_module = parse(full_name, ext, context)
         module = next_module
     # write-back metadata
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,

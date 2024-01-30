@@ -1,11 +1,12 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
+#include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.cpp.inc"
 
 using namespace mlir;
 using namespace mlir::triton;
+using namespace mlir::triton::gpu;
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 namespace {
 struct SplatOpConversion : public ConvertOpToLLVMPattern<triton::SplatOp> {
@@ -191,25 +192,27 @@ struct ReshapeOpConversion : public ConvertOpToLLVMPattern<ReshapeOp> {
   matchAndRewrite(ReshapeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    assert(!triton::gpu::isExpensiveView(op.getSrc().getType(), op.getType()) &&
-           "expensive view not supported");
+    if (triton::gpu::isExpensiveView(op.getSrc().getType(), op.getType())) {
+      return emitOptionalError(loc,
+                               "expensive view not supported on reshape op");
+    }
     auto resultTy = op.getType().template cast<RankedTensorType>();
     auto srcTy = op.getSrc().getType().template cast<RankedTensorType>();
     if (!op.getAllowReorder()) {
-      // Only support trivial block layouts for now.
       auto mod = op->getParentOfType<ModuleOp>();
       int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
       int threadsPerWarp =
           triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
       int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
-      assert(resultTy.getEncoding() == triton::gpu::getDefaultBlockedEncoding(
-                                           op.getContext(), resultTy.getShape(),
-                                           numWarps, threadsPerWarp, numCTAs) &&
-             "ReshapeOp lowering only support block encoding right now.");
-      assert(srcTy.getEncoding() == triton::gpu::getDefaultBlockedEncoding(
-                                        op.getContext(), srcTy.getShape(),
-                                        numWarps, threadsPerWarp, numCTAs) &&
-             "ReshapeOp lowering only support block encoding right now.");
+      if (srcTy.getEncoding() != triton::gpu::getDefaultBlockedEncoding(
+                                     op.getContext(), srcTy.getShape(),
+                                     numWarps, threadsPerWarp, numCTAs) ||
+          resultTy.getEncoding() != triton::gpu::getDefaultBlockedEncoding(
+                                        op.getContext(), resultTy.getShape(),
+                                        numWarps, threadsPerWarp, numCTAs)) {
+        return emitOptionalError(loc, "ReshapeOp lowering only supports the "
+                                      "default block encoding right now.");
+      }
     }
 
     auto typeConverter = getTypeConverter();
@@ -236,10 +239,12 @@ struct ExpandDimsOpConversion : public ConvertOpToLLVMPattern<ExpandDimsOp> {
 
     auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
     auto resultTy = op.getType().template cast<RankedTensorType>();
-
-    assert(srcTy.getEncoding().isa<SliceEncodingAttr>() &&
-           "ExpandDimsOp only support SliceEncodingAttr");
     auto srcLayout = srcTy.getEncoding().dyn_cast<SliceEncodingAttr>();
+    if (!srcLayout) {
+      return emitOptionalError(
+          loc, "ExpandDimsOp only supports SliceEncodingAttr as its input");
+    }
+
     auto resultLayout = resultTy.getEncoding();
 
     auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
@@ -262,26 +267,44 @@ struct ExpandDimsOpConversion : public ConvertOpToLLVMPattern<ExpandDimsOp> {
   }
 };
 
-struct TransOpConversion : public ConvertOpToLLVMPattern<triton::TransOp> {
-  using ConvertOpToLLVMPattern<triton::TransOp>::ConvertOpToLLVMPattern;
+struct TransOpConversion : public ConvertTritonGPUOpToLLVMPattern<TransOp> {
+  using ConvertTritonGPUOpToLLVMPattern::ConvertTritonGPUOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::TransOp op, OpAdaptor adaptor,
+  matchAndRewrite(TransOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto llvmElemTy = typeConverter->convertType(
-        op.getType().cast<RankedTensorType>().getElementType());
-    auto srcSmemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
-                                                      llvmElemTy, rewriter);
-    SmallVector<Value> dstStrides = {srcSmemObj.strides[1],
-                                     srcSmemObj.strides[0]};
-    SmallVector<Value> dstOffsets = {srcSmemObj.offsets[1],
-                                     srcSmemObj.offsets[0]};
-    auto dstSmemObj = SharedMemoryObject(
-        srcSmemObj.base, srcSmemObj.baseElemType, dstStrides, dstOffsets);
-    auto retVal = getStructFromSharedMemoryObject(loc, dstSmemObj, rewriter);
-    rewriter.replaceOp(op, retVal);
-    return success();
+    auto resultTy = op.getType().cast<RankedTensorType>();
+
+    if (auto enc = resultTy.getEncoding().dyn_cast<SharedEncodingAttr>()) {
+      auto llvmElemTy =
+          getTypeConverter()->convertType(resultTy.getElementType());
+      auto srcSmemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                        llvmElemTy, rewriter);
+      auto dstSmemObj = SharedMemoryObject(
+          srcSmemObj.base, srcSmemObj.baseElemType,
+          /*strides=*/applyPermutation(srcSmemObj.strides, op.getOrder()),
+          /*offsets=*/applyPermutation(srcSmemObj.offsets, op.getOrder()));
+      auto retVal = getStructFromSharedMemoryObject(loc, dstSmemObj, rewriter);
+      rewriter.replaceOp(op, retVal);
+      return success();
+    } else if (auto enc =
+                   resultTy.getEncoding().dyn_cast<BlockedEncodingAttr>()) {
+      // If the dst encoding is blocked, then TransOp::inferReturnTypes
+      // ensures that:
+      //  - the src encoding is also blocked, and
+      //  - the translation from src to dst is just a "renaming" of the
+      //    registers, i.e. each thread has exactly the same values.
+      // Thus the transpose op simply returns the same values it got.
+      auto vals = this->getTypeConverter()->unpackLLElements(
+          loc, adaptor.getSrc(), rewriter);
+      Value ret = this->getTypeConverter()->packLLElements(loc, vals, rewriter,
+                                                           resultTy);
+      rewriter.replaceOp(op, ret);
+      return success();
+    }
+
+    return emitOptionalError(loc, "unsupported encoding for TransOp");
   }
 };
 } // namespace

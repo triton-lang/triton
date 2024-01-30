@@ -190,48 +190,75 @@ public:
     return {nonKDim, kDim};
   }
 
-  Value convertAndPromoteDotOperand(mlir::PatternRewriter &rewriter,
-                                    Value oldDotOperand,
-                                    ::mlir::Attribute encoding,
-                                    Type promotedElemType) const {
-    assert(promotedElemType.isIntOrFloat());
+  /**
+   * @brief Convert layout and cast element type of a given tensor
+   *
+   * If old element type is different from new element type, this function
+   * creates two new operations:
+   * 1. %converted_value = layout_convert %value, newEncoding
+   * 2. %casted_value = cast(fext, ftrunc, etc.) %value, newElemType
+   *
+   * If old element type is same as new element type, this function creates only
+   * one operation: %converted_value = layout_convert %value, newEncoding
+   *
+   * @param rewriter
+   * @param value original tensor value, which we need to convert and cast
+   * @param newEncoding new encoding for the tenosr
+   * @param newElemType new element type for the tensor
+   * @return converted and optionaly casted tensor value
+   */
+  Value convertAndCastTensor(mlir::PatternRewriter &rewriter, Value value,
+                             ::mlir::Attribute newEncoding,
+                             Type newElemType) const {
+    assert(newElemType.isIntOrFloat());
 
-    auto loc = oldDotOperand.getLoc();
-    auto oldType = oldDotOperand.getType().cast<RankedTensorType>();
+    auto loc = value.getLoc();
+    auto oldType = value.getType().cast<RankedTensorType>();
     auto oldElemType = oldType.getElementType();
 
     assert(oldElemType.isIntOrFloat());
-    assert(oldElemType.isIntOrIndex() == promotedElemType.isIntOrIndex());
+    assert(oldElemType.isIntOrIndex() == newElemType.isIntOrIndex());
 
     auto convertedType =
-        RankedTensorType::get(oldType.getShape(), oldElemType, encoding);
+        RankedTensorType::get(oldType.getShape(), oldElemType, newEncoding);
 
-    Value convertedDotOperand = rewriter.create<ttg::ConvertLayoutOp>(
-        loc, convertedType, oldDotOperand);
+    Value convertedTensor =
+        rewriter.create<ttg::ConvertLayoutOp>(loc, convertedType, value);
 
-    if (promotedElemType == oldElemType)
-      return convertedDotOperand;
+    if (newElemType == oldElemType)
+      return convertedTensor;
 
-    Type promotedType = convertedType.cloneWith(std::nullopt, promotedElemType);
+    Type castedType = convertedType.cloneWith(std::nullopt, newElemType);
 
-    Value promotedDotOperand;
+    Value castedTensor;
 
-    if (promotedElemType.isIntOrIndex()) {
-      // TODO Implement integer casting
-      assert(!promotedElemType.isIntOrIndex() &&
-             "need to implement integer promotion");
-    } else {
-      if (oldElemType.isF16() && promotedElemType.isF32())
-        promotedDotOperand = rewriter.create<mlir::arith::ExtFOp>(
-            loc, promotedType, convertedDotOperand);
-      else if (oldElemType.isF32() && promotedElemType.isF16())
-        promotedDotOperand = rewriter.create<mlir::arith::TruncFOp>(
-            loc, promotedType, convertedDotOperand);
+    if (newElemType.isIntOrIndex()) {
+      unsigned oldWidth = oldElemType.getIntOrFloatBitWidth();
+      unsigned newWidth = newElemType.getIntOrFloatBitWidth();
+      if (oldWidth == newWidth)
+        castedTensor = rewriter.create<mlir::arith::BitcastOp>(
+            loc, convertedType, convertedTensor);
+      else if (oldWidth > newWidth)
+        castedTensor = rewriter.create<mlir::arith::TruncIOp>(loc, castedType,
+                                                              convertedTensor);
+      else if (oldElemType.isSignedInteger())
+        castedTensor = rewriter.create<mlir::arith::ExtSIOp>(loc, castedType,
+                                                             convertedTensor);
       else
-        promotedDotOperand = rewriter.create<tt::FpToFpOp>(loc, promotedType,
-                                                           convertedDotOperand);
+        castedTensor = rewriter.create<mlir::arith::ExtUIOp>(loc, castedType,
+                                                             convertedTensor);
+    } else {
+      if (oldElemType.isF16() && newElemType.isF32())
+        castedTensor = rewriter.create<mlir::arith::ExtFOp>(loc, castedType,
+                                                            convertedTensor);
+      else if (oldElemType.isF32() && newElemType.isF16())
+        castedTensor = rewriter.create<mlir::arith::TruncFOp>(loc, castedType,
+                                                              convertedTensor);
+      else
+        castedTensor =
+            rewriter.create<tt::FpToFpOp>(loc, castedType, convertedTensor);
     }
-    return promotedDotOperand;
+    return castedTensor;
   }
 
   mlir::LogicalResult
@@ -279,8 +306,7 @@ public:
 
     // convert accumulator
     auto oldAcc = dotOp.getOperand(2);
-    auto newAcc =
-        convertAndPromoteDotOperand(rewriter, oldAcc, mfmaEnc, mfmaAccType);
+    auto newAcc = convertAndCastTensor(rewriter, oldAcc, mfmaEnc, mfmaAccType);
 
     // kWidth is a number of consecutive elements per one instruction per one
     // thread
@@ -314,8 +340,8 @@ public:
                                              dotOp.getMaxNumImpreciseAcc());
 
     Value dotOutput =
-        convertAndPromoteDotOperand(rewriter, newDot, oldRetType.getEncoding(),
-                                    oldRetType.getElementType());
+        convertAndCastTensor(rewriter, newDot, oldRetType.getEncoding(),
+                             oldRetType.getElementType());
 
     rewriter.replaceOp(op, dotOutput);
 
