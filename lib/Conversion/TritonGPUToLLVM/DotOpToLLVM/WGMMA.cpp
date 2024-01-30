@@ -457,7 +457,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
           LLVM::LLVMStructType::getLiteral(rewriter.getContext(), elemTypes);
       Value d;
       if (!zeroAcc)
-        d = typeConverter->packLLElements(loc, mmaOut, rewriter, accTy);
+        d = packLLElements(loc, typeConverter, mmaOut, rewriter, accTy);
       uint32_t numLowPrecisionAcc = 0;
       Value partialAcc;
       for (int k = 0; k < numRepK; ++k) {
@@ -472,7 +472,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
           auto regATy = LLVM::LLVMStructType::getLiteral(
               rewriter.getContext(),
               SmallVector<Type>(regA.size(), regA[0].getType()));
-          a = typeConverter->packLLElements(loc, regA, rewriter, regATy);
+          a = packLLElements(loc, typeConverter, regA, rewriter, regATy);
         }
         auto b = bLoader.smemLoad(n, k, rewriter, loc);
         ValueRange operands{a, b, d};
@@ -516,7 +516,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   Type structTy = LLVM::LLVMStructType::getLiteral(
       mmaEncoding.getContext(),
       SmallVector<Type>(results.size(), dTensorTy.getElementType()));
-  auto res = typeConverter->packLLElements(loc, results, rewriter, structTy);
+  auto res = packLLElements(loc, typeConverter, results, rewriter, structTy);
   rewriter.replaceOp(op, res);
   return success();
 }

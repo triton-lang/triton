@@ -516,8 +516,8 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   auto valuesTransposed = transpose(srcValues);
   for (unsigned i = 0; i < op.getNumOperands(); ++i) {
     auto resultTy = op.getResult()[i].getType().dyn_cast<RankedTensorType>();
-    results[i] = getTypeConverter()->packLLElements(loc, valuesTransposed[i],
-                                                    rewriter, resultTy);
+    results[i] = packLLElements(loc, getTypeConverter(), valuesTransposed[i],
+                                rewriter, resultTy);
   }
   rewriter.replaceOp(op, results);
   return success();

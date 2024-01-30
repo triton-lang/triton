@@ -519,7 +519,7 @@ private:
       }
 
       Value result =
-          typeConverter->packLLElements(loc, outVals, rewriter, dstTy);
+          packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
       rewriter.replaceOp(op, result);
     }
 
@@ -693,7 +693,7 @@ private:
       }
     }
 
-    Value result = typeConverter->packLLElements(loc, outVals, rewriter, dstTy);
+    Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
 
     return success();
@@ -728,7 +728,7 @@ private:
     SmallVector<Value> outVals = loadSharedToDistributed(
         dst, dstIndices, src, smemObj, elemTy, loc, rewriter);
 
-    Value result = typeConverter->packLLElements(loc, outVals, rewriter, dstTy);
+    Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
 
     return success();
@@ -980,8 +980,8 @@ private:
         reorderedVals.push_back(bitcast(vecVals[i + 3], i32_ty));
       }
 
-      Value view = getTypeConverter()->packLLElements(loc, reorderedVals,
-                                                      rewriter, dstTy);
+      Value view = packLLElements(loc, getTypeConverter(), reorderedVals,
+                                  rewriter, dstTy);
       rewriter.replaceOp(op, view);
       return success();
     }
@@ -1019,7 +1019,7 @@ private:
     }
     assert(retVals.size() == triton::gpu::getTotalElemsPerThread(dstTy));
     Value view =
-        getTypeConverter()->packLLElements(loc, retVals, rewriter, dstTy);
+        packLLElements(loc, getTypeConverter(), retVals, rewriter, dstTy);
     rewriter.replaceOp(op, view);
     return success();
   }

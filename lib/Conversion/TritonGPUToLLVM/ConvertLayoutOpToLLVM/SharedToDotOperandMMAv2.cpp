@@ -488,7 +488,7 @@ Value composeValuesToDotOperandLayoutStruct(
   MLIRContext *ctx = elemTy.getContext();
   Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(elems.size(), elemTy));
-  auto result = typeConverter->packLLElements(loc, elems, rewriter, structTy);
+  auto result = packLLElements(loc, typeConverter, elems, rewriter, structTy);
   return result;
 }
 

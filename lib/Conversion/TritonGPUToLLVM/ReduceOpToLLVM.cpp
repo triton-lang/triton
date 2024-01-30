@@ -293,8 +293,8 @@ private:
           key.insert(key.begin() + axis, 0);
           resultVals.push_back(accs[key][i]);
         }
-        results[i] = getTypeConverter()->packLLElements(loc, resultVals,
-                                                        rewriter, resultTy);
+        results[i] = packLLElements(loc, getTypeConverter(), resultVals,
+                                    rewriter, resultTy);
       } else
         results[i] = accs.begin()->second[i];
     }
@@ -466,8 +466,8 @@ private:
           resultVals[j] = load(elemTy, readPtr);
         }
 
-        results[i] = getTypeConverter()->packLLElements(loc, resultVals,
-                                                        rewriter, resultTy);
+        results[i] = packLLElements(loc, getTypeConverter(), resultVals,
+                                    rewriter, resultTy);
       } else {
         // 0d-tensor -> scalar
         results[i] = load(elemTy, smemBases[i]);

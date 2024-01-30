@@ -104,7 +104,7 @@ struct BroadcastOpConversion
     }
 
     Value resultStruct =
-        typeConverter->packLLElements(loc, resultVals, rewriter, resultTy);
+        packLLElements(loc, typeConverter, resultVals, rewriter, resultTy);
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -529,7 +529,7 @@ struct MakeRangeOpConversion
     }
     auto typeConverter = getTypeConverter();
     Value result =
-        typeConverter->packLLElements(loc, retVals, rewriter, rankedTy);
+        packLLElements(loc, typeConverter, retVals, rewriter, rankedTy);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -648,7 +648,7 @@ struct AddPtrOpConversion
         resultVals[i] = gep(ptrTy, elemTy, ptrs[i], offsets[i]);
       }
       Value view =
-          typeConverter->packLLElements(loc, resultVals, rewriter, resultTy);
+          packLLElements(loc, typeConverter, resultVals, rewriter, resultTy);
       rewriter.replaceOp(op, view);
     } else {
       assert(resultTy.isa<triton::PointerType>());

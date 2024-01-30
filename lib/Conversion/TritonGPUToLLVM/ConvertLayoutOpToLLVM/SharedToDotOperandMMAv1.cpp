@@ -211,7 +211,7 @@ static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
     elems.push_back(bitcast(item.second.second, i32_ty));
   }
 
-  Value res = typeConverter->packLLElements(loc, elems, rewriter, resultTy);
+  Value res = packLLElements(loc, typeConverter, elems, rewriter, resultTy);
   return res;
 }
 
@@ -338,7 +338,7 @@ static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
     elems.push_back(bitcast(item.second.second, i32_ty));
   }
 
-  Value res = typeConverter->packLLElements(loc, elems, rewriter, resultTy);
+  Value res = packLLElements(loc, typeConverter, elems, rewriter, resultTy);
   return res;
 }
 

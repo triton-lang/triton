@@ -179,8 +179,8 @@ public:
         loc, rewriter, srcType, baseSharedMemPtr, warpLevelHistogram, numBins,
         numThreadsPerWarp, innerDimIndices, threadId, numWarps);
 
-    Value results = typeConverter->packLLElements(loc, histogramValue, rewriter,
-                                                  op.getResult().getType());
+    Value results = packLLElements(loc, typeConverter, histogramValue, rewriter,
+                                   op.getResult().getType());
     rewriter.replaceOp(op, results);
     return success();
   }

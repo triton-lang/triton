@@ -155,6 +155,7 @@ struct LoadOpConversion
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
+    auto typeConverter = getTypeConverter();
 
     // original values
     Value ptr = op.getPtr();
@@ -286,7 +287,7 @@ struct LoadOpConversion
           for (size_t s = 0; s < size; ++s) {
             Value falseVal = otherElems[vecStart + ii * size + s];
             Value sVal = createIndexAttrConstant(
-                rewriter, loc, this->getTypeConverter()->getIndexType(), s);
+                rewriter, loc, typeConverter->getIndexType(), s);
             v = insert_element(vecTy, v, falseVal, sVal);
           }
           v = bitcast(v, IntegerType::get(getContext(), width));
@@ -332,15 +333,15 @@ struct LoadOpConversion
       int tmp = width / valueElemNBits;
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
-            rewriter, loc, this->getTypeConverter()->getIndexType(), ii % tmp);
+            rewriter, loc, typeConverter->getIndexType(), ii % tmp);
         Value loaded = extract_element(valueElemTy, rets[ii / tmp], vecIdx);
         loadedVals.push_back(loaded);
       }
     } // end vec
 
-    Type llvmResultStructTy = getTypeConverter()->convertType(valueTy);
-    Value resultStruct = getTypeConverter()->packLLElements(
-        loc, loadedVals, rewriter, llvmResultStructTy);
+    Type llvmResultStructTy = typeConverter->convertType(valueTy);
+    Value resultStruct = packLLElements(loc, typeConverter, loadedVals,
+                                        rewriter, llvmResultStructTy);
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -1113,8 +1114,8 @@ struct AtomicCASOpConversion
 
     if (TensorTy) {
       Type structTy = getTypeConverter()->convertType(TensorTy);
-      Value resultStruct = getTypeConverter()->packLLElements(
-          loc, resultVals, rewriter, structTy);
+      Value resultStruct = packLLElements(loc, getTypeConverter(), resultVals,
+                                          rewriter, structTy);
       rewriter.replaceOp(op, {resultStruct});
     }
     return success();
@@ -1281,8 +1282,8 @@ struct AtomicRMWOpConversion
     }
     if (tensorTy) {
       Type structTy = getTypeConverter()->convertType(tensorTy);
-      Value resultStruct = getTypeConverter()->packLLElements(
-          loc, resultVals, rewriter, structTy);
+      Value resultStruct = packLLElements(loc, getTypeConverter(), resultVals,
+                                          rewriter, structTy);
       rewriter.replaceOp(op, {resultStruct});
     }
     return success();

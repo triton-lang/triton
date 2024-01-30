@@ -94,7 +94,7 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
           }
   }
 
-  auto res = typeConverter->packLLElements(loc, ret, rewriter, dTensorTy);
+  auto res = packLLElements(loc, typeConverter, ret, rewriter, dTensorTy);
   rewriter.replaceOp(op, res);
 
   return success();

@@ -67,38 +67,6 @@ Type TritonGPUToLLVMTypeConverter::convertTritonPointerType(
   return LLVM::LLVMPointerType::get(ctx, type.getAddressSpace());
 }
 
-Value TritonGPUToLLVMTypeConverter::packLLElements(
-    Location loc, ValueRange resultVals, ConversionPatternRewriter &rewriter,
-    Type type) {
-  auto structType = this->convertType(type).dyn_cast<LLVM::LLVMStructType>();
-  if (!structType) {
-    assert(resultVals.size() == 1);
-    return *resultVals.begin();
-  }
-
-  auto elementTypes = structType.getBody();
-  if (elementTypes.size() != resultVals.size()) {
-    emitError(loc) << " size mismatch when packing elements for LLVM struct"
-                   << " expected " << elementTypes.size() << " but got "
-                   << resultVals.size();
-  }
-  Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
-  for (const auto &v : llvm::enumerate(resultVals)) {
-    if (!v.value()) {
-      emitError(loc)
-          << "cannot insert null values into struct, but tried to insert"
-          << v.value();
-    }
-    if (v.value().getType() != elementTypes[v.index()]) {
-      emitError(loc) << "invalid element type in packLLEElements. Expected "
-                     << elementTypes[v.index()] << " but got "
-                     << v.value().getType();
-    }
-    llvmStruct = insert_val(structType, llvmStruct, v.value(), v.index());
-  }
-  return llvmStruct;
-}
-
 Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
     RankedTensorType type) {
   auto ctx = type.getContext();

@@ -154,7 +154,7 @@ LogicalResult convertMMA884(triton::DotOp op, triton::DotOp::Adaptor adaptor,
     resVals[i] = acc[i];
   }
 
-  Value res = typeConverter->packLLElements(loc, resVals, rewriter, DTensorTy);
+  Value res = packLLElements(loc, typeConverter, resVals, rewriter, DTensorTy);
   rewriter.replaceOp(op, res);
   return success();
 }

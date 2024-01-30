@@ -53,8 +53,8 @@ struct MakeTensorPtrOpConversion
 
     elems.push_back(base);
 
-    auto newValue = getTypeConverter()->packLLElements(
-        op.getLoc(), elems, rewriter, result.getType());
+    auto newValue = packLLElements(op.getLoc(), getTypeConverter(), elems,
+                                   rewriter, result.getType());
     rewriter.replaceOp(op, newValue);
     return success();
   }
@@ -87,8 +87,8 @@ struct AdvanceOpConversion
       elems[i] = newOffsets[i];
     }
 
-    auto newValue = getTypeConverter()->packLLElements(op.getLoc(), elems,
-                                                       rewriter, ptrType);
+    auto newValue = packLLElements(op.getLoc(), getTypeConverter(), elems,
+                                   rewriter, ptrType);
     rewriter.replaceOp(op, newValue);
     return success();
   }

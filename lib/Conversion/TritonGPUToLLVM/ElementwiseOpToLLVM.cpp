@@ -709,8 +709,8 @@ public:
     resultVals = maybeDeduplicate(op, resultVals);
     resultVals =
         packI32(resultVals, resultTy, rewriter, loc, this->getTypeConverter());
-    Value view = this->getTypeConverter()->packLLElements(loc, resultVals,
-                                                          rewriter, resultTy);
+    Value view = packLLElements(loc, this->getTypeConverter(), resultVals,
+                                rewriter, resultTy);
     rewriter.replaceOp(op, view);
 
     return success();
@@ -1301,8 +1301,8 @@ struct ElementwiseInlineAsmOpConversion
       }
       auto packed = packI32(unpackedResults[i], op->getResult(i).getType(),
                             rewriter, loc, getTypeConverter());
-      outs.push_back(getTypeConverter()->packLLElements(
-          loc, unpackedResults[i], rewriter, op->getResult(i).getType()));
+      outs.push_back(packLLElements(loc, getTypeConverter(), unpackedResults[i],
+                                    rewriter, op->getResult(i).getType()));
     }
 
     rewriter.replaceOp(op, outs);

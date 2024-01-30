@@ -46,7 +46,7 @@ Value loadC(Value tensor, Value llTensor,
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(cPack.size(), cPackTy));
     Value result =
-        typeConverter->packLLElements(loc, cPack, rewriter, structTy);
+        packLLElements(loc, typeConverter, cPack, rewriter, structTy);
     return result;
   }
 
@@ -361,7 +361,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
               : bitcast(fc[i], resElemTy);
     }
   }
-  Value res = typeConverter->packLLElements(loc, results, rewriter, structTy);
+  Value res = packLLElements(loc, typeConverter, results, rewriter, structTy);
 
   rewriter.replaceOp(op, res);
 
