@@ -260,12 +260,23 @@ static std::optional<LoadDotOperand> loadDotOperand(tt::LoadOp loadOp,
   return LoadDotOperand(loadOp, attr, needTrans);
 }
 
-/// Collect loads to pipeline. Return success if we can pipeline this loop
+/// Collect loads to pipeline.
 static void collectOpsToPipeline(scf::ForOp forOp,
                                  SmallVectorImpl<LoadDotOperand> &ops,
+                                 DenseMap<Operation *, unsigned> &opToStage,
+                                 DenseMap<Operation *, Operation *> &opToUse,
+                                 int numStages,
                                  bool &hasMMAV3) {
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
   ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
+
+  DenseMap<Operation*, std::pair<unsigned, Operation*>> loadOpToDistance = loadOpsToDistanceAndUse(forOp);
+  unsigned maxDistance = std::max_element(loadOpToDistance.begin(), loadOpToDistance.end(),
+                                          [](auto &a, auto &b) {
+                                            return a.second.first < b.second.first;
+                                          })->second.first;
+
+  unsigned distBetweenLoads = ceil<unsigned>(numStages - 2, maxDistance+1);
 
   // We cannot use forOp.walk(...) here because we only want to visit the
   // operations in the loop body block. Nested blocks are handled separately.
@@ -296,18 +307,29 @@ static void collectOpsToPipeline(scf::ForOp forOp,
         if (width >= 32)
           candidate = true;
       }
+      // TODO: currently we treat the loads that we won't pipeline the same as
+      // candidates, calculating the stage for them, and let them affect the
+      // stages of other loads that may depend on it. This is probably less
+      // than ideal.
       if (!candidate)
         continue;
       std::optional<LoadDotOperand> loadWithDotOperand =
           loadDotOperand(loadOp, hasMMAV3);
       if (!loadWithDotOperand.has_value())
         continue;
+      assert (loadOpToDistance.count(loadOp) && "LoadOp not found in loadOpToDistance map");
+      int stage = (maxDistance - loadOpToDistance[loadOp].first) * distBetweenLoads;
+      opToStage[loadOp] = stage;
+      opToUse[loadOp] = loadOpToDistance[loadOp].second;
       ops.push_back(loadWithDotOperand.value());
+    }
+    if (auto dotOp = dyn_cast<tt::DotOp>(&op)) {
+      opToStage[dotOp] = numStages - 1;
     }
   }
 }
 
-// Create an allocation that can old distance number of loadOp shapes.
+// Create an allocation that can hold distance number of loadOp shapes.
 static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
                          ttg::DotOperandEncodingAttr dotOpEnc,
                          unsigned distance, bool needTrans) {
@@ -615,6 +637,52 @@ groupInsertOpsByDistanceToDotOp(scf::ForOp forOp) {
   return groupedInsertOps;
 }
 
+// TODO: check if we can consolidate this with the addDep function.
+static void recursiveLoadHelper(Operation *op, DenseSet<Operation *> &seen,
+                            DenseMap<Operation*, std::pair<unsigned, Operation*>> &loadOpToDistance,
+                            unsigned distance = 0) {
+  if (!seen.insert(op).second)
+    return;
+  unsigned d = distance;
+  if (isa<ttg::InsertSliceAsyncOp, ttng::InsertSliceTMAOp>(op)) {
+    loadOpToDistance[op] = std::make_pair(distance, op);
+    d = distance + 1;
+  }
+  for (Value operand : op->getOperands()) {
+    Value v = operand;
+    llvm::SmallDenseSet<Value> seenBlockArgs;
+    while (auto arg = v.dyn_cast<BlockArgument>()) {
+      if (!seenBlockArgs.insert(v).second)
+        break;
+      if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
+        auto yieldOp = op->getBlock()->getTerminator();
+        v = yieldOp->getOperand(arg.getArgNumber() - 1);
+        continue;
+      }
+      break;
+    }
+    Operation *defOp = v.getDefiningOp();
+    if (defOp && defOp->getBlock() == op->getBlock()) {
+      recursiveLoadHelper(defOp, seen, loadOpToDistance, d);
+    }
+  }
+}
+
+// Create a map from load ops to their distance to the nearest dot op and the
+// final use of the load op (another load op, or a dot op).
+static DenseMap<Operation*, std::pair<unsigned, Operation*>>
+loadOpsToDistanceAndUse(scf::ForOp forOp) {
+
+  DenseMap<Operation*, std::pair<unsigned, Operation*>> loadOpToDistanceAndUse;
+  DenseSet<Operation *> seen;
+  for (Operation &op : forOp.getBody()->without_terminator()) {
+    if (!isa<tt::DotOp>(op))
+      continue;
+    recursiveLoadHelper(&op, seen, loadOpToDistanceAndUse);
+  }
+  return loadOpToDistanceAndUse;
+}
+
 static bool
 isScheduleValid(scf::ForOp forOp,
                 std::vector<std::pair<Operation *, unsigned>> &schedule) {
@@ -783,13 +851,31 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   // 1. First collect "interesting" operations with a stage where to schedule
   // them. This gives a coarse scheduling for the loop.
   SmallVector<LoadDotOperand> loads;
+  // This map defines our coarse scheduling for the interesting ops.
+  DenseMap<Operation *, unsigned> opToStage;
+  DenseMap<Operation *, Operation *> opToUse;
   bool hasMMAV3 = false;
-  collectOpsToPipeline(forOp, loads, hasMMAV3);
+  collectOpsToPipeline(forOp, loads, opToStage, opToUse, numStages, hasMMAV3);
   if (loads.empty())
     return false;
   bool hasAsynCp = llvm::any_of(loads, [](LoadDotOperand &load) {
     return !isLoadFromTensorPtr(load.load);
   });
+
+  // Calculate the number of buffers needed for each load.
+  DenseMap<Operation *, unsigned> loadToNumBuffers;
+  for (LoadDotOperand &load : loads) {
+    assert(opToUse.count(load.load) && "LoadOp not found in opToUse map");
+    assert(opToStage.count(load.load) && "LoadOp not found in opToStage map");
+    assert(opToStage.count(opToUse[load.load]) && "LoadOp use not found in opToStage map");
+
+    unsigned defStage = opToStage[load.load];
+    unsigned useStage = opToStage[opToUse[load.load]];
+    unsigned numBuffers = useStage - defStage;
+
+    if (hasMMAV3 && )
+  }
+
   // 2. Convert the loads into async loads and create the allocs.
   SmallVector<Value> allocs = createAsynOps(forOp, loads, 2, hasMMAV3);
 
