@@ -38,7 +38,7 @@ static constexpr int log2Int(int64_t num) {
   return (num > 1) ? 1 + log2Int(num / 2) : 0;
 }
 
-// if lhs * rhs overflows, return max value
+// If lhs * rhs overflows, return max value possible value for the type
 static int64_t multiplyDivisor(IntegerType intTy, int64_t lhs, int64_t rhs) {
   // Use a single byte as the minimum divisor
   int64_t maxDivisor = 1 << (std::max<int64_t>(8, intTy.getWidth()) - 2);
