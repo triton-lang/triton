@@ -318,7 +318,8 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
       isTuring ? mmaInstrPtxTuring : mmaInstrPtxAmpere;
   auto rank = dTensorTy.getRank();
   auto elemsPerThread = triton::gpu::getElemsPerThread(dTensorTy);
-  auto batchOffset = elemsPerThread[rank - 2] * elemsPerThread[rank - 1];
+  auto batchOffset =
+      elemsPerThread[rank - 2] * elemsPerThread[rank - 1] / numCPackedElem;
   auto callMma = [&](unsigned b, unsigned m, unsigned n, unsigned k) {
     unsigned colsPerThread = repN * 2;
     PTXBuilder builder;

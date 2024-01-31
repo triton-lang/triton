@@ -177,7 +177,7 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value lane, Value cSwizzleOffset) {
       contiguousIndex = urem(contiguousIndex, i32_val(contiguousTileNumMats));
     contiguousIndex = add(contiguousIndex, contiguousSliceMatOffset);
     Value contiguousIndexSwizzled = xor_(contiguousIndex, phase);
-    if (warpsPerCTA[0] != 1) {
+    if (tileShape[0] != 1) {
       Value batchOffset =
           mul(warpB, i32_val(tileShape[order[0]] * tileShape[order[1]]));
       offs[i] =
@@ -219,6 +219,7 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value lane, Value cSwizzleOffset) {
 
 SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value lane,
                                                          Value cSwizzleOffset) {
+  Value warpB = multiDimWarpId[0];
   Value warpOff = kOrder == 2 ? multiDimWarpId[1] : multiDimWarpId[2];
   int cTileShape = tileShape[order[0]];
   int sTileShape = tileShape[order[1]];
@@ -285,6 +286,11 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value lane,
           offs[idx] = add(i, mul(j, stridedSmemOffset));
         } else {
           offs[idx] = add(mul(i, stridedSmemOffset), j);
+        }
+        if (tileShape[0] != 1) {
+          Value batchOffset =
+              mul(warpB, i32_val(tileShape[order[0]] * tileShape[order[1]]));
+          offs[idx] = add(batchOffset, offs[idx]);
         }
       }
 
@@ -371,6 +377,10 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
       _i1 += (kOrder == 2 ? 1 : stridedLoadMatOffset) * stridedMatShape;
     Value i0 = mul(i32_val(_i0), stridedSmemOffset);
     Value i1 = mul(i32_val(_i1), stridedSmemOffset);
+    if (batch != 0) {
+      i0 = add(i0, mul(i32_val(batch * warpsPerCTA[0]), smemBatchOffset));
+      i1 = add(i1, mul(i32_val(batch * warpsPerCTA[0]), smemBatchOffset));
+    }
     std::array<Value, 2> ii = {i0, i1};
     // load 4 32-bit values from shared memory
     // (equivalent to ldmatrix.x4)
