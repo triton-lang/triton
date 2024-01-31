@@ -407,18 +407,6 @@ bool isExpensiveCat(CatOp cat, Attribute targetEncoding) {
   return newTotalElemsPerThread < totalElemsPerThread;
 }
 
-// Is `vals` some permutation of the numbers 0..(vals.size()-1)?
-static bool isPermutationOfIota(ArrayRef<unsigned> vals) {
-  SmallVector<unsigned, 4> sorted(vals.begin(), vals.end());
-  llvm::sort(sorted);
-  for (int i = 0; i < sorted.size(); i++) {
-    if (sorted[i] != i) {
-      return false;
-    }
-  }
-  return true;
-}
-
 LogicalResult CTALayoutAttr::verify(
     function_ref<InFlightDiagnostic()> emitError, ArrayRef<unsigned> CTAsPerCGA,
     ArrayRef<unsigned> CTASplitNum, ArrayRef<unsigned> CTAOrder) {
@@ -1879,8 +1867,7 @@ struct TritonGPUInferLayoutInterface
           getDialect()->getContext(),
           applyPermutation(layout.getCTAsPerCGA(), order),
           applyPermutation(layout.getCTASplitNum(), order),
-          applyPermutation(invOrderUnsigned,
-                           SmallVector<int32_t>(layout.getCTAOrder())));
+          applyPermutation(invOrderUnsigned, layout.getCTAOrder()));
     };
 
     if (auto enc = operandEncoding.dyn_cast<SharedEncodingAttr>()) {
@@ -1893,9 +1880,7 @@ struct TritonGPUInferLayoutInterface
       }
       resultEncoding = SharedEncodingAttr::get(
           getDialect()->getContext(), enc.getVec(), enc.getPerPhase(),
-          enc.getMaxPhase(),
-          applyPermutation(invOrderUnsigned,
-                           SmallVector<int32_t>(enc.getOrder())),
+          enc.getMaxPhase(), applyPermutation(invOrderUnsigned, enc.getOrder()),
           *ctaLayout, enc.getHasLeadingOffset());
       return success();
     }
@@ -1916,9 +1901,7 @@ struct TritonGPUInferLayoutInterface
           applyPermutation(enc.getSizePerThread(), order),
           applyPermutation(enc.getThreadsPerWarp(), order),
           applyPermutation(enc.getWarpsPerCTA(), order),
-          applyPermutation(invOrderUnsigned,
-                           SmallVector<int32_t>(enc.getOrder())),
-          *ctaLayout);
+          applyPermutation(invOrderUnsigned, enc.getOrder()), *ctaLayout);
       return success();
     }
 
