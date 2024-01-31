@@ -382,7 +382,7 @@ mlir::LogicalResult mlir::triton::TransOp::inferReturnTypes(
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // type is the same as the input
   auto argTy = operands[0].getType().cast<RankedTensorType>();
-  auto order = properties.as<Properties *>()->order;
+  auto order = properties.as<Properties *>()->order.asArrayRef();
   SmallVector<int64_t> retShape = applyPermutation(argTy.getShape(), order);
 
   auto retEltTy = argTy.getElementType();
