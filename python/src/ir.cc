@@ -272,7 +272,8 @@ void init_triton_ir(py::module &&m) {
            })
       .def("get_num_arguments", &mlir::Block::getNumArguments)
       .def("dump", &mlir::Block::dump)
-      .def("move_before", &mlir::Block::moveBefore)
+      .def("move_before",
+           [](mlir::Block &self, mlir::Block *tgt) { self.moveBefore(tgt); })
       .def("insert_before", &mlir::Block::insertBefore)
       .def("get_parent", &mlir::Block::getParent, ret::reference)
       .def("merge_block_before",
