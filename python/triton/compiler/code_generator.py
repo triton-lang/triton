@@ -827,8 +827,9 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_For(self, node):
         IteratorClass = self.visit(node.iter.func)
         iter_args = [self.visit(arg) for arg in node.iter.args]
+        iter_kwargs = dict(self.visit(keyword) for keyword in node.iter.keywords)
         if IteratorClass == language.static_range:
-            iterator = IteratorClass(*iter_args)
+            iterator = IteratorClass(*iter_args, **iter_kwargs)
             static_range = range(iterator.start.value, iterator.end.value, iterator.step.value)
             for i in static_range:
                 self.lscope[node.target.id] = constexpr(i)
@@ -836,16 +837,25 @@ class CodeGenerator(ast.NodeVisitor):
                 for stmt in node.orelse:
                     ast.NodeVisitor.generic_visit(self, stmt)
             return
-
-        if IteratorClass is not range:
+        num_stages = None
+        if IteratorClass is language.range:
+            iterator = IteratorClass(*iter_args, **iter_kwargs)
+            # visit iterator arguments
+            # note: only `range` iterator is supported now
+            # collect lower bound (lb), upper bound (ub), and step
+            lb = iterator.start
+            ub = iterator.end
+            step = iterator.step
+            num_stages = iterator.num_stages
+        elif IteratorClass is range:
+            # visit iterator arguments
+            # note: only `range` iterator is supported now
+            # collect lower bound (lb), upper bound (ub), and step
+            lb = iter_args[0] if len(iter_args) > 1 else self.visit(ast.Num(0))
+            ub = iter_args[1] if len(iter_args) > 1 else self.visit(node.iter.args[0])
+            step = iter_args[2] if len(iter_args) > 2 else self.visit(ast.Num(1))
+        else:
             raise RuntimeError('Only `range` and `static_range` iterators are currently supported')
-
-        # visit iterator arguments
-        # note: only `range` iterator is supported now
-        # collect lower bound (lb), upper bound (ub), and step
-        lb = iter_args[0] if len(iter_args) > 1 else self.visit(ast.Num(0))
-        ub = iter_args[1] if len(iter_args) > 1 else self.visit(node.iter.args[0])
-        step = iter_args[2] if len(iter_args) > 2 else self.visit(ast.Num(1))
         # handle negative constant step (not supported by scf.for in MLIR)
         negative_step = False
         if _is_constexpr(step) and step.value < 0:
@@ -908,6 +918,8 @@ class CodeGenerator(ast.NodeVisitor):
             # create ForOp
             self._set_insertion_point_and_loc(ip, last_loc)
             for_op = self.builder.create_for_op(lb, ub, step, [arg.handle for arg in init_args])
+            if num_stages is not None:
+                for_op.set_attr("tt.num_stages", self.builder.get_int32_attr(num_stages))
 
             self.scf_stack.append(node)
             self.builder.set_insertion_point_to_start(for_op.get_body(0))

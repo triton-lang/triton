@@ -656,8 +656,8 @@ public:
   LogicalResult
   matchAndRewrite(scf::ConditionOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.updateRootInPlace(
-        op, [&]() { op->setOperands(adaptor.getOperands()); });
+    rewriter.modifyOpInPlace(op,
+                             [&]() { op->setOperands(adaptor.getOperands()); });
     return success();
   }
 };

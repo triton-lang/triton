@@ -103,15 +103,15 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 // CHECK-DAG: %[[CONSTANT_0:.*]] = arith.constant 0 : i32
 // CHECK-DAG: %[[CONSTANT_1:.*]] = arith.constant 1 : i32
 // CHECK-DAG: %[[CONSTANT_2:.*]] = arith.constant 2 : i32
-// CHECK: scf.for
 // CHECK:   %[[ABUFFER:.*]] = triton_gpu.alloc_tensor
 // CHECK:   %[[BBUFFER:.*]] = triton_gpu.alloc_tensor
 // CHECK:   %[[A0BUFFER:.*]] = triton_gpu.insert_slice_async {{.*}}, {{.*}}, %[[CONSTANT_0]]
 // CHECK:   %[[B0BUFFER:.*]] = triton_gpu.insert_slice_async {{.*}}, {{.*}}, %[[CONSTANT_0]]
 // CHECK:   %[[A1BUFFER:.*]] = triton_gpu.insert_slice_async {{.*}}, {{.*}}, %[[CONSTANT_1]]
 // CHECK:   %[[B1BUFFER:.*]] = triton_gpu.insert_slice_async {{.*}}, {{.*}}, %[[CONSTANT_1]]
-// CHECK-DAG:   %[[A0:.*]] = triton_gpu.extract_slice %[[A0BUFFER]][%[[CONSTANT_0]], 0, 0]
-// CHECK-DAG:   %[[B0:.*]] = triton_gpu.extract_slice %[[B0BUFFER]][%[[CONSTANT_0]], 0, 0]
+// CHECK: scf.for {{.*}} iter_args(%[[A2BUFFER:.*]] = %[[A0BUFFER]], %[[B2BUFFER:.*]] = %[[B0BUFFER]], {{.*}}, %[[A3BUFFER:.*]] = %[[A1BUFFER]], %[[B3BUFFER:.*]] = %[[B1BUFFER]]
+// CHECK-DAG:   %[[A0:.*]] = triton_gpu.extract_slice %[[A2BUFFER]][%[[CONSTANT_0]], 0, 0]
+// CHECK-DAG:   %[[B0:.*]] = triton_gpu.extract_slice %[[B2BUFFER]][%[[CONSTANT_0]], 0, 0]
 // CHECK:   triton_gpu.async_wait {num = 2 : i32}
 // CHECK:   scf.for {{.*}} iter_args({{.*}}, %[[INS_IDX:.*]] = %[[CONSTANT_1]], %[[EXT_IDX:.*]] = %[[CONSTANT_0]]{{.*}}, %[[arg_a0:.*]] = %[[A0]], %[[arg_b0:.*]] = %[[B0]]
 // CHECK:   %[[arg_a0_dot_op:.*]] = triton_gpu.convert_layout %[[arg_a0]]
@@ -129,6 +129,12 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 // CHECK:   %[[NEXT_B:.*]] = triton_gpu.extract_slice %{{.+}}[%[[EXT_IDX_3]], 0, 0]
 // CHECK:   triton_gpu.async_wait {num = 2 : i32}
 // CHECK:   scf.yield {{.*}}, %[[NEXT_A_BUFFER]], %[[NEXT_B_BUFFER]], %[[INS_IDX_3]], %[[EXT_IDX_3]], %[[NEXT_A]], %[[NEXT_B]]
+// CHECK:   triton_gpu.async_wait {num = 0 : i32}
+// CHECK:   %[[A3BUFFER:.*]] = triton_gpu.insert_slice_async {{.*}}, {{.*}}, %[[CONSTANT_0]]
+// CHECK:   %[[B3BUFFER:.*]] = triton_gpu.insert_slice_async {{.*}}, {{.*}}, %[[CONSTANT_0]]
+// CHECK:   %[[A4BUFFER:.*]] = triton_gpu.insert_slice_async {{.*}}, {{.*}}, %[[CONSTANT_1]]
+// CHECK:   %[[B4BUFFER:.*]] = triton_gpu.insert_slice_async {{.*}}, {{.*}}, %[[CONSTANT_1]]
+// CHECK    scf.yield {{.*}}, %[[A3BUFFER]], %[[B3BUFFER]], {{.*}}, %[[A4BUFFER]], %[[B4BUFFER]]
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
 tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
                               %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},

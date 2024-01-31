@@ -507,8 +507,7 @@ private:
 
     // Store to local shared memory
     {
-      auto inVals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(),
-                                                         rewriter, srcTy);
+      auto inVals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(), rewriter);
       auto inIndices =
           emitIndices(loc, rewriter, srcLayout, srcTy, /*withCTAOffset*/ false);
 
@@ -630,8 +629,7 @@ private:
     }
     // Potentially we need to store for multiple CTAs in this replication
     auto accumNumReplicates = product<unsigned>(numReplicates);
-    auto vals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(),
-                                                     rewriter, srcTy);
+    auto vals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(), rewriter);
     unsigned inVec = 0;
     unsigned outVec = 0;
     auto origRepShape = getRepShapeForCvtLayout(op);
@@ -798,8 +796,7 @@ private:
     unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
     if (mmaLayout && mmaLayout.isHopper() && elemSize == 16 &&
         inOrd == outOrd && numElems >= 16) {
-      auto inVals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(),
-                                                         rewriter, srcTy);
+      auto inVals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(), rewriter);
 
       auto srcShapePerCTA = getShapePerCTA(mmaLayout, srcShape);
       auto instrShape = mmaLayout.getInstrShape();
@@ -952,8 +949,7 @@ private:
     auto dstTy = op.getResult().getType().cast<RankedTensorType>();
     if (isMfmaToDotShortcut(srcTy, dstTy)) {
       // get source values
-      auto vals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(),
-                                                       rewriter, srcTy);
+      auto vals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(), rewriter);
       unsigned elems = getTotalElemsPerThread(srcTy);
       Type elemTy =
           this->getTypeConverter()->convertType(srcTy.getElementType());
@@ -1003,8 +999,7 @@ private:
 
     if (isMmaToDotShortcut(srcTy, dstTy)) {
       // get source values
-      auto vals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(),
-                                                       rewriter, srcTy);
+      auto vals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(), rewriter);
       unsigned elems = getTotalElemsPerThread(srcTy);
       Type elemTy =
           this->getTypeConverter()->convertType(srcTy.getElementType());
@@ -1111,8 +1106,7 @@ private:
       return success();
     }
     // get source values
-    auto vals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(),
-                                                     rewriter, srcTy);
+    auto vals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(), rewriter);
     SmallVector<Value> retVals;
     SmallVector<unsigned> dstElementPerThread =
         triton::gpu::getElemsPerThread(dstTy);
