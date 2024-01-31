@@ -39,19 +39,11 @@ static constexpr int log2Int(int64_t num) {
 }
 
 // If lhs * rhs overflows, return max value possible value for the type
-static int64_t multiplyDivisor(IntegerType intTy, int64_t lhs, int64_t rhs) {
-  // Use a single byte as the minimum divisor
-  int64_t maxDivisor = 1 << (std::max<int64_t>(8, intTy.getWidth()) - 2);
+static int64_t multiplyDivisor(int64_t lhs, int64_t rhs) {
+  int64_t maxDivisor = highestPowOf2Divisor<int64_t>(0);
   if (lhs > maxDivisor / rhs)
     return maxDivisor;
   return lhs * rhs;
-}
-
-static IntegerType getElementIntegerType(Type type) {
-  auto elementTy = getElementTypeOrSelf(type);
-  auto intTy = elementTy.template dyn_cast<IntegerType>();
-  // If null because of a pointer type, use 64-bit integer type
-  return intTy ? intTy : IntegerType::get(elementTy.getContext(), 64);
 }
 
 //===----------------------------------------------------------------------===//
@@ -252,9 +244,7 @@ private:
       auto rank = lhs.getRank();
       auto elemSize = std::max<int64_t>(
           1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
-      auto intTy = getElementIntegerType(op.getResult().getType());
-      rhsDivisibility =
-          multiplyDivisor(intTy, rhs.getDivisibility(dim), elemSize);
+      rhsDivisibility = multiplyDivisor(rhs.getDivisibility(dim), elemSize);
     }
     return gcd(lhs.getDivisibility(dim), rhsDivisibility);
   }
@@ -314,7 +304,6 @@ private:
 
   int64_t getDivisibility(arith::MulIOp op, const AxisInfo &lhs,
                           const AxisInfo &rhs, int dim) override {
-    IntegerType intTy = getElementIntegerType(op.getResult().getType());
     auto lhsDivisibility = lhs.getDivisibility(dim);
     if (lhs.getContiguity(dim) > 1 &&
         !(rhs.getConstantValue().has_value() && rhs.getConstantValue() == 1)) {
@@ -327,7 +316,7 @@ private:
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       rhsDivisibility = 1;
     }
-    return multiplyDivisor(intTy, lhsDivisibility, rhsDivisibility);
+    return multiplyDivisor(lhsDivisibility, rhsDivisibility);
   }
 
   std::optional<int64_t> getConstantValue(arith::MulIOp op, const AxisInfo &lhs,
@@ -822,9 +811,7 @@ private:
       lhsDivisibility = 1;
     }
     auto numBits = log2Int(lhsDivisibility);
-    auto maxBits = log2Int(highestPowOf2Divisor<int64_t>(0));
-    auto intTy = getElementIntegerType(op.getResult().getType());
-    return multiplyDivisor(intTy, lhsDivisibility, 1 << shift);
+    return multiplyDivisor(lhsDivisibility, 1 << shift);
   }
 
   int64_t getConstancy(arith::ShLIOp op, const AxisInfo &lhs,
