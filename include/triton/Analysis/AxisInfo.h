@@ -117,21 +117,21 @@ private:
   /// The _divisibility_ information maps the `d`-th
   /// dimension to the largest power-of-two that
   /// divides the first element of all groups of
-  // _contiguity_ values along it
+  /// _contiguity_ values along it.
   /// For example:
   /// [10, 11, 12, 13, 18, 19, 20, 21]
   /// [20, 21, 22, 23, 28, 29, 30, 31]
-  //  would have divisibility [1, 2]
-  //  and
+  ///  would have divisibility [1, 2]
+  ///  and
   /// [12, 16, 20, 24]
   /// [13, 17, 21, 25]
   /// [14, 18, 22, 26]
   /// [15, 19, 23, 27]
-  //  would have divisibility [4, 1]
-  //  On the other hand:
-  //  [0, 1, 2, 0, 4, 5, 6, 7]
-  //  would have divisibility 1 because
-  //  _contiguity_=1
+  /// would have divisibility [4, 1]
+  /// On the other hand:
+  /// [0, 1, 2, 0, 4, 5, 6, 7]
+  /// would have divisibility 1 because
+  /// _contiguity_=1
   DimVectorT divisibility;
 
   /// The _constancy_ information maps the `d`-th
@@ -220,7 +220,8 @@ public:
         contiguity.push_back(1);
         constancy.push_back(
             std::max(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
-        divisibility.push_back(highestPowOf2Divisor(constantValue.value()));
+        divisibility.push_back(
+            highestPowOf2Divisor<int64_t>(constantValue.value()));
       } else {
         contiguity.push_back(getContiguity(op, lhsInfo, rhsInfo, d));
         constancy.push_back(getConstancy(op, lhsInfo, rhsInfo, d));
