@@ -23,8 +23,7 @@ public:
                        ConversionPatternRewriter &rewriter, Type type);
 
   SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
-                                      ConversionPatternRewriter &rewriter,
-                                      Type type);
+                                      ConversionPatternRewriter &rewriter);
 
   Type convertTritonTensorType(RankedTensorType type);
 };

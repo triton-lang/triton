@@ -1,4 +1,5 @@
 #include "PipelineExpander.h"
+#include "PipeliningUtility.h"
 #include "Schedule.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/IRMapping.h"
@@ -407,111 +408,6 @@ static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
   return allocs;
 }
 
-// Combine the current mask with the given predicate.
-static Value getPredMask(RewriterBase &rewriter, Type typeLike,
-                         Value currentMask, Value pred) {
-  Type maskType = tt::getI1SameShape(typeLike);
-  Location loc = pred.getLoc();
-  Value mask = pred;
-  if (maskType.isa<RankedTensorType>()) {
-    mask = rewriter.create<tt::SplatOp>(loc, maskType, pred);
-  }
-  if (currentMask) {
-    mask = rewriter.create<arith::AndIOp>(loc, mask, currentMask);
-  }
-  return mask;
-}
-
-// Function to mask operations during scheduling.
-static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
-                              Value pred) {
-  OpBuilder::InsertionGuard guard(rewriter);
-  if (mlir::isMemoryEffectFree(op))
-    return op;
-  if (isa<ttg::AsyncCommitGroupOp>(op))
-    return op;
-  if (isa<ttg::AsyncWaitOp>(op))
-    return op;
-  if (auto insertOp = dyn_cast<ttg::InsertSliceAsyncOp>(op)) {
-    rewriter.setInsertionPoint(insertOp);
-    Value mask = getPredMask(rewriter, insertOp.getSrc().getType(),
-                             insertOp.getMask(), pred);
-    insertOp.getMaskMutable().assign(mask);
-    return op;
-  }
-  if (auto insertOp = dyn_cast<ttng::InsertSliceTMAOp>(op)) {
-    rewriter.setInsertionPoint(insertOp);
-    Value mask = getPredMask(
-        rewriter,
-        insertOp.getSrc().getType().cast<tt::PointerType>().getPointeeType(),
-        insertOp.getMask(), pred);
-    insertOp.getMaskMutable().assign(mask);
-    return op;
-  }
-  if (auto arriveOp = dyn_cast<ttng::MBarrierArriveOp>(op)) {
-    rewriter.setInsertionPoint(arriveOp);
-    Value mask = getPredMask(rewriter, rewriter.getIntegerType(1),
-                             arriveOp.getPred(), pred);
-    arriveOp.getPredMutable().assign(mask);
-    return op;
-  }
-  if (isa<ttng::MBarrierWaitOp>(op)) {
-    return op;
-  }
-  if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-    rewriter.setInsertionPoint(loadOp);
-    Value mask = getPredMask(rewriter, loadOp.getPtr().getType(),
-                             loadOp.getMask(), pred);
-    loadOp.getMaskMutable().assign(mask);
-    return op;
-  }
-
-  assert("don't know how to predicate this op" && false);
-  return op;
-}
-
-/// Helper to recursively add dependencies to the same stage.
-static void addDep(Operation *op, DenseSet<Operation *> &deps,
-                   bool includeArg = true,
-                   DenseSet<Operation *> *filter = nullptr) {
-  if (filter && filter->count(op))
-    return;
-  if (!deps.insert(op).second)
-    return;
-  for (Value operand : op->getOperands()) {
-    Value v = operand;
-    llvm::SmallDenseSet<Value> seen;
-    while (auto arg = v.dyn_cast<BlockArgument>()) {
-      if (!includeArg)
-        break;
-      if (!seen.insert(v).second)
-        break;
-      if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
-        auto yieldOp = op->getBlock()->getTerminator();
-        v = yieldOp->getOperand(arg.getArgNumber() - 1);
-        continue;
-      }
-      break;
-    }
-    Operation *defOp = v.getDefiningOp();
-    if (defOp && defOp->getBlock() == op->getBlock()) {
-      addDep(defOp, deps, includeArg, filter);
-    }
-  }
-}
-
-// Add operations to the schedule with the given stage based on the filter
-// function.
-static void addOps(scf::ForOp forOp, int stage,
-                   std::vector<std::pair<Operation *, unsigned>> &schedule,
-                   std::function<bool(Operation *)> filter) {
-  for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!filter(&op))
-      continue;
-    schedule.emplace_back(&op, stage);
-  }
-}
-
 // create the schedule for a matmul loop. This is ad hoc based on how we know
 // matmul loops should be pipelined and is not a generic scheduler.
 static std::vector<std::pair<Operation *, unsigned>>
@@ -531,7 +427,7 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
   }
   DenseSet<Operation *> insertAndDeps;
   for (Operation *op : insertOps) {
-    addDep(op, insertAndDeps, false);
+    tt::addDep(op, insertAndDeps, false);
   }
 
   // Find dependencies with distance of 1.
@@ -553,7 +449,7 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
   // Schedule loads with a distance of 1 in stage 0
   for (Operation *op : distanceOneUsers) {
     if (isa<tt::LoadOp>(op)) {
-      addDep(op, insertAndDeps, true);
+      tt::addDep(op, insertAndDeps, true);
     }
   }
   // For the rest of the ops we can move then into stage 1 so that they can be
@@ -561,34 +457,34 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
   DenseSet<Operation *> stage1deps;
   for (Operation *op : distanceOneUsers) {
     if (!isa<tt::LoadOp>(op)) {
-      addDep(op, stage1deps, true, &insertAndDeps);
+      tt::addDep(op, stage1deps, true, &insertAndDeps);
     }
   }
 
   DenseSet<Operation *> extractAndDeps;
   for (Operation *op : extractOps) {
-    addDep(op, extractAndDeps, true, &insertAndDeps);
+    tt::addDep(op, extractAndDeps, true, &insertAndDeps);
   }
   std::vector<std::pair<Operation *, unsigned>> schedule;
   // Schedule stage `numStage - 1` first.
-  addOps(forOp, numStages - 1, schedule, [&](Operation *op) {
+  tt::addOps(forOp, numStages - 1, schedule, [&](Operation *op) {
     return insertAndDeps.count(op) == 0 && stage1deps.count(op) == 0 &&
            extractAndDeps.count(op) == 0;
   });
 
   // Schedule some dependencies with distance of 1 into stage 1 to reduce
   // pressure.
-  addOps(forOp, 1, schedule,
-         [&](Operation *op) { return stage1deps.count(op); });
+  tt::addOps(forOp, 1, schedule,
+             [&](Operation *op) { return stage1deps.count(op); });
 
   // Then Schedule stage 0.
-  addOps(forOp, 0, schedule,
-         [&](Operation *op) { return insertAndDeps.count(op); });
+  tt::addOps(forOp, 0, schedule,
+             [&](Operation *op) { return insertAndDeps.count(op); });
 
   // Finally schedule the extract ops in stage `numStage - 2` so that they get
   // pre-fetched and play well with pretech pass.
-  addOps(forOp, numStages - 2, schedule,
-         [&](Operation *op) { return extractAndDeps.count(op); });
+  tt::addOps(forOp, numStages - 2, schedule,
+             [&](Operation *op) { return extractAndDeps.count(op); });
   return schedule;
 }
 
@@ -621,7 +517,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
         s = std::move(schedule);
       };
   options.peelEpilogue = false;
-  options.predicateFn = predicateOp;
+  options.predicateFn = tt::predicateOp;
   options.supportDynamicLoops = true;
   unsigned numLoadsInStage = (numStages - 2) * loads.size();
   options.annotateFn = [](Operation *op,

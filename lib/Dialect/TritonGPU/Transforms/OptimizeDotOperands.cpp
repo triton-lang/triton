@@ -132,8 +132,10 @@ public:
         src->getDialect()->getTypeID() != TypeID::get<arith::ArithDialect>())
       return failure();
 
-    // TODO(jlebar): Why do we exclude these two ops specifically?
-    if (isa<arith::TruncIOp, arith::TruncFOp>(src))
+    // Currently, these instructions are not supported during lowering of
+    // shared -> dot_operand layout. Not all types and type conversions are
+    // supported.
+    if (isa<arith::TruncIOp, arith::TruncFOp, arith::SelectOp>(src))
       return failure();
 
     // Check that the conversion is transitively dependent on a load, and all

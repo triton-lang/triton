@@ -490,7 +490,7 @@ Operation *LayoutPropagation::rewriteForOp(scf::ForOp forOp) {
   auto newForOp = rewriter.create<scf::ForOp>(
       forOp.getLoc(), forOp.getLowerBound(), forOp.getUpperBound(),
       forOp.getStep(), operands);
-
+  newForOp->setAttrs(forOp->getAttrs());
   newForOp.getBody()->getOperations().splice(
       newForOp.getBody()->getOperations().begin(),
       forOp.getBody()->getOperations());
