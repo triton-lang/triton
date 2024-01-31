@@ -1393,8 +1393,8 @@ public:
     SmallVector<SmallVector<Value>> allOperands;
     for (auto operand : adaptor.getOperands()) {
       auto argTy = op->getOperand(0).getType();
-      auto subOperands = this->getTypeConverter()->unpackLLElements(
-          loc, operand, rewriter, argTy);
+      auto subOperands =
+          this->getTypeConverter()->unpackLLElements(loc, operand, rewriter);
       subOperands = unpackI32(subOperands, argTy, rewriter, loc,
                               this->getTypeConverter());
       allOperands.resize(subOperands.size());
@@ -1970,7 +1970,7 @@ struct ElementwiseInlineAsmOpConversion
     for (auto operand : adaptor.getOperands()) {
       auto argTy = op->getOperand(0).getType();
       auto subOperands =
-          getTypeConverter()->unpackLLElements(loc, operand, rewriter, argTy);
+          getTypeConverter()->unpackLLElements(loc, operand, rewriter);
       unpackedOperands.push_back(
           unpackI32(subOperands, argTy, rewriter, loc, getTypeConverter()));
     }

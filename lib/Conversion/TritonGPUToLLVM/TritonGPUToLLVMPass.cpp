@@ -5,6 +5,7 @@
 #include "mlir/Conversion/LLVMCommon/VectorPattern.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/Index/IR/IndexOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -22,8 +23,8 @@
 #include "triton/Tools/Sys/GetPlatform.hpp"
 
 #include "PatternTritonGPUOpToLLVM.h"
-
-#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "TypeConverter.h"
+#include "Utility.h"
 
 namespace mlir {
 namespace triton {
@@ -31,6 +32,13 @@ namespace triton {
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
 } // namespace triton
 } // namespace mlir
+
+namespace mlir {
+FailureOr<LLVM::LLVMFuncOp>
+convertFuncOpToLLVMFuncOp(FunctionOpInterface funcOp,
+                          ConversionPatternRewriter &rewriter,
+                          const LLVMTypeConverter &converter);
+}
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -124,10 +132,27 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
 /// FuncOp legalization pattern that converts MemRef arguments to pointers to
 /// MemRef descriptors (LLVM struct data types) containing all the MemRef type
 /// information.
-struct FuncOpConversion : public FuncOpConversionBase {
+
+struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
                    PatternBenefit benefit)
-      : FuncOpConversionBase(converter, benefit), numWarps(numWarps) {}
+      : ConvertOpToLLVMPattern(converter, benefit), numWarps(numWarps) {}
+
+  /// Only retain those attributes that are not constructed by
+  /// `LLVMFuncOp::build`. If `filterArgAttrs` is set, also filter out argument
+  /// attributes.
+  static void filterFuncAttributes(triton::FuncOp op, bool filterArgAttrs,
+                                   SmallVectorImpl<NamedAttribute> &result) {
+
+    for (const auto &attr : op->getAttrs()) {
+      if (attr.getName() == SymbolTable::getSymbolAttrName() ||
+          attr.getName() == op.getFunctionTypeAttrName() ||
+          attr.getName() == "std.varargs" ||
+          (filterArgAttrs && attr.getName() == op.getArgAttrsAttrName()))
+        continue;
+      result.push_back(attr);
+    }
+  }
 
   triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
                              ConversionPatternRewriter &rewriter) const {
@@ -167,7 +192,8 @@ struct FuncOpConversion : public FuncOpConversionBase {
     if (!LLVM::isKernel(funcOp))
       amendedFuncOp = amendFuncOp(funcOp, rewriter);
 
-    auto newFuncOp = convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter);
+    LLVM::LLVMFuncOp newFuncOp = *mlir::convertFuncOpToLLVMFuncOp(
+        amendedFuncOp, rewriter, *getTypeConverter());
     if (!newFuncOp) {
       return failure();
     }
@@ -393,20 +419,6 @@ struct ConvertTritonGPUToLLVM
     // because the call op has to know the shared memory base address of each
     // function
     initSharedMemory(typeConverter);
-
-    // Convert call and ret ops
-    {
-      mlir::LowerToLLVMOptions option(context);
-      TritonGPUToLLVMTypeConverter typeConverter(context, option);
-      TritonLLVMFunctionConversionTarget funcTarget(*context, target);
-      RewritePatternSet funcPatterns(context);
-      funcPatterns.add<CallOpConversion>(typeConverter, numWarps, 1);
-      funcPatterns.add<ReturnOpConversion>(typeConverter, 1);
-      if (failed(
-              applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
-        return signalPassFailure();
-    }
-
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
 
     // Emit logics to get threadId/blockIds/linearized clusterCTAId etc. and
@@ -461,6 +473,8 @@ struct ConvertTritonGPUToLLVM
     populatePatterns2(populateClusterOpsToLLVMPatterns);
     populatePatterns2(populateRegReallocOpToLLVMPatterns);
     populatePatterns1(populateHistogramOpToLLVMPatterns);
+    patterns.add<CallOpConversion>(typeConverter, numWarps, 1);
+    patterns.add<ReturnOpConversion>(typeConverter, 1);
 
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
@@ -486,7 +500,7 @@ struct ConvertTritonGPUToLLVM
 private:
   mlir::triton::gpu::TMAMetadataTy *tmaMetadata = nullptr;
 
-  void initSharedMemory(TritonGPUToLLVMTypeConverter &typeConverter) {
+  void initSharedMemory(LLVMTypeConverter &typeConverter) {
     ModuleOp mod = getOperation();
     OpBuilder b(mod.getBodyRegion());
     auto ctx = mod.getContext();
