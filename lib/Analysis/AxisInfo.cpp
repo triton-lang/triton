@@ -38,6 +38,14 @@ static constexpr int log2Int(int64_t num) {
   return (num > 1) ? 1 + log2Int(num / 2) : 0;
 }
 
+// If lhs * rhs overflows, return max value possible value for the type
+static int64_t multiplyDivisor(int64_t lhs, int64_t rhs) {
+  int64_t maxDivisor = highestPowOf2Divisor<int64_t>(0);
+  if (lhs > maxDivisor / rhs)
+    return maxDivisor;
+  return lhs * rhs;
+}
+
 //===----------------------------------------------------------------------===//
 // AxisInfo
 //===----------------------------------------------------------------------===//
@@ -219,16 +227,26 @@ private:
     // rhs = p * d_rhs = p * p' * gcd(d_lhs, d_rhs)
     // lhs + rhs = k * d_lhs + p * d_rhs = (k * d_lhs + p * d_rhs) *
     // gcd(d_lhs, d_rhs)
-    auto elemSize = 1;
+    auto rhsDivisibility = rhs.getDivisibility(dim);
     if constexpr (std::is_same_v<OpTy, triton::AddPtrOp>) {
       //  %ptr = addptr %lhs, %rhs
       // is equivalent to
-      //  %0 = mul %lhs, %elemSize
-      //  %ptr = add %0, %rhs
-      elemSize = std::max<unsigned int>(
+      //  %0 = mul %rhs, %elemSize
+      //  %ptr = add %lhs, %0
+      // The result will still be contiguous in terms of elements but not bytes
+      // For example:
+      // addptr [16] : !ptr<i32>, [0, 1, 2, 3] : i32 -> !ptr<i32>
+      // returns:
+      // [16, 20, 24, 28] : !ptr<i32>
+      // with element locations:
+      // [4, 5, 6, 7]
+      // It is "strided contiguous" with a divisilibity of 16 bytes
+      auto rank = lhs.getRank();
+      auto elemSize = std::max<int64_t>(
           1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
+      rhsDivisibility = multiplyDivisor(rhs.getDivisibility(dim), elemSize);
     }
-    return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim) * elemSize);
+    return gcd(lhs.getDivisibility(dim), rhsDivisibility);
   }
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
@@ -241,13 +259,18 @@ private:
     if (lhs.getConstantValue().has_value() &&
         rhs.getConstantValue().has_value()) {
       if constexpr (std::is_same_v<OpTy, arith::AddIOp> ||
-                    std::is_same_v<OpTy, triton::AddPtrOp> ||
                     std::is_same_v<OpTy, LLVM::AddOp>) {
         return {lhs.getConstantValue().value() +
                 rhs.getConstantValue().value()};
       } else if constexpr (std::is_same_v<OpTy, arith::SubIOp>) {
         return {lhs.getConstantValue().value() -
                 rhs.getConstantValue().value()};
+      } else if constexpr (std::is_same_v<OpTy, triton::AddPtrOp>) {
+        auto rank = lhs.getRank();
+        auto elemSize = std::max<int64_t>(
+            1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
+        auto rhsValue = rhs.getConstantValue().value() * elemSize;
+        return {lhs.getConstantValue().value() + rhsValue};
       }
     }
     return {};
@@ -293,7 +316,7 @@ private:
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       rhsDivisibility = 1;
     }
-    return lhsDivisibility * rhsDivisibility;
+    return multiplyDivisor(lhsDivisibility, rhsDivisibility);
   }
 
   std::optional<int64_t> getConstantValue(arith::MulIOp op, const AxisInfo &lhs,
@@ -788,11 +811,7 @@ private:
       lhsDivisibility = 1;
     }
     auto numBits = log2Int(lhsDivisibility);
-    auto maxBits = log2Int(highestPowOf2Divisor<int64_t>(0));
-    // Make sure the return value doesn't exceed highestPowOf2Divisor<int64>(0)
-    if (shift + numBits > maxBits)
-      return highestPowOf2Divisor<int64_t>(0);
-    return lhsDivisibility << shift;
+    return multiplyDivisor(lhsDivisibility, 1 << shift);
   }
 
   int64_t getConstancy(arith::ShLIOp op, const AxisInfo &lhs,
@@ -908,8 +927,6 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   CastOpAxisInfoVisitor<arith::ExtUIOp>,
                   CastOpAxisInfoVisitor<arith::TruncIOp>,
                   CastOpAxisInfoVisitor<arith::IndexCastOp>,
-                  CastOpAxisInfoVisitor<triton::PtrToIntOp>,
-                  CastOpAxisInfoVisitor<triton::IntToPtrOp>,
                   CastOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
                   CastOpAxisInfoVisitor<mlir::UnrealizedConversionCastOp>,
                   CastOpAxisInfoVisitor<triton::BitcastOp>>();
