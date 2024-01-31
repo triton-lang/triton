@@ -138,6 +138,22 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
                    PatternBenefit benefit)
       : ConvertOpToLLVMPattern(converter, benefit), numWarps(numWarps) {}
 
+  /// Only retain those attributes that are not constructed by
+  /// `LLVMFuncOp::build`. If `filterArgAttrs` is set, also filter out argument
+  /// attributes.
+  static void filterFuncAttributes(triton::FuncOp op, bool filterArgAttrs,
+                                   SmallVectorImpl<NamedAttribute> &result) {
+
+    for (const auto &attr : op->getAttrs()) {
+      if (attr.getName() == SymbolTable::getSymbolAttrName() ||
+          attr.getName() == op.getFunctionTypeAttrName() ||
+          attr.getName() == "std.varargs" ||
+          (filterArgAttrs && attr.getName() == op.getArgAttrsAttrName()))
+        continue;
+      result.push_back(attr);
+    }
+  }
+
   triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
                              ConversionPatternRewriter &rewriter) const {
     // Push back a variable that indicates the current stack pointer of shared
@@ -153,7 +169,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
                                            funcTy.getResults());
     // 2. Modify the argument attributes to add the new argument.
     SmallVector<NamedAttribute> amendedAttrs;
-    // filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, amendedAttrs);
+    filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, amendedAttrs);
     auto amendedArgAttrs = llvm::to_vector<4>(funcOp.getAllArgAttrs());
     amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
     amendedAttrs.push_back(rewriter.getNamedAttr(
@@ -403,20 +419,6 @@ struct ConvertTritonGPUToLLVM
     // because the call op has to know the shared memory base address of each
     // function
     initSharedMemory(typeConverter);
-
-    // Convert call and ret ops
-    {
-      mlir::LowerToLLVMOptions option(context);
-      LLVMTypeConverter typeConverter(context, option);
-      TritonLLVMFunctionConversionTarget funcTarget(*context, target);
-      RewritePatternSet funcPatterns(context);
-      funcPatterns.add<CallOpConversion>(typeConverter, numWarps, 1);
-      funcPatterns.add<ReturnOpConversion>(typeConverter, 1);
-      if (failed(
-              applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
-        return signalPassFailure();
-    }
-
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
 
     // Emit logics to get threadId/blockIds/linearized clusterCTAId etc. and
@@ -471,6 +473,8 @@ struct ConvertTritonGPUToLLVM
     populatePatterns2(populateClusterOpsToLLVMPatterns);
     populatePatterns2(populateRegReallocOpToLLVMPatterns);
     populatePatterns1(populateHistogramOpToLLVMPatterns);
+    patterns.add<CallOpConversion>(typeConverter, numWarps, 1);
+    patterns.add<ReturnOpConversion>(typeConverter, 1);
 
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
