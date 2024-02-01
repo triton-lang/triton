@@ -16,7 +16,7 @@ static ValueTableFMA getValueTableFromStructFMA(
     ConversionPatternRewriter &rewriter, Location loc,
     TritonGPUToLLVMTypeConverter *typeConverter, Type type) {
   ValueTableFMA res;
-  auto elems = typeConverter->unpackLLElements(loc, val, rewriter, type);
+  auto elems = typeConverter->unpackLLElements(loc, val, rewriter);
   int index = 0;
   for (unsigned k = 0; k < K; ++k) {
     for (unsigned m = 0; m < n0; m += shapePerCTATile)
@@ -49,8 +49,7 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   BlockedEncodingAttr dLayout =
       dTensorTy.getEncoding().cast<BlockedEncodingAttr>();
   auto order = dLayout.getOrder();
-  auto cc =
-      typeConverter->unpackLLElements(loc, adaptor.getC(), rewriter, dTensorTy);
+  auto cc = typeConverter->unpackLLElements(loc, adaptor.getC(), rewriter);
 
   Value llA = adaptor.getA();
   Value llB = adaptor.getB();

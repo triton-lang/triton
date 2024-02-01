@@ -360,13 +360,29 @@ void triton::StoreOp::getCanonicalizationPatterns(RewritePatternSet &results,
 }
 
 //-- TransOp --
+OpFoldResult mlir::triton::TransOp::fold(FoldAdaptor adaptor) {
+  // transpose(x, order=[0, 1, ...]) -> x
+  if (triton::isIota(getOrder())) {
+    return getSrc();
+  }
+
+  // transpose(transpose(x)) -> transpose(x)
+  if (auto innerTrans = getSrc().getDefiningOp<triton::TransOp>()) {
+    setOrder(applyPermutation(innerTrans.getOrder(), getOrder()));
+    setOperand(innerTrans.getSrc());
+    return getResult();
+  }
+
+  return {};
+}
+
 mlir::LogicalResult mlir::triton::TransOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, ValueRange operands,
     DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // type is the same as the input
   auto argTy = operands[0].getType().cast<RankedTensorType>();
-  auto order = properties.as<Properties *>()->order;
+  auto order = properties.as<Properties *>()->order.asArrayRef();
   SmallVector<int64_t> retShape = applyPermutation(argTy.getShape(), order);
 
   auto retEltTy = argTy.getElementType();
