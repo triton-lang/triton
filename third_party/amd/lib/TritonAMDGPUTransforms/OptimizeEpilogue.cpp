@@ -38,11 +38,38 @@ using namespace mlir;
 
 namespace {
 
+bool isOneOperandElementwiseOp(Operation *op) {
+  if (llvm::isa<arith::ExtFOp, arith::ExtSIOp, arith::ExtUIOp, arith::FPToSIOp,
+                arith::FPToUIOp, arith::NegFOp, arith::SIToFPOp,
+                arith::TruncFOp, arith::TruncIOp, arith::UIToFPOp>(op))
+    return true;
+  if (llvm::isa<math::AbsFOp, math::AbsIOp, math::AtanOp, math::Atan2Op,
+                math::CeilOp, math::CosOp, math::SinOp,
+                math::CountLeadingZerosOp, math::CountTrailingZerosOp,
+                math::CtPopOp, math::ErfOp, math::ExpOp, math::Exp2Op,
+                math::ExpM1Op, math::FloorOp, math::LogOp, math::Log10Op,
+                math::Log1pOp, math::Log2Op, math::RsqrtOp, math::SqrtOp,
+                math::TanhOp>(op))
+    return true;
+  if (llvm::isa<triton::IntToPtrOp, triton::PtrToIntOp, triton::BitcastOp,
+                triton::FpToFpOp>(op))
+    return true;
+  if (auto externElementwiseOp = dyn_cast<triton::ExternElementwiseOp>(op))
+    return externElementwiseOp.getPure();
+  return false;
+}
+
 // convert(val) : mma -> blocked
+// elementWiseOp(val) : blocked
+// ...
+// elementWiseOp(val) : blocked
 // tt.store(ptr, val, mask, ...) : blocked
 // ==>
 // convert(ptr) : blocked -> mma
 // convert(mask) : blocked -> mma
+// elementWiseOp(val) : mma
+// ...
+// elementWiseOp(val) : mma
 // tt.store(ptr, val, mask, ...) : mma
 //
 // Store with mma layout directly
@@ -67,6 +94,21 @@ public:
         !ptrType.getEncoding().isa<triton::gpu::BlockedEncodingAttr>() ||
         !valType.getEncoding().isa<triton::gpu::BlockedEncodingAttr>())
       return mlir::failure();
+
+#ifdef USE_ROCM
+    llvm::SmallVector<mlir::Operation *> chainedOps;
+    while (true) {
+      auto chainedOp = val.getDefiningOp();
+      if (llvm::isa<triton::gpu::ConvertLayoutOp>(chainedOp))
+        break;
+      if (!chainedOp->hasOneUse())
+        return mlir::failure();
+      if (!isOneOperandElementwiseOp(chainedOp))
+        return mlir::failure();
+      val = chainedOp->getOperand(0);
+      chainedOps.push_back(chainedOp);
+    }
+#endif
 
     auto cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(val.getDefiningOp());
     if (!cvtOp)
@@ -96,6 +138,18 @@ public:
         ptrType.getShape(), ptrType.getElementType(), newEncoding);
     Value newPtr = rewriter.create<triton::gpu::ConvertLayoutOp>(
         ptr.getLoc(), newPtrType, ptr);
+
+#ifdef USE_ROCM
+    for (auto chainedOp : chainedOps) {
+      auto oldType =
+          chainedOp->getResult(0).getType().cast<mlir::RankedTensorType>();
+      chainedOp->setOperand(0, newVal);
+      newVal = chainedOp->getResult(0);
+      auto newType = mlir::RankedTensorType::get(
+          oldType.getShape(), oldType.getElementType(), newEncoding);
+      newVal.setType(newType);
+    }
+#endif
 
     Value newMask = mask;
     if (mask) {

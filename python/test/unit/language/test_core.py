@@ -2732,9 +2732,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
             "numpy.dot with int8 inputs will overflow while tl.dot doesn't because MMA instruction's accumulator is 32-bit"
         )
 
-    if (M, N, K, num_warps) in [(128, 256, 32, 8)]:
-        pytest.skip(f"test_dot{(M, N, K)} not supported on HIP: memory out of resource")
-
     torch.backends.cuda.matmul.allow_tf32 = allow_tf32
 
     if num_ctas > 1 and in_dtype == 'int8':
