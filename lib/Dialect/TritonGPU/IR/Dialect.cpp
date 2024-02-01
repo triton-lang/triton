@@ -1176,8 +1176,8 @@ Attribute MfmaEncodingAttr::parse(AsmParser &parser, Type type) {
 
 void MfmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
-          << "nonKDim = " << getNonKDim() << ", warpsPerCTA = ["
-          << ArrayRef(getWarpsPerCTA()) << "]"
+          << "nonKDim = " << getNonKDim()                             //
+          << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]" //
           << ", isTransposed = " << getIsTransposed();
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getWarpsPerCTA().size());
@@ -1281,7 +1281,7 @@ void SharedEncodingAttr::print(AsmPrinter &printer) const {
           << "vec = " << getVec() << ", "
           << ", perPhase = " << getPerPhase()
           << ", maxPhase = " << getMaxPhase() //
-          << ", order = [" << getOrder();
+          << ", order = [" << getOrder() << "]";
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getOrder().size());
   printer << ", hasLeadingOffset = " << getHasLeadingOffset() << "}>";
