@@ -39,8 +39,8 @@ class BackendInstaller:
         # Initialize submodule if there is one for in-tree backends.
         if not is_external:
             root_dir = os.path.join(os.pardir, "third_party")
-            if backend_name not in os.listdir(root_dir):
-                raise Exception(f"{backend_name} is requested for install but not present in {root_dir}")
+            assert backend_name in os.listdir(
+                root_dir), f"{backend_name} is requested for install but not present in {root_dir}"
 
             try:
                 subprocess.run(["git", "submodule", "update", "--init", f"{backend_name}"], check=True,
@@ -52,16 +52,15 @@ class BackendInstaller:
 
             backend_src_dir = os.path.join(root_dir, backend_name)
 
-        backend_dir = os.path.abspath(os.path.join(backend_src_dir, "backend"))
-        if not os.path.exists(backend_dir):
-            raise Exception(f"{backend_dir} does not exist!")
+        backend_path = os.path.abspath(os.path.join(backend_src_dir, "backend"))
+        assert os.path.exists(backend_path), f"{backend_path} does not exist!"
+
         for file in ["compiler.py", "driver.py"]:
-            if not os.path.exists(os.path.join(backend_dir, file)):
-                raise Exception(f"${file} does not exist in ${backend_dir}")
+            assert os.path.exists(os.path.join(backend_path, file)), f"${file} does not exist in ${backend_path}"
 
         install_dir = os.path.join(os.path.dirname(__file__), "triton", "backends", backend_name)
-        package_data = [f"{os.path.relpath(p, backend_dir)}/*" for p, _, _, in os.walk(backend_dir)]
-        return Backend(name=backend_name, package_data=package_data, src_dir=backend_src_dir, backend_dir=backend_dir,
+        package_data = [f"{os.path.relpath(p, backend_path)}/*" for p, _, _, in os.walk(backend_path)]
+        return Backend(name=backend_name, package_data=package_data, src_dir=backend_src_dir, backend_dir=backend_path,
                        install_dir=install_dir, is_external=is_external)
 
     # Copy all in-tree backends under triton/third_party.
