@@ -554,7 +554,10 @@ class CUDABackend(BaseBackend):
             line_info = '' if os.environ.get('TRITON_DISABLE_LINE_INFO') else ' -lineinfo'
             fmad = '' if opt.enable_fp_fusion else ' --fmad=false'
             suffix = 'a ' if capability == 90 else ' '
-            cmd = f'{ptxas}{line_info}{fmad} -v --gpu-name=sm_{capability}{suffix}{fsrc.name} -o {fbin} 2> {flog.name}'
+            if os.environ.get("DISABLE_PTXAS_OPT", "0") == "1":
+              cmd = f'{ptxas}{line_info}{fmad} -v --opt-level 0 --gpu-name=sm_{capability}{suffix}{fsrc.name} -o {fbin} 2> {flog.name}'
+            else:
+              cmd = f'{ptxas}{line_info}{fmad} -v --gpu-name=sm_{capability}{suffix}{fsrc.name} -o {fbin} 2> {flog.name}'
 
             try:
                 subprocess.run(cmd, shell=True, check=True)
