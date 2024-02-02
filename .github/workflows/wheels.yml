@@ -70,7 +70,7 @@ jobs:
       - name: Install Azure CLI
         if: ${{ steps.check-version.outputs.new_commit == 'true' }}
         run: |
-          curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 
       - name: Azure login
         if: ${{ steps.check-version.outputs.new_commit == 'true' }}

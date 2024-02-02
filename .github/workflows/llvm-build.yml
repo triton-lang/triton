@@ -183,7 +183,7 @@ jobs:
         # create a subdirectory inside the existing directory.
         rm -rf "${{ env.SCCACHE_DIR }}"
         docker cp "${CONTAINER_ID}:/sccache" "${{ env.SCCACHE_DIR }}"
-        chown -R "$(id -u -n):$(id -g -n)" "${{ env.SCCACHE_DIR }}"
+        sudo chown -R "$(id -u -n):$(id -g -n)" "${{ env.SCCACHE_DIR }}"
 
         docker rm "${CONTAINER_ID}"
 
