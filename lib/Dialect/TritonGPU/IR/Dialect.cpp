@@ -1278,7 +1278,7 @@ Attribute SharedEncodingAttr::parse(AsmParser &parser, Type type) {
 
 void SharedEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
-          << "vec = " << getVec() << ", "
+          << "vec = " << getVec() //
           << ", perPhase = " << getPerPhase()
           << ", maxPhase = " << getMaxPhase() //
           << ", order = [" << getOrder() << "]";
