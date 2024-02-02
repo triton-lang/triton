@@ -2,7 +2,7 @@
 
 using namespace mlir;
 
-using ValueTable = std::map<std::tuple<unsigned, unsigned, unsigned>, Value>;
+using ValueTable = std::map<std::array<int, 3>, Value>;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
@@ -749,7 +749,6 @@ getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
   auto rank = strides.size();
   if (rank == 3)
     return smemObj;
-  // TODO: is this wrong ?
   auto expandedStrides = insertValue(strides, 0, i32_val(shape[0] * shape[1]));
   auto expandedOffsets = insertValue(offsets, 0, i32_val(0));
   auto expandedSmemObj =

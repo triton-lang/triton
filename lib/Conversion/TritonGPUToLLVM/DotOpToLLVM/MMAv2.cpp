@@ -6,7 +6,7 @@ using namespace mlir::triton;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
-using ValueTableV2 = std::map<std::tuple<unsigned, unsigned, unsigned>, Value>;
+using ValueTableV2 = std::map<std::array<int, 3>, Value>;
 
 Value loadC(Value tensor, Value llTensor,
             const LLVMTypeConverter *typeConverter, Location loc,
@@ -60,9 +60,9 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
   auto elems = unpackLLElements(loc, value, rewriter);
   int offset{};
   ValueTableV2 vals;
-  for (int b = 0; b < batch; ++b)
-    for (int i = 0; i < n0; ++i) {
-      for (int j = 0; j < n1; j++) {
+  for (auto b = 0; b < batch; ++b)
+    for (auto i = 0; i < n0; ++i) {
+      for (auto j = 0; j < n1; j++) {
         vals[{b, 2 * i, 2 * j}] = elems[offset++];
         vals[{b, 2 * i, 2 * j + 1}] = elems[offset++];
         vals[{b, 2 * i + 1, 2 * j}] = elems[offset++];
@@ -171,8 +171,7 @@ inline static const std::map<TensorCoreType, std::string> mmaInstrPtxAmpere = {
      "mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16"},
 };
 
-static void callMmaTuringInt8(PTXBuilder &builder, unsigned b, unsigned m,
-                              unsigned n, unsigned k,
+static void callMmaTuringInt8(PTXBuilder &builder, int b, int m, int n, int k,
                               mlir::triton::PTXInstr &mma, unsigned numMmaRets,
                               unsigned colsPerThread, int numCPackedElem,
                               ValueTableV2 &ha, ValueTableV2 &hb,
@@ -219,8 +218,7 @@ static void callMmaTuringInt8(PTXBuilder &builder, unsigned b, unsigned m,
   mma(retArgs2, aArgs4, bArgs4, cArgs2);
 }
 
-static void callMmaTuringFp16(PTXBuilder &builder, unsigned b, unsigned m,
-                              unsigned n, unsigned k,
+static void callMmaTuringFp16(PTXBuilder &builder, int b, int m, int n, int k,
                               mlir::triton::PTXInstr &mma, unsigned numMmaRets,
                               unsigned colsPerThread, int numCPackedElem,
                               ValueTableV2 &ha, ValueTableV2 &hb,
@@ -247,13 +245,12 @@ static void callMmaTuringFp16(PTXBuilder &builder, unsigned b, unsigned m,
   mma(retArgs, aArgs2, bArgs2, cArgs);
 }
 
-static void callMmaAmpere(PTXBuilder &builder, unsigned b, unsigned m,
-                          unsigned n, unsigned k, mlir::triton::PTXInstr &mma,
-                          unsigned numMmaRets, unsigned colsPerThread,
-                          int numCPackedElem, unsigned batchOffset,
-                          ValueTableV2 &ha, ValueTableV2 &hb,
-                          const SmallVector<Value> &fc, bool isAccF16,
-                          bool isIntMMA) {
+static void callMmaAmpere(PTXBuilder &builder, int b, int m, int n, int k,
+                          mlir::triton::PTXInstr &mma, unsigned numMmaRets,
+                          unsigned colsPerThread, int numCPackedElem,
+                          unsigned batchOffset, ValueTableV2 &ha,
+                          ValueTableV2 &hb, const SmallVector<Value> &fc,
+                          bool isAccF16, bool isIntMMA) {
   auto retArgs =
       builder.newListOperand(numMmaRets, isIntMMA || isAccF16 ? "=r" : "=f");
   auto cArgs = builder.newListOperand();

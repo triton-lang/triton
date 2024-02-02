@@ -43,7 +43,7 @@ static int getMMAVersionSafe(int computeCapability, tt::DotOp op) {
   return 0;
 }
 
-SmallVector<unsigned, 3>
+SmallVector<unsigned>
 warpsPerTileV2(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
   auto rank = shape.size();
   // Early exit for batched matmul
@@ -77,7 +77,7 @@ warpsPerTileV2(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
     }
   }
 
-  SmallVector<unsigned, 3> ret(rank, 1);
+  SmallVector<unsigned> ret(rank, 1);
   SmallVector<int64_t> shapePerWarp(rank, 1);
   shapePerWarp[rank - 1] = 8;
   shapePerWarp[rank - 2] = 16;
