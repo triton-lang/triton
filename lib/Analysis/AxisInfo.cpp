@@ -38,6 +38,14 @@ static constexpr int log2Int(int64_t num) {
   return (num > 1) ? 1 + log2Int(num / 2) : 0;
 }
 
+// If lhs * rhs overflows, return max value possible value for the type
+static int64_t multiplyDivisor(int64_t lhs, int64_t rhs) {
+  int64_t maxDivisor = highestPowOf2Divisor<int64_t>(0);
+  if (lhs > maxDivisor / rhs)
+    return maxDivisor;
+  return lhs * rhs;
+}
+
 //===----------------------------------------------------------------------===//
 // AxisInfo
 //===----------------------------------------------------------------------===//
@@ -219,16 +227,26 @@ private:
     // rhs = p * d_rhs = p * p' * gcd(d_lhs, d_rhs)
     // lhs + rhs = k * d_lhs + p * d_rhs = (k * d_lhs + p * d_rhs) *
     // gcd(d_lhs, d_rhs)
-    auto elemSize = 1;
+    auto rhsDivisibility = rhs.getDivisibility(dim);
     if constexpr (std::is_same_v<OpTy, triton::AddPtrOp>) {
       //  %ptr = addptr %lhs, %rhs
       // is equivalent to
-      //  %0 = mul %lhs, %elemSize
-      //  %ptr = add %0, %rhs
-      elemSize = std::max<unsigned int>(
+      //  %0 = mul %rhs, %elemSize
+      //  %ptr = add %lhs, %0
+      // The result will still be contiguous in terms of elements but not bytes
+      // For example:
+      // addptr [16] : !ptr<i32>, [0, 1, 2, 3] : i32 -> !ptr<i32>
+      // returns:
+      // [16, 20, 24, 28] : !ptr<i32>
+      // with element locations:
+      // [4, 5, 6, 7]
+      // It is "strided contiguous" with a divisilibity of 16 bytes
+      auto rank = lhs.getRank();
+      auto elemSize = std::max<int64_t>(
           1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
+      rhsDivisibility = multiplyDivisor(rhs.getDivisibility(dim), elemSize);
     }
-    return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim) * elemSize);
+    return gcd(lhs.getDivisibility(dim), rhsDivisibility);
   }
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
@@ -241,13 +259,18 @@ private:
     if (lhs.getConstantValue().has_value() &&
         rhs.getConstantValue().has_value()) {
       if constexpr (std::is_same_v<OpTy, arith::AddIOp> ||
-                    std::is_same_v<OpTy, triton::AddPtrOp> ||
                     std::is_same_v<OpTy, LLVM::AddOp>) {
         return {lhs.getConstantValue().value() +
                 rhs.getConstantValue().value()};
       } else if constexpr (std::is_same_v<OpTy, arith::SubIOp>) {
         return {lhs.getConstantValue().value() -
                 rhs.getConstantValue().value()};
+      } else if constexpr (std::is_same_v<OpTy, triton::AddPtrOp>) {
+        auto rank = lhs.getRank();
+        auto elemSize = std::max<int64_t>(
+            1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
+        auto rhsValue = rhs.getConstantValue().value() * elemSize;
+        return {lhs.getConstantValue().value() + rhsValue};
       }
     }
     return {};
@@ -293,7 +316,7 @@ private:
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       rhsDivisibility = 1;
     }
-    return lhsDivisibility * rhsDivisibility;
+    return multiplyDivisor(lhsDivisibility, rhsDivisibility);
   }
 
   std::optional<int64_t> getConstantValue(arith::MulIOp op, const AxisInfo &lhs,
@@ -583,23 +606,34 @@ public:
       } else {
         // Case 1: lhs and rhs are both partial constants
         constHint = gcd(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d));
-        // Case 2: lhs all constant, rhs all contiguous
-        // NOTE:
-        // lhs: 4 4 4 4
-        // rhs: 4 5 6 7
-        // lhs ge rhs: 1, 0, 0, 0
-        // Case 3: lhs all contiguous, rhs all constant
-        // NOTE
-        // lhs: 4 5 6 7
-        // rhs: 4 4 4 4
-        // lhs sle rhs: 1, 0, 0, 0
-        if (/*Case 2=*/(
-                notGePredicate(getPredicate(op)) &&
-                (AxisInfoVisitor::isConstantDim(lhsInfo, shape, d) &&
-                 AxisInfoVisitor::isContiguousDim(rhsInfo, shape, d))) ||
-            /*Case 3=*/(notLePredicate(getPredicate(op)) &&
-                        (AxisInfoVisitor::isContiguousDim(lhsInfo, shape, d) &&
-                         AxisInfoVisitor::isConstantDim(rhsInfo, shape, d)))) {
+        if ((gtPredicate(getPredicate(op)) || lePredicate(getPredicate(op))) &&
+            AxisInfoVisitor::isConstantDim(lhsInfo, shape, d)) {
+          // Case 2: lhs all constant, rhs all contiguous
+          // NOTE:
+          // lhs: 4 4 4 4
+          // rhs: 4 5 6 7
+          // lhs eq rhs: 1, 0, 0, 0
+          // lhs ne rhs: 0, 1, 1, 1
+          // lhs lt rhs: 0, 1, 1, 1
+          // lhs le rhs: 1, 1, 1, 1
+          // lhs ge rhs: 1, 0, 0, 0
+          // lhs gt rhs: 0, 0, 0, 0
+          constHint = std::max(constHint, gcd(rhsInfo.getContiguity(d),
+                                              gcd(lhsInfo.getDivisibility(d),
+                                                  rhsInfo.getDivisibility(d))));
+        } else if ((ltPredicate(getPredicate(op)) ||
+                    gePredicate(getPredicate(op))) &&
+                   AxisInfoVisitor::isConstantDim(rhsInfo, shape, d)) {
+          // Case 3: lhs all contiguous, rhs all constant
+          // NOTE
+          // lhs: 4 5 6 7
+          // rhs: 4 4 4 4
+          // lhs eq rhs: 1, 0, 0, 0
+          // lhs ne rhs: 0, 1, 1, 1
+          // lhs le rhs: 1, 0, 0, 0
+          // lhs lt rhs: 0, 0, 0, 0
+          // lhs gt rhs: 0, 1, 1, 1
+          // lhs ge rhs: 1, 1, 1, 1
           constHint = std::max(constHint, gcd(lhsInfo.getContiguity(d),
                                               gcd(lhsInfo.getDivisibility(d),
                                                   rhsInfo.getDivisibility(d))));
@@ -619,14 +653,24 @@ private:
     return op.getPredicate();
   }
 
-  static bool notGePredicate(arith::CmpIPredicate predicate) {
-    return predicate != arith::CmpIPredicate::sge &&
-           predicate != arith::CmpIPredicate::uge;
+  static bool gtPredicate(arith::CmpIPredicate predicate) {
+    return predicate == arith::CmpIPredicate::sgt ||
+           predicate == arith::CmpIPredicate::ugt;
   }
 
-  static bool notLePredicate(arith::CmpIPredicate predicate) {
-    return predicate != arith::CmpIPredicate::sle &&
-           predicate != arith::CmpIPredicate::ule;
+  static bool gePredicate(arith::CmpIPredicate predicate) {
+    return predicate == arith::CmpIPredicate::sge ||
+           predicate == arith::CmpIPredicate::uge;
+  }
+
+  static bool ltPredicate(arith::CmpIPredicate predicate) {
+    return predicate == arith::CmpIPredicate::slt ||
+           predicate == arith::CmpIPredicate::ult;
+  }
+
+  static bool lePredicate(arith::CmpIPredicate predicate) {
+    return predicate == arith::CmpIPredicate::sle ||
+           predicate == arith::CmpIPredicate::ule;
   }
 
   static bool compare(arith::CmpIPredicate predicate, int64_t lhs,
@@ -788,11 +832,7 @@ private:
       lhsDivisibility = 1;
     }
     auto numBits = log2Int(lhsDivisibility);
-    auto maxBits = log2Int(highestPowOf2Divisor<int64_t>(0));
-    // Make sure the return value doesn't exceed highestPowOf2Divisor<int64>(0)
-    if (shift + numBits > maxBits)
-      return highestPowOf2Divisor<int64_t>(0);
-    return lhsDivisibility << shift;
+    return multiplyDivisor(lhsDivisibility, 1 << shift);
   }
 
   int64_t getConstancy(arith::ShLIOp op, const AxisInfo &lhs,
@@ -908,8 +948,6 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   CastOpAxisInfoVisitor<arith::ExtUIOp>,
                   CastOpAxisInfoVisitor<arith::TruncIOp>,
                   CastOpAxisInfoVisitor<arith::IndexCastOp>,
-                  CastOpAxisInfoVisitor<triton::PtrToIntOp>,
-                  CastOpAxisInfoVisitor<triton::IntToPtrOp>,
                   CastOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
                   CastOpAxisInfoVisitor<mlir::UnrealizedConversionCastOp>,
                   CastOpAxisInfoVisitor<triton::BitcastOp>>();

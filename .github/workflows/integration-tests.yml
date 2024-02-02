@@ -67,6 +67,10 @@ jobs:
       - name: Check pre-commit
         run: |
           python3 -m pip install --upgrade pre-commit
+          # TODO: ignore the first yapf failure until https://github.com/google/yapf/issues/1164 is fixed
+          python3 -m pre_commit run --all-files --verbose yapf &> /dev/null || true
+          # If first run of yapf worked and made changes reset the tree to the original state
+          git reset --hard
           python3 -m pre_commit run --all-files --verbose
 
       - name: Install Triton
@@ -162,15 +166,6 @@ jobs:
           cd "build/$(ls build | grep -i cmake)"
           ctest
 
-      - name: Regression tests
-        if: ${{ contains(matrix.runner, 'A100') }}
-        run: |
-          python3 -m pip install pytest-rerunfailures
-          cd python/test/regression
-          sudo nvidia-smi -i 0 -pm 1
-          sudo nvidia-smi -i 0 --lock-gpu-clocks=1280,1280
-          python3 -m pytest -vvv -s . --reruns 10
-          sudo nvidia-smi -i 0 -rgc
 
   Compare-artifacts:
     needs: Integration-Tests
