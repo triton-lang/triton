@@ -14,16 +14,15 @@
 #include "llvm/ADT/APSInt.h"
 #include <numeric>
 
-using namespace mlir;
-using namespace mlir::triton;
-
 #define GEN_PASS_CLASSES
 #include "triton/Conversion/TritonToTritonGPU/Passes.h.inc"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 namespace {
 
-using triton::gpu::BlockedEncodingAttr;
+using namespace mlir;
+using namespace mlir::triton;
+using namespace mlir::triton::gpu;
 
 // pass named attrs (e.g., tt.contiguity) from Triton to Triton
 static void addNamedAttrs(Operation *op, DictionaryAttr dictAttrs) {
@@ -357,38 +356,44 @@ struct TritonInterleaveOpPattern
   }
 };
 
-struct TritonTransPattern : public OpConversionPattern<triton::TransOp> {
-
-  using OpConversionPattern<triton::TransOp>::OpConversionPattern;
+struct TritonTransPattern : public OpConversionPattern<TransOp> {
+  using OpConversionPattern<TransOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(triton::TransOp op, OpAdaptor adaptor,
+  matchAndRewrite(TransOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Value src = adaptor.getSrc();
-    auto srcType = src.getType().cast<RankedTensorType>();
-    Attribute srcEncoding = srcType.getEncoding();
-    if (!srcEncoding)
+    auto srcTy = src.getType().cast<RankedTensorType>();
+    auto srcEnc = srcTy.getEncoding();
+    if (!srcEnc)
       return failure();
-    if (!srcEncoding.isa<triton::gpu::SharedEncodingAttr>()) {
-      // TODO: end-to-end correctness is broken if
-      // the input is blocked and the output is shared
-      // with different order. Maybe a backend issue in BlockedToShared?
-      SmallVector<unsigned> order = {1, 0};
-      if (auto srcBlockedEncoding =
-              srcEncoding.dyn_cast<triton::gpu::BlockedEncodingAttr>())
-        llvm::copy(srcBlockedEncoding.getOrder(), order.begin());
-      // TODO(Qingyi): need to check whether the CTALayout of srcEncoding should
-      // be used here. For tests where numCTAs = 1, this is not a problem since
-      // all CTALayouts are the same.
-      auto CTALayout = triton::gpu::getCTALayout(srcEncoding);
-      srcEncoding = triton::gpu::SharedEncodingAttr::get(getContext(), 1, 1, 1,
-                                                         order, CTALayout);
-      srcType = RankedTensorType::get(srcType.getShape(),
-                                      srcType.getElementType(), srcEncoding);
-      src = rewriter.create<triton::gpu::ConvertLayoutOp>(src.getLoc(), srcType,
-                                                          src);
+
+    // inferTransOpEncoding chooses a layout for the transpose that makes it a
+    // "nop".  For example, if the src layout has thread [i,j] holding element
+    // [i,j] of the tensor, then the transposed layout has thread [i,j] holding
+    // element [j,i].  In other words, the transpose simply "renames" the
+    // elements, while leaving them in place.
+    //
+    // This will be called automatically, but it only works if the src encoding
+    // is blocked or shared.  If it's anything else, materialize to shared
+    // first.
+    //
+    // Unrelatedly, if the transpose feeds into a dot op, we also force it
+    // into shared memory.  Dot ops expect this.
+    if ((!srcEnc.isa<BlockedEncodingAttr>() &&
+         !srcEnc.isa<SharedEncodingAttr>()) ||
+        (!srcEnc.isa<SharedEncodingAttr>() &&
+         any_of(op->getUsers(),
+                [](Operation *user) { return isa<DotOp>(user); }))) {
+      srcEnc = SharedEncodingAttr::get(
+          getContext(), 1, 1, 1, /*order=*/SmallVector<unsigned>(op.getOrder()),
+          getCTALayout(srcEnc));
+      srcTy = RankedTensorType::get(srcTy.getShape(), srcTy.getElementType(),
+                                    srcEnc);
+      src = rewriter.create<ConvertLayoutOp>(src.getLoc(), srcTy, src);
     }
-    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::TransOp>(op, src),
+
+    addNamedAttrs(rewriter.replaceOpWithNewOp<TransOp>(op, src, op.getOrder()),
                   adaptor.getAttributes());
     return success();
   }
@@ -651,8 +656,8 @@ public:
   LogicalResult
   matchAndRewrite(scf::ConditionOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.updateRootInPlace(
-        op, [&]() { op->setOperands(adaptor.getOperands()); });
+    rewriter.modifyOpInPlace(op,
+                             [&]() { op->setOperands(adaptor.getOperands()); });
     return success();
   }
 };

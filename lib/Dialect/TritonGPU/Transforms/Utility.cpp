@@ -3,8 +3,11 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+
 #include <fstream>
 
 namespace mlir {
@@ -319,28 +322,80 @@ inferSrcEncoding(triton::ExperimentalInterleaveOp op, Attribute encoding) {
       enc.getOrder(), enc.getCTALayout());
 }
 
+static std::optional<Attribute>
+inferTransOpDstEncoding(Attribute srcEnc, ArrayRef<int32_t> order) {
+  // Simply forward to the existing inferTransOpEncoding function.
+  Attribute retEncoding;
+  if (succeeded(
+          srcEnc.getDialect()
+              .getRegisteredInterface<triton::DialectInferLayoutInterface>()
+              ->inferTransOpEncoding(srcEnc, order, retEncoding))) {
+    return retEncoding;
+  }
+  return std::nullopt;
+}
+
+static std::optional<Attribute> inferDstEncoding(triton::TransOp op,
+                                                 Attribute encoding) {
+  return inferTransOpDstEncoding(encoding, op.getOrder());
+}
+
+static std::optional<Attribute> inferSrcEncoding(triton::TransOp op,
+                                                 Attribute encoding) {
+  // We want to solve for srcEnc in
+  //   transpose(srcEnc, order) -> dstEnc.
+  // Given the identity
+  //   transpose(transpose(x, order), inverse(order)) == x,
+  // we can see this is equivalent to
+  //   transpose(dstEnc, inverse(order)) -> srcEnc.
+  return inferTransOpDstEncoding(encoding,
+                                 triton::inversePermutation(op.getOrder()));
+}
+
 std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
+  if (isa<triton::ScanOp>(op)) {
+    // Scan only supports blocked encoding at the moment.
+    if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
+      return std::nullopt;
+  }
+  if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
+      op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
+      op->hasTrait<mlir::OpTrait::Elementwise>() ||
+      isa<scf::WhileOp, scf::YieldOp, scf::ConditionOp>(op)) {
+    return encoding;
+  }
+
   if (auto reduceOp = dyn_cast<triton::ReduceOp>(op))
     return inferSrcEncoding(reduceOp, encoding);
   if (auto expand = dyn_cast<triton::ExpandDimsOp>(op))
     return inferSrcEncoding(expand, encoding);
   if (auto interleave = dyn_cast<triton::ExperimentalInterleaveOp>(op))
     return inferSrcEncoding(interleave, encoding);
-  if (isa<triton::ReshapeOp, triton::CatOp>(op))
-    return std::nullopt;
-  return encoding;
+  if (auto trans = dyn_cast<triton::TransOp>(op))
+    return inferSrcEncoding(trans, encoding);
+
+  return std::nullopt;
 }
 
 std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
+  if (isa<triton::ScanOp>(op)) {
+    if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
+      return std::nullopt;
+  }
+  if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
+      op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
+      op->hasTrait<mlir::OpTrait::Elementwise>() ||
+      isa<scf::WhileOp, scf::YieldOp, scf::ConditionOp>(op))
+    return encoding;
   if (auto reduceOp = dyn_cast<triton::ReduceOp>(op))
     return inferDstEncoding(reduceOp, encoding);
   if (auto expand = dyn_cast<triton::ExpandDimsOp>(op))
     return inferDstEncoding(expand, encoding);
   if (auto interleave = dyn_cast<triton::ExperimentalInterleaveOp>(op))
     return inferDstEncoding(interleave, encoding);
-  if (isa<triton::ReshapeOp, triton::CatOp>(op))
-    return std::nullopt;
-  return encoding;
+  if (auto trans = dyn_cast<triton::TransOp>(op))
+    return inferDstEncoding(trans, encoding);
+  return std::nullopt;
 }
 
 bool isSingleValue(Value value) {
@@ -432,6 +487,7 @@ scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
   scf::ForOp newLoop = rewriter.create<scf::ForOp>(
       loop.getLoc(), loop.getLowerBound(), loop.getUpperBound(), loop.getStep(),
       operands);
+  newLoop->setAttrs(loop->getAttrs());
   newLoop.getBody()->erase();
   newLoop.getRegion().getBlocks().splice(
       newLoop.getRegion().getBlocks().begin(), loop.getRegion().getBlocks());
@@ -553,7 +609,7 @@ SmallVector<Value> delinearize(OpBuilder &b, Location loc, Value linear,
                                ArrayRef<unsigned> order) {
   unsigned rank = shape.size();
   assert(rank == order.size());
-  auto reordered = reorder(shape, order);
+  auto reordered = triton::applyPermutation(shape, order);
   auto reorderedMultiDim = delinearize(b, loc, linear, reordered);
   SmallVector<Value> multiDim(rank);
   for (unsigned i = 0; i < rank; ++i) {
@@ -583,8 +639,8 @@ SmallVector<Value> delinearize(OpBuilder &b, Location loc, Value linear,
 
 Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape, ArrayRef<unsigned> order) {
-  return linearize(b, loc, reorder<Value>(multiDim, order),
-                   reorder<unsigned>(shape, order));
+  return linearize(b, loc, triton::applyPermutation(multiDim, order),
+                   triton::applyPermutation(shape, order));
 }
 
 Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
@@ -719,7 +775,7 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
     }
     if (deadArg.empty())
       return failure();
-    rewriter.updateRootInPlace(forOp, [&]() {
+    rewriter.modifyOpInPlace(forOp, [&]() {
       // For simplicity we just change the dead yield operand to use the
       // associated argument and leave the operations and argument removal to
       // dead code elimination.
