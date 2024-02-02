@@ -4497,3 +4497,47 @@ def test_clamp_symmetric(dtype):
     kernel[(size, )](x, limit, out, ref, x.numel(), BLOCK_SIZE=size)
 
     torch.testing.assert_close(out, ref)
+
+
+# -----------------------
+# test iterators
+# -----------------------
+
+
+def test_static_range(device):
+
+    @triton.jit
+    def loop_kernel(Z, N: tl.constexpr, step: tl.constexpr):
+        acc = 0
+        for i in tl.static_range(0, N, step=step):
+            acc += i
+        tl.store(Z, acc)
+
+    N = 100
+    step = 7
+    Out = torch.empty(1, dtype=torch.int32, device=device)
+    loop_kernel[(1, )](Out, N, step)
+    Acc = torch.tensor([0], dtype=torch.int32, device=device)
+    for i in range(0, N, step):
+        Acc += i
+    assert (Out == Acc).all(), (Out, Acc)
+
+
+def test_tl_range(device):
+    M, N, K = 64, 64, 512
+    BLOCK_M, BLOCK_N, BLOCK_K = M, N, 64
+    a = torch.randn((M, K), device=device, dtype=torch.float16)
+    b = torch.randn((K, N), device=device, dtype=torch.float16)
+    c = torch.empty((M, N), dtype=torch.float32, device=device)
+    pgm = matmul_kernel[
+        1,
+    ](a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_M, BLOCK_N,
+      BLOCK_K, 0, num_pipeline_stages=5)
+    ref_out = torch.matmul(a, b).to(torch.float32)
+    torch.testing.assert_close(ref_out, c, rtol=1e-3, atol=1e-3)
+    if device in ['cuda']:
+        capability = torch.cuda.get_device_capability()
+        if capability[0] >= 8:
+            ptx = pgm.asm['ptx']
+            # check that the loop got pipelined with the right number of stages.
+            assert 'cp.async.wait_group 0x6' in ptx
