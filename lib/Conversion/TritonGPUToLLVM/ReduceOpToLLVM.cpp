@@ -480,8 +480,7 @@ private:
 } // namespace
 
 void mlir::triton::populateReduceOpToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
-    PatternBenefit benefit) {
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    int computeCapability, PatternBenefit benefit) {
   patterns.add<ReduceOpConversion>(typeConverter, computeCapability, benefit);
 }

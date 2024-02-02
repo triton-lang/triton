@@ -188,7 +188,7 @@ public:
 } // namespace
 
 void mlir::triton::populateHistogramOpToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    PatternBenefit benefit) {
   patterns.add<HistogramOpConversion>(typeConverter, benefit);
 }
