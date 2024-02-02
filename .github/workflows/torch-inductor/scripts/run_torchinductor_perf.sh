@@ -11,8 +11,8 @@ source /opt/torchinductor_venv/bin/activate
 source "$INDUCTOR"/scripts/common.sh
 
 # lock GPU clocks to 1350 MHz
-sudo nvidia-smi -i 0 -pm 1
-sudo nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
+nvidia-smi -i 0 -pm 1
+nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
 
 cd "$PYTORCH_DIR" || exit
 TRITON_TEST_REPORTS_DIR=$TEST_REPORTS_DIR/perf
@@ -63,7 +63,7 @@ for model in "${MODELS[@]}"; do
 done
 
 # unlock GPU clocks
-sudo nvidia-smi -i 0 -rgc
+nvidia-smi -i 0 -rgc
 
 # go back to where we started
 cd "$ROOT" || exit
