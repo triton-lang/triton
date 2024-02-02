@@ -184,9 +184,9 @@ struct DotWaitOpConversion
 };
 } // namespace
 
-void mlir::triton::populateDotOpToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
+void mlir::triton::populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                               RewritePatternSet &patterns,
+                                               PatternBenefit benefit) {
   patterns.add<DotOpConversion>(typeConverter, benefit);
   patterns.add<DotAsyncOpConversion>(typeConverter, benefit);
   patterns.add<DotWaitOpConversion>(typeConverter, benefit);

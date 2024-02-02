@@ -606,23 +606,34 @@ public:
       } else {
         // Case 1: lhs and rhs are both partial constants
         constHint = gcd(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d));
-        // Case 2: lhs all constant, rhs all contiguous
-        // NOTE:
-        // lhs: 4 4 4 4
-        // rhs: 4 5 6 7
-        // lhs ge rhs: 1, 0, 0, 0
-        // Case 3: lhs all contiguous, rhs all constant
-        // NOTE
-        // lhs: 4 5 6 7
-        // rhs: 4 4 4 4
-        // lhs sle rhs: 1, 0, 0, 0
-        if (/*Case 2=*/(
-                notGePredicate(getPredicate(op)) &&
-                (AxisInfoVisitor::isConstantDim(lhsInfo, shape, d) &&
-                 AxisInfoVisitor::isContiguousDim(rhsInfo, shape, d))) ||
-            /*Case 3=*/(notLePredicate(getPredicate(op)) &&
-                        (AxisInfoVisitor::isContiguousDim(lhsInfo, shape, d) &&
-                         AxisInfoVisitor::isConstantDim(rhsInfo, shape, d)))) {
+        if ((gtPredicate(getPredicate(op)) || lePredicate(getPredicate(op))) &&
+            AxisInfoVisitor::isConstantDim(lhsInfo, shape, d)) {
+          // Case 2: lhs all constant, rhs all contiguous
+          // NOTE:
+          // lhs: 4 4 4 4
+          // rhs: 4 5 6 7
+          // lhs eq rhs: 1, 0, 0, 0
+          // lhs ne rhs: 0, 1, 1, 1
+          // lhs lt rhs: 0, 1, 1, 1
+          // lhs le rhs: 1, 1, 1, 1
+          // lhs ge rhs: 1, 0, 0, 0
+          // lhs gt rhs: 0, 0, 0, 0
+          constHint = std::max(constHint, gcd(rhsInfo.getContiguity(d),
+                                              gcd(lhsInfo.getDivisibility(d),
+                                                  rhsInfo.getDivisibility(d))));
+        } else if ((ltPredicate(getPredicate(op)) ||
+                    gePredicate(getPredicate(op))) &&
+                   AxisInfoVisitor::isConstantDim(rhsInfo, shape, d)) {
+          // Case 3: lhs all contiguous, rhs all constant
+          // NOTE
+          // lhs: 4 5 6 7
+          // rhs: 4 4 4 4
+          // lhs eq rhs: 1, 0, 0, 0
+          // lhs ne rhs: 0, 1, 1, 1
+          // lhs le rhs: 1, 0, 0, 0
+          // lhs lt rhs: 0, 0, 0, 0
+          // lhs gt rhs: 0, 1, 1, 1
+          // lhs ge rhs: 1, 1, 1, 1
           constHint = std::max(constHint, gcd(lhsInfo.getContiguity(d),
                                               gcd(lhsInfo.getDivisibility(d),
                                                   rhsInfo.getDivisibility(d))));
@@ -642,14 +653,24 @@ private:
     return op.getPredicate();
   }
 
-  static bool notGePredicate(arith::CmpIPredicate predicate) {
-    return predicate != arith::CmpIPredicate::sge &&
-           predicate != arith::CmpIPredicate::uge;
+  static bool gtPredicate(arith::CmpIPredicate predicate) {
+    return predicate == arith::CmpIPredicate::sgt ||
+           predicate == arith::CmpIPredicate::ugt;
   }
 
-  static bool notLePredicate(arith::CmpIPredicate predicate) {
-    return predicate != arith::CmpIPredicate::sle &&
-           predicate != arith::CmpIPredicate::ule;
+  static bool gePredicate(arith::CmpIPredicate predicate) {
+    return predicate == arith::CmpIPredicate::sge ||
+           predicate == arith::CmpIPredicate::uge;
+  }
+
+  static bool ltPredicate(arith::CmpIPredicate predicate) {
+    return predicate == arith::CmpIPredicate::slt ||
+           predicate == arith::CmpIPredicate::ult;
+  }
+
+  static bool lePredicate(arith::CmpIPredicate predicate) {
+    return predicate == arith::CmpIPredicate::sle ||
+           predicate == arith::CmpIPredicate::ule;
   }
 
   static bool compare(arith::CmpIPredicate predicate, int64_t lhs,
