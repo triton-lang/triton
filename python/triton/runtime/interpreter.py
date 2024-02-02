@@ -382,7 +382,14 @@ def _patch_lang_tensor(tensor, builder):
     tensor.__index__ = lambda self: int(self.handle.data)
     tensor.__bool__ = lambda self: True
     tensor.__str__ = lambda self: str(self.handle.data)
-    tensor.__getitem__ = lambda self, slices: self.handle.data.__getitem__(slices)
+
+    def handle_slice(self, slices):
+        data = self.handle.data.__getitem__(slices)
+        tensor_handle = TensorHandle(data, self.dtype)
+        tensor_type = tl.block_type(self.dtype, data.shape)
+        return tl.core.tensor(tensor_handle, tensor_type)
+
+    tensor.__getitem__ = handle_slice
 
 
 def _patch_lang_core(lang, builder):
@@ -392,13 +399,13 @@ def _patch_lang_core(lang, builder):
     # reduce is better off with a separate patch due to how
     # the builder currently interfaces with custom functions
 
-    def _new_reduce(input, axis, combine_fn):
+    def _new_reduce(input, axis, combine_fn, keep_dims=False):
         fn = combine_fn.fn.__name__
         mapping = {
             "maximum": np.max,
             "_sum_combine": np.sum,
         }
-        ret = mapping[fn](input.handle.data, axis=axis)
+        ret = mapping[fn](input.handle.data, axis=axis, keepdims=keep_dims)
         ret_type = tl.block_type(input.dtype, ret.shape)
         return tl.core.tensor(TensorHandle(ret, input.dtype), ret_type)
 

@@ -2062,3 +2062,28 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     tt.return %4 : tensor<1xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
   }
 }
+
+// -----
+
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#slice1dim1 = #triton_gpu.slice<{dim = 1, parent = #blocked1}>
+#blocked2 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+
+// CHECK-LABEL: scan_propagation
+tt.func @scan_propagation(%arg: tensor<1024xi32, #slice1dim1>) -> tensor<1024xi32, #slice1dim1> {
+  %1 = triton_gpu.convert_layout %arg : (tensor<1024xi32, #slice1dim1>) -> tensor<1024xi32, #blocked2>
+  %2 = "tt.scan" (%1) ({
+  ^bb0(%arg3: i32, %arg4: i32):
+      %add = arith.addi %arg3, %arg4 : i32
+      tt.scan.return %add : i32
+  }) {axis = 1 : i32} : (tensor<1024xi32, #blocked2>) -> tensor<1024xi32, #blocked2>
+  %3 = triton_gpu.convert_layout %2 : (tensor<1024xi32, #blocked2>) -> tensor<1024xi32, #slice1dim1>
+  // don't allow non blocked layout to be propagated to scan
+  // CHECK: triton_gpu.convert_layout
+  // CHECK: tt.scan
+  // CHECK: triton_gpu.convert_layout
+  // CHECK: tt.return
+  tt.return %3: tensor<1024xi32, #slice1dim1>
+}
+}

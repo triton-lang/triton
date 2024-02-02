@@ -782,20 +782,6 @@ def test_where_broadcast(num_ctas, device):
 
 
 # ---------------
-# test maximum/minimum ops
-# ---------------
-
-
-# TODO: Tests with unsigned integers failed at compilation stage.
-@pytest.mark.parametrize("dtype", int_dtypes + uint_dtypes + float_dtypes + ["bfloat16"])
-@pytest.mark.parametrize("op", ["maximum", "minimum"])
-def test_maximum_minium(dtype, op):
-    expr = f'tl.{op}(x, y)'
-    numpy_expr = f'np.{op}(x, y)'
-    _test_binary(dtype, dtype, expr, numpy_expr)
-
-
-# ---------------
 # test unary ops
 # ---------------
 
@@ -3084,18 +3070,6 @@ def test_store_cache_modifier(cache):
 
 
 # ---------------
-# test if
-# ---------------
-
-# ---------------
-# test for
-# ---------------
-
-# ---------------
-# test while
-# ---------------
-
-# ---------------
 # test default
 # ---------------
 # TODO: can't be local to test_default
@@ -3831,7 +3805,6 @@ def add_fn_static_cond(x, cond: tl.constexpr):
         return x + 1
 
 
-# TODO(Keren): if_exp
 @pytest.mark.parametrize(
     "call_type",
     ["attribute", "attribute_jit", "jit", "jit_if", "jit_expr", "jit_static_cond", "jit_noinline", "jit_extern"])
@@ -3970,7 +3943,7 @@ def test_while(device):
     assert out_j[0] == bound[0]
 
 
-def test_while2(device):
+def test_nested_while(device):
 
     @triton.jit
     def nested_while(data, countPtr):
@@ -3985,26 +3958,6 @@ def test_while2(device):
     nested_while[(1, )](data, counter)
     assert data[0] == 40
 
-
-# def test_for_if(device):
-
-#     @triton.jit
-#     def kernel(bound, cutoff, M, N):
-#         m = 0
-#         n = 0
-#         for i in range(bound):
-#             if i > cutoff:
-#                 m = m + 1
-#             else:
-#                 n = n + 1
-#         tl.store(M, m)
-#         tl.store(N, n)
-
-#     m = to_triton(np.zeros((1,), dtype=np.int32), device=device)
-#     n = to_triton(np.zeros((1,), dtype=np.int32), device=device)
-#     kernel[(1,)](10, 7, m, n)
-#     print(m[0])
-#     print(n[0])
 
 # -----------------------
 # test extra
@@ -4544,58 +4497,6 @@ def test_clamp_symmetric(dtype):
     kernel[(size, )](x, limit, out, ref, x.numel(), BLOCK_SIZE=size)
 
     torch.testing.assert_close(out, ref)
-
-
-# -----------------------
-# test sort
-# -----------------------
-
-
-@pytest.mark.parametrize("M, N", [[1, 512], [8, 64], [256, 16], [512, 8]])
-@pytest.mark.parametrize("descending", [False, True])
-@pytest.mark.parametrize("dtype_str", ['int32', 'float16', 'float32'])
-def test_sort(M, N, descending, dtype_str, device):
-    if is_hip():
-        pytest.skip(
-            'test_propagate_nan for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
-
-    @triton.jit
-    def sort_kernel(X, Z, N: tl.constexpr, M: tl.constexpr, descending: tl.constexpr):
-        offx = tl.arange(0, M)
-        offy = tl.arange(0, N) * M
-        off2d = offx[None, :] + offy[:, None]
-        x = tl.load(X + off2d)
-        x = tl.sort(x, descending=descending)
-        tl.store(Z + off2d, x)
-
-    x = numpy_random((N, M), dtype_str=dtype_str)
-    x = torch.from_numpy(x).to("cuda")
-    y = torch.sort(x, descending=descending)[0]
-    z = torch.empty_like(x)
-    sort_kernel[(1, )](x, z, N, M, descending, num_warps=8)
-    assert (y == z).all(), (y, z)
-
-
-@pytest.mark.parametrize("M, N", [[1, 512], [8, 64], [256, 16], [512, 8]])
-@pytest.mark.parametrize("dtype_str", ['int32', 'float16', 'float32'])
-def test_flip(M, N, dtype_str, device):
-
-    @triton.jit
-    def flip_kernel(X, Z, N: tl.constexpr, M: tl.constexpr):
-        offx = tl.arange(0, M)
-        offy = tl.arange(0, N) * M
-        off2d = offx[None, :] + offy[:, None]
-        x = tl.load(X + off2d)
-        x = tl.flip(x)
-        tl.store(Z + off2d, x)
-
-    x = numpy_random((N, M), dtype_str=dtype_str)
-    x = torch.from_numpy(x).to("cuda")
-    y = torch.flip(x, (1, ))
-    z = torch.empty_like(x)
-    flip_kernel[(1, )](x, z, N, M, num_warps=8)
-    assert (y == z).all(), (y, z)
 
 
 # -----------------------
