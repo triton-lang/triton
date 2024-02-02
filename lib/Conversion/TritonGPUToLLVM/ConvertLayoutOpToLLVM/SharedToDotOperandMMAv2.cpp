@@ -108,12 +108,14 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value lane, Value cSwizzleOffset) {
 
   // Decompose matIndex => s_0, s_1, that is the coordinate in 2x2 matrices in a
   // warp
-  Value s0 = urem(matIndex, i32_val(2));
-  Value s1 = udiv(matIndex, i32_val(2));
+  Value matIndexY = urem(matIndex, i32_val(2));
+  Value matIndexX = udiv(matIndex, i32_val(2));
 
   // We use different orders for a and b for better performance.
-  Value kMatArr = kOrder == 2 ? s1 : s0;  // index of matrix on the k dim
-  Value nkMatArr = kOrder == 2 ? s0 : s1; // index of matrix on the non-k dim
+  Value kMatArr =
+      kOrder == 2 ? matIndexX : matIndexY; // index of matrix on the k dim
+  Value nkMatArr =
+      kOrder == 2 ? matIndexY : matIndexX; // index of matrix on the non-k dim
 
   // Matrix coordinates inside a CTA,
   // the matrix layout is [2warpsPerTile[0], 2] for A and [2, 2warpsPerTile[1]]
