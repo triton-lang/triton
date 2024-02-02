@@ -71,21 +71,14 @@ class BackendInstaller:
 
     # Copy all external plugins provided by the `TRITON_PLUGIN_DIRS` env var.
     # TRITON_PLUGIN_DIRS is a semicolon-separated list of paths to the plugins.
-    # The last components of the paths must be valid python identifiders.
+    # Expect to find the name of the backend under dir/backend/name.conf
     @staticmethod
     def copy_externals():
-
-        def get_backend_name(dir: str):
-            name = Path(dir).name
-            if not name.isidentifier():
-                raise Exception(f"{name} must be a valid python identifier")
-            return name
-
         backend_dirs = os.getenv("TRITON_PLUGIN_DIRS")
         if backend_dirs is None:
             return []
         backend_dirs = backend_dirs.strip().split(";")
-        backend_names = [get_backend_name(dir) for dir in backend_dirs]
+        backend_names = [Path(os.path.join(dir, "backend", "name.conf")).read_text().strip() for dir in backend_dirs]
         return [
             BackendInstaller.prepare(backend_name, backend_src_dir=backend_src_dir, is_external=True)
             for backend_name, backend_src_dir in zip(backend_names, backend_dirs)

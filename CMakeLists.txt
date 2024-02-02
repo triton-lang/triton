@@ -147,13 +147,11 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   if (DEFINED TRITON_PLUGIN_DIRS)
     foreach(PLUGIN_DIR ${TRITON_PLUGIN_DIRS})
-      # Generate a list of plugin names by getting the last component of the provided paths.
-      # Note that each path must not end with a slash, otherwise cmake_path will return empty
-      # string as the name.
-      cmake_path(GET PLUGIN_DIR FILENAME PLUGIN_NAME)
-      if("${PLUGIN_NAME}" STREQUAL "")
-        message(FATAL_ERROR "Plugin dir ${PLUGIN_DIR} must not end with a slash")
-      endif()
+      # Read the plugin name under dir/backend/name.conf
+      cmake_path(APPEND PLUGIN_DIR "backend" "name.conf" OUTPUT_VARIABLE PLUGIN_NAME_PATH)
+      file(READ ${PLUGIN_NAME_PATH} PLUGIN_NAME)
+      string(STRIP ${PLUGIN_NAME} PLUGIN_NAME)
+
       list(APPEND TRITON_PLUGIN_NAMES ${PLUGIN_NAME})
 
       # Include the plugin as part of the build, placing the build output under
