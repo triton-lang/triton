@@ -399,13 +399,13 @@ def _patch_lang_core(lang, builder):
     # reduce is better off with a separate patch due to how
     # the builder currently interfaces with custom functions
 
-    def _new_reduce(input, axis, combine_fn):
+    def _new_reduce(input, axis, combine_fn, keep_dims=False):
         fn = combine_fn.fn.__name__
         mapping = {
             "maximum": np.max,
             "_sum_combine": np.sum,
         }
-        ret = mapping[fn](input.handle.data, axis=axis)
+        ret = mapping[fn](input.handle.data, axis=axis, keepdims=keep_dims)
         ret_type = tl.block_type(input.dtype, ret.shape)
         return tl.core.tensor(TensorHandle(ret, input.dtype), ret_type)
 
