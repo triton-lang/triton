@@ -353,6 +353,11 @@ static std::optional<Attribute> inferSrcEncoding(triton::TransOp op,
 }
 
 std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
+  if (isa<triton::ScanOp>(op)) {
+    // Scan only supports blocked encoding at the moment.
+    if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
+      return std::nullopt;
+  }
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
@@ -373,6 +378,10 @@ std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
 }
 
 std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
+  if (isa<triton::ScanOp>(op)) {
+    if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
+      return std::nullopt;
+  }
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
