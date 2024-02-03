@@ -114,10 +114,6 @@ bool maybeSharedAllocationOp(Operation *op);
 
 bool maybeAliasOp(Operation *op);
 
-#if 1
-bool supportMFMA(triton::DotOp op, int64_t nonKDim);
-#endif
-
 bool supportMMA(triton::DotOp op, int version);
 
 bool supportMMA(Value value, int version);

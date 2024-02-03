@@ -220,9 +220,6 @@ public:
       assert(externalNonKDim == 32 || externalNonKDim == 16);
     }
 
-    if (!supportMFMA(dotOp, externalNonKDim))
-      return failure();
-
     auto CTALayout = ttg::getCTALayout(oldRetType.getEncoding());
 
     // get MFMA encoding for the given number of warps

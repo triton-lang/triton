@@ -210,9 +210,6 @@ public:
         !oldRetType.getEncoding().isa<ttg::BlockedEncodingAttr>())
       return failure();
 
-    if (!supportMFMA(dotOp))
-      return failure();
-
     auto CTALayout = ttg::getCTALayout(oldRetType.getEncoding());
     assert(CTALayout.getCTAsPerCGA().size() == 2);
     assert(CTALayout.getCTAsPerCGA()[0] == 1);

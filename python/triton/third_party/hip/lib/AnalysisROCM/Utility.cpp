@@ -377,40 +377,6 @@ bool supportMMA(triton::DotOp op, int version) {
   return supportMMA(op.getA(), version) && supportMMA(op.getB(), version);
 }
 
-#if 1
-static bool supportMFMAGranularity(int m, int n, int k, int64_t nonKDim) {
-  // these limitations are dtype dependent, in future we may relax them
-  const int granularityMN = nonKDim;
-  const int granularityK = nonKDim == 32 ? 8 : 16;
-  if (m % granularityMN != 0 || n % granularityMN != 0)
-    return false;
-  if (k % granularityK != 0)
-    return false;
-  return true;
-}
-
-bool supportMFMA(triton::DotOp op, int64_t nonKDim) {
-  auto aTy = op.getA().getType().cast<RankedTensorType>();
-  auto bTy = op.getB().getType().cast<RankedTensorType>();
-
-  auto aElemTy = aTy.getElementType();
-  auto bElemTy = bTy.getElementType();
-
-  if (aElemTy != bElemTy)
-    return false;
-
-  auto aShape = aTy.getShape();
-  auto bShape = bTy.getShape();
-
-  assert(aShape[1] == bShape[0]);
-  if (!supportMFMAGranularity(aShape[0], bShape[1], aShape[1], nonKDim))
-    return false;
-
-  return aElemTy.isF16() || aElemTy.isBF16() || aElemTy.isF32() ||
-         aElemTy.isInteger(8);
-}
-#endif
-
 bool supportMMA(Value value, int version) {
   // Tell whether a DotOp support MMA by the operand type(either $a or $b).
   // We cannot get both the operand types(in TypeConverter), here we assume the

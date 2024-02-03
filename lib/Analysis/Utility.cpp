@@ -424,69 +424,6 @@ bool supportMMA(triton::DotOp op, int version) {
 }
 
 #ifdef USE_ROCM
-static bool supportMFMAGranularity(int m, int n, int k) {
-  // these limitations are dtype dependent, in future we may relax them
-  const static std::tuple<int, int, int> mfmaTypes[] = {
-      {32, 32, 8}, {16, 16, 16}, {4, 4, 64}, {64, 4, 4}, {4, 64, 4}};
-  for (const auto &mfmaType : mfmaTypes) {
-    auto [granularityM, granularityN, granularityK] = mfmaType;
-    if (m % granularityM != 0 || n % granularityN != 0)
-      continue;
-    if (k % granularityK != 0)
-      continue;
-    return true;
-  }
-  return false;
-}
-
-bool supportMFMATypes(Type a, Type b) {
-  if (a.getIntOrFloatBitWidth() != b.getIntOrFloatBitWidth())
-    return false;
-
-  auto F8E4M3FNUZ = TypeID::get<mlir::Float8E4M3FNUZType>();
-  auto F8E5M2FNUZ = TypeID::get<mlir::Float8E5M2FNUZType>();
-  auto F16 = TypeID::get<mlir::Float16Type>();
-  auto BF16 = TypeID::get<mlir::BFloat16Type>();
-  auto F32 = TypeID::get<mlir::Float32Type>();
-  auto Int = TypeID::get<mlir::IntegerType>();
-  const static DenseSet<std::pair<mlir::TypeID, mlir::TypeID>> supportedTypes = {
-      {F32, F32},
-      {F16, F16},
-      {BF16, BF16},
-      {F8E4M3FNUZ, F8E4M3FNUZ},
-      {F8E4M3FNUZ, F8E5M2FNUZ},
-      {F8E5M2FNUZ, F8E4M3FNUZ},
-      {F8E5M2FNUZ, F8E5M2FNUZ},
-      {Int, Int}};
-
-  if (!supportedTypes.contains({a.getTypeID(), b.getTypeID()}))
-    return false;
-
-  if (a.isIntOrIndex() && a.getIntOrFloatBitWidth() != 8)
-    return false;
-  return true;
-}
-
-bool supportMFMA(triton::DotOp op) {
-  auto aTy = op.getA().getType().cast<RankedTensorType>();
-  auto bTy = op.getB().getType().cast<RankedTensorType>();
-
-  auto aElemTy = aTy.getElementType();
-  auto bElemTy = bTy.getElementType();
-
-  if (!supportMFMATypes(aElemTy, bElemTy))
-    return false;
-
-  auto aShape = aTy.getShape();
-  auto bShape = bTy.getShape();
-
-  assert(aShape[1] == bShape[0]);
-  if (!supportMFMAGranularity(aShape[0], bShape[1], aShape[1]))
-    return false;
-
-  return true;
-}
-
 static bool supportWMMAGranularity(int m, int n, int k) {
   return m % 16 == 0 && n % 16 == 0 && k % 16 == 0;
 }
