@@ -363,7 +363,7 @@ def profile_batch_kernels(M, N, K, gpuid, gpus, jobs, verbose):
         jobId += ngpus
 
 
-def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, run_bench, jobs, iters, verbose=0, num_threads=16, gpus=[0]):
+def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, run_bench, jobs, iters, skipWarmup, verbose=0, num_threads=16, gpus=[0]):
     # Generate kernel out of all configs
     generate_kernel(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, jobs, iters, run_bench)
 
@@ -372,9 +372,9 @@ def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type
 
     # precompile the kernels in parallel
     start_time = datetime.now()
-    #if not run_bench:
-    for i in range(jobs):
-        run_bash_command(f"python {generated_kernel_name(M, N, K, i)} -n {num_threads}", capture=(verbose < 2))
+    if not skipWarmup:
+        for i in range(jobs):
+            run_bash_command(f"python {generated_kernel_name(M, N, K, i)} -n {num_threads}", capture=(verbose < 2))
     compile_end = datetime.now()
     compile_time = compile_end - start_time
     if verbose:
@@ -564,6 +564,7 @@ def parse_args():
     parser.add_argument("--jobs", type=int, default=1, help="number of generated files")
     parser.add_argument("--iters", type=int, default=1000, help="number of generated files")
     parser.add_argument("--init_type", type=str, default='randn', help="Initialization type for input matrices (default uniform rand [0, 1.0)])")
+    parser.add_argument("--no_warmup", action='store_true', default=False, help="Do not call the warmup kernel")
     args = parser.parse_args()
 
     return args
@@ -634,6 +635,7 @@ def main():
     run_bench = args.benchmark
     jobs = args.jobs
     iters = args.iters
+    skipWarmup = args.no_warmup
 
     # Get GPU ids
     ngpus = args.ngpus
@@ -718,7 +720,7 @@ def main():
         minTime, bestConfig, compile_time, profile_time, post_time = tune_gemm_config(
                 M, N, K, col_a, col_b, dtype_a,
                 dtype_b, dtype_c, init_type, pruned_configs,
-                run_bench, jobs, iters, num_threads=args.num_threads, gpus=gpus,
+                run_bench, jobs, iters, skipWarmup, num_threads=args.num_threads, gpus=gpus,
                 verbose=verbose_level)
 
         # post processing the numbers
@@ -748,7 +750,8 @@ def main():
             for i in range(jobs):
                 generated_script = generated_kernel_name(M, N, K, i)
                 os.remove(generated_script)
-                os.remove(generated_script + ".failed_configs")
+                if not skipWarmup:
+                    os.remove(generated_script + ".failed_configs")
                 for f in glob.glob(f"results-{i}.*"):
                     os.remove(f)
 
