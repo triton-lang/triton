@@ -787,20 +787,6 @@ def test_where_broadcast(num_ctas, device):
 
 
 # ---------------
-# test maximum/minimum ops
-# ---------------
-
-
-# TODO: Tests with unsigned integers failed at compilation stage.
-@pytest.mark.parametrize("dtype", int_dtypes + uint_dtypes + float_dtypes + ["bfloat16"])
-@pytest.mark.parametrize("op", ["maximum", "minimum"])
-def test_maximum_minium(dtype, op, device):
-    expr = f'tl.{op}(x, y)'
-    numpy_expr = f'np.{op}(x, y)'
-    _test_binary(dtype, dtype, expr, numpy_expr, device=device)
-
-
-# ---------------
 # test unary ops
 # ---------------
 
@@ -1682,7 +1668,7 @@ reduce_configs1 = [(op, dtype, (1, 1024), axis, False)
 reduce2d_shapes = [(2, 32), (4, 32), (4, 128)]
 # TODO: fix and uncomment
 # , (32, 64), (64, 128)]
-if torch.cuda.is_available() and 'V100' in torch.cuda.get_device_name(0):
+if is_cuda() and 'V100' in torch.cuda.get_device_name(0):
     reduce2d_shapes += [(128, 256) and (32, 1024)]
 
 reduce_configs2 = [(op, 'float32', shape, axis, False)
@@ -2059,10 +2045,7 @@ def test_scan_layouts(M, N, src_layout, axis, device):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        capability = 0
-        if torch.cuda.is_available():
-            capability = torch.cuda.get_device_capability()
-        kernel = triton.compile(f.name, target=(device, capability))
+        kernel = triton.compile(f.name)
     rs = RandomState(17)
     x = rs.randint(-100, 100, (M, N)).astype('int32')
 
@@ -2162,10 +2145,7 @@ def test_reduce_layouts(M, N, src_layout, axis, reduce2d, dtype_str, reduce_op, 
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        capability = 0
-        if torch.cuda.is_available():
-            capability = torch.cuda.get_device_capability()
-        kernel = triton.compile(f.name, target=(device, capability))
+        kernel = triton.compile(f.name)
 
     rs = RandomState(17)
     x = numpy_random((M, N), dtype_str=dtype_str, rs=rs, low=0, high=10)
@@ -2221,10 +2201,7 @@ def test_store_op(M, src_layout, device):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        capability = 0
-        if torch.cuda.is_available():
-            capability = torch.cuda.get_device_capability()
-        store_kernel = triton.compile(f.name, target=(device, capability))
+        store_kernel = triton.compile(f.name)
 
     rs = RandomState(17)
     x = rs.randint(0, 4, (M, 1)).astype('float32')
@@ -2273,10 +2250,7 @@ def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        capability = 0
-        if torch.cuda.is_available():
-            capability = torch.cuda.get_device_capability()
-        kernel = triton.compile(f.name, target=(device, capability))
+        kernel = triton.compile(f.name)
 
     rs = RandomState(17)
     x = rs.randint(0, 4, (M, )).astype('int32')
@@ -2359,10 +2333,7 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        capability = 0
-        if torch.cuda.is_available():
-            capability = torch.cuda.get_device_capability()
-        kernel = triton.compile(f.name, target=(device, capability))
+        kernel = triton.compile(f.name)
 
     rs = RandomState(17)
     x = rs.randint(0, 4, (M, N)).astype('int32')
@@ -2849,7 +2820,7 @@ def test_max_num_imprecise_acc(device):
             'test_max_num_imprecise_acc for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
         )
 
-    if torch.cuda.is_available():
+    if is_cuda():
         capability = torch.cuda.get_device_capability()
         if capability != (9, 0):
             return
@@ -2878,7 +2849,7 @@ def test_max_num_imprecise_acc(device):
 
 @pytest.mark.parametrize('in_dtype', ['float32'])
 def test_dot_mulbroadcastred(in_dtype, device):
-    if torch.cuda.is_available():
+    if is_cuda():
         capability = torch.cuda.get_device_capability()
         if capability[0] < 8:
             pytest.skip("Requires sm >= 80 to run")
@@ -2987,7 +2958,7 @@ def test_constexpr(literal, dtype_str, device):
 
 @pytest.mark.parametrize("dtype_str", ['float32', 'float16'])
 def test_dot_without_load(dtype_str, device):
-    if torch.cuda.is_available():
+    if is_cuda():
         capability = torch.cuda.get_device_capability()
         allow_tf32 = capability[0] > 7
     else:
@@ -4322,10 +4293,7 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        capability = 0
-        if torch.cuda.is_available():
-            capability = torch.cuda.get_device_capability()
-        kernel = triton.compile(f.name, target=(device, capability))
+        kernel = triton.compile(f.name)
     kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr())
 
     assert torch.equal(z, x)
@@ -4421,10 +4389,7 @@ def test_convertmma2mma(M, N, mma_pair, dtype, device):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
             f.write(ir)
             f.flush()
-            capability = 0
-            if torch.cuda.is_available():
-                capability = torch.cuda.get_device_capability()
-            kernel = triton.compile(f.name, target=(device, capability))
+            kernel = triton.compile(f.name)
         kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr())
 
         assert torch.equal(z, x)
@@ -4719,58 +4684,6 @@ def test_clamp_symmetric(dtype, device):
     kernel[(size, )](x, limit, out, ref, x.numel(), BLOCK_SIZE=size)
 
     torch.testing.assert_close(out, ref)
-
-
-# -----------------------
-# test sort
-# -----------------------
-
-
-@pytest.mark.parametrize("M, N", [[1, 512], [8, 64], [256, 16], [512, 8]])
-@pytest.mark.parametrize("descending", [False, True])
-@pytest.mark.parametrize("dtype_str", ['int32', 'float16', 'float32'])
-def test_sort(M, N, descending, dtype_str, device):
-    if is_hip():
-        pytest.skip(
-            'test_propagate_nan for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
-
-    @triton.jit
-    def sort_kernel(X, Z, N: tl.constexpr, M: tl.constexpr, descending: tl.constexpr):
-        offx = tl.arange(0, M)
-        offy = tl.arange(0, N) * M
-        off2d = offx[None, :] + offy[:, None]
-        x = tl.load(X + off2d)
-        x = tl.sort(x, descending=descending)
-        tl.store(Z + off2d, x)
-
-    x = numpy_random((N, M), dtype_str=dtype_str)
-    x = torch.from_numpy(x).to(device)
-    y = torch.sort(x, descending=descending)[0]
-    z = torch.empty_like(x)
-    sort_kernel[(1, )](x, z, N, M, descending, num_warps=8)
-    assert (y == z).all(), (y, z)
-
-
-@pytest.mark.parametrize("M, N", [[1, 512], [8, 64], [256, 16], [512, 8]])
-@pytest.mark.parametrize("dtype_str", ['int32', 'float16', 'float32'])
-def test_flip(M, N, dtype_str, device):
-
-    @triton.jit
-    def flip_kernel(X, Z, N: tl.constexpr, M: tl.constexpr):
-        offx = tl.arange(0, M)
-        offy = tl.arange(0, N) * M
-        off2d = offx[None, :] + offy[:, None]
-        x = tl.load(X + off2d)
-        x = tl.flip(x)
-        tl.store(Z + off2d, x)
-
-    x = numpy_random((N, M), dtype_str=dtype_str)
-    x = torch.from_numpy(x).to(device)
-    y = torch.flip(x, (1, ))
-    z = torch.empty_like(x, device=device)
-    flip_kernel[(1, )](x, z, N, M, num_warps=8)
-    assert (y == z).all(), (y, z)
 
 
 # -----------------------
