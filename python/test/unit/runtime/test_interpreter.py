@@ -12,3 +12,6 @@ sys.path.append(TEST_CORE)
 
 
 from test_core import test_bin_op
+
+# turn off
+os.environ['TRITON_INTERPRET'] = '0'
