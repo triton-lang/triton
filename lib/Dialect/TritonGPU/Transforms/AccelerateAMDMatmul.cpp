@@ -129,6 +129,76 @@ warpsPerTileWMMA(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
   return warpsPerTile(dotOp, shape, numWarps, {16, 16});
 }
 
+/**
+ * @brief Convert layout and cast element type of a given tensor
+ *
+ * If old element type is different from new element type, this function
+ * creates two new operations:
+ * 1. %converted_value = layout_convert %value, newEncoding
+ * 2. %casted_value = cast(fext, ftrunc, etc.) %value, newElemType
+ *
+ * If old element type is same as new element type, this function creates only
+ * one operation: %converted_value = layout_convert %value, newEncoding
+ *
+ * @param rewriter
+ * @param value original tensor value, which we need to convert and cast
+ * @param newEncoding new encoding for the tenosr
+ * @param newElemType new element type for the tensor
+ * @return converted and optionaly casted tensor value
+ */
+Value convertAndCastTensor(mlir::PatternRewriter &rewriter, Value value,
+                           ::mlir::Attribute newEncoding, Type newElemType) {
+  assert(newElemType.isIntOrFloat());
+
+  auto loc = value.getLoc();
+  auto oldType = value.getType().cast<RankedTensorType>();
+  auto oldElemType = oldType.getElementType();
+
+  assert(oldElemType.isIntOrFloat());
+  assert(oldElemType.isIntOrIndex() == newElemType.isIntOrIndex());
+
+  auto convertedType =
+      RankedTensorType::get(oldType.getShape(), oldElemType, newEncoding);
+
+  Value convertedTensor =
+      rewriter.create<ttg::ConvertLayoutOp>(loc, convertedType, value);
+
+  if (newElemType == oldElemType)
+    return convertedTensor;
+
+  Type castedType = convertedType.cloneWith(std::nullopt, newElemType);
+
+  Value castedTensor;
+
+  if (newElemType.isIntOrIndex()) {
+    unsigned oldWidth = oldElemType.getIntOrFloatBitWidth();
+    unsigned newWidth = newElemType.getIntOrFloatBitWidth();
+    if (oldWidth == newWidth)
+      castedTensor = rewriter.create<mlir::arith::BitcastOp>(loc, convertedType,
+                                                             convertedTensor);
+    else if (oldWidth > newWidth)
+      castedTensor = rewriter.create<mlir::arith::TruncIOp>(loc, castedType,
+                                                            convertedTensor);
+    else if (oldElemType.isSignedInteger())
+      castedTensor = rewriter.create<mlir::arith::ExtSIOp>(loc, castedType,
+                                                           convertedTensor);
+    else
+      castedTensor = rewriter.create<mlir::arith::ExtUIOp>(loc, castedType,
+                                                           convertedTensor);
+  } else {
+    if (oldElemType.isF16() && newElemType.isF32())
+      castedTensor = rewriter.create<mlir::arith::ExtFOp>(loc, castedType,
+                                                          convertedTensor);
+    else if (oldElemType.isF32() && newElemType.isF16())
+      castedTensor = rewriter.create<mlir::arith::TruncFOp>(loc, castedType,
+                                                            convertedTensor);
+    else
+      castedTensor =
+          rewriter.create<tt::FpToFpOp>(loc, castedType, convertedTensor);
+  }
+  return castedTensor;
+}
+
 class BlockedToMFMA : public mlir::RewritePattern {
   int mfmaVersion;
   int enforcedNonKDim;
@@ -240,13 +310,17 @@ public:
         /*versionMajor*/ mfmaVersion, /*versionMinor*/ 0, warpsPerTile,
         /*instrShape*/ mDim, nDim, isTransposed);
 
-    auto newRetType =
-        RankedTensorType::get(retShape, oldRetType.getElementType(), mfmaEnc);
-
     // convert accumulator
+    Type mfmaAccType;
+    if (oldRetType.getElementType().isIntOrIndex())
+      mfmaAccType = rewriter.getIntegerType(32);
+    else
+      mfmaAccType = rewriter.getF32Type();
+
     auto oldAcc = dotOp.getOperand(2);
-    auto newAcc = rewriter.create<ttg::ConvertLayoutOp>(oldAcc.getLoc(),
-                                                        newRetType, oldAcc);
+    auto newAcc = convertAndCastTensor(rewriter, oldAcc, mfmaEnc, mfmaAccType);
+
+    // convert A/B operands
     auto oldAOrder = oldAType.getEncoding()
                          .cast<ttg::DotOperandEncodingAttr>()
                          .getParent()
@@ -281,12 +355,16 @@ public:
         ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth));
     a = rewriter.create<ttg::ConvertLayoutOp>(a.getLoc(), newAType, a);
     b = rewriter.create<ttg::ConvertLayoutOp>(b.getLoc(), newBType, b);
-    auto newDot = rewriter.create<tt::DotOp>(dotOp.getLoc(), newRetType, a, b,
-                                             newAcc, dotOp.getAllowTF32(),
-					     dotOp.getMaxNumImpreciseAcc());
+    auto newDot = rewriter.create<tt::DotOp>(dotOp.getLoc(), newAcc.getType(),
+                                             a, b, newAcc, dotOp.getAllowTF32(),
+                                             dotOp.getMaxNumImpreciseAcc());
 
-    rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(op, oldRetType,
-                                                      newDot.getResult());
+    Value dotOutput =
+        convertAndCastTensor(rewriter, newDot, oldRetType.getEncoding(),
+                             oldRetType.getElementType());
+
+    rewriter.replaceOp(op, dotOutput);
+
     return success();
   }
 };
