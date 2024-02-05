@@ -357,6 +357,7 @@ bool isSingleValue(Value value) {
 }
 
 bool isExpensiveLoadOrStore(Operation *op) {
+  return true;
   // Case 1: Pointer of tensor is always expensive
   auto operandType = op->getOperand(0).getType();
   if (triton::isTensorPointerType(operandType))
