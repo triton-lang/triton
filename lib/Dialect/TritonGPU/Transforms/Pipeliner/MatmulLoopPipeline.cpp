@@ -315,6 +315,7 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
   auto ty = loadOp.getType().cast<RankedTensorType>();
   Attribute sharedEnc;
   auto CTALayout = ttg::getCTALayout(ty.getEncoding());
+
   if (dotOpEnc) {
     unsigned bitWidth = ty.getElementType().getIntOrFloatBitWidth();
     // set needTrans to avoid unnecessary conversion between shared encodings.
@@ -323,9 +324,15 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
         ttg::getOrder(ty.getEncoding()), CTALayout, bitWidth, needTrans);
   } else {
     // MMAv3
-    sharedEnc = ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(),
-                                             ttg::getOrder(ty.getEncoding()),
-                                             CTALayout, ty.getElementType());
+    if (getenv("HACK_PHASE") && atoi(getenv("HACK_PHASE"))) {
+      sharedEnc = ttg::SharedEncodingAttr::get(ty.getContext(), 1, 1, 1,
+                                            ttg::getOrder(ty.getEncoding()),
+                                            CTALayout, false);
+    } else {
+      sharedEnc = ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(),
+                                              ttg::getOrder(ty.getEncoding()),
+                                              CTALayout, ty.getElementType());
+    }
   }
   SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
   bufferShape.insert(bufferShape.begin(), distance);
@@ -791,7 +798,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     return !isLoadFromTensorPtr(load.load);
   });
   // 2. Convert the loads into async loads and create the allocs.
-  SmallVector<Value> allocs = createAsynOps(forOp, loads, 2, hasMMAV3);
+  SmallVector<Value> allocs = createAsynOps(forOp, loads, 3, hasMMAV3);
 
   // 3. Create the final schedule for the kernel loop. This will dictate the
   // stages and order of operations to the pipeline expander.
