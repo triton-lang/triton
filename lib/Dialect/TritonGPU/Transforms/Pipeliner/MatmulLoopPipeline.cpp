@@ -369,18 +369,13 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
 // the number of stages.
 static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
                                         ArrayRef<LoadDotOperand> loads,
-                                        int numStages, bool hasMMAV3) {
+                                        DenseMap<Operation *, unsigned> loadToNumBuffers,
+                                        bool hasMMAV3) {
   struct AsyncLoad {
     AsyncLoad(tt::LoadOp loadOp, Value alloc) : loadOp(loadOp), alloc(alloc) {}
     tt::LoadOp loadOp;
     Value alloc;
   };
-  int numBuffers = numStages - 1;
-  // For MMAv3 we need an extra buffer as this is assumed in the wgmma
-  // pipelining post-processing.
-  // TODO: Improve modeling of wgmma pipelining.
-  if (hasMMAV3)
-    numBuffers++;
   SmallVector<AsyncLoad> asyncLoads;
   SmallVector<Value> allocs;
   SmallVector<Value> newOperands;
@@ -388,6 +383,7 @@ static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
   bool needsAsyncWait = false;
   for (const LoadDotOperand &loadOperand : loads) {
     tt::LoadOp loadOp = loadOperand.load;
+    unsigned numBuffers = loadToNumBuffers[loadOp];
     Value alloc = createAlloc(forOp, loadOp, loadOperand.dotOperandEncoding,
                               numBuffers, loadOperand.needTrans);
     assert(alloc && "Failed to create alloc for the async load.");
@@ -708,7 +704,7 @@ isScheduleValid(scf::ForOp forOp,
 // create the schedule for a matmul loop. This is ad hoc based on how we know
 // matmul loops should be pipelined and is not a generic scheduler.
 static std::vector<std::pair<Operation *, unsigned>>
-createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
+createSchedule(scf::ForOp forOp, int numStages, DenseMap<Operation *, unsigned> opToStage, bool prefetchExtract) {
   llvm::outs() << "For loop:\n";
   forOp.dump();
 
@@ -880,16 +876,21 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     unsigned useStage = opToStage[opToUse[load.load]];
     unsigned numBuffers = useStage - defStage;
 
-    if (hasMMAV3 && )
+    if (hasMMAV3 && isa<tt::DotOp>(opToUse[load.load])) {
+      // For MMAv3, we need an extra buffer as this is assumed in the wgmma
+      // pipelining post-processing.
+      numBuffers++;
+    }
+    loadToNumBuffers[load.load] = numBuffers;
   }
 
   // 2. Convert the loads into async loads and create the allocs.
-  SmallVector<Value> allocs = createAsynOps(forOp, loads, 3, hasMMAV3);
+  SmallVector<Value> allocs = createAsynOps(forOp, loads, loadToNumBuffers, hasMMAV3);
 
   // 3. Create the final schedule for the kernel loop. This will dictate the
   // stages and order of operations to the pipeline expander.
   std::vector<std::pair<Operation *, unsigned>> schedule =
-      createSchedule(forOp, numStages, /*prefetchExtract=*/!hasMMAV3);
+      createSchedule(forOp, numStages, opToStage, /*prefetchExtract=*/!hasMMAV3);
 
   // 4. Fill out the pipeline options.
   options.getScheduleFn =
