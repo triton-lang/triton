@@ -337,6 +337,7 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
   auto ty = loadOp.getType().cast<RankedTensorType>();
   Attribute sharedEnc;
   auto CTALayout = ttg::getCTALayout(ty.getEncoding());
+
   if (dotOpEnc) {
     unsigned bitWidth = ty.getElementType().getIntOrFloatBitWidth();
     // set needTrans to avoid unnecessary conversion between shared encodings.
@@ -345,9 +346,15 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
         ttg::getOrder(ty.getEncoding()), CTALayout, bitWidth, needTrans);
   } else {
     // MMAv3
-    sharedEnc = ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(),
-                                             ttg::getOrder(ty.getEncoding()),
-                                             CTALayout, ty.getElementType());
+    if (getenv("HACK_PHASE") && atoi(getenv("HACK_PHASE"))) {
+      sharedEnc = ttg::SharedEncodingAttr::get(ty.getContext(), 1, 1, 1,
+                                            ttg::getOrder(ty.getEncoding()),
+                                            CTALayout, false);
+    } else {
+      sharedEnc = ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(),
+                                              ttg::getOrder(ty.getEncoding()),
+                                              CTALayout, ty.getElementType());
+    }
   }
   SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
   bufferShape.insert(bufferShape.begin(), distance);
@@ -808,13 +815,13 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
   std::vector<std::pair<Operation *, unsigned>> schedule;
   // Schedule stage `numStage - 1` first.
   addOps(forOp, numStages - 1, schedule, [&](Operation *op) {
-    return allInsertAndDeps.count(op) == 0 && allStage1Deps.count(op) == 0/* &&
-           extractAndDeps.count(op) == 0*/;
+    return allInsertAndDeps.count(op) == 0 && allStage1Deps.count(op) == 0 &&
+           extractAndDeps.count(op) == 0;
   });
 
   // Schedule some dependencies with distance of 1 into stage 1 to reduce
   // pressure.
-  unsigned stageIdx = numStages - 2;
+  unsigned stageIdx = numStages - 3;
   unsigned stageIncrement =
       ceil<unsigned>(numStages - 2, groupedInsertOps.size());
 
@@ -825,7 +832,7 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
     stageIdx -= stageIncrement;
   }
 
-  stageIdx = numStages - 2;
+  stageIdx = numStages - 3;
   
   for (int i = groupedInsertOps.size()-1; i >= 0; i--) {
     auto &group = insertAndDeps[i];
@@ -836,8 +843,8 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
 
   // Finally schedule the extract ops in stage `numStage - 2` so that they get
   // pre-fetched and play well with pretech pass.
-  /*addOps(forOp, numStages - 2, schedule,
-         [&](Operation *op) { return extractAndDeps.count(op); });*/
+  addOps(forOp, numStages - 2, schedule,
+         [&](Operation *op) { return extractAndDeps.count(op); });
   
   printSchedule(schedule, numStages);
   assert(isScheduleValid(forOp, schedule) && "Invalid schedule.");
@@ -877,7 +884,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   }
 
   // 2. Convert the loads into async loads and create the allocs.
-  SmallVector<Value> allocs = createAsynOps(forOp, loads, 2, hasMMAV3);
+  SmallVector<Value> allocs = createAsynOps(forOp, loads, 3, hasMMAV3);
 
   // 3. Create the final schedule for the kernel loop. This will dictate the
   // stages and order of operations to the pipeline expander.
