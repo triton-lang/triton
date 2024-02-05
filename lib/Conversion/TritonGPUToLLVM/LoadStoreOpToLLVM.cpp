@@ -1429,6 +1429,11 @@ struct InsertSliceAsyncOpConversion
             ptxBuilder.newAddrOperand(srcElems[elemIdx + wordElemIdx], "l");
         auto *copySize = ptxBuilder.newConstantOperand(byteWidth);
         auto *srcSize = copySize;
+        
+        
+        auto threadId = getThreadId(rewriter, loc);
+        Value pred = icmp_slt(threadId, i32_val(srcShape[0]));
+        
         if (op.getMask()) {
           // We don't use predicate in this case, setting src-size to 0
           // if there's any mask. cp.async will automatically fill the
@@ -1438,7 +1443,18 @@ struct InsertSliceAsyncOpConversion
                                  i32_val(byteWidth), i32_val(0));
           srcSize = ptxBuilder.newOperand(selectOp, "r");
         }
-        copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
+        bool applyPred = false;
+        if (getenv("PRED_HACK") && atoi(getenv("PRED_HACK")) == 1) {
+          llvm::outs() << "PRED_HACK\n";
+          applyPred = srcShape.size() == 1;
+        }
+        
+        if (applyPred)
+        {
+          copyAsyncOp(dstOperand, srcOperand, copySize, srcSize).predicate(pred);
+        } else {
+          copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
+        }
         ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
       }
     }
