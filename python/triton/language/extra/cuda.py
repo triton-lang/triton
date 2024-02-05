@@ -16,3 +16,8 @@ def smid(_builder=None):
 @core.builtin
 def num_threads(_builder=None):
     return core.constexpr(_builder.options.num_warps * 32)
+
+
+@core.builtin
+def num_warps(_builder=None):
+    return core.constexpr(_builder.options.num_warps)
