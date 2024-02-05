@@ -48,15 +48,26 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
 
   // Extract part.
   auto allocType = alloc.getType().cast<RankedTensorType>();
+  auto rank = allocType.getShape().size();
+  SmallVector<long int> sliceShape;
+  for (unsigned i = 1; i < rank; ++i)
+    sliceShape.push_back(allocType.getShape()[i]);
   RankedTensorType sliceType = RankedTensorType::get(
-      {allocType.getShape()[1], allocType.getShape()[2]},
-      allocType.getElementType(), allocType.getEncoding());
+      sliceShape, allocType.getElementType(), allocType.getEncoding());
+  SmallVector<OpFoldResult> sliceOffsets, sliceSizes, sliceStrides;
+  for (unsigned i = 0; i < rank; ++i) {
+    if (i == 0) {
+      sliceOffsets.push_back(extractIdx);
+      sliceSizes.push_back(int_attr(1));
+    } else {
+      sliceOffsets.push_back(int_attr(0));
+      sliceSizes.push_back(int_attr(sliceType.getShape()[i - 1]));
+    }
+    sliceStrides.push_back(int_attr(1));
+  }
   auto extract = builder.create<ttg::ExtractSliceOp>(
-      loc, sliceType, insertOp.getResult(),
-      SmallVector<OpFoldResult>{extractIdx, int_attr(0), int_attr(0)},
-      SmallVector<OpFoldResult>{int_attr(1), int_attr(sliceType.getShape()[0]),
-                                int_attr(sliceType.getShape()[1])},
-      SmallVector<OpFoldResult>{int_attr(1), int_attr(1), int_attr(1)});
+      loc, sliceType, insertOp.getResult(), sliceOffsets, sliceSizes,
+      sliceStrides);
   auto newCvt = builder.create<ttg::ConvertLayoutOp>(
       loadOp->getLoc(), loadOp.getType(), extract.getResult());
   loadOp->replaceAllUsesWith(newCvt->getResults());
@@ -285,17 +296,29 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
   auto ty = loadOp.getType().cast<RankedTensorType>();
   Attribute sharedEnc;
   auto CTALayout = ttg::getCTALayout(ty.getEncoding());
+  auto blockedOrder = ttg::getOrder(ty.getEncoding());
+  SmallVector<unsigned> sharedOrder;
+  if (blockedOrder.size() == 3) {
+    for (unsigned i = 0; i < blockedOrder.size(); ++i) {
+      if (blockedOrder[i] == 0)
+        continue;
+      sharedOrder.push_back(blockedOrder[i]);
+    }
+    sharedOrder.push_back(0);
+  } else {
+    sharedOrder = blockedOrder;
+  }
+  ArrayRef<unsigned> order = sharedOrder;
   if (dotOpEnc) {
     unsigned bitWidth = ty.getElementType().getIntOrFloatBitWidth();
     // set needTrans to avoid unnecessary conversion between shared encodings.
-    sharedEnc = ttg::SharedEncodingAttr::get(
-        ty.getContext(), dotOpEnc, ty.getShape(),
-        ttg::getOrder(ty.getEncoding()), CTALayout, bitWidth, needTrans);
+    sharedEnc =
+        ttg::SharedEncodingAttr::get(ty.getContext(), dotOpEnc, ty.getShape(),
+                                     order, CTALayout, bitWidth, needTrans);
   } else {
     // MMAv3
-    sharedEnc = ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(),
-                                             ttg::getOrder(ty.getEncoding()),
-                                             CTALayout, ty.getElementType());
+    sharedEnc = ttg::SharedEncodingAttr::get(
+        ty.getContext(), ty.getShape(), order, CTALayout, ty.getElementType());
   }
   SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
   bufferShape.insert(bufferShape.begin(), distance);
