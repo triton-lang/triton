@@ -306,6 +306,14 @@ compared to 1*64 when the hasLeadingOffset is false.
         if (contigDimSizeInByte >= 128 && contigDimSizeInByte % 128 == 0) {
           perPhase = 1;
           maxPhase = 8;
+          if (getenv("PHASE_HACK_P")) {
+            llvm::outs() << "PHASE_HACK_P\n";
+            perPhase = atoi(getenv("PHASE_HACK_P"));
+          }
+          if (getenv("PHASE_HACK_M")) {
+            llvm::outs() << "PHASE_HACK_M\n";
+            maxPhase = atoi(getenv("PHASE_HACK_M"));
+          }
         } else if (contigDimSizeInByte >= 64 && contigDimSizeInByte % 64 == 0) {
           perPhase = 2;
           maxPhase = 4;
