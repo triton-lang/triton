@@ -1,4 +1,6 @@
 # flake8: noqa: F821,F841
+import os
+import functools
 import itertools
 import re
 from typing import Optional, Union
@@ -35,6 +37,19 @@ if is_hip():
     THREADS_PER_WARP = 64
 else:
     THREADS_PER_WARP = 32
+
+
+def add_interpreter_test(func):
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        func(*args, **kwargs)  # run regular
+
+        os.environ['TRITON_INTERPRET'] = '1'
+        func(*args, **kwargs)  # run interpreter mode
+        os.environ['TRITON_INTERPRET'] = '0'
+
+    return wrapper
 
 
 def _bitwidth(dtype: str) -> int:
@@ -319,8 +334,7 @@ def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
 # ---------------
 # test binary ops
 # ---------------
-
-
+@add_interpreter_test
 @pytest.mark.parametrize("dtype_x, dtype_y, op", [  #
     (dtype_x, dtype_y, op)
     for op in ['+', '-', '*', '/', '%']
