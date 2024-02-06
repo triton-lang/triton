@@ -15,11 +15,6 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-constexpr ::llvm::StringLiteral kAttrNumTMALoadDescsName =
-    "triton_gpu.num-tma-load";
-constexpr ::llvm::StringLiteral kAttrNumTMAStoreDescsName =
-    "triton_gpu.num-tma-store";
-
 // Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
 // Operators
 #define inttoptr(...) rewriter.create<LLVM::IntToPtrOp>(loc, __VA_ARGS__)
@@ -417,12 +412,6 @@ static Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) {
     tid = rewriter.create<arith::RemSIOp>(loc, tid, _128);
   }
   return tid;
-}
-
-static Value GetCanonicalWarpId(ConversionPatternRewriter &rewriter,
-                                Location loc) {
-  return rewriter.create<triton::nvgpu::CanonicalWarpIdOp>(
-      loc, rewriter.getI32Type());
 }
 
 static Value getClusterCTAId(ConversionPatternRewriter &rewriter,

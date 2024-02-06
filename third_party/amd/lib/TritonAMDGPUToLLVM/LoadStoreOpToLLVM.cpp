@@ -6,7 +6,6 @@
 #include "Utility.h"
 
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 
 #include <numeric>
 
@@ -26,21 +25,6 @@ using ::AMD::ConvertTritonGPUOpToLLVMPattern;
 
 
 namespace {
-static CUtensorMapDataType getCUtensorMapDataType(Type ty) {
-  if (ty.isF16()) {
-    return CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_FLOAT16;
-  } else if (ty.isBF16()) {
-    return CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_BFLOAT16;
-  } else if (ty.isF32()) {
-    return CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_FLOAT32;
-  } else if (ty.getIntOrFloatBitWidth() == 8) {
-    return CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_UINT8;
-  } else {
-    llvm::report_fatal_error("Unsupported elemTy for InsertSliceTMAOp");
-    return CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_FLOAT16;
-  }
-}
-
 // Contains some helper functions for both Load and Store conversions.
 struct LoadStoreConversionBase {
   explicit LoadStoreConversionBase(ModuleAxisInfoAnalysis &axisAnalysisPass)

@@ -53,7 +53,6 @@ jobs:
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
         run: |
           echo "BACKEND=CUDA" >> "${GITHUB_ENV}"
-          echo "ENABLE_TMA=0" >> "${GITHUB_ENV}"
           echo "TRITON_DISABLE_LINE_INFO=1" >> "${GITHUB_ENV}"
 
       - name: Clear cache
@@ -94,13 +93,8 @@ jobs:
           fi
           lit -v "${LIT_TEST_DIR}"
 
-      - name: Enable TMA
-        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'H100')}}
-        run: |
-          echo "ENABLE_TMA=1" >> "${GITHUB_ENV}"
-
-      - name: Run python tests on CUDA with ENABLE_TMA=1
-        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '1'}}
+      - name: Run python tests on CUDA
+        if: ${{ env.BACKEND == 'CUDA' }}
         run: |
           cd python/test/unit
           python3 -m pytest -vvv -n 8 --ignore=runtime --ignore=operators --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
@@ -111,16 +105,6 @@ jobs:
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -vvv language/test_line_info.py
           #run hopper/test_flashattention.py to avoid out of gpu memory
           python3 -m pytest -vvv hopper/test_flashattention.py
-
-      - name: Run python tests on CUDA with ENABLE_TMA=0
-        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '0'}}
-        run: |
-          cd python/test/unit
-          python3 -bb -m pytest -vvv -n 8 --ignore=runtime --ignore=hopper --ignore=operators --ignore=language/test_line_info.py
-          # run runtime tests serially to avoid race condition with cache handling.
-          python3 -m pytest -vvv runtime/
-          # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -vvv language/test_line_info.py
 
       - name: Clear cache
         run: |
@@ -134,14 +118,8 @@ jobs:
           cd python/test/unit
           python3 -m pytest -vvv -s operators/test_flash_attention.py
 
-      - name: Run partial tests on CUDA with ENABLE_TMA=1
-        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '1'}}
-        run: |
-          cd python/test/unit
-          python3 -m pytest -vvv -n 8 operators
-
-      - name: Run partial tests on CUDA with ENABLE_TMA=0
-        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '0'}}
+      - name: Run partial tests on CUDA
+        if: ${{ env.BACKEND == 'CUDA' }}
         run: |
           cd python/test/unit
           python3 -m pytest -vvv -n 8 operators

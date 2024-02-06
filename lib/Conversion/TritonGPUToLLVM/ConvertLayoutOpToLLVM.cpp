@@ -3,7 +3,6 @@
 
 #include "triton/Analysis/Allocation.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
@@ -626,23 +625,7 @@ private:
       auto multiDimRepId =
           getMultiDimIndex<unsigned>(repId, numReplicates, outOrd);
       if (repId != 0) {
-        // TODO[shuhaoj]: change hard code style of numThreads. Hide async
-        // attr.  Better way to determine barId (number of agents are limited).
-        if (auto optionalAgentId = getWSAgentId(op)) {
-          int agentId = *optionalAgentId, roleId = 0;
-          if (auto optionalRoleId = getWSRoleId(op))
-            roleId = *optionalRoleId;
-          int barId = agentId + roleId + nameBarrierIdBegin;
-          assert(barId < nameBarrierIdEnd);
-          auto bar = rewriter.create<LLVM::ConstantOp>(
-              loc, i32_ty, rewriter.getI32IntegerAttr(barId));
-          auto kNumThreads = rewriter.create<LLVM::ConstantOp>(
-              loc, i32_ty, rewriter.getI32IntegerAttr(128));
-          rewriter.create<triton::nvgpu::NamedBarrierWaitOp>(loc, bar,
-                                                             kNumThreads);
-        } else {
-          barrier();
-        }
+        barrier();
       }
       if (srcLayout.isa<BlockedEncodingAttr>() ||
           srcLayout.isa<SliceEncodingAttr>() ||
@@ -666,23 +649,7 @@ private:
         return failure();
       }
 
-      // TODO[shuhaoj]: change hard code style of numThreads. Hide async_agent
-      // attr.  Better way to determine barId (number of agents are limited).
-      if (auto optionalAgentId = getWSAgentId(op)) {
-        int agentId = *optionalAgentId, roleId = 0;
-        if (auto optionalRoleId = getWSRoleId(op))
-          roleId = *optionalRoleId;
-        int barId = agentId + roleId + nameBarrierIdBegin;
-        assert(barId < nameBarrierIdEnd);
-        auto bar = rewriter.create<LLVM::ConstantOp>(
-            loc, i32_ty, rewriter.getI32IntegerAttr(barId));
-        auto kNumThreads = rewriter.create<LLVM::ConstantOp>(
-            loc, i32_ty, rewriter.getI32IntegerAttr(128));
-        rewriter.create<triton::nvgpu::NamedBarrierWaitOp>(loc, bar,
-                                                           kNumThreads);
-      } else {
-        barrier();
-      }
+      barrier();
       if (dstLayout.isa<BlockedEncodingAttr>() ||
           dstLayout.isa<SliceEncodingAttr>() ||
           dstLayout.isa<NvidiaMmaEncodingAttr>()) {

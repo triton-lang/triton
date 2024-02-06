@@ -49,10 +49,7 @@ public:
     // register pressure
     DenseMap<Operation *, Operation *> opToMove;
     auto moveAfter = [](Operation *lhs, Operation *rhs) {
-      auto lhsId = getWSRoleId(lhs);
-      auto rhsId = getWSRoleId(rhs);
-      if (lhsId == rhsId)
-        lhs->moveAfter(rhs);
+      lhs->moveAfter(rhs);
     };
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
       if (!willIncreaseRegisterPressure(op))

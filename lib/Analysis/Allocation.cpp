@@ -155,12 +155,6 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   return repShape;
 }
 
-SmallVector<unsigned>
-getScratchConfigForStoreAsync(triton::nvidia_gpu::StoreAsyncTMAOp op) {
-  auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
-  return convertType<unsigned, int64_t>(getShapePerCTA(srcTy));
-}
-
 // TODO: extend beyond scalars
 SmallVector<unsigned> getScratchConfigForAtomicRMW(triton::AtomicRMWOp op) {
   SmallVector<unsigned> smemShape;
@@ -236,13 +230,6 @@ private:
                                                              kAlignment);
       }
     }
-    if (isa<triton::nvidia_gpu::AllocMBarrierOp>(op)) {
-      Value result = op->getResult(0);
-      if (!result.getType().isa<RankedTensorType>())
-        // In case AllocMBarrierOp is allocating scalar mbarriers
-        allocation->addBuffer<BufferT::BufferKind::Explicit>(result, 8,
-                                                             kAlignment);
-    }
   }
 
   template <BufferT::BufferKind T>
@@ -304,18 +291,6 @@ private:
               : elems * std::max<int>(8, srcTy.getElementTypeBitWidth()) / 8;
       maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
                                                           scratchAlignment);
-    } else if (auto storeAsyncOp =
-                   dyn_cast<triton::nvidia_gpu::StoreAsyncTMAOp>(op)) {
-      auto srcTy = storeAsyncOp.getSrc().getType().cast<RankedTensorType>();
-      auto srcEncoding = srcTy.getEncoding();
-      if (!srcEncoding.isa<NvidiaMmaEncodingAttr>()) {
-        return;
-      }
-      auto smemShape = getScratchConfigForStoreAsync(storeAsyncOp);
-      unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
-                                       std::multiplies{});
-      auto bytes = elems * std::max<int>(8, srcTy.getElementTypeBitWidth()) / 8;
-      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes, 1024);
     } else if (auto atomicRMWOp = dyn_cast<triton::AtomicRMWOp>(op)) {
       auto value = op->getOperand(0);
       // only scalar requires scratch memory
@@ -479,13 +454,6 @@ private:
     // Analyze liveness of explicit buffers
     Liveness liveness(operation);
     auto getValueLivenessRange = [&](Value value) {
-      // TODO(Keren): Investigate mbarrier and figure out how to clean this up
-      // Shared memory allocated by mbarrier cannot be reused
-      if (value.getDefiningOp() &&
-          isa<triton::nvidia_gpu::AllocMBarrierOp>(value.getDefiningOp()))
-        return Interval(std::numeric_limits<size_t>::min(),
-                        std::numeric_limits<size_t>::max());
-
       auto liveOperations = liveness.resolveLiveness(value);
       auto minId = std::numeric_limits<size_t>::max();
       auto maxId = std::numeric_limits<size_t>::min();
