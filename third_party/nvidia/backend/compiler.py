@@ -447,11 +447,9 @@ class CUDABackend(BaseBackend):
             nvidia.passes.ttnvgpuir.add_wsmaterialization(pm, capability)
             passes.common.add_licm(pm)
             passes.common.add_cse(pm)
-        else:
+        elif capability // 10 >= 8:
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.num_warps, opt.num_ctas, capability)
         nvidia.passes.ttnvgpuir.add_materialize_load_store(pm, opt.num_warps, capability)
-        if capability // 10 <= 8:
-            passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
