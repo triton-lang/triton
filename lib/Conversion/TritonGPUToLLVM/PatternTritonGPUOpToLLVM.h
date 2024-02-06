@@ -3,7 +3,6 @@
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Target/PTX/TmaMetadata.h"
 
 typedef llvm::DenseMap<mlir::Operation *, mlir::triton::MakeTensorPtrOp>
     TensorPtrMapT;
@@ -36,21 +35,15 @@ void populateHistogramOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        RewritePatternSet &patterns,
                                        PatternBenefit benefit);
 
-void populateLoadStoreOpToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    mlir::triton::gpu::TMAMetadataTy *tmaMetadata,
-    const TensorPtrMapT *tensorPtrMap, PatternBenefit benefit);
+void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                       RewritePatternSet &patterns,
+                                       ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                       PatternBenefit benefit);
 
 void populateReduceOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                     RewritePatternSet &patterns,
                                     int computeCapability,
                                     PatternBenefit benefit);
-
-void populateRegReallocOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                        RewritePatternSet &patterns,
-                                        PatternBenefit benefit);
-
 void populateScanOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns,
                                   PatternBenefit benefit);
