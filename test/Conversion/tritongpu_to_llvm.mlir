@@ -712,21 +712,9 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
   tt.func @convert_layout_blocked_blocked(%arg0: tensor<16x16xf32, #blocked0>) {
     // CHECK: llvm.mlir.addressof @global_smem
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
+    // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
+    // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
     // CHECK: nvvm.barrier0
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
