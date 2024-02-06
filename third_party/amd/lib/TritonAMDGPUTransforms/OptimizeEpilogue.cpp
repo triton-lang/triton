@@ -55,7 +55,8 @@ bool isOneOperandElementwiseOp(Operation *op) {
                 triton::FpToFpOp>(op))
     return true;
   if (auto externElementwiseOp = dyn_cast<triton::ExternElementwiseOp>(op))
-    return externElementwiseOp.getPure();
+    return op->getNumOperands() == 1 &&
+           op->getNumResults() == 1 & externElementwiseOp.getPure();
   return false;
 }
 
