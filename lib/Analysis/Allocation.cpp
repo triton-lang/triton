@@ -102,6 +102,7 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   auto repShape = getRepShapeForCvtLayout(op);
   if (repShape.empty())
     return repShape;
+  auto rank = repShape.size();
 
   auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
   auto dstTy = op.getResult().getType().cast<RankedTensorType>();
@@ -143,9 +144,10 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
     if (mma.getVersionMajor() == 1)
       inVec = srcContigPerThread[inOrd[0]];
 
-  if (repShape.size() <= 1)
+  if (rank <= 1)
     return repShape;
-  unsigned paddedDim = 1;
+  // pad the last dimension
+  unsigned paddedDim = rank - 1;
   if (auto dstBlockedLayout = dstLayout.dyn_cast<BlockedEncodingAttr>()) {
     paddedDim = dstBlockedLayout.getOrder()[0];
   }
