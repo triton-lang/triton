@@ -11,6 +11,8 @@ target_link_libraries(triton-opt PRIVATE
   TritonTransforms
   TritonGPUTransforms
   TritonNvidiaGPUTransforms
+  TritonAMDGPUTransforms
+  TritonAMDGPUToLLVM
   ${dialect_libs}
   ${conversion_libs}
   ${triton_libs}
@@ -34,6 +36,8 @@ target_link_libraries(triton-reduce PRIVATE
   TritonTransforms
   TritonGPUTransforms
   TritonNvidiaGPUTransforms
+  TritonAMDGPUTransforms
+  TritonAMDGPUToLLVM
   ${dialect_libs}
   ${conversion_libs}
   ${triton_libs}
@@ -56,6 +60,8 @@ target_link_libraries(triton-lsp PRIVATE
   TritonTransforms
   TritonGPUTransforms
   TritonNvidiaGPUTransforms
+  TritonAMDGPUTransforms
+  TritonAMDGPUToLLVM
   ${dialect_libs}
   ${conversion_libs}
   ${triton_libs}

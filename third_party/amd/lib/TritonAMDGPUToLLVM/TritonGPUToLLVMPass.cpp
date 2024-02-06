@@ -47,6 +47,7 @@
 namespace mlir {
 namespace triton {
 #define GEN_PASS_DEF_CONVERTTRITONAMDGPUTOLLVM
+//#define GEN_PASS_DECL_CONVERTTRITONAMDGPUTOLLVM
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
 } // namespace triton
 } // namespace mlir

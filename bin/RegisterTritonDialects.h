@@ -4,6 +4,9 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
+#include "TritonAMDGPUToLLVM/Passes.h"
+#include "TritonAMDGPUTransforms/Passes.h"
+#include "TritonAMDGPUTransforms/TritonGPUConversion.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
@@ -41,6 +44,30 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerConvertTritonGPUToLLVMPass();
   mlir::triton::registerConvertNVGPUToLLVMPass();
   mlir::registerLLVMDIScope();
+
+  // AMD GPU specific passes registration
+  mlir::triton::registerConvertTritonAMDGPUToLLVM();
+
+  // TODO: Uncomment when fixed undefined symbols(see below)
+  // mlir::registerTritonAMDGPUPasses();
+
+  // TODO: remove section below when line above works
+  mlir::registerTritonAMDGPUAccelerateMatmul();
+  // FIXME: createTritonAMDGPUCoalesce is not defined
+  // mlir::registerTritonAMDGPUCoalesce();
+  mlir::registerTritonAMDGPUDecomposeConversions();
+  // FIXME: createTritonAMDGPUOptimizeDotOperands is not defined
+  // mlir::registerTritonAMDGPUOptimizeDotOperands();
+  mlir::registerTritonAMDGPUOptimizeEpilogue();
+  // FIXME: createTritonAMDGPUPipeline is not defined
+  // mlir::registerTritonAMDGPUPipeline();
+  // FIXME: createTritonAMDGPUPrefetch is not defined
+  // mlir::registerTritonAMDGPUPrefetch();
+  mlir::registerTritonAMDGPURemoveLayoutConversions();
+  mlir::registerTritonAMDGPUReorderInstructions();
+  mlir::registerTritonAMDGPUStreamPipeline();
+
+  // End of AMD GPU specific passes registration
 
   // TODO: register Triton & TritonGPU passes
   registry.insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
