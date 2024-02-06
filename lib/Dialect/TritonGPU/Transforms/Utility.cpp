@@ -63,10 +63,6 @@ bool isLoadFromTensorPtr(triton::LoadOp op) {
   return mlir::triton::isTensorPointerType(op.getPtr().getType());
 }
 
-bool isStoreToTensorPtr(triton::StoreOp op) {
-  return mlir::triton::isTensorPointerType(op.getPtr().getType());
-}
-
 Operation *getFirstUser(Value v) {
   DenseMap<Operation *, size_t> operationId;
   v.getParentBlock()->walk<WalkOrder::PostOrder>(

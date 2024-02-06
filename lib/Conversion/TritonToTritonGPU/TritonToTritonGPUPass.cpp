@@ -10,7 +10,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
-#include "triton/Target/PTX/TmaMetadata.h"
 #include "llvm/ADT/APSInt.h"
 #include <numeric>
 
@@ -221,7 +220,7 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
     int numCTAs = typeConverter->getNumCTAs();
     auto rank = origShape.size();
     SmallVector<unsigned> retSizePerThread(rank, 1);
-    auto numElements = product<long int>(origShape);
+    auto numElements = product<int64_t>(origShape);
     if (numElements / (numWarps * threadsPerWarp) >= 4) {
       retSizePerThread[rank - 1] = 2;
       retSizePerThread[rank - 2] = 2;

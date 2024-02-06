@@ -47,15 +47,6 @@ class CudaUtils(object):
         mod = compile_module_from_src(Path(os.path.join(dirname, "driver.c")).read_text(), "cuda_utils")
         self.load_binary = mod.load_binary
         self.get_device_properties = mod.get_device_properties
-        self.CUtensorMapDataType = mod.CUtensorMapDataType
-        self.CUtensorMapInterleave = mod.CUtensorMapInterleave
-        self.CUtensorMapSwizzle = mod.CUtensorMapSwizzle
-        self.CUtensorMapL2promotion = mod.CUtensorMapL2promotion
-        self.CUtensorMapFloatOOBfill = mod.CUtensorMapFloatOOBfill
-        self.cuTensorMapEncodeTiled = mod.cuTensorMapEncodeTiled
-        self.cuMemAlloc = mod.cuMemAlloc
-        self.cuMemcpyHtoD = mod.cuMemcpyHtoD
-        self.cuMemFree = mod.cuMemFree
         self.cuOccupancyMaxActiveClusters = mod.cuOccupancyMaxActiveClusters
 
 
@@ -83,19 +74,10 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-def generate_cu_signature(constants, signature, ids):
-    # CUtensorMap*s are always the last arguments
-    num_regular_signatures = max(signature.keys()) + 1 if len(signature) > 0 else 0
-    if ids["ids_of_tensormaps"] is not None:
-        for i, _ in enumerate(ids["ids_of_tensormaps"]):
-            signature[num_regular_signatures + i] = '*CUtensorMap'
-    return signature, num_regular_signatures
-
 
 def make_launcher(constants, signature, ids):
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
-    signature, desc_start_idx = generate_cu_signature(constants, signature, ids)
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
     def _extracted_type(ty):
@@ -129,10 +111,9 @@ def make_launcher(constants, signature, ids):
     format = "iiiiiiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
 
     # generate glue code
-    folded_without_constexprs = [c for c in ids['ids_of_folded_args'] if c not in ids['ids_of_const_exprs']]
     params = [
         i for i in signature.keys()
-        if i >= desc_start_idx or (i not in constants and i not in folded_without_constexprs)
+        if i not in constants
     ]
     src = f"""
 #include \"cuda.h\"
@@ -330,12 +311,9 @@ class CudaLauncher(object):
 
     def __init__(self, src, metadata):
         ids = {
-            "ids_of_tensormaps": metadata.ids_of_tensormaps,
-            "ids_of_folded_args": metadata.ids_of_folded_args,
             "ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()
         }
         constants = src.constants if hasattr(src, "constants") else dict()
-        enable_warp_specialization = False
         src = make_launcher(constants, src.signature, ids)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
@@ -344,39 +322,10 @@ class CudaLauncher(object):
         self.launch(*args, **kwargs)
 
 
-# ------------------------
-# Tensor Map
-# ------------------------
-
-
-class TensorMapManager:
-
-    def __init__(self, utils):
-        self.tensormaps_device = {}
-        self.utils = utils
-
-    def __getitem__(self, key: tuple):
-        if key in self.tensormaps_device:
-            return int(self.tensormaps_device[key])
-        else:
-            (e, args) = key
-            t_tensormap = e.tensormap(args)
-            TENSORMAP_SIZE_IN_BYTES = 128
-            t_tensormap_device = self.utils.cuMemAlloc(TENSORMAP_SIZE_IN_BYTES)
-            self.utils.cuMemcpyHtoD(t_tensormap_device, t_tensormap, TENSORMAP_SIZE_IN_BYTES)
-            self.tensormaps_device[key] = t_tensormap_device
-            return int(self.tensormaps_device[key])
-
-    def __del__(self):
-        for _, v in self.tensormaps_device.items():
-            self.utils.cuMemFree(v)
-
-
 class CudaDriver(GPUDriver):
 
     def __init__(self):
         self.utils = CudaUtils()  # TODO: make static
-        self.tensormap_manager = TensorMapManager(self.utils)  # TODO: make static
         self.binary_ext = "cubin"
         self.launcher_cls = CudaLauncher
         super().__init__()
@@ -391,12 +340,3 @@ class CudaDriver(GPUDriver):
     def is_active():
         import torch
         return torch.cuda.is_available() and (torch.version.hip is None)
-
-    def assemble_tensormap_to_arg(self, tensormaps_info, args):
-        args_with_tma = list(args)
-        if tensormaps_info is not None:
-            # tuple for hashable
-            args_ptr = tuple([arg.data_ptr() if hasattr(arg, 'data_ptr') else arg for arg in args])
-            for i, e in enumerate(tensormaps_info):
-                args_with_tma.append(self.tensormap_manager[(e, args_ptr)])
-        return args_with_tma
