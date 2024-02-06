@@ -21,8 +21,6 @@ class HIPOptions:
     debug: bool = False
     arch: str = None
     allow_fp8e4nv: bool = False
-    # TODO: deprecate when hook interface has changed
-    enable_warp_specialization: bool = False
     enable_fp_fusion: bool = True
     capability: int = None
     # TODO:

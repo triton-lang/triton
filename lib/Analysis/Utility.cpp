@@ -378,9 +378,7 @@ bool maybeSharedAllocationOp(Operation *op) {
 
 bool maybeAliasOp(Operation *op) {
   return isa<triton::gpu::ExtractSliceOp, triton::TransOp,
-             triton::gpu::InsertSliceAsyncOp,
-             triton::nvidia_gpu::InsertSliceTMAOp,
-             triton::nvidia_gpu::StoreAsyncTMAOp, tensor::InsertSliceOp>(op);
+             triton::gpu::InsertSliceAsyncOp, tensor::InsertSliceOp>(op);
 }
 
 static bool supportMFMAGranularity(int m, int n, int k) {
