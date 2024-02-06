@@ -24,9 +24,25 @@ class HIPOptions:
     enable_fp_fusion: bool = True
     capability: int = None
     # TODO:
-    matrix_core_version: int = 2
+    matrix_core_version: int = -1
     matrix_inst_shape: int = 0
     max_num_imprecise_acc_default: int = 0
+
+    @staticmethod
+    def get_matrix_core_version(arch: str) -> int:
+        """ Determine matrix core type available on current GPU.
+            0 means no tensor cores are available
+            1 corresponds to MFMA in CDNA 1 architecture
+            2 corresponds to MFMA in CDNA 2 architecture
+            3 corresponds to MFMA in CDNA 3 architecture
+        """
+        if arch in ['gfx908']:
+            return 1
+        if arch in ['gfx90a']:
+            return 2
+        if arch in ['gfx940', 'gfx941', 'gfx942']:
+            return 3
+        return 0
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -41,6 +57,8 @@ class HIPOptions:
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
                "num_warps must be a power of 2"
+        if(self.matrix_core_version == -1):
+            object.__setattr__(self, 'matrix_core_version', self.get_matrix_core_version(self.arch))
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
