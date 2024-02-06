@@ -268,12 +268,13 @@ static std::optional<LoadDotOperand> loadDotOperand(tt::LoadOp loadOp,
 // TODO: check if we can consolidate this with the addDep function.
 static void recursiveLoadHelper(Operation *op, DenseSet<Operation *> &seen,
                             DenseMap<Operation*, std::pair<unsigned, Operation*>> &loadOpToDistance,
-                            unsigned distance = 0) {
+                            unsigned distance, Operation *use) {
   if (!seen.insert(op).second)
     return;
   unsigned d = distance;
   if (isa<tt::LoadOp>(op)) {
-    loadOpToDistance[op] = std::make_pair(distance, op);
+    loadOpToDistance[op] = std::make_pair(distance, use);
+    use = op;
     d = distance + 1;
   }
   for (Value operand : op->getOperands()) {
@@ -291,7 +292,7 @@ static void recursiveLoadHelper(Operation *op, DenseSet<Operation *> &seen,
     }
     Operation *defOp = v.getDefiningOp();
     if (defOp && defOp->getBlock() == op->getBlock()) {
-      recursiveLoadHelper(defOp, seen, loadOpToDistance, d);
+      recursiveLoadHelper(defOp, seen, loadOpToDistance, d, use);
     }
   }
 }
@@ -306,7 +307,7 @@ loadOpsToDistanceAndUse(scf::ForOp forOp) {
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (!isa<tt::DotOp>(op))
       continue;
-    recursiveLoadHelper(&op, seen, loadOpToDistanceAndUse);
+    recursiveLoadHelper(&op, seen, loadOpToDistanceAndUse, 0, &op);
   }
   return loadOpToDistanceAndUse;
 }
@@ -708,17 +709,12 @@ createSchedule(scf::ForOp forOp, int numStages, DenseMap<Operation *, unsigned> 
     }
   }
 
-  DenseSet<Operation *> insertOps;
   DenseSet<Operation *> extractOps;
   // Find the insert/extract ops that will go respectively in stage 0 and stage
   // `numStages - 2`. All the other operations will go in stage `numStages - 1`.
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (isa<ttng::MBarrierArriveOp>(op)) {
       assert(false && "MBarrierArriveOp has not been supported yet!");
-    }
-    if (isa<ttg::InsertSliceAsyncOp, ttng::InsertSliceTMAOp,
-            ttg::AsyncCommitGroupOp>(op)) {
-      insertOps.insert(&op);
     }
     if (prefetchExtract) {
       if (isa<ttg::ExtractSliceOp, ttg::AsyncWaitOp>(op))
@@ -731,12 +727,22 @@ createSchedule(scf::ForOp forOp, int numStages, DenseMap<Operation *, unsigned> 
     }
   };
 
+  SmallVector<DenseSet<Operation *>> insertOps(numStages);
+  for (auto& [op, stage] : opToStage) {
+    if (isa<ttg::InsertSliceAsyncOp, ttng::InsertSliceTMAOp, ttg::AsyncCommitGroupOp>(op)) {
+      insertOps[stage].insert(op);
+    }
+  }
+
   // Inserts and dependencies grouped by stage.
   SmallVector<DenseSet<Operation *>> insertAndDeps(numStages);
   DenseSet<Operation *> seen;
-  for (auto& [op, stage] : opToStage) {
-    addDep(op, insertAndDeps[stage], false, &seen);
-    seen.insert(insertAndDeps[stage].begin(), insertAndDeps[stage].end());
+  for (int stage=0; stage<numStages; stage++) {
+    auto &group = insertOps[stage];
+    for (Operation *op : group) {
+      addDep(op, insertAndDeps[stage], false, &seen);
+      seen.insert(insertAndDeps[stage].begin(), insertAndDeps[stage].end());
+    }
   }
 
   for (int stage=0; stage<numStages; stage++) {
