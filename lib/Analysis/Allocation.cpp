@@ -135,8 +135,13 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   // TODO(jlebar): This is suboptimal if repShape[in/outOrd[0]] is small.  We
   // might be able to merge the few most-minor dimensions and get a larger
   // vector.
+  // For conversions to MmaV1 (Nvidia V100), this inVec is hardcoded in the
+  // codegen.
   inVec = std::min(srcContigPerThread[inOrd[0]], dstContigPerThread[inOrd[0]]);
   outVec = dstContigPerThread[outOrd[0]];
+  if (auto mma = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>())
+    if (mma.getVersionMajor() == 1)
+      inVec = srcContigPerThread[inOrd[0]];
 
   if (rank <= 1)
     return repShape;
