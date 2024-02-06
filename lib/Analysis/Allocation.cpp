@@ -102,7 +102,7 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   auto repShape = getRepShapeForCvtLayout(op);
   if (repShape.empty())
     return repShape;
-  auto rank = repShape.size();
+
   auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
   auto dstTy = op.getResult().getType().cast<RankedTensorType>();
   Attribute srcLayout = srcTy.getEncoding();
@@ -135,18 +135,21 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   // TODO(jlebar): This is suboptimal if repShape[in/outOrd[0]] is small.  We
   // might be able to merge the few most-minor dimensions and get a larger
   // vector.
+  // For conversions to MmaV1 (Nvidia V100), this inVec is hardcoded in the
+  // codegen.
   inVec = std::min(srcContigPerThread[inOrd[0]], dstContigPerThread[inOrd[0]]);
   outVec = dstContigPerThread[outOrd[0]];
+  if (auto mma = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>())
+    if (mma.getVersionMajor() == 1)
+      inVec = srcContigPerThread[inOrd[0]];
 
-  if (rank <= 1)
+  if (repShape.size() <= 1)
     return repShape;
-  // pad the last dimension
-  unsigned paddedDim = rank - 1;
+  unsigned paddedDim = 1;
   if (auto dstBlockedLayout = dstLayout.dyn_cast<BlockedEncodingAttr>()) {
     paddedDim = dstBlockedLayout.getOrder()[0];
   }
-  unsigned pad =
-      std::max(srcContigPerThread[inOrd[0]], dstContigPerThread[outOrd[0]]);
+  unsigned pad = std::max(inVec, outVec);
   repShape[paddedDim] += pad;
   return repShape;
 }
