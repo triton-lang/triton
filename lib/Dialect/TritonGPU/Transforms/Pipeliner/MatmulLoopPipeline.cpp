@@ -34,7 +34,8 @@ static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
 }
 
 static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
-                            Value insertIdx, Value extractIdx) {
+                            Value insertIdx, Value extractIdx,
+                            DenseMap<Operation *, unsigned>& opToStage) {
   OpBuilder builder(forOp);
   // Replace the load with insert/extract slice.
   builder.setInsertionPoint(loadOp);
@@ -44,6 +45,9 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
       loadOp.getOther(), loadOp.getCache(), loadOp.getEvict(),
       loadOp.getIsVolatile(), /*axis*/ 0);
   auto commmit = builder.create<ttg::AsyncCommitGroupOp>(loc);
+  opToStage.insert({insertOp, opToStage[loadOp]});
+  opToStage.insert({commmit, opToStage[loadOp]});
+  opToStage.erase(loadOp);
 
   // Extract part.
   auto allocType = alloc.getType().cast<RankedTensorType>();
@@ -143,11 +147,12 @@ static void createTMALoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
 
 /// Create an async load equivalent to the given load.
 static void createAsyncLoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
-                            Value insertIdx, Value extractIdx, Value phase) {
+                            Value insertIdx, Value extractIdx, Value phase,
+                            DenseMap<Operation *, unsigned>& opToStage) {
   if (isLoadFromTensorPtr(loadOp)) {
     createTMALoad(forOp, loadOp, alloc, insertIdx, extractIdx, phase);
   } else {
-    createAsyncCopy(forOp, loadOp, alloc, insertIdx, extractIdx);
+    createAsyncCopy(forOp, loadOp, alloc, insertIdx, extractIdx, opToStage);
   }
 }
 
@@ -260,6 +265,52 @@ static std::optional<LoadDotOperand> loadDotOperand(tt::LoadOp loadOp,
   return LoadDotOperand(loadOp, attr, needTrans);
 }
 
+// TODO: check if we can consolidate this with the addDep function.
+static void recursiveLoadHelper(Operation *op, DenseSet<Operation *> &seen,
+                            DenseMap<Operation*, std::pair<unsigned, Operation*>> &loadOpToDistance,
+                            unsigned distance = 0) {
+  if (!seen.insert(op).second)
+    return;
+  unsigned d = distance;
+  if (isa<tt::LoadOp>(op)) {
+    loadOpToDistance[op] = std::make_pair(distance, op);
+    d = distance + 1;
+  }
+  for (Value operand : op->getOperands()) {
+    Value v = operand;
+    llvm::SmallDenseSet<Value> seenBlockArgs;
+    while (auto arg = v.dyn_cast<BlockArgument>()) {
+      if (!seenBlockArgs.insert(v).second)
+        break;
+      if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
+        auto yieldOp = op->getBlock()->getTerminator();
+        v = yieldOp->getOperand(arg.getArgNumber() - 1);
+        continue;
+      }
+      break;
+    }
+    Operation *defOp = v.getDefiningOp();
+    if (defOp && defOp->getBlock() == op->getBlock()) {
+      recursiveLoadHelper(defOp, seen, loadOpToDistance, d);
+    }
+  }
+}
+
+// Create a map from load ops to their distance to the nearest dot op and the
+// final use of the load op (another load op, or a dot op).
+static DenseMap<Operation*, std::pair<unsigned, Operation*>>
+loadOpsToDistanceAndUse(scf::ForOp forOp) {
+
+  DenseMap<Operation*, std::pair<unsigned, Operation*>> loadOpToDistanceAndUse;
+  DenseSet<Operation *> seen;
+  for (Operation &op : forOp.getBody()->without_terminator()) {
+    if (!isa<tt::DotOp>(op))
+      continue;
+    recursiveLoadHelper(&op, seen, loadOpToDistanceAndUse);
+  }
+  return loadOpToDistanceAndUse;
+}
+
 /// Collect loads to pipeline.
 static void collectOpsToPipeline(scf::ForOp forOp,
                                  SmallVectorImpl<LoadDotOperand> &ops,
@@ -369,7 +420,8 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
 // the number of stages.
 static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
                                         ArrayRef<LoadDotOperand> loads,
-                                        DenseMap<Operation *, unsigned> loadToNumBuffers,
+                                        DenseMap<Operation *, unsigned>& loadToNumBuffers,
+                                        DenseMap<Operation *, unsigned>& opToStage, 
                                         bool hasMMAV3) {
   struct AsyncLoad {
     AsyncLoad(tt::LoadOp loadOp, Value alloc) : loadOp(loadOp), alloc(alloc) {}
@@ -381,9 +433,18 @@ static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
   SmallVector<Value> newOperands;
   bool needsMbarrierPhase = false;
   bool needsAsyncWait = false;
+
+  // TODO pawel:
+  // Calculate the number of buffers as the maximum number of buffers needed by
+  // the loads. This could be done more optimally by tracking number of buffers
+  // per load or group of loads that share the same requirements.
+  unsigned numBuffers = std::max_element(
+      loadToNumBuffers.begin(), loadToNumBuffers.end(),
+      [](auto &a, auto &b) { return a.second < b.second; })
+                           ->second;
+
   for (const LoadDotOperand &loadOperand : loads) {
     tt::LoadOp loadOp = loadOperand.load;
-    unsigned numBuffers = loadToNumBuffers[loadOp];
     Value alloc = createAlloc(forOp, loadOp, loadOperand.dotOperandEncoding,
                               numBuffers, loadOperand.needTrans);
     assert(alloc && "Failed to create alloc for the async load.");
@@ -451,7 +512,7 @@ static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
   bool firstLoad = true;
   for (AsyncLoad &asyncLoad : asyncLoads) {
     createAsyncLoad(forOp, asyncLoad.loadOp, asyncLoad.alloc, insertIdx,
-                    extractIdx, phase);
+                    extractIdx, phase, opToStage);
     firstLoad = false;
   }
   SmallVector<Value> newYieldOperands = {insertIdx, extractIdx};
@@ -615,76 +676,6 @@ static void recursiveHelper(Operation *op, DenseSet<Operation *> &seen,
     }
   }
 }
-static SmallVector<DenseSet<Operation *>>
-groupInsertOpsByDistanceToDotOp(scf::ForOp forOp) {
-
-  DenseMap<Operation *, unsigned> insertOpToDistance;
-  DenseSet<Operation *> seen;
-  for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!isa<tt::DotOp>(op))
-      continue;
-    recursiveHelper(&op, seen, insertOpToDistance);
-  }
-  unsigned maxDistance = 0;
-  for (auto &pair : insertOpToDistance) {
-    maxDistance = std::max(maxDistance, pair.second);
-  }
-  // Group insert ops by distance to dot op.
-  // Start from the max distance and go down to 0.
-  SmallVector<DenseSet<Operation *>> groupedInsertOps;
-  groupedInsertOps.resize(maxDistance + 1);
-  for (auto &pair : insertOpToDistance) {
-    unsigned distance = pair.second;
-    groupedInsertOps[maxDistance - distance].insert(pair.first);
-  }
-  return groupedInsertOps;
-}
-
-// TODO: check if we can consolidate this with the addDep function.
-static void recursiveLoadHelper(Operation *op, DenseSet<Operation *> &seen,
-                            DenseMap<Operation*, std::pair<unsigned, Operation*>> &loadOpToDistance,
-                            unsigned distance = 0) {
-  if (!seen.insert(op).second)
-    return;
-  unsigned d = distance;
-  if (isa<ttg::InsertSliceAsyncOp, ttng::InsertSliceTMAOp>(op)) {
-    loadOpToDistance[op] = std::make_pair(distance, op);
-    d = distance + 1;
-  }
-  for (Value operand : op->getOperands()) {
-    Value v = operand;
-    llvm::SmallDenseSet<Value> seenBlockArgs;
-    while (auto arg = v.dyn_cast<BlockArgument>()) {
-      if (!seenBlockArgs.insert(v).second)
-        break;
-      if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
-        auto yieldOp = op->getBlock()->getTerminator();
-        v = yieldOp->getOperand(arg.getArgNumber() - 1);
-        continue;
-      }
-      break;
-    }
-    Operation *defOp = v.getDefiningOp();
-    if (defOp && defOp->getBlock() == op->getBlock()) {
-      recursiveLoadHelper(defOp, seen, loadOpToDistance, d);
-    }
-  }
-}
-
-// Create a map from load ops to their distance to the nearest dot op and the
-// final use of the load op (another load op, or a dot op).
-static DenseMap<Operation*, std::pair<unsigned, Operation*>>
-loadOpsToDistanceAndUse(scf::ForOp forOp) {
-
-  DenseMap<Operation*, std::pair<unsigned, Operation*>> loadOpToDistanceAndUse;
-  DenseSet<Operation *> seen;
-  for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!isa<tt::DotOp>(op))
-      continue;
-    recursiveLoadHelper(&op, seen, loadOpToDistanceAndUse);
-  }
-  return loadOpToDistanceAndUse;
-}
 
 static bool
 isScheduleValid(scf::ForOp forOp,
@@ -708,7 +699,15 @@ createSchedule(scf::ForOp forOp, int numStages, DenseMap<Operation *, unsigned> 
   llvm::outs() << "For loop:\n";
   forOp.dump();
 
-  auto groupedInsertOps = groupInsertOpsByDistanceToDotOp(forOp);
+  for (int i=0; i<numStages; i++) {
+    llvm::outs() << "\nops in stage " << i << ":\n";
+    for (auto& [op, stage] : opToStage) {
+      if (i == stage) {
+        op->dump();
+      }
+    }
+  }
+
   DenseSet<Operation *> insertOps;
   DenseSet<Operation *> extractOps;
   // Find the insert/extract ops that will go respectively in stage 0 and stage
@@ -732,24 +731,23 @@ createSchedule(scf::ForOp forOp, int numStages, DenseMap<Operation *, unsigned> 
     }
   };
 
-  SmallVector<DenseSet<Operation *>> insertAndDeps;
+  // Inserts and dependencies grouped by stage.
+  SmallVector<DenseSet<Operation *>> insertAndDeps(numStages);
   DenseSet<Operation *> seen;
-  for (unsigned i = 0; i < groupedInsertOps.size(); i++) {
-    insertAndDeps.emplace_back();
-    for (Operation *op : groupedInsertOps[i]) {
-      addDep(op, insertAndDeps.back(), false, &seen);
-    }
-    seen.insert(insertAndDeps.back().begin(), insertAndDeps.back().end());
+  for (auto& [op, stage] : opToStage) {
+    addDep(op, insertAndDeps[stage], false, &seen);
+    seen.insert(insertAndDeps[stage].begin(), insertAndDeps[stage].end());
+  }
 
-    llvm::outs() << "\ninsertAndDeps " << i << ":\n";
-    printDenseSet(insertAndDeps.back());
+  for (int stage=0; stage<numStages; stage++) {
+    llvm::outs() << "\ninsertAndDeps " << stage << ":\n";
+    printDenseSet(insertAndDeps[stage]);
   }
 
   // Find dependencies with distance of 1.
-  SmallVector<DenseSet<Operation *>> distanceOneUsers;
-  for (unsigned i = 0; i < groupedInsertOps.size(); i++) {
-    auto &group = insertAndDeps[i];
-    distanceOneUsers.emplace_back();
+  SmallVector<DenseSet<Operation *>> distanceOneUsers(numStages);
+  for (int stage=0; stage<numStages-1; stage++) {
+    auto &group = insertAndDeps[stage];
     for (Operation *op : group) {
       for (Value operand : op->getOperands()) {
         if (auto arg = operand.dyn_cast<BlockArgument>()) {
@@ -758,37 +756,40 @@ createSchedule(scf::ForOp forOp, int numStages, DenseMap<Operation *, unsigned> 
             Value v = yieldOp->getOperand(arg.getArgNumber() - 1);
             Operation *defOp = v.getDefiningOp();
             if (defOp && group.count(defOp) == 0) {
-              distanceOneUsers.back().insert(defOp);
+              // Schedule distance 1 users in the next stage.
+              distanceOneUsers[stage+1].insert(defOp);
             }
           }
         }
       }
     }
-
-    llvm::outs() << "\ndistanceOneUsers " << i << ":\n";
-    printDenseSet(distanceOneUsers.back());
+    llvm::outs() << "\ndistanceOneUsers " << stage << ":\n";
+    printDenseSet(distanceOneUsers[stage]);
   }
-  // Schedule loads with a distance of 1 in stage 0
-  for (unsigned i = 0; i < groupedInsertOps.size(); i++) {
+
+  // Schedule loads with a distance of 1 together with the insert ops.
+  for (unsigned i = 0; i < distanceOneUsers.size(); i++) {
     auto &group = distanceOneUsers[i];
     for (auto op : group) {
       if (isa<tt::LoadOp>(op))
         addDep(op, insertAndDeps[i], true);
     }
+
+    
   }
-  SmallVector<DenseSet<Operation *>> stage1deps;
-  for (unsigned i = 0; i < groupedInsertOps.size(); i++) {
-    stage1deps.emplace_back();
-    if (i == 1)
-      continue;
+
+  SmallVector<DenseSet<Operation *>> stage1deps(numStages); // TODO pawel: rename
+  for (unsigned i = 0; i < distanceOneUsers.size(); i++) {
+    //if (i == 1) // TODO pawel: remove this special case. Why is it here?
+    //  continue;
     auto &group = distanceOneUsers[i];
     for (auto op : group) {
       if (!isa<tt::LoadOp>(op))
-        addDep(op, stage1deps.back(), true, &insertAndDeps[i]);
+        addDep(op, stage1deps[i], true, &insertAndDeps[i]);
     }
 
     llvm::outs() << "\nstage1deps " << i << ":\n";
-    printDenseSet(stage1deps.back());
+    printDenseSet(stage1deps[i]);
   }
   DenseSet<Operation *> allInsertAndDeps;
   for (auto &set : insertAndDeps) {
@@ -817,24 +818,18 @@ createSchedule(scf::ForOp forOp, int numStages, DenseMap<Operation *, unsigned> 
 
   // Schedule some dependencies with distance of 1 into stage 1 to reduce
   // pressure.
-  unsigned stageIdx = numStages - 3;
-  unsigned stageIncrement =
-      ceil<unsigned>(numStages - 2, groupedInsertOps.size());
-
-  for (int i = groupedInsertOps.size()-1; i >= 0; i--) {
-    auto &group1 = stage1deps[i];
-    addOps(forOp, stageIdx + 1, schedule,
-           [&](Operation *op) { return group1.count(op); });
-    stageIdx -= stageIncrement;
+  // Insert the ops in the reverse order of the stages. This helps with saving
+  // the number of required buffers.
+  for (int i = numStages-1; i >= 0; i--) {
+    auto &group = stage1deps[i];
+    addOps(forOp, i, schedule,
+           [&](Operation *op) { return group.count(op); });
   }
 
-  stageIdx = numStages - 3;
-  
-  for (int i = groupedInsertOps.size()-1; i >= 0; i--) {
+  for (int i = numStages-1; i >= 0; i--) {
     auto &group = insertAndDeps[i];
-    addOps(forOp, stageIdx, schedule,
+    addOps(forOp, i, schedule,
            [&](Operation *op) { return group.count(op); });
-    stageIdx -= stageIncrement;
   }
 
   // Finally schedule the extract ops in stage `numStage - 2` so that they get
@@ -885,7 +880,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   }
 
   // 2. Convert the loads into async loads and create the allocs.
-  SmallVector<Value> allocs = createAsynOps(forOp, loads, loadToNumBuffers, hasMMAV3);
+  SmallVector<Value> allocs = createAsynOps(forOp, loads, loadToNumBuffers, opToStage, hasMMAV3);
 
   // 3. Create the final schedule for the kernel loop. This will dictate the
   // stages and order of operations to the pipeline expander.
