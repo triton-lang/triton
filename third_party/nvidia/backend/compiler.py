@@ -358,7 +358,7 @@ class CUDAOptions:
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = dict() if self.extern_libs is None else dict(self.extern_libs)
         if not extern_libs.get('libdevice', None):
-            extern_libs['libdevice'] = os.getenv("TRITON_LIBDEVICE_PATH", str(default_libdir / 'libdevice.10.bc'))
+            extern_libs['libdevice'] = str(default_libdir / 'libdevice.10.bc')
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
                "num_warps must be a power of 2"
@@ -552,10 +552,7 @@ class CUDABackend(BaseBackend):
             line_info = '' if os.environ.get('TRITON_DISABLE_LINE_INFO') else ' -lineinfo'
             fmad = '' if opt.enable_fp_fusion else ' --fmad=false'
             suffix = 'a ' if capability == 90 else ' '
-            if os.environ.get("DISABLE_PTXAS_OPT", "0") == "1":
-              cmd = f'{ptxas}{line_info}{fmad} -v --opt-level 0 --gpu-name=sm_{capability}{suffix}{fsrc.name} -o {fbin} 2> {flog.name}'
-            else:
-              cmd = f'{ptxas}{line_info}{fmad} -v --gpu-name=sm_{capability}{suffix}{fsrc.name} -o {fbin} 2> {flog.name}'
+            cmd = f'{ptxas}{line_info}{fmad} -v --gpu-name=sm_{capability}{suffix}{fsrc.name} -o {fbin} 2> {flog.name}'
 
             try:
                 subprocess.run(cmd, shell=True, check=True)

@@ -135,10 +135,8 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   // TODO(jlebar): This is suboptimal if repShape[in/outOrd[0]] is small.  We
   // might be able to merge the few most-minor dimensions and get a larger
   // vector.
-  int srcContigPerThreadMajor = srcContigPerThread[inOrd[0]];
-  int dstContigPerThreadMajor = dstContigPerThread[outOrd[0]];
-  inVec = std::min(srcContigPerThreadMajor, dstContigPerThreadMajor);
-  outVec = dstContigPerThreadMajor;
+  inVec = std::min(srcContigPerThread[inOrd[0]], dstContigPerThread[inOrd[0]]);
+  outVec = dstContigPerThread[outOrd[0]];
 
   if (rank <= 1)
     return repShape;
@@ -147,7 +145,8 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   if (auto dstBlockedLayout = dstLayout.dyn_cast<BlockedEncodingAttr>()) {
     paddedDim = dstBlockedLayout.getOrder()[0];
   }
-  unsigned pad = std::max(dstContigPerThreadMajor, srcContigPerThreadMajor);
+  unsigned pad =
+      std::max(srcContigPerThread[inOrd[0]], dstContigPerThread[outOrd[0]]);
   repShape[paddedDim] += pad;
   return repShape;
 }
