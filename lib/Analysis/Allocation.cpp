@@ -135,10 +135,29 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   // TODO(jlebar): This is suboptimal if repShape[in/outOrd[0]] is small.  We
   // might be able to merge the few most-minor dimensions and get a larger
   // vector.
-  // For conversions to MmaV1 (Nvidia V100), this inVec is hardcoded in the
-  // codegen.
   inVec = std::min(srcContigPerThread[inOrd[0]], dstContigPerThread[inOrd[0]]);
   outVec = dstContigPerThread[outOrd[0]];
+
+  // TODO: We could make this condition broader to catch more cases of N-D
+  // transposes that would benefit from this optimization. For example if the
+  // inner dimension is not transposed but is small there could still be
+  // benefits.
+  if (srcLayout.isa<BlockedEncodingAttr>() &&
+      dstLayout.isa<BlockedEncodingAttr>() && outOrd[0] != (rank - 1) &&
+      inOrd[0] != outOrd[0]) {
+    // Don't vectorize for transpose. Only the read or the write can be
+    // vectorized and this causes extra bank conflicts on the non-vectorized
+    // accesses.
+    // Ex: if we transpose a 32x32 tensor, to avoid bank conflicts with scalar
+    // loads/stores we need a padding of 1 element. If we vectorize the load
+    // into a load4 then the padding has to be either 0 or 4. In both those
+    // cases we would get extra bank conflicts that would make performance
+    // worse.
+    inVec = 1;
+    outVec = 1;
+  }
+  // For conversions to MmaV1 (Nvidia V100), this inVec is hardcoded in the
+  // codegen.
   if (auto mma = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>())
     if (mma.getVersionMajor() == 1)
       inVec = srcContigPerThread[inOrd[0]];
