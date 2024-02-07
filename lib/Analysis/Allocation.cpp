@@ -138,6 +138,10 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   inVec = std::min(srcContigPerThread[inOrd[0]], dstContigPerThread[inOrd[0]]);
   outVec = dstContigPerThread[outOrd[0]];
 
+  // TODO: We could make this condition broader to catch more cases of N-D
+  // transposes that would benefit from this optimization. For example if the
+  // inner dimension is not transposed but is small there could still be
+  // benefits.
   if (srcLayout.isa<BlockedEncodingAttr>() &&
       dstLayout.isa<BlockedEncodingAttr>() && outOrd[0] != (rank - 1) &&
       inOrd[0] != outOrd[0]) {
