@@ -325,6 +325,7 @@ a = torch.randn((size, size), device='cuda', dtype=torch.float16)
 b = torch.randn((size, size), device='cuda', dtype=torch.float16)
 triton_output = matmul(a, b)
 
+# print(f"triton_output={triton_output}")
 if bench:
     torch_output = torch.matmul(a, b)
     print(f"triton_output={triton_output}")
@@ -333,8 +334,6 @@ if bench:
         print("✅ Triton and Torch match")
     else:
         print("❌ Triton and Torch differ")
-
-print("The end!")
 
 # %%
 # Benchmark
@@ -345,14 +344,13 @@ print("The end!")
 #
 # We can now compare the performance of our kernel against that of cuBLAS. Here we focus on square matrices,
 # but feel free to arrange this script as you wish to benchmark any other matrix shape.
+x_vals = [128 * i for i in range(2, 33)] + [8192]
 
 
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         x_names=['M', 'N', 'K'],  # Argument names to use as an x-axis for the plot
-        x_vals=[
-            128 * i for i in range(2, 33)
-        ],  # Different possible values for `x_name`
+        x_vals=x_vals,  # Different possible values for `x_name`
         line_arg='provider',  # Argument name whose value corresponds to a different line in the plot
         # Possible values for `line_arg`
         line_vals=['cublas', 'triton'],
@@ -363,8 +361,7 @@ print("The end!")
         ylabel="TFLOPS",  # Label name for the y-axis
         plot_name="matmul-performance",  # Name for the plot, used also as a file name for saving the plot.
         args={},
-    )
-)
+    ))
 def benchmark(M, N, K, provider):
     a = torch.randn((M, K), device='cuda', dtype=torch.float16)
     b = torch.randn((K, N), device='cuda', dtype=torch.float16)
@@ -376,30 +373,5 @@ def benchmark(M, N, K, provider):
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
 
-x_vals = [128 * i for i in range(2, 33)] + [8192]
-@triton.testing.perf_report(
-    triton.testing.Benchmark(
-        x_names=['M', 'N', 'K'],  # Argument names to use as an x-axis for the plot
-        x_vals=x_vals,  # Different possible values for `x_name`
-        line_arg='provider',  # Argument name whose value corresponds to a different line in the plot
-        # Possible values for `line_arg`
-        line_vals=['triton'],
-        # Label name for the lines
-        line_names=["Triton"],
-        # Line styles
-        styles=[('blue', '-')],
-        ylabel="TFLOPS",  # Label name for the y-axis
-        plot_name="matmul-performance",  # Name for the plot, used also as a file name for saving the plot.
-        args={},
-    )
-)
-def benchmark_trit(M, N, K, provider):
-    a = torch.randn((M, K), device='cuda', dtype=torch.float16)
-    b = torch.randn((K, N), device='cuda', dtype=torch.float16)
-    quantiles = [0.5, 0.2, 0.8]
-    if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), quantiles=quantiles)
-    perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
-    return perf(ms), perf(max_ms), perf(min_ms)
 
-if bench: benchmark_trit.run(show_plots=True, print_data=True)
+if bench: benchmark.run(show_plots=True, print_data=True)
