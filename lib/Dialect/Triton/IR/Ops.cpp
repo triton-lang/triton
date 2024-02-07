@@ -1116,8 +1116,8 @@ void ElementwiseInlineAsmOp::getEffects(
 
 LogicalResult ElementwiseInlineAsmOp::verify() {
   if (getNumOperands() >= 1) {
-    size_t numInputElems =
-        getOperand(0).getType().cast<RankedTensorType>().getNumElements();
+    auto tensorType = getOperand(0).getType().dyn_cast<RankedTensorType>();
+    size_t numInputElems = tensorType ? tensorType.getNumElements() : 0;
     if (numInputElems % this->getPackedElement() != 0) {
       return emitError("number of input elements ")
              << numInputElems
