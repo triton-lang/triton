@@ -1,7 +1,17 @@
 get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
 get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 
+function(add_amdgpu_backend name)
+  target_link_libraries(${name} PRIVATE
+    TritonAMDGPUTransforms
+    TritonAMDGPUToLLVM
+  )
+  target_compile_definitions(${name} PRIVATE USE_ROCM=1)
+endfunction()
+
 add_llvm_executable(triton-opt triton-opt.cpp PARTIAL_SOURCES_INTENDED)
+
+list(FIND TRITON_CODEGEN_BACKENDS "amd" AMD_BACKEND_IDX)
 
 # TODO: what's this?
 llvm_update_compile_flags(triton-opt)
@@ -11,8 +21,6 @@ target_link_libraries(triton-opt PRIVATE
   TritonTransforms
   TritonGPUTransforms
   TritonNvidiaGPUTransforms
-  TritonAMDGPUTransforms
-  TritonAMDGPUToLLVM
   ${dialect_libs}
   ${conversion_libs}
   ${triton_libs}
@@ -23,6 +31,10 @@ target_link_libraries(triton-opt PRIVATE
   MLIRPass
   MLIRTransforms
 )
+
+if("amd" IN_LIST TRITON_CODEGEN_BACKENDS)
+  add_amdgpu_backend(triton-opt)
+endif()
 
 mlir_check_all_link_libraries(triton-opt)
 
@@ -36,8 +48,6 @@ target_link_libraries(triton-reduce PRIVATE
   TritonTransforms
   TritonGPUTransforms
   TritonNvidiaGPUTransforms
-  TritonAMDGPUTransforms
-  TritonAMDGPUToLLVM
   ${dialect_libs}
   ${conversion_libs}
   ${triton_libs}
@@ -48,6 +58,10 @@ target_link_libraries(triton-reduce PRIVATE
   MLIRPass
   MLIRTransforms
 )
+
+if("amd" IN_LIST TRITON_CODEGEN_BACKENDS)
+  add_amdgpu_backend(triton-reduce)
+endif()
 
 mlir_check_all_link_libraries(triton-reduce)
 
@@ -60,8 +74,6 @@ target_link_libraries(triton-lsp PRIVATE
   TritonTransforms
   TritonGPUTransforms
   TritonNvidiaGPUTransforms
-  TritonAMDGPUTransforms
-  TritonAMDGPUToLLVM
   ${dialect_libs}
   ${conversion_libs}
   ${triton_libs}
@@ -72,6 +84,10 @@ target_link_libraries(triton-lsp PRIVATE
   MLIRPass
   MLIRTransforms
 )
+
+if("amd" IN_LIST TRITON_CODEGEN_BACKENDS)
+  add_amdgpu_backend(triton-lsp)
+endif()
 
 mlir_check_all_link_libraries(triton-lsp)
 

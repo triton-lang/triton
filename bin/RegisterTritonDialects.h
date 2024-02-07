@@ -4,9 +4,11 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
+#ifdef USE_ROCM
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "TritonAMDGPUTransforms/TritonGPUConversion.h"
+#endif
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
@@ -45,29 +47,27 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerConvertNVGPUToLLVMPass();
   mlir::registerLLVMDIScope();
 
-  // AMD GPU specific passes registration
+#ifdef USE_ROCM
   mlir::triton::registerConvertTritonAMDGPUToLLVM();
 
-  // TODO: Uncomment when fixed undefined symbols(see below)
+  // TODO: Uncomment when fixed undefined symbols and
+  // remove section below
+  // List of undefined symbols:
+  // createTritonAMDGPUCoalesce is not defined
+  // createTritonAMDGPUOptimizeDotOperands is not defined
+  // createTritonAMDGPUPipeline is not defined
+  // createTritonAMDGPUPrefetch is not defined
+
   // mlir::registerTritonAMDGPUPasses();
 
-  // TODO: remove section below when line above works
   mlir::registerTritonAMDGPUAccelerateMatmul();
-  // FIXME: createTritonAMDGPUCoalesce is not defined
-  // mlir::registerTritonAMDGPUCoalesce();
   mlir::registerTritonAMDGPUDecomposeConversions();
-  // FIXME: createTritonAMDGPUOptimizeDotOperands is not defined
-  // mlir::registerTritonAMDGPUOptimizeDotOperands();
   mlir::registerTritonAMDGPUOptimizeEpilogue();
-  // FIXME: createTritonAMDGPUPipeline is not defined
-  // mlir::registerTritonAMDGPUPipeline();
-  // FIXME: createTritonAMDGPUPrefetch is not defined
-  // mlir::registerTritonAMDGPUPrefetch();
   mlir::registerTritonAMDGPURemoveLayoutConversions();
   mlir::registerTritonAMDGPUReorderInstructions();
   mlir::registerTritonAMDGPUStreamPipeline();
 
-  // End of AMD GPU specific passes registration
+#endif // USE_ROCM
 
   // TODO: register Triton & TritonGPU passes
   registry.insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
