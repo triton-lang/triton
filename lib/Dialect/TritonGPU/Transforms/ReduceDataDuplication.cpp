@@ -43,7 +43,7 @@ public:
       if (auto srcMmaEncoding =
               srcEncoding.dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>()) {
 
-        if (srcMmaEncoding.getVersionMajor() == 1 ||
+        if (srcMmaEncoding.getVersionMajor() != 2 ||
             (srcMmaEncoding.getWarpsPerCTA()[1] == 1 &&
              dstDotOp.getParent() == srcMmaEncoding))
           return;
