@@ -144,6 +144,11 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
     // Don't vectorize for transpose. Only the read or the write can be
     // vectorized and this causes extra bank conflicts on the non-vectorized
     // accesses.
+    // Ex: if we transpose a 32x32 tensor, to avoid bank conflicts with scalar
+    // loads/stores we need a padding of 1 element. If we vectorize the load
+    // into a load4 then the padding has to be either 0 or 4. In both those
+    // cases we would get extra bank conflicts that would make performance
+    // worse.
     inVec = 1;
     outVec = 1;
   }
