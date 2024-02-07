@@ -139,10 +139,11 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   outVec = dstContigPerThread[outOrd[0]];
 
   if (srcLayout.isa<BlockedEncodingAttr>() &&
-      dstLayout.isa<BlockedEncodingAttr>() && outOrd[0] == 0 && inOrd[0] != 0) {
-    // don't vectorize for transpose as only the read or the write can be
-    // vectorized and this cause extra bank conflicts on the non-vectorized
-    // access.
+      dstLayout.isa<BlockedEncodingAttr>() && outOrd[0] != (rank - 1) &&
+      inOrd[0] != outOrd[0]) {
+    // Don't vectorize for transpose. Only the read or the write can be
+    // vectorized and this causes extra bank conflicts on the non-vectorized
+    // accesses.
     inVec = 1;
     outVec = 1;
   }
