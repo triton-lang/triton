@@ -171,18 +171,6 @@ static void createAsyncLoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   }
 }
 
-namespace {
-struct LoadDotOperand {
-  LoadDotOperand(tt::LoadOp load,
-                 ttg::DotOperandEncodingAttr dotOperandEncoding,
-                 bool needTrans = false)
-      : load(load), dotOperandEncoding(dotOperandEncoding),
-        needTrans(needTrans) {}
-  tt::LoadOp load;
-  ttg::DotOperandEncodingAttr dotOperandEncoding;
-  bool needTrans;
-};
-} // namespace
 
 // If all the transitive uses of the given value have are used by a convert to
 // the same dot operand encoding, return the encoding. Otherwise return nullptr.
@@ -287,106 +275,48 @@ static std::optional<PipelineOpInfo> loadInfo(tt::LoadOp loadOp,
   };
 }
 
-static std::optional<LoadDotOperand> loadDotOperand(tt::LoadOp loadOp,
-                                                    bool &hasMMAV3) {
-  bool isCandidate = false;
-  if (loadOp.getResult().hasOneUse()) {
-    Operation *use = *loadOp.getResult().getUsers().begin();
-    while (use) {
-
-      if (use->getNumResults() != 1)
-        break;
-
-      if (isa<triton::LoadOp>(use))
-        return LoadDotOperand(loadOp, nullptr);
-      SmallVector<Operation *> users;
-      for (auto user : use->getResult(0).getUsers()) {
-        if (isa<scf::YieldOp>(user))
-          continue;
-        users.push_back(user);
-      }
-      if (users.size() != 1)
-        break;
-      use = users[0];
-    }
-
-    use = *loadOp.getResult().getUsers().begin();
-
-    if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
-      auto tensorType =
-          convertLayout.getResult().getType().cast<RankedTensorType>();
-      if (auto sharedEnc =
-              tensorType.getEncoding().dyn_cast<ttg::SharedEncodingAttr>()) {
-        if (sharedEnc.getHasLeadingOffset()) {
-          // MMA V3 case.
-          auto newOrder = sharedEnc.getOrder();
-          auto ty = loadOp.getType().cast<RankedTensorType>();
-          auto oldOrder = ttg::getOrder(ty.getEncoding());
-          if (newOrder[0] == oldOrder[0] || newOrder[1] == oldOrder[1]) {
-            // The operand of MMAv3 is in SharedEncoding and it's order should
-            // not be changed after FuseTranspositions Pass. So we only pipeline
-            // the load if the order of the loaded BlockedEncoding is the same
-            // as the order of the SharedEncoding it is converted to.
-            // TODO: remove this constraint once the LoadOp supports transpose
-            // fusion
-            hasMMAV3 = true;
-            return LoadDotOperand(loadOp, nullptr);
-          }
-        }
-      }
-    }
-  }
-  bool needTrans = false;
-  ttg::DotOperandEncodingAttr attr =
-      allTransitiveUsesHaveDotEncoding(loadOp.getResult(), needTrans);
-  if (!attr)
-    return std::nullopt;
-  return LoadDotOperand(loadOp, attr, needTrans);
-}
-
-// TODO: check if we can consolidate this with the addDep function.
-static void recursiveLoadHelper(Operation *op, DenseSet<Operation *> &seen,
-                            DenseMap<Operation*, std::pair<unsigned, Operation*>> &loadOpToDistance,
-                            unsigned distance, Operation *use) {
-  if (!seen.insert(op).second)
-    return;
-  unsigned d = distance;
-  if (isa<tt::LoadOp>(op)) {
-    loadOpToDistance[op] = std::make_pair(distance, use);
-    use = op;
-    d = distance + 1;
-  }
-  for (Value operand : op->getOperands()) {
-    Value v = operand;
-    llvm::SmallDenseSet<Value> seenBlockArgs;
-    while (auto arg = v.dyn_cast<BlockArgument>()) {
-      if (!seenBlockArgs.insert(v).second)
-        break;
-      if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
-        auto yieldOp = op->getBlock()->getTerminator();
-        v = yieldOp->getOperand(arg.getArgNumber() - 1);
-        continue;
-      }
-      break;
-    }
-    Operation *defOp = v.getDefiningOp();
-    if (defOp && defOp->getBlock() == op->getBlock()) {
-      recursiveLoadHelper(defOp, seen, loadOpToDistance, d, use);
-    }
-  }
-}
 
 // Create a map from load ops to their distance to the nearest dot op and the
 // final use of the load op (another load op, or a dot op).
-static DenseMap<Operation*, std::pair<unsigned, Operation*>>
+static DenseMap<tt::LoadOp, std::pair<int, Operation*>>
 loadOpsToDistanceAndUse(scf::ForOp forOp) {
-
-  DenseMap<Operation*, std::pair<unsigned, Operation*>> loadOpToDistanceAndUse;
+  DenseMap<tt::LoadOp, std::pair<int, Operation*>> loadOpToDistanceAndUse;
   DenseSet<Operation *> seen;
+
+  std::function<void(Operation *op, int, Operation *)> dfs =
+    [&](Operation *op, int distance, Operation *use) {
+    if (!seen.insert(op).second)
+      return;
+    int d = distance;
+    if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+      loadOpToDistanceAndUse[loadOp] = std::make_pair(distance, use);
+      use = op;
+      d = distance + 1;
+    }
+    for (Value operand : op->getOperands()) {
+      Value v = operand;
+      llvm::SmallDenseSet<Value> seenBlockArgs;
+      while (auto arg = v.dyn_cast<BlockArgument>()) {
+        if (!seenBlockArgs.insert(v).second)
+          break;
+        if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
+          auto yieldOp = op->getBlock()->getTerminator();
+          v = yieldOp->getOperand(arg.getArgNumber() - 1);
+          continue;
+        }
+        break;
+      }
+      Operation *defOp = v.getDefiningOp();
+      if (defOp && defOp->getBlock() == op->getBlock()) {
+        dfs(defOp, d, use);
+      }
+    }
+  };
+
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (!isa<tt::DotOp>(op))
       continue;
-    recursiveLoadHelper(&op, seen, loadOpToDistanceAndUse, 0, &op);
+    dfs(&op, 0, &op);
   }
   return loadOpToDistanceAndUse;
 }
@@ -400,62 +330,65 @@ static bool collectOpsToPipeline(scf::ForOp forOp,
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
   ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
-  // TODO pawel: clean up
-  DenseMap<Operation*, std::pair<unsigned, Operation*>> loadOpToDistance = loadOpsToDistanceAndUse(forOp);
-  unsigned maxDistance = std::max_element(loadOpToDistance.begin(), loadOpToDistance.end(),
-                                          [](auto &a, auto &b) {
-                                            return a.second.first < b.second.first;
-                                          })->second.first;
+  DenseMap<tt::LoadOp, std::pair<int, Operation*>> loadOpToDistanceAndUse = loadOpsToDistanceAndUse(forOp);
+  if (loadOpToDistanceAndUse.empty())
+    return false;
 
-  unsigned distBetweenLoads = ceil<unsigned>(numStages - 2, maxDistance+1);
+  int maxDistance = -1;
+  for (auto& [op, info] : loadOpToDistanceAndUse) {
+    if (info.first > maxDistance) {
+      maxDistance = info.first;
+    }
+  }
+
+  unsigned stagesBetweenLoads = ceil<unsigned>(numStages - 2, maxDistance+1);
+
+  for (auto& [loadOp, distAndUse] : loadOpToDistanceAndUse) {
+    bool candidate = false;
+    if (isLoadFromTensorPtr(loadOp)) {
+      // Map to TMA load.
+      candidate = true;
+    } else {
+      auto ptr = loadOp.getPtr();
+      unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
+      if (auto mask = loadOp.getMask())
+        vec =
+            std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
+
+      auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
+      if (!tensorTy)
+        continue;
+      auto ty =
+          tensorTy.getElementType().cast<tt::PointerType>().getPointeeType();
+      unsigned width = vec * ty.getIntOrFloatBitWidth();
+      // We do not pipeline all loads for the following reasons:
+      // 1. On nvidia GPUs, cp.async's cp-size can only be 4, 8 and 16.
+      // 2. It's likely that pipling small loads won't offer much performance
+      //    improvement and may even hurt performance by increasing register
+      //    pressure.
+      if (width >= 32)
+        candidate = true;
+    }
+    // TODO pawel: currently we treat the loads that we won't pipeline the same as
+    // candidates, calculating the stage for them, and let them affect the
+    // stages of other loads that may depend on it. This is probably less
+    // than ideal.
+    if (!candidate)
+      continue;
+    std::optional<PipelineOpInfo> loadWithInfo = loadInfo(loadOp, hasMMAV3);
+    if (!loadWithInfo.has_value())
+      continue;
+    assert (loadOpToDistanceAndUse.count(loadOp) && "LoadOp not found in loadOpToDistance map");
+    int stage = (maxDistance - loadOpToDistanceAndUse[loadOp].first) * stagesBetweenLoads;
+    
+    opInfo[loadOp] = loadWithInfo.value();
+    opInfo[loadOp].stage = stage;
+    opInfo[loadOp].use = loadOpToDistanceAndUse[loadOp].second;
+  };
 
   // We cannot use forOp.walk(...) here because we only want to visit the
   // operations in the loop body block. Nested blocks are handled separately.
   for (Operation &op : forOp) {
-    if (auto loadOp = dyn_cast<tt::LoadOp>(&op)) {
-      bool candidate = false;
-      if (isLoadFromTensorPtr(loadOp)) {
-        // Map to TMA load.
-        candidate = true;
-      } else {
-        auto ptr = loadOp.getPtr();
-        unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
-        if (auto mask = loadOp.getMask())
-          vec =
-              std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
-
-        auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
-        if (!tensorTy)
-          continue;
-        auto ty =
-            tensorTy.getElementType().cast<tt::PointerType>().getPointeeType();
-        unsigned width = vec * ty.getIntOrFloatBitWidth();
-        // We do not pipeline all loads for the following reasons:
-        // 1. On nvidia GPUs, cp.async's cp-size can only be 4, 8 and 16.
-        // 2. It's likely that pipling small loads won't offer much performance
-        //    improvement and may even hurt performance by increasing register
-        //    pressure.
-        if (width >= 32)
-          candidate = true;
-      }
-      // TODO: currently we treat the loads that we won't pipeline the same as
-      // candidates, calculating the stage for them, and let them affect the
-      // stages of other loads that may depend on it. This is probably less
-      // than ideal.
-      if (!candidate)
-        continue;
-      std::optional<PipelineOpInfo> loadWithInfo = loadInfo(loadOp, hasMMAV3);
-      if (!loadWithInfo.has_value())
-        continue;
-      assert (loadOpToDistance.count(loadOp) && "LoadOp not found in loadOpToDistance map");
-      int stage = (maxDistance - loadOpToDistance[loadOp].first) * distBetweenLoads;
-      
-      opInfo[loadOp] = loadWithInfo.value();
-      opInfo[loadOp].stage = stage;
-      opInfo[loadOp].use = loadOpToDistance[loadOp].second;
-      
-      foundLoads = true;
-    }
     if (auto dotOp = dyn_cast<tt::DotOp>(&op)) {
       PipelineOpInfo dotOpInfo{
         .stage = numStages - 1,
@@ -463,7 +396,7 @@ static bool collectOpsToPipeline(scf::ForOp forOp,
       opInfo[dotOp] = dotOpInfo;
     }
   }
-  return foundLoads;
+  return true;
 }
 
 // Create an allocation that can hold distance number of loadOp shapes.
@@ -727,40 +660,6 @@ static void printSchedule(std::vector<std::pair<Operation *, unsigned>> &schedul
     llvm::outs() << "\n";
   }
 
-}
-
-// TODO: check if we can consolidate this with the addDep function.
-static void recursiveHelper(Operation *op, DenseSet<Operation *> &seen,
-                            DenseMap<Operation *, unsigned> &insertOpToDistance,
-                            unsigned distance = 0) {
-  if (!seen.insert(op).second)
-    return;
-  unsigned d = distance;
-  if (isa<ttg::InsertSliceAsyncOp, ttng::InsertSliceTMAOp>(op)) {
-    insertOpToDistance[op] = distance;
-    if (auto asyncCommit = dyn_cast<ttg::AsyncCommitGroupOp>(op->getNextNode())) {
-      insertOpToDistance[asyncCommit] = distance;
-    }
-    d = distance + 1;
-  }
-  for (Value operand : op->getOperands()) {
-    Value v = operand;
-    llvm::SmallDenseSet<Value> seenBlockArgs;
-    while (auto arg = v.dyn_cast<BlockArgument>()) {
-      if (!seenBlockArgs.insert(v).second)
-        break;
-      if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
-        auto yieldOp = op->getBlock()->getTerminator();
-        v = yieldOp->getOperand(arg.getArgNumber() - 1);
-        continue;
-      }
-      break;
-    }
-    Operation *defOp = v.getDefiningOp();
-    if (defOp && defOp->getBlock() == op->getBlock()) {
-      recursiveHelper(defOp, seen, insertOpToDistance, d);
-    }
-  }
 }
 
 static bool
