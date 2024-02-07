@@ -48,7 +48,6 @@ static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
 
 static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
                             Value insertIdx, Value extractIdx,
-                            DenseMap<Operation *, unsigned>& opToStage,
                             DenseMap<Operation *, PipelineOpInfo>& opToInfo) {
   OpBuilder builder(forOp);
   // Replace the load with insert/extract slice.
@@ -60,10 +59,6 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
       loadOp.getOther(), loadOp.getCache(), loadOp.getEvict(),
       loadOp.getIsVolatile(), /*axis*/ 0);
   auto commmit = builder.create<ttg::AsyncCommitGroupOp>(loc);
-
-  opToStage.insert({insertOp, opToStage[loadOp]});
-  opToStage.insert({commmit, opToStage[loadOp]});
-  opToStage.erase(loadOp);
 
   opToInfo.insert({insertOp, { .stage = stage }});
   opToInfo.insert({commmit, { .stage = stage }});
@@ -168,12 +163,11 @@ static void createTMALoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
 /// Create an async load equivalent to the given load.
 static void createAsyncLoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
                             Value insertIdx, Value extractIdx, Value phase,
-                            DenseMap<Operation *, unsigned>& opToStage,
                             DenseMap<Operation *, PipelineOpInfo>& opToInfo) {
   if (isLoadFromTensorPtr(loadOp)) {
     createTMALoad(forOp, loadOp, alloc, insertIdx, extractIdx, phase);
   } else {
-    createAsyncCopy(forOp, loadOp, alloc, insertIdx, extractIdx, opToStage, opToInfo);
+    createAsyncCopy(forOp, loadOp, alloc, insertIdx, extractIdx, opToInfo);
   }
 }
 
@@ -399,9 +393,6 @@ loadOpsToDistanceAndUse(scf::ForOp forOp) {
 
 /// Collect loads to pipeline. Returns true if loads are found to pipeline.
 static bool collectOpsToPipeline(scf::ForOp forOp,
-                                 SmallVectorImpl<LoadDotOperand> &ops,
-                                 DenseMap<Operation *, unsigned> &opToStage,
-                                 DenseMap<Operation *, Operation *> &opToUse,
                                  DenseMap<Operation *, PipelineOpInfo> &opInfo,
                                  int numStages,
                                  bool &hasMMAV3) {
@@ -454,19 +445,15 @@ static bool collectOpsToPipeline(scf::ForOp forOp,
       if (!candidate)
         continue;
       std::optional<PipelineOpInfo> loadWithInfo = loadInfo(loadOp, hasMMAV3);
-      std::optional<LoadDotOperand> loadWithDotOperand =
-          loadDotOperand(loadOp, hasMMAV3);
-      if (!loadWithDotOperand.has_value())
+      if (!loadWithInfo.has_value())
         continue;
       assert (loadOpToDistance.count(loadOp) && "LoadOp not found in loadOpToDistance map");
       int stage = (maxDistance - loadOpToDistance[loadOp].first) * distBetweenLoads;
       
-      loadWithInfo.value().stage = stage;
-      loadWithInfo.value().use = loadOpToDistance[loadOp].second;
       opInfo[loadOp] = loadWithInfo.value();
-      opToStage[loadOp] = stage;
-      opToUse[loadOp] = loadOpToDistance[loadOp].second;
-      ops.push_back(loadWithDotOperand.value());
+      opInfo[loadOp].stage = stage;
+      opInfo[loadOp].use = loadOpToDistance[loadOp].second;
+      
       foundLoads = true;
     }
     if (auto dotOp = dyn_cast<tt::DotOp>(&op)) {
@@ -474,7 +461,6 @@ static bool collectOpsToPipeline(scf::ForOp forOp,
         .stage = numStages - 1,
       };
       opInfo[dotOp] = dotOpInfo;
-      opToStage[dotOp] = numStages - 1;
     }
   }
   return foundLoads;
@@ -519,10 +505,8 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
 // Convert load ops into their asyn version and apply multi-buffering based on
 // the number of stages.
 static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
-                                        ArrayRef<LoadDotOperand> loads,
                                         DenseMap<Operation *, PipelineOpInfo>& opToInfo,
                                         DenseMap<Operation *, unsigned>& loadToNumBuffers,
-                                        DenseMap<Operation *, unsigned>& opToStage,
                                         bool hasMMAV3) {
   struct AsyncLoad {
     AsyncLoad(tt::LoadOp loadOp, Value alloc) : loadOp(loadOp), alloc(alloc) {}
@@ -544,23 +528,8 @@ static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
       [](auto &a, auto &b) { return a.second < b.second; })
                            ->second;
 
-  for (const LoadDotOperand &loadOperand : loads) {
-    tt::LoadOp loadOp = loadOperand.load;
-    llvm::outs() << "First loop:\n"; loadOp->dump();
-    Value alloc = createAlloc(forOp, loadOp, loadOperand.dotOperandEncoding,
-                              numBuffers, loadOperand.needTrans);
-    assert(alloc && "Failed to create alloc for the async load.");
-    newOperands.push_back(alloc);
-    allocs.push_back(alloc);
-    asyncLoads.emplace_back(loadOp, alloc);
-    if (isLoadFromTensorPtr(loadOp))
-      needsMbarrierPhase = true;
-    else
-      needsAsyncWait = true;
-  }
-  /*for (auto& loadInfoPair : opToInfo) {
+  for (auto& loadInfoPair : opToInfo) {
     if (tt::LoadOp loadOp = dyn_cast<tt::LoadOp>(loadInfoPair.first)) {
-      llvm::outs() << "Second loop:\n"; loadOp->dump();
       PipelineOpInfo loadInfo = loadInfoPair.second;
       Value alloc = createAlloc(forOp, loadOp, loadInfo.dotOperandEncoding,
                                 numBuffers, loadInfo.needTrans);
@@ -573,7 +542,7 @@ static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
       else
         needsAsyncWait = true;
     }
-  }*/
+  }
 
   OpBuilder builder(forOp);
   Location loc = forOp.getLoc();
@@ -581,15 +550,12 @@ static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
   Value minusOne = builder.create<arith::ConstantIntOp>(loc, -1, 32);
   Value zero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
   Value one = builder.create<arith::ConstantIntOp>(loc, 1, 32);
-  SmallVector<Value, 4> insertIdx(asyncLoads.size(), minusOne);
-  SmallVector<Value, 4> extractIdx(asyncLoads.size(), minusOne);
+  Value insertIdx = minusOne;
+  Value extractIdx = minusOne;
   Value numBuffersVal =
       builder.create<arith::ConstantIntOp>(loc, numBuffers, 32);
-  for (int i = 0; i < asyncLoads.size(); i++) {
-    newOperands.push_back(insertIdx[i]);
-    newOperands.push_back(extractIdx[i]);
-  }
-  
+  newOperands.push_back(insertIdx);
+  newOperands.push_back(extractIdx);
   Value phase;
   if (needsMbarrierPhase) {
     phase = builder.create<arith::ConstantIntOp>(loc, 0, 1);
@@ -604,54 +570,40 @@ static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
   for (int i = 0; i < asyncLoads.size(); i++) {
     asyncLoads[i].alloc = newForOp.getBody()->getArgument(newOperandIndex + i);
   }
-  for (int i = 0; i < asyncLoads.size(); i++) {
-    insertIdx[i] =
-        newForOp.getBody()->getArgument(newOperandIndex + asyncLoads.size() + i*2);
-    extractIdx[i] =
-        newForOp.getBody()->getArgument(newOperandIndex + asyncLoads.size() + i*2 + 1);
-  }
+  insertIdx =
+      newForOp.getBody()->getArgument(newOperandIndex + asyncLoads.size());
+  extractIdx =
+      newForOp.getBody()->getArgument(newOperandIndex + asyncLoads.size() + 1);
 
   // Create two counters for the insert and extract indices to avoid creating
   // long liverange.
+  builder.setInsertionPoint(newForOp.getBody(),
+                            newForOp.getBody()->begin());
+  insertIdx = builder.create<arith::AddIOp>(loc, insertIdx, one);
+  Value cndIns = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
+                                               insertIdx, numBuffersVal);
+  insertIdx = builder.create<arith::SelectOp>(loc, cndIns, insertIdx, zero);
 
-  SmallVector<Value> newYieldOperands;
-  
-  for (int i = 0; i < asyncLoads.size(); i++) {
-    builder.setInsertionPoint(asyncLoads[i].loadOp);
-    insertIdx[i] = builder.create<arith::AddIOp>(loc, insertIdx[i], one);
-    Value cndIns = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
-                                                insertIdx[i], numBuffersVal);
-    insertIdx[i] = builder.create<arith::SelectOp>(loc, cndIns, insertIdx[i], zero);
+  extractIdx = builder.create<arith::AddIOp>(loc, extractIdx, one);
+  Value cndExt = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
+                                               extractIdx, numBuffersVal);
+  extractIdx = builder.create<arith::SelectOp>(loc, cndExt, extractIdx, zero);
 
-    extractIdx[i] = builder.create<arith::AddIOp>(loc, extractIdx[i], one);
-    Value cndExt = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
-                                                extractIdx[i], numBuffersVal);
-    extractIdx[i] = builder.create<arith::SelectOp>(loc, cndExt, extractIdx[i], zero);
-
-    createAsyncLoad(forOp, asyncLoads[i].loadOp, asyncLoads[i].alloc, insertIdx[i],
-                    extractIdx[i], phase, opToStage, opToInfo);
-
-    newYieldOperands.push_back(insertIdx[i]);
-    newYieldOperands.push_back(extractIdx[i]);
-  }
-
-  /*if (needsMbarrierPhase) {
+  if (needsMbarrierPhase) {
     phase = newForOp.getBody()->getArgument(newOperandIndex +
                                             asyncLoads.size() + 2);
     Value oneI1 = builder.create<arith::ConstantIntOp>(loc, 1, 1);
     Value nextPhase = builder.create<arith::XOrIOp>(loc, phase, oneI1);
     phase = builder.create<arith::SelectOp>(loc, cndExt, phase, nextPhase);
-  }*/
+  }
 
-  bool firstLoad = true;
-  /*for (AsyncLoad &asyncLoad : asyncLoads) {
+  for (AsyncLoad &asyncLoad : asyncLoads) {
     createAsyncLoad(forOp, asyncLoad.loadOp, asyncLoad.alloc, insertIdx,
-                    extractIdx, phase, opToStage, opToInfo);
-    firstLoad = false;
+                    extractIdx, phase, opToInfo);
   }
   SmallVector<Value> newYieldOperands = {insertIdx, extractIdx};
   if (needsMbarrierPhase)
-    newYieldOperands.push_back(phase);*/
+    newYieldOperands.push_back(phase);
   // Patch the yield with the updated counters.
   appendToYield(forOp, newYieldOperands);
 
@@ -829,14 +781,14 @@ isScheduleValid(scf::ForOp forOp,
 // create the schedule for a matmul loop. This is ad hoc based on how we know
 // matmul loops should be pipelined and is not a generic scheduler.
 static std::vector<std::pair<Operation *, unsigned>>
-createSchedule(scf::ForOp forOp, int numStages, DenseMap<Operation *, unsigned>& opToStage, DenseMap<Operation *, PipelineOpInfo>& opToInfo, bool prefetchExtract) {
+createSchedule(scf::ForOp forOp, int numStages, DenseMap<Operation *, PipelineOpInfo>& opToInfo, bool prefetchExtract) {
   llvm::outs() << "For loop:\n";
   forOp.dump();
 
   for (int i=0; i<numStages; i++) {
     llvm::outs() << "\nops in stage " << i << ":\n";
-    for (auto& [op, stage] : opToStage) {
-      if (i == stage) {
+    for (auto& [op, info] : opToInfo) {
+      if (i == info.stage) {
         op->dump();
       }
     }
@@ -861,9 +813,9 @@ createSchedule(scf::ForOp forOp, int numStages, DenseMap<Operation *, unsigned>&
   };
 
   SmallVector<DenseSet<Operation *>> insertOps(numStages);
-  for (auto& [op, stage] : opToStage) {
+  for (auto& [op, info] : opToInfo) {
     if (isa<ttg::InsertSliceAsyncOp, ttng::InsertSliceTMAOp, ttg::AsyncCommitGroupOp>(op)) {
-      insertOps[stage].insert(op);
+      insertOps[info.stage].insert(op);
     }
   }
 
@@ -986,20 +938,14 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     scf::ForOp &forOp, int numStages, mlir::triton::PipeliningOption &options) {
   // 1. First collect "interesting" operations with a stage where to schedule
   // them. This gives a coarse scheduling for the loop.
-  SmallVector<LoadDotOperand> loads;
   DenseMap<Operation *, PipelineOpInfo> opToInfo;
   // This map defines our coarse scheduling for the interesting ops.
-  DenseMap<Operation *, unsigned> opToStage;
-  DenseMap<Operation *, Operation *> opToUse;
   bool hasMMAV3 = false;
-  if (!collectOpsToPipeline(forOp, loads, opToStage, opToUse, opToInfo, numStages, hasMMAV3))
+  if (!collectOpsToPipeline(forOp, opToInfo, numStages, hasMMAV3))
     return false;
   bool hasAsynCp = llvm::any_of(opToInfo, [](auto &pair) {
     return isa<tt::LoadOp>(pair.first) && !isLoadFromTensorPtr(cast<tt::LoadOp>(pair.first));
   });
-  /*bool hasAsynCp = llvm::any_of(loads, [](LoadDotOperand &load) {
-    return !isLoadFromTensorPtr(load.load);
-  });*/
 
   // Calculate the number of buffers needed for each load.
   DenseMap<Operation *, unsigned> loadToNumBuffers;
@@ -1020,30 +966,14 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     }
     loadToNumBuffers[opInfoPair.first] = numBuffers;
   }
-  /*for (LoadDotOperand &load : loads) {
-    assert(opToUse.count(load.load) && "LoadOp not found in opToUse map");
-    assert(opToStage.count(load.load) && "LoadOp not found in opToStage map");
-    assert(opToStage.count(opToUse[load.load]) && "LoadOp use not found in opToStage map");
- 
-    unsigned defStage = opToStage[load.load];
-    unsigned useStage = opToStage[opToUse[load.load]];
-     unsigned numBuffers = useStage - defStage;
- 
-    if (hasMMAV3 && isa<tt::DotOp>(opToUse[load.load])) {
-       // For MMAv3, we need an extra buffer as this is assumed in the wgmma
-       // pipelining post-processing.
-       numBuffers++;
-     }
-    loadToNumBuffers[load.load] = numBuffers;
-   }*/
 
   // 2. Convert the loads into async loads and create the allocs.
-  SmallVector<Value> allocs = createAsynOps(forOp, loads, opToInfo, loadToNumBuffers, opToStage, hasMMAV3);
+  SmallVector<Value> allocs = createAsynOps(forOp, opToInfo, loadToNumBuffers, hasMMAV3);
 
   // 3. Create the final schedule for the kernel loop. This will dictate the
   // stages and order of operations to the pipeline expander.
   std::vector<std::pair<Operation *, unsigned>> schedule =
-      createSchedule(forOp, numStages, opToStage, opToInfo, /*prefetchExtract=*/!hasMMAV3);
+      createSchedule(forOp, numStages, opToInfo, /*prefetchExtract=*/!hasMMAV3);
 
   // 4. Fill out the pipeline options.
   options.getScheduleFn =
