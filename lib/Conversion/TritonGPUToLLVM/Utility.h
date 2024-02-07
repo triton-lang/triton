@@ -1014,27 +1014,28 @@ DenseMap<unsigned, Value> static getSwizzledSharedPtrs(
       // Shrink by swizzling blocks
       idxCol = urem(idxCol, numElemsPerSwizzlingRowVal);
       strideRow = numElemsPerSwizzlingRowVal;
-    } else {
-      if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxCol.getDefiningOp()))
-        if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
-                add.getRhs().getDefiningOp())) {
-          unsigned cst =
-              _cst.getValue().cast<IntegerAttr>().getValue().getSExtValue();
-          unsigned key = cst % (outVec * maxPhase);
-          cacheCol.insert({key, idxCol});
-          idxCol = cacheCol[key];
-          immedateOffCol = cst / (outVec * maxPhase) * (outVec * maxPhase);
-        }
-      if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxRow.getDefiningOp()))
-        if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
-                add.getRhs().getDefiningOp())) {
-          unsigned cst =
-              _cst.getValue().cast<IntegerAttr>().getValue().getSExtValue();
-          unsigned key = cst % (perPhase * maxPhase);
-          cacheRow.insert({key, idxRow});
-          idxRow = cacheRow[key];
-          immedateOffRow = cst / (perPhase * maxPhase) * (perPhase * maxPhase);
-        }
+    }
+    if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxCol.getDefiningOp())) {
+      if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
+              add.getRhs().getDefiningOp())) {
+        unsigned cst =
+            _cst.getValue().cast<IntegerAttr>().getValue().getSExtValue();
+        unsigned key = cst % (outVec * maxPhase);
+        cacheCol.insert({key, idxCol});
+        idxCol = cacheCol[key];
+        immedateOffCol = cst / (outVec * maxPhase) * (outVec * maxPhase);
+      }
+    }
+    if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxRow.getDefiningOp())) {
+      if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
+              add.getRhs().getDefiningOp())) {
+        unsigned cst =
+            _cst.getValue().cast<IntegerAttr>().getValue().getSExtValue();
+        unsigned key = cst % (perPhase * maxPhase);
+        cacheRow.insert({key, idxRow});
+        idxRow = cacheRow[key];
+        immedateOffRow = cst / (perPhase * maxPhase) * (perPhase * maxPhase);
+      }
     }
     // row offset is simply row index
     Value rowOff = mul(idxRow, strideRow);
@@ -1056,8 +1057,8 @@ DenseMap<unsigned, Value> static getSwizzledSharedPtrs(
     // compute immediate offset
     Value immediateOff;
     if (outOrder.size() >= 2) {
-      immediateOff = add(mul(i32_val(immedateOffRow), srcStrides[outOrder[1]]),
-                         i32_val(immedateOffCol));
+      immediateOff =
+          add(mul(i32_val(immedateOffRow), strideRow), i32_val(immedateOffCol));
     } else {
       immediateOff = i32_val(immedateOffCol);
     }
