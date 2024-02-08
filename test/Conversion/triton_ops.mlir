@@ -211,6 +211,14 @@ tt.func @inline_asm(%0: tensor<512xi8>) {
   tt.return
 }
 
+// CHECK-LABEL: inline_asm_scalar
+// CHECK: tt.elementwise_inline_asm "shl.b32 $0, $0, 3;" {{.*}} : i32 -> i32
+tt.func @inline_asm_scalar(%0: i32) {
+  %1 = tt.elementwise_inline_asm "shl.b32 $0, $0, 3;"
+    {constraints = "=r,r", packed_element = 1 : i32, pure = true} %0 : i32 -> i32
+  tt.return
+}
+
 // CHECK-LABEL: reshape
 tt.func @reshape(%0: tensor<512xi32>) {
   // CHECK: tt.reshape %{{.+}} {allow_reorder = false} : tensor<512xi32> -> tensor<16x32xi32>

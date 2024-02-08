@@ -16,10 +16,6 @@ import triton.ops
 @pytest.mark.parametrize('seq_par', [True, False])
 def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par):
     import os
-    enable_tma = os.environ.get('ENABLE_TMA', 'not found').lower()
-    if enable_tma in ["on", "true", "1"]:
-        if dtype == torch.bfloat16:
-            pytest.skip('bfloat16 tma not support currently')
 
     capability = torch.cuda.get_device_capability()
     interpreter = os.environ.get("TRITON_INTERPRET", 'not found') in ["on", "true", "1"]

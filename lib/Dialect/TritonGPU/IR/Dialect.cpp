@@ -159,7 +159,10 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
 SmallVector<unsigned> getContigPerThread(Attribute layout) {
   if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
     assert(mmaLayout.isVolta() || mmaLayout.isAmpere() || mmaLayout.isHopper());
-    return {1, 2};
+    auto rank = triton::gpu::getOrder(mmaLayout).size();
+    SmallVector<unsigned> contigPerThread(rank, 1);
+    contigPerThread[rank - 1] = 2;
+    return contigPerThread;
   } else if (layout.isa<MfmaEncodingAttr>()) {
     return {1, 1};
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
@@ -231,9 +234,18 @@ SmallVector<unsigned> getOrder(Attribute layout) {
     return SmallVector<unsigned>(blockedLayout.getOrder().begin(),
                                  blockedLayout.getOrder().end());
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingTrait>()) {
-    return {1, 0};
+    auto distributedLayout = layout.cast<DistributedEncodingTrait>();
+    auto rank = distributedLayout.getWarpsPerCTA().size();
+    SmallVector<unsigned> order(rank);
+    for (auto i = 0; i < rank; ++i)
+      order[i] = rank - 1 - i;
+    return order;
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
-    return {1, 0};
+    auto rank = getWarpsPerCTA(dotLayout.getParent()).size();
+    SmallVector<unsigned> order(rank);
+    for (auto i = 0; i < rank; ++i)
+      order[i] = rank - 1 - i;
+    return order;
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     SmallVector<unsigned> parentOrder = getOrder(sliceLayout.getParent());
     unsigned dim = sliceLayout.getDim();
@@ -768,7 +780,8 @@ SmallVector<unsigned>
 NvidiaMmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
                                          Type eltTy) const {
   size_t rank = shape.size();
-  assert(rank == 2 && "Unexpected rank of mma layout");
+  assert(rank == 2 ||
+         (rank == 3 && isAmpere()) && "Unexpected rank of mma layout");
   assert((isVolta() || isAmpere() || isHopper()) &&
          "For NvidiaMmaEncodingAttr only version 1~3 is supported");
 
@@ -792,11 +805,15 @@ NvidiaMmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
     elemsPerThread[1] = resN;
   } else if (isAmpere()) {
     unsigned elemsRow =
-        ceil<unsigned>(shapePerCTA[0], 16 * getWarpsPerCTA()[0]) * 2;
+        ceil<unsigned>(shapePerCTA[rank - 2], 16 * getWarpsPerCTA()[rank - 2]) *
+        2;
     unsigned elemsCol =
-        ceil<unsigned>(shapePerCTA[1], 8 * getWarpsPerCTA()[1]) * 2;
-    elemsPerThread[0] = elemsRow;
-    elemsPerThread[1] = elemsCol;
+        ceil<unsigned>(shapePerCTA[rank - 1], 8 * getWarpsPerCTA()[rank - 1]) *
+        2;
+    if (rank == 3)
+      elemsPerThread[0] = ceil<unsigned>(shapePerCTA[0], getWarpsPerCTA()[0]);
+    elemsPerThread[rank - 2] = elemsRow;
+    elemsPerThread[rank - 1] = elemsCol;
   } else if (isHopper()) {
     auto wpt = getWarpsPerCTA();
     auto instrMNK = getInstrShape();
@@ -909,10 +926,11 @@ SmallVector<unsigned> DotOperandEncodingAttr::getCTAOrder() const {
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getCTASplitNum() const {
   SmallVector<unsigned> res = ::getCTASplitNum(getParent());
-  assert(res.size() == 2 && "Invalid dotLayout");
+  auto rank = res.size();
+  assert(rank == 2 || rank == 3 && "Invalid dotLayout");
 
   // Do not split CTA in K dimension
-  getOpIdx() == 0 ? res[1] = 1 : res[0] = 1;
+  getOpIdx() == 0 ? res[rank - 1] = 1 : res[rank - 2] = 1;
   return res;
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpsPerCTA() const {
@@ -1446,12 +1464,23 @@ SmallVector<unsigned> NvidiaMmaEncodingAttr::getWarpOrder() const {
   return ::getOrder(*this);
 }
 SmallVector<unsigned> NvidiaMmaEncodingAttr::getThreadsPerWarp() const {
-  if (isVolta())
-    return {4, 8};
-  if (isAmpere())
-    return {8, 4};
-  if (isHopper())
-    return {8, 4};
+  auto rank = getWarpsPerCTA().size();
+  SmallVector<unsigned> res(rank, 1);
+  if (isVolta()) {
+    res[rank - 2] = 4;
+    res[rank - 1] = 8;
+    return res;
+  }
+  if (isAmpere()) {
+    res[rank - 2] = 8;
+    res[rank - 1] = 4;
+    return res;
+  }
+  if (isHopper()) {
+    res[rank - 2] = 8;
+    res[rank - 1] = 4;
+    return res;
+  }
   llvm::report_fatal_error(
       "getThreadsPerWarp not implemented for unknown Mma version ");
 }
@@ -1459,22 +1488,37 @@ SmallVector<unsigned> NvidiaMmaEncodingAttr::getThreadOrder() const {
   return ::getOrder(*this);
 }
 SmallVector<unsigned> NvidiaMmaEncodingAttr::getSizePerThread() const {
+  auto rank = ::getOrder(*this).size();
+  SmallVector<unsigned> res(rank, 1);
   if (isAmpere()) {
-    return {2, 2};
-  } else if (isVolta()) {
-    return {1, 2};
-  } else if (isHopper()) {
+    res[rank - 2] = 2;
+    res[rank - 1] = 2;
+    return res;
+  }
+  if (isVolta()) {
+    res[rank - 2] = 1;
+    res[rank - 1] = 2;
+    return res;
+  }
+  if (isHopper()) {
     auto instrShape = getInstrShape();
     // TODO(thomas): what are those magic numbers?
     return SmallVector<unsigned>{instrShape[0] * 4 / 32, instrShape[1] / 4};
-  } else {
-    llvm_unreachable("Unexpected mma version");
   }
+  llvm_unreachable("Unexpected mma version");
 }
+
 SmallVector<unsigned>
 NvidiaMmaEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
-  if (isAmpere())
-    return {16 * getWarpsPerCTA()[0], 8 * getWarpsPerCTA()[1]};
+  if (isAmpere()) {
+    auto warpsPerCTA = getWarpsPerCTA();
+    auto rank = warpsPerCTA.size();
+    SmallVector<unsigned> shapePerCTATile(warpsPerCTA.begin(),
+                                          warpsPerCTA.end());
+    shapePerCTATile[rank - 1] *= 8;
+    shapePerCTATile[rank - 2] *= 16;
+    return shapePerCTATile;
+  }
   if (isVolta()) {
     assert(!tensorShape.empty() && "Volta needs the tensorShape");
     if (tensorShape.size() == 1) // must be SliceEncoding
@@ -1552,17 +1596,26 @@ int NvidiaMmaEncodingAttr::getMMAv1Vec(int opIdx) const {
 SmallVector<int64_t> NvidiaMmaEncodingAttr::getMMAv2Rep(ArrayRef<int64_t> shape,
                                                         int bitwidth,
                                                         int opIdx) const {
-  SmallVector<int> shapePerWarp = {16, 8, 4 * 64 / bitwidth};
+  auto rank = shape.size();
   auto warpsPerCTA = getWarpsPerCTA();
+  SmallVector<int> shapePerWarp = {1, 16, 8, 4 * 64 / bitwidth};
+  int numRepBatch =
+      rank == 3
+          ? std::max<int64_t>(1, shape[0] / (shapePerWarp[0] * warpsPerCTA[0]))
+          : 1;
   assert(isAmpere());
+
   if (opIdx == 0)
-    return {std::max<int64_t>(1, shape[0] / (shapePerWarp[0] * warpsPerCTA[0])),
-            std::max<int64_t>(1, shape[1] / shapePerWarp[2])};
+    return {numRepBatch,
+            std::max<int64_t>(1, shape[rank - 2] /
+                                     (shapePerWarp[1] * warpsPerCTA[rank - 2])),
+            std::max<int64_t>(1, shape[rank - 1] / shapePerWarp[3])};
   else {
     assert(opIdx == 1);
-    return {
-        std::max<int64_t>(1, shape[0] / shapePerWarp[2]),
-        std::max<int64_t>(1, shape[1] / (shapePerWarp[1] * warpsPerCTA[1]))};
+    return {numRepBatch,
+            std::max<int64_t>(1, shape[rank - 2] / shapePerWarp[3]),
+            std::max<int64_t>(1, shape[rank - 1] / (shapePerWarp[2] *
+                                                    warpsPerCTA[rank - 1]))};
   }
 }
 unsigned NvidiaMmaEncodingAttr::getTotalElemsPerThreadForOperands(
@@ -1579,9 +1632,9 @@ unsigned NvidiaMmaEncodingAttr::getTotalElemsPerThreadForOperands(
   if (isAmpere()) {
     auto rep = getMMAv2Rep(shapePerCTA, eltTy.getIntOrFloatBitWidth(), opIdx);
     if (opIdx == 0)
-      return 4 * rep[0] * rep[1];
+      return 4 * rep[0] * rep[1] * rep[2];
     if (opIdx == 1)
-      return 4 * rep[0] * std::max<int>(rep[1] / 2, 1);
+      return 4 * rep[0] * rep[1] * std::max<int>(rep[2] / 2, 1);
   }
   // V100
   if (isVolta()) {
@@ -1650,10 +1703,17 @@ NvidiaMmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
                                                         int opIdx) const {
   assert(isAmpere() && "mmaLayout version = 1 is not implemented yet");
   auto parentShapePerCTATile = getShapePerCTATile(shape);
+  auto rank = parentShapePerCTATile.size();
   if (opIdx == 0) {
-    return {parentShapePerCTATile[0], 16};
+    if (rank == 2)
+      return {parentShapePerCTATile[rank - 2], 16};
+    else
+      return {parentShapePerCTATile[0], parentShapePerCTATile[rank - 2], 16};
   } else if (opIdx == 1) {
-    return {16, parentShapePerCTATile[1]};
+    if (rank == 2)
+      return {16, parentShapePerCTATile[rank - 1]};
+    else
+      return {parentShapePerCTATile[0], 16, parentShapePerCTATile[rank - 1]};
   } else {
     llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
   }

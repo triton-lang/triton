@@ -102,7 +102,7 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   auto repShape = getRepShapeForCvtLayout(op);
   if (repShape.empty())
     return repShape;
-
+  auto rank = repShape.size();
   auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
   auto dstTy = op.getResult().getType().cast<RankedTensorType>();
   Attribute srcLayout = srcTy.getEncoding();
@@ -138,21 +138,40 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   inVec = std::min(srcContigPerThread[inOrd[0]], dstContigPerThread[inOrd[0]]);
   outVec = dstContigPerThread[outOrd[0]];
 
-  if (repShape.size() <= 1)
+  // TODO: We could make this condition broader to catch more cases of N-D
+  // transposes that would benefit from this optimization. For example if the
+  // inner dimension is not transposed but is small there could still be
+  // benefits.
+  if (srcLayout.isa<BlockedEncodingAttr>() &&
+      dstLayout.isa<BlockedEncodingAttr>() && outOrd[0] != (rank - 1) &&
+      inOrd[0] != outOrd[0]) {
+    // Don't vectorize for transpose. Only the read or the write can be
+    // vectorized and this causes extra bank conflicts on the non-vectorized
+    // accesses.
+    // Ex: if we transpose a 32x32 tensor, to avoid bank conflicts with scalar
+    // loads/stores we need a padding of 1 element. If we vectorize the load
+    // into a load4 then the padding has to be either 0 or 4. In both those
+    // cases we would get extra bank conflicts that would make performance
+    // worse.
+    inVec = 1;
+    outVec = 1;
+  }
+  // For conversions to MmaV1 (Nvidia V100), this inVec is hardcoded in the
+  // codegen.
+  if (auto mma = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>())
+    if (mma.getVersionMajor() == 1)
+      inVec = srcContigPerThread[inOrd[0]];
+
+  if (rank <= 1)
     return repShape;
-  unsigned paddedDim = 1;
+  // pad the last dimension
+  unsigned paddedDim = rank - 1;
   if (auto dstBlockedLayout = dstLayout.dyn_cast<BlockedEncodingAttr>()) {
     paddedDim = dstBlockedLayout.getOrder()[0];
   }
   unsigned pad = std::max(inVec, outVec);
   repShape[paddedDim] += pad;
   return repShape;
-}
-
-SmallVector<unsigned>
-getScratchConfigForStoreAsync(triton::nvidia_gpu::StoreAsyncTMAOp op) {
-  auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
-  return convertType<unsigned, int64_t>(getShapePerCTA(srcTy));
 }
 
 // TODO: extend beyond scalars
@@ -230,13 +249,6 @@ private:
                                                              kAlignment);
       }
     }
-    if (isa<triton::nvidia_gpu::AllocMBarrierOp>(op)) {
-      Value result = op->getResult(0);
-      if (!result.getType().isa<RankedTensorType>())
-        // In case AllocMBarrierOp is allocating scalar mbarriers
-        allocation->addBuffer<BufferT::BufferKind::Explicit>(result, 8,
-                                                             kAlignment);
-    }
   }
 
   template <BufferT::BufferKind T>
@@ -298,18 +310,6 @@ private:
               : elems * std::max<int>(8, srcTy.getElementTypeBitWidth()) / 8;
       maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
                                                           scratchAlignment);
-    } else if (auto storeAsyncOp =
-                   dyn_cast<triton::nvidia_gpu::StoreAsyncTMAOp>(op)) {
-      auto srcTy = storeAsyncOp.getSrc().getType().cast<RankedTensorType>();
-      auto srcEncoding = srcTy.getEncoding();
-      if (!srcEncoding.isa<NvidiaMmaEncodingAttr>()) {
-        return;
-      }
-      auto smemShape = getScratchConfigForStoreAsync(storeAsyncOp);
-      unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
-                                       std::multiplies{});
-      auto bytes = elems * std::max<int>(8, srcTy.getElementTypeBitWidth()) / 8;
-      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes, 1024);
     } else if (auto atomicRMWOp = dyn_cast<triton::AtomicRMWOp>(op)) {
       auto value = op->getOperand(0);
       // only scalar requires scratch memory
@@ -473,13 +473,6 @@ private:
     // Analyze liveness of explicit buffers
     Liveness liveness(operation);
     auto getValueLivenessRange = [&](Value value) {
-      // TODO(Keren): Investigate mbarrier and figure out how to clean this up
-      // Shared memory allocated by mbarrier cannot be reused
-      if (value.getDefiningOp() &&
-          isa<triton::nvidia_gpu::AllocMBarrierOp>(value.getDefiningOp()))
-        return Interval(std::numeric_limits<size_t>::min(),
-                        std::numeric_limits<size_t>::max());
-
       auto liveOperations = liveness.resolveLiveness(value);
       auto minId = std::numeric_limits<size_t>::max();
       auto maxId = std::numeric_limits<size_t>::min();

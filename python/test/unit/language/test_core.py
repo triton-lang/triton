@@ -2668,6 +2668,107 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
                 'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
 
 
+@pytest.mark.parametrize("B", [1, 2, 4, 8])
+@pytest.mark.parametrize("num_warps", [1, 2, 4, 8, 16])
+@pytest.mark.parametrize("M, N, K", [(64, 64, 64), (32, 32, 32)])
+@pytest.mark.parametrize("in_dtype_str, out_dtype_str", [('int8', 'int8'), ('float16', 'float16'),
+                                                         ('float16', 'float32'), ('float32', 'float32')])
+def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str):
+
+    @triton.jit
+    def kernel(
+        q_ptr,
+        k_ptr,
+        o_ptr,
+        stride_qb,
+        stride_qm,
+        stride_qk,
+        stride_kb,
+        stride_kk,
+        stride_kn,
+        stride_ob,
+        stride_om,
+        stride_on,
+        BLOCK_B: tl.constexpr,
+        BLOCK_M: tl.constexpr,
+        BLOCK_N: tl.constexpr,
+        BLOCK_K: tl.constexpr,
+        ALLOW_TF32: tl.constexpr,
+        out_dtype: tl.constexpr = tl.float32,
+    ):
+        startm = tl.program_id(0) * BLOCK_M
+        startn = tl.program_id(1) * BLOCK_N
+        offs_b = tl.arange(0, BLOCK_B)
+        offs_m = startm + tl.arange(0, BLOCK_M)
+        offs_n = startn + tl.arange(0, BLOCK_N)
+        offs_k = tl.arange(0, BLOCK_K)
+        q_ptrs = q_ptr + offs_b[:, None, None] * stride_qb + offs_m[None, :, None] * stride_qm + offs_k[
+            None, None, :] * stride_qk
+        k_ptrs = k_ptr + offs_b[:, None, None] * stride_kb + offs_k[None, :, None] * stride_kk + offs_n[
+            None, None, :] * stride_kn
+        q = tl.load(q_ptrs)
+        k = tl.load(k_ptrs)
+        qk = tl.dot(q, k, allow_tf32=ALLOW_TF32, out_dtype=out_dtype)
+        o_ptrs = o_ptr + offs_b[:, None, None] * stride_ob + offs_m[None, :, None] * stride_om + offs_n[
+            None, None, :] * stride_on
+        tl.store(o_ptrs, qk)
+
+    if out_dtype_str == 'int8':
+        out_dtype = tl.int8
+    elif out_dtype_str == 'float16':
+        out_dtype = tl.float16
+    else:
+        out_dtype = tl.float32
+
+    rs = RandomState(17)
+    x = numpy_random((B, M, K), dtype_str=in_dtype_str, rs=rs)
+    y = numpy_random((B, K, N), dtype_str=in_dtype_str, rs=rs)
+    if in_dtype_str == 'int8':
+        out = numpy_random((B, M, N), dtype_str='int32', rs=rs)
+    else:
+        out = numpy_random((B, M, N), dtype_str=out_dtype_str, rs=rs)
+
+    x_tri = to_triton(x)
+    y_tri = to_triton(y)
+    out_tri = to_triton(out)
+
+    BLOCK_B = B
+    BLOCK_M, BLOCK_N = 32, 32
+    BLOCK_K = K
+
+    grid = (
+        triton.cdiv(M, BLOCK_M),
+        triton.cdiv(N, BLOCK_N),
+    )
+    kernel[grid](
+        x_tri,
+        y_tri,
+        out_tri,
+        x_tri.stride(0),
+        x_tri.stride(1),
+        x_tri.stride(2),
+        y_tri.stride(0),
+        y_tri.stride(1),
+        y_tri.stride(2),
+        out_tri.stride(0),
+        out_tri.stride(1),
+        out_tri.stride(2),
+        BLOCK_B=BLOCK_B,
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        BLOCK_K=BLOCK_K,
+        ALLOW_TF32=bool(in_dtype_str == 'float32'),
+        out_dtype=out_dtype,
+        num_warps=num_warps,
+    )
+
+    if in_dtype_str == 'int8':
+        out_ref = np.matmul(x.astype(np.float32), y.astype(np.float32)).astype(np.int32)
+    else:
+        out_ref = np.matmul(x, y)
+    np.testing.assert_allclose(out_ref, to_numpy(out_tri), rtol=0.01, atol=1e-2)
+
+
 def test_max_num_imprecise_acc(device):
 
     if is_hip():

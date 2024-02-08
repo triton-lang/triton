@@ -299,13 +299,13 @@ compared to 1*64 when the hasLeadingOffset is false.
           // for now, disable swizzle when using transposed int8 tensor cores
           if ((32 / typeWidthInBit != dotOpEnc.getKWidth()) && order[0] == inner)
             return get(context, 1, 1, 1, order, CTALayout);
-
+          int rank = order.size();
           // --- handle A operand ---
           if (opIdx == 0) { // compute swizzling for A operand
               int m = (needTrans) ? matShape[2] : matShape[0];
               int k = (needTrans) ? matShape[0] : matShape[2];
-              int vec = (order[0] == 1) ? k : m;
-              int mmaStride = (order[0] == 1) ? m : k;
+              int vec = (order[0] == rank-1) ? k : m;
+              int mmaStride = (order[0] == rank-1) ? m : k;
               int maxPhase = mmaStride / perPhase;
               return get(context, vec, perPhase, maxPhase, order, CTALayout);
           }
@@ -317,8 +317,8 @@ compared to 1*64 when the hasLeadingOffset is false.
               // consider that to get m, n and k.
               int n = needTrans ? matShape[2] : matShape[1];
               int k = needTrans ? matShape[1] : matShape[2];
-              int vec = (order[0] == 1) ? n : k;
-              int mmaStride = (order[0] == 1) ? k : n;
+              int vec = (order[0] == rank-1) ? n : k;
+              int mmaStride = (order[0] == rank-1) ? k : n;
               int maxPhase = mmaStride / perPhase;
               return get(context, vec, perPhase, maxPhase, order, CTALayout);
           }

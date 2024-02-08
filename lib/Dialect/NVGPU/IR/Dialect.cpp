@@ -81,14 +81,6 @@ unsigned StoreDSmemOp::getBitwidth() {
 
 unsigned StoreDSmemOp::getVec() { return getValues().size(); }
 
-static LogicalResult verify(mlir::triton::nvgpu::TMALoadTiledOp op) {
-  return success();
-}
-
-static LogicalResult verify(mlir::triton::nvgpu::TMALoadIm2colOp op) {
-  return success();
-}
-
 static LogicalResult verify(mlir::triton::nvgpu::WGMMAOp op) {
   return success();
 }

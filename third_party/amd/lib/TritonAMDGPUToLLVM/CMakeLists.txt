@@ -16,9 +16,6 @@ add_triton_library(TritonAMDGPUToLLVM
     TypeConverter.cpp
     Utility.cpp
     ViewOpToLLVM.cpp
-    # TensorPtrOpsToLLVM.cpp
-    # ClusterOpsToLLVM.cpp
-    # RegReallocOpToLLVM.cpp
 
     DEPENDS
     TritonAMDGPUConversionPassIncGen
