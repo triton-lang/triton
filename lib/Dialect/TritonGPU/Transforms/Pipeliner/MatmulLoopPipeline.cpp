@@ -816,17 +816,17 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   // allocate only the number of buffers that specific loads need.
   // Instead, we allocate the maximum number of buffers needed by any load.
   int maxNumBuffers = -1;
-  for (auto &opInfoPair : opToInfo) {
-    if (!isa<tt::LoadOp>(opInfoPair.first))
+  for (auto& [op, info] : opToInfo) {
+    if (!isa<tt::LoadOp>(op))
       continue;
-    assert(opInfoPair.second.stage != -1 && "LoadOp stage not defined");
-    assert(opInfoPair.second.use && "LoadOp use not defined");
+    assert(info.stage != -1 && "LoadOp stage not defined");
+    assert(info.use && "LoadOp use not defined");
 
-    unsigned defStage = opInfoPair.second.stage;
-    unsigned useStage = opToInfo[opInfoPair.second.use].stage;
-    unsigned numBuffers = useStage - defStage;
+    int defStage = info.stage;
+    int useStage = opToInfo[info.use].stage;
+    int numBuffers = useStage - defStage;
 
-    if (hasMMAV3 && isa<tt::DotOp>(opInfoPair.second.use)) {
+    if (hasMMAV3 && isa<tt::DotOp>(info.use)) {
       // For MMAv3, we need an extra buffer as this is assumed in the wgmma
       // pipelining post-processing.
       numBuffers++;
