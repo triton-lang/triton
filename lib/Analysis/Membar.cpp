@@ -6,7 +6,6 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -100,26 +99,13 @@ void MembarAnalysis::visitTerminator(Operation *op,
 void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
   OpBuilder::InsertionGuard g(*builder);
   auto barrierOp = builder->create<gpu::BarrierOp>(op->getLoc());
-  if (auto optionalAgentId = getWSAgentId(op)) {
-    int agentId = *optionalAgentId, roleId = 0;
-    if (auto optionalRoleId = getWSRoleId(op))
-      roleId = *optionalRoleId;
-    int barId = agentId + roleId + nameBarrierIdBegin;
-    assert(barId < nameBarrierIdEnd);
-    // TODO[shuhaoj]: Change hard code style of numThreads. Hide async_agent
-    // attr.
-    const int numThreads = 128;
-    barrierOp->setAttr("bar_id", builder->getI64IntegerAttr(barId));
-    barrierOp->setAttr("num_threads", builder->getI64IntegerAttr(numThreads));
-  }
 }
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
   if (isa<triton::gpu::ExtractSliceOp, triton::gpu::AllocTensorOp,
-          triton::gpu::DeallocTensorOp, triton::TransOp,
-          triton::nvidia_gpu::AllocMBarrierOp>(op)) {
+          triton::gpu::DeallocTensorOp, triton::TransOp>(op)) {
     // FIXME(Keren): extract_slice is always alias for now
     return;
   }
@@ -153,9 +139,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     for (Value value : op->getOperands()) {
       for (auto bufferId : allocation->getBufferIds(value)) {
         if (bufferId != Allocation::InvalidBufferId) {
-          if (isa<triton::gpu::InsertSliceAsyncOp,
-                  triton::nvidia_gpu::InsertSliceTMAOp, tensor::InsertSliceOp>(
-                  op)) {
+          if (isa<triton::gpu::InsertSliceAsyncOp, tensor::InsertSliceOp>(op)) {
             // FIXME(Keren): insert_slice and insert_slice_async are always
             // alias for now
             curBlockInfo.syncWriteIntervals.insert(

@@ -6,7 +6,6 @@
 #include "Utility.h"
 
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 
 #include <numeric>
 
@@ -26,21 +25,6 @@ using ::AMD::ConvertTritonGPUOpToLLVMPattern;
 
 
 namespace {
-static CUtensorMapDataType getCUtensorMapDataType(Type ty) {
-  if (ty.isF16()) {
-    return CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_FLOAT16;
-  } else if (ty.isBF16()) {
-    return CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_BFLOAT16;
-  } else if (ty.isF32()) {
-    return CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_FLOAT32;
-  } else if (ty.getIntOrFloatBitWidth() == 8) {
-    return CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_UINT8;
-  } else {
-    llvm::report_fatal_error("Unsupported elemTy for InsertSliceTMAOp");
-    return CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_FLOAT16;
-  }
-}
-
 // Contains some helper functions for both Load and Store conversions.
 struct LoadStoreConversionBase {
   explicit LoadStoreConversionBase(ModuleAxisInfoAnalysis &axisAnalysisPass)
@@ -111,15 +95,13 @@ struct LoadOpConversion
       vec = std::min<size_t>(vec, getMaskAlignment(mask));
 
     // Get the LLVM values for pointers
-    auto ptrElems = getTypeConverter()->unpackLLElements(loc, llPtr, rewriter,
-                                                         ptr.getType());
+    auto ptrElems = getTypeConverter()->unpackLLElements(loc, llPtr, rewriter);
     assert(ptrElems.size() == numElems);
 
     // Get the LLVM values for mask
     SmallVector<Value> maskElems;
     if (llMask) {
-      maskElems = getTypeConverter()->unpackLLElements(loc, llMask, rewriter,
-                                                       mask.getType());
+      maskElems = getTypeConverter()->unpackLLElements(loc, llMask, rewriter);
       assert(maskElems.size() == numElems);
     }
 
@@ -137,8 +119,7 @@ struct LoadOpConversion
     }
     SmallVector<Value> otherElems;
     if (other) {
-      otherElems = getTypeConverter()->unpackLLElements(loc, llOther, rewriter,
-                                                        other.getType());
+      otherElems = getTypeConverter()->unpackLLElements(loc, llOther, rewriter);
     }
 
     // vectorized iteration through all the pointer/mask/other elements
@@ -356,18 +337,16 @@ struct StoreOpConversion
     unsigned vec = getVectorSize(ptr);
     unsigned elemsPerThread = getTotalElemsPerThread(ptr.getType());
 
-    auto ptrElems = getTypeConverter()->unpackLLElements(loc, llPtr, rewriter,
-                                                         ptr.getType());
-    auto valueElems = getTypeConverter()->unpackLLElements(
-        loc, llValue, rewriter, value.getType());
+    auto ptrElems = getTypeConverter()->unpackLLElements(loc, llPtr, rewriter);
+    auto valueElems =
+        getTypeConverter()->unpackLLElements(loc, llValue, rewriter);
     assert(ptrElems.size() == valueElems.size());
 
     // Determine the vectorization size
     SmallVector<Value> maskElems;
     if (llMask) {
       Value mask = op.getMask();
-      maskElems = getTypeConverter()->unpackLLElements(loc, llMask, rewriter,
-                                                       mask.getType());
+      maskElems = getTypeConverter()->unpackLLElements(loc, llMask, rewriter);
       assert(valueElems.size() == maskElems.size());
 
       unsigned maskAlign = getMaskAlignment(mask);
@@ -501,12 +480,12 @@ struct AtomicCASOpConversion
     Value llCmp = adaptor.getCmp();
     Value llVal = adaptor.getVal();
 
-    auto ptrElements = getTypeConverter()->unpackLLElements(
-        loc, llPtr, rewriter, op.getPtr().getType());
-    auto cmpElements = getTypeConverter()->unpackLLElements(
-        loc, llCmp, rewriter, op.getCmp().getType());
-    auto valElements = getTypeConverter()->unpackLLElements(
-        loc, llVal, rewriter, op.getVal().getType());
+    auto ptrElements =
+        getTypeConverter()->unpackLLElements(loc, llPtr, rewriter);
+    auto cmpElements =
+        getTypeConverter()->unpackLLElements(loc, llCmp, rewriter);
+    auto valElements =
+        getTypeConverter()->unpackLLElements(loc, llVal, rewriter);
 
     auto TensorTy = op.getResult().getType().dyn_cast<RankedTensorType>();
     Type valueElemTy =
@@ -575,12 +554,12 @@ struct AtomicCASOpConversion
     Value llCmp = adaptor.getCmp();
     Value llVal = adaptor.getVal();
 
-    auto ptrElements = getTypeConverter()->unpackLLElements(
-        loc, llPtr, rewriter, op.getPtr().getType());
-    auto cmpElements = getTypeConverter()->unpackLLElements(
-        loc, llCmp, rewriter, op.getCmp().getType());
-    auto valElements = getTypeConverter()->unpackLLElements(
-        loc, llVal, rewriter, op.getVal().getType());
+    auto ptrElements =
+        getTypeConverter()->unpackLLElements(loc, llPtr, rewriter);
+    auto cmpElements =
+        getTypeConverter()->unpackLLElements(loc, llCmp, rewriter);
+    auto valElements =
+        getTypeConverter()->unpackLLElements(loc, llVal, rewriter);
 
     auto valueTy = op.getResult().getType();
     auto TensorTy = valueTy.dyn_cast<RankedTensorType>();
@@ -727,14 +706,14 @@ struct AtomicRMWOpConversion
     Value llVal = adaptor.getVal();
     Value llMask = adaptor.getMask();
 
-    auto valElements = getTypeConverter()->unpackLLElements(
-        loc, llVal, rewriter, val.getType());
-    auto ptrElements = getTypeConverter()->unpackLLElements(
-        loc, llPtr, rewriter, ptr.getType());
+    auto valElements =
+        getTypeConverter()->unpackLLElements(loc, llVal, rewriter);
+    auto ptrElements =
+        getTypeConverter()->unpackLLElements(loc, llPtr, rewriter);
     SmallVector<Value> maskElements;
     if (llMask)
-      maskElements = getTypeConverter()->unpackLLElements(
-          loc, llMask, rewriter, op.getMask().getType());
+      maskElements =
+          getTypeConverter()->unpackLLElements(loc, llMask, rewriter);
 
     Value opResult = op.getResult();
     auto tensorTy = opResult.getType().dyn_cast<RankedTensorType>();
@@ -845,14 +824,14 @@ struct AtomicRMWOpConversion
     Value llVal = adaptor.getVal();
     Value llMask = adaptor.getMask();
 
-    auto valElements = getTypeConverter()->unpackLLElements(
-        loc, llVal, rewriter, val.getType());
-    auto ptrElements = getTypeConverter()->unpackLLElements(
-        loc, llPtr, rewriter, ptr.getType());
+    auto valElements =
+        getTypeConverter()->unpackLLElements(loc, llVal, rewriter);
+    auto ptrElements =
+        getTypeConverter()->unpackLLElements(loc, llPtr, rewriter);
     SmallVector<Value> maskElements;
     if (llMask)
-      maskElements = getTypeConverter()->unpackLLElements(
-          loc, llMask, rewriter, op.getMask().getType());
+      maskElements =
+          getTypeConverter()->unpackLLElements(loc, llMask, rewriter);
 
     auto valueTy = op.getResult().getType();
     auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
@@ -1100,8 +1079,7 @@ struct InsertSliceAsyncOpConversion
     Value llIndex = adaptor.getIndex();
 
     // %src
-    auto srcElems = getTypeConverter()->unpackLLElements(loc, llSrc, rewriter,
-                                                         src.getType());
+    auto srcElems = getTypeConverter()->unpackLLElements(loc, llSrc, rewriter);
 
     // %dst
     auto dstTy = dst.getType().cast<RankedTensorType>();
@@ -1128,8 +1106,7 @@ struct InsertSliceAsyncOpConversion
     // %mask
     SmallVector<Value> maskElems;
     if (llMask) {
-      maskElems = getTypeConverter()->unpackLLElements(loc, llMask, rewriter,
-                                                       mask.getType());
+      maskElems = getTypeConverter()->unpackLLElements(loc, llMask, rewriter);
       assert(srcElems.size() == maskElems.size());
     }
 
@@ -1140,8 +1117,7 @@ struct InsertSliceAsyncOpConversion
       // It's not necessary for now because the pipeline pass will skip
       // generating insert_slice_async if the load op has any "other" tensor.
       // assert(false && "insert_slice_async: Other value not supported yet");
-      otherElems = getTypeConverter()->unpackLLElements(loc, llOther, rewriter,
-                                                        other.getType());
+      otherElems = getTypeConverter()->unpackLLElements(loc, llOther, rewriter);
       assert(srcElems.size() == otherElems.size());
     }
 

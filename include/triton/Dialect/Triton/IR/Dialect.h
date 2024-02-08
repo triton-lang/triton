@@ -33,7 +33,7 @@ public:
   DialectInferLayoutInterface(Dialect *dialect) : Base(dialect) {}
 
   virtual LogicalResult
-  inferTransOpEncoding(Attribute operandEncoding,
+  inferTransOpEncoding(Attribute operandEncoding, ArrayRef<int32_t> order,
                        Attribute &resultEncoding) const = 0;
 
   virtual LogicalResult

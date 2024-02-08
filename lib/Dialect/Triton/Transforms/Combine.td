@@ -12,7 +12,7 @@ include "mlir/IR/PatternBase.td"
 // AddIOp(d, DotOp(a, b, c)) and c==0 => DotOp(a, b, d)
 // AddFOp(d, DotOp(a, b, c)) and c==0 => DotOp(a, b, d)
 def CombineDotAddIPattern : Pat<
-        (Arith_AddIOp $d, (TT_DotOp:$res $a, $b, $c, $allowTF32, $maxNumImpreciseAcc)),
+        (Arith_AddIOp $d, (TT_DotOp:$res $a, $b, $c, $allowTF32, $maxNumImpreciseAcc), $overflow),
         (TT_DotOp $a, $b, $d, $allowTF32, $maxNumImpreciseAcc, (location $res)),
         [(Constraint<CPred<"isZero($0)">> $c),
          (Constraint<CPred<"res->hasOneUse()">, "dot result has a single use">)]>;
@@ -24,7 +24,7 @@ def CombineDotAddFPattern : Pat<
          (Constraint<CPred<"res->hasOneUse()">, "dot result has a single use">)]>;
 
 def CombineDotAddIRevPattern : Pat<
-        (Arith_AddIOp (TT_DotOp:$res $a, $b, $c, $allowTF32, $maxNumImpreciseAcc), $d),
+        (Arith_AddIOp (TT_DotOp:$res $a, $b, $c, $allowTF32, $maxNumImpreciseAcc), $d, $overflow),
         (TT_DotOp $a, $b, $d, $allowTF32, $maxNumImpreciseAcc, (location $res)),
         [(Constraint<CPred<"isZero($0)">> $c),
          (Constraint<CPred<"res->hasOneUse()">, "dot result has a single use">)]>;

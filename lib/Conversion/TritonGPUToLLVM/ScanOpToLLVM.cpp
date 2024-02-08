@@ -1,5 +1,5 @@
 #include "PatternTritonGPUOpToLLVM.h"
-#include "TritonGPUToLLVMBase.h"
+#include "ReduceScanCommon.h"
 #include "triton/Analysis/Utility.h"
 
 using namespace mlir;
@@ -423,13 +423,13 @@ ScanOpConversion::getDelinearizedIds(ConversionPatternRewriter &rewriter,
 SmallVector<SmallVector<Value>>
 unpackInputs(Location loc, triton::ScanOp op, triton::ScanOpAdaptor adaptor,
              ConversionPatternRewriter &rewriter,
-             TritonGPUToLLVMTypeConverter &converter) {
+             const LLVMTypeConverter &converter) {
   auto types = op.getInputTypes();
   auto operands = adaptor.getOperands();
   unsigned srcElems = getTotalElemsPerThread(types[0]);
   SmallVector<SmallVector<Value>> srcValues(srcElems);
   for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-    auto values = converter.unpackLLElements(loc, operands[i], rewriter);
+    auto values = unpackLLElements(loc, operands[i], rewriter);
 
     assert(values.size() == srcValues.size());
     for (unsigned j = 0; j < srcValues.size(); ++j) {
@@ -516,8 +516,8 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   auto valuesTransposed = transpose(srcValues);
   for (unsigned i = 0; i < op.getNumOperands(); ++i) {
     auto resultTy = op.getResult()[i].getType().dyn_cast<RankedTensorType>();
-    results[i] = getTypeConverter()->packLLElements(loc, valuesTransposed[i],
-                                                    rewriter, resultTy);
+    results[i] = packLLElements(loc, getTypeConverter(), valuesTransposed[i],
+                                rewriter, resultTy);
   }
   rewriter.replaceOp(op, results);
   return success();
@@ -525,9 +525,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
 } // namespace
 
 void mlir::triton::populateScanOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
-  patterns.add<ScanOpConversion>(typeConverter, indexCacheInfo, benefit);
+  patterns.add<ScanOpConversion>(typeConverter, benefit);
 }

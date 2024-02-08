@@ -1,6 +1,8 @@
 #ifndef TRITONGPU_PASSES
 #define TRITONGPU_PASSES
 
+// TODO(jlebar): These and our other passes should be in a namespace.
+
 include "mlir/Pass/PassBase.td"
 
 def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {

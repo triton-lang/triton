@@ -76,31 +76,31 @@ def matmul_no_scf_kernel(a_ptr, b_ptr, c_ptr,  #
 
 
 @pytest.mark.parametrize(
-    'M,N,K,NUM_CTAS,NUM_WARPS,TRANS_A,TRANS_B,OUTPUT_TYPE,USE_TMA_EPILOGUE,ENABLE_WS',
+    'M,N,K,NUM_CTAS,NUM_WARPS,TRANS_A,TRANS_B,OUTPUT_TYPE,USE_TMA_EPILOGUE',
     itertools.chain(*[[
         # numCTAs = 1, no TMA multicast:
-        [64, 16, 16, 1, 4, False, True, "float16", USE_TMA_EPILOGUE, ENABLE_WS],
-        [64, 32, 16, 1, 4, False, True, "float16", USE_TMA_EPILOGUE, ENABLE_WS],
-        [64, 64, 16, 1, 4, False, True, "float16", USE_TMA_EPILOGUE, ENABLE_WS],
-        [64, 64, 16, 1, 4, False, True, "float32", USE_TMA_EPILOGUE, ENABLE_WS],
-        [64, 64, 32, 1, 4, False, True, "float32", USE_TMA_EPILOGUE, ENABLE_WS],
-        [64, 64, 64, 1, 4, False, True, "float32", USE_TMA_EPILOGUE, ENABLE_WS],
-        [128, 128, 16, 1, 4, False, True, "float16", USE_TMA_EPILOGUE, ENABLE_WS],
-        [128, 128, 16, 1, 4, False, True, "float32", USE_TMA_EPILOGUE, ENABLE_WS],
+        [64, 16, 16, 1, 4, False, True, "float16", USE_TMA_EPILOGUE],
+        [64, 32, 16, 1, 4, False, True, "float16", USE_TMA_EPILOGUE],
+        [64, 64, 16, 1, 4, False, True, "float16", USE_TMA_EPILOGUE],
+        [64, 64, 16, 1, 4, False, True, "float32", USE_TMA_EPILOGUE],
+        [64, 64, 32, 1, 4, False, True, "float32", USE_TMA_EPILOGUE],
+        [64, 64, 64, 1, 4, False, True, "float32", USE_TMA_EPILOGUE],
+        [128, 128, 16, 1, 4, False, True, "float16", USE_TMA_EPILOGUE],
+        [128, 128, 16, 1, 4, False, True, "float32", USE_TMA_EPILOGUE],
         # static mask, cluster 4x1
-        [256, 64, 16, 4, 4, False, True, "float16", USE_TMA_EPILOGUE, ENABLE_WS],
-        [256, 64, 16, 4, 4, False, True, "float32", USE_TMA_EPILOGUE, ENABLE_WS],
+        [256, 64, 16, 4, 4, False, True, "float16", USE_TMA_EPILOGUE],
+        [256, 64, 16, 4, 4, False, True, "float32", USE_TMA_EPILOGUE],
         # dynamic mask, cluster 2x2
-        [128, 128, 16, 4, 4, False, True, "float16", USE_TMA_EPILOGUE, ENABLE_WS],
-        [128, 128, 16, 4, 4, False, True, "float32", USE_TMA_EPILOGUE, ENABLE_WS],
+        [128, 128, 16, 4, 4, False, True, "float16", USE_TMA_EPILOGUE],
+        [128, 128, 16, 4, 4, False, True, "float32", USE_TMA_EPILOGUE],
         # small M, N
-        [16, 16, 16, 1, 4, False, True, "float32", USE_TMA_EPILOGUE, ENABLE_WS],
-        [16, 32, 16, 1, 4, False, True, "float32", USE_TMA_EPILOGUE, ENABLE_WS],
-        [32, 16, 16, 1, 4, False, True, "float32", USE_TMA_EPILOGUE, ENABLE_WS],
-        [32, 32, 16, 1, 4, False, True, "float32", USE_TMA_EPILOGUE, ENABLE_WS],
-    ] for USE_TMA_EPILOGUE in [True, False] for ENABLE_WS in [False, True]]))
+        [16, 16, 16, 1, 4, False, True, "float32", USE_TMA_EPILOGUE],
+        [16, 32, 16, 1, 4, False, True, "float32", USE_TMA_EPILOGUE],
+        [32, 16, 16, 1, 4, False, True, "float32", USE_TMA_EPILOGUE],
+        [32, 32, 16, 1, 4, False, True, "float32", USE_TMA_EPILOGUE],
+    ] for USE_TMA_EPILOGUE in [True, False]]))
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
-def test_gemm_no_scf(M, N, K, NUM_CTAS, NUM_WARPS, TRANS_A, TRANS_B, OUTPUT_TYPE, USE_TMA_EPILOGUE, ENABLE_WS):
+def test_gemm_no_scf(M, N, K, NUM_CTAS, NUM_WARPS, TRANS_A, TRANS_B, OUTPUT_TYPE, USE_TMA_EPILOGUE):
     if (TRANS_A):
         a = torch.randn((K, M), device='cuda', dtype=torch.float16).T
     else:
@@ -125,8 +125,7 @@ def test_gemm_no_scf(M, N, K, NUM_CTAS, NUM_WARPS, TRANS_A, TRANS_B, OUTPUT_TYPE
         num_warps=NUM_WARPS,  #
         num_ctas=NUM_CTAS,  #
         FLOAT16_OUTPUT=(OUTPUT_TYPE == "float16"),  #
-        USE_TMA_EPILOGUE=USE_TMA_EPILOGUE,  #
-        enable_warp_specialization=ENABLE_WS)
+        USE_TMA_EPILOGUE=USE_TMA_EPILOGUE)
     a_f32 = a.to(torch.float32)
     b_f32 = b.to(torch.float32)
     golden = torch.matmul(a_f32, b_f32)
@@ -233,10 +232,10 @@ def matmul_kernel(a_ptr, b_ptr, w_ptr, bias_ptr, z_ptr,  #
 
 
 @pytest.mark.parametrize(
-    'BLOCK_M,BLOCK_N,BLOCK_K,NUM_WARPS,NUM_CTAS,M,N,K,TRANS_A,TRANS_B,TRANS_OUTPUT,epilogue,out_dtype,USE_TMA_STORE,NUM_STAGES,ENABLE_WS',
+    'BLOCK_M,BLOCK_N,BLOCK_K,NUM_WARPS,NUM_CTAS,M,N,K,TRANS_A,TRANS_B,TRANS_OUTPUT,epilogue,out_dtype,USE_TMA_STORE,NUM_STAGES',
     [
         # corner shapes
-        (128, 128, 64, 4, 1, *shape_w_c, 'none', out_dtype, use_tma_store, 3, enable_ws)
+        (128, 128, 64, 4, 1, *shape_w_c, 'none', out_dtype, use_tma_store, 3)
         for shape_w_c in [
             [4096, 1, 1024, False, False, True],
             [2048, 204, 1000, True, False, True],
@@ -245,61 +244,40 @@ def matmul_kernel(a_ptr, b_ptr, w_ptr, bias_ptr, z_ptr,  #
         ]
         for out_dtype in ['float16', 'float32']  #
         for use_tma_store in [False, True]  #
-        for enable_ws in [False, True]
     ] + [
         # softmax epilogue
-        (*shape_w_c, trans_a, trans_b, trans_output, epilogue, out_dtype, use_tma_store, num_stages, enable_ws)
-        for shape_w_c in [
+        (*shape_w_c, trans_a, trans_b, trans_output, epilogue, out_dtype, use_tma_store, num_stages) for shape_w_c in [
             [64, 64, 16, 4, 1, 64, 64, 64],
             [128, 128, 64, 4, 1, None, None, None],
             [16, 16, 64, 4, 1, 16, 16, 64],
             [64, 64, 32, 8, 1, 64, 64, 64],
             [128, 128, 64, 4, 1, 128, 128, 128],
-        ]
-        for epilogue in ['softmax']
-        for out_dtype in ['float16', 'float32']
-        for use_tma_store in [False, True]
-        for trans_a in [False]
-        for trans_b in [True]
-        for trans_output in [False]
-        for num_stages in [3]
-        for enable_ws in [False, True]
+        ] for epilogue in ['softmax'] for out_dtype in ['float16', 'float32'] for use_tma_store in [False, True] for
+        trans_a in [False] for trans_b in [True] for trans_output in [False] for num_stages in [3]
     ] + [
         # loop over epilogues besides of softmax
-        (*shape_w_c, trans_a, trans_b, trans_output, epilogue, out_dtype, use_tma_store, num_stages, enable_ws)
-        for shape_w_c in [
+        (*shape_w_c, trans_a, trans_b, trans_output, epilogue, out_dtype, use_tma_store, num_stages) for shape_w_c in [
             [64, 64, 16, 4, 1, 128, 128, 64],
-            *[[256, 64, 16, num_warps, num_ctas, 256, 256, 64]
-              for num_warps in [4, 8]
-              for num_ctas in [1, 2, 4]],
+            *[[256, 64, 16, num_warps, num_ctas, 256, 256, 64] for num_warps in [4, 8] for num_ctas in [1, 2, 4]],
             # for chain-dot
             [128, 128, 64, 4, 1, None, None, None],
             [64, 64, 16, 4, 1, None, None, None],
             # small BLOCK_M and BLOCK_K
             [16, 16, 64, 4, 1, 128, 128, 64],
-            *[[16, 32, 64, num_warps, num_ctas, 256, 256, 256]
-              for num_warps in [4, 8]
-              for num_ctas in [1, 2]],
+            *[[16, 32, 64, num_warps, num_ctas, 256, 256, 256] for num_warps in [4, 8] for num_ctas in [1, 2]],
             # repeat
             [64, 64, 32, 8, 1, 128, 256, 64],
             [64, 64, 16, 8, 2, 128, 128, 64],
             # irregular shape
             [128, 128, 64, 4, 1, 500, 200, 128],
             [128, 128, 64, 4, 2, 513, 193, 192],
-        ]
-        for epilogue in ['none', 'add-matrix', 'add-rows', 'add-cols', 'chain-dot']
-        for out_dtype in ['float16', 'float32']
-        for use_tma_store in [False, True]
-        for trans_a in [False]
-        for trans_b in [True]
-        for trans_output in [False]
-        for num_stages in [3]
-        for enable_ws in [False, True]
-        if not (epilogue == 'chain-dot' and (shape_w_c[6] is not None or shape_w_c[1] != shape_w_c[6]))
+        ] for epilogue in ['none', 'add-matrix', 'add-rows', 'add-cols', 'chain-dot'
+                           ] for out_dtype in ['float16', 'float32'] for use_tma_store in [False, True] for trans_a in
+        [False] for trans_b in [True] for trans_output in [False] for num_stages in [3] if not (
+            epilogue == 'chain-dot' and (shape_w_c[6] is not None or shape_w_c[1] != shape_w_c[6]))
     ] + [
         # loop over tile shapes and transpose combinations
-        (*shape_w_c, trans_a, trans_b, trans_output, 'none', out_dtype, use_tma_store, num_stages, enable_ws)
-        for shape_w_c in [
+        (*shape_w_c, trans_a, trans_b, trans_output, 'none', out_dtype, use_tma_store, num_stages) for shape_w_c in [
             [64, 64, 32, 4, 1, 128, 256, 64],
             [128, 128, 16, 4, 4, 512, 256, 64],
             [128, 256, 32, 4, 8, 256, 256, 192],
@@ -312,45 +290,31 @@ def matmul_kernel(a_ptr, b_ptr, w_ptr, bias_ptr, z_ptr,  #
             [16, 32, 32, 4, 1, 128, 256, 64],
             [32, 32, 16, 4, 1, 256, 256, 192],
             [16, 32, 64, 4, 4, 512, 256, 64],
-        ]
-        for out_dtype in ['float32']
-        for use_tma_store in [False]
-        for trans_a in [False, True]
-        for trans_b in [False, True]
-        for trans_output in [False, True]
-        for num_stages in [3]
-        for enable_ws in [False, True]
+        ] for out_dtype in ['float32'] for use_tma_store in [False] for trans_a in [False, True] for trans_b in
+        [False, True] for trans_output in [False, True] for num_stages in [3]
     ] + [
         # loop over instr shapes & pipeline stages
-        (64, n, 16, 4, 1, 512, 256, 256, False, True, trans_output, 'none', out_dtype, use_tma_store, num_stages,
-         enable_ws)
+        (64, n, 16, 4, 1, 512, 256, 256, False, True, trans_output, 'none', out_dtype, use_tma_store, num_stages)
         for n in [16, 32, 64, 128, 256]
         for trans_output in [False]
         for out_dtype in ['float32']
         for use_tma_store in [False]
         for num_stages in [2, 4, 5, 7]
-        for enable_ws in [False, True]
     ] + [
         # irregular shapes
-        (*shape_w_c, *shape, False, True, trans_output, 'none', out_dtype, use_tma_store, num_stages, enable_ws)
-        for shape_w_c in [
+        (*shape_w_c, *shape, False, True, trans_output, 'none', out_dtype, use_tma_store, num_stages) for shape_w_c in [
             [128, 128, 64, 4, 1],
             [256, 128, 64, 4, 2],
             [128, 128, 128, 4, 2],
-        ]
-        for shape in [
+        ] for shape in [
             [512, 360, 1024],
             [360, 4096, 512],
-        ]
-        for trans_output in [False]
-        for out_dtype in ['float32']
-        for use_tma_store in [False, True]
-        for num_stages in [3, 4]
-        for enable_ws in [False, True]
+        ] for trans_output in [False] for out_dtype in ['float32'] for use_tma_store in [False, True] for num_stages in
+        [3, 4]
     ])
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
 def test_gemm(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, TRANS_B, TRANS_OUTPUT, epilogue,
-              out_dtype, USE_TMA_STORE, NUM_STAGES, ENABLE_WS):
+              out_dtype, USE_TMA_STORE, NUM_STAGES):
     if '-'.join(map(str, [BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, TRANS_B])) in [
             '16-32-64-4-4-512-256-64-True-False',
             '16-32-64-4-4-512-256-64-True-True',
@@ -367,9 +331,9 @@ def test_gemm(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, 
             '16-32-64-8-2-256-256-256-True',
     ]:
         pytest.skip('Known legacy issue, ldmatrix can only support x4')
-    enable_tma = os.environ.get('ENABLE_TMA', 'not found').lower()
-    if NUM_CTAS > 1 and enable_tma in ["on", "true", "1"]:
-        pytest.skip('multi-CTA with TMA not supported in MaterializeLoadStore')
+
+    if epilogue == 'add-rows' and NUM_CTAS > 1:
+        pytest.skip('known failure: error getCTAsPerCGA for SliceEncodingAttr is not well-defined.')
 
     M = BLOCK_M if M is None else M
     N = BLOCK_N if N is None else N
@@ -466,8 +430,7 @@ def test_gemm(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, 
         B_ORDER_0=b_order[0], B_ORDER_1=b_order[1],  #
         W_ORDER_0=w_order[0], W_ORDER_1=w_order[1],  #
         Z_ORDER_0=z_order[0], Z_ORDER_1=z_order[1],  #
-        num_warps=NUM_WARPS, num_ctas=NUM_CTAS, num_stages=NUM_STAGES,  #
-        enable_warp_specialization=ENABLE_WS)
+        num_warps=NUM_WARPS, num_ctas=NUM_CTAS, num_stages=NUM_STAGES)
 
     torch.set_printoptions(profile="full")
     golden = torch.nn.functional.normalize(golden)

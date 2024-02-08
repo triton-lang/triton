@@ -256,3 +256,19 @@ tt.func @test_fold_views() -> (tensor<16x8xf32>, tensor<16x128xf32>, tensor<1x1x
 
     tt.return %b, %c, %d : tensor<16x8xf32>, tensor<16x128xf32>, tensor<1x1x128xf32>
 }
+
+// CHECK-LABEL: @test_nop_transpose
+tt.func @test_nop_transpose(%arg0: tensor<2x4xf32>) -> (tensor<2x4xf32>) {
+    %a = tt.trans %arg0 {order = array<i32: 0, 1>} : (tensor<2x4xf32>) -> tensor<2x4xf32>
+    // CHECK: tt.return %arg0
+    tt.return %a : tensor<2x4xf32>
+}
+
+// CHECK-LABEL: @test_nested_transpose
+tt.func @test_nested_transpose(%arg0: tensor<2x4x8xf32>) -> (tensor<8x2x4xf32>) {
+    %a = tt.trans %arg0 {order = array<i32: 1, 0, 2>} : (tensor<2x4x8xf32>) -> tensor<4x2x8xf32>
+    %b = tt.trans %a {order = array<i32: 2, 1, 0>} : (tensor<4x2x8xf32>) -> tensor<8x2x4xf32>
+    // CHECK: %[[res:.*]] = tt.trans %arg0 {order = array<i32: 2, 0, 1>}
+    // CHECK: tt.return %[[res]]
+    tt.return %b : tensor<8x2x4xf32>
+}

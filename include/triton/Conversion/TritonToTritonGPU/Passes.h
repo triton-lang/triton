@@ -2,7 +2,6 @@
 #define TRITON_CONVERSION_PASSES_H
 
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
-#include "triton/Target/PTX/TmaMetadata.h"
 
 namespace mlir {
 namespace triton {

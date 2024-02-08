@@ -5,14 +5,16 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 
 #include <memory>
 
-using namespace mlir;
-
 namespace {
+
+using namespace mlir;
+using namespace mlir::triton;
 
 bool isZero(mlir::Value val) {
   if (mlir::matchPattern(val, mlir::m_Zero()) ||
@@ -51,8 +53,6 @@ DenseElementsAttr getConstantValue(Builder &builder, Attribute value,
 using FastMathFlags = arith::FastMathFlags;
 
 #include "TritonCombine.inc"
-
-} // anonymous namespace
 
 // select(cond, load(ptrs, splat(cond), ???), other)
 //   => load(ptrs, splat(cond), other)
@@ -212,6 +212,8 @@ public:
       signalPassFailure();
   }
 };
+
+} // anonymous namespace
 
 std::unique_ptr<mlir::Pass> mlir::triton::createCombineOpsPass() {
   return std::make_unique<CombineOpsPass>();

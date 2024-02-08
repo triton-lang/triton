@@ -93,7 +93,7 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
   }
 
 #ifdef USE_ROCM
-  auto mod = val.getParentBlock()->getParentOp()->getParentOfType<mlir::ModuleOp>();
+  auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   Value threadId = rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
   threadId = rewriter.create<arith::IndexCastOp>(loc, i32_ty, threadId);
   unsigned iWarpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);

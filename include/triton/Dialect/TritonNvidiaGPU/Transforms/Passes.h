@@ -44,38 +44,11 @@ struct ClusterInfo {
 
 namespace mlir {
 
-std::unique_ptr<Pass>
-createTritonNvidiaGPUMaterializeLoadStorePass(int numWarps = 4,
-                                              int computeCapability = 80);
-
 std::unique_ptr<Pass> createTritonNvidiaGPUPlanCTAPass(
     mlir::triton::nvidia_gpu::ClusterInfo *clusterInfo = nullptr);
 
 std::unique_ptr<Pass>
-createTritonNvidiaGPUWSFeasibilityCheckingPass(int computeCapability = 90);
-
-std::unique_ptr<Pass>
-createTritonNvidiaGPUWSDecomposingPass(int computeCapability = 90);
-
-std::unique_ptr<Pass>
-createTritonNvidiaGPUWSPipelinePass(int numStages = 3, int numWarps = 4,
-                                    int computeCapability = 90);
-
-std::unique_ptr<Pass>
-createTritonNvidiaGPUWSMutexPass(int computeCapability = 90);
-
-std::unique_ptr<Pass>
-createTritonNvidiaGPUWSMaterializationPass(int computeCapability = 90);
-
-std::unique_ptr<Pass>
 createTritonNvidiaGPUFenceInsertionPass(int computeCapability = 90);
-
-std::unique_ptr<Pass>
-createTritonGPURewriteTensorPointerPass(int computeCapability = 80);
-
-std::unique_ptr<Pass> createTritonNvidiaGPUWSFixupMissingAttrs();
-
-std::unique_ptr<Pass> createTritonNvidiaGPUAddDescriptorArgs();
 
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION

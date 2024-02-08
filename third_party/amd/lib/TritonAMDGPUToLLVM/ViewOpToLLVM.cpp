@@ -122,10 +122,10 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
         this->getTypeConverter()->convertType(resultTy.getElementType());
     SmallVector<Type> types(elems, elemTy);
     // unpack input values
-    auto lhsVals = getTypeConverter()->unpackLLElements(
-        loc, adaptor.getLhs(), rewriter, op.getOperand(0).getType());
-    auto rhsVals = getTypeConverter()->unpackLLElements(
-        loc, adaptor.getRhs(), rewriter, op.getOperand(1).getType());
+    auto lhsVals =
+        getTypeConverter()->unpackLLElements(loc, adaptor.getLhs(), rewriter);
+    auto rhsVals =
+        getTypeConverter()->unpackLLElements(loc, adaptor.getRhs(), rewriter);
     // concatenate (and potentially reorder) values
     SmallVector<Value> retVals;
     for (Value v : lhsVals)
@@ -166,10 +166,10 @@ struct InterleaveOpConversion
     Location loc = op->getLoc();
     auto resultTy = op.getType().cast<RankedTensorType>();
 
-    SmallVector<Value> lhsVals = getTypeConverter()->unpackLLElements(
-        loc, adaptor.getLhs(), rewriter, op.getLhs().getType());
-    SmallVector<Value> rhsVals = getTypeConverter()->unpackLLElements(
-        loc, adaptor.getRhs(), rewriter, op.getRhs().getType());
+    SmallVector<Value> lhsVals =
+        getTypeConverter()->unpackLLElements(loc, adaptor.getLhs(), rewriter);
+    SmallVector<Value> rhsVals =
+        getTypeConverter()->unpackLLElements(loc, adaptor.getRhs(), rewriter);
     assert(lhsVals.size() == rhsVals.size());
 
     SmallVector<Value> interleavedVals;
@@ -218,7 +218,7 @@ struct ReshapeOpConversion : public ConvertTritonGPUOpToLLVMPattern<ReshapeOp> {
     }
 
     auto vals = this->getTypeConverter()->unpackLLElements(
-        loc, adaptor.getSrc(), rewriter, op.getOperand().getType());
+        loc, adaptor.getSrc(), rewriter);
     Value ret =
         this->getTypeConverter()->packLLElements(loc, vals, rewriter, resultTy);
     rewriter.replaceOp(op, ret);
@@ -239,7 +239,7 @@ struct ExpandDimsOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto srcVals = this->getTypeConverter()->unpackLLElements(
-        loc, adaptor.getSrc(), rewriter, op.getOperand().getType());
+        loc, adaptor.getSrc(), rewriter);
 
     auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
     auto resultTy = op.getType().template cast<RankedTensorType>();
