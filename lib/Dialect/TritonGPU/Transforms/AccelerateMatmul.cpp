@@ -306,16 +306,15 @@ public:
       // convert operands
       int aBitWidth = computeOrigBitWidth(a);
       int bBitWidth = computeOrigBitWidth(b);
-      int minBitwidth = std::min(aBitWidth, bBitWidth);
-      // TODO: remove s8xf32 matmul special case when issue is fixed.
-      // https://github.com/openai/triton/issues/2853
-      if (minBitwidth == 8 && std::max(aBitWidth, bBitWidth) == 32) {
-        minBitwidth = 0;
-      }
+      int minBitWidth = std::min(aBitWidth, bBitWidth);
+      // TODO: Remove s8xf32 matmul special case when the issue is fixed:
+      // https://github.com/openai/triton/issues/2853.
+      // This doesn't allow the enablement of s8xf32 dots yet, but it is a
+      // workaround to avoid segfault which happens later in the compiler.
       Type aEltType = oldAType.getElementType();
       Type bEltType = oldBType.getElementType();
-      if (minBitwidth > 0) {
-        aEltType = bEltType = IntegerType::get(ctx, minBitwidth);
+      if (minBitWidth != 8 || std::max(aBitWidth, bBitWidth) != 32) {
+        aEltType = bEltType = IntegerType::get(ctx, minBitWidth);
       }
       // convert A operand
       auto newAEncoding = ttg::DotOperandEncodingAttr::get(
