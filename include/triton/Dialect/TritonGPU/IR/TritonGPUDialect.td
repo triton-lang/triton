@@ -23,19 +23,18 @@ def TritonGPU_Dialect : Dialect {
   let extraClassDeclaration = [{
     static std::string getNumWarpsAttrName() { return "triton_gpu.num-warps"; }
     static int getNumWarps(ModuleOp mod) {
-      if(!mod->hasAttr("triton_gpu.num-warps"))
+      if (!mod->hasAttr("triton_gpu.num-warps"))
         llvm::report_fatal_error(
             "TritonGPU module should contain a triton_gpu.num-warps attribute");
       return mod->getAttr("triton_gpu.num-warps").cast<IntegerAttr>().getInt();
     }
     static int getNumCTAs(ModuleOp mod) {
-      if(!mod->hasAttr("triton_gpu.num-ctas"))
-        llvm::report_fatal_error(
-            "TritonGPU module should contain a triton_gpu.num-ctas attribute");
+      if (!mod->hasAttr("triton_gpu.num-ctas"))
+        return 1;
       return mod->getAttr("triton_gpu.num-ctas").cast<IntegerAttr>().getInt();
     }
     static int getComputeCapability(ModuleOp mod) {
-      if(!mod->hasAttr("triton_gpu.compute-capability"))
+      if (!mod->hasAttr("triton_gpu.compute-capability"))
         llvm::report_fatal_error(
             "TritonGPU module should contain a triton_gpu.compute-capability attribute");
       return mod->getAttrOfType<IntegerAttr>("triton_gpu.compute-capability").getInt();

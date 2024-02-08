@@ -236,10 +236,7 @@ class JITFunction(KernelInterface[T]):
         }
         # folded equal_to_1 and None
         # TODO: method to collect all folded args
-        none_args = {param.num for param, arg in zip(self.params, args) if arg is None and not param.do_not_specialize}
-        ids_of_folded_args = equal_to_1 | none_args
-        return AttrsDescriptor(tuple(divisible_by_16), tuple(equal_to_1), tuple(ids_of_folded_args),
-                               tuple(divisible_by_8))
+        return AttrsDescriptor(tuple(divisible_by_16), tuple(equal_to_1), tuple(divisible_by_8))
         # return _triton.code_gen.instance_descriptor(divisible_by_16,
         # equal_to_1)
 
@@ -288,7 +285,6 @@ class JITFunction(KernelInterface[T]):
         num_warps,
         num_ctas,
         num_stages,
-        enable_warp_specialization,
         enable_fp_fusion,
         extern_libs,
         configs,
@@ -299,7 +295,7 @@ class JITFunction(KernelInterface[T]):
         name = self.fn.__name__
         module = self.fn.__module__
         arg_reprs = ", ".join([f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])])
-        repr = f"{name}[num_warps={num_warps}, num_ctas={num_ctas}, num_stages={num_stages}, enable_warp_specialization={enable_warp_specialization}, enable_fp_fusion={enable_fp_fusion}]({arg_reprs})"
+        repr = f"{name}[num_warps={num_warps}, num_ctas={num_ctas}, num_stages={num_stages}, enable_fp_fusion={enable_fp_fusion}]({arg_reprs})"
         key = str(key)
 
         class LegacyCompiler:
@@ -316,7 +312,6 @@ class JITFunction(KernelInterface[T]):
             num_warps=num_warps,
             num_ctas=num_ctas,
             num_stages=num_stages,
-            enable_warp_specialization=enable_warp_specialization,
             enable_fp_fusion=enable_fp_fusion,
             extern_libs=extern_libs,
             configs=configs,
@@ -338,9 +333,9 @@ class JITFunction(KernelInterface[T]):
         assert "device" not in kwargs, "device option is deprecated; current device will be used"
         assert "stream" not in kwargs, "stream option is deprecated; current stream will be used"
         # parse options
-        device = driver.get_current_device()
-        stream = driver.get_current_stream(device)
-        target = driver.get_current_target()
+        device = driver.active.get_current_device()
+        stream = driver.active.get_current_stream(device)
+        target = driver.active.get_current_target()
         backend = make_backend(target)
         kwargs["debug"] = self.debug
         options = backend.parse_options(kwargs)
@@ -386,8 +381,7 @@ class JITFunction(KernelInterface[T]):
             }
 
             if self._call_hook(key, signature, device, constants, options.num_warps, options.num_ctas,
-                               options.num_stages, options.enable_warp_specialization, options.enable_fp_fusion,
-                               options.extern_libs, configs):
+                               options.num_stages, options.enable_fp_fusion, options.extern_libs, configs):
                 return None
             # compile the kernel
             src = ASTSource(self, signature, constants, configs[0])
@@ -401,12 +395,12 @@ class JITFunction(KernelInterface[T]):
         if not warmup:
             args = [arg.value for arg in args if not arg.param.is_constexpr]
             metadata = kernel.metadata
+
             kernel.run(grid_0, grid_1, grid_2, metadata.num_warps,
                        metadata.num_ctas,  # number of warps/ctas per instance
                        metadata.cluster_dims[0], metadata.cluster_dims[1], metadata.cluster_dims[2],  # cluster
                        metadata.shared, stream, kernel.function, CompiledKernel.launch_enter_hook,
-                       CompiledKernel.launch_exit_hook, metadata,
-                       *driver.assemble_tensormap_to_arg(metadata.tensormaps_info, args))
+                       CompiledKernel.launch_exit_hook, metadata, *args)
         return kernel
 
     def __init__(self, fn, version=None, do_not_specialize=None, debug=None, noinline=None):

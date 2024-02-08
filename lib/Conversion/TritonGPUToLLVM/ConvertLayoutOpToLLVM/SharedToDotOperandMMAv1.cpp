@@ -1,4 +1,3 @@
-#include "../TritonGPUToLLVMBase.h"
 #include "../Utility.h"
 
 using CoordTy = SmallVector<Value>;
@@ -90,7 +89,7 @@ computeOffsets(Value threadId, bool isARow, bool isBRow, ArrayRef<int> fpw,
 
 static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
                    Value thread, Location loc,
-                   TritonGPUToLLVMTypeConverter *typeConverter,
+                   const LLVMTypeConverter *typeConverter,
                    ConversionPatternRewriter &rewriter, Type resultTy) {
   static constexpr std::array<int, 3> fpw{{2, 2, 1}};
   auto mmaEncoding = resultTy.cast<RankedTensorType>()
@@ -211,13 +210,13 @@ static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
     elems.push_back(bitcast(item.second.second, i32_ty));
   }
 
-  Value res = typeConverter->packLLElements(loc, elems, rewriter, resultTy);
+  Value res = packLLElements(loc, typeConverter, elems, rewriter, resultTy);
   return res;
 }
 
 static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
                    Value thread, Location loc,
-                   TritonGPUToLLVMTypeConverter *typeConverter,
+                   const LLVMTypeConverter *typeConverter,
                    ConversionPatternRewriter &rewriter, Type resultTy) {
   static constexpr std::array<int, 3> fpw{{2, 2, 1}};
   auto mmaEncoding = resultTy.cast<RankedTensorType>()
@@ -338,7 +337,7 @@ static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
     elems.push_back(bitcast(item.second.second, i32_ty));
   }
 
-  Value res = typeConverter->packLLElements(loc, elems, rewriter, resultTy);
+  Value res = packLLElements(loc, typeConverter, elems, rewriter, resultTy);
   return res;
 }
 
@@ -449,7 +448,7 @@ SmallVector<CoordTy> getMNCoords(Value thread, Location loc,
 
 Value convertLayout(int opIdx, Value tensor, const SharedMemoryObject &smemObj,
                     Value thread, Location loc,
-                    TritonGPUToLLVMTypeConverter *typeConverter,
+                    const LLVMTypeConverter *typeConverter,
                     ConversionPatternRewriter &rewriter, Type resultTy) {
   if (opIdx == 0)
     return loadA(tensor, smemObj, thread, loc, typeConverter, rewriter,

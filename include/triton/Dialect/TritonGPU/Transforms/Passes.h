@@ -22,7 +22,7 @@ std::unique_ptr<Pass> createCoalescePass();
 
 std::unique_ptr<Pass> createReorderInstructionsPass();
 
-std::unique_ptr<Pass> createDecomposeConversionsPass();
+std::unique_ptr<Pass> createReduceDataDuplicationPass();
 
 std::unique_ptr<Pass> createRemoveLayoutConversionsPass();
 

@@ -17,13 +17,6 @@ public:
 
   Type getElementTypeForStruct(RankedTensorType type);
   Type convertTritonPointerType(triton::PointerType type);
-
-  Value packLLElements(Location loc, ValueRange resultVals,
-                       ConversionPatternRewriter &rewriter, Type type);
-
-  SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
-                                      ConversionPatternRewriter &rewriter);
-
   Type convertTritonTensorType(RankedTensorType type);
 };
 

@@ -8,7 +8,6 @@ from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
 # TODO: this shouldn't be here
-from ..backends.nvidia.compiler import InfoFromBackendForTensorMap
 from dataclasses import dataclass
 from .code_generator import ast_to_ttir
 from pathlib import Path
@@ -21,7 +20,6 @@ import os
 class AttrsDescriptor:
     divisible_by_16: set = None
     equal_to_1: set = None
-    ids_of_folded_args: set = None
     divisible_by_8: set = None
 
     def __post_init__(self):
@@ -29,8 +27,6 @@ class AttrsDescriptor:
             self.divisible_by_16 = set()
         if self.equal_to_1 is None:
             self.equal_to_1 = set()
-        if self.ids_of_folded_args is None:
-            self.ids_of_folded_args = set()
         if self.divisible_by_8 is None:
             self.divisible_by_8 = set()
 
@@ -116,12 +112,6 @@ class ASTSource:
     def make_ir(self, options, context):
         return ast_to_ttir(self.fn, self, context=context, options=options)
 
-    def metadata(self):
-        # TODO: remove once TMA support is cleaned up
-        return {
-            "ids_of_folded_args": tuple([int(k) for k in self.attrs.ids_of_folded_args]),
-        }
-
     def parse_options(self):
         return dict()
 
@@ -146,9 +136,6 @@ class IRSource:
         module = ir.parse_mlir_module(self.path, context)
         module.context = context
         return module
-
-    def metadata(self):
-        return {"ids_of_folded_args": tuple()}
 
     def parse_options(self):
         if self.ext == "ttgir":
@@ -200,7 +187,7 @@ def parse(full_name, ext, context):
 
 def compile(src, target=None, options=None):
     if target is None:
-        target = driver.get_current_target()
+        target = driver.active.get_current_target()
     backend = make_backend(target)
     # create backend
     if not isinstance(src, ASTSource):
@@ -231,7 +218,6 @@ def compile(src, target=None, options=None):
         "target": target,
         **options.__dict__,
         **get_env_vars(),
-        **src.metadata(),
     }
     # run compilation pipeline  and populate metadata
     stages = dict()
@@ -279,24 +265,19 @@ class CompiledKernel:
         from collections import namedtuple
         metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
         self.metadata = json.loads(metadata_path.read_text())
-        self.metadata['tensormaps_info'] = [InfoFromBackendForTensorMap(e) for e in self.metadata['tensormaps_info']
-                                            ] if 'tensormaps_info' in self.metadata else []
-        for i, _ in enumerate(self.metadata["tensormaps_info"]):
-            self.metadata["tensormaps_info"][i].ids_of_folded_args = tuple(self.metadata["ids_of_folded_args"])
-        self.metadata["tensormaps_info"] = tuple(self.metadata["tensormaps_info"])
         KernelMetadata = namedtuple('KernelMetadata', sorted(list(self.metadata.keys())))
         self.metadata = KernelMetadata(**self.metadata)
 
         self.name = self.metadata.name
         # create launcher
-        self.run = driver.launcher_cls(src, self.metadata)
+        self.run = driver.active.launcher_cls(src, self.metadata)
         # stores the text of each level of IR that was generated during compilation
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
         self.asm = {
-            file.suffix[1:]: file.read_bytes() if file.suffix[1:] == driver.binary_ext else file.read_text()
+            file.suffix[1:]: file.read_bytes() if file.suffix[1:] == driver.active.binary_ext else file.read_text()
             for file in asm_files
         }
-        self.kernel = self.asm[driver.binary_ext]
+        self.kernel = self.asm[driver.active.binary_ext]
         # binaries are lazily initialized
         # because it involves doing runtime things
         # (e.g., checking amount of shared memory on current device)
@@ -306,13 +287,13 @@ class CompiledKernel:
     def _init_handles(self):
         if self.module is not None:
             return
-        device = driver.get_current_device()
+        device = driver.active.get_current_device()
         # not enough shared memory to run the kernel
-        max_shared = driver.utils.get_device_properties(device)["max_shared_mem"]
+        max_shared = driver.active.utils.get_device_properties(device)["max_shared_mem"]
         if self.metadata.shared > max_shared:
             raise OutOfResources(self.metadata.shared, max_shared, "shared memory")
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
-        self.module, self.function, self.n_regs, self.n_spills = driver.utils.load_binary(
+        self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
 
     def __getattribute__(self, name):
@@ -325,12 +306,11 @@ class CompiledKernel:
 
         def runner(*args, stream=None):
             if stream is None:
-                device = driver.get_current_device()
-                stream = driver.get_current_stream(device)
+                device = driver.active.get_current_device()
+                stream = driver.active.get_current_stream(device)
             md = self.metadata
-            args_expand = driver.assemble_tensormap_to_arg(md.tensormaps_info, args)
             self.run(grid[0], grid[1], grid[2], md.num_warps, md.num_ctas, md.cluster_dims[0], md.cluster_dims[1],
                      md.cluster_dims[2], md.shared, stream, self.function, CompiledKernel.launch_enter_hook,
-                     CompiledKernel.launch_exit_hook, md, *args_expand)
+                     CompiledKernel.launch_exit_hook, md, *args)
 
         return runner

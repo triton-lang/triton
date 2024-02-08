@@ -19,6 +19,11 @@ include "mlir/Interfaces/CastInterfaces.td" // CastOpInterface
 include "mlir/Interfaces/CallInterfaces.td" // CallOpInterface
 
 //
+// Interfaces
+//
+def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
+
+//
 // Op Base
 //
 class TT_Op<string mnemonic, list<Trait> traits = []> :
@@ -205,7 +210,7 @@ def TT_LoadOp : TT_Op<"load",
 def TT_StoreOp : TT_Op<"store",
                        [SameLoadStoreOperandsShape,
                         SameLoadStoreOperandsEncoding,
-                        MemoryEffects<[MemWrite]>,
+                        MemoryEffects<[MemWrite<GlobalMemory>]>,
                         TypesMatchWith<"infer ptr type from value type",
                                        "value", "ptr", "$_self",
                                        "mlir::OpTrait::impl::verifyLoadStorePointerAndValueType">,
@@ -242,8 +247,8 @@ def TT_StoreOp : TT_Op<"store",
 //
 def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
                                           SameOperandsAndResultEncoding,
-                                          MemoryEffects<[MemRead]>,
-                                          MemoryEffects<[MemWrite]>,
+                                          MemoryEffects<[MemRead<GlobalMemory>]>,
+                                          MemoryEffects<[MemWrite<GlobalMemory>]>,
                                           TypesMatchWith<"infer ptr type from value type",
                                                          "val", "ptr",
                                                          "getPointerTypeSameShape($_self)">,
@@ -265,8 +270,8 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
     let results = (outs TT_Type:$result);
 }
 
-def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead]>,
-                                          MemoryEffects<[MemWrite]>,
+def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead<GlobalMemory>]>,
+                                          MemoryEffects<[MemWrite<GlobalMemory>]>,
                                           SameOperandsAndResultShape,
                                           SameOperandsAndResultEncoding]> {
     let summary = "atomic cas";
@@ -347,11 +352,17 @@ def TT_ReshapeOp : TT_Op<"reshape", [Pure,
 def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
                                          SameOperandsAndResultElementType,
                                          SameOperandsAndResultEncoding]> {
-    let summary = "broadcast. No left-padding as of now.";
+    let summary = "broadcast a tensor";
 
-    let arguments = (ins TT_Type:$src);
+    let description = [{
+      For a given tensor, broadcast changes one or more dimensions with size 1
+      to a new size, e.g. tensor<1x32x1xf32> -> tensor<2x32x4xf32>.  You cannot
+      change the size of a non-1 dimension.
+    }];
 
-    let results = (outs TT_Type:$result);
+    let arguments = (ins TT_Tensor:$src);
+
+    let results = (outs TT_Tensor:$result);
 
     let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
 
@@ -388,13 +399,46 @@ def TT_TransOp : TT_Op<"trans", [Pure,
                                  DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                  SameOperandsAndResultElementType]> {
 
-    let summary = "transpose a tensor";
+    let summary = "rearrange the dimensions of a tensor";
+    let description = [{
+      For example, given a tensor x with shape [1,2,4], transpose(x) with
+      order=[2,0,1] rearranges the tensor to have shape [4,1,2].
 
-    let arguments = (ins TT_Tensor:$src);
+      Although this op is called "trans", it implements both tl.trans() and
+      tl.permute().  ("permute" might be a better name, but it's called "trans"
+      because originally it only supported 2D tensors.)
+
+      ## Implementation note on encodings:
+
+      In the TritonGPU dialect (and probably others), an encoding is chosen for
+      this op's output so it's a nop from the perspective of code generation.
+
+      For example, suppose tensor x has an encoding such that GPU thread [i,j,k]
+      has a register containing element [i,j,k] of the tensor.  Now we transpose
+      x with order [2,1,0], i.e. we reverse the order of its dimensions.  In
+      TritonGPU, we will choose a layout for the output of the transpose so that
+      GPU thread [i,j,k] has element [k,j,i] of transpose(x).  But this is the
+      same element it had before!  All we've done is "rename" the element that
+      thread [i,j,k] has.
+
+      The "real" transpose -- i.e. moving data between GPU threads -- occurs in
+      convertLayout ops that appear before and/or after the operation.
+
+      We do this so that you can chain multiple data-movement ops (e.g.
+      transpose+reshape+concat) without going to shared memory after each one.
+    }];
+
+    let arguments = (
+      ins TT_Tensor:$src,
+      DenseI32ArrayAttr:$order
+    );
 
     let results = (outs TT_Tensor:$result);
 
     let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
+
+    let hasFolder = 1;
+    let hasVerifier = 1;
 }
 
 //
@@ -561,9 +605,11 @@ def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
 //
 // ElementwiseInlineAsm Op
 //
-def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [Elementwise,
-                                                                 SameOperandsAndResultEncoding,
-                                                                 DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [
+  Elementwise,
+  SameOperandsAndResultEncoding,
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+]> {
   let summary = "inline assembly applying an elementwise operation to a group of packed elements.";
   let description = [{
     Runs an inline asm block to generate one or more tensors.
@@ -578,6 +624,8 @@ def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [Elementwise,
   let assemblyFormat = [{
     $asm_string attr-dict ($args^ `:` type($args))? `->` type($result)
   }];
+
+  let hasVerifier = 1;
 }
 
 //
@@ -602,7 +650,7 @@ def TT_HistogramOp : TT_Op<"histogram", [Pure]> {
 //
 // Print Op
 //
-def TT_PrintOp : TT_Op<"print", [MemoryEffects<[MemWrite]>]>,
+def TT_PrintOp : TT_Op<"print", [MemoryEffects<[MemWrite<GlobalMemory>]>]>,
   Arguments<(ins StrAttr:$prefix, Variadic<AnyTypeOf<[TT_Type]>>:$args)> {
   let summary = "Device-side print, as in CUDA for debugging";
   let description = [{
@@ -617,7 +665,7 @@ def TT_PrintOp : TT_Op<"print", [MemoryEffects<[MemWrite]>]>,
 //
 // Assert Op
 //
-def TT_AssertOp : TT_Op<"assert", [MemoryEffects<[MemWrite]>]> {
+def TT_AssertOp : TT_Op<"assert", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Device-side assert, as in CUDA for correctness checking";
   let description = [{
     `tt.assert` takes a condition tensor, a message string, a file string, a function string, and a line number.

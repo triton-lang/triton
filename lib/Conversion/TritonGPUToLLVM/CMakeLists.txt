@@ -13,7 +13,13 @@ add_triton_library(TritonGPUToLLVM
     LoadStoreOpToLLVM.cpp
     BarrierOpToLLVM.cpp
     TritonGPUToLLVM.cpp
-    TritonGPUToLLVMPass.cpp
+    DecomposeUnsupportedConversions.cpp
+    AssertOpToLLVM.cpp
+    PrintOpToLLVM.cpp
+    MemoryOpToLLVM.cpp
+    ControlFlowOpToLLVM.cpp
+    MakeRangeOpToLLVM.cpp
+    SPMDOpToLLVM.cpp
     ReduceOpToLLVM.cpp
     ScanOpToLLVM.cpp
     TypeConverter.cpp
@@ -21,8 +27,8 @@ add_triton_library(TritonGPUToLLVM
     ViewOpToLLVM.cpp
     TensorPtrOpsToLLVM.cpp
     ClusterOpsToLLVM.cpp
-    RegReallocOpToLLVM.cpp
     PTXAsmFormat.cpp
+    AllocateSharedMemory.cpp
 
     DEPENDS
     TritonGPUConversionPassIncGen
