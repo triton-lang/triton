@@ -63,8 +63,7 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   }
   SmallVector<OpFoldResult> stride(allocType.getRank(), int_attr(1));
   auto extract = builder.create<ttg::ExtractSliceOp>(
-      loc, sliceType, insertOp.getResult(),
-      offset, size, stride);
+      loc, sliceType, insertOp.getResult(), offset, size, stride);
   auto newCvt = builder.create<ttg::ConvertLayoutOp>(
       loadOp->getLoc(), loadOp.getType(), extract.getResult());
   loadOp->replaceAllUsesWith(newCvt->getResults());
@@ -326,12 +325,12 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
     // MMAv3
     if (getenv("HACK_PHASE") && atoi(getenv("HACK_PHASE"))) {
       sharedEnc = ttg::SharedEncodingAttr::get(ty.getContext(), 1, 1, 1,
-                                            ttg::getOrder(ty.getEncoding()),
-                                            CTALayout, false);
+                                               ttg::getOrder(ty.getEncoding()),
+                                               CTALayout, false);
     } else {
       sharedEnc = ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(),
-                                              ttg::getOrder(ty.getEncoding()),
-                                              CTALayout, ty.getElementType());
+                                               ttg::getOrder(ty.getEncoding()),
+                                               CTALayout, ty.getElementType());
     }
   }
   SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
@@ -550,18 +549,19 @@ static void addOps(scf::ForOp forOp, int stage,
   }
 }
 
-static void printSchedule(std::vector<std::pair<Operation *, unsigned>> &schedule, int numStages) {
+static void
+printSchedule(std::vector<std::pair<Operation *, unsigned>> &schedule,
+              int numStages) {
   llvm::outs() << "Schedule:\n";
   for (int i = 0; i < numStages; i++) {
     llvm::outs() << "Stage " << i << ":\n";
     for (auto &pair : schedule) {
       if (pair.second == i) {
-       pair.first->dump();
+        pair.first->dump();
       }
     }
     llvm::outs() << "\n";
   }
-
 }
 
 // TODO: check if we can consolidate this with the addDep function.
@@ -573,7 +573,8 @@ static void recursiveHelper(Operation *op, DenseSet<Operation *> &seen,
   unsigned d = distance;
   if (isa<ttg::InsertSliceAsyncOp, ttng::InsertSliceTMAOp>(op)) {
     insertOpToDistance[op] = distance;
-    if (auto asyncCommit = dyn_cast<ttg::AsyncCommitGroupOp>(op->getNextNode())) {
+    if (auto asyncCommit =
+            dyn_cast<ttg::AsyncCommitGroupOp>(op->getNextNode())) {
       insertOpToDistance[asyncCommit] = distance;
     }
     d = distance + 1;
@@ -757,7 +758,7 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
   unsigned stageIncrement =
       ceil<unsigned>(numStages - 2, groupedInsertOps.size());
 
-  for (int i = groupedInsertOps.size()-1; i >= 0; i--) {
+  for (int i = groupedInsertOps.size() - 1; i >= 0; i--) {
     auto &group1 = stage1deps[i];
     addOps(forOp, stageIdx + 1, schedule,
            [&](Operation *op) { return group1.count(op); });
@@ -765,8 +766,8 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
   }
 
   stageIdx = numStages - 3;
-  
-  for (int i = groupedInsertOps.size()-1; i >= 0; i--) {
+
+  for (int i = groupedInsertOps.size() - 1; i >= 0; i--) {
     auto &group = insertAndDeps[i];
     addOps(forOp, stageIdx, schedule,
            [&](Operation *op) { return group.count(op); });
@@ -777,7 +778,7 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
   // pre-fetched and play well with pretech pass.
   addOps(forOp, numStages - 2, schedule,
          [&](Operation *op) { return extractAndDeps.count(op); });
-  
+
   printSchedule(schedule, numStages);
   assert(isScheduleValid(forOp, schedule) && "Invalid schedule.");
   return schedule;

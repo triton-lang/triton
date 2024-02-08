@@ -169,17 +169,28 @@ BLOCK_SIZE_K = 64
 @triton.jit
 def matmul_kernel(
     # Pointers to matrices
-    a_ptr, b_ptr, c_ptr, offsetsA_ptr, offsetsB_ptr,
+    a_ptr,
+    b_ptr,
+    c_ptr,
+    offsetsA_ptr,
+    offsetsB_ptr,
     # Matrix dimensions
-    M, N, K,
+    M,
+    N,
+    K,
     # The stride variables represent how much to increase the ptr by when moving by 1
     # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
     # by to get the element one row down (A has M rows).
-    stride_am, stride_ak,
-    stride_bk, stride_bn,
-    stride_cm, stride_cn,
+    stride_am,
+    stride_ak,
+    stride_bk,
+    stride_bn,
+    stride_cm,
+    stride_cn,
     # Meta-parameters
-    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
     ACTIVATION: tl.constexpr,
 ):
@@ -212,8 +223,8 @@ def matmul_kernel(
     offs_k = tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
-    initialA = tl.arange(0, BLOCK_SIZE_M)   # 128
-    initialB = tl.arange(0, BLOCK_SIZE_K)   # 64
+    initialA = tl.arange(0, BLOCK_SIZE_M)  # 128
+    initialB = tl.arange(0, BLOCK_SIZE_K)  # 64
     offsetsA = initialA + offsetsA_ptr
     offsetsB = initialB + offsetsB_ptr
     # -----------------------------------------------------------
@@ -224,9 +235,9 @@ def matmul_kernel(
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         oA = tl.load(offsetsA)
-        offsetsA += BLOCK_SIZE_M    # 128
+        offsetsA += BLOCK_SIZE_M  # 128
         oB = tl.load(offsetsB)
-        offsetsB += BLOCK_SIZE_K    # 64
+        offsetsB += BLOCK_SIZE_K  # 64
         a_ptrs += tl.multiple_of(oA[:, None], (16, 16))
         b_ptrs += tl.multiple_of(oB[:, None], (16, 16))
         # a_ptrs += oA[:, None]
@@ -279,26 +290,18 @@ def matmul(a, b, activation=""):
 
     lut_dtype = torch.int32 if i32 else torch.int64
     # a.shape[1] is 4096; 4096 // 64 = 64; a.stride(1) is 1; torch.full((64, 64), 64, dtype=torch.int64)
-    offsetsA = torch.full((a.shape[1] // BLOCK_SIZE_K, BLOCK_SIZE_M), BLOCK_SIZE_K * a.stride(1), device=a.device, dtype=lut_dtype)
+    offsetsA = torch.full((a.shape[1] // BLOCK_SIZE_K, BLOCK_SIZE_M), BLOCK_SIZE_K * a.stride(1), device=a.device,
+                          dtype=lut_dtype)
     offsetsA[0, :] = 0
     # a.shape[0] is 4096; 4096 // 128 = 32; a.stride(0) is 4096; torch.full((32, 128), 4096, dtype=torch.int64)
-    offsetsB = torch.full((a.shape[1] // BLOCK_SIZE_K, BLOCK_SIZE_K), BLOCK_SIZE_K * b.stride(0), device=a.device, dtype=lut_dtype)
+    offsetsB = torch.full((a.shape[1] // BLOCK_SIZE_K, BLOCK_SIZE_K), BLOCK_SIZE_K * b.stride(0), device=a.device,
+                          dtype=lut_dtype)
     offsetsB[0, :] = 0
     # 1D launch kernel where each block gets its own program.
-    grid = lambda META: (
-        triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
-    )
-    matmul_kernel[grid](
-        a, b, c, offsetsA, offsetsB,
-        M, N, K,
-        a.stride(0), a.stride(1),
-        b.stride(0), b.stride(1),
-        c.stride(0), c.stride(1),
-        ACTIVATION=activation,
-        BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,
-        GROUP_SIZE_M=8,
-        num_stages=5, num_warps=8
-    )
+    grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
+    matmul_kernel[grid](a, b, c, offsetsA, offsetsB, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1),
+                        c.stride(0), c.stride(1), ACTIVATION=activation, BLOCK_SIZE_M=BLOCK_SIZE_M,
+                        BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K, GROUP_SIZE_M=8, num_stages=5, num_warps=8)
     return c
 
 
@@ -320,17 +323,20 @@ for i, arg in enumerate(sys.argv):
 torch.manual_seed(0)
 
 size = 512 if bench else 4096
-
-a = torch.randn((size, size), device='cuda', dtype=torch.float16)
-b = torch.randn((size, size), device='cuda', dtype=torch.float16)
-triton_output = matmul(a, b)
-
-# print(f"triton_output={triton_output}")
-if bench:
+close = True
+for i in range(30):
+    a = torch.randn((size, size), device='cuda', dtype=torch.float16)
+    b = torch.randn((size, size), device='cuda', dtype=torch.float16)
+    triton_output = matmul(a, b)
     torch_output = torch.matmul(a, b)
-    print(f"triton_output={triton_output}")
-    print(f"torch_output={torch_output}")
-    if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0):
+    close_current = torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0)
+    if not close_current:
+        print(f"triton_output: {triton_output}")
+        print(f"torch_output: {torch_output}")
+    close = close and close_current
+
+if bench:
+    if close:
         print("✅ Triton and Torch match")
     else:
         print("❌ Triton and Torch differ")
