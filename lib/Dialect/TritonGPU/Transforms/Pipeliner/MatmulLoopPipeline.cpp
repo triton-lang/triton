@@ -208,35 +208,11 @@ allTransitiveUsesHaveDotEncoding(Value val, bool &needTrans) {
   return attr;
 }
 
-// Return the transitive use of the load which is a dot operand.
-// TODO pawel: perhaps change the name since it is no longer only
-// a dot operand.
-static std::optional<PipelineOpInfo> loadInfo(tt::LoadOp loadOp,
-                                              bool &hasMMAV3) {
-  bool isCandidate = false;
+
+static std::optional<std::pair<ttg::DotOperandEncodingAttr, bool>>
+loadDotAttribute(tt::LoadOp loadOp, bool &hasMMAV3) {
   if (loadOp.getResult().hasOneUse()) {
     Operation *use = *loadOp.getResult().getUsers().begin();
-    while (use) {
-
-      if (use->getNumResults() != 1)
-        break;
-
-      if (isa<triton::LoadOp>(use))
-        return PipelineOpInfo{
-          .use = use
-        };
-      SmallVector<Operation *> users;
-      for (auto user : use->getResult(0).getUsers()) {
-        if (isa<scf::YieldOp>(user))
-          continue;
-        users.push_back(user);
-      }
-      if (users.size() != 1)
-        break;
-      use = users[0];
-    }
-
-    use = *loadOp.getResult().getUsers().begin();
 
     if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
       auto tensorType =
@@ -256,9 +232,7 @@ static std::optional<PipelineOpInfo> loadInfo(tt::LoadOp loadOp,
             // TODO: remove this constraint once the LoadOp supports transpose
             // fusion
             hasMMAV3 = true;
-            return PipelineOpInfo {
-              .use = use
-            };
+            return std::make_pair(nullptr, false);
           }
         }
       }
@@ -269,11 +243,8 @@ static std::optional<PipelineOpInfo> loadInfo(tt::LoadOp loadOp,
       allTransitiveUsesHaveDotEncoding(loadOp.getResult(), needTrans);
   if (!attr)
     return std::nullopt;
-  return PipelineOpInfo{
-    .dotOperandEncoding = attr,
-    .needTrans = needTrans
-  };
-}
+  return std::make_pair(attr, needTrans);
+};
 
 
 // Create a map from load ops to their distance to the nearest dot op and the
@@ -326,7 +297,6 @@ static bool collectOpsToPipeline(scf::ForOp forOp,
                                  DenseMap<Operation *, PipelineOpInfo> &opInfo,
                                  int numStages,
                                  bool &hasMMAV3) {
-  bool foundLoads = false;
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
   ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
@@ -375,17 +345,23 @@ static bool collectOpsToPipeline(scf::ForOp forOp,
     // than ideal.
     if (!candidate)
       continue;
-    std::optional<PipelineOpInfo> loadWithInfo = loadInfo(loadOp, hasMMAV3);
-    if (!loadWithInfo.has_value())
-      continue;
+
     assert (loadOpToDistanceAndUse.count(loadOp) && "LoadOp not found in loadOpToDistance map");
+    PipelineOpInfo loadInfo;
+    if (isa<tt::DotOp>(loadOpToDistanceAndUse[loadOp].second)){
+      std::optional<std::pair<ttg::DotOperandEncodingAttr, bool>> loadDotAttr = loadDotAttribute(loadOp, hasMMAV3);
+      if (!loadDotAttr.has_value())
+        continue;
+      loadInfo.dotOperandEncoding = loadDotAttr.value().first;
+      loadInfo.needTrans = loadDotAttr.value().second;
+    }
     int stage = (maxDistance - loadOpToDistanceAndUse[loadOp].first) * stagesBetweenLoads;
-    
-    opInfo[loadOp] = loadWithInfo.value();
-    opInfo[loadOp].stage = stage;
-    opInfo[loadOp].use = loadOpToDistanceAndUse[loadOp].second;
+    loadInfo.stage = stage;
+    loadInfo.use = loadOpToDistanceAndUse[loadOp].second;
+    opInfo[loadOp] = loadInfo;
   };
 
+  // Find also the dop ops and assign them to the last stage.
   // We cannot use forOp.walk(...) here because we only want to visit the
   // operations in the loop body block. Nested blocks are handled separately.
   for (Operation &op : forOp) {
@@ -439,7 +415,7 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
 // the number of stages.
 static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
                                         DenseMap<Operation *, PipelineOpInfo>& opToInfo,
-                                        DenseMap<Operation *, unsigned>& loadToNumBuffers,
+                                        int numBuffers,
                                         bool hasMMAV3) {
   struct AsyncLoad {
     AsyncLoad(tt::LoadOp loadOp, Value alloc) : loadOp(loadOp), alloc(alloc) {}
@@ -451,15 +427,6 @@ static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
   SmallVector<Value> newOperands;
   bool needsMbarrierPhase = false;
   bool needsAsyncWait = false;
-
-  // TODO pawel:
-  // Calculate the number of buffers as the maximum number of buffers needed by
-  // the loads. This could be done more optimally by tracking number of buffers
-  // per load or group of loads that share the same requirements.
-  unsigned numBuffers = std::max_element(
-      loadToNumBuffers.begin(), loadToNumBuffers.end(),
-      [](auto &a, auto &b) { return a.second < b.second; })
-                           ->second;
 
   for (auto& loadInfoPair : opToInfo) {
     if (tt::LoadOp loadOp = dyn_cast<tt::LoadOp>(loadInfoPair.first)) {
@@ -773,8 +740,6 @@ createSchedule(scf::ForOp forOp, int numStages, DenseMap<Operation *, PipelineOp
 
   SmallVector<DenseSet<Operation *>> stage1deps(numStages); // TODO pawel: rename
   for (unsigned i = 0; i < distanceOneUsers.size(); i++) {
-    //if (i == 1) // TODO pawel: remove this special case. Why is it here?
-    //  continue;
     auto &group = distanceOneUsers[i];
     for (auto op : group) {
       if (!isa<tt::LoadOp>(op))
@@ -847,7 +812,10 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   });
 
   // Calculate the number of buffers needed for each load.
-  DenseMap<Operation *, unsigned> loadToNumBuffers;
+  // TODO pawel: we could do more fine-grained allocation here and
+  // allocate only the number of buffers that specific loads need.
+  // Instead, we allocate the maximum number of buffers needed by any load.
+  int maxNumBuffers = -1;
   for (auto &opInfoPair : opToInfo) {
     if (!isa<tt::LoadOp>(opInfoPair.first))
       continue;
@@ -863,11 +831,12 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
       // pipelining post-processing.
       numBuffers++;
     }
-    loadToNumBuffers[opInfoPair.first] = numBuffers;
+    if (numBuffers > maxNumBuffers)
+      maxNumBuffers = numBuffers;
   }
 
   // 2. Convert the loads into async loads and create the allocs.
-  SmallVector<Value> allocs = createAsynOps(forOp, opToInfo, loadToNumBuffers, hasMMAV3);
+  SmallVector<Value> allocs = createAsynOps(forOp, opToInfo, maxNumBuffers, hasMMAV3);
 
   // 3. Create the final schedule for the kernel loop. This will dictate the
   // stages and order of operations to the pipeline expander.
