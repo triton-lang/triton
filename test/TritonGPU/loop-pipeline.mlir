@@ -490,6 +490,9 @@ tt.func @cross_iter_dep(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
 // CHECK: tt.expand_dims
 // CHECK: tt.expand_dims %arg5
 // CHECK-NEXT: tt.expand_dims %arg5
+// CHECK: %[[PTR0:.*]] = tt.splat %arg6
+// CHECK: %[[PTR1:.*]] = tt.addptr %[[PTR0]]
+// CHECK-NEXT: tt.load %[[PTR1]]
 tt.func @dep_arg_two_uses(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32},
                           %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32},
                           %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #C> {
@@ -938,7 +941,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
       %15 = arith.addf %12, %14 : tensor<1024xf32, #blocked>
       %16 = tt.addptr %6, %9 : tensor<1024x!tt.ptr<f32, 1>, #blocked>, tensor<1024xi32, #blocked>
       tt.store %16, %15, %10 {cache = 1 : i32, evict = 1 : i32} : tensor<1024xf32, #blocked>
-    }
+    }{tt.num_stages = 3 : i32}
     tt.return
   }
 }

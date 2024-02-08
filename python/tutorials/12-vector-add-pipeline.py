@@ -26,24 +26,22 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        #triton.Config({}, num_stages=2, num_warps=1),
-        triton.Config({}, num_stages=2, num_warps=4),
-        #triton.Config({}, num_stages=8, num_warps=4),
+        triton.Config({"num_pipeline_stages": 2}, num_warps=4),
+        triton.Config({"num_pipeline_stages": 4}, num_warps=4),
+        triton.Config({"num_pipeline_stages": 8}, num_warps=4),
     ],
     key=[],
 )
 @triton.jit
-def add_kernel(
-    x_ptr,  # *Pointer* to first input vector.
-    y_ptr,  # *Pointer* to second input vector.
-    output_ptr,  # *Pointer* to output vector.
-    n_elements,  # Size of the vector.
-    BLOCK_SIZE: tl.constexpr,  # Number of elements each program should process.
-    stride: tl.constexpr,
-):
+def add_kernel(x_ptr,  # *Pointer* to first input vector.
+               y_ptr,  # *Pointer* to second input vector.
+               output_ptr,  # *Pointer* to output vector.
+               n_elements,  # Size of the vector.
+               BLOCK_SIZE: tl.constexpr,  # Number of elements each program should process.
+               stride: tl.constexpr, num_pipeline_stages: tl.constexpr):
     pid = tl.program_id(axis=0)  # We use a 1D launch grid so axis is 0.
     block_start = pid * BLOCK_SIZE
-    for offset in range(0, BLOCK_SIZE, stride):
+    for offset in tl.range(0, BLOCK_SIZE, stride, num_stages=num_pipeline_stages):
         offsets = block_start + offset + tl.arange(0, stride)
         mask = offsets < n_elements
         x = tl.load(x_ptr + offsets, mask=mask)
@@ -59,10 +57,7 @@ def add(x: torch.Tensor, y: torch.Tensor):
     num_sm = 128 * 2 * 4
     grid = lambda meta: (num_sm, )
     BLOCK_SIZE = n_elements // num_sm
-    kernel_info = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=BLOCK_SIZE, stride=1024)
-    for ir in ["ttir", "ttgir", "llir", "ptx"]:
-        with open(f"{ir}.txt", "w") as f:
-            f.write(kernel_info.asm[ir])
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=BLOCK_SIZE, stride=1024)
     return output
 
 
