@@ -657,13 +657,13 @@ createSchedule(scf::ForOp forOp, int numStages, DenseMap<Operation *, PipelineOp
   }
 #endif // PIPELINER_DEBUG
 
-  DenseSet<Operation *> extractOps;
+  SmallVector<Operation *> extractOps;
   // Find the insert/extract ops that will go respectively in stage 0 and stage
   // `numStages - 2`. All the other operations will go in stage `numStages - 1`.
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (prefetchExtract) {
       if (isa<ttg::ExtractSliceOp, ttg::AsyncWaitOp>(op))
-        extractOps.insert(&op);
+        extractOps.push_back(&op);
     }
   }
 #if PIPELINER_DEBUG
@@ -685,8 +685,7 @@ createSchedule(scf::ForOp forOp, int numStages, DenseMap<Operation *, PipelineOp
   SmallVector<DenseSet<Operation *>> insertAndDeps(numStages);
   DenseSet<Operation *> seen;
   for (int stage=0; stage<numStages; stage++) {
-    auto &group = insertOps[stage];
-    for (Operation *op : group) {
+    for (Operation *op : insertOps[stage]) {
       addDep(op, insertAndDeps[stage], false, &seen);
       seen.insert(insertAndDeps[stage].begin(), insertAndDeps[stage].end());
     }
@@ -726,8 +725,7 @@ createSchedule(scf::ForOp forOp, int numStages, DenseMap<Operation *, PipelineOp
 
   // Schedule loads with a distance of 1 together with the insert ops.
   for (unsigned i = 0; i < distanceOneUsers.size(); i++) {
-    auto &group = distanceOneUsers[i];
-    for (auto op : group) {
+    for (auto op : distanceOneUsers[i]) {
       if (isa<tt::LoadOp>(op))
         addDep(op, insertAndDeps[i], true);
     }
@@ -738,7 +736,9 @@ createSchedule(scf::ForOp forOp, int numStages, DenseMap<Operation *, PipelineOp
     allInsertAndDeps.insert(set.begin(), set.end());
   }
 
-  SmallVector<DenseSet<Operation *>> stage1deps(numStages); // TODO pawel: rename
+  // Rest of the distance 1 dependencies will be scheduled one
+  // stage after the insert ops.
+  SmallVector<DenseSet<Operation *>> stage1deps(numStages);
   for (unsigned i = 0; i < distanceOneUsers.size(); i++) {
     auto &group = distanceOneUsers[i];
     for (auto op : group) {
@@ -808,7 +808,6 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   // 1. First collect "interesting" operations with a stage where to schedule
   // them. This gives a coarse scheduling for the loop.
   DenseMap<Operation *, PipelineOpInfo> opToInfo;
-  // This map defines our coarse scheduling for the interesting ops.
   bool hasMMAV3 = false;
   if (!collectOpsToPipeline(forOp, opToInfo, numStages, hasMMAV3))
     return false;
