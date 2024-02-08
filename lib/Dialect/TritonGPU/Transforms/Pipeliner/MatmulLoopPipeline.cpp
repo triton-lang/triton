@@ -11,6 +11,8 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/Support/Debug.h"
 
+#define PIPELINER_DEBUG 0
+
 #define int_attr(num) builder.getI64IntegerAttr(num)
 
 using namespace mlir;
@@ -210,10 +212,9 @@ allTransitiveUsesHaveDotEncoding(Value val, bool &needTrans) {
 
 
 static std::optional<std::pair<ttg::DotOperandEncodingAttr, bool>>
-loadDotAttribute(tt::LoadOp loadOp, bool &hasMMAV3) {
+loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3) {
   if (loadOp.getResult().hasOneUse()) {
     Operation *use = *loadOp.getResult().getUsers().begin();
-
     if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
       auto tensorType =
           convertLayout.getResult().getType().cast<RankedTensorType>();
@@ -251,18 +252,17 @@ loadDotAttribute(tt::LoadOp loadOp, bool &hasMMAV3) {
 // final use of the load op (another load op, or a dot op).
 static DenseMap<tt::LoadOp, std::pair<int, Operation*>>
 loadOpsToDistanceAndUse(scf::ForOp forOp) {
-  DenseMap<tt::LoadOp, std::pair<int, Operation*>> loadOpToDistanceAndUse;
+  DenseMap<tt::LoadOp, std::pair<int, Operation*>> loadOpToDistAndUse;
   DenseSet<Operation *> seen;
 
   std::function<void(Operation *op, int, Operation *)> dfs =
     [&](Operation *op, int distance, Operation *use) {
     if (!seen.insert(op).second)
       return;
-    int d = distance;
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-      loadOpToDistanceAndUse[loadOp] = std::make_pair(distance, use);
+      loadOpToDistAndUse[loadOp] = std::make_pair(distance, use);
       use = op;
-      d = distance + 1;
+      distance++;
     }
     for (Value operand : op->getOperands()) {
       Value v = operand;
@@ -279,7 +279,7 @@ loadOpsToDistanceAndUse(scf::ForOp forOp) {
       }
       Operation *defOp = v.getDefiningOp();
       if (defOp && defOp->getBlock() == op->getBlock()) {
-        dfs(defOp, d, use);
+        dfs(defOp, distance, use);
       }
     }
   };
@@ -289,7 +289,7 @@ loadOpsToDistanceAndUse(scf::ForOp forOp) {
       continue;
     dfs(&op, 0, &op);
   }
-  return loadOpToDistanceAndUse;
+  return loadOpToDistAndUse;
 }
 
 /// Collect loads to pipeline. Returns true if loads are found to pipeline.
@@ -300,12 +300,12 @@ static bool collectOpsToPipeline(scf::ForOp forOp,
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
   ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
-  DenseMap<tt::LoadOp, std::pair<int, Operation*>> loadOpToDistanceAndUse = loadOpsToDistanceAndUse(forOp);
-  if (loadOpToDistanceAndUse.empty())
+  DenseMap<tt::LoadOp, std::pair<int, Operation*>> loadOpToDistAndUse = loadOpsToDistanceAndUse(forOp);
+  if (loadOpToDistAndUse.empty())
     return false;
 
   int maxDistance = -1;
-  for (auto& [op, info] : loadOpToDistanceAndUse) {
+  for (auto& [op, info] : loadOpToDistAndUse) {
     if (info.first > maxDistance) {
       maxDistance = info.first;
     }
@@ -313,7 +313,7 @@ static bool collectOpsToPipeline(scf::ForOp forOp,
 
   unsigned stagesBetweenLoads = ceil<unsigned>(numStages - 2, maxDistance+1);
 
-  for (auto& [loadOp, distAndUse] : loadOpToDistanceAndUse) {
+  for (auto& [loadOp, distAndUse] : loadOpToDistAndUse) {
     bool candidate = false;
     if (isLoadFromTensorPtr(loadOp)) {
       // Map to TMA load.
@@ -346,22 +346,22 @@ static bool collectOpsToPipeline(scf::ForOp forOp,
     if (!candidate)
       continue;
 
-    assert (loadOpToDistanceAndUse.count(loadOp) && "LoadOp not found in loadOpToDistance map");
+    assert (loadOpToDistAndUse.count(loadOp) && "LoadOp not found in loadOpToDistance map");
     PipelineOpInfo loadInfo;
-    if (isa<tt::DotOp>(loadOpToDistanceAndUse[loadOp].second)){
-      std::optional<std::pair<ttg::DotOperandEncodingAttr, bool>> loadDotAttr = loadDotAttribute(loadOp, hasMMAV3);
+    if (isa<tt::DotOp>(loadOpToDistAndUse[loadOp].second)){
+      std::optional<std::pair<ttg::DotOperandEncodingAttr, bool>> loadDotAttr = loadDotOperand(loadOp, hasMMAV3);
       if (!loadDotAttr.has_value())
         continue;
       loadInfo.dotOperandEncoding = loadDotAttr.value().first;
       loadInfo.needTrans = loadDotAttr.value().second;
     }
-    int stage = (maxDistance - loadOpToDistanceAndUse[loadOp].first) * stagesBetweenLoads;
+    int stage = (maxDistance - loadOpToDistAndUse[loadOp].first) * stagesBetweenLoads;
     loadInfo.stage = stage;
-    loadInfo.use = loadOpToDistanceAndUse[loadOp].second;
+    loadInfo.use = loadOpToDistAndUse[loadOp].second;
     opInfo[loadOp] = loadInfo;
   };
 
-  // Find also the dop ops and assign them to the last stage.
+  // Find also the dot ops and assign them to the last stage.
   // We cannot use forOp.walk(...) here because we only want to visit the
   // operations in the loop body block. Nested blocks are handled separately.
   for (Operation &op : forOp) {
@@ -383,7 +383,6 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
   auto ty = loadOp.getType().cast<RankedTensorType>();
   Attribute sharedEnc;
   auto CTALayout = ttg::getCTALayout(ty.getEncoding());
-
   if (dotOpEnc) {
     unsigned bitWidth = ty.getElementType().getIntOrFloatBitWidth();
     // set needTrans to avoid unnecessary conversion between shared encodings.
@@ -392,15 +391,9 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
         ttg::getOrder(ty.getEncoding()), CTALayout, bitWidth, needTrans);
   } else {
     // MMAv3
-    if (getenv("HACK_PHASE") && atoi(getenv("HACK_PHASE"))) {
-      sharedEnc = ttg::SharedEncodingAttr::get(ty.getContext(), 1, 1, 1,
+    sharedEnc = ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(),
                                             ttg::getOrder(ty.getEncoding()),
-                                            CTALayout, false);
-    } else {
-      sharedEnc = ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(),
-                                              ttg::getOrder(ty.getEncoding()),
-                                              CTALayout, ty.getElementType());
-    }
+                                            CTALayout, ty.getElementType());
   }
   SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
   bufferShape.insert(bufferShape.begin(), distance);
@@ -412,7 +405,7 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
 }
 
 // Convert load ops into their asyn version and apply multi-buffering based on
-// the number of stages.
+// the required number of buffers.
 static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
                                         DenseMap<Operation *, PipelineOpInfo>& opToInfo,
                                         int numBuffers,
@@ -615,6 +608,7 @@ static void addOps(scf::ForOp forOp, int stage,
   }
 }
 
+#if PIPELINER_DEBUG
 static void printSchedule(std::vector<std::pair<Operation *, unsigned>> &schedule, int numStages) {
   llvm::outs() << "Schedule:\n";
   for (int i = 0; i < numStages; i++) {
@@ -626,8 +620,8 @@ static void printSchedule(std::vector<std::pair<Operation *, unsigned>> &schedul
     }
     llvm::outs() << "\n";
   }
-
 }
+
 
 static bool
 isScheduleValid(scf::ForOp forOp,
@@ -643,11 +637,13 @@ isScheduleValid(scf::ForOp forOp,
     return false;
   return true;
 }
+#endif // PIPELINER_DEBUG
 
 // create the schedule for a matmul loop. This is ad hoc based on how we know
 // matmul loops should be pipelined and is not a generic scheduler.
 static std::vector<std::pair<Operation *, unsigned>>
 createSchedule(scf::ForOp forOp, int numStages, DenseMap<Operation *, PipelineOpInfo>& opToInfo, bool prefetchExtract) {
+#if PIPELINER_DEBUG
   llvm::outs() << "For loop:\n";
   forOp.dump();
 
@@ -659,24 +655,24 @@ createSchedule(scf::ForOp forOp, int numStages, DenseMap<Operation *, PipelineOp
       }
     }
   }
+#endif // PIPELINER_DEBUG
 
   DenseSet<Operation *> extractOps;
   // Find the insert/extract ops that will go respectively in stage 0 and stage
   // `numStages - 2`. All the other operations will go in stage `numStages - 1`.
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (isa<ttng::MBarrierArriveOp>(op)) {
-      assert(false && "MBarrierArriveOp has not been supported yet!");
-    }
     if (prefetchExtract) {
       if (isa<ttg::ExtractSliceOp, ttg::AsyncWaitOp>(op))
         extractOps.insert(&op);
     }
   }
+#if PIPELINER_DEBUG
   auto printDenseSet = [](DenseSet<Operation *> &set) {
     for (auto op : set) {
       op->dump();
     }
   };
+#endif // PIPELINER_DEBUG
 
   SmallVector<DenseSet<Operation *>> insertOps(numStages);
   for (auto& [op, info] : opToInfo) {
@@ -696,10 +692,12 @@ createSchedule(scf::ForOp forOp, int numStages, DenseMap<Operation *, PipelineOp
     }
   }
 
+#if PIPELINER_DEBUG
   for (int stage=0; stage<numStages; stage++) {
     llvm::outs() << "\ninsertAndDeps " << stage << ":\n";
     printDenseSet(insertAndDeps[stage]);
   }
+#endif // PIPELINER_DEBUG
 
   // Find dependencies with distance of 1.
   SmallVector<DenseSet<Operation *>> distanceOneUsers(numStages);
@@ -720,8 +718,10 @@ createSchedule(scf::ForOp forOp, int numStages, DenseMap<Operation *, PipelineOp
         }
       }
     }
+#if PIPELINER_DEBUG
     llvm::outs() << "\ndistanceOneUsers " << stage << ":\n";
     printDenseSet(distanceOneUsers[stage]);
+#endif // PIPELINER_DEBUG
   }
 
   // Schedule loads with a distance of 1 together with the insert ops.
@@ -745,9 +745,10 @@ createSchedule(scf::ForOp forOp, int numStages, DenseMap<Operation *, PipelineOp
       if (!isa<tt::LoadOp>(op))
         addDep(op, stage1deps[i], true, &allInsertAndDeps);
     }
-
+#if PIPELINER_DEBUG
     llvm::outs() << "\nstage1deps " << i << ":\n";
     printDenseSet(stage1deps[i]);
+#endif // PIPELINER_DEBUG
   }
 
   DenseSet<Operation *> allStage1Deps;
@@ -759,9 +760,10 @@ createSchedule(scf::ForOp forOp, int numStages, DenseMap<Operation *, PipelineOp
   for (Operation *op : extractOps) {
     addDep(op, extractAndDeps, true, &allInsertAndDeps);
   }
-
+#if PIPELINER_DEBUG
   llvm::outs() << "\nextractAndDeps:\n";
   printDenseSet(extractAndDeps);
+#endif // PIPELINER_DEBUG
 
   std::vector<std::pair<Operation *, unsigned>> schedule;
   // Schedule stage `numStage - 1` first.
@@ -791,8 +793,11 @@ createSchedule(scf::ForOp forOp, int numStages, DenseMap<Operation *, PipelineOp
   addOps(forOp, numStages - 2, schedule,
          [&](Operation *op) { return extractAndDeps.count(op); });
   
+#if PIPELINER_DEBUG
   printSchedule(schedule, numStages);
   assert(isScheduleValid(forOp, schedule) && "Invalid schedule.");
+#endif // PIPELINER_DEBUG
+  
   return schedule;
 }
 

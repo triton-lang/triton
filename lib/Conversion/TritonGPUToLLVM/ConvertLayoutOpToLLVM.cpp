@@ -706,9 +706,6 @@ private:
     auto srcTy = src.getType().cast<RankedTensorType>();
     auto srcShape = srcTy.getShape();
     auto dstTy = dst.getType().cast<RankedTensorType>();
-    // auto dstShape = dstTy.getShape();
-    // assert(dstShape.size() == 2 &&
-    //        "Unexpected rank of ConvertLayout(shared->blocked)");
     auto srcSharedLayout = srcTy.getEncoding().cast<SharedEncodingAttr>();
     auto dstLayout = dstTy.getEncoding();
     auto inOrd = getOrder(srcSharedLayout);
