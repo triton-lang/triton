@@ -1,5 +1,7 @@
+import functools
 import os
 import hashlib
+import subprocess
 import tempfile
 from pathlib import Path
 from triton.runtime.build import _build
@@ -8,8 +10,38 @@ from triton.backends.driver import GPUDriver
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir = [os.path.join(dirname, "include")]
-library_dir = [os.path.join(dirname, "lib")]
+libdevice_dir = os.path.join(dirname, "lib")
 libraries = ['cuda']
+
+
+@functools.lru_cache()
+def libcuda_dirs():
+    env_libcuda_path = os.getenv("TRITON_LIBCUDA_PATH")
+    if env_libcuda_path:
+        return [env_libcuda_path]
+
+    libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode()
+    # each line looks like the following:
+    # libcuda.so.1 (libc6,x86-64) => /lib/x86_64-linux-gnu/libcuda.so.1
+    locs = [line.split()[-1] for line in libs.splitlines() if "libcuda.so" in line]
+    dirs = [os.path.dirname(loc) for loc in locs]
+    env_ld_library_path = os.getenv("LD_LIBRARY_PATH")
+    if env_ld_library_path and not dirs:
+        dirs = [dir for dir in env_ld_library_path.split(":") if os.path.exists(os.path.join(dir, "libcuda.so"))]
+    msg = 'libcuda.so cannot found!\n'
+    if locs:
+        msg += 'Possible files are located at %s.' % str(locs)
+        msg += 'Please create a symlink of libcuda.so to any of the files.'
+    else:
+        msg += 'Please make sure GPU is set up and then run "/sbin/ldconfig"'
+        msg += ' (requires sudo) to refresh the linker cache.'
+    assert any(os.path.exists(os.path.join(path, 'libcuda.so')) for path in dirs), msg
+    return dirs
+
+
+@functools.lru_cache()
+def library_dirs():
+    return [libdevice_dir, *libcuda_dirs()]
 
 
 def compile_module_from_src(src, name):
@@ -21,7 +53,7 @@ def compile_module_from_src(src, name):
             src_path = os.path.join(tmpdir, "main.c")
             with open(src_path, "w") as f:
                 f.write(src)
-            so = _build(name, src_path, tmpdir, library_dir, include_dir, libraries)
+            so = _build(name, src_path, tmpdir, library_dirs(), include_dir, libraries)
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), f"{name}.so", binary=True)
     import importlib.util
