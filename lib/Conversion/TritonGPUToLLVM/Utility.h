@@ -1074,7 +1074,6 @@ loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
                         Location loc, ConversionPatternRewriter &rewriter) {
   auto dstTy = dst.getType().cast<RankedTensorType>();
   auto dstShape = dstTy.getShape();
-  assert(dstShape.size() == 2 && "Unexpected rank of loadSharedToDistributed");
   auto srcTy = src.getType().cast<RankedTensorType>();
   auto dstDistributedLayout = dstTy.getEncoding();
   if (auto mmaLayout = dstDistributedLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
@@ -1094,7 +1093,7 @@ loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
   unsigned inVec = srcSharedLayout.getVec();
   unsigned minVec = std::min(outVec, inVec);
   unsigned outElems = triton::gpu::getTotalElemsPerThread(dstTy);
-  SmallVector<Value> offsetVals = {i32_val(0), i32_val(0)};
+  SmallVector<Value> offsetVals = {dstShape.size(), i32_val(0)};
   assert(outElems == dstIndices.size());
 
   DenseMap<unsigned, Value> sharedPtrs =
