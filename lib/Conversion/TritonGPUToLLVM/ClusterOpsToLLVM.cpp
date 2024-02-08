@@ -22,14 +22,18 @@
  */
 
 #include "PatternTritonGPUOpToLLVM.h"
+#include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "triton/Dialect/NVGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+
 using namespace mlir;
 using namespace mlir::triton;
 
 namespace {
-struct ClusterArriveOpConversion : public ConvertTritonGPUOpToLLVMPattern<
-                                       triton::nvidia_gpu::ClusterArriveOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::ClusterArriveOp>::ConvertTritonGPUOpToLLVMPattern;
+struct ClusterArriveOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::ClusterArriveOp> {
+  using ConvertOpToLLVMPattern<
+      triton::nvidia_gpu::ClusterArriveOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::ClusterArriveOp op, OpAdaptor adaptor,
@@ -40,10 +44,10 @@ struct ClusterArriveOpConversion : public ConvertTritonGPUOpToLLVMPattern<
   }
 };
 
-struct ClusterWaitOpConversion : public ConvertTritonGPUOpToLLVMPattern<
-                                     triton::nvidia_gpu::ClusterWaitOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::ClusterWaitOp>::ConvertTritonGPUOpToLLVMPattern;
+struct ClusterWaitOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::ClusterWaitOp> {
+  using ConvertOpToLLVMPattern<
+      triton::nvidia_gpu::ClusterWaitOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::ClusterWaitOp op, OpAdaptor adaptor,
@@ -55,8 +59,7 @@ struct ClusterWaitOpConversion : public ConvertTritonGPUOpToLLVMPattern<
 } // namespace
 
 void mlir::triton::populateClusterOpsToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<ClusterArriveOpConversion>(typeConverter, benefit);
   patterns.add<ClusterWaitOpConversion>(typeConverter, benefit);

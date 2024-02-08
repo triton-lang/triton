@@ -21,15 +21,16 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #include "PatternTritonGPUOpToLLVM.h"
+#include "Utility.h"
+#include "mlir/Conversion/LLVMCommon/Pattern.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 
 namespace {
 struct MakeTensorPtrOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::MakeTensorPtrOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::MakeTensorPtrOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::MakeTensorPtrOp> {
+  using ConvertOpToLLVMPattern<triton::MakeTensorPtrOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::MakeTensorPtrOp op, OpAdaptor adaptor,
@@ -53,17 +54,15 @@ struct MakeTensorPtrOpConversion
 
     elems.push_back(base);
 
-    auto newValue = getTypeConverter()->packLLElements(
-        op.getLoc(), elems, rewriter, result.getType());
+    auto newValue = packLLElements(op.getLoc(), getTypeConverter(), elems,
+                                   rewriter, result.getType());
     rewriter.replaceOp(op, newValue);
     return success();
   }
 };
 
-struct AdvanceOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::AdvanceOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::AdvanceOp>::ConvertTritonGPUOpToLLVMPattern;
+struct AdvanceOpConversion : public ConvertOpToLLVMPattern<triton::AdvanceOp> {
+  using ConvertOpToLLVMPattern<triton::AdvanceOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::AdvanceOp op, OpAdaptor adaptor,
@@ -75,7 +74,7 @@ struct AdvanceOpConversion
     auto tensorPtr = adaptor.getPtr();
 
     auto offsets = adaptor.getOffsets();
-    auto elems = getTypeConverter()->unpackLLElements(loc, tensorPtr, rewriter);
+    auto elems = unpackLLElements(loc, tensorPtr, rewriter);
 
     SmallVector<Value, 2> newOffsets;
 
@@ -87,8 +86,8 @@ struct AdvanceOpConversion
       elems[i] = newOffsets[i];
     }
 
-    auto newValue = getTypeConverter()->packLLElements(op.getLoc(), elems,
-                                                       rewriter, ptrType);
+    auto newValue = packLLElements(op.getLoc(), getTypeConverter(), elems,
+                                   rewriter, ptrType);
     rewriter.replaceOp(op, newValue);
     return success();
   }
@@ -96,8 +95,7 @@ struct AdvanceOpConversion
 } // namespace
 
 void mlir::triton::populateTensorPtrOpsToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<MakeTensorPtrOpConversion>(typeConverter, benefit);
   patterns.add<AdvanceOpConversion>(typeConverter, benefit);

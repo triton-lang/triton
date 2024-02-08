@@ -178,7 +178,7 @@ SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
                                ArrayRef<unsigned> order) {
   unsigned rank = shape.size();
   assert(rank == order.size());
-  auto reordered = reorder(shape, order);
+  auto reordered = applyPermutation(shape, order);
   SmallVector<Value> reorderedMultiDim(rank);
   if (auto constantOp = linear.getDefiningOp<arith::ConstantOp>()) {
     unsigned intVal =
@@ -227,8 +227,8 @@ SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
 Value linearize(ConversionPatternRewriter &rewriter, Location loc,
                 ArrayRef<Value> multiDim, ArrayRef<unsigned> shape,
                 ArrayRef<unsigned> order) {
-  return linearize(rewriter, loc, reorder<Value>(multiDim, order),
-                   reorder<unsigned>(shape, order));
+  return linearize(rewriter, loc, applyPermutation(multiDim, order),
+                   applyPermutation(shape, order));
 }
 
 Value linearize(ConversionPatternRewriter &rewriter, Location loc,

@@ -155,7 +155,7 @@ llvm::SmallVector<T> getMultiDimIndex(T linearIndex, llvm::ArrayRef<T> shape,
                                       llvm::ArrayRef<unsigned> order) {
   size_t rank = shape.size();
   assert(rank == order.size());
-  auto reordered = reorder(shape, order);
+  auto reordered = applyPermutation(shape, order);
   auto reorderedMultiDim = getMultiDimIndexImpl<T>(linearIndex, reordered);
   llvm::SmallVector<T> multiDim(rank);
   for (unsigned i = 0; i < rank; ++i) {
@@ -185,8 +185,8 @@ template <typename T>
 T getLinearIndex(llvm::ArrayRef<T> multiDimIndex, llvm::ArrayRef<T> shape,
                  llvm::ArrayRef<unsigned> order) {
   assert(shape.size() == order.size());
-  return getLinearIndexImpl<T>(reorder(multiDimIndex, order),
-                               reorder(shape, order));
+  return getLinearIndexImpl<T>(applyPermutation(multiDimIndex, order),
+                               applyPermutation(shape, order));
 }
 
 } // namespace triton

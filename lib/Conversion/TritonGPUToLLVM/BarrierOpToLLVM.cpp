@@ -22,6 +22,8 @@
  */
 
 #include "PatternTritonGPUOpToLLVM.h"
+#include "Utility.h"
+#include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 
 using namespace mlir;
@@ -29,9 +31,8 @@ using namespace mlir::triton;
 
 namespace {
 struct BarrierOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<mlir::gpu::BarrierOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      mlir::gpu::BarrierOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<mlir::gpu::BarrierOp> {
+  using ConvertOpToLLVMPattern<mlir::gpu::BarrierOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(mlir::gpu::BarrierOp op, OpAdaptor adaptor,
@@ -51,175 +52,10 @@ struct BarrierOpConversion
   }
 };
 
-// --------------------------------------------------------------------------
-// -- MBarrier related Ops lowering, to be moved to a separate file ---------
-// --------------------------------------------------------------------------
-struct AllocMBarrierOpConversion : public ConvertTritonGPUOpToLLVMPattern<
-                                       triton::nvidia_gpu::AllocMBarrierOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::AllocMBarrierOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::AllocMBarrierOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
-    auto resultTy = op.getType();
-    auto resultTensorTy = resultTy.dyn_cast<RankedTensorType>();
-    Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-    Type llvmElemTy;
-    if (resultTensorTy) {
-      llvmElemTy =
-          getTypeConverter()->convertType(resultTensorTy.getElementType());
-    } else {
-      auto resultPtrTy = resultTy.dyn_cast<triton::PointerType>();
-      assert(resultPtrTy && "Unknown type for AllocMBarrierOp");
-      llvmElemTy =
-          getTypeConverter()->convertType(resultPtrTy.getPointeeType());
-    }
-    smemBase = bitcast(smemBase, elemPtrTy);
-    auto threadId = getThreadId(rewriter, loc);
-    auto pred = icmp_eq(threadId, i32_val(0));
-    int numMBarriers = 1;
-    if (resultTensorTy) {
-      assert(resultTensorTy.getRank() == 1 &&
-             "unexpected rank for AllocMBarrierOp");
-      numMBarriers = resultTensorTy.getShape()[0];
-    }
-    for (int i = 0; i < numMBarriers; ++i) {
-      Value smem = smemBase;
-      if (i > 0) {
-        smem = gep(elemPtrTy, llvmElemTy, smem, i32_val(i));
-      }
-      rewriter.create<triton::nvgpu::MBarrierInitOp>(loc, smem, pred,
-                                                     op.getCount());
-    }
-    if (resultTensorTy) {
-      auto llvmElemTy =
-          getTypeConverter()->convertType(resultTensorTy.getElementType());
-      auto smemObj = SharedMemoryObject(
-          smemBase, llvmElemTy, resultTensorTy.getShape(), {0}, loc, rewriter);
-      auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
-      rewriter.replaceOp(op, retVal);
-    } else {
-      rewriter.replaceOp(op, smemBase);
-    }
-    return success();
-  }
-};
-
-struct MBarrierArriveOpConversion : public ConvertTritonGPUOpToLLVMPattern<
-                                        triton::nvidia_gpu::MBarrierArriveOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::MBarrierArriveOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::MBarrierArriveOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    auto mbarrier = adaptor.getMbarrier();
-    bool trackAsyncOp = op.getTrackAsyncOp();
-    triton::nvgpu::MBarriveType type = triton::nvgpu::MBarriveType::normal;
-    uint32_t txCount = op.getTxCount();
-    auto remoteCtaId = adaptor.getRemoteCtaId();
-    if (trackAsyncOp) {
-      type = triton::nvgpu::MBarriveType::cp_async;
-    } else if (remoteCtaId) {
-      assert(txCount == 0 &&
-             "remote arrive of transaction mbarrier is not implemented yet");
-      type = triton::nvgpu::MBarriveType::remote;
-    } else if (txCount > 0) {
-      type = triton::nvgpu::MBarriveType::expect_tx;
-    }
-    Value pred = adaptor.getPred();
-    if (pred == nullptr) {
-      pred = int_val(/*width*/ 1, 1);
-    }
-    rewriter.replaceOpWithNewOp<triton::nvgpu::MBarrierArriveOp>(
-        op, mbarrier, pred, remoteCtaId, type, txCount);
-    return success();
-  }
-};
-
-struct MBarrierWaitOpConversion : public ConvertTritonGPUOpToLLVMPattern<
-                                      triton::nvidia_gpu::MBarrierWaitOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::MBarrierWaitOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::MBarrierWaitOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    rewriter.replaceOpWithNewOp<triton::nvgpu::MBarrierWaitOp>(
-        op, adaptor.getMbarrier(), adaptor.getPhase());
-    return success();
-  }
-};
-
-struct ExtractMBarrierOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<
-          triton::nvidia_gpu::ExtractMBarrierOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::ExtractMBarrierOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::ExtractMBarrierOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    auto elemTy =
-        op.getTensor().getType().cast<RankedTensorType>().getElementType();
-    auto tensorStruct = adaptor.getTensor();
-    auto index = adaptor.getIndex();
-    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
-    auto basePtr =
-        extract_val(ptrTy, tensorStruct, rewriter.getDenseI64ArrayAttr(0));
-    Value result =
-        gep(ptrTy, getTypeConverter()->convertType(elemTy), basePtr, index);
-    rewriter.replaceOp(op, result);
-    return success();
-  }
-};
-
-struct NamedBarrierArriveOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<
-          triton::nvidia_gpu::NamedBarrierArriveOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::NamedBarrierArriveOp>::
-      ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::NamedBarrierArriveOp op,
-                  OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    rewriter.replaceOpWithNewOp<triton::nvgpu::NamedBarrierArriveOp>(
-        op, adaptor.getBar(), adaptor.getNumThreads());
-    return success();
-  }
-};
-
-struct NamedBarrierWaitOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<
-          triton::nvidia_gpu::NamedBarrierWaitOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::NamedBarrierWaitOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::NamedBarrierWaitOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    rewriter.replaceOpWithNewOp<triton::nvgpu::NamedBarrierWaitOp>(
-        op, adaptor.getBar(), adaptor.getNumThreads());
-    return success();
-  }
-};
-
 struct FenceAsyncSharedOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<
-          triton::nvidia_gpu::FenceAsyncSharedOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::FenceAsyncSharedOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::FenceAsyncSharedOp> {
+  using ConvertOpToLLVMPattern<
+      triton::nvidia_gpu::FenceAsyncSharedOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::FenceAsyncSharedOp op, OpAdaptor adaptor,
@@ -233,15 +69,8 @@ struct FenceAsyncSharedOpConversion
 } // namespace
 
 void mlir::triton::populateBarrierOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<BarrierOpConversion>(typeConverter, benefit);
-  patterns.add<AllocMBarrierOpConversion>(typeConverter, benefit);
-  patterns.add<MBarrierArriveOpConversion>(typeConverter, benefit);
-  patterns.add<MBarrierWaitOpConversion>(typeConverter, benefit);
-  patterns.add<ExtractMBarrierOpConversion>(typeConverter, benefit);
-  patterns.add<NamedBarrierArriveOpConversion>(typeConverter, benefit);
-  patterns.add<NamedBarrierWaitOpConversion>(typeConverter, benefit);
   patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
 }

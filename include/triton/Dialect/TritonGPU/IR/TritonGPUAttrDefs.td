@@ -73,6 +73,58 @@ def CTALayoutAttr : TritonGPU_Attr<"CTALayout", "cta_layout"> {
     ArrayRefParameter<"unsigned">:$CTAOrder
   );
 
+  let description = [{
+Describes how blocks are distributed among the cooperate thread arrays (aka
+CTAs, aka thread blocks) in a cooperate thread group (aka CTA, aka thread group
+cluster).  CGAs were introduced in Hopper (sm90).
+
+The tensor is divided up into CTASplitNum pieces, which are distributed among
+the CTAsPerCGA thread blocks.  Each CTA processes a subtensor of shape
+`tensor_shape / CTASplitNum`.
+
+Example 0: The tensor shape is [64, 128] and, there are two CTAs, each
+processing half the tensor [64, 64]. Then CTAsPerCGA = [1, 2] and
+CTASplitNum = [1, 2].
+
+Example 1: The tensor shape is [64, 128] and, there are two CTAs, both
+processing the complete tensor [64, 128]. This happens when multicast is
+enabled. In this case, CTAsPerCTA = [1, 2] but CTASplitNum = [1, 1].
+
+Example 2: Consider a matmul AxB=C, where A=[M,K], B=[K,N], C=[M,N].  The
+CTAsPerCGA for A, B, C are the same, [SplitM, SplitN], but the CTASplitNum are
+different. CTASplitNum_A = [SplitM, 1], which means multicast on dim1,
+CTASplitNum_B = [1, SplitN], which means multicast on dim0, CTASplitNum_C =
+[SplitM, SplitN]  which means no multicast.
+
+Currently programs with multiple CTAs per CGA are an experimental feature in
+Triton, not enabled by default.
+
+You can leave off the CTALayout properties in the textual IR and Triton will
+fill in the "default" CTALayout of CTAsPerCGA = CTASplitNum = [1...1].  In
+addition, if there's only one CTA per CGA, then Triton canonicalizes CTAOrder to
+[n-1,...,0] (it doesn't matter in this case).
+  }];
+
+  // CTALayout::get canonicalizes CTAOrder to [n,n-1,...,0] if CTAsPerCGA is
+  // [1...1].  The CTAOrder doesn't matter in this case.
+  //
+  // This is a little weird because if you write textual IR with a one order and
+  // then print it back out, you might get a different order.  But it seems this
+  // is the best way to canonicalize an attribute in MLIR.
+  let builders = [
+    AttrBuilder<(ins "ArrayRef<unsigned>":$CTAsPerCGA,
+                     "ArrayRef<unsigned>":$CTASplitNum,
+                     "ArrayRef<unsigned>":$CTAOrder), [{
+        if (llvm::all_of(CTAsPerCGA, [](unsigned x) { return x == 1; })) {
+          SmallVector<unsigned> order;
+          for (int i = CTAsPerCGA.size() - 1; i >= 0; --i)
+            order.push_back(i);
+          return $_get(context, CTAsPerCGA, CTASplitNum, order);
+        }
+        return $_get(context, CTAsPerCGA, CTASplitNum, CTAOrder);
+    }]>,
+  ];
+
   let extraClassDeclaration = [{
     SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
       llvm::report_fatal_error(
@@ -82,9 +134,19 @@ def CTALayoutAttr : TritonGPU_Attr<"CTALayout", "cta_layout"> {
       llvm::report_fatal_error(
         "Unsupported getTotalElemsPerThread in CTALayoutAttr.");
     }
+
+    static CTALayoutAttr getDefault(MLIRContext *context, int rank) {
+      SmallVector<unsigned> CTAsPerCGA(rank, 1);
+      SmallVector<unsigned> CTASplitNum(rank, 1);
+      SmallVector<unsigned> CTAOrder;
+      for (int i = rank - 1; i >= 0; --i)
+        CTAOrder.push_back(i);
+      return get(context, CTAsPerCGA, CTASplitNum, CTAOrder);
+    }
   }];
 
   let genVerifyDecl = 1;
+  let skipDefaultBuilders = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -150,6 +212,9 @@ compared to 1*64 when the hasLeadingOffset is false.
         return get(context, dotOpEnc, shape, order, CTALayout, typeWidthInBit, needTrans);
     }]>,
 
+    // TODO(jlebar): This should not be an overload of
+    // SharedEncodingAttr::get().  It's misleading, because it does a bunch of
+    // nontrivial work based on the given dotOpEnc.
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
@@ -234,13 +299,13 @@ compared to 1*64 when the hasLeadingOffset is false.
           // for now, disable swizzle when using transposed int8 tensor cores
           if ((32 / typeWidthInBit != dotOpEnc.getKWidth()) && order[0] == inner)
             return get(context, 1, 1, 1, order, CTALayout);
-
+          int rank = order.size();
           // --- handle A operand ---
           if (opIdx == 0) { // compute swizzling for A operand
               int m = (needTrans) ? matShape[2] : matShape[0];
               int k = (needTrans) ? matShape[0] : matShape[2];
-              int vec = (order[0] == 1) ? k : m;
-              int mmaStride = (order[0] == 1) ? m : k;
+              int vec = (order[0] == rank-1) ? k : m;
+              int mmaStride = (order[0] == rank-1) ? m : k;
               int maxPhase = mmaStride / perPhase;
               return get(context, vec, perPhase, maxPhase, order, CTALayout);
           }
@@ -252,8 +317,8 @@ compared to 1*64 when the hasLeadingOffset is false.
               // consider that to get m, n and k.
               int n = needTrans ? matShape[2] : matShape[1];
               int k = needTrans ? matShape[1] : matShape[2];
-              int vec = (order[0] == 1) ? n : k;
-              int mmaStride = (order[0] == 1) ? k : n;
+              int vec = (order[0] == rank-1) ? n : k;
+              int mmaStride = (order[0] == rank-1) ? k : n;
               int maxPhase = mmaStride / perPhase;
               return get(context, vec, perPhase, maxPhase, order, CTALayout);
           }
@@ -377,11 +442,11 @@ For the Threads Per Warp and Values Per Thread level, the linear id distribution
                     "SmallVector<unsigned>",
                     "getSizePerThread">,
 
-    InterfaceMethod<"Get the split number of CTAs per CGA to handle the partial of the shape in each dimension.",
+    InterfaceMethod<"Each CTA processes 1/CTASplitNum of the tensor.",
                     "SmallVector<unsigned>",
                     "getCTASplitNum">,
 
-    InterfaceMethod<"Return shape per CTA tile.",
+    InterfaceMethod<"Gets the shape of the encoding's tile, e.g. sizePerThread * threadsPerWarp * warpsPerCTA",
                     "SmallVector<unsigned>",
                     "getShapePerCTATile",
                      (ins "ArrayRef<int64_t>":$tensorShape)>,
@@ -457,6 +522,7 @@ for
   threadsPerWarp = {8, 4}
   warpsPerCTA = {1, 2}
   CTAsPerCGA = {1, 1}
+  CTASplitNum = {1, 1}
 }>
 
 Example 2, a row-major coalesced layout may partition a 32x32 tensor over 2 warps (i.e. 64 threads) as follows:
@@ -482,6 +548,7 @@ for
   threadsPerWarp = {8, 4}
   warpsPerCTA = {1, 2}
   CTAsPerCGA = {1, 1}
+  CTASplitNum = {1, 1}
 }>
 
 Example 3, A row-major coalesced layout may partition a 32x32 tensor over 2 warps (i.e. 64 threads) and
@@ -511,6 +578,7 @@ for
   threadsPerWarp = {8, 4}
   warpsPerCTA = {1, 2}
   CTAsPerCGA = {2, 2}
+  CTASplitNum = {2, 2}
 }>
 }];
 
@@ -520,6 +588,10 @@ for
     ArrayRefParameter<"unsigned">:$threadsPerWarp__,
     ArrayRefParameter<"unsigned">:$warpsPerCTA__,
     ArrayRefParameter<"unsigned">:$order, // the fastest-changing axis first
+
+    // CTALayout is optional in the textual IR.  If omitted, we infer it to be a
+    // single CTA (so CTAsPerCGA = [1,...,1], CTASplitNum = [1,...,1],
+    // CTAOrder=[n,n-1,...,0]).
     "CTALayoutAttr":$CTALayout
   );
   let genVerifyDecl = 1;
@@ -954,9 +1026,13 @@ def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding", "dot_oper
   let mnemonic = "dot_op";
 
   let description = [{
-In TritonGPU dialect, considering `d = tt.dot a, b, c`
-tt.dot's operands a and b must be of DotOperandEncodingAttr layout.
+In the TritonGPU dialect, given `d = tt.dot a, b, c` tt.dot's operands a and b
+must be of DotOperandEncodingAttr layout, if the dot is MMA v1 or v2 (i.e.
+pre-Hopper).  For MMA v3, the operands are *almost always* in a regular shared
+encoding, but sometimes the LHS is also a dot-operand enc.
+
 a's opIdx is 0, b's opIdx is 1.
+
 The parend field in DotOperandEncodingAttr is the layout of d.
 
 For MMA v1, an additional attribute `isMMAv1Row` determines whether e.g. the a operand is used
