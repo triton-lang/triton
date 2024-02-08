@@ -845,6 +845,31 @@ def test_abs_fp8(in_dtype, device):
 
 
 # ----------------
+# test transpose
+# ----------------
+
+
+@pytest.mark.parametrize("dtype_x", [(dtype_x) for dtype_x in dtypes_with_bfloat16])
+def test_transpose(dtype_x, device='cuda'):
+    SIZE = 128
+
+    @triton.jit
+    def kernel(Z, X, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        off2d = off[None, :] + tl.arange(0, 1)[:, None]
+        x = tl.load(X + off2d)
+        z = x.T
+        tl.store(Z + off2d.T, z)
+
+    x = numpy_random([SIZE, 1], dtype_str=dtype_x)
+    z_ref = x.T
+    x_tri = to_triton(x, device=device, dst_type=dtype_x)
+    z_tri = to_triton(np.empty_like(z_ref), device=device, dst_type=dtype_x)
+    kernel[(1, )](z_tri, x_tri, SIZE=SIZE)
+    np.testing.assert_allclose(z_ref, to_numpy(z_tri))
+
+
+# ----------------
 # test indexing
 # ----------------
 
@@ -2930,32 +2955,6 @@ def test_dot_without_load(dtype_str, device):
     out = torch.zeros((32, 32), dtype=getattr(torch, dtype_str), device=device)
     kernel[(1, )](out, ALLOW_TF32=allow_tf32)
     assert torch.all(out == out_ref)
-
-
-def test_dot_with_transposed_arg(device):
-    M = N = K = 32
-    in1 = torch.ones((M, K), dtype=torch.float32, device=device)
-    in2 = torch.ones((K, N), dtype=torch.float32, device=device)
-    out = torch.zeros((M, N), dtype=torch.float32, device=device)
-
-    @triton.jit
-    def _kernel(in1_ptr, in2_ptr, output_ptr, in_stride, in2_stride, out_stride,
-                M: tl.constexpr, N: tl.constexpr, K: tl.constexpr):
-        M_offsets = tl.arange(0, M)
-        N_offsets = tl.arange(0, N)
-        K_offsets = tl.arange(0, K)
-        in_offsets = M_offsets[:, None] * in_stride + K_offsets[None, :]
-        in2_offsets = K_offsets[:, None] * in2_stride + N_offsets[None, :]
-        x = tl.load(in1_ptr + in_offsets, mask=in_offsets < M * K)
-        w = tl.load(in2_ptr + in2_offsets, mask=in2_offsets < K * N)
-        o = tl.dot(x, w.T, out_dtype=tl.float32)
-        output_offsets = M_offsets[:, None] * out_stride + N_offsets[None, :]
-        tl.store(output_ptr + output_offsets, o, mask=output_offsets < M * N)
-
-    _kernel[(1, )](in1, in2, out, in1.stride()[0], in2.stride()[0], out.stride()[0], M=M, N=N, K=K)
-
-    reference_out = torch.matmul(in1, in2)
-    torch.testing.assert_close(out, reference_out, atol=1e-2, rtol=0)
 
 
 # ---------------
