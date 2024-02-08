@@ -17,9 +17,13 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 RankedTensorType type) {
   if (version == 1)
     return {16, 16};
-  else if (version == 2)
-    return {16, 8};
-  else if (version == 3) {
+  else if (version == 2) {
+    auto rank = shape.size();
+    SmallVector<unsigned, 3> ret(rank, 1);
+    ret[rank - 1] = 8;
+    ret[rank - 2] = 16;
+    return ret;
+  } else if (version == 3) {
     unsigned k = 256 / type.getElementTypeBitWidth();
     if (shape[0] % 64 != 0 || shape[1] % 8 != 0) {
       assert(false && "type not supported");
@@ -56,10 +60,6 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
 }
 
 bool isLoadFromTensorPtr(triton::LoadOp op) {
-  return mlir::triton::isTensorPointerType(op.getPtr().getType());
-}
-
-bool isStoreToTensorPtr(triton::StoreOp op) {
   return mlir::triton::isTensorPointerType(op.getPtr().getType());
 }
 
@@ -353,6 +353,11 @@ static std::optional<Attribute> inferSrcEncoding(triton::TransOp op,
 }
 
 std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
+  if (isa<triton::ScanOp>(op)) {
+    // Scan only supports blocked encoding at the moment.
+    if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
+      return std::nullopt;
+  }
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
@@ -373,6 +378,10 @@ std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
 }
 
 std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
+  if (isa<triton::ScanOp>(op)) {
+    if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
+      return std::nullopt;
+  }
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||

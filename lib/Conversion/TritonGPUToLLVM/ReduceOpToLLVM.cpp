@@ -3,7 +3,6 @@
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -134,13 +133,7 @@ private:
 
   void sync(ConversionPatternRewriter &rewriter, Location loc,
             triton::ReduceOp op) const {
-    // TODO[shuhaoj]: change hard code style of numThreads. Hide async_agent
-    // attr.
-    if (getWSAgentId(op)) {
-      barSync(rewriter, op, getAgentIds(op).front(), 128);
-    } else {
-      barrier();
-    }
+    barrier();
   }
 
   // Check if the reduction can use a redux op and return the kind.
@@ -480,8 +473,7 @@ private:
 } // namespace
 
 void mlir::triton::populateReduceOpToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
-    PatternBenefit benefit) {
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    int computeCapability, PatternBenefit benefit) {
   patterns.add<ReduceOpConversion>(typeConverter, computeCapability, benefit);
 }

@@ -4,7 +4,6 @@
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "triton/Target/PTX/TmaMetadata.h"
 
 #include <memory>
 
@@ -30,8 +29,7 @@ std::unique_ptr<OperationPass<ModuleOp>> createAllocateSharedMemoryPass();
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass();
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonGPUToLLVMPass(int32_t computeCapability, Target target,
-                                 mlir::triton::gpu::TMAMetadataTy *tmaMetadata);
+createConvertTritonGPUToLLVMPass(int32_t computeCapability, Target target);
 
 #define GEN_PASS_REGISTRATION
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"

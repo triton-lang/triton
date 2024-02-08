@@ -301,8 +301,7 @@ def test_non_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K
             c.stride(0), c.stride(1),  #
             BLOCK_M, BLOCK_N, BLOCK_K,  #
             num_warps=4,  #
-            num_ctas=NUM_CTAS,  #
-            enable_warp_specialization=True)
+            num_ctas=NUM_CTAS)
     else:
         warp_specialized_matmul_kernel[grid](
             a, b, c,  #
@@ -312,8 +311,7 @@ def test_non_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K
             c.stride(0), c.stride(1),  #
             BLOCK_M, BLOCK_N, BLOCK_K,  #
             num_warps=4,  #
-            num_ctas=NUM_CTAS,  #
-            enable_warp_specialization=True)
+            num_ctas=NUM_CTAS)
 
     th_c = torch.matmul(a, b)
     torch.testing.assert_close(th_c, c, atol=1e-2, rtol=0, check_dtype=False)
@@ -451,10 +449,10 @@ def test_user_defined_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N
     grid = lambda META: (min(META['NUM_SMS'], triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N'])), )
 
     if USE_TMA:
-        static_persistent_tma_warp_specialized_matmul_kernel[grid](
-            a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_M,
-            BLOCK_N, BLOCK_K, NUM_SMS, num_warps=4, num_ctas=NUM_CTAS,  #
-            enable_warp_specialization=True)
+        static_persistent_tma_warp_specialized_matmul_kernel[grid](a, b, c, M, N, K, a.stride(0), a.stride(1),
+                                                                   b.stride(0), b.stride(1), c.stride(0), c.stride(1),
+                                                                   BLOCK_M, BLOCK_N, BLOCK_K, NUM_SMS, num_warps=4,
+                                                                   num_ctas=NUM_CTAS)
     else:
         static_persistent_warp_specialized_matmul_kernel[grid](
             a, b, c,  #
@@ -463,8 +461,7 @@ def test_user_defined_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N
             b.stride(0), b.stride(1),  #
             c.stride(0), c.stride(1),  #
             BLOCK_M, BLOCK_N, BLOCK_K, NUM_SMS,  #
-            num_warps=4, num_ctas=NUM_CTAS,  #
-            enable_warp_specialization=True)
+            num_warps=4, num_ctas=NUM_CTAS)
 
     th_c = torch.matmul(a, b)
     torch.testing.assert_close(th_c, c, atol=1e-2, rtol=0, check_dtype=False)
@@ -584,8 +581,7 @@ def test_static_persistent_matmul_no_scf_kernel(M, N, K, NUM_CTAS, NUM_WARPS, TR
         num_ctas=NUM_CTAS,  #
         FLOAT16_OUTPUT=(OUTPUT_TYPE == "float16"),  #
         USE_TMA_EPILOGUE=USE_TMA_EPILOGUE,  #
-        USE_TMA_LOAD=USE_TMA_LOAD,  #
-        enable_warp_specialization=True)
+        USE_TMA_LOAD=USE_TMA_LOAD)
     a_f32 = a.to(torch.float32)
     b_f32 = b.to(torch.float32)
     golden = torch.matmul(a_f32, b_f32)
@@ -703,17 +699,16 @@ def full_static_persistent_matmul_kernel(a_ptr, b_ptr, w_ptr, bias_ptr, z_ptr,  
 
 
 @pytest.mark.parametrize(
-    'BLOCK_M,BLOCK_N,BLOCK_K,NUM_WARPS,NUM_CTAS,M,N,K,TRANS_A,TRANS_B,epilogue,out_dtype,USE_TMA_STORE,NUM_STAGES,ENABLE_WS',
-    [
+    'BLOCK_M,BLOCK_N,BLOCK_K,NUM_WARPS,NUM_CTAS,M,N,K,TRANS_A,TRANS_B,epilogue,out_dtype,USE_TMA_STORE,NUM_STAGES', [
         # corner shapes
-        (128, 128, 64, 4, 1, *shape_w_c, 'none', out_dtype, use_tma_store, 3, enable_ws) for shape_w_c in [
+        (128, 128, 64, 4, 1, *shape_w_c, 'none', out_dtype, use_tma_store, 3) for shape_w_c in [
             [4096, 1, 1024, False, False],
             [2048, 204, 1000, True, False],
             [16, 524288, 32, False, True],
-        ] for out_dtype in ['float16', 'float32'] for use_tma_store in [False, True] for enable_ws in [True]
+        ] for out_dtype in ['float16', 'float32'] for use_tma_store in [False, True]
     ] + [
         # softmax epilogue
-        (*shape_w_c, trans_a, trans_b, epilogue, out_dtype, use_tma_store, num_stages, enable_ws)
+        (*shape_w_c, trans_a, trans_b, epilogue, out_dtype, use_tma_store, num_stages)
         # softmax works for one CTA
         for shape_w_c in [
             [64, 64, 16, 4, 1, 64, 64, 64],
@@ -729,10 +724,9 @@ def full_static_persistent_matmul_kernel(a_ptr, b_ptr, w_ptr, bias_ptr, z_ptr,  
         for trans_a in [False]
         for trans_b in [True]
         for num_stages in [3]
-        for enable_ws in [True]
     ] + [
         # loop over tile shapes and transpose combinations
-        (*shape_w_c, trans_a, trans_b, 'none', out_dtype, use_tma_store, num_stages, enable_ws) for shape_w_c in [
+        (*shape_w_c, trans_a, trans_b, 'none', out_dtype, use_tma_store, num_stages) for shape_w_c in [
             [64, 64, 32, 4, 1, 128, 256, 64],
             [128, 128, 16, 4, 4, 512, 256, 64],
             [128, 256, 32, 4, 8, 256, 256, 192],
@@ -746,10 +740,10 @@ def full_static_persistent_matmul_kernel(a_ptr, b_ptr, w_ptr, bias_ptr, z_ptr,  
             [32, 32, 16, 4, 1, 256, 256, 192],
             [16, 32, 64, 4, 4, 512, 256, 64],
         ] for out_dtype in ['float32'] for use_tma_store in [False] for trans_a in [False, True] for trans_b in
-        [False, True] for num_stages in [3] for enable_ws in [True]
+        [False, True] for num_stages in [3]
     ] + [
         # loop over epilogues besides of softmax
-        (*shape_w_c, trans_a, trans_b, epilogue, out_dtype, use_tma_store, num_stages, enable_ws) for shape_w_c in [
+        (*shape_w_c, trans_a, trans_b, epilogue, out_dtype, use_tma_store, num_stages) for shape_w_c in [
             [64, 64, 16, 4, 1, 128, 128, 64],
             *[[256, 64, 16, num_warps, num_ctas, 256, 256, 64] for num_warps in [4] for num_ctas in [1, 2, 4]],
             # for chain-dot
@@ -767,19 +761,18 @@ def full_static_persistent_matmul_kernel(a_ptr, b_ptr, w_ptr, bias_ptr, z_ptr,  
             [128, 128, 64, 4, 1, 513, 193, 192],
         ] for epilogue in ['none', 'add-matrix', 'add-rows', 'add-cols', 'chain-dot'] for out_dtype in
         ['float16', 'float32'] for use_tma_store in [False, True] for trans_a in [False] for trans_b in [True] for
-        num_stages in [3] for enable_ws in [True] if not (epilogue == 'chain-dot' and
-                                                          (shape_w_c[5] is not None or shape_w_c[0] != shape_w_c[1]))
+        num_stages in [3] if not (epilogue == 'chain-dot' and
+                                  (shape_w_c[5] is not None or shape_w_c[0] != shape_w_c[1]))
     ] + [
         # loop over instr shapes & pipeline stages
-        (64, n, 16, 4, 1, 512, 256, 256, False, True, 'none', out_dtype, use_tma_store, num_stages, enable_ws)
+        (64, n, 16, 4, 1, 512, 256, 256, False, True, 'none', out_dtype, use_tma_store, num_stages)
         for n in [16, 32, 64, 128, 256]
         for out_dtype in ['float32']
         for use_tma_store in [False]
         for num_stages in [2, 4, 5, 7]
-        for enable_ws in [True]
     ] + [
         # irregular shapes
-        (*shape_w_c, *shape, False, True, 'none', out_dtype, use_tma_store, num_stages, enable_ws)
+        (*shape_w_c, *shape, False, True, 'none', out_dtype, use_tma_store, num_stages)
         for shape_w_c in [[128, 128, 64, 4, 1], [256, 128, 64, 4, 2], [128, 128, 128, 4, 2]]
         for shape in [
             [512, 360, 1024],
@@ -788,25 +781,23 @@ def full_static_persistent_matmul_kernel(a_ptr, b_ptr, w_ptr, bias_ptr, z_ptr,  
         for out_dtype in ['float32']
         for use_tma_store in [False, True]
         for num_stages in [3, 4]
-        for enable_ws in [True]
     ] + [
         # larger NUM_CTAS
-        [1024, 128, 64, 4, 8, 1300, 1800, 3000, False, False, 'none', 'float16', True, 5, True],
-        [512, 256, 64, 4, 8, 800, 30000, 10000, True, True, 'none', 'float16', True, 4, True],
-        [1024, 128, 64, 4, 8, 1800, 10000, 15000, True, True, 'none', 'float16', True, 5, True],
-        [512, 256, 64, 4, 8, 1300, 1800, 3000, False, False, 'none', 'float16', True, 5, True],
-        [128, 1024, 64, 4, 8, 800, 30000, 10000, True, True, 'none', 'float16', True, 5, True],
-        [512, 256, 64, 4, 8, 1800, 10000, 15000, True, True, 'none', 'float16', True, 5, True],
+        [1024, 128, 64, 4, 8, 1300, 1800, 3000, False, False, 'none', 'float16', True, 5],
+        [512, 256, 64, 4, 8, 800, 30000, 10000, True, True, 'none', 'float16', True, 4],
+        [1024, 128, 64, 4, 8, 1800, 10000, 15000, True, True, 'none', 'float16', True, 5],
+        [512, 256, 64, 4, 8, 1300, 1800, 3000, False, False, 'none', 'float16', True, 5],
+        [128, 1024, 64, 4, 8, 800, 30000, 10000, True, True, 'none', 'float16', True, 5],
+        [512, 256, 64, 4, 8, 1800, 10000, 15000, True, True, 'none', 'float16', True, 5],
     ])
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
 def test_full_static_persistent_matmul_kernel(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, TRANS_B,
-                                              epilogue, out_dtype, USE_TMA_STORE, NUM_STAGES, ENABLE_WS):
+                                              epilogue, out_dtype, USE_TMA_STORE, NUM_STAGES):
     if '-'.join(
             map(str, [
-                BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, epilogue, out_dtype, USE_TMA_STORE, NUM_STAGES,
-                ENABLE_WS
+                BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, epilogue, out_dtype, USE_TMA_STORE, NUM_STAGES
             ])) in [
-                '128-128-128-4-1-256-256-192-none-float32-True-3-True',
+                '128-128-128-4-1-256-256-192-none-float32-True-3',
             ]:
         pytest.skip('out of resource: shared memory, Required: 263168')
 
@@ -926,7 +917,6 @@ def test_full_static_persistent_matmul_kernel(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WAR
         A_ORDER_0=a_order[0], A_ORDER_1=a_order[1],  #
         B_ORDER_0=b_order[0], B_ORDER_1=b_order[1],  #
         num_warps=NUM_WARPS, num_ctas=NUM_CTAS, num_stages=NUM_STAGES,  #
-        enable_warp_specialization=ENABLE_WS,  #
         NUM_SMS=NUM_SMS)
 
     torch.set_printoptions(profile="full")

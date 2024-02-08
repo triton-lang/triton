@@ -306,11 +306,71 @@ struct TransOpConversion : public ConvertOpToLLVMPattern<TransOp> {
     return emitOptionalError(loc, "unsupported encoding for TransOp");
   }
 };
+
+struct BroadcastOpConversion
+    : public ConvertOpToLLVMPattern<triton::BroadcastOp> {
+  using ConvertOpToLLVMPattern<triton::BroadcastOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::BroadcastOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Following the order of indices in the legacy code, a broadcast of:
+    //   [s(0), s(1) ... s(k-1),    1, s(k+1), s(k+2) ... s(n-1)]
+    // =>
+    //   [s(0), s(1) ... s(k-1), s(k), s(k+1), s(k+2) ... s(n-1)]
+    //
+    // logically maps to a broadcast within a thread's scope:
+    //   [cta(0)..cta(k-1),     1,cta(k+1)..cta(n-1),spt(0)..spt(k-1),
+    //   1,spt(k+1)..spt(n-1)]
+    // =>
+    //   [cta(0)..cta(k-1),cta(k),cta(k+1)..cta(n-1),spt(0)..spt(k-1),spt(k),spt(k+1)..spt(n-1)]
+    //
+    // regardless of the order of the layout
+    //
+    Location loc = op->getLoc();
+    Value src = adaptor.getSrc();
+    Value result = op.getResult();
+    auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
+    auto resultTy = result.getType().cast<RankedTensorType>();
+    auto srcLayout = srcTy.getEncoding();
+    auto resultLayout = resultTy.getEncoding();
+    auto srcShape = srcTy.getShape();
+    auto resultShape = resultTy.getShape();
+    unsigned rank = srcTy.getRank();
+    auto typeConverter = getTypeConverter();
+
+    assert(rank == resultTy.getRank());
+    auto order = triton::gpu::getOrder(srcLayout);
+    auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
+    auto resultOffsets = emitOffsetForLayout(resultLayout, resultTy);
+    SmallVector<Value> srcVals = unpackLLElements(loc, src, rewriter);
+
+    std::map<SmallVector<unsigned>, Value> srcValues;
+    for (size_t i = 0; i < srcOffsets.size(); i++) {
+      srcValues[srcOffsets[i]] = srcVals[i];
+    }
+
+    SmallVector<Value> resultVals;
+    for (size_t i = 0; i < resultOffsets.size(); i++) {
+      auto offset = resultOffsets[i];
+      for (size_t j = 0; j < srcShape.size(); j++)
+        if (srcShape[j] == 1)
+          offset[j] = 0;
+      resultVals.push_back(srcValues.at(offset));
+    }
+
+    Value resultStruct =
+        packLLElements(loc, typeConverter, resultVals, rewriter, resultTy);
+    rewriter.replaceOp(op, {resultStruct});
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::populateViewOpToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    PatternBenefit benefit) {
   patterns.add<ReshapeOpConversion>(typeConverter, benefit);
   patterns.add<ExpandDimsOpConversion>(typeConverter, benefit);
   patterns.add<SplatOpConversion>(typeConverter, benefit);
@@ -318,4 +378,5 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<CatOpConversion>(typeConverter, benefit);
   patterns.add<InterleaveOpConversion>(typeConverter, benefit);
   patterns.add<TransOpConversion>(typeConverter, benefit);
+  patterns.add<BroadcastOpConversion>(typeConverter, benefit);
 }

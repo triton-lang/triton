@@ -1257,13 +1257,14 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
 
     assert_dtypes_valid(lhs.dtype, rhs.dtype, builder.options)
 
-    assert len(lhs.shape) == 2, f"First input shape ({lhs.shape}) is not two dimensional!"
-    assert len(rhs.shape) == 2, f"Second input shape ({rhs.shape}) is not two dimensional!"
-    assert lhs.shape[1].value == rhs.shape[
-        0].value, f"First input shape ({lhs.shape}) and second input shape {rhs.shape} are not compatible for matmul (second index of first shape ({lhs.shape[1].value}) must be equal to first index of second shape ({rhs.shape[0].value})"
-    assert lhs.shape[0].value >= 16 and lhs.shape[1].value >= 16 \
-        and rhs.shape[1].value >= 16, \
-        f"All values in both first input shape ({lhs.shape}) and second input shape ({rhs.shape}) must be >= 16!"
+    lhs_rank = len(lhs.shape)
+    rhs_rank = len(rhs.shape)
+    assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
+    assert lhs.shape[-1].value == rhs.shape[
+        -2].value, f"First input shape ({lhs.shape}) and second input shape {rhs.shape} are not compatible for matmul (second index of first shape ({lhs.shape[-1].value}) must be equal to first index of second shape ({rhs.shape[-2].value})"
+    assert lhs.shape[-2].value >= 16 and lhs.shape[-1].value >= 16 \
+        and rhs.shape[-1].value >= 16, \
+        f"All non-batch values in both first input shape ({lhs.shape}) and second input shape ({rhs.shape}) must be >= 16!"
     if lhs.type.scalar.is_int():
         assert lhs.type.scalar == tl.int8, "only int8 supported!"
         # TODO: This is CUDA specific, check if ROCm has the same limitation
@@ -1280,12 +1281,12 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
         _0 = builder.get_fp16(0) if out_dtype.is_fp16() else builder.get_fp32(0)
         ret_scalar_ty = out_dtype
 
-    M = lhs.type.shape[0]
-    N = rhs.type.shape[1]
-
-    ret_ty = tl.block_type(ret_scalar_ty, [M, N])
+    M = lhs.type.shape[-2]
+    N = rhs.type.shape[-1]
+    B = lhs.type.shape[0] if lhs_rank == 3 else None
+    ret_ty = tl.block_type(ret_scalar_ty, [B, M, N] if B else [M, N])
     if acc is None:
-        acc_handle = builder.create_splat(_0, [M, N])
+        acc_handle = builder.create_splat(_0, [B, M, N] if B else [M, N])
     else:
         acc_handle = acc.handle
         assert acc.type == ret_ty

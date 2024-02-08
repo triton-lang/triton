@@ -207,9 +207,6 @@ struct FuncOpConversion : public FuncOpConversionBase {
     // The call graph is updated by mapping the old function to the new one.
     allocation.mapFuncOp(funcOp, newFuncOp);
 
-    // Append arguments to receive TMADesc in global memory in the runtime
-    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 1);
-    auto numArgs = newFuncOp.getBody().front().getNumArguments();
     auto funcTy = newFuncOp.getFunctionType().cast<LLVM::LLVMFunctionType>();
     SmallVector<Type> newInputsTy(funcTy.getParams().begin(),
                                   funcTy.getParams().end());
@@ -355,10 +352,8 @@ struct ConvertTritonGPUToLLVM
                     NVVM::NVVMDialect>();
   }
 
-  ConvertTritonGPUToLLVM(int32_t computeCapability, Target target,
-                         mlir::triton::gpu::TMAMetadataTy *tmaMetadata)
-      : ConvertTritonGPUToLLVMBase({computeCapability, target}),
-        tmaMetadata(tmaMetadata) {}
+  ConvertTritonGPUToLLVM(int32_t computeCapability, Target target)
+      : ConvertTritonGPUToLLVMBase({computeCapability, target}) {}
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -446,12 +441,6 @@ struct ConvertTritonGPUToLLVM
       indexCacheInfo = {nullptr, nullptr, nullptr};
     }
 
-    // tmaMetadata is absent in a triton-opt unit test, in this case, create a
-    // local one and dump it after this pass is done.
-    mlir::triton::gpu::TMAMetadataTy tmaMetaDataDebug;
-    if (tmaMetadata == nullptr)
-      tmaMetadata = &tmaMetaDataDebug;
-
     // {
     //   RewritePatternSet patterns(context);
     //   populateTritonGPUToLLVMPatterns(typeConverter, patterns, numWarps, axisInfoAnalysis, allocation, indexCacheInfo, 10);
@@ -497,9 +486,6 @@ struct ConvertTritonGPUToLLVM
     populatePatterns1(AMD::populateScanOpToLLVMPatterns);
     populatePatterns2(AMD::populateViewOpToLLVMPatterns);
     populatePatterns2(AMD::populateBarrierOpToLLVMPatterns);
-    // populatePatterns2(AMD::populateTensorPtrOpsToLLVMPatterns);
-    // populatePatterns2(AMD::populateClusterOpsToLLVMPatterns);
-    // populatePatterns2(AMD::populateRegReallocOpToLLVMPatterns);
 
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
@@ -540,8 +526,6 @@ private:
   DenseMap<IndexCacheKeyT, SmallVector<SmallVector<Value>>,
            CacheKeyDenseMapInfo>
       indexCache;
-  mlir::triton::gpu::TMAMetadataTy *tmaMetadata = nullptr;
-
   void initSharedMemory(ModuleAllocation &allocation,
                         TritonGPUToLLVMTypeConverter &typeConverter) {
     ModuleOp mod = getOperation();
@@ -1069,7 +1053,7 @@ namespace mlir {
 namespace triton {
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonAMDGPUToLLVMPass() {
-  return std::make_unique<ConvertTritonGPUToLLVM>(90, triton::ROCDL, nullptr);
+  return std::make_unique<ConvertTritonGPUToLLVM>(90, triton::ROCDL);
 }
 
 } // namespace triton

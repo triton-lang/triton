@@ -48,82 +48,26 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
 
   // Extract part.
   auto allocType = alloc.getType().cast<RankedTensorType>();
+  auto rank = allocType.getShape().size();
+  SmallVector<int64_t> sliceShape;
+  for (unsigned i = 1; i < rank; ++i)
+    sliceShape.push_back(allocType.getShape()[i]);
   RankedTensorType sliceType = RankedTensorType::get(
-      {allocType.getShape()[1], allocType.getShape()[2]},
-      allocType.getElementType(), allocType.getEncoding());
+      sliceShape, allocType.getElementType(), allocType.getEncoding());
+  SmallVector<OpFoldResult> sliceOffsets, sliceSizes, sliceStrides;
+  for (unsigned i = 0; i < rank; ++i) {
+    if (i == 0) {
+      sliceOffsets.push_back(extractIdx);
+      sliceSizes.push_back(int_attr(1));
+    } else {
+      sliceOffsets.push_back(int_attr(0));
+      sliceSizes.push_back(int_attr(sliceType.getShape()[i - 1]));
+    }
+    sliceStrides.push_back(int_attr(1));
+  }
   auto extract = builder.create<ttg::ExtractSliceOp>(
-      loc, sliceType, insertOp.getResult(),
-      SmallVector<OpFoldResult>{extractIdx, int_attr(0), int_attr(0)},
-      SmallVector<OpFoldResult>{int_attr(1), int_attr(sliceType.getShape()[0]),
-                                int_attr(sliceType.getShape()[1])},
-      SmallVector<OpFoldResult>{int_attr(1), int_attr(1), int_attr(1)});
-  auto newCvt = builder.create<ttg::ConvertLayoutOp>(
-      loadOp->getLoc(), loadOp.getType(), extract.getResult());
-  loadOp->replaceAllUsesWith(newCvt->getResults());
-  loadOp.erase();
-
-  // Fix up the yield op.
-  appendToYield(forOp, {insertOp});
-}
-
-static void createTMALoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
-                          Value insertIdx, Value extractIdx, Value phase) {
-  OpBuilder builder(forOp);
-  Location loc = loadOp.getLoc();
-  auto CTALayout = ttg::CTALayoutAttr::get(loadOp.getContext(),
-                                           /*CTAsPerCGA*/ {1},
-                                           /*CTASplitNum*/ {1},
-                                           /*CTAOrder*/ {0});
-  auto sharedEncoding = ttg::SharedEncodingAttr::get(loadOp.getContext(), 1, 1,
-                                                     1, {0}, CTALayout, false);
-  int64_t numBuffers = alloc.getType().cast<RankedTensorType>().getShape()[0];
-  auto mBarriersTy = RankedTensorType::get(
-      {numBuffers}, builder.getIntegerType(64), sharedEncoding);
-  // Allocate an array of mbarrier objects outside the loop.
-  Value barrierArray =
-      builder.create<ttng::AllocMBarrierOp>(loc, mBarriersTy, 1);
-  // extract the barrier and emit arriver/copy/wait/extract code sequence.
-  builder.setInsertionPoint(loadOp);
-  auto mBarTy = tt::PointerType::get(builder.getIntegerType(64), 3);
-  Value barrier = builder.create<ttng::ExtractMBarrierOp>(
-      loc, mBarTy, barrierArray, insertIdx);
-  Value zero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
-  Value threadId = builder.create<ttng::GetThreadIdOp>(loc);
-  Value pred = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                             threadId, zero);
-
-  auto loadTy = loadOp.getType().dyn_cast<RankedTensorType>();
-  auto loadShape = loadTy.getShape();
-  auto CTASplitNum = ttg::getCTASplitNum(loadTy.getEncoding());
-  auto shapePerSlice = ttg::getShapePerCTA(CTASplitNum, loadShape);
-  auto elemTy = loadTy.getElementType();
-  unsigned elems = std::accumulate(shapePerSlice.begin(), shapePerSlice.end(),
-                                   1, std::multiplies{});
-  elems *= (elemTy.getIntOrFloatBitWidth() / 8);
-  builder.create<ttng::MBarrierArriveOp>(loc, barrier, pred,
-                                         /*remoteCtaId*/ nullptr,
-                                         /*trackAsyncOp*/ false, elems);
-  auto allocType = alloc.getType().cast<RankedTensorType>();
-  auto insertOp = builder.create<ttng::InsertSliceTMAOp>(
-      loc, allocType, loadOp.getPtr(), alloc,
-      /*index*/ insertIdx, barrier, loadOp.getMask(), loadOp.getOther(),
-      loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile(),
-      /*axis*/ 0);
-
-  RankedTensorType sliceType = RankedTensorType::get(
-      {allocType.getShape()[1], allocType.getShape()[2]},
-      allocType.getElementType(), allocType.getEncoding());
-  auto extract = builder.create<mlir::triton::gpu::ExtractSliceOp>(
-      loc, sliceType, insertOp.getResult(),
-      SmallVector<OpFoldResult>{extractIdx, int_attr(0), int_attr(0)},
-      SmallVector<OpFoldResult>{int_attr(1), int_attr(sliceType.getShape()[0]),
-                                int_attr(sliceType.getShape()[1])},
-      SmallVector<OpFoldResult>{int_attr(1), int_attr(1), int_attr(1)});
-
-  Value barrierWait = builder.create<ttng::ExtractMBarrierOp>(
-      loc, mBarTy, barrierArray, extractIdx);
-  builder.create<ttng::MBarrierWaitOp>(loc, barrierWait, phase);
-
+      loc, sliceType, insertOp.getResult(), sliceOffsets, sliceSizes,
+      sliceStrides);
   auto newCvt = builder.create<ttg::ConvertLayoutOp>(
       loadOp->getLoc(), loadOp.getType(), extract.getResult());
   loadOp->replaceAllUsesWith(newCvt->getResults());
@@ -136,11 +80,7 @@ static void createTMALoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
 /// Create an async load equivalent to the given load.
 static void createAsyncLoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
                             Value insertIdx, Value extractIdx, Value phase) {
-  if (isLoadFromTensorPtr(loadOp)) {
-    createTMALoad(forOp, loadOp, alloc, insertIdx, extractIdx, phase);
-  } else {
-    createAsyncCopy(forOp, loadOp, alloc, insertIdx, extractIdx);
-  }
+  createAsyncCopy(forOp, loadOp, alloc, insertIdx, extractIdx);
 }
 
 namespace {
@@ -242,30 +182,26 @@ static void collectOpsToPipeline(scf::ForOp forOp,
   for (Operation &op : forOp) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(&op)) {
       bool candidate = false;
-      if (isLoadFromTensorPtr(loadOp)) {
-        // Map to TMA load.
-        candidate = true;
-      } else {
-        auto ptr = loadOp.getPtr();
-        unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
-        if (auto mask = loadOp.getMask())
-          vec =
-              std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
+      assert(!isLoadFromTensorPtr(loadOp) &&
+             "Block ptr should have been lowered before this pass.");
+      auto ptr = loadOp.getPtr();
+      unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
+      if (auto mask = loadOp.getMask())
+        vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
 
-        auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
-        if (!tensorTy || tensorTy.getRank() < 2)
-          continue;
-        auto ty =
-            tensorTy.getElementType().cast<tt::PointerType>().getPointeeType();
-        unsigned width = vec * ty.getIntOrFloatBitWidth();
-        // We do not pipeline all loads for the following reasons:
-        // 1. On nvidia GPUs, cp.async's cp-size can only be 4, 8 and 16.
-        // 2. It's likely that pipling small loads won't offer much performance
-        //    improvement and may even hurt performance by increasing register
-        //    pressure.
-        if (width >= 32)
-          candidate = true;
-      }
+      auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
+      if (!tensorTy || tensorTy.getRank() < 2)
+        continue;
+      auto ty =
+          tensorTy.getElementType().cast<tt::PointerType>().getPointeeType();
+      unsigned width = vec * ty.getIntOrFloatBitWidth();
+      // We do not pipeline all loads for the following reasons:
+      // 1. On nvidia GPUs, cp.async's cp-size can only be 4, 8 and 16.
+      // 2. It's likely that pipling small loads won't offer much performance
+      //    improvement and may even hurt performance by increasing register
+      //    pressure.
+      if (width >= 32)
+        candidate = true;
       if (!candidate)
         continue;
       std::optional<LoadDotOperand> loadWithDotOperand =
@@ -285,17 +221,29 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
   auto ty = loadOp.getType().cast<RankedTensorType>();
   Attribute sharedEnc;
   auto CTALayout = ttg::getCTALayout(ty.getEncoding());
+  auto blockedOrder = ttg::getOrder(ty.getEncoding());
+  SmallVector<unsigned> sharedOrder;
+  if (blockedOrder.size() == 3) {
+    for (unsigned i = 0; i < blockedOrder.size(); ++i) {
+      if (blockedOrder[i] == 0)
+        continue;
+      sharedOrder.push_back(blockedOrder[i]);
+    }
+    sharedOrder.push_back(0);
+  } else {
+    sharedOrder = blockedOrder;
+  }
+  ArrayRef<unsigned> order = sharedOrder;
   if (dotOpEnc) {
     unsigned bitWidth = ty.getElementType().getIntOrFloatBitWidth();
     // set needTrans to avoid unnecessary conversion between shared encodings.
-    sharedEnc = ttg::SharedEncodingAttr::get(
-        ty.getContext(), dotOpEnc, ty.getShape(),
-        ttg::getOrder(ty.getEncoding()), CTALayout, bitWidth, needTrans);
+    sharedEnc =
+        ttg::SharedEncodingAttr::get(ty.getContext(), dotOpEnc, ty.getShape(),
+                                     order, CTALayout, bitWidth, needTrans);
   } else {
     // MMAv3
-    sharedEnc = ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(),
-                                             ttg::getOrder(ty.getEncoding()),
-                                             CTALayout, ty.getElementType());
+    sharedEnc = ttg::SharedEncodingAttr::get(
+        ty.getContext(), ty.getShape(), order, CTALayout, ty.getElementType());
   }
   SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
   bufferShape.insert(bufferShape.begin(), distance);
@@ -325,8 +273,6 @@ static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
   SmallVector<AsyncLoad> asyncLoads;
   SmallVector<Value> allocs;
   SmallVector<Value> newOperands;
-  bool needsMbarrierPhase = false;
-  bool needsAsyncWait = false;
   for (const LoadDotOperand &loadOperand : loads) {
     tt::LoadOp loadOp = loadOperand.load;
     Value alloc = createAlloc(forOp, loadOp, loadOperand.dotOperandEncoding,
@@ -335,10 +281,6 @@ static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
     newOperands.push_back(alloc);
     allocs.push_back(alloc);
     asyncLoads.emplace_back(loadOp, alloc);
-    if (isLoadFromTensorPtr(loadOp))
-      needsMbarrierPhase = true;
-    else
-      needsAsyncWait = true;
   }
 
   OpBuilder builder(forOp);
@@ -354,10 +296,6 @@ static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
   newOperands.push_back(insertIdx);
   newOperands.push_back(extractIdx);
   Value phase;
-  if (needsMbarrierPhase) {
-    phase = builder.create<arith::ConstantIntOp>(loc, 0, 1);
-    newOperands.push_back(phase);
-  }
   unsigned newOperandIndex = forOp.getBody()->getNumArguments();
   // Patch the loop to add the new loop carried dependencies.
   scf::ForOp newForOp =
@@ -385,14 +323,6 @@ static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
                                                extractIdx, numBuffersVal);
   extractIdx = builder.create<arith::SelectOp>(loc, cndExt, extractIdx, zero);
 
-  if (needsMbarrierPhase) {
-    phase = newForOp.getBody()->getArgument(newOperandIndex +
-                                            asyncLoads.size() + 2);
-    Value oneI1 = builder.create<arith::ConstantIntOp>(loc, 1, 1);
-    Value nextPhase = builder.create<arith::XOrIOp>(loc, phase, oneI1);
-    phase = builder.create<arith::SelectOp>(loc, cndExt, phase, nextPhase);
-  }
-
   bool firstLoad = true;
   for (AsyncLoad &asyncLoad : asyncLoads) {
     createAsyncLoad(forOp, asyncLoad.loadOp, asyncLoad.alloc, insertIdx,
@@ -400,8 +330,6 @@ static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
     firstLoad = false;
   }
   SmallVector<Value> newYieldOperands = {insertIdx, extractIdx};
-  if (needsMbarrierPhase)
-    newYieldOperands.push_back(phase);
   // Patch the yield with the updated counters.
   appendToYield(forOp, newYieldOperands);
 
@@ -417,8 +345,7 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
   // Find the insert/extract ops that will go respectively in stage 0 and stage
   // `numStages - 2`. All the other operations will go in stage `numStages - 1`.
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (isa<ttg::InsertSliceAsyncOp, ttg::AsyncCommitGroupOp,
-            ttng::MBarrierArriveOp, ttng::InsertSliceTMAOp>(op))
+    if (isa<ttg::InsertSliceAsyncOp, ttg::AsyncCommitGroupOp>(op))
       insertOps.emplace_back(&op);
     if (prefetchExtract) {
       if (isa<ttg::ExtractSliceOp, ttg::AsyncWaitOp>(op))
@@ -560,8 +487,7 @@ minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
   // DFS the def chain of the extract op to find the insert op. On each path
   // we calculate the number of async_commit. Then we select the minimum number
   // of async_commit ops among all the paths.
-  // If the wait is not needed (when insert is a TMA insert), return
-  // std::nullopt.
+  // If the wait is not needed return std::nullopt.
   std::function<std::optional<int>(Value, Operation *, int)> minOverHistories =
       [&](Value val, Operation *sinkOp,
           int thisHistorySum) -> std::optional<int> {
@@ -570,10 +496,6 @@ minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
         thisHistorySum += countCommitsBetween(defOp->getNextNode(), sinkOp);
         minCommitNumber = std::min(minCommitNumber, thisHistorySum);
         return minCommitNumber;
-      }
-      if (isa<ttng::InsertSliceTMAOp>(defOp)) {
-        // We don't need to wait for TMA inserts.
-        return std::nullopt;
       }
       // Failed to track, return 1 conservatively.
       return 1;

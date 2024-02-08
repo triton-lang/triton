@@ -10,7 +10,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
-#include "triton/Target/PTX/TmaMetadata.h"
 #include "llvm/ADT/APSInt.h"
 #include <numeric>
 
@@ -219,13 +218,20 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
     int numWarps = typeConverter->getNumWarps();
     int threadsPerWarp = typeConverter->getThreadsPerWarp();
     int numCTAs = typeConverter->getNumCTAs();
-
-    SmallVector<unsigned> retSizePerThread = {1, 1};
-    if (origShape[0] * origShape[1] / (numWarps * threadsPerWarp) >= 4)
-      retSizePerThread = {2, 2};
-    if (origShape[0] * origShape[1] / (numWarps * threadsPerWarp) >= 16)
-      retSizePerThread = {4, 4};
-    SmallVector<unsigned> retOrder = {1, 0};
+    auto rank = origShape.size();
+    SmallVector<unsigned> retSizePerThread(rank, 1);
+    auto numElements = product<int64_t>(origShape);
+    if (numElements / (numWarps * threadsPerWarp) >= 4) {
+      retSizePerThread[rank - 1] = 2;
+      retSizePerThread[rank - 2] = 2;
+    }
+    if (numElements / (numWarps * threadsPerWarp) >= 16) {
+      retSizePerThread[rank - 1] = 4;
+      retSizePerThread[rank - 2] = 4;
+    }
+    SmallVector<unsigned> retOrder(rank);
+    for (unsigned i = 0; i < rank; ++i)
+      retOrder[i] = rank - 1 - i;
     Attribute dEncoding = triton::gpu::BlockedEncodingAttr::get(
         getContext(), origShape, retSizePerThread, retOrder, numWarps,
         threadsPerWarp, numCTAs);

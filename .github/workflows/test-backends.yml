@@ -4,8 +4,6 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-  issue_comment:
-      types: [created]
 
 jobs:
   Runner-Preparation:
@@ -58,7 +56,7 @@ jobs:
           python3 -m pip install --no-build-isolation -vvv '.[tests]'
 
   Integration-Tests-AMD:
-    if: (github.event_name == 'workflow_dispatch') || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event.issue.pull_request && contains(github.event.comment.body, '/run-amd-tests'))
+    if: (github.event_name == 'workflow_dispatch') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     needs: Runner-Preparation
     timeout-minutes: 20
 

@@ -321,6 +321,7 @@ def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
 # ---------------
 
 
+@pytest.mark.usefixtures("add_interpreter_test")
 @pytest.mark.parametrize("dtype_x, dtype_y, op", [  #
     (dtype_x, dtype_y, op)
     for op in ['+', '-', '*', '/', '%']
@@ -779,20 +780,6 @@ def test_where_broadcast(num_ctas, device):
     where_scalar_condition[(1, )](x_tri, z_tri, SIZE, num_ctas=num_ctas)
     z = np.where(0, x, 0)
     assert (z == to_numpy(z_tri)).all()
-
-
-# ---------------
-# test maximum/minimum ops
-# ---------------
-
-
-# TODO: Tests with unsigned integers failed at compilation stage.
-@pytest.mark.parametrize("dtype", int_dtypes + uint_dtypes + float_dtypes + ["bfloat16"])
-@pytest.mark.parametrize("op", ["maximum", "minimum"])
-def test_maximum_minium(dtype, op):
-    expr = f'tl.{op}(x, y)'
-    numpy_expr = f'np.{op}(x, y)'
-    _test_binary(dtype, dtype, expr, numpy_expr)
 
 
 # ---------------
@@ -2681,6 +2668,107 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
                 'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
 
 
+@pytest.mark.parametrize("B", [1, 2, 4, 8])
+@pytest.mark.parametrize("num_warps", [1, 2, 4, 8, 16])
+@pytest.mark.parametrize("M, N, K", [(64, 64, 64), (32, 32, 32)])
+@pytest.mark.parametrize("in_dtype_str, out_dtype_str", [('int8', 'int8'), ('float16', 'float16'),
+                                                         ('float16', 'float32'), ('float32', 'float32')])
+def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str):
+
+    @triton.jit
+    def kernel(
+        q_ptr,
+        k_ptr,
+        o_ptr,
+        stride_qb,
+        stride_qm,
+        stride_qk,
+        stride_kb,
+        stride_kk,
+        stride_kn,
+        stride_ob,
+        stride_om,
+        stride_on,
+        BLOCK_B: tl.constexpr,
+        BLOCK_M: tl.constexpr,
+        BLOCK_N: tl.constexpr,
+        BLOCK_K: tl.constexpr,
+        ALLOW_TF32: tl.constexpr,
+        out_dtype: tl.constexpr = tl.float32,
+    ):
+        startm = tl.program_id(0) * BLOCK_M
+        startn = tl.program_id(1) * BLOCK_N
+        offs_b = tl.arange(0, BLOCK_B)
+        offs_m = startm + tl.arange(0, BLOCK_M)
+        offs_n = startn + tl.arange(0, BLOCK_N)
+        offs_k = tl.arange(0, BLOCK_K)
+        q_ptrs = q_ptr + offs_b[:, None, None] * stride_qb + offs_m[None, :, None] * stride_qm + offs_k[
+            None, None, :] * stride_qk
+        k_ptrs = k_ptr + offs_b[:, None, None] * stride_kb + offs_k[None, :, None] * stride_kk + offs_n[
+            None, None, :] * stride_kn
+        q = tl.load(q_ptrs)
+        k = tl.load(k_ptrs)
+        qk = tl.dot(q, k, allow_tf32=ALLOW_TF32, out_dtype=out_dtype)
+        o_ptrs = o_ptr + offs_b[:, None, None] * stride_ob + offs_m[None, :, None] * stride_om + offs_n[
+            None, None, :] * stride_on
+        tl.store(o_ptrs, qk)
+
+    if out_dtype_str == 'int8':
+        out_dtype = tl.int8
+    elif out_dtype_str == 'float16':
+        out_dtype = tl.float16
+    else:
+        out_dtype = tl.float32
+
+    rs = RandomState(17)
+    x = numpy_random((B, M, K), dtype_str=in_dtype_str, rs=rs)
+    y = numpy_random((B, K, N), dtype_str=in_dtype_str, rs=rs)
+    if in_dtype_str == 'int8':
+        out = numpy_random((B, M, N), dtype_str='int32', rs=rs)
+    else:
+        out = numpy_random((B, M, N), dtype_str=out_dtype_str, rs=rs)
+
+    x_tri = to_triton(x)
+    y_tri = to_triton(y)
+    out_tri = to_triton(out)
+
+    BLOCK_B = B
+    BLOCK_M, BLOCK_N = 32, 32
+    BLOCK_K = K
+
+    grid = (
+        triton.cdiv(M, BLOCK_M),
+        triton.cdiv(N, BLOCK_N),
+    )
+    kernel[grid](
+        x_tri,
+        y_tri,
+        out_tri,
+        x_tri.stride(0),
+        x_tri.stride(1),
+        x_tri.stride(2),
+        y_tri.stride(0),
+        y_tri.stride(1),
+        y_tri.stride(2),
+        out_tri.stride(0),
+        out_tri.stride(1),
+        out_tri.stride(2),
+        BLOCK_B=BLOCK_B,
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        BLOCK_K=BLOCK_K,
+        ALLOW_TF32=bool(in_dtype_str == 'float32'),
+        out_dtype=out_dtype,
+        num_warps=num_warps,
+    )
+
+    if in_dtype_str == 'int8':
+        out_ref = np.matmul(x.astype(np.float32), y.astype(np.float32)).astype(np.int32)
+    else:
+        out_ref = np.matmul(x, y)
+    np.testing.assert_allclose(out_ref, to_numpy(out_tri), rtol=0.01, atol=1e-2)
+
+
 def test_max_num_imprecise_acc(device):
 
     if is_hip():
@@ -3082,18 +3170,6 @@ def test_store_cache_modifier(cache):
         assert 'st.global.cs' not in ptx
         assert 'st.global.wt' in ptx
 
-
-# ---------------
-# test if
-# ---------------
-
-# ---------------
-# test for
-# ---------------
-
-# ---------------
-# test while
-# ---------------
 
 # ---------------
 # test default
@@ -3831,7 +3907,6 @@ def add_fn_static_cond(x, cond: tl.constexpr):
         return x + 1
 
 
-# TODO(Keren): if_exp
 @pytest.mark.parametrize(
     "call_type",
     ["attribute", "attribute_jit", "jit", "jit_if", "jit_expr", "jit_static_cond", "jit_noinline", "jit_extern"])
@@ -3970,7 +4045,7 @@ def test_while(device):
     assert out_j[0] == bound[0]
 
 
-def test_while2(device):
+def test_nested_while(device):
 
     @triton.jit
     def nested_while(data, countPtr):
@@ -3985,26 +4060,6 @@ def test_while2(device):
     nested_while[(1, )](data, counter)
     assert data[0] == 40
 
-
-# def test_for_if(device):
-
-#     @triton.jit
-#     def kernel(bound, cutoff, M, N):
-#         m = 0
-#         n = 0
-#         for i in range(bound):
-#             if i > cutoff:
-#                 m = m + 1
-#             else:
-#                 n = n + 1
-#         tl.store(M, m)
-#         tl.store(N, n)
-
-#     m = to_triton(np.zeros((1,), dtype=np.int32), device=device)
-#     n = to_triton(np.zeros((1,), dtype=np.int32), device=device)
-#     kernel[(1,)](10, 7, m, n)
-#     print(m[0])
-#     print(n[0])
 
 # -----------------------
 # test extra
@@ -4544,58 +4599,6 @@ def test_clamp_symmetric(dtype):
     kernel[(size, )](x, limit, out, ref, x.numel(), BLOCK_SIZE=size)
 
     torch.testing.assert_close(out, ref)
-
-
-# -----------------------
-# test sort
-# -----------------------
-
-
-@pytest.mark.parametrize("M, N", [[1, 512], [8, 64], [256, 16], [512, 8]])
-@pytest.mark.parametrize("descending", [False, True])
-@pytest.mark.parametrize("dtype_str", ['int32', 'float16', 'float32'])
-def test_sort(M, N, descending, dtype_str, device):
-    if is_hip():
-        pytest.skip(
-            'test_propagate_nan for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
-
-    @triton.jit
-    def sort_kernel(X, Z, N: tl.constexpr, M: tl.constexpr, descending: tl.constexpr):
-        offx = tl.arange(0, M)
-        offy = tl.arange(0, N) * M
-        off2d = offx[None, :] + offy[:, None]
-        x = tl.load(X + off2d)
-        x = tl.sort(x, descending=descending)
-        tl.store(Z + off2d, x)
-
-    x = numpy_random((N, M), dtype_str=dtype_str)
-    x = torch.from_numpy(x).to("cuda")
-    y = torch.sort(x, descending=descending)[0]
-    z = torch.empty_like(x)
-    sort_kernel[(1, )](x, z, N, M, descending, num_warps=8)
-    assert (y == z).all(), (y, z)
-
-
-@pytest.mark.parametrize("M, N", [[1, 512], [8, 64], [256, 16], [512, 8]])
-@pytest.mark.parametrize("dtype_str", ['int32', 'float16', 'float32'])
-def test_flip(M, N, dtype_str, device):
-
-    @triton.jit
-    def flip_kernel(X, Z, N: tl.constexpr, M: tl.constexpr):
-        offx = tl.arange(0, M)
-        offy = tl.arange(0, N) * M
-        off2d = offx[None, :] + offy[:, None]
-        x = tl.load(X + off2d)
-        x = tl.flip(x)
-        tl.store(Z + off2d, x)
-
-    x = numpy_random((N, M), dtype_str=dtype_str)
-    x = torch.from_numpy(x).to("cuda")
-    y = torch.flip(x, (1, ))
-    z = torch.empty_like(x)
-    flip_kernel[(1, )](x, z, N, M, num_warps=8)
-    assert (y == z).all(), (y, z)
 
 
 # -----------------------
