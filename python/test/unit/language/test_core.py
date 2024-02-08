@@ -856,12 +856,12 @@ def test_transpose(dtype_x, device='cuda'):
     @triton.jit
     def kernel(Z, X, SIZE: tl.constexpr):
         off = tl.arange(0, SIZE)
-        off2d = off[None, :] + tl.arange(0, 1)[:, None]
+        off2d = off[None, :] + (tl.arange(0, 2) * SIZE)[:, None]
         x = tl.load(X + off2d)
         z = x.T
         tl.store(Z + off2d.T, z)
 
-    x = numpy_random([SIZE, 1], dtype_str=dtype_x)
+    x = numpy_random([SIZE, 2], dtype_str=dtype_x)
     z_ref = x.T
     x_tri = to_triton(x, device=device, dst_type=dtype_x)
     z_tri = to_triton(np.empty_like(z_ref), device=device, dst_type=dtype_x)
