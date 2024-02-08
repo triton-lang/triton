@@ -31,9 +31,9 @@ def libcuda_dirs():
     msg = 'libcuda.so cannot found!\n'
     if locs:
         msg += 'Possible files are located at %s.' % str(locs)
-        msg += 'Please create a symlink of libcuda.so to any of the file.'
+        msg += 'Please create a symlink of libcuda.so to any of the files.'
     else:
-        msg += 'Please make sure GPU is setup and then run "/sbin/ldconfig"'
+        msg += 'Please make sure GPU is set up and then run "/sbin/ldconfig"'
         msg += ' (requires sudo) to refresh the linker cache.'
     assert any(os.path.exists(os.path.join(path, 'libcuda.so')) for path in dirs), msg
     return dirs
