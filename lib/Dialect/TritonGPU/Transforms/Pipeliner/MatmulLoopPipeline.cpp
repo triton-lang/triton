@@ -10,8 +10,8 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/Support/Debug.h"
 
 #define PIPELINER_DEBUG 0
 
@@ -50,9 +50,10 @@ static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
   yieldOp->erase();
 }
 
-static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
-                            Value insertIdx, Value extractIdx,
-                            llvm::MapVector<Operation *, PipelineOpInfo> &opToInfo) {
+static void
+createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
+                Value insertIdx, Value extractIdx,
+                llvm::MapVector<Operation *, PipelineOpInfo> &opToInfo) {
   OpBuilder builder(forOp);
   // Replace the load with insert/extract slice.
   builder.setInsertionPoint(loadOp);
@@ -100,9 +101,10 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
 }
 
 /// Create an async load equivalent to the given load.
-static void createAsyncLoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
-                            Value insertIdx, Value extractIdx, Value phase,
-                            llvm::MapVector<Operation *, PipelineOpInfo> &opToInfo) {
+static void
+createAsyncLoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
+                Value insertIdx, Value extractIdx, Value phase,
+                llvm::MapVector<Operation *, PipelineOpInfo> &opToInfo) {
   createAsyncCopy(forOp, loadOp, alloc, insertIdx, extractIdx, opToInfo);
 }
 
@@ -190,7 +192,7 @@ loadOpsToDistanceAndUse(scf::ForOp forOp) {
 
   auto isCandidate = [&](tt::LoadOp loadOp) -> bool {
     assert(!isLoadFromTensorPtr(loadOp) &&
-          "Block ptr should have been lowered before this pass.");
+           "Block ptr should have been lowered before this pass.");
     auto ptr = loadOp.getPtr();
     unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
     if (auto mask = loadOp.getMask())
@@ -211,24 +213,24 @@ loadOpsToDistanceAndUse(scf::ForOp forOp) {
   };
 
   std::function<void(Operation * op, int, Operation *)> dfs =
-    [&](Operation *op, int distance, Operation *use) {
-      if (!seen.insert(op).second)
-        return;
-      if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-        if (!isCandidate(loadOp))
+      [&](Operation *op, int distance, Operation *use) {
+        if (!seen.insert(op).second)
           return;
-        loadOpToDistAndUse[loadOp] = std::make_pair(distance, use);
-        use = op;
-        distance++;
-      }
-      for (Value operand : op->getOperands()) {
-        Value v = operand;
-        Operation *defOp = v.getDefiningOp();
-        if (defOp && defOp->getBlock() == op->getBlock()) {
-          dfs(defOp, distance, use);
+        if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+          if (!isCandidate(loadOp))
+            return;
+          loadOpToDistAndUse[loadOp] = std::make_pair(distance, use);
+          use = op;
+          distance++;
         }
-      }
-    };
+        for (Value operand : op->getOperands()) {
+          Value v = operand;
+          Operation *defOp = v.getDefiningOp();
+          if (defOp && defOp->getBlock() == op->getBlock()) {
+            dfs(defOp, distance, use);
+          }
+        }
+      };
 
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (!isa<tt::DotOp>(op))
@@ -239,9 +241,10 @@ loadOpsToDistanceAndUse(scf::ForOp forOp) {
 }
 
 /// Collect loads to pipeline. Returns true if loads are found to pipeline.
-static bool collectOpsToPipeline(scf::ForOp forOp,
-                                 llvm::MapVector<Operation *, PipelineOpInfo> &opInfo,
-                                 int numStages, bool &hasMMAV3) {
+static bool
+collectOpsToPipeline(scf::ForOp forOp,
+                     llvm::MapVector<Operation *, PipelineOpInfo> &opInfo,
+                     int numStages, bool &hasMMAV3) {
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
   ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
@@ -339,8 +342,8 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
 // the required number of buffers.
 static SmallVector<Value>
 createAsynOps(scf::ForOp &forOp,
-              llvm::MapVector<Operation *, PipelineOpInfo> &opToInfo, int numBuffers,
-              bool hasMMAV3) {
+              llvm::MapVector<Operation *, PipelineOpInfo> &opToInfo,
+              int numBuffers, bool hasMMAV3) {
   struct AsyncLoad {
     AsyncLoad(tt::LoadOp loadOp, Value alloc) : loadOp(loadOp), alloc(alloc) {}
     tt::LoadOp loadOp;
