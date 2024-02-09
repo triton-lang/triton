@@ -248,8 +248,6 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
     for (auto encoding : info.encodings) {
       std::optional<Attribute> dstEncoding;
       if (isa<triton::gpu::ConvertLayoutOp>(op)) {
-        // Try to remove the convert by making the dst encoding match the source
-        // encoding.
         dstEncoding = encoding;
       } else {
         dstEncoding = inferDstEncoding(op, encoding);
@@ -307,11 +305,9 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     }
     if (user->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<mlir::OpTrait::Elementwise>() ||
-        // TODO(jlebar): Add TransOp to this list, but we have to force it into
-        // shared memory if it's used by a dot operand.
         isa<triton::ReduceOp, triton::ExpandDimsOp, triton::ReshapeOp,
-            triton::ExperimentalInterleaveOp, triton::gpu::ConvertLayoutOp>(
-            user)) {
+            triton::TransOp, triton::ExperimentalInterleaveOp,
+            triton::gpu::ConvertLayoutOp>(user)) {
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
@@ -711,10 +707,9 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   }
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
-      // TODO(jlebar): Add TransOp to this list, but we have to force it into
-      // shared memory if it's used by a dot operand.
       isa<triton::ReduceOp, triton::ExpandDimsOp, triton::ReshapeOp,
-          triton::ExperimentalInterleaveOp, triton::gpu::ConvertLayoutOp>(op)) {
+          triton::TransOp, triton::ExperimentalInterleaveOp,
+          triton::gpu::ConvertLayoutOp>(op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
          llvm::zip(op->getResults(), newOp->getResults()))

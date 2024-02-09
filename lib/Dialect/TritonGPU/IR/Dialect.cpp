@@ -574,6 +574,7 @@ static void maybePrintCTALayout(mlir::MLIRContext *context,
 
 #define GET_ATTRDEF_CLASSES
 #include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.cpp.inc"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 SliceEncodingAttr BlockedEncodingAttr::squeeze(int axis) {
   return SliceEncodingAttr::get(getContext(), axis, *this);
@@ -2565,11 +2566,57 @@ struct CanonicalizeConvertFromConvert
   }
 };
 
+// If we have convert(trans(x)) and the trans has only one use, canonicalize to
+// trans(convert(x)).  This gives two important benefits.
+//
+//  1. We may be able to CSE the convert, and
+//  2. We can canonicalize convert(trans(convert(x))) ->
+//     trans(convert(convert(x))) -> trans(convert(x)).
+//
+// The reason trans is special and we don't need this for every other op is,
+// trans can operate on either shmem or registers, whereas almost every other op
+// only operates on registers.  So this canonicalization gives us a chance to
+// "reconsider" where the trans should live.  In general, we want to minimize
+// the use of shmem, which occurs only due to convert ops, so moving them up the
+// chain is beneficial.
+//
+// convert(trans(x) #a) #b -> trans(convert(x) #a') #b,
+// where trans(x) has one use.
+struct CanonicalizeConvertTranspose : public OpRewritePattern<ConvertLayoutOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(ConvertLayoutOp cvt,
+                  PatternRewriter &rewriter) const override {
+    auto trans = cvt.getOperand().getDefiningOp<TransOp>();
+    if (!trans || !trans->hasOneUse())
+      return failure();
+
+    auto srcTy = trans.getOperand().getType().cast<RankedTensorType>();
+    auto transTy = trans.getType().cast<RankedTensorType>(); // #a
+    auto cvtTy = cvt.getType().cast<RankedTensorType>();     // #b
+
+    auto newCvtEnc = inferSrcEncoding(trans, cvtTy.getEncoding()); // #a'
+    if (!newCvtEnc.has_value())
+      return failure();
+
+    auto newCvt = rewriter.create<ConvertLayoutOp>(
+        cvt.getLoc(),
+        RankedTensorType::get(srcTy.getShape(), srcTy.getElementType(),
+                              *newCvtEnc),
+        trans.getOperand());
+
+    rewriter.replaceOpWithNewOp<TransOp>(cvt, newCvt, trans.getOrder());
+    return success();
+  }
+};
+
 void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
                                                   MLIRContext *context) {
   patterns.add<CanonicalizeConvertFromConvert>(context);
   patterns.add<CanonicalizeConvertFromView>(context);
   patterns.add<CanonicalizeConvertFromHistogram>(context);
+  patterns.add<CanonicalizeConvertTranspose>(context);
 }
 
 //===----------------------------------------------------------------------===//
