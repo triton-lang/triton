@@ -29,6 +29,7 @@ namespace {
 struct PipelineOpInfo {
   int stage = -1;
   Operation *use = nullptr;
+  bool candidate = false;
 
   // Specific to load ops.
   ttg::DotOperandEncodingAttr dotOperandEncoding = nullptr;
@@ -63,8 +64,8 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
       loadOp.getIsVolatile(), /*axis*/ 0);
   auto commmit = builder.create<ttg::AsyncCommitGroupOp>(loc);
 
-  opToInfo.insert({insertOp, {.stage = stage}});
-  opToInfo.insert({commmit, {.stage = stage}});
+  opToInfo.insert({insertOp, {.stage = stage, .candidate = true}});
+  opToInfo.insert({commmit, {.stage = stage, .candidate = true}});
   opToInfo.erase(loadOp);
 
   // Extract part.
@@ -104,19 +105,6 @@ static void createAsyncLoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
                             DenseMap<Operation *, PipelineOpInfo> &opToInfo) {
   createAsyncCopy(forOp, loadOp, alloc, insertIdx, extractIdx, opToInfo);
 }
-
-namespace {
-struct LoadDotOperand {
-  LoadDotOperand(tt::LoadOp load,
-                 ttg::DotOperandEncodingAttr dotOperandEncoding,
-                 bool needTrans = false)
-      : load(load), dotOperandEncoding(dotOperandEncoding),
-        needTrans(needTrans) {}
-  tt::LoadOp load;
-  ttg::DotOperandEncodingAttr dotOperandEncoding;
-  bool needTrans;
-};
-} // namespace
 
 // If all the transitive uses of the given value have are used by a convert to
 // the same dot operand encoding, return the encoding. Otherwise return nullptr.
@@ -247,9 +235,9 @@ static bool collectOpsToPipeline(scf::ForOp forOp,
     return false;
 
   int maxDistance = -1;
-  for (auto &[op, info] : loadOpToDistAndUse) {
-    if (info.first > maxDistance) {
-      maxDistance = info.first;
+  for (auto &[op, distAndUse] : loadOpToDistAndUse) {
+    if (distAndUse.first > maxDistance) {
+      maxDistance = distAndUse.first;
     }
   }
 
@@ -278,23 +266,16 @@ static bool collectOpsToPipeline(scf::ForOp forOp,
     if (width >= 32)
       candidate = true;
 
-    // TODO pawel: currently we treat the loads that we won't pipeline the same
-    // as candidates, calculating the stage for them, and let them affect the
-    // stages of other loads that may depend on it. This is probably less
-    // than ideal.
-    if (!candidate)
-      continue;
-
-    assert(loadOpToDistAndUse.count(loadOp) &&
-           "LoadOp not found in loadOpToDistance map");
-    PipelineOpInfo loadInfo;
-    if (isa<tt::DotOp>(loadOpToDistAndUse[loadOp].second)) {
-      std::optional<std::pair<ttg::DotOperandEncodingAttr, bool>> loadDotAttr =
-          loadDotOperand(loadOp, hasMMAV3);
-      if (!loadDotAttr.has_value())
-        continue;
-      loadInfo.dotOperandEncoding = loadDotAttr.value().first;
-      loadInfo.needTrans = loadDotAttr.value().second;
+    PipelineOpInfo loadInfo{.candidate = candidate};
+    if (candidate) {
+      if (isa<tt::DotOp>(loadOpToDistAndUse[loadOp].second)) {
+        std::optional<std::pair<ttg::DotOperandEncodingAttr, bool>> loadDotAttr =
+            loadDotOperand(loadOp, hasMMAV3);
+        if (!loadDotAttr.has_value())
+          continue;
+        loadInfo.dotOperandEncoding = loadDotAttr.value().first;
+        loadInfo.needTrans = loadDotAttr.value().second;
+      }
     }
     int stage =
         (maxDistance - loadOpToDistAndUse[loadOp].first) * stagesBetweenLoads;
@@ -374,12 +355,12 @@ createAsynOps(scf::ForOp &forOp,
   SmallVector<Value> newOperands;
   bool needsMbarrierPhase = false;
   bool needsAsyncWait = false;
-  // TODO pawel: fix the iteration here
-  for (auto &loadInfoPair : opToInfo) {
-    if (tt::LoadOp loadOp = dyn_cast<tt::LoadOp>(loadInfoPair.first)) {
-      PipelineOpInfo loadInfo = loadInfoPair.second;
-      Value alloc = createAlloc(forOp, loadOp, loadInfo.dotOperandEncoding,
-                                numBuffers, loadInfo.needTrans);
+  for (auto &[op, info] : opToInfo) {
+    if (!info.candidate)
+      continue;
+    if (tt::LoadOp loadOp = dyn_cast<tt::LoadOp>(op)) {
+      Value alloc = createAlloc(forOp, loadOp, info.dotOperandEncoding,
+                                numBuffers, info.needTrans);
       assert(alloc && "Failed to create alloc for the async load.");
       newOperands.push_back(alloc);
       allocs.push_back(alloc);
@@ -512,7 +493,7 @@ createSchedule(scf::ForOp forOp, int numStages,
 
   SmallVector<DenseSet<Operation *>> insertOps(numStages);
   for (auto &[op, info] : opToInfo) {
-    if (isa<ttg::InsertSliceAsyncOp, ttg::AsyncCommitGroupOp>(op)) {
+    if (info.candidate && isa<ttg::InsertSliceAsyncOp, ttg::AsyncCommitGroupOp>(op)) {
       insertOps[info.stage].insert(op);
     }
   }
@@ -563,7 +544,20 @@ createSchedule(scf::ForOp forOp, int numStages,
   for (unsigned i = 0; i < distanceOneUsers.size(); i++) {
     for (auto op : distanceOneUsers[i]) {
       if (isa<tt::LoadOp>(op))
-        tt::addDep(op, insertAndDeps[i], true);
+      {
+        if (opToInfo.count(op)) {
+          // Load was on the chain of a dot op, but was considered not a
+          // candidate. We still need to schedule it.
+          assert(!opToInfo[op].candidate);
+          assert(opToInfo[op].stage != -1);
+          tt::addDep(op, insertAndDeps[opToInfo[op].stage], true);
+        }
+        else {
+          // Load was not on the chain of a dot op, schedule it in the same
+          // stage as the insert op.
+          tt::addDep(op, insertAndDeps[i], true);
+        }
+      }
     }
   }
 
@@ -649,6 +643,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     return false;
   bool hasAsynCp = llvm::any_of(opToInfo, [](auto &pair) {
     return isa<tt::LoadOp>(pair.first) &&
+           pair.second.candidate &&
            !isLoadFromTensorPtr(cast<tt::LoadOp>(pair.first));
   });
 
@@ -658,10 +653,11 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   // Instead, we allocate the maximum number of buffers needed by any load.
   int maxNumBuffers = -1;
   for (auto &[op, info] : opToInfo) {
-    if (!isa<tt::LoadOp>(op))
+    if (!isa<tt::LoadOp>(op) || !info.candidate)
       continue;
     assert(info.stage != -1 && "LoadOp stage not defined");
     assert(info.use && "LoadOp use not defined");
+    assert(opToInfo.count(info.use) && "Use not in opToInfo");
 
     int defStage = info.stage;
     int useStage = opToInfo[info.use].stage;
