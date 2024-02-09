@@ -57,3 +57,42 @@ tt.func @test_canonicalize_convert_histogram(%arg0: tensor<256xi32, #blocked1>) 
     tt.return %2 : tensor<512xi32, #blocked2>
 }
 }  // end module
+
+// -----
+
+#mma = #triton_gpu.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 128, 16]}>
+#blocked2 = #triton_gpu.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked3 = #triton_gpu.blocked<{sizePerThread = [4, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
+#shared1 = #triton_gpu.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [0, 1], hasLeadingOffset = true}>
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @convert_trans_convert
+  tt.func public @convert_trans_convert(%arg0: tensor<128x128xf16, #mma>) -> tensor<128x128xf16, #shared1> {
+     // CHECK: triton_gpu.convert_layout
+     // CHECK: tt.trans
+     // CHECK-NOT: triton_gpu.convert_layout
+     // CHECK: tt.return
+     %a = triton_gpu.convert_layout %arg0 : (tensor<128x128xf16, #mma>) -> tensor<128x128xf16, #blocked2>
+     %b = tt.trans %a {order = array<i32: 1, 0>} : (tensor<128x128xf16, #blocked2>) -> tensor<128x128xf16, #blocked3>
+     %c = triton_gpu.convert_layout %b : (tensor<128x128xf16, #blocked3>) -> tensor<128x128xf16, #shared1>
+     tt.return %c : tensor<128x128xf16, #shared1>
+  }
+}
+
+// -----
+
+#blocked2 = #triton_gpu.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked3 = #triton_gpu.blocked<{sizePerThread = [4, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
+#shared1 = #triton_gpu.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [0, 1], hasLeadingOffset = true}>
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @convert_trans(
+  tt.func public @convert_trans(%arg0: tensor<128x128xf16, #blocked2>) -> tensor<128x128xf16, #shared1> {
+     // CHECK: triton_gpu.convert_layout
+     // CHECK-NEXT: tt.trans
+     // CHECK-NEXT: tt.return
+     %b = tt.trans %arg0 {order = array<i32: 1, 0>} : (tensor<128x128xf16, #blocked2>) -> tensor<128x128xf16, #blocked3>
+     %c = triton_gpu.convert_layout %b : (tensor<128x128xf16, #blocked3>) -> tensor<128x128xf16, #shared1>
+     tt.return %c : tensor<128x128xf16, #shared1>
+  }
+}
