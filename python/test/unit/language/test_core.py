@@ -3396,6 +3396,38 @@ def test_reshape(formats, device):
     np.testing.assert_equal(z, to_numpy(z_tri))
 
 
+def test_trans_reshape(device):
+
+    @triton.jit
+    def kernel(in_base_ptr, out_base_ptr, IN_SHAPE0: tl.constexpr, IN_SHAPE1: tl.constexpr):
+
+        in_block_ptr = tl.make_block_ptr(
+            base=in_base_ptr,
+            shape=(IN_SHAPE0, IN_SHAPE1),
+            strides=(IN_SHAPE1, 1),
+            offsets=(0, 0),
+            block_shape=(IN_SHAPE0, IN_SHAPE1),
+            order=(1, 0),
+        )
+        x = tl.load(in_block_ptr)
+        x = tl.reshape(x, (32, 4, 4, 2))
+        x = tl.permute(x, (1, 2, 3, 0))
+        x = tl.reshape(x, (IN_SHAPE0 * IN_SHAPE1, ))
+        tl.store(out_base_ptr + tl.arange(0, IN_SHAPE0 * IN_SHAPE1), x)
+
+    shape = (32, 32)
+    input = torch.arange(math.prod(shape), dtype=torch.int32, device=device).reshape(shape)
+    expected = torch.permute(input, (1, 0))
+    # Don't do zeros_like -- that copies the layout, which we don't want.
+    actual = torch.zeros(expected.shape, dtype=torch.int32, device=device)
+
+    k = kernel[(1, )](input, actual, shape[0], shape[1])
+    assert k.asm['ttgir'].count(
+        'triton_gpu.convert_layout') == 1, "Expected exactly one convert_layout op in the TTGIR after optimization"
+
+    np.testing.assert_equal(to_numpy(expected), to_numpy(actual))
+
+
 # -------------
 # test call
 # -------------

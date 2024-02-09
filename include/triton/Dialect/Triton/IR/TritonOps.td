@@ -435,6 +435,9 @@ def TT_TransOp : TT_Op<"trans", [Pure,
 
     let results = (outs TT_Tensor:$result);
 
+    // TODO(jlebar): This creates parentheses around `operands`.  But there's
+    // only one operand, so we shouldn't need the parens (e.g. tt.reshape does
+    // this how I want).  At least we should be consistent!
     let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
 
     let hasFolder = 1;
