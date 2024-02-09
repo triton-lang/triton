@@ -11,6 +11,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/ADT/MapVector.h"
 
 #define PIPELINER_DEBUG 0
 
@@ -51,7 +52,7 @@ static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
 
 static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
                             Value insertIdx, Value extractIdx,
-                            DenseMap<Operation *, PipelineOpInfo> &opToInfo) {
+                            llvm::MapVector<Operation *, PipelineOpInfo> &opToInfo) {
   OpBuilder builder(forOp);
   // Replace the load with insert/extract slice.
   builder.setInsertionPoint(loadOp);
@@ -101,7 +102,7 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
 /// Create an async load equivalent to the given load.
 static void createAsyncLoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
                             Value insertIdx, Value extractIdx, Value phase,
-                            DenseMap<Operation *, PipelineOpInfo> &opToInfo) {
+                            llvm::MapVector<Operation *, PipelineOpInfo> &opToInfo) {
   createAsyncCopy(forOp, loadOp, alloc, insertIdx, extractIdx, opToInfo);
 }
 
@@ -179,9 +180,9 @@ loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3) {
 
 // Create a map from load ops to their distance to the nearest dot op and the
 // final use of the load op (another load op, or a dot op).
-static DenseMap<tt::LoadOp, std::pair<int, Operation *>>
-loadOpsToDistanceAndUse(scf::ForOp forOp, SmallVector<tt::LoadOp> &loadOps) {
-  DenseMap<tt::LoadOp, std::pair<int, Operation *>> loadOpToDistAndUse;
+static llvm::MapVector<tt::LoadOp, std::pair<int, Operation *>>
+loadOpsToDistanceAndUse(scf::ForOp forOp) {
+  llvm::MapVector<tt::LoadOp, std::pair<int, Operation *>> loadOpToDistAndUse;
   DenseSet<Operation *> seen;
 
   std::function<void(Operation * op, int, Operation *)> dfs =
@@ -190,23 +191,11 @@ loadOpsToDistanceAndUse(scf::ForOp forOp, SmallVector<tt::LoadOp> &loadOps) {
           return;
         if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
           loadOpToDistAndUse[loadOp] = std::make_pair(distance, use);
-          loadOps.push_back(loadOp);
           use = op;
           distance++;
         }
         for (Value operand : op->getOperands()) {
           Value v = operand;
-          llvm::SmallDenseSet<Value> seenBlockArgs;
-          while (auto arg = v.dyn_cast<BlockArgument>()) {
-            if (!seenBlockArgs.insert(v).second)
-              break;
-            if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
-              auto yieldOp = op->getBlock()->getTerminator();
-              v = yieldOp->getOperand(arg.getArgNumber() - 1);
-              continue;
-            }
-            break;
-          }
           Operation *defOp = v.getDefiningOp();
           if (defOp && defOp->getBlock() == op->getBlock()) {
             dfs(defOp, distance, use);
@@ -224,16 +213,14 @@ loadOpsToDistanceAndUse(scf::ForOp forOp, SmallVector<tt::LoadOp> &loadOps) {
 
 /// Collect loads to pipeline. Returns true if loads are found to pipeline.
 static bool collectOpsToPipeline(scf::ForOp forOp,
-                                 DenseMap<Operation *, PipelineOpInfo> &opInfo,
+                                 llvm::MapVector<Operation *, PipelineOpInfo> &opInfo,
                                  int numStages, bool &hasMMAV3) {
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
   ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
-  // Vector of load ops ordered by their dependency distance to the nearest
-  // dot op.
-  SmallVector<tt::LoadOp> loadOps;
-  DenseMap<tt::LoadOp, std::pair<int, Operation *>> loadOpToDistAndUse =
-      loadOpsToDistanceAndUse(forOp, loadOps);
+  // Loads ordered by their dependency distance to the nearest dot op.
+  llvm::MapVector<tt::LoadOp, std::pair<int, Operation *>> loadOpToDistAndUse =
+      loadOpsToDistanceAndUse(forOp);
   if (loadOpToDistAndUse.empty())
     return false;
 
@@ -260,8 +247,7 @@ static bool collectOpsToPipeline(scf::ForOp forOp,
 
   // Then consider the load ops that feed into the dot ops or are used by other
   // loads.
-  for (tt::LoadOp loadOp: loadOps) {
-    std::pair<int, Operation *> distAndUse = loadOpToDistAndUse[loadOp];
+  for (auto &[loadOp, distAndUse] : loadOpToDistAndUse) {
 
     // Only consider loads that feed into an operation that is already
     // scheduled. This is to avoid scheduling loads that are used by 
@@ -358,7 +344,7 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
 // the required number of buffers.
 static SmallVector<Value>
 createAsynOps(scf::ForOp &forOp,
-              DenseMap<Operation *, PipelineOpInfo> &opToInfo, int numBuffers,
+              llvm::MapVector<Operation *, PipelineOpInfo> &opToInfo, int numBuffers,
               bool hasMMAV3) {
   struct AsyncLoad {
     AsyncLoad(tt::LoadOp loadOp, Value alloc) : loadOp(loadOp), alloc(alloc) {}
@@ -471,7 +457,7 @@ isScheduleValid(scf::ForOp forOp,
 // matmul loops should be pipelined and is not a generic scheduler.
 static std::vector<std::pair<Operation *, unsigned>>
 createSchedule(scf::ForOp forOp, int numStages,
-               DenseMap<Operation *, PipelineOpInfo> &opToInfo,
+               llvm::MapVector<Operation *, PipelineOpInfo> &opToInfo,
                bool prefetchExtract) {
 #if PIPELINER_DEBUG
   llvm::outs() << "For loop:\n";
@@ -637,7 +623,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     scf::ForOp &forOp, int numStages, mlir::triton::PipeliningOption &options) {
   // 1. First collect "interesting" operations with a stage where to schedule
   // them. This gives a coarse scheduling for the loop.
-  DenseMap<Operation *, PipelineOpInfo> opToInfo;
+  llvm::MapVector<Operation *, PipelineOpInfo> opToInfo;
   bool hasMMAV3 = false;
   if (!collectOpsToPipeline(forOp, opToInfo, numStages, hasMMAV3))
     return false;
