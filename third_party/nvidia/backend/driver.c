@@ -1,5 +1,10 @@
 #include "cuda.h"
+#ifndef _WIN32
 #include <dlfcn.h>
+#else
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 #include <stdbool.h>
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -162,6 +167,7 @@ typedef CUresult (*cuTensorMapEncodeTiled_t)(
     CUtensorMapSwizzle swizzle, CUtensorMapL2promotion l2Promotion,
     CUtensorMapFloatOOBfill oobFill);
 
+#ifndef _WIN32
 #define defineGetFunctionHandle(name, symbolName)                              \
   static symbolName##_t name() {                                               \
     /* Open the shared library */                                              \
@@ -183,6 +189,27 @@ typedef CUresult (*cuTensorMapEncodeTiled_t)(
     }                                                                          \
     return funcHandle;                                                         \
   }
+#else
+#define defineGetFunctionHandle(name, symbolName)                              \
+  static symbolName##_t name() {                                               \
+    /* Open the shared library */                                              \
+    HMODULE handle = LoadLibraryA("nvcuda.dll");                               \
+    if (!handle) {                                                             \
+      PyErr_SetString(PyExc_RuntimeError, "Failed to open nvcuda.dll");        \
+      return NULL;                                                             \
+    }                                                                          \
+    symbolName##_t funcHandle =                                                \
+        (symbolName##_t)GetProcAddress((HMODULE)handle, #symbolName);          \
+    /* Check for errors */                                                     \
+    long err = GetLastError();                                                 \
+    if (err) {                                                                 \
+      PyErr_SetString(PyExc_RuntimeError,                                      \
+                      "Failed to retrieve " #symbolName " from nvcuda.dll");   \
+      return NULL;                                                             \
+    }                                                                          \
+    return funcHandle;                                                         \
+  }
+#endif
 
 defineGetFunctionHandle(getCuOccupancyMaxActiveClustersHandle,
                         cuOccupancyMaxActiveClusters);
