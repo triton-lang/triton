@@ -185,23 +185,50 @@ loadOpsToDistanceAndUse(scf::ForOp forOp) {
   llvm::MapVector<tt::LoadOp, std::pair<int, Operation *>> loadOpToDistAndUse;
   DenseSet<Operation *> seen;
 
+  ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
+  ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
+
+  auto isCandidate = [&](tt::LoadOp loadOp) -> bool {
+    assert(!isLoadFromTensorPtr(loadOp) &&
+          "Block ptr should have been lowered before this pass.");
+    auto ptr = loadOp.getPtr();
+    unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
+    if (auto mask = loadOp.getMask())
+      vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
+
+    auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
+    if (!tensorTy)
+      return false;
+    auto ty =
+        tensorTy.getElementType().cast<tt::PointerType>().getPointeeType();
+    unsigned width = vec * ty.getIntOrFloatBitWidth();
+    // We do not pipeline all loads for the following reasons:
+    // 1. On nvidia GPUs, cp.async's cp-size can only be 4, 8 and 16.
+    // 2. It's likely that pipling small loads won't offer much performance
+    //    improvement and may even hurt performance by increasing register
+    //    pressure.
+    return (width >= 32);
+  };
+
   std::function<void(Operation * op, int, Operation *)> dfs =
-      [&](Operation *op, int distance, Operation *use) {
-        if (!seen.insert(op).second)
+    [&](Operation *op, int distance, Operation *use) {
+      if (!seen.insert(op).second)
+        return;
+      if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+        if (!isCandidate(loadOp))
           return;
-        if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-          loadOpToDistAndUse[loadOp] = std::make_pair(distance, use);
-          use = op;
-          distance++;
+        loadOpToDistAndUse[loadOp] = std::make_pair(distance, use);
+        use = op;
+        distance++;
+      }
+      for (Value operand : op->getOperands()) {
+        Value v = operand;
+        Operation *defOp = v.getDefiningOp();
+        if (defOp && defOp->getBlock() == op->getBlock()) {
+          dfs(defOp, distance, use);
         }
-        for (Value operand : op->getOperands()) {
-          Value v = operand;
-          Operation *defOp = v.getDefiningOp();
-          if (defOp && defOp->getBlock() == op->getBlock()) {
-            dfs(defOp, distance, use);
-          }
-        }
-      };
+      }
+    };
 
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (!isa<tt::DotOp>(op))
@@ -248,38 +275,6 @@ static bool collectOpsToPipeline(scf::ForOp forOp,
   // Then consider the load ops that feed into the dot ops or are used by other
   // loads.
   for (auto &[loadOp, distAndUse] : loadOpToDistAndUse) {
-
-    // Only consider loads that feed into an operation that is already
-    // scheduled. This is to avoid scheduling loads that are used by 
-    // non-pipelined loads.
-    if (!opInfo.count(distAndUse.second))
-      continue;
-
-    bool candidate = false;
-    assert(!isLoadFromTensorPtr(loadOp) &&
-           "Block ptr should have been lowered before this pass.");
-    auto ptr = loadOp.getPtr();
-    unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
-    if (auto mask = loadOp.getMask())
-      vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
-
-    auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
-    if (!tensorTy)
-      continue;
-    auto ty =
-        tensorTy.getElementType().cast<tt::PointerType>().getPointeeType();
-    unsigned width = vec * ty.getIntOrFloatBitWidth();
-    // We do not pipeline all loads for the following reasons:
-    // 1. On nvidia GPUs, cp.async's cp-size can only be 4, 8 and 16.
-    // 2. It's likely that pipling small loads won't offer much performance
-    //    improvement and may even hurt performance by increasing register
-    //    pressure.
-    if (width >= 32)
-      candidate = true;
-
-    if (!candidate)
-      continue;
-
     PipelineOpInfo loadInfo;
     if (isa<tt::DotOp>(loadOpToDistAndUse[loadOp].second)) {
       std::optional<std::pair<ttg::DotOperandEncodingAttr, bool>> loadDotAttr =

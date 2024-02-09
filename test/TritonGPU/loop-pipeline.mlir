@@ -286,13 +286,14 @@ tt.func @lut_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
 // CHECK: triton_gpu.async_commit_group
 // CHECK: %[[NEXT_BUFFER_1:.*]] = tt.addptr %{{.*}}, {{.*}}
 // CHECK: triton_gpu.insert_slice_async %[[NEXT_BUFFER_1]]
-// CHECK: %[[LUT_BUFFER_0:.*]] = tt.load %{{.*}}, {{.*}}
-// CHECK: %[[LUT_BUFFER_1:.*]] = tt.expand_dims %[[LUT_BUFFER_0]] {axis = 1 : i32}
-// CHECK: %[[LUT_BUFFER_2:.*]] = tt.broadcast %[[LUT_BUFFER_1]]
-// CHECK: %[[LUT_BUFFER_3:.*]] = arith.muli {{.*}}, %[[LUT_BUFFER_2]]
-// CHECK: %[[NEXT_BUFFER_0:.*]] = tt.addptr {{.*}}, %[[LUT_BUFFER_3]]
+// CHECK: %[[LUT_BUFFER_0:.*]] = triton_gpu.extract_slice
+// CHECK: %[[LUT_BUFFER_1:.*]] = triton_gpu.convert_layout %[[LUT_BUFFER_0]]
+// CHECK: %[[LUT_BUFFER_2:.*]] = tt.expand_dims %[[LUT_BUFFER_1]] {axis = 1 : i32}
+// CHECK: %[[LUT_BUFFER_3:.*]] = tt.broadcast %[[LUT_BUFFER_2]]
+// CHECK: %[[LUT_BUFFER_4:.*]] = arith.muli {{.*}}, %[[LUT_BUFFER_3]]
+// CHECK: %[[NEXT_BUFFER_0:.*]] = tt.addptr {{.*}}, %[[LUT_BUFFER_4]]
 // CHECK: triton_gpu.insert_slice_async %[[NEXT_BUFFER_0]]
-// CHECK: triton_gpu.async_wait {num = 2 : i32}
+// CHECK: triton_gpu.async_wait {num = 1 : i32}
 tt.func @lut_bmm_vector(%77: tensor<16x16xi64, #BL> {tt.divisibility=16: i32, tt.constancy=16: i32},
                    %76: index,
                    %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
