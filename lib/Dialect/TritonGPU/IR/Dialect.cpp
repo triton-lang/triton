@@ -2330,49 +2330,40 @@ struct TritonGPUInferLayoutInterface
 // Canonicalizer
 //===----------------------------------------------------------------------===//
 
-struct CanonicalizeConvertFromView
+// reshape(cvt) -> reshape
+struct CanonicalizeConvertFromReshape
     : public mlir::OpRewritePattern<triton::ReshapeOp> {
-
-  CanonicalizeConvertFromView(MLIRContext *context)
-      : OpRewritePattern<triton::ReshapeOp>(context, 1) {}
+  using OpRewritePattern::OpRewritePattern;
 
   mlir::LogicalResult
   matchAndRewrite(triton::ReshapeOp op,
                   PatternRewriter &rewriter) const override {
-    Operation *arg = op->getOperand(0).getDefiningOp();
-    if (!arg)
-      return mlir::failure();
-    auto convert = dyn_cast<ConvertLayoutOp>(arg);
+    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
     if (!convert)
       return failure();
     if (isExpensiveView(convert.getOperand().getType(), op.getType()))
       return failure();
     if (!op.getAllowReorder() || op.getEfficientLayout().has_value())
       return failure();
-    // reshape(cvt)->reshape
-    rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
-        op, op->getResult(0).getType(), convert.getOperand(),
-        op.getAllowReorder());
+
+    rewriter.replaceOpWithNewOp<triton::ReshapeOp>(op, op.getResult().getType(),
+                                                   convert.getOperand(),
+                                                   op.getAllowReorder());
     return mlir::success();
   }
 };
 
+// histogram(cvt) -> histogram
 struct CanonicalizeConvertFromHistogram
     : public mlir::OpRewritePattern<triton::HistogramOp> {
-
-  CanonicalizeConvertFromHistogram(MLIRContext *context)
-      : OpRewritePattern<triton::HistogramOp>(context, 1) {}
+  using OpRewritePattern::OpRewritePattern;
 
   mlir::LogicalResult
   matchAndRewrite(triton::HistogramOp op,
                   PatternRewriter &rewriter) const override {
-    Operation *arg = op->getOperand(0).getDefiningOp();
-    if (!arg)
-      return mlir::failure();
-    auto convert = dyn_cast<ConvertLayoutOp>(arg);
+    auto convert = op.getInput().getDefiningOp<ConvertLayoutOp>();
     if (!convert)
       return failure();
-    // histogram(cvt)->histogram
     rewriter.replaceOpWithNewOp<triton::HistogramOp>(
         op, op->getResult(0).getType(), convert.getOperand());
     return mlir::success();
@@ -2568,7 +2559,7 @@ struct CanonicalizeConvertFromConvert
 void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
                                                   MLIRContext *context) {
   patterns.add<CanonicalizeConvertFromConvert>(context);
-  patterns.add<CanonicalizeConvertFromView>(context);
+  patterns.add<CanonicalizeConvertFromReshape>(context);
   patterns.add<CanonicalizeConvertFromHistogram>(context);
 }
 
