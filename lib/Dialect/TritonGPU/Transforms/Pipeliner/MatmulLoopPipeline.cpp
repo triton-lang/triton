@@ -29,7 +29,6 @@ namespace {
 struct PipelineOpInfo {
   int stage = -1;
   Operation *use = nullptr;
-  bool candidate = false;
 
   // Specific to load ops.
   ttg::DotOperandEncodingAttr dotOperandEncoding = nullptr;
@@ -64,8 +63,8 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
       loadOp.getIsVolatile(), /*axis*/ 0);
   auto commmit = builder.create<ttg::AsyncCommitGroupOp>(loc);
 
-  opToInfo.insert({insertOp, {.stage = stage, .candidate = true}});
-  opToInfo.insert({commmit, {.stage = stage, .candidate = true}});
+  opToInfo.insert({insertOp, {.stage = stage}});
+  opToInfo.insert({commmit, {.stage = stage}});
   opToInfo.erase(loadOp);
 
   // Extract part.
@@ -181,7 +180,7 @@ loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3) {
 // Create a map from load ops to their distance to the nearest dot op and the
 // final use of the load op (another load op, or a dot op).
 static DenseMap<tt::LoadOp, std::pair<int, Operation *>>
-loadOpsToDistanceAndUse(scf::ForOp forOp) {
+loadOpsToDistanceAndUse(scf::ForOp forOp, SmallVector<tt::LoadOp> &loadOps) {
   DenseMap<tt::LoadOp, std::pair<int, Operation *>> loadOpToDistAndUse;
   DenseSet<Operation *> seen;
 
@@ -191,6 +190,7 @@ loadOpsToDistanceAndUse(scf::ForOp forOp) {
           return;
         if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
           loadOpToDistAndUse[loadOp] = std::make_pair(distance, use);
+          loadOps.push_back(loadOp);
           use = op;
           distance++;
         }
@@ -229,8 +229,11 @@ static bool collectOpsToPipeline(scf::ForOp forOp,
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
   ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
+  // Vector of load ops ordered by their dependency distance to the nearest
+  // dot op.
+  SmallVector<tt::LoadOp> loadOps;
   DenseMap<tt::LoadOp, std::pair<int, Operation *>> loadOpToDistAndUse =
-      loadOpsToDistanceAndUse(forOp);
+      loadOpsToDistanceAndUse(forOp, loadOps);
   if (loadOpToDistAndUse.empty())
     return false;
 
@@ -243,7 +246,29 @@ static bool collectOpsToPipeline(scf::ForOp forOp,
 
   unsigned stagesBetweenLoads = ceil<unsigned>(numStages - 2, maxDistance + 1);
 
-  for (auto &[loadOp, distAndUse] : loadOpToDistAndUse) {
+  // Start by finding dot ops and assigning a stage for them.
+  // We cannot use forOp.walk(...) here because we only want to visit the
+  // operations in the loop body block. Nested blocks are handled separately.
+  for (Operation &op : forOp) {
+    if (auto dotOp = dyn_cast<tt::DotOp>(&op)) {
+      PipelineOpInfo dotOpInfo{
+          .stage = numStages - 1,
+      };
+      opInfo[dotOp] = dotOpInfo;
+    }
+  }
+
+  // Then consider the load ops that feed into the dot ops or are used by other
+  // loads.
+  for (tt::LoadOp loadOp: loadOps) {
+    std::pair<int, Operation *> distAndUse = loadOpToDistAndUse[loadOp];
+
+    // Only consider loads that feed into an operation that is already
+    // scheduled. This is to avoid scheduling loads that are used by 
+    // non-pipelined loads.
+    if (!opInfo.count(distAndUse.second))
+      continue;
+
     bool candidate = false;
     assert(!isLoadFromTensorPtr(loadOp) &&
            "Block ptr should have been lowered before this pass.");
@@ -266,16 +291,17 @@ static bool collectOpsToPipeline(scf::ForOp forOp,
     if (width >= 32)
       candidate = true;
 
-    PipelineOpInfo loadInfo{.candidate = candidate};
-    if (candidate) {
-      if (isa<tt::DotOp>(loadOpToDistAndUse[loadOp].second)) {
-        std::optional<std::pair<ttg::DotOperandEncodingAttr, bool>> loadDotAttr =
-            loadDotOperand(loadOp, hasMMAV3);
-        if (!loadDotAttr.has_value())
-          continue;
-        loadInfo.dotOperandEncoding = loadDotAttr.value().first;
-        loadInfo.needTrans = loadDotAttr.value().second;
-      }
+    if (!candidate)
+      continue;
+
+    PipelineOpInfo loadInfo;
+    if (isa<tt::DotOp>(loadOpToDistAndUse[loadOp].second)) {
+      std::optional<std::pair<ttg::DotOperandEncodingAttr, bool>> loadDotAttr =
+          loadDotOperand(loadOp, hasMMAV3);
+      if (!loadDotAttr.has_value())
+        continue;
+      loadInfo.dotOperandEncoding = loadDotAttr.value().first;
+      loadInfo.needTrans = loadDotAttr.value().second;
     }
     int stage =
         (maxDistance - loadOpToDistAndUse[loadOp].first) * stagesBetweenLoads;
@@ -284,17 +310,6 @@ static bool collectOpsToPipeline(scf::ForOp forOp,
     opInfo[loadOp] = loadInfo;
   };
 
-  // Find also the dot ops and assign them to the last stage.
-  // We cannot use forOp.walk(...) here because we only want to visit the
-  // operations in the loop body block. Nested blocks are handled separately.
-  for (Operation &op : forOp) {
-    if (auto dotOp = dyn_cast<tt::DotOp>(&op)) {
-      PipelineOpInfo dotOpInfo{
-          .stage = numStages - 1,
-      };
-      opInfo[dotOp] = dotOpInfo;
-    }
-  }
   return true;
 }
 
@@ -356,8 +371,6 @@ createAsynOps(scf::ForOp &forOp,
   bool needsMbarrierPhase = false;
   bool needsAsyncWait = false;
   for (auto &[op, info] : opToInfo) {
-    if (!info.candidate)
-      continue;
     if (tt::LoadOp loadOp = dyn_cast<tt::LoadOp>(op)) {
       Value alloc = createAlloc(forOp, loadOp, info.dotOperandEncoding,
                                 numBuffers, info.needTrans);
@@ -493,7 +506,7 @@ createSchedule(scf::ForOp forOp, int numStages,
 
   SmallVector<DenseSet<Operation *>> insertOps(numStages);
   for (auto &[op, info] : opToInfo) {
-    if (info.candidate && isa<ttg::InsertSliceAsyncOp, ttg::AsyncCommitGroupOp>(op)) {
+    if (isa<ttg::InsertSliceAsyncOp, ttg::AsyncCommitGroupOp>(op)) {
       insertOps[info.stage].insert(op);
     }
   }
@@ -544,20 +557,7 @@ createSchedule(scf::ForOp forOp, int numStages,
   for (unsigned i = 0; i < distanceOneUsers.size(); i++) {
     for (auto op : distanceOneUsers[i]) {
       if (isa<tt::LoadOp>(op))
-      {
-        if (opToInfo.count(op)) {
-          // Load was on the chain of a dot op, but was considered not a
-          // candidate. We still need to schedule it.
-          assert(!opToInfo[op].candidate);
-          assert(opToInfo[op].stage != -1);
-          tt::addDep(op, insertAndDeps[opToInfo[op].stage], true);
-        }
-        else {
-          // Load was not on the chain of a dot op, schedule it in the same
-          // stage as the insert op.
-          tt::addDep(op, insertAndDeps[i], true);
-        }
-      }
+        tt::addDep(op, insertAndDeps[i], true);
     }
   }
 
@@ -643,7 +643,6 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     return false;
   bool hasAsynCp = llvm::any_of(opToInfo, [](auto &pair) {
     return isa<tt::LoadOp>(pair.first) &&
-           pair.second.candidate &&
            !isLoadFromTensorPtr(cast<tt::LoadOp>(pair.first));
   });
 
@@ -653,7 +652,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   // Instead, we allocate the maximum number of buffers needed by any load.
   int maxNumBuffers = -1;
   for (auto &[op, info] : opToInfo) {
-    if (!isa<tt::LoadOp>(op) || !info.candidate)
+    if (!isa<tt::LoadOp>(op))
       continue;
     assert(info.stage != -1 && "LoadOp stage not defined");
     assert(info.use && "LoadOp use not defined");
