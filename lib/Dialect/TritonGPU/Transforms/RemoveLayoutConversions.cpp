@@ -202,6 +202,15 @@ static bool isLayoutAnchor(Operation *op) {
     return isExpensiveLoadOrStore(op);
   if (isa<triton::DotOp, triton::AtomicRMWOp, triton::AtomicCASOp>(op))
     return true;
+
+  // Heuristic: Mark permuting reshape as a layout anchor.  Its dst can be
+  // anything, so it stops forward-propagation of layouts.  We rely on the
+  // backwards pass to fix it up if necessary.  (If we didn't do this, then
+  // anything following the reshape won't be covered by the forward pass at
+  // all.)
+  if (auto reshape = dyn_cast<triton::ReshapeOp>(op))
+    return reshape.getAllowReorder();
+
   return false;
 }
 
