@@ -7,6 +7,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -599,8 +600,9 @@ unsigned BlockedEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
   return product<unsigned>(getElemsPerThread(shape, eltTy));
 }
 
-// TODO(jlebar): We should not force these into SmallVector's.  Just return the
-// ArrayRef.
+// If we only had BlockedEncodingAttr, we could simply return ArrayRefs here.
+// But we need to have a consistent interface with e.g. SliceEncodingAttr, which
+// computes some of these fields.
 SmallVector<unsigned> BlockedEncodingAttr::getCTAsPerCGA() const {
   return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
 }
@@ -2049,6 +2051,277 @@ struct TritonGPUInferLayoutInterface
       return op->emitError("mismatching encoding between A and B operands");
     if (aEncoding.getKWidth() != bEncoding.getKWidth())
       return op->emitError("mismatching kWidth between A and B operands");
+    return success();
+  }
+
+  // Given a src shape + encoding and a dst shape, our goal is to compute a dst
+  // encoding that makes the reshape a "nop".  That is, if GPU thread [x,y,z]
+  // contains elements [a,b,c,d] before the reshape, it contains those same
+  // elements after the reshape, they're just "renamed".
+  //
+  // A dst encoding that satisfies this property does not exist for all inputs.
+  // Here are some positive and negative examples.
+  //
+  //   - NOT OK: 4x4 order=[0,1] -> 16.  Reshape merges elements so
+  //     dim 1 is the fastest-changing in the dst, but the src has the opposite
+  //     order.
+  //   - OK: 2x2x32 order=[1,0,2] -> 4x32.  We choose dst order [0,1].
+  //     What's important is that the 2x2 dimensions appear in major-to-minor
+  //     order.
+  //   - NOT OK: 32x32 sizePerThread=[2,2] -> 1024.  Thread 0 in the src
+  //     contains elements [(0,0), (0,1), (1,0), and (1,1)].  We cannot express
+  //     this with an encoding based on the dst shape.
+  //   - OK: 32x4 sizePerThread=[4,4] -> 128.  dst with sizePerThread=[16] will
+  //     contain the same elements as before.
+  //
+  // Users of this function require that it is symmetrical: if
+  // (srcShape,srcEnc,dstShape) => dstEnc, then (dstShape,dstEnc,srcShape) =>
+  // srcEnc.
+  LogicalResult
+  inferReshapeOpNoReorderEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
+                                  ArrayRef<int64_t> dstShape, Attribute &dstEnc,
+                                  std::optional<Location> loc) const override {
+    auto src = srcEnc.dyn_cast<BlockedEncodingAttr>();
+    if (!src) {
+      return emitOptionalError(
+          loc, "Non-reordering reshape only supports BlockedEncoding");
+    }
+
+    // Nop reshape; we can always infer an encoding.
+    if (srcShape == dstShape) {
+      dstEnc = srcEnc;
+      return success();
+    }
+
+    // default -> default encoding is always a nop.
+    auto context = srcEnc.getContext();
+    int32_t numWarps = product(src.getWarpsPerCTA());
+    int32_t threadsPerWarp = product(src.getThreadsPerWarp());
+    int32_t numCTAs = product(src.getCTALayout().getCTAsPerCGA());
+    if (srcEnc == getDefaultBlockedEncoding(context, srcShape, numWarps,
+                                            threadsPerWarp, numCTAs)) {
+      dstEnc = getDefaultBlockedEncoding(context, dstShape, numWarps,
+                                         threadsPerWarp, numCTAs);
+      return success();
+    }
+
+    // Feature flag to disable this routine while it's relatively new.
+    // TODO(jlebar): Remove this once we're confident in the code.
+    if (triton::tools::getBoolEnv(
+            "TRITON_DISABLE_RESHAPE_ENCODING_INFERENCE")) {
+      return failure();
+    }
+
+    // Cowardly refuse to handle encodings with multiple CTAs.  CTAsPerCGA
+    // should be like the other fields in blocked encoding, but I'm not sure how
+    // to handle CTASplitNum.
+    if (!all_of(src.getCTAsPerCGA(), [](int32_t x) { return x == 1; }) ||
+        !all_of(src.getCTASplitNum(), [](int32_t x) { return x == 1; })) {
+      return emitOptionalError(
+          loc, "Non-reordering reshape does not currently support multi-CTA "
+               "layouts other than the default layout.");
+    }
+
+    // Cowardly refuse to handle encodings where shape[dim] is not divisible by
+    // sizePerThread[dim], threadsPerWarp[dim], and warpsPerCTA[dim].  (We make
+    // an exception if the block is larger than the shape.)
+    auto checkDivisibility = [&](StringRef name, ArrayRef<unsigned> subblock) {
+      for (int dim = 0; dim < srcShape.size(); dim++) {
+        if (srcShape[dim] >= subblock[dim] &&
+            srcShape[dim] % subblock[dim] != 0) {
+          return emitOptionalError(loc,
+                                   "Can't do a non-reordering reshape because "
+                                   "the size of dimension ",
+                                   dim, " (", srcShape[dim], ")",
+                                   " is not divisible by ", name, "[", dim, "]",
+                                   " = ", subblock[dim]);
+        }
+      }
+      return success();
+    };
+    if (!succeeded(
+            checkDivisibility("sizePerThread", src.getSizePerThread())) ||
+        !succeeded(
+            checkDivisibility("threadsPerWarp", src.getThreadsPerWarp())) ||
+        !succeeded(checkDivisibility("warpsPerCTA", src.getWarpsPerCTA()))) {
+      return failure();
+    }
+
+    SmallVector<std::pair<SmallVector<int64_t>, SmallVector<int64_t>>> decomp =
+        getReshapeDecomposition(srcShape, dstShape);
+
+    // enc.order[i] == j means that dimension j is the enc.order[i]'th most
+    // minor. But what we usually want is the inverse: inverse(enc.order)[i] = j
+    // means that dimension i is the j'th most minor (larger means more major).
+    auto srcInvOrder = inversePermutation(src.getOrder());
+
+    // If src dims [a,b,c] are to be merged, then they must be consecutive in
+    // physical order, with `a` being the most major.
+    for (const auto &[srcDims, dstDims] : decomp) {
+      if (!isConsecutive(to_vector(reverse(gather(srcInvOrder, srcDims))))) {
+        return emitOptionalError(loc,
+                                 "Cannot do a non-reordering reshape given "
+                                 "this src encoding order.  Dimensions [",
+                                 join(srcDims, ","),
+                                 "] must be physically consecutive.");
+      }
+    }
+
+    // If src dims [a,b,c] are to be merged, then `c` must fill up sizePerThread
+    // / threadsPerWarp / blocksPerCTA before `b` can have any non-1 values.
+    // Examples:
+    //
+    //  - NOT OK: shape=[4,4,4], sizePerThread=[1,2,2].
+    //    The total sizePerThread for dim 2 is 2, which is less than dim 2's
+    //    size of 4.  Therefore dim 1 cannot have non-1 sizePerThread.
+    //
+    //  - OK: shape=[4,4,4], sizePerThread=[1,2,4].
+    //    Dim 2's sizePerThread covers its whole size, so dim 1 is allowed to
+    //    have non-1 sizePerThread.
+    //
+    //  - NOT OK: shape=[4,4,4], sizePerThread=[2,1,4].
+    //    Dim 1's sizePerThread does not cover its whole size, so dim 0 is not
+    //    allowed to have non-1 sizePerThread.
+    //
+    //  - NOT OK: shape=[4,4,4], sizePerThread=[1,1,2],
+    //            threadsPerWarp=[1,2,1].
+    //    Dim 2 has 2 elems per thread and 1 thread per warp.  2*1 is less than
+    //    dim 2's size.  Therefore dim 1 must have threadsPerWarp=1.
+    //
+    // In addition, the encoding's block can be larger than the shape, but only
+    // in the most-major dimension of each decomposed chunk, and only after
+    // we've "used up" the more minor dims.  Examples:
+    //
+    //  - OK: shape=[4,4,4], sizePerThread=[1,2,4], threadsPerWarp=[16,2,1],
+    //        warpsPerCTA=[4,1,1].
+    //    The whole size of dims 0 and 1 are covered by sizePerThread *
+    //    threadsPerWarp.  Therefore dim 2 is allowed to have threadsPerWarp and
+    //    warpsPerCTA larger than its size.
+    for (const auto &[srcDims, dstDims] : decomp) {
+      auto shapeRemaining = gather(srcShape, srcDims);
+      auto checkSubblock = [&, srcDims = srcDims](ArrayRef<unsigned> subblock) {
+        // Iterate minor-to-major (i==0 is most major).
+        for (int i = srcDims.size() - 1; i >= 0; i--) {
+          int dim = srcDims[i];
+          if (subblock[dim] == 1) {
+            continue;
+          }
+
+          // Check that more-minor dims all have 1 in shapeRemaining.
+          for (int j = i + 1; j < srcDims.size(); j++) {
+            if (shapeRemaining[j] != 1) {
+              return emitOptionalError(
+                  loc,
+                  "Invalid src encoding for non-reordering reshape.  Must use "
+                  "up sizePerThread / threadsPerWarp / warpsPerCTA for "
+                  "more-minor dimensions before more major-dims can use them.");
+            }
+          }
+
+          if (shapeRemaining[i] >= subblock[dim]) {
+            assert(shapeRemaining[i] % subblock[dim] == 0); // checked earlier
+            shapeRemaining[i] /= subblock[dim];
+          } else {
+            shapeRemaining[i] = 0;
+          }
+
+          // Is the block larger than the shape in this dimension?  This is OK
+          // only if we're the most-major dimension of the chunk and in all
+          // future chunks, only this most-major dim has a non-1 size.
+          if (shapeRemaining[i] == 0 && i != 0) {
+            return emitOptionalError(
+                loc,
+                "Invalid src encoding for non-reordering reshape.  Block "
+                "size in dimension ",
+                dim,
+                " is larger than the shape that dimension, but this is only "
+                "allowed for the most-major dimension of a reshape chunk");
+          }
+        }
+        return success();
+      };
+      if (!succeeded(checkSubblock(src.getSizePerThread())) ||
+          !succeeded(checkSubblock(src.getThreadsPerWarp())) ||
+          !succeeded(checkSubblock(src.getWarpsPerCTA()))) {
+        return failure();
+      }
+    }
+
+    // Given e.g. src.getSizePerThread(), computeSubblockSize computes e.g.
+    // dst.getSizePerThread().  This should be called for each of sizePerThread,
+    // threadsPerWarp, and warpsPerCTA, in that order.
+    SmallVector<int64_t> dstShapeRemaining(dstShape);
+    auto computeSubblockSize = [&](ArrayRef<unsigned> srcSubblock,
+                                   SmallVector<unsigned> &dstSubblock,
+                                   StringRef fieldName) -> LogicalResult {
+      // The dst subblock is "filled up" greedily starting with the most minor
+      // dim.  When we're done, we are left with a smaller shape, of size
+      // dstShape / dstSubblock, which we store in dstShapeRemaining and use for
+      // the next call to computeSubblockSize.
+      dstSubblock.resize(dstShape.size());
+      for (const auto &[srcDims, dstDims] : decomp) {
+        int64_t subblockRemaining = product(gather(srcSubblock, srcDims));
+        for (int i = dstDims.size() - 1; i >= 0; i--) {
+          auto &val = dstSubblock[dstDims[i]];
+          auto &shapeRemaining = dstShapeRemaining[dstDims[i]];
+          val = std::min(subblockRemaining, shapeRemaining);
+
+          assert(shapeRemaining % val == 0); // Checked earlier.
+          subblockRemaining /= val;
+          shapeRemaining /= val;
+        }
+
+        // If there are any elems remaining in the subblock, it must be because
+        // the block is larger than the shape.  This excess goes into the
+        // most-major dim of the subblock.
+        dstSubblock[dstDims[0]] *= subblockRemaining;
+      }
+      return success();
+    };
+
+    SmallVector<unsigned> dstSizePerThread;
+    SmallVector<unsigned> dstThreadsPerWarp;
+    SmallVector<unsigned> dstWarpsPerCTA;
+    if (!succeeded(computeSubblockSize(src.getSizePerThread(), dstSizePerThread,
+                                       "sizePerThread")) ||
+        !succeeded(computeSubblockSize(src.getThreadsPerWarp(),
+                                       dstThreadsPerWarp, "threadsPerWarp")) ||
+        !succeeded(computeSubblockSize(src.getWarpsPerCTA(), dstWarpsPerCTA,
+                                       "warpsPerCTA"))) {
+      return failure();
+    }
+
+    // Since we know that each set of srcDims is consecutive, we can
+    // meaningfully sort decomp by the physical order of the src dimensions,
+    // major-to-minor.  This will also be the order of the dst dimensions.
+    llvm::sort(decomp, [&](const auto &a, const auto &b) {
+      const auto &[srcDimsA, dstDimsA] = a;
+      const auto &[srcDimsB, dstDimsB] = b;
+      return srcInvOrder[srcDimsA.front()] < srcInvOrder[srcDimsB.front()];
+    });
+
+    // Compute the dst order.  Make the dimensions appear in the same order as
+    // their corresponding src dimensions.
+    SmallVector<unsigned> dstInvOrder(dstShape.size());
+    int i = 0;
+    for (const auto &[srcDims, dstDims] : decomp) {
+      for (auto dim : reverse(dstDims)) {
+        dstInvOrder[dim] = i++;
+      }
+    }
+    auto dstOrder = inversePermutation(dstInvOrder);
+
+    // CTALayout can be all 1's because we bailed on multi-CTA layouts above.
+    auto CTALayout = CTALayoutAttr::get(
+        src.getContext(),
+        /*CTAsPerCGA=*/SmallVector<unsigned>(dstShape.size(), 1),
+        /*CTASplitNum=*/SmallVector<unsigned>(dstShape.size(), 1),
+        /*CTAOrder=*/llvm::to_vector(llvm::seq<unsigned>(dstShape.size())));
+
+    dstEnc = BlockedEncodingAttr::get(src.getContext(), dstSizePerThread,
+                                      dstThreadsPerWarp, dstWarpsPerCTA,
+                                      dstOrder, CTALayout);
+
     return success();
   }
 };

@@ -23,16 +23,24 @@
 #define TDL_TOOLS_SYS_GETENV_HPP
 
 #include <algorithm>
+#include <assert.h>
 #include <cstdlib>
 #include <set>
 #include <string>
 
-namespace triton {
+namespace mlir::triton {
 
-const std::set<std::string> ENV_VARS = {
-    "DISABLE_MMA_V3",   "TRITON_DISABLE_LINE_INFO", "DISABLE_FAST_REDUCTION",
-    "MLIR_ENABLE_DUMP", "LLVM_IR_ENABLE_DUMP",      "AMDGCN_ENABLE_DUMP",
-    "DISABLE_LLVM_OPT", "DISABLE_PTXAS_OPT"};
+inline const std::set<std::string> ENV_VARS = {
+    "AMDGCN_ENABLE_DUMP",
+    "DISABLE_FAST_REDUCTION",
+    "DISABLE_LLVM_OPT",
+    "DISABLE_MMA_V3",
+    "DISABLE_PTXAS_OPT",
+    "LLVM_IR_ENABLE_DUMP",
+    "MLIR_ENABLE_DUMP",
+    "TRITON_DISABLE_LINE_INFO",
+    "TRITON_DISABLE_RESHAPE_ENCODING_INFERENCE",
+};
 
 namespace tools {
 
@@ -45,18 +53,16 @@ inline std::string getenv(const char *name) {
 }
 
 inline bool getBoolEnv(const std::string &env) {
-  std::string msg = "Environment variable " + env + " is not recognized";
-  assert(::triton::ENV_VARS.find(env.c_str()) != ::triton::ENV_VARS.end() &&
-         msg.c_str());
+  assert(ENV_VARS.find(env.c_str()) != ENV_VARS.end() &&
+         "envvar is not recognized");
   const char *s = std::getenv(env.c_str());
   std::string str(s ? s : "");
   std::transform(str.begin(), str.end(), str.begin(),
                  [](unsigned char c) { return std::tolower(c); });
-  return (str == "on" || str == "true" || str == "1");
+  return str == "on" || str == "true" || str == "1";
 }
 
 } // namespace tools
-
-} // namespace triton
+} // namespace mlir::triton
 
 #endif

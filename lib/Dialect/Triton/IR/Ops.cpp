@@ -857,13 +857,38 @@ OpFoldResult ReshapeOp::fold(FoldAdaptor adaptor) {
 }
 
 mlir::LogicalResult mlir::triton::ReshapeOp::verify() {
-  auto dstType = getType().cast<RankedTensorType>();
-  auto srcType = getSrc().getType().cast<RankedTensorType>();
-  if (dstType.getNumElements() != srcType.getNumElements()) {
+  auto dstTy = getType().cast<RankedTensorType>();
+  auto srcTy = getSrc().getType().cast<RankedTensorType>();
+  if (dstTy.getNumElements() != srcTy.getNumElements()) {
     return emitError(
         "number of src and dst elements of reshape must be the same");
   }
-  return mlir::success();
+
+  Attribute srcEnc = srcTy.getEncoding();
+  Attribute dstEnc = dstTy.getEncoding();
+  if (!!srcEnc != !!dstEnc) {
+    return emitError("Op requires that either (a) src and dst both have "
+                     "encodings, or (b) neither does.");
+  }
+
+  if (srcEnc && !getAllowReorder()) {
+    Attribute inferredDstEnc;
+    if (cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+            ->inferReshapeOpNoReorderEncoding(srcTy.getShape(), srcEnc,
+                                              dstTy.getShape(), inferredDstEnc,
+                                              getLoc())
+            .failed()) {
+      return emitError("This reshape is impossible without reordering, but "
+                       "reordering is not allowed.  Try choosing a different "
+                       "encoding for the input tensor (or allow reordering).");
+    }
+    if (inferredDstEnc != dstEnc) {
+      return emitError("Expected result encoding ")
+             << inferredDstEnc << " but was " << dstEnc;
+    }
+  }
+
+  return success();
 }
 
 //-- FpToFpOp --

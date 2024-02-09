@@ -45,12 +45,22 @@ public:
                             Attribute &resultEncoding,
                             std::optional<Location> location) const = 0;
 
-  // Note: this function only verify operand encoding but doesn't infer result
-  // encoding
+  // Note: This function only verifies the operand encoding.  It doesn't infer
+  // the result encoding.
   virtual LogicalResult
   inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
                      Attribute retEncoding,
                      std::optional<Location> location) const = 0;
+
+  // Tries to compute the encoding for the result of a reshape operation that
+  // makes the reshape a "nop", i.e. the same GPU threads contain the same
+  // elements as before the reshape.  Note that this is not always possible (in
+  // which case you'd need to choose a different layout for the input to the
+  // reshape).
+  virtual LogicalResult
+  inferReshapeOpNoReorderEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
+                                  ArrayRef<int64_t> dstShape, Attribute &dstEnc,
+                                  std::optional<Location> loc) const = 0;
 
   // Verify that the encoding are compatible to be used together in a dot
   // operation

@@ -12,6 +12,8 @@
 
 namespace mlir {
 
+using namespace triton;
+
 SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 const ArrayRef<int64_t> &shape,
                                                 RankedTensorType type) {
@@ -352,6 +354,45 @@ static std::optional<Attribute> inferSrcEncoding(triton::TransOp op,
                                  triton::inversePermutation(op.getOrder()));
 }
 
+static std::optional<Attribute>
+inferReshapeOpDstEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
+                          ArrayRef<int64_t> dstShape, bool allowReorder) {
+  // We don't do anything smart to allow-reorder reshapes here.  They are
+  // handled in OptimizeThreadLocality.
+  if (allowReorder)
+    return std::nullopt;
+
+  Attribute dstEnc;
+  if (succeeded(
+          srcEnc.getDialect()
+              .getRegisteredInterface<triton::DialectInferLayoutInterface>()
+              ->inferReshapeOpNoReorderEncoding(
+                  srcShape, srcEnc, dstShape, dstEnc, /*loc=*/std::nullopt))) {
+    return dstEnc;
+  }
+  return std::nullopt;
+}
+
+static std::optional<Attribute> inferDstEncoding(triton::ReshapeOp op,
+                                                 Attribute encoding) {
+  auto srcTy = op.getOperand().getType().cast<RankedTensorType>();
+  auto dstTy = op.getType().cast<RankedTensorType>();
+  return inferReshapeOpDstEncoding(srcTy.getShape(), encoding, dstTy.getShape(),
+                                   op.getAllowReorder());
+}
+
+static std::optional<Attribute> inferSrcEncoding(triton::ReshapeOp op,
+                                                 Attribute encoding) {
+  // The encoding of x given the encoding of y in `reshape(x) -> y` is the same
+  // as the encoding of x given the encoding of y in `reshape(y) -> x`.  It's an
+  // invariant of inferReshapeOpNoReorderEncoding that it's symmetric in this
+  // way.
+  auto srcTy = op.getOperand().getType().cast<RankedTensorType>();
+  auto dstTy = op.getType().cast<RankedTensorType>();
+  return inferReshapeOpDstEncoding(dstTy.getShape(), encoding, srcTy.getShape(),
+                                   op.getAllowReorder());
+}
+
 std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
   if (isa<triton::ScanOp>(op)) {
     // Scan only supports blocked encoding at the moment.
@@ -373,6 +414,8 @@ std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
     return inferSrcEncoding(interleave, encoding);
   if (auto trans = dyn_cast<triton::TransOp>(op))
     return inferSrcEncoding(trans, encoding);
+  if (auto reshape = dyn_cast<triton::ReshapeOp>(op))
+    return inferSrcEncoding(reshape, encoding);
 
   return std::nullopt;
 }
@@ -395,6 +438,9 @@ std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
     return inferDstEncoding(interleave, encoding);
   if (auto trans = dyn_cast<triton::TransOp>(op))
     return inferDstEncoding(trans, encoding);
+  if (auto reshape = dyn_cast<triton::ReshapeOp>(op))
+    return inferDstEncoding(reshape, encoding);
+
   return std::nullopt;
 }
 
