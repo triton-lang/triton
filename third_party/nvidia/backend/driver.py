@@ -91,13 +91,11 @@ def ty_to_cpp(ty):
     if ty[0] == '*':
         return "CUdeviceptr"
     return {
+        "i1": "int32_t",
         "i8": "int8_t",
         "i16": "int16_t",
         "i32": "int32_t",
         "i64": "int64_t",
-        "u1": "uint32_t",
-        "u8": "uint8_t",
-        "u16": "uint16_t",
         "u32": "uint32_t",
         "u64": "uint64_t",
         "fp16": "float",
@@ -117,7 +115,18 @@ def make_launcher(constants, signature, ids):
     def _extracted_type(ty):
         if ty[0] == '*':
             return "PyObject*"
-        return ty_to_cpp(ty)
+        return {
+            'i1': 'int32_t',
+            'i32': 'int32_t',
+            'i64': 'int64_t',
+            'u32': 'uint32_t',
+            'u64': 'uint64_t',
+            'fp16': 'float',
+            'bf16': 'float',
+            'fp32': 'float',
+            'f32': 'float',
+            'fp64': 'double',
+        }[ty]
 
     def format_of(ty):
         return {
@@ -125,14 +134,10 @@ def make_launcher(constants, signature, ids):
             "float": "f",
             "double": "d",
             "long": "l",
-            "int8_t": "b",
-            "int16_t": "h",
-            "int32_t": "i",
-            "int64_t": "l",
-            "uint8_t": "B",
-            "uint16_t": "H",
             "uint32_t": "I",
+            "int32_t": "i",
             "uint64_t": "K",
+            "int64_t": "L",
         }[ty]
 
     format = "iiiiiiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
