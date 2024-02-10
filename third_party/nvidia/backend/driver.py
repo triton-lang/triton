@@ -91,6 +91,7 @@ def ty_to_cpp(ty):
     if ty[0] == '*':
         return "CUdeviceptr"
     return {
+        "i1": "int32_t",
         "i8": "int8_t",
         "i16": "int16_t",
         "i32": "int32_t",

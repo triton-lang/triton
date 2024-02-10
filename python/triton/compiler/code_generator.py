@@ -1172,6 +1172,7 @@ def str_to_ty(name):
         "bf16": language.bfloat16,
         "fp32": language.float32,
         "fp64": language.float64,
+        "i1": language.int1,
         "i8": language.int8,
         "i16": language.int16,
         "i32": language.int32,
