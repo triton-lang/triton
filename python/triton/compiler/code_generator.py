@@ -1177,6 +1177,7 @@ def str_to_ty(name):
         "i16": language.int16,
         "i32": language.int32,
         "i64": language.int64,
+        "u1": language.int1,
         "u8": language.uint8,
         "u16": language.uint16,
         "u32": language.uint32,
