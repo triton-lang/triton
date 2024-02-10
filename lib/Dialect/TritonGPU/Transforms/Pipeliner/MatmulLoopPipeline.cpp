@@ -31,7 +31,9 @@ struct PipelineOpInfo {
   int stage = -1;
   Operation *use = nullptr;
 
-  // Specific to load ops.
+  // Blocked encoding is used for loads feeding into other loads
+  ttg::BlockedEncodingAttr blockedEncoding = nullptr;
+  // Dot operand encoding is used for loads feeding into dot ops
   ttg::DotOperandEncodingAttr dotOperandEncoding = nullptr;
   bool needTrans = false;
 };
@@ -58,13 +60,25 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   // Replace the load with insert/extract slice.
   builder.setInsertionPoint(loadOp);
   Location loc = loadOp.getLoc();
-  int stage = opToInfo[loadOp].stage;
+  Value src = loadOp.getPtr();
+  if (!isExpensiveLoadOrStore(loadOp) && opToInfo[loadOp].blockedEncoding) {
+    // For inexpensive loads that do not directly feed into dot ops
+    // we want to use optimal layout for the data.
+    auto ty = src.getType().cast<RankedTensorType>();
+    ttg::BlockedEncodingAttr encoding = opToInfo[loadOp].blockedEncoding;
+    Type newType =
+        RankedTensorType::get(ty.getShape(), ty.getElementType(), encoding);
+    auto newCvt = builder.create<ttg::ConvertLayoutOp>(
+        loadOp->getLoc(), newType, loadOp.getPtr());
+    src = newCvt.getResult();
+  }
   auto insertOp = builder.create<ttg::InsertSliceAsyncOp>(
-      loc, alloc.getType(), loadOp.getPtr(), alloc, insertIdx, loadOp.getMask(),
+      loc, alloc.getType(), src, alloc, insertIdx, loadOp.getMask(),
       loadOp.getOther(), loadOp.getCache(), loadOp.getEvict(),
       loadOp.getIsVolatile(), /*axis*/ 0);
   auto commmit = builder.create<ttg::AsyncCommitGroupOp>(loc);
 
+  int stage = opToInfo[loadOp].stage;
   opToInfo.insert({insertOp, {.stage = stage}});
   opToInfo.insert({commmit, {.stage = stage}});
   opToInfo.erase(loadOp);
@@ -180,6 +194,64 @@ loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3) {
   return std::make_pair(attr, needTrans);
 };
 
+// TODO pawel: sync this encoding selection with Coalesce, perhaps move
+// to a common place.
+static RankedTensorType getTensorType(const Value &val) {
+  auto valType = val.getType();
+  if (valType.isa<triton::PointerType>())
+    valType = valType.cast<triton::PointerType>().getPointeeType();
+  return valType.cast<RankedTensorType>();
+}
+
+static unsigned getElementBitWidth(const Value &val) {
+  auto tensorType = getTensorType(val);
+
+  auto typeForMem = tensorType.getElementType().isa<triton::PointerType>()
+                        ? tensorType.getElementType()
+                              .cast<triton::PointerType>()
+                              .getPointeeType()
+                        : tensorType.getElementType();
+  return typeForMem.getIntOrFloatBitWidth();
+}
+
+template <class T> static SmallVector<unsigned, 4> argSort(const T &arr) {
+  SmallVector<unsigned, 4> ret(arr.size());
+  std::iota(ret.begin(), ret.end(), 0);
+  std::stable_sort(ret.begin(), ret.end(),
+                   [&](unsigned x, unsigned y) { return arr[x] > arr[y]; });
+  return ret;
+}
+
+static ttg::BlockedEncodingAttr
+getBlockedEncoding(tt::LoadOp loadOp, ModuleAxisInfoAnalysis &axisInfo) {
+  Value src = loadOp.getPtr();
+  auto ty = src.getType().cast<RankedTensorType>();
+
+  auto mod = loadOp->getParentOfType<ModuleOp>();
+  int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
+  int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+
+  AxisInfo *valInfo = axisInfo.getAxisInfo(src);
+
+  AxisInfo::DimVectorT contiguity = valInfo->getContiguity();
+  SmallVector<unsigned> order = argSort(contiguity);
+  AxisInfo::DimVectorT shapePerCTA = ttg::getShapePerCTA(ty);
+
+  unsigned elemNumBits = getElementBitWidth(src);
+  unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
+  unsigned maxMultipleBytes = valInfo->getDivisibility(order[0]);
+  unsigned maxMultiple = std::max(maxMultipleBytes / elemNumBytes, 1u);
+  unsigned maxContig =
+      std::min(valInfo->getContiguity(order[0]), shapePerCTA[order[0]]);
+  unsigned alignment = std::min(maxMultiple, maxContig);
+  unsigned currPerThread = std::min(alignment, 128 / elemNumBits);
+
+  ttg::CTALayoutAttr CTALayout = ttg::getCTALayout(ty.getEncoding());
+  return ttg::BlockedEncodingAttr::get(loadOp->getContext(), ty.getShape(), 4,
+                                       order, numWarps, threadsPerWarp,
+                                       CTALayout);
+}
+
 // Create a map from load ops to their distance to the nearest dot op and the
 // final use of the load op (another load op, or a dot op).
 static llvm::MapVector<tt::LoadOp, std::pair<int, Operation *>>
@@ -286,6 +358,9 @@ collectOpsToPipeline(scf::ForOp forOp,
         continue;
       loadInfo.dotOperandEncoding = loadDotAttr.value().first;
       loadInfo.needTrans = loadDotAttr.value().second;
+    }
+    if (isa<tt::LoadOp>(loadOpToDistAndUse[loadOp].second)) {
+      loadInfo.blockedEncoding = getBlockedEncoding(loadOp, axisInfoAnalysis);
     }
     int stage =
         (maxDistance - loadOpToDistAndUse[loadOp].first) * stagesBetweenLoads;
