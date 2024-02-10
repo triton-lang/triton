@@ -96,6 +96,9 @@ def ty_to_cpp(ty):
         "i16": "int16_t",
         "i32": "int32_t",
         "i64": "int64_t",
+        "u1": "uint32_t",
+        "u8": "uint8_t",
+        "u16": "uint16_t",
         "u32": "uint32_t",
         "u64": "uint64_t",
         "fp16": "float",
@@ -115,18 +118,7 @@ def make_launcher(constants, signature, ids):
     def _extracted_type(ty):
         if ty[0] == '*':
             return "PyObject*"
-        return {
-            'i1': 'int32_t',
-            'i32': 'int32_t',
-            'i64': 'int64_t',
-            'u32': 'uint32_t',
-            'u64': 'uint64_t',
-            'fp16': 'float',
-            'bf16': 'float',
-            'fp32': 'float',
-            'f32': 'float',
-            'fp64': 'double',
-        }[ty]
+        return ty_to_cpp(ty)
 
     def format_of(ty):
         return {
@@ -134,10 +126,14 @@ def make_launcher(constants, signature, ids):
             "float": "f",
             "double": "d",
             "long": "l",
-            "uint32_t": "I",
+            "int8_t": "b",
+            "int16_t": "h",
             "int32_t": "i",
+            "int64_t": "l",
+            "uint8_t": "B",
+            "uint16_t": "H",
+            "uint32_t": "I",
             "uint64_t": "K",
-            "int64_t": "L",
         }[ty]
 
     format = "iiiiiiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
