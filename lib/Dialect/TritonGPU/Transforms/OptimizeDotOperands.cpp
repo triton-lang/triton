@@ -9,276 +9,313 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <memory>
 
-using namespace mlir;
 namespace {
-using triton::DotOp;
-using triton::gpu::ConvertLayoutOp;
-using triton::gpu::DotOperandEncodingAttr;
-using triton::gpu::NvidiaMmaEncodingAttr;
-using triton::gpu::SharedEncodingAttr;
-using triton::gpu::SliceEncodingAttr;
 
-// convert(trans(convert(arg)))
-// x = convert_layout arg: #distributed -> #shared_x
-// y = trans x: #shared_x -> #shared_y
-// z = convert_layout y: #shared_y -> #dot_operand
-class ConvertTransConvert : public mlir::RewritePattern {
+using namespace mlir;
+using namespace triton;
+using namespace triton::gpu;
 
+// Given
+//   convert(trans(convert(src) #shared)) #dot_operand,
+// change the encoding of the inner convert to a special, swizzled shared
+// encoding.
+class SwizzleShmemConvert : public OpRewritePattern<ConvertLayoutOp> {
 public:
-  ConvertTransConvert(mlir::MLIRContext *context)
-      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
-                             1, context) {}
+  using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto dstOp = cast<triton::gpu::ConvertLayoutOp>(op);
-    auto tmpOp =
-        dyn_cast_or_null<triton::TransOp>(dstOp.getSrc().getDefiningOp());
-    if (!tmpOp)
-      return mlir::failure();
-    auto srcOp = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
-        tmpOp.getSrc().getDefiningOp());
-    if (!srcOp)
-      return mlir::failure();
-    auto arg = srcOp.getSrc();
-    auto X = tmpOp.getSrc();
-    // types
-    auto argType = arg.getType().cast<RankedTensorType>();
-    auto XType = X.getType().cast<RankedTensorType>();
-    auto ZType = dstOp.getResult().getType().cast<RankedTensorType>();
-    // encodings
-    auto argEncoding = argType.getEncoding();
-    auto XEncoding =
-        XType.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
-    auto ZEncoding =
-        ZType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
-    if (!ZEncoding)
-      return mlir::failure();
-    // new X encoding
-    // TODO(Qingyi): need to check whether the CTALayout of XEncoding should be
-    // used here. For tests where numCTAs = 1, this is not a problem since all
-    // CTALayouts are the same.
-    auto newXOrder = triton::gpu::getOrder(argEncoding);
-    // set needTrans to true here. newXEncoding is computed based on argEncoding
-    // which is before the transpose. without needTrans we will compute vec and
-    // maxPhase based on incorrect m, n and k size of mma. the type inference of
-    // TransOp simply swap the order but doesn't fix the vec and maxPhase for
-    // the YType, hence it would causing incorrect swizzling code.
-    auto newXEncoding = triton::gpu::SharedEncodingAttr::get(
-        getContext(), ZEncoding, XType.getShape(), newXOrder,
-        XEncoding.getCTALayout(), XType.getElementType(), true);
-    auto newXType = RankedTensorType::get(XType.getShape(),
-                                          XType.getElementType(), newXEncoding);
-    if (XEncoding == newXEncoding)
-      return mlir::failure();
-
-    auto newX = rewriter.create<triton::gpu::ConvertLayoutOp>(srcOp.getLoc(),
-                                                              newXType, arg);
-    auto newY = rewriter.create<triton::TransOp>(tmpOp.getLoc(), newX);
-    rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(dstOp, ZType,
-                                                              newY);
-    return mlir::success();
-  }
-};
-
-// convert(layout_preserving_op(x), dot_operand)
-// -> layout_preserving_op(convert(x, dot_operand))
-class MoveOpAfterLayoutConversion : public mlir::RewritePattern {
-public:
-  MoveOpAfterLayoutConversion(mlir::MLIRContext *context)
-      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
-                             1, context) {}
-
-  LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto cvt = cast<triton::gpu::ConvertLayoutOp>(op);
-    // conversion should be dependent on a load
-    // and all operations between the load and the conversion
-    // should be layout preserving
-    SetVector<Operation *> slice;
-    mlir::BackwardSliceOptions opt;
-    opt.omitBlockArguments = true;
-    getBackwardSlice(op, &slice, opt);
-    int loadIdx = -1;
-    bool checkOp = false;
-    for (int i = 0; i < slice.size(); i++) {
-      Operation *currOp = *(slice.begin() + i);
-      if (currOp->getParentRegion() != op->getParentRegion())
-        continue;
-      if (isa<triton::LoadOp>(currOp))
-        checkOp = true;
-      else if (checkOp) {
-        // Bail out if there exists an op after Load that is not FpToFp,
-        // Bitcast, or Arith.
-        if (!isa<triton::FpToFpOp, triton::BitcastOp>(currOp) &&
-            currOp->getDialect()->getTypeID() !=
-                mlir::TypeID::get<arith::ArithDialect>())
-          return mlir::failure();
-      }
-    }
-    if (!checkOp)
-      return mlir::failure();
-
-    auto cvtTy = cvt.getType().cast<RankedTensorType>();
-    auto cvtArgOp = cvt.getSrc().getDefiningOp();
-    if (!cvtArgOp || cvtArgOp->getNumOperands() == 0)
-      return mlir::failure();
-    // only consider custom conversions or arith ops
-    if (!isa<triton::FpToFpOp, triton::BitcastOp>(cvtArgOp) &&
-        cvtArgOp->getDialect()->getTypeID() !=
-            mlir::TypeID::get<arith::ArithDialect>())
-      return mlir::failure();
-    // not handled in elementwise lowering.
-    if (isa<arith::TruncIOp, arith::TruncFOp>(cvtArgOp))
-      return mlir::failure();
-    // only considers conversions to dot operand
-    if (!cvtTy.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
-      return mlir::failure();
-    auto retTy = cvtArgOp->getResult(0).getType().cast<RankedTensorType>();
-    if (!retTy)
-      return mlir::failure();
-    Type newRetTy = RankedTensorType::get(
-        retTy.getShape(), retTy.getElementType(), cvtTy.getEncoding());
-    int numArgs = cvtArgOp->getNumOperands();
-    SmallVector<triton::gpu::ConvertLayoutOp> newCvts(numArgs);
-    for (int i = 0; i < numArgs; i++) {
-      auto argTy = cvtArgOp->getOperand(i).getType().cast<RankedTensorType>();
-      if (!argTy)
-        return mlir::failure();
-      Type newCvtTy = RankedTensorType::get(
-          retTy.getShape(), argTy.getElementType(), cvtTy.getEncoding());
-      newCvts[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
-          cvt.getLoc(), newCvtTy, cvtArgOp->getOperand(i));
-    }
-    auto newRet = rewriter.clone(*cvtArgOp);
-    for (int i = 0; i < numArgs; i++)
-      newRet->setOperand(i, newCvts[i]);
-    newRet->getResult(0).setType(newRetTy);
-    rewriter.replaceOp(op, newRet->getResults());
-    return mlir::success();
-  }
-};
-
-// convert(trans(convert(arg)))
-// x = convert_layout arg: #distributed -> #shared_x
-// y = trans x: #shared_x -> #shared_y
-// z = convert_layout y: #shared_y -> #shared_z
-class FuseTransHopper : public mlir::RewritePattern {
-
-public:
-  FuseTransHopper(mlir::MLIRContext *context)
-      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
-                             1, context) {}
-
-  LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    if (!op->hasOneUse())
-      return mlir::failure();
-    auto dstOp = cast<triton::gpu::ConvertLayoutOp>(op);
-    auto tmpOp =
-        dyn_cast_or_null<triton::TransOp>(dstOp.getSrc().getDefiningOp());
-    if (!tmpOp)
-      return mlir::failure();
-    auto srcOp = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
-        tmpOp.getSrc().getDefiningOp());
-    if (!srcOp)
-      return mlir::failure();
-    auto arg = srcOp.getSrc();
-    auto X = tmpOp.getSrc();
-    // types
-    auto argType = arg.getType().cast<RankedTensorType>();
-    auto XType = X.getType().cast<RankedTensorType>();
-    auto ZType = dstOp.getResult().getType().cast<RankedTensorType>();
-    // encodings
-    auto argEncoding = argType.getEncoding();
-    auto XEncoding =
-        XType.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
-    auto ZEncoding =
-        ZType.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
-    if (!ZEncoding)
-      return mlir::failure();
-    // new X encoding
-    auto newXOrder = triton::gpu::getOrder(argEncoding);
-
-    auto dotOp = *op->getUsers().begin();
-    if (isa<triton::DotOp, triton::nvidia_gpu::DotAsyncOp>(dotOp)) {
-      auto dotTy = dotOp->getResult(0).getType().cast<RankedTensorType>();
-      auto dotEncoding =
-          dotTy.getEncoding().dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>();
-      auto eltType = XType.getElementType();
-      if (!dotEncoding || dotEncoding.getVersionMajor() != 3)
-        return mlir::failure();
-      // MMAv3 with transpose only supports f16 and bf16 data type
-      // fallback to MMAv3 without transpose for other data types
-      if (!eltType.isF16() && !eltType.isBF16()) {
-        if (dstOp.getResult() == dotOp->getOperand(0)) {
-          newXOrder = {0, 1};
-        } else if (dstOp.getResult() == dotOp->getOperand(1)) {
-          newXOrder = {1, 0};
-        }
-      }
-    }
-
-    // TODO(Qingyi): need to check whether the CTALayout of XEncoding should be
-    // used here. For tests where numCTAs = 1, this is not a problem since all
-    // CTALayouts are the same.
-    auto newXEncoding = triton::gpu::SharedEncodingAttr::get(
-        getContext(), XType.getShape(), newXOrder, XEncoding.getCTALayout(),
-        XType.getElementType());
-    auto newXType = RankedTensorType::get(XType.getShape(),
-                                          XType.getElementType(), newXEncoding);
-
-    auto newX = rewriter.create<triton::gpu::ConvertLayoutOp>(srcOp.getLoc(),
-                                                              newXType, arg);
-    rewriter.replaceOpWithNewOp<triton::TransOp>(dstOp, newX);
-    return mlir::success();
-  }
-};
-
-struct MMAV3UseRegOperand : public OpRewritePattern<triton::DotOp> {
-  using OpRewritePattern<triton::DotOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(triton::DotOp dotOp,
+  LogicalResult matchAndRewrite(ConvertLayoutOp outerCvt,
                                 PatternRewriter &rewriter) const override {
-    auto convertLhs =
-        dotOp.getOperand(0).getDefiningOp<triton::gpu::ConvertLayoutOp>();
-    if (!convertLhs)
+    // Match outerCvt(trans(innerCvt(x))).
+    auto trans = outerCvt.getSrc().getDefiningOp<TransOp>();
+    if (!trans || trans.getOrder() != ArrayRef<int32_t>{1, 0})
       return failure();
-    auto getEncoding = [](Value v) {
-      return v.getType().cast<RankedTensorType>().getEncoding();
-    };
-    if (!getEncoding(dotOp.getOperand(0)).isa<SharedEncodingAttr>())
+    auto innerCvt = trans.getSrc().getDefiningOp<ConvertLayoutOp>();
+    if (!innerCvt)
       return failure();
-    auto srcEncoding =
-        getEncoding(convertLhs.getSrc()).dyn_cast<NvidiaMmaEncodingAttr>();
-    auto dstEncoding =
-        getEncoding(dotOp.getResult()).dyn_cast<NvidiaMmaEncodingAttr>();
-    if (!srcEncoding || srcEncoding.getVersionMajor() != 3 || !dstEncoding ||
-        dstEncoding.getVersionMajor() != 3)
+
+    auto srcTy = innerCvt.getSrc().getType().cast<RankedTensorType>();
+    auto innerCvtTy = innerCvt.getType().cast<RankedTensorType>();
+    auto outerCvtTy = outerCvt.getType().cast<RankedTensorType>();
+
+    auto innerCvtEnc = innerCvtTy.getEncoding().dyn_cast<SharedEncodingAttr>();
+    auto outerCvtEnc =
+        outerCvtTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
+    if (!innerCvtEnc || !outerCvtEnc)
       return failure();
-    // We currently only support convert from f16 and bf16 mma to f16 and bf16
-    // dot operand as the other types require shuffling data across threads.
-    // TODO: extend it to more types.
-    auto srcType = convertLhs.getSrc().getType().cast<RankedTensorType>();
-    if (!(srcType.getElementType().isF16() ||
-          srcType.getElementType().isBF16()))
+
+    // TODO(Qingyi): need to check whether the CTALayout of innerCvtEnc should
+    // be used here. For tests where numCTAs = 1, this is not a problem since
+    // all CTALayouts are the same.
+    //
+    // Set needTrans to true here. newInnerCvtEnc is computed based on
+    // argEncoding which is before the transpose. Without needTrans we will
+    // compute vec and maxPhase based on incorrect m, n and k size of mma. The
+    // type inference of TransOp simply swap the order but doesn't fix the vec
+    // and maxPhase for the YType, hence it would causing incorrect swizzling
+    // code.
+    auto newInnerCvtEnc = SharedEncodingAttr::get(
+        getContext(), outerCvtEnc, innerCvtTy.getShape(),
+        /*order=*/getOrder(srcTy.getEncoding()), innerCvtEnc.getCTALayout(),
+        innerCvtTy.getElementType(), /*needTrans=*/true);
+    if (newInnerCvtEnc == innerCvtEnc)
       return failure();
-    auto dotOperandEncoding =
-        DotOperandEncodingAttr::get(dotOp.getContext(), 0, srcEncoding, 0);
-    auto newType = RankedTensorType::get(
-        srcType.getShape(), srcType.getElementType(), dotOperandEncoding);
-    Value newOperand = rewriter.create<ConvertLayoutOp>(dotOp.getLoc(), newType,
-                                                        convertLhs.getSrc());
-    rewriter.updateRootInPlace(dotOp,
-                               [&]() { dotOp.setOperand(0, newOperand); });
+
+    auto newInnerCvt = rewriter.create<ConvertLayoutOp>(
+        innerCvt.getLoc(),
+        RankedTensorType::get(innerCvtTy.getShape(),
+                              innerCvtTy.getElementType(), newInnerCvtEnc),
+        innerCvt.getSrc());
+    auto newTrans = rewriter.create<TransOp>(trans.getLoc(), newInnerCvt,
+                                             ArrayRef<int32_t>({1, 0}));
+    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(outerCvt, outerCvtTy,
+                                                 newTrans);
     return success();
   }
 };
+
+// Move convert-to-dot-operand "up" past elementwise ops:
+//
+//  convert(elementwise(x)) #dot_operand ->
+//  elementwise(convert(x, #dot_operand)).
+//
+// The goal is to put the convert right next to the originating load.  If we can
+// accomplish this, then we can save a shmem round-trip:
+//
+//   Before:
+//
+//     - Load from global into shmem using an async copy.
+//     - Load from shmem into a #blocked layout.
+//     - Do elementwise ops over #blocked layout.
+//     - Convert to #dot_operand (round-trip through shmem).
+//     - Do dot.
+//
+//   After:
+//
+//     - Load from global into shmem using an async copy (same as before).
+//     - Load from shmem into a #dot_operand layout.
+//     - Do elementwise ops over #dot_operand layout.
+//     - Do dot.
+//
+// Eliminating the shmem round-trip is such a big win, we're willing to do it
+// even if this duplicates work because some of the elementwise ops have uses
+// that don't flow into the dot.  On the other hand, we only want to do this if
+// we can in fact reduce shmem round-trips: For example, simply moving a convert
+// up above e.g. an `add` now means we have *two* converts.  That's worse,
+// unless we can continue moving the converts upwards and eventually merge them.
+// So we try to check that this will be beneficial before making any changes.
+class HoistLayoutConversion : public OpRewritePattern<ConvertLayoutOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ConvertLayoutOp cvt,
+                                PatternRewriter &rewriter) const override {
+    // Only consider conversions to dot operand.
+    auto cvtTy = cvt.getType().cast<RankedTensorType>();
+    if (!cvtTy.getEncoding().isa<DotOperandEncodingAttr>())
+      return failure();
+
+    auto src = cvt.getSrc().getDefiningOp();
+    if (!src || src->getNumOperands() == 0 || src->getNumResults() != 1)
+      return failure();
+
+    auto srcTy = src->getResult(0).getType().dyn_cast<RankedTensorType>();
+    if (!srcTy)
+      return failure();
+
+    if (!all_of(src->getOperandTypes(),
+                [](Type ty) { return ty.isa<RankedTensorType>(); }))
+      return failure();
+
+    // Only consider custom conversions or arith ops.
+    // TODO(jlebar): Is this too restrictive?
+    if (!isa<FpToFpOp, BitcastOp>(src) &&
+        src->getDialect()->getTypeID() != TypeID::get<arith::ArithDialect>())
+      return failure();
+
+    // Currently, these instructions are not supported during lowering of
+    // shared -> dot_operand layout. Not all types and type conversions are
+    // supported.
+    if (isa<arith::TruncIOp, arith::TruncFOp, arith::SelectOp>(src))
+      return failure();
+
+    // Check that the conversion is transitively dependent on a load, and all
+    // operations between the load and the conversion are layout preserving.
+    //
+    // TODO(jlebar): This is accidentally quadratic; we iterate over the whole
+    // slice but then at the end we only modify one op!
+    SetVector<Operation *> slice;
+    BackwardSliceOptions opt;
+    opt.omitBlockArguments = true;
+    // TODO(jlebar): Is this filter redundant with omitBlockArguments == true?
+    // That is, is it possible to get into a different region without going
+    // through a block argument?
+    opt.filter = [&](Operation *op) {
+      return op->getParentRegion() == cvt->getParentRegion();
+    };
+    getBackwardSlice(cvt.getOperation(), &slice, opt);
+
+    // TODO(jlebar): This is too conservative when there are multiple loads in
+    // the chain (e.g. cvt(load(x) + load(y))).  The intent is to check that all
+    // of the ops between the loads and the convert are elementwise.  But
+    // actually we set foundLoad = true once we see the first load, and so we
+    // will reject the chain if the *second* load we encounter uses a
+    // non-elementwise op to calculate its pointers.
+    bool foundLoad = false;
+    for (Operation *currOp : slice) {
+      if (isa<LoadOp>(currOp)) {
+        foundLoad = true;
+      } else if (foundLoad) {
+        // Bail out if there exists an op after Load that is not FpToFp,
+        // Bitcast, or Arith.
+        if (!isa<FpToFpOp, BitcastOp>(currOp) &&
+            currOp->getDialect()->getTypeID() !=
+                TypeID::get<arith::ArithDialect>())
+          return failure();
+      }
+    }
+    if (!foundLoad)
+      return failure();
+
+    SmallVector<ConvertLayoutOp> newOperands;
+    for (auto operand : src->getOperands()) {
+      // We checked earlier that all operands are ranked tensors.
+      auto operandTy = operand.getType().cast<RankedTensorType>();
+      Type newCvtTy = RankedTensorType::get(
+          srcTy.getShape(), operandTy.getElementType(), cvtTy.getEncoding());
+      newOperands.push_back(
+          rewriter.create<ConvertLayoutOp>(cvt.getLoc(), newCvtTy, operand));
+    }
+    auto newRet = rewriter.clone(*src);
+    for (int i = 0; i < newOperands.size(); i++)
+      newRet->setOperand(i, newOperands[i]);
+    newRet->getResult(0).setType(RankedTensorType::get(
+        srcTy.getShape(), srcTy.getElementType(), cvtTy.getEncoding()));
+
+    rewriter.replaceOp(cvt, newRet->getResults());
+    return success();
+  }
+};
+
+// Rewrite
+//
+//   dot(convert(trans(convert(src) #shared)) #shared1) ->
+//   dot(trans(convert(src) #shared2))
+//
+// if dot is an MMAv3 (because MMAv3 allows us to fold transposes).
+class FuseTransHopper : public OpRewritePattern<ConvertLayoutOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ConvertLayoutOp outerCvt,
+                                PatternRewriter &rewriter) const override {
+    if (!outerCvt->hasOneUse() ||
+        !isa<DotOp, nvidia_gpu::DotAsyncOp>(*outerCvt->getUsers().begin()))
+      return failure();
+
+    auto dot = *outerCvt->getUsers().begin();
+    auto dotEnc = dot->getResult(0)
+                      .getType()
+                      .cast<RankedTensorType>()
+                      .getEncoding()
+                      .dyn_cast<NvidiaMmaEncodingAttr>();
+    if (!dotEnc || dotEnc.getVersionMajor() != 3)
+      return failure();
+
+    // Match outerCvt(trans(innerCvt(x))).
+    auto trans = outerCvt.getSrc().getDefiningOp<TransOp>();
+    if (!trans || trans.getOrder() != ArrayRef<int32_t>({1, 0}))
+      return failure();
+    auto innerCvt = trans.getSrc().getDefiningOp<ConvertLayoutOp>();
+    if (!innerCvt)
+      return failure();
+
+    auto srcTy = innerCvt.getSrc().getType().cast<RankedTensorType>();
+    auto innerCvtTy = innerCvt.getType().cast<RankedTensorType>();
+    auto outerCvtTy = outerCvt.getResult().getType().cast<RankedTensorType>();
+
+    auto innerCvtEnc = innerCvtTy.getEncoding().dyn_cast<SharedEncodingAttr>();
+    auto outerCvtEnc = outerCvtTy.getEncoding().dyn_cast<SharedEncodingAttr>();
+    if (!innerCvtEnc || !outerCvtEnc)
+      return failure();
+
+    // MMAv3 with transpose only supports f16 and bf16.  Fall back to MMAv3
+    // without transpose for other data types.
+    auto newInnerCvtOrder = getOrder(srcTy.getEncoding());
+    auto srcElemTy = innerCvtTy.getElementType();
+    if (!srcElemTy.isF16() && !srcElemTy.isBF16()) {
+      if (outerCvt.getResult() == dot->getOperand(0)) {
+        newInnerCvtOrder = {0, 1};
+      } else if (outerCvt.getResult() == dot->getOperand(1)) {
+        newInnerCvtOrder = {1, 0};
+      }
+    }
+
+    // TODO(Qingyi): need to check whether the CTALayout of innerCvtEnc should
+    // be used here. For tests where numCTAs = 1, this is not a problem since
+    // all CTALayouts are the same.
+    auto newInnerCvtEnc = SharedEncodingAttr::get(
+        getContext(), innerCvtTy.getShape(), newInnerCvtOrder,
+        innerCvtEnc.getCTALayout(), innerCvtTy.getElementType());
+    auto newInnerCvtTy = RankedTensorType::get(
+        innerCvtTy.getShape(), innerCvtTy.getElementType(), newInnerCvtEnc);
+
+    auto newInnerCvt = rewriter.create<ConvertLayoutOp>(
+        innerCvt.getLoc(), newInnerCvtTy, innerCvt.getSrc());
+    rewriter.replaceOpWithNewOp<TransOp>(outerCvt, newInnerCvt,
+                                         ArrayRef<int32_t>({1, 0}));
+    return success();
+  }
+};
+
+// Rewrite
+//   dot(convert(lhs #mma) #shared, rhs) #mma ->
+//   dot(convert(lhs #mma) #dot_operand, rhs) #mma,
+// for fp16 or bf16 MMAv3 dots.
+struct MMAV3UseRegOperand : public OpRewritePattern<DotOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(DotOp dotOp,
+                                PatternRewriter &rewriter) const override {
+    auto convertLhs = dotOp.getOperand(0).getDefiningOp<ConvertLayoutOp>();
+    if (!convertLhs)
+      return failure();
+
+    auto getEncoding = [](Value v) {
+      return v.getType().cast<RankedTensorType>().getEncoding();
+    };
+
+    if (!getEncoding(dotOp.getOperand(0)).isa<SharedEncodingAttr>())
+      return failure();
+    auto srcEnc =
+        getEncoding(convertLhs.getSrc()).dyn_cast<NvidiaMmaEncodingAttr>();
+    auto dstEnc =
+        getEncoding(dotOp.getResult()).dyn_cast<NvidiaMmaEncodingAttr>();
+    if (!srcEnc || srcEnc.getVersionMajor() != 3 || !dstEnc ||
+        dstEnc.getVersionMajor() != 3)
+      return failure();
+
+    // We currently only support convert from f16 and bf16 mma to f16 and bf16
+    // dot operand, as the other types require shuffling data across threads.
+    // TODO: extend it to more types.
+    auto srcTy = convertLhs.getSrc().getType().cast<RankedTensorType>();
+    if (!(srcTy.getElementType().isF16() || srcTy.getElementType().isBF16()))
+      return failure();
+
+    auto dotOperandEnc = DotOperandEncodingAttr::get(
+        dotOp.getContext(), /*opIdx=*/0, srcEnc, /*kWidth=*/0);
+    auto newTy = RankedTensorType::get(srcTy.getShape(), srcTy.getElementType(),
+                                       dotOperandEnc);
+    Value newOperand = rewriter.create<ConvertLayoutOp>(dotOp.getLoc(), newTy,
+                                                        convertLhs.getSrc());
+    rewriter.modifyOpInPlace(dotOp, [&]() { dotOp.setOperand(0, newOperand); });
+    return success();
+  }
+};
+
 } // namespace
 
+// TODO(jlebar): These autogenerated headers (and the passes they declare)
+// should be included within a namespace, but we have to do it consistently.
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
@@ -297,9 +334,9 @@ public:
     auto ret = pm.run(m);
 
     mlir::RewritePatternSet patterns(context);
-    patterns.add<ConvertTransConvert>(context);
+    patterns.add<SwizzleShmemConvert>(context);
     if (triton::gpu::TritonGPUDialect::getComputeCapability(m) >= 80)
-      patterns.add<MoveOpAfterLayoutConversion>(context);
+      patterns.add<HoistLayoutConversion>(context);
     patterns.add<FuseTransHopper>(context);
     patterns.add<MMAV3UseRegOperand>(context);
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())

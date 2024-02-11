@@ -16,8 +16,6 @@ std::unique_ptr<Pass> createAccelerateMatmulPass(int computeCapability = 80);
 
 std::unique_ptr<Pass> createPrefetchPass();
 
-std::unique_ptr<Pass> createCanonicalizeLoopsPass();
-
 std::unique_ptr<Pass> createCoalescePass();
 
 std::unique_ptr<Pass> createReorderInstructionsPass();
@@ -29,8 +27,6 @@ std::unique_ptr<Pass> createRemoveLayoutConversionsPass();
 std::unique_ptr<Pass> createVerifier();
 
 std::unique_ptr<Pass> createOptimizeDotOperandsPass();
-
-std::unique_ptr<Pass> createOptimizeEpiloguePass();
 
 std::unique_ptr<Pass> createOptimizeThreadLocalityPass();
 

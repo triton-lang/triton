@@ -19,8 +19,13 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <memory>
 
-using namespace mlir;
+#define DEBUG_TYPE "tritongpu-remove-layout-conversions"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
+
 namespace {
+
+using namespace mlir;
 using triton::DotOp;
 using triton::gpu::ConvertLayoutOp;
 using triton::gpu::DotOperandEncodingAttr;
@@ -195,27 +200,48 @@ static bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
 static bool isLayoutAnchor(Operation *op) {
   if (isa<triton::LoadOp, triton::StoreOp>(op))
     return isExpensiveLoadOrStore(op);
-  if (isa<triton::ReshapeOp, triton::DotOp, triton::AtomicRMWOp,
-          triton::AtomicCASOp>(op))
+  if (isa<triton::DotOp, triton::AtomicRMWOp, triton::AtomicCASOp>(op))
     return true;
+
+  // Heuristic: Mark permuting reshape as a layout anchor.  Its dst can be
+  // anything, so it stops forward-propagation of layouts.  We rely on the
+  // backwards pass to fix it up if necessary.  (If we didn't do this, then
+  // anything following the reshape won't be covered by the forward pass at
+  // all.)
+  if (auto reshape = dyn_cast<triton::ReshapeOp>(op))
+    return reshape.getAllowReorder();
+
   return false;
 }
 
 void LayoutPropagation::initAnchorLayout() {
+  auto maybeAddAnchor = [&](Value v) {
+    if (auto tensorType = v.getType().dyn_cast<RankedTensorType>()) {
+      // Workaround, don't popagate MMA layout unless there is a convert
+      // back to mma further down to avoid generating reduction with MMA
+      // layout that may have lower performance.
+      // This can be improved with more aggressive backward propagation.
+      if (tensorType.getEncoding().isa<triton::gpu::NvidiaMmaEncodingAttr>() &&
+          v.getDefiningOp() &&
+          !hasConvertToMMATransisitiveUse(v.getDefiningOp(),
+                                          tensorType.getEncoding())) {
+        return;
+      }
+      layouts.insert({v, LayoutInfo(tensorType.getEncoding())});
+    }
+  };
+
+  // Consider function args as anchors.  This makes it easier to write tests --
+  // you can pass a tensor with an encoding as an arg, instead of explicitly
+  // calling tt.load.
+  for (auto arg : funcOp.getArguments()) {
+    maybeAddAnchor(arg);
+  }
+
   funcOp.walk([&](Operation *op) {
     if (isLayoutAnchor(op)) {
       for (auto result : op->getResults()) {
-        if (auto tensorType = result.getType().dyn_cast<RankedTensorType>()) {
-          // Workaround, don't popagate MMA layout unless there is a convert
-          // back to mma further down to avoid generating reduction with MMA
-          // layout that may have lower performance.
-          // This can be improved with more aggressive backward propagation.
-          if (tensorType.getEncoding()
-                  .isa<triton::gpu::NvidiaMmaEncodingAttr>() &&
-              !hasConvertToMMATransisitiveUse(op, tensorType.getEncoding()))
-            continue;
-          layouts.insert({result, LayoutInfo(tensorType.getEncoding())});
-        }
+        maybeAddAnchor(result);
       }
     }
   });
@@ -229,7 +255,14 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
       continue;
     bool hasChanged = false;
     for (auto encoding : info.encodings) {
-      auto dstEncoding = inferDstEncoding(op, encoding);
+      std::optional<Attribute> dstEncoding;
+      if (isa<triton::gpu::ConvertLayoutOp>(op)) {
+        // Try to remove the convert by making the dst encoding match the source
+        // encoding.
+        dstEncoding = encoding;
+      } else {
+        dstEncoding = inferDstEncoding(op, encoding);
+      }
       if (dstEncoding)
         hasChanged |= layouts[value].encodings.insert(*dstEncoding);
     }
@@ -283,7 +316,9 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     }
     if (user->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<mlir::OpTrait::Elementwise>() ||
-        isa<triton::ReduceOp, triton::ExpandDimsOp,
+        // TODO(jlebar): Add TransOp to this list, but we have to force it into
+        // shared memory if it's used by a dot operand.
+        isa<triton::ReduceOp, triton::ExpandDimsOp, triton::ReshapeOp,
             triton::ExperimentalInterleaveOp, triton::gpu::ConvertLayoutOp>(
             user)) {
       setEncoding(user->getResults(), info, changed, user);
@@ -303,6 +338,14 @@ void LayoutPropagation::propagateLayout() {
     LayoutInfo info = layouts[currentValue];
     queue.pop_back();
     SmallVector<Value> changed = propagateToUsers(currentValue, info);
+
+    LLVM_DEBUG({
+      DBGS() << "propagateLayout considering " << currentValue << ", which has "
+             << info.encodings.size() << " candidate encoding(s):\n";
+      for (Attribute encoding : info.encodings)
+        DBGS() << "  " << encoding << "\n";
+    });
+
     queue.insert(queue.end(), changed.begin(), changed.end());
   }
 }
@@ -315,7 +358,6 @@ void LayoutPropagation::resolveConflicts() {
       continue;
     // Hacky resolve, prefer block encoding.
     // TODO: add a proper heuristic.
-    int maxSizePerThread = 1;
     Attribute encoding = *info.encodings.begin();
     bool isLoadOrStore =
         op && isa<triton::LoadOp, triton::StoreOp, triton::AtomicRMWOp,
@@ -478,7 +520,7 @@ Operation *LayoutPropagation::rewriteForOp(scf::ForOp forOp) {
   auto newForOp = rewriter.create<scf::ForOp>(
       forOp.getLoc(), forOp.getLowerBound(), forOp.getUpperBound(),
       forOp.getStep(), operands);
-
+  newForOp->setAttrs(forOp->getAttrs());
   newForOp.getBody()->getOperations().splice(
       newForOp.getBody()->getOperations().begin(),
       forOp.getBody()->getOperations());
@@ -678,7 +720,9 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   }
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
-      isa<triton::ReduceOp, triton::ExpandDimsOp,
+      // TODO(jlebar): Add TransOp to this list, but we have to force it into
+      // shared memory if it's used by a dot operand.
+      isa<triton::ReduceOp, triton::ExpandDimsOp, triton::ReshapeOp,
           triton::ExperimentalInterleaveOp, triton::gpu::ConvertLayoutOp>(op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
@@ -819,7 +863,7 @@ static void backwardRematerialization(ConvertLayoutOp convertOp) {
       triton::gpu::hasSharedEncoding(convertOp.getOperand()))
     return;
   // we don't handle conversions to DotOperandEncodingAttr
-  // this is a heuristics to accommodate fused attention
+  // this is a heuristic to accommodate fused attention
   auto targetType = convertOp->getResultTypes()[0].cast<RankedTensorType>();
   if (targetType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
     return;
@@ -963,6 +1007,11 @@ public:
       layoutPropagation.rewrite();
     });
 
+    LLVM_DEBUG({
+      DBGS() << "Module after propagating layouts forward:\n";
+      m.dump();
+    });
+
     mlir::RewritePatternSet cleanUpPatterns(context);
     ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns, context);
     if (mlir::applyPatternsAndFoldGreedily(m, std::move(cleanUpPatterns))
@@ -970,12 +1019,26 @@ public:
       signalPassFailure();
     }
 
-    // 2. For convert ops left try to rematerialize the slice of producer
+    LLVM_DEBUG({
+      DBGS() << "Module after canonicalizing:\n";
+      m.dump();
+    });
+
+    // 2. For remaining convert ops, try to rematerialize the slice of producer
     // operation to avoid having to convert.
     backwardRematerialization(m);
-    // 3. For converts left try to hoist them above cast generating larger size
-    // types in order to reduce the cost of the convert op.
+    LLVM_DEBUG({
+      DBGS() << "Module after backward remat:\n";
+      m.dump();
+    });
+
+    // 3. For remaining converts, try to hoist them above cast generating larger
+    // size types in order to reduce the cost of the convert op.
     hoistConvert(m);
+    LLVM_DEBUG({
+      DBGS() << "Module after hoisting converts:\n";
+      m.dump();
+    });
 
     mlir::RewritePatternSet decomposePatterns(context);
     decomposePatterns.add<ConvertDotConvert>(context);
@@ -983,6 +1046,10 @@ public:
             .failed()) {
       signalPassFailure();
     }
+    LLVM_DEBUG({
+      DBGS() << "Module after decomposing dot-converts:\n";
+      m.dump();
+    });
 
     // 4. Apply clean up patterns to remove remove dead convert and dead code
     // generated by the previous transformations.
@@ -994,6 +1061,10 @@ public:
             .failed()) {
       signalPassFailure();
     }
+    LLVM_DEBUG({
+      DBGS() << "Module after final cleanups:\n";
+      m.dump();
+    });
   }
 };
 

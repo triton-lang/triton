@@ -4,6 +4,7 @@
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/Interfaces/FunctionImplementation.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -359,30 +360,67 @@ void triton::StoreOp::getCanonicalizationPatterns(RewritePatternSet &results,
 }
 
 //-- TransOp --
+OpFoldResult mlir::triton::TransOp::fold(FoldAdaptor adaptor) {
+  // transpose(x, order=[0, 1, ...]) -> x
+  if (triton::isIota(getOrder())) {
+    return getSrc();
+  }
+
+  // transpose(transpose(x)) -> transpose(x)
+  if (auto innerTrans = getSrc().getDefiningOp<triton::TransOp>()) {
+    setOrder(applyPermutation(innerTrans.getOrder(), getOrder()));
+    setOperand(innerTrans.getSrc());
+    return getResult();
+  }
+
+  return {};
+}
+
 mlir::LogicalResult mlir::triton::TransOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, ValueRange operands,
     DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // type is the same as the input
   auto argTy = operands[0].getType().cast<RankedTensorType>();
-  SmallVector<int64_t> retShape(argTy.getShape().begin(),
-                                argTy.getShape().end());
-  std::reverse(retShape.begin(), retShape.end());
+  auto order = properties.as<Properties *>()->order.asArrayRef();
+  SmallVector<int64_t> retShape = applyPermutation(argTy.getShape(), order);
+
   auto retEltTy = argTy.getElementType();
   Attribute argEncoding = argTy.getEncoding();
   Attribute retEncoding;
   if (argEncoding) {
     Dialect &dialect = argEncoding.getDialect();
     auto inferLayoutInterface = dyn_cast<DialectInferLayoutInterface>(&dialect);
-    if (inferLayoutInterface->inferTransOpEncoding(argEncoding, retEncoding)
+    if (inferLayoutInterface
+            ->inferTransOpEncoding(argEncoding, order, retEncoding)
             .failed()) {
-      llvm::report_fatal_error("failed to infer layout for ReduceOp");
       return mlir::failure();
     }
   }
   inferredReturnTypes.push_back(
       RankedTensorType::get(retShape, retEltTy, retEncoding));
   return mlir::success();
+}
+
+LogicalResult triton::TransOp::verify() {
+  // Check that the op's `order` attribute is a permutation of the right length.
+  auto srcTy = getSrc().getType().cast<RankedTensorType>();
+
+  ArrayRef<int32_t> order = getOrder();
+  if (order.size() != srcTy.getRank()) {
+    return emitError("order must have the same size as the rank of the "
+                     "operand and result");
+  }
+
+  SmallVector<int32_t, 8> sortedOrder(order);
+  llvm::sort(sortedOrder);
+  for (int32_t i = 0; i < sortedOrder.size(); i++) {
+    if (sortedOrder[i] != i) {
+      return emitError("order must be a permutation of [0, ..., rank - 1]");
+    }
+  }
+
+  return success();
 }
 
 //-- DotOp --
@@ -725,38 +763,32 @@ LogicalResult ExpandDimsOp::canonicalize(ExpandDimsOp op,
   //    broadcast(expand_dims(broadcast))
   // -> broadcast(broadcast(expand_dims))
   // -> broadcast(expand_dims)
-  //
-  // Note we can't do this if x is a scalar, because expandDims requires a
-  // tensor input.  (We could change it to broadcast(expand_dims(splat(x))), but
-  // it's unclear that's better.)  broadcast currently accepts scalar inputs,
-  // but it probably shouldn't (just use splat instead).
   if (auto broadcast = dyn_cast<triton::BroadcastOp>(definingOp)) {
     auto src = broadcast.getSrc();
-    if (auto srcTy = src.getType().dyn_cast<RankedTensorType>()) {
-      SmallVector<int64_t> newExpandShape(srcTy.getShape());
-      newExpandShape.insert(newExpandShape.begin() + op.getAxis(), 1);
+    auto srcTy = src.getType().dyn_cast<RankedTensorType>();
+    SmallVector<int64_t> newExpandShape(srcTy.getShape());
+    newExpandShape.insert(newExpandShape.begin() + op.getAxis(), 1);
 
-      // Infer the encoding of the new expand op, if encodings are present.
-      Attribute newExpandEnc;
-      if (auto srcEnc = srcTy.getEncoding()) {
-        if (dyn_cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-                ->inferExpandDimsOpEncoding(srcEnc, op.getAxis(), newExpandEnc,
-                                            op.getLoc())
-                .failed()) {
-          return emitOptionalError(op.getLoc(),
-                                   "failed to infer layout for ExpandDimsOp");
-        }
+    // Infer the encoding of the new expand op, if encodings are present.
+    Attribute newExpandEnc;
+    if (auto srcEnc = srcTy.getEncoding()) {
+      if (dyn_cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+              ->inferExpandDimsOpEncoding(srcEnc, op.getAxis(), newExpandEnc,
+                                          op.getLoc())
+              .failed()) {
+        return emitOptionalError(op.getLoc(),
+                                 "failed to infer layout for ExpandDimsOp");
       }
-
-      auto newExpandTy = RankedTensorType::get(
-          newExpandShape, srcTy.getElementType(), newExpandEnc);
-      auto newExpand = rewriter.create<triton::ExpandDimsOp>(
-          op.getLoc(), newExpandTy, src, op.getAxis());
-      auto newBroadcast = rewriter.create<triton::BroadcastOp>(
-          broadcast.getLoc(), op.getType(), newExpand.getResult());
-      rewriter.replaceOp(op, {newBroadcast.getResult()});
-      return mlir::success();
     }
+
+    auto newExpandTy = RankedTensorType::get(
+        newExpandShape, srcTy.getElementType(), newExpandEnc);
+    auto newExpand = rewriter.create<triton::ExpandDimsOp>(
+        op.getLoc(), newExpandTy, src, op.getAxis());
+    auto newBroadcast = rewriter.create<triton::BroadcastOp>(
+        broadcast.getLoc(), op.getType(), newExpand.getResult());
+    rewriter.replaceOp(op, {newBroadcast.getResult()});
+    return mlir::success();
   }
 
   return mlir::failure();
@@ -825,13 +857,38 @@ OpFoldResult ReshapeOp::fold(FoldAdaptor adaptor) {
 }
 
 mlir::LogicalResult mlir::triton::ReshapeOp::verify() {
-  auto dstType = getType().cast<RankedTensorType>();
-  auto srcType = getSrc().getType().cast<RankedTensorType>();
-  if (dstType.getNumElements() != srcType.getNumElements()) {
+  auto dstTy = getType().cast<RankedTensorType>();
+  auto srcTy = getSrc().getType().cast<RankedTensorType>();
+  if (dstTy.getNumElements() != srcTy.getNumElements()) {
     return emitError(
         "number of src and dst elements of reshape must be the same");
   }
-  return mlir::success();
+
+  Attribute srcEnc = srcTy.getEncoding();
+  Attribute dstEnc = dstTy.getEncoding();
+  if (!!srcEnc != !!dstEnc) {
+    return emitError("Op requires that either (a) src and dst both have "
+                     "encodings, or (b) neither does.");
+  }
+
+  if (srcEnc && !getAllowReorder()) {
+    Attribute inferredDstEnc;
+    if (cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+            ->inferReshapeOpNoReorderEncoding(srcTy.getShape(), srcEnc,
+                                              dstTy.getShape(), inferredDstEnc,
+                                              getLoc())
+            .failed()) {
+      return emitError("This reshape is impossible without reordering, but "
+                       "reordering is not allowed.  Try choosing a different "
+                       "encoding for the input tensor (or allow reordering).");
+    }
+    if (inferredDstEnc != dstEnc) {
+      return emitError("Expected result encoding ")
+             << inferredDstEnc << " but was " << dstEnc;
+    }
+  }
+
+  return success();
 }
 
 //-- FpToFpOp --
@@ -1080,6 +1137,20 @@ void ElementwiseInlineAsmOp::getEffects(
                        SideEffects::DefaultResource::get());
   effects.emplace_back(MemoryEffects::Read::get(),
                        SideEffects::DefaultResource::get());
+}
+
+LogicalResult ElementwiseInlineAsmOp::verify() {
+  if (getNumOperands() >= 1) {
+    auto tensorType = getOperand(0).getType().dyn_cast<RankedTensorType>();
+    size_t numInputElems = tensorType ? tensorType.getNumElements() : 0;
+    if (numInputElems % this->getPackedElement() != 0) {
+      return emitError("number of input elements ")
+             << numInputElems
+             << " must be a multiple of the op's packed_element attribute, "
+             << getPackedElement();
+    }
+  }
+  return success();
 }
 
 // -- ExternElementwiseOp --

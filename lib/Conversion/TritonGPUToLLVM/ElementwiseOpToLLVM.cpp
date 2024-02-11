@@ -1,8 +1,11 @@
 #include "PatternTritonGPUOpToLLVM.h"
+#include "Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
+using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
+using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
 namespace {
 /* ----- FP8E5M2 ------ */
@@ -416,7 +419,7 @@ inline SmallVector<Value> unpackI32(const SmallVector<Value> &inValues,
                                     Type srcTy,
                                     ConversionPatternRewriter &rewriter,
                                     Location loc,
-                                    TypeConverter *typeConverter) {
+                                    const LLVMTypeConverter *typeConverter) {
   auto tensorTy = srcTy.dyn_cast<RankedTensorType>();
   if (!tensorTy)
     return inValues;
@@ -439,7 +442,8 @@ inline SmallVector<Value> unpackI32(const SmallVector<Value> &inValues,
 inline SmallVector<Value> packI32(const SmallVector<Value> &inValues,
                                   Type srcTy,
                                   ConversionPatternRewriter &rewriter,
-                                  Location loc, TypeConverter *typeConverter) {
+                                  Location loc,
+                                  const LLVMTypeConverter *typeConverter) {
   auto tensorTy = srcTy.dyn_cast<RankedTensorType>();
   if (!tensorTy)
     return inValues;
@@ -549,15 +553,14 @@ public:
 // Also supports processing the inputs in a vectorized form by consuming and
 // producing multiple operand sets in ConcreteT::createDestOps.
 template <typename SourceOp, typename ConcreteT>
-class ElementwiseOpConversionBase
-    : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
+class ElementwiseOpConversionBase : public ConvertOpToLLVMPattern<SourceOp> {
 public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
-  explicit ElementwiseOpConversionBase(
-      TritonGPUToLLVMTypeConverter &typeConverter,
-      ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit = 1)
-      : ConvertTritonGPUOpToLLVMPattern<SourceOp>(typeConverter, benefit),
+  explicit ElementwiseOpConversionBase(LLVMTypeConverter &typeConverter,
+                                       ModuleAxisInfoAnalysis &axisAnalysisPass,
+                                       PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         axisAnalysisPass(axisAnalysisPass) {}
 
   // Try to deduplicate the resultVals based on the
@@ -640,9 +643,8 @@ public:
       SmallVector<unsigned> order = triton::gpu::getOrder(encoding);
       if (rank != order.size())
         return resultVals;
-      ArrayRef<unsigned> orderRef(order);
-      elemsPerThread = reorder(ArrayRef<unsigned>(elemsPerThread), orderRef);
-      constancy = reorder(ArrayRef<int64_t>(constancy), orderRef);
+      elemsPerThread = applyPermutation(elemsPerThread, order);
+      constancy = applyPermutation(constancy, order);
     }
 
     SmallVector<unsigned> strides(rank, 1);
@@ -679,8 +681,7 @@ public:
     SmallVector<SmallVector<Value>> allOperands;
     for (auto operand : adaptor.getOperands()) {
       auto argTy = op->getOperand(0).getType();
-      auto subOperands =
-          this->getTypeConverter()->unpackLLElements(loc, operand, rewriter);
+      auto subOperands = unpackLLElements(loc, operand, rewriter);
       subOperands = unpackI32(subOperands, argTy, rewriter, loc,
                               this->getTypeConverter());
       allOperands.resize(subOperands.size());
@@ -710,8 +711,8 @@ public:
     resultVals = maybeDeduplicate(op, resultVals);
     resultVals =
         packI32(resultVals, resultTy, rewriter, loc, this->getTypeConverter());
-    Value view = this->getTypeConverter()->packLLElements(loc, resultVals,
-                                                          rewriter, resultTy);
+    Value view = packLLElements(loc, this->getTypeConverter(), resultVals,
+                                rewriter, resultTy);
     rewriter.replaceOp(op, view);
 
     return success();
@@ -750,7 +751,7 @@ struct FpToFpOpConversion
   using ElementwiseOpConversionBase<
       triton::FpToFpOp, FpToFpOpConversion>::ElementwiseOpConversionBase;
 
-  explicit FpToFpOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+  explicit FpToFpOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
                               int computeCapability, PatternBenefit benefit = 1)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
@@ -1108,8 +1109,8 @@ private:
 };
 
 struct ElementwiseInlineAsmOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<ElementwiseInlineAsmOp> {
-  using Base = ConvertTritonGPUOpToLLVMPattern<ElementwiseInlineAsmOp>;
+    : public ConvertOpToLLVMPattern<ElementwiseInlineAsmOp> {
+  using Base = ConvertOpToLLVMPattern<ElementwiseInlineAsmOp>;
 
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
@@ -1225,8 +1226,7 @@ struct ElementwiseInlineAsmOpConversion
     SmallVector<SmallVector<Value>> unpackedOperands;
     for (auto operand : adaptor.getOperands()) {
       auto argTy = op->getOperand(0).getType();
-      auto subOperands =
-          getTypeConverter()->unpackLLElements(loc, operand, rewriter);
+      auto subOperands = unpackLLElements(loc, operand, rewriter);
       unpackedOperands.push_back(
           unpackI32(subOperands, argTy, rewriter, loc, getTypeConverter()));
     }
@@ -1250,18 +1250,13 @@ struct ElementwiseInlineAsmOpConversion
     // equals the number of output elements per return value, except when the
     // asm has no inputs, in which case there's 1 output element.
     size_t numInputElems = unpackedOperands[0].size();
-    for (unsigned i = 0; i < unpackedOperands.size(); ++i) {
-      if (unpackedOperands[i].size() != numInputElems) {
-        llvm::report_fatal_error("Inline asm op has operands with different "
-                                 "numbers of elements.");
-      }
-    }
 
-    // TODO(jlebar): This should be checked by the verifier.
-    if (numInputElems % op.getPackedElement() != 0) {
-      llvm::report_fatal_error("Inline asm op has packed_element=k, but k does "
-                               "not divide the number of elements per thread.");
-    }
+    // These are checked by the verifier, so we don't need to raise a nice
+    // error.
+    assert(all_of(unpackedOperands, [&](auto &operands) {
+      return operands.size() == numInputElems;
+    }));
+    assert(numInputElems % op.getPackedElement() == 0);
 
     // Run the inline asm op on each block of elements.
     //
@@ -1303,8 +1298,8 @@ struct ElementwiseInlineAsmOpConversion
       }
       auto packed = packI32(unpackedResults[i], op->getResult(i).getType(),
                             rewriter, loc, getTypeConverter());
-      outs.push_back(getTypeConverter()->packLLElements(
-          loc, unpackedResults[i], rewriter, op->getResult(i).getType()));
+      outs.push_back(packLLElements(loc, getTypeConverter(), unpackedResults[i],
+                                    rewriter, op->getResult(i).getType()));
     }
 
     rewriter.replaceOp(op, outs);
@@ -1631,7 +1626,7 @@ struct MinMaxFOpConversion
       typename std::conditional<std::is_same<OpTy, arith::MinimumFOp>::value,
                                 LLVM::MinNumOp, LLVM::MaxNumOp>::type;
 
-  explicit MinMaxFOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+  explicit MinMaxFOpConversion(LLVMTypeConverter &typeConverter,
                                ModuleAxisInfoAnalysis &axisAnalysisPass,
                                int computeCapability,
                                PatternBenefit benefit = 1)
@@ -1675,7 +1670,7 @@ struct ClampFOpConversion
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
-  explicit ClampFOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+  explicit ClampFOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
                               int computeCapability, PatternBenefit benefit = 1)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
@@ -1846,14 +1841,52 @@ struct SelectOpConversion
         adaptor.getAttributes().getValue())};
   }
 };
+
+struct AddPtrOpConversion : public ConvertOpToLLVMPattern<triton::AddPtrOp> {
+  using ConvertOpToLLVMPattern<triton::AddPtrOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::AddPtrOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto resultTy = op.getType();
+    auto offsetTy = op.getOffset().getType();
+    auto typeConverter = getTypeConverter();
+    auto resultTensorTy = resultTy.dyn_cast<RankedTensorType>();
+    if (resultTensorTy) {
+      unsigned elems = getTotalElemsPerThread(resultTy);
+      Type elemTy = typeConverter->convertType(resultTensorTy.getElementType()
+                                                   .cast<triton::PointerType>()
+                                                   .getPointeeType());
+      Type ptrTy = typeConverter->convertType(resultTensorTy.getElementType());
+      auto ptrs = unpackLLElements(loc, adaptor.getPtr(), rewriter);
+      auto offsets = unpackLLElements(loc, adaptor.getOffset(), rewriter);
+      SmallVector<Value> resultVals(elems);
+      for (unsigned i = 0; i < elems; ++i) {
+        resultVals[i] = gep(ptrTy, elemTy, ptrs[i], offsets[i]);
+      }
+      Value view =
+          packLLElements(loc, typeConverter, resultVals, rewriter, resultTy);
+      rewriter.replaceOp(op, view);
+    } else {
+      assert(resultTy.isa<triton::PointerType>());
+      auto resultPtrTy = typeConverter->convertType(resultTy);
+      auto resultElemTy = typeConverter->convertType(
+          resultTy.cast<triton::PointerType>().getPointeeType());
+      Value result =
+          gep(resultPtrTy, resultElemTy, adaptor.getPtr(), adaptor.getOffset());
+      rewriter.replaceOp(op, result);
+    }
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::populateElementwiseOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation,
-    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-    int computeCapability, PatternBenefit benefit) {
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
+    PatternBenefit benefit) {
 #define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
   patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
       typeConverter, axisInfoAnalysis, benefit);
@@ -1901,6 +1934,7 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
 
+  patterns.add<AddPtrOpConversion>(typeConverter, benefit);
   patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<CmpIOpConversion>(typeConverter, axisInfoAnalysis, benefit);

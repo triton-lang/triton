@@ -140,6 +140,31 @@ private:
   SmallVector<Type> srcElementTypes;
 };
 
+// Decomposes a reshape into simpler pieces.
+//
+// As an example, suppose we have a reshape from [4,4,4] to [2,2,8,2].
+// You might explain what this does as follows.
+//
+//  - Split the first input dimension into [2,2].
+//  - Take the remaining two input dimensions, merge them into a single [16]
+//    dim, and then split that into [8,2].
+//
+// In general, a reshape can be described a sequence of smushing one or more
+// input dimensions together and then breaking them apart into one or more
+// output dimensions.  So we could represent the example above as follows.
+//
+//   [
+//     ([0], [0, 1]),  # input dim [0] -> output dims [0, 1]
+//     ([1, 2], [2, 3]),  # input dims [1, 2] -> output dims [2, 3]
+//   ]
+//
+// Notice that the input dims (first tuple elems) appear in sequential order if
+// you read left-to-right-top-to-bottom, and so do the output dims.
+//
+// This function returns the above decomposition.
+SmallVector<std::pair<SmallVector<int64_t>, SmallVector<int64_t>>>
+getReshapeDecomposition(ArrayRef<int64_t> srcShape, ArrayRef<int64_t> dstShape);
+
 bool maybeSharedAllocationOp(Operation *op);
 
 bool maybeAliasOp(Operation *op);
@@ -166,31 +191,26 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
 // ConvertLayoutOpHelper in the future
 bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout);
 
-template <typename T_OUT, typename T_IN>
-inline SmallVector<T_OUT> convertType(ArrayRef<T_IN> in) {
-  SmallVector<T_OUT> out;
-  for (const T_IN &i : in)
-    out.push_back(T_OUT(i));
+template <typename T, typename U> SmallVector<T> convertType(ArrayRef<U> in) {
+  SmallVector<T> out;
+  for (const auto &i : in)
+    out.push_back(T(i));
   return out;
+}
+template <typename T, typename VecU>
+SmallVector<T> convertType(const VecU &in) {
+  return convertType<T>(ArrayRef(in));
 }
 
 template <typename Int> Int product(llvm::ArrayRef<Int> arr) {
   return std::accumulate(arr.begin(), arr.end(), 1, std::multiplies{});
 }
-
-template <typename Int> Int ceil(Int m, Int n) { return (m + n - 1) / n; }
-
-/// output[i] = input[order[i]]
-template <typename T, typename RES_T = T>
-SmallVector<RES_T> reorder(ArrayRef<T> input, ArrayRef<unsigned> order) {
-  size_t rank = order.size();
-  assert(input.size() == rank);
-  SmallVector<RES_T> result(rank);
-  for (auto it : llvm::enumerate(order)) {
-    result[it.index()] = input[it.value()];
-  }
-  return result;
+template <typename VecT> auto product(const VecT &vec) {
+  return product(llvm::ArrayRef(vec));
 }
+
+// TODO(jlebar): Rename to ceilOfRatio.
+template <typename Int> Int ceil(Int m, Int n) { return (m + n - 1) / n; }
 
 /// Get the highest power of 2 divisor of an integer.
 template <typename T> T highestPowOf2Divisor(T n) {
@@ -372,6 +392,140 @@ std::unique_ptr<DataFlowSolver> createDataFlowSolver();
 
 triton::MakeTensorPtrOp getMakeTensorPtrOp(Value v);
 
+namespace triton {
+
+// Many functions here have two overloads, fn(ArrayRef<T>) and fn(const VecT&).
+// This is helpful because C++ won't both convert a vector to ArrayRef *and*
+// infer the proper type T in one step.  So without the second overload, we
+// would have to explicitly convert most arguments to ArrayRef at the callsite.
+
+// Better version of llvm::join.  This one works when T is an integer or any
+// other type which defines operator<<(raw_ostream).
+template <typename T> std::string join(ArrayRef<T> elems, StringRef sep) {
+  std::string ret;
+  llvm::raw_string_ostream s(ret);
+  if (elems.empty()) {
+    return ret;
+  }
+
+  s << elems[0];
+  for (int i = 1; i < elems.size(); i++) {
+    s << sep << elems[i];
+  }
+  return ret;
+}
+
+template <typename VecT> std::string join(const VecT &elems, StringRef sep) {
+  return join(ArrayRef(elems), sep);
+}
+
+template <typename T, typename U>
+SmallVector<T> applyPermutation(ArrayRef<T> vec, ArrayRef<U> permutation) {
+  static_assert(std::is_integral_v<U>);
+  assert(vec.size() == permutation.size());
+
+  // Check that `permutation` is actually a permutation.
+#ifndef NDEBUG
+  SmallVector<U> sortedPerm(permutation);
+  llvm::sort(sortedPerm);
+  for (U i = 0; i < static_cast<U>(sortedPerm.size()); i++) {
+    assert(sortedPerm[i] == i);
+  }
+#endif
+
+  SmallVector<T> ret;
+  ret.reserve(vec.size());
+  for (const U &i : permutation) {
+    ret.push_back(vec[i]);
+  }
+  return ret;
+}
+
+template <typename VecT, typename PermT>
+auto applyPermutation(const VecT &vec, const PermT &permutation) {
+  return applyPermutation(ArrayRef(vec), ArrayRef(permutation));
+}
+
+template <typename T>
+[[nodiscard]] SmallVector<T> inversePermutation(ArrayRef<T> permutation) {
+  // Check that `permutation` is actually a permutation.
+#ifndef NDEBUG
+  SmallVector<T> sortedPerm(permutation);
+  llvm::sort(sortedPerm);
+  for (int i = 0; i < sortedPerm.size(); ++i) {
+    assert(sortedPerm[i] == i);
+  }
+#endif
+
+  SmallVector<T> ret(permutation.size());
+  for (int i = 0; i < permutation.size(); ++i) {
+    ret[permutation[i]] = i;
+  }
+  return ret;
+}
+
+template <typename VecT>
+[[nodiscard]] auto inversePermutation(const VecT &permutation) {
+  return inversePermutation(ArrayRef(permutation));
+}
+
+template <typename T, typename U>
+[[nodiscard]] SmallVector<T> gather(ArrayRef<T> elems, ArrayRef<U> indices) {
+  SmallVector<T> ret;
+  ret.reserve(indices.size());
+  for (const U &i : indices) {
+    ret.push_back(elems[i]);
+  }
+  return ret;
+}
+
+template <typename VecT, typename IdxT>
+[[nodiscard]] auto gather(const VecT &elems, const IdxT &indices) {
+  return gather(ArrayRef(elems), ArrayRef(indices));
+}
+
+// Is `vec` [0, 1, ..., n]?  Returns true on empty list.
+template <typename T> bool isIota(ArrayRef<T> vec) {
+  static_assert(std::is_integral_v<T>);
+  for (T i = 0; i < vec.size(); ++i) {
+    if (vec[i] != i) {
+      return false;
+    }
+  }
+  return true;
+}
+
+template <typename VecT> bool isIota(const VecT &vec) {
+  return isIota(ArrayRef(vec));
+}
+
+// Is `vals` some permutation of the numbers 0..(vals.size()-1)?
+template <typename T> bool isPermutationOfIota(ArrayRef<T> vals) {
+  SmallVector<T> sorted(vals);
+  llvm::sort(sorted);
+  return isIota(sorted);
+}
+
+template <typename VecT> bool IsPermutationOfIota(const VecT &vec) {
+  return isPermutationOfIota(ArrayRef(vec));
+}
+
+// Is `vec` [i, i+1, ..., i+n]?  Returns true on empty list.
+template <typename T> bool isConsecutive(ArrayRef<T> vec) {
+  static_assert(std::is_integral_v<T>);
+  for (int i = 1; i < vec.size(); i++) {
+    if (vec[i] != vec[i - 1] + 1) {
+      return false;
+    }
+  }
+  return true;
+}
+
+template <typename VecT> bool isConsecutive(const VecT &vec) {
+  return isConsecutive(ArrayRef(vec));
+}
+
+} // namespace triton
 } // namespace mlir
 
 #endif // TRITON_ANALYSIS_UTILITY_H

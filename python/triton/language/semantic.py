@@ -556,11 +556,14 @@ def interleave(a: tl.tensor, b: tl.tensor, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_interleave(a.handle, b.handle), ret_type)
 
 
-def trans(input: tl.tensor, builder: ir.builder) -> tl.tensor:
-    if len(input.shape) != 2:
-        raise ValueError("Only 2D tensors can be transposed")
-    ret_type = tl.block_type(input.type.scalar, [input.shape[1], input.shape[0]])
-    return tl.tensor(builder.create_trans(input.handle), ret_type)
+def permute(input: tl.tensor, dims: Tuple[int], builder: ir.builder) -> tl.tensor:
+    if len(input.shape) != len(dims):
+        raise ValueError("permute dims must have the same length as input shape")
+    if sorted(tl._constexpr_to_value(d) for d in dims) != list(range(len(dims))):
+        raise ValueError(f"permute dims must be a permutation of 0, 1, ..., n-1, but were {dims}")
+
+    ret_type = tl.block_type(input.type.scalar, [input.shape[d] for d in dims])
+    return tl.tensor(builder.create_trans(input.handle, dims), ret_type)
 
 
 def broadcast_impl_shape(input: tl.tensor, shape: List[int], builder: ir.builder) -> tl.tensor:
@@ -1254,13 +1257,14 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
 
     assert_dtypes_valid(lhs.dtype, rhs.dtype, builder.options)
 
-    assert len(lhs.shape) == 2, f"First input shape ({lhs.shape}) is not two dimensional!"
-    assert len(rhs.shape) == 2, f"Second input shape ({rhs.shape}) is not two dimensional!"
-    assert lhs.shape[1].value == rhs.shape[
-        0].value, f"First input shape ({lhs.shape}) and second input shape {rhs.shape} are not compatible for matmul (second index of first shape ({lhs.shape[1].value}) must be equal to first index of second shape ({rhs.shape[0].value})"
-    assert lhs.shape[0].value >= 16 and lhs.shape[1].value >= 16 \
-        and rhs.shape[1].value >= 16, \
-        f"All values in both first input shape ({lhs.shape}) and second input shape ({rhs.shape}) must be >= 16!"
+    lhs_rank = len(lhs.shape)
+    rhs_rank = len(rhs.shape)
+    assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
+    assert lhs.shape[-1].value == rhs.shape[
+        -2].value, f"First input shape ({lhs.shape}) and second input shape {rhs.shape} are not compatible for matmul (second index of first shape ({lhs.shape[-1].value}) must be equal to first index of second shape ({rhs.shape[-2].value})"
+    assert lhs.shape[-2].value >= 16 and lhs.shape[-1].value >= 16 \
+        and rhs.shape[-1].value >= 16, \
+        f"All non-batch values in both first input shape ({lhs.shape}) and second input shape ({rhs.shape}) must be >= 16!"
     if lhs.type.scalar.is_int():
         assert lhs.type.scalar == tl.int8, "only int8 supported!"
         # TODO: This is CUDA specific, check if ROCm has the same limitation
@@ -1277,36 +1281,12 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
         _0 = builder.get_fp16(0) if out_dtype.is_fp16() else builder.get_fp32(0)
         ret_scalar_ty = out_dtype
 
-    M = lhs.type.shape[0]
-    N = rhs.type.shape[1]
-
-    # Cast operands of types f16 and i8 for configurations where FMA only supported.
-    # TODO: builder should contain target information
-    # if is_hip() and not mfma_supported(M, N, lhs.type.shape[1], allow_tf32, ret_scalar_ty):
-    #     ret_cast_scalar_ty = tl.float32 if lhs.type.scalar.is_int() else ret_scalar_ty
-    #     lhs = cast(lhs, ret_cast_scalar_ty, builder)
-    #     rhs = cast(rhs, ret_cast_scalar_ty, builder)
-    #     if ret_cast_scalar_ty == tl.float16:
-    #         _0 = builder.create_splat(builder.get_fp16(0), [M, N])
-    #     else:
-    #         _0 = builder.create_splat(builder.get_fp32(0), [M, N])
-    #     ret_ty = tl.block_type(ret_cast_scalar_ty, [M, N])
-    #     ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32), ret_ty)
-    #     return cast(ret, ret_scalar_ty, builder)
-    # if is_hip() and mfma_supported(M, N, lhs.type.shape[1], allow_tf32,
-    #                                ret_scalar_ty) and ret_scalar_ty.primitive_bitwidth < 32:
-    #     if lhs.type.scalar.is_int():
-    #         ret_dot_scalar_ty = tl.int32
-    #         _0 = builder.create_splat(builder.get_int32(0), [M, N])
-    #     else:
-    #         ret_dot_scalar_ty = tl.float32
-    #         _0 = builder.create_splat(builder.get_fp32(0), [M, N])
-    #     ret_ty = tl.block_type(ret_dot_scalar_ty, [M, N])
-    #     ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32), ret_ty)
-    #     return cast(ret, ret_scalar_ty, builder)
-    ret_ty = tl.block_type(ret_scalar_ty, [M, N])
+    M = lhs.type.shape[-2]
+    N = rhs.type.shape[-1]
+    B = lhs.type.shape[0] if lhs_rank == 3 else None
+    ret_ty = tl.block_type(ret_scalar_ty, [B, M, N] if B else [M, N])
     if acc is None:
-        acc_handle = builder.create_splat(_0, [M, N])
+        acc_handle = builder.create_splat(_0, [B, M, N] if B else [M, N])
     else:
         acc_handle = acc.handle
         assert acc.type == ret_ty

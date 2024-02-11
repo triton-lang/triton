@@ -1,6 +1,8 @@
 #ifndef TRITONGPU_PASSES
 #define TRITONGPU_PASSES
 
+// TODO(jlebar): These and our other passes should be in a namespace.
+
 include "mlir/Pass/PassBase.td"
 
 def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
@@ -105,19 +107,6 @@ def TritonGPURemoveLayoutConversions : Pass<"tritongpu-remove-layout-conversions
   }];
 
   let constructor = "mlir::triton::gpu::createRemoveLayoutConversionsPass()";
-
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::TritonDialect"];
-
-}
-
-def TritonGPUOptimizeEpilogue : Pass<"tritongpu-optimize-epilogue", "mlir::ModuleOp"> {
-  let summary = "Optimize epilogue: (1) Store accumulators directly without going thorough SMEM in epilogue.";
-
-  let description = [{
-  }];
-
-  let constructor = "mlir::triton::gpu::createOptimizeEpiloguePass()";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];

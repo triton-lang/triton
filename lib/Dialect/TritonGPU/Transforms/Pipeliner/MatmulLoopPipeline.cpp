@@ -1,4 +1,5 @@
 #include "PipelineExpander.h"
+#include "PipeliningUtility.h"
 #include "Schedule.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/IRMapping.h"
@@ -47,82 +48,26 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
 
   // Extract part.
   auto allocType = alloc.getType().cast<RankedTensorType>();
+  auto rank = allocType.getShape().size();
+  SmallVector<int64_t> sliceShape;
+  for (unsigned i = 1; i < rank; ++i)
+    sliceShape.push_back(allocType.getShape()[i]);
   RankedTensorType sliceType = RankedTensorType::get(
-      {allocType.getShape()[1], allocType.getShape()[2]},
-      allocType.getElementType(), allocType.getEncoding());
+      sliceShape, allocType.getElementType(), allocType.getEncoding());
+  SmallVector<OpFoldResult> sliceOffsets, sliceSizes, sliceStrides;
+  for (unsigned i = 0; i < rank; ++i) {
+    if (i == 0) {
+      sliceOffsets.push_back(extractIdx);
+      sliceSizes.push_back(int_attr(1));
+    } else {
+      sliceOffsets.push_back(int_attr(0));
+      sliceSizes.push_back(int_attr(sliceType.getShape()[i - 1]));
+    }
+    sliceStrides.push_back(int_attr(1));
+  }
   auto extract = builder.create<ttg::ExtractSliceOp>(
-      loc, sliceType, insertOp.getResult(),
-      SmallVector<OpFoldResult>{extractIdx, int_attr(0), int_attr(0)},
-      SmallVector<OpFoldResult>{int_attr(1), int_attr(sliceType.getShape()[0]),
-                                int_attr(sliceType.getShape()[1])},
-      SmallVector<OpFoldResult>{int_attr(1), int_attr(1), int_attr(1)});
-  auto newCvt = builder.create<ttg::ConvertLayoutOp>(
-      loadOp->getLoc(), loadOp.getType(), extract.getResult());
-  loadOp->replaceAllUsesWith(newCvt->getResults());
-  loadOp.erase();
-
-  // Fix up the yield op.
-  appendToYield(forOp, {insertOp});
-}
-
-static void createTMALoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
-                          Value insertIdx, Value extractIdx, Value phase) {
-  OpBuilder builder(forOp);
-  Location loc = loadOp.getLoc();
-  auto CTALayout = ttg::CTALayoutAttr::get(loadOp.getContext(),
-                                           /*CTAsPerCGA*/ {1},
-                                           /*CTASplitNum*/ {1},
-                                           /*CTAOrder*/ {0});
-  auto sharedEncoding = ttg::SharedEncodingAttr::get(loadOp.getContext(), 1, 1,
-                                                     1, {0}, CTALayout, false);
-  int64_t numBuffers = alloc.getType().cast<RankedTensorType>().getShape()[0];
-  auto mBarriersTy = RankedTensorType::get(
-      {numBuffers}, builder.getIntegerType(64), sharedEncoding);
-  // Allocate an array of mbarrier objects outside the loop.
-  Value barrierArray =
-      builder.create<ttng::AllocMBarrierOp>(loc, mBarriersTy, 1);
-  // extract the barrier and emit arriver/copy/wait/extract code sequence.
-  builder.setInsertionPoint(loadOp);
-  auto mBarTy = tt::PointerType::get(builder.getIntegerType(64), 3);
-  Value barrier = builder.create<ttng::ExtractMBarrierOp>(
-      loc, mBarTy, barrierArray, insertIdx);
-  Value zero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
-  Value threadId = builder.create<ttng::GetThreadIdOp>(loc);
-  Value pred = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                             threadId, zero);
-
-  auto loadTy = loadOp.getType().dyn_cast<RankedTensorType>();
-  auto loadShape = loadTy.getShape();
-  auto CTASplitNum = ttg::getCTASplitNum(loadTy.getEncoding());
-  auto shapePerSlice = ttg::getShapePerCTA(CTASplitNum, loadShape);
-  auto elemTy = loadTy.getElementType();
-  unsigned elems = std::accumulate(shapePerSlice.begin(), shapePerSlice.end(),
-                                   1, std::multiplies{});
-  elems *= (elemTy.getIntOrFloatBitWidth() / 8);
-  builder.create<ttng::MBarrierArriveOp>(loc, barrier, pred,
-                                         /*remoteCtaId*/ nullptr,
-                                         /*trackAsyncOp*/ false, elems);
-  auto allocType = alloc.getType().cast<RankedTensorType>();
-  auto insertOp = builder.create<ttng::InsertSliceTMAOp>(
-      loc, allocType, loadOp.getPtr(), alloc,
-      /*index*/ insertIdx, barrier, loadOp.getMask(), loadOp.getOther(),
-      loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile(),
-      /*axis*/ 0);
-
-  RankedTensorType sliceType = RankedTensorType::get(
-      {allocType.getShape()[1], allocType.getShape()[2]},
-      allocType.getElementType(), allocType.getEncoding());
-  auto extract = builder.create<mlir::triton::gpu::ExtractSliceOp>(
-      loc, sliceType, insertOp.getResult(),
-      SmallVector<OpFoldResult>{extractIdx, int_attr(0), int_attr(0)},
-      SmallVector<OpFoldResult>{int_attr(1), int_attr(sliceType.getShape()[0]),
-                                int_attr(sliceType.getShape()[1])},
-      SmallVector<OpFoldResult>{int_attr(1), int_attr(1), int_attr(1)});
-
-  Value barrierWait = builder.create<ttng::ExtractMBarrierOp>(
-      loc, mBarTy, barrierArray, extractIdx);
-  builder.create<ttng::MBarrierWaitOp>(loc, barrierWait, phase);
-
+      loc, sliceType, insertOp.getResult(), sliceOffsets, sliceSizes,
+      sliceStrides);
   auto newCvt = builder.create<ttg::ConvertLayoutOp>(
       loadOp->getLoc(), loadOp.getType(), extract.getResult());
   loadOp->replaceAllUsesWith(newCvt->getResults());
@@ -135,11 +80,7 @@ static void createTMALoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
 /// Create an async load equivalent to the given load.
 static void createAsyncLoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
                             Value insertIdx, Value extractIdx, Value phase) {
-  if (isLoadFromTensorPtr(loadOp)) {
-    createTMALoad(forOp, loadOp, alloc, insertIdx, extractIdx, phase);
-  } else {
-    createAsyncCopy(forOp, loadOp, alloc, insertIdx, extractIdx);
-  }
+  createAsyncCopy(forOp, loadOp, alloc, insertIdx, extractIdx);
 }
 
 namespace {
@@ -241,30 +182,26 @@ static void collectOpsToPipeline(scf::ForOp forOp,
   for (Operation &op : forOp) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(&op)) {
       bool candidate = false;
-      if (isLoadFromTensorPtr(loadOp)) {
-        // Map to TMA load.
-        candidate = true;
-      } else {
-        auto ptr = loadOp.getPtr();
-        unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
-        if (auto mask = loadOp.getMask())
-          vec =
-              std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
+      assert(!isLoadFromTensorPtr(loadOp) &&
+             "Block ptr should have been lowered before this pass.");
+      auto ptr = loadOp.getPtr();
+      unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
+      if (auto mask = loadOp.getMask())
+        vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
 
-        auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
-        if (!tensorTy || tensorTy.getRank() < 2)
-          continue;
-        auto ty =
-            tensorTy.getElementType().cast<tt::PointerType>().getPointeeType();
-        unsigned width = vec * ty.getIntOrFloatBitWidth();
-        // We do not pipeline all loads for the following reasons:
-        // 1. On nvidia GPUs, cp.async's cp-size can only be 4, 8 and 16.
-        // 2. It's likely that pipling small loads won't offer much performance
-        //    improvement and may even hurt performance by increasing register
-        //    pressure.
-        if (width >= 32)
-          candidate = true;
-      }
+      auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
+      if (!tensorTy || tensorTy.getRank() < 2)
+        continue;
+      auto ty =
+          tensorTy.getElementType().cast<tt::PointerType>().getPointeeType();
+      unsigned width = vec * ty.getIntOrFloatBitWidth();
+      // We do not pipeline all loads for the following reasons:
+      // 1. On nvidia GPUs, cp.async's cp-size can only be 4, 8 and 16.
+      // 2. It's likely that pipling small loads won't offer much performance
+      //    improvement and may even hurt performance by increasing register
+      //    pressure.
+      if (width >= 32)
+        candidate = true;
       if (!candidate)
         continue;
       std::optional<LoadDotOperand> loadWithDotOperand =
@@ -284,17 +221,29 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
   auto ty = loadOp.getType().cast<RankedTensorType>();
   Attribute sharedEnc;
   auto CTALayout = ttg::getCTALayout(ty.getEncoding());
+  auto blockedOrder = ttg::getOrder(ty.getEncoding());
+  SmallVector<unsigned> sharedOrder;
+  if (blockedOrder.size() == 3) {
+    for (unsigned i = 0; i < blockedOrder.size(); ++i) {
+      if (blockedOrder[i] == 0)
+        continue;
+      sharedOrder.push_back(blockedOrder[i]);
+    }
+    sharedOrder.push_back(0);
+  } else {
+    sharedOrder = blockedOrder;
+  }
+  ArrayRef<unsigned> order = sharedOrder;
   if (dotOpEnc) {
     unsigned bitWidth = ty.getElementType().getIntOrFloatBitWidth();
     // set needTrans to avoid unnecessary conversion between shared encodings.
-    sharedEnc = ttg::SharedEncodingAttr::get(
-        ty.getContext(), dotOpEnc, ty.getShape(),
-        ttg::getOrder(ty.getEncoding()), CTALayout, bitWidth, needTrans);
+    sharedEnc =
+        ttg::SharedEncodingAttr::get(ty.getContext(), dotOpEnc, ty.getShape(),
+                                     order, CTALayout, bitWidth, needTrans);
   } else {
     // MMAv3
-    sharedEnc = ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(),
-                                             ttg::getOrder(ty.getEncoding()),
-                                             CTALayout, ty.getElementType());
+    sharedEnc = ttg::SharedEncodingAttr::get(
+        ty.getContext(), ty.getShape(), order, CTALayout, ty.getElementType());
   }
   SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
   bufferShape.insert(bufferShape.begin(), distance);
@@ -324,8 +273,6 @@ static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
   SmallVector<AsyncLoad> asyncLoads;
   SmallVector<Value> allocs;
   SmallVector<Value> newOperands;
-  bool needsMbarrierPhase = false;
-  bool needsAsyncWait = false;
   for (const LoadDotOperand &loadOperand : loads) {
     tt::LoadOp loadOp = loadOperand.load;
     Value alloc = createAlloc(forOp, loadOp, loadOperand.dotOperandEncoding,
@@ -334,10 +281,6 @@ static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
     newOperands.push_back(alloc);
     allocs.push_back(alloc);
     asyncLoads.emplace_back(loadOp, alloc);
-    if (isLoadFromTensorPtr(loadOp))
-      needsMbarrierPhase = true;
-    else
-      needsAsyncWait = true;
   }
 
   OpBuilder builder(forOp);
@@ -353,10 +296,6 @@ static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
   newOperands.push_back(insertIdx);
   newOperands.push_back(extractIdx);
   Value phase;
-  if (needsMbarrierPhase) {
-    phase = builder.create<arith::ConstantIntOp>(loc, 0, 1);
-    newOperands.push_back(phase);
-  }
   unsigned newOperandIndex = forOp.getBody()->getNumArguments();
   // Patch the loop to add the new loop carried dependencies.
   scf::ForOp newForOp =
@@ -384,151 +323,17 @@ static SmallVector<Value> createAsynOps(scf::ForOp &forOp,
                                                extractIdx, numBuffersVal);
   extractIdx = builder.create<arith::SelectOp>(loc, cndExt, extractIdx, zero);
 
-  if (needsMbarrierPhase) {
-    phase = newForOp.getBody()->getArgument(newOperandIndex +
-                                            asyncLoads.size() + 2);
-    Value oneI1 = builder.create<arith::ConstantIntOp>(loc, 1, 1);
-    Value nextPhase = builder.create<arith::XOrIOp>(loc, phase, oneI1);
-    phase = builder.create<arith::SelectOp>(loc, cndExt, phase, nextPhase);
-  }
-
   bool firstLoad = true;
   for (AsyncLoad &asyncLoad : asyncLoads) {
     createAsyncLoad(forOp, asyncLoad.loadOp, asyncLoad.alloc, insertIdx,
                     extractIdx, phase);
     firstLoad = false;
   }
-  // Insert a waitOp after the first async copy. This does make the assumption
-  // that the wait will be scheduled in a different stage that all the async
-  // copy but we cannot guarantee that one wait is enough otherwise.
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    if (isa<ttg::InsertSliceAsyncOp>(op)) {
-      OpBuilder builder(op.getContext());
-      builder.setInsertionPointAfter(&op);
-      builder.create<ttg::AsyncWaitOp>(op.getLoc(), 0);
-      break;
-    }
-  }
   SmallVector<Value> newYieldOperands = {insertIdx, extractIdx};
-  if (needsMbarrierPhase)
-    newYieldOperands.push_back(phase);
   // Patch the yield with the updated counters.
   appendToYield(forOp, newYieldOperands);
 
   return allocs;
-}
-
-// Combine the current mask with the given predicate.
-static Value getPredMask(RewriterBase &rewriter, Type typeLike,
-                         Value currentMask, Value pred) {
-  Type maskType = tt::getI1SameShape(typeLike);
-  Location loc = pred.getLoc();
-  Value mask = pred;
-  if (maskType.isa<RankedTensorType>()) {
-    mask = rewriter.create<tt::SplatOp>(loc, maskType, pred);
-  }
-  if (currentMask) {
-    mask = rewriter.create<arith::AndIOp>(loc, mask, currentMask);
-  }
-  return mask;
-}
-
-// Function to mask operations during scheduling.
-static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
-                              Value pred) {
-  OpBuilder::InsertionGuard guard(rewriter);
-  if (mlir::isMemoryEffectFree(op))
-    return op;
-  if (isa<ttg::AsyncCommitGroupOp>(op))
-    return op;
-  if (isa<ttg::AsyncWaitOp>(op))
-    return op;
-  if (auto insertOp = dyn_cast<ttg::InsertSliceAsyncOp>(op)) {
-    rewriter.setInsertionPoint(insertOp);
-    Value mask = getPredMask(rewriter, insertOp.getSrc().getType(),
-                             insertOp.getMask(), pred);
-    insertOp.getMaskMutable().assign(mask);
-    return op;
-  }
-  if (auto insertOp = dyn_cast<ttng::InsertSliceTMAOp>(op)) {
-    rewriter.setInsertionPoint(insertOp);
-    Value mask = getPredMask(
-        rewriter,
-        insertOp.getSrc().getType().cast<tt::PointerType>().getPointeeType(),
-        insertOp.getMask(), pred);
-    insertOp.getMaskMutable().assign(mask);
-    return op;
-  }
-  if (auto arriveOp = dyn_cast<ttng::MBarrierArriveOp>(op)) {
-    rewriter.setInsertionPoint(arriveOp);
-    Value mask = getPredMask(rewriter, rewriter.getIntegerType(1),
-                             arriveOp.getPred(), pred);
-    arriveOp.getPredMutable().assign(mask);
-    return op;
-  }
-  if (isa<ttng::MBarrierWaitOp>(op)) {
-    return op;
-  }
-  if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-    rewriter.setInsertionPoint(loadOp);
-    Value mask = getPredMask(rewriter, loadOp.getPtr().getType(),
-                             loadOp.getMask(), pred);
-    loadOp.getMaskMutable().assign(mask);
-    return op;
-  }
-
-  assert("don't know how to predicate this op" && false);
-  return op;
-}
-
-static void setWaitNum(Operation *op,
-                       mlir::triton::PipeliningOption::PipelinerPart part,
-                       unsigned iteration, unsigned numLoadsInStage) {
-  if (auto waitOp = dyn_cast<ttg::AsyncWaitOp>(op)) {
-    waitOp.setNum(numLoadsInStage);
-  }
-}
-
-/// Helper to recursively add dependencies to the same stage.
-static void addDep(Operation *op, DenseSet<Operation *> &deps,
-                   bool includeArg = true,
-                   DenseSet<Operation *> *filter = nullptr) {
-  if (filter && filter->count(op))
-    return;
-  if (!deps.insert(op).second)
-    return;
-  for (Value operand : op->getOperands()) {
-    Value v = operand;
-    llvm::SmallDenseSet<Value> seen;
-    while (auto arg = v.dyn_cast<BlockArgument>()) {
-      if (!includeArg)
-        break;
-      if (!seen.insert(v).second)
-        break;
-      if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
-        auto yieldOp = op->getBlock()->getTerminator();
-        v = yieldOp->getOperand(arg.getArgNumber() - 1);
-        continue;
-      }
-      break;
-    }
-    Operation *defOp = v.getDefiningOp();
-    if (defOp && defOp->getBlock() == op->getBlock()) {
-      addDep(defOp, deps, includeArg, filter);
-    }
-  }
-}
-
-// Add operations to the schedule with the given stage based on the filter
-// function.
-static void addOps(scf::ForOp forOp, int stage,
-                   std::vector<std::pair<Operation *, unsigned>> &schedule,
-                   std::function<bool(Operation *)> filter) {
-  for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!filter(&op))
-      continue;
-    schedule.emplace_back(&op, stage);
-  }
 }
 
 // create the schedule for a matmul loop. This is ad hoc based on how we know
@@ -540,8 +345,7 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
   // Find the insert/extract ops that will go respectively in stage 0 and stage
   // `numStages - 2`. All the other operations will go in stage `numStages - 1`.
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (isa<ttg::InsertSliceAsyncOp, ttg::AsyncCommitGroupOp,
-            ttng::MBarrierArriveOp, ttng::InsertSliceTMAOp>(op))
+    if (isa<ttg::InsertSliceAsyncOp, ttg::AsyncCommitGroupOp>(op))
       insertOps.emplace_back(&op);
     if (prefetchExtract) {
       if (isa<ttg::ExtractSliceOp, ttg::AsyncWaitOp>(op))
@@ -550,7 +354,7 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
   }
   DenseSet<Operation *> insertAndDeps;
   for (Operation *op : insertOps) {
-    addDep(op, insertAndDeps, false);
+    tt::addDep(op, insertAndDeps, false);
   }
 
   // Find dependencies with distance of 1.
@@ -572,7 +376,7 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
   // Schedule loads with a distance of 1 in stage 0
   for (Operation *op : distanceOneUsers) {
     if (isa<tt::LoadOp>(op)) {
-      addDep(op, insertAndDeps, true);
+      tt::addDep(op, insertAndDeps, true);
     }
   }
   // For the rest of the ops we can move then into stage 1 so that they can be
@@ -580,36 +384,38 @@ createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
   DenseSet<Operation *> stage1deps;
   for (Operation *op : distanceOneUsers) {
     if (!isa<tt::LoadOp>(op)) {
-      addDep(op, stage1deps, true, &insertAndDeps);
+      tt::addDep(op, stage1deps, true, &insertAndDeps);
     }
   }
 
   DenseSet<Operation *> extractAndDeps;
   for (Operation *op : extractOps) {
-    addDep(op, extractAndDeps, true, &insertAndDeps);
+    tt::addDep(op, extractAndDeps, true, &insertAndDeps);
   }
   std::vector<std::pair<Operation *, unsigned>> schedule;
   // Schedule stage `numStage - 1` first.
-  addOps(forOp, numStages - 1, schedule, [&](Operation *op) {
+  tt::addOps(forOp, numStages - 1, schedule, [&](Operation *op) {
     return insertAndDeps.count(op) == 0 && stage1deps.count(op) == 0 &&
            extractAndDeps.count(op) == 0;
   });
 
   // Schedule some dependencies with distance of 1 into stage 1 to reduce
   // pressure.
-  addOps(forOp, 1, schedule,
-         [&](Operation *op) { return stage1deps.count(op); });
+  tt::addOps(forOp, 1, schedule,
+             [&](Operation *op) { return stage1deps.count(op); });
 
   // Then Schedule stage 0.
-  addOps(forOp, 0, schedule,
-         [&](Operation *op) { return insertAndDeps.count(op); });
+  tt::addOps(forOp, 0, schedule,
+             [&](Operation *op) { return insertAndDeps.count(op); });
 
   // Finally schedule the extract ops in stage `numStage - 2` so that they get
   // pre-fetched and play well with pretech pass.
-  addOps(forOp, numStages - 2, schedule,
-         [&](Operation *op) { return extractAndDeps.count(op); });
+  tt::addOps(forOp, numStages - 2, schedule,
+             [&](Operation *op) { return extractAndDeps.count(op); });
   return schedule;
 }
+
+constexpr static char kNeedWaitAttrName[] = "triton.pipeline.needs_wait";
 
 bool mlir::triton::preProcessLoopAndGetSchedule(
     scf::ForOp &forOp, int numStages, mlir::triton::PipeliningOption &options) {
@@ -638,15 +444,16 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
         s = std::move(schedule);
       };
   options.peelEpilogue = false;
-  options.predicateFn = predicateOp;
+  options.predicateFn = tt::predicateOp;
   options.supportDynamicLoops = true;
   unsigned numLoadsInStage = (numStages - 2) * loads.size();
-  options.annotateFn =
-      [numLoadsInStage](Operation *op,
-                        mlir::triton::PipeliningOption::PipelinerPart part,
-                        unsigned iteration) {
-        return setWaitNum(op, part, iteration, numLoadsInStage);
-      };
+  options.annotateFn = [](Operation *op,
+                          mlir::triton::PipeliningOption::PipelinerPart part,
+                          unsigned iteration) {
+    if (isa<ttg::ExtractSliceOp>(op)) {
+      op->setAttr(kNeedWaitAttrName, UnitAttr::get(op->getContext()));
+    }
+  };
 
   if (hasAsynCp) {
     // Insert a wait 0 after the loop
@@ -658,6 +465,116 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
       builder.create<ttg::DeallocTensorOp>(forOp.getLoc(), alloc);
   }
   return true;
+}
+
+/// Find the minimum number of async_commit_group ops between the extract
+/// and the insert. Wait number is the number of commits-1.
+static std::optional<int>
+minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
+  auto countCommitsBetween = [](Operation *op1, Operation *op2) {
+    int count = 0;
+    for (auto op = op1; op != op2; op = op->getNextNode()) {
+      if (isa<ttg::AsyncCommitGroupOp>(op))
+        count++;
+      // Intentionally skip block ops' children. This will give us
+      // convervatively low number of insert ops.
+    }
+    return count;
+  };
+
+  int minCommitNumber = INT_MAX;
+
+  // DFS the def chain of the extract op to find the insert op. On each path
+  // we calculate the number of async_commit. Then we select the minimum number
+  // of async_commit ops among all the paths.
+  // If the wait is not needed return std::nullopt.
+  std::function<std::optional<int>(Value, Operation *, int)> minOverHistories =
+      [&](Value val, Operation *sinkOp,
+          int thisHistorySum) -> std::optional<int> {
+    if (Operation *defOp = val.getDefiningOp()) {
+      if (isa<ttg::InsertSliceAsyncOp>(defOp)) {
+        thisHistorySum += countCommitsBetween(defOp->getNextNode(), sinkOp);
+        minCommitNumber = std::min(minCommitNumber, thisHistorySum);
+        return minCommitNumber;
+      }
+      // Failed to track, return 1 conservatively.
+      return 1;
+    }
+    if (auto arg = val.dyn_cast<BlockArgument>()) {
+      Block *block = arg.getOwner();
+      auto forOp = dyn_cast<scf::ForOp>(block->getParentOp());
+
+      // Failed to track, return 1 conservatively.
+      if (!forOp)
+        return 1;
+
+      Operation *firstForInst = &*forOp.getBody()->begin();
+      int insertsBetween = countCommitsBetween(firstForInst, sinkOp);
+      thisHistorySum += insertsBetween;
+      if (thisHistorySum >= minCommitNumber)
+        return minCommitNumber;
+
+      // get the value value assigned to the argument coming from outside the
+      // loop
+      Value incomingVal = forOp.getInitArgs()[arg.getArgNumber() - 1];
+      std::optional<int> min1 =
+          minOverHistories(incomingVal, forOp, thisHistorySum);
+      if (!min1.has_value())
+        return std::nullopt;
+
+      // get the value value assigned to the argument coming from the previous
+      // iteration
+      Operation *yieldOp = block->getTerminator();
+      Value prevVal = yieldOp->getOperand(arg.getArgNumber() - 1);
+      std::optional<int> min2 =
+          minOverHistories(prevVal, yieldOp, thisHistorySum);
+      if (!min1.has_value())
+        return std::nullopt;
+      return std::min(std::min(min1, min2).value(), minCommitNumber);
+    }
+    // Failed to track, return 1 conservatively.
+    return 1;
+  };
+
+  std::optional<int> minCommits =
+      minOverHistories(extractOp.getOperand(0), extractOp, 0);
+  if (minCommits == std::nullopt)
+    return std::nullopt;
+  if (minCommits == 0)
+    llvm::report_fatal_error("No commits between insert and extract!");
+  return minCommits.value() - 1;
+}
+
+/// Insert wait ops after the extract_slice ops.
+void mlir::triton::insertWaits(ModuleOp module) {
+  module.walk([&](ttg::ExtractSliceOp firstExtractOp) {
+    if (!firstExtractOp->hasAttr(kNeedWaitAttrName))
+      return;
+
+    Operation *extractOp = firstExtractOp;
+    ttg::ExtractSliceOp lastExtractOp = firstExtractOp;
+
+    // If there is no meaningful work between the extracts, don't insert
+    // multiple waits. Insert just one wait per group of extracts.
+    std::optional<int> minWaitNumber = std::nullopt;
+    while (extractOp) {
+      lastExtractOp = cast<ttg::ExtractSliceOp>(extractOp);
+      std::optional<int> currMin = minWaitNumberForExtract(lastExtractOp);
+      if (currMin.has_value())
+        minWaitNumber =
+            std::min(minWaitNumber.value_or(INT_MAX), currMin.value());
+
+      extractOp->removeAttr(kNeedWaitAttrName);
+      extractOp = dyn_cast<ttg::ExtractSliceOp>(extractOp->getNextNode());
+    }
+
+    if (!minWaitNumber.has_value())
+      return; // Wait is not needed.
+    OpBuilder builder(lastExtractOp);
+    builder.setInsertionPointAfter(lastExtractOp);
+    builder.create<ttg::AsyncWaitOp>(lastExtractOp.getLoc(),
+                                     minWaitNumber.value());
+  });
 }
 
 /// MMA V3 post-processing.

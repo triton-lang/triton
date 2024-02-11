@@ -2,7 +2,6 @@
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -18,15 +17,16 @@ using ::AMD::TritonGPUToLLVMTypeConverter;
 using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
 using ::AMD::ConvertTritonGPUOpToLLVMPattern;
 
+namespace AMD{
 namespace {
 struct ReduceOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::ReduceOp> {
+    : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp> {
 public:
   ReduceOpConversion(
       TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
       ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
       int computeCapability, PatternBenefit benefit)
-      : ConvertTritonGPUOpToLLVMPattern<triton::ReduceOp>(
+      : ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp>(
             typeConverter, allocation, indexCacheInfo, benefit),
         computeCapability(computeCapability) {}
 
@@ -58,7 +58,7 @@ public:
     auto smemShape = helper.getScratchConfig();
 
     SmallVector<Value> smemBases =
-        getSmemBases(helper, op, smemShape, rewriter);
+        getSmemBases(op, product<unsigned>(smemShape), rewriter);
 
     storeWarpReduceToSharedMemory(helper, accs, indices, smemBases, rewriter);
 
@@ -126,8 +126,7 @@ private:
     unsigned srcElems = getTotalElemsPerThread(types[0]);
     SmallVector<SmallVector<Value>> srcValues(srcElems);
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      auto values = getTypeConverter()->unpackLLElements(loc, operands[i],
-                                                         rewriter, types[i]);
+      auto values = getTypeConverter()->unpackLLElements(loc, operands[i], rewriter);
 
       assert(values.size() == srcValues.size());
       for (unsigned j = 0; j < srcValues.size(); ++j) {
@@ -137,45 +136,9 @@ private:
     return srcValues;
   }
 
-  SmallVector<Value> getSmemBases(ReduceOpHelper &helper, triton::ReduceOp op,
-                                  SmallVector<unsigned> smemShape,
-                                  ConversionPatternRewriter &rewriter) const {
-    auto loc = op.getLoc();
-    unsigned elems = product<unsigned>(smemShape);
-    // indices will store the index of the op operands in descending order
-    // of their bitwidths
-    std::vector<unsigned> indices(op.getNumOperands());
-    std::iota(indices.begin(), indices.end(), 0);
-    std::sort(indices.begin(), indices.end(), [&](unsigned i, unsigned j) {
-      return op.getElementTypes()[i].getIntOrFloatBitWidth() >
-             op.getElementTypes()[j].getIntOrFloatBitWidth();
-    });
-    // Assign base index to each operand in their order in indices
-    std::map<unsigned, Value> indexToBase;
-    indexToBase[indices[0]] =
-        getSharedMemoryBase(loc, rewriter, op.getOperation());
-    for (unsigned i = 1; i < op.getNumOperands(); ++i) {
-      indexToBase[indices[i]] = gep(
-          ptr_ty(rewriter.getContext(), 3), getElementType(op, indices[i - 1]),
-          indexToBase[indices[i - 1]], i32_val(elems));
-    }
-    // smemBases[k] is the base pointer for the k-th operand
-    SmallVector<Value> smemBases(op.getNumOperands());
-    for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      smemBases[i] = indexToBase[i];
-    }
-    return smemBases;
-  }
-
   void sync(ConversionPatternRewriter &rewriter, Location loc,
             triton::ReduceOp op) const {
-    // TODO[shuhaoj]: change hard code style of numThreads. Hide async_agent
-    // attr.
-    if (getWSAgentId(op)) {
-      barSync(rewriter, op, getAgentIds(op).front(), 128);
-    } else {
-      barrier();
-    }
+    barrier();
   }
 
   // Check if the reduction can use a redux op and return the kind.
@@ -355,12 +318,6 @@ private:
         results[i] = accs.begin()->second[i];
     }
     rewriter.replaceOp(op, results);
-  }
-
-  // Return the pointee type of the shared memory pointer for operand i.
-  Type getElementType(triton::ReduceOp op, int i) const {
-    auto ty = op.getInputTypes()[i].getElementType();
-    return getTypeConverter()->convertType(ty);
   }
 
   SmallVector<Value>
@@ -548,7 +505,6 @@ private:
 };
 }
 
-namespace AMD{
 void populateReduceOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,

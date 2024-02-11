@@ -34,7 +34,7 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=4, num_stages=2, enable_warp_specialization=True),
+        triton.Config({}, num_warps=4, num_stages=2),
     ],
     key=['Q', 'K', 'V'],
 )

@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from enum import Enum
 from functools import partial, wraps
 from typing import Union, Callable, List, Sequence, TypeVar, cast
+import builtins
 
 from .._C.libtriton import ir
 from . import semantic
@@ -941,12 +942,28 @@ def broadcast_to(input, shape, _builder=None):
 @builtin
 def trans(input, _builder=None):
     """
-    Returns a transposed tensor.
+    Transposes a 2D tensor.
 
     :param input: The input tensor.
     :type input:
     """
-    return semantic.trans(input, _builder)
+    if len(input.shape) != 2:
+        raise ValueError("Only 2D tensors can be transposed")
+    return semantic.permute(input, (1, 0), _builder)
+
+
+@builtin
+def permute(input, dims, _builder=None):
+    """
+    Permutes the dimensions of a tensor.
+
+    :param input: The input tensor.
+    :type input:
+    :param dims: The desired ordering of dimensions.  For example,
+        :code:`(2, 1, 0)` reverses the order dims in a a 3D tensor.
+    :type dims: Tuple[int]
+    """
+    return semantic.permute(input, dims, _builder)
 
 
 @builtin
@@ -1526,7 +1543,7 @@ def reduce(input, axis, combine_fn, keep_dims=False, _builder=None, _generator=N
             _builder.create_reduce_ret(*handles)
 
     def expand_ndims(t, ndims):
-        for _ in range(ndims):
+        for _ in builtins.range(ndims):
             t = expand_dims(t, 0, _builder=_builder)
         return t
 
@@ -1561,7 +1578,7 @@ def _reduce_with_indices(input, axis, combine_fn, keep_dims=False, _builder=None
 
     if len(input.shape) > 1:
         # Broadcast index across the non-reduced axes
-        axes_to_expand = [constexpr(d) for d in range(len(input.shape))]
+        axes_to_expand = [constexpr(d) for d in builtins.range(len(input.shape))]
         del axes_to_expand[axis]
         index = expand_dims(index, axes_to_expand, _builder=_builder)
         index = broadcast_to(index, input.shape, _builder=_builder)
@@ -1986,6 +2003,45 @@ class static_range:
         raise RuntimeError("static_range can only be used in @triton.jit'd functions")
 
 
+class range:
+    """
+    Iterator that counts upward forever.
+
+    .. highlight:: python
+    .. code-block:: python
+
+        @triton.jit
+        def kernel(...):
+            for i in tl.range(10, num_stages=3):
+                ...
+    :note: This is a special iterator used to implement similar semantics to Python's :code:`range` in the context of
+        :code:`triton.jit` functions. In addition, it allows user to pass extra attributes to the compiler.
+    :param arg1: the start value.
+    :param arg2: the end value.
+    :param step: the step value.
+    :param num_warps: the num_warps used by pipeliner value.
+    """
+
+    def __init__(self, arg1, arg2=None, step=None, num_stages=None):
+        if step is None:
+            self.step = constexpr(1)
+        else:
+            self.step = step
+        if arg2 is None:
+            self.start = constexpr(0)
+            self.end = arg1
+        else:
+            self.start = arg1
+            self.end = arg2
+        self.num_stages = num_stages
+
+    def __iter__(self):
+        raise RuntimeError("tl.range can only be used in @triton.jit'd functions")
+
+    def __next__(self):
+        raise RuntimeError("tl.range can only be used in @triton.jit'd functions")
+
+
 # -----------------------
 # Extern functions
 # -----------------------
@@ -2034,6 +2090,7 @@ def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dic
         return tensor(func(lib_name, lib_path, symbol, arg_list, ret_type.to_ir(_builder), is_pure), ret_type)
 
 
+@builtin
 def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, is_pure: bool,
                        _builder=None):
     '''
@@ -2050,7 +2107,7 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
     all_scalar = True
     ret_shape = None
     arg_types = []
-    for i in range(len(dispatch_args)):
+    for i in builtins.range(len(dispatch_args)):
         dispatch_args[i] = _to_tensor(dispatch_args[i], _builder)
         arg_types.append(dispatch_args[i].dtype)
         if dispatch_args[i].type.is_block():
@@ -2067,7 +2124,7 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
             _, broadcast_arg = semantic.binary_op_type_checking_impl(item, broadcast_arg, _builder,
                                                                      arithmetic_check=arithmetic_check)
         # Change the shape of each argument based on the broadcast shape
-        for i in range(len(dispatch_args)):
+        for i in builtins.range(len(dispatch_args)):
             dispatch_args[i], _ = semantic.binary_op_type_checking_impl(dispatch_args[i], broadcast_arg, _builder,
                                                                         arithmetic_check=arithmetic_check)
         if not all_scalar:

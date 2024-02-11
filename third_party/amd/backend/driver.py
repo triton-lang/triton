@@ -97,9 +97,8 @@ def make_launcher(constants, signature, ids):
     format = "iiiiiiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
 
     # generate glue code
-    folded_without_constexprs = [c for c in ids['ids_of_folded_args'] if c not in ids['ids_of_const_exprs']]
     params = [
-        i for i in signature.keys() if i >= start_desc or (i not in constants and i not in folded_without_constexprs)
+        i for i in signature.keys() if i not in constants
     ]
     src = f"""
 #define __HIP_PLATFORM_AMD__
@@ -245,7 +244,6 @@ class HIPLauncher(object):
     
     def __init__(self, src, metadata):
         ids = {
-            "ids_of_folded_args": metadata.ids_of_folded_args,
             "ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()
         }
         constants = src.constants if hasattr(src, "constants") else dict()

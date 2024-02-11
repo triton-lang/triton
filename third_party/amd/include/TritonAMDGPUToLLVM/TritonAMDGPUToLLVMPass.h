@@ -1,7 +1,6 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_PASS_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_PASS_H
 
-#include "triton/Target/PTX/TmaMetadata.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Transforms/DialectConversion.h"
 
