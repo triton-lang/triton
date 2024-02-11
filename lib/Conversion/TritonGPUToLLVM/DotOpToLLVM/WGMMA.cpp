@@ -431,14 +431,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                                               : triton::nvgpu::WGMMALayout::col;
 
   auto func = op->getParentOfType<LLVM::LLVMFuncOp>();
-  int numTMADescs =
-      func->getAttr(kAttrNumTMALoadDescsName).cast<IntegerAttr>().getInt();
-  Operation *startSequence = nullptr;
-  if (numTMADescs == 0)
-    startSequence = rewriter.create<triton::nvgpu::FenceAsyncSharedOp>(loc, 0);
-  Operation *fenceOp = rewriter.create<triton::nvgpu::WGMMAFenceOp>(loc);
-  if (startSequence == nullptr)
-    startSequence = fenceOp;
+  Operation *startSequence = rewriter.create<triton::nvgpu::WGMMAFenceOp>(loc);
   // WGMMA fp8 -> fp32 accumulates in lower precision than fp32.
   bool needsPartialAccumulator = isFP8(eltTypeA) &&
                                  eltTypeC == triton::nvgpu::WGMMAEltType::f32 &&

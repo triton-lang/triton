@@ -208,7 +208,7 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
       ```
   }];
 
-  let arguments = (ins TT_PtrLike:$src, TT_Tensor:$dst, I32:$index,
+  let arguments = (ins TT_PtrTensor:$src, TT_Tensor:$dst, I32:$index,
                        Optional<I1Tensor>:$mask, Optional<TT_Type>:$other,
                        TT_CacheModifierAttr:$cache, TT_EvictionPolicyAttr:$evict,
                        BoolAttr:$isVolatile, I32Attr:$axis);

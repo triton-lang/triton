@@ -198,22 +198,6 @@ struct ReshapeOpConversion : public ConvertOpToLLVMPattern<ReshapeOp> {
     }
     auto resultTy = op.getType().template cast<RankedTensorType>();
     auto srcTy = op.getSrc().getType().template cast<RankedTensorType>();
-    if (!op.getAllowReorder()) {
-      auto mod = op->getParentOfType<ModuleOp>();
-      int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-      int threadsPerWarp =
-          triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-      int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
-      if (srcTy.getEncoding() != triton::gpu::getDefaultBlockedEncoding(
-                                     op.getContext(), srcTy.getShape(),
-                                     numWarps, threadsPerWarp, numCTAs) ||
-          resultTy.getEncoding() != triton::gpu::getDefaultBlockedEncoding(
-                                        op.getContext(), resultTy.getShape(),
-                                        numWarps, threadsPerWarp, numCTAs)) {
-        return emitOptionalError(loc, "ReshapeOp lowering only supports the "
-                                      "default block encoding right now.");
-      }
-    }
 
     auto typeConverter = getTypeConverter();
     auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);

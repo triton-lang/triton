@@ -23,12 +23,6 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 const ArrayRef<int64_t> &shape,
                                                 RankedTensorType type);
 
-/// Returns true if the Load is for TMA
-bool isLoadFromTensorPtr(triton::LoadOp op);
-
-/// Returns true if the store is for TMA
-bool isStoreToTensorPtr(triton::StoreOp op);
-
 /// Return the first consumer of v
 Operation *getFirstUser(Value v);
 

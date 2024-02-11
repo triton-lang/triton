@@ -43,25 +43,6 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     insertOp.getMaskMutable().assign(mask);
     return op;
   }
-  if (auto insertOp = dyn_cast<ttng::InsertSliceTMAOp>(op)) {
-    rewriter.setInsertionPoint(insertOp);
-    Value mask = getPredMask(
-        rewriter,
-        insertOp.getSrc().getType().cast<tt::PointerType>().getPointeeType(),
-        insertOp.getMask(), pred);
-    insertOp.getMaskMutable().assign(mask);
-    return op;
-  }
-  if (auto arriveOp = dyn_cast<ttng::MBarrierArriveOp>(op)) {
-    rewriter.setInsertionPoint(arriveOp);
-    Value mask = getPredMask(rewriter, rewriter.getIntegerType(1),
-                             arriveOp.getPred(), pred);
-    arriveOp.getPredMutable().assign(mask);
-    return op;
-  }
-  if (isa<ttng::MBarrierWaitOp>(op)) {
-    return op;
-  }
   if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
     rewriter.setInsertionPoint(loadOp);
     Value mask = getPredMask(rewriter, loadOp.getPtr().getType(),

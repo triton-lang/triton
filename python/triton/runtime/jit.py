@@ -124,12 +124,13 @@ class KernelArg:
         annotation = self.param.annotation
         if "Tensor" in annotation:
             return self.value.dtype
-        elif annotation == "bool":
-            return "i1"
-        elif annotation == "float":
-            return "fp32"
-        else:
-            return JITFunction._key_of(self.value)
+        for ty1, ty2 in [("uint", 'u'), ("int", 'i')]:
+            width = annotation[annotation.find(ty1) + len(ty1):]
+            if width and ty1 in annotation:
+                return f"{ty2}{width}"
+        if annotation == "bool":
+            return "u1"
+        return JITFunction._key_of(self.value)
 
     def specialization_key(self):
         assert not self.param.do_not_specialize
@@ -236,10 +237,7 @@ class JITFunction(KernelInterface[T]):
         }
         # folded equal_to_1 and None
         # TODO: method to collect all folded args
-        none_args = {param.num for param, arg in zip(self.params, args) if arg is None and not param.do_not_specialize}
-        ids_of_folded_args = equal_to_1 | none_args
-        return AttrsDescriptor(tuple(divisible_by_16), tuple(equal_to_1), tuple(ids_of_folded_args),
-                               tuple(divisible_by_8))
+        return AttrsDescriptor(tuple(divisible_by_16), tuple(equal_to_1), tuple(divisible_by_8))
         # return _triton.code_gen.instance_descriptor(divisible_by_16,
         # equal_to_1)
 
@@ -288,7 +286,6 @@ class JITFunction(KernelInterface[T]):
         num_warps,
         num_ctas,
         num_stages,
-        enable_warp_specialization,
         enable_fp_fusion,
         extern_libs,
         configs,
@@ -299,7 +296,7 @@ class JITFunction(KernelInterface[T]):
         name = self.fn.__name__
         module = self.fn.__module__
         arg_reprs = ", ".join([f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])])
-        repr = f"{name}[num_warps={num_warps}, num_ctas={num_ctas}, num_stages={num_stages}, enable_warp_specialization={enable_warp_specialization}, enable_fp_fusion={enable_fp_fusion}]({arg_reprs})"
+        repr = f"{name}[num_warps={num_warps}, num_ctas={num_ctas}, num_stages={num_stages}, enable_fp_fusion={enable_fp_fusion}]({arg_reprs})"
         key = str(key)
 
         class LegacyCompiler:
@@ -316,7 +313,6 @@ class JITFunction(KernelInterface[T]):
             num_warps=num_warps,
             num_ctas=num_ctas,
             num_stages=num_stages,
-            enable_warp_specialization=enable_warp_specialization,
             enable_fp_fusion=enable_fp_fusion,
             extern_libs=extern_libs,
             configs=configs,
@@ -380,14 +376,13 @@ class JITFunction(KernelInterface[T]):
 
             # Build kernel signature -- doesn't include constexpr arguments.
             signature = {
-                arg.param.num: self._type_of(self._key_of(arg.value))
+                arg.param.num: self._type_of(arg.signature_key())
                 for arg in args
                 if not arg.param.is_constexpr
             }
 
             if self._call_hook(key, signature, device, constants, options.num_warps, options.num_ctas,
-                               options.num_stages, options.enable_warp_specialization, options.enable_fp_fusion,
-                               options.extern_libs, configs):
+                               options.num_stages, options.enable_fp_fusion, options.extern_libs, configs):
                 return None
             # compile the kernel
             src = ASTSource(self, signature, constants, configs[0])
@@ -406,8 +401,7 @@ class JITFunction(KernelInterface[T]):
                        metadata.num_ctas,  # number of warps/ctas per instance
                        metadata.cluster_dims[0], metadata.cluster_dims[1], metadata.cluster_dims[2],  # cluster
                        metadata.shared, stream, kernel.function, CompiledKernel.launch_enter_hook,
-                       CompiledKernel.launch_exit_hook, metadata,
-                       *driver.active.assemble_tensormap_to_arg(metadata.tensormaps_info, args))
+                       CompiledKernel.launch_exit_hook, metadata, *args)
         return kernel
 
     def __init__(self, fn, version=None, do_not_specialize=None, debug=None, noinline=None):

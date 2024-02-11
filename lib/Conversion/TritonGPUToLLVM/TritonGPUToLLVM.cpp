@@ -63,30 +63,6 @@ public:
   }
 };
 
-class FoldSplatMaskInInsertAsync : public mlir::RewritePattern {
-
-public:
-  FoldSplatMaskInInsertAsync(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            triton::nvidia_gpu::InsertSliceTMAOp::getOperationName(), 1,
-            context) {}
-
-  LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto insertOp = cast<triton::nvidia_gpu::InsertSliceTMAOp>(op);
-    if (!insertOp.getMask())
-      return failure();
-    auto splatOp = insertOp.getMask().getDefiningOp<triton::SplatOp>();
-    if (!splatOp)
-      return failure();
-    rewriter.modifyOpInPlace(insertOp, [&]() {
-      insertOp.getMaskMutable().assign(splatOp->getOperand(0));
-    });
-    return mlir::success();
-  }
-};
-
 /// FuncOp legalization pattern that converts MemRef arguments to pointers to
 /// MemRef descriptors (LLVM struct data types) containing all the MemRef type
 /// information.
@@ -208,10 +184,8 @@ struct ConvertTritonGPUToLLVM
                     NVVM::NVVMDialect>();
   }
 
-  ConvertTritonGPUToLLVM(int32_t computeCapability, Target target,
-                         mlir::triton::gpu::TMAMetadataTy *tmaMetadata)
-      : ConvertTritonGPUToLLVMBase({computeCapability, target}),
-        tmaMetadata(tmaMetadata) {}
+  ConvertTritonGPUToLLVM(int32_t computeCapability, Target target)
+      : ConvertTritonGPUToLLVMBase({computeCapability, target}) {}
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -225,51 +199,10 @@ struct ConvertTritonGPUToLLVM
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
-    // Hack: WSMaterialization may have changed the effective number of warps,
-    // in a way that isn't reflected in triton_gpu.num-warps.  If so, we have to
-    // respect that here.
-    if (Attribute attr = mod->getAttr("triton_gpu.num-warp-groups-per-cta")) {
-      numWarps *= attr.cast<IntegerAttr>().getInt();
-    }
-
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
     ModuleMembarAnalysis membarPass(&allocation);
     membarPass.run();
-
-    /* Get tensorPtrMap before conversion */
-    TensorPtrMapT tensorPtrMap;
-    mod.walk(
-        [&tensorPtrMap](mlir::triton::nvidia_gpu::InsertSliceTMAOp insertOp) {
-          auto src = insertOp.getSrc();
-          auto ptrTy = src.getType().dyn_cast<triton::PointerType>();
-          if (ptrTy && ptrTy.getPointeeType().isa<RankedTensorType>()) {
-            auto makeTensorPtrOp = getMakeTensorPtrOp(insertOp.getSrc());
-            tensorPtrMap[insertOp.getOperation()] = makeTensorPtrOp;
-          }
-        });
-
-    mod.walk(
-        [&tensorPtrMap](mlir::triton::nvidia_gpu::StoreAsyncTMAOp storeOp) {
-          auto dst = storeOp.getDst();
-          auto ptrTy = dst.getType().dyn_cast<triton::PointerType>();
-          if (ptrTy && ptrTy.getPointeeType().isa<RankedTensorType>()) {
-            auto makeTensorPtrOp = getMakeTensorPtrOp(storeOp.getDst());
-            tensorPtrMap[storeOp.getOperation()] = makeTensorPtrOp;
-          }
-        });
-
-    // Hack: cleanup
-    {
-      RewritePatternSet patterns(context);
-      patterns.add<FoldSplatMaskInInsertAsync>(context);
-      SmallVector<Operation *> insertSlices;
-      mod.walk([&insertSlices](triton::nvidia_gpu::InsertSliceTMAOp op) {
-        insertSlices.push_back(op);
-      });
-      if (applyOpPatternsAndFold(insertSlices, std::move(patterns)).failed())
-        signalPassFailure();
-    }
 
     // Lower functions
     {
@@ -291,21 +224,7 @@ struct ConvertTritonGPUToLLVM
     // function
     initSharedMemory(typeConverter);
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
-
-    // Emit logics to get threadId/blockIds/linearized clusterCTAId etc. and
-    // cache the values. The reason to do it here is that cluster_ctaid is
-    // currently implemented via inline asm, and thus cannot be CSEed.
-    // clusterCTAId will be emitted only when numCTAs is larger than 1, and
-    // other values will be DCEed if not used hereafter.
-    bool isWarpSpecialization =
-        ttng::TritonNvidiaGPUDialect::getWSSupportedAttr(mod);
     OpBuilder::InsertPoint indexInsertPoint;
-
-    // tmaMetadata is absent in a triton-opt unit test, in this case, create a
-    // local one and dump it after this pass is done.
-    mlir::triton::gpu::TMAMetadataTy tmaMetaDataDebug;
-    if (tmaMetadata == nullptr)
-      tmaMetadata = &tmaMetaDataDebug;
 
     RewritePatternSet patterns(context);
     int benefit = 10;
@@ -314,7 +233,7 @@ struct ConvertTritonGPUToLLVM
     populateElementwiseOpToLLVMPatterns(
         typeConverter, patterns, axisInfoAnalysis, computeCapability, benefit);
     populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,
-                                      tmaMetadata, &tensorPtrMap, benefit);
+                                      benefit);
     populateReduceOpToLLVMPatterns(typeConverter, patterns, computeCapability,
                                    benefit);
     populateScanOpToLLVMPatterns(typeConverter, patterns, benefit);
@@ -322,7 +241,6 @@ struct ConvertTritonGPUToLLVM
     populateBarrierOpToLLVMPatterns(typeConverter, patterns, benefit);
     populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns, benefit);
     populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit);
-    populateRegReallocOpToLLVMPatterns(typeConverter, patterns, benefit);
     populateHistogramOpToLLVMPatterns(typeConverter, patterns, benefit);
     populatePrintOpToLLVMPattern(typeConverter, patterns, benefit);
     populateAssertOpToLLVMPattern(typeConverter, patterns, benefit);
@@ -352,8 +270,6 @@ struct ConvertTritonGPUToLLVM
   }
 
 private:
-  mlir::triton::gpu::TMAMetadataTy *tmaMetadata = nullptr;
-
   void initSharedMemory(LLVMTypeConverter &typeConverter) {
     ModuleOp mod = getOperation();
     OpBuilder b(mod.getBodyRegion());
@@ -390,11 +306,9 @@ namespace triton {
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass() {
   return std::make_unique<ConvertTritonGPUToLLVM>();
 }
-std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass(
-    int32_t computeCapability, Target target,
-    mlir::triton::gpu::TMAMetadataTy *tmaMetadata) {
-  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability, target,
-                                                  tmaMetadata);
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertTritonGPUToLLVMPass(int32_t computeCapability, Target target) {
+  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability, target);
 }
 
 } // namespace triton

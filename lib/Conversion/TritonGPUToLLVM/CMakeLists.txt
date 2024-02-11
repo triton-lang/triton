@@ -27,7 +27,6 @@ add_triton_library(TritonGPUToLLVM
     ViewOpToLLVM.cpp
     TensorPtrOpsToLLVM.cpp
     ClusterOpsToLLVM.cpp
-    RegReallocOpToLLVM.cpp
     PTXAsmFormat.cpp
     AllocateSharedMemory.cpp
 

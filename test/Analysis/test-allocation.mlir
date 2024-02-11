@@ -253,27 +253,6 @@ tt.func @dealloc(%A : !tt.ptr<f16>) {
   // CHECK-NEXT: size = 2048
 }
 
-// mbarrier's shared memory cannot be reused
-// CHECK-LABEL: alloc_m_barrier
-tt.func @alloc_m_barrier() {
-  // CHECK: offset = 0, size = 16
-  %mbar0 = triton_nvidia_gpu.alloc_mbarrier { count = 128 : i32 } : tensor<2xi64, #A_SHARED>
-  // CHECK-NEXT: offset = 16, size = 16
-  %mbar1 = triton_nvidia_gpu.alloc_mbarrier { count = 128 : i32 } : tensor<2xi64, #A_SHARED>
-  // CHECK-NEXT: size = 32
-  tt.return
-}
-
-// CHECK-LABEL: alloc_m_barrier_scalar
-tt.func @alloc_m_barrier_scalar() {
-  // CHECK: offset = 0, size = 8
-  %mbar0 = triton_nvidia_gpu.alloc_mbarrier { count = 128 : i32 } : !tt.ptr<i64, 3>
-  // CHECK-NEXT: offset = 8, size = 8
-  %mbar1 = triton_nvidia_gpu.alloc_mbarrier { count = 128 : i32 } : !tt.ptr<i64, 3>
-  // CHECK-NEXT: size = 16
-  tt.return
-}
-
 // CHECK-LABEL: scratch
 tt.func @scratch() {
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>

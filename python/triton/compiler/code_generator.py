@@ -1075,7 +1075,7 @@ class CodeGenerator(ast.NodeVisitor):
         lhs = self.visit(node.value)
         if _is_triton_tensor(lhs):
             if node.attr == "T":
-                return language.semantic.trans(lhs, builder=self.builder)
+                return language.semantic.permute(lhs, (1, 0), builder=self.builder)
         return getattr(lhs, node.attr)
 
     def visit_Expr(self, node):
@@ -1177,6 +1177,7 @@ def str_to_ty(name):
         "i16": language.int16,
         "i32": language.int32,
         "i64": language.int64,
+        "u1": language.int1,
         "u8": language.uint8,
         "u16": language.uint16,
         "u32": language.uint32,

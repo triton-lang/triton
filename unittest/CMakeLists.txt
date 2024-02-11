@@ -20,7 +20,10 @@ function(add_triton_ut)
           gmock
           ${__LIBS})
 
-  gtest_discover_tests(${__NAME})
+  # Without the TEST_DISCOVERY_TIMEOUT, the tests randomly time out on my mac
+  # laptop.  I think the issue may be that the very first time you run a program
+  # it's a bit slow.
+  gtest_discover_tests(${__NAME} PROPERTIES TEST_DISCOVERY_TIMEOUT 60)
 endfunction()
 
 add_subdirectory(Analysis)

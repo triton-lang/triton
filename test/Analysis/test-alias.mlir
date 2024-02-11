@@ -77,20 +77,6 @@ tt.func @insert_slice_async(%A : !tt.ptr<f16>, %i1 : i1) {
   tt.return
 }
 
-// CHECK-LABEL: insert_slice_tma
-tt.func @insert_slice_tma(%A : !tt.ptr<f16>, %i1 : i1) {
-  %mbar = triton_nvidia_gpu.alloc_mbarrier { count = 128 : i32 } : !tt.ptr<i64, 3>
-  %a_ptr = tt.splat %A : (!tt.ptr<f16>) -> tensor<16x16x!tt.ptr<f16>, #AL>
-  %mask = tt.splat %i1 : (i1) -> tensor<16x16xi1, #AL>
-  %other = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
-  // CHECK: %cst_0 -> %cst_0
-  %tensor = arith.constant dense<0.000000e+00> : tensor<1x16x16xf16, #A_SHARED>
-  %index = arith.constant 0 : i32
-  // CHECK: %3 -> %cst_0
-  %a = triton_nvidia_gpu.insert_slice_tma %a_ptr, %tensor, %index, %mbar, %mask, %other {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operand_segment_sizes = array<i32: 1, 1, 1, 1, 1, 1>} : tensor<16x16x!tt.ptr<f16>, #AL>, tensor<1x16x16xf16, #A_SHARED>, i32, !tt.ptr<i64, 3>, tensor<16x16xi1, #AL>, tensor<16x16xf16, #AL> -> tensor<1x16x16xf16, #A_SHARED>
-  tt.return
-}
-
 // CHECK-LABEL: insert_slice
 tt.func @insert_slice(%A : !tt.ptr<f16>, %i1 : i1) {
   %a_ptr = tt.splat %A : (!tt.ptr<f16>) -> tensor<16x16x!tt.ptr<f16>, #AL>
@@ -112,16 +98,6 @@ tt.func @extract_slice(%A : !tt.ptr<f16>) {
   %index = arith.constant 0 : i32
   // CHECK-NEXT: %0 -> %cst
   %cst1 = triton_gpu.extract_slice %cst0[%index, 0, 0][1, 16, 16][1, 1, 1] : tensor<1x16x16xf16, #A_SHARED> to tensor<16x16xf16, #A_SHARED>
-  tt.return
-}
-
-// CHECK-LABEL: extract_m_barrier
-tt.func @extract_m_barrier() {
-  // CHECK: %0 -> %0
-  %mbar = triton_nvidia_gpu.alloc_mbarrier { count = 128 : i32 } : tensor<2xi64, #A_SHARED>
-  %c0 = arith.constant 0 : i32
-  // CHECK: %1 -> %0
-  %mbar0 = triton_nvidia_gpu.extract_mbarrier %mbar[%c0] : tensor<2xi64, #A_SHARED>, i32 -> !tt.ptr<i64, 3>
   tt.return
 }
 
