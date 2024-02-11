@@ -404,7 +404,7 @@ mlir::LogicalResult mlir::triton::TransOp::inferReturnTypes(
 
 LogicalResult triton::TransOp::verify() {
   // Check that the op's `order` attribute is a permutation of the right length.
-  auto srcTy = getSrc().getType().cast<RankedTensorType>();
+  auto srcTy = getSrc().getType();
 
   ArrayRef<int32_t> order = getOrder();
   if (order.size() != srcTy.getRank()) {
@@ -449,8 +449,8 @@ mlir::LogicalResult mlir::triton::DotOp::inferReturnTypes(
 }
 
 LogicalResult mlir::triton::DotOp::verify() {
-  auto aTy = getOperand(0).getType().cast<RankedTensorType>();
-  auto bTy = getOperand(1).getType().cast<RankedTensorType>();
+  auto aTy = getA().getType();
+  auto bTy = getB().getType();
   if (aTy.getElementType().getIntOrFloatBitWidth() !=
       bTy.getElementType().getIntOrFloatBitWidth())
     return emitError(
@@ -857,8 +857,8 @@ OpFoldResult ReshapeOp::fold(FoldAdaptor adaptor) {
 }
 
 mlir::LogicalResult mlir::triton::ReshapeOp::verify() {
-  auto dstTy = getType().cast<RankedTensorType>();
-  auto srcTy = getSrc().getType().cast<RankedTensorType>();
+  auto dstTy = getType();
+  auto srcTy = getSrc().getType();
   if (dstTy.getNumElements() != srcTy.getNumElements()) {
     return emitError(
         "number of src and dst elements of reshape must be the same");

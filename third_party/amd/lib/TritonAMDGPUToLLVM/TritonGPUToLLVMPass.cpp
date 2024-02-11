@@ -565,10 +565,9 @@ private:
       if (!getElementTypeOrSelf(cvtOp)
                .isa<mlir::Float8E4M3B11FNUZType, mlir::Float8E4M3FNType>())
         return;
-      auto shape = cvtOp.getType().cast<RankedTensorType>().getShape();
-      auto argEncoding =
-          cvtOp.getOperand().getType().cast<RankedTensorType>().getEncoding();
-      auto cvtEncoding = cvtOp.getType().cast<RankedTensorType>().getEncoding();
+      auto shape = cvtOp.getType().getShape();
+      auto argEncoding = cvtOp.getSrc().getType().getEncoding();
+      auto cvtEncoding = cvtOp.getType().getEncoding();
       if (argEncoding.isa<triton::gpu::DotOperandEncodingAttr>() ||
           cvtEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
         return;
@@ -596,7 +595,7 @@ private:
                                     int threadsPerWarp, int numCTAs) const {
     // Replace `splat -> shared` with `splat -> blocked -> shared`.
     mod.walk([&](triton::SplatOp splatOp) -> void {
-      auto dstType = splatOp.getType().cast<RankedTensorType>();
+      auto dstType = splatOp.getType();
       auto shared =
           dstType.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
       if (shared) {
@@ -624,8 +623,8 @@ private:
     // unless certain conditions are met
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
-      auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
-      auto dstType = cvtOp.getType().cast<RankedTensorType>();
+      auto srcType = cvtOp.getSrc().getType();
+      auto dstType = cvtOp.getType();
       auto srcMfma =
           srcType.getEncoding().dyn_cast<triton::gpu::MfmaEncodingAttr>();
       auto dstDotOp =
@@ -653,7 +652,7 @@ private:
     auto smemShape = getScratchConfigForCvtLayout(cvtOp, inVec, outVec);
     unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
                                      std::multiplies{});
-    auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
+    auto srcType = cvtOp.getSrc().getType();
     auto bytes =
         srcType.getElementType().isa<triton::PointerType>()
             ? elems * kPtrBitWidth / 8
@@ -684,8 +683,8 @@ private:
                       std::pair<unsigned, unsigned> warpsPerCta) const {
     unsigned warpsPerCtaX = warpsPerCta.first;
     unsigned warpsPerCtaY = warpsPerCta.second;
-    auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
-    auto dstType = cvtOp.getType().cast<RankedTensorType>();
+    auto srcType = cvtOp.getSrc().getType();
+    auto dstType = cvtOp.getType();
 
     auto srcMfma =
         srcType.getEncoding().dyn_cast<triton::gpu::MfmaEncodingAttr>();
@@ -728,8 +727,8 @@ private:
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
 
-      auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
-      auto dstType = cvtOp.getType().cast<RankedTensorType>();
+      auto srcType = cvtOp.getSrc().getType();
+      auto dstType = cvtOp.getType();
 
       auto srcMfma =
           srcType.getEncoding().dyn_cast<triton::gpu::MfmaEncodingAttr>();
@@ -799,8 +798,8 @@ private:
     // unless certain conditions are met
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
-      auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
-      auto dstType = cvtOp.getType().cast<RankedTensorType>();
+      auto srcType = cvtOp.getSrc().getType();
+      auto dstType = cvtOp.getType();
       auto srcMma =
           srcType.getEncoding().dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>();
       auto dstDotOp =
@@ -828,8 +827,8 @@ private:
     // because the codegen doesn't handle `blocked -> dot_op` directly
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
-      auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
-      auto dstType = cvtOp.getType().cast<RankedTensorType>();
+      auto srcType = cvtOp.getSrc().getType();
+      auto dstType = cvtOp.getType();
       auto srcBlocked =
           srcType.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
       auto dstDotOp =
@@ -882,8 +881,8 @@ private:
       auto src = insertSliceAsyncOp.getSrc();
       auto dst = insertSliceAsyncOp.getDst();
       auto mask = insertSliceAsyncOp.getMask();
-      auto srcTy = src.getType().cast<RankedTensorType>();
-      auto dstTy = dst.getType().cast<RankedTensorType>();
+      auto srcTy = src.getType();
+      auto dstTy = dst.getType();
       auto srcBlocked =
           srcTy.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
       auto resSharedLayout =
@@ -988,13 +987,12 @@ private:
   // supported.
   void decomposeMixedModeDotOp(ModuleOp mod) const {
     mod.walk([](triton::DotOp dotOp) -> void {
-      Value D = dotOp.getResult();
+      auto D = dotOp.getD();
       OpBuilder builder(dotOp);
       Type AElType =
-          dotOp.getA().getType().cast<RankedTensorType>().getElementType();
+          dotOp.getA().getType().getElementType();
       Type promoteType;
       NvidiaMmaEncodingAttr mmaLayout = D.getType()
-                                            .cast<RankedTensorType>()
                                             .getEncoding()
                                             .dyn_cast<NvidiaMmaEncodingAttr>();
       if (mmaLayout) {
@@ -1008,11 +1006,10 @@ private:
 #ifdef USE_ROCM
       } else if (MfmaEncodingAttr mfmaLayout =
                      D.getType()
-                         .cast<RankedTensorType>()
                          .getEncoding()
                          .dyn_cast<MfmaEncodingAttr>()) {
         Type BElType =
-            dotOp.getB().getType().cast<RankedTensorType>().getElementType();
+            dotOp.getB().getType().getElementType();
 
         auto maxBitWidth = std::max(AElType.getIntOrFloatBitWidth(),
                                     BElType.getIntOrFloatBitWidth());
@@ -1032,8 +1029,8 @@ private:
       } else {
         // FMA case.
         Type AElType =
-            dotOp.getA().getType().cast<RankedTensorType>().getElementType();
-        Type DElType = D.getType().cast<RankedTensorType>().getElementType();
+            dotOp.getA().getType().getElementType();
+        Type DElType = D.getType().getElementType();
         if (AElType == DElType)
           return;
         promoteType = DElType;
