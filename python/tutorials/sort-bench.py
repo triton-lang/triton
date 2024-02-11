@@ -14,10 +14,27 @@ def compare_and_swap(x, desc_mask, i: tl.constexpr, n_dims: tl.constexpr):
     # reshapes
     left = tl.reshape(left, x.shape)
     right = tl.reshape(right, x.shape)
-    desc_mask = tl.reshape(desc_mask, x.shape)
     _0 = tl.zeros_like(left)
     ret = x ^ tl.where((left > right) ^ desc_mask, left ^ right, _0)
-    return left, right, ret, desc_mask
+    return ret
+
+
+@triton.jit
+def bitonic_merge(x, N_DIMS: tl.constexpr, ACTIVE_DIMS: tl.constexpr, ORDER_TYPE: tl.constexpr):
+    '''
+    order_type 0 == ascending
+    order_type 1 == descending
+    order_type 2 == alternating
+    '''
+    tl.static_assert(ACTIVE_DIMS <= N_DIMS)
+    if ORDER_TYPE == 2:
+        shape: tl.constexpr = [2**(N_DIMS - 1 - ACTIVE_DIMS), 2, 2**ACTIVE_DIMS]
+        desc_mask = tl.reshape(tl.broadcast_to(tl.arange(0, 2)[None, :, None], shape), x.shape)
+    else:
+        desc_mask = ORDER_TYPE
+    for i in tl.static_range(ACTIVE_DIMS):
+        x = compare_and_swap(x, desc_mask, i + (N_DIMS - ACTIVE_DIMS), N_DIMS)
+    return x
 
 
 @triton.jit
@@ -25,17 +42,9 @@ def sort_rows(X, Y1, Y2, R, N: tl.constexpr, N_DIMS: tl.constexpr):
     pid = tl.program_id(0)
     Xs = X + pid * N + tl.arange(0, N)
     x = tl.load(Xs)
-    i: tl.constexpr = 2
-    # desc_mask
-    shape: tl.constexpr = [2**(i - 1), 2, 2**(N_DIMS - i)]
-    desc_mask = tl.broadcast_to(tl.arange(0, 2)[None, :, None], shape)
-    #
-    y1, y2, r, m = compare_and_swap(x, desc_mask, i, N_DIMS)
-    # tl.store(Y1 + pid * N + tl.arange(0, N), y1)
-    # tl.store(Y2 + pid * N + tl.arange(0, N), y2)
-
-    tl.store(R + pid * N + tl.arange(0, N), r)
-    # tl.store(Y2 + pid * N + tl.arange(0, N), m)
+    for i in tl.static_range(1, N_DIMS + 1):
+        x = bitonic_merge(x, N_DIMS, i, 2 if i < N_DIMS else 0)
+    tl.store(R + pid * N + tl.arange(0, N), x)
 
 
 N = 8
@@ -45,8 +54,6 @@ Y2 = torch.empty_like(X)
 R = torch.empty_like(X)
 h = sort_rows[(1, )](X, Y1, Y2, R, N, int(math.log2(N)))
 print(X)
-print(Y1)
-print(Y2)
 print(R)
 
 # x x
