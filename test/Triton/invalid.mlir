@@ -69,7 +69,7 @@ tt.func public @fn(%arg0: tensor<f32>, %arg1: tensor<f32>) {
 // -----
 
 tt.func public @fn(%arg0: f32, %arg1: f32) {
-    // expected-error @+1 {{tensor}}
+    // expected-error @+1 {{kind of type}}
     %a = tt.experimental_interleave %arg0, %arg1 : f32 -> f32
     tt.return
 }
