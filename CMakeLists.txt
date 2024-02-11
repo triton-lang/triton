@@ -180,14 +180,23 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
     # LLVM
     LLVMPasses
-    LLVMX86CodeGen
-    LLVMX86AsmParser
     LLVMNVPTXCodeGen
     # LLVMNVPTXAsmPrinter
     LLVMAMDGPUCodeGen
     LLVMAMDGPUAsmParser
 
   )
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
+      list(APPEND TRITON_LIBRARIES
+          LLVMAArch64CodeGen
+          LLVMAArch64AsmParser
+      )
+  else()
+      list(APPEND TRITON_LIBRARIES
+          LLVMX86CodeGen
+          LLVMX86AsmParser
+      )
+  endif()
 
   # Define triton library
   string(JOIN "," TRITON_BACKENDS_TUPLE ${TRITON_CODEGEN_BACKENDS})
