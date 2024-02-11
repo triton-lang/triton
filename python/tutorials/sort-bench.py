@@ -44,17 +44,21 @@ def sort_rows(X, Y1, Y2, R, N: tl.constexpr, N_DIMS: tl.constexpr):
     x = tl.load(Xs)
     for i in tl.static_range(1, N_DIMS + 1):
         x = bitonic_merge(x, N_DIMS, i, 2 if i < N_DIMS else 0)
+    # x = tl.sort(x)
     tl.store(R + pid * N + tl.arange(0, N), x)
 
 
-N = 8
-X = torch.tensor([3, 9, 1, 4, 2, 1, 9, 3], dtype=torch.int32, device="cuda")
+M = 16384
+N = 512
+X = torch.randint(10, (M, N), dtype=torch.int32, device="cuda")
 Y1 = torch.empty_like(X)
 Y2 = torch.empty_like(X)
 R = torch.empty_like(X)
-h = sort_rows[(1, )](X, Y1, Y2, R, N, int(math.log2(N)))
-print(X)
-print(R)
+fn = lambda: sort_rows[(M, )](X, Y1, Y2, R, N, int(math.log2(N)))
+fn()
+print((R - torch.sort(X, dim=1).values).abs().max())
+# fn = lambda: torch.sort(X, dim=1)
+# print(triton.testing.do_bench(fn))
 
 # x x
 # x x
