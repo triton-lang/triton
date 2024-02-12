@@ -689,6 +689,28 @@ void mlir::triton::asyncLaunchDots(scf::ForOp forOp) {
               !CArg.hasOneUse())
             valid = false;
 
+          // Both operands needs to have been multi-buffered if they come from
+          // shared memory otherwise we will have a race condition as the shared
+          // memory will be overriden before the wgmma wait.
+          // Note that we relay on the assumption that `createAsynOps` will have
+          // allocated enough buffers to pipeline dot operation with 2 stages.
+          for (Value operand : {dotOp.getOperand(0), dotOp.getOperand(1)}) {
+            auto operandEncoding =
+                operand.getType().cast<RankedTensorType>().getEncoding();
+            if (!operandEncoding.isa<ttg::SharedEncodingAttr>())
+              continue;
+            Value transitiveOperand = operand;
+            while (isa_and_nonnull<ttg::ConvertLayoutOp, tt::TransOp>(
+                transitiveOperand.getDefiningOp()))
+              transitiveOperand =
+                  transitiveOperand.getDefiningOp()->getOperand(0);
+            if (forOp.isDefinedOutsideOfLoop(transitiveOperand))
+              continue;
+            if (transitiveOperand.getDefiningOp<ttg::ExtractSliceOp>() ==
+                nullptr)
+              valid = false;
+          }
+
           if (valid) {
             dots.push_back(dotOp);
             resultNeedSync.push_back(
