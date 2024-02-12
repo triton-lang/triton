@@ -126,6 +126,9 @@ class Builder:
     def get_float_ty(self):
         return tl.float32
 
+    def get_int32_ty(self):
+        return tl.int32
+
     def get_int64_ty(self):
         return tl.int64
 

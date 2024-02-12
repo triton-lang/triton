@@ -4,7 +4,6 @@ import re
 import sys
 import warnings
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
-
 from .. import language
 from .._C.libtriton import ir
 from ..language import constexpr, tensor
@@ -239,7 +238,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.dereference_name: Callable[[str], Any] = self._define_name_lookup()
         self.fn = None
 
-    builtin_namespace: Dict[str, Any] = {_.__name__: _ for _ in (range, float, int, isinstance, getattr)}
+    builtin_namespace: Dict[str, Any] = {_.__name__: _ for _ in (len, range, float, int, isinstance, getattr)}
     builtin_namespace.update((
         ('print', language.core.device_print),
         ('min', language.minimum),
@@ -1124,13 +1123,6 @@ class CodeGenerator(ast.NodeVisitor):
     def generic_visit(self, node):
         raise UnsupportedLanguageConstruct(None, node, "unsupported AST node type: {}".format(type(node).__name__))
 
-    def execute_static_print(self, node: ast.Call) -> None:
-        # TODO: too simplistic? Perhaps do something else with non-constexpr
-
-        kws = {name: _unwrap_if_constexpr(value) for name, value in (self.visit(keyword) for keyword in node.keywords)}
-        args = [_unwrap_if_constexpr(self.visit(arg)) for arg in node.args]
-        print(*args, **kws)
-
     def execute_static_assert(self, node: ast.Call) -> None:
         arg_count = len(node.args)
         if not (0 < arg_count <= 2) or len(node.keywords):
@@ -1153,9 +1145,23 @@ class CodeGenerator(ast.NodeVisitor):
             raise CompileTimeAssertionFailure(None, node, _unwrap_if_constexpr(message))
         return None
 
+    def static_executor(python_fn):
+
+        def ret(self, node: ast.Call):
+            kws = {
+                name: _unwrap_if_constexpr(value)
+                for name, value in (self.visit(keyword) for keyword in node.keywords)
+            }
+            args = [_unwrap_if_constexpr(self.visit(arg)) for arg in node.args]
+            return constexpr(python_fn(*args, **kws))
+
+        return ret
+
     statically_implemented_functions: Dict[object, Callable[[ast.Call], Any]] = {
         language.core.static_assert: execute_static_assert,
-        language.core.static_print: execute_static_print,
+        language.core.static_print: static_executor(print),
+        int: static_executor(int),
+        len: static_executor(len),
     }
 
 
