@@ -212,7 +212,7 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
   LogicalResult
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    RankedTensorType origType = op.getType().cast<RankedTensorType>();
+    RankedTensorType origType = op.getType();
     auto origShape = origType.getShape();
     auto typeConverter = getTypeConverter<TritonGPUTypeConverter>();
     int numWarps = typeConverter->getNumWarps();
@@ -290,8 +290,8 @@ struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
                        .cast<RankedTensorType>();
     auto retEncoding =
         retType.getEncoding().cast<triton::gpu::BlockedEncodingAttr>();
-    auto lhsType = adaptor.getLhs().getType().cast<RankedTensorType>();
-    auto rhsType = adaptor.getRhs().getType().cast<RankedTensorType>();
+    auto lhsType = adaptor.getLhs().getType();
+    auto rhsType = adaptor.getRhs().getType();
     auto lhsTotalElemsPerThread = triton::gpu::getTotalElemsPerThread(lhsType);
     auto rhsTotalElemsPerThread = triton::gpu::getTotalElemsPerThread(rhsType);
     auto retTotalElemsPerThread = triton::gpu::getTotalElemsPerThread(retType);
@@ -415,9 +415,8 @@ struct TritonBroadcastPattern
     auto srcEncoding = srcType.getEncoding();
     if (!srcEncoding)
       return failure();
-    auto opType = op.getType().cast<RankedTensorType>();
-    Type retType = RankedTensorType::get(opType.getShape(),
-                                         opType.getElementType(), srcEncoding);
+    Type retType = RankedTensorType::get(
+        op.getType().getShape(), op.getType().getElementType(), srcEncoding);
     // Type retType = this->getTypeConverter()->convertType(op.getType());
     addNamedAttrs(rewriter.replaceOpWithNewOp<triton::BroadcastOp>(
                       op, retType, adaptor.getOperands()),

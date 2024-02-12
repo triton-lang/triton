@@ -408,7 +408,7 @@ bool isExpensiveCat(CatOp cat, Attribute targetEncoding) {
   // If the new elements per thread is less than the old one, we will need to do
   // convert encoding that goes through shared memory anyway. So we consider it
   // as expensive.
-  auto tensorTy = cat.getResult().getType().cast<RankedTensorType>();
+  auto tensorTy = cat.getResult().getType();
   auto totalElemsPerThread = gpu::getTotalElemsPerThread(tensorTy);
   auto shape = tensorTy.getShape();
   auto elemTy = tensorTy.getElementType();
@@ -2385,8 +2385,8 @@ struct CanonicalizeConvertFromConvert
 
     // We don't handle conversions to DotOperandEncodingAttr.  This is a
     // heuristic to accommodate fused attention.
-    auto srcType = op.getOperand().getType().cast<RankedTensorType>();
-    auto dstType = op.getType().cast<RankedTensorType>();
+    auto srcType = op.getSrc().getType();
+    auto dstType = op.getType();
     if (dstType.getEncoding().isa<DotOperandEncodingAttr>() &&
         srcType.getEncoding().isa<NvidiaMmaEncodingAttr>())
       return failure();
@@ -2437,9 +2437,7 @@ struct CanonicalizeConvertFromConvert
 
     // cvt(cat) -> cat
     if (auto cat = dyn_cast<CatOp>(arg)) {
-      auto encoding =
-          op->getResult(0).getType().cast<RankedTensorType>().getEncoding();
-      if (isExpensiveCat(cat, encoding))
+      if (isExpensiveCat(cat, op.getType().getEncoding()))
         return failure();
 
       rewriter.replaceOpWithNewOp<CatOp>(op, op->getResult(0).getType(),
@@ -2462,7 +2460,7 @@ struct CanonicalizeConvertFromConvert
       if (!hasSharedEncoding(op->getResult(0)))
         return failure();
 
-      auto newType = op->getResult(0).getType().cast<RankedTensorType>();
+      auto newType = op.getType();
       // Ensure that the new insert_slice op is placed in the same place as
       // the old insert_slice op. Otherwise, the new insert_slice op may be
       // placed after the async_wait op, which is not allowed.
@@ -2484,15 +2482,14 @@ struct CanonicalizeConvertFromConvert
       if (!hasSharedEncoding(op->getResult(0)))
         return failure();
 
-      auto origType =
-          extract_slice.getSource().getType().cast<RankedTensorType>();
-      auto newType = RankedTensorType::get(
-          origType.getShape(), origType.getElementType(),
-          op->getResult(0).getType().cast<RankedTensorType>().getEncoding());
-      auto origResType = op->getResult(0).getType().cast<RankedTensorType>();
+      auto origType = extract_slice.getSource().getType();
+      auto newType =
+          RankedTensorType::get(origType.getShape(), origType.getElementType(),
+                                op.getType().getEncoding());
+      auto origResType = op.getType();
       auto resType = RankedTensorType::get(
           origResType.getShape(), origResType.getElementType(),
-          extract_slice.getType().cast<RankedTensorType>().getEncoding());
+          extract_slice.getType().getEncoding());
       // Ensure that the new extract_slice op is placed in the same place as
       // the old extract_slice op. Otherwise, the new extract_slice op may be
       // placed after the async_wait op, which is not allowed.
@@ -2519,7 +2516,7 @@ struct CanonicalizeConvertFromConvert
           hasSharedEncoding(op.getResult()))
         return failure();
 
-      auto srcType = op.getOperand().getType().cast<RankedTensorType>();
+      auto srcType = op.getSrc().getType();
       auto srcShared =
           srcType.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
       if (srcShared && srcShared.getVec() > 1)
@@ -2578,7 +2575,6 @@ void ExtractSliceOp::build(OpBuilder &b, OperationState &result,
   dispatchIndexOpFoldResults(offsets, dynamicOffsets, staticOffsets);
   dispatchIndexOpFoldResults(sizes, dynamicSizes, staticSizes);
   dispatchIndexOpFoldResults(strides, dynamicStrides, staticStrides);
-  auto sourceRankedTensorType = source.getType().cast<RankedTensorType>();
   build(b, result, resultType, source, dynamicOffsets, dynamicSizes,
         dynamicStrides, b.getDenseI64ArrayAttr(staticOffsets),
         b.getDenseI64ArrayAttr(staticSizes),

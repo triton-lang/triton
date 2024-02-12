@@ -375,9 +375,8 @@ inferReshapeOpDstEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
 
 static std::optional<Attribute> inferDstEncoding(triton::ReshapeOp op,
                                                  Attribute encoding) {
-  auto srcTy = op.getOperand().getType().cast<RankedTensorType>();
-  auto dstTy = op.getType().cast<RankedTensorType>();
-  return inferReshapeOpDstEncoding(srcTy.getShape(), encoding, dstTy.getShape(),
+  return inferReshapeOpDstEncoding(op.getSrc().getType().getShape(), encoding,
+                                   op.getType().getShape(),
                                    op.getAllowReorder());
 }
 
@@ -387,9 +386,8 @@ static std::optional<Attribute> inferSrcEncoding(triton::ReshapeOp op,
   // as the encoding of x given the encoding of y in `reshape(y) -> x`.  It's an
   // invariant of inferReshapeOpNoReorderEncoding that it's symmetric in this
   // way.
-  auto srcTy = op.getOperand().getType().cast<RankedTensorType>();
-  auto dstTy = op.getType().cast<RankedTensorType>();
-  return inferReshapeOpDstEncoding(dstTy.getShape(), encoding, srcTy.getShape(),
+  return inferReshapeOpDstEncoding(op.getType().getShape(), encoding,
+                                   op.getSrc().getType().getShape(),
                                    op.getAllowReorder());
 }
 
@@ -500,8 +498,7 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
                                         targetEncoding);
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
     if (targetEncoding.isa<triton::gpu::NvidiaMmaEncodingAttr>()) {
-      auto srcEncoding =
-          convert.getOperand().getType().cast<RankedTensorType>().getEncoding();
+      auto srcEncoding = convert.getSrc().getType().getEncoding();
       if (targetEncoding != srcEncoding)
         return false;
     }
@@ -509,7 +506,7 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
   }
 
   if (auto reshape = dyn_cast<triton::ReshapeOp>(op)) {
-    auto reshapeDstType = reshape.getType().cast<RankedTensorType>();
+    auto reshapeDstType = reshape.getType();
     RankedTensorType newDstType =
         RankedTensorType::get(reshapeDstType.getShape(),
                               reshapeDstType.getElementType(), targetEncoding);
