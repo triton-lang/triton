@@ -1,5 +1,6 @@
 // RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu=num-warps=2 | FileCheck %s
 
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 2 : i32} {
 tt.func @ops() {
   // CHECK: module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 2 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {{.*}}
   %a = arith.constant dense<1.00e+00> : tensor<128x32xf16>
@@ -8,9 +9,11 @@ tt.func @ops() {
   %0 = tt.dot %a, %b, %c {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<128x32xf16> * tensor<32x128xf16> -> tensor<128x128xf32>
   tt.return
 }
+}
 
 // -----
 
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 2 : i32} {
 tt.func @load_ops(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
   // Test if LoadOp is lowered properly (see #771)
   %ptrs = tt.splat %ptr : (!tt.ptr<f32>) -> tensor<128x!tt.ptr<f32>>
@@ -27,9 +30,11 @@ tt.func @load_ops(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
   tt.store %ptrs, %c : tensor<128xf32>
   tt.return
 }
+}
 
 // -----
 
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 2 : i32} {
 tt.func @reduce_ops(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
   // Test if the total number of threadsPerWarp is 32
   // Test if the total number of warps is 2
@@ -67,10 +72,12 @@ tt.func @reduce_ops(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
 
   tt.return
 }
+}
 
 
 // -----
 
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 2 : i32} {
 tt.func public @select_op(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: i1) attributes {noinline = false} {
   // CHECK-LABEL: select_op
   %cst = arith.constant dense<0.000000e+00> : tensor<128xf32>
@@ -86,4 +93,5 @@ tt.func public @select_op(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg
   %6 = tt.addptr %5, %0 : tensor<128x!tt.ptr<f32>>, tensor<128xi32>
   tt.store %6, %4 {cache = 1 : i32, evict = 1 : i32} : tensor<128xf32>
   tt.return
+}
 }

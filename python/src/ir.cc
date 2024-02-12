@@ -106,7 +106,8 @@ public:
 private:
   std::unique_ptr<mlir::OpBuilder> builder;
   std::unique_ptr<mlir::Location> lastLoc;
-  bool lineInfoEnabled = !triton::tools::getBoolEnv("TRITON_DISABLE_LINE_INFO");
+  bool lineInfoEnabled =
+      !mlir::triton::tools::getBoolEnv("TRITON_DISABLE_LINE_INFO");
 };
 
 static std::string locationToString(mlir::Location loc) {
@@ -272,7 +273,8 @@ void init_triton_ir(py::module &&m) {
            })
       .def("get_num_arguments", &mlir::Block::getNumArguments)
       .def("dump", &mlir::Block::dump)
-      .def("move_before", &mlir::Block::moveBefore)
+      .def("move_before",
+           [](mlir::Block &self, mlir::Block &dst) { self.moveBefore(&dst); })
       .def("insert_before", &mlir::Block::insertBefore)
       .def("get_parent", &mlir::Block::getParent, ret::reference)
       .def("merge_block_before",
@@ -1559,7 +1561,7 @@ void init_triton_ir(py::module &&m) {
                    return mlir::success();
                  });
 
-             if (!::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP"))
+             if (!mlir::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP"))
                return;
              auto printingFlags = mlir::OpPrintingFlags();
              printingFlags.elideLargeElementsAttrs(16);
@@ -1577,7 +1579,8 @@ void init_triton_ir(py::module &&m) {
       .def("run", [](mlir::PassManager &self, mlir::ModuleOp &mod) {
         // TODO: maybe dump module to file and print error for better
         // diagnostics
-        auto reproducerPath = ::triton::tools::getenv("TRITON_REPRODUCER_PATH");
+        auto reproducerPath =
+            mlir::triton::tools::getenv("TRITON_REPRODUCER_PATH");
         if (!reproducerPath.empty()) {
           auto anchorName = self.getOpAnchorName();
           auto passes = self.getPasses();
@@ -1593,8 +1596,8 @@ void init_triton_ir(py::module &&m) {
 void init_triton_env_vars(py::module &m) {
   m.def("get_env_vars", []() -> std::map<std::string, bool> {
     std::map<std::string, bool> envVars;
-    for (const auto &envVar : triton::ENV_VARS) {
-      envVars[envVar] = triton::tools::getBoolEnv(envVar);
+    for (const auto &envVar : mlir::triton::ENV_VARS) {
+      envVars[envVar] = mlir::triton::tools::getBoolEnv(envVar);
     }
     return envVars;
   });

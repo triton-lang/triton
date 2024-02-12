@@ -59,8 +59,8 @@ public:
       return mlir::failure();
     if (!cvtOp.getSrc().getDefiningOp<triton::LoadOp>())
       return failure();
-    auto dstTy = dstOp.getResult().getType().cast<RankedTensorType>();
-    auto srcTy = cvtOp.getOperand().getType().cast<RankedTensorType>();
+    auto dstTy = dstOp.getResult().getType();
+    auto srcTy = cvtOp.getOperand().getType();
     if (dstTy != srcTy)
       return mlir::failure();
 
@@ -166,10 +166,7 @@ static bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
     getForwardSlice(currentValue, &forwardSlice);
     for (Operation *op : forwardSlice) {
       if (auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-        Attribute dstEncoding = convertOp.getResult()
-                                    .getType()
-                                    .cast<RankedTensorType>()
-                                    .getEncoding();
+        Attribute dstEncoding = convertOp.getResult().getType().getEncoding();
         if (auto mmaLayout =
                 dstEncoding.dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>())
           return (mmaLayout.getVersionMajor() > 1) ? true
@@ -200,27 +197,48 @@ static bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
 static bool isLayoutAnchor(Operation *op) {
   if (isa<triton::LoadOp, triton::StoreOp>(op))
     return isExpensiveLoadOrStore(op);
-  if (isa<triton::ReshapeOp, triton::DotOp, triton::AtomicRMWOp,
-          triton::AtomicCASOp>(op))
+  if (isa<triton::DotOp, triton::AtomicRMWOp, triton::AtomicCASOp>(op))
     return true;
+
+  // Heuristic: Mark permuting reshape as a layout anchor.  Its dst can be
+  // anything, so it stops forward-propagation of layouts.  We rely on the
+  // backwards pass to fix it up if necessary.  (If we didn't do this, then
+  // anything following the reshape won't be covered by the forward pass at
+  // all.)
+  if (auto reshape = dyn_cast<triton::ReshapeOp>(op))
+    return reshape.getAllowReorder();
+
   return false;
 }
 
 void LayoutPropagation::initAnchorLayout() {
+  auto maybeAddAnchor = [&](Value v) {
+    if (auto tensorType = v.getType().dyn_cast<RankedTensorType>()) {
+      // Workaround, don't popagate MMA layout unless there is a convert
+      // back to mma further down to avoid generating reduction with MMA
+      // layout that may have lower performance.
+      // This can be improved with more aggressive backward propagation.
+      if (tensorType.getEncoding().isa<triton::gpu::NvidiaMmaEncodingAttr>() &&
+          v.getDefiningOp() &&
+          !hasConvertToMMATransisitiveUse(v.getDefiningOp(),
+                                          tensorType.getEncoding())) {
+        return;
+      }
+      layouts.insert({v, LayoutInfo(tensorType.getEncoding())});
+    }
+  };
+
+  // Consider function args as anchors.  This makes it easier to write tests --
+  // you can pass a tensor with an encoding as an arg, instead of explicitly
+  // calling tt.load.
+  for (auto arg : funcOp.getArguments()) {
+    maybeAddAnchor(arg);
+  }
+
   funcOp.walk([&](Operation *op) {
     if (isLayoutAnchor(op)) {
       for (auto result : op->getResults()) {
-        if (auto tensorType = result.getType().dyn_cast<RankedTensorType>()) {
-          // Workaround, don't popagate MMA layout unless there is a convert
-          // back to mma further down to avoid generating reduction with MMA
-          // layout that may have lower performance.
-          // This can be improved with more aggressive backward propagation.
-          if (tensorType.getEncoding()
-                  .isa<triton::gpu::NvidiaMmaEncodingAttr>() &&
-              !hasConvertToMMATransisitiveUse(op, tensorType.getEncoding()))
-            continue;
-          layouts.insert({result, LayoutInfo(tensorType.getEncoding())});
-        }
+        maybeAddAnchor(result);
       }
     }
   });
@@ -295,7 +313,9 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     }
     if (user->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<mlir::OpTrait::Elementwise>() ||
-        isa<triton::ReduceOp, triton::ExpandDimsOp,
+        // TODO(jlebar): Add TransOp to this list, but we have to force it into
+        // shared memory if it's used by a dot operand.
+        isa<triton::ReduceOp, triton::ExpandDimsOp, triton::ReshapeOp,
             triton::ExperimentalInterleaveOp, triton::gpu::ConvertLayoutOp>(
             user)) {
       setEncoding(user->getResults(), info, changed, user);
@@ -315,6 +335,14 @@ void LayoutPropagation::propagateLayout() {
     LayoutInfo info = layouts[currentValue];
     queue.pop_back();
     SmallVector<Value> changed = propagateToUsers(currentValue, info);
+
+    LLVM_DEBUG({
+      DBGS() << "propagateLayout considering " << currentValue << ", which has "
+             << info.encodings.size() << " candidate encoding(s):\n";
+      for (Attribute encoding : info.encodings)
+        DBGS() << "  " << encoding << "\n";
+    });
+
     queue.insert(queue.end(), changed.begin(), changed.end());
   }
 }
@@ -327,7 +355,6 @@ void LayoutPropagation::resolveConflicts() {
       continue;
     // Hacky resolve, prefer block encoding.
     // TODO: add a proper heuristic.
-    int maxSizePerThread = 1;
     Attribute encoding = *info.encodings.begin();
     bool isLoadOrStore =
         op && isa<triton::LoadOp, triton::StoreOp, triton::AtomicRMWOp,
@@ -664,8 +691,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   OpBuilder rewriter(op);
   Attribute encoding = *layouts[op->getResult(0)].encodings.begin();
   if (auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-    Attribute srcEncoding =
-        convertOp.getOperand().getType().cast<RankedTensorType>().getEncoding();
+    Attribute srcEncoding = convertOp.getSrc().getType().getEncoding();
     auto it = layouts.find(convertOp.getOperand());
     if (it != layouts.end())
       srcEncoding = *(it->second.encodings.begin());
@@ -690,7 +716,9 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   }
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
-      isa<triton::ReduceOp, triton::ExpandDimsOp,
+      // TODO(jlebar): Add TransOp to this list, but we have to force it into
+      // shared memory if it's used by a dot operand.
+      isa<triton::ReduceOp, triton::ExpandDimsOp, triton::ReshapeOp,
           triton::ExperimentalInterleaveOp, triton::gpu::ConvertLayoutOp>(op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
@@ -832,7 +860,7 @@ static void backwardRematerialization(ConvertLayoutOp convertOp) {
     return;
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristic to accommodate fused attention
-  auto targetType = convertOp->getResultTypes()[0].cast<RankedTensorType>();
+  auto targetType = convertOp.getResult().getType();
   if (targetType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
     return;
 
@@ -858,7 +886,7 @@ static void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp) {
     return;
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristics to accommodate fused attention
-  auto targetType = convertOp->getResultTypes()[0].cast<RankedTensorType>();
+  auto targetType = convertOp.getResult().getType();
   if (targetType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
     return;
 

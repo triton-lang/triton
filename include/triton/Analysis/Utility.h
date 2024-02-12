@@ -140,6 +140,31 @@ private:
   SmallVector<Type> srcElementTypes;
 };
 
+// Decomposes a reshape into simpler pieces.
+//
+// As an example, suppose we have a reshape from [4,4,4] to [2,2,8,2].
+// You might explain what this does as follows.
+//
+//  - Split the first input dimension into [2,2].
+//  - Take the remaining two input dimensions, merge them into a single [16]
+//    dim, and then split that into [8,2].
+//
+// In general, a reshape can be described a sequence of smushing one or more
+// input dimensions together and then breaking them apart into one or more
+// output dimensions.  So we could represent the example above as follows.
+//
+//   [
+//     ([0], [0, 1]),  # input dim [0] -> output dims [0, 1]
+//     ([1, 2], [2, 3]),  # input dims [1, 2] -> output dims [2, 3]
+//   ]
+//
+// Notice that the input dims (first tuple elems) appear in sequential order if
+// you read left-to-right-top-to-bottom, and so do the output dims.
+//
+// This function returns the above decomposition.
+SmallVector<std::pair<SmallVector<int64_t>, SmallVector<int64_t>>>
+getReshapeDecomposition(ArrayRef<int64_t> srcShape, ArrayRef<int64_t> dstShape);
+
 bool maybeSharedAllocationOp(Operation *op);
 
 bool maybeAliasOp(Operation *op);
@@ -166,12 +191,15 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
 // ConvertLayoutOpHelper in the future
 bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout);
 
-template <typename T_OUT, typename T_IN>
-inline SmallVector<T_OUT> convertType(ArrayRef<T_IN> in) {
-  SmallVector<T_OUT> out;
-  for (const T_IN &i : in)
-    out.push_back(T_OUT(i));
+template <typename T, typename U> SmallVector<T> convertType(ArrayRef<U> in) {
+  SmallVector<T> out;
+  for (const auto &i : in)
+    out.push_back(T(i));
   return out;
+}
+template <typename T, typename VecU>
+SmallVector<T> convertType(const VecU &in) {
+  return convertType<T>(ArrayRef(in));
 }
 
 template <typename Int> Int product(llvm::ArrayRef<Int> arr) {
@@ -181,6 +209,7 @@ template <typename VecT> auto product(const VecT &vec) {
   return product(llvm::ArrayRef(vec));
 }
 
+// TODO(jlebar): Rename to ceilOfRatio.
 template <typename Int> Int ceil(Int m, Int n) { return (m + n - 1) / n; }
 
 /// Get the highest power of 2 divisor of an integer.

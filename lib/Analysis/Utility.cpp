@@ -319,6 +319,44 @@ unsigned ScanLoweringHelper::getScratchSizeInBytes() {
   return elementSizeInBytes * getScratchSizeInElems();
 }
 
+SmallVector<std::pair<SmallVector<int64_t>, SmallVector<int64_t>>>
+getReshapeDecomposition(ArrayRef<int64_t> srcShape,
+                        ArrayRef<int64_t> dstShape) {
+  SmallVector<std::pair<SmallVector<int64_t>, SmallVector<int64_t>>> ret;
+
+  if (srcShape.empty()) {
+    assert(dstShape.empty());
+    return ret;
+  }
+  ret.push_back({});
+
+  int srcIdx = 0;
+  int dstIdx = 0;
+  int srcNElems = 1;
+  int dstNElems = 1;
+  while (srcIdx < srcShape.size() || dstIdx < dstShape.size()) {
+    if (srcNElems < dstNElems || //
+        (srcIdx < srcShape.size() && srcNElems == 1) ||
+        (srcIdx < srcShape.size() && srcShape[srcIdx] == 1)) {
+      assert(srcIdx < srcShape.size());
+      srcNElems *= srcShape[srcIdx];
+      ret.back().first.push_back(srcIdx);
+      srcIdx++;
+    } else if (dstNElems < srcNElems ||
+               (dstIdx < dstShape.size() && dstShape[dstIdx] == 1)) {
+      assert(dstIdx < dstShape.size());
+      dstNElems *= dstShape[dstIdx];
+      ret.back().second.push_back(dstIdx);
+      dstIdx++;
+    } else {
+      ret.push_back({});
+      srcNElems = 1;
+      dstNElems = 1;
+    }
+  }
+  return ret;
+}
+
 triton::gpu::BlockedEncodingAttr ScanLoweringHelper::getEncoding() {
   return srcEncoding.cast<triton::gpu::BlockedEncodingAttr>();
 }
@@ -450,7 +488,7 @@ bool supportMMA(triton::DotOp op, int version) {
   auto aElemTy = op.getA().getType().cast<RankedTensorType>().getElementType();
   auto bElemTy = op.getB().getType().cast<RankedTensorType>().getElementType();
   if (version == 3) {
-    if (::triton::tools::getBoolEnv("DISABLE_MMA_V3"))
+    if (mlir::triton::tools::getBoolEnv("DISABLE_MMA_V3"))
       return false;
     auto retType = op.getResult().getType().cast<RankedTensorType>();
     auto retShapePerCTA = triton::gpu::getShapePerCTA(retType);

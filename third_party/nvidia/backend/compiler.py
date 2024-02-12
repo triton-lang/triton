@@ -59,7 +59,6 @@ class CUDAOptions:
     num_stages: int = 3
     cluster_dims: tuple = (1, 1, 1)
     ptx_version: int = None
-    optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
     allow_fp8e4nv: bool = False
     max_num_imprecise_acc_default: bool = None
@@ -134,8 +133,6 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_optimize_thread_locality(pm)
         passes.ttgpuir.add_accelerate_matmul(pm, capability)
         passes.ttgpuir.add_remove_layout_conversions(pm)
-        if opt.optimize_epilogue:
-            passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm)
         passes.common.add_cse(pm)
         if capability // 10 >= 8:

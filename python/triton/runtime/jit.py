@@ -124,12 +124,13 @@ class KernelArg:
         annotation = self.param.annotation
         if "Tensor" in annotation:
             return self.value.dtype
-        elif annotation == "bool":
-            return "i1"
-        elif annotation == "float":
-            return "fp32"
-        else:
-            return JITFunction._key_of(self.value)
+        for ty1, ty2 in [("uint", 'u'), ("int", 'i')]:
+            width = annotation[annotation.find(ty1) + len(ty1):]
+            if width and ty1 in annotation:
+                return f"{ty2}{width}"
+        if annotation == "bool":
+            return "u1"
+        return JITFunction._key_of(self.value)
 
     def specialization_key(self):
         assert not self.param.do_not_specialize
@@ -375,7 +376,7 @@ class JITFunction(KernelInterface[T]):
 
             # Build kernel signature -- doesn't include constexpr arguments.
             signature = {
-                arg.param.num: self._type_of(self._key_of(arg.value))
+                arg.param.num: self._type_of(arg.signature_key())
                 for arg in args
                 if not arg.param.is_constexpr
             }

@@ -115,12 +115,10 @@ Type getMmaRetType(TensorCoreType mmaType, MLIRContext *ctx) {
 }
 
 TensorCoreType getMmaType(triton::DotOp op) {
-  Value A = op.getA();
-  Value B = op.getB();
-  auto aTy = A.getType().cast<RankedTensorType>();
-  auto bTy = B.getType().cast<RankedTensorType>();
+  auto aTy = op.getA().getType();
+  auto bTy = op.getB().getType();
   // d = a*b + c
-  auto dTy = op.getD().getType().cast<RankedTensorType>();
+  auto dTy = op.getD().getType();
 
   if (dTy.getElementType().isF32()) {
     if (aTy.getElementType().isF16() && bTy.getElementType().isF16())
@@ -378,32 +376,15 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
 LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                          const LLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, bool isTuring) {
-  auto loc = op.getLoc();
-  auto mmaLayout = op.getResult()
-                       .getType()
-                       .cast<RankedTensorType>()
-                       .getEncoding()
-                       .cast<NvidiaMmaEncodingAttr>();
-
-  Value A = op.getA();
-  Value B = op.getB();
-  Value C = op.getC();
-
-  auto ATensorTy = A.getType().cast<RankedTensorType>();
-  auto BTensorTy = B.getType().cast<RankedTensorType>();
-
-  assert(ATensorTy.getEncoding().isa<DotOperandEncodingAttr>() &&
-         BTensorTy.getEncoding().isa<DotOperandEncodingAttr>() &&
+  assert(op.getA().getType().getEncoding().isa<DotOperandEncodingAttr>() &&
+         op.getB().getType().getEncoding().isa<DotOperandEncodingAttr>() &&
          "Both $a and %b should be DotOperand layout.");
 
-  Value loadedA, loadedB, loadedC;
-  loadedA = adaptor.getA();
-  loadedB = adaptor.getB();
-  loadedC =
+  Value loadedC =
       loadC(op.getC(), adaptor.getC(), typeConverter, op.getLoc(), rewriter);
-
-  return convertDot(typeConverter, rewriter, op.getLoc(), A, B, C, op.getD(),
-                    loadedA, loadedB, loadedC, op, adaptor, isTuring);
+  return convertDot(typeConverter, rewriter, op.getLoc(), op.getA(), op.getB(),
+                    op.getC(), op.getD(), adaptor.getA(), adaptor.getB(),
+                    loadedC, op, adaptor, isTuring);
 }
 
 // Convert to mma.m16n8k8

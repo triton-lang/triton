@@ -3,3 +3,8 @@ add_triton_ut(
 	SRCS SwizzleTest.cpp
 	LIBS TritonGPUIR TritonNvidiaGPUIR  ${dialect_libs} ${conversion_libs} ${triton_libs}
 )
+add_triton_ut(
+	NAME Dialect
+	SRCS DialectTest.cpp
+	LIBS TritonGPUIR ${dialect_libs} ${conversion_libs} ${triton_libs}
+)
