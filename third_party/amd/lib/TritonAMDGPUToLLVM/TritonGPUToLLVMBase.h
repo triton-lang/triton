@@ -445,6 +445,7 @@ public:
                           ConversionPatternRewriter &rewriter) const {
     auto dstTy = dst.getType().cast<RankedTensorType>();
     auto dstShape = dstTy.getShape();
+    assert(dstShape.size() <= 2 && "Unexpected rank of loadSharedToDistributed");
     auto srcTy = src.getType().cast<RankedTensorType>();
     auto dstDistributedLayout = dstTy.getEncoding();
     if (auto mmaLayout =

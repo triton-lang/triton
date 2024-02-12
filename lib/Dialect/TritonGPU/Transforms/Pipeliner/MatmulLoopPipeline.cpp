@@ -70,10 +70,10 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
     ttg::BlockedEncodingAttr encoding = opToInfo[loadOp].blockedEncoding;
     auto convertBlockLayout = [&](Value src) {
       auto ty = src.getType().cast<RankedTensorType>();
-      auto newTy = 
-        RankedTensorType::get(ty.getShape(), ty.getElementType(), encoding);
-      auto cvt = builder.create<ttg::ConvertLayoutOp>(
-        loadOp->getLoc(), newTy, src);
+      auto newTy =
+          RankedTensorType::get(ty.getShape(), ty.getElementType(), encoding);
+      auto cvt =
+          builder.create<ttg::ConvertLayoutOp>(loadOp->getLoc(), newTy, src);
       return cvt.getResult();
     };
     src = convertBlockLayout(src);
@@ -495,7 +495,7 @@ createAsynOps(scf::ForOp &forOp,
 
   return allocs;
 }
- 
+
 static void
 printSchedule(std::vector<std::pair<Operation *, unsigned>> &schedule,
               int numStages) {
@@ -524,7 +524,6 @@ isScheduleValid(scf::ForOp forOp,
     return false;
   return true;
 }
-
 
 // create the schedule for a matmul loop. This is ad hoc based on how we know
 // matmul loops should be pipelined and is not a generic scheduler.
@@ -698,10 +697,6 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   bool hasMMAV3 = false;
   if (!collectOpsToPipeline(forOp, opToInfo, numStages, hasMMAV3))
     return false;
-  bool hasAsynCp = llvm::any_of(opToInfo, [](auto &pair) {
-    return isa<tt::LoadOp>(pair.first) &&
-           !isLoadFromTensorPtr(cast<tt::LoadOp>(pair.first));
-  });
 
   // Calculate the number of buffers needed for each load.
   // TODO pawel: we could do more fine-grained allocation here and
@@ -753,16 +748,13 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
       op->setAttr(kNeedWaitAttrName, UnitAttr::get(op->getContext()));
     }
   };
-
-  if (hasAsynCp) {
-    // Insert a wait 0 after the loop
-    OpBuilder builder(forOp);
-    builder.setInsertionPointAfter(forOp);
-    builder.create<ttg::AsyncWaitOp>(forOp.getLoc(), 0);
-    // Explicitly deallocate allocated tensors after the wait op
-    for (auto alloc : allocs)
-      builder.create<ttg::DeallocTensorOp>(forOp.getLoc(), alloc);
-  }
+  // Insert a wait 0 after the loop
+  OpBuilder builder(forOp);
+  builder.setInsertionPointAfter(forOp);
+  builder.create<ttg::AsyncWaitOp>(forOp.getLoc(), 0);
+  // Explicitly deallocate allocated tensors after the wait op
+  for (auto alloc : allocs)
+    builder.create<ttg::DeallocTensorOp>(forOp.getLoc(), alloc);
   return true;
 }
 
