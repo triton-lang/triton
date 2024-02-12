@@ -1798,7 +1798,7 @@ scan_configs = [(op, type, shape, axis, num_warps)
                 for type in ['int32', 'float32']
                 for axis in [1, 0]
                 for shape in scan2d_shapes
-                for op in ['cumsum', 'cumprod', 'get_first_element', 'linear_recurrence']]
+                for op in ['cumsum', 'cumprod', 'get_first_element', 'linear_recurrence', 'cummax']]
 negative_config = [('cumsum', 'float32', (32, 32), -1, 4)]
 
 
@@ -1812,6 +1812,12 @@ def get_first_element(a, b):
 @triton.jit
 def linear_recurrence(a1, b1, a2, b2):
     return a1 * a2, b1 * a2 + b2
+
+
+@triton.jit
+def cummax(v0, i0, v1, i1):
+    gt = v0 > v1
+    return tl.where(gt, v0, v1), tl.where(gt, i0, i1)
 
 
 @pytest.mark.parametrize("op, dtype_str, shape, axis, num_warps", scan_configs + negative_config)
@@ -1833,6 +1839,11 @@ def test_scan2d(op, dtype_str, shape, axis, num_warps, device):
     elif op == 'get_first_element':
         kernel = patch_kernel(kernel,
                               {'GENERATE_TEST_HERE': f'z = tl.associative_scan(x, axis={axis}, combine_fn={op})'})
+    elif op == 'cummax':
+        rg = "range_m[:, None]" if axis == 0 else "range_n[None, :]"
+        rg = f"tl.broadcast_to({rg}.to(tl.int64), [BLOCK_M, BLOCK_N])"
+        kernel = patch_kernel(
+            kernel, {'GENERATE_TEST_HERE': f'_, z = tl.associative_scan((x, {rg}), axis={axis}, combine_fn={op})'})
     else:
         assert op == 'linear_recurrence'
         kernel = patch_kernel(
@@ -1855,6 +1866,10 @@ def test_scan2d(op, dtype_str, shape, axis, num_warps, device):
         numpy_op = {'cumsum': np.cumsum, 'cumprod': np.cumprod}[op]
         z_dtype_str = dtype_str
         z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
+    elif op == 'cummax':
+        # NumPy does not have cummax
+        z = z.astype(np.int64)
+        z_ref = torch.cummax(torch.from_numpy(x), axis=axis).indices.numpy()
     elif op == 'linear_recurrence':
         # Simplify to the axis=1 case
         x_ref = x.T if axis == 0 else x
