@@ -494,16 +494,16 @@ struct AtomicCASOpConversion
     auto valElements = unpackLLElements(loc, llVal, rewriter);
 
     auto valueTy = op.getResult().getType();
-    auto TensorTy = valueTy.dyn_cast<RankedTensorType>();
+    auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
     Type valueElemTy =
-        TensorTy ? getTypeConverter()->convertType(TensorTy.getElementType())
+        tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
                  : valueTy;
     auto valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     auto elemsPerThread = getTotalElemsPerThread(op.getVal().getType());
     // vec = 1 for scalar
     auto vec = getVectorSize(op.getPtr());
     // tensor
-    if (TensorTy) {
+    if (tensorTy) {
       auto valTy = op.getVal().getType().cast<RankedTensorType>();
       vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
     }
@@ -540,7 +540,7 @@ struct AtomicCASOpConversion
       atom.global().o(semStr).o(scope).o("cas").o(sTy);
       atom(dstOpr, ptrOpr, cmpOpr, valOpr).predicate(mask);
 
-      if (TensorTy) {
+      if (tensorTy) {
         auto retType = vec == 1 ? valueElemTy : vecTy;
         auto ret = ptxBuilderAtomicCAS.launch(rewriter, loc, retType);
         for (int ii = 0; ii < vec; ++ii) {
@@ -569,8 +569,8 @@ struct AtomicCASOpConversion
       }
     }
 
-    if (TensorTy) {
-      Type structTy = getTypeConverter()->convertType(TensorTy);
+    if (tensorTy) {
+      Type structTy = getTypeConverter()->convertType(tensorTy);
       Value resultStruct = packLLElements(loc, getTypeConverter(), resultVals,
                                           rewriter, structTy);
       rewriter.replaceOp(op, {resultStruct});
@@ -768,13 +768,13 @@ struct InsertSliceAsyncOpConversion
     Value other = op.getOther();
     auto funcOp = op->getParentOfType<FunctionOpInterface>();
 
-    auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
-    auto resTy = op.getDst().getType().cast<RankedTensorType>();
-    auto resElemTy = getTypeConverter()->convertType(resTy.getElementType());
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getDst().getType();
+    auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     auto srcLayout = srcTy.getEncoding();
     assert((srcLayout.isa<BlockedEncodingAttr, SliceEncodingAttr>() &&
             "Unexpected srcLayout in InsertSliceAsyncOpConversion"));
-    auto resSharedLayout = resTy.getEncoding().cast<SharedEncodingAttr>();
+    auto resSharedLayout = dstTy.getEncoding().cast<SharedEncodingAttr>();
     auto srcShape = srcTy.getShape();
     assert((srcShape.size() <= 3) &&
            "insert_slice_async: Unexpected rank of %src");
@@ -789,14 +789,12 @@ struct InsertSliceAsyncOpConversion
     auto srcElems = unpackLLElements(loc, llSrc, rewriter);
 
     // %dst
-    RankedTensorType dstTy = op.getDst().getType();
-    auto dstShape = dstTy.getShape();
     auto smemObj =
         getSharedMemoryObjectFromStruct(loc, llDst, resElemTy, rewriter);
     auto axis = op->getAttrOfType<IntegerAttr>("axis").getInt();
     SmallVector<Value, 4> offsetVals;
     SmallVector<Value, 4> srcStrides;
-    for (auto i = 0; i < dstShape.size(); ++i) {
+    for (auto i = 0; i < dstTy.getShape().size(); ++i) {
       if (i == axis) {
         offsetVals.emplace_back(llIndex);
       } else {

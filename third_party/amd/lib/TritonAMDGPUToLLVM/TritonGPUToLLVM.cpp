@@ -85,7 +85,7 @@ struct BroadcastOpConversion
     Value src = adaptor.getSrc();
     Value result = op.getResult();
     RankedTensorType srcTy = op.getSrc().getType();
-    auto resultTy = result.getType().cast<RankedTensorType>();
+    RankedTensorType resultTy = op.getType();
     auto srcLayout = srcTy.getEncoding();
     auto resultLayout = resultTy.getEncoding();
     auto srcShape = srcTy.getShape();
