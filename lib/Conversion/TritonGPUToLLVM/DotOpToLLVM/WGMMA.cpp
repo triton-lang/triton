@@ -516,26 +516,16 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
 LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                            const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Value thread) {
-  auto loc = op.getLoc();
-  Value A = op.getA();
-  Value B = op.getB();
-  Value C = op.getC();
-  auto ATensorTy = A.getType().cast<RankedTensorType>();
-  auto BTensorTy = B.getType().cast<RankedTensorType>();
-
-  assert(ATensorTy.getEncoding().isa<SharedEncodingAttr>() ||
-         ATensorTy.getEncoding().isa<DotOperandEncodingAttr>());
-  assert(BTensorTy.getEncoding().isa<SharedEncodingAttr>() &&
+  auto AEnc = op.getA().getType().getEncoding();
+  auto BEnc = op.getB().getType().getEncoding();
+  assert(AEnc.isa<SharedEncodingAttr>() || AEnc.isa<DotOperandEncodingAttr>());
+  assert(BEnc.isa<SharedEncodingAttr>() &&
          "Operand B should use Shared layout.");
-
-  Value llA, llB, llC;
-  llA = adaptor.getA();
-  llB = adaptor.getB();
-  llC = adaptor.getC();
-
-  return convertDot(typeConverter, rewriter, loc, op.getOperation(), A, B, C,
-                    op.getD(), llA, llB, llC, op.getAllowTF32(),
-                    op.getMaxNumImpreciseAcc(), true, thread);
+  return convertDot(typeConverter, rewriter, op.getLoc(), op.getOperation(), //
+                    op.getA(), op.getB(), op.getC(), op.getD(),              //
+                    adaptor.getA(), adaptor.getB(), adaptor.getC(),          //
+                    op.getAllowTF32(), op.getMaxNumImpreciseAcc(), true,
+                    thread);
 }
 
 LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
@@ -543,24 +533,14 @@ LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
                                 const LLVMTypeConverter *typeConverter,
                                 ConversionPatternRewriter &rewriter,
                                 Value thread) {
-  auto loc = op.getLoc();
-  Value A = op.getA();
-  Value B = op.getB();
-  Value C = op.getC();
-  auto ATensorTy = A.getType().cast<RankedTensorType>();
-  auto BTensorTy = B.getType().cast<RankedTensorType>();
-
-  assert(ATensorTy.getEncoding().isa<SharedEncodingAttr>() ||
-         ATensorTy.getEncoding().isa<DotOperandEncodingAttr>());
-  assert(BTensorTy.getEncoding().isa<SharedEncodingAttr>() &&
+  auto AEnc = op.getA().getType().getEncoding();
+  auto BEnc = op.getB().getType().getEncoding();
+  assert(AEnc.isa<SharedEncodingAttr>() || AEnc.isa<DotOperandEncodingAttr>());
+  assert(BEnc.isa<SharedEncodingAttr>() &&
          "Operand B should use Shared layout.");
-
-  Value llA, llB, llC;
-  llA = adaptor.getA();
-  llB = adaptor.getB();
-  llC = adaptor.getC();
-
-  return convertDot(typeConverter, rewriter, loc, op.getOperation(), A, B, C,
-                    op.getD(), llA, llB, llC, op.getAllowTF32(),
-                    op.getMaxNumImpreciseAcc(), false, thread);
+  return convertDot(typeConverter, rewriter, op.getLoc(), op.getOperation(), //
+                    op.getA(), op.getB(), op.getC(), op.getD(),              //
+                    adaptor.getA(), adaptor.getB(), adaptor.getC(),
+                    op.getAllowTF32(), op.getMaxNumImpreciseAcc(), false,
+                    thread);
 }

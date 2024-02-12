@@ -59,8 +59,8 @@ public:
       return mlir::failure();
     if (!cvtOp.getSrc().getDefiningOp<triton::LoadOp>())
       return failure();
-    auto dstTy = dstOp.getResult().getType().cast<RankedTensorType>();
-    auto srcTy = cvtOp.getOperand().getType().cast<RankedTensorType>();
+    auto dstTy = dstOp.getResult().getType();
+    auto srcTy = cvtOp.getOperand().getType();
     if (dstTy != srcTy)
       return mlir::failure();
 
@@ -166,10 +166,7 @@ static bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
     getForwardSlice(currentValue, &forwardSlice);
     for (Operation *op : forwardSlice) {
       if (auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-        Attribute dstEncoding = convertOp.getResult()
-                                    .getType()
-                                    .cast<RankedTensorType>()
-                                    .getEncoding();
+        Attribute dstEncoding = convertOp.getResult().getType().getEncoding();
         if (auto mmaLayout =
                 dstEncoding.dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>())
           return (mmaLayout.getVersionMajor() > 1) ? true
@@ -694,8 +691,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   OpBuilder rewriter(op);
   Attribute encoding = *layouts[op->getResult(0)].encodings.begin();
   if (auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-    Attribute srcEncoding =
-        convertOp.getOperand().getType().cast<RankedTensorType>().getEncoding();
+    Attribute srcEncoding = convertOp.getSrc().getType().getEncoding();
     auto it = layouts.find(convertOp.getOperand());
     if (it != layouts.end())
       srcEncoding = *(it->second.encodings.begin());
@@ -864,7 +860,7 @@ static void backwardRematerialization(ConvertLayoutOp convertOp) {
     return;
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristic to accommodate fused attention
-  auto targetType = convertOp->getResultTypes()[0].cast<RankedTensorType>();
+  auto targetType = convertOp.getResult().getType();
   if (targetType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
     return;
 
@@ -890,7 +886,7 @@ static void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp) {
     return;
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristics to accommodate fused attention
-  auto targetType = convertOp->getResultTypes()[0].cast<RankedTensorType>();
+  auto targetType = convertOp.getResult().getType();
   if (targetType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
     return;
 
