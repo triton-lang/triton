@@ -254,7 +254,7 @@ getBlockedEncoding(tt::LoadOp loadOp, ModuleAxisInfoAnalysis &axisInfo) {
   unsigned currPerThread = std::min(alignment, 128 / elemNumBits);
 
   ttg::CTALayoutAttr CTALayout = ttg::getCTALayout(ty.getEncoding());
-  return ttg::BlockedEncodingAttr::get(loadOp->getContext(), ty.getShape(), 4,
+  return ttg::BlockedEncodingAttr::get(loadOp->getContext(), ty.getShape(), currPerThread,
                                        order, numWarps, threadsPerWarp,
                                        CTALayout);
 }
