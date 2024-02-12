@@ -151,11 +151,11 @@ public:
       return mlir::failure();
     // broadcast operand is expand dims
     auto expandLhsOp = llvm::dyn_cast_or_null<triton::ExpandDimsOp>(
-        broadcastLhsOp.getOperand().getDefiningOp());
+        broadcastLhsOp.getSrc().getDefiningOp());
     if (!expandLhsOp)
       return mlir::failure();
     auto expandRhsOp = llvm::dyn_cast_or_null<triton::ExpandDimsOp>(
-        broadcastRhsOp.getOperand().getDefiningOp());
+        broadcastRhsOp.getSrc().getDefiningOp());
     if (!expandRhsOp)
       return mlir::failure();
     // get not-broadcast dimensions
@@ -169,20 +169,16 @@ public:
         broadcastLhsOp.getType().cast<ShapedType>().getShape();
     if (broadcastLhsShape[2] < 16 || broadcastRhsShape[0] < 16)
       return mlir::failure();
-    Type newAccType =
-        RankedTensorType::get({broadcastLhsShape[0], broadcastRhsShape[2]},
-                              broadcastLhsOp.getOperand()
-                                  .getType()
-                                  .cast<ShapedType>()
-                                  .getElementType());
+    Type newAccType = RankedTensorType::get(
+        {broadcastLhsShape[0], broadcastRhsShape[2]},
+        broadcastLhsOp.getSrc().getType().cast<ShapedType>().getElementType());
     rewriter.setInsertionPoint(op);
     auto newAcc = rewriter.create<triton::SplatOp>(
         op->getLoc(), newAccType,
         rewriter.create<arith::ConstantOp>(op->getLoc(),
                                            rewriter.getF32FloatAttr(0)));
-    rewriter.replaceOpWithNewOp<triton::DotOp>(op, expandLhsOp.getOperand(),
-                                               expandRhsOp.getOperand(), newAcc,
-                                               true, 0);
+    rewriter.replaceOpWithNewOp<triton::DotOp>(
+        op, expandLhsOp.getSrc(), expandRhsOp.getSrc(), newAcc, true, 0);
     return mlir::success();
   }
 };

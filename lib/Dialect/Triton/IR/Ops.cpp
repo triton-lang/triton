@@ -730,13 +730,13 @@ LogicalResult ExpandDimsOp::inferReturnTypes(
 
 LogicalResult ExpandDimsOp::canonicalize(ExpandDimsOp op,
                                          PatternRewriter &rewriter) {
-  auto definingOp = op.getOperand().getDefiningOp();
+  auto definingOp = op.getSrc().getDefiningOp();
   if (!definingOp) {
     return failure();
   }
   // expand_dims(splat) -> splat
   if (auto splat = dyn_cast<SplatOp>(definingOp)) {
-    rewriter.replaceOpWithNewOp<SplatOp>(op, op.getType(), splat.getOperand());
+    rewriter.replaceOpWithNewOp<SplatOp>(op, op.getType(), splat.getSrc());
     return success();
   }
   // expand_dims(broadcast(x)) -> broadcast(expand_dims(x))
@@ -800,7 +800,7 @@ OpFoldResult ExpandDimsOp::fold(FoldAdaptor adaptor) {
 template <typename OpType>
 LogicalResult canonicalizeViewOrBroadcast(OpType op,
                                           PatternRewriter &rewriter) {
-  auto definingOp = op.getOperand().getDefiningOp();
+  auto definingOp = op.getSrc().getDefiningOp();
   if (!definingOp) {
     return failure();
   }
@@ -815,7 +815,7 @@ LogicalResult canonicalizeViewOrBroadcast(OpType op,
 
   // view(splat) -> splat
   if (auto splat = dyn_cast<SplatOp>(definingOp)) {
-    rewriter.replaceOpWithNewOp<SplatOp>(op, op.getType(), splat.getOperand());
+    rewriter.replaceOpWithNewOp<SplatOp>(op, op.getType(), splat.getSrc());
     return success();
   }
 
@@ -829,9 +829,9 @@ LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
 }
 
 OpFoldResult ReshapeOp::fold(FoldAdaptor adaptor) {
-  if (getType() == getOperand().getType()) {
+  if (getType() == getSrc().getType()) {
     // no-op
-    return getOperand();
+    return getSrc();
   }
 
   return foldViewLikeOp(*this, adaptor.getSrc());
@@ -840,7 +840,7 @@ OpFoldResult ReshapeOp::fold(FoldAdaptor adaptor) {
 LogicalResult ReshapeOp::verify() {
   auto dstTy = getType();
   auto srcTy = getSrc().getType();
-  if (dstTy.getNumElements() != srcTy.getNumElements()) {
+  if (getType().getNumElements() != srcTy.getNumElements()) {
     return emitError(
         "number of src and dst elements of reshape must be the same");
   }
@@ -875,7 +875,7 @@ LogicalResult ReshapeOp::verify() {
 //-- FpToFpOp --
 LogicalResult FpToFpOp::verify() {
   auto dstType = getType().getElementType();
-  auto srcType = getFrom().getType().getElementType();
+  auto srcType = getSrc().getType().getElementType();
   if ((dstType.getIntOrFloatBitWidth() < srcType.getIntOrFloatBitWidth()) &&
       (!getRounding().has_value())) {
     return emitError("Rounding mode is required for FP downcast");
@@ -890,9 +890,9 @@ LogicalResult BroadcastOp::canonicalize(BroadcastOp op,
 }
 
 OpFoldResult BroadcastOp::fold(FoldAdaptor adaptor) {
-  if (getType() == getOperand().getType()) {
+  if (getType() == getSrc().getType()) {
     // no-op
-    return getOperand();
+    return getSrc();
   }
 
   auto value = adaptor.getSrc();

@@ -74,13 +74,12 @@ public:
 
 #ifdef USE_ROCM
     auto encoding =
-        cvtOp.getSrc().getType().cast<RankedTensorType>().getEncoding();
+        cvtOp.getSrc().getType().getEncoding();
     if (!encoding.isa<triton::gpu::MfmaEncodingAttr>())
       return mlir::failure();
 #endif
     if (!cvtOp.getSrc()
              .getType()
-             .cast<RankedTensorType>()
              .getEncoding()
              .isa<triton::gpu::MmaEncodingTrait>())
       return mlir::failure();
@@ -89,9 +88,9 @@ public:
       return mlir::failure();
 
     auto newEncoding =
-        cvtOp.getOperand().getType().cast<RankedTensorType>().getEncoding();
+        cvtOp.getSrc().getType().cast<RankedTensorType>().getEncoding();
 
-    auto newVal = cvtOp.getOperand();
+    auto newVal = cvtOp.getSrc();
 
     auto newPtrType = RankedTensorType::get(
         ptrType.getShape(), ptrType.getElementType(), newEncoding);

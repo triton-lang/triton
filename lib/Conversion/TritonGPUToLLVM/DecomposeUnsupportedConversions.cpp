@@ -40,7 +40,7 @@ struct DecomposeUnsupportedConversions
         return;
       auto shape = cvtOp.getType().cast<RankedTensorType>().getShape();
       auto argEncoding =
-          cvtOp.getOperand().getType().cast<RankedTensorType>().getEncoding();
+          cvtOp.getSrc().getType().cast<RankedTensorType>().getEncoding();
       auto cvtEncoding = cvtOp.getType().cast<RankedTensorType>().getEncoding();
       if (argEncoding.isa<triton::gpu::DotOperandEncodingAttr>() ||
           cvtEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
@@ -50,7 +50,7 @@ struct DecomposeUnsupportedConversions
       auto newArgType = RankedTensorType::get(shape, F16Ty, argEncoding);
       auto newCvtType = RankedTensorType::get(shape, F16Ty, cvtEncoding);
       auto newArg = builder.create<mlir::triton::FpToFpOp>(
-          cvtOp.getLoc(), newArgType, cvtOp.getOperand());
+          cvtOp.getLoc(), newArgType, cvtOp.getSrc());
       addAttrs(newArg, cvtOp->getAttrs());
       auto newCvt = builder.create<mlir::triton::gpu::ConvertLayoutOp>(
           cvtOp.getLoc(), newCvtType, newArg);
@@ -80,7 +80,7 @@ struct DecomposeUnsupportedConversions
                 mod.getContext(), dstType.getShape(), sizePerThread,
                 getOrder(shared), numWarps, threadsPerWarp, numCTAs));
         auto newSplat = builder.create<triton::SplatOp>(
-            splatOp.getLoc(), newType, splatOp.getOperand());
+            splatOp.getLoc(), newType, splatOp.getSrc());
         auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
             splatOp.getLoc(), dstType, newSplat.getResult());
         splatOp.replaceAllUsesWith(newConvert.getResult());
@@ -93,7 +93,7 @@ struct DecomposeUnsupportedConversions
     /* -------------------------------- */
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
-      auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
+      auto srcType = cvtOp.getSrc().getType().cast<RankedTensorType>();
       auto dstType = cvtOp.getType().cast<RankedTensorType>();
       auto srcMma =
           srcType.getEncoding().dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>();
@@ -106,7 +106,7 @@ struct DecomposeUnsupportedConversions
                 mod.getContext(), srcType.getShape(), getSizePerThread(srcMma),
                 getOrder(srcMma), numWarps, threadsPerWarp, numCTAs));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
-            cvtOp.getLoc(), tmpType, cvtOp.getOperand());
+            cvtOp.getLoc(), tmpType, cvtOp.getSrc());
         addAttrs(tmp, cvtOp->getAttrs());
         auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), dstType, tmp);
@@ -121,7 +121,7 @@ struct DecomposeUnsupportedConversions
     /* -------------------------------- */
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
-      auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
+      auto srcType = cvtOp.getSrc().getType().cast<RankedTensorType>();
       auto dstType = cvtOp.getType().cast<RankedTensorType>();
       auto srcBlocked =
           srcType.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
@@ -135,7 +135,7 @@ struct DecomposeUnsupportedConversions
                 srcBlocked.getOrder(), srcBlocked.getCTALayout(),
                 srcType.getElementType()));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
-            cvtOp.getLoc(), tmpType, cvtOp.getOperand());
+            cvtOp.getLoc(), tmpType, cvtOp.getSrc());
         addAttrs(tmp, cvtOp->getAttrs());
         auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), dstType, tmp);

@@ -123,7 +123,7 @@ struct MoveBroadcastAfterElementwisePattern
         return mlir::failure();
       }
       auto getSrcShape = [](triton::BroadcastOp b) {
-        return b.getSrc().getType().cast<RankedTensorType>().getShape();
+        return b.getSrc().getType().getShape();
       };
       if (auto broadcastOp = llvm::dyn_cast<triton::BroadcastOp>(definingOp)) {
         if (!seenBroadcast) {
@@ -154,7 +154,7 @@ struct MoveBroadcastAfterElementwisePattern
       }
     }
 
-    auto srcTy = broadcastOp.getSrc().getType().dyn_cast<RankedTensorType>();
+    auto srcTy = broadcastOp.getSrc().getType();
     auto srcShape = srcTy.getShape();
     auto srcEncoding = srcTy.getEncoding();
 

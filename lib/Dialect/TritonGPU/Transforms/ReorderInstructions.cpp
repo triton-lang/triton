@@ -25,7 +25,7 @@ using namespace mlir;
 
 static inline bool
 willIncreaseRegisterPressure(triton::gpu::ConvertLayoutOp op) {
-  auto srcType = op.getOperand().getType().cast<RankedTensorType>();
+  auto srcType = op.getSrc().getType().cast<RankedTensorType>();
   auto dstType = op.getResult().getType().cast<RankedTensorType>();
   auto srcEncoding = srcType.getEncoding();
   auto dstEncoding = dstType.getEncoding();
@@ -92,7 +92,7 @@ public:
       auto dstEncoding = dstType.getEncoding();
       if (!dstEncoding.isa<triton::gpu::SharedEncodingAttr>())
         return;
-      Operation *argOp = op.getOperand().getDefiningOp();
+      Operation *argOp = op.getSrc().getDefiningOp();
       if (!argOp)
         return;
       moveAfter(op, argOp);
@@ -100,7 +100,7 @@ public:
     // Move transpositions just after their definition
     opToMove.clear();
     m.walk([&](triton::TransOp op) {
-      Operation *argOp = op.getOperand().getDefiningOp();
+      Operation *argOp = op.getSrc().getDefiningOp();
       if (!argOp)
         return;
       moveAfter(op, argOp);

@@ -763,15 +763,13 @@ struct InsertSliceAsyncOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     // insert_slice_async %src, %dst, %index, %mask, %other
     auto loc = op.getLoc();
-    Value src = op.getSrc();
-    Value dst = op.getDst();
     Value res = op.getResult();
     Value mask = op.getMask();
     Value other = op.getOther();
     auto funcOp = op->getParentOfType<FunctionOpInterface>();
 
-    auto srcTy = src.getType().cast<RankedTensorType>();
-    auto resTy = dst.getType().cast<RankedTensorType>();
+    auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
+    auto resTy = op.getDst().getType().cast<RankedTensorType>();
     auto resElemTy = getTypeConverter()->convertType(resTy.getElementType());
     auto srcLayout = srcTy.getEncoding();
     assert((srcLayout.isa<BlockedEncodingAttr, SliceEncodingAttr>() &&
@@ -791,7 +789,7 @@ struct InsertSliceAsyncOpConversion
     auto srcElems = unpackLLElements(loc, llSrc, rewriter);
 
     // %dst
-    auto dstTy = dst.getType().cast<RankedTensorType>();
+    RankedTensorType dstTy = op.getDst().getType();
     auto dstShape = dstTy.getShape();
     auto smemObj =
         getSharedMemoryObjectFromStruct(loc, llDst, resElemTy, rewriter);
@@ -833,7 +831,7 @@ struct InsertSliceAsyncOpConversion
     // We don't use getVec() here because we are copying from memory to memory.
     // If contiguity > vector size, we can have one pointer maintaining the
     // start of the vector and the other pointer moving to the next vector.
-    unsigned inVec = getContiguity(src);
+    unsigned inVec = getContiguity(op.getSrc());
     unsigned outVec = resSharedLayout.getVec();
     unsigned minVec = inVec;
     if (outVec > 1)
@@ -907,7 +905,7 @@ struct ExtractSliceOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     // %dst = extract_slice %src[%offsets]
     Location loc = op->getLoc();
-    auto srcTy = op.getSource().getType().dyn_cast<RankedTensorType>();
+    auto srcTy = op.getSrc().getType();
     auto srcLayout = srcTy.getEncoding().dyn_cast<SharedEncodingAttr>();
     assert(srcLayout && "Unexpected resultLayout in ExtractSliceOpConversion");
     assert(op.hasUnitStride() &&
@@ -918,8 +916,8 @@ struct ExtractSliceOpConversion
 
     // newBase = base + offset
     // Triton supports either static and dynamic offsets
-    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
-        loc, adaptor.getSource(), llvmElemTy, rewriter);
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                         llvmElemTy, rewriter);
     SmallVector<Value, 4> opOffsetVals;
     SmallVector<Value, 4> offsetVals;
     auto mixedOffsets = op.getMixedOffsets();
