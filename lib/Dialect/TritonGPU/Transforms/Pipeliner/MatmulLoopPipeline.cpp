@@ -13,7 +13,9 @@
 #include "llvm/ADT/MapVector.h"
 #include "llvm/Support/Debug.h"
 
-#define PIPELINER_DEBUG 0
+#define DEBUG_TYPE "triton-matmul-loop-pipeline"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 #define int_attr(num) builder.getI64IntegerAttr(num)
 
@@ -61,16 +63,21 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   builder.setInsertionPoint(loadOp);
   Location loc = loadOp.getLoc();
   Value src = loadOp.getPtr();
+  Value mask = loadOp.getMask();
   if (!isExpensiveLoadOrStore(loadOp) && opToInfo[loadOp].blockedEncoding) {
     // For inexpensive loads that do not directly feed into dot ops
     // we want to use optimal layout for the data.
-    auto ty = src.getType().cast<RankedTensorType>();
     ttg::BlockedEncodingAttr encoding = opToInfo[loadOp].blockedEncoding;
-    Type newType =
+    auto convertBlockLayout = [&](Value src) {
+      auto ty = src.getType().cast<RankedTensorType>();
+      auto newTy = 
         RankedTensorType::get(ty.getShape(), ty.getElementType(), encoding);
-    auto newCvt = builder.create<ttg::ConvertLayoutOp>(
-        loadOp->getLoc(), newType, loadOp.getPtr());
-    src = newCvt.getResult();
+      auto cvt = builder.create<ttg::ConvertLayoutOp>(
+        loadOp->getLoc(), newTy, src);
+      return cvt.getResult();
+    };
+    src = convertBlockLayout(src);
+    mask = convertBlockLayout(src);
   }
   auto insertOp = builder.create<ttg::InsertSliceAsyncOp>(
       loc, alloc.getType(), src, alloc, insertIdx, loadOp.getMask(),
@@ -427,8 +434,6 @@ createAsynOps(scf::ForOp &forOp,
   SmallVector<AsyncLoad> asyncLoads;
   SmallVector<Value> allocs;
   SmallVector<Value> newOperands;
-  bool needsMbarrierPhase = false;
-  bool needsAsyncWait = false;
   for (auto &[op, info] : opToInfo) {
     if (tt::LoadOp loadOp = dyn_cast<tt::LoadOp>(op)) {
       Value alloc = createAlloc(forOp, loadOp, info.dotOperandEncoding,
@@ -437,10 +442,6 @@ createAsynOps(scf::ForOp &forOp,
       newOperands.push_back(alloc);
       allocs.push_back(alloc);
       asyncLoads.emplace_back(loadOp, alloc);
-      if (isLoadFromTensorPtr(loadOp))
-        needsMbarrierPhase = true;
-      else
-        needsAsyncWait = true;
     }
   }
 
@@ -494,19 +495,18 @@ createAsynOps(scf::ForOp &forOp,
 
   return allocs;
 }
-#if PIPELINER_DEBUG
+ 
 static void
 printSchedule(std::vector<std::pair<Operation *, unsigned>> &schedule,
               int numStages) {
-  llvm::outs() << "Schedule:\n";
+  LDBG("Schedule:");
   for (int i = 0; i < numStages; i++) {
-    llvm::outs() << "Stage " << i << ":\n";
+    LDBG("\nStage " << i);
     for (auto &pair : schedule) {
       if (pair.second == i) {
         pair.first->dump();
       }
     }
-    llvm::outs() << "\n";
   }
 }
 
@@ -524,7 +524,7 @@ isScheduleValid(scf::ForOp forOp,
     return false;
   return true;
 }
-#endif // PIPELINER_DEBUG
+
 
 // create the schedule for a matmul loop. This is ad hoc based on how we know
 // matmul loops should be pipelined and is not a generic scheduler.
@@ -532,19 +532,20 @@ static std::vector<std::pair<Operation *, unsigned>>
 createSchedule(scf::ForOp forOp, int numStages,
                llvm::MapVector<Operation *, PipelineOpInfo> &opToInfo,
                bool prefetchExtract) {
-#if PIPELINER_DEBUG
-  llvm::outs() << "For loop:\n";
-  forOp.dump();
+  LLVM_DEBUG({
+    LDBG("For loop:");
+    forOp.dump();
 
-  for (int i = 0; i < numStages; i++) {
-    llvm::outs() << "\nops in stage " << i << ":\n";
-    for (auto &[op, info] : opToInfo) {
-      if (i == info.stage) {
-        op->dump();
+    LDBG("Initial schedule:");
+    for (int i = 0; i < numStages; i++) {
+      LDBG("\nOps in stage " << i);
+      for (auto &[op, info] : opToInfo) {
+        if (i == info.stage) {
+          op->dump();
+        }
       }
     }
-  }
-#endif // PIPELINER_DEBUG
+  });
 
   SmallVector<Operation *> extractOps;
   // Find the insert/extract ops that will go respectively in stage 0 and stage
@@ -555,13 +556,12 @@ createSchedule(scf::ForOp forOp, int numStages,
         extractOps.push_back(&op);
     }
   }
-#if PIPELINER_DEBUG
+
   auto printDenseSet = [](DenseSet<Operation *> &set) {
     for (auto op : set) {
       op->dump();
     }
   };
-#endif // PIPELINER_DEBUG
 
   SmallVector<DenseSet<Operation *>> insertOps(numStages);
   for (auto &[op, info] : opToInfo) {
@@ -580,12 +580,12 @@ createSchedule(scf::ForOp forOp, int numStages,
     }
   }
 
-#if PIPELINER_DEBUG
-  for (int stage = 0; stage < numStages; stage++) {
-    llvm::outs() << "\ninsertAndDeps " << stage << ":\n";
-    printDenseSet(insertAndDeps[stage]);
-  }
-#endif // PIPELINER_DEBUG
+  LLVM_DEBUG({
+    for (int stage = 0; stage < numStages; stage++) {
+      LDBG("\ninsertAndDeps " << stage);
+      printDenseSet(insertAndDeps[stage]);
+    }
+  });
 
   // Find dependencies with distance of 1.
   SmallVector<DenseSet<Operation *>> distanceOneUsers(numStages);
@@ -606,10 +606,10 @@ createSchedule(scf::ForOp forOp, int numStages,
         }
       }
     }
-#if PIPELINER_DEBUG
-    llvm::outs() << "\ndistanceOneUsers " << stage << ":\n";
-    printDenseSet(distanceOneUsers[stage]);
-#endif // PIPELINER_DEBUG
+    LLVM_DEBUG({
+      LDBG("\ndistanceOneUsers " << stage);
+      printDenseSet(distanceOneUsers[stage]);
+    });
   }
 
   // Schedule loads with a distance of 1 together with the insert ops.
@@ -634,10 +634,10 @@ createSchedule(scf::ForOp forOp, int numStages,
       if (!isa<tt::LoadOp>(op))
         tt::addDep(op, stage1deps[i], true, &allInsertAndDeps);
     }
-#if PIPELINER_DEBUG
-    llvm::outs() << "\nstage1deps " << i << ":\n";
-    printDenseSet(stage1deps[i]);
-#endif // PIPELINER_DEBUG
+    LLVM_DEBUG({
+      LDBG("\nstage1deps " << i);
+      printDenseSet(stage1deps[i]);
+    });
   }
 
   DenseSet<Operation *> allStage1Deps;
@@ -649,10 +649,10 @@ createSchedule(scf::ForOp forOp, int numStages,
   for (Operation *op : extractOps) {
     tt::addDep(op, extractAndDeps, true, &allInsertAndDeps);
   }
-#if PIPELINER_DEBUG
-  llvm::outs() << "\nextractAndDeps:\n";
-  printDenseSet(extractAndDeps);
-#endif // PIPELINER_DEBUG
+  LLVM_DEBUG({
+    LDBG("\nextractAndDeps:");
+    printDenseSet(extractAndDeps);
+  });
 
   std::vector<std::pair<Operation *, unsigned>> schedule;
   // Schedule stage `numStage - 1` first.
@@ -682,10 +682,8 @@ createSchedule(scf::ForOp forOp, int numStages,
   tt::addOps(forOp, numStages - 2, schedule,
              [&](Operation *op) { return extractAndDeps.count(op); });
 
-#if PIPELINER_DEBUG
-  printSchedule(schedule, numStages);
+  LLVM_DEBUG(printSchedule(schedule, numStages));
   assert(isScheduleValid(forOp, schedule) && "Invalid schedule.");
-#endif // PIPELINER_DEBUG
 
   return schedule;
 }
