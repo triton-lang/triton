@@ -489,8 +489,7 @@ minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
   // of async_commit ops among all the paths.
   // If the wait is not needed return std::nullopt.
   std::function<int(Value, Operation *, int)> minOverHistories =
-      [&](Value val, Operation *sinkOp,
-          int thisHistorySum) -> int {
+      [&](Value val, Operation *sinkOp, int thisHistorySum) -> int {
     if (Operation *defOp = val.getDefiningOp()) {
       if (isa<ttg::InsertSliceAsyncOp>(defOp)) {
         thisHistorySum += countCommitsBetween(defOp->getNextNode(), sinkOp);
@@ -517,23 +516,20 @@ minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
       // get the value value assigned to the argument coming from outside the
       // loop
       Value incomingVal = forOp.getInitArgs()[arg.getArgNumber() - 1];
-      int min1 =
-          minOverHistories(incomingVal, forOp, thisHistorySum);
+      int min1 = minOverHistories(incomingVal, forOp, thisHistorySum);
 
       // get the value value assigned to the argument coming from the previous
       // iteration
       Operation *yieldOp = block->getTerminator();
       Value prevVal = yieldOp->getOperand(arg.getArgNumber() - 1);
-      int min2 =
-          minOverHistories(prevVal, yieldOp, thisHistorySum);
+      int min2 = minOverHistories(prevVal, yieldOp, thisHistorySum);
       return std::min(std::min(min1, min2), minCommitNumber);
     }
     // Failed to track, return 1 conservatively.
     return 1;
   };
 
-  int minCommits =
-      minOverHistories(extractOp.getOperand(0), extractOp, 0);
+  int minCommits = minOverHistories(extractOp.getOperand(0), extractOp, 0);
   if (minCommits == 0)
     llvm::report_fatal_error("No commits between insert and extract!");
   return minCommits - 1;
