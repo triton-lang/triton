@@ -3,6 +3,27 @@ from __future__ import annotations
 from ..runtime.jit import jit
 from . import core, math
 
+# constexpr utilities (triton metaprogramming sucks)
+
+
+def _unwrap_if_constexpr(o):
+    return o.value if isinstance(o, core.constexpr) else o
+
+
+def _log2(i: core.constexpr):
+    log2 = 0
+    n = i.value
+    while n > 1:
+        n >>= 1
+        log2 += 1
+    return core.constexpr(log2)
+
+
+def _is_power_of_two(i: core.constexpr):
+    n = i.value
+    return core.constexpr((n & (n - 1)) == 0 and n != 0)
+
+
 # -----------------------
 # Standard library
 # -----------------------
@@ -351,7 +372,7 @@ def sort(x, dim: core.constexpr = None, descending: core.constexpr = 0):
     _dim: core.constexpr = len(x.shape) - 1 if dim is None else dim
     core.static_assert(_dim == len(x.shape) - 1, "only minor dimension is currently supported")
     # iteratively run bitonic merge-sort steps
-    n_dims: core.constexpr = math.log2(x.shape[_dim])
+    n_dims: core.constexpr = _log2(x.shape[_dim])
     for i in core.static_range(1, n_dims + 1):
         x = _bitonic_merge(x, i, 2 if i < n_dims else descending, n_dims)
     return x
@@ -369,15 +390,6 @@ def _get_flip_dim(dim, shape):
     return core.constexpr(dim)
 
 
-def _is_power_of_two(i: core.constexpr):
-    n = i.value
-    return core.constexpr((n & (n - 1)) == 0 and n != 0)
-
-
-def _unwrap_if_constexpr(o):
-    return o.value if isinstance(o, core.constexpr) else o
-
-
 @jit
 def flip(x, dim=None):
     """
@@ -392,8 +404,8 @@ def flip(x, dim=None):
     core.static_assert(_is_power_of_two(x.numel))
     # # reshape the tensor to have all dimensions be 2.
     # # TODO: We shouldn't have to change the dimensions not sorted.
-    steps: core.constexpr = math.log2(x.numel)
-    start: core.constexpr = math.log2(x.numel) - math.log2(x.shape[_get_flip_dim(dim, x.shape)])
+    steps: core.constexpr = _log2(x.numel)
+    start: core.constexpr = _log2(x.numel) - _log2(x.shape[_get_flip_dim(dim, x.shape)])
     y = core.reshape(x, [2] * steps)
     y = core.expand_dims(y, start)
     flip = (core.arange(0, 2)[:, None] == 1 - core.arange(0, 2))

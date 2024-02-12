@@ -4,7 +4,6 @@ import re
 import sys
 import warnings
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
-import math
 from .. import language
 from .._C.libtriton import ir
 from ..language import constexpr, tensor
@@ -1158,20 +1157,9 @@ class CodeGenerator(ast.NodeVisitor):
 
         return ret
 
-    def log2(val):
-        if isinstance(val, float):
-            return math.log2(val)
-        assert isinstance(val, int)
-        ret = 0
-        while val > 1:
-            val >>= 1
-            ret += 1
-        return ret
-
     statically_implemented_functions: Dict[object, Callable[[ast.Call], Any]] = {
         language.core.static_assert: execute_static_assert,
         language.core.static_print: static_executor(print),
-        language.math.log2: static_executor(log2),
         int: static_executor(int),
         len: static_executor(len),
     }
