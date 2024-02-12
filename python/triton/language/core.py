@@ -86,6 +86,8 @@ class dtype:
         UNSIGNED = 1
 
     def __init__(self, name):
+        if hasattr(name, 'value'):
+            name = name.value
         self.name = name
         assert name in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES + dtype.OTHER_TYPES, name
         if name in dtype.SINT_TYPES:
