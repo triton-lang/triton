@@ -25,13 +25,12 @@ using namespace mlir;
 
 static inline bool
 willIncreaseRegisterPressure(triton::gpu::ConvertLayoutOp op) {
-  auto srcType = op.getSrc().getType().cast<RankedTensorType>();
-  auto dstType = op.getResult().getType().cast<RankedTensorType>();
-  auto srcEncoding = srcType.getEncoding();
-  auto dstEncoding = dstType.getEncoding();
-  if (srcEncoding.isa<triton::gpu::SharedEncodingAttr>())
+  if (op.getSrc()
+          .getType()
+          .getEncoding()
+          .isa<triton::gpu::SharedEncodingAttr>())
     return true;
-  if (dstEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
+  if (op.getType().getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
     return true;
   return false;
 }
@@ -67,7 +66,7 @@ public:
       kv.first->moveBefore(kv.second);
     // Move convert(load) immediately after dependent load
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
-      auto dstType = op.getResult().getType().cast<RankedTensorType>();
+      RankedTensorType dstType = op.getType();
       auto dstEncoding = dstType.getEncoding();
       // Enable moving shared->dot conversion after dependent load.
       // For the Q tensor in flash attention, the shared->dot conversion acts as
@@ -105,7 +104,7 @@ public:
     return;
 #endif
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
-      auto dstType = op.getResult().getType().cast<RankedTensorType>();
+      auto dstType = op.getType().cast<RankedTensorType>();
       auto dstEncoding =
           dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
       if (!dstEncoding)

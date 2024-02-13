@@ -54,8 +54,8 @@ public:
       return mlir::failure();
     if (!cvtOp.getSrc().getDefiningOp<triton::LoadOp>())
       return failure();
-    auto dstTy = dstOp.getResult().getType().cast<RankedTensorType>();
-    auto srcTy = cvtOp.getSrc().getType().cast<RankedTensorType>();
+    RankedTensorType dstTy = dstOp.getType();
+    RankedTensorType srcTy = cvtOp.getSrc().getType();
     if (dstTy != srcTy)
       return mlir::failure();
 
@@ -63,9 +63,9 @@ public:
         op->getLoc(), dstTy.getElementType(),
         rewriter.getZeroAttr(dstTy.getElementType()));
     auto _0 = rewriter.create<triton::SplatOp>(
-        op->getLoc(), dotOp.getResult().getType(), _0f);
+        op->getLoc(), dotOp.getType(), _0f);
     auto newDot = rewriter.create<triton::DotOp>(
-        op->getLoc(), dotOp.getResult().getType(), dotOp.getOperand(0),
+        op->getLoc(), dotOp.getType(), dotOp.getOperand(0),
         dotOp.getOperand(1), _0, dotOp.getAllowTF32(),
         dotOp.getMaxNumImpreciseAcc());
     auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(

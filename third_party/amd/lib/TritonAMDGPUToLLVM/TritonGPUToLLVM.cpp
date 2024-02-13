@@ -522,14 +522,14 @@ struct MakeRangeOpConversion
   matchAndRewrite(triton::MakeRangeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto rankedTy = op.getResult().getType().cast<RankedTensorType>();
-    auto shape = rankedTy.getShape();
-    auto layout = rankedTy.getEncoding();
+    RankedTensorType ty = op.getType();
+    auto shape = ty.getShape();
+    auto layout = ty.getEncoding();
 
-    auto elemTy = rankedTy.getElementType();
+    auto elemTy = ty.getElementType();
     assert(elemTy.isInteger(32));
     Value start = createIndexAttrConstant(rewriter, loc, elemTy, op.getStart());
-    auto idxs = emitIndices(loc, rewriter, layout, rankedTy);
+    auto idxs = emitIndices(loc, rewriter, layout, ty);
     unsigned elems = idxs.size();
     SmallVector<Value> retVals(elems);
     // TODO: slice layout has more elements than expected.
@@ -540,7 +540,7 @@ struct MakeRangeOpConversion
       retVals[multiDim.index()] = add(multiDim.value()[0], start);
     }
     Value result =
-        getTypeConverter()->packLLElements(loc, retVals, rewriter, rankedTy);
+        getTypeConverter()->packLLElements(loc, retVals, rewriter, ty);
     rewriter.replaceOp(op, result);
     return success();
   }

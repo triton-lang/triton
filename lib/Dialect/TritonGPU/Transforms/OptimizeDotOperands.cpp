@@ -229,9 +229,9 @@ public:
     if (!innerCvt)
       return failure();
 
-    auto srcTy = innerCvt.getSrc().getType().cast<RankedTensorType>();
-    auto innerCvtTy = innerCvt.getType().cast<RankedTensorType>();
-    auto outerCvtTy = outerCvt.getResult().getType().cast<RankedTensorType>();
+    RankedTensorType srcTy = innerCvt.getSrc().getType();
+    RankedTensorType innerCvtTy = innerCvt.getType();
+    RankedTensorType outerCvtTy = outerCvt.getType();
 
     auto innerCvtEnc = innerCvtTy.getEncoding().dyn_cast<SharedEncodingAttr>();
     auto outerCvtEnc = outerCvtTy.getEncoding().dyn_cast<SharedEncodingAttr>();

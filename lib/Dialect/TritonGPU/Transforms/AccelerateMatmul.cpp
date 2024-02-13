@@ -226,7 +226,7 @@ public:
     auto dotOp = cast<tt::DotOp>(op);
     auto ctx = op->getContext();
     // TODO: Check data-types and SM compatibility
-    auto oldRetType = dotOp.getResult().getType();
+    RankedTensorType oldRetType = dotOp.getType();
     if (!oldRetType.getEncoding() ||
         oldRetType.getEncoding().isa<ttg::NvidiaMmaEncodingAttr>())
       return failure();

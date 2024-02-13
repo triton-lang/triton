@@ -408,7 +408,7 @@ bool isExpensiveCat(CatOp cat, Attribute targetEncoding) {
   // If the new elements per thread is less than the old one, we will need to do
   // convert encoding that goes through shared memory anyway. So we consider it
   // as expensive.
-  auto tensorTy = cat.getResult().getType();
+  RankedTensorType tensorTy = cat.getType();
   auto totalElemsPerThread = gpu::getTotalElemsPerThread(tensorTy);
   auto shape = tensorTy.getShape();
   auto elemTy = tensorTy.getElementType();
@@ -2347,7 +2347,7 @@ struct CanonicalizeConvertFromReshape
       return failure();
 
     rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
-        op, op.getResult().getType(), convert.getSrc(), op.getAllowReorder());
+        op, op.getType(), convert.getSrc(), op.getAllowReorder());
     return mlir::success();
   }
 };

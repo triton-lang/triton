@@ -226,7 +226,7 @@ public:
                                     triton::MakeTensorPtrOp op,
                                     std::stack<Operation *> &eraser) {
     // Save info for later use
-    auto ptrType = op.getResult().getType().cast<triton::PointerType>();
+    auto ptrType = op.getType().cast<triton::PointerType>();
     auto tensorType = ptrType.getPointeeType().cast<RankedTensorType>();
 
     // Cast I32 offsets into I64
