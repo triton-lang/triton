@@ -339,6 +339,7 @@ collectOpsToPipeline(scf::ForOp forOp,
       maxDistance = distAndUse.first;
     }
   }
+  assert(maxDistance >= 0);
 
   unsigned stagesBetweenLoads = ceil<unsigned>(numStages - 2, maxDistance + 1);
 
