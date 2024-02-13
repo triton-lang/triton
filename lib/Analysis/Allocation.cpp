@@ -55,8 +55,8 @@ getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
 }
 
 SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
-  auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
-  auto dstTy = op.getResult().getType().cast<RankedTensorType>();
+  auto srcTy = op.getSrc().getType();
+  auto dstTy = op.getType();
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
 
@@ -103,8 +103,8 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   if (repShape.empty())
     return repShape;
   auto rank = repShape.size();
-  auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
-  auto dstTy = op.getResult().getType().cast<RankedTensorType>();
+  auto srcTy = op.getSrc().getType();
+  auto dstTy = op.getType();
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
 
@@ -286,8 +286,8 @@ private:
       maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
                                                           scratchAlignment);
     } else if (auto cvtLayout = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-      auto srcTy = cvtLayout.getSrc().getType().cast<RankedTensorType>();
-      auto dstTy = cvtLayout.getResult().getType().cast<RankedTensorType>();
+      auto srcTy = cvtLayout.getSrc().getType();
+      auto dstTy = cvtLayout.getResult().getType();
       auto srcEncoding = srcTy.getEncoding();
       auto dstEncoding = dstTy.getEncoding();
       if (srcEncoding.isa<SharedEncodingAttr>() ||

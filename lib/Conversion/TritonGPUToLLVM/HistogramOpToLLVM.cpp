@@ -144,7 +144,7 @@ public:
   matchAndRewrite(triton::HistogramOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-    Value input = adaptor.getInput();
+    Value input = adaptor.getSrc();
     auto typeConverter = getTypeConverter();
     SmallVector<Value> srcValues = unpackLLElements(loc, input, rewriter);
     int numBins =
@@ -154,7 +154,7 @@ public:
     // warp.
     numBins = std::max(numBins, numThreadsPerWarp);
     Value threadId = getThreadId(rewriter, loc);
-    auto srcType = op.getInput().getType().cast<RankedTensorType>();
+    auto srcType = op.getSrc().getType();
     // First compute a warp local histogram based on values owned by each warps.
     SmallVector<Value> warpLevelHistogram =
         computeWarpLevelHistogram(loc, srcType, srcValues, numBins,

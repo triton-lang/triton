@@ -12,14 +12,14 @@ module {
     %0 = tt.get_program_id x : i32
     %1 = arith.muli %0, %c2_i32 : i32
     %2 = tt.make_range {end = 2 : i32, start = 0 : i32} : tensor<2xi32>
-    %3 = tt.splat %1 : (i32) -> tensor<2xi32>
+    %3 = tt.splat %1 : i32 -> tensor<2xi32>
     %4 = arith.addi %3, %2 : tensor<2xi32>
-    %5 = tt.splat %arg2 : (i32) -> tensor<2xi32>
+    %5 = tt.splat %arg2 : i32 -> tensor<2xi32>
     %6 = arith.cmpi slt, %4, %5 : tensor<2xi32>
-    %7 = tt.splat %arg0 : (!tt.ptr<i64, 1>) -> tensor<2x!tt.ptr<i64, 1>>
+    %7 = tt.splat %arg0 : !tt.ptr<i64, 1> -> tensor<2x!tt.ptr<i64, 1>>
     %8 = tt.addptr %7, %4 : tensor<2x!tt.ptr<i64, 1>>, tensor<2xi32>
     %9 = "tt.atomic_cas"(%8, %cst_0, %cst) <{sem = 4 : i32, scope = 2 : i32}> : (tensor<2x!tt.ptr<i64, 1>>, tensor<2xi64>, tensor<2xi64>) -> tensor<2xi64>
-    %10 = tt.splat %arg1 : (!tt.ptr<i64, 1>) -> tensor<2x!tt.ptr<i64, 1>>
+    %10 = tt.splat %arg1 : !tt.ptr<i64, 1> -> tensor<2x!tt.ptr<i64, 1>>
     %11 = tt.addptr %10, %4 : tensor<2x!tt.ptr<i64, 1>>, tensor<2xi32>
     tt.store %11, %9, %6 {cache = 1 : i32, evict = 1 : i32} : tensor<2xi64>
     tt.return

@@ -46,11 +46,11 @@ def TT_IntToPtrOp : TT_Op<"int_to_ptr", [Elementwise,
                                          /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
     let summary = "Cast int64 to pointer";
 
-    let arguments = (ins TT_I64Like:$from);
+    let arguments = (ins TT_I64Like:$src);
 
     let results = (outs TT_PtrLike:$result);
 
-    let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 }
 
 def TT_PtrToIntOp : TT_Op<"ptr_to_int", [Elementwise,
@@ -60,11 +60,11 @@ def TT_PtrToIntOp : TT_Op<"ptr_to_int", [Elementwise,
                                          /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
     let summary = "Cast pointer to int64";
 
-    let arguments = (ins TT_PtrLike:$from);
+    let arguments = (ins TT_PtrLike:$src);
 
     let results = (outs TT_I64Like:$result);
 
-    let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 }
 
 // arith.bitcast doesn't support pointers
@@ -75,11 +75,11 @@ def TT_BitcastOp : TT_Op<"bitcast", [Elementwise,
                                      /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
     let summary = "Cast between types of the same bitwidth";
 
-    let arguments = (ins TT_Type:$from);
+    let arguments = (ins TT_Type:$src);
 
     let results = (outs TT_Type:$result);
 
-    let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 
     // TODO: Add verifier
 }
@@ -96,11 +96,11 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
         F8 <-> FP16, BF16, FP32, FP64
     }];
 
-    let arguments = (ins TT_FloatTensor:$from, OptionalAttr<TT_RoundingModeAttr>:$rounding);
+    let arguments = (ins TT_FloatTensor:$src, OptionalAttr<TT_RoundingModeAttr>:$rounding);
 
     let results = (outs TT_FloatTensor:$result);
 
-    let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 
     let hasVerifier = 1;
 }
@@ -304,7 +304,7 @@ def TT_SplatOp : TT_Op<"splat", [Pure,
 
     let results = (outs TT_Tensor:$result);
 
-    let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 
     let hasFolder = 1;
 }
@@ -318,7 +318,7 @@ def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
 
     let results = (outs TT_Tensor:$result);
 
-    let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 
     let hasCanonicalizeMethod = 1;
     let hasFolder = 1;
@@ -364,7 +364,7 @@ def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
 
     let results = (outs TT_Tensor:$result);
 
-    let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 
     let hasCanonicalizeMethod = 1;
     let hasFolder = 1;
@@ -372,6 +372,7 @@ def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
 
 // cat is not `pure` because it may reorder elements
 def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
+                             SameTypeOperands,
                              SameOperandsAndResultElementType]> {
     let summary = "concatenate 2 tensors";
 
@@ -379,7 +380,7 @@ def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
 
     let results = (outs TT_Tensor:$result);
 
-    let assemblyFormat = "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
+    let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
 }
 
 def TT_ExperimentalInterleaveOp : TT_Op<"experimental_interleave", [NoMemoryEffect, SameTypeOperands, SameOperandsAndResultElementType]> {
@@ -435,10 +436,7 @@ def TT_TransOp : TT_Op<"trans", [Pure,
 
     let results = (outs TT_Tensor:$result);
 
-    // TODO(jlebar): This creates parentheses around `operands`.  But there's
-    // only one operand, so we shouldn't need the parens (e.g. tt.reshape does
-    // this how I want).  At least we should be consistent!
-    let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 
     let hasFolder = 1;
     let hasVerifier = 1;
@@ -504,11 +502,11 @@ def TT_ReduceOp: TT_Op<"reduce",
                         SingleBlock,
                         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
     let summary = "Reduction using generic combination algorithm";
-    let arguments = (ins Variadic<TT_Tensor>:$operands, I32Attr:$axis);
+    let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis);
     let results = (outs Variadic<TT_Type>:$result);
     let regions = (region SizedRegion<1>:$combineOp);
     let builders = [
-        OpBuilder<(ins "ValueRange":$operands, "int":$axis)>,
+        OpBuilder<(ins "ValueRange":$srcs, "int":$axis)>,
     ];
     let hasVerifier = 1;
     let hasRegionVerifier = 1;
@@ -535,11 +533,11 @@ def TT_ScanOp: TT_Op<"scan",
                         SingleBlock,
                         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
     let summary = "Associatve scan using generic combination algorithm";
-    let arguments = (ins Variadic<TT_Tensor>:$operands, I32Attr:$axis);
+    let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis);
     let results = (outs Variadic<TT_Tensor>:$result);
     let regions = (region SizedRegion<1>:$combineOp);
     let builders = [
-        OpBuilder<(ins "ValueRange":$operands, "int":$axis)>,
+        OpBuilder<(ins "ValueRange":$srcs, "int":$axis)>,
     ];
     let hasVerifier = 1;
     let hasRegionVerifier = 1;
@@ -571,7 +569,7 @@ def TT_ExternElementwiseOp : TT_Op<"extern_elementwise", [Elementwise,
         return $libpath/$libname:$symbol($args...)
     }];
 
-    let arguments = (ins Variadic<TT_Type>:$args, StrAttr:$libname, StrAttr:$libpath, StrAttr:$symbol, BoolAttr:$pure);
+    let arguments = (ins Variadic<TT_Type>:$srcs, StrAttr:$libname, StrAttr:$libpath, StrAttr:$symbol, BoolAttr:$pure);
 
     let results = (outs TT_Type:$result);
 
@@ -641,11 +639,11 @@ def TT_HistogramOp : TT_Op<"histogram", [Pure]> {
     start at 0.
   }];
 
-  let arguments = (ins TT_IntTensor:$input);
+  let arguments = (ins TT_IntTensor:$src);
   let results = (outs TT_IntTensor:$result);
 
   let assemblyFormat = [{
-    $input attr-dict `:` type($input) `->` type($result)
+    $src attr-dict `:` type($src) `->` type($result)
   }];
 }
 
@@ -916,13 +914,13 @@ def ReturnOp : TT_Op<"return", [Pure, HasParent<"FuncOp">, /*MemRefsNormalizable
     ```
   }];
 
-  let arguments = (ins Variadic<AnyType>:$operands);
+  let arguments = (ins Variadic<AnyType>:$srcs);
 
   let builders = [OpBuilder<(ins), [{
     build($_builder, $_state, std::nullopt);
   }]>];
 
-  let assemblyFormat = "attr-dict ($operands^ `:` type($operands))?";
+  let assemblyFormat = "attr-dict ($srcs^ `:` type($srcs))?";
   let hasVerifier = 1;
 }
 

@@ -494,16 +494,16 @@ struct AtomicCASOpConversion
     auto valElements = unpackLLElements(loc, llVal, rewriter);
 
     auto valueTy = op.getResult().getType();
-    auto TensorTy = valueTy.dyn_cast<RankedTensorType>();
+    auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
     Type valueElemTy =
-        TensorTy ? getTypeConverter()->convertType(TensorTy.getElementType())
+        tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
                  : valueTy;
     auto valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     auto elemsPerThread = getTotalElemsPerThread(op.getVal().getType());
     // vec = 1 for scalar
     auto vec = getVectorSize(op.getPtr());
     // tensor
-    if (TensorTy) {
+    if (tensorTy) {
       auto valTy = op.getVal().getType().cast<RankedTensorType>();
       vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
     }
@@ -540,7 +540,7 @@ struct AtomicCASOpConversion
       atom.global().o(semStr).o(scope).o("cas").o(sTy);
       atom(dstOpr, ptrOpr, cmpOpr, valOpr).predicate(mask);
 
-      if (TensorTy) {
+      if (tensorTy) {
         auto retType = vec == 1 ? valueElemTy : vecTy;
         auto ret = ptxBuilderAtomicCAS.launch(rewriter, loc, retType);
         for (int ii = 0; ii < vec; ++ii) {
@@ -569,8 +569,8 @@ struct AtomicCASOpConversion
       }
     }
 
-    if (TensorTy) {
-      Type structTy = getTypeConverter()->convertType(TensorTy);
+    if (tensorTy) {
+      Type structTy = getTypeConverter()->convertType(tensorTy);
       Value resultStruct = packLLElements(loc, getTypeConverter(), resultVals,
                                           rewriter, structTy);
       rewriter.replaceOp(op, {resultStruct});
@@ -763,20 +763,18 @@ struct InsertSliceAsyncOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     // insert_slice_async %src, %dst, %index, %mask, %other
     auto loc = op.getLoc();
-    Value src = op.getSrc();
-    Value dst = op.getDst();
     Value res = op.getResult();
     Value mask = op.getMask();
     Value other = op.getOther();
     auto funcOp = op->getParentOfType<FunctionOpInterface>();
 
-    auto srcTy = src.getType().cast<RankedTensorType>();
-    auto resTy = dst.getType().cast<RankedTensorType>();
-    auto resElemTy = getTypeConverter()->convertType(resTy.getElementType());
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getDst().getType();
+    auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     auto srcLayout = srcTy.getEncoding();
     assert((srcLayout.isa<BlockedEncodingAttr, SliceEncodingAttr>() &&
             "Unexpected srcLayout in InsertSliceAsyncOpConversion"));
-    auto resSharedLayout = resTy.getEncoding().cast<SharedEncodingAttr>();
+    auto resSharedLayout = dstTy.getEncoding().cast<SharedEncodingAttr>();
     auto srcShape = srcTy.getShape();
     assert((srcShape.size() <= 3) &&
            "insert_slice_async: Unexpected rank of %src");
@@ -791,14 +789,12 @@ struct InsertSliceAsyncOpConversion
     auto srcElems = unpackLLElements(loc, llSrc, rewriter);
 
     // %dst
-    auto dstTy = dst.getType().cast<RankedTensorType>();
-    auto dstShape = dstTy.getShape();
     auto smemObj =
         getSharedMemoryObjectFromStruct(loc, llDst, resElemTy, rewriter);
     auto axis = op->getAttrOfType<IntegerAttr>("axis").getInt();
     SmallVector<Value, 4> offsetVals;
     SmallVector<Value, 4> srcStrides;
-    for (auto i = 0; i < dstShape.size(); ++i) {
+    for (auto i = 0; i < dstTy.getShape().size(); ++i) {
       if (i == axis) {
         offsetVals.emplace_back(llIndex);
       } else {
@@ -833,7 +829,7 @@ struct InsertSliceAsyncOpConversion
     // We don't use getVec() here because we are copying from memory to memory.
     // If contiguity > vector size, we can have one pointer maintaining the
     // start of the vector and the other pointer moving to the next vector.
-    unsigned inVec = getContiguity(src);
+    unsigned inVec = getContiguity(op.getSrc());
     unsigned outVec = resSharedLayout.getVec();
     unsigned minVec = inVec;
     if (outVec > 1)
@@ -907,7 +903,7 @@ struct ExtractSliceOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     // %dst = extract_slice %src[%offsets]
     Location loc = op->getLoc();
-    auto srcTy = op.getSource().getType().dyn_cast<RankedTensorType>();
+    auto srcTy = op.getSrc().getType();
     auto srcLayout = srcTy.getEncoding().dyn_cast<SharedEncodingAttr>();
     assert(srcLayout && "Unexpected resultLayout in ExtractSliceOpConversion");
     assert(op.hasUnitStride() &&
@@ -918,8 +914,8 @@ struct ExtractSliceOpConversion
 
     // newBase = base + offset
     // Triton supports either static and dynamic offsets
-    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
-        loc, adaptor.getSource(), llvmElemTy, rewriter);
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                         llvmElemTy, rewriter);
     SmallVector<Value, 4> opOffsetVals;
     SmallVector<Value, 4> offsetVals;
     auto mixedOffsets = op.getMixedOffsets();

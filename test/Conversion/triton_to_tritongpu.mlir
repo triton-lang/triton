@@ -16,7 +16,7 @@ tt.func @ops() {
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 2 : i32} {
 tt.func @load_ops(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
   // Test if LoadOp is lowered properly (see #771)
-  %ptrs = tt.splat %ptr : (!tt.ptr<f32>) -> tensor<128x!tt.ptr<f32>>
+  %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
   %mask = arith.constant dense<true> : tensor<128xi1>
   %other = arith.constant dense<0.0e+0> : tensor<128xf32>
   // CHECK: %{{.*}} = tt.load %{{.*}} {cache = 1 : i32, evict = 1 : i32, isVolatile = true} : {{.*}}
@@ -82,14 +82,14 @@ tt.func public @select_op(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg
   // CHECK-LABEL: select_op
   %cst = arith.constant dense<0.000000e+00> : tensor<128xf32>
   %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
-  %1 = tt.splat %arg0 : (!tt.ptr<f32>) -> tensor<128x!tt.ptr<f32>>
+  %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
   %2 = tt.addptr %1, %0 : tensor<128x!tt.ptr<f32>>, tensor<128xi32>
   %3 = tt.load %2 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128xf32>
 
   // CHECK: %{{.*}} = arith.select %arg2, %{{.*}}, %{{.*}} : tensor<128xf32, #blocked>
   %4 = arith.select %arg2, %cst, %3 : tensor<128xf32>
 
-  %5 = tt.splat %arg1 : (!tt.ptr<f32>) -> tensor<128x!tt.ptr<f32>>
+  %5 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
   %6 = tt.addptr %5, %0 : tensor<128x!tt.ptr<f32>>, tensor<128xi32>
   tt.store %6, %4 {cache = 1 : i32, evict = 1 : i32} : tensor<128xf32>
   tt.return
