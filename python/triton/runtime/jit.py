@@ -161,6 +161,16 @@ class KernelInterface(Generic[T]):
         # return cast(T, functools.partial(cast(Callable, self.run), grid=grid))
 
 
+def serialize_specialization_data(signature, constants, attrs, options, key):
+    import json
+    obj = {
+        'signature': signature, 'constants': constants, 'attrs': attrs.to_dict(), 'options': options.__dict__, 'key':
+        key
+    }
+    serialized_obj = json.dumps(obj)
+    return serialized_obj
+
+
 class JITFunction(KernelInterface[T]):
     # Hook for inspecting compiled functions and modules
     cache_hook = None
@@ -265,11 +275,7 @@ class JITFunction(KernelInterface[T]):
         signature,
         device,
         constants,
-        num_warps,
-        num_ctas,
-        num_stages,
-        enable_fp_fusion,
-        extern_libs,
+        options,
         configs,
     ):
         if JITFunction.cache_hook is None:
@@ -278,8 +284,7 @@ class JITFunction(KernelInterface[T]):
         name = self.fn.__name__
         module = self.fn.__module__
         arg_reprs = ", ".join([f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])])
-        repr = f"{name}[num_warps={num_warps}, num_ctas={num_ctas}, num_stages={num_stages}, enable_fp_fusion={enable_fp_fusion}]({arg_reprs})"
-        key = str(key)
+        repr = f"{name}[num_warps={options.num_warps}, num_ctas={options.num_ctas}, num_stages={options.num_stages}, enable_fp_fusion={options.enable_fp_fusion}]({arg_reprs})"
 
         class LegacyCompiler:
 
@@ -288,16 +293,19 @@ class JITFunction(KernelInterface[T]):
                 self.name = name
                 pass
 
+        specialization_data = serialize_specialization_data(signature, constants, configs[0], options, key)
+
         kwargs = dict(
             signature=signature,
             device=device,
             constants=constants,
-            num_warps=num_warps,
-            num_ctas=num_ctas,
-            num_stages=num_stages,
-            enable_fp_fusion=enable_fp_fusion,
-            extern_libs=extern_libs,
+            num_warps=options.num_warps,
+            num_ctas=options.num_ctas,
+            num_stages=options.num_stages,
+            enable_fp_fusion=options.enable_fp_fusion,
+            extern_libs=options.extern_libs,
             configs=configs,
+            specialization_data=specialization_data,
         )
 
         return JITFunction.cache_hook(
@@ -344,6 +352,7 @@ class JITFunction(KernelInterface[T]):
         spec_key = tuple(arg.specialization_key() for arg in args if not arg.param.do_not_specialize)
         constexpr_key = tuple(arg.value for arg in args if arg.param.is_constexpr)
         key = (sig_key, constexpr_key, spec_key, options)
+        key = str(key)
         # Kernel is not cached; we have to compile.
         if key not in self.cache[device]:
             configs = (self._get_config(*[arg.value for arg in args]), )
@@ -363,8 +372,7 @@ class JITFunction(KernelInterface[T]):
                 if not arg.param.is_constexpr
             }
 
-            if self._call_hook(key, signature, device, constants, options.num_warps, options.num_ctas,
-                               options.num_stages, options.enable_fp_fusion, options.extern_libs, configs):
+            if self._call_hook(key, signature, device, constants, options, configs):
                 return None
             # compile the kernel
             src = ASTSource(self, signature, constants, configs[0])
@@ -435,6 +443,23 @@ class JITFunction(KernelInterface[T]):
 
     def warmup(self, *args, grid, **kwargs):
         return self.run(grid=grid, warmup=True, *map(MockTensor.wrap_dtype, args), **kwargs)
+
+    def preload(self, specialization_data):
+        from ..compiler import AttrsDescriptor, compile, ASTSource
+        import json
+        device = driver.active.get_current_device()
+        deserialized_obj = json.loads(specialization_data)
+        constants = {int(key): value for key, value in deserialized_obj['constants'].items()}
+        signature = {int(key): value for key, value in deserialized_obj['signature'].items()}
+        src = ASTSource(self, signature, constants, AttrsDescriptor.from_dict(deserialized_obj['attrs']))
+        options = {
+            key: tuple(value) if isinstance(value, list) else value
+            for key, value in deserialized_obj['options'].items()
+        }
+        key = deserialized_obj['key']
+        kernel = compile(src, None, options)
+        self.cache[device][key] = kernel
+        return kernel
 
     # we do not parse `src` in the constructor because
     # the user might want to monkey-patch self.src dynamically.
