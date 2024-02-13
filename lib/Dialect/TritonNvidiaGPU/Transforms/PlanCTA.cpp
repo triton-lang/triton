@@ -672,8 +672,7 @@ bool CTAPlanner::processElementwise(Operation *op, Attribute layout) {
 }
 
 bool CTAPlanner::processConstant(arith::ConstantOp constant, Attribute layout) {
-  if (auto tensorTy =
-          constant.getResult().getType().dyn_cast<RankedTensorType>()) {
+  if (auto tensorTy = constant.getType().dyn_cast<RankedTensorType>()) {
     if (auto attr = constant.getValue().dyn_cast<SplatElementsAttr>()) {
 
       auto newTensorTy = RankedTensorType::get(

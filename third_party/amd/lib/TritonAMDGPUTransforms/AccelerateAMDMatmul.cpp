@@ -266,7 +266,7 @@ public:
                   mlir::PatternRewriter &rewriter) const override {
     auto dotOp = cast<tt::DotOp>(op);
 
-    auto oldRetType = dotOp.getResult().getType().cast<RankedTensorType>();
+    RankedTensorType oldRetType = dotOp.getType();
     if (!oldRetType.getEncoding() ||
         !oldRetType.getEncoding().isa<ttg::BlockedEncodingAttr>())
       return failure();

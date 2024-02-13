@@ -86,7 +86,7 @@ struct LoadOpConversion
     Value llOther = adaptor.getOther();
 
     // Determine the vectorization size
-    Type valueTy = op.getResult().getType();
+    Type valueTy = op.getType();
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
     unsigned vec = getVectorSize(ptr);
@@ -487,10 +487,10 @@ struct AtomicCASOpConversion
     auto valElements =
         getTypeConverter()->unpackLLElements(loc, llVal, rewriter);
 
-    auto TensorTy = op.getResult().getType().dyn_cast<RankedTensorType>();
+    auto tensorTy = op.getType().dyn_cast<RankedTensorType>();
     Type valueElemTy =
-        TensorTy ? getTypeConverter()->convertType(TensorTy.getElementType())
-                 : op.getResult().getType();
+        tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
+                 : op.getType();
     auto tid = tid_val();
     Value pred = icmp_eq(tid, i32_val(0));
 
@@ -561,17 +561,17 @@ struct AtomicCASOpConversion
     auto valElements =
         getTypeConverter()->unpackLLElements(loc, llVal, rewriter);
 
-    auto valueTy = op.getResult().getType();
-    auto TensorTy = valueTy.dyn_cast<RankedTensorType>();
+    auto valueTy = op.getType();
+    auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
     Type valueElemTy =
-        TensorTy ? getTypeConverter()->convertType(TensorTy.getElementType())
+        tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
                  : valueTy;
     auto valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     auto elemsPerThread = getTotalElemsPerThread(op.getVal().getType());
     // vec = 1 for scalar
     auto vec = getVectorSize(op.getPtr());
     // tensor
-    if (TensorTy) {
+    if (tensorTy) {
       auto valTy = op.getVal().getType().cast<RankedTensorType>();
       vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
     }
@@ -608,7 +608,7 @@ struct AtomicCASOpConversion
       atom.global().o(semStr).o(scope).o("cas").o(sTy);
       atom(dstOpr, ptrOpr, cmpOpr, valOpr).predicate(mask);
 
-      if (TensorTy) {
+      if (tensorTy) {
         auto retType = vec == 1 ? valueElemTy : vecTy;
         auto ret = ptxBuilderAtomicCAS.launch(rewriter, loc, retType);
         for (int ii = 0; ii < vec; ++ii) {
@@ -636,8 +636,8 @@ struct AtomicCASOpConversion
       }
     }
 
-    if (TensorTy) {
-      Type structTy = getTypeConverter()->convertType(TensorTy);
+    if (tensorTy) {
+      Type structTy = getTypeConverter()->convertType(tensorTy);
       Value resultStruct = getTypeConverter()->packLLElements(
           loc, resultVals, rewriter, structTy);
       rewriter.replaceOp(op, {resultStruct});
@@ -833,7 +833,7 @@ struct AtomicRMWOpConversion
       maskElements =
           getTypeConverter()->unpackLLElements(loc, llMask, rewriter);
 
-    auto valueTy = op.getResult().getType();
+    auto valueTy = op.getType();
     auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
     Type valueElemTy =
         tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())

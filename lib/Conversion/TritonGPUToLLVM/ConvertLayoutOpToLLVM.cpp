@@ -65,8 +65,8 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getResult().getType();
+    RankedTensorType srcTy = op.getSrc().getType();
+    RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
     if (isaDistributedLayout(srcLayout) &&
@@ -460,7 +460,7 @@ private:
     auto loc = op.getLoc();
     auto typeConverter = getTypeConverter();
     auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getResult().getType();
+    auto dstTy = op.getType();
     auto srcLayout = srcTy.getEncoding();
     auto dstLayout = dstTy.getEncoding();
     auto srcShapePerCTA = getShapePerCTA(srcTy);
@@ -544,8 +544,8 @@ private:
                                 ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto typeConverter = getTypeConverter();
-    auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getResult().getType();
+    RankedTensorType srcTy = op.getSrc().getType();
+    RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
 
@@ -947,8 +947,8 @@ private:
                               OpAdaptor adaptor,
                               ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
-    auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
-    auto dstTy = op.getResult().getType().cast<RankedTensorType>();
+    RankedTensorType srcTy = op.getSrc().getType();
+    RankedTensorType dstTy = op.getType();
     if (triton::gpu::getTotalElemsPerThread(srcTy) ==
         triton::gpu::getTotalElemsPerThread(dstTy)) {
       rewriter.replaceOp(op, adaptor.getSrc());
