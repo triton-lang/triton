@@ -1022,10 +1022,6 @@ def noinline_multi_values_fn(x, y, Z):
 
 @pytest.mark.parametrize("mode", ["simple", "call_graph", "shared", "dynamic", "multi_values"])
 def test_noinline(mode, device):
-    if is_hip():
-        pytest.skip(
-            'test_noinline for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
 
     @triton.jit
     def kernel(X, Y, Z):
