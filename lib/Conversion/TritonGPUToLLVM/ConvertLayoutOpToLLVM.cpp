@@ -675,8 +675,9 @@ private:
     auto typeConverter = getTypeConverter();
     auto loc = op.getLoc();
     auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getType();
-    assert(dstTy.getShape().size() == 2 &&
+    auto dstTy = op.getResult().getType();
+    auto dstShape = dstTy.getShape();
+    assert(dstShape.size() <= 2 &&
            "Unexpected rank of ConvertLayout(shared->blocked)");
     auto srcSharedLayout = srcTy.getEncoding().cast<SharedEncodingAttr>();
     auto dstLayout = dstTy.getEncoding();
