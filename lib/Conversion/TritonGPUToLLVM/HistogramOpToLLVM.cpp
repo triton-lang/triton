@@ -144,17 +144,16 @@ public:
   matchAndRewrite(triton::HistogramOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-    Value input = adaptor.getInput();
+    Value input = adaptor.getSrc();
     auto typeConverter = getTypeConverter();
     SmallVector<Value> srcValues = unpackLLElements(loc, input, rewriter);
-    int numBins =
-        op.getResult().getType().cast<RankedTensorType>().getDimSize(0);
+    int numBins = op.getType().getDimSize(0);
     int numThreadsPerWarp = 32;
     // Pad out the bins so that we have at least one bin per thread within a
     // warp.
     numBins = std::max(numBins, numThreadsPerWarp);
     Value threadId = getThreadId(rewriter, loc);
-    auto srcType = op.getInput().getType().cast<RankedTensorType>();
+    auto srcType = op.getSrc().getType();
     // First compute a warp local histogram based on values owned by each warps.
     SmallVector<Value> warpLevelHistogram =
         computeWarpLevelHistogram(loc, srcType, srcValues, numBins,
@@ -166,7 +165,7 @@ public:
     // data in the default blocked layout.
     Value baseSharedMemPtr =
         LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
-    auto dstType = op.getResult().getType().cast<RankedTensorType>();
+    auto dstType = op.getType();
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     Attribute dstEncoding = dstType.getEncoding();
@@ -180,7 +179,7 @@ public:
         numThreadsPerWarp, innerDimIndices, threadId, numWarps);
 
     Value results = packLLElements(loc, typeConverter, histogramValue, rewriter,
-                                   op.getResult().getType());
+                                   op.getType());
     rewriter.replaceOp(op, results);
     return success();
   }

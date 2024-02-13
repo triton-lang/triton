@@ -1649,7 +1649,7 @@ struct FpToFpOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    auto srcElementType = getElementType(op.getFrom());
+    auto srcElementType = getElementType(op.getSrc());
     auto dstElementType = getElementType(op.getResult());
 
     size_t numElements = 4;

@@ -11,19 +11,19 @@
 
 #include <memory>
 
+#define GEN_PASS_CLASSES
+#include "triton/Dialect/Triton/Transforms/Passes.h.inc"
+
+namespace mlir::triton {
 namespace {
 
-using namespace mlir;
-using namespace mlir::triton;
-
-bool isZero(mlir::Value val) {
-  if (mlir::matchPattern(val, mlir::m_Zero()) ||
-      mlir::matchPattern(val, mlir::m_AnyZeroFloat()))
+bool isZero(Value val) {
+  if (matchPattern(val, m_Zero()) || matchPattern(val, m_AnyZeroFloat()))
     return true;
   // broadcast(constant_0)
-  if (auto bc = val.getDefiningOp<mlir::triton::BroadcastOp>()) {
-    if (mlir::matchPattern(bc.getSrc(), mlir::m_Zero()) ||
-        mlir::matchPattern(bc.getSrc(), mlir::m_AnyZeroFloat()))
+  if (auto bc = val.getDefiningOp<BroadcastOp>()) {
+    if (matchPattern(bc.getSrc(), m_Zero()) ||
+        matchPattern(bc.getSrc(), m_AnyZeroFloat()))
       return true;
   }
   return false;
@@ -56,52 +56,51 @@ using FastMathFlags = arith::FastMathFlags;
 
 // select(cond, load(ptrs, splat(cond), ???), other)
 //   => load(ptrs, splat(cond), other)
-class CombineSelectMaskedLoadPattern : public mlir::RewritePattern {
+class CombineSelectMaskedLoadPattern : public RewritePattern {
 public:
-  CombineSelectMaskedLoadPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(mlir::arith::SelectOp::getOperationName(), 3,
-                             context, {triton::LoadOp::getOperationName()}) {}
+  CombineSelectMaskedLoadPattern(MLIRContext *context)
+      : RewritePattern(arith::SelectOp::getOperationName(), 3, context,
+                       {LoadOp::getOperationName()}) {}
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto selectOp = llvm::dyn_cast<mlir::arith::SelectOp>(op);
+  LogicalResult matchAndRewrite(Operation *op,
+                                PatternRewriter &rewriter) const override {
+    auto selectOp = llvm::dyn_cast<arith::SelectOp>(op);
     if (!selectOp)
-      return mlir::failure();
+      return failure();
 
-    mlir::Value trueValue = selectOp.getTrueValue();
-    mlir::Value falseValue = selectOp.getFalseValue();
-    mlir::Value condSelect = selectOp.getCondition();
+    Value trueValue = selectOp.getTrueValue();
+    Value falseValue = selectOp.getFalseValue();
+    Value condSelect = selectOp.getCondition();
 
     auto *loadOpCandidate = trueValue.getDefiningOp();
-    auto loadOp = llvm::dyn_cast_or_null<triton::LoadOp>(loadOpCandidate);
+    auto loadOp = llvm::dyn_cast_or_null<LoadOp>(loadOpCandidate);
     if (!loadOp)
-      return mlir::failure();
+      return failure();
 
-    mlir::Value mask = loadOp.getMask();
+    Value mask = loadOp.getMask();
     if (!mask)
-      return mlir::failure();
+      return failure();
 
     auto *splatOpCandidate = mask.getDefiningOp();
-    auto splatOp = llvm::dyn_cast_or_null<triton::SplatOp>(splatOpCandidate);
+    auto splatOp = llvm::dyn_cast_or_null<SplatOp>(splatOpCandidate);
     if (!splatOp)
-      return mlir::failure();
+      return failure();
 
     auto splatCond = splatOp.getSrc();
     if (splatCond != condSelect)
-      return mlir::failure();
+      return failure();
 
-    rewriter.replaceOpWithNewOp<triton::LoadOp>(
+    rewriter.replaceOpWithNewOp<LoadOp>(
         op, loadOp.getPtr(), loadOp.getMask(), falseValue,
         loadOp.getBoundaryCheck(), loadOp.getPadding(), loadOp.getCache(),
         loadOp.getEvict(), loadOp.getIsVolatile());
-    return mlir::success();
+    return success();
   }
 };
 
 // sum(x[:, :, None] * y[None, :, :], 1)
 // -> dot(x, y)
-class CombineBroadcastMulReducePattern : public mlir::RewritePattern {
+class CombineBroadcastMulReducePattern : public RewritePattern {
 private:
   static bool isAddF32(const Operation *op) {
     if (auto addf = dyn_cast_or_null<arith::AddFOp>(op))
@@ -119,83 +118,75 @@ private:
   }
 
 public:
-  CombineBroadcastMulReducePattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(triton::ReduceOp::getOperationName(), 1, context) {
-  }
+  CombineBroadcastMulReducePattern(MLIRContext *context)
+      : RewritePattern(ReduceOp::getOperationName(), 1, context) {}
 
-  mlir::LogicalResult matchAndRewrite(mlir::Operation *op,
-                                      mlir::PatternRewriter &rewriter) const {
-    auto reduceOp = llvm::dyn_cast<triton::ReduceOp>(op);
+  LogicalResult matchAndRewrite(Operation *op,
+                                PatternRewriter &rewriter) const {
+    auto reduceOp = llvm::dyn_cast<ReduceOp>(op);
     if (!reduceOp)
-      return mlir::failure();
+      return failure();
     // only support reduce with simple addition
     Region &combineOp = reduceOp.getCombineOp();
     bool isReduceAdd = combineOp.hasOneBlock() &&
                        combineOp.front().getOperations().size() == 2 &&
                        isAddF32(&*combineOp.front().getOperations().begin());
     if (!isReduceAdd)
-      return mlir::failure();
+      return failure();
     // operand of reduce has to be mul
     auto mulOp = llvm::dyn_cast_or_null<arith::MulFOp>(
         reduceOp.getOperand(0).getDefiningOp());
     if (!mulOp)
-      return mlir::failure();
+      return failure();
     // mul operand has to be broadcast
-    auto broadcastLhsOp = llvm::dyn_cast_or_null<triton::BroadcastOp>(
+    auto broadcastLhsOp = llvm::dyn_cast_or_null<BroadcastOp>(
         mulOp.getOperand(0).getDefiningOp());
     if (!broadcastLhsOp)
-      return mlir::failure();
-    auto broadcastRhsOp = llvm::dyn_cast_or_null<triton::BroadcastOp>(
+      return failure();
+    auto broadcastRhsOp = llvm::dyn_cast_or_null<BroadcastOp>(
         mulOp.getOperand(1).getDefiningOp());
     if (!broadcastRhsOp)
-      return mlir::failure();
+      return failure();
     // broadcast operand is expand dims
-    auto expandLhsOp = llvm::dyn_cast_or_null<triton::ExpandDimsOp>(
-        broadcastLhsOp.getOperand().getDefiningOp());
+    auto expandLhsOp = llvm::dyn_cast_or_null<ExpandDimsOp>(
+        broadcastLhsOp.getSrc().getDefiningOp());
     if (!expandLhsOp)
-      return mlir::failure();
-    auto expandRhsOp = llvm::dyn_cast_or_null<triton::ExpandDimsOp>(
-        broadcastRhsOp.getOperand().getDefiningOp());
+      return failure();
+    auto expandRhsOp = llvm::dyn_cast_or_null<ExpandDimsOp>(
+        broadcastRhsOp.getSrc().getDefiningOp());
     if (!expandRhsOp)
-      return mlir::failure();
+      return failure();
     // get not-broadcast dimensions
     int expandLhsAxis = expandLhsOp.getAxis();
     int expandRhsAxis = expandRhsOp.getAxis();
     if (expandLhsAxis != 2 || expandRhsAxis != 0)
-      return mlir::failure();
+      return failure();
     auto broadcastLhsShape =
         broadcastLhsOp.getType().cast<ShapedType>().getShape();
     auto broadcastRhsShape =
         broadcastLhsOp.getType().cast<ShapedType>().getShape();
     if (broadcastLhsShape[2] < 16 || broadcastRhsShape[0] < 16)
-      return mlir::failure();
-    Type newAccType =
-        RankedTensorType::get({broadcastLhsShape[0], broadcastRhsShape[2]},
-                              broadcastLhsOp.getOperand()
-                                  .getType()
-                                  .cast<ShapedType>()
-                                  .getElementType());
+      return failure();
+    Type newAccType = RankedTensorType::get(
+        {broadcastLhsShape[0], broadcastRhsShape[2]},
+        broadcastLhsOp.getSrc().getType().cast<ShapedType>().getElementType());
     rewriter.setInsertionPoint(op);
-    auto newAcc = rewriter.create<triton::SplatOp>(
+    auto newAcc = rewriter.create<SplatOp>(
         op->getLoc(), newAccType,
         rewriter.create<arith::ConstantOp>(op->getLoc(),
                                            rewriter.getF32FloatAttr(0)));
-    rewriter.replaceOpWithNewOp<triton::DotOp>(op, expandLhsOp.getOperand(),
-                                               expandRhsOp.getOperand(), newAcc,
-                                               true, 0);
-    return mlir::success();
+    rewriter.replaceOpWithNewOp<DotOp>(op, expandLhsOp.getSrc(),
+                                       expandRhsOp.getSrc(), newAcc, true, 0);
+    return success();
   }
 };
-
-#define GEN_PASS_CLASSES
-#include "triton/Dialect/Triton/Transforms/Passes.h.inc"
 
 class CombineOpsPass : public TritonCombineOpsBase<CombineOpsPass> {
 public:
   void runOnOperation() override {
-    mlir::MLIRContext *context = &getContext();
-    mlir::RewritePatternSet patterns(context);
-    mlir::ModuleOp m = getOperation();
+    MLIRContext *context = &getContext();
+    RewritePatternSet patterns(context);
+    ModuleOp m = getOperation();
 
     // Dot Add %{
     patterns.add<CombineDotAddIPattern>(context);
@@ -215,6 +206,8 @@ public:
 
 } // anonymous namespace
 
-std::unique_ptr<mlir::Pass> mlir::triton::createCombineOpsPass() {
+std::unique_ptr<mlir::Pass> createCombineOpsPass() {
   return std::make_unique<CombineOpsPass>();
 }
+
+} // namespace mlir::triton

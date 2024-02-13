@@ -824,8 +824,8 @@ private:
   lowerMfmaToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                         ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
-    auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
-    auto dstTy = op.getResult().getType().cast<RankedTensorType>();
+    RankedTensorType srcTy = op.getSrc().getType();
+    RankedTensorType dstTy = op.getType();
     if (isMfmaToDotShortcut(srcTy, dstTy)) {
       // get source values
       auto vals =
@@ -871,8 +871,8 @@ private:
   lowerMmaToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
-    auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
-    auto dstTy = op.getResult().getType().cast<RankedTensorType>();
+    RankedTensorType srcTy = op.getSrc().getType();
+    RankedTensorType dstTy = op.getType();
     if (matchMmaV3AndDotOperandLayout(srcTy, dstTy)) {
       rewriter.replaceOp(op, adaptor.getSrc());
       return success();
@@ -979,8 +979,8 @@ private:
                               OpAdaptor adaptor,
                               ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
-    auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
-    auto dstTy = op.getResult().getType().cast<RankedTensorType>();
+    RankedTensorType srcTy = op.getSrc().getType();
+    RankedTensorType dstTy = op.getType();
     if (triton::gpu::getTotalElemsPerThread(srcTy) ==
         triton::gpu::getTotalElemsPerThread(dstTy)) {
       rewriter.replaceOp(op, adaptor.getSrc());

@@ -84,8 +84,8 @@ struct BroadcastOpConversion
     Location loc = op->getLoc();
     Value src = adaptor.getSrc();
     Value result = op.getResult();
-    auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
-    auto resultTy = result.getType().cast<RankedTensorType>();
+    RankedTensorType srcTy = op.getSrc().getType();
+    RankedTensorType resultTy = op.getType();
     auto srcLayout = srcTy.getEncoding();
     auto resultLayout = resultTy.getEncoding();
     auto srcShape = srcTy.getShape();
@@ -522,14 +522,14 @@ struct MakeRangeOpConversion
   matchAndRewrite(triton::MakeRangeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto rankedTy = op.getResult().getType().cast<RankedTensorType>();
-    auto shape = rankedTy.getShape();
-    auto layout = rankedTy.getEncoding();
+    RankedTensorType ty = op.getType();
+    auto shape = ty.getShape();
+    auto layout = ty.getEncoding();
 
-    auto elemTy = rankedTy.getElementType();
+    auto elemTy = ty.getElementType();
     assert(elemTy.isInteger(32));
     Value start = createIndexAttrConstant(rewriter, loc, elemTy, op.getStart());
-    auto idxs = emitIndices(loc, rewriter, layout, rankedTy);
+    auto idxs = emitIndices(loc, rewriter, layout, ty);
     unsigned elems = idxs.size();
     SmallVector<Value> retVals(elems);
     // TODO: slice layout has more elements than expected.
@@ -540,7 +540,7 @@ struct MakeRangeOpConversion
       retVals[multiDim.index()] = add(multiDim.value()[0], start);
     }
     Value result =
-        getTypeConverter()->packLLElements(loc, retVals, rewriter, rankedTy);
+        getTypeConverter()->packLLElements(loc, retVals, rewriter, ty);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -718,7 +718,7 @@ struct ExtractSliceOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     // %dst = extract_slice %src[%offsets]
     Location loc = op->getLoc();
-    auto srcTy = op.getSource().getType().dyn_cast<RankedTensorType>();
+    auto srcTy = op.getSrc().getType().dyn_cast<RankedTensorType>();
     auto srcLayout = srcTy.getEncoding().dyn_cast<SharedEncodingAttr>();
     assert(srcLayout && "Unexpected resultLayout in ExtractSliceOpConversion");
     assert(op.hasUnitStride() &&
@@ -728,7 +728,7 @@ struct ExtractSliceOpConversion
 
     // newBase = base + offset
     // Triton supports either static and dynamic offsets
-    auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSource(),
+    auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
     SmallVector<Value, 4> opOffsetVals;
     SmallVector<Value, 4> offsetVals;
