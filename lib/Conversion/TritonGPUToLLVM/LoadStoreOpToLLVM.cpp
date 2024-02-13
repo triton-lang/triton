@@ -152,9 +152,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Value llOther = adaptor.getOther();
 
     // Determine the vectorization size
-    Type valueTy = op.getResult().getType();
     Type valueElemTy =
-        typeConverter->convertType(getElementTypeOrSelf(valueTy));
+        typeConverter->convertType(getElementTypeOrSelf(op.getType()));
     unsigned vec = getVectorSize(ptr);
     unsigned numElems = getTotalElemsPerThread(ptr.getType());
     if (llMask)
@@ -320,7 +319,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       }
     } // end vec
 
-    Type llvmResultStructTy = typeConverter->convertType(valueTy);
+    Type llvmResultStructTy = typeConverter->convertType(op.getType());
     Value resultStruct = packLLElements(loc, typeConverter, loadedVals,
                                         rewriter, llvmResultStructTy);
     rewriter.replaceOp(op, {resultStruct});
@@ -493,7 +492,7 @@ struct AtomicCASOpConversion
     auto cmpElements = unpackLLElements(loc, llCmp, rewriter);
     auto valElements = unpackLLElements(loc, llVal, rewriter);
 
-    auto valueTy = op.getResult().getType();
+    auto valueTy = op.getType();
     auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
     Type valueElemTy =
         tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
@@ -615,7 +614,7 @@ struct AtomicRMWOpConversion
     if (llMask)
       maskElements = unpackLLElements(loc, llMask, rewriter);
 
-    auto valueTy = op.getResult().getType();
+    auto valueTy = op.getType();
     auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
     Type valueElemTy =
         tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())

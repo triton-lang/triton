@@ -118,12 +118,9 @@ allTransitiveUsesHaveDotEncoding(Value val, bool &needTrans) {
       auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(user);
       if (!convertLayout)
         return nullptr;
-      auto tensorType =
-          convertLayout.getResult().getType().dyn_cast<RankedTensorType>();
-      if (!tensorType)
-        return nullptr;
-      tempAttr =
-          tensorType.getEncoding().dyn_cast<ttg::DotOperandEncodingAttr>();
+      tempAttr = convertLayout.getType()
+                     .getEncoding()
+                     .dyn_cast<ttg::DotOperandEncodingAttr>();
     }
     if (!tempAttr || (attr != nullptr && attr != tempAttr))
       return nullptr;
@@ -139,8 +136,7 @@ static std::optional<LoadDotOperand> loadDotOperand(tt::LoadOp loadOp,
   if (loadOp.getResult().hasOneUse()) {
     Operation *use = *loadOp.getResult().getUsers().begin();
     if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
-      auto tensorType =
-          convertLayout.getResult().getType().cast<RankedTensorType>();
+      auto tensorType = convertLayout.getType().cast<RankedTensorType>();
       if (auto sharedEnc =
               tensorType.getEncoding().dyn_cast<ttg::SharedEncodingAttr>()) {
         if (sharedEnc.getHasLeadingOffset()) {
@@ -657,7 +653,7 @@ void mlir::triton::asyncLaunchDots(scf::ForOp forOp) {
   }
   for (Operation &op : *loop) {
     if (auto dotOp = dyn_cast<tt::DotOp>(&op)) {
-      auto resTy = dotOp.getResult().getType().dyn_cast<RankedTensorType>();
+      RankedTensorType resTy = dotOp.getType();
       if (auto resEnc =
               resTy.getEncoding().dyn_cast<ttg::NvidiaMmaEncodingAttr>()) {
         if (resEnc && resEnc.isHopper()) {

@@ -503,8 +503,7 @@ bool LoopPipeliner::isLoadChain(Operation *op) const {
     if (auto f2fOp = dyn_cast<triton::FpToFpOp>(op))
       loadVal = f2fOp.getSrc();
     if (validLoads.contains(loadVal.getDefiningOp())) {
-      auto cvtDstTy = cvtOp.getResult().getType().cast<RankedTensorType>();
-      if (cvtDstTy.getEncoding().isa<ttg::DotOperandEncodingAttr>())
+      if (cvtOp.getType().getEncoding().isa<ttg::DotOperandEncodingAttr>())
         return true;
     }
   }
