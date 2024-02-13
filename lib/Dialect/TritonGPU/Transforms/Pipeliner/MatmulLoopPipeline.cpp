@@ -254,9 +254,9 @@ getBlockedEncoding(tt::LoadOp loadOp, ModuleAxisInfoAnalysis &axisInfo) {
   unsigned currPerThread = std::min(alignment, 128 / elemNumBits);
 
   ttg::CTALayoutAttr CTALayout = ttg::getCTALayout(ty.getEncoding());
-  return ttg::BlockedEncodingAttr::get(loadOp->getContext(), ty.getShape(), currPerThread,
-                                       order, numWarps, threadsPerWarp,
-                                       CTALayout);
+  return ttg::BlockedEncodingAttr::get(loadOp->getContext(), ty.getShape(),
+                                       currPerThread, order, numWarps,
+                                       threadsPerWarp, CTALayout);
 }
 
 // Create a map from load ops to their distance to the nearest dot op and the
