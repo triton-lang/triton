@@ -2717,7 +2717,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
 @pytest.mark.parametrize("M, N, K", [(64, 64, 64), (32, 32, 32)])
 @pytest.mark.parametrize("in_dtype_str, out_dtype_str", [('int8', 'int8'), ('float16', 'float16'),
                                                          ('float16', 'float32'), ('float32', 'float32')])
-def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str):
+def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
 
     @triton.jit
     def kernel(
@@ -2772,9 +2772,9 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str):
     else:
         out = numpy_random((B, M, N), dtype_str=out_dtype_str, rs=rs)
 
-    x_tri = to_triton(x)
-    y_tri = to_triton(y)
-    out_tri = to_triton(out)
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device)
+    out_tri = to_triton(out, device=device)
 
     BLOCK_B = B
     BLOCK_M, BLOCK_N = 32, 32
