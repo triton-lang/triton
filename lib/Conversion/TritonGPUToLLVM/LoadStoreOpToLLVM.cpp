@@ -21,11 +21,13 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 
 namespace {
 
-Value getMask(Type valueTy, ConversionPatternRewriter &rewriter, Location loc) {
+std::optional<Value> getMask(Type valueTy, ConversionPatternRewriter &rewriter,
+                             Location loc) {
   auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
   Value mask = int_val(1, 1);
   auto tid = tid_val();
   auto clusterCTAId = getClusterCTAId(rewriter, loc);
+  bool maskEnabled = false;
   if (tensorTy) {
     auto layout = tensorTy.getEncoding();
     auto shape = tensorTy.getShape();
@@ -53,6 +55,7 @@ Value getMask(Type valueTy, ConversionPatternRewriter &rewriter, Location loc) {
               multiDimThreadId[dim]);
       mask = and_(mask, icmp_slt(mul(threadDim, i32_val(sizePerThread[dim])),
                                  i32_val(shape[dim])));
+      maskEnabled = true;
     }
     // Do not write duplicated data when multicast is enabled
     if (triton::gpu::getNumCTAs(layout) > 1) {
@@ -81,6 +84,7 @@ Value getMask(Type valueTy, ConversionPatternRewriter &rewriter, Location loc) {
         // The mask is equivalent to:
         //     multiDimClusterCTAId[dim] == 0
         mask = and_(mask, icmp_eq(repId, _0));
+        maskEnabled = true;
       }
     }
   } else {
@@ -88,8 +92,11 @@ Value getMask(Type valueTy, ConversionPatternRewriter &rewriter, Location loc) {
     // CTA0 can write
     mask = and_(mask, icmp_eq(clusterCTAId, i32_val(0)));
     mask = and_(mask, icmp_eq(tid, i32_val(0)));
+    maskEnabled = true;
   }
-  return mask;
+  if (maskEnabled)
+    return mask;
+  return std::nullopt;
 }
 
 // Contains some helper functions for both Load and Store conversions.
@@ -372,7 +379,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       vec = std::min(vec, maskAlign);
     }
 
-    Value mask = getMask(valueTy, rewriter, loc);
+    Value mask = getMask(valueTy, rewriter, loc).value_or(int_val(1, 1));
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
     const size_t valueElemNBits = dtsize * 8;
@@ -507,7 +514,7 @@ struct AtomicCASOpConversion
       vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
     }
 
-    Value mask = getMask(valueTy, rewriter, loc);
+    Value mask = getMask(valueTy, rewriter, loc).value_or(int_val(1, 1));
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
 
@@ -631,7 +638,7 @@ struct AtomicRMWOpConversion
       // mask
       numElems = tensorTy.getNumElements();
     }
-    Value mask = getMask(valueTy, rewriter, loc);
+    Value mask = getMask(valueTy, rewriter, loc).value_or(int_val(1, 1));
 
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
@@ -882,7 +889,16 @@ struct InsertSliceAsyncOpConversion
                                  i32_val(byteWidth), i32_val(0));
           srcSize = ptxBuilder.newOperand(selectOp, "r");
         }
-        copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
+
+        // When other != 0 are supported, we will need to fold the op.getMask()
+        // and getMask() into the same predicate, the way it is done for LoadOp.
+        auto maskVal = getMask(srcTy, rewriter, loc);
+        if (maskVal.has_value()) {
+          copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
+              .predicate(maskVal.value());
+        } else {
+          copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
+        }
         ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
       }
     }
