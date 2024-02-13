@@ -18,15 +18,15 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     %0 = tt.get_program_id x : i32
     %1 = arith.muli %0, %c1024_i32 : i32
     %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
-    %3 = tt.splat %1 : (i32) -> tensor<1024xi32, #blocked>
+    %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
     %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
-    %5 = tt.splat %arg2 : (i32) -> tensor<1024xi32, #blocked>
+    %5 = tt.splat %arg2 : i32 -> tensor<1024xi32, #blocked>
     %6 = arith.cmpi slt, %4, %5 : tensor<1024xi32, #blocked>
     %7 = arith.divsi %4, %cst : tensor<1024xi32, #blocked>
-    %8 = tt.splat %arg0 : (!tt.ptr<f16, 1>) -> tensor<1024x!tt.ptr<f16, 1>, #blocked>
+    %8 = tt.splat %arg0 : !tt.ptr<f16, 1> -> tensor<1024x!tt.ptr<f16, 1>, #blocked>
     %9 = tt.addptr %8, %7 : tensor<1024x!tt.ptr<f16, 1>, #blocked>, tensor<1024xi32, #blocked>
     %10 = tt.load %9, %6 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<1024xf16, #blocked>
-    %11 = tt.splat %arg1 : (!tt.ptr<f16, 1>) -> tensor<1024x!tt.ptr<f16, 1>, #blocked>
+    %11 = tt.splat %arg1 : !tt.ptr<f16, 1> -> tensor<1024x!tt.ptr<f16, 1>, #blocked>
     %12 = tt.addptr %11, %4 : tensor<1024x!tt.ptr<f16, 1>, #blocked>, tensor<1024xi32, #blocked>
     tt.store %12, %10, %6 {cache = 1 : i32, evict = 1 : i32} : tensor<1024xf16, #blocked>
     tt.return
@@ -56,15 +56,15 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     %0 = tt.get_program_id x : i32
     %1 = arith.muli %0, %c1024_i32 : i32
     %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
-    %3 = tt.splat %1 : (i32) -> tensor<1024xi32, #blocked>
+    %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
     %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
-    %5 = tt.splat %arg2 : (i32) -> tensor<1024xi32, #blocked>
+    %5 = tt.splat %arg2 : i32 -> tensor<1024xi32, #blocked>
     %6 = arith.cmpi slt, %4, %5 : tensor<1024xi32, #blocked>
     %7 = arith.divsi %4, %cst : tensor<1024xi32, #blocked>
-    %8 = tt.splat %arg0 : (!tt.ptr<f16, 1>) -> tensor<1024x!tt.ptr<f16, 1>, #blocked>
+    %8 = tt.splat %arg0 : !tt.ptr<f16, 1> -> tensor<1024x!tt.ptr<f16, 1>, #blocked>
     %9 = tt.addptr %8, %7 : tensor<1024x!tt.ptr<f16, 1>, #blocked>, tensor<1024xi32, #blocked>
     %10 = tt.load %9, %6 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<1024xf16, #blocked>
-    %11 = tt.splat %arg1 : (!tt.ptr<f16, 1>) -> tensor<1024x!tt.ptr<f16, 1>, #blocked>
+    %11 = tt.splat %arg1 : !tt.ptr<f16, 1> -> tensor<1024x!tt.ptr<f16, 1>, #blocked>
     %12 = tt.addptr %11, %4 : tensor<1024x!tt.ptr<f16, 1>, #blocked>, tensor<1024xi32, #blocked>
     tt.store %12, %10, %6 {cache = 1 : i32, evict = 1 : i32} : tensor<1024xf16, #blocked>
     tt.return

@@ -8,7 +8,7 @@
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
   tt.func public @dont_divide_0() attributes {noinline = false} {
     %zero = arith.constant dense<0.000000e+00> : tensor<16x1xf32, #mma>
-    %cvt = triton_gpu.convert_layout %zero : (tensor<16x1xf32, #mma>) -> tensor<16x1xf32, #blocked>
+    %cvt = triton_gpu.convert_layout %zero : tensor<16x1xf32, #mma> -> tensor<16x1xf32, #blocked>
     tt.return
   }
 }

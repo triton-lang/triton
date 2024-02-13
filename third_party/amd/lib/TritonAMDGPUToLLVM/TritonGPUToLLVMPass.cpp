@@ -576,7 +576,7 @@ private:
       auto newArgType = RankedTensorType::get(shape, F16Ty, argEncoding);
       auto newCvtType = RankedTensorType::get(shape, F16Ty, cvtEncoding);
       auto newArg = builder.create<mlir::triton::FpToFpOp>(
-          cvtOp.getLoc(), newArgType, cvtOp.getOperand());
+          cvtOp.getLoc(), newArgType, cvtOp.getSrc());
       addWSNamedAttrs(newArg, cvtOp->getAttrs());
       auto newCvt = builder.create<mlir::triton::gpu::ConvertLayoutOp>(
           cvtOp.getLoc(), newCvtType, newArg);
@@ -607,7 +607,7 @@ private:
                 mod.getContext(), dstType.getShape(), sizePerThread,
                 getOrder(shared), numWarps, threadsPerWarp, numCTAs));
         auto newSplat = builder.create<triton::SplatOp>(
-            splatOp.getLoc(), newType, splatOp.getOperand());
+            splatOp.getLoc(), newType, splatOp.getSrc());
         auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
             splatOp.getLoc(), dstType, newSplat.getResult());
         splatOp.replaceAllUsesWith(newConvert.getResult());
@@ -637,7 +637,7 @@ private:
                 mod.getContext(), srcType.getShape(), getSizePerThread(srcMfma),
                 getOrder(srcMfma), numWarps, threadsPerWarp, numCTAs));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
-            cvtOp.getLoc(), tmpType, cvtOp.getOperand());
+            cvtOp.getLoc(), tmpType, cvtOp.getSrc());
         auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), dstType, tmp);
         cvtOp.replaceAllUsesWith(newConvert.getResult());
@@ -698,7 +698,7 @@ private:
         srcType.getShape(), srcType.getElementType(), newMfmaEnc);
 
     auto tmpCvt = builder.create<triton::gpu::ConvertLayoutOp>(
-        cvtOp.getLoc(), newSrcType, cvtOp.getOperand());
+        cvtOp.getLoc(), newSrcType, cvtOp.getSrc());
     auto newEpilogueCvt = builder.create<triton::gpu::ConvertLayoutOp>(
         cvtOp.getLoc(), newDstType, tmpCvt);
 
@@ -811,7 +811,7 @@ private:
                 mod.getContext(), srcType.getShape(), getSizePerThread(srcMma),
                 getOrder(srcMma), numWarps, threadsPerWarp, numCTAs));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
-            cvtOp.getLoc(), tmpType, cvtOp.getOperand());
+            cvtOp.getLoc(), tmpType, cvtOp.getSrc());
         addWSNamedAttrs(tmp, cvtOp->getAttrs());
         auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), dstType, tmp);
@@ -841,7 +841,7 @@ private:
                 srcBlocked.getOrder(), srcBlocked.getCTALayout(),
                 srcType.getElementType()));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
-            cvtOp.getLoc(), tmpType, cvtOp.getOperand());
+            cvtOp.getLoc(), tmpType, cvtOp.getSrc());
         addWSNamedAttrs(tmp, cvtOp->getAttrs());
         auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), dstType, tmp);

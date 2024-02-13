@@ -15,8 +15,8 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 :
 // CHECK-LABEL: matmul_loop
 // There shouldn't be any membar with the dot op encoding.
 tt.func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
-  %a_ptr_init = tt.splat %A : (!tt.ptr<f16>) -> tensor<128x32x!tt.ptr<f16>, #AL>
-  %b_ptr_init = tt.splat %B : (!tt.ptr<f16>) -> tensor<32x128x!tt.ptr<f16>, #BL>
+  %a_ptr_init = tt.splat %A : !tt.ptr<f16> -> tensor<128x32x!tt.ptr<f16>, #AL>
+  %b_ptr_init = tt.splat %B : !tt.ptr<f16> -> tensor<32x128x!tt.ptr<f16>, #BL>
 
   %a_mask = arith.constant dense<true> : tensor<128x32xi1, #AL>
   %a_other = arith.constant dense<0.00e+00> : tensor<128x32xf16, #AL>
@@ -29,9 +29,9 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>,
 
   scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %prev_c = %c_init) -> (tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>) {
     %a_ = tt.load %a_ptr, %a_mask, %a_other {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x32xf16, #AL>
-    %a = triton_gpu.convert_layout %a_ : (tensor<128x32xf16, #AL>) -> tensor<128x32xf16, #A_DOT>
+    %a = triton_gpu.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A_DOT>
     %b_ = tt.load %b_ptr, %b_mask, %b_other {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128xf16, #BL>
-    %b = triton_gpu.convert_layout %b_ : (tensor<32x128xf16, #BL>) -> tensor<32x128xf16, #B_DOT>
+    %b = triton_gpu.convert_layout %b_ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B_DOT>
     %c = tt.dot %a, %b, %prev_c {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<128x32xf16, #A_DOT> * tensor<32x128xf16, #B_DOT> -> tensor<128x128xf32, #C>
 
     %next_a_ptr = tt.addptr %a_ptr, %a_off : tensor<128x32x!tt.ptr<f16>, #AL>, tensor<128x32xi32, #AL>
@@ -45,12 +45,12 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>,
 tt.func @raw_single_block(%A : !tt.ptr<f16>) {
   %cst1 = arith.constant dense<true> : tensor<128x32xi1, #AL>
   %cst2 = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #AL>
-  %0 = tt.splat %A : (!tt.ptr<f16>) -> tensor<128x32x!tt.ptr<f16>, #AL>
+  %0 = tt.splat %A : !tt.ptr<f16> -> tensor<128x32x!tt.ptr<f16>, #AL>
   %1 = tt.load %0, %cst1, %cst2 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x32xf16, #AL>
-  %2 = triton_gpu.convert_layout %1 : (tensor<128x32xf16, #AL>) -> tensor<128x32xf16, #A_SHARED>
+  %2 = triton_gpu.convert_layout %1 : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A_SHARED>
   // CHECK: gpu.barrier
   // CHECK-NEXT: triton_gpu.convert_layout
-  %3 = triton_gpu.convert_layout %2 : (tensor<128x32xf16, #A_SHARED>) -> tensor<128x32xf16, #A_SHARED>
+  %3 = triton_gpu.convert_layout %2 : tensor<128x32xf16, #A_SHARED> -> tensor<128x32xf16, #A_SHARED>
   tt.return
 }
 
@@ -58,15 +58,15 @@ tt.func @raw_single_block(%A : !tt.ptr<f16>) {
 tt.func @war_single_block(%A : !tt.ptr<f16>) {
   %cst1 = arith.constant dense<true> : tensor<128x32xi1, #AL>
   %cst2 = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #AL>
-  %0 = tt.splat %A : (!tt.ptr<f16>) -> tensor<128x32x!tt.ptr<f16>, #AL>
+  %0 = tt.splat %A : !tt.ptr<f16> -> tensor<128x32x!tt.ptr<f16>, #AL>
   %1 = tt.load %0, %cst1, %cst2 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x32xf16, #AL>
-  %2 = triton_gpu.convert_layout %1 : (tensor<128x32xf16, #AL>) -> tensor<128x32xf16, #A_SHARED>
+  %2 = triton_gpu.convert_layout %1 : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A_SHARED>
   // CHECK: gpu.barrier
   // CHECK-NEXT: triton_gpu.convert_layout
-  %3 = triton_gpu.convert_layout %2 : (tensor<128x32xf16, #A_SHARED>) -> tensor<128x32xf16, #AL>
+  %3 = triton_gpu.convert_layout %2 : tensor<128x32xf16, #A_SHARED> -> tensor<128x32xf16, #AL>
   // CHECK: gpu.barrier
   // CHECK-NEXT: %4 = triton_gpu.convert_layout
-  %4 = triton_gpu.convert_layout %1 : (tensor<128x32xf16, #AL>) -> tensor<128x32xf16, #A_SHARED>
+  %4 = triton_gpu.convert_layout %1 : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A_SHARED>
   tt.return
 }
 
@@ -75,10 +75,10 @@ tt.func @scratch() {
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %0 = tt.cat %cst0, %cst0 {axis = 0} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+  %0 = tt.cat %cst0, %cst0 {axis = 0} : tensor<16x16xf16, #A_SHARED> -> tensor<32x16xf16, #A_SHARED>
   // CHECK: gpu.barrier
   // CHECK-NEXT: triton_gpu.convert_layout
-  %1 = triton_gpu.convert_layout %0 : (tensor<32x16xf16, #A_SHARED>) -> tensor<32x16xf16, #AL>
+  %1 = triton_gpu.convert_layout %0 : tensor<32x16xf16, #A_SHARED> -> tensor<32x16xf16, #AL>
   %2 = "tt.reduce" (%1) ({
   ^bb0(%arg1: f16, %arg2: f16):
     %add = arith.addf %arg1, %arg2 : f16
@@ -92,21 +92,21 @@ tt.func @async_wait() {
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %0 = tt.cat %cst0, %cst0 {axis = 0} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+  %0 = tt.cat %cst0, %cst0 {axis = 0} : tensor<16x16xf16, #A_SHARED> -> tensor<32x16xf16, #A_SHARED>
   triton_gpu.async_wait {num = 4 : i32}
   // CHECK: gpu.barrier
   // CHECK-NEXT: triton_gpu.convert_layout
-  %1 = triton_gpu.convert_layout %0 : (tensor<32x16xf16, #A_SHARED>) -> tensor<32x16xf16, #AL>
+  %1 = triton_gpu.convert_layout %0 : tensor<32x16xf16, #A_SHARED> -> tensor<32x16xf16, #AL>
   tt.return
 }
 
 // CHECK-LABEL: alloc
 tt.func @alloc() {
   %0 = triton_gpu.alloc_tensor : tensor<16x16xf16, #A_SHARED>
-  %1 = tt.cat %0, %0 {axis = 0} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+  %1 = tt.cat %0, %0 {axis = 0} : tensor<16x16xf16, #A_SHARED> -> tensor<32x16xf16, #A_SHARED>
   // CHECK: gpu.barrier
   // CHECK-NEXT: triton_gpu.convert_layout
-  %2 = triton_gpu.convert_layout %1 : (tensor<32x16xf16, #A_SHARED>) -> tensor<32x16xf16, #AL>
+  %2 = triton_gpu.convert_layout %1 : tensor<32x16xf16, #A_SHARED> -> tensor<32x16xf16, #AL>
   tt.return
 }
 
@@ -117,10 +117,10 @@ tt.func @extract_slice() {
   %0 = triton_gpu.extract_slice %cst0[%index, 0, 0][1, 16, 16][1, 1, 1] : tensor<1x16x16xf16, #A_SHARED> to tensor<16x16xf16, #A_SHARED>
   // CHECK: gpu.barrier
   // CHECK-NEXT: triton_gpu.convert_layout
-  %1 = triton_gpu.convert_layout %0 : (tensor<16x16xf16, #A_SHARED>) -> tensor<16x16xf16, #AL>
+  %1 = triton_gpu.convert_layout %0 : tensor<16x16xf16, #A_SHARED> -> tensor<16x16xf16, #AL>
   // CHECK: gpu.barrier
   // CHECK-NEXT: triton_gpu.convert_layout
-  %2 = triton_gpu.convert_layout %1 : (tensor<16x16xf16, #AL>) -> tensor<16x16xf16, #A_SHARED>
+  %2 = triton_gpu.convert_layout %1 : tensor<16x16xf16, #AL> -> tensor<16x16xf16, #A_SHARED>
   tt.return
 }
 
@@ -128,31 +128,31 @@ tt.func @extract_slice() {
 tt.func @trans() {
   // CHECK-NOT: gpu.barrier
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #A_SHARED>
-  %b = tt.trans %cst0 {order=array<i32: 1,0>} : (tensor<16x32xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED_T>
+  %b = tt.trans %cst0 {order=array<i32: 1,0>} : tensor<16x32xf16, #A_SHARED> -> tensor<32x16xf16, #A_SHARED_T>
   tt.return
 }
 
 // CHECK-LABEL: insert_slice_async_op
 tt.func @insert_slice_async_op(%A : !tt.ptr<f16>, %i1 : i1) {
-  %a_ptr = tt.splat %A : (!tt.ptr<f16>) -> tensor<16x16x!tt.ptr<f16>, #AL>
-  %mask = tt.splat %i1 : (i1) -> tensor<16x16xi1, #AL>
+  %a_ptr = tt.splat %A : !tt.ptr<f16> -> tensor<16x16x!tt.ptr<f16>, #AL>
+  %mask = tt.splat %i1 : i1 -> tensor<16x16xi1, #AL>
   %other = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   %tensor = triton_gpu.alloc_tensor : tensor<1x16x16xf16, #A_SHARED>
   %index = arith.constant 0 : i32
   %3 = triton_gpu.insert_slice_async %a_ptr, %tensor, %index, %mask, %other {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x16x!tt.ptr<f16>, #AL> -> tensor<1x16x16xf16, #A_SHARED>
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %4 = tt.cat %3, %3 {axis = 0} : (tensor<1x16x16xf16, #A_SHARED>, tensor<1x16x16xf16, #A_SHARED>) -> tensor<2x16x16xf16, #A_SHARED>
+  %4 = tt.cat %3, %3 {axis = 0} : tensor<1x16x16xf16, #A_SHARED> -> tensor<2x16x16xf16, #A_SHARED>
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %5 = tt.cat %4, %4 {axis = 0} : (tensor<2x16x16xf16, #A_SHARED>, tensor<2x16x16xf16, #A_SHARED>) -> tensor<4x16x16xf16, #A_SHARED>
+  %5 = tt.cat %4, %4 {axis = 0} : tensor<2x16x16xf16, #A_SHARED> -> tensor<4x16x16xf16, #A_SHARED>
   tt.return
 }
 
 // CHECK-LABEL: insert_slice_op
 tt.func @insert_slice_op(%A : !tt.ptr<f16>, %i1 : i1) {
-  %a_ptr = tt.splat %A : (!tt.ptr<f16>) -> tensor<16x16x!tt.ptr<f16>, #AL>
-  %mask = tt.splat %i1 : (i1) -> tensor<16x16xi1, #AL>
+  %a_ptr = tt.splat %A : !tt.ptr<f16> -> tensor<16x16x!tt.ptr<f16>, #AL>
+  %mask = tt.splat %i1 : i1 -> tensor<16x16xi1, #AL>
   %other = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   %tensor = arith.constant dense<0.000000e+00> : tensor<1x16x16xf16, #A_SHARED>
   %index = arith.constant 0 : index
@@ -162,10 +162,10 @@ tt.func @insert_slice_op(%A : !tt.ptr<f16>, %i1 : i1) {
   %3 = tensor.insert_slice %2 into %tensor[%index, 0, 0][1, 16, 16][1, 1, 1]: tensor<16x16xf16, #AL> into tensor<1x16x16xf16, #A_SHARED>
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %4 = tt.cat %3, %3 {axis = 0} : (tensor<1x16x16xf16, #A_SHARED>, tensor<1x16x16xf16, #A_SHARED>) -> tensor<2x16x16xf16, #A_SHARED>
+  %4 = tt.cat %3, %3 {axis = 0} : tensor<1x16x16xf16, #A_SHARED> -> tensor<2x16x16xf16, #A_SHARED>
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %5 = tt.cat %4, %4 {axis = 0} : (tensor<2x16x16xf16, #A_SHARED>, tensor<2x16x16xf16, #A_SHARED>) -> tensor<4x16x16xf16, #A_SHARED>
+  %5 = tt.cat %4, %4 {axis = 0} : tensor<2x16x16xf16, #A_SHARED> -> tensor<4x16x16xf16, #A_SHARED>
   tt.return
 }
 
@@ -177,19 +177,19 @@ tt.func @multi_blocks(%i1 : i1) {
   scf.if %i1 {
     // CHECK: gpu.barrier
     // CHECK-NEXT: tt.cat
-    %0 = tt.cat %cst0, %cst1 {axis = 0} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+    %0 = tt.cat %cst0, %cst1 {axis = 0} : tensor<16x16xf16, #A_SHARED> -> tensor<32x16xf16, #A_SHARED>
     scf.yield
   } else {
     %cst2 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
     %cst3 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
     // CHECK: gpu.barrier
     // CHECK-NEXT: tt.cat
-    %1 = tt.cat %cst2, %cst3 {axis = 0} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+    %1 = tt.cat %cst2, %cst3 {axis = 0} : tensor<16x16xf16, #A_SHARED> -> tensor<32x16xf16, #A_SHARED>
     scf.yield
   }
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %2 = tt.cat %cst0, %cst1 {axis = 0} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+  %2 = tt.cat %cst0, %cst1 {axis = 0} : tensor<16x16xf16, #A_SHARED> -> tensor<32x16xf16, #A_SHARED>
   tt.return
 }
 
@@ -201,15 +201,15 @@ tt.func @multi_blocks_join_barrier(%i1 : i1) {
   scf.if %i1 {
     // CHECK: gpu.barrier
     // CHECK-NEXT: tt.cat
-    %0 = tt.cat %cst0, %cst1 {axis = 0} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+    %0 = tt.cat %cst0, %cst1 {axis = 0} : tensor<16x16xf16, #A_SHARED> -> tensor<32x16xf16, #A_SHARED>
     scf.yield
   } else {
     // CHECK: gpu.barrier
     // CHECK-NEXT: tt.cat
-    %1 = tt.cat %cst0, %cst1 {axis = 0} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+    %1 = tt.cat %cst0, %cst1 {axis = 0} : tensor<16x16xf16, #A_SHARED> -> tensor<32x16xf16, #A_SHARED>
     scf.yield
   }
-  %a_ = triton_gpu.convert_layout %cst0 : (tensor<16x16xf16, #A_SHARED>) -> tensor<16x16xf16, #AL>
+  %a_ = triton_gpu.convert_layout %cst0 : tensor<16x16xf16, #A_SHARED> -> tensor<16x16xf16, #AL>
   tt.return
 }
 
@@ -221,18 +221,18 @@ tt.func @multi_blocks_yield(%i1 : i1) {
   %a = scf.if %i1 -> (tensor<32x16xf16, #A_SHARED>) {
     // CHECK: gpu.barrier
     // CHECK-NEXT: tt.cat
-    %0 = tt.cat %cst0, %cst1 {axis = 0} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+    %0 = tt.cat %cst0, %cst1 {axis = 0} : tensor<16x16xf16, #A_SHARED> -> tensor<32x16xf16, #A_SHARED>
     scf.yield %0 : tensor<32x16xf16, #A_SHARED>
   } else {
     // CHECK: gpu.barrier
     // CHECK-NEXT: tt.cat
-    %1 = tt.cat %cst0, %cst1 {axis = 0} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+    %1 = tt.cat %cst0, %cst1 {axis = 0} : tensor<16x16xf16, #A_SHARED> -> tensor<32x16xf16, #A_SHARED>
     scf.yield %1 : tensor<32x16xf16, #A_SHARED>
   }
-  %a_ = triton_gpu.convert_layout %cst0 : (tensor<16x16xf16, #A_SHARED>) -> tensor<16x16xf16, #AL>
+  %a_ = triton_gpu.convert_layout %cst0 : tensor<16x16xf16, #A_SHARED> -> tensor<16x16xf16, #AL>
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %4 = tt.cat %a, %a {axis = 0} : (tensor<32x16xf16, #A_SHARED>, tensor<32x16xf16, #A_SHARED>) -> tensor<64x16xf16, #A_SHARED>
+  %4 = tt.cat %a, %a {axis = 0} : tensor<32x16xf16, #A_SHARED> -> tensor<64x16xf16, #A_SHARED>
   tt.return
 }
 
@@ -244,7 +244,7 @@ tt.func @multi_blocks_entry_no_shared(%i1 : i1) {
     // CHECK: gpu.barrier
     // CHECK-NEXT: tt.cat
     %cst1 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
-    %0 = tt.cat %cst1, %cst1 {axis = 0} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+    %0 = tt.cat %cst1, %cst1 {axis = 0} : tensor<16x16xf16, #A_SHARED> -> tensor<32x16xf16, #A_SHARED>
     scf.yield %0 : tensor<32x16xf16, #A_SHARED>
   } else {
     // CHECK-NOT: gpu.barrier
@@ -254,7 +254,7 @@ tt.func @multi_blocks_entry_no_shared(%i1 : i1) {
   }
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %1 = tt.cat %a, %a {axis = 0} : (tensor<32x16xf16, #A_SHARED>, tensor<32x16xf16, #A_SHARED>) -> tensor<64x16xf16, #A_SHARED>
+  %1 = tt.cat %a, %a {axis = 0} : tensor<32x16xf16, #A_SHARED> -> tensor<64x16xf16, #A_SHARED>
   tt.return
 }
 
@@ -266,12 +266,12 @@ tt.func @multi_blocks_noelse(%i1 : i1) {
   scf.if %i1 {
     // CHECK: gpu.barrier
     // CHECK-NEXT: tt.cat
-    %0 = tt.cat %cst0, %cst1 {axis = 0} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+    %0 = tt.cat %cst0, %cst1 {axis = 0} : tensor<16x16xf16, #A_SHARED> -> tensor<32x16xf16, #A_SHARED>
     scf.yield
   }
   // CHECK: gpu.barrier
   // CHECK-NEXT: triton_gpu.convert_layout
-  %1 = triton_gpu.convert_layout %cst0 : (tensor<16x16xf16, #A_SHARED>) -> tensor<16x16xf16, #AL>
+  %1 = triton_gpu.convert_layout %cst0 : tensor<16x16xf16, #A_SHARED> -> tensor<16x16xf16, #AL>
   tt.return
 }
 
@@ -284,19 +284,19 @@ tt.func @multi_blocks_nested_scf(%i1 : i1, %i2 : i1) {
     scf.if %i2 {
       // CHECK: gpu.barrier
       // CHECK-NEXT: tt.cat
-      %0 = tt.cat %cst0, %cst1 {axis = 0} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+      %0 = tt.cat %cst0, %cst1 {axis = 0} : tensor<16x16xf16, #A_SHARED> -> tensor<32x16xf16, #A_SHARED>
       scf.yield
     }
     scf.yield
   } else {
     // CHECK: gpu.barrier
     // CHECK-NEXT: tt.cat
-    %1 = tt.cat %cst0, %cst1 {axis = 0} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+    %1 = tt.cat %cst0, %cst1 {axis = 0} : tensor<16x16xf16, #A_SHARED> -> tensor<32x16xf16, #A_SHARED>
     scf.yield
   }
   // CHECK: gpu.barrier
   // CHECK-NEXT: triton_gpu.convert_layout
-  %2 = triton_gpu.convert_layout %cst0 : (tensor<16x16xf16, #A_SHARED>) -> tensor<16x16xf16, #AL>
+  %2 = triton_gpu.convert_layout %cst0 : tensor<16x16xf16, #A_SHARED> -> tensor<16x16xf16, #AL>
   tt.return
 }
 
@@ -308,7 +308,7 @@ tt.func @for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !t
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) {
     // CHECK: gpu.barrier
     // CHECK-NEXT: tt.cat
-    %5 = tt.cat %a_shared, %b_shared {axis = 0} : (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) -> tensor<256x32xf16, #A_SHARED>
+    %5 = tt.cat %a_shared, %b_shared {axis = 0} : tensor<128x32xf16, #A_SHARED> -> tensor<256x32xf16, #A_SHARED>
     scf.yield %b_shared, %a_shared, %a_shared : tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>
   }
   tt.return
@@ -322,18 +322,18 @@ tt.func @for_alias(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %
   %b_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %0 = tt.cat %a_shared_init, %b_shared_init {axis = 0} : (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) -> tensor<256x32xf16, #A_SHARED>
+  %0 = tt.cat %a_shared_init, %b_shared_init {axis = 0} : tensor<128x32xf16, #A_SHARED> -> tensor<256x32xf16, #A_SHARED>
   %c_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) {
-    %cst1 = tt.cat %a_shared_init, %b_shared_init {axis = 0} : (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) -> tensor<256x32xf16, #AL>
+    %cst1 = tt.cat %a_shared_init, %b_shared_init {axis = 0} : tensor<128x32xf16, #A_SHARED> -> tensor<256x32xf16, #AL>
     // CHECK: gpu.barrier
     // CHECK-NEXT: tt.cat
-    %7 = tt.cat %a_shared, %b_shared {axis = 0} : (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) -> tensor<256x32xf16, #AL>
+    %7 = tt.cat %a_shared, %b_shared {axis = 0} : tensor<128x32xf16, #A_SHARED> -> tensor<256x32xf16, #AL>
     scf.yield %c_shared, %a_shared, %b_shared : tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>
   }
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %9 = tt.cat %0, %0 {axis = 0} : (tensor<256x32xf16, #A_SHARED>, tensor<256x32xf16, #A_SHARED>) -> tensor<512x32xf16, #A_SHARED>
+  %9 = tt.cat %0, %0 {axis = 0} : tensor<256x32xf16, #A_SHARED> -> tensor<512x32xf16, #A_SHARED>
   tt.return
 }
 
@@ -345,20 +345,20 @@ tt.func @for_reuse(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %
   %b_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %0 = tt.cat %a_shared_init, %b_shared_init {axis = 0} : (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) -> tensor<256x32xf16, #A_SHARED>
+  %0 = tt.cat %a_shared_init, %b_shared_init {axis = 0} : tensor<128x32xf16, #A_SHARED> -> tensor<256x32xf16, #A_SHARED>
   %c_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) {
     // CHECK: gpu.barrier
     // CHECK-NEXT: tt.cat
-    %6 = tt.cat %a_shared_init, %b_shared_init {axis = 0} : (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) -> tensor<256x32xf16, #A_SHARED>
+    %6 = tt.cat %a_shared_init, %b_shared_init {axis = 0} : tensor<128x32xf16, #A_SHARED> -> tensor<256x32xf16, #A_SHARED>
     // CHECK: gpu.barrier
     // CHECK-NEXT: tt.cat
-    %7 = tt.cat %a_shared, %b_shared {axis = 0} : (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) -> tensor<256x32xf16, #A_SHARED>
+    %7 = tt.cat %a_shared, %b_shared {axis = 0} : tensor<128x32xf16, #A_SHARED> -> tensor<256x32xf16, #A_SHARED>
     scf.yield %c_shared, %a_shared, %b_shared : tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>
   }
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %9 = tt.cat %0, %0 {axis = 0} : (tensor<256x32xf16, #A_SHARED>, tensor<256x32xf16, #A_SHARED>) -> tensor<512x32xf16, #A_SHARED>
+  %9 = tt.cat %0, %0 {axis = 0} : tensor<256x32xf16, #A_SHARED> -> tensor<512x32xf16, #A_SHARED>
   tt.return
 }
 
@@ -368,23 +368,23 @@ tt.func @for_reuse_nested(%lb : index, %ub : index, %step : index, %A : !tt.ptr<
   %b_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %0 = tt.cat %a_shared_init, %b_shared_init {axis = 0} : (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) -> tensor<256x32xf16, #A_SHARED>
+  %0 = tt.cat %a_shared_init, %b_shared_init {axis = 0} : tensor<128x32xf16, #A_SHARED> -> tensor<256x32xf16, #A_SHARED>
   %c_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) {
     // CHECK: gpu.barrier
     // CHECK-NEXT: tt.cat
-    %6 = tt.cat %a_shared_init, %b_shared_init {axis = 0} : (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) -> tensor<256x32xf16, #A_SHARED>
+    %6 = tt.cat %a_shared_init, %b_shared_init {axis = 0} : tensor<128x32xf16, #A_SHARED> -> tensor<256x32xf16, #A_SHARED>
     %a_shared_next, %b_shared_next, %c_shared_next = scf.for %ivv = %lb to %ub step %step iter_args(%a_shared_nested = %a_shared_init, %b_shared_nested = %b_shared_init, %c_shared_nested = %c_shared_init) -> (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) {
       // CHECK: gpu.barrier
       // CHECK-NEXT:  tt.cat
-      %12 = tt.cat %a_shared_nested, %b_shared_nested {axis = 0} : (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) -> tensor<256x32xf16, #A_SHARED>
+      %12 = tt.cat %a_shared_nested, %b_shared_nested {axis = 0} : tensor<128x32xf16, #A_SHARED> -> tensor<256x32xf16, #A_SHARED>
       scf.yield %c_shared_nested, %a_shared_nested, %b_shared_nested : tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>
     }
     scf.yield %c_shared, %a_shared, %b_shared : tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>
   }
   // CHECK: gpu.barrier
   // CHECK-NEXT:  tt.cat
-  %15 = tt.cat %0, %0 {axis = 0} : (tensor<256x32xf16, #A_SHARED>, tensor<256x32xf16, #A_SHARED>) -> tensor<512x32xf16, #A_SHARED>
+  %15 = tt.cat %0, %0 {axis = 0} : tensor<256x32xf16, #A_SHARED> -> tensor<512x32xf16, #A_SHARED>
   tt.return
 }
 
@@ -421,7 +421,7 @@ tt.func @for_if_for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, 
   %b_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   %c_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   // CHECK: gpu.barrier
-  %c_blocked = triton_gpu.convert_layout %c_shared_init : (tensor<128x32xf16, #A_SHARED>) -> tensor<128x32xf16, #AL>
+  %c_blocked = triton_gpu.convert_layout %c_shared_init : tensor<128x32xf16, #A_SHARED> -> tensor<128x32xf16, #AL>
 
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) {
     %c_shared_next_next = scf.if %i1 -> tensor<128x32xf16, #A_SHARED> {
@@ -433,13 +433,13 @@ tt.func @for_if_for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, 
       %c_shared_ = scf.for %jv = %lb to %ub step %step iter_args(%c_shared_next = %c_shared) -> (tensor<128x32xf16, #A_SHARED>) {
         // CHECK: gpu.barrier
         // CHECK-NEXT: triton_gpu.convert_layout
-        %c_blocked_next = triton_gpu.convert_layout %c_shared_next : (tensor<128x32xf16, #A_SHARED>) -> tensor<128x32xf16, #AL>
+        %c_blocked_next = triton_gpu.convert_layout %c_shared_next : tensor<128x32xf16, #A_SHARED> -> tensor<128x32xf16, #AL>
         scf.yield %c_shared : tensor<128x32xf16, #A_SHARED>
       }
       scf.yield %c_shared_ : tensor<128x32xf16, #A_SHARED>
     }
     // CHECK-NOT: gpu.barrier
-    %b_blocked_next = triton_gpu.convert_layout %b_shared: (tensor<128x32xf16, #A_SHARED>) -> tensor<128x32xf16, #AL>
+    %b_blocked_next = triton_gpu.convert_layout %b_shared: tensor<128x32xf16, #A_SHARED> -> tensor<128x32xf16, #AL>
     scf.yield %a_shared, %b_shared, %c_shared_next_next : tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>
   }
   tt.return
@@ -453,12 +453,12 @@ tt.func @cf_if(%i1 : i1) {
 ^bb1:  // pred: ^bb0
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %0 = tt.cat %cst, %cst_0 {axis = 0 : i64} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+  %0 = tt.cat %cst, %cst_0 {axis = 0 : i64} : tensor<16x16xf16, #A_SHARED> -> tensor<32x16xf16, #A_SHARED>
   cf.br ^bb2
 ^bb2:  // 2 preds: ^bb0, ^bb1
   // CHECK: gpu.barrier
   // CHECK-NEXT: triton_gpu.convert_layout
-  %1 = triton_gpu.convert_layout %cst : (tensor<16x16xf16, #A_SHARED>) -> tensor<16x16xf16, #AL>
+  %1 = triton_gpu.convert_layout %cst : tensor<16x16xf16, #A_SHARED> -> tensor<16x16xf16, #AL>
   tt.return
 }
 
@@ -469,20 +469,20 @@ tt.func @cf_if_else(%i1 : i1) {
 ^bb1:  // pred: ^bb0
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %0 = tt.cat %cst, %cst_0 {axis = 0 : i64} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+  %0 = tt.cat %cst, %cst_0 {axis = 0 : i64} : tensor<16x16xf16, #A_SHARED> -> tensor<32x16xf16, #A_SHARED>
   cf.br ^bb3(%0 : tensor<32x16xf16, #A_SHARED>)
 ^bb2:  // pred: ^bb0
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %1 = tt.cat %cst, %cst_0 {axis = 0 : i64} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+  %1 = tt.cat %cst, %cst_0 {axis = 0 : i64} : tensor<16x16xf16, #A_SHARED> -> tensor<32x16xf16, #A_SHARED>
   cf.br ^bb3(%1 : tensor<32x16xf16, #A_SHARED>)
 ^bb3(%2: tensor<32x16xf16, #A_SHARED>):  // 2 preds: ^bb1, ^bb2
   cf.br ^bb4
 ^bb4:  // pred: ^bb3
-  %3 = triton_gpu.convert_layout %cst : (tensor<16x16xf16, #A_SHARED>) -> tensor<16x16xf16, #AL>
+  %3 = triton_gpu.convert_layout %cst : tensor<16x16xf16, #A_SHARED> -> tensor<16x16xf16, #AL>
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %4 = tt.cat %2, %2 {axis = 0 : i64} : (tensor<32x16xf16, #A_SHARED>, tensor<32x16xf16, #A_SHARED>) -> tensor<64x16xf16, #A_SHARED>
+  %4 = tt.cat %2, %2 {axis = 0 : i64} : tensor<32x16xf16, #A_SHARED> -> tensor<64x16xf16, #A_SHARED>
   tt.return
 }
 
@@ -493,12 +493,12 @@ tt.func @cf_if_else_return(%i1 : i1) {
 ^bb1:  // pred: ^bb0
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %0 = tt.cat %cst, %cst_0 {axis = 0 : i64} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+  %0 = tt.cat %cst, %cst_0 {axis = 0 : i64} : tensor<16x16xf16, #A_SHARED> -> tensor<32x16xf16, #A_SHARED>
   tt.return
 ^bb2:  // pred: ^bb0
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %1 = tt.cat %cst, %cst_0 {axis = 0 : i64} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+  %1 = tt.cat %cst, %cst_0 {axis = 0 : i64} : tensor<16x16xf16, #A_SHARED> -> tensor<32x16xf16, #A_SHARED>
   tt.return
 }
 
@@ -510,7 +510,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 :
 tt.func @convert_layout1(%A : !tt.ptr<f16>) {
   // CHECK-NOT: gpu.barrier
   %0 = triton_gpu.alloc_tensor : tensor<16x16xf16, #A_SHARED>
-  %1 = triton_gpu.convert_layout %0 : (tensor<16x16xf16, #A_SHARED>) -> tensor<16x16xf16, #AL>
+  %1 = triton_gpu.convert_layout %0 : tensor<16x16xf16, #A_SHARED> -> tensor<16x16xf16, #AL>
   tt.return
 }
 
@@ -518,11 +518,11 @@ tt.func @convert_layout1(%A : !tt.ptr<f16>) {
 tt.func @convert_layout2(%A : !tt.ptr<f16>) {
   %0 = triton_gpu.alloc_tensor : tensor<16x16xf16, #A_SHARED>
   %1 = triton_gpu.alloc_tensor : tensor<16x16xf16, #A_SHARED>
-  %2 = tt.cat %1, %1 {axis = 0} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+  %2 = tt.cat %1, %1 {axis = 0} : tensor<16x16xf16, #A_SHARED> -> tensor<32x16xf16, #A_SHARED>
   // CHECK: triton_gpu.convert_layout
   // CHECK-NEXT: gpu.barrier
-  %3 = triton_gpu.convert_layout %0 : (tensor<16x16xf16, #A_SHARED>) -> tensor<16x16xf16, #AL>
-  %4 = tt.cat %2, %2 {axis = 0} : (tensor<32x16xf16, #A_SHARED>, tensor<32x16xf16, #A_SHARED>) -> tensor<64x16xf16, #AL>
+  %3 = triton_gpu.convert_layout %0 : tensor<16x16xf16, #A_SHARED> -> tensor<16x16xf16, #AL>
+  %4 = tt.cat %2, %2 {axis = 0} : tensor<32x16xf16, #A_SHARED> -> tensor<64x16xf16, #AL>
   tt.return
 }
 
@@ -532,14 +532,14 @@ tt.func @convert_layout3(%cond : i1) {
     %0 = triton_gpu.alloc_tensor : tensor<16x64xf16, #A_SHARED>
     // CHECK: triton_gpu.convert_layout
     // CHECK-NOT: gpu.barrier
-    %1 = triton_gpu.convert_layout %0 : (tensor<16x64xf16, #A_SHARED>) -> tensor<16x64xf16, #AL>
+    %1 = triton_gpu.convert_layout %0 : tensor<16x64xf16, #A_SHARED> -> tensor<16x64xf16, #AL>
   } else {
     %0 = triton_gpu.alloc_tensor : tensor<16x16xf16, #A_SHARED>
     // CHECK: triton_gpu.convert_layout
     // CHECK-NEXT: gpu.barrier
     // CHECK-NEXT: triton_gpu.convert_layout
-    %1 = triton_gpu.convert_layout %0 : (tensor<16x16xf16, #A_SHARED>) -> tensor<16x16xf16, #AL>
-    %2 = triton_gpu.convert_layout %1 : (tensor<16x16xf16, #AL>) -> tensor<16x16xf16, #A_SHARED>
+    %1 = triton_gpu.convert_layout %0 : tensor<16x16xf16, #A_SHARED> -> tensor<16x16xf16, #AL>
+    %2 = triton_gpu.convert_layout %1 : tensor<16x16xf16, #AL> -> tensor<16x16xf16, #A_SHARED>
   }
   tt.return
 }
@@ -561,7 +561,7 @@ tt.func @single_call_sync(%A : !tt.ptr<f16>) {
   // CHECK: tt.call
   // CHECK-NEXT: gpu.barrier
   tt.call @convert_layout1(%A) : (!tt.ptr<f16>) -> ()
-  %1 = triton_gpu.convert_layout %0 : (tensor<16x32xf16, #AL>) -> tensor<16x32xf16, #BL>
+  %1 = triton_gpu.convert_layout %0 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
   tt.return
 }
 
@@ -571,7 +571,7 @@ tt.func @single_call_no_sync(%A : !tt.ptr<f16>) {
   // CHECK-NOT: gpu.barrier
   %0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   tt.call @convert_layout2(%A) : (!tt.ptr<f16>) -> ()
-  %1 = triton_gpu.convert_layout %0 : (tensor<16x16xf16, #AL>) -> tensor<16x16xf16, #BL>
+  %1 = triton_gpu.convert_layout %0 : tensor<16x16xf16, #AL> -> tensor<16x16xf16, #BL>
   tt.return
 }
 

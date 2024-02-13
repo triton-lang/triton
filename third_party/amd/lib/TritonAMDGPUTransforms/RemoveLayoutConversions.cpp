@@ -55,7 +55,7 @@ public:
     if (!cvtOp.getSrc().getDefiningOp<triton::LoadOp>())
       return failure();
     auto dstTy = dstOp.getResult().getType().cast<RankedTensorType>();
-    auto srcTy = cvtOp.getOperand().getType().cast<RankedTensorType>();
+    auto srcTy = cvtOp.getSrc().getType().cast<RankedTensorType>();
     if (dstTy != srcTy)
       return mlir::failure();
 
@@ -70,7 +70,7 @@ public:
         dotOp.getMaxNumImpreciseAcc());
     auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
         op->getLoc(), dstTy, newDot.getResult());
-    rewriter.replaceOpWithNewOp<arith::AddFOp>(op, newCvt, cvtOp.getOperand());
+    rewriter.replaceOpWithNewOp<arith::AddFOp>(op, newCvt, cvtOp.getSrc());
     return mlir::success();
   }
 };
@@ -335,7 +335,7 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
 #ifdef USE_ROCM
       if (auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(user)) {
         if (triton::gpu::hasSharedEncoding(convertOp.getResult()) ||
-            triton::gpu::hasSharedEncoding(convertOp.getOperand()))
+            triton::gpu::hasSharedEncoding(convertOp.getSrc()))
           continue;
       }
 #endif
@@ -711,11 +711,11 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   Attribute encoding = *layouts[op->getResult(0)].encodings.begin();
   if (auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
     Attribute srcEncoding =
-        convertOp.getOperand().getType().cast<RankedTensorType>().getEncoding();
-    auto it = layouts.find(convertOp.getOperand());
+        convertOp.getSrc().getType().cast<RankedTensorType>().getEncoding();
+    auto it = layouts.find(convertOp.getSrc());
     if (it != layouts.end())
       srcEncoding = *(it->second.encodings.begin());
-    Value src = getValueAs(convertOp.getOperand(), srcEncoding);
+    Value src = getValueAs(convertOp.getSrc(), srcEncoding);
     auto tensorType = op->getResult(0).getType().cast<RankedTensorType>();
     auto newType = RankedTensorType::get(tensorType.getShape(),
                                          tensorType.getElementType(), encoding);
@@ -839,7 +839,7 @@ static void rewriteSlice(SetVector<Value> &slice,
       newV.setType(newType);
     }
   }
-  convertOp.replaceAllUsesWith(mapping.lookup(convertOp.getOperand()));
+  convertOp.replaceAllUsesWith(mapping.lookup(convertOp.getSrc()));
   convertOp.erase();
   for (Operation *op : deadLoops)
     op->erase();
@@ -874,7 +874,7 @@ static LogicalResult getRematerializableSlice(
 static void backwardRematerialization(ConvertLayoutOp convertOp) {
   // we don't want to rematerialize any conversion to/from shared
   if (triton::gpu::hasSharedEncoding(convertOp.getResult()) ||
-      triton::gpu::hasSharedEncoding(convertOp.getOperand()))
+      triton::gpu::hasSharedEncoding(convertOp.getSrc()))
     return;
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristics to accommodate fused attention
@@ -887,7 +887,7 @@ static void backwardRematerialization(ConvertLayoutOp convertOp) {
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
   LogicalResult result = getRematerializableSlice(
-      convertOp.getOperand(), targetType.getEncoding(), slice, layout);
+      convertOp.getSrc(), targetType.getEncoding(), slice, layout);
   if (result.failed())
     return;
 
@@ -900,7 +900,7 @@ static void backwardRematerialization(ConvertLayoutOp convertOp) {
 static void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp) {
   // we don't want to rematerialize any conversion to/from shared
   if (triton::gpu::hasSharedEncoding(convertOp.getResult()) ||
-      triton::gpu::hasSharedEncoding(convertOp.getOperand()))
+      triton::gpu::hasSharedEncoding(convertOp.getSrc()))
     return;
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristics to accommodate fused attention
@@ -916,7 +916,7 @@ static void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp) {
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
   LogicalResult result =
-      getRematerializableSlice(convertOp.getOperand(), targetType.getEncoding(),
+      getRematerializableSlice(convertOp.getSrc(), targetType.getEncoding(),
                                slice, layout, isExtOrBroadcastOp);
   if (result.failed())
     return;

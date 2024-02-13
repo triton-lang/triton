@@ -512,7 +512,7 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
                               reshapeDstType.getElementType(), targetEncoding);
     return reshape.getAllowReorder() &&
            !reshape.getEfficientLayout().has_value() &&
-           !triton::gpu::isExpensiveView(reshape.getOperand().getType(),
+           !triton::gpu::isExpensiveView(reshape.getSrc().getType(),
                                          newDstType);
   }
   return isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
