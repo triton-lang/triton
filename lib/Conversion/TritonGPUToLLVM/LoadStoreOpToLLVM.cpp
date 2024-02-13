@@ -890,7 +890,7 @@ struct InsertSliceAsyncOpConversion
           srcSize = ptxBuilder.newOperand(selectOp, "r");
         }
 
-        // When other != 0 are supported, we will need to fold the op.getMask()
+        // When 'other != 0' is supported, we will need to fold the op.getMask()
         // and getMask() into the same predicate, the way it is done for LoadOp.
         auto maskVal = getMask(srcTy, rewriter, loc);
         if (maskVal.has_value()) {
