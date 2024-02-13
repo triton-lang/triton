@@ -71,12 +71,12 @@ tt.func @test_combine_addptr_pattern(%base: !tt.ptr<f32>) -> tensor<8x!tt.ptr<f3
     // 10 + 15 = 25
     // COM: CHECK-NEXT: %[[cst:.*]] = arith.constant dense<25> : tensor<8xi32>
 
-    %base_ = tt.splat %base : (!tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>>
+    %base_ = tt.splat %base : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
 
-    // COM: CHECK-NEXT: %[[tmp0:.*]] = tt.splat %{{.*}} : (!tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>>
+    // COM: CHECK-NEXT: %[[tmp0:.*]] = tt.splat %{{.*}} : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
 
-    %idx0 = tt.splat %off0 : (i32) -> tensor<8xi32>
-    %idx1 = tt.splat %off1 : (i32) -> tensor<8xi32>
+    %idx0 = tt.splat %off0 : i32 -> tensor<8xi32>
+    %idx1 = tt.splat %off1 : i32 -> tensor<8xi32>
 
     // COM: CHECK-NEXT: %1 = tt.addptr %[[tmp0]], %[[cst]] : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
     %ptr0 = tt.addptr %base_, %idx0 : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
@@ -88,7 +88,7 @@ tt.func @test_combine_addptr_pattern(%base: !tt.ptr<f32>) -> tensor<8x!tt.ptr<f3
 
 // CHECK-LABEL: @test_combine_select_masked_load_pattern
 tt.func @test_combine_select_masked_load_pattern(%ptr: tensor<8x!tt.ptr<f32>>, %cond: i1) -> (tensor<8xf32>, tensor<8xf32>) {
-    %mask = tt.splat %cond : (i1) -> tensor<8xi1>
+    %mask = tt.splat %cond : i1 -> tensor<8xi1>
     %false_val = arith.constant dense<0.0> : tensor<8xf32>
 
     // CHECK: %[[res1:.*]] = tt.load %{{.*}}, %{{.*}}, %{{.*}} {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<8xf32>
@@ -117,7 +117,7 @@ tt.func @test_combine_select_masked_load_fail_pattern(%ptr: tensor<8x!tt.ptr<f32
     %1 = arith.select %cond0, %real_load0, %false_val : tensor<8xf32>
 
     // Case 3: condition of "broadcast" is not the same as the condition of "select".  Select should not be canonicalized.
-    %cond0_ = tt.splat %cond0 : (i1) -> tensor<8xi1>
+    %cond0_ = tt.splat %cond0 : i1 -> tensor<8xi1>
     %real_load1 = tt.load %ptr, %cond0_, %false_val {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<8xf32>
     // CHECK: %{{.*}} = arith.select %{{.*}}, %{{.*}}, %{{.*}} : tensor<8xf32>
     %2 = arith.select %cond1, %real_load1, %false_val : tensor<8xf32>
@@ -129,7 +129,7 @@ tt.func @test_combine_select_masked_load_fail_pattern(%ptr: tensor<8x!tt.ptr<f32
 tt.func @test_combine_broadcast_constant_pattern(%cst : f32) -> tensor<8x2xf32> {
     // CHECK: %[[cst:.*]] = arith.constant dense<1.000000e+00> : tensor<8x2xf32>
     %const = arith.constant dense<1.0> : tensor<8xf32>
-    %bst_out = tt.broadcast %const : (tensor<8xf32>) -> tensor<8x2xf32>
+    %bst_out = tt.broadcast %const : tensor<8xf32> -> tensor<8x2xf32>
 
     // CHECK-NEXT: tt.return %[[cst]] : tensor<8x2xf32>
     tt.return %bst_out : tensor<8x2xf32>
@@ -193,15 +193,15 @@ tt.func @test_canonicalize_masked_store_fail_pattern(%ptr: tensor<8x!tt.ptr<f32>
 
 // CHECK-LABEL: @test_canonicalize_expand_dims
 tt.func @test_canonicalize_expand_dims(%arg0: tensor<f32>, %arg1: tensor<1xf32>) -> (tensor<1x8xf32>, tensor<8x8xf32>) {
-    %splat = tt.splat %arg0 : (tensor<f32>) -> tensor<8xf32>
-    // CHECK: %{{.*}} = tt.splat %arg0 : (tensor<f32>) -> tensor<1x8xf32>
-    %ed = tt.expand_dims %splat {axis = 0 : i32} : (tensor<8xf32>) -> tensor<1x8xf32>
+    %splat = tt.splat %arg0 : tensor<f32> -> tensor<8xf32>
+    // CHECK: %{{.*}} = tt.splat %arg0 : tensor<f32> -> tensor<1x8xf32>
+    %ed = tt.expand_dims %splat {axis = 0 : i32} : tensor<8xf32> -> tensor<1x8xf32>
 
-    // CHECK-NEXT: %[[ed2:.*]] = tt.expand_dims %arg1 {axis = 0 : i32} : (tensor<1xf32>) -> tensor<1x1xf32>
-    // CHECK-NEXT: %{{.*}} = tt.broadcast %[[ed2]] : (tensor<1x1xf32>) -> tensor<8x8xf32>
-    %bc = tt.broadcast %arg1 : (tensor<1xf32>) -> tensor<8xf32>
-    %ed2 = tt.expand_dims %bc {axis = 0 : i32} : (tensor<8xf32>) -> tensor<1x8xf32>
-    %bc2 = tt.broadcast %ed2 : (tensor<1x8xf32>) -> tensor<8x8xf32>
+    // CHECK-NEXT: %[[ed2:.*]] = tt.expand_dims %arg1 {axis = 0 : i32} : tensor<1xf32> -> tensor<1x1xf32>
+    // CHECK-NEXT: %{{.*}} = tt.broadcast %[[ed2]] : tensor<1x1xf32> -> tensor<8x8xf32>
+    %bc = tt.broadcast %arg1 : tensor<1xf32> -> tensor<8xf32>
+    %ed2 = tt.expand_dims %bc {axis = 0 : i32} : tensor<8xf32> -> tensor<1x8xf32>
+    %bc2 = tt.broadcast %ed2 : tensor<1x8xf32> -> tensor<8x8xf32>
 
     tt.return %ed, %bc2 : tensor<1x8xf32>, tensor<8x8xf32>
 }
@@ -213,8 +213,8 @@ tt.func @test_canonicalize_view(%arg0: tensor<8xf32>, %arg1: tensor<f32>) -> (te
     // CHECK: %{{.*}} = tt.reshape %arg0 {allow_reorder = true} : tensor<8xf32> -> tensor<4x2xf32>
     %view1 = tt.reshape %view0 {allow_reorder = true} : tensor<2x4xf32> -> tensor<4x2xf32>
 
-    %splat = tt.splat %arg1 : (tensor<f32>) -> tensor<8xf32>
-    // CHECK: %{{.*}} = tt.splat %arg1 : (tensor<f32>) -> tensor<2x2x2xf32>
+    %splat = tt.splat %arg1 : tensor<f32> -> tensor<8xf32>
+    // CHECK: %{{.*}} = tt.splat %arg1 : tensor<f32> -> tensor<2x2x2xf32>
     %view2 = tt.reshape %splat {allow_reorder = true} : tensor<8xf32> -> tensor<2x2x2xf32>
 
     %view3 = tt.reshape %arg0 {allow_reorder = true} : tensor<8xf32> -> tensor<8xf32>
@@ -226,15 +226,15 @@ tt.func @test_canonicalize_view(%arg0: tensor<8xf32>, %arg1: tensor<f32>) -> (te
 
 // CHECK-LABEL: @test_canonicalize_broadcast
 tt.func @test_canonicalize_broadcast(%arg0: tensor<1x1x8xf32>, %arg1: tensor<f32>) -> (tensor<4x2x8xf32>, tensor<8x8xf32>, tensor<1x1x8xf32>) {
-    %broadcast0 = tt.broadcast %arg0 : (tensor<1x1x8xf32>) -> tensor<1x2x8xf32>
-    // CHECK: %{{.*}} = tt.broadcast %arg0 : (tensor<1x1x8xf32>) -> tensor<4x2x8xf32>
-    %broadcast1 = tt.broadcast %broadcast0 : (tensor<1x2x8xf32>) -> tensor<4x2x8xf32>
+    %broadcast0 = tt.broadcast %arg0 : tensor<1x1x8xf32> -> tensor<1x2x8xf32>
+    // CHECK: %{{.*}} = tt.broadcast %arg0 : tensor<1x1x8xf32> -> tensor<4x2x8xf32>
+    %broadcast1 = tt.broadcast %broadcast0 : tensor<1x2x8xf32> -> tensor<4x2x8xf32>
 
-    %splat = tt.splat %arg1 : (tensor<f32>) -> tensor<1x8xf32>
-    // CHECK: %{{.*}} = tt.splat %arg1 : (tensor<f32>) -> tensor<8x8xf32>
-    %broadcast2 = tt.broadcast %splat : (tensor<1x8xf32>) -> tensor<8x8xf32>
+    %splat = tt.splat %arg1 : tensor<f32> -> tensor<1x8xf32>
+    // CHECK: %{{.*}} = tt.splat %arg1 : tensor<f32> -> tensor<8x8xf32>
+    %broadcast2 = tt.broadcast %splat : tensor<1x8xf32> -> tensor<8x8xf32>
 
-    %broadcast3 = tt.broadcast %arg0 : (tensor<1x1x8xf32>) -> tensor<1x1x8xf32>
+    %broadcast3 = tt.broadcast %arg0 : tensor<1x1x8xf32> -> tensor<1x1x8xf32>
     // CHECK: %{{.*}} = arith.addf %arg0, %arg0 : tensor<1x1x8xf32>
     %add = arith.addf %broadcast3, %arg0 : tensor<1x1x8xf32>
 
@@ -249,25 +249,25 @@ tt.func @test_fold_views() -> (tensor<16x8xf32>, tensor<16x128xf32>, tensor<1x1x
     %b = tt.reshape %a {allow_reorder = true} : tensor<1x128xf32> -> tensor<16x8xf32>
 
     // CHECK-DAG: %{{.*}} = arith.constant dense<1.{{.*}}> : tensor<16x128xf32>
-    %c = tt.broadcast %a : (tensor<1x128xf32>) -> tensor<16x128xf32>
+    %c = tt.broadcast %a : tensor<1x128xf32> -> tensor<16x128xf32>
 
     // CHECK-DAG: %{{.*}} = arith.constant dense<1.{{.*}}> : tensor<1x1x128xf32>
-    %d = tt.expand_dims %a {axis = 0: i32} : (tensor<1x128xf32>) -> tensor<1x1x128xf32>
+    %d = tt.expand_dims %a {axis = 0: i32} : tensor<1x128xf32> -> tensor<1x1x128xf32>
 
     tt.return %b, %c, %d : tensor<16x8xf32>, tensor<16x128xf32>, tensor<1x1x128xf32>
 }
 
 // CHECK-LABEL: @test_nop_transpose
 tt.func @test_nop_transpose(%arg0: tensor<2x4xf32>) -> (tensor<2x4xf32>) {
-    %a = tt.trans %arg0 {order = array<i32: 0, 1>} : (tensor<2x4xf32>) -> tensor<2x4xf32>
+    %a = tt.trans %arg0 {order = array<i32: 0, 1>} : tensor<2x4xf32> -> tensor<2x4xf32>
     // CHECK: tt.return %arg0
     tt.return %a : tensor<2x4xf32>
 }
 
 // CHECK-LABEL: @test_nested_transpose
 tt.func @test_nested_transpose(%arg0: tensor<2x4x8xf32>) -> (tensor<8x2x4xf32>) {
-    %a = tt.trans %arg0 {order = array<i32: 1, 0, 2>} : (tensor<2x4x8xf32>) -> tensor<4x2x8xf32>
-    %b = tt.trans %a {order = array<i32: 2, 1, 0>} : (tensor<4x2x8xf32>) -> tensor<8x2x4xf32>
+    %a = tt.trans %arg0 {order = array<i32: 1, 0, 2>} : tensor<2x4x8xf32> -> tensor<4x2x8xf32>
+    %b = tt.trans %a {order = array<i32: 2, 1, 0>} : tensor<4x2x8xf32> -> tensor<8x2x4xf32>
     // CHECK: %[[res:.*]] = tt.trans %arg0 {order = array<i32: 2, 0, 1>}
     // CHECK: tt.return %[[res]]
     tt.return %b : tensor<8x2x4xf32>

@@ -23,15 +23,13 @@
 
 using namespace mlir;
 
-static inline bool
-willIncreaseRegisterPressure(triton::gpu::ConvertLayoutOp op) {
-  auto srcType = op.getOperand().getType().cast<RankedTensorType>();
-  auto dstType = op.getResult().getType().cast<RankedTensorType>();
-  auto srcEncoding = srcType.getEncoding();
-  auto dstEncoding = dstType.getEncoding();
-  if (srcEncoding.isa<triton::gpu::SharedEncodingAttr>())
+static bool willIncreaseRegisterPressure(triton::gpu::ConvertLayoutOp op) {
+  if (op.getSrc()
+          .getType()
+          .getEncoding()
+          .isa<triton::gpu::SharedEncodingAttr>())
     return true;
-  if (dstEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
+  if (op.getType().getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
     return true;
   return false;
 }
@@ -88,11 +86,9 @@ public:
       kv.first->moveBefore(kv.second);
     // Move convert(load) immediately after dependent load
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
-      auto dstType = op.getResult().getType().cast<RankedTensorType>();
-      auto dstEncoding = dstType.getEncoding();
-      if (!dstEncoding.isa<triton::gpu::SharedEncodingAttr>())
+      if (!op.getType().getEncoding().isa<triton::gpu::SharedEncodingAttr>())
         return;
-      Operation *argOp = op.getOperand().getDefiningOp();
+      Operation *argOp = op.getSrc().getDefiningOp();
       if (!argOp)
         return;
       moveAfter(op, argOp);
@@ -100,7 +96,7 @@ public:
     // Move transpositions just after their definition
     opToMove.clear();
     m.walk([&](triton::TransOp op) {
-      Operation *argOp = op.getOperand().getDefiningOp();
+      Operation *argOp = op.getSrc().getDefiningOp();
       if (!argOp)
         return;
       moveAfter(op, argOp);
@@ -108,9 +104,9 @@ public:
     // Move `dot` operand so that conversions to opIdx=1 happens after
     // conversions to opIdx=0
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
-      auto dstType = op.getResult().getType().cast<RankedTensorType>();
-      auto dstEncoding =
-          dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+      auto dstEncoding = op.getType()
+                             .getEncoding()
+                             .dyn_cast<triton::gpu::DotOperandEncodingAttr>();
       if (!dstEncoding)
         return;
       int opIdx = dstEncoding.getOpIdx();

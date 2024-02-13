@@ -32,7 +32,7 @@ public:
     ModuleOp mod = getOperation();
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
-      auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
+      auto srcType = cvtOp.getSrc().getType().cast<RankedTensorType>();
       auto dstType = cvtOp.getType().cast<RankedTensorType>();
       auto srcEncoding = srcType.getEncoding();
       if (srcEncoding.isa<triton::gpu::SharedEncodingAttr>())
@@ -67,7 +67,7 @@ public:
               triton::gpu::getCTALayout(srcEncoding),
               srcType.getElementType()));
       auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
-          cvtOp.getLoc(), tmpType, cvtOp.getOperand());
+          cvtOp.getLoc(), tmpType, cvtOp.getSrc());
       auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
           cvtOp.getLoc(), dstType, tmp);
       cvtOp.replaceAllUsesWith(newConvert.getResult());

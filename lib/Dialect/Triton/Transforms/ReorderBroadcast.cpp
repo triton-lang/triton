@@ -10,13 +10,12 @@
 
 #include <memory>
 
-namespace mlir {
+// TODO(jlebar): Move this and all other generatede code into namespace
+// mlir::triton.
 #define GEN_PASS_DEF_TRITONREORDERBROADCAST
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
-} // namespace mlir
 
-using namespace mlir;
-
+namespace mlir::triton {
 namespace {
 
 Operation *cloneWithNewArgsAndResultTypes(PatternRewriter &rewriter,
@@ -30,7 +29,7 @@ Operation *cloneWithNewArgsAndResultTypes(PatternRewriter &rewriter,
 }
 
 bool isSplat(Operation *op) {
-  if (auto splatOp = llvm::dyn_cast<triton::SplatOp>(op)) {
+  if (auto splatOp = llvm::dyn_cast<SplatOp>(op)) {
     return true;
   }
   DenseElementsAttr constAttr;
@@ -39,29 +38,29 @@ bool isSplat(Operation *op) {
 
 // elementwise(splat(a), splat(b), ...) => splat(elementwise(a, b, ...))
 struct MoveSplatAfterElementwisePattern
-    : public mlir::OpTraitRewritePattern<mlir::OpTrait::Elementwise> {
+    : public OpTraitRewritePattern<OpTrait::Elementwise> {
 
-  MoveSplatAfterElementwisePattern(mlir::MLIRContext *context)
+  MoveSplatAfterElementwisePattern(MLIRContext *context)
       : OpTraitRewritePattern(context) {}
 
-  mlir::LogicalResult match(Operation *op) const override {
+  LogicalResult match(Operation *op) const override {
     if (!isMemoryEffectFree(op)) {
-      return mlir::failure();
+      return failure();
     }
 
     for (auto operand : op->getOperands()) {
       auto definingOp = operand.getDefiningOp();
       if (!definingOp)
-        return mlir::failure();
+        return failure();
 
       if (!isSplat(definingOp)) {
-        return mlir::failure();
+        return failure();
       }
     }
-    return mlir::success(op->getNumOperands() > 0);
+    return success(op->getNumOperands() > 0);
   }
 
-  void rewrite(Operation *op, mlir::PatternRewriter &rewriter) const override {
+  void rewrite(Operation *op, PatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
     auto operands = op->getOperands();
 
@@ -70,7 +69,7 @@ struct MoveSplatAfterElementwisePattern
       auto definingOp = operands[iOp].getDefiningOp();
 
       DenseElementsAttr constAttr;
-      if (auto splatOp = llvm::dyn_cast<triton::SplatOp>(definingOp)) {
+      if (auto splatOp = llvm::dyn_cast<SplatOp>(definingOp)) {
         scalarOperands[iOp] = splatOp.getSrc();
       } else if (matchPattern(definingOp, m_Constant(&constAttr)) &&
                  constAttr.isSplat()) {
@@ -93,8 +92,8 @@ struct MoveSplatAfterElementwisePattern
                                                 scalarResultTys);
 
     for (unsigned iRes = 0; iRes < resultTypes.size(); ++iRes) {
-      auto newResult = rewriter.create<triton::SplatOp>(loc, resultTypes[iRes],
-                                                        newOp->getResult(iRes));
+      auto newResult = rewriter.create<SplatOp>(loc, resultTypes[iRes],
+                                                newOp->getResult(iRes));
       rewriter.replaceAllUsesWith(op->getResult(iRes), newResult);
     }
   }
@@ -104,14 +103,14 @@ struct MoveSplatAfterElementwisePattern
 // This also generalizes to multiple arguments when the rest are splat-like
 // Not handled: multiple broadcasted arguments
 struct MoveBroadcastAfterElementwisePattern
-    : public mlir::OpTraitRewritePattern<mlir::OpTrait::Elementwise> {
+    : public OpTraitRewritePattern<OpTrait::Elementwise> {
 
-  MoveBroadcastAfterElementwisePattern(mlir::MLIRContext *context)
+  MoveBroadcastAfterElementwisePattern(MLIRContext *context)
       : OpTraitRewritePattern(context) {}
 
-  mlir::LogicalResult match(Operation *op) const override {
+  LogicalResult match(Operation *op) const override {
     if (!isMemoryEffectFree(op)) {
-      return mlir::failure();
+      return failure();
     }
 
     auto operands = op->getOperands();
@@ -120,41 +119,41 @@ struct MoveBroadcastAfterElementwisePattern
     for (auto operand : operands) {
       auto definingOp = operand.getDefiningOp();
       if (!definingOp) {
-        return mlir::failure();
+        return failure();
       }
-      auto getSrcShape = [](triton::BroadcastOp b) {
-        return b.getSrc().getType().cast<RankedTensorType>().getShape();
+      auto getSrcShape = [](BroadcastOp b) {
+        return b.getSrc().getType().getShape();
       };
-      if (auto broadcastOp = llvm::dyn_cast<triton::BroadcastOp>(definingOp)) {
+      if (auto broadcastOp = llvm::dyn_cast<BroadcastOp>(definingOp)) {
         if (!seenBroadcast) {
           seenBroadcast = true;
           srcShape = getSrcShape(broadcastOp);
         } else if (srcShape != getSrcShape(broadcastOp)) {
           // If the broadcast have different types we cannot re-order.
-          return mlir::failure();
+          return failure();
         }
       } else if (!isSplat(definingOp)) {
         // Not splat or broadcast
-        return mlir::failure();
+        return failure();
       }
     }
-    return mlir::success(seenBroadcast);
+    return success(seenBroadcast);
   }
 
-  void rewrite(Operation *op, mlir::PatternRewriter &rewriter) const override {
+  void rewrite(Operation *op, PatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
 
     // Find broadcast op
     auto operands = op->getOperands();
-    triton::BroadcastOp broadcastOp;
+    BroadcastOp broadcastOp;
     for (auto operand : operands) {
-      broadcastOp = operand.getDefiningOp<triton::BroadcastOp>();
+      broadcastOp = operand.getDefiningOp<BroadcastOp>();
       if (broadcastOp) {
         break;
       }
     }
 
-    auto srcTy = broadcastOp.getSrc().getType().dyn_cast<RankedTensorType>();
+    auto srcTy = broadcastOp.getSrc().getType();
     auto srcShape = srcTy.getShape();
     auto srcEncoding = srcTy.getEncoding();
 
@@ -162,17 +161,15 @@ struct MoveBroadcastAfterElementwisePattern
     llvm::SmallVector<Value, 4> newOperands;
     for (auto operand : operands) {
       auto definingOp = operand.getDefiningOp();
-      if (auto broadcastSrcOp =
-              llvm::dyn_cast<triton::BroadcastOp>(definingOp)) {
+      if (auto broadcastSrcOp = llvm::dyn_cast<BroadcastOp>(definingOp)) {
         newOperands.push_back(broadcastSrcOp.getSrc());
         continue;
       }
       auto elemTy =
           operand.getType().dyn_cast<RankedTensorType>().getElementType();
       auto newTy = RankedTensorType::get(srcShape, elemTy, srcEncoding);
-      if (auto splatOp = llvm::dyn_cast<triton::SplatOp>(definingOp)) {
-        auto newSplat =
-            rewriter.create<triton::SplatOp>(loc, newTy, splatOp.getSrc());
+      if (auto splatOp = llvm::dyn_cast<SplatOp>(definingOp)) {
+        auto newSplat = rewriter.create<SplatOp>(loc, newTy, splatOp.getSrc());
         newOperands.push_back(newSplat);
         continue;
       }
@@ -202,35 +199,35 @@ struct MoveBroadcastAfterElementwisePattern
     auto newOp = cloneWithNewArgsAndResultTypes(rewriter, op, newOperands,
                                                 newResultTypes);
     for (unsigned iRes = 0; iRes < newResultTypes.size(); ++iRes) {
-      auto newResult = rewriter.create<triton::BroadcastOp>(
-          loc, resultTypes[iRes], newOp->getResult(iRes));
+      auto newResult = rewriter.create<BroadcastOp>(loc, resultTypes[iRes],
+                                                    newOp->getResult(iRes));
       rewriter.replaceAllUsesWith(op->getResult(iRes), newResult);
     }
   }
 };
 
 template <typename OpType>
-class CanonicalizePattern : public mlir::OpRewritePattern<OpType> {
+class CanonicalizePattern : public OpRewritePattern<OpType> {
 public:
-  explicit CanonicalizePattern(mlir::MLIRContext *context)
-      : mlir::OpRewritePattern<OpType>(context) {}
+  explicit CanonicalizePattern(MLIRContext *context)
+      : OpRewritePattern<OpType>(context) {}
 
-  mlir::LogicalResult
-  matchAndRewrite(OpType op, mlir::PatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(OpType op,
+                                PatternRewriter &rewriter) const override {
     return OpType::canonicalize(op, rewriter);
   }
 };
 
 class ReorderBroadcastPass
-    : public mlir::impl::TritonReorderBroadcastBase<ReorderBroadcastPass> {
+    : public ::impl::TritonReorderBroadcastBase<ReorderBroadcastPass> {
 public:
   void runOnOperation() override {
-    mlir::MLIRContext *context = &getContext();
-    mlir::RewritePatternSet patterns(context);
-    mlir::ModuleOp m = getOperation();
+    MLIRContext *context = &getContext();
+    RewritePatternSet patterns(context);
+    ModuleOp m = getOperation();
 
-    patterns.add<CanonicalizePattern<triton::BroadcastOp>>(context);
-    patterns.add<CanonicalizePattern<triton::ExpandDimsOp>>(context);
+    patterns.add<CanonicalizePattern<BroadcastOp>>(context);
+    patterns.add<CanonicalizePattern<ExpandDimsOp>>(context);
     // elementwise(broadcast(a)) => broadcast(elementwise(a))
     patterns.add<MoveBroadcastAfterElementwisePattern>(context);
     // elementwise(splat(a), splat(b), ...) => splat(elementwise(a, b, ...))
@@ -243,6 +240,8 @@ public:
 
 } // namespace
 
-std::unique_ptr<mlir::Pass> mlir::triton::createReorderBroadcastPass() {
+std::unique_ptr<mlir::Pass> createReorderBroadcastPass() {
   return std::make_unique<ReorderBroadcastPass>();
 }
+
+} // namespace mlir::triton

@@ -151,12 +151,9 @@ allTransitiveUsesHaveDotEncoding(Value val, bool &needTrans) {
       auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(user);
       if (!convertLayout)
         return nullptr;
-      auto tensorType =
-          convertLayout.getResult().getType().dyn_cast<RankedTensorType>();
-      if (!tensorType)
-        return nullptr;
-      tempAttr =
-          tensorType.getEncoding().dyn_cast<ttg::DotOperandEncodingAttr>();
+      tempAttr = convertLayout.getType()
+                     .getEncoding()
+                     .dyn_cast<ttg::DotOperandEncodingAttr>();
     }
     if (!tempAttr || (attr != nullptr && attr != tempAttr))
       return nullptr;
@@ -170,8 +167,7 @@ loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3) {
   if (loadOp.getResult().hasOneUse()) {
     Operation *use = *loadOp.getResult().getUsers().begin();
     if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
-      auto tensorType =
-          convertLayout.getResult().getType().cast<RankedTensorType>();
+      auto tensorType = convertLayout.getType().cast<RankedTensorType>();
       if (auto sharedEnc =
               tensorType.getEncoding().dyn_cast<ttg::SharedEncodingAttr>()) {
         if (sharedEnc.getHasLeadingOffset()) {
@@ -781,9 +777,8 @@ minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
   // we calculate the number of async_commit. Then we select the minimum number
   // of async_commit ops among all the paths.
   // If the wait is not needed return std::nullopt.
-  std::function<std::optional<int>(Value, Operation *, int)> minOverHistories =
-      [&](Value val, Operation *sinkOp,
-          int thisHistorySum) -> std::optional<int> {
+  std::function<int(Value, Operation *, int)> minOverHistories =
+      [&](Value val, Operation *sinkOp, int thisHistorySum) -> int {
     if (Operation *defOp = val.getDefiningOp()) {
       if (isa<ttg::InsertSliceAsyncOp>(defOp)) {
         thisHistorySum += countCommitsBetween(defOp->getNextNode(), sinkOp);
@@ -810,32 +805,23 @@ minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
       // get the value value assigned to the argument coming from outside the
       // loop
       Value incomingVal = forOp.getInitArgs()[arg.getArgNumber() - 1];
-      std::optional<int> min1 =
-          minOverHistories(incomingVal, forOp, thisHistorySum);
-      if (!min1.has_value())
-        return std::nullopt;
+      int min1 = minOverHistories(incomingVal, forOp, thisHistorySum);
 
       // get the value value assigned to the argument coming from the previous
       // iteration
       Operation *yieldOp = block->getTerminator();
       Value prevVal = yieldOp->getOperand(arg.getArgNumber() - 1);
-      std::optional<int> min2 =
-          minOverHistories(prevVal, yieldOp, thisHistorySum);
-      if (!min2.has_value())
-        return std::nullopt;
-      return std::min(std::min(min1, min2).value(), minCommitNumber);
+      int min2 = minOverHistories(prevVal, yieldOp, thisHistorySum);
+      return std::min(std::min(min1, min2), minCommitNumber);
     }
     // Failed to track, return 1 conservatively.
     return 1;
   };
 
-  std::optional<int> minCommits =
-      minOverHistories(extractOp.getOperand(0), extractOp, 0);
-  if (minCommits == std::nullopt)
-    return std::nullopt;
+  int minCommits = minOverHistories(extractOp.getOperand(0), extractOp, 0);
   if (minCommits == 0)
     llvm::report_fatal_error("No commits between insert and extract!");
-  return minCommits.value() - 1;
+  return minCommits - 1;
 }
 
 /// Insert wait ops after the extract_slice ops.
@@ -950,7 +936,7 @@ void mlir::triton::asyncLaunchDots(scf::ForOp forOp) {
   }
   for (Operation &op : *loop) {
     if (auto dotOp = dyn_cast<tt::DotOp>(&op)) {
-      auto resTy = dotOp.getResult().getType().dyn_cast<RankedTensorType>();
+      RankedTensorType resTy = dotOp.getType();
       if (auto resEnc =
               resTy.getEncoding().dyn_cast<ttg::NvidiaMmaEncodingAttr>()) {
         if (resEnc && resEnc.isHopper()) {
