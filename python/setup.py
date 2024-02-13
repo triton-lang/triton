@@ -66,7 +66,12 @@ class BackendInstaller:
     # Copy all in-tree backends under triton/third_party.
     @staticmethod
     def copy(active):
-        return [BackendInstaller.prepare(backend) for backend in active]
+        ret = []
+        for backend, download_dependencies in active:
+            if download_dependencies:
+                download_dependencies()
+            ret.append(BackendInstaller.prepare(backend))
+        return ret
 
     # Copy all external plugins provided by the `TRITON_PLUGIN_DIRS` env var.
     # TRITON_PLUGIN_DIRS is a semicolon-separated list of paths to the plugins.
@@ -370,29 +375,38 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
 
 
-download_and_copy(
-    src_path="bin/ptxas",
-    variable="TRITON_PTXAS_PATH",
-    version="12.4.99",
-    url_func=lambda arch, version:
-    f"https://anaconda.org/nvidia/cuda-nvcc/{version}/download/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2",
-)
-download_and_copy(
-    src_path="bin/cuobjdump",
-    variable="TRITON_CUOBJDUMP_PATH",
-    version="12.4.99",
-    url_func=lambda arch, version:
-    f"https://anaconda.org/nvidia/cuda-cuobjdump/{version}/download/linux-{arch}/cuda-cuobjdump-{version}-0.tar.bz2",
-)
-download_and_copy(
-    src_path="bin/nvdisasm",
-    variable="TRITON_NVDISASM_PATH",
-    version="12.4.99",
-    url_func=lambda arch, version:
-    f"https://anaconda.org/nvidia/cuda-nvdisasm/{version}/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
-)
+def download_nvidia_dependencies():
+    download_and_copy(
+        src_path="bin/ptxas",
+        variable="TRITON_PTXAS_PATH",
+        version="12.4.99",
+        url_func=lambda arch, version:
+        f"https://anaconda.org/nvidia/cuda-nvcc/{version}/download/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2",
+    )
+    download_and_copy(
+        src_path="bin/cuobjdump",
+        variable="TRITON_CUOBJDUMP_PATH",
+        version="12.4.99",
+        url_func=lambda arch, version:
+        f"https://anaconda.org/nvidia/cuda-cuobjdump/{version}/download/linux-{arch}/cuda-cuobjdump-{version}-0.tar.bz2",
+    )
+    download_and_copy(
+        src_path="bin/nvdisasm",
+        variable="TRITON_NVDISASM_PATH",
+        version="12.4.99",
+        url_func=lambda arch, version:
+        f"https://anaconda.org/nvidia/cuda-nvdisasm/{version}/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
+    )
 
-backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
+
+def get_codegen_backends():
+    intree_backends = [("nvidia", download_nvidia_dependencies), ("amd", None)]
+    backends = os.environ.get("TRITON_CODEGEN_BACKENDS", "nvidia;amd").split(";")
+    active_backends = [backend.strip() for backend in backends if len(backend.strip())]
+    return [(backend, download_deps) for backend, download_deps in intree_backends if backend in active_backends]
+
+
+backends = [*BackendInstaller.copy(get_codegen_backends()), *BackendInstaller.copy_externals()]
 
 
 def add_link_to_backends():
