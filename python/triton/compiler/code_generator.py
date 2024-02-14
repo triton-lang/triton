@@ -1203,8 +1203,6 @@ def kernel_suffix(signature, specialization):
             suffix += 'c'
         if i in specialization.divisible_by_16:
             suffix += 'd'
-        if i in specialization.divisible_by_8:
-            suffix += 'e'
     return suffix
 
 
@@ -1219,13 +1217,6 @@ def ast_to_ttir(fn, specialization, context, options):
     tys = list(specialization.signature.values())
     new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for k in attrs.equal_to_1}
     new_attrs = {k: [("tt.divisibility", 16)] for k in attrs.divisible_by_16}
-    for k in attrs.divisible_by_8:
-        attr = new_attrs[k] if k in new_attrs else []
-        if k in attrs.divisible_by_16:
-            attr.append(("tt.max_divisibility", 16))
-        else:
-            attr.append(("tt.max_divisibility", 8))
-        new_attrs[k] = attr
 
     all_constants = constants.copy()
     all_constants.update(new_constants)
