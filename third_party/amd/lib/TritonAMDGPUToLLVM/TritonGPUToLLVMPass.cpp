@@ -27,7 +27,6 @@
 #endif
 #include "triton/Tools/Sys/GetPlatform.hpp"
 
-#include "BarrierOpToLLVM.h"
 // #include "ClusterOpsToLLVM.h"
 #include "ConvertLayoutOpToLLVM.h"
 #include "DotOpToLLVM.h"
@@ -487,7 +486,6 @@ struct ConvertTritonAMDGPUToLLVM
     populatePatterns4(AMD::populateReduceOpToLLVMPatterns);
     populatePatterns1(AMD::populateScanOpToLLVMPatterns);
     populatePatterns2(AMD::populateViewOpToLLVMPatterns);
-    populatePatterns2(AMD::populateBarrierOpToLLVMPatterns);
 
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
