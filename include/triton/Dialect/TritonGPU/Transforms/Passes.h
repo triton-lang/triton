@@ -17,10 +17,9 @@ std::unique_ptr<Pass> createTritonAMDGPUDotSlicingPass(int sliceKTile = 0);
 std::unique_ptr<Pass>
 createTritonGPUAccelerateMatmulPass(int computeCapability = 80);
 
-std::unique_ptr<Pass>
-createTritonAMDGPUAccelerateMatmulPass(std::string archGenName = std::string(),
-                                       int matrixInstructionSize = 0,
-                                       bool enableWmmaTransform = false);
+std::unique_ptr<Pass> createTritonAMDGPUAccelerateMatmulPass(
+    std::string archGenName = std::string(), int matrixInstructionSize = 0,
+    int kpack = 1, bool enableWmmaTransform = false);
 
 std::unique_ptr<Pass> createTritonGPUPrefetchPass();
 

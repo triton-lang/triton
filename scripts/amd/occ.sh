@@ -5,14 +5,14 @@
 rm -rf ~/.triton/cache/
 
 export MLIR_ENABLE_DUMP=1
+export LLVM_IR_ENABLE_DUMP=1
 export AMDGCN_ENABLE_DUMP=1
 ## Assume CDNA arch
 SIMD=4
 LDS_SIZE=65536
 TOTAL_VGPR=512
 
-python -u $1 > output.mlir 2>&1
-
+$1 > output.mlir 2>&1
 
 LDS_line=$(sed -n '/triton_gpu\.shared\ /p' output.mlir | tail -n 1 | grep -o 'triton_gpu.shared = [0-9]*')
 numWarps_line=$(sed -n '/triton_gpu\.num-warps/p' output.mlir | tail -n 1 | grep -o 'triton_gpu.num-warps. = [0-9]*')
@@ -34,5 +34,10 @@ if [ $occ_LDS -lt $occ_vgpr ];then
 fi
 echo "occ: $occ waves/SIMD (occ_LDS: $occ_LDS, occ_vgpr: $occ_vgpr)"
 
-perf=$(tail -n 1 output.mlir | awk '{print $NF}')
-printf "perf: %.1f tflops\n" $perf
+perf=$(tail -n 2 output.mlir)
+echo "$perf"
+
+## remove distracting info from the assembly
+sed -i '/\.loc/d' output.mlir
+sed -i '/\.Ltmp.*:/d' output.mlir
+sed -i '/AMD clang version/d' output.mlir

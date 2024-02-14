@@ -859,5 +859,6 @@ unsigned MfmaInsn::getKDim() { return attr.k; }
 unsigned MfmaInsn::getMDim() { return attr.m; }
 unsigned MfmaInsn::getNDim() { return attr.n; }
 StringRef MfmaInsn::getInsnName() { return attr.insn; }
+unsigned  MfmaInsn::getKBase() { return attr.k_base;}
 
 } // namespace mlir

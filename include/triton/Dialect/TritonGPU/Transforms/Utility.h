@@ -223,6 +223,7 @@ public:
   unsigned getMDim();
   unsigned getNDim();
   StringRef getInsnName();
+  unsigned getKBase();
 };
 } // namespace mlir
 

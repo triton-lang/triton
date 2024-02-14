@@ -125,6 +125,9 @@ def TritonAMDGPUAccelerateMatmul : Pass<"tritonamdgpu-accelerate-matmul", "mlir:
     Option<"matrixInstructionSize", "matrix-instruction-size",
            "int32_t", /*default*/"0",
            "enforce matrix instruction MN size">,
+    Option<"kpack", "kpack",
+           "int32_t", /*default*/"1",
+           "Kwidth / k_base">,
     Option<"enableWmmaTransform", "enable-wmma-transform",
            "bool", /*default*/"false",
            "temporary option, required for lit tests only">

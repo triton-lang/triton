@@ -353,6 +353,7 @@ class JITFunction(KernelInterface[T]):
         waves_per_eu,
         slice_k_tile,
         matrix_instr_nonkdim,
+        kpack,
         enable_warp_specialization,
         enable_fp_fusion,
         extern_libs,
@@ -364,7 +365,7 @@ class JITFunction(KernelInterface[T]):
         name = self.fn.__name__
         module = self.fn.__module__
         arg_reprs = ', '.join([f'{param.name}: {ty}' for param, ty in zip(self.params, key[1])])
-        repr = f"{name}[num_warps={num_warps}, num_ctas={num_ctas}, num_stages={num_stages}, waves_per_eu={waves_per_eu}, slice_k_tile={slice_k_tile}, matrix_instr_nonkdim={matrix_instr_nonkdim}, enable_warp_specialization={enable_warp_specialization}]({arg_reprs}), enable_fp_fusion={enable_fp_fusion}]({arg_reprs})"
+        repr = f"{name}[num_warps={num_warps}, num_ctas={num_ctas}, num_stages={num_stages}, waves_per_eu={waves_per_eu}, slice_k_tile={slice_k_tile}, matrix_instr_nonkdim={matrix_instr_nonkdim}, kpack={kpack}, enable_warp_specialization={enable_warp_specialization}]({arg_reprs}), enable_fp_fusion={enable_fp_fusion}]({arg_reprs})"
         key = str(key)
 
         class LegacyCompiler:
@@ -431,6 +432,7 @@ class JITFunction(KernelInterface[T]):
         waves_per_eu = get_special_arg("waves_per_eu", 0)
         slice_k_tile = get_special_arg("slice_k_tile", 0)
         matrix_instr_nonkdim = get_special_arg("matrix_instr_nonkdim", 0)
+        kpack = get_special_arg("kpack", 1)
         enable_warp_specialization = get_special_arg("enable_warp_specialization", False)
         enable_fp_fusion = get_special_arg("enable_fp_fusion", True)
         extern_libs = get_special_arg("extern_libs")
@@ -508,6 +510,7 @@ class JITFunction(KernelInterface[T]):
             waves_per_eu,
             slice_k_tile,
             matrix_instr_nonkdim,
+            kpack,
             enable_warp_specialization,
             enable_fp_fusion,
             self.debug,
@@ -545,6 +548,7 @@ class JITFunction(KernelInterface[T]):
                     waves_per_eu,
                     slice_k_tile,
                     matrix_instr_nonkdim,
+                    kpack,
                     enable_warp_specialization,
                     enable_fp_fusion,
                     extern_libs,
@@ -563,6 +567,7 @@ class JITFunction(KernelInterface[T]):
                 waves_per_eu=waves_per_eu,
                 slice_k_tile=slice_k_tile,
                 matrix_instr_nonkdim=matrix_instr_nonkdim,
+                kpack=kpack,
                 enable_warp_specialization=enable_warp_specialization,
                 enable_fp_fusion=enable_fp_fusion,
                 extern_libs=extern_libs,

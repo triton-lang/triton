@@ -1875,9 +1875,10 @@ void init_triton_ir(py::module &&m) {
                  mlir::createTritonGPUAccelerateMatmulPass(computeCapability));
            })
       .def("add_tritonamdgpu_accelerate_matmul_pass",
-           [](mlir::PassManager &self, const std::string archGenName, int instrSize) {
+           [](mlir::PassManager &self, const std::string archGenName,
+              int instrSize, int kpack) {
              self.addPass(mlir::createTritonAMDGPUAccelerateMatmulPass(
-                 archGenName, instrSize));
+                 archGenName, instrSize, kpack));
            })
       .def("add_tritongpu_optimize_dot_operands_pass",
            [](mlir::PassManager &self) {

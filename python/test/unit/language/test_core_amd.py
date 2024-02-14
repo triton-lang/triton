@@ -25,6 +25,10 @@ torch_dtypes = ['bool'] + int_dtypes + ['uint8'] + float_dtypes + ['bfloat16']
 num_ctas_list = [1]
 
 
+def get_matrix_core_version():
+    backend = triton.common.backend.get_backend("hip")
+    return backend.get_matrix_core_version()
+
 def hip_skip():
     import inspect
     return pytest.skip(f"Skipping {inspect.stack()[1][3]}!")
@@ -1040,11 +1044,10 @@ def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
     check_type_supported(in_dtype, device)
     check_type_supported(out_dtype, device)
 
-    backend = triton.common.backend.get_backend("hip")
-    if backend.get_matrix_core_version() == 3:
+    if get_matrix_core_version() == 3:
         if out_dtype == torch.bfloat16 and (in_dtype == tl.float8e4b15 or in_dtype == tl.float8e4b15x4):
            pytest.skip(f"Type conversion between {in_dtype} and {out_dtype} is not available on hardware")
-    elif backend.get_matrix_core_version() == 2:
+    elif get_matrix_core_version() == 2:
         if out_dtype == torch.bfloat16 and in_dtype != tl.float8e5:
            pytest.skip(f"Type conversion between {in_dtype} and {out_dtype} is not available on hardware")
 
@@ -1263,8 +1266,7 @@ def test_gemm_fp816_mixed_inputs(M, N, K, a_type, b_type, out_dtype, device = 'c
 def test_gemm_amd_fp8_inputs(M, N, K, a_type, b_type, out_dtype, device = 'cuda'):
     check_type_supported(out_dtype, device)
 
-    backend = triton.common.backend.get_backend("hip")
-    if backend.get_matrix_core_version() != 3:
+    if get_matrix_core_version() != 3:
         pytest.skip("fp8 data type is not available on hardware")
 
     @triton.jit
@@ -1619,9 +1621,9 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
 # ---------------
 
 
-@pytest.mark.parametrize("M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, out_dtype, non_k_dim",
+@pytest.mark.parametrize("M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, out_dtype, non_k_dim, kpack",
                          # FMA Test Dot tests
-                         [(*shape, 4, False, False, epilogue, allow_tf32, in_dtype, out_dtype, 0)
+                         [(*shape, 4, False, False, epilogue, allow_tf32, in_dtype, out_dtype, 0, 1)
                           for shape in [(64, 64, 64), (16, 16, 16)]
                           for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
                           for allow_tf32 in [True, False]
@@ -1630,7 +1632,7 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                                                       ('float32', 'float32')]
                           if not (allow_tf32 and (in_dtype in ['float16']))] +
 
-                         [(*shape_nw, col_a, col_b, 'none', allow_tf32, in_dtype, out_dtype, 0)
+                         [(*shape_nw, col_a, col_b, 'none', allow_tf32, in_dtype, out_dtype, 0, 1)
                           for shape_nw in [[128, 256, 32, 8],
                                            [128, 16, 32, 4],
                                            [32, 128, 64, 4],
@@ -1648,9 +1650,9 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                                                       ('float16', 'float16'),
                                                       ('float16', 'float32'),
                                                       ('float32', 'float32')]]
-                         if triton.common.backend.get_backend("hip").get_matrix_core_version() == 0 else
+                         if get_matrix_core_version() == 0 else
                          # MFMA Test Dot tests
-                         [(*shape, 2, False, False, epilogue, allow_tf32, in_dtype, out_dtype, non_k_dim)
+                         [(*shape, 2, False, False, epilogue, allow_tf32, in_dtype, out_dtype, non_k_dim, 1)
                           for shape in [(64, 64, 64), (32, 32, 32), (16, 16, 16)]
                           for epilogue in ['none', 'trans', 'add-matrix', 'chain-dot', 'softmax']
                           for allow_tf32 in [True, False]
@@ -1663,7 +1665,7 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                           for non_k_dim in [0, 4, 16, 32]
                           if not (allow_tf32 and (in_dtype in ['float16']))] +
 
-                         [(*shape_nw, col_a, col_b, 'none', allow_tf32, in_dtype, out_dtype, non_k_dim)
+                         [(*shape_nw, col_a, col_b, 'none', allow_tf32, in_dtype, out_dtype, non_k_dim, kpack)
                           for shape_nw in [[128, 128, 32, 2],
                                            [128, 16, 32, 4],
                                            [128, 128, 64, 2],
@@ -1699,15 +1701,15 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                           for col_b in [True, False]
                           for in_dtype in ['int8', 'bfloat16', 'float16', 'float32']
                           for out_dtype in [None]
-                          for non_k_dim in [0, 4, 16, 32]])
-def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, out_dtype, non_k_dim, device='cuda'):
+                          for non_k_dim in [0, 4, 16, 32]
+                          for kpack in [1, 2]])
+def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, out_dtype, non_k_dim, kpack, device='cuda'):
     capability = torch.cuda.get_device_capability()
 
     if torch.version.hip is not None:
-        # TODO consider reenabling this tests when fp8 casing is fixed
-        if M == 16 and N == 16 and K == 16 and "float8" in in_dtype:
-            pytest.skip("triton do not generate MFMA instructions for given block size")
 
+        if (M < 16 or N < 16) and kpack == 2:
+            pytest.skip("Skip tests for mfma4 with kpack=2")
         # set capability to large number to jump over check below
         # check are not relevant to amd gpu, left them for smaller diff between test_core.py and test_core_amd.py tests
         if (M, N, K) == (128, 256, 32):
@@ -1877,7 +1879,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
                          CHAIN_DOT=epilogue == 'chain-dot',
                          ALLOW_TF32=allow_tf32,
                          num_warps=num_warps,
-                         matrix_instr_nonkdim=non_k_dim)
+                         matrix_instr_nonkdim=non_k_dim,
+                         kpack = kpack)
     # torch result
     if in_dtype == 'int8':
         z_ref = np.matmul(x.astype(np.float32),
@@ -1912,8 +1915,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         # added atol, to loose precision for float16xfloat16->float32 case
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
     if torch.version.hip is not None:
-        backend = triton.common.backend.get_backend("hip")
-        if backend.get_matrix_core_version() > 0:
+        if get_matrix_core_version() > 0:
             ttgir = pgm.asm['ttgir']
             if non_k_dim == 0 and ((M == 4 and N == 64) or (M == 64 and N == 4)):
                 m64n4 = "instrShape = [64, 4]"
@@ -1935,10 +1937,12 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
                 assert "instrShape = [16, 16]" not in ttgir
                 assert "instrShape = [32, 32]" in ttgir
         gcn = pgm.asm['amdgcn']
-        if backend.get_matrix_core_version() == 3 and effective_in_dtype == tl.float8e5b16:
+        if get_matrix_core_version() == 3 and effective_in_dtype == tl.float8e5b16:
             assert "v_mfma_f32_32x32x16_bf8_bf8" in gcn or "v_mfma_f32_16x16x32_bf8_bf8" in gcn
-        if backend.get_matrix_core_version() == 3 and effective_in_dtype == tl.float8e4b8:
+        if get_matrix_core_version() == 3 and effective_in_dtype == tl.float8e4b8:
             assert "v_mfma_f32_32x32x16_fp8_fp8" in gcn or "v_mfma_f32_16x16x32_fp8_fp8" in gcn
+        if get_matrix_core_version() == 3 and kpack == 2:
+            assert "ds_read_b128" in gcn and "ds_write_b128" in gcn
         return
     # make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
@@ -2771,7 +2775,7 @@ def test_dot_mfma_vector_load(vec_size, swizzle, transposeA, transposeB):
     if transposeA and not transposeB:
         pytest.skip()
 
-    if triton.common.backend.get_backend("hip").get_matrix_core_version() == 0:
+    if get_matrix_core_version() == 0:
         pytest.skip("mfma is not available on hardware")
 
     # source code for following ttgir:
@@ -2862,7 +2866,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 
     import triton.language.semantic as sem
     # if torch.version.hip is not None and sem.gpu_matrix_core_version() > 0:
-    if torch.version.hip is not None and backend.get_matrix_core_version() > 0:
+    if torch.version.hip is not None and get_matrix_core_version() > 0:
         kernel[(1, 1, 1)](x_tri, y_tri, z_tri)
         np.testing.assert_allclose(z_np, to_numpy(z_tri), rtol=0.01, atol=1e-3)
 
