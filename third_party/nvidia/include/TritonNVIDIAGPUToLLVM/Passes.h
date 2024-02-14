@@ -17,7 +17,7 @@ namespace triton {
 enum Target { NVVM, ROCDL, Default = NVVM };
 
 #define GEN_PASS_DECL
-#include "TritonNVIDIAGPUToLLVM/Passes.h.inc"
+#include "nvidia/include/TritonNVIDIAGPUToLLVM/Passes.h.inc"
 
 namespace gpu {
 std::unique_ptr<OperationPass<ModuleOp>>
@@ -32,7 +32,7 @@ std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonGPUToLLVMPass(int32_t computeCapability, Target target);
 
 #define GEN_PASS_REGISTRATION
-#include "TritonNVIDIAGPUToLLVM/Passes.h.inc"
+#include "nvidia/include/TritonNVIDIAGPUToLLVM/Passes.h.inc"
 
 } // namespace triton
 
