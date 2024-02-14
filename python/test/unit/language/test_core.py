@@ -2619,7 +2619,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
 
     z_tri = to_triton(z, device=device)
     if epilogue == 'trans':
-        z_tri = torch.as_strided(z_tri, (M, N), z_tri.stride()[::-1])
+        z_tri = torch.as_strided(z_tri, (M, N), [1, M])
 
     if out_dtype == 'int8':
         out_dtype = tl.int8
