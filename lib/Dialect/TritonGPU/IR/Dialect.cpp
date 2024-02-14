@@ -2324,6 +2324,88 @@ struct TritonGPUInferLayoutInterface
 
     return success();
   }
+
+  LogicalResult
+  inferJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,
+                      std::optional<Location> loc) const override {
+    auto enc = srcEnc.dyn_cast<BlockedEncodingAttr>();
+    if (!enc) {
+      return emitOptionalError(loc,
+                               "JoinOp can only operate on BlockedEncoding");
+    }
+
+    // JoinOp takes two tensors of shape AxBxC and generates a tensor of shape
+    // AxBxCx2.  The encoding is the same as the input, but with 2 elems per
+    // thread in the new dimension.  The new dimension is most-minor.
+    auto append = [](ArrayRef<unsigned> vals, int val) {
+      SmallVector<unsigned> ret(vals);
+      ret.push_back(val);
+      return ret;
+    };
+    auto appendMinorDim = [](ArrayRef<unsigned> order) {
+      SmallVector<unsigned> ret(order);
+      ret.insert(ret.begin(), ret.size());
+      return ret;
+    };
+    dstEnc = BlockedEncodingAttr::get(
+        enc.getContext(),                    //
+        append(enc.getSizePerThread(), 2),   //
+        append(enc.getThreadsPerWarp(), 1),  //
+        append(enc.getWarpsPerCTA(), 1),     //
+        appendMinorDim(enc.getOrder()),      //
+        CTALayoutAttr::get(enc.getContext(), //
+                           append(enc.getCTAsPerCGA(), 1),
+                           append(enc.getCTASplitNum(), 1),
+                           appendMinorDim(enc.getCTAOrder())));
+    return success();
+  }
+
+  LogicalResult
+  inferSplitOpEncoding(Attribute srcEnc, Attribute &dstEnc,
+                       std::optional<Location> loc) const override {
+    auto enc = srcEnc.dyn_cast<BlockedEncodingAttr>();
+    if (!enc) {
+      return emitOptionalError(loc,
+                               "SplitOp can only operate on BlockedEncoding");
+    }
+
+    // SplitOp takes a tensor of shape AxBxCx2 and generates two tensors of
+    // shape AxBxC.  The input must have 2 elements per thread in the last
+    // dimension, which must be most-minor.  The result encoding is the same as
+    // the input, but with the last dimension removed.
+    if (enc.getSizePerThread().back() != 2) {
+      return emitOptionalError(loc,
+                               "SplitOp requires 2 elements per thread in the "
+                               "last dimension of the input");
+    }
+    if (enc.getThreadsPerWarp().back() != 1 ||
+        enc.getWarpsPerCTA().back() != 1 || enc.getCTAsPerCGA().back() != 1) {
+      return emitOptionalError(
+          loc, "SplitOp requires threadsPerWarp, warpsPerCTA, "
+               "and CTAsPerCGA = 1 for the last dimension of the input");
+    }
+    if (enc.getOrder().front() != enc.getOrder().size() - 1) {
+      return emitOptionalError(
+          loc, "SplitOp requires the last dimension to be most-minor in order");
+    }
+    if (enc.getCTALayout().getCTAsPerCGA().back() != 1) {
+      return emitOptionalError(
+          loc,
+          "SplitOp requires the last dimension to be most-minor in CTAOrder");
+    }
+
+    dstEnc = BlockedEncodingAttr::get(
+        enc.getContext(), //
+        ArrayRef(enc.getSizePerThread()).drop_back(1),
+        ArrayRef(enc.getThreadsPerWarp()).drop_back(1),
+        ArrayRef(enc.getWarpsPerCTA()).drop_back(1),
+        ArrayRef(enc.getOrder()).drop_front(1),
+        CTALayoutAttr::get(enc.getContext(), //
+                           ArrayRef(enc.getCTAsPerCGA()).drop_back(1),
+                           ArrayRef(enc.getCTASplitNum()).drop_back(1),
+                           ArrayRef(enc.getCTAOrder()).drop_front(1)));
+    return success();
+  }
 };
 
 //===----------------------------------------------------------------------===//

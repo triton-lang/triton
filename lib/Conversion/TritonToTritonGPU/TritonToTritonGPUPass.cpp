@@ -321,41 +321,81 @@ struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
   }
 };
 
-struct TritonInterleaveOpPattern
-    : public OpConversionPattern<triton::ExperimentalInterleaveOp> {
+struct TritonJoinOpPattern
+    : public OpConversionPattern<triton::ExperimentalJoinOp> {
   using OpConversionPattern::OpConversionPattern;
 
-  LogicalResult matchAndRewrite(ExperimentalInterleaveOp op, OpAdaptor adaptor,
+  LogicalResult matchAndRewrite(ExperimentalJoinOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const {
-    // Preconditions:
-    //   * The two inputs shapes and encodings are the same.
-    //   * The input encoding is a blocked layout.
-    //
-    // These are mostly taken care of by the nature of this rewrite: All the
-    // operands provided by `adaptor` have the default blocked layout.
-    //
-    // Postconditions:
-    //   * Output shape is `input_shape[0:-1] + [2 * input_shape[-1]]`.
-    //   * Output encoding is the input encoding except the last dimension has
-    //     twice as many elems per thread.
-    assert(adaptor.getLhs().getType() == adaptor.getRhs().getType());
-    auto operandEnc = adaptor.getLhs()
-                          .getType()
-                          .cast<RankedTensorType>()
-                          .getEncoding()
-                          .cast<BlockedEncodingAttr>();
-    auto newRetEncoding = inferDstEncoding(op, operandEnc);
-    if (!newRetEncoding.has_value())
-      return failure();
-
-    auto retType = this->getTypeConverter()
-                       ->convertType(op.getType())
-                       .cast<RankedTensorType>();
-    auto newRetType = RankedTensorType::get(
-        retType.getShape(), retType.getElementType(), *newRetEncoding);
-    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::ExperimentalInterleaveOp>(
-                      op, newRetType, adaptor.getOperands()),
+    // Simply rely on type inference for this op.  (Notably, GenericOpPattern
+    // does not do this, instead it assigns the default layout to the ins and
+    // outs.)
+    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::ExperimentalJoinOp>(
+                      op, adaptor.getLhs(), adaptor.getRhs()),
                   adaptor.getAttributes());
+    return success();
+  }
+};
+
+struct TritonSplitOpPattern
+    : public OpConversionPattern<triton::ExperimentalSplitOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(ExperimentalSplitOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const {
+    auto src = adaptor.getSrc();
+    auto srcTy = src.getType().cast<RankedTensorType>();
+    auto srcEnc = srcTy.getEncoding().dyn_cast<BlockedEncodingAttr>();
+    int rank = srcEnc.getOrder().size();
+    auto typeConverter = getTypeConverter<TritonGPUTypeConverter>();
+
+    // The operand to split must have:
+    //  - a blocked layout, with
+    //  - sizePerThread = 2 in the last dimension,
+    //  - threadsPerWarp, warpsPerCTA, and CTAsPerCGA = 1 in the last dim, and
+    //  - the last dimension minor.
+    // If that's not the case, add a convert before the split.
+    if (!srcEnc || srcEnc.getSizePerThread().back() != 2 ||
+        srcEnc.getOrder().front() != rank - 1) {
+      // If we take the default encoding for the op's result (i.e. post-split)
+      // and add 1 to the end of each dim, that gives us what we want.  Other
+      // than making a legal src encoding, our choice of layout doesn't matter;
+      // it'll get fixed by RemoveLayoutConversions.
+      auto defaultEnc = getDefaultBlockedEncoding(
+          getContext(),
+          op.getResult(0).getType().cast<RankedTensorType>().getShape(),
+          typeConverter->getNumWarps(), typeConverter->getThreadsPerWarp(),
+          typeConverter->getNumCTAs());
+
+      auto append = [&](ArrayRef<unsigned> vals, unsigned val) {
+        SmallVector<unsigned> res(vals);
+        res.push_back(val);
+        return res;
+      };
+      auto prepend = [&](ArrayRef<unsigned> vals, unsigned val) {
+        SmallVector<unsigned> res;
+        res.push_back(val);
+        res.append(vals.begin(), vals.end());
+        return res;
+      };
+
+      srcEnc = BlockedEncodingAttr::get(
+          getContext(), append(defaultEnc.getSizePerThread(), 2),
+          append(defaultEnc.getThreadsPerWarp(), 1),
+          append(defaultEnc.getWarpsPerCTA(), 1),
+          prepend(defaultEnc.getOrder(), rank - 1),
+          CTALayoutAttr::get(getContext(),
+                             append(defaultEnc.getCTAsPerCGA(), 1),
+                             append(defaultEnc.getCTASplitNum(), 1),
+                             prepend(defaultEnc.getCTAOrder(), rank - 1)));
+      srcTy = RankedTensorType::get(srcTy.getShape(), srcTy.getElementType(),
+                                    srcEnc);
+      src = rewriter.create<ConvertLayoutOp>(op.getLoc(), srcTy, src);
+    }
+
+    addNamedAttrs(
+        rewriter.replaceOpWithNewOp<triton::ExperimentalSplitOp>(op, src),
+        adaptor.getAttributes());
     return success();
   }
 };
@@ -518,7 +558,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::FpToFpOp>, GenericOpPattern<triton::IntToPtrOp>,
       GenericOpPattern<triton::PtrToIntOp>, GenericOpPattern<triton::SplatOp>,
       TritonBroadcastPattern, GenericOpPattern<triton::AddPtrOp>,
-      TritonCatPattern, TritonInterleaveOpPattern,
+      TritonCatPattern, TritonJoinOpPattern, TritonSplitOpPattern,
       GenericOpPattern<triton::ClampFOp>,
       GenericOpPattern<triton::ElementwiseInlineAsmOp>, TritonReducePattern,
       GenericOpPattern<triton::ReduceReturnOp>, TritonScanPattern,

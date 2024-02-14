@@ -301,10 +301,8 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     }
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
-        // TODO(jlebar): Add TransOp to this list, but we have to force it into
-        // shared memory if it's used by a dot operand.
-        isa<ReduceOp, ExpandDimsOp, ReshapeOp, ExperimentalInterleaveOp,
-            ConvertLayoutOp>(user)) {
+        isa<ReduceOp, ExpandDimsOp, ReshapeOp, ExperimentalJoinOp,
+            ExperimentalSplitOp, ConvertLayoutOp>(user)) {
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
@@ -473,10 +471,18 @@ Operation *LayoutPropagation::cloneElementwise(OpBuilder &rewriter,
                                                Operation *op,
                                                Attribute encoding) {
   Operation *newOp = rewriter.clone(*op);
-  for (OpOperand &operand : op->getOpOperands())
-    newOp->setOperand(
-        operand.getOperandNumber(),
-        getValueAs(operand.get(), *inferSrcEncoding(op, encoding)));
+
+  std::optional<Attribute> operandEnc;
+  if (op->getNumOperands() > 0) {
+    operandEnc = inferSrcEncoding(op, encoding);
+    assert(operandEnc.has_value());
+  }
+
+  for (OpOperand &operand : op->getOpOperands()) {
+    newOp->setOperand(operand.getOperandNumber(),
+                      getValueAs(operand.get(), *operandEnc));
+  }
+
   for (unsigned i = 0, e = op->getNumResults(); i < e; ++i) {
     auto origType = op->getResult(i).getType().dyn_cast<RankedTensorType>();
     if (!origType)
@@ -700,10 +706,8 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   }
   if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<OpTrait::Elementwise>() ||
-      // TODO(jlebar): Add TransOp to this list, but we have to force it into
-      // shared memory if it's used by a dot operand.
-      isa<ReduceOp, ExpandDimsOp, ReshapeOp, ExperimentalInterleaveOp,
-          ConvertLayoutOp>(op)) {
+      isa<ReduceOp, ExpandDimsOp, ReshapeOp, ExperimentalJoinOp,
+          ExperimentalSplitOp, ConvertLayoutOp>(op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
          llvm::zip(op->getResults(), newOp->getResults()))

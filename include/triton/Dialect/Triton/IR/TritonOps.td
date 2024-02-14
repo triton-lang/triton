@@ -383,17 +383,42 @@ def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
 }
 
-def TT_ExperimentalInterleaveOp : TT_Op<"experimental_interleave", [NoMemoryEffect, SameTypeOperands, SameOperandsAndResultElementType]> {
-    let summary = "interleave two tensors in their minor dimension";
+def TT_ExperimentalJoinOp : TT_Op<"experimental_join", [
+    NoMemoryEffect, SameTypeOperands,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>,
+]> {
+    let summary = "join two tensors along a new, minor dimension";
     let description = [{
-        For example, if the two input tensors are [1,2,3] and [4,5,6],
-        interleaving them returns [1,4,2,5,3,6].
+        For example, if the two input tensors are 4x8xf32, returns a tensor of
+        shape 4x8x2xf32.
+
+        Because Triton tensors always have a power-of-two number of elements,
+        the two input tensors must have the same shape.
     }];
 
     let arguments = (ins TT_Tensor:$lhs, TT_Tensor:$rhs);
     let results = (outs TT_Tensor:$result);
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
-    let hasVerifier = 1;
+}
+
+def TT_ExperimentalSplitOp : TT_Op<"experimental_split", [
+  NoMemoryEffect,
+  DeclareOpInterfaceMethods<InferTypeOpInterface>,
+  TypesMatchWith<"outLHS and outRHS types match",
+                  "outLHS", "outRHS", "$_self">,
+]> {
+    let summary = "splits a tensor into two, along its last dimension";
+    let description = [{
+        The input must be a tensor whose last dimension has size 2.  Returns two
+        tensors, src[..., 0] and src[..., 1].
+
+        For example, if the input shape is 4x8x2xf32, returns two tensors of
+        shape 4x8xf32.
+    }];
+
+    let arguments = (ins TT_Tensor:$src);
+    let results = (outs TT_Tensor:$outLHS, TT_Tensor:$outRHS);
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($outLHS)";
 }
 
 def TT_TransOp : TT_Op<"trans", [Pure,
