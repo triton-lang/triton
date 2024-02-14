@@ -985,25 +985,47 @@ def cat(input, other, can_reorder=False, _builder=None):
 
 
 @builtin
-def _experimental_interleave(a, b, _builder=None):
+def _experimental_join(a, b, _builder=None):
     """
-    Interleave the given tensors in their minor dimension.
+    Join the given tensors in a new, minor dimension.
 
-    For example, given :code:`a=[1,2,3]` and :code:`b=[4,5,6]`, the result is
-    :code:`[1,4,2,5,3,6]`.
+    For example, given two tensors of shape (4,8), produces a new tensor of
+    shape (4,8,2).
 
     The two inputs are broadcasted to be the same shape.
 
-    If you want to interleave more than two elements, you can use multiple calls
-    to this function.  This reflects the constraint in Triton that tensors must
+    If you want to join more than two elements, you can use multiple calls to
+    this function.  This reflects the constraint in Triton that tensors must
     have power-of-two sizes.
+
+    join is the inverse of split.
 
     :param a: The first input tensor.
     :type a: Tensor
     :param b: The second input tensor.
     :type b: Tensor
     """
-    return semantic.interleave(a, b, _builder)
+    return semantic.join(a, b, _builder)
+
+
+@builtin
+def _experimental_split(a, _builder=None):
+    """
+    Split a tensor in two along its last dim, which must have size 2.
+
+    For example, given a tensor of shape (4,8,2), produces two tensors of shape
+    (4,8).
+
+    If you want to split into more than two pieces, you can use multiple calls
+    to this function (probably plus calling reshape).  This reflects the
+    constraint in Triton that tensors must have power-of-two sizes.
+
+    split is the inverse of join.
+
+    :param a: The tensor to split.
+    :type a: Tensor
+    """
+    return semantic.split(a, _builder)
 
 
 @builtin

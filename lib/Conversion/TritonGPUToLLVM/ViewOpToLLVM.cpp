@@ -135,29 +135,27 @@ struct CatOpConversion : public ConvertOpToLLVMPattern<CatOp> {
   }
 };
 
-struct InterleaveOpConversion
-    : public ConvertOpToLLVMPattern<ExperimentalInterleaveOp> {
-  using OpAdaptor = typename ExperimentalInterleaveOp::Adaptor;
+struct JoinOpConversion : public ConvertOpToLLVMPattern<ExperimentalJoinOp> {
+  using OpAdaptor = typename ExperimentalJoinOp::Adaptor;
 
-  explicit InterleaveOpConversion(LLVMTypeConverter &typeConverter,
-                                  PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern<ExperimentalInterleaveOp>(typeConverter,
-                                                         benefit) {}
+  explicit JoinOpConversion(LLVMTypeConverter &typeConverter,
+                            PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<ExperimentalJoinOp>(typeConverter, benefit) {}
 
   LogicalResult
-  matchAndRewrite(ExperimentalInterleaveOp op, OpAdaptor adaptor,
+  matchAndRewrite(ExperimentalJoinOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // We rely on the following invariants of this op (which are checked by its
     // verifier):
     //
     // - The op has a blocked encoding.
-    // - The last dimension (the one we're interleaving) is also the most minor
+    // - The last dimension (the one we're joining) is also the most minor
     //   dimension.
     // - The input and output encodings are the same, except the output has
-    //   twice as many elements per thread in the last dimension.
+    //   2 elements per thread in the last dim.
     //
-    // With these invariants, interleaving is trivial: We just return the i'th
-    // element from lhs, followed by the i'th elem from rhs.
+    // With these invariants, join is trivial: We just return the i'th element
+    // from lhs, followed by the i'th elem from rhs.
     Location loc = op->getLoc();
     auto resultTy = op.getType().cast<RankedTensorType>();
     auto typeConverter = getTypeConverter();
@@ -168,15 +166,55 @@ struct InterleaveOpConversion
         unpackLLElements(loc, adaptor.getRhs(), rewriter);
     assert(lhsVals.size() == rhsVals.size());
 
-    SmallVector<Value> interleavedVals;
+    SmallVector<Value> joinedVals;
     for (int i = 0; i < lhsVals.size(); i++) {
-      interleavedVals.push_back(lhsVals[i]);
-      interleavedVals.push_back(rhsVals[i]);
+      joinedVals.push_back(lhsVals[i]);
+      joinedVals.push_back(rhsVals[i]);
     }
 
     Value ret =
-        packLLElements(loc, typeConverter, interleavedVals, rewriter, resultTy);
+        packLLElements(loc, typeConverter, joinedVals, rewriter, resultTy);
     rewriter.replaceOp(op, ret);
+    return success();
+  }
+};
+
+struct SplitOpConversion : public ConvertOpToLLVMPattern<ExperimentalSplitOp> {
+  using OpAdaptor = typename ExperimentalSplitOp::Adaptor;
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ExperimentalSplitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // We rely on the following invariants of this op (which are checked by its
+    // verifier):
+    //
+    // - The op has a blocked encoding.
+    // - The last dimension (the one we're spliting) is also the most minor
+    //   dimension, and has sizePerThread=2.
+    //
+    // With these invariants, split is trivial: Every other value goes into
+    // return value 0, and every other goes into return value 1.
+    Location loc = op->getLoc();
+    auto typeConverter = getTypeConverter();
+
+    SmallVector<Value> srcVals =
+        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    assert(srcVals.size() % 2 == 0);
+
+    SmallVector<Value> outLhsVals;
+    SmallVector<Value> outRhsVals;
+    for (int i = 0; i < srcVals.size(); i += 2) {
+      outLhsVals.push_back(srcVals[i]);
+      outRhsVals.push_back(srcVals[i + 1]);
+    }
+
+    auto resultTy = op.getResult(0).getType().cast<RankedTensorType>();
+    Value retLhs =
+        packLLElements(loc, typeConverter, outLhsVals, rewriter, resultTy);
+    Value retRhs =
+        packLLElements(loc, typeConverter, outRhsVals, rewriter, resultTy);
+    rewriter.replaceOp(op, {retLhs, retRhs});
     return success();
   }
 };
@@ -360,7 +398,8 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<SplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
   patterns.add<CatOpConversion>(typeConverter, benefit);
-  patterns.add<InterleaveOpConversion>(typeConverter, benefit);
+  patterns.add<JoinOpConversion>(typeConverter, benefit);
+  patterns.add<SplitOpConversion>(typeConverter, benefit);
   patterns.add<TransOpConversion>(typeConverter, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
 }

@@ -1440,32 +1440,33 @@ def test_load_store_same_ptr(device):
         assert torch.all(x == 2)
 
 
-def test_interleave(device):
+def test_join(device):
 
     @triton.jit
     def kernel(X, Y, Z, N: tl.constexpr):
         offs = tl.arange(0, N)
         x = tl.load(X + offs)
         y = tl.load(Y + offs)
-        z = tl._experimental_interleave(x, y)
-        tl.store(Z + tl.arange(0, 2 * N), z)
+        z = tl._experimental_join(x, y)
+        tl.store(Z + tl.arange(0, N)[:, None] * 2 + tl.arange(0, 2)[None, :], z)
 
     x = torch.arange(0, 128, device=device).to(torch.int32)
     y = torch.arange(-128, 0, device=device).to(torch.int32)
-    z_ref = torch.stack([x, y], dim=-1).reshape((256, ))
+    z_ref = torch.stack([x, y], dim=-1)
     z = torch.zeros_like(z_ref)
     kernel[(1, )](x, y, z, N=128)
 
     np.testing.assert_equal(to_numpy(z_ref), to_numpy(z))
 
 
-def test_interleave_with_mma(device):
+def test_join_with_mma(device):
 
     @triton.jit
     def kernel(X, Z):
         x = tl.load(X + 16 * tl.arange(0, 32)[:, None] + tl.arange(0, 16)[None, :])  # (32,16)
-        x2 = tl._experimental_interleave(x, 2 * x)  # (32,32)
-        z = tl.dot(x2, x2)  # (32,32)
+        x2 = tl._experimental_join(x, 2 * x)  # (32,16,2)
+        x3 = tl.reshape(x2, (32, 32))
+        z = tl.dot(x3, x3)  # (32,32)
         tl.store(Z + 32 * tl.arange(0, 32)[:, None] + tl.arange(0, 32)[None, :], z)
 
     x = torch.arange(0, 32 * 16, device=device, dtype=torch.float32).reshape((32, 16))
@@ -1475,6 +1476,27 @@ def test_interleave_with_mma(device):
     kernel[(1, )](x, z)
 
     torch.testing.assert_close(z, z_ref)
+
+
+def test_split(device):
+
+    @triton.jit
+    def kernel(X, Z1, Z2, N: tl.constexpr):
+        offs = tl.arange(0, N)
+        x = tl.load(X + offs)
+        x1 = tl.reshape(x, (N // 2, 2))
+        z1, z2 = tl._experimental_split(x1)
+        tl.store(Z1 + tl.arange(0, N // 2), z1)
+        tl.store(Z2 + tl.arange(0, N // 2), z2)
+
+    x = torch.arange(0, 256, device=device).to(torch.int32).reshape((128, 2))
+    z1_ref, z2_ref = (x[:, 0], x[:, 1])
+    z1 = torch.zeros_like(z1_ref)
+    z2 = torch.zeros_like(z2_ref)
+    kernel[(1, )](x, z1, z2, N=256)
+
+    np.testing.assert_equal(to_numpy(z1_ref), to_numpy(z1))
+    np.testing.assert_equal(to_numpy(z2_ref), to_numpy(z2))
 
 
 def convert_float_to_float32(fp: torch.tensor, dtype=None):

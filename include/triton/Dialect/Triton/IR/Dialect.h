@@ -62,6 +62,14 @@ public:
                                   ArrayRef<int64_t> dstShape, Attribute &dstEnc,
                                   std::optional<Location> loc) const = 0;
 
+  virtual LogicalResult
+  inferJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,
+                      std::optional<Location> loc) const = 0;
+
+  virtual LogicalResult
+  inferSplitOpEncoding(Attribute srcEnc, Attribute &dstEnc,
+                       std::optional<Location> loc) const = 0;
+
   // Verify that the encoding are compatible to be used together in a dot
   // operation
   virtual LogicalResult

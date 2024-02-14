@@ -339,14 +339,13 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
           continue;
       }
 #endif
-    if (user->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
-        user->hasTrait<mlir::OpTrait::Elementwise>() ||
-        isa<triton::ReduceOp, triton::ExpandDimsOp,
-            triton::ExperimentalInterleaveOp, triton::gpu::ConvertLayoutOp>(
-            user)) {
-      setEncoding(user->getResults(), info, changed, user);
-      continue;
-    }
+      if (user->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
+          user->hasTrait<mlir::OpTrait::Elementwise>() ||
+          isa<triton::ReduceOp, triton::ExpandDimsOp,
+              triton::gpu::ConvertLayoutOp>(user)) {
+        setEncoding(user->getResults(), info, changed, user);
+        continue;
+      }
   }
   return changed;
 }
@@ -737,7 +736,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
       isa<triton::ReduceOp, triton::ExpandDimsOp,
-          triton::ExperimentalInterleaveOp, triton::gpu::ConvertLayoutOp>(op)) {
+          triton::gpu::ConvertLayoutOp>(op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
          llvm::zip(op->getResults(), newOp->getResults()))

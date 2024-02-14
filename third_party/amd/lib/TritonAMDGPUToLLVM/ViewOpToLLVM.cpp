@@ -140,51 +140,6 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
   }
 };
 
-struct InterleaveOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<ExperimentalInterleaveOp> {
-  using OpAdaptor = typename ExperimentalInterleaveOp::Adaptor;
-
-  explicit InterleaveOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
-                                  PatternBenefit benefit = 1)
-      : ConvertTritonGPUOpToLLVMPattern<ExperimentalInterleaveOp>(typeConverter,
-                                                                  benefit) {}
-
-  LogicalResult
-  matchAndRewrite(ExperimentalInterleaveOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    // We rely on the following invariants of this op (which are checked by its
-    // verifier):
-    //
-    // - The op has a blocked encoding.
-    // - The last dimension (the one we're interleaving) is also the most minor
-    //   dimension.
-    // - The input and output encodings are the same, except the output has
-    //   twice as many elements per thread in the last dimension.
-    //
-    // With these invariants, interleaving is trivial: We just return the i'th
-    // element from lhs, followed by the i'th elem from rhs.
-    Location loc = op->getLoc();
-    auto resultTy = op.getType().cast<RankedTensorType>();
-
-    SmallVector<Value> lhsVals =
-        getTypeConverter()->unpackLLElements(loc, adaptor.getLhs(), rewriter);
-    SmallVector<Value> rhsVals =
-        getTypeConverter()->unpackLLElements(loc, adaptor.getRhs(), rewriter);
-    assert(lhsVals.size() == rhsVals.size());
-
-    SmallVector<Value> interleavedVals;
-    for (int i = 0; i < lhsVals.size(); i++) {
-      interleavedVals.push_back(lhsVals[i]);
-      interleavedVals.push_back(rhsVals[i]);
-    }
-
-    Value ret = getTypeConverter()->packLLElements(loc, interleavedVals,
-                                                   rewriter, resultTy);
-    rewriter.replaceOp(op, ret);
-    return success();
-  }
-};
-
 struct ReshapeOpConversion : public ConvertTritonGPUOpToLLVMPattern<ReshapeOp> {
   using OpAdaptor = typename ReshapeOp::Adaptor;
   explicit ReshapeOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
@@ -306,7 +261,6 @@ void populateViewOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
   patterns.add<SplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
   patterns.add<CatOpConversion>(typeConverter, benefit);
-  patterns.add<InterleaveOpConversion>(typeConverter, benefit);
   patterns.add<TransOpConversion>(typeConverter, benefit);
 }
 }

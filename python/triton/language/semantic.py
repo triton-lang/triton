@@ -543,17 +543,30 @@ def cat(lhs: tl.tensor, rhs: tl.tensor, can_reorder: bool, builder: ir.builder) 
     return tl.tensor(builder.create_cat(lhs.handle, rhs.handle), ret_type)
 
 
-def interleave(a: tl.tensor, b: tl.tensor, builder: ir.builder) -> tl.tensor:
+def join(a: tl.tensor, b: tl.tensor, builder: ir.builder) -> tl.tensor:
     a, b = broadcast_impl_value(a, b, builder)
 
     if isinstance(a.shape[-1], tl.constexpr):
         two = tl.constexpr(2)
     else:
         two = 2
-    new_shape = a.shape[0:-1] + [two * a.shape[-1]]
+    new_shape = a.shape + [two]
 
     ret_type = tl.block_type(a.type.scalar, new_shape)
-    return tl.tensor(builder.create_interleave(a.handle, b.handle), ret_type)
+    return tl.tensor(builder.create_join(a.handle, b.handle), ret_type)
+
+
+def split(a: tl.tensor, builder: ir.builder) -> Tuple[tl.tensor, tl.tensor]:
+    assert (len(a.shape) > 0)
+    assert (tl._constexpr_to_value(a.shape[-1]) == 2)
+
+    new_shape = a.shape[:-1]
+    ret_type = tl.block_type(a.type.scalar, new_shape)
+    outLHS, outRHS = builder.create_split(a.handle)
+    return (
+        tl.tensor(outLHS, ret_type),
+        tl.tensor(outRHS, ret_type),
+    )
 
 
 def permute(input: tl.tensor, dims: Tuple[int], builder: ir.builder) -> tl.tensor:
