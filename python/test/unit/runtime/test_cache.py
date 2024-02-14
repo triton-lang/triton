@@ -257,3 +257,49 @@ def test_memory_leak() -> None:
         x0 = xindex
         tmp0 = tl.load(in_ptr0 + (x0), xmask)
         tl.store(out_ptr0 + (x0 + tl.zeros([XBLOCK], tl.int32)), tmp0, xmask)
+
+
+def test_preload() -> None:
+
+    @triton.jit
+    def kernel_add(a, b, o, N: tl.constexpr):
+        idx = tl.arange(0, N)
+        tl.device_assert(idx < 32, "idx < 32")
+        tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
+
+    device = torch.cuda.current_device()
+
+    # get the serialized specialization data
+    specialization_data = None
+
+    def cache_hook(*args, **kwargs):
+        nonlocal specialization_data
+        specialization_data = kwargs["compile"]["specialization_data"]
+
+    JITFunction.cache_hook = cache_hook
+    pre_compile = kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
+    hash = pre_compile.hash
+    assert specialization_data is not None
+
+    # clear the cache
+    reset_tmp_dir()
+    kernel_add.cache[device].clear()
+
+    # preload the kernel
+    kernel_preload = kernel_add.preload(specialization_data)
+    assert kernel_preload.hash == hash
+    assert len(kernel_add.cache[device]) == 1
+
+    # we should hit the cache and not compile anything
+    counter = 0
+
+    def inc_counter(*args, **kwargs):
+        nonlocal counter
+        counter += 1
+
+    JITFunction.cache_hook = inc_counter
+    final_kernel = kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
+    JITFunction.cache_hook = None
+    assert counter == 0
+    assert len(kernel_add.cache[device]) == 1
+    assert final_kernel.hash == hash
