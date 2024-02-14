@@ -1189,14 +1189,14 @@ void init_triton_ir(py::module &&m) {
                  RankedTensorType::get(shape, lhsType.getElementType()), lhs,
                  rhs);
            })
-      .def("create_interleave",
+      .def("create_join",
            [](TritonOpBuilder &self, Value &a, Value &b) -> Value {
-             auto aTy = a.getType().cast<RankedTensorType>();
-             llvm::SmallVector<int64_t> shape(aTy.getShape().begin(),
-                                              aTy.getShape().end());
-             shape[shape.size() - 1] *= 2;
-             return self.create<ExperimentalInterleaveOp>(
-                 RankedTensorType::get(shape, aTy.getElementType()), a, b);
+             return self.create<ExperimentalJoinOp>(a, b);
+           })
+      .def("create_split",
+           [](TritonOpBuilder &self, Value &a) -> std::vector<Value> {
+             auto op = self.create<ExperimentalSplitOp>(a);
+             return std::vector<Value>(op->result_begin(), op->result_end());
            })
       // Implements tl.trans and tl.permute.
       .def("create_trans",
