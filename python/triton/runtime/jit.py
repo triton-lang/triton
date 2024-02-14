@@ -162,6 +162,7 @@ class KernelInterface(Generic[T]):
 
 
 def serialize_specialization_data(signature, constants, attrs, options, key):
+    constants = {key: str(value) if value.__class__.__name__ == "dtype" else value for key, value in constants.items()}
     import json
     obj = {
         'signature': signature, 'constants': constants, 'attrs': attrs.to_dict(), 'options': options.__dict__, 'key':
@@ -448,9 +449,13 @@ class JITFunction(KernelInterface[T]):
     def preload(self, specialization_data):
         from ..compiler import AttrsDescriptor, compile, ASTSource
         import json
+        import triton.language as tl
         device = driver.active.get_current_device()
         deserialized_obj = json.loads(specialization_data)
-        constants = {int(key): value for key, value in deserialized_obj['constants'].items()}
+        constants = {
+            int(key): tl.dtype(value) if tl.dtype.is_dtype(value) else value
+            for key, value in deserialized_obj['constants'].items()
+        }
         signature = {int(key): value for key, value in deserialized_obj['signature'].items()}
         src = ASTSource(self, signature, constants, AttrsDescriptor.from_dict(deserialized_obj['attrs']))
         options = {

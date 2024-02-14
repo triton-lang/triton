@@ -262,7 +262,7 @@ def test_memory_leak() -> None:
 def test_preload() -> None:
 
     @triton.jit
-    def kernel_add(a, b, o, N: tl.constexpr):
+    def kernel_add(a, b, o, N: tl.constexpr, type: tl.constexpr):
         idx = tl.arange(0, N)
         tl.device_assert(idx < 32, "idx < 32")
         tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
@@ -277,7 +277,7 @@ def test_preload() -> None:
         specialization_data = kwargs["compile"]["specialization_data"]
 
     JITFunction.cache_hook = cache_hook
-    pre_compile = kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
+    pre_compile = kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, tl.float32, grid=(1, ))
     hash = pre_compile.hash
     assert specialization_data is not None
 
@@ -298,7 +298,7 @@ def test_preload() -> None:
         counter += 1
 
     JITFunction.cache_hook = inc_counter
-    final_kernel = kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
+    final_kernel = kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, tl.float32, grid=(1, ))
     JITFunction.cache_hook = None
     assert counter == 0
     assert len(kernel_add.cache[device]) == 1
