@@ -286,11 +286,12 @@ class JITFunction(KernelInterface[T]):
         arg_reprs = ", ".join([f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])])
         repr = f"{name}[num_warps={options.num_warps}, num_ctas={options.num_ctas}, num_stages={options.num_stages}, enable_fp_fusion={options.enable_fp_fusion}]({arg_reprs})"
 
-        class LegacyCompiler:
+        class JitFunctionInfo:
 
-            def __init__(self, module, name):
+            def __init__(self, module, name, jit_function):
                 self.module = module
                 self.name = name
+                self.jit_function = jit_function
                 pass
 
         specialization_data = serialize_specialization_data(signature, constants, configs[0], options, key)
@@ -311,7 +312,7 @@ class JITFunction(KernelInterface[T]):
         return JITFunction.cache_hook(
             key=key,
             repr=repr,
-            fn=LegacyCompiler(module, name),
+            fn=JitFunctionInfo(module, name, self),
             compile={"key": key, **kwargs},
             is_manual_warmup=False,
             already_compiled=False,

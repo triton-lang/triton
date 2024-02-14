@@ -28,16 +28,12 @@ class AttrsDescriptor:
             self.equal_to_1 = set()
 
     def to_dict(self):
-        return {
-            'divisible_by_16': list(self.divisible_by_16), 'equal_to_1': list(self.equal_to_1), 'divisible_by_8':
-            list(self.divisible_by_8)
-        }
+        return {'divisible_by_16': list(self.divisible_by_16), 'equal_to_1': list(self.equal_to_1)}
 
     @staticmethod
     def from_dict(data):
-        return AttrsDescriptor(divisible_by_16=set(data.get('divisible_by_16',
-                                                            [])), equal_to_1=set(data.get('equal_to_1', [])),
-                               divisible_by_8=set(data.get('divisible_by_8', [])))
+        return AttrsDescriptor(divisible_by_16=set(data.get('divisible_by_16', [])),
+                               equal_to_1=set(data.get('equal_to_1', [])))
 
     def hash(self):
         key = str([sorted(x) for x in self.__dict__.values()])
