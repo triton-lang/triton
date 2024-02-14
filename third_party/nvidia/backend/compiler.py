@@ -102,7 +102,8 @@ class CUDABackend(BaseBackend):
     @staticmethod
     def make_ttir(mod, metadata, opt):
         pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
+        if opt.debug:
+            pm.enable_debug()
         passes.common.add_inliner(pm)
         passes.ttir.add_rewrite_tensor_pointer(pm)
         passes.ttir.add_combine(pm)
@@ -123,7 +124,8 @@ class CUDABackend(BaseBackend):
             cluster_info.clusterDimZ = opt.cluster_dims[2]
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
+        if opt.debug:
+          pm.enable_debug()
         passes.ttir.add_convert_to_ttgpuir(pm, opt.num_warps, 32, opt.num_ctas, capability)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
@@ -161,7 +163,8 @@ class CUDABackend(BaseBackend):
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
+        if options.debug:
+          pm.enable_debug()
         passes.ttgpuir.add_decompose_unsupported_conversions(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
