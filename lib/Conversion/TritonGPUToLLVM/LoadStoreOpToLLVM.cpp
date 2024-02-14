@@ -21,7 +21,9 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 
 namespace {
 
-std::optional<Value> getMask(Type valueTy, ConversionPatternRewriter &rewriter,
+// Return the mask for the unique data accessed by given tensor type.
+// Used to mask out the redundant data accessed by threads.
+std::optional<Value> redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
                              Location loc) {
   auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
   Value mask = int_val(1, 1);
@@ -94,9 +96,9 @@ std::optional<Value> getMask(Type valueTy, ConversionPatternRewriter &rewriter,
     mask = and_(mask, icmp_eq(tid, i32_val(0)));
     maskEnabled = true;
   }
-  if (maskEnabled)
+  //if (maskEnabled)
     return mask;
-  return std::nullopt;
+  //return std::nullopt;
 }
 
 // Contains some helper functions for both Load and Store conversions.
@@ -379,7 +381,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       vec = std::min(vec, maskAlign);
     }
 
-    Value mask = getMask(valueTy, rewriter, loc).value_or(int_val(1, 1));
+    Value mask = redundantDataMask(valueTy, rewriter, loc).value_or(int_val(1, 1));
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
     const size_t valueElemNBits = dtsize * 8;
@@ -514,7 +516,7 @@ struct AtomicCASOpConversion
       vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
     }
 
-    Value mask = getMask(valueTy, rewriter, loc).value_or(int_val(1, 1));
+    Value mask = redundantDataMask(valueTy, rewriter, loc).value_or(int_val(1, 1));
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
 
@@ -638,7 +640,7 @@ struct AtomicRMWOpConversion
       // mask
       numElems = tensorTy.getNumElements();
     }
-    Value mask = getMask(valueTy, rewriter, loc).value_or(int_val(1, 1));
+    Value mask = redundantDataMask(valueTy, rewriter, loc).value_or(int_val(1, 1));
 
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
@@ -890,10 +892,15 @@ struct InsertSliceAsyncOpConversion
           srcSize = ptxBuilder.newOperand(selectOp, "r");
         }
 
+        // 
         // When 'other != 0' is supported, we will need to fold the op.getMask()
-        // and getMask() into the same predicate, the way it is done for LoadOp.
-        auto maskVal = getMask(srcTy, rewriter, loc);
-        if (maskVal.has_value()) {
+        // and redundantDataMask() into the same predicate, the way it is done for LoadOp.
+        auto maskVal = redundantDataMask(srcTy, rewriter, loc);
+
+        // TODO: Masking does not work for CTA multicast with cp.async. This is 
+        // a quick and dirty workaround to avoid the issue.
+        bool skipMaskForMultiCTA = triton::gpu::getNumCTAs(srcLayout) > 1;
+        if (maskVal.has_value() && !skipMaskForMultiCTA) {
           copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
               .predicate(maskVal.value());
         } else {
