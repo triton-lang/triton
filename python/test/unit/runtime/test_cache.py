@@ -129,7 +129,7 @@ def test_specialize(mode):
     reset_tmp_dir()
     x = torch.empty(1, dtype=torch.int32, device='cuda')
     function = {'enable': kernel, 'disable': kernel_nospec}[mode]
-    target = {'enable': 4, 'disable': 1}[mode]
+    target = {'enable': 3, 'disable': 1}[mode]
     for i in [1, 2, 4, 8, 16, 32]:
         function[(1, )](x, i, BLOCK=512)
     assert counter == target
@@ -148,7 +148,7 @@ def test_annotation():
     kernel[(1, )](x, 8)
     kernel[(1, )](x, 16)
     kernel[(1, )](x, 17)
-    assert len(kernel.cache[device]) == 4
+    assert len(kernel.cache[device]) == 3
 
 
 def test_constexpr_not_callable() -> None:
