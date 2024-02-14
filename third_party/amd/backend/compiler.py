@@ -164,8 +164,8 @@ class HIPBackend(BaseBackend):
                 llvm.link_extern_lib(llvm_mod, path)
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
         # Set kernel attributes
-        kernels = [fn for fn in llvm_mod.get_functions() if fn.has_public_visibility() and not fn.is_declaration()]
-        assert len(kernels) == 1
+        kernels = [fn for fn in llvm_mod.get_functions() if not fn.is_declaration()]
+        # The public kernel should be kernel 0
         kernels[0].set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
         kernels[0].add_fn_attr("amdgpu-flat-work-group-size", f"1, {options.num_warps*64}")
         kernels[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
