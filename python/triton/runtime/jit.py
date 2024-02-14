@@ -142,7 +142,6 @@ class KernelArg:
             # bool is a subclass of int, so we don't check explicitly above.
             return (
                 self.value % JITFunction.divisibility == 0,
-                self.value % JITFunction.divisibility_8 == 0,
                 self.value == 1,
             )
 
@@ -166,11 +165,6 @@ class JITFunction(KernelInterface[T]):
     # Hook for inspecting compiled functions and modules
     cache_hook = None
     divisibility = 16
-    # As Hopper TMA load and store primitive requires the tensor stride to be 16-byte aligned.
-    # And we only support WGMMA with float16 dtype on Hopper for now.
-    # So whether the LoadOp and StoreOp will lowering into TMA copy depend on whether the tensor stride is divisible by 8.
-    # TODO: Make it more reasonable to handle multiple dtypes.
-    divisibility_8 = 8
 
     @staticmethod
     def _key_of(arg):
@@ -213,22 +207,10 @@ class JITFunction(KernelInterface[T]):
                 return True
             return False
 
-        def is_divisible_by_8(x):
-            if isinstance(x, int):
-                return x % JITFunction.divisibility_8 == 0
-            if x is None:
-                return True
-            return False
-
         divisible_by_16 = {
             param.num
             for param, arg in zip(self.params, args)
             if is_divisible_by_16(arg) and not param.do_not_specialize
-        }
-        divisible_by_8 = {
-            param.num
-            for param, arg in zip(self.params, args)
-            if is_divisible_by_8(arg) and not param.do_not_specialize
         }
         equal_to_1 = {
             param.num
@@ -237,7 +219,7 @@ class JITFunction(KernelInterface[T]):
         }
         # folded equal_to_1 and None
         # TODO: method to collect all folded args
-        return AttrsDescriptor(tuple(divisible_by_16), tuple(equal_to_1), tuple(divisible_by_8))
+        return AttrsDescriptor(tuple(divisible_by_16), tuple(equal_to_1))
         # return _triton.code_gen.instance_descriptor(divisible_by_16,
         # equal_to_1)
 

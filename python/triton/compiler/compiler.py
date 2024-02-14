@@ -20,15 +20,12 @@ import os
 class AttrsDescriptor:
     divisible_by_16: set = None
     equal_to_1: set = None
-    divisible_by_8: set = None
 
     def __post_init__(self):
         if self.divisible_by_16 is None:
             self.divisible_by_16 = set()
         if self.equal_to_1 is None:
             self.equal_to_1 = set()
-        if self.divisible_by_8 is None:
-            self.divisible_by_8 = set()
 
     def hash(self):
         key = str([sorted(x) for x in self.__dict__.values()])
@@ -76,16 +73,6 @@ def _get_num_warps_from_ir_str(src: str):
     num_warps_matches = re.findall(ttgir_num_warps_pattern, src)
     assert len(num_warps_matches) == 1, "Expected exactly one match for num_warps"
     num_warps = int(num_warps_matches[0])
-
-    # If warp specialization is enabled, the true number of warps from
-    # the perspective of e.g. CUDA is num-warps times the number of
-    # specialized groups.
-    num_warp_groups_matches = re.findall(r'"triton_gpu.num-warp-groups-per-cta"\s?=\s?(\d+)\s?:', src)
-    assert len(num_warp_groups_matches) == 0 or len(num_warp_groups_matches) == 1, \
-      "Expected triton_gpu.num-warp-groups-per-cta attribute to appear 0 or 1 times"
-    if num_warp_groups_matches:
-        num_warps *= int(num_warp_groups_matches[0])
-
     return num_warps
 
 
