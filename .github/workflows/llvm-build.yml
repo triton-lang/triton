@@ -186,7 +186,7 @@ jobs:
         CURR_PWD="$(pwd)" #fixing since its named after host
         cd "${{ env.llvm_install_dir }}/python_packages/mlir_core/mlir/_mlir_libs/"
         for file in *x86_64*; do
-          mv "$file" "${file/x86_64/arm64}"
+          mv "$file" "${file/x86_64/aarch64}"
         done
         cd $CURR_PWD
         tar czf "${{ env.llvm_install_dir }}.tar.gz" -C "${{ env.llvm_install_dir }}" .
