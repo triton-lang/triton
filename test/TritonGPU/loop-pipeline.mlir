@@ -278,6 +278,53 @@ tt.func @indirect_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
   tt.return %79#0 : tensor<16x16xf32, #C>
 }
 
+// CHECK-LABEL: tt.func @indirect_bmm_scalar_dist_one
+// CHECK: triton_gpu.insert_slice_async
+// CHECK: triton_gpu.insert_slice_async
+// CHECK: triton_gpu.insert_slice_async
+// CHECK: triton_gpu.insert_slice_async
+// CHECK: triton_gpu.async_commit_group
+// CHECK: scf.for %{{.*}} iter_args({{.*}}, {{.*}}, {{.*}}, %[[IND_BUFFER_PREV:.*]] = {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}) ->
+// CHECK: %[[NEXT_BUFFER_1:.*]] = tt.addptr %{{.*}}, {{.*}}
+// CHECK: triton_gpu.insert_slice_async %[[NEXT_BUFFER_1]]
+// CHECK: %[[IND_BUFFER_0:.*]] = tt.load %{{.*}}, {{.*}}
+// CHECK: %[[IND_BUFFER_1:.*]] = arith.muli {{.*}}, %[[IND_BUFFER_PREV]]
+// CHECK: %[[IND_BUFFER_2:.*]] = tt.splat %[[IND_BUFFER_1]]
+// CHECK: %[[NEXT_BUFFER_0:.*]] = tt.addptr {{.*}}, %[[IND_BUFFER_2]]
+// CHECK: triton_gpu.insert_slice_async %[[NEXT_BUFFER_0]]
+// CHECK: triton_gpu.async_wait {num = 2 : i32}
+// CHECK: scf.yield {{.*}}, {{.*}}, {{.*}}, %[[IND_BUFFER_0]]
+tt.func @indirect_bmm_scalar_dist_one(%77: i64 {tt.divisibility=16: i32},
+                   %76: index,
+                   %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
+                   %75: !tt.ptr<i64>,
+                   %78: tensor<16x16xi32, #AL> {tt.constancy=16: i32, tt.divisibility=16: i32},
+                   %60: tensor<16x16x!tt.ptr<f16>, #BL> {tt.divisibility=16: i32, tt.contiguity=16 : i32}) -> tensor<16x16xf32, #C>{
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #C>
+  %c4_i32 = arith.constant 4 : i32
+  %c1 = arith.constant 1 : index
+  %c0 = arith.constant 0 : index
+  %c0_i64 = arith.constant 0 : i64
+  %c1_i32 = arith.constant 1 : i32
+  %50 = tt.load %75 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : i64
+  %51 = tt.addptr %75, %c1_i32 : !tt.ptr<i64>, i32
+  %79:4 = scf.for %arg18 = %c0 to %76 step %c1 iter_args(%arg19 = %cst, %arg20 = %49, %arg21 = %51, %arg22 = %50) -> (tensor<16x16xf32, #C>, tensor<16x16x!tt.ptr<f16>, #AL>, !tt.ptr<i64>, i64) {
+    %82 = tt.load %arg20 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x16xf16, #AL>
+    %83 = tt.load %arg21 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : i64
+    %84 = arith.muli %77, %arg22 : i64
+    %85 = tt.splat %84 : i64 -> tensor<16x16xi64, #BL>
+    %86 = tt.addptr %60, %85 : tensor<16x16x!tt.ptr<f16>, #BL>, tensor<16x16xi64, #BL>
+    %87 = tt.load %86 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x16xf16, #BL>
+    %88 = triton_gpu.convert_layout %82 : tensor<16x16xf16, #AL> -> tensor<16x16xf16, #A>
+    %89 = triton_gpu.convert_layout %87 : tensor<16x16xf16, #BL> -> tensor<16x16xf16, #B>
+    %90 = tt.dot %88, %89, %arg19 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<16x16xf16, #A> * tensor<16x16xf16, #B> -> tensor<16x16xf32, #C>
+    %91 = tt.addptr %arg20, %78 : tensor<16x16x!tt.ptr<f16>, #AL>, tensor<16x16xi32, #AL>
+    %92 = tt.addptr %arg21, %c1_i32 : !tt.ptr<i64>, i32
+    scf.yield %90, %91, %92, %83 : tensor<16x16xf32, #C>, tensor<16x16x!tt.ptr<f16>, #AL>, !tt.ptr<i64>, i64
+  }
+  tt.return %79#0 : tensor<16x16xf32, #C>
+}
+
 // CHECK-LABEL: tt.func @indirect_bmm_vector
 // CHECK: triton_gpu.insert_slice_async
 // CHECK: triton_gpu.insert_slice_async
