@@ -211,7 +211,7 @@ public:
     auto CTALayout = ttg::getCTALayout(argType.getEncoding());
     auto newLayout = ttg::SharedEncodingAttr::get(
         argType.getContext(), argType.getShape(), newOrder, CTALayout,
-        argType.getElementType(), true);
+        argType.getElementType(), /*hasLeadingOffset=*/true);
     auto newType = RankedTensorType::get(argType.getShape(),
                                          argType.getElementType(), newLayout);
 
