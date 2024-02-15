@@ -63,14 +63,6 @@ def TritonNvidiaGPU_Dialect : Dialect {
       return mod->getAttrOfType<IntegerAttr>("triton_gpu.compute-capability").getInt();
     }
     void registerTypes();
-
-    // Warp specialization related:
-    static std::string getWSSupportedAttrName() { return "triton_gpu.enable-warp-specialization"; }
-    static int getWSSupportedAttr(ModuleOp mod) {
-      auto name = getWSSupportedAttrName();
-      if (!mod->hasAttr(name)) return 0;
-      return mod->getAttrOfType<IntegerAttr>(name).getInt();
-    }
   }];
 
   let useDefaultTypePrinterParser = 1;

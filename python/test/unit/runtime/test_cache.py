@@ -129,7 +129,7 @@ def test_specialize(mode):
     reset_tmp_dir()
     x = torch.empty(1, dtype=torch.int32, device='cuda')
     function = {'enable': kernel, 'disable': kernel_nospec}[mode]
-    target = {'enable': 4, 'disable': 1}[mode]
+    target = {'enable': 3, 'disable': 1}[mode]
     for i in [1, 2, 4, 8, 16, 32]:
         function[(1, )](x, i, BLOCK=512)
     assert counter == target
@@ -148,7 +148,7 @@ def test_annotation():
     kernel[(1, )](x, 8)
     kernel[(1, )](x, 16)
     kernel[(1, )](x, 17)
-    assert len(kernel.cache[device]) == 4
+    assert len(kernel.cache[device]) == 3
 
 
 def test_constexpr_not_callable() -> None:
@@ -257,3 +257,49 @@ def test_memory_leak() -> None:
         x0 = xindex
         tmp0 = tl.load(in_ptr0 + (x0), xmask)
         tl.store(out_ptr0 + (x0 + tl.zeros([XBLOCK], tl.int32)), tmp0, xmask)
+
+
+def test_preload() -> None:
+
+    @triton.jit
+    def kernel_add(a, b, o, N: tl.constexpr, type: tl.constexpr):
+        idx = tl.arange(0, N)
+        tl.device_assert(idx < 32, "idx < 32")
+        tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
+
+    device = torch.cuda.current_device()
+
+    # get the serialized specialization data
+    specialization_data = None
+
+    def cache_hook(*args, **kwargs):
+        nonlocal specialization_data
+        specialization_data = kwargs["compile"]["specialization_data"]
+
+    JITFunction.cache_hook = cache_hook
+    pre_compile = kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, tl.float32, grid=(1, ))
+    hash = pre_compile.hash
+    assert specialization_data is not None
+
+    # clear the cache
+    reset_tmp_dir()
+    kernel_add.cache[device].clear()
+
+    # preload the kernel
+    kernel_preload = kernel_add.preload(specialization_data)
+    assert kernel_preload.hash == hash
+    assert len(kernel_add.cache[device]) == 1
+
+    # we should hit the cache and not compile anything
+    counter = 0
+
+    def inc_counter(*args, **kwargs):
+        nonlocal counter
+        counter += 1
+
+    JITFunction.cache_hook = inc_counter
+    final_kernel = kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, tl.float32, grid=(1, ))
+    JITFunction.cache_hook = None
+    assert counter == 0
+    assert len(kernel_add.cache[device]) == 1
+    assert final_kernel.hash == hash

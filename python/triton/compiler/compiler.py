@@ -20,15 +20,20 @@ import os
 class AttrsDescriptor:
     divisible_by_16: set = None
     equal_to_1: set = None
-    divisible_by_8: set = None
 
     def __post_init__(self):
         if self.divisible_by_16 is None:
             self.divisible_by_16 = set()
         if self.equal_to_1 is None:
             self.equal_to_1 = set()
-        if self.divisible_by_8 is None:
-            self.divisible_by_8 = set()
+
+    def to_dict(self):
+        return {'divisible_by_16': list(self.divisible_by_16), 'equal_to_1': list(self.equal_to_1)}
+
+    @staticmethod
+    def from_dict(data):
+        return AttrsDescriptor(divisible_by_16=set(data.get('divisible_by_16', [])),
+                               equal_to_1=set(data.get('equal_to_1', [])))
 
     def hash(self):
         key = str([sorted(x) for x in self.__dict__.values()])
@@ -76,16 +81,6 @@ def _get_num_warps_from_ir_str(src: str):
     num_warps_matches = re.findall(ttgir_num_warps_pattern, src)
     assert len(num_warps_matches) == 1, "Expected exactly one match for num_warps"
     num_warps = int(num_warps_matches[0])
-
-    # If warp specialization is enabled, the true number of warps from
-    # the perspective of e.g. CUDA is num-warps times the number of
-    # specialized groups.
-    num_warp_groups_matches = re.findall(r'"triton_gpu.num-warp-groups-per-cta"\s?=\s?(\d+)\s?:', src)
-    assert len(num_warp_groups_matches) == 0 or len(num_warp_groups_matches) == 1, \
-      "Expected triton_gpu.num-warp-groups-per-cta attribute to appear 0 or 1 times"
-    if num_warp_groups_matches:
-        num_warps *= int(num_warp_groups_matches[0])
-
     return num_warps
 
 
@@ -211,7 +206,7 @@ def compile(src, target=None, options=None):
     if metadata_path is not None:
         # cache hit!
         metadata = json.loads(Path(metadata_path).read_text())
-        return CompiledKernel(src, metadata_group)
+        return CompiledKernel(src, metadata_group, hash)
     # initialize metadata
     metadata = {
         "hash": hash,
@@ -243,7 +238,7 @@ def compile(src, target=None, options=None):
                                                              binary=False)
     fn_cache_manager.put_group(metadata_filename, metadata_group)
     # return handle to compiled kernel
-    return CompiledKernel(src, metadata_group)
+    return CompiledKernel(src, metadata_group, hash)
 
 
 def make_backend(target):
@@ -261,12 +256,13 @@ class CompiledKernel:
     launch_enter_hook = None
     launch_exit_hook = None
 
-    def __init__(self, src, metadata_group):
+    def __init__(self, src, metadata_group, hash):
         from collections import namedtuple
         metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
         self.metadata = json.loads(metadata_path.read_text())
         KernelMetadata = namedtuple('KernelMetadata', sorted(list(self.metadata.keys())))
         self.metadata = KernelMetadata(**self.metadata)
+        self.hash = hash
 
         self.name = self.metadata.name
         # create launcher

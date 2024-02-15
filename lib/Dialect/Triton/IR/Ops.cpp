@@ -1023,81 +1023,69 @@ LogicalResult ReturnOp::verify() {
   return success();
 }
 
-// -- ExperimentalInterleaveOp --
-LogicalResult ExperimentalInterleaveOp::verify() {
-  // A built-in verifier already checked that LHS and RHS have the same shape
-  // (including same encoding).
-  assert(getLhs().getType().getShape() == getRhs().getType().getShape());
+// -- ExperimentalJoinOp --
+LogicalResult ExperimentalJoinOp::inferReturnTypes(
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  // These should have been checked by tablegen-generated code.
+  assert(operands.size() == 2);
+  assert(operands[0].getType() == operands[1].getType());
+  assert(operands[0].getType().isa<RankedTensorType>());
+  assert(operands[1].getType().isa<RankedTensorType>());
 
-  auto srcTy = getLhs().getType();
-  auto dstTy = getResult().getType();
-  if (srcTy.getRank() != dstTy.getRank()) {
-    return emitError("operands and result must have the same rank");
-  }
+  Value lhs = operands[0];
+  Value rhs = operands[1];
+  auto srcTy = lhs.getType().cast<RankedTensorType>();
 
-  auto rank = srcTy.getRank();
-  if (rank == 0) {
-    return emitError("operands and result must be at least 1D");
-  }
+  SmallVector<int64_t> retShape(srcTy.getShape());
+  retShape.push_back(2);
 
-  for (int i = 0; i < rank - 1; ++i) {
-    if (srcTy.getShape()[i] != dstTy.getShape()[i]) {
-      return emitError("except in the last dimension, the shape of the "
-                       "operands and result must be the same.  Mismatch in "
-                       "dimension ")
-             << i << " (" << srcTy.getShape()[i] << " vs "
-             << dstTy.getShape()[i] << ")";
-    }
-  }
-
-  if (2 * srcTy.getShape()[rank - 1] != dstTy.getShape()[rank - 1]) {
-    return emitError("the last dimension of the result (")
-           << dstTy.getShape()[rank - 1]
-           << ") must be twice the size of the last dimension of the "
-              "operands ("
-           << srcTy.getShape()[rank - 1] << ")";
-  }
-
-  // If an encoding is present, it must be a blocked encoding.  The src and dst
-  // encodings must be the same, except for the last dimension, which must also
-  // be the most-minor dim.
-  auto srcEnc = srcTy.getEncoding();
-  auto dstEnc = dstTy.getEncoding();
-  if (!!srcEnc != !!dstEnc) {
-    return emitError("if an encoding is present on one operand or result, it "
-                     "must be present on all of them.");
-  }
+  Attribute srcEnc = srcTy.getEncoding();
+  Attribute retEnc;
   if (srcEnc) {
-    if (!srcEnc.isa<triton::gpu::BlockedEncodingAttr>()) {
-      return emitError("operand encoding must be triton_gpu.blocked");
-    }
-    if (!dstEnc.isa<triton::gpu::BlockedEncodingAttr>()) {
-      return emitError("result encoding must be triton_gpu.blocked");
-    }
-
-    // Check that the src encoding has the correct order (namely, that the last
-    // dim is also the most minor dim).  This is a precondition for
-    // inferDstEncoding.
-    if (srcEnc.cast<triton::gpu::BlockedEncodingAttr>().getOrder()[0] !=
-        rank - 1) {
-      return emitError(
-          "the last dimension of the source encoding must be the "
-          "most-minor dimension (so it must appear first in `order`)");
-    }
-
-    std::optional<Attribute> expectedDstEnc = inferDstEncoding(*this, srcEnc);
-    if (!expectedDstEnc.has_value()) {
-      return emitError("internal error: unable to infer dst encoding from src "
-                       "encoding.  This is probably a bug in the verifier.");
-    }
-    if (dstEnc != *expectedDstEnc) {
-      return emitError("result encoding must be the same as the source "
-                       "encoding, except for the last dimension, which must be "
-                       "the most-minor dim.  Expected ")
-             << *expectedDstEnc << ", but got " << dstEnc;
+    if (dyn_cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+            ->inferJoinOpEncoding(srcEnc, retEnc, location)
+            .failed()) {
+      return failure();
     }
   }
+  inferredReturnTypes.push_back(
+      RankedTensorType::get(retShape, srcTy.getElementType(), retEnc));
+  return success();
+}
 
+// -- ExperimentalSplitOp --
+LogicalResult ExperimentalSplitOp::inferReturnTypes(
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  // These should have been checked by tablegen-generated code.
+  assert(operands.size() == 1);
+  assert(operands[0].getType().isa<RankedTensorType>());
+
+  Value src = operands[0];
+  auto srcTy = src.getType().cast<RankedTensorType>();
+  auto srcShape = srcTy.getShape();
+
+  if (srcShape.empty() || srcShape.back() != 2) {
+    return emitOptionalError(location,
+                             "last dimension of input tensor must be 2");
+  }
+  ArrayRef<int64_t> retShape(srcShape.begin(), srcShape.end() - 1);
+
+  Attribute srcEnc = srcTy.getEncoding();
+  Attribute retEnc;
+  if (srcEnc) {
+    if (dyn_cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+            ->inferSplitOpEncoding(srcEnc, retEnc, location)
+            .failed()) {
+      return failure();
+    }
+  }
+  auto retTy = RankedTensorType::get(retShape, srcTy.getElementType(), retEnc);
+  inferredReturnTypes.push_back(retTy);
+  inferredReturnTypes.push_back(retTy);
   return success();
 }
 
