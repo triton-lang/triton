@@ -21,10 +21,12 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "../lib/Conversion/TritonGPUToLLVM/Utility.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
+
+#include "Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;

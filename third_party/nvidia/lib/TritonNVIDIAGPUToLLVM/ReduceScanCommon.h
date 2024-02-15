@@ -8,7 +8,7 @@
 
 #include "../lib/Conversion/TritonGPUToLLVM/TypeConverter.h"
 //
-#include "../lib/Conversion/TritonGPUToLLVM/Utility.h"
+#include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"

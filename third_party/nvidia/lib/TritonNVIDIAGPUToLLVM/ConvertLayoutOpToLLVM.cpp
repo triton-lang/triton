@@ -1,4 +1,4 @@
-#include "../lib/Conversion/TritonGPUToLLVM/Utility.h"
+#include "Utility.h"
 #include "PatternTritonGPUOpToLLVM.h"
 
 #include "triton/Analysis/Allocation.h"

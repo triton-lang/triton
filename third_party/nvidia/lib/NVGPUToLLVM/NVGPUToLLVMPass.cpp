@@ -8,9 +8,8 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 
-#include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
+#include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
 
-#include "../lib/Conversion/TritonGPUToLLVM/Utility.h"
 using namespace mlir;
 using namespace mlir::triton;
 

@@ -1,4 +1,4 @@
-#include "../lib/Conversion/TritonGPUToLLVM/Utility.h"
+#include "Utility.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "ReduceScanCommon.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"

@@ -1,9 +1,10 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 
-#include "../lib/Conversion/TritonGPUToLLVM/Utility.h"
 #include "PatternTritonGPUOpToLLVM.h"
+#include "nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 
+#include "Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 #include <numeric>

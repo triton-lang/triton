@@ -1,4 +1,4 @@
-#include "../lib/Conversion/TritonGPUToLLVM/Utility.h"
+#include "Utility.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.cpp.inc"
 

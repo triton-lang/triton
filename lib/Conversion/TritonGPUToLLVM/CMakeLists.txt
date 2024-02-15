@@ -1,7 +1,6 @@
 add_triton_library(TritonGPUToLLVM
     TypeConverter.cpp
     Utility.cpp
-    PTXAsmFormat.cpp
 
     LINK_LIBS PUBLIC
     MLIRIR

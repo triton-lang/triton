@@ -1,4 +1,6 @@
-#include "../lib/Conversion/TritonGPUToLLVM/Utility.h"
+#include "nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
+
+#include "Utility.h"
 
 using namespace mlir;
 

@@ -23,7 +23,7 @@
 #include "triton/Tools/Sys/GetPlatform.hpp"
 
 #include "../lib/Conversion/TritonGPUToLLVM/TypeConverter.h"
-#include "../lib/Conversion/TritonGPUToLLVM/Utility.h"
+#include "Utility.h"
 #include "PatternTritonGPUOpToLLVM.h"
 
 namespace mlir {

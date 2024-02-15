@@ -26,6 +26,8 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     TensorPtrOpsToLLVM.cpp
     ClusterOpsToLLVM.cpp
     AllocateSharedMemory.cpp
+    PTXAsmFormat.cpp
+    Utility.cpp
 
     DEPENDS
     TritonNVIDIAGPUConversionPassIncGen
