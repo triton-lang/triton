@@ -855,7 +855,7 @@ def test_abs_fp8(in_dtype, device):
 
 
 @pytest.mark.parametrize("dtype_x", [(dtype_x) for dtype_x in dtypes_with_bfloat16])
-def test_transpose(dtype_x, device='cuda'):
+def test_transpose(dtype_x, device):
     SIZE = 128
 
     @triton.jit
