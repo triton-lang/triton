@@ -83,14 +83,6 @@ Operation *getFirstUser(Value v) {
   return firstUser;
 }
 
-triton::gpu::SharedEncodingAttr getSharedEncoding(RankedTensorType tensorTy) {
-  auto blockedLayout =
-      tensorTy.getEncoding().cast<triton::gpu::BlockedEncodingAttr>();
-  return triton::gpu::SharedEncodingAttr::get(
-      tensorTy.getContext(), tensorTy.getShape(), blockedLayout.getOrder(),
-      blockedLayout.getCTALayout(), tensorTy.getElementType());
-}
-
 //===----------------------------------------------------------------------===//
 // GraphDumper
 //===----------------------------------------------------------------------===//

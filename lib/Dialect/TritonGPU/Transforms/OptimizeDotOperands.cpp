@@ -255,7 +255,7 @@ public:
     // all CTALayouts are the same.
     auto newInnerCvtEnc = SharedEncodingAttr::get(
         getContext(), innerCvtTy.getShape(), newInnerCvtOrder,
-        innerCvtEnc.getCTALayout(), innerCvtTy.getElementType());
+        innerCvtEnc.getCTALayout(), innerCvtTy.getElementType(), true);
     auto newInnerCvtTy = RankedTensorType::get(
         innerCvtTy.getShape(), innerCvtTy.getElementType(), newInnerCvtEnc);
 
