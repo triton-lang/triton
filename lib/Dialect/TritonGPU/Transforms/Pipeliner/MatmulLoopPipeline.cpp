@@ -624,11 +624,11 @@ createSchedule(scf::ForOp forOp, int numStages,
   // Rest of the distance 1 dependencies will be scheduled one
   // stage after the insert ops.
   SmallVector<DenseSet<Operation *>> stage1deps(numStages);
-  for (unsigned i = 0; i < distanceOneUsers.size()-1; i++) {
+  for (unsigned i = 0; i < distanceOneUsers.size() - 1; i++) {
     auto &group = distanceOneUsers[i];
     for (auto op : group) {
       if (!isa<tt::LoadOp>(op))
-        tt::addDep(op, stage1deps[i+1], true, &allInsertAndDeps);
+        tt::addDep(op, stage1deps[i + 1], true, &allInsertAndDeps);
     }
     LLVM_DEBUG({
       LDBG("\nstage1deps " << i);
