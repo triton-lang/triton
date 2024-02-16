@@ -216,11 +216,12 @@ getBlockedEncoding(tt::LoadOp loadOp, ModuleAxisInfoAnalysis &axisInfo) {
 } 
 
 static ttg::SharedEncodingAttr
-getSharedEncoding(RankedTensorType type, bool isMMAV3,
+getSharedEncoding(tt::LoadOp loadOp, Operation *use, bool isMMAV3,
                   ttg::DotOperandEncodingAttr dotOpEnc, bool needTrans) {
 
-  auto CTALayout = ttg::getCTALayout(type.getEncoding());
-  auto blockedOrder = ttg::getOrder(type.getEncoding());
+  auto ty = loadOp.getType().cast<RankedTensorType>();
+  auto CTALayout = ttg::getCTALayout(ty.getEncoding());
+  auto blockedOrder = ttg::getOrder(ty.getEncoding());
   SmallVector<unsigned> order;
   if (blockedOrder.size() == 3) {
     for (unsigned i = 0; i < blockedOrder.size(); ++i) {
@@ -232,24 +233,28 @@ getSharedEncoding(RankedTensorType type, bool isMMAV3,
   } else {
     order = blockedOrder;
   }
-  if (type.getShape().size() == 1) {
-    // For 1D tensors, we do not swizzled layout.
-    return ttg::SharedEncodingAttr::get(type.getContext(), 1, 1, 1, order,
-                                        CTALayout, false);
-  }
-  if (dotOpEnc) {
-    assert(!isMMAV3 && "MMAv3 should not have dotOperandEncoding");
-    unsigned bitWidth = type.getElementType().getIntOrFloatBitWidth();
-    // set needTrans to avoid unnecessary conversion between shared encodings.
-    return ttg::SharedEncodingAttr::get(type.getContext(), dotOpEnc,
-                                        type.getShape(), order, CTALayout,
-                                        bitWidth, needTrans);
+  if (isa<tt::DotOp>(use)) {
+    if (dotOpEnc) {
+      assert(!isMMAV3 && "MMAv3 should not have dotOperandEncoding");
+      unsigned bitWidth = ty.getElementType().getIntOrFloatBitWidth();
+      // set needTrans to avoid unnecessary conversion between shared encodings.
+      return ttg::SharedEncodingAttr::get(ty.getContext(), dotOpEnc,
+                                          ty.getShape(), order, CTALayout,
+                                          bitWidth, needTrans);
+    } else {
+      assert(isMMAV3 && "Load used by dot op should be either MMAv3 or have "
+                        "dotOperandEncoding.");
+      return ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(), order,
+                                          CTALayout, ty.getElementType());
+    }
   } else {
-    assert(isMMAV3 && "Load used by dot op should be either MMAv3 or have "
-                      "dotOperandEncoding.");
-    return ttg::SharedEncodingAttr::get(type.getContext(), type.getShape(),
-                                        order, CTALayout, type.getElementType(),
-                                        isMMAV3);
+    assert(!dotOpEnc && !isMMAV3 &&
+           "Load used by non-dot op should not have dotOperandEncoding or be "
+           "MMAv3.");
+    // Use non-swizzled layout for loads that do not feed into dot ops.
+    // TODO: This won't be optimal for 2D tensors.
+    return ttg::SharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
+                                        CTALayout);
   }
 }
 
@@ -366,9 +371,9 @@ collectOpsToPipeline(scf::ForOp forOp,
     if (isa<tt::LoadOp>(distAndUse.second)) {
       loadInfo.blockedEncoding = getBlockedEncoding(loadOp, axisInfoAnalysis);
     }
-    loadInfo.sharedEncoding = getSharedEncoding(
-        loadOp.getType().cast<RankedTensorType>(), loadIsMMAV3,
-        loadInfo.dotOperandEncoding, loadInfo.needTrans);
+    loadInfo.sharedEncoding =
+        getSharedEncoding(loadOp, distAndUse.second, loadIsMMAV3,
+                          loadInfo.dotOperandEncoding, loadInfo.needTrans);
     int stage = (maxDistance - distAndUse.first) * stagesBetweenLoads;
     loadInfo.stage = stage;
     loadInfo.use = distAndUse.second;

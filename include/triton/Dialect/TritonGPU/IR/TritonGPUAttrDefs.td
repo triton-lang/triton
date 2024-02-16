@@ -364,8 +364,7 @@ compared to 1*64 when the hasLeadingOffset is false.
     AttrBuilder<(ins "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
                      "CTALayoutAttr":$CTALayout,
-                     "Type":$eltTy,
-                     "bool":$hasLeadingOffset), [{
+                     "Type":$eltTy), [{
         auto shapePerCTA = getShapePerCTA(CTALayout.getCTASplitNum(), shape);
 
         int32_t eleBitWidth = eltTy.getIntOrFloatBitWidth();
@@ -387,7 +386,7 @@ compared to 1*64 when the hasLeadingOffset is false.
           llvm_unreachable("unsupported shared memory layout for MMAv3");
         }
 
-        return $_get(context, vec, perPhase, maxPhase, order, CTALayout, hasLeadingOffset);
+        return $_get(context, vec, perPhase, maxPhase, order, CTALayout, true);
     }]>
   ];
 
