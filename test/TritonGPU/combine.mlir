@@ -2142,3 +2142,31 @@ tt.func @scan_propagation(%arg: tensor<1024xi32, #slice1dim1>) -> tensor<1024xi3
   tt.return %3: tensor<1024xi32, #slice1dim1>
 }
 }
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+// CHECK-LABEL: fw_propagate_for_op
+  tt.func public @fw_propagate_for_op(%arg0: tensor<1024x4xi32, #blocked>, %arg1: tensor<1024x4x!tt.ptr<i32, 1>, #blocked1>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c2_i32 = arith.constant 2 : i32
+    %c1_i32 = arith.constant 1 : i32
+
+  // CHECK-NOT: triton_gpu.convert_layout
+  // CHECK: arith.muli
+  // CHECK: scf.for
+  // CHECK:   scf.yield
+  // CHECK: triton_gpu.convert_layout
+  // CHECK: tt.store
+    %0 = triton_gpu.convert_layout %arg0 : tensor<1024x4xi32, #blocked> -> tensor<1024x4xi32, #blocked1>
+    %1 = arith.muli %0, %0 : tensor<1024x4xi32, #blocked1>
+    %2 = scf.for %arg2 = %c0_i32 to %c2_i32 step %c1_i32 iter_args(%arg3 = %1) -> (tensor<1024x4xi32, #blocked1>)  : i32 {
+      %3 = arith.addi %arg3, %arg3 : tensor<1024x4xi32, #blocked1>
+      scf.yield %3 : tensor<1024x4xi32, #blocked1>
+    }
+    tt.store %arg1, %2 {cache = 1 : i32, evict = 1 : i32} : tensor<1024x4xi32, #blocked1>
+    tt.return
+  }
+}
