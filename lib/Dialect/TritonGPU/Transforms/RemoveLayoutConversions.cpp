@@ -718,8 +718,27 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   return nullptr;
 }
 
-bool canBeRemat(Operation *op) {
-  if (isa<LoadOp, StoreOp>(op))
+bool isMoreExpensiveLoad(LoadOp op, Attribute newEncoding) {
+  if (!isExpensiveLoadOrStore(op))
+    return false;
+  // If it is an expensive load and it does not have a single use, then it is
+  // more expensive to redo the load.
+  if (!op->hasOneUse())
+    return true;
+
+  // Loading a tensor in different layout isn't more expensive, as long as they
+  // can be vectorized in the same granularity.
+  auto tensorType = op.getType().cast<RankedTensorType>();
+  auto oldEncoding = tensorType.getEncoding();
+  auto oldContigPerThread = getContigPerThread(oldEncoding);
+  auto newContigPerThread = getContigPerThread(newEncoding);
+  return oldContigPerThread.back() > newContigPerThread.back();
+}
+
+bool canBeRemat(Operation *op, Attribute newEncoding) {
+  if (auto loadOp = dyn_cast<LoadOp>(op))
+    return !isMoreExpensiveLoad(loadOp, newEncoding);
+  if (isa<StoreOp>(op))
     return !isExpensiveLoadOrStore(op);
   if (isa<tensor::ExtractSliceOp, AllocTensorOp, InsertSliceAsyncOp,
           AtomicRMWOp, AtomicCASOp, DotOp>(op))
@@ -831,7 +850,7 @@ LogicalResult getRematerializableSlice(
   // Check if all the operations in the slice can be rematerialized.
   for (Value v : slice) {
     if (Operation *op = v.getDefiningOp()) {
-      if (!canBeRemat(op))
+      if (!canBeRemat(op, rootEncoding))
         return failure();
     }
   }

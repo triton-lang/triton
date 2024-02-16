@@ -1995,7 +1995,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     %27 = tt.load %26 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<1x256xf16, #blocked2>
     %28 = tt.broadcast %27 : tensor<1x256xf16, #blocked2> -> tensor<32x256xf16, #blocked2>
     %29 = arith.addf %20, %28 : tensor<32x256xf16, #blocked2>
-// CHECK: %[[C:.+]] = triton_gpu.convert_layout %29 : tensor<32x256xf16, [[$MMA]]> -> tensor<32x256xf16, [[$BLOCKED]]>
+// CHECK: %[[C:.+]] = triton_gpu.convert_layout %28 : tensor<32x256xf16, [[$MMA]]> -> tensor<32x256xf16, [[$BLOCKED]]>
 // CHECK: arith.extf %[[C]] : tensor<32x256xf16, [[$BLOCKED]]> to tensor<32x256xf32, [[$BLOCKED]]>
     %30 = arith.extf %29 : tensor<32x256xf16, #blocked2> to tensor<32x256xf32, #blocked2>
     %31 = "tt.reduce"(%30) <{axis = 1 : i32}> ({
