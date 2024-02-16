@@ -1,6 +1,6 @@
 import importlib.util
 import itertools
-import operator
+import operator  # noqa: F401
 import os
 import shutil
 import tempfile
@@ -30,7 +30,7 @@ def function_2(i):
 
 @triton.jit
 def combine_fn(a, b):
-    return COMBINE_OP(a, b)
+    return COMBINE_OP(a, b)  # noqa: F821
 
 
 @triton.jit
@@ -50,7 +50,7 @@ def kernel_nospec(X, i, BLOCK: tl.constexpr):
 @triton.jit
 def kernel_with_combine_fn(X, BLOCK: tl.constexpr):
     i = tl.arange(0, BLOCK)
-    i = REDUCE_OR_SCAN(i, 0, combine_fn)
+    i = REDUCE_OR_SCAN(i, 0, combine_fn)  # noqa: F821
     tl.store(X, i)
 
 
