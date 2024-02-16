@@ -107,14 +107,13 @@ unsigned getElementBitWidth(const Value &val) {
   return typeForMem.getIntOrFloatBitWidth();
 }
 
-unsigned getNumElementsPerThread(Operation *op,
-                                 SmallVector<unsigned> order,
+unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   Value val = getMemAccessPtr(op);
   assert(val.getType().isa<RankedTensorType>());
   auto ty = val.getType().cast<RankedTensorType>();
   auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
-  AxisInfo& valInfo = *axisInfoAnalysis.getAxisInfo(val);
+  AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
   unsigned elemNumBits = getElementBitWidth(val);
   unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
   unsigned maxMultipleBytes = valInfo.getDivisibility(order[0]);

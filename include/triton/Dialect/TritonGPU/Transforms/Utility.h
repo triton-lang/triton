@@ -45,8 +45,7 @@ Value getMemAccessPtr(Operation *op);
 unsigned getElementBitWidth(const Value &val);
 
 unsigned
-getNumElementsPerThread(Operation *op,
-                        SmallVector<unsigned> order,
+getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                         mlir::ModuleAxisInfoAnalysis &axisInfoAnalysis);
 
 /* Dump Triton IR in graphviz dot format.

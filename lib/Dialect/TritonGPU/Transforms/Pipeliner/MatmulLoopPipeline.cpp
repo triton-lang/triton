@@ -213,7 +213,7 @@ getBlockedEncoding(tt::LoadOp loadOp, ModuleAxisInfoAnalysis &axisInfo) {
   return ttg::BlockedEncodingAttr::get(loadOp->getContext(), ty.getShape(),
                                        currPerThread, order, numWarps,
                                        threadsPerWarp, CTALayout);
-} 
+}
 
 static ttg::SharedEncodingAttr
 getSharedEncoding(tt::LoadOp loadOp, Operation *use, bool isMMAV3,

@@ -107,8 +107,8 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
       // For loads, we can expect that the gaps won't matter due to the L1
       // cache.
       unsigned elemNumBits = getElementBitWidth(ptr);
-      perThread = std::min<int>(perThread,
-                                getNumElementsPerThread(op, order, axisInfoAnalysis));
+      perThread = std::min<int>(
+          perThread, getNumElementsPerThread(op, order, axisInfoAnalysis));
     }
     SmallVector<unsigned, 4> sizePerThread(refTensorType.getRank(), 1);
     sizePerThread[order[0]] = perThread;
