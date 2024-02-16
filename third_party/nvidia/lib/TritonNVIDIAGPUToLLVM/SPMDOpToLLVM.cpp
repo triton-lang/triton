@@ -13,7 +13,8 @@ struct GetProgramIdOpConversion
   LogicalResult
   matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Value programId = llGetPid(op.getAxisAsInt(), op->getLoc(),
+    Value programId =
+        LLVM::NVIDIA::llGetPid(op.getAxisAsInt(), op->getLoc(),
                                op->getParentOfType<ModuleOp>(), rewriter);
     rewriter.replaceOp(op, programId);
     return success();
@@ -41,7 +42,7 @@ struct GetNumProgramsOpConversion
     std::string sreg = numCTAs == 1 ? "%nctaid." : "%nclusterid.";
     sreg.append(1, 'x' + op.getAxis()); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
 
-    Value numPrograms = LLVM::getSRegValue(rewriter, loc, sreg);
+    Value numPrograms = LLVM::NVIDIA::getSRegValue(rewriter, loc, sreg);
     rewriter.replaceOp(op, numPrograms);
     return success();
   }

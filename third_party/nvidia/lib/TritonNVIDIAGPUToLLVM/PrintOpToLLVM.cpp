@@ -1,5 +1,5 @@
-#include "Utility.h"
 #include "PatternTritonGPUOpToLLVM.h"
+#include "Utility.h"
 
 namespace {
 
@@ -24,7 +24,8 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
         LLVM::addStringToModule(loc, rewriter, "printfPrefix_", op.getPrefix());
 
     auto getPid = [&](int axis) {
-      return llGetPid(axis, loc, op->getParentOfType<ModuleOp>(), rewriter);
+      return LLVM::NVIDIA::llGetPid(axis, loc, op->getParentOfType<ModuleOp>(),
+                                    rewriter);
     };
     std::array<Value, 3> pid = {getPid(0), getPid(1), getPid(2)};
 

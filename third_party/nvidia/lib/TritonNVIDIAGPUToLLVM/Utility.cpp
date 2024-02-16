@@ -5,6 +5,8 @@
 namespace mlir {
 
 namespace LLVM {
+
+namespace NVIDIA {
 using namespace mlir::triton;
 
 Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
@@ -47,6 +49,6 @@ Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr) {
   Value val = builder.launch(b, loc, b.getIntegerType(32), false);
   return val;
 }
-
+} // namespace NVIDIA
 } // namespace LLVM
 } // namespace mlir

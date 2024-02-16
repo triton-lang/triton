@@ -1,6 +1,6 @@
-#include "Utility.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "ReduceScanCommon.h"
+#include "Utility.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
@@ -9,9 +9,9 @@ using namespace mlir::triton;
 
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::linearize;
-using ::mlir::LLVM::loadShared;
 using ::mlir::LLVM::shflSync;
-using ::mlir::LLVM::storeShared;
+using ::mlir::LLVM::NVIDIA::loadShared;
+using ::mlir::LLVM::NVIDIA::storeShared;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 

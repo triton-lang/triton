@@ -9,7 +9,7 @@ using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::linearize;
 using ::mlir::LLVM::shflIdxSync;
 using ::mlir::LLVM::shflUpSync;
-using ::mlir::LLVM::storeShared;
+using ::mlir::LLVM::NVIDIA::storeShared;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 // apply combine region to acc and cur and accumulate it into acc
