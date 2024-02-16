@@ -513,7 +513,7 @@ def _unwrap(tensor):
 builder = Builder()
 
 # These keywords are not supported by the interpreter
-RESERVED_KWS = ["num_warps", "num_stages", "num_ctas", "enable_fp_fusion"]
+RESERVED_KWS = ["num_warps", "num_stages", "num_ctas", "enable_fp_fusion", "grid"]
 
 
 class GridExecutor:
