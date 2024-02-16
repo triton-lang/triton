@@ -2,8 +2,8 @@
 #include "TritonGPUToLLVMBase.h"
 #include "TypeConverter.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "triton/Dialect/NVGPU/IR/Dialect.h"
 
 namespace mlir {
 
@@ -97,6 +97,29 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
     break;
   }
   return Value();
+}
+
+Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+               int i) {
+  return commonShflSync(loc, rewriter, val, i32_val(i), i, NVVM::ShflKind::bfly,
+                        i32_val(0x1f));
+}
+
+Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                 int i) {
+  return commonShflSync(loc, rewriter, val, i32_val(i), i, NVVM::ShflKind::up,
+                        i32_val(0x0));
+}
+
+Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                  int i) {
+  return shflIdxSync(loc, rewriter, val, i32_val(i));
+}
+
+Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                  Value i) {
+  return commonShflSync(loc, rewriter, val, i, 0, NVVM::ShflKind::idx,
+                        i32_val(0x1f));
 }
 
 } // namespace AMD

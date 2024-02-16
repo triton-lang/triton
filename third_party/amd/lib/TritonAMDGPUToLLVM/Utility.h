@@ -12,7 +12,17 @@
 namespace mlir {
 namespace LLVM {
 using namespace mlir::triton;
-namespace AMD {} // namespace AMD
+namespace AMD {
+
+Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+               int i);
+Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                 int i);
+Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                  int i);
+Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                  Value i);
+} // namespace AMD
 
 } // namespace LLVM
 } // namespace mlir

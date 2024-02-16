@@ -11,7 +11,7 @@ using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
 using ::AMD::TritonGPUToLLVMTypeConverter;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::linearize;
-using ::mlir::LLVM::shflSync;
+using ::mlir::LLVM::AMD::shflSync;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 

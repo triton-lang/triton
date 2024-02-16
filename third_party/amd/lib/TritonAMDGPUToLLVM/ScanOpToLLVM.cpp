@@ -10,8 +10,8 @@ using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
 using ::AMD::TritonGPUToLLVMTypeConverter;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::linearize;
-using ::mlir::LLVM::shflIdxSync;
-using ::mlir::LLVM::shflUpSync;
+using ::mlir::LLVM::AMD::shflIdxSync;
+using ::mlir::LLVM::AMD::shflUpSync;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 // apply combine region to acc and cur and accumulate it into acc
