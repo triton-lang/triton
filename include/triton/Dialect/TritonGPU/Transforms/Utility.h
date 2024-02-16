@@ -42,11 +42,12 @@ template <class T> SmallVector<unsigned, 4> argSort(const T &arr) {
 
 Value getMemAccessPtr(Operation *op);
 
+unsigned getElementBitWidth(const Value &val);
+
 unsigned
 getNumElementsPerThread(Operation *op,
+                        SmallVector<unsigned> order,
                         mlir::ModuleAxisInfoAnalysis &axisInfoAnalysis);
-
-unsigned getElementBitWidth(const Value &val);
 
 /* Dump Triton IR in graphviz dot format.
  *

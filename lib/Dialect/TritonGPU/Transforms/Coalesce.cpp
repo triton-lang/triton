@@ -85,13 +85,13 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     int numThreads = numWarps * threadsPerWarp;
     int numElemsPerThread = std::max(numElems / numThreads, 1);
 
-    unsigned perThread = getNumElementsPerThread(op, axisInfoAnalysis);
+    unsigned perThread = getNumElementsPerThread(op, order, axisInfoAnalysis);
     LDBG("perThread for op: " << perThread);
     for (Operation *opSameOrder : memAccessesSameOrder) {
       if (opSameOrder == op)
         continue;
       unsigned currPerThread =
-          getNumElementsPerThread(opSameOrder, axisInfoAnalysis);
+          getNumElementsPerThread(opSameOrder, order, axisInfoAnalysis);
       LDBG("perThread for opSameOrder: " << currPerThread);
       perThread = std::max(perThread, currPerThread);
     }
@@ -108,7 +108,7 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
       // cache.
       unsigned elemNumBits = getElementBitWidth(ptr);
       perThread = std::min<int>(perThread,
-                                getNumElementsPerThread(op, axisInfoAnalysis));
+                                getNumElementsPerThread(op, order, axisInfoAnalysis));
     }
     SmallVector<unsigned, 4> sizePerThread(refTensorType.getRank(), 1);
     sizePerThread[order[0]] = perThread;

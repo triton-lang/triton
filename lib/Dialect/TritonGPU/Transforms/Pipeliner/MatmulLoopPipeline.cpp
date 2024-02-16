@@ -203,23 +203,17 @@ static ttg::BlockedEncodingAttr
 getBlockedEncoding(tt::LoadOp loadOp, ModuleAxisInfoAnalysis &axisInfo) {
   Value src = loadOp.getPtr();
   auto ty = src.getType().cast<RankedTensorType>();
-
   auto mod = loadOp->getParentOfType<ModuleOp>();
   int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
   int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-
-  AxisInfo *valInfo = axisInfo.getAxisInfo(src);
-
-  AxisInfo::DimVectorT contiguity = valInfo->getContiguity();
+  AxisInfo::DimVectorT contiguity = axisInfo.getAxisInfo(src)->getContiguity();
   SmallVector<unsigned> order = argSort(contiguity);
-
-  unsigned currPerThread = getNumElementsPerThread(loadOp, axisInfo);
-
+  unsigned currPerThread = getNumElementsPerThread(loadOp, order, axisInfo);
   ttg::CTALayoutAttr CTALayout = ttg::getCTALayout(ty.getEncoding());
   return ttg::BlockedEncodingAttr::get(loadOp->getContext(), ty.getShape(),
                                        currPerThread, order, numWarps,
                                        threadsPerWarp, CTALayout);
-}
+} 
 
 static ttg::SharedEncodingAttr
 getSharedEncoding(RankedTensorType type, bool isMMAV3,

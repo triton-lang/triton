@@ -100,7 +100,6 @@ Value getMemAccessPtr(Operation *op) {
 
 unsigned getElementBitWidth(const Value &val) {
   auto tensorType = val.getType().cast<RankedTensorType>();
-
   auto typeForMem =
       tensorType.getElementType().isa<PointerType>()
           ? tensorType.getElementType().cast<PointerType>().getPointeeType()
@@ -109,15 +108,13 @@ unsigned getElementBitWidth(const Value &val) {
 }
 
 unsigned getNumElementsPerThread(Operation *op,
+                                 SmallVector<unsigned> order,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   Value val = getMemAccessPtr(op);
-  AxisInfo valInfo;
   assert(val.getType().isa<RankedTensorType>());
   auto ty = val.getType().cast<RankedTensorType>();
   auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
-  valInfo = *axisInfoAnalysis.getAxisInfo(val);
-  auto contiguity = axisInfoAnalysis.getAxisInfo(val)->getContiguity();
-  SmallVector<unsigned> order = argSort(contiguity);
+  AxisInfo& valInfo = *axisInfoAnalysis.getAxisInfo(val);
   unsigned elemNumBits = getElementBitWidth(val);
   unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
   unsigned maxMultipleBytes = valInfo.getDivisibility(order[0]);
