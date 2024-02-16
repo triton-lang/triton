@@ -42,7 +42,9 @@ template <class T> SmallVector<unsigned, 4> argSort(const T &arr) {
 
 Value getMemAccessPtr(Operation *op);
 
-unsigned getNumElementsPerThread(Operation *op, mlir::ModuleAxisInfoAnalysis &axisInfoAnalysis);
+unsigned
+getNumElementsPerThread(Operation *op,
+                        mlir::ModuleAxisInfoAnalysis &axisInfoAnalysis);
 
 unsigned getElementBitWidth(const Value &val);
 

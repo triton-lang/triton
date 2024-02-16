@@ -3,11 +3,11 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Analysis/AxisInfo.h"
 
 #include <fstream>
 
@@ -108,7 +108,8 @@ unsigned getElementBitWidth(const Value &val) {
   return typeForMem.getIntOrFloatBitWidth();
 }
 
-unsigned getNumElementsPerThread(Operation *op, ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+unsigned getNumElementsPerThread(Operation *op,
+                                 ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   Value val = getMemAccessPtr(op);
   AxisInfo valInfo;
   assert(val.getType().isa<RankedTensorType>());

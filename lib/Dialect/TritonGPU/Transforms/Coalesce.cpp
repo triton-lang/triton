@@ -1,9 +1,9 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/Support/Debug.h"
 #include <iterator>
 #include <numeric>
@@ -90,7 +90,8 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     for (Operation *opSameOrder : memAccessesSameOrder) {
       if (opSameOrder == op)
         continue;
-      unsigned currPerThread = getNumElementsPerThread(opSameOrder, axisInfoAnalysis);
+      unsigned currPerThread =
+          getNumElementsPerThread(opSameOrder, axisInfoAnalysis);
       LDBG("perThread for opSameOrder: " << currPerThread);
       perThread = std::max(perThread, currPerThread);
     }
@@ -106,7 +107,8 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
       // For loads, we can expect that the gaps won't matter due to the L1
       // cache.
       unsigned elemNumBits = getElementBitWidth(ptr);
-      perThread = std::min<int>(perThread, getNumElementsPerThread(op, axisInfoAnalysis));
+      perThread = std::min<int>(perThread,
+                                getNumElementsPerThread(op, axisInfoAnalysis));
     }
     SmallVector<unsigned, 4> sizePerThread(refTensorType.getRank(), 1);
     sizePerThread[order[0]] = perThread;
