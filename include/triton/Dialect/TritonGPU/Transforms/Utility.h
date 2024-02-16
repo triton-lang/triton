@@ -3,12 +3,15 @@
 
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
-#include "llvm/ADT/MapVector.h"
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include <algorithm>
+#include <numeric>
 
 namespace mlir {
+
+class ModuleAxisInfoAnalysis;
 
 namespace triton {
 class LoadOp;
@@ -29,8 +32,19 @@ bool isLoadFromTensorPtr(triton::LoadOp op);
 /// Return the first consumer of v
 Operation *getFirstUser(Value v);
 
-/// Return the proper SharedEncodingAttr according to shape/order
-triton::gpu::SharedEncodingAttr getSharedEncoding(RankedTensorType tensorTy);
+template <class T> SmallVector<unsigned, 4> argSort(const T &arr) {
+  SmallVector<unsigned, 4> ret(arr.size());
+  std::iota(ret.begin(), ret.end(), 0);
+  std::stable_sort(ret.begin(), ret.end(),
+                   [&](unsigned x, unsigned y) { return arr[x] > arr[y]; });
+  return ret;
+}
+
+Value getMemAccessPtr(Operation *op);
+
+unsigned getNumElementsPerThread(Operation *op, mlir::ModuleAxisInfoAnalysis &axisInfoAnalysis);
+
+unsigned getElementBitWidth(const Value &val);
 
 /* Dump Triton IR in graphviz dot format.
  *

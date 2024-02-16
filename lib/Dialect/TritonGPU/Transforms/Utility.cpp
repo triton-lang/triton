@@ -7,6 +7,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Analysis/AxisInfo.h"
 
 #include <fstream>
 
@@ -83,12 +84,48 @@ Operation *getFirstUser(Value v) {
   return firstUser;
 }
 
-triton::gpu::SharedEncodingAttr getSharedEncoding(RankedTensorType tensorTy) {
-  auto blockedLayout =
-      tensorTy.getEncoding().cast<triton::gpu::BlockedEncodingAttr>();
-  return triton::gpu::SharedEncodingAttr::get(
-      tensorTy.getContext(), tensorTy.getShape(), blockedLayout.getOrder(),
-      blockedLayout.getCTALayout(), tensorTy.getElementType());
+Value getMemAccessPtr(Operation *op) {
+  if (auto ld = dyn_cast<triton::LoadOp>(op))
+    return ld.getPtr();
+  if (auto atomic = dyn_cast<triton::AtomicRMWOp>(op))
+    return atomic.getPtr();
+  if (auto atomic = dyn_cast<triton::AtomicCASOp>(op))
+    return atomic.getPtr();
+  if (auto insert = dyn_cast<triton::gpu::InsertSliceAsyncOp>(op))
+    return insert.getSrc();
+  if (auto store = dyn_cast<triton::StoreOp>(op))
+    return store.getPtr();
+  return nullptr;
+}
+
+unsigned getElementBitWidth(const Value &val) {
+  auto tensorType = val.getType().cast<RankedTensorType>();
+
+  auto typeForMem =
+      tensorType.getElementType().isa<PointerType>()
+          ? tensorType.getElementType().cast<PointerType>().getPointeeType()
+          : tensorType.getElementType();
+  return typeForMem.getIntOrFloatBitWidth();
+}
+
+unsigned getNumElementsPerThread(Operation *op, ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+  Value val = getMemAccessPtr(op);
+  AxisInfo valInfo;
+  assert(val.getType().isa<RankedTensorType>());
+  auto ty = val.getType().cast<RankedTensorType>();
+  auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
+  valInfo = *axisInfoAnalysis.getAxisInfo(val);
+  auto contiguity = axisInfoAnalysis.getAxisInfo(val)->getContiguity();
+  SmallVector<unsigned> order = argSort(contiguity);
+  unsigned elemNumBits = getElementBitWidth(val);
+  unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
+  unsigned maxMultipleBytes = valInfo.getDivisibility(order[0]);
+  unsigned maxMultiple = std::max(maxMultipleBytes / elemNumBytes, 1u);
+  unsigned maxContig =
+      std::min(valInfo.getContiguity(order[0]), shapePerCTA[order[0]]);
+  unsigned alignment = std::min(maxMultiple, maxContig);
+  unsigned currPerThread = std::min(alignment, 128 / elemNumBits);
+  return currPerThread;
 }
 
 //===----------------------------------------------------------------------===//
