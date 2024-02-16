@@ -280,15 +280,14 @@ getSharedEncoding(tt::LoadOp loadOp, Operation *use, bool isMMAV3,
       assert(!isMMAV3 && "MMAv3 should not have dotOperandEncoding");
       unsigned bitWidth = ty.getElementType().getIntOrFloatBitWidth();
       // set needTrans to avoid unnecessary conversion between shared encodings.
-      return
-          ttg::SharedEncodingAttr::get(ty.getContext(), dotOpEnc, ty.getShape(),
-                                       order, CTALayout, bitWidth, needTrans);
+      return ttg::SharedEncodingAttr::get(ty.getContext(), dotOpEnc,
+                                          ty.getShape(), order, CTALayout,
+                                          bitWidth, needTrans);
     } else {
       assert(isMMAV3 && "Load used by dot op should be either MMAv3 or have "
                         "dotOperandEncoding.");
-      return
-          ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(), order,
-                                       CTALayout, ty.getElementType());
+      return ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(), order,
+                                          CTALayout, ty.getElementType());
     }
   } else {
     assert(!dotOpEnc && !isMMAV3 &&
@@ -297,7 +296,7 @@ getSharedEncoding(tt::LoadOp loadOp, Operation *use, bool isMMAV3,
     // Use non-swizzled layout for loads that do not feed into dot ops.
     // TODO: This won't be optimal for 2D tensors.
     return ttg::SharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
-                                             CTALayout);
+                                        CTALayout);
   }
 }
 
@@ -414,9 +413,9 @@ collectOpsToPipeline(scf::ForOp forOp,
     if (isa<tt::LoadOp>(distAndUse.second)) {
       loadInfo.blockedEncoding = getBlockedEncoding(loadOp, axisInfoAnalysis);
     }
-    loadInfo.sharedEncoding = getSharedEncoding(
-        loadOp, distAndUse.second, loadIsMMAV3,
-        loadInfo.dotOperandEncoding, loadInfo.needTrans);
+    loadInfo.sharedEncoding =
+        getSharedEncoding(loadOp, distAndUse.second, loadIsMMAV3,
+                          loadInfo.dotOperandEncoding, loadInfo.needTrans);
     int stage = (maxDistance - distAndUse.first) * stagesBetweenLoads;
     loadInfo.stage = stage;
     loadInfo.use = distAndUse.second;
