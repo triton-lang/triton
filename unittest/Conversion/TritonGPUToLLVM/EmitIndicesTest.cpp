@@ -145,7 +145,7 @@ protected:
     auto elemTy = getElemTy(elemTyStr);
     auto layout = SharedEncodingAttr::get(
         &context, {row, col}, getMatrixOrder(rowMajor), getSingleCTALayout2d(),
-        elemTy, /*hasLeadingOffset=*/true);
+        elemTy);
     llvm::outs() << layout << "\n";
     runShared(row, col, layout, elemTy, /*multiCTA=*/false, refStr);
   }
