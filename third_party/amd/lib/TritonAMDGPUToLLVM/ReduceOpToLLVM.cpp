@@ -6,18 +6,16 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+using ::AMD::ConvertTritonGPUOpToLLVMPattern;
+using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
+using ::AMD::TritonGPUToLLVMTypeConverter;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::linearize;
-using ::mlir::LLVM::AMD::loadShared;
 using ::mlir::LLVM::AMD::shflSync;
-using ::mlir::LLVM::AMD::storeShared;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
-using ::AMD::TritonGPUToLLVMTypeConverter;
-using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
-using ::AMD::ConvertTritonGPUOpToLLVMPattern;
 
-namespace AMD{
+namespace AMD {
 namespace {
 struct ReduceOpConversion
     : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp> {
@@ -126,7 +124,8 @@ private:
     unsigned srcElems = getTotalElemsPerThread(types[0]);
     SmallVector<SmallVector<Value>> srcValues(srcElems);
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      auto values = getTypeConverter()->unpackLLElements(loc, operands[i], rewriter);
+      auto values =
+          getTypeConverter()->unpackLLElements(loc, operands[i], rewriter);
 
       assert(values.size() == srcValues.size());
       for (unsigned j = 0; j < srcValues.size(); ++j) {
@@ -143,9 +142,9 @@ private:
 
   // Check if the reduction can use a redux op and return the kind.
   std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op) const {
-    #ifdef USE_ROCM
-      return std::nullopt;
-    #endif
+#ifdef USE_ROCM
+    return std::nullopt;
+#endif
     if (computeCapability < 80)
       return std::nullopt;
     if (op.getNumOperands() != 1 || op.getNumResults() != 1)
@@ -255,7 +254,7 @@ private:
       auto srcTys = op.getInputTypes();
       auto inputTy = srcTys[0].cast<RankedTensorType>();
       auto inMfma =
-        inputTy.getEncoding().dyn_cast<triton::gpu::MfmaEncodingAttr>();
+          inputTy.getEncoding().dyn_cast<triton::gpu::MfmaEncodingAttr>();
       if (inMfma && inMfma.getIsTransposed()) {
         assert(numLaneToReduce == 2 || numLaneToReduce == 4);
         // for mfma 32x32 adjacent threads in y dimension in transposed MFMA
@@ -389,7 +388,7 @@ private:
         auto elemTy = getElementType(op, i);
         Value writePtr = gep(ptr_ty(rewriter.getContext(), 3), elemTy,
                              smemBases[i], writeOffset);
-        storeShared(rewriter, loc, writePtr, acc[i], laneZero);
+        store(acc[i], writePtr);
       }
     }
   }
@@ -424,7 +423,7 @@ private:
         auto elemTy = getElementType(op, i);
         Value readPtr = gep(ptr_ty(rewriter.getContext(), 3), elemTy,
                             smemBases[i], readOffset);
-        acc[i] = loadShared(rewriter, loc, readPtr, elemTy, threadIsNeeded);
+        acc[i] = load(elemTy, readPtr);
       }
       warpReduce(rewriter, loc, acc, op, sizeInterWarps, 1 /* interleave */);
       // only the first thread in each sizeInterWarps is writing
@@ -446,12 +445,13 @@ private:
 #if USE_ROCM
         // This barrier is known to be critical for Navi 2x/3x
         if (i > 0 && wavefront_size == 32) {
-            GCNBuilder BuilderMemfenceLDS;
-            BuilderMemfenceLDS.create<>("s_waitcnt lgkmcnt(0)")->operator()();
-            BuilderMemfenceLDS.launch(rewriter, loc, void_ty(rewriter.getContext()));
+          GCNBuilder BuilderMemfenceLDS;
+          BuilderMemfenceLDS.create<>("s_waitcnt lgkmcnt(0)")->operator()();
+          BuilderMemfenceLDS.launch(rewriter, loc,
+                                    void_ty(rewriter.getContext()));
         }
 #endif
-        storeShared(rewriter, loc, writePtrs[i], acc[i], pred);
+        store(acc[i], writePtrs[i]);
       }
 
       if (round != elemsPerThread - 1) {
@@ -503,7 +503,7 @@ private:
     rewriter.replaceOp(op, results);
   }
 };
-}
+} // namespace
 
 void populateReduceOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
@@ -514,4 +514,4 @@ void populateReduceOpToLLVMPatterns(
   patterns.add<ReduceOpConversion>(typeConverter, allocation, indexCacheInfo,
                                    computeCapability, benefit);
 }
-}
+} // namespace AMD

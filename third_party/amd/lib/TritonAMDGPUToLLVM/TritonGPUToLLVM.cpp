@@ -7,13 +7,12 @@ namespace {
 using namespace mlir;
 using namespace mlir::triton;
 
+using ::AMD::ConvertTritonGPUOpToLLVMPattern;
+using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
+using ::AMD::TritonGPUToLLVMTypeConverter;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::getSRegValue;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
-using ::AMD::TritonGPUToLLVMTypeConverter;
-using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
-using ::AMD::ConvertTritonGPUOpToLLVMPattern;
 
 Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
                ConversionPatternRewriter &rewriter) {
@@ -27,15 +26,15 @@ Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
   Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[axis]);
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
 #else
-  // It is not easy to get the compute capability here, so we use numCTAs to
-  // decide the semantic of GetProgramIdOp. If numCTAs = 1, then
-  // GetProgramIdOp is converted to "%ctaid", otherwise it is converted to
-  // "%clusterid".
-  int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
+  // // It is not easy to get the compute capability here, so we use numCTAs to
+  // // decide the semantic of GetProgramIdOp. If numCTAs = 1, then
+  // // GetProgramIdOp is converted to "%ctaid", otherwise it is converted to
+  // // "%clusterid".
+  // int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
 
-  std::string sreg = numCTAs == 1 ? "%ctaid." : "%clusterid.";
-  sreg.append(1, 'x' + axis); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
-  return getSRegValue(rewriter, loc, sreg);
+  // std::string sreg = numCTAs == 1 ? "%ctaid." : "%clusterid.";
+  // sreg.append(1, 'x' + axis); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
+  // return getSRegValue(rewriter, loc, sreg);
 #endif
 }
 
@@ -557,8 +556,8 @@ struct GetProgramIdOpConversion
 
 #ifdef USE_ROCM
     static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
-                                                  mlir::gpu::Dimension::y,
-                                                  mlir::gpu::Dimension::z};
+                                                    mlir::gpu::Dimension::y,
+                                                    mlir::gpu::Dimension::z};
     Location loc = op->getLoc();
     assert(op.getAxisAsInt() < 3);
 
@@ -585,8 +584,8 @@ struct GetNumProgramsOpConversion
                   ConversionPatternRewriter &rewriter) const override {
 #ifdef USE_ROCM
     static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
-                                                  mlir::gpu::Dimension::y,
-                                                  mlir::gpu::Dimension::z};
+                                                    mlir::gpu::Dimension::y,
+                                                    mlir::gpu::Dimension::z};
     Location loc = op->getLoc();
     assert(op.getAxis() < 3);
     Value blockId =
@@ -594,22 +593,24 @@ struct GetNumProgramsOpConversion
     rewriter.replaceOpWithNewOp<arith::TruncIOp>(op, i32_ty, blockId);
     return success();
 #else
-    // It is not easy to get the compute capability here, so we use numCTAs to
-    // decide the semantic of GetNumProgramsOp. If numCTAs = 1, then
-    // GetNumProgramsOp is converted to "%nctaid", otherwise it is converted to
-    // "%nclusterid".
-    auto moduleOp = op->getParentOfType<ModuleOp>();
-    assert(moduleOp && "Parent ModuleOp not found for GetProgramIdOp");
-    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
+    // // It is not easy to get the compute capability here, so we use numCTAs
+    // to
+    // // decide the semantic of GetNumProgramsOp. If numCTAs = 1, then
+    // // GetNumProgramsOp is converted to "%nctaid", otherwise it is converted
+    // to
+    // // "%nclusterid".
+    // auto moduleOp = op->getParentOfType<ModuleOp>();
+    // assert(moduleOp && "Parent ModuleOp not found for GetProgramIdOp");
+    // int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
 
-    Location loc = op->getLoc();
-    assert(op.getAxis() < 3);
-    std::string sreg = numCTAs == 1 ? "%nctaid." : "%nclusterid.";
-    sreg.append(1, 'x' + op.getAxis()); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
+    // Location loc = op->getLoc();
+    // assert(op.getAxis() < 3);
+    // std::string sreg = numCTAs == 1 ? "%nctaid." : "%nclusterid.";
+    // sreg.append(1, 'x' + op.getAxis()); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
 
-    Value numPrograms = getSRegValue(rewriter, loc, sreg);
-    rewriter.replaceOp(op, numPrograms);
-    return success();
+    // Value numPrograms = getSRegValue(rewriter, loc, sreg);
+    // rewriter.replaceOp(op, numPrograms);
+    // return success();
 #endif
   }
 };
@@ -634,7 +635,8 @@ struct AddPtrOpConversion
                                               .getPointeeType());
       Type ptrTy =
           getTypeConverter()->convertType(resultTensorTy.getElementType());
-      auto ptrs = getTypeConverter()->unpackLLElements(loc, adaptor.getPtr(), rewriter);
+      auto ptrs =
+          getTypeConverter()->unpackLLElements(loc, adaptor.getPtr(), rewriter);
       auto offsets = getTypeConverter()->unpackLLElements(
           loc, adaptor.getOffset(), rewriter);
       SmallVector<Value> resultVals(elems);
@@ -775,18 +777,6 @@ struct AsyncWaitOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::AsyncWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    PTXBuilder ptxBuilder;
-    auto &asyncWaitOp = *ptxBuilder.create<>("cp.async.wait_group");
-    auto num = op->getAttrOfType<IntegerAttr>("num").getInt();
-    asyncWaitOp(ptxBuilder.newConstantOperand(num));
-
-    auto ctx = op.getContext();
-    auto loc = op.getLoc();
-    auto voidTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, voidTy);
-
-    // Safe to remove the op since it doesn't have any return value.
-    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -799,12 +789,6 @@ struct AsyncCommitGroupOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::AsyncCommitGroupOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-
-    PTXBuilder ptxBuilder;
-    ptxBuilder.create<>("cp.async.commit_group")->operator()();
-    ptxBuilder.launch(rewriter, op.getLoc(), void_ty(op.getContext()));
-    // Safe to remove the op since it doesn't have any return value.
-    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -817,18 +801,6 @@ struct AsyncBulkWaitOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::AsyncBulkWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    PTXBuilder ptxBuilder;
-    auto &asyncBulkWaitOp = *ptxBuilder.create<>("cp.async.bulk.wait_group");
-    auto num = op->getAttrOfType<IntegerAttr>("num").getInt();
-    asyncBulkWaitOp(ptxBuilder.newConstantOperand(num));
-
-    auto ctx = op.getContext();
-    auto loc = op.getLoc();
-    auto voidTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, voidTy);
-
-    // Safe to remove the op since it doesn't have any return value.
-    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -842,20 +814,13 @@ struct AsyncBulkCommitGroupOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::AsyncBulkCommitGroupOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-
-    PTXBuilder ptxBuilder;
-    ptxBuilder.create<>("cp.async.bulk.commit_group")->operator()();
-    ptxBuilder.launch(rewriter, op.getLoc(), void_ty(op.getContext()));
-    // Safe to remove the op since it doesn't have any return value.
-    rewriter.eraseOp(op);
     return success();
   }
 };
 
 } // namespace
 
-
-namespace AMD{
+namespace AMD {
 void populateTritonGPUToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
@@ -881,4 +846,4 @@ void populateTritonGPUToLLVMPatterns(
   patterns.add<AssertOpConversion>(typeConverter, benefit);
 }
 
-} // namespace mlir::triton
+} // namespace AMD

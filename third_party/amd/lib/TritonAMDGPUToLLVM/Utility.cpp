@@ -1,67 +1,23 @@
 #include "Utility.h"
-#include "TypeConverter.h"
 #include "TritonGPUToLLVMBase.h"
+#include "TypeConverter.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
-#if USE_ROCM
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
-#endif
+#include "triton/Dialect/NVGPU/IR/Dialect.h"
 
 namespace mlir {
 
 namespace LLVM {
 using namespace mlir::triton;
 
-
-namespace AMD{
-Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                  Value val, Value pred) {
-#if USE_ROCM
-  store(val, ptr);
-  return val;
-#else
-  MLIRContext *ctx = rewriter.getContext();
-  unsigned bits = std::max(8u, val.getType().getIntOrFloatBitWidth());
-  const char *c = bits == 64 ? "l" : (bits == 16 ? "h" : "r");
-
-  PTXBuilder builder;
-  auto *ptrOpr = builder.newAddrOperand(ptr, "r");
-  auto *valOpr = builder.newOperand(val, c);
-  auto &st = builder.create<>("st")->shared().b(bits);
-  st(ptrOpr, valOpr).predicate(pred, "b");
-  return builder.launch(rewriter, loc, void_ty(ctx));
-#endif
-}
-
-Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                 Type elemTy, Value pred) {
-#if USE_ROCM
-  return load(elemTy, ptr);
-#else
-  MLIRContext *ctx = rewriter.getContext();
-  auto ptrTy = ptr.getType().cast<LLVMPointerType>();
-  assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for loadShared");
-  unsigned bitwidth = std::max(8u, elemTy.getIntOrFloatBitWidth());
-
-  const char *c = bitwidth == 64 ? "=l" : (bitwidth == 16 ? "=h" : "=r");
-
-  PTXBuilder builder;
-  auto *dOpr = builder.newOperand(c);
-  auto *ptrOpr = builder.newAddrOperand(ptr, "r");
-  auto &ld = builder.create<>("ld")->shared().b(bitwidth);
-  ld(dOpr, ptrOpr).predicate(pred, "b");
-  return builder.launch(rewriter, loc, elemTy);
-#endif
-}
-
+namespace AMD {
 static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
-                            Value val, Value i, int strideInt, NVVM::ShflKind mode,
-                            Value clamp) {
+                            Value val, Value i, int strideInt,
+                            NVVM::ShflKind mode, Value clamp) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
-#ifdef USE_ROCM
-  //On AMD, the ds_swizzle_b32 and ds_permute_b32 instructions work on 32bit/dwords
-  //so we need promote to 32 here.
+  // On AMD, the ds_swizzle_b32 and ds_permute_b32 instructions work on
+  // 32bit/dwords so we need promote to 32 here.
   auto valType = val.getType();
   if (!valType.isInteger(32) && bits <= 32) {
     if (!valType.isIntOrIndex())
@@ -77,7 +33,6 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
       val = bitcast(val, valType);
     return val;
   }
-#endif
 
   if (bits == 64) {
     Type vecTy = vec_ty(f32_ty, 2);
@@ -92,9 +47,9 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
     return bitcast(vec, val.getType());
   }
 
-#ifdef USE_ROCM
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  Value threadId = rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
+  Value threadId =
+      rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
   threadId = rewriter.create<arith::IndexCastOp>(loc, i32_ty, threadId);
   unsigned iWarpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
   Value warpSize = i32_val(iWarpSize);
@@ -106,7 +61,6 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
     Value permuteAddr = shl(lane, byteOffset);
     return rewriter.create<ROCDL::DsBpermuteOp>(loc, valType, permuteAddr, val);
   };
-
 
   switch (mode) {
   case NVVM::ShflKind::bfly:
@@ -143,26 +97,6 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
     break;
   }
   return Value();
-
-#else
-
-  Type type = val.getType();
-  if (type != i32_ty) {
-    val = bitcast(val, int_ty(bits));
-    if (bits < 32)
-      val = zext(i32_ty, val);
-  }
-  Value mask = i32_val(0xFFFFFFFF);
-  Value result = rewriter.create<NVVM::ShflOp>(loc, i32_ty, mask, val, i, clamp,
-                                               mode, UnitAttr());
-  if (type != i32_ty) {
-    if (bits < 32)
-      result = trunc(int_ty(bits), result);
-    result = bitcast(result, type);
-  }
-  return result;
-
-#endif
 }
 
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
@@ -174,7 +108,7 @@ Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i) {
   return commonShflSync(loc, rewriter, val, i32_val(i), i, NVVM::ShflKind::up,
-		  i32_val(0x0));
+                        i32_val(0x0));
 }
 
 Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
@@ -187,7 +121,8 @@ Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
   return commonShflSync(loc, rewriter, val, i, 0, NVVM::ShflKind::idx,
                         i32_val(0x1f));
 }
-}
+
+} // namespace AMD
 
 } // namespace LLVM
 } // namespace mlir

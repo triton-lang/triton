@@ -1,4 +1,4 @@
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
+#include "TritonAMDGPUToLLVM/Passes.h"
 
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
@@ -27,7 +27,6 @@
 #endif
 #include "triton/Tools/Sys/GetPlatform.hpp"
 
-#include "BarrierOpToLLVM.h"
 // #include "ClusterOpsToLLVM.h"
 #include "ConvertLayoutOpToLLVM.h"
 #include "DotOpToLLVM.h"
@@ -46,17 +45,17 @@
 
 namespace mlir {
 namespace triton {
-#define GEN_PASS_DEF_CONVERTTRITONGPUTOLLVM
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
+#define GEN_PASS_DEF_CONVERTTRITONAMDGPUTOLLVM
+#include "TritonAMDGPUToLLVM/Passes.h.inc"
 } // namespace triton
 } // namespace mlir
 
 using namespace mlir;
 using namespace mlir::triton;
 namespace ttng = mlir::triton::nvidia_gpu;
-using ::AMD::TritonGPUToLLVMTypeConverter;
-using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
 using ::AMD::ConvertTritonGPUOpToLLVMPattern;
+using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
+using ::AMD::TritonGPUToLLVMTypeConverter;
 
 namespace {
 
@@ -342,18 +341,19 @@ public:
   }
 };
 
-struct ConvertTritonGPUToLLVM
-    : public triton::impl::ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
-  using ConvertTritonGPUToLLVMBase<
-      ConvertTritonGPUToLLVM>::ConvertTritonGPUToLLVMBase;
+struct ConvertTritonAMDGPUToLLVM
+    : public triton::impl::ConvertTritonAMDGPUToLLVMBase<
+          ConvertTritonAMDGPUToLLVM> {
+  using ConvertTritonAMDGPUToLLVMBase<
+      ConvertTritonAMDGPUToLLVM>::ConvertTritonAMDGPUToLLVMBase;
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<triton::nvgpu::NVGPUDialect, LLVM::LLVMDialect,
                     NVVM::NVVMDialect>();
   }
 
-  ConvertTritonGPUToLLVM(int32_t computeCapability, Target target)
-      : ConvertTritonGPUToLLVMBase({computeCapability, target}) {}
+  ConvertTritonAMDGPUToLLVM(int32_t computeCapability, Target target)
+      : ConvertTritonAMDGPUToLLVMBase({computeCapability, target}) {}
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -441,12 +441,15 @@ struct ConvertTritonGPUToLLVM
 
     // {
     //   RewritePatternSet patterns(context);
-    //   populateTritonGPUToLLVMPatterns(typeConverter, patterns, numWarps, axisInfoAnalysis, allocation, indexCacheInfo, 10);
-    //   mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
-    //   mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
+    //   populateTritonGPUToLLVMPatterns(typeConverter, patterns, numWarps,
+    //   axisInfoAnalysis, allocation, indexCacheInfo, 10);
+    //   mlir::arith::populateArithToLLVMConversionPatterns(typeConverter,
+    //   patterns); mlir::populateGpuToROCDLConversionPatterns(typeConverter,
+    //   patterns,
     //                                              mlir::gpu::amd::HIP);
     //   populatePatterns3(populateLoadStoreOpToLLVMPatterns);
-    //   if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))){
+    //   if (failed(applyPartialConversion(mod, convTarget,
+    //   std::move(patterns)))){
     //     llvm::outs() << "fail1!\n";
     //     return signalPassFailure();
     //   }
@@ -483,7 +486,6 @@ struct ConvertTritonGPUToLLVM
     populatePatterns4(AMD::populateReduceOpToLLVMPatterns);
     populatePatterns1(AMD::populateScanOpToLLVMPatterns);
     populatePatterns2(AMD::populateViewOpToLLVMPatterns);
-    populatePatterns2(AMD::populateBarrierOpToLLVMPatterns);
 
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
@@ -504,7 +506,7 @@ struct ConvertTritonGPUToLLVM
 
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
-    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))){
+    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {
       return signalPassFailure();
     }
 
@@ -987,12 +989,10 @@ private:
     mod.walk([](triton::DotOp dotOp) -> void {
       auto D = dotOp.getD();
       OpBuilder builder(dotOp);
-      Type AElType =
-          dotOp.getA().getType().getElementType();
+      Type AElType = dotOp.getA().getType().getElementType();
       Type promoteType;
-      NvidiaMmaEncodingAttr mmaLayout = D.getType()
-                                            .getEncoding()
-                                            .dyn_cast<NvidiaMmaEncodingAttr>();
+      NvidiaMmaEncodingAttr mmaLayout =
+          D.getType().getEncoding().dyn_cast<NvidiaMmaEncodingAttr>();
       if (mmaLayout) {
         bool isNativeHopperFP8 =
             AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
@@ -1003,11 +1003,8 @@ private:
         promoteType = builder.getF16Type();
 #ifdef USE_ROCM
       } else if (MfmaEncodingAttr mfmaLayout =
-                     D.getType()
-                         .getEncoding()
-                         .dyn_cast<MfmaEncodingAttr>()) {
-        Type BElType =
-            dotOp.getB().getType().getElementType();
+                     D.getType().getEncoding().dyn_cast<MfmaEncodingAttr>()) {
+        Type BElType = dotOp.getB().getType().getElementType();
 
         auto maxBitWidth = std::max(AElType.getIntOrFloatBitWidth(),
                                     BElType.getIntOrFloatBitWidth());
@@ -1026,8 +1023,7 @@ private:
 #endif
       } else {
         // FMA case.
-        Type AElType =
-            dotOp.getA().getType().getElementType();
+        Type AElType = dotOp.getA().getType().getElementType();
         Type DElType = D.getType().getElementType();
         if (AElType == DElType)
           return;
@@ -1048,7 +1044,7 @@ namespace mlir {
 namespace triton {
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonAMDGPUToLLVMPass() {
-  return std::make_unique<ConvertTritonGPUToLLVM>(90, triton::ROCDL);
+  return std::make_unique<ConvertTritonAMDGPUToLLVM>(90, triton::ROCDL);
 }
 
 } // namespace triton

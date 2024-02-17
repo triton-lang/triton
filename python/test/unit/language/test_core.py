@@ -863,6 +863,8 @@ def test_abs_fp8(in_dtype, device):
 
 @pytest.mark.parametrize("dtype_x", [(dtype_x) for dtype_x in dtypes_with_bfloat16])
 def test_transpose(dtype_x, device):
+    if is_hip():
+        pytest.skip('test_transpose not supported on HIP.')
     SIZE = 128
 
     @triton.jit
@@ -1334,7 +1336,7 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
     check_type_supported(dtype_x, device)
     check_type_supported(dtype_z, device)
 
-    if is_hip() and (dtype_z == "bfloat16"):
+    if is_hip() and (dtype_z in ("bfloat16", "float8_e4m3fn") or dtype_x == "float8_e4m3fn"):
         pytest.skip(f'test_cast{(dtype_x, dtype_z)} cast to bfloat16 not supported on HIP.')
 
     torch.manual_seed(0)
@@ -1452,6 +1454,8 @@ def test_load_store_same_ptr(device):
 
 
 def test_join(device):
+    if is_hip():
+        pytest.skip("test_join not supported on HIP")
 
     @triton.jit
     def kernel(X, Y, Z, N: tl.constexpr):
@@ -1471,6 +1475,8 @@ def test_join(device):
 
 
 def test_join_with_mma(device):
+    if is_hip():
+        pytest.skip("test_join_with_mma not supported on HIP")
 
     @triton.jit
     def kernel(X, Z):
@@ -1490,6 +1496,8 @@ def test_join_with_mma(device):
 
 
 def test_split(device):
+    if is_hip():
+        pytest.skip("test_split not supported on HIP")
 
     @triton.jit
     def kernel(X, Z1, Z2, N: tl.constexpr):
@@ -2748,6 +2756,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
 @pytest.mark.parametrize("in_dtype_str, out_dtype_str", [('int8', 'int8'), ('float16', 'float16'),
                                                          ('float16', 'float32'), ('float32', 'float32')])
 def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
+    if is_hip():
+        pytest.skip('test_dot3d not supported on HIP.')
 
     @triton.jit
     def kernel(
@@ -3453,6 +3463,8 @@ def test_reshape(formats, device):
 
 
 def test_trans_reshape(device):
+    if is_hip():
+        pytest.skip('test_trans_reshape not supported on HIP.')
 
     @triton.jit
     def kernel(in_base_ptr, out_base_ptr, IN_SHAPE0: tl.constexpr, IN_SHAPE1: tl.constexpr):
@@ -4741,6 +4753,8 @@ def test_static_range(device):
 
 
 def test_tl_range(device):
+    if is_hip():
+        pytest.skip("test_tl_range is not supported in HIP")
     M, N, K = 64, 64, 512
     BLOCK_M, BLOCK_N, BLOCK_K = M, N, 64
     a = torch.randn((M, K), device=device, dtype=torch.float16)

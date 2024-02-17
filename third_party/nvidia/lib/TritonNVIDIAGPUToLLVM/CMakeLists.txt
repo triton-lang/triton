@@ -1,0 +1,35 @@
+add_triton_library(TritonNVIDIAGPUToLLVM
+    ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
+    ConvertLayoutOpToLLVM/SharedToDotOperandMMAv1.cpp
+    ConvertLayoutOpToLLVM/SharedToDotOperandMMAv2.cpp
+    ConvertLayoutOpToLLVM.cpp
+    DotOpToLLVM/FMA.cpp
+    DotOpToLLVM/MMAv1.cpp
+    DotOpToLLVM/MMAv2.cpp
+    DotOpToLLVM/WGMMA.cpp
+    DotOpToLLVM.cpp
+    HistogramOpToLLVM.cpp
+    ElementwiseOpToLLVM.cpp
+    LoadStoreOpToLLVM.cpp
+    BarrierOpToLLVM.cpp
+    TritonGPUToLLVM.cpp
+    DecomposeUnsupportedConversions.cpp
+    AssertOpToLLVM.cpp
+    PrintOpToLLVM.cpp
+    MemoryOpToLLVM.cpp
+    ControlFlowOpToLLVM.cpp
+    MakeRangeOpToLLVM.cpp
+    SPMDOpToLLVM.cpp
+    ReduceOpToLLVM.cpp
+    ScanOpToLLVM.cpp
+    ViewOpToLLVM.cpp
+    TensorPtrOpsToLLVM.cpp
+    ClusterOpsToLLVM.cpp
+    AllocateSharedMemory.cpp
+    PTXAsmFormat.cpp
+    Utility.cpp
+
+    DEPENDS
+    TritonNVIDIAGPUConversionPassIncGen
+    NVGPUAttrDefsIncGen
+)
