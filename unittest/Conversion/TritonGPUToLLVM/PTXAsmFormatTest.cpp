@@ -1,4 +1,4 @@
-#include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
+#include "nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"

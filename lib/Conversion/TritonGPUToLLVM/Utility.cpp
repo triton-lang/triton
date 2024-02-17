@@ -246,37 +246,6 @@ Value linearize(ConversionPatternRewriter &rewriter, Location loc,
   return linear;
 }
 
-Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                  Value val, Value pred) {
-  MLIRContext *ctx = rewriter.getContext();
-  unsigned bits = std::max(8u, val.getType().getIntOrFloatBitWidth());
-  const char *c = bits == 64 ? "l" : (bits == 16 ? "h" : "r");
-
-  PTXBuilder builder;
-  auto *ptrOpr = builder.newAddrOperand(ptr, "r");
-  auto *valOpr = builder.newOperand(val, c);
-  auto &st = builder.create<>("st")->shared().b(bits);
-  st(ptrOpr, valOpr).predicate(pred, "b");
-  return builder.launch(rewriter, loc, void_ty(ctx));
-}
-
-Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                 Type elemTy, Value pred) {
-  MLIRContext *ctx = rewriter.getContext();
-  auto ptrTy = ptr.getType().cast<LLVMPointerType>();
-  assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for loadShared");
-  unsigned bitwidth = std::max(8u, elemTy.getIntOrFloatBitWidth());
-
-  const char *c = bitwidth == 64 ? "=l" : (bitwidth == 16 ? "=h" : "=r");
-
-  PTXBuilder builder;
-  auto *dOpr = builder.newOperand(c);
-  auto *ptrOpr = builder.newAddrOperand(ptr, "r");
-  auto &ld = builder.create<>("ld")->shared().b(bitwidth);
-  ld(dOpr, ptrOpr).predicate(pred, "b");
-  return builder.launch(rewriter, loc, elemTy);
-}
-
 static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
                             Value val, Value i, NVVM::ShflKind mode,
                             Value clamp) {
@@ -332,16 +301,6 @@ Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                   Value i) {
   return commonShflSync(loc, rewriter, val, i, NVVM::ShflKind::idx,
                         i32_val(0x1f));
-}
-
-Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr) {
-  PTXBuilder builder;
-  auto &mov = builder.create("mov")->o("u32");
-  auto *destOpr = builder.newOperand("=r");
-  auto *sRegOpr = builder.newConstantOperand(sRegStr);
-  mov(destOpr, sRegOpr);
-  Value val = builder.launch(b, loc, b.getIntegerType(32), false);
-  return val;
 }
 
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
