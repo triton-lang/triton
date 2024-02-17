@@ -3450,6 +3450,19 @@ def test_reshape(formats, device):
     np.testing.assert_equal(z, to_numpy(z_tri))
 
 
+def test_reshape_err(device):
+
+    @triton.jit
+    def kernel():
+        x = tl.arange(0, 8 * 8)
+        y = tl.reshape(x, (8 * 4, ))
+
+    with pytest.raises(triton.CompilationError) as exc_info:
+        kernel[(1, )]()
+
+    assert "reshape" in str(exc_info.value)
+
+
 def test_trans_reshape(device):
     if is_hip():
         pytest.skip('test_trans_reshape not supported on HIP.')
