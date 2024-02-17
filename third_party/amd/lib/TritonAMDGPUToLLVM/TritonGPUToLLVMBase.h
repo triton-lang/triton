@@ -21,13 +21,11 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::delinearize;
-using ::mlir::LLVM::SharedMemoryObject;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::MfmaEncodingAttr;
+using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 namespace ttng = ::mlir::triton::nvidia_gpu;
 
@@ -173,7 +171,7 @@ class ReduceOp;
 class ScanOp;
 } // namespace mlir::triton
 
-namespace AMD{
+namespace AMD {
 class ConvertTritonGPUOpToLLVMPatternBase {
 public:
   // Two levels of value cache in emitting indices calculation:
@@ -440,7 +438,8 @@ public:
                           ConversionPatternRewriter &rewriter) const {
     auto dstTy = dst.getType().cast<RankedTensorType>();
     auto dstShape = dstTy.getShape();
-    assert(dstShape.size() <= 2 && "Unexpected rank of loadSharedToDistributed");
+    assert(dstShape.size() <= 2 &&
+           "Unexpected rank of loadSharedToDistributed");
     auto srcTy = src.getType().cast<RankedTensorType>();
     auto dstDistributedLayout = dstTy.getEncoding();
     if (auto mmaLayout =
@@ -703,8 +702,7 @@ public:
                                                           mmaLayout, type);
       } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
         result = emitBaseIndexForMfmaLayout(loc, rewriter, mfmaLayout, type);
-      } 
-      else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+      } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
         auto parentLayout = sliceLayout.getParent();
         auto parentShape = sliceLayout.paddedShape(type.getShape());
         RankedTensorType parentTy = RankedTensorType::get(
@@ -802,10 +800,9 @@ public:
         result =
             emitIndicesForDistributedLayout(loc, b, mma, type, withCTAOffset);
       } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
-        result =
-            emitIndicesForDistributedLayout(loc, b, mfmaLayout, type, withCTAOffset);
-      } 
-      else if (auto slice = layout.dyn_cast<SliceEncodingAttr>()) {
+        result = emitIndicesForDistributedLayout(loc, b, mfmaLayout, type,
+                                                 withCTAOffset);
+      } else if (auto slice = layout.dyn_cast<SliceEncodingAttr>()) {
         result =
             emitIndicesForDistributedLayout(loc, b, slice, type, withCTAOffset);
       } else {
@@ -1152,7 +1149,7 @@ private:
     return ret;
   }
 
-    SmallVector<Value>
+  SmallVector<Value>
   emitBaseIndexForMfmaLayout(Location loc, ConversionPatternRewriter &rewriter,
                              const MfmaEncodingAttr &mfmaLayout,
                              RankedTensorType type) const {
@@ -1360,5 +1357,5 @@ public:
     return smemBases;
   }
 };
-}
+} // namespace AMD
 #endif

@@ -24,7 +24,7 @@
 #include "DumpLayout.h"
 
 #include "../../../lib/Conversion/TritonGPUToLLVM/TypeConverter.h"
-#include "../../../lib/Conversion/TritonGPUToLLVM/Utility.h"
+#include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
 
 namespace mlir {
 namespace triton {
@@ -66,7 +66,7 @@ public:
 private:
   Value getMockSmemBase() {
     Value mockSmemBase =
-        mlir::LLVM::getSRegValue(rewriter, loc, "%mock_smem_base");
+        mlir::LLVM::NVIDIA::getSRegValue(rewriter, loc, "%mock_smem_base");
     auto llPtrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
     auto cast = rewriter.create<UnrealizedConversionCastOp>(
         loc, TypeRange{llPtrTy}, ValueRange{mockSmemBase});

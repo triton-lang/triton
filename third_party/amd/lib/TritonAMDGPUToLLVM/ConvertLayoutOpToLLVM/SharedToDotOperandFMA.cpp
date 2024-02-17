@@ -1,7 +1,8 @@
 #include "../ConvertLayoutOpToLLVM.h"
-#include "../Utility.h"
+#include "Utility.h"
 
 using ValueTable = std::map<std::pair<int, int>, Value>;
+using ::AMD::TritonGPUToLLVMTypeConverter;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
@@ -14,12 +15,13 @@ using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::isaDistributedLayout;
 using ::mlir::triton::gpu::SharedEncodingAttr;
-using ::AMD::TritonGPUToLLVMTypeConverter;
 
-SmallVector<Value>
-static getThreadIds(Value threadId, ArrayRef<unsigned int> shapePerCTATile,
-             ArrayRef<unsigned int> sizePerThread, ArrayRef<unsigned int> order,
-             ConversionPatternRewriter &rewriter, Location loc) {
+SmallVector<Value> static getThreadIds(Value threadId,
+                                       ArrayRef<unsigned int> shapePerCTATile,
+                                       ArrayRef<unsigned int> sizePerThread,
+                                       ArrayRef<unsigned int> order,
+                                       ConversionPatternRewriter &rewriter,
+                                       Location loc) {
   int dim = order.size();
   SmallVector<Value> threadIds(dim);
   for (unsigned k = 0; k < dim - 1; k++) {
@@ -57,10 +59,9 @@ static int getSizePerThreadForMN(BlockedEncodingAttr layout, bool isM) {
   return isM ? mSizePerThread : nSizePerThread;
 }
 
-static Value getStructFromValueTable(ArrayRef<Value> vals,
-                              ConversionPatternRewriter &rewriter, Location loc,
-                              TritonGPUToLLVMTypeConverter *typeConverter,
-                              Type elemTy) {
+static Value getStructFromValueTable(
+    ArrayRef<Value> vals, ConversionPatternRewriter &rewriter, Location loc,
+    TritonGPUToLLVMTypeConverter *typeConverter, Type elemTy) {
   SmallVector<Type> elemTypes(vals.size(), elemTy);
   SmallVector<Value> elems;
   elems.reserve(vals.size());
@@ -72,12 +73,10 @@ static Value getStructFromValueTable(ArrayRef<Value> vals,
   return typeConverter->packLLElements(loc, elems, rewriter, structTy);
 }
 
-static ValueTable getValueTableFromStruct(Value val, int K, int n0, int shapePerCTA,
-                                   int sizePerThread,
-                                   ConversionPatternRewriter &rewriter,
-                                   Location loc,
-                                   TritonGPUToLLVMTypeConverter *typeConverter,
-                                   Type type) {
+static ValueTable getValueTableFromStruct(
+    Value val, int K, int n0, int shapePerCTA, int sizePerThread,
+    ConversionPatternRewriter &rewriter, Location loc,
+    TritonGPUToLLVMTypeConverter *typeConverter, Type type) {
   ValueTable res;
   auto elems = typeConverter->unpackLLElements(loc, val, rewriter);
   int index = 0;
@@ -90,9 +89,10 @@ static ValueTable getValueTableFromStruct(Value val, int K, int n0, int shapePer
   return res;
 }
 
-static Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
-               Location loc, TritonGPUToLLVMTypeConverter *typeConverter,
-               ConversionPatternRewriter &rewriter) {
+static Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout,
+                      Value thread, Location loc,
+                      TritonGPUToLLVMTypeConverter *typeConverter,
+                      ConversionPatternRewriter &rewriter) {
   auto aTensorTy = A.getType().cast<RankedTensorType>();
   auto aLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
   auto aShapePerCTA = getShapePerCTA(aTensorTy);
@@ -157,9 +157,10 @@ static Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thr
   return getStructFromValueTable(vas, rewriter, loc, typeConverter, elemTy);
 }
 
-static Value loadBFMA(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
-               Location loc, TritonGPUToLLVMTypeConverter *typeConverter,
-               ConversionPatternRewriter &rewriter) {
+static Value loadBFMA(Value B, Value llB, BlockedEncodingAttr dLayout,
+                      Value thread, Location loc,
+                      TritonGPUToLLVMTypeConverter *typeConverter,
+                      ConversionPatternRewriter &rewriter) {
   auto bTensorTy = B.getType().cast<RankedTensorType>();
   auto bLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
   auto bShapePerCTA = getShapePerCTA(bTensorTy);
@@ -224,8 +225,7 @@ static Value loadBFMA(Value B, Value llB, BlockedEncodingAttr dLayout, Value thr
   return getStructFromValueTable(vbs, rewriter, loc, typeConverter, elemTy);
 }
 
-
-namespace AMD{
+namespace AMD {
 namespace SharedToDotOperandFMA {
 Value convertLayout(int opIdx, Value val, Value llVal,
                     BlockedEncodingAttr dLayout, Value thread, Location loc,
@@ -236,5 +236,5 @@ Value convertLayout(int opIdx, Value val, Value llVal,
   else
     return loadBFMA(val, llVal, dLayout, thread, loc, typeConverter, rewriter);
 }
-}
 } // namespace SharedToDotOperandFMA
+} // namespace AMD

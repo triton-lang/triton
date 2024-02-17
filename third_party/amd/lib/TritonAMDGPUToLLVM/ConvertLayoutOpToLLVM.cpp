@@ -1,6 +1,6 @@
 #include "ConvertLayoutOpToLLVM.h"
-#include "TritonGPUToLLVMBase.h"
 #include "Utility.h"
+#include "TritonGPUToLLVMBase.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
