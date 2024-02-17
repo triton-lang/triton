@@ -54,8 +54,8 @@ public:
       return mlir::failure();
     if (!cvtOp.getSrc().getDefiningOp<triton::LoadOp>())
       return failure();
-    auto dstTy = dstOp.getResult().getType().cast<RankedTensorType>();
-    auto srcTy = cvtOp.getOperand().getType().cast<RankedTensorType>();
+    RankedTensorType dstTy = dstOp.getType();
+    RankedTensorType srcTy = cvtOp.getSrc().getType();
     if (dstTy != srcTy)
       return mlir::failure();
 
@@ -63,14 +63,14 @@ public:
         op->getLoc(), dstTy.getElementType(),
         rewriter.getZeroAttr(dstTy.getElementType()));
     auto _0 = rewriter.create<triton::SplatOp>(
-        op->getLoc(), dotOp.getResult().getType(), _0f);
+        op->getLoc(), dotOp.getType(), _0f);
     auto newDot = rewriter.create<triton::DotOp>(
-        op->getLoc(), dotOp.getResult().getType(), dotOp.getOperand(0),
+        op->getLoc(), dotOp.getType(), dotOp.getOperand(0),
         dotOp.getOperand(1), _0, dotOp.getAllowTF32(),
         dotOp.getMaxNumImpreciseAcc());
     auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
         op->getLoc(), dstTy, newDot.getResult());
-    rewriter.replaceOpWithNewOp<arith::AddFOp>(op, newCvt, cvtOp.getOperand());
+    rewriter.replaceOpWithNewOp<arith::AddFOp>(op, newCvt, cvtOp.getSrc());
     return mlir::success();
   }
 };
@@ -335,18 +335,17 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
 #ifdef USE_ROCM
       if (auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(user)) {
         if (triton::gpu::hasSharedEncoding(convertOp.getResult()) ||
-            triton::gpu::hasSharedEncoding(convertOp.getOperand()))
+            triton::gpu::hasSharedEncoding(convertOp.getSrc()))
           continue;
       }
 #endif
-    if (user->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
-        user->hasTrait<mlir::OpTrait::Elementwise>() ||
-        isa<triton::ReduceOp, triton::ExpandDimsOp,
-            triton::ExperimentalInterleaveOp, triton::gpu::ConvertLayoutOp>(
-            user)) {
-      setEncoding(user->getResults(), info, changed, user);
-      continue;
-    }
+      if (user->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
+          user->hasTrait<mlir::OpTrait::Elementwise>() ||
+          isa<triton::ReduceOp, triton::ExpandDimsOp,
+              triton::gpu::ConvertLayoutOp>(user)) {
+        setEncoding(user->getResults(), info, changed, user);
+        continue;
+      }
   }
   return changed;
 }
@@ -711,11 +710,11 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   Attribute encoding = *layouts[op->getResult(0)].encodings.begin();
   if (auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
     Attribute srcEncoding =
-        convertOp.getOperand().getType().cast<RankedTensorType>().getEncoding();
-    auto it = layouts.find(convertOp.getOperand());
+        convertOp.getSrc().getType().cast<RankedTensorType>().getEncoding();
+    auto it = layouts.find(convertOp.getSrc());
     if (it != layouts.end())
       srcEncoding = *(it->second.encodings.begin());
-    Value src = getValueAs(convertOp.getOperand(), srcEncoding);
+    Value src = getValueAs(convertOp.getSrc(), srcEncoding);
     auto tensorType = op->getResult(0).getType().cast<RankedTensorType>();
     auto newType = RankedTensorType::get(tensorType.getShape(),
                                          tensorType.getElementType(), encoding);
@@ -737,7 +736,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
       isa<triton::ReduceOp, triton::ExpandDimsOp,
-          triton::ExperimentalInterleaveOp, triton::gpu::ConvertLayoutOp>(op)) {
+          triton::gpu::ConvertLayoutOp>(op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
          llvm::zip(op->getResults(), newOp->getResults()))
@@ -839,7 +838,7 @@ static void rewriteSlice(SetVector<Value> &slice,
       newV.setType(newType);
     }
   }
-  convertOp.replaceAllUsesWith(mapping.lookup(convertOp.getOperand()));
+  convertOp.replaceAllUsesWith(mapping.lookup(convertOp.getSrc()));
   convertOp.erase();
   for (Operation *op : deadLoops)
     op->erase();
@@ -874,7 +873,7 @@ static LogicalResult getRematerializableSlice(
 static void backwardRematerialization(ConvertLayoutOp convertOp) {
   // we don't want to rematerialize any conversion to/from shared
   if (triton::gpu::hasSharedEncoding(convertOp.getResult()) ||
-      triton::gpu::hasSharedEncoding(convertOp.getOperand()))
+      triton::gpu::hasSharedEncoding(convertOp.getSrc()))
     return;
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristics to accommodate fused attention
@@ -887,7 +886,7 @@ static void backwardRematerialization(ConvertLayoutOp convertOp) {
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
   LogicalResult result = getRematerializableSlice(
-      convertOp.getOperand(), targetType.getEncoding(), slice, layout);
+      convertOp.getSrc(), targetType.getEncoding(), slice, layout);
   if (result.failed())
     return;
 
@@ -900,7 +899,7 @@ static void backwardRematerialization(ConvertLayoutOp convertOp) {
 static void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp) {
   // we don't want to rematerialize any conversion to/from shared
   if (triton::gpu::hasSharedEncoding(convertOp.getResult()) ||
-      triton::gpu::hasSharedEncoding(convertOp.getOperand()))
+      triton::gpu::hasSharedEncoding(convertOp.getSrc()))
     return;
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristics to accommodate fused attention
@@ -916,7 +915,7 @@ static void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp) {
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
   LogicalResult result =
-      getRematerializableSlice(convertOp.getOperand(), targetType.getEncoding(),
+      getRematerializableSlice(convertOp.getSrc(), targetType.getEncoding(),
                                slice, layout, isExtOrBroadcastOp);
   if (result.failed())
     return;

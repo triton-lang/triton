@@ -1,0 +1,21 @@
+# Commits listed here are ignored by `git blame`.  Add "big and uninteresting
+# changes" here.  Don't forget that it has to be a separate commit (and, because
+# our automation squashes PRs, a separate PR)!
+#
+# Run the following command to teach your `git blame` to pick up this file.
+#
+#  $ git config blame.ignoreRevsFile .git-blame-ignore-revs`
+
+841a77d1b5961b43e1b64e5265bdfe52c133574d
+cb68a0d9d501657258ed9f7ad7610d0784c9be9a
+03184de8b535bb24fb1f49cc1f5e008bcbaa73ef
+bc4a8e66da036fafc01b87ee9e210df7ee8fb738
+846d6e7e77891706d179b20f27b1278ac3b9a9ac
+0327b9d32db6d1d63d207ccab722bd45e00a6678
+df08301e76a56d9ab3f36ff00ab7133672baa8d3
+f88b01f558df06f010a869e01473253a5f5cd8db
+312cf97e147e962562877026fd82c928cf6eaa30
+53d868113a706988394134ca1f7f85cb3016cc81
+539fbe5049570f29e73dc6843f984cd4913c5505
+053af4e9f8f005e1bc3f8ac9bf285eaf0ac9bf72
+5b36cb48ad9ce566dd24ff7183f207a1cb9358b5

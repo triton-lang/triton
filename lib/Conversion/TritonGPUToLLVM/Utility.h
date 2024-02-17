@@ -5,7 +5,6 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
-#include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include <set>
@@ -43,6 +42,8 @@ using namespace mlir::triton;
 #define or_(...) rewriter.create<LLVM::OrOp>(loc, __VA_ARGS__)
 #define bitcast(val__, type__)                                                 \
   rewriter.create<LLVM::BitcastOp>(loc, type__, val__)
+#define addrspacecast(val__, type__)                                           \
+  rewriter.create<LLVM::AddrSpaceCastOp>(loc, type__, val__)
 #define gep(...) rewriter.create<LLVM::GEPOp>(loc, __VA_ARGS__)
 #define ptr_ty(...) LLVM::LLVMPointerType::get(__VA_ARGS__)
 #define insert_val(...) rewriter.create<LLVM::InsertValueOp>(loc, __VA_ARGS__)
@@ -87,15 +88,6 @@ using namespace mlir::triton;
 #define select(...) rewriter.create<LLVM::SelectOp>(loc, __VA_ARGS__)
 #define address_of(...) rewriter.create<LLVM::AddressOfOp>(loc, __VA_ARGS__)
 #define barrier() rewriter.create<mlir::gpu::BarrierOp>(loc)
-#define barSync(rewriter, op, bar, numThreads)                                 \
-  do {                                                                         \
-    ::mlir::triton::PTXBuilder ptxBuilder;                                     \
-    auto &barSyncOp = *ptxBuilder.create<>("bar.sync");                        \
-    barSyncOp(ptxBuilder.newConstantOperand(bar),                              \
-              ptxBuilder.newConstantOperand(numThreads));                      \
-    auto voidTy = void_ty(op->getContext());                                   \
-    ptxBuilder.launch(rewriter, op->getLoc(), voidTy);                         \
-  } while (0)
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
 #define null(...) rewriter.create<LLVM::ZeroOp>(loc, __VA_ARGS__)
 #define call(...) rewriter.create<LLVM::CallOp>(loc, __VA_ARGS__)
@@ -339,12 +331,6 @@ Value linearize(ConversionPatternRewriter &rewriter, Location loc,
 Value linearize(ConversionPatternRewriter &rewriter, Location loc,
                 ArrayRef<Value> multiDim, ArrayRef<unsigned> shape);
 
-Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                  Value val, Value pred);
-
-Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                 Type elemTy, Value pred);
-
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i);
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
@@ -353,7 +339,6 @@ Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                   int i);
 Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                   Value i);
-Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr);
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content);
 
@@ -402,15 +387,10 @@ static Value getThreadIdInCTA(ConversionPatternRewriter &rewriter,
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
 }
 
-// Returns CTA level thread idx for not ws mode.
-// Returns agent level thread idx for ws mode.
+// Returns CTA level thread idx.
 static Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) {
   Value tid = getThreadIdInCTA(rewriter, loc);
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  if (triton::nvidia_gpu::TritonNvidiaGPUDialect::getWSSupportedAttr(mod)) {
-    Value _128 = rewriter.create<arith::ConstantIntOp>(loc, 128, 32);
-    tid = rewriter.create<arith::RemSIOp>(loc, tid, _128);
-  }
   return tid;
 }
 
@@ -1074,7 +1054,7 @@ loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
                         Location loc, ConversionPatternRewriter &rewriter) {
   auto dstTy = dst.getType().cast<RankedTensorType>();
   auto dstShape = dstTy.getShape();
-  assert(dstShape.size() == 2 && "Unexpected rank of loadSharedToDistributed");
+  assert(dstShape.size() <= 2 && "Unexpected rank of loadSharedToDistributed");
   auto srcTy = src.getType().cast<RankedTensorType>();
   auto dstDistributedLayout = dstTy.getEncoding();
   if (auto mmaLayout = dstDistributedLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
@@ -1094,7 +1074,7 @@ loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
   unsigned inVec = srcSharedLayout.getVec();
   unsigned minVec = std::min(outVec, inVec);
   unsigned outElems = triton::gpu::getTotalElemsPerThread(dstTy);
-  SmallVector<Value> offsetVals = {i32_val(0), i32_val(0)};
+  SmallVector<Value> offsetVals = {smemObj.strides.size(), i32_val(0)};
   assert(outElems == dstIndices.size());
 
   DenseMap<unsigned, Value> sharedPtrs =
@@ -1235,23 +1215,6 @@ static Value packLLElements(Location loc,
     llvmStruct = insert_val(structType, llvmStruct, v.value(), v.index());
   }
   return llvmStruct;
-}
-
-static Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
-                      ConversionPatternRewriter &rewriter) {
-  assert(axis >= 0);
-  assert(axis < 3);
-  assert(moduleOp);
-
-  // It is not easy to get the compute capability here, so we use numCTAs to
-  // decide the semantic of GetProgramIdOp. If numCTAs = 1, then
-  // GetProgramIdOp is converted to "%ctaid", otherwise it is converted to
-  // "%clusterid".
-  int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
-
-  std::string sreg = numCTAs == 1 ? "%ctaid." : "%clusterid.";
-  sreg.append(1, 'x' + axis); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
-  return LLVM::getSRegValue(rewriter, loc, sreg);
 }
 
 } // namespace mlir

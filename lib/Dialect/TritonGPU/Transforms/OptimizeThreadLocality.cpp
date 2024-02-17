@@ -38,7 +38,7 @@ struct OptimizeReshapeLayoutPattern
     }
     if (!reductionAxis)
       return failure();
-    auto tensorType = viewOp.getResult().getType().cast<RankedTensorType>();
+    RankedTensorType tensorType = viewOp.getType();
     if (auto blocked = tensorType.getEncoding()
                            .dyn_cast<triton::gpu::BlockedEncodingAttr>()) {
       // If the layout already has all the elements along the reduction

@@ -1,4 +1,4 @@
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
+#include "TritonAMDGPUToLLVM/Passes.h"
 
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
@@ -27,7 +27,6 @@
 #endif
 #include "triton/Tools/Sys/GetPlatform.hpp"
 
-#include "BarrierOpToLLVM.h"
 // #include "ClusterOpsToLLVM.h"
 #include "ConvertLayoutOpToLLVM.h"
 #include "DotOpToLLVM.h"
@@ -46,17 +45,17 @@
 
 namespace mlir {
 namespace triton {
-#define GEN_PASS_DEF_CONVERTTRITONGPUTOLLVM
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
+#define GEN_PASS_DEF_CONVERTTRITONAMDGPUTOLLVM
+#include "TritonAMDGPUToLLVM/Passes.h.inc"
 } // namespace triton
 } // namespace mlir
 
 using namespace mlir;
 using namespace mlir::triton;
 namespace ttng = mlir::triton::nvidia_gpu;
-using ::AMD::TritonGPUToLLVMTypeConverter;
-using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
 using ::AMD::ConvertTritonGPUOpToLLVMPattern;
+using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
+using ::AMD::TritonGPUToLLVMTypeConverter;
 
 namespace {
 
@@ -342,18 +341,19 @@ public:
   }
 };
 
-struct ConvertTritonGPUToLLVM
-    : public triton::impl::ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
-  using ConvertTritonGPUToLLVMBase<
-      ConvertTritonGPUToLLVM>::ConvertTritonGPUToLLVMBase;
+struct ConvertTritonAMDGPUToLLVM
+    : public triton::impl::ConvertTritonAMDGPUToLLVMBase<
+          ConvertTritonAMDGPUToLLVM> {
+  using ConvertTritonAMDGPUToLLVMBase<
+      ConvertTritonAMDGPUToLLVM>::ConvertTritonAMDGPUToLLVMBase;
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<triton::nvgpu::NVGPUDialect, LLVM::LLVMDialect,
                     NVVM::NVVMDialect>();
   }
 
-  ConvertTritonGPUToLLVM(int32_t computeCapability, Target target)
-      : ConvertTritonGPUToLLVMBase({computeCapability, target}) {}
+  ConvertTritonAMDGPUToLLVM(int32_t computeCapability, Target target)
+      : ConvertTritonAMDGPUToLLVMBase({computeCapability, target}) {}
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -431,8 +431,6 @@ struct ConvertTritonGPUToLLVM
     // currently implemented via inline asm, and thus cannot be CSEed.
     // clusterCTAId will be emitted only when numCTAs is larger than 1, and
     // other values will be DCEed if not used hereafter.
-    bool isWarpSpecialization =
-        ttng::TritonNvidiaGPUDialect::getWSSupportedAttr(mod);
     OpBuilder::InsertPoint indexInsertPoint;
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo indexCacheInfo{
         &baseIndexCache, &indexCache, &indexInsertPoint};
@@ -443,12 +441,15 @@ struct ConvertTritonGPUToLLVM
 
     // {
     //   RewritePatternSet patterns(context);
-    //   populateTritonGPUToLLVMPatterns(typeConverter, patterns, numWarps, axisInfoAnalysis, allocation, indexCacheInfo, 10);
-    //   mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
-    //   mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
+    //   populateTritonGPUToLLVMPatterns(typeConverter, patterns, numWarps,
+    //   axisInfoAnalysis, allocation, indexCacheInfo, 10);
+    //   mlir::arith::populateArithToLLVMConversionPatterns(typeConverter,
+    //   patterns); mlir::populateGpuToROCDLConversionPatterns(typeConverter,
+    //   patterns,
     //                                              mlir::gpu::amd::HIP);
     //   populatePatterns3(populateLoadStoreOpToLLVMPatterns);
-    //   if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))){
+    //   if (failed(applyPartialConversion(mod, convTarget,
+    //   std::move(patterns)))){
     //     llvm::outs() << "fail1!\n";
     //     return signalPassFailure();
     //   }
@@ -485,7 +486,6 @@ struct ConvertTritonGPUToLLVM
     populatePatterns4(AMD::populateReduceOpToLLVMPatterns);
     populatePatterns1(AMD::populateScanOpToLLVMPatterns);
     populatePatterns2(AMD::populateViewOpToLLVMPatterns);
-    populatePatterns2(AMD::populateBarrierOpToLLVMPatterns);
 
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
@@ -506,7 +506,7 @@ struct ConvertTritonGPUToLLVM
 
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
-    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))){
+    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {
       return signalPassFailure();
     }
 
@@ -565,10 +565,9 @@ private:
       if (!getElementTypeOrSelf(cvtOp)
                .isa<mlir::Float8E4M3B11FNUZType, mlir::Float8E4M3FNType>())
         return;
-      auto shape = cvtOp.getType().cast<RankedTensorType>().getShape();
-      auto argEncoding =
-          cvtOp.getOperand().getType().cast<RankedTensorType>().getEncoding();
-      auto cvtEncoding = cvtOp.getType().cast<RankedTensorType>().getEncoding();
+      auto shape = cvtOp.getType().getShape();
+      auto argEncoding = cvtOp.getSrc().getType().getEncoding();
+      auto cvtEncoding = cvtOp.getType().getEncoding();
       if (argEncoding.isa<triton::gpu::DotOperandEncodingAttr>() ||
           cvtEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
         return;
@@ -577,7 +576,7 @@ private:
       auto newArgType = RankedTensorType::get(shape, F16Ty, argEncoding);
       auto newCvtType = RankedTensorType::get(shape, F16Ty, cvtEncoding);
       auto newArg = builder.create<mlir::triton::FpToFpOp>(
-          cvtOp.getLoc(), newArgType, cvtOp.getOperand());
+          cvtOp.getLoc(), newArgType, cvtOp.getSrc());
       addWSNamedAttrs(newArg, cvtOp->getAttrs());
       auto newCvt = builder.create<mlir::triton::gpu::ConvertLayoutOp>(
           cvtOp.getLoc(), newCvtType, newArg);
@@ -596,7 +595,7 @@ private:
                                     int threadsPerWarp, int numCTAs) const {
     // Replace `splat -> shared` with `splat -> blocked -> shared`.
     mod.walk([&](triton::SplatOp splatOp) -> void {
-      auto dstType = splatOp.getType().cast<RankedTensorType>();
+      auto dstType = splatOp.getType();
       auto shared =
           dstType.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
       if (shared) {
@@ -608,7 +607,7 @@ private:
                 mod.getContext(), dstType.getShape(), sizePerThread,
                 getOrder(shared), numWarps, threadsPerWarp, numCTAs));
         auto newSplat = builder.create<triton::SplatOp>(
-            splatOp.getLoc(), newType, splatOp.getOperand());
+            splatOp.getLoc(), newType, splatOp.getSrc());
         auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
             splatOp.getLoc(), dstType, newSplat.getResult());
         splatOp.replaceAllUsesWith(newConvert.getResult());
@@ -624,8 +623,8 @@ private:
     // unless certain conditions are met
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
-      auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
-      auto dstType = cvtOp.getType().cast<RankedTensorType>();
+      auto srcType = cvtOp.getSrc().getType();
+      auto dstType = cvtOp.getType();
       auto srcMfma =
           srcType.getEncoding().dyn_cast<triton::gpu::MfmaEncodingAttr>();
       auto dstDotOp =
@@ -638,7 +637,7 @@ private:
                 mod.getContext(), srcType.getShape(), getSizePerThread(srcMfma),
                 getOrder(srcMfma), numWarps, threadsPerWarp, numCTAs));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
-            cvtOp.getLoc(), tmpType, cvtOp.getOperand());
+            cvtOp.getLoc(), tmpType, cvtOp.getSrc());
         auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), dstType, tmp);
         cvtOp.replaceAllUsesWith(newConvert.getResult());
@@ -653,7 +652,7 @@ private:
     auto smemShape = getScratchConfigForCvtLayout(cvtOp, inVec, outVec);
     unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
                                      std::multiplies{});
-    auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
+    auto srcType = cvtOp.getSrc().getType();
     auto bytes =
         srcType.getElementType().isa<triton::PointerType>()
             ? elems * kPtrBitWidth / 8
@@ -684,8 +683,8 @@ private:
                       std::pair<unsigned, unsigned> warpsPerCta) const {
     unsigned warpsPerCtaX = warpsPerCta.first;
     unsigned warpsPerCtaY = warpsPerCta.second;
-    auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
-    auto dstType = cvtOp.getType().cast<RankedTensorType>();
+    auto srcType = cvtOp.getSrc().getType();
+    auto dstType = cvtOp.getType();
 
     auto srcMfma =
         srcType.getEncoding().dyn_cast<triton::gpu::MfmaEncodingAttr>();
@@ -699,7 +698,7 @@ private:
         srcType.getShape(), srcType.getElementType(), newMfmaEnc);
 
     auto tmpCvt = builder.create<triton::gpu::ConvertLayoutOp>(
-        cvtOp.getLoc(), newSrcType, cvtOp.getOperand());
+        cvtOp.getLoc(), newSrcType, cvtOp.getSrc());
     auto newEpilogueCvt = builder.create<triton::gpu::ConvertLayoutOp>(
         cvtOp.getLoc(), newDstType, tmpCvt);
 
@@ -728,8 +727,8 @@ private:
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
 
-      auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
-      auto dstType = cvtOp.getType().cast<RankedTensorType>();
+      auto srcType = cvtOp.getSrc().getType();
+      auto dstType = cvtOp.getType();
 
       auto srcMfma =
           srcType.getEncoding().dyn_cast<triton::gpu::MfmaEncodingAttr>();
@@ -799,8 +798,8 @@ private:
     // unless certain conditions are met
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
-      auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
-      auto dstType = cvtOp.getType().cast<RankedTensorType>();
+      auto srcType = cvtOp.getSrc().getType();
+      auto dstType = cvtOp.getType();
       auto srcMma =
           srcType.getEncoding().dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>();
       auto dstDotOp =
@@ -812,7 +811,7 @@ private:
                 mod.getContext(), srcType.getShape(), getSizePerThread(srcMma),
                 getOrder(srcMma), numWarps, threadsPerWarp, numCTAs));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
-            cvtOp.getLoc(), tmpType, cvtOp.getOperand());
+            cvtOp.getLoc(), tmpType, cvtOp.getSrc());
         addWSNamedAttrs(tmp, cvtOp->getAttrs());
         auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), dstType, tmp);
@@ -828,8 +827,8 @@ private:
     // because the codegen doesn't handle `blocked -> dot_op` directly
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
-      auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
-      auto dstType = cvtOp.getType().cast<RankedTensorType>();
+      auto srcType = cvtOp.getSrc().getType();
+      auto dstType = cvtOp.getType();
       auto srcBlocked =
           srcType.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
       auto dstDotOp =
@@ -842,7 +841,7 @@ private:
                 srcBlocked.getOrder(), srcBlocked.getCTALayout(),
                 srcType.getElementType()));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
-            cvtOp.getLoc(), tmpType, cvtOp.getOperand());
+            cvtOp.getLoc(), tmpType, cvtOp.getSrc());
         addWSNamedAttrs(tmp, cvtOp->getAttrs());
         auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), dstType, tmp);
@@ -882,8 +881,8 @@ private:
       auto src = insertSliceAsyncOp.getSrc();
       auto dst = insertSliceAsyncOp.getDst();
       auto mask = insertSliceAsyncOp.getMask();
-      auto srcTy = src.getType().cast<RankedTensorType>();
-      auto dstTy = dst.getType().cast<RankedTensorType>();
+      auto srcTy = src.getType();
+      auto dstTy = dst.getType();
       auto srcBlocked =
           srcTy.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
       auto resSharedLayout =
@@ -988,15 +987,12 @@ private:
   // supported.
   void decomposeMixedModeDotOp(ModuleOp mod) const {
     mod.walk([](triton::DotOp dotOp) -> void {
-      Value D = dotOp.getResult();
+      auto D = dotOp.getD();
       OpBuilder builder(dotOp);
-      Type AElType =
-          dotOp.getA().getType().cast<RankedTensorType>().getElementType();
+      Type AElType = dotOp.getA().getType().getElementType();
       Type promoteType;
-      NvidiaMmaEncodingAttr mmaLayout = D.getType()
-                                            .cast<RankedTensorType>()
-                                            .getEncoding()
-                                            .dyn_cast<NvidiaMmaEncodingAttr>();
+      NvidiaMmaEncodingAttr mmaLayout =
+          D.getType().getEncoding().dyn_cast<NvidiaMmaEncodingAttr>();
       if (mmaLayout) {
         bool isNativeHopperFP8 =
             AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
@@ -1007,12 +1003,8 @@ private:
         promoteType = builder.getF16Type();
 #ifdef USE_ROCM
       } else if (MfmaEncodingAttr mfmaLayout =
-                     D.getType()
-                         .cast<RankedTensorType>()
-                         .getEncoding()
-                         .dyn_cast<MfmaEncodingAttr>()) {
-        Type BElType =
-            dotOp.getB().getType().cast<RankedTensorType>().getElementType();
+                     D.getType().getEncoding().dyn_cast<MfmaEncodingAttr>()) {
+        Type BElType = dotOp.getB().getType().getElementType();
 
         auto maxBitWidth = std::max(AElType.getIntOrFloatBitWidth(),
                                     BElType.getIntOrFloatBitWidth());
@@ -1031,9 +1023,8 @@ private:
 #endif
       } else {
         // FMA case.
-        Type AElType =
-            dotOp.getA().getType().cast<RankedTensorType>().getElementType();
-        Type DElType = D.getType().cast<RankedTensorType>().getElementType();
+        Type AElType = dotOp.getA().getType().getElementType();
+        Type DElType = D.getType().getElementType();
         if (AElType == DElType)
           return;
         promoteType = DElType;
@@ -1053,7 +1044,7 @@ namespace mlir {
 namespace triton {
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonAMDGPUToLLVMPass() {
-  return std::make_unique<ConvertTritonGPUToLLVM>(90, triton::ROCDL);
+  return std::make_unique<ConvertTritonAMDGPUToLLVM>(90, triton::ROCDL);
 }
 
 } // namespace triton

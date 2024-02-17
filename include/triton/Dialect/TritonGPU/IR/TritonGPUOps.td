@@ -40,7 +40,7 @@ def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
 
   let hasCanonicalizer = 1;
 
-  let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
+  let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 }
 
 def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
@@ -112,7 +112,7 @@ def TTG_ExtractSliceOp : TTG_Op<"extract_slice",
   }];
 
   let arguments = (ins
-    AnyRankedTensor:$source,
+    AnyRankedTensor:$src,
     Variadic<I32>:$offsets,
     Variadic<I32>:$sizes,
     Variadic<I32>:$strides,
@@ -125,7 +125,7 @@ def TTG_ExtractSliceOp : TTG_Op<"extract_slice",
   let builders = [
     // Build an ExtractSliceOp with mixed static and dynamic entries and custom
     // result type. If the type passed is nullptr, it is inferred.
-    OpBuilder<(ins "RankedTensorType":$resultType, "Value":$source,
+    OpBuilder<(ins "RankedTensorType":$resultType, "Value":$src,
       "ArrayRef<OpFoldResult>":$offsets, "ArrayRef<OpFoldResult>":$sizes,
       "ArrayRef<OpFoldResult>":$strides,
       CArg<"ArrayRef<NamedAttribute>", "{}">:$attrs)>,
@@ -136,23 +136,18 @@ def TTG_ExtractSliceOp : TTG_Op<"extract_slice",
     /// and `strides` operands.
     static unsigned getOffsetSizeAndStrideStartOperandIndex() { return 1; }
 
-    /// Returns the type of the base tensor operand.
-    RankedTensorType getSourceType() {
-      return getSource().getType().cast<RankedTensorType>();
-    }
-
     std::array<unsigned, 3> getArrayAttrMaxRanks() {
-      unsigned rank = getSourceType().getRank();
+      unsigned rank = getSrc().getType().getRank();
       return {rank, rank, rank};
     }
   }];
 
   let assemblyFormat = [{
-    $source ``
+    $src ``
     custom<DynamicIndexList>($offsets, $static_offsets)
     custom<DynamicIndexList>($sizes, $static_sizes)
     custom<DynamicIndexList>($strides, $static_strides)
-    attr-dict `:` type($source) `to` type($result)
+    attr-dict `:` type($src) `to` type($result)
   }];
 }
 
@@ -173,7 +168,7 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
 
   let description = [{
       This operation inserts a tensor `$src` into another tensor `$dst` as specified by the operation’s
-      `$index` argument and `$axis` attribute.
+      `$index` argument and `$axis` attributes.
 
       It returns a copy of `$dst` with the proper slice updated asynchronously with the value of `$src`.
       This operation is non-blocking, and `$results` will have the updated value after the corresponding async_wait.
@@ -208,7 +203,7 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
       ```
   }];
 
-  let arguments = (ins TT_PtrLike:$src, TT_Tensor:$dst, I32:$index,
+  let arguments = (ins TT_PtrTensor:$src, TT_Tensor:$dst, I32:$index,
                        Optional<I1Tensor>:$mask, Optional<TT_Type>:$other,
                        TT_CacheModifierAttr:$cache, TT_EvictionPolicyAttr:$evict,
                        BoolAttr:$isVolatile, I32Attr:$axis);
@@ -270,9 +265,9 @@ def TTG_DeallocTensorOp : TTG_Op<"dealloc_tensor", [MemoryEffects<[MemFree<Share
     The contents of the tensor are supposed to be in shared memory.
   }];
 
-  let arguments = (ins TT_Tensor:$src);
+  let arguments = (ins TT_Tensor:$ptr);
 
-  let assemblyFormat = [{$src attr-dict `:` type($src)}];
+  let assemblyFormat = [{$ptr attr-dict `:` type($ptr)}];
 }
 
 #endif

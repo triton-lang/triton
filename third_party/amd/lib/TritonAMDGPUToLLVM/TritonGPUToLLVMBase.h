@@ -21,13 +21,11 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::delinearize;
-using ::mlir::LLVM::SharedMemoryObject;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::MfmaEncodingAttr;
+using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 namespace ttng = ::mlir::triton::nvidia_gpu;
 
@@ -173,7 +171,7 @@ class ReduceOp;
 class ScanOp;
 } // namespace mlir::triton
 
-namespace AMD{
+namespace AMD {
 class ConvertTritonGPUOpToLLVMPatternBase {
 public:
   // Two levels of value cache in emitting indices calculation:
@@ -232,15 +230,10 @@ public:
     return rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
   }
 
-  // Returns CTA level thread idx for not ws mode.
-  // Returns agent level thread idx for ws mode.
+  // Returns CTA level thread idx.
   Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) const {
     Value tid = getThreadIdInCTA(rewriter, loc);
     auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    if (ttng::TritonNvidiaGPUDialect::getWSSupportedAttr(mod)) {
-      Value _128 = rewriter.create<arith::ConstantIntOp>(loc, 128, 32);
-      tid = rewriter.create<arith::RemSIOp>(loc, tid, _128);
-    }
     return tid;
   }
 
@@ -445,7 +438,7 @@ public:
                           ConversionPatternRewriter &rewriter) const {
     auto dstTy = dst.getType().cast<RankedTensorType>();
     auto dstShape = dstTy.getShape();
-    assert(dstShape.size() == 2 &&
+    assert(dstShape.size() <= 2 &&
            "Unexpected rank of loadSharedToDistributed");
     auto srcTy = src.getType().cast<RankedTensorType>();
     auto dstDistributedLayout = dstTy.getEncoding();
@@ -467,7 +460,7 @@ public:
     unsigned inVec = srcSharedLayout.getVec();
     unsigned minVec = std::min(outVec, inVec);
     unsigned outElems = triton::gpu::getTotalElemsPerThread(dstTy);
-    SmallVector<Value> offsetVals = {i32_val(0), i32_val(0)};
+    SmallVector<Value> offsetVals(smemObj.strides.size(), i32_val(0));
     assert(outElems == dstIndices.size());
 
     DenseMap<unsigned, Value> sharedPtrs =
@@ -709,8 +702,7 @@ public:
                                                           mmaLayout, type);
       } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
         result = emitBaseIndexForMfmaLayout(loc, rewriter, mfmaLayout, type);
-      } 
-      else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+      } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
         auto parentLayout = sliceLayout.getParent();
         auto parentShape = sliceLayout.paddedShape(type.getShape());
         RankedTensorType parentTy = RankedTensorType::get(
@@ -808,10 +800,9 @@ public:
         result =
             emitIndicesForDistributedLayout(loc, b, mma, type, withCTAOffset);
       } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
-        result =
-            emitIndicesForDistributedLayout(loc, b, mfmaLayout, type, withCTAOffset);
-      } 
-      else if (auto slice = layout.dyn_cast<SliceEncodingAttr>()) {
+        result = emitIndicesForDistributedLayout(loc, b, mfmaLayout, type,
+                                                 withCTAOffset);
+      } else if (auto slice = layout.dyn_cast<SliceEncodingAttr>()) {
         result =
             emitIndicesForDistributedLayout(loc, b, slice, type, withCTAOffset);
       } else {
@@ -1158,7 +1149,7 @@ private:
     return ret;
   }
 
-    SmallVector<Value>
+  SmallVector<Value>
   emitBaseIndexForMfmaLayout(Location loc, ConversionPatternRewriter &rewriter,
                              const MfmaEncodingAttr &mfmaLayout,
                              RankedTensorType type) const {
@@ -1366,5 +1357,5 @@ public:
     return smemBases;
   }
 };
-}
+} // namespace AMD
 #endif

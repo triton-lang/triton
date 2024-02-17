@@ -28,8 +28,8 @@ tt.func public @reshape_different_num_elements(%arg0: tensor<32x128xf16>) {
 
 // expected-note @+1 {{prior use}}
 tt.func public @fn(%arg0: tensor<32xf32>, %arg1: tensor<33xf32>) {
-    // expected-error @+1 {{different type}}
-    %a = tt.experimental_interleave %arg0, %arg1 : tensor<32xf32> -> tensor<64xf32>
+    // expected-error @+1 {{expects different type}}
+    %a = tt.experimental_join %arg0, %arg1 : tensor<32xf32> -> tensor<32x2xf32>
     tt.return
 }
 
@@ -37,40 +37,42 @@ tt.func public @fn(%arg0: tensor<32xf32>, %arg1: tensor<33xf32>) {
 
 // expected-note @+1 {{prior use}}
 tt.func public @fn(%arg0: tensor<32x32xf32>, %arg1: tensor<32x32xf16>) {
-    // expected-error @+1 {{different type}}
-    %a = tt.experimental_interleave %arg0, %arg1 : tensor<32x32xf32> -> tensor<64x64xf32>
+    // expected-error @+1 {{expects different type}}
+    %a = tt.experimental_join %arg0, %arg1 : tensor<32x32xf32> -> tensor<32x32x2xf32>
     tt.return
 }
 
 // -----
 
 tt.func public @fn(%arg0: tensor<32xf32>, %arg1: tensor<32xf32>) {
-    // expected-error @+1 {{last dimension}}
-    %a = tt.experimental_interleave %arg0, %arg1 : tensor<32xf32> -> tensor<128xf32>
+    // expected-error @+2 {{op failed to infer returned types}}
+    // expected-error @+1 {{incompatible with return type}}
+    %a = tt.experimental_join %arg0, %arg1 : tensor<32xf32> -> tensor<64xf32>
     tt.return
 }
 
 // -----
 
 tt.func public @fn(%arg0: tensor<32x32xf32>, %arg1: tensor<32x32xf32>) {
-    // expected-error @+1 {{shape}}
-    %a = tt.experimental_interleave %arg0, %arg1 : tensor<32x32xf32> -> tensor<64x64xf32>
+    // expected-error @+2 {{op failed to infer returned types}}
+    // expected-error @+1 {{incompatible with return type}}
+    %a = tt.experimental_join %arg0, %arg1 : tensor<32x32xf32> -> tensor<32x64xf32>
     tt.return
 }
 
 // -----
 
+// This one is OK
 tt.func public @fn(%arg0: tensor<f32>, %arg1: tensor<f32>) {
-    // expected-error @+1 {{at least 1D}}
-    %a = tt.experimental_interleave %arg0, %arg1 : tensor<f32> -> tensor<f32>
+    %a = tt.experimental_join %arg0, %arg1 : tensor<f32> -> tensor<2xf32>
     tt.return
 }
 
 // -----
 
 tt.func public @fn(%arg0: f32, %arg1: f32) {
-    // expected-error @+1 {{tensor}}
-    %a = tt.experimental_interleave %arg0, %arg1 : f32 -> f32
+    // expected-error @+1 {{kind of type}}
+    %a = tt.experimental_join %arg0, %arg1 : f32 -> tensor<2xf32>
     tt.return
 }
 
@@ -79,8 +81,9 @@ tt.func public @fn(%arg0: f32, %arg1: f32) {
 #blocked = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: tensor<32xf32, #blocked>) {
-    // expected-error @+1 {{encoding}}
-    %a = tt.experimental_interleave %arg0, %arg0 : tensor<32xf32, #blocked> -> tensor<64xf32>
+    // expected-error @+2 {{op failed to infer returned types}}
+    // expected-error @+1 {{incompatible with return type}}
+    %a = tt.experimental_join %arg0, %arg0 : tensor<32xf32, #blocked> -> tensor<32x2xf32>
     tt.return
 }
 }  // end module
@@ -90,8 +93,9 @@ tt.func public @fn(%arg0: tensor<32xf32, #blocked>) {
 #shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: tensor<32xf32>) {
-    // expected-error @+1 {{encoding}}
-    %a = tt.experimental_interleave %arg0, %arg0 : tensor<32xf32> -> tensor<64xf32, #shared>
+    // expected-error @+2 {{op failed to infer returned types}}
+    // expected-error @+1 {{incompatible with return type}}
+    %a = tt.experimental_join %arg0, %arg0 : tensor<32xf32> -> tensor<32x2xf32, #shared>
     tt.return
 }
 }  // end module
@@ -99,22 +103,12 @@ tt.func public @fn(%arg0: tensor<32xf32>) {
 // -----
 
 #shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#blocked = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+#blocked = #triton_gpu.blocked<{sizePerThread = [1,2], threadsPerWarp = [32,1], warpsPerCTA = [1,1], order = [1,0]}>
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: tensor<32xf32, #shared>) {
-    // expected-error @+1 {{encoding}}
-    %a = tt.experimental_interleave %arg0, %arg0 : tensor<32xf32, #shared> -> tensor<64xf32, #blocked>
-    tt.return
-}
-}  // end module
-
-// -----
-
-#blocked = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
-module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
-tt.func public @fn(%arg0: tensor<32xf32, #blocked>) {
-    // expected-error @+1 {{encoding}}
-    %a = tt.experimental_interleave %arg0, %arg0 : tensor<32xf32, #blocked> -> tensor<64xf32, #blocked>
+    // expected-error @+2 {{can only operate on BlockedEncoding}}
+    // expected-error @+1 {{op failed to infer returned types}}
+    %a = tt.experimental_join %arg0, %arg0 : tensor<32xf32, #shared> -> tensor<32x2xf32, #blocked>
     tt.return
 }
 }  // end module
@@ -122,12 +116,90 @@ tt.func public @fn(%arg0: tensor<32xf32, #blocked>) {
 // -----
 
 // Bad order; should be [1,0]
-#blocked  = #triton_gpu.blocked<{sizePerThread = [1,1], threadsPerWarp = [1,32], warpsPerCTA = [1,1], order = [0,1], CTAsPerCGA = [1,1], CTASplitNum = [1,1], CTAOrder = [0,1]}>
-#blocked1 = #triton_gpu.blocked<{sizePerThread = [1,2], threadsPerWarp = [1,32], warpsPerCTA = [1,1], order = [0,1], CTAsPerCGA = [1,1], CTASplitNum = [1,1], CTAOrder = [0,1]}>
+#blocked  = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1,2], threadsPerWarp = [32,1], warpsPerCTA = [1,1], order = [0,1]}>
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
-tt.func public @fn(%arg0: tensor<32x32xf32, #blocked>) {
-    // expected-error @+1 {{order}}
-    %a = tt.experimental_interleave %arg0, %arg0 : tensor<32x32xf32, #blocked> -> tensor<32x64xf32, #blocked1>
+tt.func public @fn(%arg0: tensor<32xf32, #blocked>) {
+    // expected-error @+2 {{order}}
+    // expected-error @+1 {{op failed to infer returned types}}
+    %a = tt.experimental_join %arg0, %arg0 : tensor<32xf32, #blocked> -> tensor<32x2xf32, #blocked1>
+    tt.return
+}
+}  // end module
+
+// -----
+
+tt.func public @fn(%arg0: tensor<32xf32>) {
+    // expected-error @+2 {{last dimension}}
+    // expected-error @+1 {{op failed to infer returned types}}
+    %a, %b = tt.experimental_split %arg0 : tensor<32xf32> -> tensor<16xf32>
+    tt.return
+}
+
+// -----
+
+tt.func public @fn(%arg0: tensor<32x2xf32>) {
+    // expected-error @+2 {{op inferred type}}
+    // expected-error @+1 {{op failed to infer returned types}}
+    %a, %b = tt.experimental_split %arg0 : tensor<32x2xf32> -> tensor<32xf16>
+    tt.return
+}
+
+// -----
+
+tt.func public @fn(%arg0: f32) {
+    // expected-error @+1 {{invalid kind of type}}
+    %a, %b = tt.experimental_split %arg0 : f32 -> f16
+    tt.return
+}
+// -----
+
+tt.func public @fn(%arg0: tensor<2xf32>) {
+    %a, %b = tt.experimental_split %arg0 : tensor<2xf32> -> tensor<f32> // OK
+    tt.return
+}
+
+// -----
+
+// Bad order; should start with 2.
+#blocked  = #triton_gpu.blocked<{sizePerThread = [1,1,2], threadsPerWarp = [1,32,1], warpsPerCTA = [1,1,1], order = [1,2,0]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1,1], threadsPerWarp = [1,32], warpsPerCTA = [1,1], order = [1,0]}>
+
+module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+tt.func public @fn(%arg0: tensor<2x2x2xf32, #blocked>) {
+    // expected-error @+2 {{last dimension}}
+    // expected-error @+1 {{op failed to infer returned types}}
+    %a, %b = tt.experimental_split %arg0 : tensor<2x2x2xf32, #blocked> -> tensor<2x2xf32, #blocked1>
+    tt.return
+}
+}  // end module
+
+// -----
+
+#blocked  = #triton_gpu.blocked<{sizePerThread = [1,1,2], threadsPerWarp = [1,32,1], warpsPerCTA = [1,1,1], order = [2,0,1]}>
+// Bad order, should be [1,0].
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1,1], threadsPerWarp = [1,32], warpsPerCTA = [1,1], order = [1,0]}>
+
+module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+tt.func public @fn(%arg0: tensor<2x2x2xf32, #blocked>) {
+    // expected-error @+2 {{op inferred type}}
+    // expected-error @+1 {{op failed to infer returned types}}
+    %a, %b = tt.experimental_split %arg0 : tensor<2x2x2xf32, #blocked> -> tensor<2x2xf32, #blocked1>
+    tt.return
+}
+}  // end module
+
+// -----
+
+#blocked  = #triton_gpu.blocked<{sizePerThread = [1,1,2], threadsPerWarp = [1,32,1], warpsPerCTA = [1,1,1], order = [2,0,1]}>
+// bad sizePerThread; should be [1,1].
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1,2], threadsPerWarp = [1,32], warpsPerCTA = [1,1], order = [0,1]}>
+
+module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+tt.func public @fn(%arg0: tensor<2x2x2xf32, #blocked>) {
+    // expected-error @+2 {{op inferred type}}
+    // expected-error @+1 {{op failed to infer returned types}}
+    %a, %b = tt.experimental_split %arg0 : tensor<2x2x2xf32, #blocked> -> tensor<2x2xf32, #blocked1>
     tt.return
 }
 }  // end module
@@ -137,8 +209,8 @@ tt.func public @fn(%arg0: tensor<32x32xf32, #blocked>) {
 // Valid ops.
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: tensor<16x32x64xf32>) {
-    %a = tt.trans %arg0 {order = array<i32: 0, 1, 2>} : (tensor<16x32x64xf32>) -> tensor<16x32x64xf32>
-    %b = tt.trans %arg0 {order = array<i32: 1, 0, 2>} : (tensor<16x32x64xf32>) -> tensor<32x16x64xf32>
+    %a = tt.trans %arg0 {order = array<i32: 0, 1, 2>} : tensor<16x32x64xf32> -> tensor<16x32x64xf32>
+    %b = tt.trans %arg0 {order = array<i32: 1, 0, 2>} : tensor<16x32x64xf32> -> tensor<32x16x64xf32>
     tt.return
 }
 }  // end module
@@ -152,8 +224,8 @@ tt.func public @fn(%arg0: tensor<16x32x64xf32>) {
 #blocked3 = #triton_gpu.blocked<{sizePerThread = [2,1,4], threadsPerWarp = [4,2,4], warpsPerCTA = [4,2,8], order = [1,0,2], CTAsPerCGA = [2,1,4], CTASplitNum = [2,1,4], CTAOrder = [1,0,2]}>
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 8 : i32, "triton_gpu.num-warps" = 64 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: tensor<2x4x8x16xf32, #blocked>, %arg1: tensor<16x32x64xf32, #blocked2>) {
-    %a = tt.trans %arg0 {order = array<i32: 1, 3, 2, 0>} : (tensor<2x4x8x16xf32, #blocked>) -> tensor<4x16x8x2xf32, #blocked1>
-    %b = tt.trans %arg1 {order = array<i32: 1, 0, 2>} : (tensor<16x32x64xf32, #blocked2>) -> tensor<32x16x64xf32, #blocked3>
+    %a = tt.trans %arg0 {order = array<i32: 1, 3, 2, 0>} : tensor<2x4x8x16xf32, #blocked> -> tensor<4x16x8x2xf32, #blocked1>
+    %b = tt.trans %arg1 {order = array<i32: 1, 0, 2>} : tensor<16x32x64xf32, #blocked2> -> tensor<32x16x64xf32, #blocked3>
     tt.return
 }
 }  // end module
@@ -167,8 +239,8 @@ tt.func public @fn(%arg0: tensor<2x4x8x16xf32, #blocked>, %arg1: tensor<16x32x64
 #shared3 = #triton_gpu.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [0, 1], CTAsPerCGA = [2, 1], CTASplitNum = [4, 2], CTAOrder = [1, 0], hasLeadingOffset = true}>
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 8 : i32, "triton_gpu.num-warps" = 64 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: tensor<2x4x8x16xf32, #shared>, %arg1: tensor<16x32xf32, #shared2>) {
-    %a = tt.trans %arg0 {order = array<i32: 1, 3, 2, 0>} : (tensor<2x4x8x16xf32, #shared>) -> tensor<4x16x8x2xf32, #shared1>
-    %b = tt.trans %arg1 {order = array<i32: 1, 0>} : (tensor<16x32xf32, #shared2>) -> tensor<32x16xf32, #shared3>
+    %a = tt.trans %arg0 {order = array<i32: 1, 3, 2, 0>} : tensor<2x4x8x16xf32, #shared> -> tensor<4x16x8x2xf32, #shared1>
+    %b = tt.trans %arg1 {order = array<i32: 1, 0>} : tensor<16x32xf32, #shared2> -> tensor<32x16xf32, #shared3>
     tt.return
 }
 }  // end module
@@ -181,7 +253,7 @@ tt.func public @fn(%arg0: tensor<2x4x8x16xf32, #shared>, %arg1: tensor<16x32xf32
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 8 : i32, "triton_gpu.num-warps" = 64 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: tensor<16x32x64xf32, #blocked>) {
     // expected-error @+1 {{type}}
-    %a = tt.trans %arg0 {order = array<i32: 1, 0, 2>} : (tensor<16x32x64xf32, #blocked>) -> tensor<32x16x64xf32, #blocked1>
+    %a = tt.trans %arg0 {order = array<i32: 1, 0, 2>} : tensor<16x32x64xf32, #blocked> -> tensor<32x16x64xf32, #blocked1>
     tt.return
 }
 }  // end module
@@ -194,7 +266,7 @@ tt.func public @fn(%arg0: tensor<16x32x64xf32, #blocked>) {
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 8 : i32, "triton_gpu.num-warps" = 64 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: tensor<16x32x64xf32, #shared>) {
     // expected-error @+1 {{type}}
-    %a = tt.trans %arg0 {order = array<i32: 1, 0, 2>} : (tensor<16x32x64xf32, #shared>) -> tensor<32x16x64xf32, #shared1>
+    %a = tt.trans %arg0 {order = array<i32: 1, 0, 2>} : tensor<16x32x64xf32, #shared> -> tensor<32x16x64xf32, #shared1>
     tt.return
 }
 }  // end module
@@ -204,7 +276,7 @@ tt.func public @fn(%arg0: tensor<16x32x64xf32, #shared>) {
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: tensor<16x32xf32>) {
     // expected-error @+1 {{order}}
-    %a = tt.trans %arg0 {order = array<i32: 0>} : (tensor<16x32xf32>) -> tensor<32x16xf32>
+    %a = tt.trans %arg0 {order = array<i32: 0>} : tensor<16x32xf32> -> tensor<32x16xf32>
     tt.return
 }
 }  // end module
@@ -214,7 +286,7 @@ tt.func public @fn(%arg0: tensor<16x32xf32>) {
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: tensor<16x32xf32>) {
     // expected-error @+1 {{order}}
-    %a = tt.trans %arg0 {order = array<i32: 2, 1, 0>} : (tensor<16x32xf32>) -> tensor<32x16xf32>
+    %a = tt.trans %arg0 {order = array<i32: 2, 1, 0>} : tensor<16x32xf32> -> tensor<32x16xf32>
     tt.return
 }
 }  // end module
@@ -224,7 +296,7 @@ tt.func public @fn(%arg0: tensor<16x32xf32>) {
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: tensor<16x32xf32>) {
     // expected-error @+1 {{order must be a permutation}}
-    %a = tt.trans %arg0 {order = array<i32: 0, 0>} : (tensor<16x32xf32>) -> tensor<32x16xf32>
+    %a = tt.trans %arg0 {order = array<i32: 0, 0>} : tensor<16x32xf32> -> tensor<32x16xf32>
     tt.return
 }
 }  // end module

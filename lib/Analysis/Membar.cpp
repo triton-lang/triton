@@ -4,7 +4,6 @@
 
 #include "../lib/Conversion/TritonGPUToLLVM/Utility.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"

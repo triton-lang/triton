@@ -47,7 +47,7 @@ class Prefetcher {
   unsigned prefetchWidth = 32;
 
   /// dots to be prefetched
-  SetVector<Value> dots;
+  SetVector<triton::DotOp> dots;
   /// dot => dot operand
   DenseMap<Value, Value> dot2aLoopArg;
   DenseMap<Value, Value> dot2aHeaderDef;
@@ -172,7 +172,7 @@ LogicalResult Prefetcher::initialize() {
         break;
       rets.push_back(op->getOperand(0));
       if (auto cvt = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(op))
-        if (triton::gpu::hasSharedEncoding(cvt.getOperand())) {
+        if (triton::gpu::hasSharedEncoding(cvt.getSrc())) {
           foundConvertFromShared = true;
           break;
         }
@@ -199,8 +199,8 @@ LogicalResult Prefetcher::initialize() {
   };
 
   for (triton::DotOp dot : dotsInFor) {
-    auto aType = dot.getA().getType().cast<RankedTensorType>();
-    auto bType = dot.getB().getType().cast<RankedTensorType>();
+    auto aType = dot.getA().getType();
+    auto bType = dot.getB().getType();
     auto aEnc = aType.getEncoding().cast<triton::gpu::DotOperandEncodingAttr>();
     auto bEnc = bType.getEncoding().cast<triton::gpu::DotOperandEncodingAttr>();
     int aKWidth = aEnc.getKWidth();
@@ -248,9 +248,8 @@ LogicalResult Prefetcher::initialize() {
 void Prefetcher::emitPrologue() {
   OpBuilder builder(forOp);
 
-  for (Value dot : dots) {
-    Attribute dotEncoding =
-        dot.getType().cast<RankedTensorType>().getEncoding();
+  for (triton::DotOp dot : dots) {
+    Attribute dotEncoding = dot.getType().getEncoding();
     Value aPrefetched =
         generatePrefetch(dot2aHeaderDef[dot], 0, true, dotEncoding, builder);
     cloneElementwiseOps(aPrefetched, dot2aVals[dot], builder);
@@ -258,10 +257,8 @@ void Prefetcher::emitPrologue() {
         generatePrefetch(dot2bHeaderDef[dot], 1, true, dotEncoding, builder);
     cloneElementwiseOps(bPrefetched, dot2bVals[dot], builder);
 
-    operand2headPrefetch[dot.getDefiningOp<triton::DotOp>().getA()] =
-        aPrefetched;
-    operand2headPrefetch[dot.getDefiningOp<triton::DotOp>().getB()] =
-        bPrefetched;
+    operand2headPrefetch[dot.getA()] = aPrefetched;
+    operand2headPrefetch[dot.getB()] = bPrefetched;
   }
 }
 
@@ -271,11 +268,9 @@ scf::ForOp Prefetcher::createNewForOp() {
   SmallVector<Value> loopArgs;
   for (auto v : forOp.getInitArgs())
     loopArgs.push_back(v);
-  for (Value dot : dots) {
-    loopArgs.push_back(
-        operand2headPrefetch[dot.getDefiningOp<triton::DotOp>().getA()]);
-    loopArgs.push_back(
-        operand2headPrefetch[dot.getDefiningOp<triton::DotOp>().getB()]);
+  for (triton::DotOp dot : dots) {
+    loopArgs.push_back(operand2headPrefetch[dot.getA()]);
+    loopArgs.push_back(operand2headPrefetch[dot.getB()]);
   }
 
   auto newForOp = builder.create<scf::ForOp>(
@@ -292,8 +287,7 @@ scf::ForOp Prefetcher::createNewForOp() {
     Operation *newOp = builder.clone(op, mapping);
     auto dot = dyn_cast<triton::DotOp>(&op);
     if (dot && dots.contains(dot)) {
-      Attribute dotEncoding =
-          dot.getType().cast<RankedTensorType>().getEncoding();
+      Attribute dotEncoding = dot.getType().getEncoding();
       // prefetched dot
       Operation *firstDot = builder.clone(*dot, mapping);
       if (Value a = operand2headPrefetch.lookup(dot.getA()))
@@ -305,9 +299,7 @@ scf::ForOp Prefetcher::createNewForOp() {
 
       // remaining part
       int64_t kOff = prefetchWidth;
-      int64_t kRem =
-          dot.getA().getType().cast<RankedTensorType>().getShape()[1] -
-          prefetchWidth;
+      int64_t kRem = dot.getA().getType().getShape()[1] - prefetchWidth;
       Operation *prevDot = firstDot;
       while (kRem != 0) {
         // int64_t kShape = largestPow2(kRem);
@@ -341,9 +333,8 @@ scf::ForOp Prefetcher::createNewForOp() {
   SmallVector<Value> yieldValues;
   for (Value v : forOp.getBody()->getTerminator()->getOperands())
     yieldValues.push_back(mapping.lookupOrDefault(v));
-  for (Value dot : dots) {
-    Attribute dotEncoding =
-        dot.getType().cast<RankedTensorType>().getEncoding();
+  for (triton::DotOp dot : dots) {
+    Attribute dotEncoding = dot.getType().getEncoding();
     Value aToYield = generatePrefetch(mapping.lookup(dot2aYield[dot]), 0, true,
                                       dotEncoding, builder);
     cloneElementwiseOps(aToYield, dot2aVals[dot], builder);

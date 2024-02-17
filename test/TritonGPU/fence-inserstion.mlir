@@ -11,8 +11,8 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
   // CHECK-LABEL: matmul_like_fence
   tt.func public @matmul_like_fence(%arg0: tensor<128x128xf16, #blocked>, %arg1: tensor<128x64xf16, #blocked2>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x64xf32, #mma>
-    %0 = triton_gpu.convert_layout %arg0 : (tensor<128x128xf16, #blocked>) -> tensor<128x128xf16, #shared>
-    %1 = triton_gpu.convert_layout %arg1 : (tensor<128x64xf16, #blocked2>) -> tensor<128x64xf16, #shared1>
+    %0 = triton_gpu.convert_layout %arg0 : tensor<128x128xf16, #blocked> -> tensor<128x128xf16, #shared>
+    %1 = triton_gpu.convert_layout %arg1 : tensor<128x64xf16, #blocked2> -> tensor<128x64xf16, #shared1>
     // CHECK: triton_nvidia_gpu.fence_async_shared
     %2 = tt.dot %0, %1, %cst {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x128xf16, #shared> * tensor<128x64xf16, #shared1> -> tensor<128x64xf32, #mma>
     tt.return

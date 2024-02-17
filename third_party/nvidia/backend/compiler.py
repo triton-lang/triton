@@ -36,7 +36,7 @@ def _path_to_binary(binary: str):
 
 @functools.lru_cache()
 def get_ptxas_version():
-    version = subprocess.check_output([_path_to_binary("ptxas")[0], "--version"])
+    version = subprocess.check_output([_path_to_binary("ptxas")[0], "--version"]).decode("utf-8")
     return version
 
 
@@ -63,7 +63,6 @@ class CUDAOptions:
     num_stages: int = 3
     cluster_dims: tuple = (1, 1, 1)
     ptx_version: int = None
-    optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
     allow_fp8e4nv: bool = False
     max_num_imprecise_acc_default: bool = None
@@ -138,8 +137,6 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_optimize_thread_locality(pm)
         passes.ttgpuir.add_accelerate_matmul(pm, capability)
         passes.ttgpuir.add_remove_layout_conversions(pm)
-        if opt.optimize_epilogue:
-            passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm)
         passes.common.add_cse(pm)
         if capability // 10 >= 8:
@@ -169,10 +166,10 @@ class CUDABackend(BaseBackend):
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        passes.ttgpuir.add_decompose_unsupported_conversions(pm)
+        nvidia.passes.ttgpuir.add_decompose_unsupported_conversions(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
-        passes.ttgpuir.add_allocate_shared_memory(pm)
+        nvidia.passes.ttgpuir.add_allocate_shared_memory(pm)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability)
         nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
         passes.convert.add_arith_to_llvmir(pm)
@@ -278,5 +275,5 @@ class CUDABackend(BaseBackend):
 
     @functools.lru_cache()
     def hash(self):
-        version = subprocess.check_output([_path_to_binary("ptxas")[0], "--version"]).decode("utf-8")
+        version = get_ptxas_version()
         return f'{version}-{self.capability}'

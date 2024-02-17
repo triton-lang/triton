@@ -112,11 +112,10 @@ jobs:
 
       - name: Run interpreter tests
         env:
-          # TRITON_INTERPRET: "1"
-          CUA_VISIBLE_DEVICES: ""
+          TRITON_INTERPRET: "1"
         run: |
           cd python/test/unit
-          python3 -m pytest -vvv -s operators/test_flash_attention.py
+          python3 -m pytest -vvv -n 8 -m interpreter language/test_core.py
 
       - name: Run partial tests on CUDA
         if: ${{ env.BACKEND == 'CUDA' }}

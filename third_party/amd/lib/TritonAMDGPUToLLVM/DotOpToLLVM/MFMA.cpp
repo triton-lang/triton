@@ -23,7 +23,7 @@
 #ifdef USE_ROCM
 
 #include "../DotOpToLLVM.h"
-#include "../Utility.h"
+#include "Utility.h"
 
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 
@@ -32,11 +32,11 @@ using namespace mlir::triton;
 
 namespace {
 
+using ::AMD::TritonGPUToLLVMTypeConverter;
+using ::mlir::LLVM::shflSync;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::MfmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
-using ::AMD::TritonGPUToLLVMTypeConverter;
-using ::mlir::LLVM::AMD::shflSync;
 
 enum class MatrixCoreType : uint8_t {
   // D = AB + C
@@ -50,7 +50,7 @@ enum class MatrixCoreType : uint8_t {
   FP32_FP32_FP32_FP32,
   FP64_FP64_FP64_FP64,
   INT32_INT8_INT8_INT32,
-  INT32_INT8_INT8_INT32_CDNA3,  
+  INT32_INT8_INT8_INT32_CDNA3,
   NOT_APPLICABLE,
 };
 
@@ -315,8 +315,7 @@ struct DotOpMFMAConversionHelper {
     if (reduceSubBlocks) {
       while (subBlockSize < waveSize) {
         for (int i = 0; i < numScalars; ++i) {
-          Value other_acc =
-              shflSync(loc, rewriter, accScalar[i], subBlockSize);
+          Value other_acc = shflSync(loc, rewriter, accScalar[i], subBlockSize);
           if (elemType.isInteger(32))
             accScalar[i] = add(accScalar[i], other_acc);
           else
@@ -383,8 +382,10 @@ struct DotOpMFMAConversionHelper {
     auto bEncoding = bTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
     int kWidth = aEncoding.getKWidth();
 
-    auto repA = mfmaLayout.getMFMARepForOperands(aTensorTy.getShape(), elemTy, kWidth, 0);
-    auto repB = mfmaLayout.getMFMARepForOperands(bTensorTy.getShape(), elemTy, kWidth, 1);
+    auto repA = mfmaLayout.getMFMARepForOperands(aTensorTy.getShape(), elemTy,
+                                                 kWidth, 0);
+    auto repB = mfmaLayout.getMFMARepForOperands(bTensorTy.getShape(), elemTy,
+                                                 kWidth, 1);
 
     assert(repA[1] == repB[0]);
 
@@ -458,7 +459,7 @@ struct DotOpMFMAConversionHelper {
 
 } // namespace
 
-namespace AMD{
+namespace AMD {
 LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           TritonGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) {
@@ -490,6 +491,6 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   return helper.convertDot(op, adaptor);
 }
-}
+} // namespace AMD
 
 #endif // ifdef USE_ROCM

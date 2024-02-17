@@ -142,7 +142,6 @@ class KernelArg:
             # bool is a subclass of int, so we don't check explicitly above.
             return (
                 self.value % JITFunction.divisibility == 0,
-                self.value % JITFunction.divisibility_8 == 0,
                 self.value == 1,
             )
 
@@ -162,15 +161,21 @@ class KernelInterface(Generic[T]):
         # return cast(T, functools.partial(cast(Callable, self.run), grid=grid))
 
 
+def serialize_specialization_data(signature, constants, attrs, options, key):
+    constants = {key: str(value) if value.__class__.__name__ == "dtype" else value for key, value in constants.items()}
+    import json
+    obj = {
+        'signature': signature, 'constants': constants, 'attrs': attrs.to_dict(), 'options': options.__dict__, 'key':
+        key
+    }
+    serialized_obj = json.dumps(obj)
+    return serialized_obj
+
+
 class JITFunction(KernelInterface[T]):
     # Hook for inspecting compiled functions and modules
     cache_hook = None
     divisibility = 16
-    # As Hopper TMA load and store primitive requires the tensor stride to be 16-byte aligned.
-    # And we only support WGMMA with float16 dtype on Hopper for now.
-    # So whether the LoadOp and StoreOp will lowering into TMA copy depend on whether the tensor stride is divisible by 8.
-    # TODO: Make it more reasonable to handle multiple dtypes.
-    divisibility_8 = 8
 
     @staticmethod
     def _key_of(arg):
@@ -213,22 +218,10 @@ class JITFunction(KernelInterface[T]):
                 return True
             return False
 
-        def is_divisible_by_8(x):
-            if isinstance(x, int):
-                return x % JITFunction.divisibility_8 == 0
-            if x is None:
-                return True
-            return False
-
         divisible_by_16 = {
             param.num
             for param, arg in zip(self.params, args)
             if is_divisible_by_16(arg) and not param.do_not_specialize
-        }
-        divisible_by_8 = {
-            param.num
-            for param, arg in zip(self.params, args)
-            if is_divisible_by_8(arg) and not param.do_not_specialize
         }
         equal_to_1 = {
             param.num
@@ -237,7 +230,7 @@ class JITFunction(KernelInterface[T]):
         }
         # folded equal_to_1 and None
         # TODO: method to collect all folded args
-        return AttrsDescriptor(tuple(divisible_by_16), tuple(equal_to_1), tuple(divisible_by_8))
+        return AttrsDescriptor(tuple(divisible_by_16), tuple(equal_to_1))
         # return _triton.code_gen.instance_descriptor(divisible_by_16,
         # equal_to_1)
 
@@ -283,11 +276,7 @@ class JITFunction(KernelInterface[T]):
         signature,
         device,
         constants,
-        num_warps,
-        num_ctas,
-        num_stages,
-        enable_fp_fusion,
-        extern_libs,
+        options,
         configs,
     ):
         if JITFunction.cache_hook is None:
@@ -296,32 +285,35 @@ class JITFunction(KernelInterface[T]):
         name = self.fn.__name__
         module = self.fn.__module__
         arg_reprs = ", ".join([f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])])
-        repr = f"{name}[num_warps={num_warps}, num_ctas={num_ctas}, num_stages={num_stages}, enable_fp_fusion={enable_fp_fusion}]({arg_reprs})"
-        key = str(key)
+        repr = f"{name}[num_warps={options.num_warps}, num_ctas={options.num_ctas}, num_stages={options.num_stages}, enable_fp_fusion={options.enable_fp_fusion}]({arg_reprs})"
 
-        class LegacyCompiler:
+        class JitFunctionInfo:
 
-            def __init__(self, module, name):
+            def __init__(self, module, name, jit_function):
                 self.module = module
                 self.name = name
+                self.jit_function = jit_function
                 pass
+
+        specialization_data = serialize_specialization_data(signature, constants, configs[0], options, key)
 
         kwargs = dict(
             signature=signature,
             device=device,
             constants=constants,
-            num_warps=num_warps,
-            num_ctas=num_ctas,
-            num_stages=num_stages,
-            enable_fp_fusion=enable_fp_fusion,
-            extern_libs=extern_libs,
+            num_warps=options.num_warps,
+            num_ctas=options.num_ctas,
+            num_stages=options.num_stages,
+            enable_fp_fusion=options.enable_fp_fusion,
+            extern_libs=options.extern_libs,
             configs=configs,
+            specialization_data=specialization_data,
         )
 
         return JITFunction.cache_hook(
             key=key,
             repr=repr,
-            fn=LegacyCompiler(module, name),
+            fn=JitFunctionInfo(module, name, self),
             compile={"key": key, **kwargs},
             is_manual_warmup=False,
             already_compiled=False,
@@ -362,6 +354,7 @@ class JITFunction(KernelInterface[T]):
         spec_key = tuple(arg.specialization_key() for arg in args if not arg.param.do_not_specialize)
         constexpr_key = tuple(arg.value for arg in args if arg.param.is_constexpr)
         key = (sig_key, constexpr_key, spec_key, options)
+        key = str(key)
         # Kernel is not cached; we have to compile.
         if key not in self.cache[device]:
             configs = (self._get_config(*[arg.value for arg in args]), )
@@ -381,8 +374,7 @@ class JITFunction(KernelInterface[T]):
                 if not arg.param.is_constexpr
             }
 
-            if self._call_hook(key, signature, device, constants, options.num_warps, options.num_ctas,
-                               options.num_stages, options.enable_fp_fusion, options.extern_libs, configs):
+            if self._call_hook(key, signature, device, constants, options, configs):
                 return None
             # compile the kernel
             src = ASTSource(self, signature, constants, configs[0])
@@ -453,6 +445,27 @@ class JITFunction(KernelInterface[T]):
 
     def warmup(self, *args, grid, **kwargs):
         return self.run(grid=grid, warmup=True, *map(MockTensor.wrap_dtype, args), **kwargs)
+
+    def preload(self, specialization_data):
+        from ..compiler import AttrsDescriptor, compile, ASTSource
+        import json
+        import triton.language as tl
+        device = driver.active.get_current_device()
+        deserialized_obj = json.loads(specialization_data)
+        constants = {
+            int(key): tl.dtype(value) if tl.dtype.is_dtype(value) else value
+            for key, value in deserialized_obj['constants'].items()
+        }
+        signature = {int(key): value for key, value in deserialized_obj['signature'].items()}
+        src = ASTSource(self, signature, constants, AttrsDescriptor.from_dict(deserialized_obj['attrs']))
+        options = {
+            key: tuple(value) if isinstance(value, list) else value
+            for key, value in deserialized_obj['options'].items()
+        }
+        key = deserialized_obj['key']
+        kernel = compile(src, None, options)
+        self.cache[device][key] = kernel
+        return kernel
 
     # we do not parse `src` in the constructor because
     # the user might want to monkey-patch self.src dynamically.

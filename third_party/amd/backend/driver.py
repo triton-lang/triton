@@ -61,7 +61,7 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-def make_launcher(constants, signature, ids):
+def make_launcher(constants, signature, ids, warp_size):
     start_desc = len(signature)
     #signature = generate_cu_signature(constants, signature, ids)
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
@@ -125,7 +125,7 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas
   // printf("_launch hip kernel\\n");
   void *params[] = {{ {', '.join(f"&arg{i}" for i in params)} }};
   if (gridX*gridY*gridZ > 0) {{
-      HIP_CHECK(hipModuleLaunchKernel(function, gridX, gridY, gridZ, 64*num_warps, 1, 1, shared_memory, stream, params, 0));
+      HIP_CHECK(hipModuleLaunchKernel(function, gridX, gridY, gridZ, {warp_size}*num_warps, 1, 1, shared_memory, stream, params, 0));
     }}
   }}
 
@@ -188,9 +188,9 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   int shared_memory;
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
-  PyObject *compiled_kernel = NULL;
+  PyObject *metadata = NULL;
   {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &num_ctas, &clusterDimX, &clusterDimY, &clusterDimZ, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel{', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''})) {{
+  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &num_ctas, &clusterDimX, &clusterDimY, &clusterDimZ, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &metadata{', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''})) {{
     return NULL;
   }}
 
@@ -247,7 +247,7 @@ class HIPLauncher(object):
             "ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()
         }
         constants = src.constants if hasattr(src, "constants") else dict()
-        src = make_launcher(constants, src.signature, ids)
+        src = make_launcher(constants, src.signature, ids, metadata.warp_size)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
     

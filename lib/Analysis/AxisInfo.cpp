@@ -345,7 +345,7 @@ private:
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                        int dim) override {
-    auto resTy = op.getResult().getType().template dyn_cast<RankedTensorType>();
+    auto resTy = op.getType().template dyn_cast<RankedTensorType>();
     if (!resTy)
       return BinaryOpVisitorImpl<OpTy>::getConstancy(op, lhs, rhs, dim);
     auto shape = resTy.getShape();
@@ -400,7 +400,7 @@ public:
 private:
   int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                         int dim) override {
-    auto resTy = op.getResult().getType().template dyn_cast<RankedTensorType>();
+    auto resTy = op.getType().template dyn_cast<RankedTensorType>();
     if (!resTy)
       return BinaryOpVisitorImpl<OpTy>::getContiguity(op, lhs, rhs, dim);
     auto shape = resTy.getShape();
@@ -434,7 +434,7 @@ private:
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                        int dim) override {
-    auto resTy = op.getResult().getType().template dyn_cast<RankedTensorType>();
+    auto resTy = op.getType().template dyn_cast<RankedTensorType>();
     if (!resTy)
       return BinaryOpVisitorImpl<OpTy>::getConstancy(op, lhs, rhs, dim);
     auto shape = resTy.getShape();
@@ -583,7 +583,7 @@ public:
   AxisInfo
   getAxisInfo(OpTy op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    auto resTy = op.getResult().getType().template dyn_cast<RankedTensorType>();
+    auto resTy = op.getType().template dyn_cast<RankedTensorType>();
     if (!resTy)
       return AxisInfo();
     auto shape = resTy.getShape();

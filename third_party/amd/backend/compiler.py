@@ -29,6 +29,16 @@ class HIPOptions:
     max_num_imprecise_acc_default: int = 0
 
     @staticmethod
+    def get_warp_size(arch: str) -> int:
+        # 64 is not supported for RDNA for now
+        if 'gfx10' in arch or 'gfx11' in arch:
+            return 32
+        if 'gfx9' in arch:
+            return 64
+        print("Warning: Unexpected device. Wave Size is set to 64.")
+        return 64 # Default value
+
+    @staticmethod
     def get_matrix_core_version(arch: str) -> int:
         """ Determine matrix core type available on current GPU.
             0 means no tensor cores are available
@@ -47,9 +57,13 @@ class HIPOptions:
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = dict() if self.extern_libs is None else dict(self.extern_libs)
+        # Ignore user-defined warp size for gfx9
+        warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch else 64
+        object.__setattr__(self, 'warp_size', warp_size)
+        oclc_wavefrontsize_lib = "oclc_wavefrontsize64_on" if self.warp_size == 64 else "oclc_wavefrontsize64_off"
         libs = [
             "cuda2gcn", "opencl", "ocml", "ockl", "oclc_finite_only_off", "oclc_daz_opt_off",
-            "oclc_correctly_rounded_sqrt_on", "oclc_unsafe_math_off", "oclc_wavefrontsize64_on", "oclc_abi_version_400"
+            "oclc_correctly_rounded_sqrt_on", "oclc_unsafe_math_off", oclc_wavefrontsize_lib, "oclc_abi_version_400"
         ]
         libs += ['oclc_isa_version_' + self.arch.replace('gfx', '')]
         for lib in libs:
@@ -108,7 +122,7 @@ class HIPBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         # TODO: capability
-        passes.ttir.add_convert_to_ttgpuir(pm, opt.num_warps, 64, opt.num_ctas, 90)
+        passes.ttir.add_convert_to_ttgpuir(pm, opt.num_warps, opt.warp_size, opt.num_ctas, 90)
         pm.run(mod)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
@@ -164,10 +178,10 @@ class HIPBackend(BaseBackend):
                 llvm.link_extern_lib(llvm_mod, path)
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
         # Set kernel attributes
-        kernels = [fn for fn in llvm_mod.get_functions() if fn.has_public_visibility() and not fn.is_declaration()]
-        assert len(kernels) == 1
+        kernels = [fn for fn in llvm_mod.get_functions() if not fn.is_declaration()]
+        # The public kernel should be kernel 0
         kernels[0].set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
-        kernels[0].add_fn_attr("amdgpu-flat-work-group-size", f"1, {options.num_warps*64}")
+        kernels[0].add_fn_attr("amdgpu-flat-work-group-size", f"1, {options.num_warps*options.warp_size}")
         kernels[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
         kernels[0].add_fn_attr("denormal-fp-math-f32", "preserve-sign")
         # Get some metadata

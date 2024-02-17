@@ -263,25 +263,30 @@ static std::optional<Attribute> inferDstEncoding(triton::ExpandDimsOp op,
   return sliceEncoding.getParent();
 }
 
-static std::optional<Attribute>
-inferDstEncoding(triton::ExperimentalInterleaveOp op, Attribute encoding) {
-  // Same as src encoding, except the last dim has 2x the elements per thread.
-  auto ctx = op->getContext();
-  auto enc = encoding.dyn_cast<triton::gpu::BlockedEncodingAttr>();
-  if (!enc)
-    return std::nullopt;
+static std::optional<Attribute> inferDstEncoding(ExperimentalJoinOp op,
+                                                 Attribute srcEnc) {
+  Attribute dstEnc;
+  if (srcEnc.getDialect()
+          .getRegisteredInterface<DialectInferLayoutInterface>()
+          ->inferJoinOpEncoding(srcEnc, dstEnc,
+                                /*loc=*/std::nullopt)
+          .succeeded()) {
+    return dstEnc;
+  }
+  return std::nullopt;
+}
 
-  // Precondition for the interleave op in general: The last dim is also the
-  // most minor dim (i.e. it occurs first in `order`).
-  if (enc.getOrder()[0] != enc.getOrder().size() - 1)
-    return std::nullopt;
-
-  auto newSizePerThread = enc.getSizePerThread();
-  newSizePerThread[newSizePerThread.size() - 1] *= 2;
-
-  return triton::gpu::BlockedEncodingAttr::get(
-      ctx, newSizePerThread, enc.getThreadsPerWarp(), enc.getWarpsPerCTA(),
-      enc.getOrder(), enc.getCTALayout());
+static std::optional<Attribute> inferDstEncoding(ExperimentalSplitOp op,
+                                                 Attribute srcEnc) {
+  Attribute dstEnc;
+  if (srcEnc.getDialect()
+          .getRegisteredInterface<DialectInferLayoutInterface>()
+          ->inferSplitOpEncoding(srcEnc, dstEnc,
+                                 /*loc=*/std::nullopt)
+          .succeeded()) {
+    return dstEnc;
+  }
+  return std::nullopt;
 }
 
 static std::optional<Attribute> inferSrcEncoding(triton::ReduceOp op,
@@ -300,28 +305,30 @@ static std::optional<Attribute> inferSrcEncoding(triton::ExpandDimsOp op,
                                              encoding);
 }
 
-static std::optional<Attribute>
-inferSrcEncoding(triton::ExperimentalInterleaveOp op, Attribute encoding) {
-  // Same as dst encoding, except the last dim has half the elements per thread.
-  auto ctx = op->getContext();
-  auto enc = encoding.dyn_cast<triton::gpu::BlockedEncodingAttr>();
-  if (!enc)
-    return std::nullopt;
+static std::optional<Attribute> inferSrcEncoding(ExperimentalJoinOp op,
+                                                 Attribute dstEnc) {
+  // Split is the inverse of join.
+  Attribute srcEnc;
+  if (dstEnc.getDialect()
+          .getRegisteredInterface<DialectInferLayoutInterface>()
+          ->inferSplitOpEncoding(dstEnc, srcEnc, /*loc=*/std::nullopt)
+          .succeeded()) {
+    return srcEnc;
+  }
+  return std::nullopt;
+}
 
-  // Precondition for the interleave op in general: The last dim is also the
-  // most minor dim (i.e. it occurs first in `order`).
-  if (enc.getOrder()[0] != enc.getOrder().size() - 1)
-    return std::nullopt;
-
-  if (enc.getSizePerThread()[enc.getSizePerThread().size() - 1] % 2 != 0)
-    return std::nullopt;
-
-  auto newSizePerThread = enc.getSizePerThread();
-  newSizePerThread[newSizePerThread.size() - 1] /= 2;
-
-  return triton::gpu::BlockedEncodingAttr::get(
-      ctx, newSizePerThread, enc.getThreadsPerWarp(), enc.getWarpsPerCTA(),
-      enc.getOrder(), enc.getCTALayout());
+static std::optional<Attribute> inferSrcEncoding(ExperimentalSplitOp op,
+                                                 Attribute dstEnc) {
+  // Join is the inverse of split.
+  Attribute srcEnc;
+  if (dstEnc.getDialect()
+          .getRegisteredInterface<DialectInferLayoutInterface>()
+          ->inferJoinOpEncoding(dstEnc, srcEnc, /*loc=*/std::nullopt)
+          .succeeded()) {
+    return srcEnc;
+  }
+  return std::nullopt;
 }
 
 static std::optional<Attribute>
@@ -375,9 +382,8 @@ inferReshapeOpDstEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
 
 static std::optional<Attribute> inferDstEncoding(triton::ReshapeOp op,
                                                  Attribute encoding) {
-  auto srcTy = op.getOperand().getType().cast<RankedTensorType>();
-  auto dstTy = op.getType().cast<RankedTensorType>();
-  return inferReshapeOpDstEncoding(srcTy.getShape(), encoding, dstTy.getShape(),
+  return inferReshapeOpDstEncoding(op.getSrc().getType().getShape(), encoding,
+                                   op.getType().getShape(),
                                    op.getAllowReorder());
 }
 
@@ -387,9 +393,8 @@ static std::optional<Attribute> inferSrcEncoding(triton::ReshapeOp op,
   // as the encoding of x given the encoding of y in `reshape(y) -> x`.  It's an
   // invariant of inferReshapeOpNoReorderEncoding that it's symmetric in this
   // way.
-  auto srcTy = op.getOperand().getType().cast<RankedTensorType>();
-  auto dstTy = op.getType().cast<RankedTensorType>();
-  return inferReshapeOpDstEncoding(dstTy.getShape(), encoding, srcTy.getShape(),
+  return inferReshapeOpDstEncoding(op.getType().getShape(), encoding,
+                                   op.getSrc().getType().getShape(),
                                    op.getAllowReorder());
 }
 
@@ -410,8 +415,10 @@ std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
     return inferSrcEncoding(reduceOp, encoding);
   if (auto expand = dyn_cast<triton::ExpandDimsOp>(op))
     return inferSrcEncoding(expand, encoding);
-  if (auto interleave = dyn_cast<triton::ExperimentalInterleaveOp>(op))
-    return inferSrcEncoding(interleave, encoding);
+  if (auto join = dyn_cast<triton::ExperimentalJoinOp>(op))
+    return inferSrcEncoding(join, encoding);
+  if (auto split = dyn_cast<triton::ExperimentalSplitOp>(op))
+    return inferSrcEncoding(split, encoding);
   if (auto trans = dyn_cast<triton::TransOp>(op))
     return inferSrcEncoding(trans, encoding);
   if (auto reshape = dyn_cast<triton::ReshapeOp>(op))
@@ -428,14 +435,16 @@ std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
-      isa<scf::WhileOp, scf::YieldOp, scf::ConditionOp>(op))
+      isa<scf::WhileOp, scf::ForOp, scf::YieldOp, scf::ConditionOp>(op))
     return encoding;
   if (auto reduceOp = dyn_cast<triton::ReduceOp>(op))
     return inferDstEncoding(reduceOp, encoding);
   if (auto expand = dyn_cast<triton::ExpandDimsOp>(op))
     return inferDstEncoding(expand, encoding);
-  if (auto interleave = dyn_cast<triton::ExperimentalInterleaveOp>(op))
-    return inferDstEncoding(interleave, encoding);
+  if (auto join = dyn_cast<triton::ExperimentalJoinOp>(op))
+    return inferDstEncoding(join, encoding);
+  if (auto split = dyn_cast<triton::ExperimentalSplitOp>(op))
+    return inferDstEncoding(split, encoding);
   if (auto trans = dyn_cast<triton::TransOp>(op))
     return inferDstEncoding(trans, encoding);
   if (auto reshape = dyn_cast<triton::ReshapeOp>(op))
@@ -500,8 +509,7 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
                                         targetEncoding);
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
     if (targetEncoding.isa<triton::gpu::NvidiaMmaEncodingAttr>()) {
-      auto srcEncoding =
-          convert.getOperand().getType().cast<RankedTensorType>().getEncoding();
+      auto srcEncoding = convert.getSrc().getType().getEncoding();
       if (targetEncoding != srcEncoding)
         return false;
     }
@@ -509,13 +517,13 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
   }
 
   if (auto reshape = dyn_cast<triton::ReshapeOp>(op)) {
-    auto reshapeDstType = reshape.getType().cast<RankedTensorType>();
+    auto reshapeDstType = reshape.getType();
     RankedTensorType newDstType =
         RankedTensorType::get(reshapeDstType.getShape(),
                               reshapeDstType.getElementType(), targetEncoding);
     return reshape.getAllowReorder() &&
            !reshape.getEfficientLayout().has_value() &&
-           !triton::gpu::isExpensiveView(reshape.getOperand().getType(),
+           !triton::gpu::isExpensiveView(reshape.getSrc().getType(),
                                          newDstType);
   }
   return isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
