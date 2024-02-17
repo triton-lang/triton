@@ -25,6 +25,9 @@ torch_types = ["int8", "uint8", "int16", "int32", "long", "float16", "float32", 
     ("device_print_large", "int32"),
     ("print_multiple_args", "int32"),
     ("device_print_multiple_args", "int32"),
+    ("device_print_hex", "int16"),
+    ("device_print_hex", "int32"),
+    ("device_print_hex", "int64"),
 ])
 def test_print(func_type: str, data_type: str):
     proc = subprocess.Popen([sys.executable, print_path, func_type, data_type], stdout=subprocess.PIPE, shell=False)
@@ -39,6 +42,16 @@ def test_print(func_type: str, data_type: str):
             line = f"pid (0, 0, 0) idx ({i:3}) x: {i}"
             if data_type.startswith("float"):
                 line += ".000000"
+            expected_lines[line] = 1
+    elif func_type == "device_print_hex":
+        for i in range(128):
+            line = f"pid (0, 0, 0) idx ({i:3}) x: 0x"
+            if data_type == "int16":
+                line += f"{i:04x}"
+            if data_type == "int32":
+                line += f"{i:08x}"
+            if data_type == "int64":
+                line += f"{i:016x}"
             expected_lines[line] = 1
     elif func_type == "static_print":
         expected_lines[" int32[constexpr[128]]"] = 1

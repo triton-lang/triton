@@ -1365,12 +1365,12 @@ void init_triton_ir(py::module &&m) {
                  types, inlineAsm, constraints, isPure, pack, values);
            })
       .def("create_print",
-           [](TritonOpBuilder &self, const std::string &prefix,
+           [](TritonOpBuilder &self, const std::string &prefix, bool hex,
               const std::vector<Value> &values) -> void {
              self.create<PrintOp>(
                  StringAttr::get(self.getBuilder().getContext(),
                                  llvm::StringRef(prefix)),
-                 values);
+                 hex, values);
            })
       .def("create_assert",
            [](TritonOpBuilder &self, Value &condition,
