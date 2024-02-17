@@ -7,6 +7,7 @@ import math
 import numpy as np
 import pytest
 import torch
+import os
 from numpy.random import RandomState
 
 import triton
@@ -14,12 +15,16 @@ import triton.language as tl
 from triton.runtime.jit import JITFunction, TensorWrapper, reinterpret
 
 
+def is_interpreter():
+    return os.environ.get('TRITON_INTERPRET', '0') == '1'
+
+
 def is_cuda():
-    return triton.runtime.driver.active.get_current_target()[0] == "cuda"
+    return not is_interpreter() and triton.runtime.driver.active.get_current_target()[0] == "cuda"
 
 
 def is_hip():
-    return triton.runtime.driver.active.get_current_target()[0] == "hip"
+    return not is_interpreter() and triton.runtime.driver.active.get_current_target()[0] == "hip"
 
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
@@ -35,7 +40,9 @@ torch_dtypes = ['bool'] + int_dtypes + ['uint8'] + float_dtypes + ['bfloat16']
 num_ctas_list = [1]
 
 GPU_DIALECT = "triton_gpu"
-if is_hip():
+if is_interpreter():
+    THREADS_PER_WARP = 1
+elif is_hip():
     THREADS_PER_WARP = 64
 else:
     THREADS_PER_WARP = 32
@@ -325,7 +332,7 @@ def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
 # ---------------
 
 
-@pytest.mark.usefixtures("add_interpreter_test")
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, dtype_y, op", [  #
     (dtype_x, dtype_y, op)
     for op in ['+', '-', '*', '/', '%']
@@ -1318,11 +1325,11 @@ def test_tensor_atomic_cas(sem, num_ctas, device):
                          (([(dtype_x, dtype_z, False, size)
                             for dtype_x in torch_float8_dtypes
                             for dtype_z in ["float16", "float32", "bfloat16"]
-                            for size in [1024, 32]] +  #
-                           [(dtype_x, dtype_z, False, size)
-                            for dtype_z in torch_float8_dtypes
-                            for dtype_x in ["float16", "float32", "bfloat16"]
-                            for size in [1024, 32]]) if torch.__version__ >= "2.1" else []))
+                            for size in [1024, 32]]  #
+                           + [(dtype_x, dtype_z, False, size)
+                              for dtype_z in torch_float8_dtypes
+                              for dtype_x in ["float16", "float32", "bfloat16"]
+                              for size in [1024, 32]]) if torch.__version__ >= "2.1" else []))
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
     # bfloat16 on cc < 80 will not be tested
@@ -1538,8 +1545,8 @@ def convert_float_to_float32(fp: torch.tensor, dtype=None):
         output[fp == 0b11111111] = torch.nan
     else:
         output = torch.where(exp == (1 << exp_width) - 1,
-                             ((sign << (tl.float32.primitive_bitwidth - 1)) | extended_exp |
-                              (frac << (tl.float32.fp_mantissa_width - dtype.fp_mantissa_width)))  #
+                             ((sign << (tl.float32.primitive_bitwidth - 1)) | extended_exp
+                              | (frac << (tl.float32.fp_mantissa_width - dtype.fp_mantissa_width)))  #
                              .view(torch.float32), output)
     return output
 
@@ -2536,6 +2543,7 @@ def test_trans_4d(dtype_str, shape, perm, device):
 # ---------------
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize(
     "M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, out_dtype",
     [(*shape, 4, False, False, epilogue, allow_tf32, in_dtype, out_dtype)
@@ -2574,6 +2582,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         if out_dtype == 'float16':
             # TODO: support out_dtype=float16 for tl.dot on V100
             pytest.skip("Only test out_dtype=float16 on devices with sm >=80")
+    if is_interpreter() and in_dtype == 'int8':
+        pytest.skip(
+            "numpy.dot with int8 inputs will overflow while tl.dot doesn't because MMA instruction's accumulator is 32-bit"
+        )
 
     if (M, N, K, num_warps) in [(128, 256, 32, 8)]:
         pytest.skip(f"test_dot{(M, N, K)} not supported on HIP: memory out of resource")
