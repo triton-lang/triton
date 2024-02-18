@@ -439,6 +439,7 @@ def _patch_lang_core(lang, builder):
     lang.min = functools.partial(_new_reduce_wrapper, "min")
     lang.max = functools.partial(_new_reduce_wrapper, "max")
     lang.sum = functools.partial(_new_reduce_wrapper, "sum")
+    lang.static_range = lambda start, stop, step: range(start, stop, step)
 
 
 def _patch_lang_math(lang, builder):
