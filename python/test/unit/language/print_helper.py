@@ -16,6 +16,13 @@ def kernel_device_print(X, Y, BLOCK: tl.constexpr):
 
 
 @triton.jit
+def kernel_device_print_hex(X, Y, BLOCK: tl.constexpr):
+    x = tl.load(X + tl.arange(0, BLOCK))
+    tl.device_print("x: ", x, hex=True)
+    tl.store(Y + tl.arange(0, BLOCK), x)
+
+
+@triton.jit
 def kernel_print(X, Y, BLOCK: tl.constexpr):
     x = tl.load(X + tl.arange(0, BLOCK))
     # Triton should add a space after this prefix.
@@ -87,6 +94,8 @@ def test_print(func: str, data_type: str):
         kernel_no_arg_print[(1, )](num_warps=4)
     elif func == "print_no_arg":
         kernel_print_no_arg[(1, )](num_warps=4)
+    elif func == "device_print_hex":
+        kernel_device_print_hex[(1, )](x, y, BLOCK=shape[0])
     else:
         assert f"Unknown kernel: {func}"
 
