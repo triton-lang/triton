@@ -69,7 +69,7 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
         if (!elems.empty()) {
           printTensor(prefixStr, /*operand=*/i,
                       /*numOperands=*/op.getNumOperands(), elems, pid, indices,
-                      dimWidths, rewriter);
+                      dimWidths, op.getHex(), rewriter);
         }
       }
     }
@@ -80,7 +80,7 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
   void printTensor(Value prefixStr, size_t operand, size_t numOperands,
                    ArrayRef<Value> elems, std::array<Value, 3> pid,
                    ArrayRef<SmallVector<Value>> indices,
-                   ArrayRef<int> dimWidths,
+                   ArrayRef<int> dimWidths, bool hex,
                    ConversionPatternRewriter &rewriter) const {
     assert(!elems.empty());
     assert(elems.size() == indices.size());
@@ -133,7 +133,8 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
           os << "... (truncated)";
           break;
         }
-        os << getFormatSubstr(index[dim], /*width=*/dimWidths[dim]);
+        os << getFormatSubstr(index[dim], /*hex=*/false,
+                              /*width=*/dimWidths[dim]);
         printfOperands.push_back(index[dim]);
       }
       os << ")";
@@ -146,7 +147,7 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
       }
 
       auto elem = elems[i];
-      os << getFormatSubstr(elem);
+      os << getFormatSubstr(elem, hex);
       printfOperands.push_back(elem);
 
       // It's the same format string each iteration, but it's a lot easier if we
@@ -161,14 +162,35 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
     }
   }
 
-  std::string getFormatSubstr(Value value,
+  std::string getFormatSubstr(Value value, bool hex = false,
                               std::optional<int> width = std::nullopt) const {
+    Type type = value.getType();
+    if (type.isa<LLVM::PointerType>()) {
+      return "%p";
+    }
+
+    // Hex is "0x%0nx" or "0x%0nllx", where n is the number of hex digits in the
+    // type (so 4 for fp16, 8 for int32, 16 for int64).
+    int typeBits = type.getIntOrFloatBitWidth();
+    if (hex) {
+      // Ignore `width` for `hex` values, pad to typeWidth.
+      std::string ret =
+          "0x%0" + std::to_string(type.getIntOrFloatBitWidth() / 4);
+      if (type.getIntOrFloatBitWidth() > 32) {
+        ret += "ll";
+      }
+      ret += "x";
+      return ret;
+    }
+
     std::string prefix = "%";
     if (width.has_value()) {
       prefix += std::to_string(*width);
+    } else if (hex) {
+      prefix += "0";
+      prefix += std::to_string(value.getType().getIntOrFloatBitWidth() / 4);
     }
 
-    Type type = value.getType();
     if (type.isa<LLVM::LLVMPointerType>()) {
       return prefix + "p";
     } else if (type.isBF16() || type.isF16() || type.isF32() || type.isF64()) {
