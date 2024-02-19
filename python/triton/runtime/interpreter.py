@@ -186,6 +186,7 @@ class Builder:
         return TensorHandle(ret, dtype_tt)
 
     def create_masked_store(self, ptrs, value, mask, cache_modifier, eviction_policy):
+        print(f"value.dtype.itemsize: {value.data.dtype}")
         return _interpreter.store(ptrs.data, value.data, mask.data)
 
     # casting ops
@@ -489,7 +490,7 @@ def _patch_lang_math(lang, builder):
         def impl(*args, **kwargs):
             ret_type = args[0].type  # TODO: incorrect
             ret_dtype = args[0].dtype  # TODO: incorrect
-            args = [arg.handle.data for arg in args]
+            args = [arg.handle.data for arg in args if isinstance(arg, tl.core.tensor)]
             # remove the _builder kwarg
             kwargs = {k: v.handle.data for k, v in kwargs.items() if k != "_builder"}
             ret = getattr(np, mapping[name])(*args, **kwargs)
@@ -521,7 +522,8 @@ def _patch_lang(fn):
     assert len(lang) == 1, "triton.language must be visible from within jit'd function"
     _patch_lang_tensor(getattr(lang[0], "tensor"), builder)
     _patch_lang_core(lang[0], builder)
-    _patch_lang_math(lang[0], builder)
+    if lang[0] == tl:
+        _patch_lang_math(lang[0], builder)
 
 
 # TODO: wrap everything in triton tensors
