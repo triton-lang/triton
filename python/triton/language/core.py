@@ -1777,7 +1777,7 @@ def static_assert(cond, msg="", _builder=None):
 
 
 @builtin
-def device_print(prefix, *args, _builder=None):
+def device_print(prefix, *args, hex=False, _builder=None):
     '''
     Print the values at runtime from the device.  String formatting does not work for runtime values, so you should
     provide the values you want to print as arguments.  The first value must be a string, all following values must
@@ -1794,6 +1794,7 @@ def device_print(prefix, *args, _builder=None):
 
     :param prefix: a prefix to print before the values. This is required to be a string literal.
     :param args: the values to print. They can be any tensor or scalar.
+    :param hex: print all values as hex instead of decimal
     '''
     import string
     prefix = _constexpr_to_value(prefix)
@@ -1807,7 +1808,7 @@ def device_print(prefix, *args, _builder=None):
     new_args = []
     for arg in args:
         new_args.append(_to_tensor(arg, _builder))
-    return semantic.device_print(prefix, new_args, _builder)
+    return semantic.device_print(prefix, new_args, hex, _builder)
 
 
 @builtin

@@ -4734,6 +4734,7 @@ def test_clamp_symmetric(dtype, device):
 # -----------------------
 
 
+@pytest.mark.interpreter
 def test_static_range(device):
 
     @triton.jit
