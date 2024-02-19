@@ -218,9 +218,9 @@ class Builder:
     create_mul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
     create_sdiv = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.floor_divide)
     create_udiv = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.floor_divide)
+    # LLVM has 'numpy.fmod', not 'numpy.remainder', semantics on integer remainders.
     create_srem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.fmod)
     create_urem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.fmod)
-    create_mod = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.remainder)
     create_add = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.add)
     create_sub = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.subtract)
     create_shl = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.left_shift)
@@ -425,6 +425,7 @@ def _patch_lang_core(lang, builder):
             raise ValueError(f"mode {mode} not supported")
 
     def _new_to_ir(self, builder):
+        # We need to specify signedness for integer types in the numpy mode
         if self.name == 'void':
             return builder.get_void_ty()
         elif self.name == 'int1':
