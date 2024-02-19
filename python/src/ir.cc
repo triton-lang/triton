@@ -1423,13 +1423,13 @@ void init_triton_ir(py::module &&m) {
       .def("enable_debug",
            [](PassManager &self) {
              auto *context = self.getContext();
-             bool have_diagnostics =
+             bool haveDiagnostics =
                  ::triton::tools::getBoolEnv("MLIR_ENABLE_DIAGNOSTICS");
-             bool have_dump = ::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
-             if (have_diagnostics || have_dump) {
+             bool haveDump = ::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
+             if (haveDiagnostics || haveDump) {
                context->disableMultithreading();
              }
-             if (have_diagnostics) {
+             if (haveDiagnostics) {
                context->printOpOnDiagnostic(true);
                context->printStackTraceOnDiagnostic(true);
                context->getDiagEngine().registerHandler([](Diagnostic &diag) {
@@ -1437,14 +1437,14 @@ void init_triton_ir(py::module &&m) {
                  return success();
                });
              }
-             if (have_dump) {
+             if (haveDump) {
                auto printingFlags = OpPrintingFlags();
                printingFlags.elideLargeElementsAttrs(16);
                printingFlags.enableDebugInfo();
-               auto print_always = [](Pass *, Operation *) { return true; };
+               auto printAlways = [](Pass *, Operation *) { return true; };
                self.enableIRPrinting(
-                   /*shouldPrintBeforePass=*/print_always,
-                   /*shouldPrintAfterPass=*/print_always,
+                   /*shouldPrintBeforePass=*/printAlways,
+                   /*shouldPrintAfterPass=*/printAlways,
                    /*printModuleScope=*/true,
                    /*printAfterOnlyOnChange=*/false,
                    /*printAfterOnlyOnFailure*/ true, llvm::dbgs(),
