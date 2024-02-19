@@ -4,8 +4,6 @@ import numpy as np
 
 import triton
 import triton.language as tl
-import functools
-from dataclasses import dataclass
 from .._C.libtriton import interpreter as _interpreter
 
 
@@ -88,20 +86,10 @@ def wrap_ret(compute_ret_ty):
     return wrapper
 
 
-@dataclass(frozen=True)
-class InterpreterOptions:
-    extern_libs: dict = None
-    debug: bool = False
-    arch: str = None
-    allow_fp8e4nv: bool = False
-    max_num_imprecise_acc_default: int = 0
-
-
 class Builder:
 
     def __init__(self) -> None:
         self.arch = None
-        self.options = InterpreterOptions()
         # pass
 
     def set_grid_idx(self, x, y, z):
@@ -284,11 +272,12 @@ class Builder:
     create_iabs = lambda self, arg: self.unary_op(arg, np.abs)
 
     # tensor operators
+    create_dot = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.dot)
     create_reshape = lambda self, arg, shape, allowReorder: TensorHandle(arg.data.reshape(shape), arg.dtype)
     create_trans = lambda self, arg: self.unary_op(arg, np.transpose)
 
     def create_dot(self, a, b, d, allow_tf32, maxNumImpreciseAcc):
-        return TensorHandle(np.dot(a.data, b.data) + d.data, d.dtype)
+        return TensorHandle(np.dot(a.data, b.data) + d.data, a.dtype)
 
     def create_make_range(self, start, stop):
         return TensorHandle(np.arange(start, stop, dtype=np.int32), tl.int32)
@@ -381,7 +370,7 @@ class Builder:
         return ret
 
 
-def _patch_attr(obj, name, member, builder):
+def patch_attr(obj, name, member, builder):
     new_member = lambda *args, member=member, **kwargs: (member(*args, **
                                                                 {k: v
                                                                  for k, v in kwargs.items()
@@ -392,7 +381,7 @@ def _patch_attr(obj, name, member, builder):
 def _patch_lang_tensor(tensor, builder):
     for name, member in inspect.getmembers(tensor):
         if tl.core.is_builtin(member):
-            _patch_attr(tensor, name, member, builder)
+            patch_attr(tensor, name, member, builder)
     tensor.__index__ = lambda self: int(self.handle.data)
     tensor.__bool__ = lambda self: True
     tensor.__str__ = lambda self: str(self.handle.data)
@@ -409,14 +398,13 @@ def _patch_lang_tensor(tensor, builder):
 def _patch_lang_core(lang, builder):
     for name, member in inspect.getmembers(lang):
         if tl.core.is_builtin(member):
-            _patch_attr(lang, name, member, builder)
+            patch_attr(lang, name, member, builder)
     # reduce is better off with a separate patch due to how
     # the builder currently interfaces with custom functions
 
     def _new_reduce(input, axis, combine_fn, keep_dims=False):
         fn = combine_fn.fn.__name__
         mapping = {
-            "minimum": np.min,
             "maximum": np.max,
             "_sum_combine": np.sum,
         }
@@ -424,21 +412,7 @@ def _patch_lang_core(lang, builder):
         ret_type = tl.block_type(input.dtype, ret.shape)
         return tl.core.tensor(TensorHandle(ret, input.dtype), ret_type)
 
-    def _new_reduce_wrapper(mode, input, axis=None, return_indices=False, return_indices_tie_break_left=True,
-                            keep_dims=False):
-        if mode == "min":
-            return _new_reduce(input, axis, tl.standard.minimum, keep_dims)
-        elif mode == "max":
-            return _new_reduce(input, axis, tl.standard.maximum, keep_dims)
-        elif mode == "sum":
-            return _new_reduce(input, axis, tl.standard._sum_combine, keep_dims)
-        else:
-            raise ValueError(f"mode {mode} not supported")
-
     lang.reduce = _new_reduce
-    lang.min = functools.partial(_new_reduce_wrapper, "min")
-    lang.max = functools.partial(_new_reduce_wrapper, "max")
-    lang.sum = functools.partial(_new_reduce_wrapper, "sum")
 
 
 def _patch_lang_math(lang, builder):
@@ -483,14 +457,6 @@ to the mapping in python/triton/interpreter/new_interpreter.py:_patch_lang_math.
             setattr(math, name, make_fallback(name))
 
 
-def _patch_lang(fn):
-    lang = [value for _, value in fn.__globals__.items() if value in [tl, tl.core]]
-    assert len(lang) == 1, "triton.language must be visible from within jit'd function"
-    _patch_lang_tensor(getattr(lang[0], "tensor"), builder)
-    _patch_lang_core(lang[0], builder)
-    _patch_lang_math(lang[0], builder)
-
-
 # TODO: wrap everything in triton tensors
 def _implicit_cvt(arg):
     if isinstance(arg, int):
@@ -512,8 +478,7 @@ def _unwrap(tensor):
 
 builder = Builder()
 
-# These keywords are not supported by the interpreter
-RESERVED_KWS = ["num_warps", "num_stages", "num_ctas", "enable_fp_fusion", "grid"]
+RESERVED_KWS = ["num_warps", "num_stages", "num_ctas", "enable_fp_fusion"]
 
 
 class GridExecutor:
@@ -527,14 +492,19 @@ class GridExecutor:
         __annotations__ = {name: _normalize_ty(ty) for name, ty in fn.__annotations__.items()}
         self.constexprs = [name for name in arg_names if __annotations__.get(name) == "constexpr"]
 
+    def _patch_lang(self, builder):
+        lang = [value for _, value in self.fn.__globals__.items() if value in [tl, tl.core]]
+        assert len(lang) == 1, "triton.language must be visible from within jit'd function"
+        _patch_lang_tensor(getattr(lang[0], "tensor"), builder)
+        _patch_lang_core(lang[0], builder)
+        _patch_lang_math(lang[0], builder)
+
     def __call__(self, *args_dev, **kwargs):
         args_hst = [_unwrap(arg).cpu() if hasattr(arg, "data_ptr") else arg for arg in args_dev]
         # removes reserved keywords from kwargs
         kwargs = {k: v for k, v in kwargs.items() if k not in RESERVED_KWS}
-        if kwargs.pop("warmup", False):
-            return
         # remaps core language functions to interpreted ones
-        _patch_lang(self.fn)
+        self._patch_lang(builder)
         # we need to copy arguments to the host for the interpreter
         # implicitly convert tensor arguments to their base pointers
         args = inspect.getcallargs(self.fn, *args_hst, **kwargs)
@@ -557,11 +527,19 @@ class GridExecutor:
 
 class InterpretedFunction:
 
+    def _patch_lang(self, builder):
+        lang = [value for _, value in self.fn.__globals__.items() if value in [tl, tl.core]]
+        assert len(lang) == 1, "triton.language must be visible from within jit'd function"
+        _patch_lang_tensor(getattr(lang[0], "tensor"), builder)
+        _patch_lang_core(lang[0], builder)
+
     def __init__(self, fn) -> None:
         self.fn = fn
 
         def run(*args, **kwargs):
             grid = kwargs["grid"]
+            kwargs = {k: v for k, v in kwargs.items() if k not in RESERVED_KWS + ["grid"]}
+
             return GridExecutor(self.fn, self.arg_names, grid)(*args, **kwargs)
 
         self.run = run
@@ -572,6 +550,5 @@ class InterpretedFunction:
         return GridExecutor(self.fn, self.arg_names, grid)
 
     def __call__(self, *args, **kwargs):
-        # This is a device function call
-        _patch_lang(self.fn)
+        self._patch_lang(builder)
         return self.fn(*args, **kwargs)
