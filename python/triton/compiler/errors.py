@@ -17,7 +17,7 @@ class CompilationError(Exception):
             else:
                 source_excerpt = " <source empty>"
 
-        message = "at {}:{}:{}".format(node.lineno, node.col_offset, source_excerpt)
+        message = "at {}:{}:\n{}".format(node.lineno, node.col_offset, source_excerpt)
         if self.error_message:
             message += '\n' + self.error_message
         return message
