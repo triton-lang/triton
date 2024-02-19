@@ -31,11 +31,8 @@ public:
   LogicalResult
   matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    std::cout << "ReduceOpPromotionConversion" << std::endl;
-    auto mod = op->getParentOfType<mlir::ModuleOp>();
-    mod.dump();
-
-#if 1
+    
+    // promote op
     rewriter.modifyOpInPlace(op, [&]() {
       // promote operands
       SmallVector<Value> newOperands;
@@ -78,8 +75,6 @@ public:
           });
 
         } else if (type.isa<RankedTensorType>()) {
-          std::cout << "og tensor result: " << std::endl;
-          type.dump();
           auto oldType = type.cast<RankedTensorType>();
           auto elemType = oldType.getElementType();
           if (elemType.isInteger(16) || elemType.isInteger(8)) {
@@ -100,7 +95,7 @@ public:
         }
       }
 
-      // promote block
+      // promote combine op
       for (Block &oldBlock : op.getCombineOp().getBlocks()) {
         // update block args
         for (auto arg : oldBlock.getArguments()) {
@@ -137,72 +132,6 @@ public:
       }
     });
 
-#else
-    std::cout << "promote operands: " << std::endl;
-    SmallVector<Value> promotedOperands;
-    for (OpOperand &operand : op->getOpOperands()) {
-      auto oldType = operand.get().getType().cast<RankedTensorType>();
-      auto newType = oldType.cloneWith(std::nullopt, i32_ty);
-      auto promotedVal = rewriter.create<mlir::arith::ExtSIOp>(
-          op->getLoc(), newType, operand.get());
-      promotedVal.dump();
-      promotedOperands.push_back(promotedVal);
-    }
-    
-    std::cout << "new reduce op:" << std::endl;
-    // new op
-    auto newReduceOp = rewriter.create<triton::ReduceOp>(op.getLoc(), promotedOperands, adaptor.getAxis());
-    auto &newCompineRegion = newReduceOp.getCombineOp();
-    Block* newBlock = rewriter.createBlock(&newCompineRegion);
-  
-
-    std::cout << "write new ops:" << std::endl;
-    // write new Block
-    rewriter.setInsertionPointToStart(newBlock);
-    for (Block &oldBlock : op.getCombineOp().getBlocks()) {
-      std::cout << "set args" << std::endl;
-      for (size_t i = 0; i < oldBlock.getNumArguments(); i++) {
-        std::cout << "new arg" << std::endl;
-        newBlock->addArgument(i32_ty, newReduceOp.getLoc());
-      }
-
-      std::cout << "copy ops" << std::endl;
-      for (Operation &oldOp : oldBlock.getOperations()) {
-        // clone op
-        Operation *newOp = rewriter.clone(oldOp); // Maybe create a new op here maybe seems to be shared with old op
-
-        // think about op uses
-        
-        // update operands
-        for (OpOperand &operand : newOp->getOpOperands()) {
-            auto val = operand.get();
-            auto type = val.getType();
-            if (type.isInteger(16)){
-                val.setType(i32_ty);
-            }
-        }
-
-        // update results
-        for (Value result : newOp->getResults()) {
-          auto type = result.getType();
-          if (type.isInteger(16)) {
-            result.setType(i32_ty);
-          }
-        }
-      }
-    }
-    
-    std::cout << "trunc result 0: " << std::endl;
-    rewriter.setInsertionPointAfter(newReduceOp);
-    auto truncResult = rewriter.create<mlir::arith::TruncIOp>(newReduceOp->getLoc(), i16_ty, newReduceOp->getResult(0));
-
-    // replace uses
-    op->getResult(0).replaceAllUsesWith(truncResult);
-    op->getResult(1).replaceAllUsesWith(newReduceOp->getResult(1));
-
-    // replace op
-    rewriter.replaceOp(op, {truncResult, newReduceOp->getResult(1)});
-#endif
 
     return success();
   }
@@ -225,10 +154,6 @@ public:
   LogicalResult
   matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    std::cout << "ReduceOpConversion" << std::endl;
-    auto mod = op->getParentOfType<mlir::ModuleOp>();
-    mod.dump();
-
     ReduceOpHelper helper(op);
     assert(helper.isSupportedLayout() &&
            "Unexpected srcLayout in ReduceOpConversion");
@@ -711,15 +636,9 @@ void populateReduceOpToLLVMPatterns(
     ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     int computeCapability, PatternBenefit benefit) {
-
-#if 1
   patterns.add<ReduceOpPromotionConversion>(
       typeConverter, allocation, indexCacheInfo, computeCapability, 2);
   patterns.add<ReduceOpConversion>(typeConverter, allocation, indexCacheInfo,
                                    computeCapability, 1);
-#elif 0
-  patterns.add<ReduceOpConversion>(typeConverter, allocation, indexCacheInfo,
-                                   computeCapability, benefit);
-#endif
 }
 } // namespace AMD

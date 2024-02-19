@@ -26,7 +26,7 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
       val = sext(i32_ty, val);
 
     val = commonShflSync(loc, rewriter, val, i, strideInt, mode, clamp);
-    // custom amd suffle logic. Maybe the real cause of issue
+
     if (bits < 32)
       val = trunc(int_ty(bits), val);
     if (!valType.isIntOrIndex())

@@ -1583,22 +1583,6 @@ def reduce(input, axis, combine_fn, keep_dims=False, _builder=None, _generator=N
             ret = tuple(expand_ndims(t, len(input[0].shape)) for t in ret)
     return ret
 
-@builtin
-def _promote_reduction_input(t, _builder=None):
-    scalar_ty = t.type.scalar
-    # input is extended to 32-bits if necessary
-    # this increases numerical accuracy and can be done pretty much for free
-    # on GPUs
-    
-    # promote ints
-    if scalar_ty.is_int() and scalar_ty.int_bitwidth < 32:
-        return t.to(int32, _builder=_builder)
-    
-    # promote floats
-    if scalar_ty is float16:
-        return t.to(float32, _builder=_builder)
-
-    return t
 
 @builtin
 def _promote_bfloat16_to_float32(t, _builder=None):
