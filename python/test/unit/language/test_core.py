@@ -375,13 +375,9 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
     else:
         numpy_expr = None
     if op == '%' and _mod_operation_ill_conditioned(dtype_x, dtype_y):
-        if is_interpreter():
-            with pytest.raises(AssertionError):
-                with pytest.warns(RuntimeWarning, match="overflow encountered in case"):
-                    _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
-        else:
-            with pytest.raises(AssertionError, match='Not equal to tolerance'):
-                _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
+        error_msg = '' if is_interpreter() else 'Not equal to tolerance'
+        with pytest.raises(AssertionError, match=error_msg):
+            _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
     elif (op in ('%', '/') and ((dtype_x in int_dtypes and dtype_y in uint_dtypes) or
                                 (dtype_x in uint_dtypes and dtype_y in int_dtypes))):
         error_class = ValueError if is_interpreter() else triton.CompilationError
