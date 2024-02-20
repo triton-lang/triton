@@ -1416,7 +1416,7 @@ def fdiv(x, y, ieee_rounding=False, _builder=None):
     return semantic.fdiv(x, y, ieee_rounding, _builder)
 
 
-@jit
+@builtin
 def minimum(x, y, propagate_nan: constexpr = PropagateNan.NONE, _builder=None):
     """
     Computes the element-wise minimum of :code:`x` and :code:`y`.
@@ -1435,10 +1435,10 @@ def minimum(x, y, propagate_nan: constexpr = PropagateNan.NONE, _builder=None):
     x = _promote_bfloat16_to_float32(x, _builder=_builder)
     y = _promote_bfloat16_to_float32(y, _builder=_builder)
     propagate_nan = _constexpr_to_value(propagate_nan)
-    return semantic.minimum(x, y, propagate_nan)
+    return semantic.minimum(x, y, propagate_nan, _builder)
 
 
-@jit
+@builtin
 def maximum(x, y, propagate_nan: constexpr = PropagateNan.NONE, _builder=None):
     """
     Computes the element-wise maximum of :code:`x` and :code:`y`.
@@ -1457,7 +1457,7 @@ def maximum(x, y, propagate_nan: constexpr = PropagateNan.NONE, _builder=None):
     x = _promote_bfloat16_to_float32(x, _builder=_builder)
     y = _promote_bfloat16_to_float32(y, _builder=_builder)
     propagate_nan = _constexpr_to_value(propagate_nan)
-    return semantic.maximum(x, y, propagate_nan)
+    return semantic.maximum(x, y, propagate_nan, _builder)
 
 
 @builtin
