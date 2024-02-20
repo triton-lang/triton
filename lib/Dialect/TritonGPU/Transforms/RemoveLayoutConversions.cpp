@@ -718,26 +718,23 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   return nullptr;
 }
 
-bool isMoreExpensiveLoad(LoadOp op, Attribute newEncoding) {
-  if (!isExpensiveLoadOrStore(op))
-    return false;
-  // If it is an expensive load and it does not have a single use, then it is
-  // more expensive to redo the load.
-  if (!op->hasOneUse())
-    return true;
-
-  // Loading a tensor in different layout isn't more expensive, as long as they
-  // can be vectorized in the same granularity.
-  auto tensorType = op.getType().cast<RankedTensorType>();
+bool WillBeMoreExpensiveLoad(LoadOp op, Attribute newEncoding) {
+  auto tensorType = op.getPtr().getType().cast<RankedTensorType>();
   auto oldEncoding = tensorType.getEncoding();
-  auto oldContigPerThread = getContigPerThread(oldEncoding);
-  auto newContigPerThread = getContigPerThread(newEncoding);
-  return oldContigPerThread.back() > newContigPerThread.back();
+  auto oldContigPerThread =
+      triton::gpu::getUniqueContigPerThread(oldEncoding, tensorType.getShape());
+  auto oldOrder = triton::gpu::getOrder(oldEncoding);
+  auto oldContiguity = oldContigPerThread[oldOrder[0]];
+
+  // If the original load cannot be vectorized, the new load will likely not be
+  // more expensive.
+  return oldContiguity > 1;
 }
 
-bool canBeRemat(Operation *op, Attribute newEncoding) {
+bool canBeRemat(Operation *op, Attribute newEncoding, bool onlyUsedInSlice) {
   if (auto loadOp = dyn_cast<LoadOp>(op))
-    return !isMoreExpensiveLoad(loadOp, newEncoding);
+    return !isExpensiveLoadOrStore(op) ||
+           (onlyUsedInSlice && !WillBeMoreExpensiveLoad(loadOp, newEncoding));
   if (isa<StoreOp>(op))
     return !isExpensiveLoadOrStore(op);
   if (isa<tensor::ExtractSliceOp, AllocTensorOp, InsertSliceAsyncOp,
@@ -847,10 +844,31 @@ LogicalResult getRematerializableSlice(
   if (result.failed() || slice.empty())
     return failure();
 
+  // Check if operations of this slice are only used in the slice. This is to
+  // make sure an expensive operations to be rematerialized will not cause extra
+  // overhead.
+  bool onlyUsedInSlice = true;
+  for (Value v : slice) {
+    if (Operation *op = v.getDefiningOp()) {
+      if (op->hasOneUse()) {
+        continue;
+      } else {
+        for (auto user : op->getUsers()) {
+          for (auto res : user->getResults()) {
+            if (!slice.contains(res)) {
+              onlyUsedInSlice = false;
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+
   // Check if all the operations in the slice can be rematerialized.
   for (Value v : slice) {
     if (Operation *op = v.getDefiningOp()) {
-      if (!canBeRemat(op, rootEncoding))
+      if (!canBeRemat(op, rootEncoding, onlyUsedInSlice))
         return failure();
     }
   }
