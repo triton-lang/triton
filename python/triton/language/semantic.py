@@ -515,12 +515,17 @@ def view(input: tl.tensor, dst_shape: List[int], builder: ir.builder) -> tl.tens
     for s in dst_shape:
         numel *= s
     if input.type.numel != numel:
-        raise ValueError("cannot view block of different shape")
+        raise ValueError("view() cannot change total number of elements in tensor")
     ret_ty = tl.block_type(input.type.scalar, dst_shape)
     return tl.tensor(builder.create_reshape(input.handle, dst_shape, True), ret_ty)
 
 
 def reshape(input: tl.tensor, dst_shape: List[int], builder: ir.builder) -> tl.tensor:
+    numel = 1
+    for s in dst_shape:
+        numel *= s
+    if input.type.numel != numel:
+        raise ValueError("reshape() cannot change total number of elements in tensor")
     ret_ty = tl.block_type(input.type.scalar, dst_shape)
     return tl.tensor(builder.create_reshape(input.handle, dst_shape, False), ret_ty)
 
@@ -1519,7 +1524,7 @@ def debug_barrier(builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_barrier(), tl.void)
 
 
-def device_print(prefix: str, args: List[tl.tensor], builder: ir.builder) -> tl.tensor:
+def device_print(prefix: str, args: List[tl.tensor], hex: bool, builder: ir.builder) -> tl.tensor:
     # It makes sense visually for prefix to end in ": "; make it so.  Also,
     # non-empty prefixes should start with " ".
     if not prefix.endswith(" ") and args:
@@ -1532,7 +1537,7 @@ def device_print(prefix: str, args: List[tl.tensor], builder: ir.builder) -> tl.
     new_args = []
     for arg in args:
         new_args.append(arg.handle)
-    return tl.tensor(builder.create_print(prefix, new_args), tl.void)
+    return tl.tensor(builder.create_print(prefix, hex, new_args), tl.void)
 
 
 def device_assert(cond: tl.tensor, msg: str, file_name: str, func_name, lineno: int, builder: ir.builder) -> tl.tensor:

@@ -32,7 +32,7 @@ def _path_to_binary(binary: str):
 
 @functools.lru_cache()
 def get_ptxas_version():
-    version = subprocess.check_output([_path_to_binary("ptxas")[0], "--version"])
+    version = subprocess.check_output([_path_to_binary("ptxas")[0], "--version"]).decode("utf-8")
     return version
 
 
@@ -162,10 +162,10 @@ class CUDABackend(BaseBackend):
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        passes.ttgpuir.add_decompose_unsupported_conversions(pm)
+        nvidia.passes.ttgpuir.add_decompose_unsupported_conversions(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
-        passes.ttgpuir.add_allocate_shared_memory(pm)
+        nvidia.passes.ttgpuir.add_allocate_shared_memory(pm)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability)
         nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
         passes.convert.add_arith_to_llvmir(pm)
@@ -267,5 +267,5 @@ class CUDABackend(BaseBackend):
 
     @functools.lru_cache()
     def hash(self):
-        version = subprocess.check_output([_path_to_binary("ptxas")[0], "--version"]).decode("utf-8")
+        version = get_ptxas_version()
         return f'{version}-{self.capability}'

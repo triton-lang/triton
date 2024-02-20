@@ -1,0 +1,2 @@
+add_subdirectory(TritonNVIDIAGPUToLLVM)
+add_subdirectory(NVGPUToLLVM)

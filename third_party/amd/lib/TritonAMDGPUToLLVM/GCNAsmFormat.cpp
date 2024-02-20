@@ -1,7 +1,7 @@
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "TritonAMDGPUToLLVM/AsmFormat.h"
+#include "triton/Conversion/TritonGPUToLLVM/AsmFormat.h"
 #include "llvm/Support/raw_ostream.h"
 #include <sstream> // unify to llvm::raw_string_ostream ?
 

@@ -78,6 +78,54 @@ tt.func public @fn(%arg0: f32, %arg1: f32) {
 
 // -----
 
+tt.func public @fn(%v: tensor<4x128xf64>) {
+    // expected-error @+1 {{operand types and result types}}
+    %a = "tt.reduce" (%v) ({
+    ^bb0(%arg0: f32, %arg1: f32):
+      %add = arith.addf %arg0, %arg1 : f32
+      tt.reduce.return %add : f32
+    }) {axis = 0 : i32}  : (tensor<4x128xf64>) -> tensor<128xf32>
+    tt.return
+}
+
+// -----
+
+tt.func public @fn(%v: tensor<4x128xf32>) {
+    // expected-error @+1 {{requires the same shape}}
+    %a = "tt.scan" (%v) ({
+    ^bb0(%arg0: f32, %arg1: f32):
+      %add = arith.addf %arg0, %arg1 : f32
+      tt.scan.return %add : f32
+    }) {axis = 0 : i32}  : (tensor<4x128xf32>) -> tensor<128xf32>
+    tt.return
+}
+
+// -----
+
+tt.func public @fn(%v1: tensor<4x128xf32>, %v2: tensor<4x128xi64>) {
+    // expected-error @+1 {{operand types and result types}}
+    %a, %b = "tt.scan" (%v1, %v2) ({
+    ^bb0(%arg0: f32, %arg1: i32, %arg2: f32, %arg3: i32):
+      %add = arith.addf %arg0, %arg2 : f32
+      tt.scan.return %add, %arg1 : f32, i32
+    }) {axis = 0 : i32}  : (tensor<4x128xf32>, tensor<4x128xi64>) -> (tensor<4x128xi64>, tensor<4x128xf32>)
+    tt.return
+}
+
+// -----
+
+tt.func public @fn(%v1: tensor<4x128xf32>, %v2: tensor<4x128xi64>) {
+    // expected-error @+1 {{operand types and result types}}
+    %a, %b = "tt.reduce" (%v1, %v2) ({
+    ^bb0(%arg0: f32, %arg1: i32, %arg2: f32, %arg3: i32):
+      %add = arith.addf %arg0, %arg2 : f32
+      tt.reduce.return %add, %arg1 : f32, i32
+    }) {axis = 0 : i32}  : (tensor<4x128xf32>, tensor<4x128xi64>) -> (tensor<128xi64>, tensor<128xf32>)
+    tt.return
+}
+
+// -----
+
 #blocked = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: tensor<32xf32, #blocked>) {
