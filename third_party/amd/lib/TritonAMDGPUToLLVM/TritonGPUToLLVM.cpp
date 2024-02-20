@@ -19,23 +19,11 @@ Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
   assert(axis >= 0);
   assert(axis < 3);
   assert(moduleOp);
-#ifdef USE_ROCM
   static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
                                                   mlir::gpu::Dimension::y,
                                                   mlir::gpu::Dimension::z};
   Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[axis]);
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
-#else
-  // // It is not easy to get the compute capability here, so we use numCTAs to
-  // // decide the semantic of GetProgramIdOp. If numCTAs = 1, then
-  // // GetProgramIdOp is converted to "%ctaid", otherwise it is converted to
-  // // "%clusterid".
-  // int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
-
-  // std::string sreg = numCTAs == 1 ? "%ctaid." : "%clusterid.";
-  // sreg.append(1, 'x' + axis); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
-  // return getSRegValue(rewriter, loc, sreg);
-#endif
 }
 
 struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
@@ -582,7 +570,6 @@ struct GetNumProgramsOpConversion
   LogicalResult
   matchAndRewrite(triton::GetNumProgramsOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-#ifdef USE_ROCM
     static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
                                                     mlir::gpu::Dimension::y,
                                                     mlir::gpu::Dimension::z};
@@ -592,26 +579,6 @@ struct GetNumProgramsOpConversion
         rewriter.create<::mlir::gpu::GridDimOp>(loc, dims[op.getAxis()]);
     rewriter.replaceOpWithNewOp<arith::TruncIOp>(op, i32_ty, blockId);
     return success();
-#else
-    // // It is not easy to get the compute capability here, so we use numCTAs
-    // to
-    // // decide the semantic of GetNumProgramsOp. If numCTAs = 1, then
-    // // GetNumProgramsOp is converted to "%nctaid", otherwise it is converted
-    // to
-    // // "%nclusterid".
-    // auto moduleOp = op->getParentOfType<ModuleOp>();
-    // assert(moduleOp && "Parent ModuleOp not found for GetProgramIdOp");
-    // int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
-
-    // Location loc = op->getLoc();
-    // assert(op.getAxis() < 3);
-    // std::string sreg = numCTAs == 1 ? "%nctaid." : "%nclusterid.";
-    // sreg.append(1, 'x' + op.getAxis()); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
-
-    // Value numPrograms = getSRegValue(rewriter, loc, sreg);
-    // rewriter.replaceOp(op, numPrograms);
-    // return success();
-#endif
   }
 };
 

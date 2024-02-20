@@ -439,21 +439,6 @@ struct ConvertTritonAMDGPUToLLVM
       indexCacheInfo = {nullptr, nullptr, nullptr};
     }
 
-    // {
-    //   RewritePatternSet patterns(context);
-    //   populateTritonGPUToLLVMPatterns(typeConverter, patterns, numWarps,
-    //   axisInfoAnalysis, allocation, indexCacheInfo, 10);
-    //   mlir::arith::populateArithToLLVMConversionPatterns(typeConverter,
-    //   patterns); mlir::populateGpuToROCDLConversionPatterns(typeConverter,
-    //   patterns,
-    //                                              mlir::gpu::amd::HIP);
-    //   populatePatterns3(populateLoadStoreOpToLLVMPatterns);
-    //   if (failed(applyPartialConversion(mod, convTarget,
-    //   std::move(patterns)))){
-    //     llvm::outs() << "fail1!\n";
-    //     return signalPassFailure();
-    //   }
-    // }
     RewritePatternSet patterns(context);
 
     auto populatePatterns1 = [&](auto populateFunc) {
