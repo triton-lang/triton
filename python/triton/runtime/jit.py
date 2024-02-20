@@ -50,8 +50,8 @@ class DependenciesFinder(ast.NodeVisitor):
         # Traverse arguments as well as node.func so we can find JITFunctions
         # passed to tl.reduce or tl.associative_scan as the combine_fn
         for arg in itertools.chain(
-            (node.func,),
-            node.args,
+            (node.func, ),
+                node.args,
             (kw.value for kw in node.keywords),
         ):
             func = self.visit(arg)
