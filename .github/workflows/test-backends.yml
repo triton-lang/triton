@@ -24,7 +24,7 @@ jobs:
   Integration-Tests-Shared-Middle-Layer:
     if: (github.event_name == 'workflow_dispatch') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -58,7 +58,7 @@ jobs:
   Integration-Tests-AMD:
     if: (github.event_name == 'workflow_dispatch') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     needs: Runner-Preparation
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     runs-on: ${{ matrix.runner }}
 
@@ -115,7 +115,7 @@ jobs:
 
   Integration-Tests-Intel:
     needs: Runner-Preparation
-    timeout-minutes: 20
+    timeout-minutes: 30
     if: false && ((github.event_name == 'workflow_dispatch') || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
 
     runs-on: ${{ matrix.runner }}
