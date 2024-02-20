@@ -18,6 +18,9 @@ class TensorHandle:
     def __bool__(self):
         return bool(self.data.all())
 
+    def clone(self):
+        return TensorHandle(self.data.copy(), self.dtype)
+
 
 class BlockPointerHandle:
 
@@ -186,7 +189,6 @@ class Builder:
         return TensorHandle(ret, dtype_tt)
 
     def create_masked_store(self, ptrs, value, mask, cache_modifier, eviction_policy):
-        print(f"value.dtype.itemsize: {value.data.dtype}")
         return _interpreter.store(ptrs.data, value.data, mask.data)
 
     # casting ops
@@ -279,7 +281,9 @@ class Builder:
 
     # tensor operators
     create_reshape = lambda self, arg, shape, allowReorder: TensorHandle(arg.data.reshape(shape), arg.dtype)
-    create_trans = lambda self, arg: self.unary_op(arg, np.transpose)
+
+    def create_trans(self, arg, perm):
+        return TensorHandle(np.transpose(arg.data, perm), arg.dtype)
 
     def create_dot(self, a, b, d, allow_tf32, maxNumImpreciseAcc):
         return TensorHandle(np.dot(a.data, b.data) + d.data, d.dtype)
@@ -362,11 +366,15 @@ class Builder:
     #     pass
 
     def create_make_block_ptr(self, base, shape, strides, offsets, tensor_shape, order):
-        return BlockPointerHandle(base, shape, strides, np.array(offsets), tensor_shape, order)
+        # Create new offsets to avoid modifying the original
+        new_offsets = [offset.clone() for offset in offsets]
+        return BlockPointerHandle(base, shape, strides, new_offsets, tensor_shape, order)
 
     def create_advance(self, ptr, offsets):
         assert len(ptr.offsets) == len(offsets)
-        ret = BlockPointerHandle(ptr.base, ptr.shape, ptr.strides, ptr.offsets, ptr.tensor_shape, ptr.order)
+        # Create new offsets to avoid modifying the original
+        new_offsets = [offset.clone() for offset in ptr.offsets]
+        ret = BlockPointerHandle(ptr.base, ptr.shape, ptr.strides, new_offsets, ptr.tensor_shape, ptr.order)
         for i in range(len(offsets)):
             ret.offsets[i].data += offsets[i].data
         return ret
