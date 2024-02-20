@@ -47,27 +47,32 @@ class DependenciesFinder(ast.NodeVisitor):
         return getattr(lhs, node.attr)
 
     def visit_Call(self, node):
+
+        def is_triton_builtin(func):
+            if inspect.isbuiltin(node.func):
+                return True
+            module = getattr(func, "__module__", "")
+            return module.startswith(TRITON_MODULE)
+
+        func = self.visit(node.func)
+        assert func is None or is_triton_builtin(func) or isinstance(
+            func, JITFunction
+        ), f'Function "{func.__name__}" is being called from a Triton function but is not a Triton function itself. Decorate it with @triton.jit to fix this'
+
         # Traverse arguments as well as node.func so we can find JITFunctions
         # passed to tl.reduce or tl.associative_scan as the combine_fn
-        for arg in itertools.chain(
-            (node.func, ),
-                node.args,
-            (kw.value for kw in node.keywords),
+        for obj in itertools.chain(
+            (func, ),
+                map(self.visit, node.args),
+            (self.visit(kw.value) for kw in node.keywords),
         ):
-            func = self.visit(arg)
-            if func is None:
+            if not isinstance(obj, JITFunction):
+                continue
+            if is_triton_builtin(obj):
                 continue
 
-            if inspect.isbuiltin(func):
-                continue
-            if func.__module__ and (func.__module__.startswith(TRITON_MODULE)):
-                continue
-
-            assert isinstance(
-                func, JITFunction
-            ), f'Function "{func.__name__}" is being called from a Triton function but is not a Triton function itself. Decorate it with @triton.jit to fix this'
-            func_cache_key = func.cache_key
-            noinline = str(getattr(func, "noinline", False))
+            func_cache_key = obj.cache_key
+            noinline = str(getattr(obj, "noinline", False))
 
             key = func_cache_key + noinline
             self.hasher.update(key.encode("utf-8"))
