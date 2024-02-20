@@ -33,9 +33,11 @@ struct PipelineOpInfo {
   int stage = -1;
   Operation *use = nullptr;
 
-  // Blocked encoding is used for loads feeding into other loads
+  // Layout of the data in the shared memory.
+  ttg::SharedEncodingAttr sharedEncoding = nullptr;
+  // Blocked encoding is used for loads feeding into other loads.
   ttg::BlockedEncodingAttr blockedEncoding = nullptr;
-  // Dot operand encoding is used for loads feeding into dot ops
+  // Dot operand encoding is used for loads feeding into dot ops.
   ttg::DotOperandEncodingAttr dotOperandEncoding = nullptr;
   bool needTrans = false;
 };
@@ -255,6 +257,49 @@ getBlockedEncoding(tt::LoadOp loadOp, ModuleAxisInfoAnalysis &axisInfo) {
                                        threadsPerWarp, CTALayout);
 }
 
+static ttg::SharedEncodingAttr
+getSharedEncoding(tt::LoadOp loadOp, Operation *use, bool isMMAV3,
+                  ttg::DotOperandEncodingAttr dotOpEnc, bool needTrans) {
+
+  auto ty = loadOp.getType().cast<RankedTensorType>();
+  auto CTALayout = ttg::getCTALayout(ty.getEncoding());
+  auto blockedOrder = ttg::getOrder(ty.getEncoding());
+  SmallVector<unsigned> order;
+  if (blockedOrder.size() == 3) {
+    for (unsigned i = 0; i < blockedOrder.size(); ++i) {
+      if (blockedOrder[i] == 0)
+        continue;
+      order.push_back(blockedOrder[i]);
+    }
+    order.push_back(0);
+  } else {
+    order = blockedOrder;
+  }
+  if (isa<tt::DotOp>(use)) {
+    if (dotOpEnc) {
+      assert(!isMMAV3 && "MMAv3 should not have dotOperandEncoding");
+      unsigned bitWidth = ty.getElementType().getIntOrFloatBitWidth();
+      // set needTrans to avoid unnecessary conversion between shared encodings.
+      return ttg::SharedEncodingAttr::get(ty.getContext(), dotOpEnc,
+                                          ty.getShape(), order, CTALayout,
+                                          bitWidth, needTrans);
+    } else {
+      assert(isMMAV3 && "Load used by dot op should be either MMAv3 or have "
+                        "dotOperandEncoding.");
+      return ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(), order,
+                                          CTALayout, ty.getElementType());
+    }
+  } else {
+    assert(!dotOpEnc && !isMMAV3 &&
+           "Load used by non-dot op should not have dotOperandEncoding or be "
+           "MMAv3.");
+    // Use non-swizzled layout for loads that do not feed into dot ops.
+    // TODO: This won't be optimal for 2D tensors.
+    return ttg::SharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
+                                        CTALayout);
+  }
+}
+
 // Create a map from load ops to their distance to the nearest dot op and the
 // final use of the load op (another load op, or a dot op).
 static llvm::MapVector<tt::LoadOp, std::pair<int, Operation *>>
@@ -355,21 +400,25 @@ collectOpsToPipeline(scf::ForOp forOp,
   // loads.
   for (auto &[loadOp, distAndUse] : loadOpToDistAndUse) {
     PipelineOpInfo loadInfo;
-    if (isa<tt::DotOp>(loadOpToDistAndUse[loadOp].second)) {
+    bool loadIsMMAV3 = false;
+    if (isa<tt::DotOp>(distAndUse.second)) {
       std::optional<std::pair<ttg::DotOperandEncodingAttr, bool>> loadDotAttr =
-          loadDotOperand(loadOp, hasMMAV3);
+          loadDotOperand(loadOp, loadIsMMAV3);
+      hasMMAV3 |= loadIsMMAV3;
       if (!loadDotAttr.has_value())
         continue;
       loadInfo.dotOperandEncoding = loadDotAttr.value().first;
       loadInfo.needTrans = loadDotAttr.value().second;
     }
-    if (isa<tt::LoadOp>(loadOpToDistAndUse[loadOp].second)) {
+    if (isa<tt::LoadOp>(distAndUse.second)) {
       loadInfo.blockedEncoding = getBlockedEncoding(loadOp, axisInfoAnalysis);
     }
-    int stage =
-        (maxDistance - loadOpToDistAndUse[loadOp].first) * stagesBetweenLoads;
+    loadInfo.sharedEncoding =
+        getSharedEncoding(loadOp, distAndUse.second, loadIsMMAV3,
+                          loadInfo.dotOperandEncoding, loadInfo.needTrans);
+    int stage = (maxDistance - distAndUse.first) * stagesBetweenLoads;
     loadInfo.stage = stage;
-    loadInfo.use = loadOpToDistAndUse[loadOp].second;
+    loadInfo.use = distAndUse.second;
     opInfo[loadOp] = loadInfo;
   };
 
@@ -378,36 +427,9 @@ collectOpsToPipeline(scf::ForOp forOp,
 
 // Create an allocation that can hold distance number of loadOp shapes.
 static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
-                         ttg::DotOperandEncodingAttr dotOpEnc,
-                         unsigned distance, bool needTrans) {
+                         ttg::SharedEncodingAttr sharedEnc, unsigned distance) {
   OpBuilder builder(forOp);
   auto ty = loadOp.getType().cast<RankedTensorType>();
-  Attribute sharedEnc;
-  auto CTALayout = ttg::getCTALayout(ty.getEncoding());
-  auto blockedOrder = ttg::getOrder(ty.getEncoding());
-  SmallVector<unsigned> sharedOrder;
-  if (blockedOrder.size() == 3) {
-    for (unsigned i = 0; i < blockedOrder.size(); ++i) {
-      if (blockedOrder[i] == 0)
-        continue;
-      sharedOrder.push_back(blockedOrder[i]);
-    }
-    sharedOrder.push_back(0);
-  } else {
-    sharedOrder = blockedOrder;
-  }
-  ArrayRef<unsigned> order = sharedOrder;
-  if (dotOpEnc) {
-    unsigned bitWidth = ty.getElementType().getIntOrFloatBitWidth();
-    // set needTrans to avoid unnecessary conversion between shared encodings.
-    sharedEnc =
-        ttg::SharedEncodingAttr::get(ty.getContext(), dotOpEnc, ty.getShape(),
-                                     order, CTALayout, bitWidth, needTrans);
-  } else {
-    // MMAv3
-    sharedEnc = ttg::SharedEncodingAttr::get(
-        ty.getContext(), ty.getShape(), order, CTALayout, ty.getElementType());
-  }
   SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
   bufferShape.insert(bufferShape.begin(), distance);
   Type allocType =
@@ -433,8 +455,8 @@ createAsynOps(scf::ForOp &forOp,
   SmallVector<Value> newOperands;
   for (auto &[op, info] : opToInfo) {
     if (tt::LoadOp loadOp = dyn_cast<tt::LoadOp>(op)) {
-      Value alloc = createAlloc(forOp, loadOp, info.dotOperandEncoding,
-                                numBuffers, info.needTrans);
+      assert(info.sharedEncoding && "LoadOp shared encoding not defined.");
+      Value alloc = createAlloc(forOp, loadOp, info.sharedEncoding, numBuffers);
       assert(alloc && "Failed to create alloc for the async load.");
       newOperands.push_back(alloc);
       allocs.push_back(alloc);
