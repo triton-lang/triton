@@ -1365,12 +1365,12 @@ void init_triton_ir(py::module &&m) {
                  types, inlineAsm, constraints, isPure, pack, values);
            })
       .def("create_print",
-           [](TritonOpBuilder &self, const std::string &prefix,
+           [](TritonOpBuilder &self, const std::string &prefix, bool hex,
               const std::vector<Value> &values) -> void {
              self.create<PrintOp>(
                  StringAttr::get(self.getBuilder().getContext(),
                                  llvm::StringRef(prefix)),
-                 values);
+                 hex, values);
            })
       .def("create_assert",
            [](TritonOpBuilder &self, Value &condition,
@@ -1423,26 +1423,33 @@ void init_triton_ir(py::module &&m) {
       .def("enable_debug",
            [](PassManager &self) {
              auto *context = self.getContext();
-             context->printOpOnDiagnostic(true);
-             context->printStackTraceOnDiagnostic(true);
-             context->disableMultithreading();
-             context->getDiagEngine().registerHandler([](Diagnostic &diag) {
-               llvm::outs() << diag << "\n";
-               return success();
-             });
-
-             if (!triton::tools::getBoolEnv("MLIR_ENABLE_DUMP"))
-               return;
-             auto printingFlags = OpPrintingFlags();
-             printingFlags.elideLargeElementsAttrs(16);
-             printingFlags.enableDebugInfo();
-             auto print_always = [](Pass *, Operation *) { return true; };
-             self.enableIRPrinting(
-                 /*shouldPrintBeforePass=*/print_always,
-                 /*shouldPrintAfterPass=*/print_always,
-                 /*printModuleScope=*/true,
-                 /*printAfterOnlyOnChange=*/false,
-                 /*printAfterOnlyOnFailure*/ true, llvm::dbgs(), printingFlags);
+             bool haveDiagnostics =
+                 ::triton::tools::getBoolEnv("MLIR_ENABLE_DIAGNOSTICS");
+             bool haveDump = ::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
+             if (haveDiagnostics || haveDump) {
+               context->disableMultithreading();
+             }
+             if (haveDiagnostics) {
+               context->printOpOnDiagnostic(true);
+               context->printStackTraceOnDiagnostic(true);
+               context->getDiagEngine().registerHandler([](Diagnostic &diag) {
+                 llvm::outs() << diag << "\n";
+                 return success();
+               });
+             }
+             if (haveDump) {
+               auto printingFlags = OpPrintingFlags();
+               printingFlags.elideLargeElementsAttrs(16);
+               printingFlags.enableDebugInfo();
+               auto printAlways = [](Pass *, Operation *) { return true; };
+               self.enableIRPrinting(
+                   /*shouldPrintBeforePass=*/printAlways,
+                   /*shouldPrintAfterPass=*/printAlways,
+                   /*printModuleScope=*/true,
+                   /*printAfterOnlyOnChange=*/false,
+                   /*printAfterOnlyOnFailure*/ true, llvm::dbgs(),
+                   printingFlags);
+             }
            })
       .def("run", [](PassManager &self, ModuleOp &mod) {
         // TODO: maybe dump module to file and print error for better

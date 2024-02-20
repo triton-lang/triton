@@ -5,15 +5,14 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+using ::AMD::ConvertTritonGPUOpToLLVMPattern;
+using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
+using ::AMD::TritonGPUToLLVMTypeConverter;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::linearize;
 using ::mlir::LLVM::AMD::shflIdxSync;
 using ::mlir::LLVM::AMD::shflUpSync;
-using ::mlir::LLVM::AMD::storeShared;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
-using ::AMD::TritonGPUToLLVMTypeConverter;
-using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
-using ::AMD::ConvertTritonGPUOpToLLVMPattern;
 
 // apply combine region to acc and cur and accumulate it into acc
 // TODO(Lezcano) This is now duplicated with ReduceOpConversion::reduce.
@@ -24,7 +23,6 @@ static SmallVector<Value> accumulate(ConversionPatternRewriter &rewriter,
   // Allows for passing an unitialized acc and use cur as the neutral element
   if (acc.size() == 0) {
     return cur;
-
   }
   assert(cur.size() == acc.size());
   // Create a new copy of the reduce block, and inline it
@@ -135,7 +133,7 @@ static void storeWarpAccumulator(SmallVector<SmallVector<Value>> &srcValues,
     for (unsigned i = 0; i < lastElement.size(); ++i) {
       Value writePtr = gep(ptr_ty(rewriter.getContext(), 3), smemTypes[i],
                            smemBases[i], index);
-      storeShared(rewriter, loc, writePtr, lastElement[i], mask);
+      store(lastElement[i], writePtr);
     }
     chunkId++;
   }
@@ -330,7 +328,7 @@ static void AddPartialReduceOneWarp(SmallVector<SmallVector<Value>> &srcValues,
   }
 }
 
-namespace AMD{
+namespace AMD {
 namespace {
 struct ScanOpConversion
     : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ScanOp> {
@@ -480,7 +478,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
     SmallVector<Type> smemTypes(op.getNumOperands());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       smemTypes[i] = getElementType(op, i);
-    }   
+    }
 
     // Store the partial reducing for each warp into shared memory.
     storeWarpAccumulator(srcValues, rewriter, helper, laneIdAxis, warpIdAxis,
@@ -537,4 +535,4 @@ void populateScanOpToLLVMPatterns(
   patterns.add<ScanOpConversion>(typeConverter, allocation, indexCacheInfo,
                                  benefit);
 }
-}
+} // namespace AMD

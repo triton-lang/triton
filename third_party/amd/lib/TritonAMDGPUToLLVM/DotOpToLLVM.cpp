@@ -4,15 +4,15 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+using ::AMD::ConvertTritonGPUOpToLLVMPattern;
+using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
+using ::AMD::TritonGPUToLLVMTypeConverter;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
-using ::AMD::TritonGPUToLLVMTypeConverter;
-using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
-using ::AMD::ConvertTritonGPUOpToLLVMPattern;
 
-namespace AMD{
+namespace AMD {
 LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                             TritonGPUToLLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter);
@@ -21,30 +21,33 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 //                             TritonGPUToLLVMTypeConverter *typeConverter,
 //                             ConversionPatternRewriter &rewriter);
 
-// LogicalResult convertMMA1688(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+// LogicalResult convertMMA1688(triton::DotOp op, triton::DotOp::Adaptor
+// adaptor,
 //                              TritonGPUToLLVMTypeConverter *typeConverter,
 //                              ConversionPatternRewriter &rewriter);
 
-// LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+// LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor
+// adaptor,
 //                               TritonGPUToLLVMTypeConverter *typeConverter,
 //                               ConversionPatternRewriter &rewriter);
 
 // LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 //                            TritonGPUToLLVMTypeConverter *typeConverter,
-//                            ConversionPatternRewriter &rewriter, Value thread);
+//                            ConversionPatternRewriter &rewriter, Value
+//                            thread);
 
 // LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
-//                                 triton::nvidia_gpu::DotAsyncOp::Adaptor adaptor,
-//                                 TritonGPUToLLVMTypeConverter *typeConverter,
-//                                 ConversionPatternRewriter &rewriter,
-//                                 Value thread);
+//                                 triton::nvidia_gpu::DotAsyncOp::Adaptor
+//                                 adaptor, TritonGPUToLLVMTypeConverter
+//                                 *typeConverter, ConversionPatternRewriter
+//                                 &rewriter, Value thread);
 
 #ifdef USE_ROCM
 LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           TritonGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter);
 #endif
-}
+} // namespace AMD
 
 namespace {
 struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
@@ -69,7 +72,8 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
                                           .cast<RankedTensorType>()
                                           .getEncoding()
                                           .dyn_cast<NvidiaMmaEncodingAttr>();
-    // if (!isOuter && mmaLayout && supportMMA(op, mmaLayout.getVersionMajor())) {
+    // if (!isOuter && mmaLayout && supportMMA(op, mmaLayout.getVersionMajor()))
+    // {
     //   if (mmaLayout.isVolta())
     //     return convertMMA884(op, adaptor, getTypeConverter(), rewriter);
     //   if (mmaLayout.isTuring())
@@ -205,9 +209,9 @@ struct DotWaitOpConversion
     return success();
   }
 };
-}
+} // namespace
 
-namespace AMD{
+namespace AMD {
 void populateDotOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns, int numWarps,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
@@ -217,4 +221,4 @@ void populateDotOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
   patterns.add<DotAsyncOpConversion>(typeConverter, allocation, benefit);
   patterns.add<DotWaitOpConversion>(typeConverter, allocation, benefit);
 }
-}
+} // namespace AMD
