@@ -9,35 +9,6 @@ from dataclasses import dataclass
 from .._C.libtriton import interpreter as _interpreter
 
 
-# TODO: duplicate
-def str_to_ty(name):
-    language = tl
-    if name[0] == "*":
-        ty = str_to_ty(name[1:])
-        return language.pointer_type(ty)
-    tys = {
-        "fp8e4nv": language.float8e4nv,
-        "fp8e5": language.float8e5,
-        "fp8e4b15": language.float8e4b15,
-        "fp8e4b15x4": language.float8e4b15x4,
-        "fp16": language.float16,
-        "bf16": language.bfloat16,
-        "fp32": language.float32,
-        "fp64": language.float64,
-        "i1": language.int1,
-        "i8": language.int8,
-        "i16": language.int16,
-        "i32": language.int32,
-        "i64": language.int64,
-        "u8": language.uint8,
-        "u16": language.uint16,
-        "u32": language.uint32,
-        "u64": language.uint64,
-        "B": language.int1,
-    }
-    return tys[name]
-
-
 class TensorHandle:
 
     def __init__(self, data, dtype):
@@ -46,6 +17,9 @@ class TensorHandle:
 
     def __bool__(self):
         return bool(self.data.all())
+
+    def clone(self):
+        return TensorHandle(self.data.copy(), self.dtype)
 
 
 class BlockPointerHandle:
@@ -129,6 +103,8 @@ class Builder:
             tl.int64: np.dtype(np.int64),
             tl.uint64: np.dtype(np.uint64),
         }
+        if isinstance(tt_dtype, tl.block_type):
+            return np_types[tt_dtype.element_ty]
         return np_types[tt_dtype]
 
     # constants
@@ -138,17 +114,38 @@ class Builder:
     def get_float_ty(self):
         return tl.float32
 
+    def get_double_ty(self):
+        return tl.float64
+
+    def get_int8_ty(self):
+        return tl.int8
+
+    def get_uint8_ty(self):
+        return tl.uint8
+
+    def get_int16_ty(self):
+        return tl.int16
+
+    def get_uint16_ty(self):
+        return tl.uint16
+
     def get_int32_ty(self):
         return tl.int32
 
+    def get_uint32_ty(self):
+        return tl.uint32
+
     def get_int64_ty(self):
         return tl.int64
+
+    def get_uint64_ty(self):
+        return tl.uint64
 
     def get_ptr_ty(self, elt_ty, addr_space):
         return tl.pointer_type(elt_ty, addr_space)
 
     def get_block_ty(self, dtype, shape):
-        return tl.tensor(shape, dtype)
+        return tl.block_type(dtype, shape)
 
     def get_int32(self, value):
         return TensorHandle(np.array([value], dtype=np.int32), tl.int32)
@@ -196,8 +193,6 @@ class Builder:
 
     # casting ops
     def cast_impl(self, src, dst_type):
-        if isinstance(dst_type, tl.tensor):
-            dst_type = dst_type.dtype
         return TensorHandle(src.data.astype(self.np_dtype(dst_type)), dst_type)
 
     create_si_to_fp = lambda self, src, dst_type: self.cast_impl(src, dst_type)
@@ -226,8 +221,9 @@ class Builder:
     create_mul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
     create_sdiv = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.floor_divide)
     create_udiv = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.floor_divide)
-    create_srem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.remainder)
-    create_urem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.remainder)
+    # LLVM has 'numpy.fmod', not 'numpy.remainder', semantics on integer remainders.
+    create_srem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.fmod)
+    create_urem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.fmod)
     create_add = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.add)
     create_sub = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.subtract)
     create_shl = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.left_shift)
@@ -285,7 +281,9 @@ class Builder:
 
     # tensor operators
     create_reshape = lambda self, arg, shape, allowReorder: TensorHandle(arg.data.reshape(shape), arg.dtype)
-    create_trans = lambda self, arg: self.unary_op(arg, np.transpose)
+
+    def create_trans(self, arg, perm):
+        return TensorHandle(np.transpose(arg.data, perm), arg.dtype)
 
     def create_dot(self, a, b, d, allow_tf32, maxNumImpreciseAcc):
         return TensorHandle(np.dot(a.data, b.data) + d.data, d.dtype)
@@ -320,9 +318,6 @@ class Builder:
         return TensorHandle(val.data.astype(np.uint64), dst_ty)
 
     # def create_cat(self, lhs, rhs):
-    #     pass
-
-    # def create_broadcast(self, arg, shape):
     #     pass
 
     def create_splat(self, arg, shape):
@@ -371,11 +366,15 @@ class Builder:
     #     pass
 
     def create_make_block_ptr(self, base, shape, strides, offsets, tensor_shape, order):
-        return BlockPointerHandle(base, shape, strides, np.array(offsets), tensor_shape, order)
+        # Create new offsets to avoid modifying the original
+        new_offsets = [offset.clone() for offset in offsets]
+        return BlockPointerHandle(base, shape, strides, new_offsets, tensor_shape, order)
 
     def create_advance(self, ptr, offsets):
         assert len(ptr.offsets) == len(offsets)
-        ret = BlockPointerHandle(ptr.base, ptr.shape, ptr.strides, ptr.offsets, ptr.tensor_shape, ptr.order)
+        # Create new offsets to avoid modifying the original
+        new_offsets = [offset.clone() for offset in ptr.offsets]
+        ret = BlockPointerHandle(ptr.base, ptr.shape, ptr.strides, new_offsets, ptr.tensor_shape, ptr.order)
         for i in range(len(offsets)):
             ret.offsets[i].data += offsets[i].data
         return ret
@@ -395,7 +394,6 @@ def _patch_lang_tensor(tensor, builder):
             _patch_attr(tensor, name, member, builder)
     tensor.__index__ = lambda self: int(self.handle.data)
     tensor.__bool__ = lambda self: True
-    tensor.__str__ = lambda self: str(self.handle.data)
 
     def handle_slice(self, slices):
         data = self.handle.data.__getitem__(slices)
@@ -435,11 +433,52 @@ def _patch_lang_core(lang, builder):
         else:
             raise ValueError(f"mode {mode} not supported")
 
+    def _new_to_ir(self, builder):
+        # We need to specify signedness for integer types in the numpy mode
+        if self.name == 'void':
+            return builder.get_void_ty()
+        elif self.name == 'int1':
+            return builder.get_int1_ty()
+        elif self.name == 'int8':
+            return builder.get_int8_ty()
+        elif self.name == 'uint8':
+            return builder.get_uint8_ty()
+        elif self.name == 'int16':
+            return builder.get_int16_ty()
+        elif self.name == 'uint16':
+            return builder.get_uint16_ty()
+        elif self.name == 'int32':
+            return builder.get_int32_ty()
+        elif self.name == 'uint32':
+            return builder.get_uint32_ty()
+        elif self.name == 'int64':
+            return builder.get_int64_ty()
+        elif self.name == 'uint64':
+            return builder.get_uint64_ty()
+        elif self.name == 'fp8e5':
+            return builder.get_fp8e5_ty()
+        elif self.name == 'fp8e4nv':
+            return builder.get_fp8e4nv_ty()
+        elif self.name == 'fp8e4b15':
+            return builder.get_fp8e4b15_ty()
+        elif self.name == 'fp8e4b15x4':
+            return builder.get_fp8e4b15x4_ty()
+        elif self.name == 'fp16':
+            return builder.get_half_ty()
+        elif self.name == 'bf16':
+            return builder.get_bf16_ty()
+        elif self.name == 'fp32':
+            return builder.get_float_ty()
+        elif self.name == 'fp64':
+            return builder.get_double_ty()
+        raise ValueError(f'fail to convert {self} to ir type')
+
     lang.reduce = _new_reduce
     lang.min = functools.partial(_new_reduce_wrapper, "min")
     lang.max = functools.partial(_new_reduce_wrapper, "max")
     lang.sum = functools.partial(_new_reduce_wrapper, "sum")
     lang.static_range = lambda start, stop, step: range(start, stop, step)
+    lang.dtype.to_ir = _new_to_ir
 
 
 def _patch_lang_math(lang, builder):
@@ -451,6 +490,7 @@ def _patch_lang_math(lang, builder):
         "exp2": "exp2",
         "log2": "log2",
         "max": "maximum",
+        "floor": "floor",
     }
 
     def make_numpy(name):
@@ -458,8 +498,9 @@ def _patch_lang_math(lang, builder):
         def impl(*args, **kwargs):
             ret_type = args[0].type  # TODO: incorrect
             ret_dtype = args[0].dtype  # TODO: incorrect
-            args = [arg.handle.data for arg in args]
-            kwargs = {k: v.handle.data for k, v in kwargs.items()}
+            args = [arg.handle.data for arg in args if isinstance(arg, tl.core.tensor)]
+            # remove the _builder kwarg
+            kwargs = {k: v.handle.data for k, v in kwargs.items() if k != "_builder"}
             ret = getattr(np, mapping[name])(*args, **kwargs)
             ret = tl.core.tensor(TensorHandle(ret, ret_dtype), ret_type)
             return ret
@@ -489,26 +530,21 @@ def _patch_lang(fn):
     assert len(lang) == 1, "triton.language must be visible from within jit'd function"
     _patch_lang_tensor(getattr(lang[0], "tensor"), builder)
     _patch_lang_core(lang[0], builder)
-    _patch_lang_math(lang[0], builder)
+    if lang[0] == tl:
+        _patch_lang_math(lang[0], builder)
 
 
 # TODO: wrap everything in triton tensors
 def _implicit_cvt(arg):
     if isinstance(arg, int):
-        ty = str_to_ty(triton.runtime.jit.JITFunction._type_of(triton.runtime.jit.JITFunction._key_of(arg)))
+        ty = tl.str_to_ty(triton.runtime.jit.JITFunction._type_of(triton.runtime.jit.JITFunction._key_of(arg)))
         handle = TensorHandle(np.array([arg], dtype=np.int32), ty)
         return tl.tensor(handle, ty)
     if hasattr(arg, "data_ptr"):
-        ty = str_to_ty(triton.runtime.jit.JITFunction._type_of(triton.runtime.jit.JITFunction._key_of(arg)))
+        ty = tl.str_to_ty(triton.runtime.jit.JITFunction._type_of(triton.runtime.jit.JITFunction._key_of(arg)))
         handle = TensorHandle(np.array([arg.data_ptr()], dtype=np.uint64), ty)
         return tl.tensor(handle, ty)
     return arg
-
-
-def _unwrap(tensor):
-    if isinstance(tensor, triton.TensorWrapper):
-        return tensor.base
-    return tensor
 
 
 builder = Builder()
@@ -528,8 +564,23 @@ class GridExecutor:
         __annotations__ = {name: _normalize_ty(ty) for name, ty in fn.__annotations__.items()}
         self.constexprs = [name for name in arg_names if __annotations__.get(name) == "constexpr"]
 
+    def _init_args_hst(self, args_dev):
+        args_hst = []
+        for arg in args_dev:
+            if hasattr(arg, "data_ptr"):
+                args_hst.append(arg.cpu())
+            else:
+                args_hst.append(arg)
+        return args_hst
+
+    def _restore_args_dev(self, args_dev, args_hst):
+        for arg_dev, arg_hst in zip(args_dev, args_hst):
+            if hasattr(arg_dev, "data_ptr"):
+                arg_dev.copy_(arg_hst.to(arg_dev.device))
+
     def __call__(self, *args_dev, **kwargs):
-        args_hst = [_unwrap(arg).cpu() if hasattr(arg, "data_ptr") else arg for arg in args_dev]
+        # copy arguments to the host
+        args_hst = self._init_args_hst(args_dev)
         # removes reserved keywords from kwargs
         kwargs = {k: v for k, v in kwargs.items() if k not in RESERVED_KWS}
         if kwargs.pop("warmup", False):
@@ -551,9 +602,7 @@ class GridExecutor:
                     builder.set_grid_idx(x, y, z)
                     self.fn(**args)
         # copy arguments back to propagate side-effects
-        for arg_dev, arg_hst in zip(args_dev, args_hst):
-            if hasattr(arg_dev, "data_ptr"):
-                _unwrap(arg_dev).copy_(arg_hst.to(arg_dev.device))
+        self._restore_args_dev(args_dev, args_hst)
 
 
 class InterpretedFunction:

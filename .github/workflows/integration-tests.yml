@@ -115,7 +115,8 @@ jobs:
           TRITON_INTERPRET: "1"
         run: |
           cd python/test/unit
-          python3 -m pytest -vvv -n 8 -m interpreter language/test_core.py
+          python3 -m pytest -vvv -n 4 -m interpreter language/test_core.py --device cpu
+          python3 -m pytest -n 8 -m interpreter -vvv -s operators/test_flash_attention.py::test_op --device cpu
 
       - name: Run partial tests on CUDA
         if: ${{ env.BACKEND == 'CUDA' }}
