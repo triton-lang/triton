@@ -47,7 +47,6 @@
 namespace mlir {
 namespace triton {
 #define GEN_PASS_DEF_CONVERTTRITONAMDGPUTOLLVM
-//#define GEN_PASS_DECL_CONVERTTRITONAMDGPUTOLLVM
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
 } // namespace triton
 } // namespace mlir
@@ -473,8 +472,15 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
 
     // Native lowering patterns
-    mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
-                                               mlir::gpu::amd::HIP);
+    switch (target) {
+    case Target::NVVM:
+      mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
+      break;
+    case Target::ROCDL:
+      mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
+                                                 mlir::gpu::amd::HIP);
+      break;
+    }
 
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);

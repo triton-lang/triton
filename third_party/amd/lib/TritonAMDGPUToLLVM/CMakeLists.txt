@@ -22,3 +22,4 @@ add_triton_library(TritonAMDGPUToLLVM
 
 target_include_directories(TritonAMDGPUToLLVM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
 target_include_directories(TritonAMDGPUToLLVM PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/../../include)
+target_compile_definitions(TritonAMDGPUToLLVM PUBLIC USE_ROCM)

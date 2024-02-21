@@ -5,6 +5,10 @@
 
 namespace mlir {
 
+namespace triton {
+enum Target { NVVM, ROCDL, Default = NVVM };
+} // namespace triton
+
 /// Create a pass to add DIScope
 std::unique_ptr<Pass> createLLVMDIScopePass();
 
