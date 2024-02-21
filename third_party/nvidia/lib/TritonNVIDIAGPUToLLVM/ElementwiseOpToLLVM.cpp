@@ -1770,20 +1770,20 @@ private:
 };
 
 struct PreciseSqrtOpConversion
-    : public ElementwiseOpConversionBase<ExternElementwiseOp,
-                                         ExternElementwiseOpConversion> {
-  using Base = ElementwiseOpConversionBase<ExternElementwiseOp,
-                                           ExternElementwiseOpConversion>;
+    : public ElementwiseOpConversionBase<PreciseSqrtOp,
+                                         PreciseSqrtOpConversion> {
+  using Base = ElementwiseOpConversionBase<PreciseSqrtOp,
+                                           PreciseSqrtOpConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
   typedef typename Base::OpAdaptor OpAdaptor;
 
   // TODO pawel: this is copied from ExternElementwiseOpConversion!!! Refactor!
-  SmallVector<Value> createDestOps(PreciseSqrtFOp op, OpAdaptor adaptor,
+  SmallVector<Value> createDestOps(PreciseSqrtOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    StringRef funcName = "__nv_fqrt_rn";
+    StringRef funcName = "__nv_fsqrt_rn";
 
     Type funcType = getFunctionType(elemTy, operands[0]);
     LLVM::LLVMFuncOp funcOp =
@@ -1799,7 +1799,7 @@ private:
   }
 
   LLVM::LLVMFuncOp appendOrGetFuncOp(ConversionPatternRewriter &rewriter,
-                                     PreciseSqrtFOp op, StringRef funcName,
+                                     PreciseSqrtOp op, StringRef funcName,
                                      Type funcType) const {
     using LLVM::LLVMFuncOp;
 

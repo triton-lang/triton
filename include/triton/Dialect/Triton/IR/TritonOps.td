@@ -132,7 +132,7 @@ def TT_ClampFOp : TT_Op<"clampf", [Elementwise,
 //
 
 // TODO pawel: think about the name
-def TT_PreciseSqrtFOp : TT_Op<"precise_sqrtf", [Elementwise,
+def TT_PreciseSqrtOp : TT_Op<"precise_sqrt", [Elementwise,
                                   SameOperandsAndResultType,
                                   Pure]> {
     let summary = "Precise sqrt for floating point types";
@@ -144,6 +144,8 @@ def TT_PreciseSqrtFOp : TT_Op<"precise_sqrtf", [Elementwise,
     let arguments = (ins TT_FloatLike:$x);
 
     let results = (outs TT_FloatLike:$result);
+
+    let assemblyFormat = "$x attr-dict `:` type($x)";
 }
 
 //
