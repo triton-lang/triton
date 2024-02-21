@@ -1140,7 +1140,7 @@ def atomic_max(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope:
     if sca_ty not in {tl.float32, tl.float64}:
         raise TypeError(f"atomic_max not supported for dtype {sca_ty}")
 
-    itype = tl.int32 if sca_ty == tl.float32 else tl.float64
+    itype = tl.int32 if sca_ty == tl.float32 else tl.int64
     zero = full([], 0.0, sca_ty, builder)
 
     i_val = bitcast(val, itype, builder)
@@ -1176,7 +1176,7 @@ def atomic_min(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope:
     if sca_ty not in {tl.float32, tl.float64}:
         raise TypeError(f"atomic_min not supported for dtype {sca_ty}")
 
-    itype = tl.int32 if sca_ty == tl.float32 else tl.float64
+    itype = tl.int32 if sca_ty == tl.float32 else tl.int64
     zero = full([], 0.0, sca_ty, builder)
 
     i_val = bitcast(val, itype, builder)
