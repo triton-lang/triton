@@ -232,3 +232,31 @@ __all__ = [
     _experimental_join,
     _experimental_split,
 ]
+
+
+def str_to_ty(name):
+    if name[0] == "*":
+        ty = str_to_ty(name[1:])
+        return pointer_type(ty)
+    tys = {
+        "fp8e4nv": float8e4nv,
+        "fp8e5": float8e5,
+        "fp8e4b15": float8e4b15,
+        "fp8e4b15x4": float8e4b15x4,
+        "fp16": float16,
+        "bf16": bfloat16,
+        "fp32": float32,
+        "fp64": float64,
+        "i1": int1,
+        "i8": int8,
+        "i16": int16,
+        "i32": int32,
+        "i64": int64,
+        "u1": int1,
+        "u8": uint8,
+        "u16": uint16,
+        "u32": uint32,
+        "u64": uint64,
+        "B": int1,
+    }
+    return tys[name]

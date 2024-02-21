@@ -604,6 +604,15 @@ class TensorWrapper:
     def element_size(self):
         return self.base.element_size()
 
+    def cpu(self):
+        return TensorWrapper(self.base.cpu(), self.dtype)
+
+    def copy_(self, other):
+        self.base.copy_(other.base)
+
+    def to(self, device):
+        return TensorWrapper(self.base.to(device), self.dtype)
+
 
 def reinterpret(tensor, dtype):
     if isinstance(tensor, TensorWrapper):
