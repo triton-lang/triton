@@ -1018,7 +1018,20 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Call(self, node):
         fn = _unwrap_if_constexpr(self.visit(node.func))
+        try:
+            return self.visit_Call_Impl(fn, node)
+        except CompilationError as e:
+            # Fill in the callee's source code, and rely on our caller to do the
+            # same.
+            if hasattr(fn, 'src') and fn.src and e.src is None:
+                e.set_source_code(fn.src)
+            raise CompilationError(None, node, None) from e
+        except Exception as e:
+            if hasattr(fn, 'src'):
+                raise CompilationError(fn.src, node, repr(e)) from e
+            raise
 
+    def visit_Call_Impl(self, fn, node):
         static_implementation = self.statically_implemented_functions.get(fn)
         if static_implementation is not None:
             return static_implementation(self, node)
