@@ -26,7 +26,8 @@ import triton.language as tl
 # AMD E4M3B8
 # Note: When picking this f8 data type, scaling is required when using f8
 # for the second gemm
-float8:tl.constexpr = torch.float8_e4m3fnuz
+TORCH_HAS_FP8E4 = hasattr(torch, 'float8_e4m3fnuz')
+float8:tl.constexpr = None if not TORCH_HAS_FP8E4 else torch.float8_e4m3fnuz
 
 @triton.jit
 def max_fn(x, y):
@@ -109,7 +110,7 @@ def _attn_fwd(
         acc = acc * alpha[:, None]
         if not pre_load_v:
             v = tl.load(V_block_ptr)
-        acc += tl.dot(p.to(tl.float16), v)
+        acc += tl.dot(p.to(v.dtype), v)
         # -- update m_i and l_i
         l_ij = tl.sum(p, 1)
         l_i = l_i * alpha + l_ij
@@ -163,7 +164,7 @@ class _attention(torch.autograd.Function):
             ## For fp16, pick BLOCK_M=256, num_warps=8
             ## For fp8, pick BLOCK_M=128, num_warps=4
             ## TODO (zhanglx): add tuning infra for FA
-            BLOCK_M = 128 if q.dtype == float8 else 256
+            BLOCK_M = 128 if TORCH_HAS_FP8E4 and q.dtype == torch.float8_e4m3fnuz else 256
             BLOCK_N = 128
             waves_per_eu = 2
             num_warps = BLOCK_M // 32
@@ -197,6 +198,7 @@ attention = _attention.apply
 
 name_to_torch_types = {
     'fp16': torch.float16,
+    'bf16': torch.bfloat16,
     'fp8': float8
 }
 
@@ -205,39 +207,41 @@ name_to_torch_types = {
     for shape in [(4, 48, 1024, 128),
                   (4, 48, 2048, 128),
                   (4, 48, 4096, 128)]
-    for dtype in ['fp16', 'fp8']])
+    for dtype in ['fp16', 'bf16', 'fp8']])
 def test_op_fwd(Z, H, N_CTX, D_HEAD, dtype):
     torch.manual_seed(20)
+    init_dtype = torch.float16 if dtype == 'fp8' else name_to_torch_types[dtype]
     q = (
-        torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16, device="cuda")
+        torch.empty((Z, H, N_CTX, D_HEAD), dtype=init_dtype, device="cuda")
         .normal_(mean=0., std=0.5)
         .requires_grad_()
     )
     k = (
-        torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16, device="cuda")
+        torch.empty((Z, H, N_CTX, D_HEAD), dtype=init_dtype, device="cuda")
         .normal_(mean=0., std=0.5)
         .requires_grad_()
     )
     v = (
-        torch.empty((Z, H, D_HEAD, N_CTX), dtype=torch.float16, device="cuda")
+        torch.empty((Z, H, D_HEAD, N_CTX), dtype=init_dtype, device="cuda")
         .normal_(mean=0., std=0.5)
         .requires_grad_()
     )
     sm_scale = 0.5
+    # reference implementation
+    M = torch.tril(torch.ones((N_CTX, N_CTX), device="cuda"))
+    p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
+    p = torch.softmax(p.float(), dim=-1).to(q.dtype)
+    ref_out = torch.matmul(p, v.transpose(2,3))
+    # triton implementation
+    # q,k casting for partial fp8
     q = q.to(name_to_torch_types[dtype])
     k = k.to(name_to_torch_types[dtype])
     dout = torch.randn_like(q, dtype=torch.float16)
-    # reference implementation
-    M = torch.tril(torch.ones((N_CTX, N_CTX), device="cuda"))
-    p = torch.matmul(q.half(), k.transpose(2, 3).half()) * sm_scale
-    p = torch.softmax(p.float(), dim=-1).half()
-    ref_out = torch.matmul(p, v.transpose(2,3))
-    # triton implementation
     tri_out = attention(q, k, v, sm_scale)
     # compare
     atol = 1.4e-1 if dtype == 'fp8' else 1e-2
-    rtol = 1e-2 if dtype == 'fp8' else 0
-    torch.testing.assert_close(ref_out, tri_out, atol=atol, rtol=0)
+    rtol = 1e-2 if dtype == 'fp8' else 3e-3
+    torch.testing.assert_close(ref_out, tri_out, atol=atol, rtol=rtol)
 
 
 try:
@@ -254,7 +258,7 @@ HAS_FLASH = FLASH_VER is not None
 
 # vary seq length for fixed head and batch=4
 configs = []
-for dtype in [torch.float16, float8]:
+for dtype in ['fp16', 'bf16', 'fp8']:
     for D_HEAD in [128]:
         for causal in [False]:
             configs.append(triton.testing.Benchmark(
@@ -285,14 +289,18 @@ for dtype in [torch.float16, float8]:
 
 @triton.testing.perf_report(configs)
 def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, causal, provider, dtype, device="cuda"):
+    if dtype == 'fp8' and not TORCH_HAS_FP8E4:
+        sys.exit("fp8 is not available")
     warmup = 25
     rep = 100
-    q = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=torch.float16, device="cuda", requires_grad=True)
-    k = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=torch.float16, device="cuda", requires_grad=True)
-    v = torch.randn((BATCH, H, D_HEAD, N_CTX), dtype=torch.float16, device="cuda", requires_grad=True)
+    init_dtype = torch.float16 if dtype != 'bf16' else torch.bfloat16
+    q = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=init_dtype, device="cuda", requires_grad=True)
+    k = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=init_dtype, device="cuda", requires_grad=True)
+    v = torch.randn((BATCH, H, D_HEAD, N_CTX), dtype=init_dtype, device="cuda", requires_grad=True)
     sm_scale = 1.3
-    q = q.to(dtype)
-    k = k.to(dtype)
+    # q,k casting for partial fp8
+    q = q.to(name_to_torch_types[dtype])
+    k = k.to(name_to_torch_types[dtype])
     fn = lambda: attention(q, k, v, sm_scale)
     ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
     flops_per_matmul = 2. * BATCH * H * N_CTX * N_CTX * D_HEAD

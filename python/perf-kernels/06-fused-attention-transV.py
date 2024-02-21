@@ -71,7 +71,7 @@ def _attn_fwd_inner(
         acc = acc * alpha[:, None]
         if not pre_load_v:
             v = tl.load(V_block_ptr)
-        acc += tl.dot(p.to(tl.float16), v)
+        acc += tl.dot(p.to(v.dtype), v)
         # -- update m_i and l_i
         l_ij = tl.sum(p, 1)
         l_i = l_i * alpha + l_ij
@@ -362,7 +362,7 @@ def _bwd_kernel_dk_dv(
     qk_scale = sm_scale * 1.44269504
     # load k and v: they will stay in SRAM throughout
     k = tl.load(K_block_ptr)
-    k = (k * qk_scale).to(tl.float16)
+    k = (k * qk_scale).to(k.dtype)
     v = tl.load(V_block_ptr)
     dv = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
     dk = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
@@ -412,8 +412,8 @@ def _bwd_kernel_dk_dv(
         block_shape=(BLOCK_M, BLOCK_DMODEL),
         order=(1, 0)
     )
-    tl.store(DK_block_ptr, (dk * sm_scale).to(tl.float16))
-    tl.store(DV_block_ptr, dv.to(tl.float16))
+    tl.store(DK_block_ptr, (dk * sm_scale).to(k.dtype))
+    tl.store(DV_block_ptr, dv.to(v.dtype))
 
 @triton.jit
 def _bwd_kernel_dq(
@@ -474,7 +474,7 @@ def _bwd_kernel_dq(
     qk_scale = sm_scale * 1.44269504
     # load q and do: they will stay in SRAM throughout
     q = tl.load(Q_block_ptr)
-    q = (q * qk_scale).to(tl.float16)
+    q = (q * qk_scale).to(q.dtype)
     do = tl.load(DO_block_ptr)
     Di = tl.load(D_ptrs + offs_m)
     l_i = tl.load(l_ptrs + offs_m)
@@ -510,7 +510,7 @@ def _bwd_kernel_dq(
         block_shape=(BLOCK_M, BLOCK_DMODEL),
         order=(1, 0)
     )
-    tl.store(DQ_block_ptr, (dq * sm_scale).to(tl.float16))
+    tl.store(DQ_block_ptr, (dq * sm_scale).to(q.dtype))
 
 empty = torch.empty(128, device="cuda")
 
@@ -651,6 +651,7 @@ attention = _attention.apply
                           #(4, 48, 16384, 64)
                           ])
 @pytest.mark.parametrize('causal', [False, True])
+@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
 def test_op_fwd(Z, H, N_CTX, D_HEAD, causal, dtype=torch.float16):
     torch.manual_seed(20)
     q = (
@@ -675,7 +676,7 @@ def test_op_fwd(Z, H, N_CTX, D_HEAD, causal, dtype=torch.float16):
     p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
     if causal:
         p[:, :, M == 0] = float("-inf")
-    p = torch.softmax(p.float(), dim=-1).half()
+    p = torch.softmax(p.float(), dim=-1).to(v.dtype)
     ref_out = torch.matmul(p, v.transpose(2,3))
     # triton implementation
     tri_out = attention(q, k, v, causal, sm_scale)
@@ -689,6 +690,7 @@ def test_op_fwd(Z, H, N_CTX, D_HEAD, causal, dtype=torch.float16):
                           (4, 48, 4096, 64),
                           (1, 16, 8192, 64),
                           ])
+@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
 def test_op_bwd(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     torch.manual_seed(20)
     causal = True
@@ -703,7 +705,7 @@ def test_op_bwd(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
     if causal:
         p[:, :, M == 0] = float("-inf")
-    p = torch.softmax(p.float(), dim=-1).half()
+    p = torch.softmax(p.float(), dim=-1).to(v.dtype)
     ref_out = torch.matmul(p, v)
     ref_out.backward(dout)
     ref_dv, v.grad = v.grad.clone(), None
@@ -739,52 +741,59 @@ except BaseException:
         FLASH_VER = None
 HAS_FLASH = FLASH_VER is not None
 
+name_to_torch_types = {
+    'fp16': torch.float16,
+    'bf16': torch.bfloat16,
+}
+
 # vary seq length for fixed head and batch=4
 configs = []
 for mode in ['fwd']:
-    for D_HEAD in [128, 64]:
-        for causal in [False, True]:
-            configs.append(triton.testing.Benchmark(
-                x_names=['BATCH', 'H','N_CTX'],
-                x_vals=[(16, 16, 1024),
-                        (8, 16, 2048),
-                        (4, 16, 4096),
-                        (2, 16, 8192),
-                        (1, 16, 16384),
-                        (4, 48, 1024),
-                        (4, 48, 2048),
-                        (4, 48, 4096),
-                        (4, 48, 8192),
-                        (4, 48, 16384),
-                        ],
+    for dtype in ["fp16", "bf16"]:
+        for D_HEAD in [128, 64]:
+            for causal in [False, True]:
+                configs.append(triton.testing.Benchmark(
+                    x_names=['BATCH', 'H','N_CTX'],
+                    x_vals=[(16, 16, 1024),
+                            (8, 16, 2048),
+                            (4, 16, 4096),
+                            (2, 16, 8192),
+                            (1, 16, 16384),
+                            (4, 48, 1024),
+                            (4, 48, 2048),
+                            (4, 48, 4096),
+                            (4, 48, 8192),
+                            (4, 48, 16384),
+                            ],
                 line_arg='provider',
                 line_vals=['triton'] + (['flash'] if HAS_FLASH else []),
                 line_names=['Triton'] + ([f'Flash-{FLASH_VER}'] if HAS_FLASH else []),
                 styles=[('red', '-'), ('blue', '-')],
                 ylabel='ms',
-                plot_name=f'fused-attention-d{D_HEAD}-{mode}-causal={causal}',
+                plot_name=f'fused-attention-d{D_HEAD}-{mode}-causal={causal}-{dtype}',
                 args={
                     'D_HEAD': D_HEAD,
-                    'dtype': torch.float16,
+                    'dtype': dtype,
                     'mode': mode,
                     'causal': causal})
             )
 
 
 @triton.testing.perf_report(configs)
-def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, causal, mode, provider, dtype=torch.float16, device="cuda"):
+def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, causal, mode, provider, dtype, device="cuda"):
     assert mode in ['fwd', 'bwd']
     warmup = 25
     rep = 100
+    init_dtype = name_to_torch_types[dtype]
     split_kernel = False
     # Bwd pass only supports causal=True right now
     if mode == 'bwd':
         causal = True
         split_kernel = True
     if provider == "triton":
-        q = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
-        k = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
-        v = torch.randn((BATCH, H, D_HEAD, N_CTX), dtype=dtype, device="cuda", requires_grad=True)
+        q = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=init_dtype, device="cuda", requires_grad=True)
+        k = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=init_dtype, device="cuda", requires_grad=True)
+        v = torch.randn((BATCH, H, D_HEAD, N_CTX), dtype=init_dtype, device="cuda", requires_grad=True)
         sm_scale = 1.3
         fn = lambda: attention(q, k, v, causal, sm_scale, split_kernel)
         if mode == 'bwd':
@@ -793,7 +802,7 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, causal, mode, provider, dtype
             fn = lambda: o.backward(do, retain_graph=True)
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
     if provider == "flash":
-        qkv = torch.randn((BATCH, N_CTX, 3, H, D_HEAD), dtype=dtype, device=device, requires_grad=True)
+        qkv = torch.randn((BATCH, N_CTX, 3, H, D_HEAD), dtype=init_dtype, device=device, requires_grad=True)
         if FLASH_VER == 1:
             lengths = torch.full((BATCH,), fill_value=N_CTX, device=device)
             cu_seqlens = torch.zeros((BATCH + 1,), device=device, dtype=torch.int32)
