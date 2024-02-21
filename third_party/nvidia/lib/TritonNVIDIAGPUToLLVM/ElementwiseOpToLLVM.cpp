@@ -1768,27 +1768,32 @@ private:
   int computeCapability;
 };
 
-struct PreciseSqrtOpConversion
-    : public ElementwiseOpConversionBase<PreciseSqrtOp,
-                                         PreciseSqrtOpConversion> {
-  using Base = ElementwiseOpConversionBase<PreciseSqrtOp,
-                                           PreciseSqrtOpConversion>;
+template <typename TritonOp>
+struct NamedExternalElementwiseOpConversion
+    : public ElementwiseOpConversionBase<TritonOp,
+                                         NamedExternalElementwiseOpConversion<TritonOp>> {
+  using Base = ElementwiseOpConversionBase<TritonOp,
+                                           NamedExternalElementwiseOpConversion<TritonOp>>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
-  typedef typename Base::OpAdaptor OpAdaptor;
 
-  SmallVector<Value> createDestOps(PreciseSqrtOp op, OpAdaptor adaptor,
+  explicit NamedExternalElementwiseOpConversion(LLVMTypeConverter &typeConverter,
+                              ModuleAxisInfoAnalysis &axisAnalysisPass,
+                              StringRef externFuncName, PatternBenefit benefit)
+      : Base::ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
+        funcName(externFuncName) {}
+
+  SmallVector<Value> createDestOps(TritonOp op, Adaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    StringRef funcName = "__nv_fsqrt_rn";
-
     Type funcType = getFunctionType(elemTy, operands[0]);
-    LLVM::LLVMFuncOp funcOp =
-        appendOrGetFuncOp(rewriter, op, funcName, funcType);
-    return {
-        rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
+    LLVM::LLVMFuncOp funcOp = appendOrGetFuncOp(rewriter, op, funcName, funcType);
+    return {rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
   }
+
+private:
+  StringRef funcName;
 };
 
 /// The lowering of index_cast becomes an integer conversion since index
@@ -1939,7 +1944,8 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
 
-  patterns.add<PreciseSqrtOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<NamedExternalElementwiseOpConversion<triton::PreciseSqrtOp>>(typeConverter, axisInfoAnalysis, "__nv_fsqrt_rn", benefit);
+  patterns.add<NamedExternalElementwiseOpConversion<triton::PreciseDivFOp>>(typeConverter, axisInfoAnalysis, "__nv_fdiv_rn", benefit);
 
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
   patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, benefit);

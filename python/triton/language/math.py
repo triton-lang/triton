@@ -177,13 +177,20 @@ def fast_dividef(arg0, arg1, _builder=None):
     }, is_pure=True, _builder=_builder)
 
 
+# @core.extern
+# def div_rn(arg0, arg1, _builder=None):
+#     return core.extern_elementwise(
+#         "", "", [arg0, arg1], {
+#             (core.dtype("fp32"), core.dtype("fp32")): ("__nv_fdiv_rn", core.dtype("fp32")),
+#             (core.dtype("fp64"), core.dtype("fp64")): ("__nv_ddiv_rn", core.dtype("fp64")),
+#         }, is_pure=True, _builder=_builder)
+
+
 @core.extern
 def div_rn(arg0, arg1, _builder=None):
-    return core.extern_elementwise(
-        "", "", [arg0, arg1], {
-            (core.dtype("fp32"), core.dtype("fp32")): ("__nv_fdiv_rn", core.dtype("fp32")),
-            (core.dtype("fp64"), core.dtype("fp64")): ("__nv_ddiv_rn", core.dtype("fp64")),
-        }, is_pure=True, _builder=_builder)
+    arg0 = core._to_tensor(arg0, _builder)
+    arg1 = core._to_tensor(arg1, _builder)
+    return core.tensor(_builder.create_precise_divf(arg0.handle, arg1.handle), arg0.type)
 
 
 @core.extern
@@ -256,6 +263,7 @@ def rcp_ru(arg0, _builder=None):
 #             (core.dtype("fp32"), ): ("__nv_fsqrt_rn", core.dtype("fp32")),
 #             (core.dtype("fp64"), ): ("__nv_dsqrt_rn", core.dtype("fp64")),
 #         }, is_pure=True, _builder=_builder)
+
 
 @core.extern
 def sqrt_rn(arg0, _builder=None):

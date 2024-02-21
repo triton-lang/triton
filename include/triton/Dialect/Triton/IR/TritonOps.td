@@ -148,6 +148,22 @@ def TT_PreciseSqrtOp : TT_Op<"precise_sqrt", [Elementwise,
     let assemblyFormat = "$x attr-dict `:` type($x)";
 }
 
+def TT_PreciseDivFOp : TT_Op<"precise_divf", [Elementwise,
+                                  SameOperandsAndResultType,
+                                  Pure]> {
+    let summary = "Precise div for floating point types";
+
+    let description = [{
+        Precise div for floating point types.
+    }];
+
+    let arguments = (ins TT_FloatLike:$x, TT_FloatLike:$y);
+
+    let results = (outs TT_FloatLike:$result);
+
+    let assemblyFormat = "$x `,` $y attr-dict `:` type($x)";
+}
+
 //
 // Pointer Arith Ops
 //

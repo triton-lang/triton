@@ -987,6 +987,10 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &input) -> Value {
              return Value(self.create<PreciseSqrtOp>(input));
            })
+      .def("create_precise_divf",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return Value(self.create<PreciseDivFOp>(lhs, rhs));
+           })
       // AddPtr (similar to GEP)
       .def("create_addptr",
            [](TritonOpBuilder &self, Value &ptr, Value &offset) -> Value {
