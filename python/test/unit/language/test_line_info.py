@@ -150,8 +150,8 @@ def test_line_info(func: str):
     elif func == "multi_files":
         assert (check_file_lines(file_lines, "test_line_info.py", 48))
         assert (check_file_lines(file_lines, "test_line_info.py", 50))
-        assert (check_file_lines(file_lines, "standard.py", 153))
-        assert (check_file_lines(file_lines, "standard.py", 198))
+        assert (check_file_lines(file_lines, "standard.py", 149))
+        assert (check_file_lines(file_lines, "standard.py", 169))
     elif func == "autotune":
         assert (check_file_lines(file_lines, "test_line_info.py", 60))
         assert (check_file_lines(file_lines, "test_line_info.py", 61))
