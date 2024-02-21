@@ -171,47 +171,21 @@ static bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
                 dstEncoding.dyn_cast<triton::gpu::MmaEncodingAttr>())
           return (mmaLayout.getVersionMajor() > 1) ? true
                                                    : mmaLayout == encoding;
-        if (dstEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
-          return encoding.cast<triton::gpu::MmaEncodingAttr>()
-                     .getVersionMajor() > 1;
-      }
-      auto yield = dyn_cast<scf::YieldOp>(op);
-      if (!yield)
-        continue;
-      auto forOp = dyn_cast<scf::ForOp>(yield.getOperation()->getParentOp());
-      if (!forOp)
-        continue;
-      for (OpOperand &operand : yield->getOpOperands()) {
-        Operation *def = operand.get().getDefiningOp();
-        if (def && forwardSlice.count(def) &&
-            (seen.insert(operand.get()).second == true))
-          queue.push_back(forOp.getRegionIterArg(operand.getOperandNumber()));
-      }
-    }
-  }
-  return false;
-}
+        if (auto mfmaLayout =
+                dstEncoding.dyn_cast<triton::gpu::MfmaEncodingAttr>())
+          return mfmaLayout == encoding;
+        if (dstEncoding.isa<triton::gpu::DotOperandEncodingAttr>()) {
+          if (auto mmaLayout =
+                  encoding.dyn_cast<triton::gpu::MmaEncodingAttr>()) {
+            return mmaLayout.getVersionMajor() > 1;
 
-#ifdef USE_ROCM
-// Look ahead to at the transitive uses and see if there is a convert to mfma
-// operations.
-// TODO: unify with hasConvertToMMATransisitiveUse?
-static bool hasConvertToMFMATransisitiveUse(Operation *op, Attribute encoding) {
-  SmallVector<Value> queue = {op->getResult(0)};
-  SetVector<Operation *> forwardSlice;
-  llvm::SmallDenseSet<Value> seen;
-  while (!queue.empty()) {
-    Value currentValue = queue.back();
-    queue.pop_back();
-    getForwardSlice(currentValue, &forwardSlice);
-    for (Operation *op : forwardSlice) {
-      if (auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-        if (convertOp.getResult()
-                .getType()
-                .cast<RankedTensorType>()
-                .getEncoding() == encoding)
-          return true;
+          } else {
+            assert(encoding.dyn_cast<triton::gpu::MfmaEncodingAttr>());
+            return true;
+          }
+        }
       }
+
       auto yield = dyn_cast<scf::YieldOp>(op);
       if (!yield)
         continue;
@@ -228,7 +202,6 @@ static bool hasConvertToMFMATransisitiveUse(Operation *op, Attribute encoding) {
   }
   return false;
 }
-#endif
 
 // Return true if the op is an op with a layout we don't want to change. We will
 // propagate the layout starting from anchor ops.
@@ -250,21 +223,10 @@ void LayoutPropagation::initAnchorLayout() {
           // back to mma further down to avoid generating reduction with MMA
           // layout that may have lower performance.
           // This can be improved with more aggressive backward propagation.
-          if (tensorType.getEncoding().isa<triton::gpu::MmaEncodingAttr>() &&
+          if ((tensorType.getEncoding().isa<triton::gpu::MmaEncodingAttr>() ||
+               tensorType.getEncoding().isa<triton::gpu::MfmaEncodingAttr>()) &&
               !hasConvertToMMATransisitiveUse(op, tensorType.getEncoding()))
             continue;
-#ifdef USE_ROCM
-          // Workaround to not propagate MFMA layout in case there are
-          // no chained dots MFMA layout is expensive to convert, so we want
-          // to convert it to something else as soon as possible.
-          // It saves LDS space in some cases.
-          //
-          // TODO: rework this heuristic if we can store MFMA layout directly
-          // into global memory.
-          if (tensorType.getEncoding().isa<triton::gpu::MfmaEncodingAttr>() &&
-              !hasConvertToMFMATransisitiveUse(op, tensorType.getEncoding()))
-            continue;
-#endif
           layouts.insert({result, LayoutInfo(tensorType.getEncoding())});
         }
       }
@@ -379,7 +341,8 @@ void LayoutPropagation::resolveConflicts() {
                   triton::AtomicCASOp>(op);
     for (Attribute e : info.encodings) {
       if ((isLoadOrStore && e.isa<triton::gpu::BlockedEncodingAttr>()) ||
-          (!isLoadOrStore && e.isa<triton::gpu::MmaEncodingAttr>())) {
+          (!isLoadOrStore && (e.isa<triton::gpu::MmaEncodingAttr>() ||
+                              e.isa<triton::gpu::MfmaEncodingAttr>()))) {
         encoding = e;
         break;
       }
