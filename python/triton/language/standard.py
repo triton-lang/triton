@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..runtime.jit import jit
-from . import core, math
+from . import core
 
 # constexpr utilities (triton metaprogramming sucks)
 
@@ -94,7 +94,7 @@ def swizzle2d(i, j, size_i, size_j, size_g):
     # row-index of the first element of this group
     off_i = group_id * size_g
     # last group may have fewer rows
-    size_g = minimum(size_i - off_i, size_g)
+    size_g = core.minimum(size_i - off_i, size_g)
     # new row and column indices
     new_i = off_i + (ij % size_g)
     new_j = (ij % size_gj) // size_g
@@ -143,9 +143,11 @@ def _argmax_combine_tie_break_left(value1, index1, value2, index2):
 def _argmax_combine_tie_break_fast(value1, index1, value2, index2):
     return _argmax_combine(value1, index1, value2, index2, False)
 
+
 @jit
 def _elementwise_max(a, b):
     return core.maximum(a, b)
+
 
 @jit
 @core._add_reduction_docstr("maximum", return_indices_arg="return_indices",
@@ -198,9 +200,11 @@ def _argmin_combine_tie_break_left(value1, index1, value2, index2):
 def _argmin_combine_tie_break_fast(value1, index1, value2, index2):
     return _argmin_combine(value1, index1, value2, index2, False)
 
+
 @jit
 def _elementwise_min(a, b):
     return core.minimum(a, b)
+
 
 @jit
 @core._add_reduction_docstr("minimum", return_indices_arg="return_indices",
