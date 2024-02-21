@@ -271,27 +271,27 @@ llvm::SmallVector<Value> loadReg(ConversionPatternRewriter &rewriter,
   OpBuilder::InsertionGuard g(rewriter);
   rewriter.setInsertionPoint(insertBefore);
 
-  // Internally bfloat16 is stored as int16, so we check them both
-  auto isBF16 =
-      elements[0].getType().isBF16() || elements[0].getType().isInteger(16);
-
-  if (!(elements[0].getType().isF16() || isBF16)) {
+  bool needPacking = elements[0].getType().isIntOrFloat() &&
+                     elements[0].getType().getIntOrFloatBitWidth() < 32;
+  if (!needPacking) {
     llvm::SmallVector<Value> mmaOut(numElements);
     for (int i = 0; i < numElements; ++i)
       mmaOut[i] = elements[startIndex + i];
     return mmaOut;
   }
+  Type elementType = elements[0].getType();
+  int numElementsPacked = 32 / elementType.getIntOrFloatBitWidth();
 
   // For FP16 and BF16 we need to pack accumulator into 32-bit integers.
-  llvm::SmallVector<Value> mmaOut(numElements / 2);
-  Type cPackTy = isBF16 ? vec_ty(rewriter.getIntegerType(16), 2)
-                        : vec_ty(rewriter.getF16Type(), 2);
-  for (int i = 0; i < numElements / 2; ++i) {
-    Value a0 = elements[startIndex + 2 * i];
-    Value a1 = elements[startIndex + 2 * i + 1];
+  int num32BitsValue = numElements / numElementsPacked;
+  llvm::SmallVector<Value> mmaOut(num32BitsValue);
+  Type cPackTy = vec_ty(elementType, numElementsPacked);
+  for (int i = 0; i < num32BitsValue; ++i) {
     Value pack = rewriter.create<LLVM::UndefOp>(loc, cPackTy);
-    pack = insert_element(cPackTy, pack, a0, i32_val(0));
-    pack = insert_element(cPackTy, pack, a1, i32_val(1));
+    for (int j = 0; j < numElementsPacked; ++j) {
+      Value element = elements[startIndex + i * numElementsPacked + j];
+      pack = insert_element(cPackTy, pack, element, i32_val(j));
+    }
     pack = bitcast(pack, rewriter.getIntegerType(32));
     mmaOut[i] = pack;
   }
