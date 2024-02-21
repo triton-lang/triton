@@ -1769,6 +1769,56 @@ private:
   int computeCapability;
 };
 
+struct PreciseSqrtOpConversion
+    : public ElementwiseOpConversionBase<ExternElementwiseOp,
+                                         ExternElementwiseOpConversion> {
+  using Base = ElementwiseOpConversionBase<ExternElementwiseOp,
+                                           ExternElementwiseOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+  typedef typename Base::OpAdaptor OpAdaptor;
+
+  // TODO pawel: this is copied from ExternElementwiseOpConversion!!! Refactor!
+  SmallVector<Value> createDestOps(PreciseSqrtFOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    StringRef funcName = "__nv_fqrt_rn";
+
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetFuncOp(rewriter, op, funcName, funcType);
+    return {
+        rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
+  }
+
+private:
+  Type getFunctionType(Type resultType, ValueRange operands) const {
+    SmallVector<Type> operandTypes(operands.getTypes());
+    return LLVM::LLVMFunctionType::get(resultType, operandTypes);
+  }
+
+  LLVM::LLVMFuncOp appendOrGetFuncOp(ConversionPatternRewriter &rewriter,
+                                     PreciseSqrtFOp op, StringRef funcName,
+                                     Type funcType) const {
+    using LLVM::LLVMFuncOp;
+
+    auto funcAttr = StringAttr::get(op->getContext(), funcName);
+    Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(op, funcAttr);
+    if (funcOp)
+      return cast<LLVMFuncOp>(*funcOp);
+
+    auto parent = ((Operation *)op)->getParentOfType<LLVM::LLVMFuncOp>();
+    OpBuilder b(parent);
+    auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
+    ret.getOperation()->setAttr(
+        "libname", StringAttr::get(op->getContext(), ""));
+    ret.getOperation()->setAttr(
+        "libpath", StringAttr::get(op->getContext(), ""));
+    return ret;
+  }
+};
+
 /// The lowering of index_cast becomes an integer conversion since index
 /// becomes an integer.  If the bit width of the source and target integer
 /// types is the same, just erase the cast.  If the target type is wider,
@@ -1916,6 +1966,8 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(triton::IntToPtrOp, LLVM::IntToPtrOp)
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
+
+  patterns.add<PreciseSqrtOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
   patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, benefit);

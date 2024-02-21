@@ -983,6 +983,10 @@ void init_triton_ir(py::module &&m) {
               PropagateNan propagateNan) -> Value {
              return Value(self.create<ClampFOp>(input, min, max, propagateNan));
            })
+      .def("create_precise_sqrtf",
+           [](TritonOpBuilder &self, Value &input) -> Value {
+             return Value(self.create<PreciseSqrtFOp>(input));
+           })
       // AddPtr (similar to GEP)
       .def("create_addptr",
            [](TritonOpBuilder &self, Value &ptr, Value &offset) -> Value {

@@ -105,6 +105,10 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
     let hasVerifier = 1;
 }
 
+//
+// Arithmetic Ops
+//
+
 def TT_ClampFOp : TT_Op<"clampf", [Elementwise,
                                   SameOperandsAndResultType,
                                   Pure]> {
@@ -121,6 +125,25 @@ def TT_ClampFOp : TT_Op<"clampf", [Elementwise,
     let results = (outs TT_FloatLike:$result);
 
     let assemblyFormat = "$x `,` $min `,` $max attr-dict `:` type($result)";
+}
+
+//
+// Math Ops
+//
+
+// TODO pawel: think about the name
+def TT_PreciseSqrtFOp : TT_Op<"precise_sqrtf", [Elementwise,
+                                  SameOperandsAndResultType,
+                                  Pure]> {
+    let summary = "Precise sqrt for floating point types";
+
+    let description = [{
+        Precise sqrt for floating point types.
+    }];
+
+    let arguments = (ins TT_FloatLike:$x);
+
+    let results = (outs TT_FloatLike:$result);
 }
 
 //
