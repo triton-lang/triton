@@ -4325,14 +4325,14 @@ def test_smid(device):
 # TODO: backend should be tested separately
 
 layouts = [
-    BlockedLayout([1, 16], [8, 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 8], [2, 16], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [4, 8], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 1], [1, 32], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([8, 1], [16, 2], [1, 4], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([4, 1], [8, 4], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 1], [32, 1], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([4, 4], [1, 32], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1])
+    BlockedLayout([1, 16], [8, THREADS_PER_WARP//8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 8], [2, THREADS_PER_WARP//2], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [4, THREADS_PER_WARP//4], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 1], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([8, 1], [16, THREADS_PER_WARP//16], [1, 4], [0, 1], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([4, 1], [8, THREADS_PER_WARP//8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([4, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1])
 ]
 
 intermediate_layouts = [
@@ -4349,8 +4349,8 @@ intermediate_layouts = [
 @pytest.mark.parametrize("interm_layout", intermediate_layouts)
 @pytest.mark.parametrize("dst_layout", layouts)
 def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
-    if is_hip():
-        pytest.skip("test_convert2d is not supported in HIP")
+    if is_hip() and interm_layout is not None and M == 128 and N == 128:
+        pytest.skip("LDS is not sufficient")
     if (M == 1 or N == 1) and interm_layout:
         pytest.skip("Out of bound access when maxPhase > 1")
     if str(src_layout) == str(dst_layout):
@@ -4379,7 +4379,7 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     """
 
     ir = layouts + f"""
-    module attributes {{"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32}} {{
+    module attributes {{"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
   tt.func public @kernel_0d1d(%arg0: !tt.ptr<f16, 1> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16, 1> {{tt.divisibility = 16 : i32}}) {{
     %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #src>
     %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
