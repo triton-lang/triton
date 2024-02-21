@@ -427,9 +427,9 @@ def _patch_lang_core(lang, builder):
     def _new_reduce_wrapper(mode, input, axis=None, return_indices=False, return_indices_tie_break_left=True,
                             keep_dims=False):
         if mode == "min":
-            return _new_reduce(input, axis, tl.standard.minimum, keep_dims)
+            return _new_reduce(input, axis, tl.minimum, keep_dims)
         elif mode == "max":
-            return _new_reduce(input, axis, tl.standard.maximum, keep_dims)
+            return _new_reduce(input, axis, tl.maximum, keep_dims)
         elif mode == "sum":
             return _new_reduce(input, axis, tl.standard._sum_combine, keep_dims)
         else:
