@@ -118,13 +118,20 @@ def trunc(arg0, _builder=None):
         }, is_pure=True, _builder=_builder)
 
 
+# @core.extern
+# def exp2(arg0, _builder=None):
+#     return core.extern_elementwise(
+#         "", "", [arg0], {
+#             (core.dtype("fp32"), ): ("__nv_exp2f", core.dtype("fp32")),
+#             (core.dtype("fp64"), ): ("__nv_exp2", core.dtype("fp64")),
+#         }, is_pure=True, _builder=_builder)
+
+
+# TODO pawel: handle non f32 types for all of the new functions
 @core.extern
 def exp2(arg0, _builder=None):
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__nv_exp2f", core.dtype("fp32")),
-            (core.dtype("fp64"), ): ("__nv_exp2", core.dtype("fp64")),
-        }, is_pure=True, _builder=_builder)
+    arg0 = core._to_tensor(arg0, _builder)
+    return core.tensor(_builder.create_exp2(arg0.handle), arg0.type)
 
 
 @core.extern

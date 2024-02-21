@@ -1304,6 +1304,10 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::ExpOp>(val);
            })
+      .def("create_exp2",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::Exp2Op>(val);
+           })
       .def("create_cos",
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::CosOp>(val);
