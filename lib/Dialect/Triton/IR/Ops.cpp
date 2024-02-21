@@ -546,19 +546,31 @@ LogicalResult ReduceOp::inferReturnTypes(
   return success();
 }
 
-LogicalResult ReduceOp::verify() {
-  if (this->getOperands().size() < 1) {
-    return this->emitOpError() << "must have at least 1 operand";
+// Helpers for Reductions and Scans
+template <class Op> LogicalResult verifyReduceScan(Op &op) {
+  if (op.getOperands().empty()) {
+    return op.emitOpError() << "must have at least 1 operand";
   }
-  for (const auto &operand : this->getOperands()) {
-    if (!dyn_cast<RankedTensorType>(operand.getType())) {
-      return this->emitOpError() << "operands must be RankedTensorType";
+  if (op.getNumOperands() != op.getNumResults()) {
+    return op.emitOpError() << "must have the same number of inputs as outputs";
+  }
+
+  auto getElementType = [](Type ty) {
+    if (auto tensorType = ty.dyn_cast<RankedTensorType>()) {
+      return tensorType.getElementType();
+    }
+    return ty;
+  };
+
+  for (auto [opElemTy, resTy] :
+       llvm::zip(op.getElementTypes(), op.getResultTypes())) {
+    if (opElemTy != getElementType(resTy)) {
+      return op.emitOpError() << "operand types and result types must agree";
     }
   }
   return success();
 }
 
-// Helpers for Reductions and Scans
 template <class ReturnOp, class Op>
 static LogicalResult verifyRegionsImpl(Op &op) {
   auto argElementTypes = op.getElementTypes();
@@ -627,9 +639,10 @@ getElementTypesImpl(const Operation::operand_range &operands) {
   return srcElemTys;
 }
 
+LogicalResult ReduceOp::verify() { return verifyReduceScan(*this); }
+
 LogicalResult ReduceOp::verifyRegions() {
-  using ReturnOp = ReduceReturnOp;
-  return verifyRegionsImpl<ReturnOp>(*this);
+  return verifyRegionsImpl<ReduceReturnOp>(*this);
 }
 
 llvm::SmallVector<RankedTensorType> ReduceOp::getInputTypes() {
@@ -661,21 +674,10 @@ ScanOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
   return success();
 }
 
-LogicalResult ScanOp::verify() {
-  if (this->getOperands().size() < 1) {
-    return this->emitOpError() << "must have at least 1 operand";
-  }
-  /*for (const auto &operand : this->getOperands()) {
-    if (!dyn_cast<RankedTensorType>(operand.getType())) {
-      return this->emitOpError() << "operands must be RankedTensorType";
-    }
-  }*/
-  return success();
-}
+LogicalResult ScanOp::verify() { return verifyReduceScan(*this); }
 
 LogicalResult ScanOp::verifyRegions() {
-  using ReturnOp = ScanReturnOp;
-  return verifyRegionsImpl<ReturnOp>(*this);
+  return verifyRegionsImpl<ScanReturnOp>(*this);
 }
 
 llvm::SmallVector<RankedTensorType> ScanOp::getInputTypes() {
