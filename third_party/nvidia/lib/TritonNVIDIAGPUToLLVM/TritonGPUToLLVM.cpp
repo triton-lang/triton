@@ -22,9 +22,10 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetPlatform.hpp"
 
+#include "../lib/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "../lib/Conversion/TritonGPUToLLVM/TypeConverter.h"
-#include "Utility.h"
 #include "PatternTritonGPUOpToLLVM.h"
+#include "Utility.h"
 
 namespace mlir {
 namespace triton {
@@ -244,7 +245,8 @@ struct ConvertTritonGPUToLLVM
     populateHistogramOpToLLVMPatterns(typeConverter, patterns, benefit);
     populatePrintOpToLLVMPattern(typeConverter, patterns, benefit);
     populateAssertOpToLLVMPattern(typeConverter, patterns, benefit);
-    populateMemoryOpToLLVMPattern(typeConverter, patterns, benefit);
+    mlir::triton::common::populateMemoryOpToLLVMPattern(typeConverter, patterns,
+                                                        benefit);
     populateControlFlowOpToLLVMPattern(typeConverter, patterns, benefit);
     populateMakeRangeOpToLLVMPattern(typeConverter, patterns, benefit);
     populateSPMDOpToLLVMPattern(typeConverter, patterns, benefit);

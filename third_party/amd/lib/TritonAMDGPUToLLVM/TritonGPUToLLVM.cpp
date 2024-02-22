@@ -1,7 +1,7 @@
 #include "TritonGPUToLLVM.h"
 #include "Utility.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-
+#include "../lib/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 namespace {
 
 using namespace mlir;
@@ -626,57 +626,6 @@ struct AddPtrOpConversion
   }
 };
 
-struct AllocTensorOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::AllocTensorOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::AllocTensorOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::AllocTensorOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    Value smemBase = getSharedMemoryBase(loc, rewriter, op.getResult());
-    auto resultTy = op.getType().dyn_cast<RankedTensorType>();
-    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-    smemBase = bitcast(smemBase, elemPtrTy);
-    auto sharedLayout = resultTy.getEncoding().cast<SharedEncodingAttr>();
-    auto order = sharedLayout.getOrder();
-    // Workaround for 3D tensors
-    // TODO: we need to modify the pipeline pass to give a proper shared
-    // encoding to 3D tensors
-    SmallVector<unsigned> newOrder;
-    if (resultTy.getShape().size() != order.size()) {
-      for (auto i = 0; i < order.size(); ++i)
-        newOrder.push_back(order[i] + 1);
-      newOrder.push_back(0);
-    } else {
-      newOrder = SmallVector<unsigned>(order.begin(), order.end());
-    }
-
-    auto llvmElemTy =
-        getTypeConverter()->convertType(resultTy.getElementType());
-    auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
-    auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, shapePerCTA,
-                                      newOrder, loc, rewriter);
-    auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
-    rewriter.replaceOp(op, retVal);
-    return success();
-  }
-};
-
-struct DeallocTensorOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::DeallocTensorOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::DeallocTensorOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::DeallocTensorOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    rewriter.eraseOp(op);
-    return success();
-  }
-};
-
 struct ExtractSliceOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::ExtractSliceOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -795,9 +744,8 @@ void populateTritonGPUToLLVMPatterns(
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     PatternBenefit benefit) {
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
-  patterns.add<AllocTensorOpConversion>(typeConverter, moduleAllocation,
-                                        benefit);
-  patterns.add<DeallocTensorOpConversion>(typeConverter, benefit);
+  mlir::triton::common::populateMemoryOpToLLVMPattern(typeConverter, patterns,
+                                                      benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
   patterns.add<AsyncBulkCommitGroupOpConversion>(typeConverter, benefit);

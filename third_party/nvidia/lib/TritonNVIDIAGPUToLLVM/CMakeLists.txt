@@ -16,7 +16,6 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     DecomposeUnsupportedConversions.cpp
     AssertOpToLLVM.cpp
     PrintOpToLLVM.cpp
-    MemoryOpToLLVM.cpp
     ControlFlowOpToLLVM.cpp
     MakeRangeOpToLLVM.cpp
     SPMDOpToLLVM.cpp
