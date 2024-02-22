@@ -31,3 +31,9 @@ def log2(arg0, _builder=None):
 def erf(arg0, _builder=None):
     arg0 = core._to_tensor(arg0, _builder)
     return core.tensor(_builder.create_erf(arg0.handle), arg0.type)
+
+
+@core.extern
+def floor(arg0, _builder=None):
+    arg0 = core._to_tensor(arg0, _builder)
+    return core.tensor(_builder.create_floor(arg0.handle), arg0.type)

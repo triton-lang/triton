@@ -1300,6 +1300,10 @@ void init_triton_ir(py::module &&m) {
              return self.create<DotOp>(c.getType(), a, b, c, allowTF32,
                                        maxNumImpreciseAcc);
            })
+      .def("create_floor",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::FloorOp>(val);
+           })
       .def("create_exp",
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::ExpOp>(val);

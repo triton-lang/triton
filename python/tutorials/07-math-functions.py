@@ -1,11 +1,11 @@
 """
-Libdevice (`tl.math`) function
+Libdevice (`tl.extra.cuda.libdevice`) function
 ==============================
 Triton can invoke a custom function from an external library.
-In this example, we will use the `libdevice` library (a.k.a `math` in triton) to apply `asin` on a tensor.
+In this example, we will use the `libdevice` library to apply `asin` on a tensor.
 Please refer to https://docs.nvidia.com/cuda/libdevice-users-guide/index.html regarding the semantics of all available libdevice functions.
-In `triton/language/math.py`, we try to aggregate functions with the same computation but different data types together.
-For example, both `__nv_asin` and `__nvasinf` calculate the principal value of the arc sine of the input, but `__nv_asin` operates on `double` and `__nv_asinf` operates on `float`.
+In `libdevice.py`, we try to aggregate functions with the same computation but different data types together.
+For example, both `__nv_asin` and `__nv_asinf` calculate the principal value of the arc sine of the input, but `__nv_asin` operates on `double` and `__nv_asinf` operates on `float`.
 Using triton, you can simply call `tl.math.asin`.
 Triton automatically selects the correct underlying device function to invoke based on input and output types.
 """
@@ -18,6 +18,7 @@ import torch
 
 import triton
 import triton.language as tl
+from triton.language.extra.cuda import libdevice
 
 
 @triton.jit
@@ -32,7 +33,7 @@ def asin_kernel(
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     x = tl.load(x_ptr + offsets, mask=mask)
-    x = tl.math.asin(x)
+    x = libdevice.asin(x)
     tl.store(y_ptr + offsets, x, mask=mask)
 
 

@@ -1484,14 +1484,14 @@ def _check_dtype(dtypes: List[str]) -> T:
 def umulhi(x: tl.tensor, y: tl.tensor, builder: ir.builder) -> tl.tensor:
     x, y = binary_op_type_checking_impl(x, y, builder)
     # FIXME(Keren): not portable, should be fixed
-    from . import math
-    return math.mulhi(x, y, _builder=builder)
+    # TODO pawel: Stop using the intrinsic altogether, come up with pattern matching
+    from .extra.cuda import libdevice
+    return libdevice.mulhi(x, y, _builder=builder)
 
 
 @_check_dtype(dtypes=["fp32", "fp64"])
 def floor(x: tl.tensor, builder: ir.builder) -> tl.tensor:
-    # FIXME(Keren): not portable, should be fixed
-    from . import math
+    from .extra.cuda import math
     return math.floor(x, _builder=builder)
 
 
