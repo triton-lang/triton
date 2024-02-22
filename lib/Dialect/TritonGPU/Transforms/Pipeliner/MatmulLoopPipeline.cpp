@@ -427,13 +427,13 @@ collectOpsToPipeline(scf::ForOp forOp,
   // We cannot use forOp.walk(...) here because we only want to visit the
   // operations in the loop body block. Nested blocks are handled separately.
   for (Operation &op : forOp) {
-    auto I = opInfo.find(&op);
-    if (I != opInfo.end() && I->second.stage == -1) {
-      assert(!isa<tt::LoadOp>(I->first));
+    auto iter = opInfo.find(&op);
+    if (iter != opInfo.end() && iter->second.stage == -1) {
+      assert(!isa<tt::LoadOp>(iter->first));
       PipelineOpInfo useOpInfo{
           .stage = numStages - 1,
       };
-      I->second = useOpInfo;
+      iter->second = useOpInfo;
     }
   }
 
