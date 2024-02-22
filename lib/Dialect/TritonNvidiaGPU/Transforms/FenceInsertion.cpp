@@ -62,13 +62,14 @@ public:
         return WalkResult::advance();
       Operation *fence = builder.create<ttng::FenceAsyncSharedOp>(
           op->getLoc(), /*bCluster=*/false);
-      // If there is only one dependency and it is outside of the loop try to
-      // hoist the fence. Only handle single dependency for simplicity.
-      if (aDependsOnShared && bDependsOnShared)
-        return WalkResult::advance();
-      Value depValue = aDependsOnShared ? a : b;
+      // If there is all the dependencies are outside of the loop try to hoist
+      // the fence.
       while (auto loopOp = fence->getParentOfType<LoopLikeOpInterface>()) {
-        if (loopOp->isAncestor(depValue.getParentBlock()->getParentOp()))
+        if (aDependsOnShared &&
+            loopOp->isAncestor(a.getParentBlock()->getParentOp()))
+          break;
+        if (bDependsOnShared &&
+            loopOp->isAncestor(b.getParentBlock()->getParentOp()))
           break;
         loopOp.moveOutOfLoop(fence);
       }
