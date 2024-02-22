@@ -1489,6 +1489,26 @@ def test_join(device):
     np.testing.assert_equal(to_numpy(z_ref), to_numpy(z))
 
 
+def test_join_scalars(device):
+    if is_hip():
+        pytest.skip("test_join not supported on HIP")
+
+    @triton.jit
+    def kernel(X, Y, Z):
+        x = tl.load(X)
+        y = tl.load(Y)
+        z = tl._experimental_join(x, y)
+        tl.static_assert(z.shape == [2])
+        tl.store(Z + tl.arange(0, 2), z)
+
+    x = torch.full([1], 42, device=device).to(torch.int32)
+    y = torch.full([1], 100, device=device).to(torch.int32)
+    z = torch.zeros([2], device=device)
+    kernel[(1, )](x, y, z)
+
+    np.testing.assert_equal([42, 100], to_numpy(z))
+
+
 def test_join_with_mma(device):
     if is_hip():
         pytest.skip("test_join_with_mma not supported on HIP")
@@ -1528,6 +1548,33 @@ def test_split(device):
     z1 = torch.zeros_like(z1_ref)
     z2 = torch.zeros_like(z2_ref)
     kernel[(1, )](x, z1, z2, N=256)
+
+    np.testing.assert_equal(to_numpy(z1_ref), to_numpy(z1))
+    np.testing.assert_equal(to_numpy(z2_ref), to_numpy(z2))
+
+
+def test_split_to_scalar(device):
+    if is_hip():
+        pytest.skip("test_split not supported on HIP")
+
+    @triton.jit
+    def kernel(X, Z1, Z2):
+        offs = tl.arange(0, 2)
+        x = tl.load(X + offs)
+        z1, z2 = tl._experimental_split(x)
+        tl.static_assert(isinstance(z1, tl.tensor))
+        tl.static_assert(isinstance(z2, tl.tensor))
+        tl.static_assert(z1.shape == [])
+        tl.static_assert(z2.shape == [])
+        tl.store(Z1, z1)
+        tl.store(Z2, z2)
+
+    N = 2
+    x = torch.arange(0, N, device=device).reshape(N // 2, 2)
+    z1_ref, z2_ref = (x[:, 0], x[:, 1])
+    z1 = torch.zeros_like(z1_ref)
+    z2 = torch.zeros_like(z2_ref)
+    kernel[(1, )](x, z1, z2)
 
     np.testing.assert_equal(to_numpy(z1_ref), to_numpy(z1))
     np.testing.assert_equal(to_numpy(z2_ref), to_numpy(z2))

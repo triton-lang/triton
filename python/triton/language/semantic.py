@@ -551,6 +551,13 @@ def cat(lhs: tl.tensor, rhs: tl.tensor, can_reorder: bool, builder: ir.builder) 
 def join(a: tl.tensor, b: tl.tensor, builder: ir.builder) -> tl.tensor:
     a, b = broadcast_impl_value(a, b, builder)
 
+    # The IR can't handle joining two scalars, so upcast them to 1D tensors,
+    # then downcast the result.
+    was_rank_1 = a.shape == []
+    if was_rank_1:
+        a = expand_dims(a, 0, builder)
+        b = expand_dims(b, 0, builder)
+
     if isinstance(a.shape[-1], tl.constexpr):
         two = tl.constexpr(2)
     else:
@@ -558,7 +565,12 @@ def join(a: tl.tensor, b: tl.tensor, builder: ir.builder) -> tl.tensor:
     new_shape = a.shape + [two]
 
     ret_type = tl.block_type(a.type.scalar, new_shape)
-    return tl.tensor(builder.create_join(a.handle, b.handle), ret_type)
+    ret = tl.tensor(builder.create_join(a.handle, b.handle), ret_type)
+
+    if was_rank_1:
+        ret = reshape(ret, [2], builder)
+
+    return ret
 
 
 def split(a: tl.tensor, builder: ir.builder) -> Tuple[tl.tensor, tl.tensor]:
