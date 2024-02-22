@@ -44,22 +44,36 @@ public:
       return;
     ModuleOp mod = getOperation();
     mod.walk([&](Operation *op) {
-      if (isa<tt::DotOp, ttng::DotAsyncOp>(op)) {
-        OpBuilder builder(op);
-        auto a = op->getOperand(0);
-        auto b = op->getOperand(1);
-        auto mmaEncoding = op->getResult(0)
-                               .getType()
-                               .cast<RankedTensorType>()
-                               .getEncoding()
-                               .dyn_cast<ttg::NvidiaMmaEncodingAttr>();
-        auto isHopperEncoding = mmaEncoding && mmaEncoding.isHopper();
-        if (isHopperEncoding &&
-            (dependOnSharedEncOperand(a) || dependOnSharedEncOperand(b))) {
-          builder.create<ttng::FenceAsyncSharedOp>(op->getLoc(),
-                                                   false /*bCluster*/);
-        }
+      if (!isa<tt::DotOp, ttng::DotAsyncOp>(op))
+        return WalkResult::advance();
+      OpBuilder builder(op);
+      auto a = op->getOperand(0);
+      auto b = op->getOperand(1);
+      auto mmaEncoding = op->getResult(0)
+                             .getType()
+                             .cast<RankedTensorType>()
+                             .getEncoding()
+                             .dyn_cast<ttg::NvidiaMmaEncodingAttr>();
+      if (!mmaEncoding || !mmaEncoding.isHopper())
+        return WalkResult::advance();
+      bool aDependsOnShared = dependOnSharedEncOperand(a);
+      bool bDependsOnShared = dependOnSharedEncOperand(b);
+      if (!aDependsOnShared && !bDependsOnShared)
+        return WalkResult::advance();
+      Operation *fence = builder.create<ttng::FenceAsyncSharedOp>(
+          op->getLoc(), /*bCluster=*/false);
+      // If there is all the dependencies are outside of the loop try to hoist
+      // the fence.
+      while (auto loopOp = fence->getParentOfType<LoopLikeOpInterface>()) {
+        if (aDependsOnShared &&
+            loopOp->isAncestor(a.getParentBlock()->getParentOp()))
+          break;
+        if (bDependsOnShared &&
+            loopOp->isAncestor(b.getParentBlock()->getParentOp()))
+          break;
+        loopOp.moveOutOfLoop(fence);
       }
+      return WalkResult::advance();
     });
   }
 
