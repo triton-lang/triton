@@ -1163,13 +1163,19 @@ def tan(arg0, _builder=None):
         }, is_pure=True, _builder=_builder)
 
 
+# @core.extern
+# def log2(arg0, _builder=None):
+#     return core.extern_elementwise(
+#         "", "", [arg0], {
+#             (core.dtype("fp32"), ): ("__nv_log2f", core.dtype("fp32")),
+#             (core.dtype("fp64"), ): ("__nv_log2", core.dtype("fp64")),
+#         }, is_pure=True, _builder=_builder)
+
+
 @core.extern
 def log2(arg0, _builder=None):
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__nv_log2f", core.dtype("fp32")),
-            (core.dtype("fp64"), ): ("__nv_log2", core.dtype("fp64")),
-        }, is_pure=True, _builder=_builder)
+    arg0 = core._to_tensor(arg0, _builder)
+    return core.tensor(_builder.create_log2(arg0.handle), arg0.type)
 
 
 @core.extern
@@ -1460,13 +1466,19 @@ def cyl_bessel_i1(arg0, _builder=None):
         }, is_pure=True, _builder=_builder)
 
 
+# @core.extern
+# def erf(arg0, _builder=None):
+#     return core.extern_elementwise(
+#         "", "", [arg0], {
+#             (core.dtype("fp32"), ): ("__nv_erff", core.dtype("fp32")),
+#             (core.dtype("fp64"), ): ("__nv_erf", core.dtype("fp64")),
+#         }, is_pure=True, _builder=_builder)
+
+
 @core.extern
 def erf(arg0, _builder=None):
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__nv_erff", core.dtype("fp32")),
-            (core.dtype("fp64"), ): ("__nv_erf", core.dtype("fp64")),
-        }, is_pure=True, _builder=_builder)
+    arg0 = core._to_tensor(arg0, _builder)
+    return core.tensor(_builder.create_erf(arg0.handle), arg0.type)
 
 
 @core.extern

@@ -1505,6 +1505,7 @@ def _add_math_1arg_docstr(name: str) -> Callable[[T], T]:
     return _decorator
 
 
+# TODO pawel: should these go to the math module?
 @builtin
 @_add_math_1arg_docstr("exponential")
 def exp(x, _builder=None):

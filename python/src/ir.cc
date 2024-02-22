@@ -1320,6 +1320,14 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::LogOp>(val);
            })
+      .def("create_log2",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::Log2Op>(val);
+           })
+      .def("create_erf",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::ErfOp>(val);
+           })
       .def("create_sqrt",
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::SqrtOp>(val);
