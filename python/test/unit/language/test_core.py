@@ -381,10 +381,8 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
     elif (op in ('%', '/') and ((dtype_x in int_dtypes and dtype_y in uint_dtypes) or
                                 (dtype_x in uint_dtypes and dtype_y in int_dtypes))):
         error_class = ValueError if is_interpreter() else triton.CompilationError
-        with pytest.raises(error_class) as exc_info:
+        with pytest.raises(error_class, match='Cannot use .* because they have different signedness'):
             _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
-        assert re.match('Cannot use .* because they have different signedness',
-                        str(exc_info.value) if is_interpreter() else str(exc_info.value.__cause__))
     else:
         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
 
@@ -479,10 +477,9 @@ def test_bitwise_op(dtype_x, dtype_y, op, num_ctas, device):
     else:
         numpy_expr = None
     if 'float' in dtype_x + dtype_y:
-        with pytest.raises(triton.CompilationError) as exc_info:
-            _test_binary(dtype_x, dtype_y, expr, numpy_expr='np.array([])', device=device, num_ctas=num_ctas)
         # The CompilationError must have been caused by a C++ exception with this text.
-        assert re.match('invalid operands of type', str(exc_info.value.__cause__))
+        with pytest.raises(triton.CompilationError, match='invalid operands of type'):
+            _test_binary(dtype_x, dtype_y, expr, numpy_expr='np.array([])', device=device, num_ctas=num_ctas)
     else:
         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
 
