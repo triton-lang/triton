@@ -23,9 +23,6 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 const ArrayRef<int64_t> &shape,
                                                 RankedTensorType type);
 
-/// Return the first consumer of v
-Operation *getFirstUser(Value v);
-
 /// Return the proper SharedEncodingAttr according to shape/order
 triton::gpu::SharedEncodingAttr getSharedEncoding(RankedTensorType tensorTy);
 
