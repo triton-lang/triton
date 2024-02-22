@@ -381,10 +381,8 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
     elif (op in ('%', '/') and ((dtype_x in int_dtypes and dtype_y in uint_dtypes) or
                                 (dtype_x in uint_dtypes and dtype_y in int_dtypes))):
         error_class = ValueError if is_interpreter() else triton.CompilationError
-        with pytest.raises(error_class) as exc_info:
+        with pytest.raises(error_class, match='Cannot use .* because they have different signedness'):
             _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
-        assert re.match('Cannot use .* because they have different signedness',
-                        str(exc_info.value) if is_interpreter() else str(exc_info.value.__cause__))
     else:
         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
 
@@ -479,10 +477,9 @@ def test_bitwise_op(dtype_x, dtype_y, op, num_ctas, device):
     else:
         numpy_expr = None
     if 'float' in dtype_x + dtype_y:
-        with pytest.raises(triton.CompilationError) as exc_info:
-            _test_binary(dtype_x, dtype_y, expr, numpy_expr='np.array([])', device=device, num_ctas=num_ctas)
         # The CompilationError must have been caused by a C++ exception with this text.
-        assert re.match('invalid operands of type', str(exc_info.value.__cause__))
+        with pytest.raises(triton.CompilationError, match='invalid operands of type'):
+            _test_binary(dtype_x, dtype_y, expr, numpy_expr='np.array([])', device=device, num_ctas=num_ctas)
     else:
         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
 
@@ -691,20 +688,25 @@ def test_expand_dims_error_cases(device):
     N = 32
     dummy_tensor = torch.empty((), device=device)
 
-    with pytest.raises(triton.CompilationError, match="invalid axis -3"):
+    with pytest.raises(triton.CompilationError) as exc_info:
         dim_out_of_range1[(1, )](dummy_tensor, N)
+    assert "invalid axis -3" in str(exc_info.value.__cause__)
 
-    with pytest.raises(triton.CompilationError, match="invalid axis 2"):
+    with pytest.raises(triton.CompilationError) as exc_info:
         dim_out_of_range2[(1, )](dummy_tensor, N)
+    assert "invalid axis 2" in str(exc_info.value.__cause__)
 
-    with pytest.raises(triton.CompilationError, match="invalid axis 1"):
+    with pytest.raises(triton.CompilationError) as exc_info:
         dim_out_of_range3[(1, )](dummy_tensor, N)
+    assert "invalid axis 1" in str(exc_info.value.__cause__)
 
-    with pytest.raises(triton.CompilationError, match=r"duplicate axes, normalized axes = \[0, 0\]"):
+    with pytest.raises(triton.CompilationError) as exc_info:
         duplicate_dim1[(1, )](dummy_tensor, N)
+    assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", str(exc_info.value.__cause__))
 
-    with pytest.raises(triton.CompilationError, match=r"duplicate axes, normalized axes = \[0, 0\]"):
+    with pytest.raises(triton.CompilationError) as exc_info:
         duplicate_dim2[(1, )](dummy_tensor, N)
+    assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", str(exc_info.value.__cause__))
 
 
 # ----------------------------
@@ -717,8 +719,9 @@ def test_invalid_pid_axis(device):
     def _kernel(dst):
         pid = tl.program_id(20)
 
-    with pytest.raises(triton.CompilationError, match=r"program_id axis must be 0, 1, or 2 but got 20"):
+    with pytest.raises(triton.CompilationError) as exc_info:
         _kernel[(1, )](dst)
+    assert re.search(r"program_id axis must be 0, 1, or 2 but got 20", str(exc_info.value.__cause__))
 
 
 # ---------------
