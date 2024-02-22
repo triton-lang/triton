@@ -56,20 +56,19 @@ public:
                              .dyn_cast<ttg::NvidiaMmaEncodingAttr>();
       if (!mmaEncoding || !mmaEncoding.isHopper())
         return WalkResult::advance();
-      bool dependsOnA = dependOnSharedEncOperand(a);
-      bool dependsOnB = dependOnSharedEncOperand(b);
-      Value insertPoint = nullptr;
-      if (!dependsOnA && !dependsOnB)
+      bool aDependsOnShared = dependOnSharedEncOperand(a);
+      bool bDependsOnShared = dependOnSharedEncOperand(b);
+      if (!aDependsOnShared && !bDependsOnShared)
         return WalkResult::advance();
       Operation *fence = builder.create<ttng::FenceAsyncSharedOp>(
-          op->getLoc(), false /*bCluster*/);
+          op->getLoc(), /*bCluster=*/false);
       // If there is only one dependency and it is outside of the loop try to
-      // hoist the fence.
-      if (dependsOnA && dependsOnB)
+      // hoist the fence. Only handle single dependency for simplicity.
+      if (aDependsOnShared && bDependsOnShared)
         return WalkResult::advance();
-      insertPoint = dependsOnA ? a : b;
+      Value depValue = aDependsOnShared ? a : b;
       while (auto loopOp = fence->getParentOfType<LoopLikeOpInterface>()) {
-        if (loopOp->isAncestor(insertPoint.getParentBlock()->getParentOp()))
+        if (loopOp->isAncestor(depValue.getParentBlock()->getParentOp()))
           break;
         loopOp.moveOutOfLoop(fence);
       }

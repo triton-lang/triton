@@ -65,24 +65,6 @@ bool isLoadFromTensorPtr(triton::LoadOp op) {
   return mlir::triton::isTensorPointerType(op.getPtr().getType());
 }
 
-Operation *getFirstUser(Value v) {
-  DenseMap<Operation *, size_t> operationId;
-  v.getParentBlock()->walk<WalkOrder::PostOrder>(
-      [&](Operation *op) { operationId[op] = operationId.size(); });
-  size_t minId = std::numeric_limits<size_t>::max();
-  Operation *firstUser = nullptr;
-  for (Operation *user : v.getUsers()) {
-    assert(operationId.find(user) != operationId.end());
-    size_t userId = operationId[user];
-    if (userId < minId) {
-      minId = userId;
-      firstUser = user;
-    }
-  }
-  assert(firstUser);
-  return firstUser;
-}
-
 //===----------------------------------------------------------------------===//
 // GraphDumper
 //===----------------------------------------------------------------------===//
