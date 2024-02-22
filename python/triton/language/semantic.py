@@ -1491,7 +1491,7 @@ def umulhi(x: tl.tensor, y: tl.tensor, builder: ir.builder) -> tl.tensor:
 
 @_check_dtype(dtypes=["fp32", "fp64"])
 def floor(x: tl.tensor, builder: ir.builder) -> tl.tensor:
-    from .extra.cuda import math
+    from . import math
     return math.floor(x, _builder=builder)
 
 
