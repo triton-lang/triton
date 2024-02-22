@@ -6,6 +6,7 @@ from enum import Enum
 from functools import partial, wraps
 from typing import Union, Callable, List, Sequence, TypeVar, cast
 import builtins
+from ..runtime.jit import jit
 
 from .._C.libtriton import ir
 from . import semantic
@@ -990,7 +991,7 @@ def _experimental_join(a, b, _builder=None):
     Join the given tensors in a new, minor dimension.
 
     For example, given two tensors of shape (4,8), produces a new tensor of
-    shape (4,8,2).
+    shape (4,8,2).  Given two scalars, returns a tensor of shape (2).
 
     The two inputs are broadcasted to be the same shape.
 
@@ -1008,13 +1009,18 @@ def _experimental_join(a, b, _builder=None):
     return semantic.join(a, b, _builder)
 
 
+@jit
+def _take_first(a, b):
+    return a
+
+
 @builtin
-def _experimental_split(a, _builder=None):
+def _experimental_split(a, _builder=None, _generator=None) -> tuple[tensor, tensor]:
     """
     Split a tensor in two along its last dim, which must have size 2.
 
     For example, given a tensor of shape (4,8,2), produces two tensors of shape
-    (4,8).
+    (4,8).  Given a tensor of shape (2), returns two scalars.
 
     If you want to split into more than two pieces, you can use multiple calls
     to this function (probably plus calling reshape).  This reflects the
@@ -1025,7 +1031,21 @@ def _experimental_split(a, _builder=None):
     :param a: The tensor to split.
     :type a: Tensor
     """
-    return semantic.split(a, _builder)
+    # If len(a.shape) == 1, i.e. a.shape == [2], we should return two scalars.
+    # But semantic.split can only handle returning tensors.  Work around this by
+    # expanding the input to shape [1,2] and then reducing the result.
+    was_rank_1 = len(a.shape) == 1
+    if was_rank_1:
+        a = semantic.expand_dims(a, 0, _builder)
+
+    out_lhs, out_rhs = semantic.split(a, _builder)
+
+    if was_rank_1:
+        # Currently `reduce` is the best way to convert a tensor of shape [1] to a scalar.
+        out_lhs = cast(tensor, reduce(out_lhs, None, _take_first, _builder=_builder, _generator=_generator))
+        out_rhs = cast(tensor, reduce(out_rhs, None, _take_first, _builder=_builder, _generator=_generator))
+
+    return out_lhs, out_rhs
 
 
 @builtin
