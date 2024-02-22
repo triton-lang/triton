@@ -416,8 +416,8 @@ def _patch_lang_core(lang, builder):
     def _new_reduce(input, axis, combine_fn, keep_dims=False):
         fn = combine_fn.fn.__name__
         mapping = {
-            "minimum": np.min,
-            "maximum": np.max,
+            "_elementwise_min": np.min,
+            "_elementwise_max": np.max,
             "_sum_combine": np.sum,
         }
         ret = mapping[fn](input.handle.data, axis=axis, keepdims=keep_dims)
