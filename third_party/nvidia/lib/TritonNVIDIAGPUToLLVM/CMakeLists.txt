@@ -14,14 +14,11 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     BarrierOpToLLVM.cpp
     TritonGPUToLLVM.cpp
     DecomposeUnsupportedConversions.cpp
-    AssertOpToLLVM.cpp
     PrintOpToLLVM.cpp
     ControlFlowOpToLLVM.cpp
-    MakeRangeOpToLLVM.cpp
     SPMDOpToLLVM.cpp
     ReduceOpToLLVM.cpp
     ScanOpToLLVM.cpp
-    ViewOpToLLVM.cpp
     TensorPtrOpsToLLVM.cpp
     ClusterOpsToLLVM.cpp
     AllocateSharedMemory.cpp
@@ -31,4 +28,7 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     DEPENDS
     TritonNVIDIAGPUConversionPassIncGen
     NVGPUAttrDefsIncGen
+
+    LINK_LIBS PUBLIC
+    TritonGPUToLLVM
 )

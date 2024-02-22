@@ -238,17 +238,20 @@ struct ConvertTritonGPUToLLVM
     populateReduceOpToLLVMPatterns(typeConverter, patterns, computeCapability,
                                    benefit);
     populateScanOpToLLVMPatterns(typeConverter, patterns, benefit);
-    populateViewOpToLLVMPatterns(typeConverter, patterns, benefit);
+    mlir::triton::common::populateViewOpToLLVMPatterns(typeConverter, patterns,
+                                                       benefit);
     populateBarrierOpToLLVMPatterns(typeConverter, patterns, benefit);
     populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns, benefit);
     populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit);
     populateHistogramOpToLLVMPatterns(typeConverter, patterns, benefit);
     populatePrintOpToLLVMPattern(typeConverter, patterns, benefit);
-    populateAssertOpToLLVMPattern(typeConverter, patterns, benefit);
+    mlir::triton::common::populateAssertOpToLLVMPattern(typeConverter, patterns,
+                                                        benefit);
     mlir::triton::common::populateMemoryOpToLLVMPattern(typeConverter, patterns,
                                                         benefit);
     populateControlFlowOpToLLVMPattern(typeConverter, patterns, benefit);
-    populateMakeRangeOpToLLVMPattern(typeConverter, patterns, benefit);
+    mlir::triton::common::populateMakeRangeOpToLLVMPattern(typeConverter,
+                                                           patterns, benefit);
     populateSPMDOpToLLVMPattern(typeConverter, patterns, benefit);
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
