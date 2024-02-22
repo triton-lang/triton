@@ -6,7 +6,7 @@ import warnings
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 from .. import language
 from .._C.libtriton import ir
-from ..language import constexpr, tensor
+from ..language import constexpr, tensor, str_to_ty
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
@@ -1018,7 +1018,20 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Call(self, node):
         fn = _unwrap_if_constexpr(self.visit(node.func))
+        try:
+            return self.visit_Call_Impl(fn, node)
+        except CompilationError as e:
+            # Fill in the callee's source code, and rely on our caller to do the
+            # same.
+            if hasattr(fn, 'src') and fn.src and e.src is None:
+                e.set_source_code(fn.src)
+            raise CompilationError(None, node, None) from e
+        except Exception as e:
+            if hasattr(fn, 'src'):
+                raise CompilationError(fn.src, node, repr(e)) from e
+            raise
 
+    def visit_Call_Impl(self, fn, node):
         static_implementation = self.statically_implemented_functions.get(fn)
         if static_implementation is not None:
             return static_implementation(self, node)
@@ -1163,34 +1176,6 @@ class CodeGenerator(ast.NodeVisitor):
         int: static_executor(int),
         len: static_executor(len),
     }
-
-
-def str_to_ty(name):
-    if name[0] == "*":
-        ty = str_to_ty(name[1:])
-        return language.pointer_type(ty)
-    tys = {
-        "fp8e4nv": language.float8e4nv,
-        "fp8e5": language.float8e5,
-        "fp8e4b15": language.float8e4b15,
-        "fp8e4b15x4": language.float8e4b15x4,
-        "fp16": language.float16,
-        "bf16": language.bfloat16,
-        "fp32": language.float32,
-        "fp64": language.float64,
-        "i1": language.int1,
-        "i8": language.int8,
-        "i16": language.int16,
-        "i32": language.int32,
-        "i64": language.int64,
-        "u1": language.int1,
-        "u8": language.uint8,
-        "u16": language.uint16,
-        "u32": language.uint32,
-        "u64": language.uint64,
-        "B": language.int1,
-    }
-    return tys[name]
 
 
 def kernel_suffix(signature, specialization):

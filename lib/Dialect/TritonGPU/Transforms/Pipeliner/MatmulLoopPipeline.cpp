@@ -357,6 +357,16 @@ loadOpsToDistanceAndUse(scf::ForOp forOp) {
       continue;
     dfs(&op, 0, &op);
   }
+
+  // If the loop has numStages attribute, also consider pipelining other loads
+  // that are not directly used by dot ops.
+  if (forOp->hasAttr(tt::kNumStagesAttrName)) {
+    for (Operation &op : forOp.getBody()->without_terminator()) {
+      if (!isa<tt::LoadOp>(op))
+        dfs(&op, 0, &op);
+    }
+  }
+
   return loadOpToDistAndUse;
 }
 
@@ -382,19 +392,11 @@ collectOpsToPipeline(scf::ForOp forOp,
   }
   assert(maxDistance >= 0);
 
-  unsigned stagesBetweenLoads = ceil<unsigned>(numStages - 2, maxDistance + 1);
+  // Start by initializing PipelineOpInfo for users of the loads.
+  for (auto &[loadOp, distAndUse] : loadOpToDistAndUse)
+    opInfo[distAndUse.second] = PipelineOpInfo();
 
-  // Start by finding dot ops and assigning a stage for them.
-  // We cannot use forOp.walk(...) here because we only want to visit the
-  // operations in the loop body block. Nested blocks are handled separately.
-  for (Operation &op : forOp) {
-    if (auto dotOp = dyn_cast<tt::DotOp>(&op)) {
-      PipelineOpInfo dotOpInfo{
-          .stage = numStages - 1,
-      };
-      opInfo[dotOp] = dotOpInfo;
-    }
-  }
+  unsigned stagesBetweenLoads = ceil<unsigned>(numStages - 2, maxDistance + 1);
 
   // Then consider the load ops that feed into the dot ops or are used by other
   // loads.
@@ -409,8 +411,7 @@ collectOpsToPipeline(scf::ForOp forOp,
         continue;
       loadInfo.dotOperandEncoding = loadDotAttr.value().first;
       loadInfo.needTrans = loadDotAttr.value().second;
-    }
-    if (isa<tt::LoadOp>(distAndUse.second)) {
+    } else {
       loadInfo.blockedEncoding = getBlockedEncoding(loadOp, axisInfoAnalysis);
     }
     loadInfo.sharedEncoding =
@@ -421,6 +422,20 @@ collectOpsToPipeline(scf::ForOp forOp,
     loadInfo.use = distAndUse.second;
     opInfo[loadOp] = loadInfo;
   };
+
+  // Last, find load users and assigning a stage for them.
+  // We cannot use forOp.walk(...) here because we only want to visit the
+  // operations in the loop body block. Nested blocks are handled separately.
+  for (Operation &op : forOp) {
+    auto iter = opInfo.find(&op);
+    if (iter != opInfo.end() && iter->second.stage == -1) {
+      assert(!isa<tt::LoadOp>(iter->first));
+      PipelineOpInfo useOpInfo{
+          .stage = numStages - 1,
+      };
+      iter->second = useOpInfo;
+    }
+  }
 
   return true;
 }

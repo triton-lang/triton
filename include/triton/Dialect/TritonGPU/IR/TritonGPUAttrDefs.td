@@ -796,6 +796,61 @@ The data will be distributed between threads as follows:
   let hasCustomAssemblyFormat = 1;
 }
 
+def AMDWmmaEncodingAttr : DistributedEncoding<"AMDWmmaEncoding", "amd_wmma_encoding", [MmaEncodingTrait]> {
+  let mnemonic = "amd_wmma";
+
+  let description = [{
+An encoding for tensors that have been produced by WMMA instructions,
+available on RDNA 3.
+A `warpsPerCTA` parameter characterizes data distribution between waves.
+An important limitation of WMMA for layout is a shape for tiles proccessed
+by a single wave. It is [16, 16].
+This encoding assumes specific access to matrix elements by threads.
+Example:
+Suppose we have a tensor with shape [32, 48], `warpsPerCTA` set to [2, 3].
+
+    wave 0 [16, 16]           wave 1 [16, 16]           wave 2 [16, 16]
+-----------/\----------   -----------/\----------   -----------/\----------
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+...                       ...                       ...
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+
+    wave 3 [16, 16]           wave 4 [16, 16]           wave 5 [16, 16]
+-----------/\----------   -----------/\----------   -----------/\----------
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+...                       ...                       ...
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+  }];
+
+  let parameters = (
+    ins
+    ArrayRefParameter<"unsigned">:$warpsPerCTA__,
+    "CTALayoutAttr":$CTALayout
+  );
+
+  let hasCustomAssemblyFormat = 1;
+
+  let extraClassDeclaration = extraDistributedDeclaration # [{
+    bool supportReduction() const {
+      return true;
+    }
+    SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx) const;
+    SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int opIdx) const;
+    unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
+    SmallVector<int64_t> getWMMAElemsPerInstrForOperands() const;
+    SmallVector<int64_t> getWMMARepForOperands(ArrayRef<int64_t> operandShape,
+                                      Type elemType, int kWidth, int opIdx) const;
+    static SmallVector<unsigned> getMNKDimPerWMMAInstr();
+  }];
+}
 
 def NvidiaMmaEncodingAttr : DistributedEncoding<"NvidiaMmaEncoding", "nvidia_mma_encoding", [MmaEncodingTrait]> {
   let mnemonic = "nvidia_mma";

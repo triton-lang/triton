@@ -26,9 +26,6 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
 /// Returns true if the Load uses block pointer.
 bool isLoadFromTensorPtr(triton::LoadOp op);
 
-/// Return the first consumer of v
-Operation *getFirstUser(Value v);
-
 /* Dump Triton IR in graphviz dot format.
  *
  * You can override `onValue` and `onOperation` in a subclass to mark

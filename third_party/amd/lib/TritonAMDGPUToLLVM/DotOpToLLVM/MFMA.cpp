@@ -161,6 +161,10 @@ struct DotOpMFMAConversionHelper {
       return rewriter.create<ROCDL::mfma_i32_16x16x16i8>(
           loc, TypeRange{resType},
           ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
+    case MatrixCoreType::INT32_INT8_INT8_INT32_CDNA3:
+      return rewriter.create<ROCDL::mfma_i32_16x16x32_i8>(
+          loc, TypeRange{resType},
+          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
     case MatrixCoreType::FP64_FP64_FP64_FP64:
       return rewriter.create<ROCDL::mfma_f64_16x16x4f64>(
           loc, TypeRange{resType},
