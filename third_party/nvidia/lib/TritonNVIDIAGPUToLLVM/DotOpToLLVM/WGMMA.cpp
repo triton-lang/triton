@@ -279,16 +279,16 @@ llvm::SmallVector<Value> loadReg(ConversionPatternRewriter &rewriter,
     return mmaOut;
   }
   Type elementType = elements[0].getType();
-  int numPackedElements = 32 / elementType.getIntOrFloatBitWidth();
+  int numElemsPer32Bits = 32 / elementType.getIntOrFloatBitWidth();
 
   // For FP16 and BF16 we need to pack accumulator into 32-bit integers.
-  int num32BitValues = numElements / numPackedElements;
+  int num32BitValues = numElements / numElemsPer32Bits;
   llvm::SmallVector<Value> mmaOut(num32BitValues);
-  Type packTy = vec_ty(elementType, numPackedElements);
+  Type packTy = vec_ty(elementType, numElemsPer32Bits);
   for (int i = 0; i < num32BitValues; ++i) {
     Value pack = rewriter.create<LLVM::UndefOp>(loc, packTy);
-    for (int j = 0; j < numPackedElements; ++j) {
-      Value element = elements[startIndex + i * numPackedElements + j];
+    for (int j = 0; j < numElemsPer32Bits; ++j) {
+      Value element = elements[startIndex + i * numElemsPer32Bits + j];
       pack = insert_element(packTy, pack, element, i32_val(j));
     }
     pack = bitcast(pack, rewriter.getIntegerType(32));
