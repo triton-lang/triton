@@ -641,10 +641,11 @@ bool CTAPlanner::isElementwiseOp(Operation *op) const {
                 arith::MaximumFOp, arith::MaxNumFOp, arith::MaxSIOp,
                 arith::MaxUIOp, arith::MinimumFOp, arith::MinNumFOp,
                 arith::MinSIOp, arith::MinUIOp, arith::MulFOp, arith::MulIOp,
-                arith::NegFOp, arith::OrIOp, arith::RemFOp, arith::RemSIOp,
-                arith::RemUIOp, arith::ShLIOp, arith::ShRSIOp, arith::ShRUIOp,
-                arith::SIToFPOp, arith::SubFOp, arith::SubIOp, arith::TruncFOp,
-                arith::TruncIOp, arith::UIToFPOp, arith::XOrIOp>(op))
+                arith::MulUIExtendedOp, arith::MulSIExtendedOp, arith::NegFOp,
+                arith::OrIOp, arith::RemFOp, arith::RemSIOp, arith::RemUIOp,
+                arith::ShLIOp, arith::ShRSIOp, arith::ShRUIOp, arith::SIToFPOp,
+                arith::SubFOp, arith::SubIOp, arith::TruncFOp, arith::TruncIOp,
+                arith::UIToFPOp, arith::XOrIOp>(op))
     return true;
   if (llvm::isa<math::AbsFOp, math::AbsIOp, math::AtanOp, math::Atan2Op,
                 math::CeilOp, math::CopySignOp, math::CosOp, math::SinOp,

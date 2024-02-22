@@ -164,6 +164,22 @@ def TT_PreciseDivFOp : TT_Op<"precise_divf", [Elementwise,
     let assemblyFormat = "$x `,` $y attr-dict `:` type($x)";
 }
 
+def TT_MulhiOp : TT_Op<"mulhi", [Elementwise,
+                                  SameOperandsAndResultType,
+                                  Pure]> {
+    let summary = "High half of the product of two integers";
+
+    let description = [{
+        High half of the product of two integers.
+    }];
+
+    let arguments = (ins TT_IntLike:$x, TT_IntLike:$y);
+
+    let results = (outs TT_IntLike:$result);
+
+    let assemblyFormat = "$x `,` $y attr-dict `:` type($x)";
+}
+
 //
 // Pointer Arith Ops
 //

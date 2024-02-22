@@ -1950,6 +1950,7 @@ void populateElementwiseOpToLLVMPatterns(
 
   patterns.add<NamedExternalElementwiseOpConversion<triton::PreciseSqrtOp>>(typeConverter, axisInfoAnalysis, "__nv_fsqrt_rn", benefit);
   patterns.add<NamedExternalElementwiseOpConversion<triton::PreciseDivFOp>>(typeConverter, axisInfoAnalysis, "__nv_fdiv_rn", benefit);
+  patterns.add<NamedExternalElementwiseOpConversion<triton::MulhiOp>>(typeConverter, axisInfoAnalysis, "__nv_mulhi", benefit);
 
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
   patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
