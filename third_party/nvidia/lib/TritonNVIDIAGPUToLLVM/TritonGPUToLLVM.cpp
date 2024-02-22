@@ -22,6 +22,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetPlatform.hpp"
 
+#include "../lib/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "../lib/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"

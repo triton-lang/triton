@@ -3,6 +3,7 @@
 #include "Utility.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+
 namespace {
 
 using namespace mlir;
@@ -132,11 +133,12 @@ struct PrintOpConversion
     size_t rank = dimWidths.size();
 
     // Format is:
-    //   pid (<x>, <y>, <z>) idx (<i1>, <i2>, ...)<prefix> (operand <n>) <elem>
+    //   pid (<x>, <y>, <z>) idx (<i1>, <i2>, ...)<prefix> (operand <n>)
+    //   <elem>
     // where we leave off "(operand <n>)" if there's only one operand.
     //
-    // The Python wrapper munges `prefix` so that it prints nicely (e.g. starts
-    // with " " and ends with ": ").
+    // The Python wrapper munges `prefix` so that it prints nicely (e.g.
+    // starts with " " and ends with ": ").
 
     Value formatStrValue;
     for (int i = 0; i < elems.size(); i++) {
@@ -148,9 +150,9 @@ struct PrintOpConversion
       constexpr int kMaxPrintfOperands = 32;
       SmallVector<Value, kMaxPrintfOperands> printfOperands;
 
-      // TODO(jlebar): We really should pad the pid, but because the max pid is
-      // not known at compile-time, this would require nontrivial device-side
-      // work.
+      // TODO(jlebar): We really should pad the pid, but because the max pid
+      // is not known at compile-time, this would require nontrivial
+      // device-side work.
       os << "pid (";
       for (int j = 0; j < pid.size(); j++) {
         if (j != 0) {
@@ -192,8 +194,8 @@ struct PrintOpConversion
       os << getFormatSubstr(elem);
       printfOperands.push_back(elem);
 
-      // It's the same format string each iteration, but it's a lot easier if we
-      // construct the format string at the same time as we populate
+      // It's the same format string each iteration, but it's a lot easier if
+      // we construct the format string at the same time as we populate
       // printfOperands.  But we don't want to create BLOCK_SIZE duplicate
       // strings, so we cache the Value.
       if (i == 0) {
