@@ -429,7 +429,7 @@ def _patch_lang_core(lang, builder):
         if mode == "min":
             return _new_reduce(input, axis, tl.standard._elementwise_min, keep_dims)
         elif mode == "max":
-            return _new_reduce(input, axis, tl.stamdard._elementwise_max, keep_dims)
+            return _new_reduce(input, axis, tl.standard._elementwise_max, keep_dims)
         elif mode == "sum":
             return _new_reduce(input, axis, tl.standard._sum_combine, keep_dims)
         else:
