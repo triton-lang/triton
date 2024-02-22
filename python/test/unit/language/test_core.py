@@ -1135,11 +1135,6 @@ def test_noinline(mode, device):
                                    for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']
                                    for sem in [None, 'acquire', 'release', 'acq_rel', 'relaxed']]))
 def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
-    if is_hip():
-        pytest.skip(
-            'test_atomic_rmw for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
-
     check_cuda_only(device)
 
     capability = torch.cuda.get_device_capability()
