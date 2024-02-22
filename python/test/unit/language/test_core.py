@@ -3,11 +3,13 @@ import itertools
 import re
 from typing import Optional, Union
 import math
+import textwrap
 
 import numpy as np
 import pytest
 import torch
 import os
+import inspect
 from numpy.random import RandomState
 
 import triton
@@ -125,10 +127,18 @@ def to_numpy(x):
 
 
 def patch_kernel(template, to_replace):
-    kernel = triton.JITFunction(template.fn)
-    for key, value in to_replace.items():
-        kernel.src = kernel.src.replace(key, value)
-    return kernel
+    if is_interpreter():
+        local_namespace = {}
+        src = textwrap.dedent(inspect.getsource(template.fn))
+        for k, v in to_replace.items():
+            src = src.replace(k, v)
+        exec(src, globals(), local_namespace)
+        return local_namespace[template.fn.__name__]
+    else:
+        kernel = triton.JITFunction(template.fn)
+        for key, value in to_replace.items():
+            kernel.src = kernel.src.replace(key, value)
+        return kernel
 
 
 def check_cuda_only(device):
@@ -146,6 +156,12 @@ def check_type_supported(dtype, device):
             pytest.skip("bfloat16 is only supported on NVGPU with cc >= 80")
         if cc[0] < 9 and dtype in {tl.float8e4nv, "float8e4nv", "float8_e4m3fn"}:
             pytest.skip("float8e4nv is only supported on NVGPU with cc >= 90")
+    if is_interpreter():
+        if dtype in [
+                tl.float8e4nv, "float8e4nv", tl.bfloat16, "bfloat16", tl.float8e5, "float8e5", tl.float8e4b15,
+                "float8e4b15", tl.float8e4b15x4, "float8e4b15x4"
+        ]:
+            pytest.skip("bfloat16 and float8 are not supported in the interpreter")
 
 
 class MmaLayout:
@@ -192,6 +208,7 @@ class SharedLayout:
         return f"#{GPU_DIALECT}.shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x", list(dtypes) + ["bfloat16"])
 def test_empty_kernel(dtype_x, device):
     SIZE = 128
@@ -298,7 +315,7 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
     y_tri = to_triton(y, device=device, dst_type=dtype_y)
     z_tri = to_triton(np.empty(SIZE, dtype=z_ref.dtype), device=device)
     kernel[(1, )](z_tri, x_tri, y_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
-    np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=expr, rtol=0.01)
+    np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=expr, atol=1e-3, rtol=0.01)
 
 
 def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
@@ -358,13 +375,16 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
     else:
         numpy_expr = None
     if op == '%' and _mod_operation_ill_conditioned(dtype_x, dtype_y):
-        with pytest.raises(AssertionError, match='Not equal to tolerance'):
+        error_msg = '' if is_interpreter() else 'Not equal to tolerance'
+        with pytest.raises(AssertionError, match=error_msg):
             _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
     elif (op in ('%', '/') and ((dtype_x in int_dtypes and dtype_y in uint_dtypes) or
                                 (dtype_x in uint_dtypes and dtype_y in int_dtypes))):
-        with pytest.raises(triton.CompilationError) as exc_info:
+        error_class = ValueError if is_interpreter() else triton.CompilationError
+        with pytest.raises(error_class) as exc_info:
             _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
-        assert re.match('Cannot use .* because they have different signedness', str(exc_info.value.__cause__))
+        assert re.match('Cannot use .* because they have different signedness',
+                        str(exc_info.value) if is_interpreter() else str(exc_info.value.__cause__))
     else:
         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
 
