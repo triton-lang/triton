@@ -7,6 +7,8 @@
 namespace mlir {
 namespace triton {
 
+static const char *kNumStagesAttrName = "tt.num_stages";
+
 /// Function to mask operations during scheduling.
 Operation *predicateOp(RewriterBase &rewriter, Operation *op, Value pred);
 
