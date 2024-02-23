@@ -487,6 +487,9 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   // order to avoid having a separate code path in the reverse direction.
   // We do this by 1) reversing chunks, 2) reversing lanes, 3) reversing
   // warp ids and then undoing this below.
+  // (Note: Tried pretty hard to get shflDownSync to work but I ended up
+  // having to add a lot of the complex cross warp code (if rev switch
+  // first/last etc). Reverse first seems more maintainable.)
   if (op.getReverse()) {
     warpIdAxis = sub(i32_val(axisNumWarps - 1), warpIdAxis);
     srcValues = flipSrcValues(loc, op, rewriter, srcValues, iWarpSize);
