@@ -779,6 +779,28 @@ unsigned MfmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
 //
 
 SmallVector<unsigned>
+AMDWmmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
+                                       Type eltTy) const {
+  size_t rank = shape.size();
+  assert(rank == 2 && "Unexpected rank of mfma layout");
+
+  SmallVector<unsigned> elemsPerThread(rank);
+  auto nonKDim = getMNKDimPerWMMAInstr()[0];
+  auto elemsPerThreadPerTile = getSizePerThread();
+  return {ceil<unsigned>(shape[0], nonKDim * getWarpsPerCTA()[0]) *
+              elemsPerThreadPerTile[0],
+          ceil<unsigned>(shape[1], nonKDim * getWarpsPerCTA()[1]) *
+              elemsPerThreadPerTile[1]};
+}
+
+unsigned AMDWmmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
+                                                     Type eltTy) const {
+  return product<unsigned>(getElemsPerThread(shape, eltTy));
+}
+
+//
+
+SmallVector<unsigned>
 NvidiaMmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
                                          Type eltTy) const {
   size_t rank = shape.size();
@@ -1205,6 +1227,63 @@ void MfmaEncodingAttr::print(AsmPrinter &printer) const {
 }
 
 //===----------------------------------------------------------------------===//
+// WMMA encoding
+//===----------------------------------------------------------------------===//
+
+Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
+  if (parser.parseLess().failed())
+    return {};
+  DictionaryAttr dict;
+  if (parser.parseAttribute(dict).failed())
+    return {};
+  if (parser.parseGreater().failed())
+    return {};
+
+  SmallVector<unsigned> warpsPerCTA;
+  std::optional<SmallVector<unsigned>> CTAsPerCGA;
+  std::optional<SmallVector<unsigned>> CTASplitNum;
+  std::optional<SmallVector<unsigned>> CTAOrder;
+
+  for (const NamedAttribute &attr : dict) {
+    if (attr.getName() == "warpsPerCTA") {
+      if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
+        return {};
+    }
+    if (attr.getName() == "CTAsPerCGA") {
+      if (parseIntArrayAttr(parser, attr, CTAsPerCGA.emplace(), "CTAsPerCGA")
+              .failed())
+        return {};
+    }
+    if (attr.getName() == "CTASplitNum") {
+      if (parseIntArrayAttr(parser, attr, CTASplitNum.emplace(), "CTASplitNum")
+              .failed())
+        return {};
+    }
+    if (attr.getName() == "CTAOrder") {
+      if (parseIntArrayAttr(parser, attr, CTAOrder.emplace(), "CTAOrder")
+              .failed())
+        return {};
+    }
+  }
+
+  std::optional<CTALayoutAttr> CTALayout = getCTALayoutOrError(
+      parser, CTAsPerCGA, CTASplitNum, CTAOrder, /*rank=*/warpsPerCTA.size());
+  if (!CTALayout.has_value())
+    return {};
+
+  return parser.getChecked<AMDWmmaEncodingAttr>(parser.getContext(),
+                                                warpsPerCTA, *CTALayout);
+}
+
+void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
+  printer << "<{"
+          << "warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]";
+  maybePrintCTALayout(getContext(), printer, getCTALayout(),
+                      /*rank=*/getWarpsPerCTA().size());
+  printer << "}>";
+}
+
+//===----------------------------------------------------------------------===//
 // Sliced Encoding
 //===----------------------------------------------------------------------===//
 
@@ -1436,6 +1515,98 @@ MfmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
   }
 }
 
+SmallVector<unsigned>
+AMDWmmaEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
+  auto nonKDim = getMNKDimPerWMMAInstr()[0];
+  return {nonKDim * getWarpsPerCTA()[0], nonKDim * getWarpsPerCTA()[1]};
+}
+SmallVector<unsigned> AMDWmmaEncodingAttr::getCTAsPerCGA() const {
+  return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
+}
+SmallVector<unsigned> AMDWmmaEncodingAttr::getCTAOrder() const {
+  return SmallVector<unsigned>(getCTALayout().getCTAOrder());
+}
+SmallVector<unsigned> AMDWmmaEncodingAttr::getCTASplitNum() const {
+  return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
+}
+SmallVector<unsigned> AMDWmmaEncodingAttr::getWarpsPerCTA() const {
+  return SmallVector<unsigned>(getWarpsPerCTA__());
+}
+SmallVector<unsigned> AMDWmmaEncodingAttr::getWarpOrder() const {
+  return ::getOrder(*this);
+}
+SmallVector<unsigned> AMDWmmaEncodingAttr::getThreadOrder() const {
+  return ::getOrder(*this);
+}
+SmallVector<unsigned> AMDWmmaEncodingAttr::getThreadsPerWarp() const {
+  return {getMNKDimPerWMMAInstr()[0] / getSizePerThread()[0],
+          getMNKDimPerWMMAInstr()[1] / getSizePerThread()[1]};
+}
+
+SmallVector<unsigned> AMDWmmaEncodingAttr::getSizePerThread() const {
+  return {8, 1};
+}
+SmallVector<unsigned>
+AMDWmmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
+  if (opIdx == 0) {
+    return {1, 16};
+  } else if (opIdx == 1) {
+    return {16, 1};
+  } else {
+    llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
+  }
+}
+
+SmallVector<unsigned>
+AMDWmmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
+                                                      int opIdx) const {
+  auto parentShapePerCTA = getShapePerCTATile(shape);
+  if (opIdx == 0) {
+    return {parentShapePerCTA[0], static_cast<unsigned>(shape[1])};
+  } else if (opIdx == 1) {
+    return {static_cast<unsigned>(shape[0]), parentShapePerCTA[1]};
+  } else {
+    llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
+  }
+}
+
+unsigned AMDWmmaEncodingAttr::getTotalElemsPerThreadForOperands(
+    ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const {
+  int warpsPerCTAM = getWarpsPerCTA()[0];
+  int warpsPerCTAN = getWarpsPerCTA()[1];
+  auto tileSize = getWMMAElemsPerInstrForOperands();
+  auto rep = getWMMARepForOperands(shape, eltTy, kWidth, opIdx);
+  return product(tileSize) * product(rep) * warpsPerCTAN * warpsPerCTAM;
+}
+
+SmallVector<int64_t>
+AMDWmmaEncodingAttr::getWMMAElemsPerInstrForOperands() const {
+  return {16, 16};
+}
+
+SmallVector<int64_t>
+AMDWmmaEncodingAttr::getWMMARepForOperands(ArrayRef<int64_t> operandShape,
+                                           Type elemType, int kWidth,
+                                           int opIdx) const {
+  auto operandTileShape = getWMMAElemsPerInstrForOperands();
+  auto warpsPerCTA = getWarpsPerCTA();
+  if (opIdx == 0)
+    return {std::max<int64_t>(1, operandShape[0] /
+                                     (operandTileShape[0] * warpsPerCTA[0])),
+            std::max<int64_t>(1, operandShape[1] / operandTileShape[1])};
+  else {
+    assert(opIdx == 1);
+    return {std::max<int64_t>(1, operandShape[0] / operandTileShape[0]),
+            std::max<int64_t>(1, operandShape[1] /
+                                     (operandTileShape[1] * warpsPerCTA[1]))};
+  }
+}
+
+SmallVector<unsigned> AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr() {
+  // TODO: move magic numbers out of the code
+  return {16, 16, 16};
+}
+
 //===----------------------------------------------------------------------===//
 // Mma encoding
 //===----------------------------------------------------------------------===//
@@ -1627,8 +1798,7 @@ unsigned NvidiaMmaEncodingAttr::getTotalElemsPerThreadForOperands(
   int warpsPerCTAN = getWarpsPerCTA()[1];
   // H100
   if (isHopper()) {
-    if (eltTy.isF16() || eltTy.isBF16())
-      return getTotalElemsPerThread(shape, eltTy);
+    return getTotalElemsPerThread(shape, eltTy);
   }
   // A100
   if (isAmpere()) {
