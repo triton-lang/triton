@@ -115,52 +115,23 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
       return {};
 
   auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
-  auto srcContigPerThread =
-      getUniqueContigPerThread(srcLayout, srcTy.getShape());
-  auto dstContigPerThread =
-      getUniqueContigPerThread(dstLayout, dstTy.getShape());
+  unsigned srcContigPerThread =
+      getUniqueContigPerThread(srcLayout, srcTy.getShape())[inOrd[0]];
+  unsigned dstContigPerThread =
+      getUniqueContigPerThread(dstLayout, dstTy.getShape())[outOrd[0]];
+  // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
+  //       that we cannot do vectorization.
+  unsigned innerDim = rank - 1;
+  inVec = outOrd[0] != innerDim  ? 1
+          : inOrd[0] != innerDim ? 1
+                                 : srcContigPerThread;
+  outVec = outOrd[0] != innerDim ? 1 : dstContigPerThread;
 
-  // We're going to do two shared memory operations:
-  //
-  //  - write from src into scratch (vectorized according to inVec)
-  //  - read from scratch into dst (vectorized according to outVec)
-  //
-  // scratch has the same layout as dst, so the reads (outVec) can be vectorized
-  // if we have N consecutive elements in dst/scratch.
-  //
-  // But writes to scratch (inVec) can be vectorized only if we have N
-  // consecutive elements in src *and* those elements go into N consecutive
-  // elements in scratch.
-  //
-  // TODO(jlebar): This is suboptimal if repShape[in/outOrd[0]] is small.  We
-  // might be able to merge the few most-minor dimensions and get a larger
-  // vector.
-  inVec = std::min(srcContigPerThread[inOrd[0]], dstContigPerThread[inOrd[0]]);
-  outVec = dstContigPerThread[outOrd[0]];
-
-  // TODO: We could make this condition broader to catch more cases of N-D
-  // transposes that would benefit from this optimization. For example if the
-  // inner dimension is not transposed but is small there could still be
-  // benefits.
-  if (srcLayout.isa<BlockedEncodingAttr>() &&
-      dstLayout.isa<BlockedEncodingAttr>() && outOrd[0] != (rank - 1) &&
-      inOrd[0] != outOrd[0]) {
-    // Don't vectorize for transpose. Only the read or the write can be
-    // vectorized and this causes extra bank conflicts on the non-vectorized
-    // accesses.
-    // Ex: if we transpose a 32x32 tensor, to avoid bank conflicts with scalar
-    // loads/stores we need a padding of 1 element. If we vectorize the load
-    // into a load4 then the padding has to be either 0 or 4. In both those
-    // cases we would get extra bank conflicts that would make performance
-    // worse.
-    inVec = 1;
-    outVec = 1;
-  }
   // For conversions to MmaV1 (Nvidia V100), this inVec is hardcoded in the
   // codegen.
   if (auto mma = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>())
     if (mma.getVersionMajor() == 1)
-      inVec = srcContigPerThread[inOrd[0]];
+      inVec = srcContigPerThread;
 
   if (rank <= 1)
     return repShape;

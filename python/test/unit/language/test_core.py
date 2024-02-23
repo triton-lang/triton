@@ -381,10 +381,8 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
     elif (op in ('%', '/') and ((dtype_x in int_dtypes and dtype_y in uint_dtypes) or
                                 (dtype_x in uint_dtypes and dtype_y in int_dtypes))):
         error_class = ValueError if is_interpreter() else triton.CompilationError
-        with pytest.raises(error_class) as exc_info:
+        with pytest.raises(error_class, match='Cannot use .* because they have different signedness'):
             _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
-        assert re.match('Cannot use .* because they have different signedness',
-                        str(exc_info.value) if is_interpreter() else str(exc_info.value.__cause__))
     else:
         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
 
@@ -479,10 +477,9 @@ def test_bitwise_op(dtype_x, dtype_y, op, num_ctas, device):
     else:
         numpy_expr = None
     if 'float' in dtype_x + dtype_y:
-        with pytest.raises(triton.CompilationError) as exc_info:
-            _test_binary(dtype_x, dtype_y, expr, numpy_expr='np.array([])', device=device, num_ctas=num_ctas)
         # The CompilationError must have been caused by a C++ exception with this text.
-        assert re.match('invalid operands of type', str(exc_info.value.__cause__))
+        with pytest.raises(triton.CompilationError, match='invalid operands of type'):
+            _test_binary(dtype_x, dtype_y, expr, numpy_expr='np.array([])', device=device, num_ctas=num_ctas)
     else:
         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
 
@@ -691,20 +688,25 @@ def test_expand_dims_error_cases(device):
     N = 32
     dummy_tensor = torch.empty((), device=device)
 
-    with pytest.raises(triton.CompilationError, match="invalid axis -3"):
+    with pytest.raises(triton.CompilationError) as exc_info:
         dim_out_of_range1[(1, )](dummy_tensor, N)
+    assert "invalid axis -3" in str(exc_info.value.__cause__)
 
-    with pytest.raises(triton.CompilationError, match="invalid axis 2"):
+    with pytest.raises(triton.CompilationError) as exc_info:
         dim_out_of_range2[(1, )](dummy_tensor, N)
+    assert "invalid axis 2" in str(exc_info.value.__cause__)
 
-    with pytest.raises(triton.CompilationError, match="invalid axis 1"):
+    with pytest.raises(triton.CompilationError) as exc_info:
         dim_out_of_range3[(1, )](dummy_tensor, N)
+    assert "invalid axis 1" in str(exc_info.value.__cause__)
 
-    with pytest.raises(triton.CompilationError, match=r"duplicate axes, normalized axes = \[0, 0\]"):
+    with pytest.raises(triton.CompilationError) as exc_info:
         duplicate_dim1[(1, )](dummy_tensor, N)
+    assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", str(exc_info.value.__cause__))
 
-    with pytest.raises(triton.CompilationError, match=r"duplicate axes, normalized axes = \[0, 0\]"):
+    with pytest.raises(triton.CompilationError) as exc_info:
         duplicate_dim2[(1, )](dummy_tensor, N)
+    assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", str(exc_info.value.__cause__))
 
 
 # ----------------------------
@@ -717,8 +719,9 @@ def test_invalid_pid_axis(device):
     def _kernel(dst):
         pid = tl.program_id(20)
 
-    with pytest.raises(triton.CompilationError, match=r"program_id axis must be 0, 1, or 2 but got 20"):
+    with pytest.raises(triton.CompilationError) as exc_info:
         _kernel[(1, )](dst)
+    assert re.search(r"program_id axis must be 0, 1, or 2 but got 20", str(exc_info.value.__cause__))
 
 
 # ---------------
@@ -2723,7 +2726,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
 
     z_tri = to_triton(z, device=device)
     if epilogue == 'trans':
-        z_tri = torch.as_strided(z_tri, (M, N), z_tri.stride()[::-1])
+        z_tri = torch.as_strided(z_tri, (M, N), [1, M])
 
     if out_dtype == 'int8':
         out_dtype = tl.int8
@@ -4325,14 +4328,14 @@ def test_smid(device):
 # TODO: backend should be tested separately
 
 layouts = [
-    BlockedLayout([1, 16], [8, 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 8], [2, 16], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [4, 8], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 1], [1, 32], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([8, 1], [16, 2], [1, 4], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([4, 1], [8, 4], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 1], [32, 1], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([4, 4], [1, 32], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1])
+    BlockedLayout([1, 16], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 8], [2, THREADS_PER_WARP // 2], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 1], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([8, 1], [16, THREADS_PER_WARP // 16], [1, 4], [0, 1], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([4, 1], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([4, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1])
 ]
 
 intermediate_layouts = [
@@ -4349,8 +4352,6 @@ intermediate_layouts = [
 @pytest.mark.parametrize("interm_layout", intermediate_layouts)
 @pytest.mark.parametrize("dst_layout", layouts)
 def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
-    if is_hip():
-        pytest.skip("test_convert2d is not supported in HIP")
     if (M == 1 or N == 1) and interm_layout:
         pytest.skip("Out of bound access when maxPhase > 1")
     if str(src_layout) == str(dst_layout):
@@ -4379,7 +4380,7 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     """
 
     ir = layouts + f"""
-    module attributes {{"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32}} {{
+    module attributes {{"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
   tt.func public @kernel_0d1d(%arg0: !tt.ptr<f16, 1> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16, 1> {{tt.divisibility = 16 : i32}}) {{
     %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #src>
     %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
