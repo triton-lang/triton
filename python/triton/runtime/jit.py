@@ -2,6 +2,7 @@ from __future__ import annotations, division
 import ast
 import hashlib
 import inspect
+import itertools
 import os
 import textwrap
 from collections import defaultdict, namedtuple
@@ -27,8 +28,12 @@ class DependenciesFinder(ast.NodeVisitor):
 
     def __init__(self, globals, src) -> None:
         super().__init__()
-        self.ret = hashlib.sha1(src.encode("utf-8")).hexdigest()
+        self.hasher = hashlib.sha1(src.encode("utf-8"))
         self.globals = globals
+
+    @property
+    def ret(self):
+        return self.hasher.hexdigest()
 
     def visit_Name(self, node):
         return self.globals.get(node.id, None)
@@ -42,20 +47,35 @@ class DependenciesFinder(ast.NodeVisitor):
         return getattr(lhs, node.attr)
 
     def visit_Call(self, node):
+
+        def is_triton_builtin(func):
+            if inspect.isbuiltin(node.func):
+                return True
+            module = getattr(func, "__module__", "")
+            return module.startswith(TRITON_MODULE)
+
         func = self.visit(node.func)
-        if func is None:
-            return
-        if inspect.isbuiltin(func):
-            return
-        if func.__module__ and (func.__module__.startswith(TRITON_MODULE)):
-            return
-        assert isinstance(
+        assert func is None or is_triton_builtin(func) or isinstance(
             func, JITFunction
         ), f'Function "{func.__name__}" is being called from a Triton function but is not a Triton function itself. Decorate it with @triton.jit to fix this'
-        func_cache_key = func.cache_key
-        noinline = str(getattr(func, "noinline", False))
-        self.ret = (self.ret + func_cache_key + noinline).encode("utf-8")
-        self.ret = hashlib.sha1(self.ret).hexdigest()
+
+        # Traverse arguments as well as node.func so we can find JITFunctions
+        # passed to tl.reduce or tl.associative_scan as the combine_fn
+        for obj in itertools.chain(
+            (func, ),
+                map(self.visit, node.args),
+            (self.visit(kw.value) for kw in node.keywords),
+        ):
+            if not isinstance(obj, JITFunction):
+                continue
+            if is_triton_builtin(obj):
+                continue
+
+            func_cache_key = obj.cache_key
+            noinline = str(getattr(obj, "noinline", False))
+
+            key = func_cache_key + noinline
+            self.hasher.update(key.encode("utf-8"))
 
 
 # -----------------------------------------------------------------------------

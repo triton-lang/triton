@@ -1,4 +1,5 @@
 import importlib.util
+import itertools
 import os
 import shutil
 import tempfile
@@ -27,6 +28,11 @@ def function_2(i):
 
 
 @triton.jit
+def combine_fn(a, b):
+    return COMBINE_OP  # noqa: F821
+
+
+@triton.jit
 def kernel(X, i, BLOCK: tl.constexpr):
     i = i + 1
     i = function_1(i)
@@ -37,6 +43,13 @@ def kernel(X, i, BLOCK: tl.constexpr):
 def kernel_nospec(X, i, BLOCK: tl.constexpr):
     i = i + 1
     i = function_1(i)
+    tl.store(X, i)
+
+
+@triton.jit
+def kernel_with_combine_fn(X, BLOCK: tl.constexpr):
+    i = tl.arange(0, BLOCK)
+    i = REDUCE_OR_SCAN(i, 0, combine_fn)  # noqa: F821
     tl.store(X, i)
 
 
@@ -67,6 +80,33 @@ def test_nested1_change():
     baseline = kernel.cache_key
     updated = apply_src_change(function_1, 'i + 1', 'i + 2')
     assert baseline != updated
+
+
+def test_combine_fn_change():
+    # Test that tl.reduce and associative_scan calls include
+    # the combine_fn in the hash
+
+    orig_combine_fn_src = combine_fn.src
+    orig_kernel_src = kernel_with_combine_fn.src
+    seen_keys = set()
+
+    for reduce_or_scan, combine_op in itertools.product(
+        ["tl.reduce", "tl.associative_scan"],
+        ["a + b", "a * b"],
+    ):
+        combine_fn.src = orig_combine_fn_src.replace("COMBINE_OP", combine_op)
+        kernel_with_combine_fn.src = orig_kernel_src.replace("REDUCE_OR_SCAN", reduce_or_scan)
+        try:
+            key = kernel_with_combine_fn.cache_key
+        finally:
+            combine_fn.src = orig_combine_fn_src
+            kernel_with_combine_fn.src = orig_kernel_src
+
+            kernel_with_combine_fn.hash = None
+            combine_fn.hash = None
+
+        assert key not in seen_keys
+        seen_keys.add(key)
 
 
 def write_and_load_module(code, num_extra_lines):
