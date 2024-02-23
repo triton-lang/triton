@@ -1,8 +1,8 @@
 #include "TritonGPUToLLVM.h"
 
-#include "../lib/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 namespace {
 
 using namespace mlir;
@@ -463,7 +463,7 @@ void populateTritonGPUToLLVMPatterns(
   patterns.add<PrintOpConversion>(typeConverter, benefit);
 
   mlir::triton::populateAddPtrOpToLLVMPattern(typeConverter, patterns,
-                                                    axisInfoAnalysis, benefit);
+                                              axisInfoAnalysis, benefit);
   mlir::triton::populateMemoryOpToLLVMPattern(typeConverter, patterns, benefit);
   mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, patterns,
                                                  benefit);

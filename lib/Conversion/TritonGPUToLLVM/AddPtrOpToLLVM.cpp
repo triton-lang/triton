@@ -1,7 +1,7 @@
-#include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 using namespace mlir::triton::gpu;

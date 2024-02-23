@@ -1,7 +1,7 @@
 #include "DotOpToLLVM.h"
 #include "Utility.h"
 
-#include "../lib/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 using namespace mlir;
 using namespace mlir::triton;
 

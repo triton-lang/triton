@@ -3,7 +3,7 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 
-#include "../lib/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
 namespace mlir::triton {
 

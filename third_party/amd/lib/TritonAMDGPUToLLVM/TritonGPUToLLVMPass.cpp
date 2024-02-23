@@ -40,7 +40,7 @@
 #include "TritonGPUToLLVMBase.h"
 #include "TypeConverter.h"
 
-#include "../lib/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 
