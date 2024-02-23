@@ -1898,7 +1898,7 @@ scan_configs = [(op, type, shape, axis, reverse, num_warps)
                 for axis in [1, 0]
                 for reverse in [True, False]
                 for shape in scan2d_shapes
-                for op in ['cumsum', 'cumprod', 'get_first_element', 'linear_recurrence', 'cummax']]
+                for op in ['cumsum', 'cumprod', 'get_first_element', 'linear_recurrence', 'cummax', 'roll']]
 negative_config = [('cumsum', 'float32', (32, 32), -1, False, 4)]
 
 
@@ -1918,6 +1918,11 @@ def linear_recurrence(a1, b1, a2, b2):
 def cummax(v0, i0, v1, i1):
     gt = v0 > v1
     return tl.where(gt, v0, v1), tl.where(gt, i0, i1)
+
+
+@triton.jit
+def roll(a1, b1_last, b1_cur, a2, b2_last, b2_cur):
+    return a1 + a2, tl.where(a2 == 1, b1_cur, 0) + b2_last, b2_cur
 
 
 @pytest.mark.parametrize("op, dtype_str, shape, axis, reverse, num_warps", scan_configs + negative_config)
@@ -1946,6 +1951,12 @@ def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, device):
         kernel = patch_kernel(kernel, {
             'GENERATE_TEST_HERE':
             f'_, z = tl.associative_scan((x, {rg}), axis={axis}, combine_fn={op}, reverse={reverse})'
+        })
+    elif op == 'roll':
+        assert op == 'roll'
+        kernel = patch_kernel(kernel, {
+            'GENERATE_TEST_HERE':
+            f'_, z, _ = tl.associative_scan((1 + 0* x, 0 * x, x), axis={axis}, combine_fn={op}, reverse={reverse})'
         })
     else:
         assert op == 'linear_recurrence'
@@ -1983,7 +1994,16 @@ def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, device):
         z_ref = torch.cummax(torch.from_numpy(x_in.copy()), axis=axis).indices.numpy()
         if reverse:
             z_ref = x_in.shape[axis] - np.flip(z_ref, axis) - 1
+    elif op == 'roll':
+        ROLL = 1
+        z_ref = np.roll(x_in.copy(), ROLL, axis=axis)
+        if axis == 0:
+            z_ref[:ROLL] = 0
+        else:
+            z_ref[:, :ROLL] = 0
 
+        if reverse:
+            z_ref = np.flip(z_ref, axis)
     elif op == 'linear_recurrence':
         # Simplify to the axis=1 case
         x_ref = x.T if axis == 0 else x
