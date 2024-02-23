@@ -442,17 +442,17 @@ unpackInputs(Location loc, triton::ScanOp op, triton::ScanOpAdaptor adaptor,
 
 // Flip the srcValues. Both reverses the chunks and reverses the lanes.
 // Lane reversal is done with a butterfly shuffle flip (divide and flip).
-SmallVector<SmallVector<Value>> 
-flipSrcValues(Location loc, triton::ScanOp op, 
+SmallVector<SmallVector<Value>>
+flipSrcValues(Location loc, triton::ScanOp op,
               ConversionPatternRewriter &rewriter,
-              SmallVector<SmallVector<Value>> srcValues,
-              int iWarpSize){
+              SmallVector<SmallVector<Value>> srcValues, int iWarpSize) {
   SmallVector<SmallVector<Value>> values(srcValues.size());
   for (int i = 0; i < srcValues.size(); ++i) {
     int revIndex = srcValues.size() - i - 1;
     for (unsigned j = 0; j < op.getNumOperands(); ++j) {
-      for (unsigned k = iWarpSize / 2; k >= 1; k = k / 2){
-        srcValues[revIndex][j] = shflSync(loc, rewriter, srcValues[revIndex][j], k);
+      for (unsigned k = iWarpSize / 2; k >= 1; k = k / 2) {
+        srcValues[revIndex][j] =
+            shflSync(loc, rewriter, srcValues[revIndex][j], k);
       }
       values[i].push_back(srcValues[revIndex][j]);
     }
@@ -460,7 +460,6 @@ flipSrcValues(Location loc, triton::ScanOp op,
   return values;
 }
 
-    
 // Lowering using warp shuffle operations to do warp level scan.
 LogicalResult
 ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
@@ -489,8 +488,8 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   // We do this by 1) reversing chunks, 2) reversing lanes, 3) reversing
   // warp ids and then undoing this below.
   if (op.getReverse()) {
-      warpIdAxis = sub(i32_val(axisNumWarps-1), warpIdAxis);
-      srcValues = flipSrcValues(loc, op, rewriter, srcValues, iWarpSize);
+    warpIdAxis = sub(i32_val(axisNumWarps - 1), warpIdAxis);
+    srcValues = flipSrcValues(loc, op, rewriter, srcValues, iWarpSize);
   }
 
   // Scan contiguous elements in a thread and update `srcValues`.
@@ -545,7 +544,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
 
   SmallVector<Value> results(op.getNumOperands());
   if (op.getReverse()) {
-      srcValues = flipSrcValues(loc, op, rewriter, srcValues, iWarpSize);
+    srcValues = flipSrcValues(loc, op, rewriter, srcValues, iWarpSize);
   }
 
   auto valuesTransposed = transpose(srcValues);
