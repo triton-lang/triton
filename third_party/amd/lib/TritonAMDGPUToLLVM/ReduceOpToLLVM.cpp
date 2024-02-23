@@ -17,129 +17,6 @@ using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 namespace AMD {
 namespace {
-struct ReduceOpPromotionConversion
-    : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp> {
-public:
-  ReduceOpPromotionConversion(
-      TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
-      ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-      int computeCapability, PatternBenefit benefit)
-      : ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp>(
-            typeConverter, allocation, indexCacheInfo, benefit),
-        computeCapability(computeCapability) {}
-
-  LogicalResult
-  matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    
-    // promote op
-    rewriter.modifyOpInPlace(op, [&]() {
-      // promote operands
-      SmallVector<Value> newOperands;
-      for (OpOperand &operand : op->getOpOperands()) {
-        auto val = operand.get();
-        auto oldType = val.getType().cast<RankedTensorType>();
-        auto elemType = oldType.getElementType();
-        if (elemType.isInteger(16) || elemType.isInteger(8)) {
-          auto newType = oldType.cloneWith(std::nullopt, i32_ty);
-          auto promotedVal =
-              rewriter.create<mlir::arith::ExtSIOp>(op->getLoc(), newType, val);
-          newOperands.push_back(promotedVal);
-        } else if (elemType.isF16()) {
-          auto newType = oldType.cloneWith(std::nullopt, f32_ty);
-          auto promotedVal =
-              rewriter.create<mlir::arith::ExtFOp>(op->getLoc(), newType, val);
-          newOperands.push_back(promotedVal);
-        } else {
-          newOperands.push_back(val);
-        }
-      }
-      op->setOperands(newOperands);
-
-      // promote results
-      for (Value result : op.getResults()) {
-        auto type = result.getType();
-        if (type.isInteger(16) || type.isInteger(8)) {
-          result.setType(i32_ty);
-        } else if (type.isF16()) {
-          result.setType(f32_ty);
-
-          // add trunc if float result type was changed
-          rewriter.setInsertionPointAfter(op);
-          auto truncResult = rewriter.create<mlir::arith::TruncFOp>(
-              result.getLoc(), f16_ty, result);
-          
-          // replace uses
-          result.replaceUsesWithIf(truncResult, [](OpOperand &user) {
-            return !isa<mlir::arith::TruncFOp>(user.getOwner());
-          });
-
-        } else if (type.isa<RankedTensorType>()) {
-          auto oldType = type.cast<RankedTensorType>();
-          auto elemType = oldType.getElementType();
-          if (elemType.isInteger(16) || elemType.isInteger(8)) {
-            result.setType(oldType.cloneWith(std::nullopt, i32_ty));
-          } else if (elemType.isF16()) {
-            result.setType(oldType.cloneWith(std::nullopt, f32_ty));
-
-            // add trunc if float result type was changed
-            rewriter.setInsertionPointAfter(op);
-            auto truncResult = rewriter.create<mlir::arith::TruncFOp>(
-                result.getLoc(), oldType, result);
-
-            // replace uses
-            result.replaceUsesWithIf(truncResult, [](OpOperand &user) {
-              return !isa<mlir::arith::TruncFOp>(user.getOwner());
-            });
-          }
-        }
-      }
-
-      // promote combine op
-      for (Block &oldBlock : op.getCombineOp().getBlocks()) {
-        // update block args
-        for (auto arg : oldBlock.getArguments()) {
-          auto type = arg.getType();
-          if (type.isInteger(16) || type.isInteger(8)) {
-            arg.setType(i32_ty);
-          } else if (type.isF16()) {
-            arg.setType(f32_ty);
-          }
-        }
-
-        for (Operation &oldOp : oldBlock.getOperations()) {
-          // update operands
-          for (OpOperand &operand : oldOp.getOpOperands()) {
-            auto val = operand.get();
-            auto type = val.getType();
-            if (type.isInteger(16) || type.isInteger(8)) {
-              val.setType(i32_ty);
-            } else if (type.isF16()) {
-              val.setType(f32_ty);
-            }
-          }
-
-          // update results
-          for (Value result : oldOp.getResults()) {
-            auto type = result.getType();
-            if (type.isInteger(16) || type.isInteger(8)) {
-              result.setType(i32_ty);
-            } else if (type.isF16()) {
-              result.setType(f32_ty);
-            }
-          }
-        }
-      }
-    });
-
-
-    return success();
-  }
-
-private:
-  int computeCapability;
-};
-
 struct ReduceOpConversion
     : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp> {
 public:
@@ -636,9 +513,7 @@ void populateReduceOpToLLVMPatterns(
     ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     int computeCapability, PatternBenefit benefit) {
-  patterns.add<ReduceOpPromotionConversion>(
-      typeConverter, allocation, indexCacheInfo, computeCapability, 2);
   patterns.add<ReduceOpConversion>(typeConverter, allocation, indexCacheInfo,
-                                   computeCapability, 1);
+                                   computeCapability, benefit);
 }
 } // namespace AMD
