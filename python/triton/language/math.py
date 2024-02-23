@@ -96,7 +96,7 @@ def log(x, _builder=None):
     return core.tensor(_builder.create_log(x.handle), x.type)
 
 
-@core.extern
+@core.builtin
 @_check_dtype(dtypes=["fp32", "fp64"])
 @_add_math_1arg_docstr("logarithm (base 2)")
 def log2(x, _builder=None):
@@ -128,7 +128,7 @@ def sqrt(x, _builder=None):
     return core.tensor(_builder.create_sqrt(x.handle), x.type)
 
 
-@core.extern
+@core.builtin
 @_check_dtype(dtypes=["fp32"])
 @_add_math_1arg_docstr("square root (rounding to nearest)")
 def sqrt_rn(x, _builder=None):
@@ -161,7 +161,7 @@ def div_rn(x, y, _builder=None):
     return core.tensor(_builder.create_precise_divf(x.handle, y.handle), x.type)
 
 
-@core.extern
+@core.builtin
 @_check_dtype(dtypes=["fp32", "fp64"])
 @_add_math_1arg_docstr("error function")
 def erf(x, _builder=None):
@@ -169,7 +169,7 @@ def erf(x, _builder=None):
     return core.tensor(_builder.create_erf(x.handle), x.type)
 
 
-@core.extern
+@core.builtin
 @_check_dtype(dtypes=["fp32", "fp64"])
 @_add_math_1arg_docstr("floor")
 def floor(x, _builder=None):

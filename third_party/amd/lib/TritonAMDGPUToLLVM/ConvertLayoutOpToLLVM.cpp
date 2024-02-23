@@ -1,7 +1,9 @@
 #include "ConvertLayoutOpToLLVM.h"
-#include "Utility.h"
 #include "TritonGPUToLLVMBase.h"
+#include "Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
@@ -60,15 +62,6 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     TritonGPUToLLVMTypeConverter *typeConverter, Value thread);
 } // namespace SharedToDotOperandMFMA
 #endif
-
-namespace AMD {
-namespace SharedToDotOperandFMA {
-Value convertLayout(int opIdx, Value B, Value llB, BlockedEncodingAttr dLayout,
-                    Value thread, Location loc,
-                    TritonGPUToLLVMTypeConverter *typeConverter,
-                    ConversionPatternRewriter &rewriter);
-}
-} // namespace AMD
 
 namespace {
 struct ConvertLayoutOpConversion
@@ -724,7 +717,7 @@ private:
 
     auto srcStrides =
         getStridesFromShapeAndOrder(srcShape, inOrd, loc, rewriter);
-    auto dstIndices = emitIndices(loc, rewriter, dstLayout, dstTy);
+    auto dstIndices = emitIndices(loc, rewriter, dstLayout, dstTy, true);
 
     SmallVector<Value> outVals = loadSharedToDistributed(
         dst, dstIndices, src, smemObj, elemTy, loc, rewriter);
@@ -808,7 +801,7 @@ private:
       auto dotOpLayout =
           dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
       auto thread = getThreadId(rewriter, loc);
-      res = AMD::SharedToDotOperandFMA::convertLayout(
+      res = SharedToDotOperandFMA::convertLayout(
           dotOpLayout.getOpIdx(), src, adaptor.getSrc(), blockedLayout, thread,
           loc, getTypeConverter(), rewriter);
     } else {

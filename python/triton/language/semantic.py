@@ -587,6 +587,13 @@ def cat(lhs: tl.tensor, rhs: tl.tensor, can_reorder: bool, builder: ir.builder) 
 def join(a: tl.tensor, b: tl.tensor, builder: ir.builder) -> tl.tensor:
     a, b = broadcast_impl_value(a, b, builder)
 
+    # The IR can't handle joining two scalars, so upcast them to 1D tensors,
+    # then downcast the result.
+    was_rank_1 = a.shape == []
+    if was_rank_1:
+        a = expand_dims(a, 0, builder)
+        b = expand_dims(b, 0, builder)
+
     if isinstance(a.shape[-1], tl.constexpr):
         two = tl.constexpr(2)
     else:
@@ -594,7 +601,12 @@ def join(a: tl.tensor, b: tl.tensor, builder: ir.builder) -> tl.tensor:
     new_shape = a.shape + [two]
 
     ret_type = tl.block_type(a.type.scalar, new_shape)
-    return tl.tensor(builder.create_join(a.handle, b.handle), ret_type)
+    ret = tl.tensor(builder.create_join(a.handle, b.handle), ret_type)
+
+    if was_rank_1:
+        ret = reshape(ret, [2], builder)
+
+    return ret
 
 
 def split(a: tl.tensor, builder: ir.builder) -> Tuple[tl.tensor, tl.tensor]:
@@ -1176,7 +1188,7 @@ def atomic_max(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope:
     if sca_ty not in {tl.float32, tl.float64}:
         raise TypeError(f"atomic_max not supported for dtype {sca_ty}")
 
-    itype = tl.int32 if sca_ty == tl.float32 else tl.float64
+    itype = tl.int32 if sca_ty == tl.float32 else tl.int64
     zero = full([], 0.0, sca_ty, builder)
 
     i_val = bitcast(val, itype, builder)
@@ -1212,7 +1224,7 @@ def atomic_min(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope:
     if sca_ty not in {tl.float32, tl.float64}:
         raise TypeError(f"atomic_min not supported for dtype {sca_ty}")
 
-    itype = tl.int32 if sca_ty == tl.float32 else tl.float64
+    itype = tl.int32 if sca_ty == tl.float32 else tl.int64
     zero = full([], 0.0, sca_ty, builder)
 
     i_val = bitcast(val, itype, builder)
