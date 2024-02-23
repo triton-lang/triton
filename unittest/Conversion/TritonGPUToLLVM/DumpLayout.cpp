@@ -23,8 +23,8 @@
 
 #include "DumpLayout.h"
 
-#include "../../../lib/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 
 namespace mlir {
 namespace triton {
