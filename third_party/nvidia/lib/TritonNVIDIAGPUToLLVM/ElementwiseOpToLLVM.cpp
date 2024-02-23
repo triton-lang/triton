@@ -1794,15 +1794,15 @@ struct MulhiUIOpConversion
 };
 
 template <typename TritonOp>
-struct NamedExternalElementwiseOpConversion
+struct OpToExternCallConversion
     : public ElementwiseOpConversionBase<TritonOp,
-                                         NamedExternalElementwiseOpConversion<TritonOp>> {
+                                         OpToExternCallConversion<TritonOp>> {
   using Base = ElementwiseOpConversionBase<TritonOp,
-                                           NamedExternalElementwiseOpConversion<TritonOp>>;
+                                           OpToExternCallConversion<TritonOp>>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
-  explicit NamedExternalElementwiseOpConversion(LLVMTypeConverter &typeConverter,
+  explicit OpToExternCallConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
                               StringRef externFuncName, PatternBenefit benefit)
       : Base::ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
@@ -1936,8 +1936,8 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
 
-  patterns.add<NamedExternalElementwiseOpConversion<triton::PreciseSqrtOp>>(typeConverter, axisInfoAnalysis, "__nv_fsqrt_rn", benefit);
-  patterns.add<NamedExternalElementwiseOpConversion<triton::PreciseDivFOp>>(typeConverter, axisInfoAnalysis, "__nv_fdiv_rn", benefit);
+  patterns.add<OpToExternCallConversion<triton::PreciseSqrtOp>>(typeConverter, axisInfoAnalysis, "__nv_fsqrt_rn", benefit);
+  patterns.add<OpToExternCallConversion<triton::PreciseDivFOp>>(typeConverter, axisInfoAnalysis, "__nv_fdiv_rn", benefit);
 
   mlir::triton::populateAddPtrOpToLLVMPattern(typeConverter, patterns,
                                               axisInfoAnalysis, benefit);
