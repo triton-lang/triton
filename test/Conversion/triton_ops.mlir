@@ -196,7 +196,7 @@ tt.func @scan_op(%ptr: tensor<1x2x4x!tt.ptr<f32>>, %v : tensor<1x2x4xf32>) {
   // CHECK-SAME: axis = 1
   // CHECK: tt.scan.return
   // CHECK-NEXT: (tensor<1x2x4xf32>) -> tensor<1x2x4xf32>
-  %a = "tt.scan"(%v) <{axis = 1 : i32}>({
+  %a = "tt.scan"(%v) <{axis = 1 : i32, reverse = false}>({
   ^bb0(%arg0: f32, %arg1: f32):
     %add = arith.addf %arg0, %arg1 : f32
     tt.scan.return %add : f32
