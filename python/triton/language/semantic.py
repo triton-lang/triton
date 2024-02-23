@@ -1427,7 +1427,7 @@ def reduction(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, builder
 # ===----------------------------------------------------------------------===
 
 
-def associative_scan(inputs: Sequence[tl.tensor], axis: int, region_builder_fn,
+def associative_scan(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, reverse: bool,
                      builder: ir.builder) -> Tuple[tl.tensor, ...]:
     shape = inputs[0].type.shape
     rank = len(shape)
@@ -1444,7 +1444,7 @@ def associative_scan(inputs: Sequence[tl.tensor], axis: int, region_builder_fn,
         res_ty = tl.block_type(scalar_ty, shape)
         return tl.tensor(x, res_ty)
 
-    scan_op = builder.create_scan([t.handle for t in inputs], axis)
+    scan_op = builder.create_scan([t.handle for t in inputs], axis, reverse)
     region_builder_fn(scan_op)
     scan_op.verify()
 

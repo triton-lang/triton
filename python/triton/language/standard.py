@@ -272,10 +272,10 @@ def xor_sum(input, axis=None, keep_dims=False, _builder=None, _generator=None):
 
 @jit
 @core._add_scan_docstr("cumsum")
-def cumsum(input, axis=0):
+def cumsum(input, axis=0, reverse=False):
     # todo rename this to a generic function name
     input = core._promote_bfloat16_to_float32(input)
-    return core.associative_scan(input, axis, _sum_combine)
+    return core.associative_scan(input, axis, _sum_combine, reverse)
 
 
 # cumprod
@@ -288,10 +288,10 @@ def _prod_combine(a, b):
 
 @jit
 @core._add_scan_docstr("cumprod")
-def cumprod(input, axis=0):
+def cumprod(input, axis=0, reverse=False):
     # todo rename this to a generic function name
     input = core._promote_bfloat16_to_float32(input)
-    return core.associative_scan(input, axis, _prod_combine)
+    return core.associative_scan(input, axis, _prod_combine, reverse)
 
 
 # sort

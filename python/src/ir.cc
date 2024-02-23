@@ -1332,8 +1332,10 @@ void init_triton_ir(py::module &&m) {
              return self.create<ReduceReturnOp>(return_values);
            })
       .def("create_scan",
-           [](TritonOpBuilder &self, std::vector<Value> operands, int axis)
-               -> OpState { return self.create<ScanOp>(operands, axis); })
+           [](TritonOpBuilder &self, std::vector<Value> operands, int axis,
+              bool reverse) -> OpState {
+             return self.create<ScanOp>(operands, axis, reverse);
+           })
       .def("create_scan_ret",
            [](TritonOpBuilder &self, py::args args) -> OpState {
              llvm::SmallVector<Value> return_values;

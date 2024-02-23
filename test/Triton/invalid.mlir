@@ -96,7 +96,7 @@ tt.func public @fn(%v: tensor<4x128xf32>) {
     ^bb0(%arg0: f32, %arg1: f32):
       %add = arith.addf %arg0, %arg1 : f32
       tt.scan.return %add : f32
-    }) {axis = 0 : i32}  : (tensor<4x128xf32>) -> tensor<128xf32>
+    }) {axis = 0 : i32, reverse = false}  : (tensor<4x128xf32>) -> tensor<128xf32>
     tt.return
 }
 
@@ -108,7 +108,7 @@ tt.func public @fn(%v1: tensor<4x128xf32>, %v2: tensor<4x128xi64>) {
     ^bb0(%arg0: f32, %arg1: i32, %arg2: f32, %arg3: i32):
       %add = arith.addf %arg0, %arg2 : f32
       tt.scan.return %add, %arg1 : f32, i32
-    }) {axis = 0 : i32}  : (tensor<4x128xf32>, tensor<4x128xi64>) -> (tensor<4x128xi64>, tensor<4x128xf32>)
+    }) {axis = 0 : i32, reverse = false}  : (tensor<4x128xf32>, tensor<4x128xi64>) -> (tensor<4x128xi64>, tensor<4x128xf32>)
     tt.return
 }
 
