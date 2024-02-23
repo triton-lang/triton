@@ -1385,21 +1385,6 @@ def where(condition, x, y, _builder=None):
 
 
 @builtin
-def umulhi(x, y, _builder=None):
-    """
-    Returns the most significant 32 bits of the product of x and y.
-
-    :param x: the input tensor
-    :type x: int32
-    :param y: the input tensor
-    :type y: int32
-    """
-    x = _to_tensor(x, _builder)
-    y = _to_tensor(y, _builder)
-    return semantic.umulhi(x, y, _builder)
-
-
-@builtin
 def fdiv(x, y, ieee_rounding=False, _builder=None):
     """
     Returns a floating-point resultant tensor of dividing x by y.
@@ -1488,64 +1473,6 @@ def clamp(x, min, max, propagate_nan: constexpr = PropagateNan.NONE, _builder=No
     propagate_nan = _constexpr_to_value(propagate_nan)
 
     return semantic.clamp(x, min, max, propagate_nan, _builder)
-
-
-def _add_math_1arg_docstr(name: str) -> Callable[[T], T]:
-
-    def _decorator(func: T) -> T:
-        docstr = """
-    Computes the element-wise {name} of :code:`x`.
-
-    :param x: the input values
-    :type x: Block
-    """
-        func.__doc__ = docstr.format(name=name)
-        return func
-
-    return _decorator
-
-
-# TODO pawel: should these go to the math module?
-@builtin
-@_add_math_1arg_docstr("exponential")
-def exp(x, _builder=None):
-    x = _to_tensor(x, _builder)
-    return semantic.exp(x, _builder)
-
-
-@builtin
-@_add_math_1arg_docstr("natural logarithm")
-def log(x, _builder=None):
-    x = _to_tensor(x, _builder)
-    return semantic.log(x, _builder)
-
-
-@builtin
-@_add_math_1arg_docstr("cosine")
-def cos(x, _builder=None):
-    x = _to_tensor(x, _builder)
-    return semantic.cos(x, _builder)
-
-
-@builtin
-@_add_math_1arg_docstr("sine")
-def sin(x, _builder=None):
-    x = _to_tensor(x, _builder)
-    return semantic.sin(x, _builder)
-
-
-@builtin
-@_add_math_1arg_docstr("square root")
-def sqrt(x, _builder=None):
-    x = _to_tensor(x, _builder)
-    return semantic.sqrt(x, _builder)
-
-
-@builtin
-@_add_math_1arg_docstr("absolute value")
-def abs(x, _builder=None):
-    x = _to_tensor(x, _builder)
-    return semantic.abs(x, _builder)
 
 
 # -----------------------

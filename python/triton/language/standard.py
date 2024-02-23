@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..runtime.jit import jit
-from . import core
+from . import core, math
 
 # constexpr utilities (triton metaprogramming sucks)
 
@@ -43,13 +43,13 @@ def cdiv(x, div):
 
 
 @jit
-@core._add_math_1arg_docstr("sigmoid")
+@math._add_math_1arg_docstr("sigmoid")
 def sigmoid(x):
     return 1 / (1 + core.exp(-x))
 
 
 @jit
-@core._add_math_1arg_docstr("softmax")
+@math._add_math_1arg_docstr("softmax")
 def softmax(x, ieee_rounding=False):
     z = x - max(x, 0)
     num = core.exp(z)
