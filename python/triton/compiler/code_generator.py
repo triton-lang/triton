@@ -300,8 +300,12 @@ class CodeGenerator(ast.NodeVisitor):
             stmts = [stmts]
         for stmt in stmts:
             ret_type = self.visit(stmt)
-            if ret_type is not None and isinstance(stmt, ast.Return):
+
+            # Stop parsing as soon as we hit a `return` statement; everything
+            # after this is dead code.
+            if isinstance(stmt, ast.Return):
                 self.last_ret_type = ret_type
+                break
 
     def visit_Module(self, node):
         ast.NodeVisitor.generic_visit(self, node)
