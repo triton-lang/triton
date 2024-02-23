@@ -39,7 +39,8 @@
 #include "TritonGPUToLLVM.h"
 #include "TritonGPUToLLVMBase.h"
 #include "TypeConverter.h"
-#include "ViewOpToLLVM.h"
+
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 
@@ -439,21 +440,6 @@ struct ConvertTritonAMDGPUToLLVM
       indexCacheInfo = {nullptr, nullptr, nullptr};
     }
 
-    // {
-    //   RewritePatternSet patterns(context);
-    //   populateTritonGPUToLLVMPatterns(typeConverter, patterns, numWarps,
-    //   axisInfoAnalysis, allocation, indexCacheInfo, 10);
-    //   mlir::arith::populateArithToLLVMConversionPatterns(typeConverter,
-    //   patterns); mlir::populateGpuToROCDLConversionPatterns(typeConverter,
-    //   patterns,
-    //                                              mlir::gpu::amd::HIP);
-    //   populatePatterns3(populateLoadStoreOpToLLVMPatterns);
-    //   if (failed(applyPartialConversion(mod, convTarget,
-    //   std::move(patterns)))){
-    //     llvm::outs() << "fail1!\n";
-    //     return signalPassFailure();
-    //   }
-    // }
     RewritePatternSet patterns(context);
 
     auto populatePatterns1 = [&](auto populateFunc) {
@@ -477,6 +463,10 @@ struct ConvertTritonAMDGPUToLLVM
                    allocation, indexCacheInfo, computeCapability,
                    /*benefit*/ 10);
     };
+    auto populatePatterns5 = [&](auto populateFunc) {
+      populateFunc(typeConverter, patterns,
+                   /*benefit*/ 10);
+    };
 
     populatePatterns1(AMD::populateTritonGPUToLLVMPatterns);
     populatePatterns1(AMD::populateConvertLayoutOpToLLVMPatterns);
@@ -485,7 +475,7 @@ struct ConvertTritonAMDGPUToLLVM
     populatePatterns3(AMD::populateLoadStoreOpToLLVMPatterns);
     populatePatterns4(AMD::populateReduceOpToLLVMPatterns);
     populatePatterns1(AMD::populateScanOpToLLVMPatterns);
-    populatePatterns2(AMD::populateViewOpToLLVMPatterns);
+    populatePatterns5(mlir::triton::populateViewOpToLLVMPatterns);
 
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
