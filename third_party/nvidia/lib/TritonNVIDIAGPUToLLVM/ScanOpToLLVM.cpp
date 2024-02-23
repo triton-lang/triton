@@ -440,11 +440,13 @@ unpackInputs(Location loc, triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   return srcValues;
 }
 
+// Flip the srcValues. Both reverses the chunks and reverses the lanes.
+// Lane reversal is done with a butterfly shuffle flip (divide and flip).
 SmallVector<SmallVector<Value>> 
 flipSrcValues(Location loc, triton::ScanOp op, 
-                   ConversionPatternRewriter &rewriter,
-                   SmallVector<SmallVector<Value>> srcValues,
-                   int iWarpSize){
+              ConversionPatternRewriter &rewriter,
+              SmallVector<SmallVector<Value>> srcValues,
+              int iWarpSize){
     SmallVector<SmallVector<Value>> values(srcValues.size());
     for (int i = 0; i < srcValues.size(); ++i) {
         int revIndex = srcValues.size() - i - 1;
@@ -482,6 +484,10 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   auto srcValues =
       unpackInputs(loc, op, adaptor, rewriter, *getTypeConverter());
 
+  // For the reverse option we apply flip(scan(flip()) in
+  // order to avoid having a separate code path in the reverse direction.
+  // We do this by 1) reversing chunks, 2) reversing lanes, 3) reversing
+  // warp ids and then undoing this below.
   if (op.getReverse()) {
       warpIdAxis = sub(i32_val(axisNumWarps-1), warpIdAxis);
       srcValues = flipSrcValues(loc, op, rewriter, srcValues, iWarpSize);
