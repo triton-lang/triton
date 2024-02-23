@@ -1,10 +1,10 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_ELEMENTWISE_OP_H
 #define TRITON_CONVERSION_TRITONGPU_TO_ELEMENTWISE_OP_H
 
-#include "../lib/Conversion/TritonGPUToLLVM/Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;

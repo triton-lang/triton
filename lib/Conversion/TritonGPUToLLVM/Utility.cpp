@@ -1,6 +1,6 @@
-#include "Utility.h"
-#include "TypeConverter.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 namespace mlir {
 
