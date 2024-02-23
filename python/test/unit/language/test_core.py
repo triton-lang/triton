@@ -2172,7 +2172,7 @@ def test_scan_layouts(M, N, src_layout, axis, device):
       %8 = tt.broadcast %6 : tensor<1x{N}xi32, #blocked> -> tensor<{M}x{N}xi32, #blocked>
       %9 = tt.addptr %7, %8 : tensor<{M}x{N}x!tt.ptr<i32, 1>, #blocked>, tensor<{M}x{N}xi32, #blocked>
       %10 = tt.load %9 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}xi32, #blocked>
-      %11 = "tt.scan"(%10) <{{axis = {axis} : i32}}> ({{
+      %11 = "tt.scan"(%10) <{{axis = {axis} : i32, reverse = false}}> ({{
       ^bb0(%arg2: i32, %arg3: i32):
         %16 = arith.addi %arg2, %arg3 : i32
         tt.scan.return %16 : i32
