@@ -199,58 +199,16 @@ loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3) {
   return std::make_pair(attr, needTrans);
 };
 
-// TODO pawel: sync this encoding selection with Coalesce, perhaps move
-// to a common place.
-static RankedTensorType getTensorType(const Value &val) {
-  auto valType = val.getType();
-  if (valType.isa<triton::PointerType>())
-    valType = valType.cast<triton::PointerType>().getPointeeType();
-  return valType.cast<RankedTensorType>();
-}
-
-static unsigned getElementBitWidth(const Value &val) {
-  auto tensorType = getTensorType(val);
-
-  auto typeForMem = tensorType.getElementType().isa<triton::PointerType>()
-                        ? tensorType.getElementType()
-                              .cast<triton::PointerType>()
-                              .getPointeeType()
-                        : tensorType.getElementType();
-  return typeForMem.getIntOrFloatBitWidth();
-}
-
-template <class T> static SmallVector<unsigned, 4> argSort(const T &arr) {
-  SmallVector<unsigned, 4> ret(arr.size());
-  std::iota(ret.begin(), ret.end(), 0);
-  std::stable_sort(ret.begin(), ret.end(),
-                   [&](unsigned x, unsigned y) { return arr[x] > arr[y]; });
-  return ret;
-}
-
 static ttg::BlockedEncodingAttr
 getBlockedEncoding(tt::LoadOp loadOp, ModuleAxisInfoAnalysis &axisInfo) {
   Value src = loadOp.getPtr();
   auto ty = src.getType().cast<RankedTensorType>();
-
   auto mod = loadOp->getParentOfType<ModuleOp>();
   int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
   int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-
-  AxisInfo *valInfo = axisInfo.getAxisInfo(src);
-
-  AxisInfo::DimVectorT contiguity = valInfo->getContiguity();
+  AxisInfo::DimVectorT contiguity = axisInfo.getAxisInfo(src)->getContiguity();
   SmallVector<unsigned> order = argSort(contiguity);
-  AxisInfo::DimVectorT shapePerCTA = ttg::getShapePerCTA(ty);
-
-  unsigned elemNumBits = getElementBitWidth(src);
-  unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
-  unsigned maxMultipleBytes = valInfo->getDivisibility(order[0]);
-  unsigned maxMultiple = std::max(maxMultipleBytes / elemNumBytes, 1u);
-  unsigned maxContig =
-      std::min(valInfo->getContiguity(order[0]), shapePerCTA[order[0]]);
-  unsigned alignment = std::min(maxMultiple, maxContig);
-  unsigned currPerThread = std::min(alignment, 128 / elemNumBits);
-
+  unsigned currPerThread = getNumElementsPerThread(loadOp, order, axisInfo);
   ttg::CTALayoutAttr CTALayout = ttg::getCTALayout(ty.getEncoding());
   return ttg::BlockedEncodingAttr::get(loadOp->getContext(), ty.getShape(),
                                        currPerThread, order, numWarps,

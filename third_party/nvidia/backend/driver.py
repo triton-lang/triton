@@ -109,7 +109,6 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-
 def make_launcher(constants, signature, ids):
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
@@ -139,10 +138,7 @@ def make_launcher(constants, signature, ids):
     format = "iiiiiiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
 
     # generate glue code
-    params = [
-        i for i in signature.keys()
-        if i not in constants
-    ]
+    params = [i for i in signature.keys() if i not in constants]
     src = f"""
 #include \"cuda.h\"
 #include <stdbool.h>
@@ -338,9 +334,7 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
 class CudaLauncher(object):
 
     def __init__(self, src, metadata):
-        ids = {
-            "ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()
-        }
+        ids = {"ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()}
         constants = src.constants if hasattr(src, "constants") else dict()
         src = make_launcher(constants, src.signature, ids)
         mod = compile_module_from_src(src, "__triton_launcher")
