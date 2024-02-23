@@ -1,8 +1,8 @@
 #include "TritonGPUToLLVM.h"
 
+#include "../lib/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-#include "../lib/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 namespace {
 
 using namespace mlir;
@@ -94,8 +94,8 @@ struct PrintOpConversion
         SmallVector<SmallVector<Value>> indices;
         if (auto rankedTy =
                 op.getOperand(i).getType().dyn_cast<RankedTensorType>()) {
-          indices =
-              emitIndices(loc, rewriter, rankedTy.getEncoding(), rankedTy, true);
+          indices = emitIndices(loc, rewriter, rankedTy.getEncoding(), rankedTy,
+                                true);
           for (int64_t dim : rankedTy.getShape()) {
             if (dim > 0) {
               dimWidths.push_back(static_cast<int>(std::ceil(std::log10(dim))));
@@ -455,18 +455,19 @@ void populateTritonGPUToLLVMPatterns(
     ModuleAllocation &moduleAllocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     PatternBenefit benefit) {
-  mlir::triton::common::populateElementwiseOpToLLVMPatterns(
-      typeConverter, patterns, axisInfoAnalysis, benefit);
-  mlir::triton::common::populateMemoryOpToLLVMPattern(typeConverter, patterns,
-                                                      benefit);
   patterns.add<ExtractSliceOpConversion>(typeConverter, moduleAllocation,
                                          benefit);
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
   patterns.add<GetNumProgramsOpConversion>(typeConverter, benefit);
-  mlir::triton::common::populateMakeRangeOpToLLVMPattern(typeConverter,
-                                                         patterns, benefit);
   patterns.add<ReturnOpConversion>(typeConverter, benefit);
   patterns.add<PrintOpConversion>(typeConverter, benefit);
+
+  mlir::triton::common::populateElementwiseOpToLLVMPatterns(
+      typeConverter, patterns, axisInfoAnalysis, benefit);
+  mlir::triton::common::populateMemoryOpToLLVMPattern(typeConverter, patterns,
+                                                      benefit);
+  mlir::triton::common::populateMakeRangeOpToLLVMPattern(typeConverter,
+                                                         patterns, benefit);
   mlir::triton::common::populateAssertOpToLLVMPattern(typeConverter, patterns,
                                                       benefit);
 }
