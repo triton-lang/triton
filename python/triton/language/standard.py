@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..runtime.jit import jit
-from . import core, math
+from . import core
 
 # constexpr utilities (triton metaprogramming sucks)
 
@@ -94,7 +94,7 @@ def swizzle2d(i, j, size_i, size_j, size_g):
     # row-index of the first element of this group
     off_i = group_id * size_g
     # last group may have fewer rows
-    size_g = minimum(size_i - off_i, size_g)
+    size_g = core.minimum(size_i - off_i, size_g)
     # new row and column indices
     new_i = off_i + (ij % size_g)
     new_j = (ij % size_gj) // size_g
@@ -117,40 +117,6 @@ def zeros(shape, dtype):
 @jit
 def zeros_like(input):
     return zeros(input.shape, input.dtype)
-
-
-@jit
-def minimum(x, y, propagate_nan: core.constexpr = core.PropagateNan.NONE):
-    """
-    Computes the element-wise minimum of :code:`x` and :code:`y`.
-
-    :param x: the first input tensor
-    :type x: Block
-    :param y: the second input tensor
-    :type y: Block
-    :param propagate_nan: whether to propagate NaN values.
-    :type propagate_nan: tl.PropagateNan
-
-    .. seealso:: :class:`tl.PropagateNan`
-    """
-    return math.min(x, y, propagate_nan)
-
-
-@jit
-def maximum(x, y, propagate_nan: core.constexpr = core.PropagateNan.NONE):
-    """
-    Computes the element-wise maximum of :code:`x` and :code:`y`.
-
-    :param x: the first input tensor
-    :type x: Block
-    :param y: the second input tensor
-    :type y: Block
-    :param propagate_nan: whether to propagate NaN values.
-    :type propagate_nan: tl.PropagateNan
-
-    .. seealso:: :class:`tl.PropagateNan`
-    """
-    return math.max(x, y, propagate_nan)
 
 
 # max and argmax
@@ -179,6 +145,11 @@ def _argmax_combine_tie_break_fast(value1, index1, value2, index2):
 
 
 @jit
+def _elementwise_max(a, b):
+    return core.maximum(a, b)
+
+
+@jit
 @core._add_reduction_docstr("maximum", return_indices_arg="return_indices",
                             tie_break_arg="return_indices_tie_break_left")
 def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False):
@@ -195,7 +166,7 @@ def max(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
             else:
                 assert input.dtype.is_integer_type()
                 input = input.to(core.int32)
-        return core.reduce(input, axis, maximum, keep_dims=keep_dims)
+        return core.reduce(input, axis, _elementwise_max, keep_dims=keep_dims)
 
 
 @jit
@@ -231,6 +202,11 @@ def _argmin_combine_tie_break_fast(value1, index1, value2, index2):
 
 
 @jit
+def _elementwise_min(a, b):
+    return core.minimum(a, b)
+
+
+@jit
 @core._add_reduction_docstr("minimum", return_indices_arg="return_indices",
                             tie_break_arg="return_indices_tie_break_left")
 def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False):
@@ -247,7 +223,7 @@ def min(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
             else:
                 assert input.dtype.is_integer_type()
                 input = input.to(core.int32)
-        return core.reduce(input, axis, minimum, keep_dims=keep_dims)
+        return core.reduce(input, axis, _elementwise_min, keep_dims=keep_dims)
 
 
 @jit

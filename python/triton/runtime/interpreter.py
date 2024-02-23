@@ -231,10 +231,12 @@ class Builder:
     create_ashr = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.right_shift)
     create_minsi = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.minimum)
     create_minui = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.minimum)
-    create_minf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.minimum)
+    create_minimumf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.minimum)
+    create_minnumf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.minimum)
     create_maxsi = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.maximum)
     create_maxui = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.maximum)
-    create_maxf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.maximum)
+    create_maximumf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.maximum)
+    create_maxnumf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.maximum)
     create_icmpSLE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.less_equal)
     create_icmpSLT = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.less)
     create_icmpSGE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.greater_equal)
@@ -414,8 +416,8 @@ def _patch_lang_core(lang, builder):
     def _new_reduce(input, axis, combine_fn, keep_dims=False):
         fn = combine_fn.fn.__name__
         mapping = {
-            "minimum": np.min,
-            "maximum": np.max,
+            "_elementwise_min": np.min,
+            "_elementwise_max": np.max,
             "_sum_combine": np.sum,
         }
         ret = mapping[fn](input.handle.data, axis=axis, keepdims=keep_dims)
@@ -425,9 +427,9 @@ def _patch_lang_core(lang, builder):
     def _new_reduce_wrapper(mode, input, axis=None, return_indices=False, return_indices_tie_break_left=True,
                             keep_dims=False):
         if mode == "min":
-            return _new_reduce(input, axis, tl.standard.minimum, keep_dims)
+            return _new_reduce(input, axis, tl.standard._elementwise_min, keep_dims)
         elif mode == "max":
-            return _new_reduce(input, axis, tl.standard.maximum, keep_dims)
+            return _new_reduce(input, axis, tl.standard._elementwise_max, keep_dims)
         elif mode == "sum":
             return _new_reduce(input, axis, tl.standard._sum_combine, keep_dims)
         else:
