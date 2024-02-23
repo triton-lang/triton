@@ -1,7 +1,8 @@
 #include "TritonGPUToLLVM.h"
+
 #include "Utility.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 namespace {
 
 using namespace mlir;
@@ -19,23 +20,11 @@ Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
   assert(axis >= 0);
   assert(axis < 3);
   assert(moduleOp);
-#ifdef USE_ROCM
   static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
                                                   mlir::gpu::Dimension::y,
                                                   mlir::gpu::Dimension::z};
   Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[axis]);
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
-#else
-  // // It is not easy to get the compute capability here, so we use numCTAs to
-  // // decide the semantic of GetProgramIdOp. If numCTAs = 1, then
-  // // GetProgramIdOp is converted to "%ctaid", otherwise it is converted to
-  // // "%clusterid".
-  // int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
-
-  // std::string sreg = numCTAs == 1 ? "%ctaid." : "%clusterid.";
-  // sreg.append(1, 'x' + axis); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
-  // return getSRegValue(rewriter, loc, sreg);
-#endif
 }
 
 struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
@@ -55,66 +44,6 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
 
     rewriter.replaceOpWithNewOp<LLVM::ReturnOp>(op, TypeRange(), ValueRange(),
                                                 op->getAttrs());
-    return success();
-  }
-};
-
-struct BroadcastOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::BroadcastOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::BroadcastOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::BroadcastOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    // Following the order of indices in the legacy code, a broadcast of:
-    //   [s(0), s(1) ... s(k-1),    1, s(k+1), s(k+2) ... s(n-1)]
-    // =>
-    //   [s(0), s(1) ... s(k-1), s(k), s(k+1), s(k+2) ... s(n-1)]
-    //
-    // logically maps to a broadcast within a thread's scope:
-    //   [cta(0)..cta(k-1),     1,cta(k+1)..cta(n-1),spt(0)..spt(k-1),
-    //   1,spt(k+1)..spt(n-1)]
-    // =>
-    //   [cta(0)..cta(k-1),cta(k),cta(k+1)..cta(n-1),spt(0)..spt(k-1),spt(k),spt(k+1)..spt(n-1)]
-    //
-    // regardless of the order of the layout
-    //
-    Location loc = op->getLoc();
-    Value src = adaptor.getSrc();
-    Value result = op.getResult();
-    RankedTensorType srcTy = op.getSrc().getType();
-    RankedTensorType resultTy = op.getType();
-    auto srcLayout = srcTy.getEncoding();
-    auto resultLayout = resultTy.getEncoding();
-    auto srcShape = srcTy.getShape();
-    auto resultShape = resultTy.getShape();
-    unsigned rank = srcTy.getRank();
-
-    assert(rank == resultTy.getRank());
-    auto order = triton::gpu::getOrder(srcLayout);
-    auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
-    auto resultOffsets = emitOffsetForLayout(resultLayout, resultTy);
-    SmallVector<Value> srcVals =
-        getTypeConverter()->unpackLLElements(loc, src, rewriter);
-
-    DenseMap<SmallVector<unsigned>, Value, SmallVectorKeyInfo> srcValues;
-    for (size_t i = 0; i < srcOffsets.size(); i++) {
-      srcValues[srcOffsets[i]] = srcVals[i];
-    }
-
-    SmallVector<Value> resultVals;
-    for (size_t i = 0; i < resultOffsets.size(); i++) {
-      auto offset = resultOffsets[i];
-      for (size_t j = 0; j < srcShape.size(); j++)
-        if (srcShape[j] == 1)
-          offset[j] = 0;
-      resultVals.push_back(srcValues.lookup(offset));
-    }
-
-    Value resultStruct =
-        getTypeConverter()->packLLElements(loc, resultVals, rewriter, resultTy);
-    rewriter.replaceOp(op, {resultStruct});
     return success();
   }
 };
@@ -165,8 +94,8 @@ struct PrintOpConversion
         SmallVector<SmallVector<Value>> indices;
         if (auto rankedTy =
                 op.getOperand(i).getType().dyn_cast<RankedTensorType>()) {
-          indices =
-              emitIndices(loc, rewriter, rankedTy.getEncoding(), rankedTy);
+          indices = emitIndices(loc, rewriter, rankedTy.getEncoding(), rankedTy,
+                                true);
           for (int64_t dim : rankedTy.getShape()) {
             if (dim > 0) {
               dimWidths.push_back(static_cast<int>(std::ceil(std::log10(dim))));
@@ -409,142 +338,6 @@ struct PrintOpConversion
   }
 };
 
-struct AssertOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::AssertOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::AssertOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::AssertOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-    auto ctx = rewriter.getContext();
-    auto elems = getTypeConverter()->unpackLLElements(
-        loc, adaptor.getCondition(), rewriter);
-    auto elemTy = elems[0].getType();
-    Value condition = int_val(elemTy.getIntOrFloatBitWidth(), 0);
-    for (auto elem : elems) {
-      if (elemTy.isSignedInteger() || elemTy.isSignlessInteger()) {
-        condition =
-            or_(condition,
-                icmp_eq(elem, rewriter.create<LLVM::ConstantOp>(
-                                  loc, elemTy, rewriter.getZeroAttr(elemTy))));
-      } else {
-        assert(false && "Unsupported type for assert");
-        return failure();
-      }
-    }
-    llAssert(op, condition, adaptor.getMessage(), adaptor.getFile(),
-             adaptor.getFunc(), adaptor.getLine(), rewriter);
-    rewriter.eraseOp(op);
-    return success();
-  }
-
-  // op: the op at which the assert is inserted. Unlike printf, we need to
-  // know about the op to split the block.
-  static void llAssert(Operation *op, Value condition, StringRef message,
-                       StringRef file, StringRef func, int line,
-                       ConversionPatternRewriter &rewriter) {
-    ConversionPatternRewriter::InsertionGuard guard(rewriter);
-    auto ctx = rewriter.getContext();
-    auto loc = op->getLoc();
-
-    // #block1
-    // if (condition) {
-    //   #block2
-    //   __assertfail(message);
-    // }
-    // #block3
-    Block *prevBlock = op->getBlock();
-    Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
-    rewriter.setInsertionPointToStart(ifBlock);
-
-    auto funcOp = getAssertfailDeclaration(rewriter);
-    auto moduleOp =
-        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    Value messageString =
-        LLVM::addStringToModule(loc, rewriter, "assertMessage_", message);
-    Value fileString =
-        LLVM::addStringToModule(loc, rewriter, "assertFile_", file);
-    Value funcString =
-        LLVM::addStringToModule(loc, rewriter, "assertFunc_", func);
-    Value lineNumber = i32_val(line);
-    Value charSize = int_val(sizeof(size_t) * 8, sizeof(char));
-
-    SmallVector<Value> operands = {messageString, fileString, lineNumber,
-                                   funcString, charSize};
-    auto ret = call(funcOp, operands);
-
-    // Split a block after the call.
-    Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
-    rewriter.setInsertionPointToEnd(ifBlock);
-    rewriter.create<cf::BranchOp>(loc, thenBlock);
-    rewriter.setInsertionPointToEnd(prevBlock);
-    rewriter.create<cf::CondBranchOp>(loc, condition, ifBlock, thenBlock);
-  }
-
-  static LLVM::LLVMFuncOp
-  getAssertfailDeclaration(ConversionPatternRewriter &rewriter) {
-    auto moduleOp =
-        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    StringRef funcName("__assertfail");
-    Operation *funcOp = moduleOp.lookupSymbol(funcName);
-    if (funcOp)
-      return cast<LLVM::LLVMFuncOp>(*funcOp);
-
-    // void __assert_fail(const char * assertion, const char * file, unsigned
-    // int line, const char * function);
-    auto *ctx = rewriter.getContext();
-    SmallVector<Type> argsType{ptr_ty(ctx), ptr_ty(ctx), i32_ty, ptr_ty(ctx),
-                               rewriter.getIntegerType(sizeof(size_t) * 8)};
-    auto funcType = LLVM::LLVMFunctionType::get(void_ty(ctx), argsType);
-
-    ConversionPatternRewriter::InsertionGuard guard(rewriter);
-    rewriter.setInsertionPointToStart(moduleOp.getBody());
-
-    return rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(ctx), funcName,
-                                             funcType);
-  }
-};
-
-struct MakeRangeOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::MakeRangeOp> {
-
-  MakeRangeOpConversion(
-      TritonGPUToLLVMTypeConverter &converter,
-      ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-      PatternBenefit benefit)
-      : ConvertTritonGPUOpToLLVMPattern<triton::MakeRangeOp>(
-            converter, indexCacheInfo, benefit) {}
-
-  LogicalResult
-  matchAndRewrite(triton::MakeRangeOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    RankedTensorType ty = op.getType();
-    auto shape = ty.getShape();
-    auto layout = ty.getEncoding();
-
-    auto elemTy = ty.getElementType();
-    assert(elemTy.isInteger(32));
-    Value start = createIndexAttrConstant(rewriter, loc, elemTy, op.getStart());
-    auto idxs = emitIndices(loc, rewriter, layout, ty);
-    unsigned elems = idxs.size();
-    SmallVector<Value> retVals(elems);
-    // TODO: slice layout has more elements than expected.
-    // Unexpected behavior for make range, but generally OK when followed by
-    // expand dims + broadcast. very weird behavior otherwise potentially.
-    for (const auto &multiDim : llvm::enumerate(idxs)) {
-      assert(multiDim.value().size() == 1);
-      retVals[multiDim.index()] = add(multiDim.value()[0], start);
-    }
-    Value result =
-        getTypeConverter()->packLLElements(loc, retVals, rewriter, ty);
-    rewriter.replaceOp(op, result);
-    return success();
-  }
-};
-
 struct GetProgramIdOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::GetProgramIdOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -582,7 +375,6 @@ struct GetNumProgramsOpConversion
   LogicalResult
   matchAndRewrite(triton::GetNumProgramsOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-#ifdef USE_ROCM
     static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
                                                     mlir::gpu::Dimension::y,
                                                     mlir::gpu::Dimension::z};
@@ -591,121 +383,6 @@ struct GetNumProgramsOpConversion
     Value blockId =
         rewriter.create<::mlir::gpu::GridDimOp>(loc, dims[op.getAxis()]);
     rewriter.replaceOpWithNewOp<arith::TruncIOp>(op, i32_ty, blockId);
-    return success();
-#else
-    // // It is not easy to get the compute capability here, so we use numCTAs
-    // to
-    // // decide the semantic of GetNumProgramsOp. If numCTAs = 1, then
-    // // GetNumProgramsOp is converted to "%nctaid", otherwise it is converted
-    // to
-    // // "%nclusterid".
-    // auto moduleOp = op->getParentOfType<ModuleOp>();
-    // assert(moduleOp && "Parent ModuleOp not found for GetProgramIdOp");
-    // int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
-
-    // Location loc = op->getLoc();
-    // assert(op.getAxis() < 3);
-    // std::string sreg = numCTAs == 1 ? "%nctaid." : "%nclusterid.";
-    // sreg.append(1, 'x' + op.getAxis()); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
-
-    // Value numPrograms = getSRegValue(rewriter, loc, sreg);
-    // rewriter.replaceOp(op, numPrograms);
-    // return success();
-#endif
-  }
-};
-
-struct AddPtrOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::AddPtrOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::AddPtrOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::AddPtrOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    auto resultTy = op.getType();
-    auto offsetTy = op.getOffset().getType();
-    auto resultTensorTy = resultTy.dyn_cast<RankedTensorType>();
-    if (resultTensorTy) {
-      unsigned elems = getTotalElemsPerThread(resultTy);
-      Type elemTy =
-          getTypeConverter()->convertType(resultTensorTy.getElementType()
-                                              .cast<triton::PointerType>()
-                                              .getPointeeType());
-      Type ptrTy =
-          getTypeConverter()->convertType(resultTensorTy.getElementType());
-      auto ptrs =
-          getTypeConverter()->unpackLLElements(loc, adaptor.getPtr(), rewriter);
-      auto offsets = getTypeConverter()->unpackLLElements(
-          loc, adaptor.getOffset(), rewriter);
-      SmallVector<Value> resultVals(elems);
-      for (unsigned i = 0; i < elems; ++i) {
-        resultVals[i] = gep(ptrTy, elemTy, ptrs[i], offsets[i]);
-      }
-      Value view = getTypeConverter()->packLLElements(loc, resultVals, rewriter,
-                                                      resultTy);
-      rewriter.replaceOp(op, view);
-    } else {
-      assert(resultTy.isa<triton::PointerType>());
-      auto resultPtrTy = getTypeConverter()->convertType(resultTy);
-      auto resultElemTy = getTypeConverter()->convertType(
-          resultTy.cast<triton::PointerType>().getPointeeType());
-      Value result =
-          gep(resultPtrTy, resultElemTy, adaptor.getPtr(), adaptor.getOffset());
-      rewriter.replaceOp(op, result);
-    }
-    return success();
-  }
-};
-
-struct AllocTensorOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::AllocTensorOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::AllocTensorOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::AllocTensorOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    Value smemBase = getSharedMemoryBase(loc, rewriter, op.getResult());
-    auto resultTy = op.getType().dyn_cast<RankedTensorType>();
-    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-    smemBase = bitcast(smemBase, elemPtrTy);
-    auto sharedLayout = resultTy.getEncoding().cast<SharedEncodingAttr>();
-    auto order = sharedLayout.getOrder();
-    // Workaround for 3D tensors
-    // TODO: we need to modify the pipeline pass to give a proper shared
-    // encoding to 3D tensors
-    SmallVector<unsigned> newOrder;
-    if (resultTy.getShape().size() != order.size()) {
-      for (auto i = 0; i < order.size(); ++i)
-        newOrder.push_back(order[i] + 1);
-      newOrder.push_back(0);
-    } else {
-      newOrder = SmallVector<unsigned>(order.begin(), order.end());
-    }
-
-    auto llvmElemTy =
-        getTypeConverter()->convertType(resultTy.getElementType());
-    auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
-    auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, shapePerCTA,
-                                      newOrder, loc, rewriter);
-    auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
-    rewriter.replaceOp(op, retVal);
-    return success();
-  }
-};
-
-struct DeallocTensorOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::DeallocTensorOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::DeallocTensorOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::DeallocTensorOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -769,55 +446,6 @@ struct ExtractSliceOpConversion
   }
 };
 
-struct AsyncWaitOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::AsyncWaitOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::AsyncWaitOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::AsyncWaitOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    return success();
-  }
-};
-
-struct AsyncCommitGroupOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::AsyncCommitGroupOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::AsyncCommitGroupOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::AsyncCommitGroupOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    return success();
-  }
-};
-
-struct AsyncBulkWaitOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::AsyncBulkWaitOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::AsyncBulkWaitOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::AsyncBulkWaitOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    return success();
-  }
-};
-
-struct AsyncBulkCommitGroupOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<
-          triton::gpu::AsyncBulkCommitGroupOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::AsyncBulkCommitGroupOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::AsyncBulkCommitGroupOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    return success();
-  }
-};
-
 } // namespace
 
 namespace AMD {
@@ -827,23 +455,19 @@ void populateTritonGPUToLLVMPatterns(
     ModuleAllocation &moduleAllocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     PatternBenefit benefit) {
-  patterns.add<AddPtrOpConversion>(typeConverter, benefit);
-  patterns.add<AllocTensorOpConversion>(typeConverter, moduleAllocation,
-                                        benefit);
-  patterns.add<DeallocTensorOpConversion>(typeConverter, benefit);
-  patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
-  patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
-  patterns.add<AsyncBulkCommitGroupOpConversion>(typeConverter, benefit);
-  patterns.add<AsyncBulkWaitOpConversion>(typeConverter, benefit);
-  patterns.add<BroadcastOpConversion>(typeConverter, benefit);
   patterns.add<ExtractSliceOpConversion>(typeConverter, moduleAllocation,
                                          benefit);
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
   patterns.add<GetNumProgramsOpConversion>(typeConverter, benefit);
-  patterns.add<MakeRangeOpConversion>(typeConverter, indexCacheInfo, benefit);
   patterns.add<ReturnOpConversion>(typeConverter, benefit);
   patterns.add<PrintOpConversion>(typeConverter, benefit);
-  patterns.add<AssertOpConversion>(typeConverter, benefit);
+
+  mlir::triton::populateAddPtrOpToLLVMPattern(typeConverter, patterns,
+                                              axisInfoAnalysis, benefit);
+  mlir::triton::populateMemoryOpToLLVMPattern(typeConverter, patterns, benefit);
+  mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, patterns,
+                                                 benefit);
+  mlir::triton::populateAssertOpToLLVMPattern(typeConverter, patterns, benefit);
 }
 
 } // namespace AMD

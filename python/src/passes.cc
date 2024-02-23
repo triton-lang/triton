@@ -5,7 +5,6 @@
 #include "passes.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Membar.h"
-// #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
