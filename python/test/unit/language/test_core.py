@@ -1954,10 +1954,11 @@ def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, device):
         })
     elif op == 'roll':
         assert op == 'roll'
-        kernel = patch_kernel(kernel, {
-            'GENERATE_TEST_HERE':
-            f'_, z, _ = tl.associative_scan((1 + 0* x, 0 * x, x), axis={axis}, combine_fn={op}, reverse={reverse})'
-        })
+        kernel = patch_kernel(
+            kernel, {
+                'GENERATE_TEST_HERE':
+                f'_, z, _ = tl.associative_scan((1 + 0* x, 0 * x, x), axis={axis}, combine_fn={op}, reverse={reverse})'
+            })
     else:
         assert op == 'linear_recurrence'
         kernel = patch_kernel(kernel, {
