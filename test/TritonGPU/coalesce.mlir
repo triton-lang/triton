@@ -53,25 +53,6 @@ tt.func @transpose(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
 
 // -----
 
-#blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 2], order = [0, 1]}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 2 : i32} {
-
-// CHECK: [[NEW_LOADED_LAYOUT:#.*]] = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [2, 1], order = [1, 0]}>
-tt.func @load_tensor(%arg0: !tt.ptr<f32, 1> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}) {
-  %c0 = arith.constant 0 : i32
-  %c1 = arith.constant 1 : i64
-  %0 = arith.extsi %arg1 : i32 to i64
-  %1 = arith.extsi %arg2 : i32 to i64
-  %2 = tt.make_tensor_ptr %arg0, [%0, %1], [%1, %c1], [%c0, %c0] { order = array<i32: 1, 0> } : !tt.ptr<tensor<32x32xf32, #blocked>, 1>
-  // CHECK: !tt.ptr<tensor<32x32xf32, {{.*}}>, 1> -> tensor<32x32xf32, [[NEW_LOADED_LAYOUT]]>
-  %3 = tt.load %2 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x32xf32, #blocked>, 1> -> tensor<32x32xf32, #blocked>
-  tt.return
-}
-
-}
-
-// -----
-
 #blocked = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
 

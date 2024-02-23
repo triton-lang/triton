@@ -3,12 +3,15 @@
 
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
-#include "llvm/ADT/MapVector.h"
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include <algorithm>
+#include <numeric>
 
 namespace mlir {
+
+class ModuleAxisInfoAnalysis;
 
 namespace triton {
 class LoadOp;
@@ -25,6 +28,22 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
 
 /// Returns true if the Load uses block pointer.
 bool isLoadFromTensorPtr(triton::LoadOp op);
+
+// Return an array of indices enumerating the elements of 'arr' in descending
+// order (so that result[i] is the index of the i-th largest element of 'arr')
+SmallVector<unsigned, 4> argSort(const SmallVector<int64_t> &arr);
+
+// Return the operand used to access the memory in the operation
+Value getMemAccessPtr(Operation *op);
+
+// Return bitwidth of tensor element
+unsigned getElementBitWidth(RankedTensorType type);
+
+// Calculate the optimal number of elements per thread for a given operation
+// along an axis with greatest continuity.
+unsigned
+getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
+                        mlir::ModuleAxisInfoAnalysis &axisInfoAnalysis);
 
 /* Dump Triton IR in graphviz dot format.
  *
