@@ -32,18 +32,18 @@ bool isLoadFromTensorPtr(triton::LoadOp op);
 /// Return the first consumer of v
 Operation *getFirstUser(Value v);
 
-template <class T> SmallVector<unsigned, 4> argSort(const T &arr) {
-  SmallVector<unsigned, 4> ret(arr.size());
-  std::iota(ret.begin(), ret.end(), 0);
-  std::stable_sort(ret.begin(), ret.end(),
-                   [&](unsigned x, unsigned y) { return arr[x] > arr[y]; });
-  return ret;
-}
+// Return an array of indices enumerating the elements of 'arr' in descending
+// order (so that result[i] is the index of the i-th largest element of 'arr')
+SmallVector<unsigned, 4> argSort(const SmallVector<int64_t> &arr);
 
+// Return the operand used to access the memory in the operation
 Value getMemAccessPtr(Operation *op);
 
-unsigned getElementBitWidth(const Value &val);
+// Return bitwidth of tensor element
+unsigned getElementBitWidth(RankedTensorType type);
 
+// Calculate the optimal number of elements per thread for a given operation
+// along an axis with greatest continuity.
 unsigned
 getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                         mlir::ModuleAxisInfoAnalysis &axisInfoAnalysis);

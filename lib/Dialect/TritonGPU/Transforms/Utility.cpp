@@ -84,6 +84,14 @@ Operation *getFirstUser(Value v) {
   return firstUser;
 }
 
+SmallVector<unsigned, 4> argSort(const SmallVector<int64_t> &arr) {
+  SmallVector<unsigned, 4> ret(arr.size());
+  std::iota(ret.begin(), ret.end(), 0);
+  std::stable_sort(ret.begin(), ret.end(),
+                   [&](unsigned x, unsigned y) { return arr[x] > arr[y]; });
+  return ret;
+}
+
 Value getMemAccessPtr(Operation *op) {
   if (auto ld = dyn_cast<triton::LoadOp>(op))
     return ld.getPtr();
@@ -98,12 +106,11 @@ Value getMemAccessPtr(Operation *op) {
   return nullptr;
 }
 
-unsigned getElementBitWidth(const Value &val) {
-  auto tensorType = val.getType().cast<RankedTensorType>();
+unsigned getElementBitWidth(RankedTensorType type) {
   auto typeForMem =
-      tensorType.getElementType().isa<PointerType>()
-          ? tensorType.getElementType().cast<PointerType>().getPointeeType()
-          : tensorType.getElementType();
+      type.getElementType().isa<PointerType>()
+          ? type.getElementType().cast<PointerType>().getPointeeType()
+          : type.getElementType();
   return typeForMem.getIntOrFloatBitWidth();
 }
 
@@ -114,7 +121,7 @@ unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
   auto ty = val.getType().cast<RankedTensorType>();
   auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
   AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
-  unsigned elemNumBits = getElementBitWidth(val);
+  unsigned elemNumBits = getElementBitWidth(ty);
   unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
   unsigned maxMultipleBytes = valInfo.getDivisibility(order[0]);
   unsigned maxMultiple = std::max(maxMultipleBytes / elemNumBytes, 1u);
