@@ -133,7 +133,7 @@ private:
 
 } // namespace
 
-void mlir::triton::populateControlFlowOpToLLVMPattern(
+void mlir::triton::NVIDIA::populateControlFlowOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<ReturnOpConversion>(typeConverter, benefit);

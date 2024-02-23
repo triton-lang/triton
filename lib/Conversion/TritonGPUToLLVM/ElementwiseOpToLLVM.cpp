@@ -1,7 +1,7 @@
+#include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVM.h"
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -479,7 +479,7 @@ struct SelectOpConversion
 };
 } // namespace
 
-void mlir::triton::populateAddPtrOpToLLVMPattern(
+void mlir::triton::populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);

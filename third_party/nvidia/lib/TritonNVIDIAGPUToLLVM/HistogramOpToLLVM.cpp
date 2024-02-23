@@ -186,7 +186,7 @@ public:
 };
 } // namespace
 
-void mlir::triton::populateHistogramOpToLLVMPatterns(
+void mlir::triton::NVIDIA::populateHistogramOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<HistogramOpConversion>(typeConverter, benefit);

@@ -58,7 +58,7 @@ struct ClusterWaitOpConversion
 };
 } // namespace
 
-void mlir::triton::populateClusterOpsToLLVMPatterns(
+void mlir::triton::NVIDIA::populateClusterOpsToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<ClusterArriveOpConversion>(typeConverter, benefit);

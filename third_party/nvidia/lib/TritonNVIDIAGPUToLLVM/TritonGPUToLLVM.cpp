@@ -42,7 +42,7 @@ convertFuncOpToLLVMFuncOp(FunctionOpInterface funcOp,
 }
 
 using namespace mlir;
-using namespace mlir::triton;
+using namespace mlir::triton::NVIDIA;
 namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace {

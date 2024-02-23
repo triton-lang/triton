@@ -1073,7 +1073,9 @@ private:
 } // namespace
 } // namespace gpu
 
-void populateElementwiseOpToLLVMPatterns(
+} // namespace mlir::triton
+
+void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
     PatternBenefit benefit) {
@@ -1126,8 +1128,8 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
 
-  mlir::triton::populateAddPtrOpToLLVMPattern(typeConverter, patterns,
-                                              axisInfoAnalysis, benefit);
+  mlir::triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
+                                                    axisInfoAnalysis, benefit);
 
   patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FSubOpConversion>(typeConverter, axisInfoAnalysis, benefit);
@@ -1154,5 +1156,3 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<MinMaxFOpConversion<arith::MaximumFOp>>(
       typeConverter, axisInfoAnalysis, computeCapability, benefit);
 }
-
-} // namespace mlir::triton

@@ -1579,7 +1579,7 @@ void populateElementwiseOpToLLVMPatterns(
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
   // __nv_expf for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
-  mlir::triton::populateAddPtrOpToLLVMPattern(typeConverter, patterns,
-                                              axisInfoAnalysis, benefit);
+  mlir::triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
+                                                    axisInfoAnalysis, benefit);
 }
 } // namespace AMD

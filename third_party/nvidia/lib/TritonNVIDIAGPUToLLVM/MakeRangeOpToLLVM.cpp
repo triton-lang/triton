@@ -42,7 +42,7 @@ struct MakeRangeOpConversion
 
 } // namespace
 
-void mlir::triton::populateMakeRangeOpToLLVMPattern(
+void mlir::triton::NVIDIA::populateMakeRangeOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<MakeRangeOpConversion>(typeConverter, benefit);

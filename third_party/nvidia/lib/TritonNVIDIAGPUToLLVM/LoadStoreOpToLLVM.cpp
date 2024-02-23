@@ -1056,7 +1056,7 @@ struct AsyncBulkCommitGroupOpConversion
 
 } // namespace
 
-void mlir::triton::populateLoadStoreOpToLLVMPatterns(
+void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
   patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, benefit);

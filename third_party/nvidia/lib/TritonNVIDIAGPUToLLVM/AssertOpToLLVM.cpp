@@ -105,7 +105,7 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
 
 } // namespace
 
-void mlir::triton::populateAssertOpToLLVMPattern(
+void mlir::triton::NVIDIA::populateAssertOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<AssertOpConversion>(typeConverter, benefit);
