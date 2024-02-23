@@ -72,7 +72,7 @@ bool isDivisible(Value v, unsigned divisor) {
 }
 
 bool shouldRemove(tt::MakeTensorPtrOp &op, int computeCapability) {
-  if (computeCapability < 90 || !::triton::tools::getBoolEnv("ENABLE_TMA"))
+  if (computeCapability < 90 || !mlir::triton::tools::getBoolEnv("ENABLE_TMA"))
     return true;
   auto resType = op.getResult()
                      .getType()
@@ -94,7 +94,7 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, int computeCapability) {
   if (stride.size() == 2)
     strideDivisible =
         isDivisible(stride[ord[1]], 128 / elemType.getIntOrFloatBitWidth());
-  bool enableTMA = ::triton::tools::getBoolEnv("ENABLE_TMA");
+  bool enableTMA = mlir::triton::tools::getBoolEnv("ENABLE_TMA");
   return !(boxDimSwizzle && strideDivisible && enableTMA);
 }
 

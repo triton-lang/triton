@@ -93,7 +93,7 @@ void MaterializeLoadStorePass::materializeLoadTilePtr(
     mlir::triton::LoadOp load) {
   if (computeCapability < 90)
     return;
-  if (!::triton::tools::getBoolEnv("ENABLE_TMA"))
+  if (!mlir::triton::tools::getBoolEnv("ENABLE_TMA"))
     return;
   auto loc = load.getLoc();
   OpBuilder b(load);
@@ -146,7 +146,7 @@ void MaterializeLoadStorePass::materializeLoadTilePtr(
 
 void MaterializeLoadStorePass::materializeStoreTilePtr(
     mlir::triton::StoreOp store) {
-  if (computeCapability < 90 || !::triton::tools::getBoolEnv("ENABLE_TMA"))
+  if (computeCapability < 90 || !mlir::triton::tools::getBoolEnv("ENABLE_TMA"))
     return;
   auto loc = store.getLoc();
   OpBuilder builder(store);

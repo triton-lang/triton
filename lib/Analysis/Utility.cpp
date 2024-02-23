@@ -397,7 +397,7 @@ bool supportMMA(triton::DotOp op, int version) {
   auto aElemTy = op.getA().getType().cast<RankedTensorType>().getElementType();
   auto bElemTy = op.getB().getType().cast<RankedTensorType>().getElementType();
   if (version == 3) {
-    if (::triton::tools::getBoolEnv("DISABLE_MMA_V3"))
+    if (mlir::triton::tools::getBoolEnv("DISABLE_MMA_V3"))
       return false;
     auto retType = op.getResult().getType().cast<RankedTensorType>();
     auto retShapePerCTA = triton::gpu::getShapePerCTA(retType);

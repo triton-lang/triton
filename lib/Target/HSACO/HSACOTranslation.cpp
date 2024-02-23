@@ -145,7 +145,7 @@ std::string generate_amdgcn_assembly(llvm::Module *module,
   pass.run(*module);
 
   std::string amdgcn(buffer.begin(), buffer.end());
-  if (::triton::tools::getBoolEnv("AMDGCN_ENABLE_DUMP")) {
+  if (mlir::triton::tools::getBoolEnv("AMDGCN_ENABLE_DUMP")) {
     llvm::dbgs() << "// -----// AMDGCN Dump //----- //\n" << amdgcn << '\n';
   }
 
@@ -156,7 +156,7 @@ std::string generate_hsaco(llvm::Module *module, const std::string &triple,
                            const std::string &proc,
                            const std::string &features) {
   auto machine = initialize_module(module, triple, proc, features);
-  std::string dump_path = ::triton::tools::getenv("AMDGCN_DUMP_PATH");
+  std::string dump_path = mlir::triton::tools::getenv("AMDGCN_DUMP_PATH");
   
   // create unique dir for kernel's binary and hsaco
   std::error_code ec;
@@ -235,7 +235,7 @@ std::string generate_hsaco(llvm::Module *module, const std::string &triple,
                                               "hip" / "llvm" / "bin" / "ld.lld";
   std::string lld_path = compiletime_path.string();
   if (!std::filesystem::exists(lld_path)) {
-    std::string rocm_path = ::triton::tools::getenv("ROCM_PATH");
+    std::string rocm_path = mlir::triton::tools::getenv("ROCM_PATH");
     lld_path = (rocm_path.empty()) ? ROCM_DEFAULT_DIR : rocm_path;
     lld_path += "/llvm/bin/ld.lld";
   }
@@ -312,7 +312,7 @@ void translateTritonToTritonGPU(mlir::ModuleOp &module,
       /*shouldPrintBeforePass=*/nullptr,
       /*shouldPrintAfterPass=*/
       [](mlir::Pass *pass, mlir::Operation *) {
-        return ::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
+        return mlir::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
       },
       /*printModuleScope=*/false,
       /*printAfterOnlyOnChange=*/true,
@@ -446,7 +446,7 @@ static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
   if (!funcs.empty()) {
     static const std::string libdevice = "libdevice";
     // first search for environmental path
-    std::string env_path = ::triton::tools::getenv("TRITON_LIBDEVICE_PATH");
+    std::string env_path = mlir::triton::tools::getenv("TRITON_LIBDEVICE_PATH");
     if (!env_path.empty()) {
       externLibs.try_emplace(libdevice, env_path);
       return externLibs;
@@ -606,7 +606,7 @@ translateLLVMDialectToLLVMIR(llvm::LLVMContext *llvmContext,
     llvm::errs() << "Could not open file: " << EC.message() << "\n";
   }
 
-  if (::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
+  if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
     std::string mod_string;
     std::unique_ptr<llvm::raw_string_ostream> ir_ss(
         new llvm::raw_string_ostream(mod_string));
@@ -643,7 +643,7 @@ void translateTritonGPUToLLVMDialect(mlir::ModuleOp &module,
       /*shouldPrintBeforePass=*/nullptr,
       /*shouldPrintAfterPass=*/
       [](mlir::Pass *pass, mlir::Operation *) {
-        return ::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
+        return mlir::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
       },
       /*printModuleScope=*/false,
       /*printAfterOnlyOnChange=*/true,

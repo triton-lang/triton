@@ -1,4 +1,5 @@
 #include "ElementwiseOpToLLVM.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -309,21 +310,30 @@ static Value convertFp32ToBf16(Location loc,
                                 ConversionPatternRewriter &rewriter,
                                 const Value &v) {
 #ifdef USE_ROCM
-  auto as_uint32 = bitcast(v, i32_ty);
-  auto check_exponent = and_(i32_ty, xor_(i32_ty, as_uint32, i32_val(0xffffffff)), i32_val(0x7f800000));
-  auto exponent_not_all1s = icmp_ne(check_exponent, i32_val(0)); 
-  auto exponent_all1s = icmp_eq(check_exponent, i32_val(0)); 
-  auto rounded = add(i32_ty, i32_val(0x7fff),  and_(i32_ty, lshr(i32_ty, as_uint32, i32_val(16)), i32_val(1)) );
-  rounded = add(i32_ty, rounded, as_uint32);
-  auto res = select(exponent_not_all1s, rounded, as_uint32); 
+  if (mlir::triton::tools::getBoolEnv("TRUNCATE_F32_TO_BF16")) {
+    auto as_int32 = bitcast(v, i32_ty);
+    auto shifted = lshr(i32_ty, as_int32, i32_val(16));
+    auto truncated = trunc(i16_ty, shifted);
+    return(bitcast(truncated, i16_ty));
+  }
+  else {
+    auto as_uint32 = bitcast(v, i32_ty);
+    auto check_exponent = and_(i32_ty, xor_(i32_ty, as_uint32, i32_val(0xffffffff)), i32_val(0x7f800000));
+    auto exponent_not_all1s = icmp_ne(check_exponent, i32_val(0)); 
+    auto exponent_all1s = icmp_eq(check_exponent, i32_val(0)); 
+    auto rounded = add(i32_ty, i32_val(0x7fff),  and_(i32_ty, lshr(i32_ty, as_uint32, i32_val(16)), i32_val(1)) );
+    rounded = add(i32_ty, rounded, as_uint32);
+    auto res = select(exponent_not_all1s, rounded, as_uint32); 
 
-  auto preserve_nan = and_( i1_ty, exponent_all1s, icmp_ne(and_(i32_ty, as_uint32, i32_val(0xffff)), i32_val(0)) );
-  auto nan = or_(i32_ty, as_uint32, i32_val(0x10000));
-  res = select(preserve_nan, nan, res); 
+    auto preserve_nan = and_( i1_ty, exponent_all1s, icmp_ne(and_(i32_ty, as_uint32, i32_val(0xffff)), i32_val(0)) );
+    auto nan = or_(i32_ty, as_uint32, i32_val(0x10000));
+    res = select(preserve_nan, nan, res); 
 
-  auto shifted = lshr(i32_ty, res, i32_val(16));
-  auto truncated = trunc(i16_ty, shifted);
-  return truncated;
+    auto shifted = lshr(i32_ty, res, i32_val(16));
+    auto truncated = trunc(i16_ty, shifted);
+    return truncated;
+  }
+
 #else
   PTXBuilder builder;
   auto &cvt = *builder.create("cvt.rn.bf16.f32");

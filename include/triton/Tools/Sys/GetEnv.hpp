@@ -27,12 +27,12 @@
 #include <set>
 #include <string>
 
-namespace triton {
+namespace mlir::triton {
 
 const std::set<std::string> ENV_VARS = {
     "DISABLE_MMA_V3",    "TRITON_DISABLE_LINE_INFO", "DISABLE_FAST_REDUCTION",
     "ENABLE_TMA",        "MLIR_ENABLE_DUMP",         "LLVM_IR_ENABLE_DUMP",
-    "AMDGCN_ENABLE_DUMP"};
+    "AMDGCN_ENABLE_DUMP", "TRUNCATE_F32_TO_BF16"};
 
 namespace tools {
 
@@ -46,7 +46,7 @@ inline std::string getenv(const char *name) {
 
 inline bool getBoolEnv(const std::string &env) {
   std::string msg = "Environment variable " + env + " is not recognized";
-  assert(::triton::ENV_VARS.find(env.c_str()) != ::triton::ENV_VARS.end() &&
+  assert(mlir::triton::ENV_VARS.find(env.c_str()) != mlir::triton::ENV_VARS.end() &&
          msg.c_str());
   const char *s = std::getenv(env.c_str());
   std::string str(s ? s : "");
