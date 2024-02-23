@@ -1658,6 +1658,7 @@ def associative_scan(input, axis, combine_fn, reverse=False, _builder=None, _gen
     :param input: the input tensor, or tuple of tensors
     :param axis: the dimension along which the reduction should be done
     :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit)
+    :param reverse: apply the associative scan in the reverse direction along axis.
 
     """
     if isinstance(input, tensor):
