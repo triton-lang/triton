@@ -986,8 +986,9 @@ private:
 
   void promoteReduceOps(ModuleOp mod) const {
 
+    // promote reduce ops
     mod.walk([&](triton::ReduceOp op) -> void {
-      OpBuilder rewriter(op);
+      OpBuilder builder(op);
 
       // promote operands
       SmallVector<Value> newOperands;
@@ -996,14 +997,14 @@ private:
         auto oldType = val.getType().cast<RankedTensorType>();
         auto elemType = oldType.getElementType();
         if (elemType.isInteger(16) || elemType.isInteger(8)) {
-          auto newType = oldType.cloneWith(std::nullopt, i32_ty);
+          auto newType = oldType.cloneWith(std::nullopt, builder.getIntegerType(32));
           auto promotedVal =
-              rewriter.create<mlir::arith::ExtSIOp>(op->getLoc(), newType, val);
+              builder.create<mlir::arith::ExtSIOp>(op->getLoc(), newType, val);
           newOperands.push_back(promotedVal);
         } else if (elemType.isF16()) {
-          auto newType = oldType.cloneWith(std::nullopt, f32_ty);
+          auto newType = oldType.cloneWith(std::nullopt, builder.getF32Type());
           auto promotedVal =
-              rewriter.create<mlir::arith::ExtFOp>(op->getLoc(), newType, val);
+              builder.create<mlir::arith::ExtFOp>(op->getLoc(), newType, val);
           newOperands.push_back(promotedVal);
         } else {
           newOperands.push_back(val);
@@ -1015,71 +1016,66 @@ private:
       for (Value result : op.getResults()) {
         auto type = result.getType();
         if (type.isInteger(16)) {
-          result.setType(i32_ty);
+          result.setType(builder.getIntegerType(32));
 
           // add trunc if float result type was changed
-          rewriter.setInsertionPointAfter(op);
-          auto truncResult = rewriter.create<mlir::arith::TruncIOp>(
-              result.getLoc(), i16_ty, result);
+          builder.setInsertionPointAfter(op);
+          auto truncResult = builder.create<mlir::arith::TruncIOp>(
+              result.getLoc(), builder.getIntegerType(16), result);
 
-          // replace uses
-          result.replaceUsesWithIf(truncResult, [](OpOperand &user) {
-            return !isa<mlir::arith::TruncIOp>(user.getOwner());
-          });
+          // replace all uses except for the truncOp above
+          result.replaceAllUsesWith(truncResult);
+          truncResult->setOperand(0, result);
 
         } else if (type.isInteger(8)) {
-          result.setType(i32_ty);
+          result.setType(builder.getIntegerType(32));
 
           // add trunc if float result type was changed
-          rewriter.setInsertionPointAfter(op);
-          auto truncResult = rewriter.create<mlir::arith::TruncIOp>(
-              result.getLoc(), i8_ty, result);
+          builder.setInsertionPointAfter(op);
+          auto truncResult = builder.create<mlir::arith::TruncIOp>(
+              result.getLoc(), builder.getIntegerType(8), result);
 
-          // replace uses
-          result.replaceUsesWithIf(truncResult, [](OpOperand &user) {
-            return !isa<mlir::arith::TruncIOp>(user.getOwner());
-          });
+          // replace all uses except for the truncOp above
+          result.replaceAllUsesWith(truncResult);
+          truncResult->setOperand(0, result);
 
         } else if (type.isF16()) {
-          result.setType(f32_ty);
+          result.setType(builder.getF32Type());
 
           // add trunc if float result type was changed
-          rewriter.setInsertionPointAfter(op);
-          auto truncResult = rewriter.create<mlir::arith::TruncFOp>(
-              result.getLoc(), f16_ty, result);
+          builder.setInsertionPointAfter(op);
+          auto truncResult = builder.create<mlir::arith::TruncFOp>(
+              result.getLoc(), builder.getF16Type(), result);
 
-          // replace uses
-          result.replaceUsesWithIf(truncResult, [](OpOperand &user) {
-            return !isa<mlir::arith::TruncFOp>(user.getOwner());
-          });
+          // replace all uses except for the truncOp above
+          result.replaceAllUsesWith(truncResult);
+          truncResult->setOperand(0, result);
 
         } else if (type.isa<RankedTensorType>()) {
           auto oldType = type.cast<RankedTensorType>();
           auto elemType = oldType.getElementType();
           if (elemType.isInteger(16) || elemType.isInteger(8)) {
-            result.setType(oldType.cloneWith(std::nullopt, i32_ty));
+            result.setType(oldType.cloneWith(std::nullopt, builder.getIntegerType(32)));
 
             // add trunc if float result type was changed
-            rewriter.setInsertionPointAfter(op);
-            auto truncResult = rewriter.create<mlir::arith::TruncIOp>(
+            builder.setInsertionPointAfter(op);
+            auto truncResult = builder.create<mlir::arith::TruncIOp>(
                 result.getLoc(), oldType, result);
 
-            // replace uses
-            result.replaceUsesWithIf(truncResult, [](OpOperand &user) {
-              return !isa<mlir::arith::TruncIOp>(user.getOwner());
-            });
+            // replace all uses except for the truncOp above
+            result.replaceAllUsesWith(truncResult);
+            truncResult->setOperand(0, result);
           } else if (elemType.isF16()) {
-            result.setType(oldType.cloneWith(std::nullopt, f32_ty));
+            result.setType(oldType.cloneWith(std::nullopt, builder.getF32Type()));
 
             // add trunc if float result type was changed
-            rewriter.setInsertionPointAfter(op);
-            auto truncResult = rewriter.create<mlir::arith::TruncFOp>(
+            builder.setInsertionPointAfter(op);
+            auto truncResult = builder.create<mlir::arith::TruncFOp>(
                 result.getLoc(), oldType, result);
 
-            // replace uses
-            result.replaceUsesWithIf(truncResult, [](OpOperand &user) {
-              return !isa<mlir::arith::TruncFOp>(user.getOwner());
-            });
+            // replace all uses except for the truncOp above
+            result.replaceAllUsesWith(truncResult);
+            truncResult->setOperand(0, result);
           }
         }
       }
@@ -1090,9 +1086,9 @@ private:
         for (auto arg : oldBlock.getArguments()) {
           auto type = arg.getType();
           if (type.isInteger(16) || type.isInteger(8)) {
-            arg.setType(i32_ty);
+            arg.setType(builder.getIntegerType(32));
           } else if (type.isF16()) {
-            arg.setType(f32_ty);
+            arg.setType(builder.getF32Type());
           }
         }
 
@@ -1102,9 +1098,9 @@ private:
             auto val = operand.get();
             auto type = val.getType();
             if (type.isInteger(16) || type.isInteger(8)) {
-              val.setType(i32_ty);
+              val.setType(builder.getIntegerType(32));
             } else if (type.isF16()) {
-              val.setType(f32_ty);
+              val.setType(builder.getF32Type());
             }
           }
 
@@ -1112,9 +1108,9 @@ private:
           for (Value result : oldOp.getResults()) {
             auto type = result.getType();
             if (type.isInteger(16) || type.isInteger(8)) {
-              result.setType(i32_ty);
+              result.setType(builder.getIntegerType(32));
             } else if (type.isF16()) {
-              result.setType(f32_ty);
+              result.setType(builder.getF32Type());
             }
           }
         }
