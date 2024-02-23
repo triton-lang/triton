@@ -218,8 +218,9 @@ def compile(src, target=None, options=None):
     if target is None:
         target = driver.active.get_current_target()
     backend = make_backend(target)
+    ir_source = not isinstance(src, ASTSource)
     # create backend
-    if not isinstance(src, ASTSource):
+    if ir_source:
         assert isinstance(src, str), "source must be either AST or a filepath"
         src = IRSource(src)
     extra_options = src.parse_options()
@@ -252,6 +253,9 @@ def compile(src, target=None, options=None):
     stages = dict()
     backend.add_stages(stages, options)
     first_stage = list(stages.keys()).index(src.ext)
+    # when the source is an IR file, don't apply the passes related to this stage. This makes it easier to write IR level tests.
+    if ir_source:
+        first_stage += 1
     context = ir.context()
     ir.load_dialects(context)
     backend.load_dialects(context)
