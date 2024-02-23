@@ -657,8 +657,9 @@ unsigned ReduceOp::getNumOperands() { return this->getOperands().size(); }
 
 //-- ScanOp --
 void ScanOp::build(OpBuilder &builder, OperationState &state,
-                   ValueRange operands, int axis) {
+                   ValueRange operands, int axis, bool reverse) {
   SmallVector<Type> inferredReturnTypes;
+  state.addAttribute("reverse", builder.getBoolAttr(reverse));
   for (auto arg : operands)
     inferredReturnTypes.push_back(arg.getType());
   ReduceOp::build(builder, state, inferredReturnTypes, operands, axis);

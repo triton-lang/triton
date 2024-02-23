@@ -1696,16 +1696,17 @@ def _add_scan_docstr(name: str, return_indices_arg: str = None, tie_break_arg: s
 
 
 @builtin
-def associative_scan(input, axis, combine_fn, _builder=None, _generator=None):
+def associative_scan(input, axis, combine_fn, reverse=False, _builder=None, _generator=None):
     """Applies the combine_fn to each elements with a carry in :code:`input` tensors along the provided :code:`axis` and update the carry
 
     :param input: the input tensor, or tuple of tensors
     :param axis: the dimension along which the reduction should be done
     :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit)
+    :param reverse: apply the associative scan in the reverse direction along axis.
 
     """
     if isinstance(input, tensor):
-        return associative_scan((input, ), axis, combine_fn, _builder=_builder, _generator=_generator)[0]
+        return associative_scan((input, ), axis, combine_fn, reverse, _builder=_builder, _generator=_generator)[0]
 
     def make_combine_region(scan_op):
         in_scalar_tys = [t.type.scalar for t in input]
@@ -1726,7 +1727,7 @@ def associative_scan(input, axis, combine_fn, _builder=None, _generator=None):
     axis = _constexpr_to_value(axis)
     if axis is not None:
         axis = _wrap_axis(axis, len(input[0].shape))
-    return semantic.associative_scan(input, axis, make_combine_region, _builder)
+    return semantic.associative_scan(input, axis, make_combine_region, reverse, _builder)
 
 
 @builtin
