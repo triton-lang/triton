@@ -3,10 +3,25 @@
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+
+using namespace mlir;
+using namespace mlir::triton;
+
+using ::mlir::triton::gpu::BlockedEncodingAttr;
 
 typedef llvm::DenseMap<mlir::Operation *, mlir::triton::MakeTensorPtrOp>
     TensorPtrMapT;
 
+namespace SharedToDotOperandFMA {
+Value convertLayout(int opIdx, Value val, Value llVal,
+                    BlockedEncodingAttr dLayout, Value thread, Location loc,
+                    const LLVMTypeConverter *typeConverter,
+                    ConversionPatternRewriter &rewriter);
+}
+LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+                            const LLVMTypeConverter *typeConverter,
+                            ConversionPatternRewriter &rewriter);
 namespace mlir {
 namespace triton {
 namespace common {
