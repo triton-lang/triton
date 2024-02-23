@@ -1768,6 +1768,29 @@ private:
   int computeCapability;
 };
 
+struct MulhiUIOpConversion
+    : public ElementwiseOpConversionBase<MulhiUIOp,
+                                         MulhiUIOpConversion> {
+  using Base = ElementwiseOpConversionBase<MulhiUIOp,
+                                           MulhiUIOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(MulhiUIOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    
+    Type resultElementTy = getElementTypeOrSelf(op.getResult().getType());
+    assert (resultElementTy.isInteger(32) || resultElementTy.isInteger(64));
+    
+    StringRef funcName = resultElementTy.isInteger(32) ? "__nv_umulhi" : "__nv_umul64hi";
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp = appendOrGetFuncOp(rewriter, op, funcName, funcType);
+    return {rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
+  }
+};
+
 template <typename TritonOp>
 struct NamedExternalElementwiseOpConversion
     : public ElementwiseOpConversionBase<TritonOp,
@@ -1950,7 +1973,6 @@ void populateElementwiseOpToLLVMPatterns(
 
   patterns.add<NamedExternalElementwiseOpConversion<triton::PreciseSqrtOp>>(typeConverter, axisInfoAnalysis, "__nv_fsqrt_rn", benefit);
   patterns.add<NamedExternalElementwiseOpConversion<triton::PreciseDivFOp>>(typeConverter, axisInfoAnalysis, "__nv_fdiv_rn", benefit);
-  patterns.add<NamedExternalElementwiseOpConversion<triton::MulhiOp>>(typeConverter, axisInfoAnalysis, "__nv_mulhi", benefit);
 
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
   patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
@@ -1981,6 +2003,7 @@ void populateElementwiseOpToLLVMPatterns(
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
   // __nv_expf for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
   patterns.add<MinMaxFOpConversion<arith::MinimumFOp>>(

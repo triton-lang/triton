@@ -164,7 +164,7 @@ def TT_PreciseDivFOp : TT_Op<"precise_divf", [Elementwise,
     let assemblyFormat = "$x `,` $y attr-dict `:` type($x)";
 }
 
-def TT_MulhiOp : TT_Op<"mulhi", [Elementwise,
+def TT_MulhiUIOp : TT_Op<"mulhiui", [Elementwise,
                                   SameOperandsAndResultType,
                                   Pure]> {
     let summary = "High half of the product of two integers";

@@ -1483,7 +1483,7 @@ def _check_dtype(dtypes: List[str]) -> T:
 
 def umulhi(x: tl.tensor, y: tl.tensor, builder: ir.builder) -> tl.tensor:
     x, y = binary_op_type_checking_impl(x, y, builder)
-    return tl.tensor(builder.create_mulhi(x.handle, y.handle), x.type)
+    return tl.tensor(builder.create_umulhi(x.handle, y.handle), x.type)
 
 
 @_check_dtype(dtypes=["fp32", "fp64"])
