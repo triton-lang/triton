@@ -201,18 +201,10 @@ jobs:
         cd $CURR_PWD
         tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
 
-
-
-
-
-
-
-
     - name: Configure, Build, and Install LLVM (macOS arm64)
       if: matrix.config.arch == 'arm64' && matrix.config.target-os == 'macos'
       run: >
         python3 -m pip install -r llvm-project/mlir/python/requirements.txt
-
         cmake -GNinja -Bllvm-project/build
         -DCMAKE_BUILD_TYPE=Release
         -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
