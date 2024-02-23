@@ -251,7 +251,10 @@ def compile(src, target=None, options=None):
     # run compilation pipeline  and populate metadata
     stages = dict()
     backend.add_stages(stages, options)
-    first_stage = list(stages.keys()).index(src.ext)
+    if options.first_compilation_stage is not None:
+        first_stage = list(stages.keys()).index(options.first_compilation_stage)
+    else:
+        first_stage = list(stages.keys()).index(src.ext)
     context = ir.context()
     ir.load_dialects(context)
     backend.load_dialects(context)

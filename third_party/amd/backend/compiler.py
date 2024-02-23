@@ -27,6 +27,7 @@ class HIPOptions:
     matrix_core_version: int = -1
     matrix_inst_shape: int = 0
     max_num_imprecise_acc_default: int = 0
+    first_compilation_stage: str = None
 
     @staticmethod
     def get_warp_size(arch: str) -> int:

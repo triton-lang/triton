@@ -4349,8 +4349,6 @@ intermediate_layouts = [
 @pytest.mark.parametrize("interm_layout", intermediate_layouts)
 @pytest.mark.parametrize("dst_layout", layouts)
 def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
-    if is_hip() and interm_layout is not None and M == 128 and N == 128:
-        pytest.skip("LDS is not sufficient")
     if (M == 1 or N == 1) and interm_layout:
         pytest.skip("Out of bound access when maxPhase > 1")
     if str(src_layout) == str(dst_layout):
@@ -4410,7 +4408,7 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        kernel = triton.compile(f.name)
+        kernel = triton.compile(f.name, options={"first_compilation_stage": "llir"})
     kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr())
 
     assert torch.equal(z, x)
