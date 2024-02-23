@@ -1,8 +1,10 @@
-#include "Utility.h"
 #include "PatternTritonGPUOpToLLVM.h"
+#include "Utility.h"
 
 #include "triton/Analysis/Allocation.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
@@ -46,13 +48,6 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     DotOperandEncodingAttr bEncoding,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread);
-}
-
-namespace SharedToDotOperandFMA {
-Value convertLayout(int opIdx, Value B, Value llB, BlockedEncodingAttr dLayout,
-                    Value thread, Location loc,
-                    const LLVMTypeConverter *typeConverter,
-                    ConversionPatternRewriter &rewriter);
 }
 
 namespace {
