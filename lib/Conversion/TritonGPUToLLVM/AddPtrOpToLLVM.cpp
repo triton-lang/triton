@@ -45,10 +45,8 @@ struct AddPtrOpConversion : public ConvertOpToLLVMPattern<AddPtrOp> {
 };
 
 } // namespace
-void mlir::triton::common::populateElementwiseOpToLLVMPatterns(
+void mlir::triton::populateAddPtrOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
-  using namespace mlir::triton::gpu;
-
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
 }

@@ -343,7 +343,7 @@ struct BroadcastOpConversion
 
 } // namespace
 
-void mlir::triton::common::populateViewOpToLLVMPatterns(
+void mlir::triton::populateViewOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<ReshapeOpConversion>(typeConverter, benefit);

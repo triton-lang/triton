@@ -10,9 +10,6 @@ using namespace mlir::triton;
 
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 
-typedef llvm::DenseMap<mlir::Operation *, mlir::triton::MakeTensorPtrOp>
-    TensorPtrMapT;
-
 namespace SharedToDotOperandFMA {
 Value convertLayout(int opIdx, Value val, Value llVal,
                     BlockedEncodingAttr dLayout, Value thread, Location loc,
@@ -24,11 +21,11 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                             ConversionPatternRewriter &rewriter);
 namespace mlir {
 namespace triton {
-namespace common {
 
-void populateElementwiseOpToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit);
+void populateAddPtrOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                   RewritePatternSet &patterns,
+                                   ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                   PatternBenefit benefit);
 
 void populateMemoryOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,
@@ -45,7 +42,6 @@ void populateMakeRangeOpToLLVMPattern(LLVMTypeConverter &typeConverter,
 void populateViewOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns,
                                   PatternBenefit benefit);
-} // namespace common
 } // namespace triton
 } // namespace mlir
 

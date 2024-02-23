@@ -38,7 +38,7 @@ struct MakeRangeOpConversion
 
 } // namespace
 
-void mlir::triton::common::populateMakeRangeOpToLLVMPattern(
+void mlir::triton::populateMakeRangeOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<MakeRangeOpConversion>(typeConverter, benefit);

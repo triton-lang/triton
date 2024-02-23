@@ -1882,8 +1882,8 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
 
-  mlir::triton::common::populateElementwiseOpToLLVMPatterns(
-      typeConverter, patterns, axisInfoAnalysis, benefit);
+  mlir::triton::populateAddPtrOpToLLVMPattern(typeConverter, patterns,
+                                              axisInfoAnalysis, benefit);
   patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<CmpIOpConversion>(typeConverter, axisInfoAnalysis, benefit);

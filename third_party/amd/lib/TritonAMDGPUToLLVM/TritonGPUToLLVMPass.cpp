@@ -475,7 +475,7 @@ struct ConvertTritonAMDGPUToLLVM
     populatePatterns3(AMD::populateLoadStoreOpToLLVMPatterns);
     populatePatterns4(AMD::populateReduceOpToLLVMPatterns);
     populatePatterns1(AMD::populateScanOpToLLVMPatterns);
-    populatePatterns5(mlir::triton::common::populateViewOpToLLVMPatterns);
+    populatePatterns5(mlir::triton::populateViewOpToLLVMPatterns);
 
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
