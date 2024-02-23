@@ -227,11 +227,11 @@ class CodeGenerator(ast.NodeVisitor):
         self.jit_fn = jit_fn
         self.function_name = function_name
         self.is_kernel = is_kernel
-        self.last_node = None
+        self.cur_node = None
         self.debug = options.debug if debug is None else debug
         self.noinline = noinline
         self.scf_stack = []
-        self.last_ret_type = None
+        self.ret_type = None
         # SSA-construction
         # name => language.tensor
         self.local_defs: Dict[str, tensor] = {}
@@ -299,9 +299,12 @@ class CodeGenerator(ast.NodeVisitor):
         if not _is_list_like(stmts):
             stmts = [stmts]
         for stmt in stmts:
-            ret_type = self.visit(stmt)
-            if ret_type is not None and isinstance(stmt, ast.Return):
-                self.last_ret_type = ret_type
+            self.visit(stmt)
+
+            # Stop parsing as soon as we hit a `return` statement; everything
+            # after this is dead code.
+            if isinstance(stmt, ast.Return):
+                break
 
     def visit_Module(self, node):
         ast.NodeVisitor.generic_visit(self, node)
@@ -321,7 +324,7 @@ class CodeGenerator(ast.NodeVisitor):
         # self.builder.set_insertion_point_to_end(ret_block)
         if ret_value is None:
             self.builder.ret([])
-            ret_ty = None
+            ret_ty = language.void
         elif isinstance(ret_value, tuple):
             ret_values = [language.core._to_tensor(v, self.builder) for v in ret_value]
             ret_types = [v.type for v in ret_values]
@@ -333,7 +336,11 @@ class CodeGenerator(ast.NodeVisitor):
             ret_ty = ret.type
         # self.builder.create_branch(post_ret_block)
         # self.builder.set_insertion_point_to_end(post_ret_block)
-        return ret_ty
+
+        if self.ret_type is None:
+            self.ret_type = ret_ty
+        elif self.ret_type != ret_ty:
+            raise TypeError(f'Inconsistent return types: {self.ret_type} and {ret_ty}')
 
     def visit_FunctionDef(self, node):
         arg_names, kwarg_names = self.visit(node.args)
@@ -379,15 +386,16 @@ class CodeGenerator(ast.NodeVisitor):
         # visit function body
         self.visit_compound_statement(node.body)
         # finalize function
-        if self.last_ret_type is None:
+        if self.ret_type is None or self.ret_type == language.void:
+            self.ret_type = language.void
             self.builder.ret([])
         else:
             # update return type
-            if isinstance(self.last_ret_type, tuple):
-                self.prototype.ret_types = list(self.last_ret_type)
+            if isinstance(self.ret_type, tuple):
+                self.prototype.ret_types = list(self.ret_type)
                 self.fn.reset_type(self.prototype.to_ir(self.builder))
             else:
-                self.prototype.ret_types = [self.last_ret_type]
+                self.prototype.ret_types = [self.ret_type]
                 self.fn.reset_type(self.prototype.to_ir(self.builder))
         if insert_pt:
             self.builder.set_insertion_point_to_end(insert_pt)
@@ -1006,11 +1014,10 @@ class CodeGenerator(ast.NodeVisitor):
             try:
                 generator.visit(fn.parse())
             except Exception as e:
-                # Wrap the error in the callee with the location of the call
-                # (self.last_node).
-                raise CompilationError(self.jit_fn.src, self.last_node, None) from e
+                # Wrap the error in the callee with the location of the call.
+                raise CompilationError(self.jit_fn.src, self.cur_node, None) from e
 
-            callee_ret_type = generator.last_ret_type
+            callee_ret_type = generator.ret_type
             self.function_ret_types[fn_name] = callee_ret_type
         else:
             callee_ret_type = self.function_ret_types[fn_name]
@@ -1128,8 +1135,9 @@ class CodeGenerator(ast.NodeVisitor):
             # methods but we can't move to that without breaking Python 3.6 and 3.7.
             warnings.simplefilter("ignore", DeprecationWarning)  # python 3.9
             warnings.simplefilter("ignore", PendingDeprecationWarning)  # python 3.8
-            self.last_node = node
+            last_node = self.cur_node
             last_loc = self.builder.get_loc()
+            self.cur_node = node
             if hasattr(node, 'lineno') and hasattr(node, 'col_offset'):
                 self.builder.set_loc(self.file_name, self.begin_line + node.lineno, node.col_offset)
                 last_loc = self.builder.get_loc()
@@ -1140,10 +1148,11 @@ class CodeGenerator(ast.NodeVisitor):
             except Exception as e:
                 # Wrap the error in a CompilationError which contains the source
                 # of the @jit function.
-                raise CompilationError(self.jit_fn.src, self.last_node, repr(e)) from None
+                raise CompilationError(self.jit_fn.src, self.cur_node, repr(e)) from None
 
             # Reset the location to the last one before the visit
             if last_loc:
+                self.cur_node = last_node
                 self.builder.set_loc(last_loc)
             return ret
 
