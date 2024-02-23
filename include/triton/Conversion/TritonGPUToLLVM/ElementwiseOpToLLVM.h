@@ -1,12 +1,21 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_ELEMENTWISE_OP_H
 #define TRITON_CONVERSION_TRITONGPU_TO_ELEMENTWISE_OP_H
 
+#include "triton/Analysis/AxisInfo.h"
+
 using namespace mlir;
 using namespace mlir::triton;
 
 namespace mlir::triton {
 
 namespace gpu {
+
+inline Type getElementType(Value value) {
+  auto type = value.getType();
+  if (auto tensorType = type.dyn_cast<RankedTensorType>())
+    return tensorType.getElementType();
+  return type;
+}
 
 // MMA encoding has a different order depending on the element's bit width;
 // reorder if we're in this case.
