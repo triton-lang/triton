@@ -1,12 +1,93 @@
-#ifndef TRITON_CONVERSION_TRITONCOMMONGPU_TO_ELEMENTWISE_OP_H
-#define TRITON_CONVERSION_TRITONCOMMONGPU_TO_ELEMENTWISE_OP_H
-#include "Utility.h"
+#ifndef TRITON_CONVERSION_TRITONGPU_TO_ELEMENTWISE_OP_H
+#define TRITON_CONVERSION_TRITONGPU_TO_ELEMENTWISE_OP_H
 
-#include "PatternTritonGPUOpToLLVM.h"
+using namespace mlir;
+using namespace mlir::triton;
 
 namespace mlir::triton {
 
 namespace gpu {
+
+// MMA encoding has a different order depending on the element's bit width;
+// reorder if we're in this case.
+static SmallVector<Value> reorderValues(const SmallVector<Value> &values,
+                                        Type inType, Type ouType) {
+  auto inTensorTy = inType.dyn_cast<RankedTensorType>();
+  auto ouTensorTy = ouType.dyn_cast<RankedTensorType>();
+  if (!inTensorTy || !ouTensorTy)
+    return values;
+  auto inEncoding = dyn_cast<DotOperandEncodingAttr>(inTensorTy.getEncoding());
+  auto ouEncoding = dyn_cast<DotOperandEncodingAttr>(ouTensorTy.getEncoding());
+  assert(inEncoding == ouEncoding);
+  if (!inEncoding)
+    return values;
+  // If the parent of the dot operand is in block encoding, we don't need to
+  // reorder elements
+  auto parentEncoding = dyn_cast<NvidiaMmaEncodingAttr>(ouEncoding.getParent());
+  if (!parentEncoding)
+    return values;
+  size_t inBitWidth = inTensorTy.getElementType().getIntOrFloatBitWidth();
+  size_t ouBitWidth = ouTensorTy.getElementType().getIntOrFloatBitWidth();
+  auto ouEltTy = ouTensorTy.getElementType();
+  if (inBitWidth == ouBitWidth)
+    return values;
+  if (inBitWidth == 16 && ouBitWidth == 32) {
+    SmallVector<Value> ret;
+    for (unsigned i = 0; i < values.size(); i += 8) {
+      ret.push_back(values[i]);
+      ret.push_back(values[i + 1]);
+      ret.push_back(values[i + 4]);
+      ret.push_back(values[i + 5]);
+      ret.push_back(values[i + 2]);
+      ret.push_back(values[i + 3]);
+      ret.push_back(values[i + 6]);
+      ret.push_back(values[i + 7]);
+    }
+    return ret;
+  }
+  if (inBitWidth == 8 && ouBitWidth == 16) {
+    SmallVector<Value> ret;
+    for (unsigned i = 0; i < values.size(); i += 16) {
+      ret.push_back(values[i + 0]);
+      ret.push_back(values[i + 1]);
+      ret.push_back(values[i + 2]);
+      ret.push_back(values[i + 3]);
+      ret.push_back(values[i + 8]);
+      ret.push_back(values[i + 9]);
+      ret.push_back(values[i + 10]);
+      ret.push_back(values[i + 11]);
+      ret.push_back(values[i + 4]);
+      ret.push_back(values[i + 5]);
+      ret.push_back(values[i + 6]);
+      ret.push_back(values[i + 7]);
+      ret.push_back(values[i + 12]);
+      ret.push_back(values[i + 13]);
+      ret.push_back(values[i + 14]);
+      ret.push_back(values[i + 15]);
+    }
+    return ret;
+    // for (unsigned i = 0; i < values.size(); i += 16) {
+    //   ret.push_back(values[i]);
+    //   ret.push_back(values[i + 1]);
+    //   ret.push_back(values[i + 4]);
+    //   ret.push_back(values[i + 5]);
+    //   ret.push_back(values[i + 8]);
+    //   ret.push_back(values[i + 9]);
+    //   ret.push_back(values[i + 12]);
+    //   ret.push_back(values[i + 13]);
+
+    //   ret.push_back(values[i + 2]);
+    //   ret.push_back(values[i + 3]);
+    //   ret.push_back(values[i + 6]);
+    //   ret.push_back(values[i + 7]);
+    //   ret.push_back(values[i + 10]);
+    //   ret.push_back(values[i + 11]);
+    //   ret.push_back(values[i + 14]);
+    //   ret.push_back(values[i + 15]);
+    // }
+  }
+  llvm_unreachable("unimplemented code path");
+}
 
 inline SmallVector<Value> unpackI32(const SmallVector<Value> &inValues,
                                     Type srcTy,
