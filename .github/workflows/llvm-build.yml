@@ -142,7 +142,7 @@ jobs:
       run: |
         python3 -m pip install -r llvm-project/mlir/python/requirements.txt
         mkdir arm-sysroot
-        mkdir -p llvm-project/host-tools 
+        mkdir -p llvm-project/host-tools
         cd llvm-project/host-tools
         cmake -G Ninja ../llvm -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS="mlir;llvm;clang"
         ninja mlir-tblgen
@@ -200,6 +200,12 @@ jobs:
         done
         cd $CURR_PWD
         tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
+
+
+
+
+
+
 
 
     - name: Configure, Build, and Install LLVM (macOS arm64)
