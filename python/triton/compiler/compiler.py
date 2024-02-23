@@ -220,7 +220,7 @@ def compile(src, target=None, options=None):
     backend = make_backend(target)
     ir_source = not isinstance(src, ASTSource)
     # create backend
-    if not isinstance(src, ASTSource):
+    if ir_source:
         assert isinstance(src, str), "source must be either AST or a filepath"
         src = IRSource(src)
     extra_options = src.parse_options()
