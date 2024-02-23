@@ -1437,6 +1437,50 @@ def fdiv(x, y, ieee_rounding=False, _builder=None):
 
 
 @builtin
+def minimum(x, y, propagate_nan: constexpr = PropagateNan.NONE, _builder=None):
+    """
+    Computes the element-wise minimum of :code:`x` and :code:`y`.
+
+    :param x: the first input tensor
+    :type x: Block
+    :param y: the second input tensor
+    :type y: Block
+    :param propagate_nan: whether to propagate NaN values.
+    :type propagate_nan: tl.PropagateNan
+
+    .. seealso:: :class:`tl.PropagateNan`
+    """
+    x = _to_tensor(x, _builder)
+    y = _to_tensor(y, _builder)
+    x = _promote_bfloat16_to_float32(x, _builder=_builder)
+    y = _promote_bfloat16_to_float32(y, _builder=_builder)
+    propagate_nan = _constexpr_to_value(propagate_nan)
+    return semantic.minimum(x, y, propagate_nan, _builder)
+
+
+@builtin
+def maximum(x, y, propagate_nan: constexpr = PropagateNan.NONE, _builder=None):
+    """
+    Computes the element-wise maximum of :code:`x` and :code:`y`.
+
+    :param x: the first input tensor
+    :type x: Block
+    :param y: the second input tensor
+    :type y: Block
+    :param propagate_nan: whether to propagate NaN values.
+    :type propagate_nan: tl.PropagateNan
+
+    .. seealso:: :class:`tl.PropagateNan`
+    """
+    x = _to_tensor(x, _builder)
+    y = _to_tensor(y, _builder)
+    x = _promote_bfloat16_to_float32(x, _builder=_builder)
+    y = _promote_bfloat16_to_float32(y, _builder=_builder)
+    propagate_nan = _constexpr_to_value(propagate_nan)
+    return semantic.maximum(x, y, propagate_nan, _builder)
+
+
+@builtin
 def clamp(x, min, max, propagate_nan: constexpr = PropagateNan.NONE, _builder=None):
     """
     Clamps the input tensor :code:`x` within the range [min, max].

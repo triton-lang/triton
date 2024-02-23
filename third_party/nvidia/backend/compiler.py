@@ -13,6 +13,7 @@ import os
 import subprocess
 from pathlib import Path
 
+
 def _path_to_binary(binary: str):
     paths = [
         os.environ.get(f"TRITON_{binary.upper()}_PATH", ""),
@@ -230,9 +231,9 @@ class CUDABackend(BaseBackend):
             fmad = '' if opt.enable_fp_fusion else ' --fmad=false'
             suffix = 'a ' if capability == 90 else ' '
             if os.environ.get("DISABLE_PTXAS_OPT", "0") == "1":
-              cmd = f'{ptxas}{line_info}{fmad} -v --opt-level 0 --gpu-name=sm_{capability}{suffix}{fsrc.name} -o {fbin} 2> {flog.name}'
+                cmd = f'{ptxas}{line_info}{fmad} -v --opt-level 0 --gpu-name=sm_{capability}{suffix}{fsrc.name} -o {fbin} 2> {flog.name}'
             else:
-              cmd = f'{ptxas}{line_info}{fmad} -v --gpu-name=sm_{capability}{suffix}{fsrc.name} -o {fbin} 2> {flog.name}'
+                cmd = f'{ptxas}{line_info}{fmad} -v --gpu-name=sm_{capability}{suffix}{fsrc.name} -o {fbin} 2> {flog.name}'
 
             try:
                 subprocess.run(cmd, shell=True, check=True)

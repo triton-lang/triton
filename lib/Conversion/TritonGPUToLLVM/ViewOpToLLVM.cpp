@@ -1,17 +1,14 @@
-#include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.cpp.inc"
 
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
-
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-
 namespace {
 struct SplatOpConversion : public ConvertOpToLLVMPattern<triton::SplatOp> {
   using ConvertOpToLLVMPattern<triton::SplatOp>::ConvertOpToLLVMPattern;
-
   // Convert SplatOp or arith::ConstantOp with SplatElementsAttr to a
   // LLVM::StructType value.
   //
@@ -48,7 +45,6 @@ struct SplatOpConversion : public ConvertOpToLLVMPattern<triton::SplatOp> {
     llvm::SmallVector<Value> elems(elemsPerThread, llSrc);
     return packLLElements(loc, typeConverter, elems, rewriter, resType);
   }
-
   LogicalResult matchAndRewrite(triton::SplatOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const {
     auto loc = op->getLoc();
@@ -60,27 +56,22 @@ struct SplatOpConversion : public ConvertOpToLLVMPattern<triton::SplatOp> {
     return success();
   }
 };
-
 // This pattern helps to convert arith::ConstantOp(with SplatElementsAttr),
 // the logic is the same as triton::SplatOp, so the underlying implementation
 // is reused.
 struct ArithConstantSplatOpConversion
     : public ConvertOpToLLVMPattern<arith::ConstantOp> {
   using ConvertOpToLLVMPattern<arith::ConstantOp>::ConvertOpToLLVMPattern;
-
   LogicalResult
   matchAndRewrite(arith::ConstantOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto value = op.getValue();
     if (!value.dyn_cast<SplatElementsAttr>())
       return failure();
-
     auto loc = op->getLoc();
-
     LLVM::ConstantOp arithConstantOp;
     auto values = op.getValue().dyn_cast<SplatElementsAttr>();
     auto elemType = values.getElementType();
-
     Attribute val;
     if (elemType.isBF16() || type::isFloat(elemType)) {
       val = values.getValues<FloatAttr>()[0];
@@ -91,25 +82,19 @@ struct ArithConstantSplatOpConversion
                    << value.getType() << "\n";
       return failure();
     }
-
     auto constOp = rewriter.create<LLVM::ConstantOp>(loc, elemType, val);
     auto typeConverter = getTypeConverter();
     auto llStruct = SplatOpConversion::convertSplatLikeOp(
         elemType, op.getType(), constOp, typeConverter, rewriter, loc);
     rewriter.replaceOp(op, llStruct);
-
     return success();
   }
 };
-
 struct CatOpConversion : public ConvertOpToLLVMPattern<CatOp> {
   using OpAdaptor = typename CatOp::Adaptor;
-
   explicit CatOpConversion(LLVMTypeConverter &typeConverter,
-
                            PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<CatOp>(typeConverter, benefit) {}
-
   LogicalResult
   matchAndRewrite(CatOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -134,14 +119,11 @@ struct CatOpConversion : public ConvertOpToLLVMPattern<CatOp> {
     return success();
   }
 };
-
 struct JoinOpConversion : public ConvertOpToLLVMPattern<ExperimentalJoinOp> {
   using OpAdaptor = typename ExperimentalJoinOp::Adaptor;
-
   explicit JoinOpConversion(LLVMTypeConverter &typeConverter,
                             PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<ExperimentalJoinOp>(typeConverter, benefit) {}
-
   LogicalResult
   matchAndRewrite(ExperimentalJoinOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -159,30 +141,25 @@ struct JoinOpConversion : public ConvertOpToLLVMPattern<ExperimentalJoinOp> {
     Location loc = op->getLoc();
     auto resultTy = op.getType().cast<RankedTensorType>();
     auto typeConverter = getTypeConverter();
-
     SmallVector<Value> lhsVals =
         unpackLLElements(loc, adaptor.getLhs(), rewriter);
     SmallVector<Value> rhsVals =
         unpackLLElements(loc, adaptor.getRhs(), rewriter);
     assert(lhsVals.size() == rhsVals.size());
-
     SmallVector<Value> joinedVals;
     for (int i = 0; i < lhsVals.size(); i++) {
       joinedVals.push_back(lhsVals[i]);
       joinedVals.push_back(rhsVals[i]);
     }
-
     Value ret =
         packLLElements(loc, typeConverter, joinedVals, rewriter, resultTy);
     rewriter.replaceOp(op, ret);
     return success();
   }
 };
-
 struct SplitOpConversion : public ConvertOpToLLVMPattern<ExperimentalSplitOp> {
   using OpAdaptor = typename ExperimentalSplitOp::Adaptor;
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-
   LogicalResult
   matchAndRewrite(ExperimentalSplitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -197,18 +174,15 @@ struct SplitOpConversion : public ConvertOpToLLVMPattern<ExperimentalSplitOp> {
     // return value 0, and every other goes into return value 1.
     Location loc = op->getLoc();
     auto typeConverter = getTypeConverter();
-
     SmallVector<Value> srcVals =
         unpackLLElements(loc, adaptor.getSrc(), rewriter);
     assert(srcVals.size() % 2 == 0);
-
     SmallVector<Value> outLhsVals;
     SmallVector<Value> outRhsVals;
     for (int i = 0; i < srcVals.size(); i += 2) {
       outLhsVals.push_back(srcVals[i]);
       outRhsVals.push_back(srcVals[i + 1]);
     }
-
     auto resultTy = op.getResult(0).getType().cast<RankedTensorType>();
     Value retLhs =
         packLLElements(loc, typeConverter, outLhsVals, rewriter, resultTy);
@@ -218,14 +192,11 @@ struct SplitOpConversion : public ConvertOpToLLVMPattern<ExperimentalSplitOp> {
     return success();
   }
 };
-
 struct ReshapeOpConversion : public ConvertOpToLLVMPattern<ReshapeOp> {
   using OpAdaptor = typename ReshapeOp::Adaptor;
   explicit ReshapeOpConversion(LLVMTypeConverter &typeConverter,
-
                                PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<ReshapeOp>(typeConverter, benefit) {}
-
   LogicalResult
   matchAndRewrite(ReshapeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -236,7 +207,6 @@ struct ReshapeOpConversion : public ConvertOpToLLVMPattern<ReshapeOp> {
     }
     auto resultTy = op.getType().template cast<RankedTensorType>();
     auto srcTy = op.getSrc().getType().template cast<RankedTensorType>();
-
     auto typeConverter = getTypeConverter();
     auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     Value ret = packLLElements(loc, typeConverter, vals, rewriter, resultTy);
@@ -244,21 +214,17 @@ struct ReshapeOpConversion : public ConvertOpToLLVMPattern<ReshapeOp> {
     return success();
   }
 };
-
 struct ExpandDimsOpConversion : public ConvertOpToLLVMPattern<ExpandDimsOp> {
   using OpAdaptor = typename ExpandDimsOp::Adaptor;
   explicit ExpandDimsOpConversion(LLVMTypeConverter &typeConverter,
-
                                   PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<ExpandDimsOp>(typeConverter, benefit) {}
-
   LogicalResult
   matchAndRewrite(ExpandDimsOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto typeConverter = getTypeConverter();
     auto srcVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-
     auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
     auto resultTy = op.getType().template cast<RankedTensorType>();
     auto srcLayout = srcTy.getEncoding().dyn_cast<SliceEncodingAttr>();
@@ -266,16 +232,13 @@ struct ExpandDimsOpConversion : public ConvertOpToLLVMPattern<ExpandDimsOp> {
       return emitOptionalError(
           loc, "ExpandDimsOp only supports SliceEncodingAttr as its input");
     }
-
     auto resultLayout = resultTy.getEncoding();
-
     auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
     auto resultOffsets = emitOffsetForLayout(resultLayout, resultTy);
     std::map<SmallVector<unsigned>, Value> srcValues;
     for (size_t i = 0; i < srcOffsets.size(); i++) {
       srcValues[srcOffsets[i]] = srcVals[i];
     }
-
     SmallVector<Value> resultVals;
     for (size_t i = 0; i < resultOffsets.size(); i++) {
       auto offset = resultOffsets[i];
@@ -288,16 +251,13 @@ struct ExpandDimsOpConversion : public ConvertOpToLLVMPattern<ExpandDimsOp> {
     return success();
   }
 };
-
 struct TransOpConversion : public ConvertOpToLLVMPattern<TransOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-
   LogicalResult
   matchAndRewrite(TransOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto resultTy = op.getType().cast<RankedTensorType>();
-
     if (auto enc = resultTy.getEncoding().dyn_cast<SharedEncodingAttr>()) {
       auto llvmElemTy =
           getTypeConverter()->convertType(resultTy.getElementType());
@@ -324,15 +284,12 @@ struct TransOpConversion : public ConvertOpToLLVMPattern<TransOp> {
       rewriter.replaceOp(op, ret);
       return success();
     }
-
     return emitOptionalError(loc, "unsupported encoding for TransOp");
   }
 };
-
 struct BroadcastOpConversion
     : public ConvertOpToLLVMPattern<triton::BroadcastOp> {
   using ConvertOpToLLVMPattern<triton::BroadcastOp>::ConvertOpToLLVMPattern;
-
   LogicalResult
   matchAndRewrite(triton::BroadcastOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -360,18 +317,15 @@ struct BroadcastOpConversion
     auto resultShape = resultTy.getShape();
     unsigned rank = srcTy.getRank();
     auto typeConverter = getTypeConverter();
-
     assert(rank == resultTy.getRank());
     auto order = triton::gpu::getOrder(srcLayout);
     auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
     auto resultOffsets = emitOffsetForLayout(resultLayout, resultTy);
     SmallVector<Value> srcVals = unpackLLElements(loc, src, rewriter);
-
     std::map<SmallVector<unsigned>, Value> srcValues;
     for (size_t i = 0; i < srcOffsets.size(); i++) {
       srcValues[srcOffsets[i]] = srcVals[i];
     }
-
     SmallVector<Value> resultVals;
     for (size_t i = 0; i < resultOffsets.size(); i++) {
       auto offset = resultOffsets[i];
@@ -380,7 +334,6 @@ struct BroadcastOpConversion
           offset[j] = 0;
       resultVals.push_back(srcValues.at(offset));
     }
-
     Value resultStruct =
         packLLElements(loc, typeConverter, resultVals, rewriter, resultTy);
     rewriter.replaceOp(op, {resultStruct});

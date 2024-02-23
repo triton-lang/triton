@@ -1,17 +1,14 @@
-#include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
 namespace {
 
 using namespace mlir;
 using namespace mlir::triton;
-
 struct MakeRangeOpConversion
     : public ConvertOpToLLVMPattern<triton::MakeRangeOp> {
-
   MakeRangeOpConversion(LLVMTypeConverter &converter, PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::MakeRangeOp>(converter, benefit) {}
-
   LogicalResult
   matchAndRewrite(triton::MakeRangeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -19,7 +16,6 @@ struct MakeRangeOpConversion
     RankedTensorType ty = op.getType();
     auto shape = ty.getShape();
     auto layout = ty.getEncoding();
-
     auto elemTy = ty.getElementType();
     assert(elemTy.isInteger(32));
     Value start = createIndexAttrConstant(rewriter, loc, elemTy, op.getStart());

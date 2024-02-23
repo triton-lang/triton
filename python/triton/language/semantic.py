@@ -254,6 +254,42 @@ def mod(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
 ##############
 
 
+def minimum(x: tl.tensor, y: tl.tensor, propagate_nan: tl.PropagateNan, builder: ir.builder):
+    x, y = binary_op_type_checking_impl(x, y, builder)
+    dtype = x.dtype
+    if dtype.is_floating():
+        if propagate_nan == tl.PropagateNan.ALL:
+            return tl.tensor(builder.create_minimumf(x.handle, y.handle), x.type)
+        elif propagate_nan == tl.PropagateNan.NONE:
+            return tl.tensor(builder.create_minnumf(x.handle, y.handle), x.type)
+        else:
+            assert False, f"Unexpected propagate_nan {propagate_nan}"
+    elif dtype.is_int_signed():
+        return tl.tensor(builder.create_minsi(x.handle, y.handle), x.type)
+    elif dtype.is_int_unsigned():
+        return tl.tensor(builder.create_minui(x.handle, y.handle), x.type)
+    else:
+        assert False, f"Unexpected dtype {dtype}"
+
+
+def maximum(x: tl.tensor, y: tl.tensor, propagate_nan: tl.PropagateNan, builder: ir.builder):
+    x, y = binary_op_type_checking_impl(x, y, builder)
+    dtype = x.dtype
+    if dtype.is_floating():
+        if propagate_nan == tl.PropagateNan.ALL:
+            return tl.tensor(builder.create_maximumf(x.handle, y.handle), x.type)
+        elif propagate_nan == tl.PropagateNan.NONE:
+            return tl.tensor(builder.create_maxnumf(x.handle, y.handle), x.type)
+        else:
+            assert False, f"Unexpected propagate_nan {propagate_nan}"
+    elif dtype.is_int_signed():
+        return tl.tensor(builder.create_maxsi(x.handle, y.handle), x.type)
+    elif dtype.is_int_unsigned():
+        return tl.tensor(builder.create_maxui(x.handle, y.handle), x.type)
+    else:
+        assert False, f"Unexpected dtype {dtype}"
+
+
 def clamp(x: tl.tensor, min: tl.tensor, max: tl.tensor, propagate_nan: tl.PropagateNan, builder: ir.builder):
     min, max = binary_op_type_checking_impl(min, max, builder)
     x, min = binary_op_type_checking_impl(x, min, builder)
