@@ -1,7 +1,7 @@
-#include "TypeConverter.h"
-#include "Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Conversion/MLIRTypes.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;

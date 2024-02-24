@@ -319,7 +319,7 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
 
 } // namespace
 
-void mlir::triton::populatePrintOpToLLVMPattern(
+void mlir::triton::NVIDIA::populatePrintOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<PrintOpConversion>(typeConverter, benefit);

@@ -10,6 +10,8 @@ typedef llvm::DenseMap<mlir::Operation *, mlir::triton::MakeTensorPtrOp>
 namespace mlir {
 namespace triton {
 
+namespace NVIDIA {
+
 void populateBarrierOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                      RewritePatternSet &patterns,
                                      PatternBenefit benefit);
@@ -63,7 +65,7 @@ void populateControlFlowOpToLLVMPattern(LLVMTypeConverter &typeConverter,
 void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
                                  PatternBenefit benefit);
-
+} // namespace NVIDIA
 } // namespace triton
 } // namespace mlir
 

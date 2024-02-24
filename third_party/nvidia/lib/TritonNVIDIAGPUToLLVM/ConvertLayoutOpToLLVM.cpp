@@ -1019,7 +1019,7 @@ private:
 };
 } // namespace
 
-void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
+void mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<ConvertLayoutOpConversion>(typeConverter, benefit);

@@ -1,5 +1,5 @@
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
-#include "../lib/Conversion/TritonGPUToLLVM/TypeConverter.h"
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 // #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 // #include "triton/Dialect/NVGPU/IR/Dialect.h"
 namespace mlir {
