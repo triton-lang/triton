@@ -1,4 +1,5 @@
 from . import core
+from . import semantic
 from functools import wraps
 from typing import List
 
@@ -122,7 +123,7 @@ def sin(x, _builder=None):
 
 @core.builtin
 @_check_dtype(dtypes=["fp32", "fp64"])
-@_add_math_1arg_docstr("square root")
+@_add_math_1arg_docstr("fast square root")
 def sqrt(x, _builder=None):
     x = core._to_tensor(x, _builder)
     return core.tensor(_builder.create_sqrt(x.handle), x.type)
@@ -130,7 +131,7 @@ def sqrt(x, _builder=None):
 
 @core.builtin
 @_check_dtype(dtypes=["fp32"])
-@_add_math_1arg_docstr("square root (rounding to nearest)")
+@_add_math_1arg_docstr("precise square root (rounding to nearest)")
 def sqrt_rn(x, _builder=None):
     x = core._to_tensor(x, _builder)
     return core.tensor(_builder.create_precise_sqrt(x.handle), x.type)
@@ -152,8 +153,17 @@ def abs(x, _builder=None):
 
 
 @core.builtin
+@_add_math_2arg_docstr("fast division")
+def fdiv(x, y, ieee_rounding=False, _builder=None):
+    ieee_rounding = core._constexpr_to_value(ieee_rounding)
+    x = core._to_tensor(x, _builder)
+    y = core._to_tensor(y, _builder)
+    return semantic.fdiv(x, y, ieee_rounding, _builder)
+
+
+@core.builtin
 @_check_dtype(dtypes=["fp32"])
-@_add_math_1arg_docstr("division (rounding to nearest)")
+@_add_math_2arg_docstr("precise division (rounding to nearest)")
 def div_rn(x, y, _builder=None):
     x = core._to_tensor(x, _builder)
     y = core._to_tensor(y, _builder)

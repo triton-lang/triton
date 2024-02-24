@@ -55,7 +55,7 @@ def softmax(x, ieee_rounding=False):
     z = x - max(x, 0)
     num = core.exp(z)
     den = sum(num, 0)
-    return core.fdiv(num, den, ieee_rounding)
+    return math.fdiv(num, den, ieee_rounding)
 
 
 @jit

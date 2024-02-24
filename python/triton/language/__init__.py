@@ -50,7 +50,6 @@ from .core import (
     dtype,
     expand_dims,
     full,
-    fdiv,
     float16,
     float32,
     float64,
@@ -98,7 +97,7 @@ from .core import (
     _experimental_join,
     _experimental_split,
 )
-from .math import (umulhi, exp, exp2, log, log2, cos, sin, sqrt, sqrt_rn, abs, div_rn, erf, floor)
+from .math import (umulhi, exp, exp2, log, log2, cos, sin, sqrt, sqrt_rn, abs, fdiv, div_rn, erf, floor)
 from .random import (
     pair_uniform_to_normal,
     philox,
