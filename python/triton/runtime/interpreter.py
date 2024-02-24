@@ -620,6 +620,10 @@ class InterpretedFunction:
         signature = inspect.signature(fn)
         self.arg_names = [v.name for v in signature.parameters.values()]
 
+    @property
+    def __name__(self):
+        return self.fn.__name__
+
     def __getitem__(self, grid):
         return GridExecutor(self.fn, self.arg_names, grid)
 

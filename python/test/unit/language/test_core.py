@@ -884,6 +884,30 @@ def test_abs_fp8(in_dtype, device):
 
 
 # ----------------
+# test passing shapes as individual params rather than tuples
+# ----------------
+
+
+def test_shapes_as_params(device):
+
+    @triton.jit
+    def kernel():
+        a = tl.arange(0, 32).expand_dims(-1).broadcast_to(32, 32)
+        tl.static_assert(a.shape == [tl.constexpr(32), tl.constexpr(32)])
+
+        a = tl.arange(0, 32).reshape(4, 8).permute(1, 0)
+        tl.static_assert(a.shape == [tl.constexpr(8), tl.constexpr(4)])
+
+        a = tl.arange(0, 64).reshape(2, 4, 8).trans(2, 1, 0)
+        tl.static_assert(a.shape == [tl.constexpr(8), tl.constexpr(4), tl.constexpr(2)])
+
+        a = tl.arange(0, 64).view(2, 4, 8)
+        tl.static_assert(a.shape == [tl.constexpr(2), tl.constexpr(4), tl.constexpr(8)])
+
+    kernel[(1, )]()
+
+
+# ----------------
 # test transpose
 # ----------------
 
@@ -2639,7 +2663,7 @@ def test_trans_4d(dtype_str, shape, perm, device):
             block_shape=(ou_shape1, ou_shape2, ou_shape3, ou_shape4),
             order=(3, 2, 1, 0),
         )
-        tl.store(out_ptr, tl.permute(tl.load(in_ptr), (trans1, trans2, trans3, trans4)))
+        tl.store(out_ptr, tl.load(in_ptr).permute((trans1, trans2, trans3, trans4)))
 
     input = torch.arange(math.prod(shape), dtype=getattr(torch, dtype_str), device=device).reshape(shape)
     expected = torch.permute(input, perm)
