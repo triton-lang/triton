@@ -984,6 +984,35 @@ private:
     return builder.create<triton::FpToFpOp>(loc, tensorPromotedType, operand);
   }
 
+
+  static void promoteReduceOpResult(OpBuilder &builder, triton::ReduceOp op, Value result, Type promotedType){
+    // save original type
+    auto originalType = result.getType();
+    auto elemType = originalType.isa<RankedTensorType>() ? originalType.cast<RankedTensorType>().getElementType(): originalType;
+
+    // promote result type
+    result.setType(promotedType);
+
+    // set insertion point after reduce op
+    builder.setInsertionPointAfter(op);
+
+    // truncate result back to original type
+    mlir::Operation *truncResult = nullptr;
+    if (elemType.isInteger(16) || elemType.isInteger(8)) {
+      truncResult = builder.create<mlir::arith::TruncIOp>(result.getLoc(),
+                                                          originalType, result);
+    } else if (elemType.isF16()) {
+      truncResult = builder.create<mlir::arith::TruncFOp>(result.getLoc(),
+                                                          originalType, result);
+    }
+
+    // replace all uses except for the truncOp above
+    if (truncResult != nullptr) {
+      result.replaceAllUsesWith(truncResult->getResult(0));
+      truncResult->setOperand(0, result);
+    }
+  }
+
   void promoteReduceOps(ModuleOp mod) const {
 
     // promote reduce ops
@@ -1015,67 +1044,17 @@ private:
       // promote results
       for (Value result : op.getResults()) {
         auto type = result.getType();
-        if (type.isInteger(16)) {
-          result.setType(builder.getIntegerType(32));
-
-          // add trunc if float result type was changed
-          builder.setInsertionPointAfter(op);
-          auto truncResult = builder.create<mlir::arith::TruncIOp>(
-              result.getLoc(), builder.getIntegerType(16), result);
-
-          // replace all uses except for the truncOp above
-          result.replaceAllUsesWith(truncResult);
-          truncResult->setOperand(0, result);
-
-        } else if (type.isInteger(8)) {
-          result.setType(builder.getIntegerType(32));
-
-          // add trunc if float result type was changed
-          builder.setInsertionPointAfter(op);
-          auto truncResult = builder.create<mlir::arith::TruncIOp>(
-              result.getLoc(), builder.getIntegerType(8), result);
-
-          // replace all uses except for the truncOp above
-          result.replaceAllUsesWith(truncResult);
-          truncResult->setOperand(0, result);
-
+        if (type.isInteger(16) || type.isInteger(8)) {
+          promoteReduceOpResult(builder, op, result, builder.getIntegerType(32));
         } else if (type.isF16()) {
-          result.setType(builder.getF32Type());
-
-          // add trunc if float result type was changed
-          builder.setInsertionPointAfter(op);
-          auto truncResult = builder.create<mlir::arith::TruncFOp>(
-              result.getLoc(), builder.getF16Type(), result);
-
-          // replace all uses except for the truncOp above
-          result.replaceAllUsesWith(truncResult);
-          truncResult->setOperand(0, result);
-
+          promoteReduceOpResult(builder, op, result, builder.getF32Type());
         } else if (type.isa<RankedTensorType>()) {
           auto oldType = type.cast<RankedTensorType>();
           auto elemType = oldType.getElementType();
           if (elemType.isInteger(16) || elemType.isInteger(8)) {
-            result.setType(oldType.cloneWith(std::nullopt, builder.getIntegerType(32)));
-
-            // add trunc if float result type was changed
-            builder.setInsertionPointAfter(op);
-            auto truncResult = builder.create<mlir::arith::TruncIOp>(
-                result.getLoc(), oldType, result);
-
-            // replace all uses except for the truncOp above
-            result.replaceAllUsesWith(truncResult);
-            truncResult->setOperand(0, result);
+            promoteReduceOpResult(builder, op, result, oldType.cloneWith(std::nullopt, builder.getIntegerType(32)));
           } else if (elemType.isF16()) {
-            result.setType(oldType.cloneWith(std::nullopt, builder.getF32Type()));
-
-            // add trunc if float result type was changed
-            builder.setInsertionPointAfter(op);
-            auto truncResult = builder.create<mlir::arith::TruncFOp>(
-                result.getLoc(), oldType, result);
-
-            // replace all uses except for the truncOp above
-            result.replaceAllUsesWith(truncResult);
-            truncResult->setOperand(0, result);
+            promoteReduceOpResult(builder, op, result, oldType.cloneWith(std::nullopt, builder.getF32Type()));
           }
         }
       }
