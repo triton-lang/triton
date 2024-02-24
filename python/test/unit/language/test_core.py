@@ -645,6 +645,10 @@ def test_expand_dims(device):
         t = tl.expand_dims(scalar, -1)
         tl.static_assert(t.shape == [1])
 
+        # N is a scalar that's not even a tl.tensor -- this should work too.
+        t = tl.expand_dims(N, -1)
+        tl.static_assert(t.shape == [1])
+
     N = 32
     dummy_tensor = torch.empty((), device=device)
     expand_dims_kernel[(1, )](dummy_tensor, N)
