@@ -16,7 +16,7 @@ def test_err_in_binary_operator():
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constants={}))
 
     try:
-        assert "at 2:8:" in str(e.value), "error should point to the opening \" of the string"
+        assert "at 2:4:" in str(e.value), "error should point to the 0"
     except AssertionError as assertion_err:
         raise assertion_err from e.value
 
@@ -67,7 +67,7 @@ def test_err_in_binary_op():
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constants={}))
 
     try:
-        assert "at 2:11:" in str(e.value), "error should point to the 1"
+        assert "at 2:4:" in str(e.value), "error should point to the 1.0"
         assert "<source unavailable>" not in str(e.value)
     except AssertionError as assertion_err:
         raise assertion_err from e.value
@@ -120,5 +120,72 @@ def test_err_in_builtin():
 
         assert "at 2:4:" in str(outer), "error should point to expand_dims call"
         assert "<source unavailable>" not in str(outer)
+    except AssertionError as assertion_err:
+        raise assertion_err from e.value
+
+
+@triton.jit
+def two_returns():
+    return tl.arange(0, 4)
+    return tl.arange(0, 8)
+
+
+def test_two_returns_no_err():
+    # This program is valid; `a` has shape (10,).
+    @triton.jit
+    def kernel():
+        a = two_returns()
+        a + tl.arange(0, 4)  # only works if we took the first return
+
+    triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constants={}))
+
+
+@triton.jit
+def returns_branched_on_constexpr(N: tl.constexpr):
+    if N == 0:
+        return tl.arange(0, 4)
+    # Ideally this would work even without the `else`, but we're not that smart
+    # yet.
+    else:
+        return tl.arange(0, 8)
+
+
+def test_returns_branched_on_constexpr():
+
+    @triton.jit
+    def kernel1(N: tl.constexpr):
+        a = returns_branched_on_constexpr(N)
+        a + tl.arange(0, 4)
+
+    triton.compile(triton.compiler.ASTSource(fn=kernel1, signature={}, constants={"N": 0}))
+
+    @triton.jit
+    def kernel2(N: tl.constexpr):
+        a = returns_branched_on_constexpr(N)
+        a + tl.arange(0, 8)
+
+    triton.compile(triton.compiler.ASTSource(fn=kernel2, signature={}, constants={"N": 1}))
+
+
+@triton.jit
+def returns_branched_on_non_constexpr(N: int):
+    if N == 0:
+        return tl.arange(0, 4)
+    else:
+        return tl.arange(0, 8)
+
+
+def test_returns_branched_on_non_constexpr():
+
+    @triton.jit
+    def kernel(N: int):
+        returns_branched_on_non_constexpr(N)
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={'N': 'i32'}, constants={}))
+
+    try:
+        assert "at 2:4:" in str(e.value), "error should point to the function call"
+        assert "at 5:8:" in str(e.value.__cause__), "error should point to the second `return`"
     except AssertionError as assertion_err:
         raise assertion_err from e.value
