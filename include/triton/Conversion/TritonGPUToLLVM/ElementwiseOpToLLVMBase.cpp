@@ -1,15 +1,3 @@
-#include "mlir/Conversion/LLVMCommon/Pattern.h"
-#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
-#include "triton/Analysis/AxisInfo.h"
-#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-
-using namespace mlir;
-using namespace mlir::triton;
-
-namespace mlir::triton {
-
-namespace gpu {
-
 // MMA encoding has a different order depending on the element's bit width;
 // reorder if we're in this case.
 static SmallVector<Value> reorderValues(const SmallVector<Value> &values,
@@ -271,6 +259,3 @@ LogicalResult ElementwiseOpConversionBase<SourceOp, ConcreteT>::matchAndRewrite(
 
   return success();
 }
-} // namespace gpu
-
-} // namespace mlir::triton

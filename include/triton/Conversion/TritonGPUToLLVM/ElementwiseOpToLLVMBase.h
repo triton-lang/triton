@@ -70,9 +70,8 @@ private:
   int computeCapability;
 };
 
+#include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.cpp"
 } // namespace gpu
 
 } // namespace mlir::triton
-
-#include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.cpp"
 #endif
