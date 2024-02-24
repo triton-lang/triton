@@ -6,12 +6,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
-using mlir::triton::gpu::ElementwiseOpConversionBase;
-using mlir::triton::gpu::getElementType;
-using mlir::triton::gpu::MultipleOperandsRange;
-using mlir::triton::gpu::packI32;
-using mlir::triton::gpu::reorderValues;
-using mlir::triton::gpu::unpackI32;
+using namespace mlir::triton::gpu;
 
 namespace mlir::triton {
 

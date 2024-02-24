@@ -4,17 +4,10 @@
 
 using namespace mlir;
 using namespace mlir::triton;
+using namespace mlir::triton::gpu;
 
-using ::AMD::ConvertTritonGPUOpToLLVMPattern;
 using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
 using ::AMD::TritonGPUToLLVMTypeConverter;
-using mlir::triton::gpu::ElementwiseOpConversionBase;
-using mlir::triton::gpu::getElementType;
-using ::mlir::triton::gpu::getTotalElemsPerThread;
-using mlir::triton::gpu::MultipleOperandsRange;
-using mlir::triton::gpu::packI32;
-using mlir::triton::gpu::reorderValues;
-using mlir::triton::gpu::unpackI32;
 
 typedef std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
                                          const SmallVector<Value> &)>
