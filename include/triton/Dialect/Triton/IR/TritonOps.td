@@ -131,7 +131,6 @@ def TT_ClampFOp : TT_Op<"clampf", [Elementwise,
 // Math Ops
 //
 
-// TODO pawel: think about the name
 def TT_PreciseSqrtOp : TT_Op<"precise_sqrt", [Elementwise,
                                   SameOperandsAndResultType,
                                   Pure]> {
