@@ -3,7 +3,7 @@ add_triton_library(TritonGPUToLLVM
     DotOpToLLVM/FMA.cpp
     TypeConverter.cpp
     Utility.cpp
-    AddPtrOpToLLVM.cpp
+    ElementwiseOpToLLVM.cpp
     MemoryOpToLLVM.cpp
     AssertOpToLLVM.cpp
     ViewOpToLLVM.cpp

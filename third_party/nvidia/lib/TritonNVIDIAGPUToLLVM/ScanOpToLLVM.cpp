@@ -561,7 +561,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
 }
 } // namespace
 
-void mlir::triton::populateScanOpToLLVMPatterns(
+void mlir::triton::NVIDIA::populateScanOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<ScanOpConversion>(typeConverter, benefit);
