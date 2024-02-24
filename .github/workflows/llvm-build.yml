@@ -142,7 +142,17 @@ jobs:
       run: |
         python3 -m pip install -r llvm-project/mlir/python/requirements.txt
         mkdir arm-sysroot
-        sudo apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf qemu-user-static gcc-aarch64-linux-gnu g++-aarch64-linux-gnu wget
+        mkdir -p llvm-project/host-tools
+        cd llvm-project/host-tools
+        cmake -G Ninja ../llvm -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS="mlir;llvm;clang"
+        ninja mlir-tblgen
+        ninja llvm-tblgen
+        ninja clang-tblgen
+        cd ../..
+        mv ./llvm-project/host-tools/bin ./host-tools
+        HOST_TOOLS="$(pwd)/host-tools"
+        rm -rf llvm-project/host-tools
+        sudo apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf qemu-user-static gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
         cp -r /usr/aarch64-linux-gnu/lib ./arm-sysroot
         cp -r /usr/aarch64-linux-gnu/include ./arm-sysroot
         LINKER=$(pwd)/arm-sysroot/lib/ld-linux-aarch64.so.1
@@ -155,10 +165,11 @@ jobs:
         echo $LINKER
         cmake -GNinja -Bllvm-project/build \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_C_COMPILER_LAUNCHER=sccache \
-        -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
         -DLLVM_ENABLE_PROJECTS="mlir;llvm" \
         -DLLVM_BUILD_UTILS=ON \
+        -DLLVM_TABLEGEN=$HOST_TOOLS/llvm-tblgen \
+        -DMLIR_TABLEGEN=$HOST_TOOLS/mlir-tblgen \
+        -DCLANG_TABLEGEN=$HOST_TOOLS/clang-tblgen \
         -DLLVM_ENABLE_ASSERTIONS=ON \
         -DCMAKE_LINKER=$LINKER \
         -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
@@ -181,22 +192,19 @@ jobs:
         -DCMAKE_SYSROOT=$SYSROOT \
         -DLLVM_ENABLE_TERMINFO=OFF \
         llvm-project/llvm
-
         ninja -C llvm-project/build install
-        CURR_PWD="$(pwd)" #fixing since its named after host
+        CURR_PWD="$(pwd)"
         cd "${{ env.llvm_install_dir }}/python_packages/mlir_core/mlir/_mlir_libs/"
         for file in *x86_64*; do
           mv "$file" "${file/x86_64/aarch64}"
         done
         cd $CURR_PWD
-        tar czf "${{ env.llvm_install_dir }}.tar.gz" -C "${{ env.llvm_install_dir }}" .
-
+        tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
 
     - name: Configure, Build, and Install LLVM (macOS arm64)
       if: matrix.config.arch == 'arm64' && matrix.config.target-os == 'macos'
       run: >
         python3 -m pip install -r llvm-project/mlir/python/requirements.txt
-
         cmake -GNinja -Bllvm-project/build
         -DCMAKE_BUILD_TYPE=Release
         -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
