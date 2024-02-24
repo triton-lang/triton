@@ -1100,6 +1100,7 @@ def expand_dims(input, axis, _builder=None):
     :type axis: int | Sequence[int]
 
     """
+    input = _to_tensor(input, _builder)
     axis = _constexpr_to_value(axis)
     axes = list(axis) if isinstance(axis, Sequence) else [axis]
     new_ndim = len(input.shape) + len(axes)
