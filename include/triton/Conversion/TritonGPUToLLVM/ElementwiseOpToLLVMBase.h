@@ -74,5 +74,5 @@ private:
 
 } // namespace mlir::triton
 
-#include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVM.cpp"
+#include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.cpp"
 #endif

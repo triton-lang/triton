@@ -1,5 +1,5 @@
 #include "ElementwiseOpToLLVM.h"
-#include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
 using namespace mlir;
