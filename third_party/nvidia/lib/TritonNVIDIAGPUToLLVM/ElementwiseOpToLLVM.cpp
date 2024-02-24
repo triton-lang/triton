@@ -1060,8 +1060,9 @@ static Type getFunctionType(Type resultType, ValueRange operands) {
 }
 
 static LLVM::LLVMFuncOp appendOrGetFuncOp(ConversionPatternRewriter &rewriter,
-                                     Operation *op, StringRef funcName,
-                                     Type funcType, StringRef libname = "", StringRef libpath = "") {
+                                          Operation *op, StringRef funcName,
+                                          Type funcType, StringRef libname = "",
+                                          StringRef libpath = "") {
   using LLVM::LLVMFuncOp;
 
   auto funcAttr = StringAttr::get(op->getContext(), funcName);
@@ -1072,10 +1073,10 @@ static LLVM::LLVMFuncOp appendOrGetFuncOp(ConversionPatternRewriter &rewriter,
   auto parent = op->getParentOfType<LLVM::LLVMFuncOp>();
   OpBuilder b(parent);
   auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
-  ret.getOperation()->setAttr(
-      "libname", StringAttr::get(op->getContext(), libname));
-  ret.getOperation()->setAttr(
-      "libpath", StringAttr::get(op->getContext(), libpath));
+  ret.getOperation()->setAttr("libname",
+                              StringAttr::get(op->getContext(), libname));
+  ret.getOperation()->setAttr("libpath",
+                              StringAttr::get(op->getContext(), libpath));
   return ret;
 }
 
@@ -1097,8 +1098,8 @@ struct ExternElementwiseOpConversion
       llvm::errs() << "ExternElementwiseOpConversion";
 
     Type funcType = getFunctionType(elemTy, operands[0]);
-    LLVM::LLVMFuncOp funcOp =
-        appendOrGetFuncOp(rewriter, op, funcName, funcType, op.getLibname(), op.getLibpath());
+    LLVM::LLVMFuncOp funcOp = appendOrGetFuncOp(
+        rewriter, op, funcName, funcType, op.getLibname(), op.getLibpath());
     return {
         rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
   }
@@ -1771,10 +1772,8 @@ private:
 };
 
 struct MulhiUIOpConversion
-    : public ElementwiseOpConversionBase<MulhiUIOp,
-                                         MulhiUIOpConversion> {
-  using Base = ElementwiseOpConversionBase<MulhiUIOp,
-                                           MulhiUIOpConversion>;
+    : public ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion> {
+  using Base = ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
@@ -1782,14 +1781,17 @@ struct MulhiUIOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    
+
     Type resultElementTy = getElementTypeOrSelf(op.getResult().getType());
-    assert (resultElementTy.isInteger(32) || resultElementTy.isInteger(64));
-    
-    StringRef funcName = resultElementTy.isInteger(32) ? "__nv_umulhi" : "__nv_umul64hi";
+    assert(resultElementTy.isInteger(32) || resultElementTy.isInteger(64));
+
+    StringRef funcName =
+        resultElementTy.isInteger(32) ? "__nv_umulhi" : "__nv_umul64hi";
     Type funcType = getFunctionType(elemTy, operands[0]);
-    LLVM::LLVMFuncOp funcOp = appendOrGetFuncOp(rewriter, op, funcName, funcType);
-    return {rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetFuncOp(rewriter, op, funcName, funcType);
+    return {
+        rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
   }
 };
 
@@ -1797,15 +1799,17 @@ template <typename TritonOp>
 struct OpToExternCallConversion
     : public ElementwiseOpConversionBase<TritonOp,
                                          OpToExternCallConversion<TritonOp>> {
-  using Base = ElementwiseOpConversionBase<TritonOp,
-                                           OpToExternCallConversion<TritonOp>>;
+  using Base =
+      ElementwiseOpConversionBase<TritonOp, OpToExternCallConversion<TritonOp>>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
   explicit OpToExternCallConversion(LLVMTypeConverter &typeConverter,
-                              ModuleAxisInfoAnalysis &axisAnalysisPass,
-                              StringRef externFuncName, PatternBenefit benefit)
-      : Base::ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
+                                    ModuleAxisInfoAnalysis &axisAnalysisPass,
+                                    StringRef externFuncName,
+                                    PatternBenefit benefit)
+      : Base::ElementwiseOpConversionBase(typeConverter, axisAnalysisPass,
+                                          benefit),
         funcName(externFuncName) {}
 
   SmallVector<Value> createDestOps(TritonOp op, Adaptor adaptor,
@@ -1813,8 +1817,10 @@ struct OpToExternCallConversion
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
     Type funcType = getFunctionType(elemTy, operands[0]);
-    LLVM::LLVMFuncOp funcOp = appendOrGetFuncOp(rewriter, op, funcName, funcType);
-    return {rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetFuncOp(rewriter, op, funcName, funcType);
+    return {
+        rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
   }
 
 private:
@@ -1936,8 +1942,10 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
 
-  patterns.add<OpToExternCallConversion<triton::PreciseSqrtOp>>(typeConverter, axisInfoAnalysis, "__nv_fsqrt_rn", benefit);
-  patterns.add<OpToExternCallConversion<triton::PreciseDivFOp>>(typeConverter, axisInfoAnalysis, "__nv_fdiv_rn", benefit);
+  patterns.add<OpToExternCallConversion<triton::PreciseSqrtOp>>(
+      typeConverter, axisInfoAnalysis, "__nv_fsqrt_rn", benefit);
+  patterns.add<OpToExternCallConversion<triton::PreciseDivFOp>>(
+      typeConverter, axisInfoAnalysis, "__nv_fdiv_rn", benefit);
 
   mlir::triton::populateAddPtrOpToLLVMPattern(typeConverter, patterns,
                                               axisInfoAnalysis, benefit);
