@@ -795,23 +795,22 @@ class tensor:
 
     @property
     def T(self):
+        """Transposes a 2D tensor."""
         assert False, "Transposition must be created by the AST Visitor"
 
     @builtin
-    def to(self, dtype, fp_downcast_rounding: str = None, bitcast=False, _builder=None):
+    def to(self, dtype: dtype, fp_downcast_rounding: str | None = None, bitcast: bool = False, _builder=None):
         """
         Casts the tensor to the given :code:`dtype`.
+
         :param dtype: The target data type.
-        :type dtype: DType
-        :param fp_downcast_rounding: The rounding mode for downcasting floating-point values. \
-            This parameter is only used when self is a floating-point tensor and dtype is a floating-point type \
-            with a smaller bitwidth. Supported values are :code:`"rtne"` (round to nearest, ties to even) and \
-            :code:`"rtz"` (round towards zero).
-        :type fp_downcast_rounding: str
-        :param bitcast: If true, the tensor is bitcasted to the given :code:`dtype`, instead of being casted.
-        :type bitcast: bool
-        :param _builder: The IR builder.
-        :type _builder: ir.builder
+        :param fp_downcast_rounding: The rounding mode for downcasting
+            floating-point values.  This parameter is only used when self is a
+            floating-point tensor and dtype is a floating-point type with a
+            smaller bitwidth. Supported values are :code:`"rtne"` (round to
+            nearest, ties to even) and :code:`"rtz"` (round towards zero).
+        :param bitcast: If true, the tensor is bitcasted to the given
+            :code:`dtype`, instead of being casted.
         """
         if isinstance(bitcast, constexpr):
             bitcast = bitcast.value
@@ -834,7 +833,7 @@ def program_id(axis, _builder=None):
     """
     Returns the id of the current program instance along the given :code:`axis`.
 
-    :param axis: The axis of the 3D launch grid. Has to be either 0, 1 or 2.
+    :param axis: The axis of the 3D launch grid. Must be 0, 1 or 2.
     :type axis: int
     """
     # if axis == -1:
@@ -853,7 +852,7 @@ def num_programs(axis, _builder=None):
     """
     Returns the number of program instances launched along the given :code:`axis`.
 
-    :param axis: The axis of the 3D launch grid. Has to be either 0, 1 or 2.
+    :param axis: The axis of the 3D launch grid. Must be 0, 1 or 2.
     :type axis: int
     """
     axis = _constexpr_to_value(axis)
@@ -868,12 +867,14 @@ def num_programs(axis, _builder=None):
 @builtin
 def arange(start, end, _builder=None):
     """
-    Returns contiguous values within the left-closed and right-open interval [:code:`start`, :code:`end`). \
-    End - Start must be less than or equal to TRITON_MAX_TENSOR_NUMEL = 131072
+    Returns contiguous values within the half-open interval :code:`[start,
+    end)`.  :code:`end - start` must be less than or equal to
+    :code:`TRITON_MAX_TENSOR_NUMEL = 131072`
 
     :param start: Start of the interval. Must be a power of two.
     :type start: int32
-    :param end: End of the interval. Must be a power of two > start.
+    :param end: End of the interval. Must be a power of two greater than
+        :code:`start`.
     :type end: int32
     """
     start = _constexpr_to_value(start)
@@ -1148,22 +1149,27 @@ def load(pointer, mask=None, other=None, boundary_check=tuple(), padding_option=
          eviction_policy="", volatile=False, _builder=None):
     """
     Return a tensor of data whose values are loaded from memory at location defined by `pointer`:
-        (1) `pointer` could be a single element pointer, then a scalar will be loaded
 
-            - `mask` and `other` must be scalar too
-            - `other` is implicitly typecast to `pointer.dtype.element_ty`
-            - `boundary_check` and `padding_option` must be empty
+        (1) If `pointer` is a single element pointer, a scalar is be loaded.  In
+            this case:
 
-        (2) `pointer` could be element-wise tensor of pointers, in which case:
+            - `mask` and `other` must also be scalars,
+            - `other` is implicitly typecast to `pointer.dtype.element_ty`, and
+            - `boundary_check` and `padding_option` must be empty.
 
-            - `mask` and `other` are implicitly broadcast to `pointer.shape`
-            - `other` is implicitly typecast to `pointer.dtype.element_ty`
-            - `boundary_check` and `padding_option` must be empty
+        (2) If `pointer` is an N-dimensional tensor of pointers, an
+            N-dimensional tensor is loaded.  In this case:
 
-        (3) `pointer` could be a block pointer defined by `make_block_ptr`, in which case:
+            - `mask` and `other` are implicitly broadcast to `pointer.shape`,
+            - `other` is implicitly typecast to `pointer.dtype.element_ty`, and
+            - `boundary_check` and `padding_option` must be empty.
 
-            - `mask` and `other` must be None
-            - `boundary_check` and `padding_option` can be specified to control the behavior of out-of-bound access
+        (3) If `pointer` is a block pointer defined by `make_block_ptr`, a
+            tensor is loaded.  In this case:
+
+            - `mask` and `other` must be None, and
+            - `boundary_check` and `padding_option` can be specified to control
+               the behavior of out-of-bound access.
 
     :param pointer: Pointer to the data to be loaded
     :type pointer: `triton.PointerType`, or block of `dtype=triton.PointerType`
@@ -1198,21 +1204,25 @@ def load(pointer, mask=None, other=None, boundary_check=tuple(), padding_option=
 @builtin
 def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="", _builder=None):
     """
-    Store a tensor of data into memory locations defined by `pointer`:
-        (1) `pointer` could be a single element pointer, then a scalar will be stored
+    Store a tensor of data into memory locations defined by `pointer`.
 
-            - `mask` must be scalar too
-            - `boundary_check` and `padding_option` must be empty
+        (1) If `pointer` is a single element pointer, a scalar is stored.  In
+            this case:
 
-        (2) `pointer` could be element-wise tensor of pointers, in which case:
+            - `mask` must also be scalar, and
+            - `boundary_check` and `padding_option` must be empty.
 
-            - `mask` is implicitly broadcast to `pointer.shape`
-            - `boundary_check` must be empty
+        (2) If `pointer` is an N-dimensional tensor of pointers, an
+            N-dimensional block is stored.  In this case:
 
-        (3) or `pointer` could be a block pointer defined by `make_block_ptr`, in which case:
+            - `mask` is implicitly broadcast to `pointer.shape`, and
+            - `boundary_check` must be empty.
 
-            - `mask` must be None
-            - `boundary_check` can be specified to control the behavior of out-of-bound access
+        (3) If `pointer` is a block pointer defined by `make_block_ptr`, a block
+            of data is stored.  In this case:
+
+            - `mask` must be None, and
+            - `boundary_check` can be specified to control the behavior of out-of-bound access.
 
     `value` is implicitly broadcast to `pointer.shape` and typecast to `pointer.dtype.element_ty`.
 
