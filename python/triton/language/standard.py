@@ -71,18 +71,24 @@ def ravel(x):
 @jit
 def swizzle2d(i, j, size_i, size_j, size_g):
     """
-    Transforms indices of a row-major size_i*size_j matrix into those
-    of one where indices are row major for each group of size_j rows.
-    For example, for size_i = size_j = 4 and size_g = 2, it will transform
-    [[0 , 1 , 2 , 3 ],
-     [4 , 5 , 6 , 7 ],
-     [8 , 9 , 10, 11],
-     [12, 13, 14, 15]]
-    into
-    [[0, 2,  4 , 6 ],
-     [1, 3,  5 , 7 ],
-     [8, 10, 12, 14],
-     [9, 11, 13, 15]]
+    Transforms indices of a row-major :code:`size_i * size_j` matrix into those
+    of one where the indices are row-major for each group of :code:`size_j`
+    rows.
+
+    For example, for :code:`size_i = size_j = 4` and :code:`size_g = 2`, it will
+    transform ::
+
+        [[0 , 1 , 2 , 3 ],
+         [4 , 5 , 6 , 7 ],
+         [8 , 9 , 10, 11],
+         [12, 13, 14, 15]]
+
+    into ::
+
+        [[0, 2,  4 , 6 ],
+         [1, 3,  5 , 7 ],
+         [8, 10, 12, 14],
+         [9, 11, 13, 15]]
     """
     # "unrolled index in array"
     ij = i * size_j + j
@@ -116,6 +122,9 @@ def zeros(shape, dtype):
 
 @jit
 def zeros_like(input):
+    """
+    Creates a tensor of zeros with the same shape and type as a given tensor.
+    """
     return zeros(input.shape, input.dtype)
 
 
