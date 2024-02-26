@@ -9,6 +9,7 @@ using ::AMD::ConvertTritonGPUOpToLLVMPattern;
 using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
 using ::AMD::TritonGPUToLLVMTypeConverter;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
+using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
@@ -16,6 +17,10 @@ using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 namespace AMD {
 #ifdef USE_ROCM
 LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+                          TritonGPUToLLVMTypeConverter *typeConverter,
+                          ConversionPatternRewriter &rewriter);
+
+LogicalResult convertWMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           TritonGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter);
 #endif
@@ -45,12 +50,14 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
                                           .getEncoding()
                                           .dyn_cast<NvidiaMmaEncodingAttr>();
 #ifdef USE_ROCM
-    AMDMfmaEncodingAttr mfmaLayout = D.getType()
-                                      .cast<RankedTensorType>()
-                                      .getEncoding()
-                                      .dyn_cast<AMDMfmaEncodingAttr>();
-    if (!isOuter && mfmaLayout && supportMFMA(op)) {
-      return AMD::convertMFMA(op, adaptor, getTypeConverter(), rewriter);
+    if (!isOuter) {
+      auto dEncoding = D.getType().cast<RankedTensorType>().getEncoding();
+      if (dEncoding.isa<AMDMfmaEncodingAttr>() && supportMFMA(op)) {
+        return AMD::convertMFMA(op, adaptor, getTypeConverter(), rewriter);
+      }
+      if (dEncoding.isa<AMDWmmaEncodingAttr>()) {
+        return AMD::convertWMMA(op, adaptor, getTypeConverter(), rewriter);
+      }
     }
 #endif
 
