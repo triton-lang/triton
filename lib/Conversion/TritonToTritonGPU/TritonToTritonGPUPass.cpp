@@ -793,9 +793,6 @@ public:
     populateSCFPatterns(typeConverter, patterns);
     populateCFPatterns(typeConverter, patterns);
 
-    if (failed(applyPartialConversion(mod, target, std::move(patterns))))
-      return signalPassFailure();
-
     auto inti = llvm::APSInt(32, false);
     auto i32_ty = IntegerType::get(mod->getContext(), 32);
 
@@ -812,6 +809,9 @@ public:
     mod->setAttr(AttrComputeCapabilityName,
                  IntegerAttr::get(
                      i32_ty, llvm::APInt(32, computeCapability.getValue())));
+
+    if (failed(applyPartialConversion(mod, target, std::move(patterns))))
+      return signalPassFailure();
 
     // update layouts
     //  broadcast src => multicast, dst => broadcasted
