@@ -63,28 +63,97 @@ tt.func @test_combine_dot_add_rev_pattern() -> (tensor<128x128xf32>) {
 }
 
 
-// COM: CHECK-LABEL: @test_combine_addptr_pattern
+// CHECK-LABEL: @test_combine_addptr_pattern
 tt.func @test_combine_addptr_pattern(%base: !tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>> {
     %off0 = arith.constant 10 : i32
     %off1 = arith.constant 15 : i32
 
-    // 10 + 15 = 25
-    // COM: CHECK-NEXT: %[[cst:.*]] = arith.constant dense<25> : tensor<8xi32>
+    // CHECK-NEXT: %[[cst:.*]] = arith.constant dense<25> : tensor<8xi32>
 
     %base_ = tt.splat %base : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
 
-    // COM: CHECK-NEXT: %[[tmp0:.*]] = tt.splat %{{.*}} : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
+    // CHECK-NEXT: %[[tmp0:.*]] = tt.splat %{{.*}} : !tt.ptr<f32, 1> -> tensor<8x!tt.ptr<f32, 1>>
 
     %idx0 = tt.splat %off0 : i32 -> tensor<8xi32>
     %idx1 = tt.splat %off1 : i32 -> tensor<8xi32>
 
-    // COM: CHECK-NEXT: %1 = tt.addptr %[[tmp0]], %[[cst]] : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
+    // CHECK-NEXT: %1 = tt.addptr %[[tmp0]], %[[cst]] : tensor<8x!tt.ptr<f32, 1>>, tensor<8xi32>
     %ptr0 = tt.addptr %base_, %idx0 : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
+    %ptr1 = tt.addptr %ptr0, %idx1 : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
+
+    tt.return %ptr1 : tensor<8x!tt.ptr<f32, 1>>
+}
+
+// CHECK-LABEL: @test_combine_addptr_pattern_i64
+tt.func @test_combine_addptr_pattern_i64(%base: !tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>> {
+    %off0 = arith.constant 10 : i64
+    %off1 = arith.constant dense<15> : tensor<8xi64>
+
+    // CHECK-NEXT: %[[cst:.*]] = arith.constant dense<25> : tensor<8xi64>
+
+    %base_ = tt.splat %base : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
+
+    // CHECK-NEXT: %[[tmp0:.*]] = tt.splat %{{.*}} : !tt.ptr<f32, 1> -> tensor<8x!tt.ptr<f32, 1>>
+
+    %idx0 = tt.splat %off0 : i64 -> tensor<8xi64>
+
+    // CHECK-NEXT: %1 = tt.addptr %[[tmp0]], %[[cst]] : tensor<8x!tt.ptr<f32, 1>>, tensor<8xi64>
+    %ptr0 = tt.addptr %base_, %idx0 : tensor<8x!tt.ptr<f32>>, tensor<8xi64>
+    %ptr1 = tt.addptr %ptr0, %off1 : tensor<8x!tt.ptr<f32>>, tensor<8xi64>
+
+    tt.return %ptr1 : tensor<8x!tt.ptr<f32, 1>>
+}
+
+// CHECK-LABEL: @test_combine_addptr_pattern_scalar
+tt.func @test_combine_addptr_pattern_scalar(%base: !tt.ptr<f32>) -> !tt.ptr<f32> {
+    %off0 = arith.constant 10 : i32
+    %off1 = arith.constant 15 : i32
+
+    // CHECK-NEXT: %[[cst:.*]] = arith.constant 25 : i32
+    // CHECK-NEXT: %0 = tt.addptr %{{.*}}, %[[cst]] : !tt.ptr<f32, 1>, i32
+    %ptr0 = tt.addptr %base, %off0 : !tt.ptr<f32>, i32
+    %ptr1 = tt.addptr %ptr0, %off1 : !tt.ptr<f32>, i32
+
+    tt.return %ptr1 : !tt.ptr<f32, 1>
+}
+
+// CHECK-LABEL: @test_not_combine_addptr_pattern
+tt.func @test_not_combine_addptr_pattern(%base: !tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>> {
+    %off0 = arith.constant 10 : i16
+    %off1 = arith.constant 15 : i32
+
+    // CHECK-DAG: %[[cst:.*]] = arith.constant dense<10> : tensor<8xi16>
+    // CHECK-DAG: %[[cst1:.*]] = arith.constant dense<15> : tensor<8xi32>
+
+    %base_ = tt.splat %base : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
+
+    %idx0 = tt.splat %off0 : i16 -> tensor<8xi16>
+    %idx1 = tt.splat %off1 : i32 -> tensor<8xi32>
+
+    %ptr0 = tt.addptr %base_, %idx0 : tensor<8x!tt.ptr<f32>>, tensor<8xi16>
     %ptr1 = tt.addptr %ptr0, %idx1 : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
 
     tt.return %ptr1 : tensor<8x!tt.ptr<f32>>
 }
 
+// CHECK-LABEL: @test_not_combine_addptr_pattern_overflow
+tt.func @test_not_combine_addptr_pattern_overflow(%base: !tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>> {
+    %off0 = arith.constant 127 : i8
+    %off1 = arith.constant 1 : i8
+
+    // CHECK-DAG: %[[cst:.*]] = arith.constant dense<127> : tensor<8xi8>
+    // CHECK-DAG: %[[cst1:.*]] = arith.constant dense<1> : tensor<8xi8>
+
+    %base_ = tt.splat %base : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
+
+    %idx0 = tt.splat %off0 : i8 -> tensor<8xi8>
+    %idx1 = tt.splat %off1 : i8 -> tensor<8xi8>
+
+    %ptr0 = tt.addptr %base_, %idx0 : tensor<8x!tt.ptr<f32>>, tensor<8xi8>
+    %ptr1 = tt.addptr %ptr0, %idx1 : tensor<8x!tt.ptr<f32>>, tensor<8xi8>
+
+    tt.return %ptr1 : tensor<8x!tt.ptr<f32>>
+}
 
 // CHECK-LABEL: @test_combine_select_masked_load_pattern
 tt.func @test_combine_select_masked_load_pattern(%ptr: tensor<8x!tt.ptr<f32>>, %cond: i1) -> (tensor<8xf32>, tensor<8xf32>) {
