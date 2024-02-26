@@ -645,6 +645,10 @@ def test_expand_dims(device):
         t = tl.expand_dims(scalar, -1)
         tl.static_assert(t.shape == [1])
 
+        # N is a scalar that's not even a tl.tensor -- this should work too.
+        t = tl.expand_dims(N, -1)
+        tl.static_assert(t.shape == [1])
+
     N = 32
     dummy_tensor = torch.empty((), device=device)
     expand_dims_kernel[(1, )](dummy_tensor, N)
@@ -1692,9 +1696,6 @@ def get_reduced_dtype(dtype_str, op):
 def test_reduce1d(op, dtype_str, shape, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
 
-    if is_hip():
-        pytest.skip("test_reduce1d not supported on HIP")
-
     # triton kernel
     @triton.jit
     def kernel(X, Z, BLOCK: tl.constexpr):
@@ -1796,10 +1797,6 @@ keep_dims_3d_configs = [(op, 'float32', (32, 2, 16), axis, True)
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
-
-    if is_hip():
-        pytest.skip("test_reduce2d not supported on HIP")
-    # triton kernel
 
     @triton.jit
     def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, IS_3D: tl.constexpr,

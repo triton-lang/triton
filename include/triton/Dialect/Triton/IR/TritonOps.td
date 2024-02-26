@@ -169,7 +169,7 @@ def TT_MulhiUIOp : TT_Op<"mulhiui", [Elementwise,
     let summary = "Most significant N bits of the 2N-bit product of two integers";
 
     let description = [{
-        High half of the product of two integers.
+        Most significant N bits of the 2N-bit product of two integers.
     }];
 
     let arguments = (ins TT_IntLike:$x, TT_IntLike:$y);

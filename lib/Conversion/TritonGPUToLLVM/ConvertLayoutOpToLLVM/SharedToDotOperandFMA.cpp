@@ -1,4 +1,4 @@
-#include "Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 using ValueTable = std::map<std::pair<int, int>, Value>;
 using ::mlir::LLVM::delinearize;

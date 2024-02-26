@@ -354,10 +354,11 @@ private:
     triton::ReduceOp op = helper.getOperation();
     Location loc = op.getLoc();
     Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = i32_val(32);
+    auto srcLayout = helper.getSrcLayout();
+    unsigned wavefront_size = triton::gpu::getWarpSize(srcLayout);
+    Value warpSize = i32_val(wavefront_size);
     Value warpId = udiv(threadId, warpSize);
     Value laneId = urem(threadId, warpSize);
-    auto srcLayout = helper.getSrcLayout();
     auto srcShape = helper.getSrcShape();
     unsigned axis = op.getAxis();
     auto smemShape = helper.getScratchConfig();
@@ -406,7 +407,8 @@ private:
     Location loc = op.getLoc();
 
     Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = i32_val(32);
+    unsigned wavefront_size = triton::gpu::getWarpSize(srcLayout);
+    Value warpSize = i32_val(wavefront_size);
     Value laneId = urem(threadId, warpSize);
     Value zero = i32_val(0);
 

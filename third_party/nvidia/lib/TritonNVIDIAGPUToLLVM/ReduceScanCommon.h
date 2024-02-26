@@ -6,7 +6,7 @@
 // and <atomic>
 #include "triton/Analysis/Allocation.h"
 
-#include "../lib/Conversion/TritonGPUToLLVM/TypeConverter.h"
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 //
 #include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"

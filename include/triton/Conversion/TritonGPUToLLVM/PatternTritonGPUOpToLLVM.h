@@ -22,10 +22,9 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 namespace mlir {
 namespace triton {
 
-void populateAddPtrOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                   RewritePatternSet &patterns,
-                                   ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                   PatternBenefit benefit);
+void populateElementwiseOpToLLVMPatterns(
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit);
 
 void populateMemoryOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,

@@ -462,8 +462,6 @@ void populateTritonGPUToLLVMPatterns(
   patterns.add<ReturnOpConversion>(typeConverter, benefit);
   patterns.add<PrintOpConversion>(typeConverter, benefit);
 
-  mlir::triton::populateAddPtrOpToLLVMPattern(typeConverter, patterns,
-                                              axisInfoAnalysis, benefit);
   mlir::triton::populateMemoryOpToLLVMPattern(typeConverter, patterns, benefit);
   mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, patterns,
                                                  benefit);
