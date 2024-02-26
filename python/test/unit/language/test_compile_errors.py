@@ -6,6 +6,21 @@ from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 import traceback
 
 
+def test_err_undefined_variable():
+
+    @triton.jit
+    def kernel():
+        a += 1  # noqa
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constants={}))
+
+    try:
+        assert "is not defined" in str(e.value), "error should mention the undefined variable"
+    except AssertionError as assertion_err:
+        raise assertion_err from e.value
+
+
 def test_err_in_binary_operator():
 
     @triton.jit
