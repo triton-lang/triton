@@ -1464,6 +1464,9 @@ void init_triton_ir(py::module &&m) {
           makeReproducer(anchorName, passes, op, reproducerPath);
         }
 
+        if (triton::tools::getBoolEnv("TRITON_ENABLE_LLVM_DEBUG")) {
+          ::llvm::DebugFlag = true;
+        }
         if (failed(self.run(mod.getOperation())))
           throw std::runtime_error("PassManager::run failed");
       });
