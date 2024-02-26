@@ -65,9 +65,6 @@ public:
 
 protected:
   ModuleAxisInfoAnalysis &axisAnalysisPass;
-
-private:
-  int computeCapability;
 };
 
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.cpp"
