@@ -148,8 +148,9 @@ class TritonGPUOptimizeThreadLocalityPass
       reduceOps.insert(reduce);
     });
 
+    IRRewriter builder(&getContext());
     for (auto reduce : reduceOps) {
-      OpBuilder builder(reduce);
+      builder.setInsertionPoint(reduce);
       auto srcType = reduce.getOperands()[0].getType().cast<RankedTensorType>();
       auto srcShape = srcType.getShape();
       auto srcEncoding = srcType.getEncoding();

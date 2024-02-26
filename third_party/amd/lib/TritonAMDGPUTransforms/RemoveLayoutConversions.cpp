@@ -776,7 +776,7 @@ static void rewriteSlice(SetVector<Value> &slice,
   opsToRewrite = multiRootTopologicalSort(opsToRewrite);
 
   SmallVector<Operation *> deadLoops;
-  OpBuilder builder(slice.begin()->getContext());
+  IRRewriter builder(slice.begin()->getContext());
   for (Operation *op : opsToRewrite) {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       // Keep a mapping of the operands index to the new operands index.

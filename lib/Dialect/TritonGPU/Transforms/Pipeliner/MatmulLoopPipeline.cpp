@@ -438,7 +438,9 @@ createAsynOps(scf::ForOp &forOp,
     }
   }
 
-  OpBuilder builder(forOp);
+  IRRewriter builder(forOp.getContext());
+  builder.setInsertionPoint(forOp);
+
   Location loc = forOp.getLoc();
   // Create two new counters to index into the allocs.
   Value minusOne = builder.create<arith::ConstantIntOp>(loc, -1, 32);
