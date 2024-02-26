@@ -141,8 +141,14 @@ public:
         mfmaVersion(mfmaVersion), enforcedNonKDim(nonKDim), kpack(kpack) {}
 
   bool isSecondDot(tt::DotOp &dotOp) const {
+    auto filter = [&dotOp](Operation *op) {
+      return op->getParentRegion() == dotOp->getParentRegion();
+    };
+    mlir::BackwardSliceOptions bwdOpt;
+    bwdOpt.omitBlockArguments = true;
+    bwdOpt.filter = filter;
     SetVector<Operation *> slices;
-    mlir::getBackwardSlice(dotOp.getResult(), &slices);
+    mlir::getBackwardSlice(dotOp.getResult(), &slices, bwdOpt);
     if (llvm::find_if(slices, [](Operation *op) {
           return isa<tt::DotOp>(op);
         }) != slices.end())
