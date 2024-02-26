@@ -10,14 +10,18 @@ class CompilationError(Exception):
         if self.src is None:
             source_excerpt = " <source unavailable>"
         else:
-            source_excerpt = self.src.split('\n')[:node.lineno][-self.source_line_count_max_in_message:]
-            if source_excerpt:
-                source_excerpt.append(' ' * node.col_offset + '^')
-                source_excerpt = '\n'.join(source_excerpt)
+            if hasattr(node, 'lineno'):
+                source_excerpt = self.src.split('\n')[:node.lineno][-self.source_line_count_max_in_message:]
+                if source_excerpt:
+                    source_excerpt.append(' ' * node.col_offset + '^')
+                    source_excerpt = '\n'.join(source_excerpt)
+                else:
+                    source_excerpt = " <source empty>"
             else:
-                source_excerpt = " <source empty>"
+                source_excerpt = self.src
 
-        message = "at {}:{}:\n{}".format(node.lineno, node.col_offset, source_excerpt)
+        message = "at {}:{}:\n{}".format(node.lineno, node.col_offset, source_excerpt) if hasattr(
+            node, 'lineno') else source_excerpt
         if self.error_message:
             message += '\n' + self.error_message
         return message
