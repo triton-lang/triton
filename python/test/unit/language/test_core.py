@@ -1476,8 +1476,6 @@ def test_load_store_same_ptr(device):
 
 
 def test_join(device):
-    if is_hip():
-        pytest.skip("test_join not supported on HIP")
 
     @triton.jit
     def kernel(X, Y, Z, N: tl.constexpr):
@@ -1497,8 +1495,6 @@ def test_join(device):
 
 
 def test_join_scalars(device):
-    if is_hip():
-        pytest.skip("test_join not supported on HIP")
 
     @triton.jit
     def kernel(X, Y, Z):
@@ -1517,8 +1513,6 @@ def test_join_scalars(device):
 
 
 def test_join_with_mma(device):
-    if is_hip():
-        pytest.skip("test_join_with_mma not supported on HIP")
 
     @triton.jit
     def kernel(X, Z):
@@ -1538,8 +1532,6 @@ def test_join_with_mma(device):
 
 
 def test_split(device):
-    if is_hip():
-        pytest.skip("test_split not supported on HIP")
 
     @triton.jit
     def kernel(X, Z1, Z2, N: tl.constexpr):
@@ -1561,8 +1553,6 @@ def test_split(device):
 
 
 def test_split_to_scalar(device):
-    if is_hip():
-        pytest.skip("test_split not supported on HIP")
 
     @triton.jit
     def kernel(X, Z1, Z2):
