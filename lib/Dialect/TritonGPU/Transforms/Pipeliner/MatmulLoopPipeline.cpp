@@ -220,7 +220,7 @@ getBlockedEncoding(tt::LoadOp loadOp, ModuleAxisInfoAnalysis &axisInfo) {
   AxisInfo::DimVectorT contiguity = axisInfo.getAxisInfo(src)->getContiguity();
   SmallVector<unsigned> order = argSort(contiguity);
   unsigned currPerThread = getNumElementsPerThread(loadOp, order, axisInfo);
-  SmallVector<unsigned, 4> sizePerThread(order.size(), 1);
+  SmallVector<unsigned> sizePerThread(order.size(), 1);
   sizePerThread[order[0]] = currPerThread;
   ttg::CTALayoutAttr CTALayout = ttg::getCTALayout(ty.getEncoding());
   return ttg::BlockedEncodingAttr::get(loadOp->getContext(), ty.getShape(),
