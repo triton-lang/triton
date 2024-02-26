@@ -5,6 +5,7 @@ add_triton_library(TritonIR
   Traits.cpp
 
   DEPENDS
+  TritonGPUAttrDefsIncGen
   TritonTableGen
 
   LINK_LIBS PUBLIC
