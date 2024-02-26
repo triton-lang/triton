@@ -890,8 +890,6 @@ def test_abs_fp8(in_dtype, device):
 
 @pytest.mark.parametrize("dtype_x", [(dtype_x) for dtype_x in dtypes_with_bfloat16])
 def test_transpose(dtype_x, device):
-    if is_hip():
-        pytest.skip('test_transpose not supported on HIP.')
     SIZE = 128
 
     @triton.jit
@@ -2581,8 +2579,6 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
 @pytest.mark.parametrize("shape", [(2, 4), (16, 16)])
 @pytest.mark.parametrize("perm", list(itertools.permutations([0, 1])))
 def test_trans_2d(dtype_str, shape, perm, device):
-    if is_hip():
-        pytest.skip('test_trans_2d for HIP currently broken')
 
     @triton.jit
     def kernel(In, Out, in_shape1: tl.constexpr, in_shape2: tl.constexpr, ou_shape1: tl.constexpr,
@@ -2605,8 +2601,6 @@ def test_trans_2d(dtype_str, shape, perm, device):
 @pytest.mark.parametrize("shape", [(2, 2, 8, 64), (4, 4, 4, 4)])
 @pytest.mark.parametrize("perm", list(itertools.permutations([0, 1, 2, 3])))
 def test_trans_4d(dtype_str, shape, perm, device):
-    if is_hip():
-        pytest.skip('test_trans_4d for HIP currently broken')
 
     @triton.jit
     def kernel(In, Out,  #
@@ -3579,8 +3573,6 @@ def test_reshape_err(device):
 
 
 def test_trans_reshape(device):
-    if is_hip():
-        pytest.skip('test_trans_reshape not supported on HIP.')
 
     @triton.jit
     def kernel(in_base_ptr, out_base_ptr, IN_SHAPE0: tl.constexpr, IN_SHAPE1: tl.constexpr):
