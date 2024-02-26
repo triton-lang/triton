@@ -46,14 +46,14 @@ def cdiv(x, div):
 @jit
 @math._add_math_1arg_docstr("sigmoid")
 def sigmoid(x):
-    return 1 / (1 + core.exp(-x))
+    return 1 / (1 + math.exp(-x))
 
 
 @jit
 @math._add_math_1arg_docstr("softmax")
 def softmax(x, ieee_rounding=False):
     z = x - max(x, 0)
-    num = core.exp(z)
+    num = math.exp(z)
     den = sum(num, 0)
     return math.fdiv(num, den, ieee_rounding)
 
