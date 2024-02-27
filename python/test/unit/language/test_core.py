@@ -917,8 +917,6 @@ def test_shapes_as_params(device):
 
 @pytest.mark.parametrize("dtype_x", [(dtype_x) for dtype_x in dtypes_with_bfloat16])
 def test_transpose(dtype_x, device):
-    if is_hip():
-        pytest.skip('test_transpose not supported on HIP.')
     SIZE = 128
 
     @triton.jit
@@ -1503,8 +1501,6 @@ def test_load_store_same_ptr(device):
 
 
 def test_join(device):
-    if is_hip():
-        pytest.skip("test_join not supported on HIP")
 
     @triton.jit
     def kernel(X, Y, Z, N: tl.constexpr):
@@ -1524,8 +1520,6 @@ def test_join(device):
 
 
 def test_join_scalars(device):
-    if is_hip():
-        pytest.skip("test_join not supported on HIP")
 
     @triton.jit
     def kernel(X, Y, Z):
@@ -1544,8 +1538,6 @@ def test_join_scalars(device):
 
 
 def test_join_with_mma(device):
-    if is_hip():
-        pytest.skip("test_join_with_mma not supported on HIP")
 
     @triton.jit
     def kernel(X, Z):
@@ -1599,8 +1591,6 @@ def test_interleave_scalars(device):
 
 
 def test_split(device):
-    if is_hip():
-        pytest.skip("test_split not supported on HIP")
 
     @triton.jit
     def kernel(X, Z1, Z2, N: tl.constexpr):
@@ -1622,8 +1612,6 @@ def test_split(device):
 
 
 def test_split_to_scalar(device):
-    if is_hip():
-        pytest.skip("test_split not supported on HIP")
 
     @triton.jit
     def kernel(X, Z1, Z2):
@@ -2652,8 +2640,6 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
 @pytest.mark.parametrize("shape", [(2, 4), (16, 16)])
 @pytest.mark.parametrize("perm", list(itertools.permutations([0, 1])))
 def test_trans_2d(dtype_str, shape, perm, device):
-    if is_hip():
-        pytest.skip('test_trans_2d for HIP currently broken')
 
     @triton.jit
     def kernel(In, Out, in_shape1: tl.constexpr, in_shape2: tl.constexpr, ou_shape1: tl.constexpr,
@@ -2676,8 +2662,6 @@ def test_trans_2d(dtype_str, shape, perm, device):
 @pytest.mark.parametrize("shape", [(2, 2, 8, 64), (4, 4, 4, 4)])
 @pytest.mark.parametrize("perm", list(itertools.permutations([0, 1, 2, 3])))
 def test_trans_4d(dtype_str, shape, perm, device):
-    if is_hip():
-        pytest.skip('test_trans_4d for HIP currently broken')
 
     @triton.jit
     def kernel(In, Out,  #
@@ -3650,8 +3634,6 @@ def test_reshape_err(device):
 
 
 def test_trans_reshape(device):
-    if is_hip():
-        pytest.skip('test_trans_reshape not supported on HIP.')
 
     @triton.jit
     def kernel(in_base_ptr, out_base_ptr, IN_SHAPE0: tl.constexpr, IN_SHAPE1: tl.constexpr):
@@ -4803,10 +4785,8 @@ def test_enable_fp_fusion(enable_fp_fusion, device):
 @pytest.mark.parametrize("propagate_nan", ['NONE', 'ALL'])
 @pytest.mark.parametrize("func", ['minimum', 'maximum', 'clamp'])
 def test_propagate_nan(dtype, propagate_nan, func, device):
-    if is_hip():
-        pytest.skip(
-            'test_propagate_nan for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
+    if is_hip() and func == 'clamp':
+        pytest.skip('test_propagate_nan is not supported for clamp in HIP')
 
     @triton.jit
     def kernel(A, B, C, propagate_nan: tl.constexpr, func: tl.constexpr):
