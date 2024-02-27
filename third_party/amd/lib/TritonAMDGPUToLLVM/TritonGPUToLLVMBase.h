@@ -11,6 +11,7 @@
 #include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include <set>
@@ -651,25 +652,28 @@ public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
   explicit ConvertTritonGPUOpToLLVMPattern(
-      TritonGPUToLLVMTypeConverter &typeConverter, PatternBenefit benefit = 1)
+      TritonGPUToLLVMTypeConverter &typeConverter,
+      PatternBenefit benefit = patternBenefitDefault)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         ConvertTritonGPUOpToLLVMPatternBase(typeConverter) {}
 
   explicit ConvertTritonGPUOpToLLVMPattern(
       TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
-      PatternBenefit benefit = 1)
+      PatternBenefit benefit = patternBenefitDefault)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         ConvertTritonGPUOpToLLVMPatternBase(typeConverter, allocation) {}
 
   explicit ConvertTritonGPUOpToLLVMPattern(
       TritonGPUToLLVMTypeConverter &typeConverter,
-      IndexCacheInfo indexCacheInfo, PatternBenefit benefit = 1)
+      IndexCacheInfo indexCacheInfo,
+      PatternBenefit benefit = patternBenefitDefault)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         ConvertTritonGPUOpToLLVMPatternBase(typeConverter, indexCacheInfo) {}
 
   explicit ConvertTritonGPUOpToLLVMPattern(
       TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
-      IndexCacheInfo indexCacheInfo, PatternBenefit benefit = 1)
+      IndexCacheInfo indexCacheInfo,
+      PatternBenefit benefit = patternBenefitDefault)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         ConvertTritonGPUOpToLLVMPatternBase(typeConverter, allocation,
                                             indexCacheInfo) {}

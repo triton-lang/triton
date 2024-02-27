@@ -4722,8 +4722,6 @@ def test_enable_fp_fusion(enable_fp_fusion, device):
 @pytest.mark.parametrize("propagate_nan", ['NONE', 'ALL'])
 @pytest.mark.parametrize("func", ['minimum', 'maximum', 'clamp'])
 def test_propagate_nan(dtype, propagate_nan, func, device):
-    if is_hip() and func == 'clamp':
-        pytest.skip('test_propagate_nan is not supported for clamp in HIP')
 
     @triton.jit
     def kernel(A, B, C, propagate_nan: tl.constexpr, func: tl.constexpr):
@@ -4760,10 +4758,6 @@ def test_propagate_nan(dtype, propagate_nan, func, device):
 
 @pytest.mark.parametrize("dtype", ['float16', 'float32'])
 def test_clamp(dtype, device):
-    if is_hip():
-        pytest.skip(
-            'test_clamp for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
 
     @triton.jit
     def kernel(x_ptr, min_ptr, max_ptr, out_ptr, ref_ptr, N, BLOCK_SIZE: tl.constexpr):
@@ -4799,10 +4793,6 @@ def test_clamp(dtype, device):
 # codegen in the backends
 @pytest.mark.parametrize("dtype", ['float16', 'float32'])
 def test_clamp_symmetric(dtype, device):
-    if is_hip():
-        pytest.skip(
-            'test_clamp_symmetric for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
 
     @triton.jit
     def kernel(x_ptr, limit_ptr, out_ptr, ref_ptr, N, BLOCK_SIZE: tl.constexpr):

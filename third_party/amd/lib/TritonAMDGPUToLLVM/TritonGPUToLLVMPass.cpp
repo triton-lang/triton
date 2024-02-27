@@ -399,7 +399,7 @@ struct ConvertTritonAMDGPUToLLVM
       TritonLLVMFunctionConversionTarget funcTarget(*context, target);
       RewritePatternSet funcPatterns(context);
       funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, allocation,
-                                         /*benefit=*/1);
+                                         patternBenefitDefault);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
       if (failed(
@@ -419,8 +419,9 @@ struct ConvertTritonAMDGPUToLLVM
       TritonLLVMFunctionConversionTarget funcTarget(*context, target);
       RewritePatternSet funcPatterns(context);
       funcPatterns.add<CallOpConversion>(typeConverter, numWarps, allocation,
-                                         /*benefit=*/1);
-      funcPatterns.add<ReturnOpConversion>(typeConverter, /*benefit=*/1);
+                                         patternBenefitDefault);
+      funcPatterns.add<ReturnOpConversion>(typeConverter,
+                                           patternBenefitDefault);
       if (failed(
               applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
         return signalPassFailure();
@@ -446,27 +447,27 @@ struct ConvertTritonAMDGPUToLLVM
     auto populatePatterns1 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
                    allocation, indexCacheInfo,
-                   /*benefit*/ 10);
+                   patternBenefitPrioritizeOverLLVMConversions);
     };
 
     auto populatePatterns2 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, /*benefit*/ 10);
+                   allocation, patternBenefitPrioritizeOverLLVMConversions);
     };
 
     auto populatePatterns3 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, indexCacheInfo, /*benefit*/ 10);
+                   allocation, indexCacheInfo, patternBenefitPrioritizeOverLLVMConversions);
     };
 
     auto populatePatterns4 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
                    allocation, indexCacheInfo, computeCapability,
-                   /*benefit*/ 10);
+                   patternBenefitPrioritizeOverLLVMConversions);
     };
     auto populatePatterns5 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns,
-                   /*benefit*/ 10);
+                   patternBenefitPrioritizeOverLLVMConversions);
     };
 
     populatePatterns1(AMD::populateTritonGPUToLLVMPatterns);
@@ -974,11 +975,13 @@ private:
     return builder.create<triton::FpToFpOp>(loc, tensorPromotedType, operand);
   }
 
-
-  static void promoteReduceOpResult(OpBuilder &builder, triton::ReduceOp op, Value result, Type promotedType){
+  static void promoteReduceOpResult(OpBuilder &builder, triton::ReduceOp op,
+                                    Value result, Type promotedType) {
     // save original type
     auto originalType = result.getType();
-    auto elemType = originalType.isa<RankedTensorType>() ? originalType.cast<RankedTensorType>().getElementType(): originalType;
+    auto elemType = originalType.isa<RankedTensorType>()
+                        ? originalType.cast<RankedTensorType>().getElementType()
+                        : originalType;
 
     // promote result type
     result.setType(promotedType);
@@ -1016,7 +1019,8 @@ private:
         auto oldType = val.getType().cast<RankedTensorType>();
         auto elemType = oldType.getElementType();
         if (elemType.isInteger(16) || elemType.isInteger(8)) {
-          auto newType = oldType.cloneWith(std::nullopt, builder.getIntegerType(32));
+          auto newType =
+              oldType.cloneWith(std::nullopt, builder.getIntegerType(32));
           auto promotedVal =
               builder.create<mlir::arith::ExtSIOp>(op->getLoc(), newType, val);
           newOperands.push_back(promotedVal);
@@ -1035,16 +1039,21 @@ private:
       for (Value result : op.getResults()) {
         auto type = result.getType();
         if (type.isInteger(16) || type.isInteger(8)) {
-          promoteReduceOpResult(builder, op, result, builder.getIntegerType(32));
+          promoteReduceOpResult(builder, op, result,
+                                builder.getIntegerType(32));
         } else if (type.isF16()) {
           promoteReduceOpResult(builder, op, result, builder.getF32Type());
         } else if (type.isa<RankedTensorType>()) {
           auto oldType = type.cast<RankedTensorType>();
           auto elemType = oldType.getElementType();
           if (elemType.isInteger(16) || elemType.isInteger(8)) {
-            promoteReduceOpResult(builder, op, result, oldType.cloneWith(std::nullopt, builder.getIntegerType(32)));
+            promoteReduceOpResult(
+                builder, op, result,
+                oldType.cloneWith(std::nullopt, builder.getIntegerType(32)));
           } else if (elemType.isF16()) {
-            promoteReduceOpResult(builder, op, result, oldType.cloneWith(std::nullopt, builder.getF32Type()));
+            promoteReduceOpResult(
+                builder, op, result,
+                oldType.cloneWith(std::nullopt, builder.getF32Type()));
           }
         }
       }

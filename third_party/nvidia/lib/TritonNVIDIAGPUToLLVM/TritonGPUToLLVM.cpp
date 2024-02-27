@@ -212,7 +212,7 @@ struct ConvertTritonGPUToLLVM
       TritonLLVMFunctionConversionTarget funcTarget(*context, target);
       RewritePatternSet funcPatterns(context);
       funcPatterns.add<FuncOpConversion>(typeConverter, numWarps,
-                                         /*benefit=*/1);
+                                         patternBenefitDefault);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
       if (failed(
@@ -228,11 +228,14 @@ struct ConvertTritonGPUToLLVM
     OpBuilder::InsertPoint indexInsertPoint;
 
     RewritePatternSet patterns(context);
-    int benefit = 10;
+    int benefit = patternBenefitPrioritizeOverLLVMConversions;
     populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, benefit);
     populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
     populateElementwiseOpToLLVMPatterns(
         typeConverter, patterns, axisInfoAnalysis, computeCapability, benefit);
+    populateClampFOpToLLVMPattern(typeConverter, patterns, axisInfoAnalysis,
+                                  computeCapability,
+                                  patternBenefitClampOptimizedPattern);
     populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,
                                       benefit);
     populateReduceOpToLLVMPatterns(typeConverter, patterns, computeCapability,

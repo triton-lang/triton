@@ -3,17 +3,11 @@
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 using namespace mlir;
 using namespace mlir::triton;
-using namespace mlir::triton::gpu;
 
 using ::mlir::triton::gpu::BlockedEncodingAttr;
-
-using ClampFOpFunction = std::function<SmallVector<Value>(
-    ClampFOp, ConversionPatternRewriter &, Type, MultipleOperandsRange,
-    Location, int)>;
 
 namespace SharedToDotOperandFMA {
 Value convertLayout(int opIdx, Value val, Value llVal,
@@ -26,6 +20,10 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                             ConversionPatternRewriter &rewriter);
 namespace mlir {
 namespace triton {
+
+constexpr int patternBenefitDefault = 1;
+constexpr int patternBenefitPrioritizeOverLLVMConversions = 10;
+constexpr int patternBenefitClampOptimizedPattern = 20;
 
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
@@ -52,13 +50,11 @@ void populateMinMaxFOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                     ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                     bool hwNanPropagationSupported,
                                     PatternBenefit benefit);
-
-void populateClampFOpToLLVMPattern(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    std::function<bool(ClampFOp, int)> optimizedClampPatternFound,
-    ClampFOpFunction emitOptimization, ClampFOpFunction emitDefault,
-    int computeCapability, PatternBenefit benefit);
+void populateClampFOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                   RewritePatternSet &patterns,
+                                   ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                   bool hwNanPropagationSupported,
+                                   PatternBenefit benefit);
 } // namespace triton
 } // namespace mlir
 
