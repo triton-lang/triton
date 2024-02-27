@@ -4,6 +4,7 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 using namespace mlir;
@@ -60,9 +61,10 @@ class ElementwiseOpConversionBase : public ConvertOpToLLVMPattern<SourceOp> {
 public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
-  explicit ElementwiseOpConversionBase(LLVMTypeConverter &typeConverter,
-                                       ModuleAxisInfoAnalysis &axisAnalysisPass,
-                                       PatternBenefit benefit = 1)
+  explicit ElementwiseOpConversionBase(
+      LLVMTypeConverter &typeConverter,
+      ModuleAxisInfoAnalysis &axisAnalysisPass,
+      PatternBenefit benefit = patternBenefitDefault)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         axisAnalysisPass(axisAnalysisPass) {}
 
