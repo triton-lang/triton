@@ -191,6 +191,12 @@ def matmul_kernel(
         # The stride variables represent how much to increase the ptr by when moving by 1
         # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
         # by to get the element one row down (A has M rows).
+        #
+        # We assume `b` is packed with 2 `int4` elements per K, i.e. it's a
+        # (K//2)xNx(2xint4) matrix, represented in Triton as (K//2)xNxi8.  If K
+        # is the minor dimension, then stride_bk should logically be 0.5.  But
+        # we don't want a fractional stride!  So let the given stride be the
+        # stride per 2xint4.
         stride_am, stride_ak,  #
         stride_bk, stride_bn,  #
         stride_cm, stride_cn,
@@ -221,13 +227,14 @@ def matmul_kernel(
     # We will advance this pointer as we move in the K direction
     # and accumulate
     # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
-    # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
+    # `b_ptrs` is a block of [BLOCK_SIZE_K // 2, BLOCK_SIZE_N] pointers
     # See above `Pointer Arithmetic` section for details
     offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
-    offs_k = tl.arange(0, BLOCK_SIZE_K)
-    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
-    b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+    offs_ak = tl.arange(0, BLOCK_SIZE_K)
+    offs_bk = tl.arange(0, BLOCK_SIZE_K // 2)
+    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_ak[None, :] * stride_ak)
+    b_ptrs = b_ptr + (offs_bk[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
     # -----------------------------------------------------------
     # Iterate to compute a block of the C matrix.
@@ -238,13 +245,21 @@ def matmul_kernel(
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
-        a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
-        b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+        a = tl.load(a_ptrs, mask=offs_ak[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
+        b = tl.load(b_ptrs, mask=offs_bk[:, None] < (K - k * BLOCK_SIZE_K) // 2, other=0.0)
+        tl.static_assert(b.dtype == tl.int8)
+
+        # Unpack `b` into an fp16 matrix, taking care to sign-extend b_lo.  Note
+        # that Triton implicitly widens the result of shifts to `int32`.
+        b_lo = ((b << 4).to(tl.int8) >> 4).to(tl.int8)
+        b_hi = (b >> 4).to(tl.int8)
+        b = tl.join(b_lo, b_hi).permute(0, 2, 1).reshape(BLOCK_SIZE_K, BLOCK_SIZE_N).to(tl.float16)
+
         # We accumulate along the K dimension.
         accumulator += tl.dot(a, b)
         # Advance the ptrs to the next K block.
         a_ptrs += BLOCK_SIZE_K * stride_ak
-        b_ptrs += BLOCK_SIZE_K * stride_bk
+        b_ptrs += BLOCK_SIZE_K * stride_bk // 2
     # You can fuse arbitrary activation functions here
     # while the accumulator is still in FP32!
     if ACTIVATION == "leaky_relu":
@@ -274,11 +289,12 @@ def leaky_relu(x):
 
 def matmul(a, b, activation=""):
     # Check constraints.
-    assert a.shape[1] == b.shape[0], "Incompatible dimensions"
+    assert a.shape[1] == b.shape[0] * 2, "Incompatible dimensions"
     assert a.is_contiguous(), "Matrix A must be contiguous"
     assert b.is_contiguous(), "Matrix B must be contiguous"
     M, K = a.shape
-    K, N = b.shape
+    _, N = b.shape
+
     # Allocates output.
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
     # 1D launch kernel where each block gets its own program.
@@ -294,23 +310,34 @@ def matmul(a, b, activation=""):
     return c
 
 
+def pack_2xint4(t):
+    # Packs a KxNxfp16 matrix into a (K//2)xNx(2xint4) matrix.
+    t = t.to(torch.int8).reshape(t.shape[0] // 2, 2, t.shape[1]).permute(1, 0, 2)
+    return (t[0] & 0xf) | (t[1] << 4)
+
+
 # %%
 # Unit Test
 # ---------
 #
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).
 
-torch.manual_seed(0)
-a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-triton_output = matmul(a, b)
-torch_output = torch.matmul(a, b)
-print(f"triton_output={triton_output}")
-print(f"torch_output={torch_output}")
-if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0):
-    print("✅ Triton and Torch match")
-else:
-    print("❌ Triton and Torch differ")
+
+def test():
+    torch.manual_seed(0)
+    a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
+    b = torch.randint(low=-8, high=7, size=(512, 512), device='cuda', dtype=torch.int8).to(torch.float16)
+    triton_output = matmul(a, pack_2xint4(b))
+    torch_output = torch.matmul(a, b)
+    print(f"triton_output={triton_output}")
+    print(f"torch_output={torch_output}")
+    if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0):
+        print("✅ Triton and Torch match")
+    else:
+        print("❌ Triton and Torch differ")
+
+
+test()
 
 # %%
 # Benchmark
@@ -340,12 +367,12 @@ else:
     ))
 def benchmark(M, N, K, provider):
     a = torch.randn((M, K), device='cuda', dtype=torch.float16)
-    b = torch.randn((K, N), device='cuda', dtype=torch.float16)
+    b = torch.randint(low=-8, high=7, size=(K, N), device='cuda', dtype=torch.int8).to(torch.float16)
     quantiles = [0.5, 0.2, 0.8]
     if provider == 'cublas':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
     if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), quantiles=quantiles)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, pack_2xint4(b)), quantiles=quantiles)
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
 
