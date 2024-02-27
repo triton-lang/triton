@@ -9,6 +9,33 @@ using namespace mlir::triton::gpu;
 
 namespace mlir::triton::gpu {
 
+Type getFunctionType(Type resultType, ValueRange operands) {
+  SmallVector<Type> operandTypes(operands.getTypes());
+  return LLVM::LLVMFunctionType::get(resultType, operandTypes);
+}
+
+LLVM::LLVMFuncOp appendOrGetExternFuncOp(ConversionPatternRewriter &rewriter,
+                                         Operation *op, StringRef funcName,
+                                         Type funcType,
+                                         StringRef libname /*= ""*/,
+                                         StringRef libpath /*= ""*/) {
+  using LLVM::LLVMFuncOp;
+
+  auto funcAttr = StringAttr::get(op->getContext(), funcName);
+  Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(op, funcAttr);
+  if (funcOp)
+    return cast<LLVMFuncOp>(*funcOp);
+
+  auto parent = op->getParentOfType<LLVM::LLVMFuncOp>();
+  OpBuilder b(parent);
+  auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
+  ret.getOperation()->setAttr("libname",
+                              StringAttr::get(op->getContext(), libname));
+  ret.getOperation()->setAttr("libpath",
+                              StringAttr::get(op->getContext(), libpath));
+  return ret;
+}
+
 Type getElementType(Value value) {
   auto type = value.getType();
   if (auto tensorType = type.dyn_cast<RankedTensorType>())
@@ -266,36 +293,10 @@ struct ExternElementwiseOpConversion
       llvm::errs() << "ExternElementwiseOpConversion";
 
     Type funcType = getFunctionType(elemTy, operands[0]);
-    LLVM::LLVMFuncOp funcOp =
-        appendOrGetFuncOp(rewriter, op, funcName, funcType);
+    LLVM::LLVMFuncOp funcOp = appendOrGetExternFuncOp(
+        rewriter, op, funcName, funcType, op.getLibname(), op.getLibpath());
     return {
         rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
-  }
-
-private:
-  Type getFunctionType(Type resultType, ValueRange operands) const {
-    SmallVector<Type> operandTypes(operands.getTypes());
-    return LLVM::LLVMFunctionType::get(resultType, operandTypes);
-  }
-
-  LLVM::LLVMFuncOp appendOrGetFuncOp(ConversionPatternRewriter &rewriter,
-                                     ExternElementwiseOp op, StringRef funcName,
-                                     Type funcType) const {
-    using LLVM::LLVMFuncOp;
-
-    auto funcAttr = StringAttr::get(op->getContext(), funcName);
-    Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(op, funcAttr);
-    if (funcOp)
-      return cast<LLVMFuncOp>(*funcOp);
-
-    auto parent = ((Operation *)op)->getParentOfType<LLVM::LLVMFuncOp>();
-    OpBuilder b(parent);
-    auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
-    ret.getOperation()->setAttr(
-        "libname", StringAttr::get(op->getContext(), op.getLibname()));
-    ret.getOperation()->setAttr(
-        "libpath", StringAttr::get(op->getContext(), op.getLibpath()));
-    return ret;
   }
 };
 

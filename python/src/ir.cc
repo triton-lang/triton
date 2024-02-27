@@ -902,6 +902,10 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return self.create<arith::MulIOp>(lhs, rhs);
            })
+      .def("create_umulhi",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<triton::MulhiUIOp>(lhs, rhs);
+           })
       .def("create_sdiv",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return self.create<arith::DivSIOp>(lhs, rhs);
@@ -982,6 +986,14 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &input, Value &min, Value &max,
               PropagateNan propagateNan) -> Value {
              return Value(self.create<ClampFOp>(input, min, max, propagateNan));
+           })
+      .def("create_precise_sqrt",
+           [](TritonOpBuilder &self, Value &input) -> Value {
+             return Value(self.create<PreciseSqrtOp>(input));
+           })
+      .def("create_precise_divf",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return Value(self.create<PreciseDivFOp>(lhs, rhs));
            })
       // AddPtr (similar to GEP)
       .def("create_addptr",
@@ -1292,9 +1304,17 @@ void init_triton_ir(py::module &&m) {
              return self.create<DotOp>(c.getType(), a, b, c, allowTF32,
                                        maxNumImpreciseAcc);
            })
+      .def("create_floor",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::FloorOp>(val);
+           })
       .def("create_exp",
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::ExpOp>(val);
+           })
+      .def("create_exp2",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::Exp2Op>(val);
            })
       .def("create_cos",
            [](TritonOpBuilder &self, Value &val) -> Value {
@@ -1307,6 +1327,14 @@ void init_triton_ir(py::module &&m) {
       .def("create_log",
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::LogOp>(val);
+           })
+      .def("create_log2",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::Log2Op>(val);
+           })
+      .def("create_erf",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::ErfOp>(val);
            })
       .def("create_sqrt",
            [](TritonOpBuilder &self, Value &val) -> Value {

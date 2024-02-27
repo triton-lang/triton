@@ -3784,103 +3784,40 @@ def test_num_warps_pow2(device):
 
 
 # -------------
-# test extern
+# test precise math
 # -------------
-
-
-@pytest.mark.parametrize("dtype_str, expr, lib_path", [('int32', 'math.ffs', ''), ('float32', 'math.log2', ''),
-                                                       ('float32', 'math.scalbn', ''), ('float32', 'math.pow', ''),
-                                                       ('float64', 'math.pow_dtype', ''),
-                                                       ('float64', 'math.norm4d', '')])
+@pytest.mark.parametrize("expr_prec, expr_ref",
+                         [('tl.math.sqrt_rn(x)', 'tl.math.sqrt(x.to(tl.float64)).to(tl.float32)'),
+                          ('tl.math.div_rn(x,y)', '(x.to(tl.float64) / y.to(tl.float64)).to(tl.float32)')])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_math_tensor(dtype_str, expr, lib_path, num_ctas, device):
-
-    if is_hip() and expr == "math.scalbn":
-        pytest.skip("test_math_tensor[math.scalbn] is not supported in HIP")
+def test_precise_math(expr_prec, expr_ref, num_ctas, device):
 
     @triton.jit
-    def kernel(X, Y, BLOCK: tl.constexpr):
+    def kernel(X, Y, OUT, OUT_REF, BLOCK: tl.constexpr):
         x = tl.load(X + tl.arange(0, BLOCK))
-        y = GENERATE_TEST_HERE
-        tl.store(Y + tl.arange(0, BLOCK), y)
+        y = tl.load(Y + tl.arange(0, BLOCK))
+        prec = PREC_CALC
+        ref = REF_CALC
+        tl.store(OUT + tl.arange(0, BLOCK), prec)
+        tl.store(OUT_REF + tl.arange(0, BLOCK), ref)
 
     shape = (128, )
-    rs = RandomState(17)
-    # limit the range of integers so that the sum does not overflow
-    x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
+    out = torch.zeros(shape, dtype=torch.float32, device=device)
+    out_ref = torch.zeros(shape, dtype=torch.float32, device=device)
 
-    if expr == 'math.log2':
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.broadcast_to(tl.{expr}(5.0), x.shape)'})
-        y_ref = np.log2(5.0)
-    elif expr == 'math.ffs':
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x)'})
-        y_ref = np.zeros(shape, dtype=x.dtype)
-        for i in range(shape[0]):
-            y_ref[i] = (int(x[i]) & int(-x[i])).bit_length()
-    elif expr == 'math.scalbn':
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x, 2)'})
-        y_ref = x * pow(2, 2)
-    elif expr == 'math.pow_dtype':
-        x = np.abs(x)
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, 0.5)'})
-        y_ref = np.power(x, 0.5)
-    elif expr == 'math.pow':
-        # numpy does not allow negative factors in power, so we use abs()
-        x = np.abs(x)
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x, x)'})
-        y_ref = np.power(x, x)
-    elif expr == 'math.pow_dtype':
-        x = np.abs(x)
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, 0.5)'})
-        y_ref = np.power(x, 0.5)
-    elif expr == 'math.norm4d':
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x, x, x, x)'})
-        y_ref = np.sqrt(4 * np.power(x, 2))
+    x = torch.randn(shape, dtype=torch.float32, device=device)
+    y = torch.randn(shape, dtype=torch.float32, device=device)
 
-    x_tri = to_triton(x, device=device)
-    # triton result
-    y_tri = to_triton(numpy_random((shape[0], ), dtype_str=dtype_str, rs=rs), device=device)
-    kernel[(1, )](x_tri, y_tri, BLOCK=shape[0], extern_libs={'libdevice': lib_path}, num_ctas=num_ctas)
-    # compare
-    if expr == 'math.ffs':
-        np.testing.assert_equal(y_ref, to_numpy(y_tri))
-    else:
-        np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)
+    if (expr_prec.count('sqrt') > 0):
+        x = torch.abs(x)
 
+    if (expr_prec.count('div') > 0):
+        y += 1e-6
 
-@pytest.mark.parametrize("dtype_str, expr, lib_path", [('float32', 'math.pow', ''), ('float64', 'math.pow_dtype', ''),
-                                                       ('float64', 'math.pow', '')])
-@pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_math_scalar(dtype_str, expr, lib_path, num_ctas, device):
+    kernel = patch_kernel(kernel, {'PREC_CALC': expr_prec, 'REF_CALC': expr_ref})
 
-    @triton.jit
-    def kernel(X, Y, BLOCK: tl.constexpr):
-        x = X
-        y = GENERATE_TEST_HERE
-        tl.store(Y + tl.arange(0, BLOCK), y)
-
-    shape = (128, )
-    rs = RandomState(17)
-    # limit the range of integers so that the sum does not overflow
-    x = numpy_random((1, ), dtype_str=dtype_str, rs=rs)
-    y_ref = np.zeros(shape, dtype=x.dtype)
-
-    # numpy does not allow negative factors in power, so we use abs()
-    if expr == 'math.pow':
-        x = np.abs(x)
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, x)'})
-        y_ref[:] = np.power(x, x)
-    elif expr == 'math.pow_dtype':
-        x = np.abs(x)
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, 0.5)'})
-        y_ref[:] = np.power(x, 0.5)
-
-    # triton result
-    x_tri = to_triton(x, device=device)[0].item()
-    y_tri = to_triton(numpy_random((shape[0], ), dtype_str=dtype_str, rs=rs), device=device)
-    kernel[(1, )](x_tri, y_tri, BLOCK=shape[0], extern_libs={'libdevice': lib_path}, num_ctas=num_ctas)
-    # compare
-    np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)
+    kernel[(1, )](x, y, out, out_ref, BLOCK=shape[0], num_ctas=num_ctas)
+    assert torch.all(out == out_ref)  # bitwise exact
 
 
 # -----------------------

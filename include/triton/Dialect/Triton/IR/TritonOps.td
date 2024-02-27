@@ -105,6 +105,10 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
     let hasVerifier = 1;
 }
 
+//
+// Arithmetic Ops
+//
+
 def TT_ClampFOp : TT_Op<"clampf", [Elementwise,
                                   SameOperandsAndResultType,
                                   Pure]> {
@@ -121,6 +125,58 @@ def TT_ClampFOp : TT_Op<"clampf", [Elementwise,
     let results = (outs TT_FloatLike:$result);
 
     let assemblyFormat = "$x `,` $min `,` $max attr-dict `:` type($result)";
+}
+
+//
+// Math Ops
+//
+
+def TT_PreciseSqrtOp : TT_Op<"precise_sqrt", [Elementwise,
+                                  SameOperandsAndResultType,
+                                  Pure]> {
+    let summary = "Precise sqrt for floating point types";
+
+    let description = [{
+        Precise sqrt for floating point types.
+    }];
+
+    let arguments = (ins TT_FloatLike:$x);
+
+    let results = (outs TT_FloatLike:$result);
+
+    let assemblyFormat = "$x attr-dict `:` type($x)";
+}
+
+def TT_PreciseDivFOp : TT_Op<"precise_divf", [Elementwise,
+                                  SameOperandsAndResultType,
+                                  Pure]> {
+    let summary = "Precise div for floating point types";
+
+    let description = [{
+        Precise div for floating point types.
+    }];
+
+    let arguments = (ins TT_FloatLike:$x, TT_FloatLike:$y);
+
+    let results = (outs TT_FloatLike:$result);
+
+    let assemblyFormat = "$x `,` $y attr-dict `:` type($x)";
+}
+
+def TT_MulhiUIOp : TT_Op<"mulhiui", [Elementwise,
+                                  SameOperandsAndResultType,
+                                  Pure]> {
+    let summary = "Most significant N bits of the 2N-bit product of two integers";
+
+    let description = [{
+        Most significant N bits of the 2N-bit product of two integers.
+    }];
+
+    let arguments = (ins TT_IntLike:$x, TT_IntLike:$y);
+
+    let results = (outs TT_IntLike:$result);
+
+    let assemblyFormat = "$x `,` $y attr-dict `:` type($x)";
 }
 
 //
