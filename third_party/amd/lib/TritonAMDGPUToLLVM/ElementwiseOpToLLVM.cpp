@@ -1507,7 +1507,7 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
       typeConverter, axisInfoAnalysis, benefit);
   POPULATE_BINARY_OP(arith::SubIOp, LLVM::SubOp) // -
-  POPULATE_BINARY_OP(arith::AddIOp, LLVM::AddOp) // +
+  POPULATE_BINARY_OP(arith::AddIOp, LLVM::AddOp) // + 
   POPULATE_BINARY_OP(arith::MulIOp, LLVM::MulOp) // *
   POPULATE_BINARY_OP(arith::DivSIOp, LLVM::SDivOp)
   POPULATE_BINARY_OP(arith::DivUIOp, LLVM::UDivOp)
@@ -1574,5 +1574,8 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
   mlir::triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
                                                     axisInfoAnalysis, benefit);
+  mlir::triton::populateMinMaxFOpToLLVMPattern(
+      typeConverter, patterns, axisInfoAnalysis,
+      true /*hwNanPropagationSupported*/, benefit);
 }
 } // namespace AMD

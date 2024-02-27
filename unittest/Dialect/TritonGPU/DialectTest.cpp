@@ -1,6 +1,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "mlir/AsmParser/AsmParser.h"
-#include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include <algorithm>
 #include <gtest/gtest.h>
 #include <random>

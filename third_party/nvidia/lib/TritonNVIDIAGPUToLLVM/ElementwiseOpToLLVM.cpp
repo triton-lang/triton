@@ -887,62 +887,6 @@ struct ExpOpConversionApprox
   }
 };
 
-template <typename OpTy>
-struct MinMaxFOpConversion
-    : ElementwiseOpConversionBase<OpTy, MinMaxFOpConversion<OpTy>> {
-  using Base = ElementwiseOpConversionBase<OpTy, MinMaxFOpConversion<OpTy>>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  static_assert(std::is_same<OpTy, arith::MinimumFOp>::value ||
-                    std::is_same<OpTy, arith::MaximumFOp>::value,
-                "OpTy must be arith::MinimumFOp or arith::MaximumFOp");
-
-  // Choose the destination op based on the OpTy.
-  using DestOpNanProp =
-      typename std::conditional<std::is_same<OpTy, arith::MinimumFOp>::value,
-                                LLVM::MinimumOp, LLVM::MaximumOp>::type;
-  using DestOpNoNanProp =
-      typename std::conditional<std::is_same<OpTy, arith::MinimumFOp>::value,
-                                LLVM::MinNumOp, LLVM::MaxNumOp>::type;
-
-  explicit MinMaxFOpConversion(LLVMTypeConverter &typeConverter,
-                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                               int computeCapability,
-                               PatternBenefit benefit = 1)
-      : Base::ElementwiseOpConversionBase(typeConverter, axisAnalysisPass,
-                                          benefit),
-        computeCapability(computeCapability) {}
-
-  SmallVector<Value> createDestOps(OpTy op, Adaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    if (computeCapability >= 80) {
-      return {rewriter.create<DestOpNanProp>(loc, elemTy, operands[0][0],
-                                             operands[0][1])};
-    }
-    // Handle pre-80 compute capability.
-    // If any of the operands is NaN, return NaN.
-    auto lhs = operands[0][0];
-    auto rhs = operands[0][1];
-    auto lhsIsNan =
-        rewriter.create<LLVM::FCmpOp>(loc, LLVM::FCmpPredicate::une, lhs, lhs);
-    auto rhsIsNan =
-        rewriter.create<LLVM::FCmpOp>(loc, LLVM::FCmpPredicate::une, rhs, rhs);
-    auto isNan = rewriter.create<LLVM::OrOp>(loc, lhsIsNan, rhsIsNan);
-    auto nonNanRes = rewriter.create<DestOpNoNanProp>(loc, elemTy, lhs, rhs);
-
-    auto nan = LLVM::createNaNConstant(loc, rewriter, elemTy);
-
-    // Select the result based on the isNan flag.
-    return {rewriter.create<LLVM::SelectOp>(loc, isNan, nan, nonNanRes)};
-  }
-
-private:
-  int computeCapability;
-};
-
 struct ClampFOpConversion
     : ElementwiseOpConversionBase<ClampFOp, ClampFOpConversion> {
   using Base = ElementwiseOpConversionBase<ClampFOp, ClampFOpConversion>;
@@ -1065,6 +1009,62 @@ private:
   int computeCapability;
 };
 
+struct MulhiUIOpConversion
+    : public ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion> {
+  using Base = ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(MulhiUIOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+
+    Type resultElementTy = getElementTypeOrSelf(op.getResult().getType());
+    assert(resultElementTy.isInteger(32) || resultElementTy.isInteger(64));
+
+    StringRef funcName =
+        resultElementTy.isInteger(32) ? "__nv_umulhi" : "__nv_umul64hi";
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+    return {
+        rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
+  }
+};
+
+template <typename TritonOp>
+struct OpToExternCallConversion
+    : public ElementwiseOpConversionBase<TritonOp,
+                                         OpToExternCallConversion<TritonOp>> {
+  using Base =
+      ElementwiseOpConversionBase<TritonOp, OpToExternCallConversion<TritonOp>>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  explicit OpToExternCallConversion(LLVMTypeConverter &typeConverter,
+                                    ModuleAxisInfoAnalysis &axisAnalysisPass,
+                                    StringRef externFuncName,
+                                    PatternBenefit benefit)
+      : Base::ElementwiseOpConversionBase(typeConverter, axisAnalysisPass,
+                                          benefit),
+        funcName(externFuncName) {}
+
+  SmallVector<Value> createDestOps(TritonOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+    return {
+        rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
+  }
+
+private:
+  StringRef funcName;
+};
+
 } // namespace
 } // namespace gpu
 
@@ -1113,15 +1113,24 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(arith::ExtUIOp, LLVM::ZExtOp)
   POPULATE_UNARY_OP(arith::FPToUIOp, LLVM::FPToUIOp)
   POPULATE_UNARY_OP(arith::UIToFPOp, LLVM::UIToFPOp)
+  POPULATE_UNARY_OP(math::FloorOp, math::FloorOp)
   POPULATE_UNARY_OP(math::LogOp, math::LogOp)
+  POPULATE_UNARY_OP(math::Log2Op, math::Log2Op)
   POPULATE_UNARY_OP(math::CosOp, math::CosOp)
   POPULATE_UNARY_OP(math::SinOp, math::SinOp)
   POPULATE_UNARY_OP(math::SqrtOp, math::SqrtOp)
   POPULATE_UNARY_OP(math::ExpOp, math::ExpOp)
+  POPULATE_UNARY_OP(math::Exp2Op, math::Exp2Op)
+  POPULATE_UNARY_OP(math::ErfOp, math::ErfOp)
   POPULATE_UNARY_OP(triton::BitcastOp, LLVM::BitcastOp)
   POPULATE_UNARY_OP(triton::IntToPtrOp, LLVM::IntToPtrOp)
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
+
+  patterns.add<OpToExternCallConversion<triton::PreciseSqrtOp>>(
+      typeConverter, axisInfoAnalysis, "__nv_fsqrt_rn", benefit);
+  patterns.add<OpToExternCallConversion<triton::PreciseDivFOp>>(
+      typeConverter, axisInfoAnalysis, "__nv_fdiv_rn", benefit);
 
   mlir::triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
                                                     axisInfoAnalysis, benefit);
@@ -1144,10 +1153,10 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
   // __nv_expf for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
-  patterns.add<MinMaxFOpConversion<arith::MinimumFOp>>(
-      typeConverter, axisInfoAnalysis, computeCapability, benefit);
-  patterns.add<MinMaxFOpConversion<arith::MaximumFOp>>(
-      typeConverter, axisInfoAnalysis, computeCapability, benefit);
+  mlir::triton::populateMinMaxFOpToLLVMPattern(
+      typeConverter, patterns, axisInfoAnalysis,
+      computeCapability >= 80 /*hwNanPropagationSupported*/, benefit);
 }

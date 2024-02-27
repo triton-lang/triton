@@ -301,8 +301,8 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     }
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
-        isa<ReduceOp, ExpandDimsOp, ReshapeOp, ExperimentalJoinOp,
-            ExperimentalSplitOp, ConvertLayoutOp>(user)) {
+        isa<ReduceOp, ExpandDimsOp, ReshapeOp, JoinOp, SplitOp,
+            ConvertLayoutOp>(user)) {
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
@@ -706,8 +706,8 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   }
   if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<OpTrait::Elementwise>() ||
-      isa<ReduceOp, ExpandDimsOp, ReshapeOp, ExperimentalJoinOp,
-          ExperimentalSplitOp, ConvertLayoutOp>(op)) {
+      isa<ReduceOp, ExpandDimsOp, ReshapeOp, JoinOp, SplitOp, ConvertLayoutOp>(
+          op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
          llvm::zip(op->getResults(), newOp->getResults()))

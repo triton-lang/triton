@@ -884,14 +884,39 @@ def test_abs_fp8(in_dtype, device):
 
 
 # ----------------
+# test passing shapes as individual params rather than tuples
+# ----------------
+
+
+def test_shapes_as_params(device):
+
+    @triton.jit
+    def kernel():
+        a = tl.arange(0, 32).expand_dims(-1).broadcast_to(32, 32)
+        tl.static_assert(a.shape == [tl.constexpr(32), tl.constexpr(32)])
+
+        a = tl.arange(0, 32).reshape(4, 8).permute(1, 0)
+        tl.static_assert(a.shape == [tl.constexpr(8), tl.constexpr(4)])
+
+        a = tl.arange(0, 32).reshape(4, 8).reshape(32)
+        tl.static_assert(a.shape == [tl.constexpr(32)])
+
+        a = tl.arange(0, 64).reshape(2, 4, 8).trans(2, 1, 0)
+        tl.static_assert(a.shape == [tl.constexpr(8), tl.constexpr(4), tl.constexpr(2)])
+
+        a = tl.arange(0, 64).view(2, 4, 8)
+        tl.static_assert(a.shape == [tl.constexpr(2), tl.constexpr(4), tl.constexpr(8)])
+
+    kernel[(1, )]()
+
+
+# ----------------
 # test transpose
 # ----------------
 
 
 @pytest.mark.parametrize("dtype_x", [(dtype_x) for dtype_x in dtypes_with_bfloat16])
 def test_transpose(dtype_x, device):
-    if is_hip():
-        pytest.skip('test_transpose not supported on HIP.')
     SIZE = 128
 
     @triton.jit
@@ -1476,15 +1501,13 @@ def test_load_store_same_ptr(device):
 
 
 def test_join(device):
-    if is_hip():
-        pytest.skip("test_join not supported on HIP")
 
     @triton.jit
     def kernel(X, Y, Z, N: tl.constexpr):
         offs = tl.arange(0, N)
         x = tl.load(X + offs)
         y = tl.load(Y + offs)
-        z = tl._experimental_join(x, y)
+        z = tl.join(x, y)
         tl.store(Z + tl.arange(0, N)[:, None] * 2 + tl.arange(0, 2)[None, :], z)
 
     x = torch.arange(0, 128, device=device).to(torch.int32)
@@ -1497,14 +1520,12 @@ def test_join(device):
 
 
 def test_join_scalars(device):
-    if is_hip():
-        pytest.skip("test_join not supported on HIP")
 
     @triton.jit
     def kernel(X, Y, Z):
         x = tl.load(X)
         y = tl.load(Y)
-        z = tl._experimental_join(x, y)
+        z = tl.join(x, y)
         tl.static_assert(z.shape == [2])
         tl.store(Z + tl.arange(0, 2), z)
 
@@ -1517,13 +1538,11 @@ def test_join_scalars(device):
 
 
 def test_join_with_mma(device):
-    if is_hip():
-        pytest.skip("test_join_with_mma not supported on HIP")
 
     @triton.jit
     def kernel(X, Z):
         x = tl.load(X + 16 * tl.arange(0, 32)[:, None] + tl.arange(0, 16)[None, :])  # (32,16)
-        x2 = tl._experimental_join(x, 2 * x)  # (32,16,2)
+        x2 = tl.join(x, 2 * x)  # (32,16,2)
         x3 = tl.reshape(x2, (32, 32))
         z = tl.dot(x3, x3)  # (32,32)
         tl.store(Z + 32 * tl.arange(0, 32)[:, None] + tl.arange(0, 32)[None, :], z)
@@ -1537,16 +1556,48 @@ def test_join_with_mma(device):
     torch.testing.assert_close(z, z_ref)
 
 
-def test_split(device):
+def test_interleave(device):
     if is_hip():
-        pytest.skip("test_split not supported on HIP")
+        pytest.skip("test_interleaves not supported on HIP")
+
+    @triton.jit
+    def kernel(Z, N: tl.constexpr):
+        z = tl.interleave(tl.arange(0, N), tl.arange(N, 2 * N))
+        tl.store(Z + tl.arange(0, 2 * N), z)
+
+    x = torch.arange(0, 128, device=device).to(torch.int32)
+    y = torch.arange(128, 256, device=device).to(torch.int32)
+    z_ref = torch.stack([x, y], dim=-1).reshape(256)
+    z = torch.zeros_like(z_ref)
+    kernel[(1, )](z, N=128)
+
+    np.testing.assert_equal(to_numpy(z_ref), to_numpy(z))
+
+
+def test_interleave_scalars(device):
+    if is_hip():
+        pytest.skip("test_interleaves not supported on HIP")
+
+    @triton.jit
+    def kernel(X, Y, Z):
+        z = tl.interleave(X, Y)
+        tl.static_assert(z.shape == [tl.constexpr(2)])
+        tl.store(Z + tl.arange(0, 2), z)
+
+    z = torch.zeros(2, device=device)
+    kernel[(1, )](10, 20, z)
+
+    np.testing.assert_equal([10, 20], to_numpy(z))
+
+
+def test_split(device):
 
     @triton.jit
     def kernel(X, Z1, Z2, N: tl.constexpr):
         offs = tl.arange(0, N)
         x = tl.load(X + offs)
         x1 = tl.reshape(x, (N // 2, 2))
-        z1, z2 = tl._experimental_split(x1)
+        z1, z2 = tl.split(x1)
         tl.store(Z1 + tl.arange(0, N // 2), z1)
         tl.store(Z2 + tl.arange(0, N // 2), z2)
 
@@ -1561,14 +1612,12 @@ def test_split(device):
 
 
 def test_split_to_scalar(device):
-    if is_hip():
-        pytest.skip("test_split not supported on HIP")
 
     @triton.jit
     def kernel(X, Z1, Z2):
         offs = tl.arange(0, 2)
         x = tl.load(X + offs)
-        z1, z2 = tl._experimental_split(x)
+        z1, z2 = tl.split(x)
         tl.static_assert(isinstance(z1, tl.tensor))
         tl.static_assert(isinstance(z2, tl.tensor))
         tl.static_assert(z1.shape == [])
@@ -2591,8 +2640,6 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
 @pytest.mark.parametrize("shape", [(2, 4), (16, 16)])
 @pytest.mark.parametrize("perm", list(itertools.permutations([0, 1])))
 def test_trans_2d(dtype_str, shape, perm, device):
-    if is_hip():
-        pytest.skip('test_trans_2d for HIP currently broken')
 
     @triton.jit
     def kernel(In, Out, in_shape1: tl.constexpr, in_shape2: tl.constexpr, ou_shape1: tl.constexpr,
@@ -2615,8 +2662,6 @@ def test_trans_2d(dtype_str, shape, perm, device):
 @pytest.mark.parametrize("shape", [(2, 2, 8, 64), (4, 4, 4, 4)])
 @pytest.mark.parametrize("perm", list(itertools.permutations([0, 1, 2, 3])))
 def test_trans_4d(dtype_str, shape, perm, device):
-    if is_hip():
-        pytest.skip('test_trans_4d for HIP currently broken')
 
     @triton.jit
     def kernel(In, Out,  #
@@ -2639,7 +2684,7 @@ def test_trans_4d(dtype_str, shape, perm, device):
             block_shape=(ou_shape1, ou_shape2, ou_shape3, ou_shape4),
             order=(3, 2, 1, 0),
         )
-        tl.store(out_ptr, tl.permute(tl.load(in_ptr), (trans1, trans2, trans3, trans4)))
+        tl.store(out_ptr, tl.load(in_ptr).permute((trans1, trans2, trans3, trans4)))
 
     input = torch.arange(math.prod(shape), dtype=getattr(torch, dtype_str), device=device).reshape(shape)
     expected = torch.permute(input, perm)
@@ -3589,8 +3634,6 @@ def test_reshape_err(device):
 
 
 def test_trans_reshape(device):
-    if is_hip():
-        pytest.skip('test_trans_reshape not supported on HIP.')
 
     @triton.jit
     def kernel(in_base_ptr, out_base_ptr, IN_SHAPE0: tl.constexpr, IN_SHAPE1: tl.constexpr):
@@ -3741,103 +3784,40 @@ def test_num_warps_pow2(device):
 
 
 # -------------
-# test extern
+# test precise math
 # -------------
-
-
-@pytest.mark.parametrize("dtype_str, expr, lib_path", [('int32', 'math.ffs', ''), ('float32', 'math.log2', ''),
-                                                       ('float32', 'math.scalbn', ''), ('float32', 'math.pow', ''),
-                                                       ('float64', 'math.pow_dtype', ''),
-                                                       ('float64', 'math.norm4d', '')])
+@pytest.mark.parametrize("expr_prec, expr_ref",
+                         [('tl.math.sqrt_rn(x)', 'tl.math.sqrt(x.to(tl.float64)).to(tl.float32)'),
+                          ('tl.math.div_rn(x,y)', '(x.to(tl.float64) / y.to(tl.float64)).to(tl.float32)')])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_math_tensor(dtype_str, expr, lib_path, num_ctas, device):
-
-    if is_hip() and expr == "math.scalbn":
-        pytest.skip("test_math_tensor[math.scalbn] is not supported in HIP")
+def test_precise_math(expr_prec, expr_ref, num_ctas, device):
 
     @triton.jit
-    def kernel(X, Y, BLOCK: tl.constexpr):
+    def kernel(X, Y, OUT, OUT_REF, BLOCK: tl.constexpr):
         x = tl.load(X + tl.arange(0, BLOCK))
-        y = GENERATE_TEST_HERE
-        tl.store(Y + tl.arange(0, BLOCK), y)
+        y = tl.load(Y + tl.arange(0, BLOCK))
+        prec = PREC_CALC
+        ref = REF_CALC
+        tl.store(OUT + tl.arange(0, BLOCK), prec)
+        tl.store(OUT_REF + tl.arange(0, BLOCK), ref)
 
     shape = (128, )
-    rs = RandomState(17)
-    # limit the range of integers so that the sum does not overflow
-    x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
+    out = torch.zeros(shape, dtype=torch.float32, device=device)
+    out_ref = torch.zeros(shape, dtype=torch.float32, device=device)
 
-    if expr == 'math.log2':
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.broadcast_to(tl.{expr}(5.0), x.shape)'})
-        y_ref = np.log2(5.0)
-    elif expr == 'math.ffs':
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x)'})
-        y_ref = np.zeros(shape, dtype=x.dtype)
-        for i in range(shape[0]):
-            y_ref[i] = (int(x[i]) & int(-x[i])).bit_length()
-    elif expr == 'math.scalbn':
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x, 2)'})
-        y_ref = x * pow(2, 2)
-    elif expr == 'math.pow_dtype':
-        x = np.abs(x)
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, 0.5)'})
-        y_ref = np.power(x, 0.5)
-    elif expr == 'math.pow':
-        # numpy does not allow negative factors in power, so we use abs()
-        x = np.abs(x)
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x, x)'})
-        y_ref = np.power(x, x)
-    elif expr == 'math.pow_dtype':
-        x = np.abs(x)
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, 0.5)'})
-        y_ref = np.power(x, 0.5)
-    elif expr == 'math.norm4d':
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x, x, x, x)'})
-        y_ref = np.sqrt(4 * np.power(x, 2))
+    x = torch.randn(shape, dtype=torch.float32, device=device)
+    y = torch.randn(shape, dtype=torch.float32, device=device)
 
-    x_tri = to_triton(x, device=device)
-    # triton result
-    y_tri = to_triton(numpy_random((shape[0], ), dtype_str=dtype_str, rs=rs), device=device)
-    kernel[(1, )](x_tri, y_tri, BLOCK=shape[0], extern_libs={'libdevice': lib_path}, num_ctas=num_ctas)
-    # compare
-    if expr == 'math.ffs':
-        np.testing.assert_equal(y_ref, to_numpy(y_tri))
-    else:
-        np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)
+    if (expr_prec.count('sqrt') > 0):
+        x = torch.abs(x)
 
+    if (expr_prec.count('div') > 0):
+        y += 1e-6
 
-@pytest.mark.parametrize("dtype_str, expr, lib_path", [('float32', 'math.pow', ''), ('float64', 'math.pow_dtype', ''),
-                                                       ('float64', 'math.pow', '')])
-@pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_math_scalar(dtype_str, expr, lib_path, num_ctas, device):
+    kernel = patch_kernel(kernel, {'PREC_CALC': expr_prec, 'REF_CALC': expr_ref})
 
-    @triton.jit
-    def kernel(X, Y, BLOCK: tl.constexpr):
-        x = X
-        y = GENERATE_TEST_HERE
-        tl.store(Y + tl.arange(0, BLOCK), y)
-
-    shape = (128, )
-    rs = RandomState(17)
-    # limit the range of integers so that the sum does not overflow
-    x = numpy_random((1, ), dtype_str=dtype_str, rs=rs)
-    y_ref = np.zeros(shape, dtype=x.dtype)
-
-    # numpy does not allow negative factors in power, so we use abs()
-    if expr == 'math.pow':
-        x = np.abs(x)
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, x)'})
-        y_ref[:] = np.power(x, x)
-    elif expr == 'math.pow_dtype':
-        x = np.abs(x)
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, 0.5)'})
-        y_ref[:] = np.power(x, 0.5)
-
-    # triton result
-    x_tri = to_triton(x, device=device)[0].item()
-    y_tri = to_triton(numpy_random((shape[0], ), dtype_str=dtype_str, rs=rs), device=device)
-    kernel[(1, )](x_tri, y_tri, BLOCK=shape[0], extern_libs={'libdevice': lib_path}, num_ctas=num_ctas)
-    # compare
-    np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)
+    kernel[(1, )](x, y, out, out_ref, BLOCK=shape[0], num_ctas=num_ctas)
+    assert torch.all(out == out_ref)  # bitwise exact
 
 
 # -----------------------
@@ -4742,10 +4722,8 @@ def test_enable_fp_fusion(enable_fp_fusion, device):
 @pytest.mark.parametrize("propagate_nan", ['NONE', 'ALL'])
 @pytest.mark.parametrize("func", ['minimum', 'maximum', 'clamp'])
 def test_propagate_nan(dtype, propagate_nan, func, device):
-    if is_hip():
-        pytest.skip(
-            'test_propagate_nan for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
+    if is_hip() and func == 'clamp':
+        pytest.skip('test_propagate_nan is not supported for clamp in HIP')
 
     @triton.jit
     def kernel(A, B, C, propagate_nan: tl.constexpr, func: tl.constexpr):
