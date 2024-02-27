@@ -383,7 +383,7 @@ def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
 }
 
-def TT_ExperimentalJoinOp : TT_Op<"experimental_join", [
+def TT_JoinOp : TT_Op<"join", [
     NoMemoryEffect, SameTypeOperands,
     DeclareOpInterfaceMethods<InferTypeOpInterface>,
 ]> {
@@ -401,7 +401,7 @@ def TT_ExperimentalJoinOp : TT_Op<"experimental_join", [
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
 }
 
-def TT_ExperimentalSplitOp : TT_Op<"experimental_split", [
+def TT_SplitOp : TT_Op<"split", [
   NoMemoryEffect,
   DeclareOpInterfaceMethods<InferTypeOpInterface>,
   TypesMatchWith<"outLHS and outRHS types match",
