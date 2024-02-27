@@ -570,8 +570,8 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::PrintOp>, GenericOpPattern<triton::AssertOp>,
       GenericOpPattern<triton::AtomicCASOp>,
       GenericOpPattern<triton::AtomicRMWOp>, GenericOpPattern<ReturnOp>,
-      GenericOpPattern<triton::CallOp>, TritonFuncOpPattern>(typeConverter,
-                                                             context);
+      GenericOpPattern<triton::CallOp>, GenericOpPattern<triton::BlockCSEOp>,
+      TritonFuncOpPattern>(typeConverter, context);
 }
 
 //

@@ -326,6 +326,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.builder.ret([])
             ret_ty = language.void
         elif isinstance(ret_value, tuple):
+            print("TUPLE!!!")
             ret_values = [language.core._to_tensor(v, self.builder) for v in ret_value]
             ret_types = [v.type for v in ret_values]
             self.builder.ret([v.handle for v in ret_values])

@@ -1547,6 +1547,10 @@ def abs(x: tl.tensor, builder: ir.builder) -> tl.tensor:
 ##
 
 
+def block_cse(x: tl.tensor, builder: ir.builder) -> tl.tensor:
+    return tl.tensor(builder.create_block_cse(x.handle), x.type)
+
+
 def multiple_of(x: tl.tensor, values: List[int]) -> tl.tensor:
     if max(1, len(x.shape)) != len(values):
         raise ValueError("Shape of input to multiple_of does not match the length of values")

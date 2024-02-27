@@ -8,6 +8,21 @@
 using namespace mlir::triton::gpu;
 namespace {
 
+/*struct BlockCSEOpConversion
+    : public ConvertOpToLLVMPattern<BlockCSEOp> {
+  using ConvertOpToLLVMPattern<BlockCSEOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(BlockCSEOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto resultTy = op.getType();
+    rewriter.replaceAllUsesWith(op.getResult(), op.getOperand());
+    rewriter.eraseOp(op);
+    return success();
+  }
+};*/
+
 struct AddPtrOpConversion : public ConvertOpToLLVMPattern<AddPtrOp> {
   using ConvertOpToLLVMPattern<AddPtrOp>::ConvertOpToLLVMPattern;
 
@@ -492,4 +507,5 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<IndexCastOpLowering>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SelectOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  // patterns.add<BlockCSEOpConversion>(typeConverter, benefit);
 }

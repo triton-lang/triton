@@ -1579,9 +1579,9 @@ def abs(x, _builder=None):
 
 
 @builtin
-def cse_barrier(*args, _builder=None):
-    handles = [a.handle for a in args]
-    return _builder.create_opt_barrier(*handles)
+def cse_barrier(x, _builder=None):
+    x = _to_tensor(x, _builder)
+    return semantic.block_cse(x, _builder)
 
 
 # -----------------------

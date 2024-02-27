@@ -210,6 +210,18 @@ public:
 };
 
 template <typename OpTy>
+class PassThroughOpAxisInfoVisitor final : public AxisInfoVisitorImpl<OpTy> {
+public:
+  using AxisInfoVisitorImpl<OpTy>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(OpTy op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    return operands[0]->getValue();
+  }
+};
+
+template <typename OpTy>
 class AddSubOpAxisInfoVisitor final : public BinaryOpVisitorImpl<OpTy> {
 public:
   using BinaryOpVisitorImpl<OpTy>::BinaryOpVisitorImpl;
@@ -954,6 +966,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
   // TODO: Remove rules for LLVM::ConstantOp, LLVM::AddOp
   // when scf.for supports integers induction variable
   visitors.append<MakeRangeOpAxisInfoVisitor>();
+  visitors.append<PassThroughOpAxisInfoVisitor<triton::BlockCSEOp>>();
   visitors.append<ConstantOpAxisInfoVisitor<arith::ConstantOp>,
                   ConstantOpAxisInfoVisitor<LLVM::ConstantOp>>();
   visitors.append<AddSubOpAxisInfoVisitor<triton::AddPtrOp>,
