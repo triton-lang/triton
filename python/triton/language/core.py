@@ -922,7 +922,7 @@ class tensor:
     def permute(self, *dims) -> tensor:
         ...
 
-    def _experimental_split(self) -> tuple[tensor, tensor]:
+    def split(self) -> tuple[tensor, tensor]:
         ...
 
     def view(self, *shape) -> tensor:
@@ -1234,6 +1234,12 @@ def cat(input, other, can_reorder=False, _builder=None):
 
 @builtin
 def _experimental_join(a, b, _builder=None):
+    """Forwards to core.join for temporary backwards compat."""
+    return join(a, b, _builder)
+
+
+@builtin
+def join(a, b, _builder=None):
     """
     Join the given tensors in a new, minor dimension.
 
@@ -1256,6 +1262,13 @@ def _experimental_join(a, b, _builder=None):
     return semantic.join(a, b, _builder)
 
 
+@_tensor_member_fn
+@builtin
+def _experimental_split(a, _builder=None, _generator=None) -> tuple[tensor, tensor]:
+    """Forwards to core.split for temporary backwards compat."""
+    return split(a, _builder, _generator)
+
+
 @jit
 def _take_first(a, b):
     return a
@@ -1263,7 +1276,7 @@ def _take_first(a, b):
 
 @_tensor_member_fn
 @builtin
-def _experimental_split(a, _builder=None, _generator=None) -> tuple[tensor, tensor]:
+def split(a, _builder=None, _generator=None) -> tuple[tensor, tensor]:
     """
     Split a tensor in two along its last dim, which must have size 2.
 
