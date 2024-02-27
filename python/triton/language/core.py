@@ -1578,6 +1578,12 @@ def abs(x, _builder=None):
     return semantic.abs(x, _builder)
 
 
+@builtin
+def cse_barrier(*args, _builder=None):
+    handles = [a.handle for a in args]
+    return _builder.create_opt_barrier(*handles)
+
+
 # -----------------------
 # Reductions
 # -----------------------

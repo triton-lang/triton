@@ -1286,6 +1286,17 @@ void init_triton_ir(py::module &&m) {
                  self.getBuilder().getI32Type(),
                  self.getBuilder().getI32IntegerAttr(axis));
            })
+      .def("create_opt_barrier",
+           [](TritonOpBuilder &self, py::args args) -> ValueRange {
+             llvm::SmallVector<Value> arg_values;
+             llvm::SmallVector<Type> arg_types;
+             for (const auto &arg : args) {
+               arg_values.push_back(py::cast<Value>(arg));
+               arg_types.push_back(py::cast<Value>(arg).getType());
+             }
+             return self.create<OptBarrierOp>(arg_types, arg_values)
+                 .getResults();
+           })
       .def("create_dot",
            [](TritonOpBuilder &self, Value &a, Value &b, Value &c,
               bool allowTF32, int maxNumImpreciseAcc) -> Value {

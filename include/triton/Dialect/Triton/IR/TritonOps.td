@@ -31,6 +31,18 @@ class TT_Op<string mnemonic, list<Trait> traits = []> :
        !listconcat(traits, [TensorSizeTrait, VerifyTensorLayoutsTrait])> {
 }
 
+def TT_OptBarrierOp : TT_Op<"opt_barrier", [Pure]> {
+    let summary = "Optimization barrier";
+
+    let description = [{
+        Optimization barrier.
+    }];
+
+    let arguments = (ins Variadic<AnyType>:$operands);
+    let results = (outs Variadic<AnyType>:$results);
+    let assemblyFormat = "$operands attr-dict `:` type($operands) `->` type($results)";
+}
+
 //
 // Cast Ops
 //
