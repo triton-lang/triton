@@ -282,7 +282,7 @@ def _binary_op_dtype_override(a: str, b: str) -> Optional[np.dtype]:
 
 
 def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y='real', device='cuda', num_ctas=1,
-                 y_low=None, y_high=None):
+                 y_low=None, y_high=None, dtype_z=None):
     check_type_supported(dtype_x, device)  # early return if dtype_x is not supported
     check_type_supported(dtype_y, device)
     SIZE = 128
@@ -307,9 +307,12 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
         y[:] = float('nan')
     # reference result
     z_ref = eval(expr if numpy_expr is None else numpy_expr)
-    dtype_z = _binary_op_dtype_override(dtype_x, dtype_y)
-    if dtype_z is not None:
+    if dtype_z is not None:  # override dtype if specified, for example the comparison operator returns bool
         z_ref = z_ref.astype(dtype_z)
+    else:
+        dtype_z = _binary_op_dtype_override(dtype_x, dtype_y)
+        if dtype_z is not None:
+            z_ref = z_ref.astype(dtype_z)
     # triton result
     x_tri = to_triton(x, device=device, dst_type=dtype_x)
     y_tri = to_triton(y, device=device, dst_type=dtype_y)
@@ -412,6 +415,7 @@ def test_addptr(dtype, order, device):
     np.testing.assert_allclose(y, to_numpy(y_tri))
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, dtype_y", [  #
     (dtype_x, dtype_y) for dtype_x in int_dtypes for dtype_y in int_dtypes
 ] + [(dtype_x, dtype_y) for dtype_x in uint_dtypes for dtype_y in uint_dtypes])
@@ -461,6 +465,7 @@ def test_unsigned_name_mangling(device):
 
 # test bitwise ops
 # ---------------
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, dtype_y, op", [  #
     (dtype_x, dtype_y, op)
     for op in ['&', '|', '^']
@@ -478,12 +483,14 @@ def test_bitwise_op(dtype_x, dtype_y, op, num_ctas, device):
         numpy_expr = None
     if 'float' in dtype_x + dtype_y:
         # The CompilationError must have been caused by a C++ exception with this text.
-        with pytest.raises(triton.CompilationError, match='invalid operands of type'):
+        error = triton.CompilationError if not is_interpreter() else tl.semantic.IncompatibleTypeErrorImpl
+        with pytest.raises(error, match='invalid operands of type'):
             _test_binary(dtype_x, dtype_y, expr, numpy_expr='np.array([])', device=device, num_ctas=num_ctas)
     else:
         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, dtype_y, op", [  #
     (dtype_x, dtype_y, op)
     for op in ['<<', '>>']
@@ -508,6 +515,7 @@ def test_shift_op(dtype_x, dtype_y, op, num_ctas, device):
 ops = ['==', '!=', '>', '<', '>=', '<=']
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize(
     "dtype_x, dtype_y, op, mode_x, mode_y",
     # real
@@ -525,7 +533,8 @@ def test_compare_op(dtype_x, dtype_y, op, mode_x, mode_y, num_ctas, device):
         numpy_expr = f'x.astype(np.{dtype_y}) {op} y.astype(np.{dtype_y})'
     else:
         numpy_expr = None
-    _test_binary(dtype_x, dtype_y, expr, numpy_expr, mode_x=mode_x, mode_y=mode_y, device=device, num_ctas=num_ctas)
+    _test_binary(dtype_x, dtype_y, expr, numpy_expr, mode_x=mode_x, mode_y=mode_y, device=device, num_ctas=num_ctas,
+                 dtype_z=np.uint8)
 
 
 # ---------------
