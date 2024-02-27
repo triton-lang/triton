@@ -1,3 +1,4 @@
+import contextlib
 import functools
 import hashlib
 import importlib
@@ -43,9 +44,10 @@ def build_for_backend(name, src, srcdir):
         scheme = 'posix_prefix'
     py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
 
-    ret = subprocess.check_call([cc, src, f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-o", so])
-    if ret == 0:
-        return so
+    with contextlib.suppress(subprocess.CalledProcessError):
+        ret = subprocess.check_call([cc, src, f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-o", so])
+        if ret == 0:
+            return so
     # fallback on setuptools
     extra_compile_args = []
     library_dirs = []
