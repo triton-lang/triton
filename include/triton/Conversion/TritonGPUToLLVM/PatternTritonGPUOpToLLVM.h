@@ -41,6 +41,12 @@ void populateMakeRangeOpToLLVMPattern(LLVMTypeConverter &typeConverter,
 void populateViewOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns,
                                   PatternBenefit benefit);
+
+void populateMinMaxFOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                    RewritePatternSet &patterns,
+                                    ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                    bool hwNanPropagationSupported,
+                                    PatternBenefit benefit);
 } // namespace triton
 } // namespace mlir
 

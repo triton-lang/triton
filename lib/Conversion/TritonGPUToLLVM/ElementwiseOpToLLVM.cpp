@@ -593,7 +593,72 @@ struct SelectOpConversion
         adaptor.getAttributes().getValue())};
   }
 };
+template <typename OpTy>
+struct MinMaxFOpConversion
+    : ElementwiseOpConversionBase<OpTy, MinMaxFOpConversion<OpTy>> {
+  using Base = ElementwiseOpConversionBase<OpTy, MinMaxFOpConversion<OpTy>>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  static_assert(std::is_same<OpTy, arith::MinimumFOp>::value ||
+                    std::is_same<OpTy, arith::MaximumFOp>::value,
+                "OpTy must be arith::MinimumFOp or arith::MaximumFOp");
+
+  // Choose the destination op based on the OpTy.
+  using DestOpNanProp =
+      typename std::conditional<std::is_same<OpTy, arith::MinimumFOp>::value,
+                                LLVM::MinimumOp, LLVM::MaximumOp>::type;
+  using DestOpNoNanProp =
+      typename std::conditional<std::is_same<OpTy, arith::MinimumFOp>::value,
+                                LLVM::MinNumOp, LLVM::MaxNumOp>::type;
+
+  explicit MinMaxFOpConversion(LLVMTypeConverter &typeConverter,
+                               ModuleAxisInfoAnalysis &axisAnalysisPass,
+                               bool hwNanPropagationSupported,
+                               PatternBenefit benefit = 1)
+      : Base::ElementwiseOpConversionBase(typeConverter, axisAnalysisPass,
+                                          benefit),
+        hwNanPropagationSupported(hwNanPropagationSupported) {}
+
+  SmallVector<Value> createDestOps(OpTy op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    if (hwNanPropagationSupported) {
+      return {rewriter.create<DestOpNanProp>(loc, elemTy, operands[0][0],
+                                             operands[0][1])};
+    }
+    // Handle workaround for NaN propagation, i.e. software emulation of NaN
+    // propagation. If any of the operands is NaN, return NaN.
+    auto lhs = operands[0][0];
+    auto rhs = operands[0][1];
+    auto lhsIsNan =
+        rewriter.create<LLVM::FCmpOp>(loc, LLVM::FCmpPredicate::une, lhs, lhs);
+    auto rhsIsNan =
+        rewriter.create<LLVM::FCmpOp>(loc, LLVM::FCmpPredicate::une, rhs, rhs);
+    auto isNan = rewriter.create<LLVM::OrOp>(loc, lhsIsNan, rhsIsNan);
+    auto nonNanRes = rewriter.create<DestOpNoNanProp>(loc, elemTy, lhs, rhs);
+
+    auto nan = LLVM::createNaNConstant(loc, rewriter, elemTy);
+
+    // Select the result based on the isNan flag.
+    return {rewriter.create<LLVM::SelectOp>(loc, isNan, nan, nonNanRes)};
+  }
+
+private:
+  bool hwNanPropagationSupported;
+};
 } // namespace
+
+void mlir::triton::populateMinMaxFOpToLLVMPattern(
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, bool hwNanPropagationSupported,
+    PatternBenefit benefit) {
+  patterns.add<MinMaxFOpConversion<arith::MinimumFOp>>(
+      typeConverter, axisInfoAnalysis, hwNanPropagationSupported, benefit);
+  patterns.add<MinMaxFOpConversion<arith::MaximumFOp>>(
+      typeConverter, axisInfoAnalysis, hwNanPropagationSupported, benefit);
+}
 
 void mlir::triton::populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,

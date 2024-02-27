@@ -213,9 +213,6 @@ public:
 
 protected:
   ModuleAxisInfoAnalysis &axisAnalysisPass;
-
-private:
-  int computeCapability;
 };
 
 } // namespace gpu
