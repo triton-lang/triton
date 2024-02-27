@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..runtime.jit import jit
-from . import core, math
+from . import core
 
 # constexpr utilities (triton metaprogramming sucks)
 
@@ -29,6 +29,7 @@ def _is_power_of_two(i: core.constexpr):
 # -----------------------
 
 
+@core._tensor_member_fn
 @jit
 def cdiv(x, div):
     """
@@ -42,12 +43,14 @@ def cdiv(x, div):
     return (x + div - 1) // div
 
 
+@core._tensor_member_fn
 @jit
 @core._add_math_1arg_docstr("sigmoid")
 def sigmoid(x):
     return 1 / (1 + core.exp(-x))
 
 
+@core._tensor_member_fn
 @jit
 @core._add_math_1arg_docstr("softmax")
 def softmax(x, ieee_rounding=False):
@@ -57,6 +60,7 @@ def softmax(x, ieee_rounding=False):
     return core.fdiv(num, den, ieee_rounding)
 
 
+@core._tensor_member_fn
 @jit
 def ravel(x):
     """
@@ -71,18 +75,24 @@ def ravel(x):
 @jit
 def swizzle2d(i, j, size_i, size_j, size_g):
     """
-    Transforms indices of a row-major size_i*size_j matrix into those
-    of one where indices are row major for each group of size_j rows.
-    For example, for size_i = size_j = 4 and size_g = 2, it will transform
-    [[0 , 1 , 2 , 3 ],
-     [4 , 5 , 6 , 7 ],
-     [8 , 9 , 10, 11],
-     [12, 13, 14, 15]]
-    into
-    [[0, 2,  4 , 6 ],
-     [1, 3,  5 , 7 ],
-     [8, 10, 12, 14],
-     [9, 11, 13, 15]]
+    Transforms indices of a row-major :code:`size_i * size_j` matrix into those
+    of one where the indices are row-major for each group of :code:`size_j`
+    rows.
+
+    For example, for :code:`size_i = size_j = 4` and :code:`size_g = 2`, it will
+    transform ::
+
+        [[0 , 1 , 2 , 3 ],
+         [4 , 5 , 6 , 7 ],
+         [8 , 9 , 10, 11],
+         [12, 13, 14, 15]]
+
+    into ::
+
+        [[0, 2,  4 , 6 ],
+         [1, 3,  5 , 7 ],
+         [8, 10, 12, 14],
+         [9, 11, 13, 15]]
     """
     # "unrolled index in array"
     ij = i * size_j + j
@@ -94,7 +104,7 @@ def swizzle2d(i, j, size_i, size_j, size_g):
     # row-index of the first element of this group
     off_i = group_id * size_g
     # last group may have fewer rows
-    size_g = minimum(size_i - off_i, size_g)
+    size_g = core.minimum(size_i - off_i, size_g)
     # new row and column indices
     new_i = off_i + (ij % size_g)
     new_j = (ij % size_gj) // size_g
@@ -116,41 +126,10 @@ def zeros(shape, dtype):
 
 @jit
 def zeros_like(input):
+    """
+    Creates a tensor of zeros with the same shape and type as a given tensor.
+    """
     return zeros(input.shape, input.dtype)
-
-
-@jit
-def minimum(x, y, propagate_nan: core.constexpr = core.PropagateNan.NONE):
-    """
-    Computes the element-wise minimum of :code:`x` and :code:`y`.
-
-    :param x: the first input tensor
-    :type x: Block
-    :param y: the second input tensor
-    :type y: Block
-    :param propagate_nan: whether to propagate NaN values.
-    :type propagate_nan: tl.PropagateNan
-
-    .. seealso:: :class:`tl.PropagateNan`
-    """
-    return math.min(x, y, propagate_nan)
-
-
-@jit
-def maximum(x, y, propagate_nan: core.constexpr = core.PropagateNan.NONE):
-    """
-    Computes the element-wise maximum of :code:`x` and :code:`y`.
-
-    :param x: the first input tensor
-    :type x: Block
-    :param y: the second input tensor
-    :type y: Block
-    :param propagate_nan: whether to propagate NaN values.
-    :type propagate_nan: tl.PropagateNan
-
-    .. seealso:: :class:`tl.PropagateNan`
-    """
-    return math.max(x, y, propagate_nan)
 
 
 # max and argmax
@@ -179,6 +158,12 @@ def _argmax_combine_tie_break_fast(value1, index1, value2, index2):
 
 
 @jit
+def _elementwise_max(a, b):
+    return core.maximum(a, b)
+
+
+@core._tensor_member_fn
+@jit
 @core._add_reduction_docstr("maximum", return_indices_arg="return_indices",
                             tie_break_arg="return_indices_tie_break_left")
 def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False):
@@ -195,9 +180,10 @@ def max(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
             else:
                 assert input.dtype.is_integer_type()
                 input = input.to(core.int32)
-        return core.reduce(input, axis, maximum, keep_dims=keep_dims)
+        return core.reduce(input, axis, _elementwise_max, keep_dims=keep_dims)
 
 
+@core._tensor_member_fn
 @jit
 @core._add_reduction_docstr("maximum index", tie_break_arg="tie_break_left")
 def argmax(input, axis, tie_break_left=True, keep_dims=False):
@@ -231,6 +217,12 @@ def _argmin_combine_tie_break_fast(value1, index1, value2, index2):
 
 
 @jit
+def _elementwise_min(a, b):
+    return core.minimum(a, b)
+
+
+@core._tensor_member_fn
+@jit
 @core._add_reduction_docstr("minimum", return_indices_arg="return_indices",
                             tie_break_arg="return_indices_tie_break_left")
 def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False):
@@ -247,9 +239,10 @@ def min(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
             else:
                 assert input.dtype.is_integer_type()
                 input = input.to(core.int32)
-        return core.reduce(input, axis, minimum, keep_dims=keep_dims)
+        return core.reduce(input, axis, _elementwise_min, keep_dims=keep_dims)
 
 
+@core._tensor_member_fn
 @jit
 @core._add_reduction_docstr("minimum index", tie_break_arg="tie_break_left")
 def argmin(input, axis, tie_break_left=True, keep_dims=False):
@@ -265,6 +258,7 @@ def _sum_combine(a, b):
 # sum
 
 
+@core._tensor_member_fn
 @jit
 @core._add_reduction_docstr("sum")
 def sum(input, axis=None, keep_dims=False):
@@ -280,6 +274,7 @@ def _xor_combine(a, b):
 # xor sum
 
 
+@core._tensor_member_fn
 @core.builtin
 @core._add_reduction_docstr("xor sum")
 def xor_sum(input, axis=None, keep_dims=False, _builder=None, _generator=None):
@@ -294,12 +289,13 @@ def xor_sum(input, axis=None, keep_dims=False, _builder=None, _generator=None):
 # cumsum
 
 
+@core._tensor_member_fn
 @jit
 @core._add_scan_docstr("cumsum")
-def cumsum(input, axis=0):
+def cumsum(input, axis=0, reverse=False):
     # todo rename this to a generic function name
     input = core._promote_bfloat16_to_float32(input)
-    return core.associative_scan(input, axis, _sum_combine)
+    return core.associative_scan(input, axis, _sum_combine, reverse)
 
 
 # cumprod
@@ -310,12 +306,13 @@ def _prod_combine(a, b):
     return a * b
 
 
+@core._tensor_member_fn
 @jit
 @core._add_scan_docstr("cumprod")
-def cumprod(input, axis=0):
+def cumprod(input, axis=0, reverse=False):
     # todo rename this to a generic function name
     input = core._promote_bfloat16_to_float32(input)
-    return core.associative_scan(input, axis, _prod_combine)
+    return core.associative_scan(input, axis, _prod_combine, reverse)
 
 
 # sort
@@ -366,8 +363,9 @@ def _bitonic_merge(x, stage: core.constexpr, order: core.constexpr, n_dims: core
     return x
 
 
+@core._tensor_member_fn
 @jit
-def sort(x, dim: core.constexpr = None, descending: core.constexpr = 0):
+def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.constexpr(0)):
     # handle default dimension or check that it is the most minor dim
     _dim: core.constexpr = len(x.shape) - 1 if dim is None else dim
     core.static_assert(_dim == len(x.shape) - 1, "only minor dimension is currently supported")
@@ -390,6 +388,7 @@ def _get_flip_dim(dim, shape):
     return core.constexpr(dim)
 
 
+@core._tensor_member_fn
 @jit
 def flip(x, dim=None):
     """
@@ -417,3 +416,25 @@ def flip(x, dim=None):
         y = sum(y * flip2, i + 1, keep_dims=True)
     x = core.reshape(y, x.shape)
     return x
+
+
+@jit
+def interleave(a, b):
+    """
+    Interleaves the values of two tensors along their last dimension.
+
+    The two tensors must have the same shape.
+
+    Equivalent to `tl.join(a, b).reshape(a.shape[-1:] + [2 * a.shape[-1]])`
+    """
+    c = core.join(a, b)
+
+    assert isinstance(c.shape, list)
+    if len(c.shape) == 1:
+        # We must have interleaved two scalars.
+        return c
+    else:
+        # This `else` is necessary because Triton's AST parser doesn't
+        # understand that if we take the `if` above we definitely don't run this
+        # `else`.
+        return core.reshape(c, c.shape[:-2] + [2 * c.shape[-2]])

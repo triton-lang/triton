@@ -1,4 +1,5 @@
 #include "PipelineExpander.h"
+#include "PipeliningUtility.h"
 #include "Schedule.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/IRMapping.h"
@@ -28,8 +29,6 @@ using namespace mlir;
 
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
-
-static const char *kNumStagesAttrName = "tt.num_stages";
 
 // Return true if the preconditions for pipelining the loop are met.
 static bool preCondition(scf::ForOp forOp) {
@@ -105,9 +104,11 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
   int getNumStagesOrDefault(scf::ForOp forOp) {
     // Use the attribute attached to the loop if it exists otherwise use the
     // global control.
-    if (!forOp->hasAttr(kNumStagesAttrName))
+    if (!forOp->hasAttr(mlir::triton::kNumStagesAttrName))
       return numStages;
-    return forOp->getAttr(kNumStagesAttrName).cast<IntegerAttr>().getInt();
+    return forOp->getAttr(mlir::triton::kNumStagesAttrName)
+        .cast<IntegerAttr>()
+        .getInt();
   }
 
   void runOnOperation() override {

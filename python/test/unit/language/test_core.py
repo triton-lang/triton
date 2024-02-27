@@ -3,11 +3,13 @@ import itertools
 import re
 from typing import Optional, Union
 import math
+import textwrap
 
 import numpy as np
 import pytest
 import torch
 import os
+import inspect
 from numpy.random import RandomState
 
 import triton
@@ -125,10 +127,18 @@ def to_numpy(x):
 
 
 def patch_kernel(template, to_replace):
-    kernel = triton.JITFunction(template.fn)
-    for key, value in to_replace.items():
-        kernel.src = kernel.src.replace(key, value)
-    return kernel
+    if is_interpreter():
+        local_namespace = {}
+        src = textwrap.dedent(inspect.getsource(template.fn))
+        for k, v in to_replace.items():
+            src = src.replace(k, v)
+        exec(src, globals(), local_namespace)
+        return local_namespace[template.fn.__name__]
+    else:
+        kernel = triton.JITFunction(template.fn)
+        for key, value in to_replace.items():
+            kernel.src = kernel.src.replace(key, value)
+        return kernel
 
 
 def check_cuda_only(device):
@@ -146,6 +156,12 @@ def check_type_supported(dtype, device):
             pytest.skip("bfloat16 is only supported on NVGPU with cc >= 80")
         if cc[0] < 9 and dtype in {tl.float8e4nv, "float8e4nv", "float8_e4m3fn"}:
             pytest.skip("float8e4nv is only supported on NVGPU with cc >= 90")
+    if is_interpreter():
+        if dtype in [
+                tl.float8e4nv, "float8e4nv", tl.bfloat16, "bfloat16", tl.float8e5, "float8e5", tl.float8e4b15,
+                "float8e4b15", tl.float8e4b15x4, "float8e4b15x4"
+        ]:
+            pytest.skip("bfloat16 and float8 are not supported in the interpreter")
 
 
 class MmaLayout:
@@ -192,6 +208,7 @@ class SharedLayout:
         return f"#{GPU_DIALECT}.shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x", list(dtypes) + ["bfloat16"])
 def test_empty_kernel(dtype_x, device):
     SIZE = 128
@@ -298,7 +315,7 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
     y_tri = to_triton(y, device=device, dst_type=dtype_y)
     z_tri = to_triton(np.empty(SIZE, dtype=z_ref.dtype), device=device)
     kernel[(1, )](z_tri, x_tri, y_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
-    np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=expr, rtol=0.01)
+    np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=expr, atol=1e-3, rtol=0.01)
 
 
 def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
@@ -358,13 +375,14 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
     else:
         numpy_expr = None
     if op == '%' and _mod_operation_ill_conditioned(dtype_x, dtype_y):
-        with pytest.raises(AssertionError, match='Not equal to tolerance'):
+        error_msg = '' if is_interpreter() else 'Not equal to tolerance'
+        with pytest.raises(AssertionError, match=error_msg):
             _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
     elif (op in ('%', '/') and ((dtype_x in int_dtypes and dtype_y in uint_dtypes) or
                                 (dtype_x in uint_dtypes and dtype_y in int_dtypes))):
-        with pytest.raises(triton.CompilationError) as exc_info:
+        error_class = ValueError if is_interpreter() else triton.CompilationError
+        with pytest.raises(error_class, match='Cannot use .* because they have different signedness'):
             _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
-        assert re.match('Cannot use .* because they have different signedness', str(exc_info.value.__cause__))
     else:
         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
 
@@ -459,10 +477,9 @@ def test_bitwise_op(dtype_x, dtype_y, op, num_ctas, device):
     else:
         numpy_expr = None
     if 'float' in dtype_x + dtype_y:
-        with pytest.raises(triton.CompilationError) as exc_info:
-            _test_binary(dtype_x, dtype_y, expr, numpy_expr='np.array([])', device=device, num_ctas=num_ctas)
         # The CompilationError must have been caused by a C++ exception with this text.
-        assert re.match('invalid operands of type', str(exc_info.value.__cause__))
+        with pytest.raises(triton.CompilationError, match='invalid operands of type'):
+            _test_binary(dtype_x, dtype_y, expr, numpy_expr='np.array([])', device=device, num_ctas=num_ctas)
     else:
         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
 
@@ -628,6 +645,10 @@ def test_expand_dims(device):
         t = tl.expand_dims(scalar, -1)
         tl.static_assert(t.shape == [1])
 
+        # N is a scalar that's not even a tl.tensor -- this should work too.
+        t = tl.expand_dims(N, -1)
+        tl.static_assert(t.shape == [1])
+
     N = 32
     dummy_tensor = torch.empty((), device=device)
     expand_dims_kernel[(1, )](dummy_tensor, N)
@@ -671,20 +692,25 @@ def test_expand_dims_error_cases(device):
     N = 32
     dummy_tensor = torch.empty((), device=device)
 
-    with pytest.raises(triton.CompilationError, match="invalid axis -3"):
+    with pytest.raises(triton.CompilationError) as exc_info:
         dim_out_of_range1[(1, )](dummy_tensor, N)
+    assert "invalid axis -3" in str(exc_info.value.__cause__)
 
-    with pytest.raises(triton.CompilationError, match="invalid axis 2"):
+    with pytest.raises(triton.CompilationError) as exc_info:
         dim_out_of_range2[(1, )](dummy_tensor, N)
+    assert "invalid axis 2" in str(exc_info.value.__cause__)
 
-    with pytest.raises(triton.CompilationError, match="invalid axis 1"):
+    with pytest.raises(triton.CompilationError) as exc_info:
         dim_out_of_range3[(1, )](dummy_tensor, N)
+    assert "invalid axis 1" in str(exc_info.value.__cause__)
 
-    with pytest.raises(triton.CompilationError, match=r"duplicate axes, normalized axes = \[0, 0\]"):
+    with pytest.raises(triton.CompilationError) as exc_info:
         duplicate_dim1[(1, )](dummy_tensor, N)
+    assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", str(exc_info.value.__cause__))
 
-    with pytest.raises(triton.CompilationError, match=r"duplicate axes, normalized axes = \[0, 0\]"):
+    with pytest.raises(triton.CompilationError) as exc_info:
         duplicate_dim2[(1, )](dummy_tensor, N)
+    assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", str(exc_info.value.__cause__))
 
 
 # ----------------------------
@@ -697,8 +723,9 @@ def test_invalid_pid_axis(device):
     def _kernel(dst):
         pid = tl.program_id(20)
 
-    with pytest.raises(triton.CompilationError, match=r"program_id axis must be 0, 1, or 2 but got 20"):
+    with pytest.raises(triton.CompilationError) as exc_info:
         _kernel[(1, )](dst)
+    assert re.search(r"program_id axis must be 0, 1, or 2 but got 20", str(exc_info.value.__cause__))
 
 
 # ---------------
@@ -854,6 +881,33 @@ def test_abs_fp8(in_dtype, device):
     expect = f32_tensor.abs()
     actual_f8 = convert_float_to_float32(out_f8, in_dtype)
     torch.testing.assert_close(actual_f8, expect, equal_nan=True)
+
+
+# ----------------
+# test passing shapes as individual params rather than tuples
+# ----------------
+
+
+def test_shapes_as_params(device):
+
+    @triton.jit
+    def kernel():
+        a = tl.arange(0, 32).expand_dims(-1).broadcast_to(32, 32)
+        tl.static_assert(a.shape == [tl.constexpr(32), tl.constexpr(32)])
+
+        a = tl.arange(0, 32).reshape(4, 8).permute(1, 0)
+        tl.static_assert(a.shape == [tl.constexpr(8), tl.constexpr(4)])
+
+        a = tl.arange(0, 32).reshape(4, 8).reshape(32)
+        tl.static_assert(a.shape == [tl.constexpr(32)])
+
+        a = tl.arange(0, 64).reshape(2, 4, 8).trans(2, 1, 0)
+        tl.static_assert(a.shape == [tl.constexpr(8), tl.constexpr(4), tl.constexpr(2)])
+
+        a = tl.arange(0, 64).view(2, 4, 8)
+        tl.static_assert(a.shape == [tl.constexpr(2), tl.constexpr(4), tl.constexpr(8)])
+
+    kernel[(1, )]()
 
 
 # ----------------
@@ -1115,11 +1169,6 @@ def test_noinline(mode, device):
                                    for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']
                                    for sem in [None, 'acquire', 'release', 'acq_rel', 'relaxed']]))
 def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
-    if is_hip():
-        pytest.skip(
-            'test_atomic_rmw for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
-
     check_cuda_only(device)
 
     capability = torch.cuda.get_device_capability()
@@ -1462,7 +1511,7 @@ def test_join(device):
         offs = tl.arange(0, N)
         x = tl.load(X + offs)
         y = tl.load(Y + offs)
-        z = tl._experimental_join(x, y)
+        z = tl.join(x, y)
         tl.store(Z + tl.arange(0, N)[:, None] * 2 + tl.arange(0, 2)[None, :], z)
 
     x = torch.arange(0, 128, device=device).to(torch.int32)
@@ -1474,6 +1523,26 @@ def test_join(device):
     np.testing.assert_equal(to_numpy(z_ref), to_numpy(z))
 
 
+def test_join_scalars(device):
+    if is_hip():
+        pytest.skip("test_join not supported on HIP")
+
+    @triton.jit
+    def kernel(X, Y, Z):
+        x = tl.load(X)
+        y = tl.load(Y)
+        z = tl.join(x, y)
+        tl.static_assert(z.shape == [2])
+        tl.store(Z + tl.arange(0, 2), z)
+
+    x = torch.full([1], 42, device=device).to(torch.int32)
+    y = torch.full([1], 100, device=device).to(torch.int32)
+    z = torch.zeros([2], device=device)
+    kernel[(1, )](x, y, z)
+
+    np.testing.assert_equal([42, 100], to_numpy(z))
+
+
 def test_join_with_mma(device):
     if is_hip():
         pytest.skip("test_join_with_mma not supported on HIP")
@@ -1481,7 +1550,7 @@ def test_join_with_mma(device):
     @triton.jit
     def kernel(X, Z):
         x = tl.load(X + 16 * tl.arange(0, 32)[:, None] + tl.arange(0, 16)[None, :])  # (32,16)
-        x2 = tl._experimental_join(x, 2 * x)  # (32,16,2)
+        x2 = tl.join(x, 2 * x)  # (32,16,2)
         x3 = tl.reshape(x2, (32, 32))
         z = tl.dot(x3, x3)  # (32,32)
         tl.store(Z + 32 * tl.arange(0, 32)[:, None] + tl.arange(0, 32)[None, :], z)
@@ -1495,6 +1564,40 @@ def test_join_with_mma(device):
     torch.testing.assert_close(z, z_ref)
 
 
+def test_interleave(device):
+    if is_hip():
+        pytest.skip("test_interleaves not supported on HIP")
+
+    @triton.jit
+    def kernel(Z, N: tl.constexpr):
+        z = tl.interleave(tl.arange(0, N), tl.arange(N, 2 * N))
+        tl.store(Z + tl.arange(0, 2 * N), z)
+
+    x = torch.arange(0, 128, device=device).to(torch.int32)
+    y = torch.arange(128, 256, device=device).to(torch.int32)
+    z_ref = torch.stack([x, y], dim=-1).reshape(256)
+    z = torch.zeros_like(z_ref)
+    kernel[(1, )](z, N=128)
+
+    np.testing.assert_equal(to_numpy(z_ref), to_numpy(z))
+
+
+def test_interleave_scalars(device):
+    if is_hip():
+        pytest.skip("test_interleaves not supported on HIP")
+
+    @triton.jit
+    def kernel(X, Y, Z):
+        z = tl.interleave(X, Y)
+        tl.static_assert(z.shape == [tl.constexpr(2)])
+        tl.store(Z + tl.arange(0, 2), z)
+
+    z = torch.zeros(2, device=device)
+    kernel[(1, )](10, 20, z)
+
+    np.testing.assert_equal([10, 20], to_numpy(z))
+
+
 def test_split(device):
     if is_hip():
         pytest.skip("test_split not supported on HIP")
@@ -1504,7 +1607,7 @@ def test_split(device):
         offs = tl.arange(0, N)
         x = tl.load(X + offs)
         x1 = tl.reshape(x, (N // 2, 2))
-        z1, z2 = tl._experimental_split(x1)
+        z1, z2 = tl.split(x1)
         tl.store(Z1 + tl.arange(0, N // 2), z1)
         tl.store(Z2 + tl.arange(0, N // 2), z2)
 
@@ -1513,6 +1616,33 @@ def test_split(device):
     z1 = torch.zeros_like(z1_ref)
     z2 = torch.zeros_like(z2_ref)
     kernel[(1, )](x, z1, z2, N=256)
+
+    np.testing.assert_equal(to_numpy(z1_ref), to_numpy(z1))
+    np.testing.assert_equal(to_numpy(z2_ref), to_numpy(z2))
+
+
+def test_split_to_scalar(device):
+    if is_hip():
+        pytest.skip("test_split not supported on HIP")
+
+    @triton.jit
+    def kernel(X, Z1, Z2):
+        offs = tl.arange(0, 2)
+        x = tl.load(X + offs)
+        z1, z2 = tl.split(x)
+        tl.static_assert(isinstance(z1, tl.tensor))
+        tl.static_assert(isinstance(z2, tl.tensor))
+        tl.static_assert(z1.shape == [])
+        tl.static_assert(z2.shape == [])
+        tl.store(Z1, z1)
+        tl.store(Z2, z2)
+
+    N = 2
+    x = torch.arange(0, N, device=device).reshape(N // 2, 2)
+    z1_ref, z2_ref = (x[:, 0], x[:, 1])
+    z1 = torch.zeros_like(z1_ref)
+    z2 = torch.zeros_like(z2_ref)
+    kernel[(1, )](x, z1, z2)
 
     np.testing.assert_equal(to_numpy(z1_ref), to_numpy(z1))
     np.testing.assert_equal(to_numpy(z2_ref), to_numpy(z2))
@@ -1627,9 +1757,6 @@ def get_reduced_dtype(dtype_str, op):
 def test_reduce1d(op, dtype_str, shape, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
 
-    if is_hip():
-        pytest.skip("test_reduce1d not supported on HIP")
-
     # triton kernel
     @triton.jit
     def kernel(X, Z, BLOCK: tl.constexpr):
@@ -1732,10 +1859,6 @@ keep_dims_3d_configs = [(op, 'float32', (32, 2, 16), axis, True)
 def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
 
-    if is_hip():
-        pytest.skip("test_reduce2d not supported on HIP")
-    # triton kernel
-
     @triton.jit
     def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, IS_3D: tl.constexpr,
                AXIS: tl.constexpr, KEEP_DIMS: tl.constexpr):
@@ -1830,13 +1953,14 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
 
 scan2d_shapes = [(8, 32), (16, 32), (32, 16), (2, 1024), (1024, 2), (32, 32), (1, 1024)]
 
-scan_configs = [(op, type, shape, axis, num_warps)
+scan_configs = [(op, type, shape, axis, reverse, num_warps)
                 for num_warps in [4, 16]
                 for type in ['int32', 'float32']
                 for axis in [1, 0]
+                for reverse in [True, False]
                 for shape in scan2d_shapes
-                for op in ['cumsum', 'cumprod', 'get_first_element', 'linear_recurrence', 'cummax']]
-negative_config = [('cumsum', 'float32', (32, 32), -1, 4)]
+                for op in ['cumsum', 'cumprod', 'get_first_element', 'linear_recurrence', 'cummax', 'roll']]
+negative_config = [('cumsum', 'float32', (32, 32), -1, False, 4)]
 
 
 @triton.jit
@@ -1857,8 +1981,13 @@ def cummax(v0, i0, v1, i1):
     return tl.where(gt, v0, v1), tl.where(gt, i0, i1)
 
 
-@pytest.mark.parametrize("op, dtype_str, shape, axis, num_warps", scan_configs + negative_config)
-def test_scan2d(op, dtype_str, shape, axis, num_warps, device):
+@triton.jit
+def roll(a1, b1_last, b1_cur, a2, b2_last, b2_cur):
+    return a1 + a2, tl.where(a2 == 1, b1_cur, 0) + b2_last, b2_cur
+
+
+@pytest.mark.parametrize("op, dtype_str, shape, axis, reverse, num_warps", scan_configs + negative_config)
+def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, device):
     check_type_supported(dtype_str, device)
 
     # triton kernel
@@ -1872,19 +2001,31 @@ def test_scan2d(op, dtype_str, shape, axis, num_warps, device):
         tl.store(Z + range_m[:, None] * BLOCK_N + range_n[None, :], z)
 
     if op == 'cumsum' or op == 'cumprod':
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'z = tl.{op}(x, axis={axis})'})
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'z = tl.{op}(x, axis={axis}, reverse={reverse})'})
     elif op == 'get_first_element':
-        kernel = patch_kernel(kernel,
-                              {'GENERATE_TEST_HERE': f'z = tl.associative_scan(x, axis={axis}, combine_fn={op})'})
+        kernel = patch_kernel(
+            kernel,
+            {'GENERATE_TEST_HERE': f'z = tl.associative_scan(x, axis={axis}, combine_fn={op}, reverse={reverse})'})
     elif op == 'cummax':
         rg = "range_m[:, None]" if axis == 0 else "range_n[None, :]"
         rg = f"tl.broadcast_to({rg}.to(tl.int64), [BLOCK_M, BLOCK_N])"
+        kernel = patch_kernel(kernel, {
+            'GENERATE_TEST_HERE':
+            f'_, z = tl.associative_scan((x, {rg}), axis={axis}, combine_fn={op}, reverse={reverse})'
+        })
+    elif op == 'roll':
+        assert op == 'roll'
         kernel = patch_kernel(
-            kernel, {'GENERATE_TEST_HERE': f'_, z = tl.associative_scan((x, {rg}), axis={axis}, combine_fn={op})'})
+            kernel, {
+                'GENERATE_TEST_HERE':
+                f'_, z, _ = tl.associative_scan((1 + 0* x, 0 * x, x), axis={axis}, combine_fn={op}, reverse={reverse})'
+            })
     else:
         assert op == 'linear_recurrence'
-        kernel = patch_kernel(
-            kernel, {'GENERATE_TEST_HERE': f'_, z = tl.associative_scan((x, y), axis={axis}, combine_fn={op})'})
+        kernel = patch_kernel(kernel, {
+            'GENERATE_TEST_HERE':
+            f'_, z = tl.associative_scan((x, y), axis={axis}, combine_fn={op}, reverse={reverse})'
+        })
     # input
     rs = RandomState(17)
     if op == 'linear_recurrence' and dtype_str in int_dtypes:
@@ -1896,21 +2037,43 @@ def test_scan2d(op, dtype_str, shape, axis, num_warps, device):
         x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
         # y is just used in linear_recurrence
         y = numpy_random(shape, dtype_str=dtype_str, rs=rs)
+    x_in = x
+    if reverse:
+        x_in = np.flip(x, axis)
     z = np.empty_like(x)
     x_tri = to_triton(x, device=device)
     y_tri = to_triton(y, device=device)
     if op == 'cumsum' or op == 'cumprod':
         numpy_op = {'cumsum': np.cumsum, 'cumprod': np.cumprod}[op]
         z_dtype_str = dtype_str
-        z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
+        z_ref = numpy_op(x_in, axis=axis).astype(getattr(np, z_dtype_str))
+        if reverse:
+            z_ref = np.flip(z_ref, axis)
+
     elif op == 'cummax':
         # NumPy does not have cummax
         z = z.astype(np.int64)
-        z_ref = torch.cummax(torch.from_numpy(x), axis=axis).indices.numpy()
+        z_ref = torch.cummax(torch.from_numpy(x_in.copy()), axis=axis).indices.numpy()
+        if reverse:
+            z_ref = x_in.shape[axis] - np.flip(z_ref, axis) - 1
+    elif op == 'roll':
+        ROLL = 1
+        z_ref = np.roll(x_in.copy(), ROLL, axis=axis)
+        if axis == 0:
+            z_ref[:ROLL] = 0
+        else:
+            z_ref[:, :ROLL] = 0
+
+        if reverse:
+            z_ref = np.flip(z_ref, axis)
     elif op == 'linear_recurrence':
         # Simplify to the axis=1 case
         x_ref = x.T if axis == 0 else x
         y_ref = y.T if axis == 0 else y
+        if reverse:
+            x_ref = np.flip(x_ref, 1)
+            y_ref = np.flip(y_ref, 1)
+
         result = []
         for x_refi, y_refi in zip(x_ref, y_ref):
             li = []
@@ -1920,18 +2083,29 @@ def test_scan2d(op, dtype_str, shape, axis, num_warps, device):
                 li.append(acc)
             result.append(li)
         z_ref = np.array(result)
+        if reverse:
+            z_ref = np.flip(z_ref, 1)
+
         if axis == 0:
             z_ref = z_ref.T
     else:
         assert op == 'get_first_element'
         z_ref = x
         if axis == 0:
-            z_ref[1:] = x[0]
+            if reverse:
+                z_ref[:-1] = x[-1]
+            else:
+                z_ref[1:] = x[0]
         else:
-            z_ref[:, 1:] = x[:, 0:1]
+            if reverse:
+                z_ref[:, :-1] = x[:, -1:]
+            else:
+                z_ref[:, 1:] = x[:, 0:1]
+
     # triton result
     z_tri = to_triton(z, device=device)
     kernel[(1, )](x_tri, y_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis, num_warps=num_warps)
+
     z_tri = to_numpy(z_tri)
     # compare
     if dtype_str == 'float32':
@@ -2059,7 +2233,7 @@ def test_scan_layouts(M, N, src_layout, axis, device):
       %8 = tt.broadcast %6 : tensor<1x{N}xi32, #blocked> -> tensor<{M}x{N}xi32, #blocked>
       %9 = tt.addptr %7, %8 : tensor<{M}x{N}x!tt.ptr<i32, 1>, #blocked>, tensor<{M}x{N}xi32, #blocked>
       %10 = tt.load %9 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}xi32, #blocked>
-      %11 = "tt.scan"(%10) <{{axis = {axis} : i32}}> ({{
+      %11 = "tt.scan"(%10) <{{axis = {axis} : i32, reverse = false}}> ({{
       ^bb0(%arg2: i32, %arg3: i32):
         %16 = arith.addi %arg2, %arg3 : i32
         tt.scan.return %16 : i32
@@ -2526,7 +2700,7 @@ def test_trans_4d(dtype_str, shape, perm, device):
             block_shape=(ou_shape1, ou_shape2, ou_shape3, ou_shape4),
             order=(3, 2, 1, 0),
         )
-        tl.store(out_ptr, tl.permute(tl.load(in_ptr), (trans1, trans2, trans3, trans4)))
+        tl.store(out_ptr, tl.load(in_ptr).permute((trans1, trans2, trans3, trans4)))
 
     input = torch.arange(math.prod(shape), dtype=getattr(torch, dtype_str), device=device).reshape(shape)
     expected = torch.permute(input, perm)
@@ -2661,7 +2835,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
 
     z_tri = to_triton(z, device=device)
     if epilogue == 'trans':
-        z_tri = torch.as_strided(z_tri, (M, N), z_tri.stride()[::-1])
+        z_tri = torch.as_strided(z_tri, (M, N), [1, M])
 
     if out_dtype == 'int8':
         out_dtype = tl.int8
@@ -4263,14 +4437,14 @@ def test_smid(device):
 # TODO: backend should be tested separately
 
 layouts = [
-    BlockedLayout([1, 16], [8, 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 8], [2, 16], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [4, 8], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 1], [1, 32], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([8, 1], [16, 2], [1, 4], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([4, 1], [8, 4], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 1], [32, 1], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([4, 4], [1, 32], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1])
+    BlockedLayout([1, 16], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 8], [2, THREADS_PER_WARP // 2], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 1], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([8, 1], [16, THREADS_PER_WARP // 16], [1, 4], [0, 1], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([4, 1], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([4, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1])
 ]
 
 intermediate_layouts = [
@@ -4287,8 +4461,6 @@ intermediate_layouts = [
 @pytest.mark.parametrize("interm_layout", intermediate_layouts)
 @pytest.mark.parametrize("dst_layout", layouts)
 def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
-    if is_hip():
-        pytest.skip("test_convert2d is not supported in HIP")
     if (M == 1 or N == 1) and interm_layout:
         pytest.skip("Out of bound access when maxPhase > 1")
     if str(src_layout) == str(dst_layout):
@@ -4317,7 +4489,7 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     """
 
     ir = layouts + f"""
-    module attributes {{"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32}} {{
+    module attributes {{"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
   tt.func public @kernel_0d1d(%arg0: !tt.ptr<f16, 1> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16, 1> {{tt.divisibility = 16 : i32}}) {{
     %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #src>
     %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>

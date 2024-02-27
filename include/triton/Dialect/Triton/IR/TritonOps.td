@@ -383,7 +383,7 @@ def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
 }
 
-def TT_ExperimentalJoinOp : TT_Op<"experimental_join", [
+def TT_JoinOp : TT_Op<"join", [
     NoMemoryEffect, SameTypeOperands,
     DeclareOpInterfaceMethods<InferTypeOpInterface>,
 ]> {
@@ -401,7 +401,7 @@ def TT_ExperimentalJoinOp : TT_Op<"experimental_join", [
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
 }
 
-def TT_ExperimentalSplitOp : TT_Op<"experimental_split", [
+def TT_SplitOp : TT_Op<"split", [
   NoMemoryEffect,
   DeclareOpInterfaceMethods<InferTypeOpInterface>,
   TypesMatchWith<"outLHS and outRHS types match",
@@ -555,14 +555,15 @@ def TT_ReduceReturnOp: TT_Op<"reduce.return",
 def TT_ScanOp: TT_Op<"scan",
                        [Pure,
                         SameOperandsAndResultEncoding,
+                        SameOperandsAndResultShape,
                         SingleBlock,
                         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
-    let summary = "Associatve scan using generic combination algorithm";
-    let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis);
+    let summary = "Associative scan using generic combination algorithm";
+    let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis, BoolAttr:$reverse);
     let results = (outs Variadic<TT_Tensor>:$result);
     let regions = (region SizedRegion<1>:$combineOp);
     let builders = [
-        OpBuilder<(ins "ValueRange":$srcs, "int":$axis)>,
+        OpBuilder<(ins "ValueRange":$srcs, "int":$axis, "bool":$reverse)>,
     ];
     let hasVerifier = 1;
     let hasRegionVerifier = 1;

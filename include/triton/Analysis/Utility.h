@@ -126,6 +126,7 @@ public:
 
   Location getLoc() { return scanOp.getLoc(); }
   unsigned getAxis() { return scanOp.getAxis(); }
+  bool getReverse() { return scanOp.getReverse(); }
   triton::gpu::BlockedEncodingAttr getEncoding();
   llvm::ArrayRef<int64_t> getShape() { return srcShape; }
   unsigned getNumOperands() { return scanOp.getNumOperands(); }

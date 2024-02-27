@@ -1,5 +1,5 @@
-#ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_PATTERNS_TRITON_GPU_OP_TO_LLVM_H
-#define TRITON_CONVERSION_TRITONGPU_TO_LLVM_PATTERNS_TRITON_GPU_OP_TO_LLVM_H
+#ifndef TRITON_CONVERSION_TRITONNVIDIAGPU_TO_LLVM_PATTERNS_TRITON_GPU_OP_TO_LLVM_H
+#define TRITON_CONVERSION_TRITONNVIDIAGPU_TO_LLVM_PATTERNS_TRITON_GPU_OP_TO_LLVM_H
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -9,6 +9,8 @@ typedef llvm::DenseMap<mlir::Operation *, mlir::triton::MakeTensorPtrOp>
 
 namespace mlir {
 namespace triton {
+
+namespace NVIDIA {
 
 void populateBarrierOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                      RewritePatternSet &patterns,
@@ -52,34 +54,18 @@ void populateTensorPtrOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,
                                         PatternBenefit benefit);
 
-void populateViewOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                  RewritePatternSet &patterns,
-                                  PatternBenefit benefit);
-
 void populatePrintOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns,
                                   PatternBenefit benefit);
-
-void populateAssertOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                   RewritePatternSet &patterns,
-                                   PatternBenefit benefit);
-
-void populateMemoryOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                   RewritePatternSet &patterns,
-                                   PatternBenefit benefit);
 
 void populateControlFlowOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,
                                         PatternBenefit benefit);
 
-void populateMakeRangeOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                      RewritePatternSet &patterns,
-                                      PatternBenefit benefit);
-
 void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
                                  PatternBenefit benefit);
-
+} // namespace NVIDIA
 } // namespace triton
 } // namespace mlir
 

@@ -6,6 +6,8 @@ from enum import Enum
 from functools import partial, wraps
 from typing import Union, Callable, List, Sequence, TypeVar, cast
 import builtins
+from ..runtime.jit import jit
+import inspect
 
 from .._C.libtriton import ir
 from . import semantic
@@ -33,6 +35,69 @@ def builtin(fn: T) -> T:
     setattr(wrapper, TRITON_BUILTIN, True)
 
     return wrapper
+
+
+def _tensor_member_fn(fn: T) -> T:
+    """Decorator that adds this free function as a member fn on class tensor.
+
+    When called as a member function on class tensor, the first argument to `fn`
+    is `self`, i.e. the tensor object.
+
+    If there are multiple decorators on a function, you probably want this one
+    to be the highest one (i.e. furthest from the function's `def`), so it's
+    applied last.
+
+    Unfortunately you still need to add a type stub to the body of class tensor
+    in order for pytype to know about it.
+    """
+    assert callable(fn)
+    orig_sig = inspect.signature(fn)
+    # Does fn take args other than _builder, _generator, and the tensor itself?
+    has_args = len(orig_sig.parameters.keys() - {"_builder", "_generator"}) > 1
+
+    if not fn.__doc__:
+        fn.__doc__ = ""
+    fn.__doc__ += f"""
+    This function can also be called as a member function on :py:class:`tensor`,
+    as :code:`x.{fn.__name__}({"..." if has_args else ""})` instead of
+    :code:`{fn.__name__}(x{", ..." if has_args else ""})`.
+    """
+
+    def wrapper(*args, **kwargs):
+        return fn(*args, **kwargs)
+
+    # Match the signature of `fn`, but change the first arg to `self` so the
+    # docs are a little less weird.
+    new_params = list(orig_sig.parameters.values())
+    new_params[0] = new_params[0].replace(name='self')
+    new_sig = orig_sig.replace(parameters=new_params)
+    wrapper.__signature__ = new_sig
+    wrapper.__doc__ = f"Forwards to :py:func:`{fn.__name__}` free function"
+
+    setattr(tensor, fn.__name__, wrapper)
+    return fn
+
+
+def _unwrap_iterable(x):
+    """Returns x[0] if x has one element and x[0] is iterable."""
+    if len(x) == 1:
+        # Determine whether x[0] is iterable.
+        #
+        # You might want to use collections.abc.Iterable instead of this
+        # try/except block.  Unfortunately, this doesn't work with constexpr.
+        #
+        # The problem is that abc.Iterable checks for __iter__ on the *class*.
+        # But we want constexpr to expose an __iter__ method if and only if the
+        # wrapped *object* (i.e. self.value) is iterable.  Therefore there's no
+        # right answer for whether the class constexpr defines __iter__, and
+        # abc.Iterable doesn't work (at least not without some metaclass magic).
+        try:
+            iter(x[0])
+            return x[0]
+        except TypeError:
+            pass
+
+    return x
 
 
 def is_builtin(fn) -> bool:
@@ -535,6 +600,9 @@ class constexpr:
     def __not__(self):
         return constexpr(not self.value)
 
+    def __iter__(self):
+        return iter(self.value)
+
     def __call__(self, *args, **kwds):
         return self.value(*args, **kwds)
 
@@ -549,8 +617,31 @@ def check_bit_width(value, shift_value):
 
 
 class tensor:
+    """Represents an N-dimensional array of values or pointers.
+
+    :code:`tensor` is the fundamental data structure in Triton programs.  Most
+    functions in :py:mod:`triton.language` operate on and return tensors.
+
+    Most of the named member functions here are duplicates of the free functions
+    in :code:`triton.language`.  For example, :code:`triton.language.sqrt(x)` is
+    equivalent to :code:`x.sqrt()`.  An exception is :py:meth:`to()`, which has
+    no equivalent free function.
+
+    :code:`tensor` also defines most of the magic/dunder methods, so you can
+    write :code:`x+y`, :code:`x << 2`, etc.
+
+    .. rubric:: Nontrivial methods
+    .. automethod:: to
+
+    .. rubric:: Constructors
+    ..
+       For some reason Sphinx includes __init__ before printing the full table
+       of methods.  Not what I want, but I can't figure out how to fix it.  Give
+       it its own section so it looks intentional. :)
+    """
 
     def __init__(self, handle, type: dtype):
+        """Not called by user code."""
         # IR handle
         self.handle = handle
         # Block shape
@@ -794,29 +885,153 @@ class tensor:
 
     @property
     def T(self):
+        """Transposes a 2D tensor."""
         assert False, "Transposition must be created by the AST Visitor"
 
     @builtin
-    def to(self, dtype, fp_downcast_rounding: str = None, bitcast=False, _builder=None):
+    def to(self, dtype: dtype, fp_downcast_rounding: str | None = None, bitcast: bool = False, _builder=None):
         """
         Casts the tensor to the given :code:`dtype`.
+
         :param dtype: The target data type.
-        :type dtype: DType
-        :param fp_downcast_rounding: The rounding mode for downcasting floating-point values. \
-            This parameter is only used when self is a floating-point tensor and dtype is a floating-point type \
-            with a smaller bitwidth. Supported values are :code:`"rtne"` (round to nearest, ties to even) and \
-            :code:`"rtz"` (round towards zero).
-        :type fp_downcast_rounding: str
-        :param bitcast: If true, the tensor is bitcasted to the given :code:`dtype`, instead of being casted.
-        :type bitcast: bool
-        :param _builder: The IR builder.
-        :type _builder: ir.builder
+        :param fp_downcast_rounding: The rounding mode for downcasting
+            floating-point values.  This parameter is only used when self is a
+            floating-point tensor and dtype is a floating-point type with a
+            smaller bitwidth. Supported values are :code:`"rtne"` (round to
+            nearest, ties to even) and :code:`"rtz"` (round towards zero).
+        :param bitcast: If true, the tensor is bitcasted to the given
+            :code:`dtype`, instead of being casted.
         """
         if isinstance(bitcast, constexpr):
             bitcast = bitcast.value
         if bitcast:
             return semantic.bitcast(self, dtype, _builder)
         return semantic.cast(self, dtype, _builder, fp_downcast_rounding)
+
+    # Type stubs for functions added by the _tensor_member_fn decorator.
+    # (Unfortunately these can't be created automatically.)
+    #
+    # We couldn't write these definitions out even if we wanted to, because some
+    # of these functions are defined in standard.py.
+    def broadcast_to(self, *shape) -> tensor:
+        ...
+
+    def trans(self, *dims) -> tensor:
+        ...
+
+    def permute(self, *dims) -> tensor:
+        ...
+
+    def split(self) -> tuple[tensor, tensor]:
+        ...
+
+    def view(self, *shape) -> tensor:
+        ...
+
+    def reshape(self, *shape) -> tensor:
+        ...
+
+    def expand_dims(self, axis) -> tensor:
+        ...
+
+    def store(self, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="") -> tensor:
+        ...
+
+    def advance(self, offsets) -> tensor:
+        ...
+
+    def atomic_cas(self, cmp, val, sem=None, scope=None) -> tensor:
+        ...
+
+    def atomic_xchg(self, val, mask=None, sem=None, scope=None) -> tensor:
+        ...
+
+    def atomic_add(self, val, mask=None, sem=None, scope=None) -> tensor:
+        ...
+
+    def atomic_max(self, val, mask=None, sem=None, scope=None) -> tensor:
+        ...
+
+    def atomic_min(self, val, mask=None, sem=None, scope=None) -> tensor:
+        ...
+
+    def atomic_and(self, val, mask=None, sem=None, scope=None) -> tensor:
+        ...
+
+    def atomic_or(self, val, mask=None, sem=None, scope=None) -> tensor:
+        ...
+
+    def atomic_xor(self, val, mask=None, sem=None, scope=None) -> tensor:
+        ...
+
+    def exp(self) -> tensor:
+        ...
+
+    def log(self) -> tensor:
+        ...
+
+    def cos(self) -> tensor:
+        ...
+
+    def sin(self) -> tensor:
+        ...
+
+    def sqrt(self) -> tensor:
+        ...
+
+    def abs(self) -> tensor:
+        ...
+
+    def reduce(self, axis, combine_fn, keep_dims=False) -> tensor:
+        ...
+
+    def associative_scan(self, axis, combine_fn, reverse=False) -> tensor:
+        ...
+
+    def histogram(self, num_bins) -> tensor:
+        ...
+
+    def cdiv(self, div) -> tensor:
+        ...
+
+    def sigmoid(self) -> tensor:
+        ...
+
+    def softmax(self, ieee_rounding=False) -> tensor:
+        ...
+
+    def ravel(self) -> tensor:
+        ...
+
+    def max(self, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False) -> tensor:
+        ...
+
+    def argmax(self, axis, tie_break_left=True, keep_dims=False) -> tensor:
+        ...
+
+    def min(self, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False) -> tensor:
+        ...
+
+    def argmin(self, axis, tie_break_left=True, keep_dims=False) -> tensor:
+        ...
+
+    def sum(self, axis=None, keep_dims=False) -> tensor:
+        ...
+
+    def xor_sum(self, axis=None, keep_dims=False) -> tensor:
+        ...
+
+    def cumsum(self, axis=0, reverse=False) -> tensor:
+        ...
+
+    def cumprod(self, axis=0, reverse=False) -> tensor:
+        ...
+
+    def sort(self, dim: constexpr = None, descending: constexpr = constexpr(0)) -> tensor:
+        ...
+
+    def flip(self, dim=None) -> tensor:
+        ...
 
 
 # -----------------------
@@ -833,7 +1048,7 @@ def program_id(axis, _builder=None):
     """
     Returns the id of the current program instance along the given :code:`axis`.
 
-    :param axis: The axis of the 3D launch grid. Has to be either 0, 1 or 2.
+    :param axis: The axis of the 3D launch grid. Must be 0, 1 or 2.
     :type axis: int
     """
     # if axis == -1:
@@ -852,7 +1067,7 @@ def num_programs(axis, _builder=None):
     """
     Returns the number of program instances launched along the given :code:`axis`.
 
-    :param axis: The axis of the 3D launch grid. Has to be either 0, 1 or 2.
+    :param axis: The axis of the 3D launch grid. Must be 0, 1 or 2.
     :type axis: int
     """
     axis = _constexpr_to_value(axis)
@@ -867,12 +1082,14 @@ def num_programs(axis, _builder=None):
 @builtin
 def arange(start, end, _builder=None):
     """
-    Returns contiguous values within the left-closed and right-open interval [:code:`start`, :code:`end`). \
-    End - Start must be less than or equal to TRITON_MAX_TENSOR_NUMEL = 131072
+    Returns contiguous values within the half-open interval :code:`[start,
+    end)`.  :code:`end - start` must be less than or equal to
+    :code:`TRITON_MAX_TENSOR_NUMEL = 131072`
 
     :param start: Start of the interval. Must be a power of two.
     :type start: int32
-    :param end: End of the interval. Must be a power of two > start.
+    :param end: End of the interval. Must be a power of two greater than
+        :code:`start`.
     :type end: int32
     """
     start = _constexpr_to_value(start)
@@ -927,44 +1144,75 @@ def broadcast(input, other, _builder=None):
     return semantic.broadcast_impl_value(input, other, _builder)
 
 
+@_tensor_member_fn
 @builtin
-def broadcast_to(input, shape, _builder=None):
+def broadcast_to(input, *shape, _builder=None):
     """
     Tries to broadcast the given tensor to a new :code:`shape`.
 
     :param input: The input tensor.
     :type input: Block
     :param shape: The desired shape.
-    :type shape: Tuple[int]
+    :type shape:
+
+    :code:`shape` can be passed as a tuple or as individual parameters: ::
+
+        # These are equivalent
+        broadcast_to(x, (32, 32))
+        broadcast_to(x, 32, 32)
     """
-    shape = _shape_check_impl(shape)
+    shape = _shape_check_impl(_unwrap_iterable(shape))
     return semantic.broadcast_impl_shape(input, shape, _builder)
 
 
+@_tensor_member_fn
 @builtin
-def trans(input, _builder=None):
+def trans(input: tensor, *dims, _builder=None):
     """
-    Transposes a 2D tensor.
+    Permutes the dimensions of a tensor.
+
+    If no permutation is specified, tries to do a (1,0) permutation, i.e. tries
+    to transpose a 2D tensor.
 
     :param input: The input tensor.
-    :type input:
+    :param dims: The desired ordering of dimensions.  For example,
+        :code:`(2, 1, 0)` reverses the order dims in a a 3D tensor.
+
+    :code:`dims` can be passed as a tuple or as individual parameters: ::
+
+        # These are equivalent
+        trans(x, (2, 1, 0))
+        trans(x, 2, 1, 0)
+
+    :py:func:`permute` is equivalent to this function, except it doesn't
+    have the special case when no permutation is specified.
     """
-    if len(input.shape) != 2:
-        raise ValueError("Only 2D tensors can be transposed")
-    return semantic.permute(input, (1, 0), _builder)
+    if not dims:
+        dims = (1, 0)
+    return semantic.permute(input, dims, _builder)
 
 
+@_tensor_member_fn
 @builtin
-def permute(input, dims, _builder=None):
+def permute(input, *dims, _builder=None):
     """
     Permutes the dimensions of a tensor.
 
     :param input: The input tensor.
-    :type input:
+    :type input: Block
     :param dims: The desired ordering of dimensions.  For example,
         :code:`(2, 1, 0)` reverses the order dims in a a 3D tensor.
-    :type dims: Tuple[int]
+
+    :code:`dims` can be passed as a tuple or as individual parameters: ::
+
+        # These are equivalent
+        permute(x, (2, 1, 0))
+        permute(x, 2, 1, 0)
+
+    :py:func:`trans` is equivalent to this function, except when
+    :code:`dims` is empty, it tries to do a (1,0) permutation.
     """
+    dims = _unwrap_iterable(dims)
     return semantic.permute(input, dims, _builder)
 
 
@@ -986,11 +1234,17 @@ def cat(input, other, can_reorder=False, _builder=None):
 
 @builtin
 def _experimental_join(a, b, _builder=None):
+    """Forwards to core.join for temporary backwards compat."""
+    return join(a, b, _builder)
+
+
+@builtin
+def join(a, b, _builder=None):
     """
     Join the given tensors in a new, minor dimension.
 
     For example, given two tensors of shape (4,8), produces a new tensor of
-    shape (4,8,2).
+    shape (4,8,2).  Given two scalars, returns a tensor of shape (2).
 
     The two inputs are broadcasted to be the same shape.
 
@@ -1008,13 +1262,26 @@ def _experimental_join(a, b, _builder=None):
     return semantic.join(a, b, _builder)
 
 
+@_tensor_member_fn
 @builtin
-def _experimental_split(a, _builder=None):
+def _experimental_split(a, _builder=None, _generator=None) -> tuple[tensor, tensor]:
+    """Forwards to core.split for temporary backwards compat."""
+    return split(a, _builder, _generator)
+
+
+@jit
+def _take_first(a, b):
+    return a
+
+
+@_tensor_member_fn
+@builtin
+def split(a, _builder=None, _generator=None) -> tuple[tensor, tensor]:
     """
     Split a tensor in two along its last dim, which must have size 2.
 
     For example, given a tensor of shape (4,8,2), produces two tensors of shape
-    (4,8).
+    (4,8).  Given a tensor of shape (2), returns two scalars.
 
     If you want to split into more than two pieces, you can use multiple calls
     to this function (probably plus calling reshape).  This reflects the
@@ -1025,37 +1292,62 @@ def _experimental_split(a, _builder=None):
     :param a: The tensor to split.
     :type a: Tensor
     """
-    return semantic.split(a, _builder)
+    # If len(a.shape) == 1, i.e. a.shape == [2], we should return two scalars.
+    # But semantic.split can only handle returning tensors.  Work around this by
+    # expanding the input to shape [1,2] and then reducing the result.
+    was_rank_1 = len(a.shape) == 1
+    if was_rank_1:
+        a = semantic.expand_dims(a, 0, _builder)
+
+    out_lhs, out_rhs = semantic.split(a, _builder)
+
+    if was_rank_1:
+        # Currently `reduce` is the best way to convert a tensor of shape [1] to a scalar.
+        out_lhs = cast(tensor, reduce(out_lhs, None, _take_first, _builder=_builder, _generator=_generator))
+        out_rhs = cast(tensor, reduce(out_rhs, None, _take_first, _builder=_builder, _generator=_generator))
+
+    return out_lhs, out_rhs
 
 
+@_tensor_member_fn
 @builtin
-def view(input, shape, _builder=None):
+def view(input, *shape, _builder=None):
     """
     Returns a tensor with the same elements as `input` but a different shape.
     The order of the elements may not be preserved.
 
     :param input: The input tensor.
-    :type input:
+    :type input: Block
     :param shape: The desired shape.
-    :type shape: Tuple[int]
 
+    :code:`shape` can be passed as a tuple or as individual parameters: ::
+
+        # These are equivalent
+        view(x, (32, 32))
+        view(x, 32, 32)
     """
-    shape = _shape_check_impl(shape)
+    shape = _shape_check_impl(_unwrap_iterable(shape))
     return semantic.view(input, shape, _builder)
 
 
+@_tensor_member_fn
 @builtin
-def reshape(input, shape, _builder=None):
+def reshape(input, *shape, _builder=None):
     """
     Returns a tensor with the same number of elements as input but with the
     provided shape.
 
     :param input: The input tensor.
-    :type input:
+    :type input: Block
     :param shape: The new shape.
-    :type shape: Tuple[int]
+
+    :code:`shape ` can be passed as a tuple or as individual parameters: ::
+
+        # These are equivalent
+        reshape(x, (32, 32))
+        reshape(x, 32, 32)
     """
-    shape = _shape_check_impl(shape)
+    shape = _shape_check_impl(_unwrap_iterable(shape))
     return semantic.reshape(input, shape, _builder)
 
 
@@ -1066,6 +1358,7 @@ def _wrap_axis(axis, ndim):
     return axis if axis >= 0 else axis + ndim
 
 
+@_tensor_member_fn
 @builtin
 def expand_dims(input, axis, _builder=None):
     """
@@ -1080,6 +1373,7 @@ def expand_dims(input, axis, _builder=None):
     :type axis: int | Sequence[int]
 
     """
+    input = _to_tensor(input, _builder)
     axis = _constexpr_to_value(axis)
     axes = list(axis) if isinstance(axis, Sequence) else [axis]
     new_ndim = len(input.shape) + len(axes)
@@ -1127,22 +1421,27 @@ def load(pointer, mask=None, other=None, boundary_check=tuple(), padding_option=
          eviction_policy="", volatile=False, _builder=None):
     """
     Return a tensor of data whose values are loaded from memory at location defined by `pointer`:
-        (1) `pointer` could be a single element pointer, then a scalar will be loaded
 
-            - `mask` and `other` must be scalar too
-            - `other` is implicitly typecast to `pointer.dtype.element_ty`
-            - `boundary_check` and `padding_option` must be empty
+        (1) If `pointer` is a single element pointer, a scalar is be loaded.  In
+            this case:
 
-        (2) `pointer` could be element-wise tensor of pointers, in which case:
+            - `mask` and `other` must also be scalars,
+            - `other` is implicitly typecast to `pointer.dtype.element_ty`, and
+            - `boundary_check` and `padding_option` must be empty.
 
-            - `mask` and `other` are implicitly broadcast to `pointer.shape`
-            - `other` is implicitly typecast to `pointer.dtype.element_ty`
-            - `boundary_check` and `padding_option` must be empty
+        (2) If `pointer` is an N-dimensional tensor of pointers, an
+            N-dimensional tensor is loaded.  In this case:
 
-        (3) `pointer` could be a block pointer defined by `make_block_ptr`, in which case:
+            - `mask` and `other` are implicitly broadcast to `pointer.shape`,
+            - `other` is implicitly typecast to `pointer.dtype.element_ty`, and
+            - `boundary_check` and `padding_option` must be empty.
 
-            - `mask` and `other` must be None
-            - `boundary_check` and `padding_option` can be specified to control the behavior of out-of-bound access
+        (3) If `pointer` is a block pointer defined by `make_block_ptr`, a
+            tensor is loaded.  In this case:
+
+            - `mask` and `other` must be None, and
+            - `boundary_check` and `padding_option` can be specified to control
+               the behavior of out-of-bound access.
 
     :param pointer: Pointer to the data to be loaded
     :type pointer: `triton.PointerType`, or block of `dtype=triton.PointerType`
@@ -1174,24 +1473,29 @@ def load(pointer, mask=None, other=None, boundary_check=tuple(), padding_option=
                          volatile, _builder)
 
 
+@_tensor_member_fn
 @builtin
 def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="", _builder=None):
     """
-    Store a tensor of data into memory locations defined by `pointer`:
-        (1) `pointer` could be a single element pointer, then a scalar will be stored
+    Store a tensor of data into memory locations defined by `pointer`.
 
-            - `mask` must be scalar too
-            - `boundary_check` and `padding_option` must be empty
+        (1) If `pointer` is a single element pointer, a scalar is stored.  In
+            this case:
 
-        (2) `pointer` could be element-wise tensor of pointers, in which case:
+            - `mask` must also be scalar, and
+            - `boundary_check` and `padding_option` must be empty.
 
-            - `mask` is implicitly broadcast to `pointer.shape`
-            - `boundary_check` must be empty
+        (2) If `pointer` is an N-dimensional tensor of pointers, an
+            N-dimensional block is stored.  In this case:
 
-        (3) or `pointer` could be a block pointer defined by `make_block_ptr`, in which case:
+            - `mask` is implicitly broadcast to `pointer.shape`, and
+            - `boundary_check` must be empty.
 
-            - `mask` must be None
-            - `boundary_check` can be specified to control the behavior of out-of-bound access
+        (3) If `pointer` is a block pointer defined by `make_block_ptr`, a block
+            of data is stored.  In this case:
+
+            - `mask` must be None, and
+            - `boundary_check` can be specified to control the behavior of out-of-bound access.
 
     `value` is implicitly broadcast to `pointer.shape` and typecast to `pointer.dtype.element_ty`.
 
@@ -1232,8 +1536,9 @@ def make_block_ptr(base: tensor, shape, strides, offsets, block_shape, order, _b
     return semantic.make_block_ptr(base, shape, strides, offsets, block_shape, order, _builder)
 
 
+@_tensor_member_fn
 @builtin
-def advance(base: tensor, offsets, _builder=None):
+def advance(base, offsets, _builder=None):
     """
     Advance a block pointer
 
@@ -1278,6 +1583,7 @@ def _add_atomic_docstr(name: str, has_cmp: bool = False) -> Callable[[T], T]:
     return _decorator
 
 
+@_tensor_member_fn
 @builtin
 @_add_atomic_docstr("compare-and-swap", has_cmp=True)
 def atomic_cas(pointer, cmp, val, sem=None, scope=None, _builder=None):
@@ -1288,6 +1594,7 @@ def atomic_cas(pointer, cmp, val, sem=None, scope=None, _builder=None):
     return semantic.atomic_cas(pointer, cmp, val, sem, scope, _builder)
 
 
+@_tensor_member_fn
 @builtin
 @_add_atomic_docstr("exchange")
 def atomic_xchg(pointer, val, mask=None, sem=None, scope=None, _builder=None):
@@ -1297,6 +1604,7 @@ def atomic_xchg(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     return semantic.atomic_xchg(pointer, val, mask, sem, scope, _builder)
 
 
+@_tensor_member_fn
 @builtin
 @_add_atomic_docstr("add")
 def atomic_add(pointer, val, mask=None, sem=None, scope=None, _builder=None):
@@ -1306,6 +1614,7 @@ def atomic_add(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     return semantic.atomic_add(pointer, val, mask, sem, scope, _builder)
 
 
+@_tensor_member_fn
 @builtin
 @_add_atomic_docstr("max")
 def atomic_max(pointer, val, mask=None, sem=None, scope=None, _builder=None):
@@ -1315,6 +1624,7 @@ def atomic_max(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     return semantic.atomic_max(pointer, val, mask, sem, scope, _builder)
 
 
+@_tensor_member_fn
 @builtin
 @_add_atomic_docstr("min")
 def atomic_min(pointer, val, mask=None, sem=None, scope=None, _builder=None):
@@ -1324,6 +1634,7 @@ def atomic_min(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     return semantic.atomic_min(pointer, val, mask, sem, scope, _builder)
 
 
+@_tensor_member_fn
 @builtin
 @_add_atomic_docstr("logical and")
 def atomic_and(pointer, val, mask=None, sem=None, scope=None, _builder=None):
@@ -1333,6 +1644,7 @@ def atomic_and(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     return semantic.atomic_and(pointer, val, mask, sem, scope, _builder)
 
 
+@_tensor_member_fn
 @builtin
 @_add_atomic_docstr("logical or")
 def atomic_or(pointer, val, mask=None, sem=None, scope=None, _builder=None):
@@ -1342,6 +1654,7 @@ def atomic_or(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     return semantic.atomic_or(pointer, val, mask, sem, scope, _builder)
 
 
+@_tensor_member_fn
 @builtin
 @_add_atomic_docstr("logical xor")
 def atomic_xor(pointer, val, mask=None, sem=None, scope=None, _builder=None):
@@ -1417,6 +1730,50 @@ def fdiv(x, y, ieee_rounding=False, _builder=None):
 
 
 @builtin
+def minimum(x, y, propagate_nan: constexpr = PropagateNan.NONE, _builder=None):
+    """
+    Computes the element-wise minimum of :code:`x` and :code:`y`.
+
+    :param x: the first input tensor
+    :type x: Block
+    :param y: the second input tensor
+    :type y: Block
+    :param propagate_nan: whether to propagate NaN values.
+    :type propagate_nan: tl.PropagateNan
+
+    .. seealso:: :class:`tl.PropagateNan`
+    """
+    x = _to_tensor(x, _builder)
+    y = _to_tensor(y, _builder)
+    x = _promote_bfloat16_to_float32(x, _builder=_builder)
+    y = _promote_bfloat16_to_float32(y, _builder=_builder)
+    propagate_nan = _constexpr_to_value(propagate_nan)
+    return semantic.minimum(x, y, propagate_nan, _builder)
+
+
+@builtin
+def maximum(x, y, propagate_nan: constexpr = PropagateNan.NONE, _builder=None):
+    """
+    Computes the element-wise maximum of :code:`x` and :code:`y`.
+
+    :param x: the first input tensor
+    :type x: Block
+    :param y: the second input tensor
+    :type y: Block
+    :param propagate_nan: whether to propagate NaN values.
+    :type propagate_nan: tl.PropagateNan
+
+    .. seealso:: :class:`tl.PropagateNan`
+    """
+    x = _to_tensor(x, _builder)
+    y = _to_tensor(y, _builder)
+    x = _promote_bfloat16_to_float32(x, _builder=_builder)
+    y = _promote_bfloat16_to_float32(y, _builder=_builder)
+    propagate_nan = _constexpr_to_value(propagate_nan)
+    return semantic.maximum(x, y, propagate_nan, _builder)
+
+
+@builtin
 def clamp(x, min, max, propagate_nan: constexpr = PropagateNan.NONE, _builder=None):
     """
     Clamps the input tensor :code:`x` within the range [min, max].
@@ -1461,6 +1818,7 @@ def _add_math_1arg_docstr(name: str) -> Callable[[T], T]:
     return _decorator
 
 
+@_tensor_member_fn
 @builtin
 @_add_math_1arg_docstr("exponential")
 def exp(x, _builder=None):
@@ -1468,6 +1826,7 @@ def exp(x, _builder=None):
     return semantic.exp(x, _builder)
 
 
+@_tensor_member_fn
 @builtin
 @_add_math_1arg_docstr("natural logarithm")
 def log(x, _builder=None):
@@ -1475,6 +1834,7 @@ def log(x, _builder=None):
     return semantic.log(x, _builder)
 
 
+@_tensor_member_fn
 @builtin
 @_add_math_1arg_docstr("cosine")
 def cos(x, _builder=None):
@@ -1482,6 +1842,7 @@ def cos(x, _builder=None):
     return semantic.cos(x, _builder)
 
 
+@_tensor_member_fn
 @builtin
 @_add_math_1arg_docstr("sine")
 def sin(x, _builder=None):
@@ -1489,6 +1850,7 @@ def sin(x, _builder=None):
     return semantic.sin(x, _builder)
 
 
+@_tensor_member_fn
 @builtin
 @_add_math_1arg_docstr("square root")
 def sqrt(x, _builder=None):
@@ -1496,6 +1858,7 @@ def sqrt(x, _builder=None):
     return semantic.sqrt(x, _builder)
 
 
+@_tensor_member_fn
 @builtin
 @_add_math_1arg_docstr("absolute value")
 def abs(x, _builder=None):
@@ -1537,6 +1900,7 @@ def _insertion_guard(builder):
     builder.restore_insertion_point(ip)
 
 
+@_tensor_member_fn
 @builtin
 def reduce(input, axis, combine_fn, keep_dims=False, _builder=None, _generator=None):
     """Applies the combine_fn to all elements in :code:`input` tensors along the provided :code:`axis`
@@ -1631,17 +1995,19 @@ def _add_scan_docstr(name: str, return_indices_arg: str = None, tie_break_arg: s
     return _decorator
 
 
+@_tensor_member_fn
 @builtin
-def associative_scan(input, axis, combine_fn, _builder=None, _generator=None):
+def associative_scan(input, axis, combine_fn, reverse=False, _builder=None, _generator=None):
     """Applies the combine_fn to each elements with a carry in :code:`input` tensors along the provided :code:`axis` and update the carry
 
     :param input: the input tensor, or tuple of tensors
     :param axis: the dimension along which the reduction should be done
     :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit)
+    :param reverse: apply the associative scan in the reverse direction along axis.
 
     """
     if isinstance(input, tensor):
-        return associative_scan((input, ), axis, combine_fn, _builder=_builder, _generator=_generator)[0]
+        return associative_scan((input, ), axis, combine_fn, reverse, _builder=_builder, _generator=_generator)[0]
 
     def make_combine_region(scan_op):
         in_scalar_tys = [t.type.scalar for t in input]
@@ -1662,9 +2028,10 @@ def associative_scan(input, axis, combine_fn, _builder=None, _generator=None):
     axis = _constexpr_to_value(axis)
     if axis is not None:
         axis = _wrap_axis(axis, len(input[0].shape))
-    return semantic.associative_scan(input, axis, make_combine_region, _builder)
+    return semantic.associative_scan(input, axis, make_combine_region, reverse, _builder)
 
 
+@_tensor_member_fn
 @builtin
 def histogram(input, num_bins, _builder=None, _generator=None):
     """computes an histogram based on input tensor with num_bins bins the bins have a width of 1 and start at 0.

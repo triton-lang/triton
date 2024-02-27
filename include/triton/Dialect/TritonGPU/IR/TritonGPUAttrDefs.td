@@ -75,7 +75,7 @@ def CTALayoutAttr : TritonGPU_Attr<"CTALayout", "cta_layout"> {
 
   let description = [{
 Describes how blocks are distributed among the cooperate thread arrays (aka
-CTAs, aka thread blocks) in a cooperate thread group (aka CTA, aka thread group
+CTAs, aka thread blocks) in a cooperate thread group (aka CTG, aka thread group
 cluster).  CGAs were introduced in Hopper (sm90).
 
 The tensor is divided up into CTASplitNum pieces, which are distributed among
@@ -162,7 +162,12 @@ different cuda threads in the programs, via shared memory. In other words,
 for all indices i \in R^d, \mathcal{L}(i) = {0, 1, ..., 32*num_warps - 1}.
 
 In order to avoid shared memory bank conflicts, elements may be swizzled
-in memory. For example, a swizzled row-major layout could store its data
+in memory. Swizzling is defined with three parameters: vec, perPhase and
+maxPhase. Vec defines group of the elements that are accessed contiguously.
+Every perPhase number of rows of data the elements will be rotated right by
+vec, so in phase P the 0th element of the row is at the position P*vec.
+maxPhase defines after how many phases the rotation is reset.
+For example, a swizzled row-major layout could store its data
 as follows:
 
 A_{0, 0}  A_{0, 1}  A_{0, 2}  A_{0, 3} ...   [phase 0] \ per_phase = 2
@@ -791,6 +796,61 @@ The data will be distributed between threads as follows:
   let hasCustomAssemblyFormat = 1;
 }
 
+def AMDWmmaEncodingAttr : DistributedEncoding<"AMDWmmaEncoding", "amd_wmma_encoding", [MmaEncodingTrait]> {
+  let mnemonic = "amd_wmma";
+
+  let description = [{
+An encoding for tensors that have been produced by WMMA instructions,
+available on RDNA 3.
+A `warpsPerCTA` parameter characterizes data distribution between waves.
+An important limitation of WMMA for layout is a shape for tiles proccessed
+by a single wave. It is [16, 16].
+This encoding assumes specific access to matrix elements by threads.
+Example:
+Suppose we have a tensor with shape [32, 48], `warpsPerCTA` set to [2, 3].
+
+    wave 0 [16, 16]           wave 1 [16, 16]           wave 2 [16, 16]
+-----------/\----------   -----------/\----------   -----------/\----------
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+...                       ...                       ...
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+
+    wave 3 [16, 16]           wave 4 [16, 16]           wave 5 [16, 16]
+-----------/\----------   -----------/\----------   -----------/\----------
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+...                       ...                       ...
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+  }];
+
+  let parameters = (
+    ins
+    ArrayRefParameter<"unsigned">:$warpsPerCTA__,
+    "CTALayoutAttr":$CTALayout
+  );
+
+  let hasCustomAssemblyFormat = 1;
+
+  let extraClassDeclaration = extraDistributedDeclaration # [{
+    bool supportReduction() const {
+      return true;
+    }
+    SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx) const;
+    SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int opIdx) const;
+    unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
+    SmallVector<int64_t> getWMMAElemsPerInstrForOperands() const;
+    SmallVector<int64_t> getWMMARepForOperands(ArrayRef<int64_t> operandShape,
+                                      Type elemType, int kWidth, int opIdx) const;
+    static SmallVector<unsigned> getMNKDimPerWMMAInstr();
+  }];
+}
 
 def NvidiaMmaEncodingAttr : DistributedEncoding<"NvidiaMmaEncoding", "nvidia_mma_encoding", [MmaEncodingTrait]> {
   let mnemonic = "nvidia_mma";

@@ -1,9 +1,7 @@
 add_triton_library(TritonNVIDIAGPUToLLVM
-    ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandMMAv1.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandMMAv2.cpp
     ConvertLayoutOpToLLVM.cpp
-    DotOpToLLVM/FMA.cpp
     DotOpToLLVM/MMAv1.cpp
     DotOpToLLVM/MMAv2.cpp
     DotOpToLLVM/WGMMA.cpp
@@ -14,15 +12,11 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     BarrierOpToLLVM.cpp
     TritonGPUToLLVM.cpp
     DecomposeUnsupportedConversions.cpp
-    AssertOpToLLVM.cpp
     PrintOpToLLVM.cpp
-    MemoryOpToLLVM.cpp
     ControlFlowOpToLLVM.cpp
-    MakeRangeOpToLLVM.cpp
     SPMDOpToLLVM.cpp
     ReduceOpToLLVM.cpp
     ScanOpToLLVM.cpp
-    ViewOpToLLVM.cpp
     TensorPtrOpsToLLVM.cpp
     ClusterOpsToLLVM.cpp
     AllocateSharedMemory.cpp
@@ -32,4 +26,7 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     DEPENDS
     TritonNVIDIAGPUConversionPassIncGen
     NVGPUAttrDefsIncGen
+
+    LINK_LIBS PUBLIC
+    TritonGPUToLLVM
 )

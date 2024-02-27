@@ -1,5 +1,5 @@
-#include "Utility.h"
 #include "PatternTritonGPUOpToLLVM.h"
+#include "Utility.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Analysis/Utility.h"
 
@@ -186,7 +186,7 @@ public:
 };
 } // namespace
 
-void mlir::triton::populateHistogramOpToLLVMPatterns(
+void mlir::triton::NVIDIA::populateHistogramOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<HistogramOpConversion>(typeConverter, benefit);

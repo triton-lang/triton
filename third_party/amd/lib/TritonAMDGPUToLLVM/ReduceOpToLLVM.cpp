@@ -195,7 +195,7 @@ private:
     unsigned srcElems = getTotalElemsPerThread(operandType);
     auto *combineOp = &op.getCombineOp();
     auto srcIndices =
-        emitIndices(op.getLoc(), rewriter, helper.getSrcLayout(), operandType);
+        emitIndices(op.getLoc(), rewriter, helper.getSrcLayout(), operandType, true);
     // reduce within threads
     for (unsigned i = 0; i < srcElems; ++i) {
       SmallVector<unsigned> key = offset[i];
@@ -354,10 +354,11 @@ private:
     triton::ReduceOp op = helper.getOperation();
     Location loc = op.getLoc();
     Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = i32_val(32);
+    auto srcLayout = helper.getSrcLayout();
+    unsigned wavefront_size = triton::gpu::getWarpSize(srcLayout);
+    Value warpSize = i32_val(wavefront_size);
     Value warpId = udiv(threadId, warpSize);
     Value laneId = urem(threadId, warpSize);
-    auto srcLayout = helper.getSrcLayout();
     auto srcShape = helper.getSrcShape();
     unsigned axis = op.getAxis();
     auto smemShape = helper.getScratchConfig();
@@ -406,7 +407,8 @@ private:
     Location loc = op.getLoc();
 
     Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = i32_val(32);
+    unsigned wavefront_size = triton::gpu::getWarpSize(srcLayout);
+    Value warpSize = i32_val(wavefront_size);
     Value laneId = urem(threadId, warpSize);
     Value zero = i32_val(0);
 
@@ -479,7 +481,7 @@ private:
         // nd-tensor where n >= 1
         auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
         unsigned resultElems = getTotalElemsPerThread(resultTy);
-        auto resultIndices = emitIndices(loc, rewriter, resultLayout, resultTy);
+        auto resultIndices = emitIndices(loc, rewriter, resultLayout, resultTy, true);
         assert(resultIndices.size() == resultElems);
 
         SmallVector<Value> resultVals(resultElems);

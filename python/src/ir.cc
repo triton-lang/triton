@@ -1191,11 +1191,11 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_join",
            [](TritonOpBuilder &self, Value &a, Value &b) -> Value {
-             return self.create<ExperimentalJoinOp>(a, b);
+             return self.create<JoinOp>(a, b);
            })
       .def("create_split",
            [](TritonOpBuilder &self, Value &a) -> std::vector<Value> {
-             auto op = self.create<ExperimentalSplitOp>(a);
+             auto op = self.create<SplitOp>(a);
              return std::vector<Value>(op->result_begin(), op->result_end());
            })
       // Implements tl.trans and tl.permute.
@@ -1332,8 +1332,10 @@ void init_triton_ir(py::module &&m) {
              return self.create<ReduceReturnOp>(return_values);
            })
       .def("create_scan",
-           [](TritonOpBuilder &self, std::vector<Value> operands, int axis)
-               -> OpState { return self.create<ScanOp>(operands, axis); })
+           [](TritonOpBuilder &self, std::vector<Value> operands, int axis,
+              bool reverse) -> OpState {
+             return self.create<ScanOp>(operands, axis, reverse);
+           })
       .def("create_scan_ret",
            [](TritonOpBuilder &self, py::args args) -> OpState {
              llvm::SmallVector<Value> return_values;
@@ -1423,26 +1425,33 @@ void init_triton_ir(py::module &&m) {
       .def("enable_debug",
            [](PassManager &self) {
              auto *context = self.getContext();
-             context->printOpOnDiagnostic(true);
-             context->printStackTraceOnDiagnostic(true);
-             context->disableMultithreading();
-             context->getDiagEngine().registerHandler([](Diagnostic &diag) {
-               llvm::outs() << diag << "\n";
-               return success();
-             });
-
-             if (!triton::tools::getBoolEnv("MLIR_ENABLE_DUMP"))
-               return;
-             auto printingFlags = OpPrintingFlags();
-             printingFlags.elideLargeElementsAttrs(16);
-             printingFlags.enableDebugInfo();
-             auto print_always = [](Pass *, Operation *) { return true; };
-             self.enableIRPrinting(
-                 /*shouldPrintBeforePass=*/print_always,
-                 /*shouldPrintAfterPass=*/print_always,
-                 /*printModuleScope=*/true,
-                 /*printAfterOnlyOnChange=*/false,
-                 /*printAfterOnlyOnFailure*/ true, llvm::dbgs(), printingFlags);
+             bool haveDiagnostics =
+                 ::triton::tools::getBoolEnv("MLIR_ENABLE_DIAGNOSTICS");
+             bool haveDump = ::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
+             if (haveDiagnostics || haveDump) {
+               context->disableMultithreading();
+             }
+             if (haveDiagnostics) {
+               context->printOpOnDiagnostic(true);
+               context->printStackTraceOnDiagnostic(true);
+               context->getDiagEngine().registerHandler([](Diagnostic &diag) {
+                 llvm::outs() << diag << "\n";
+                 return success();
+               });
+             }
+             if (haveDump) {
+               auto printingFlags = OpPrintingFlags();
+               printingFlags.elideLargeElementsAttrs(16);
+               printingFlags.enableDebugInfo();
+               auto printAlways = [](Pass *, Operation *) { return true; };
+               self.enableIRPrinting(
+                   /*shouldPrintBeforePass=*/printAlways,
+                   /*shouldPrintAfterPass=*/printAlways,
+                   /*printModuleScope=*/true,
+                   /*printAfterOnlyOnChange=*/false,
+                   /*printAfterOnlyOnFailure*/ true, llvm::dbgs(),
+                   printingFlags);
+             }
            })
       .def("run", [](PassManager &self, ModuleOp &mod) {
         // TODO: maybe dump module to file and print error for better
@@ -1455,6 +1464,9 @@ void init_triton_ir(py::module &&m) {
           makeReproducer(anchorName, passes, op, reproducerPath);
         }
 
+        if (triton::tools::getBoolEnv("TRITON_ENABLE_LLVM_DEBUG")) {
+          ::llvm::DebugFlag = true;
+        }
         if (failed(self.run(mod.getOperation())))
           throw std::runtime_error("PassManager::run failed");
       });

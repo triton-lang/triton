@@ -1,5 +1,7 @@
-#include "Utility.h"
 #include "PatternTritonGPUOpToLLVM.h"
+#include "Utility.h"
+
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -8,10 +10,6 @@ using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
-
-LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                            const LLVMTypeConverter *typeConverter,
-                            ConversionPatternRewriter &rewriter);
 
 LogicalResult convertMMA884(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                             const LLVMTypeConverter *typeConverter,
@@ -184,9 +182,9 @@ struct DotWaitOpConversion
 };
 } // namespace
 
-void mlir::triton::populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                               RewritePatternSet &patterns,
-                                               PatternBenefit benefit) {
+void mlir::triton::NVIDIA::populateDotOpToLLVMPatterns(
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    PatternBenefit benefit) {
   patterns.add<DotOpConversion>(typeConverter, benefit);
   patterns.add<DotAsyncOpConversion>(typeConverter, benefit);
   patterns.add<DotWaitOpConversion>(typeConverter, benefit);

@@ -160,6 +160,7 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_to_llvmir(pm)
         pm.run(mod)
         pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_cf_to_llvmir(pm)
         passes.convert.add_arith_to_llvmir(pm)
@@ -199,6 +200,10 @@ class HIPBackend(BaseBackend):
         metadata["name"] = names[0]
         # llvm -> hsaco
         hsaco = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion, True)
+        if os.environ.get("AMDGCN_ENABLE_DUMP", "0") == "1":
+            hsaco_str = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion, False)
+            print("// -----// AMDGCN Dump //----- //")
+            print(hsaco_str)
         import subprocess
         rocm_path = HIPBackend.path_to_rocm_lld()
         with tempfile.NamedTemporaryFile() as tmp_out:

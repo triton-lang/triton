@@ -605,7 +605,7 @@ struct InsertSliceOpConversion
     auto smemBase = gep(elemPtrTy, elemTy, smemObj.base, offset);
 
     auto llSrc = adaptor.getSource();
-    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy);
+    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy, true);
     storeDistributedToShared(src, llSrc, srcStrides, srcIndices, dst, smemBase,
                              elemTy, loc, rewriter);
     // Barrier is not necessary.

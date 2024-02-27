@@ -180,12 +180,47 @@ def parse(full_name, ext, context):
         return Path(full_name).read_bytes()
 
 
+def filter_traceback(e: BaseException):
+    """
+    Removes code_generator.py and related files from tracebacks.
+
+    These are uninteresting to the user -- "just show me *my* code!"
+    """
+    if e.__cause__ is not None:
+        filter_traceback(e.__cause__)
+    if e.__context__ is not None:
+        filter_traceback(e.__context__)
+
+    # If a user has a file that matches one of these, they're out of luck.
+    BAD_FILES = [
+        "/triton/compiler/code_generator.py",
+        "/ast.py",
+    ]
+
+    tb = e.__traceback__
+    frames = []
+    while tb is not None:
+        if not any(f for f in BAD_FILES if tb.tb_frame.f_code.co_filename.endswith(f)):
+            frames.append(tb)
+        tb = tb.tb_next
+
+    for (cur_frame, next_frame) in zip(frames, frames[1:]):
+        cur_frame.tb_next = next_frame
+
+    if not frames:
+        e.__traceback__ = None
+    else:
+        frames[-1].tb_next = None
+        e.__traceback__ = frames[0]
+
+
 def compile(src, target=None, options=None):
     if target is None:
         target = driver.active.get_current_target()
     backend = make_backend(target)
+    ir_source = not isinstance(src, ASTSource)
     # create backend
-    if not isinstance(src, ASTSource):
+    if ir_source:
         assert isinstance(src, str), "source must be either AST or a filepath"
         src = IRSource(src)
     extra_options = src.parse_options()
@@ -218,10 +253,17 @@ def compile(src, target=None, options=None):
     stages = dict()
     backend.add_stages(stages, options)
     first_stage = list(stages.keys()).index(src.ext)
+    # when the source is an IR file, don't apply the passes related to this stage. This makes it easier to write IR level tests.
+    if ir_source:
+        first_stage += 1
     context = ir.context()
     ir.load_dialects(context)
     backend.load_dialects(context)
-    module = src.make_ir(options, context)
+    try:
+        module = src.make_ir(options, context)
+    except Exception as e:
+        filter_traceback(e)
+        raise
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         ir_filename = f"{src.name}.{ext}"

@@ -33,11 +33,10 @@ struct PipelineOpInfo {
   int stage = -1;
   Operation *use = nullptr;
 
-  // Blocked encoding is used for loads feeding into other loads
+  // Layout of the data in the shared memory.
+  ttg::SharedEncodingAttr sharedEncoding = nullptr;
+  // Blocked encoding is used for loads feeding into other loads.
   ttg::BlockedEncodingAttr blockedEncoding = nullptr;
-  // Dot operand encoding is used for loads feeding into dot ops
-  ttg::DotOperandEncodingAttr dotOperandEncoding = nullptr;
-  bool needTrans = false;
 };
 
 }; // namespace
@@ -130,40 +129,57 @@ createAsyncLoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
 }
 
 // If all the transitive uses of the given value have are used by a convert to
-// the same dot operand encoding, return the encoding. Otherwise return nullptr.
-// Negate `needTrans` when a TransOp is seen on the transitive use chain.
-static ttg::DotOperandEncodingAttr
-allTransitiveUsesHaveDotEncoding(Value val, bool &needTrans) {
-  ttg::DotOperandEncodingAttr attr;
+// the same dot operand encoding, return true and set the shared encoding that
+// needs to be used to be compatible with users' layouts.
+static bool
+allTransitiveUsesHaveDotEncoding(Value val,
+                                 ttg::SharedEncodingAttr &sharedEnc) {
+  ttg::SharedEncodingAttr attr;
   for (Operation *user : val.getUsers()) {
+    ttg::SharedEncodingAttr tempAttr;
     if (user->getNumResults() != 1)
-      return nullptr;
+      return false;
     auto tensorType = user->getResult(0).getType().dyn_cast<RankedTensorType>();
     if (!tensorType)
-      return nullptr;
-    if (isa<triton::TransOp>(user))
-      needTrans = !needTrans;
-    ttg::DotOperandEncodingAttr tempAttr;
+      return false;
     if (tensorType.getEncoding().isa<ttg::SharedEncodingAttr>()) {
-      tempAttr =
-          allTransitiveUsesHaveDotEncoding(user->getResult(0), needTrans);
+      // First time we find a shared encoding in the chain, save it and try to
+      // use it if it is compatible with the other users.
+      if (!tempAttr)
+        tempAttr = tensorType.getEncoding().cast<ttg::SharedEncodingAttr>();
+      ttg::SharedEncodingAttr nextEncoding;
+      bool hasDotEncodingUse =
+          allTransitiveUsesHaveDotEncoding(user->getResult(0), nextEncoding);
+      if (!hasDotEncodingUse)
+        return false;
     } else {
       auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(user);
       if (!convertLayout)
-        return nullptr;
-      tempAttr = convertLayout.getType()
-                     .getEncoding()
-                     .dyn_cast<ttg::DotOperandEncodingAttr>();
+        return false;
+      auto dotOpEnc = convertLayout.getType()
+                          .getEncoding()
+                          .dyn_cast<ttg::DotOperandEncodingAttr>();
+      auto srcTensorType = val.getType().cast<RankedTensorType>();
+      auto CTALayout = ttg::getCTALayout(srcTensorType.getEncoding());
+      auto order = ttg::getOrder(srcTensorType.getEncoding());
+      unsigned bitWidth =
+          srcTensorType.getElementType().getIntOrFloatBitWidth();
+      tempAttr = ttg::SharedEncodingAttr::get(
+          val.getContext(), dotOpEnc, srcTensorType.getShape(), order,
+          CTALayout, bitWidth, /*needTrans=*/false);
     }
+    // We need to check that the shared encoding needed by the users are
+    // compatible.
     if (!tempAttr || (attr != nullptr && attr != tempAttr))
-      return nullptr;
+      return false;
     attr = tempAttr;
   }
-  return attr;
+  sharedEnc = attr;
+  return true;
 }
 
-static std::optional<std::pair<ttg::DotOperandEncodingAttr, bool>>
-loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3) {
+bool loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3,
+                    ttg::SharedEncodingAttr &enc) {
   if (loadOp.getResult().hasOneUse()) {
     Operation *use = *loadOp.getResult().getUsers().begin();
     if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
@@ -183,76 +199,64 @@ loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3) {
             // TODO: remove this constraint once the LoadOp supports transpose
             // fusion
             hasMMAV3 = true;
-            return std::make_pair(nullptr, false);
+            return true;
           }
         }
       }
     }
   }
-  bool needTrans = false;
-  ttg::DotOperandEncodingAttr attr =
-      allTransitiveUsesHaveDotEncoding(loadOp.getResult(), needTrans);
-  if (!attr)
-    return std::nullopt;
-  return std::make_pair(attr, needTrans);
+  if (allTransitiveUsesHaveDotEncoding(loadOp.getResult(), enc))
+    return true;
+  return false;
 };
-
-// TODO pawel: sync this encoding selection with Coalesce, perhaps move
-// to a common place.
-static RankedTensorType getTensorType(const Value &val) {
-  auto valType = val.getType();
-  if (valType.isa<triton::PointerType>())
-    valType = valType.cast<triton::PointerType>().getPointeeType();
-  return valType.cast<RankedTensorType>();
-}
-
-static unsigned getElementBitWidth(const Value &val) {
-  auto tensorType = getTensorType(val);
-
-  auto typeForMem = tensorType.getElementType().isa<triton::PointerType>()
-                        ? tensorType.getElementType()
-                              .cast<triton::PointerType>()
-                              .getPointeeType()
-                        : tensorType.getElementType();
-  return typeForMem.getIntOrFloatBitWidth();
-}
-
-template <class T> static SmallVector<unsigned, 4> argSort(const T &arr) {
-  SmallVector<unsigned, 4> ret(arr.size());
-  std::iota(ret.begin(), ret.end(), 0);
-  std::stable_sort(ret.begin(), ret.end(),
-                   [&](unsigned x, unsigned y) { return arr[x] > arr[y]; });
-  return ret;
-}
 
 static ttg::BlockedEncodingAttr
 getBlockedEncoding(tt::LoadOp loadOp, ModuleAxisInfoAnalysis &axisInfo) {
   Value src = loadOp.getPtr();
   auto ty = src.getType().cast<RankedTensorType>();
-
   auto mod = loadOp->getParentOfType<ModuleOp>();
   int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
   int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-
-  AxisInfo *valInfo = axisInfo.getAxisInfo(src);
-
-  AxisInfo::DimVectorT contiguity = valInfo->getContiguity();
+  AxisInfo::DimVectorT contiguity = axisInfo.getAxisInfo(src)->getContiguity();
   SmallVector<unsigned> order = argSort(contiguity);
-  AxisInfo::DimVectorT shapePerCTA = ttg::getShapePerCTA(ty);
-
-  unsigned elemNumBits = getElementBitWidth(src);
-  unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
-  unsigned maxMultipleBytes = valInfo->getDivisibility(order[0]);
-  unsigned maxMultiple = std::max(maxMultipleBytes / elemNumBytes, 1u);
-  unsigned maxContig =
-      std::min(valInfo->getContiguity(order[0]), shapePerCTA[order[0]]);
-  unsigned alignment = std::min(maxMultiple, maxContig);
-  unsigned currPerThread = std::min(alignment, 128 / elemNumBits);
-
+  unsigned currPerThread = getNumElementsPerThread(loadOp, order, axisInfo);
+  SmallVector<unsigned> sizePerThread(order.size(), 1);
+  sizePerThread[order[0]] = currPerThread;
   ttg::CTALayoutAttr CTALayout = ttg::getCTALayout(ty.getEncoding());
   return ttg::BlockedEncodingAttr::get(loadOp->getContext(), ty.getShape(),
-                                       currPerThread, order, numWarps,
+                                       sizePerThread, order, numWarps,
                                        threadsPerWarp, CTALayout);
+}
+
+static ttg::SharedEncodingAttr getSharedEncoding(tt::LoadOp loadOp,
+                                                 Operation *use, bool isMMAV3) {
+
+  auto ty = loadOp.getType().cast<RankedTensorType>();
+  auto CTALayout = ttg::getCTALayout(ty.getEncoding());
+  auto blockedOrder = ttg::getOrder(ty.getEncoding());
+  SmallVector<unsigned> order;
+  if (blockedOrder.size() == 3) {
+    for (unsigned i = 0; i < blockedOrder.size(); ++i) {
+      if (blockedOrder[i] == 0)
+        continue;
+      order.push_back(blockedOrder[i]);
+    }
+    order.push_back(0);
+  } else {
+    order = blockedOrder;
+  }
+  if (isa<tt::DotOp>(use)) {
+    assert(isMMAV3 && "Load used by dot op should be either MMAv3 or have a "
+                      "shared encoding already picked based on users layouts.");
+    return ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(), order,
+                                        CTALayout, ty.getElementType());
+  } else {
+    assert(!isMMAV3 && "Load used by non-dot op should not be MMAv3.");
+    // Use non-swizzled layout for loads that do not feed into dot ops.
+    // TODO: This won't be optimal for 2D tensors.
+    return ttg::SharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
+                                        CTALayout);
+  }
 }
 
 // Create a map from load ops to their distance to the nearest dot op and the
@@ -312,6 +316,16 @@ loadOpsToDistanceAndUse(scf::ForOp forOp) {
       continue;
     dfs(&op, 0, &op);
   }
+
+  // If the loop has numStages attribute, also consider pipelining other loads
+  // that are not directly used by dot ops.
+  if (forOp->hasAttr(tt::kNumStagesAttrName)) {
+    for (Operation &op : forOp.getBody()->without_terminator()) {
+      if (!isa<tt::LoadOp>(op))
+        dfs(&op, 0, &op);
+    }
+  }
+
   return loadOpToDistAndUse;
 }
 
@@ -337,77 +351,59 @@ collectOpsToPipeline(scf::ForOp forOp,
   }
   assert(maxDistance >= 0);
 
-  unsigned stagesBetweenLoads = ceil<unsigned>(numStages - 2, maxDistance + 1);
+  // Start by initializing PipelineOpInfo for users of the loads.
+  for (auto &[loadOp, distAndUse] : loadOpToDistAndUse)
+    opInfo[distAndUse.second] = PipelineOpInfo();
 
-  // Start by finding dot ops and assigning a stage for them.
-  // We cannot use forOp.walk(...) here because we only want to visit the
-  // operations in the loop body block. Nested blocks are handled separately.
-  for (Operation &op : forOp) {
-    if (auto dotOp = dyn_cast<tt::DotOp>(&op)) {
-      PipelineOpInfo dotOpInfo{
-          .stage = numStages - 1,
-      };
-      opInfo[dotOp] = dotOpInfo;
-    }
-  }
+  unsigned stagesBetweenLoads = ceil<unsigned>(numStages - 2, maxDistance + 1);
 
   // Then consider the load ops that feed into the dot ops or are used by other
   // loads.
   for (auto &[loadOp, distAndUse] : loadOpToDistAndUse) {
     PipelineOpInfo loadInfo;
-    if (isa<tt::DotOp>(loadOpToDistAndUse[loadOp].second)) {
-      std::optional<std::pair<ttg::DotOperandEncodingAttr, bool>> loadDotAttr =
-          loadDotOperand(loadOp, hasMMAV3);
-      if (!loadDotAttr.has_value())
+    bool loadIsMMAV3 = false;
+    if (isa<tt::DotOp>(distAndUse.second)) {
+      ttg::SharedEncodingAttr sharedEnc;
+      bool isLoadDotOperand = loadDotOperand(loadOp, loadIsMMAV3, sharedEnc);
+      hasMMAV3 |= loadIsMMAV3;
+      if (!isLoadDotOperand)
         continue;
-      loadInfo.dotOperandEncoding = loadDotAttr.value().first;
-      loadInfo.needTrans = loadDotAttr.value().second;
-    }
-    if (isa<tt::LoadOp>(loadOpToDistAndUse[loadOp].second)) {
+      loadInfo.sharedEncoding = sharedEnc;
+    } else {
       loadInfo.blockedEncoding = getBlockedEncoding(loadOp, axisInfoAnalysis);
     }
-    int stage =
-        (maxDistance - loadOpToDistAndUse[loadOp].first) * stagesBetweenLoads;
+    // If we haven't already assigned a layout do it now.
+    if (!loadInfo.sharedEncoding)
+      loadInfo.sharedEncoding =
+          getSharedEncoding(loadOp, distAndUse.second, loadIsMMAV3);
+    int stage = (maxDistance - distAndUse.first) * stagesBetweenLoads;
     loadInfo.stage = stage;
-    loadInfo.use = loadOpToDistAndUse[loadOp].second;
+    loadInfo.use = distAndUse.second;
     opInfo[loadOp] = loadInfo;
   };
+
+  // Last, find load users and assigning a stage for them.
+  // We cannot use forOp.walk(...) here because we only want to visit the
+  // operations in the loop body block. Nested blocks are handled separately.
+  for (Operation &op : forOp) {
+    auto iter = opInfo.find(&op);
+    if (iter != opInfo.end() && iter->second.stage == -1) {
+      assert(!isa<tt::LoadOp>(iter->first));
+      PipelineOpInfo useOpInfo{
+          .stage = numStages - 1,
+      };
+      iter->second = useOpInfo;
+    }
+  }
 
   return true;
 }
 
 // Create an allocation that can hold distance number of loadOp shapes.
 static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
-                         ttg::DotOperandEncodingAttr dotOpEnc,
-                         unsigned distance, bool needTrans) {
+                         ttg::SharedEncodingAttr sharedEnc, unsigned distance) {
   OpBuilder builder(forOp);
   auto ty = loadOp.getType().cast<RankedTensorType>();
-  Attribute sharedEnc;
-  auto CTALayout = ttg::getCTALayout(ty.getEncoding());
-  auto blockedOrder = ttg::getOrder(ty.getEncoding());
-  SmallVector<unsigned> sharedOrder;
-  if (blockedOrder.size() == 3) {
-    for (unsigned i = 0; i < blockedOrder.size(); ++i) {
-      if (blockedOrder[i] == 0)
-        continue;
-      sharedOrder.push_back(blockedOrder[i]);
-    }
-    sharedOrder.push_back(0);
-  } else {
-    sharedOrder = blockedOrder;
-  }
-  ArrayRef<unsigned> order = sharedOrder;
-  if (dotOpEnc) {
-    unsigned bitWidth = ty.getElementType().getIntOrFloatBitWidth();
-    // set needTrans to avoid unnecessary conversion between shared encodings.
-    sharedEnc =
-        ttg::SharedEncodingAttr::get(ty.getContext(), dotOpEnc, ty.getShape(),
-                                     order, CTALayout, bitWidth, needTrans);
-  } else {
-    // MMAv3
-    sharedEnc = ttg::SharedEncodingAttr::get(
-        ty.getContext(), ty.getShape(), order, CTALayout, ty.getElementType());
-  }
   SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
   bufferShape.insert(bufferShape.begin(), distance);
   Type allocType =
@@ -433,8 +429,8 @@ createAsynOps(scf::ForOp &forOp,
   SmallVector<Value> newOperands;
   for (auto &[op, info] : opToInfo) {
     if (tt::LoadOp loadOp = dyn_cast<tt::LoadOp>(op)) {
-      Value alloc = createAlloc(forOp, loadOp, info.dotOperandEncoding,
-                                numBuffers, info.needTrans);
+      assert(info.sharedEncoding && "LoadOp shared encoding not defined.");
+      Value alloc = createAlloc(forOp, loadOp, info.sharedEncoding, numBuffers);
       assert(alloc && "Failed to create alloc for the async load.");
       newOperands.push_back(alloc);
       allocs.push_back(alloc);

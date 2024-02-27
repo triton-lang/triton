@@ -23,6 +23,7 @@
 # -- General configuration ------------------------------------------------
 
 import os
+import platform
 import shutil
 import sys
 import sysconfig
@@ -154,13 +155,17 @@ sphinx_gallery_conf = {
     'examples_dirs': '../python/tutorials/',
     'gallery_dirs': 'getting-started/tutorials',
     'filename_pattern': '',
-    # XXX: Temporarily disable fused attention tutorial on V100
-    'ignore_pattern': r'(__init__\.py|09.*\.py|10.*\.py)',
+    # TODO: Re-enable the grouped-gemm tutorial.  It currently hits this
+    # assertion:
+    # https://github.com/openai/triton/blob/main/lib/Dialect/TritonNvidiaGPU/Transforms/FenceInsertion.cpp#L127
+    'ignore_pattern': r'(__init__\.py|11.*.py)',
     'within_subsection_order': FileNameSortKey,
     'reference_url': {
         'sphinx_gallery': None,
     },
-    'abort_on_example_error': True,
+    # Examples don't work on non-Linux platforms, because they actually run
+    # Triton.  But it's nice to be able to run the rest of the docs build.
+    'abort_on_example_error': platform.system() == 'Linux',
 }
 
 # Add any paths that contain templates here, relative to this directory.
