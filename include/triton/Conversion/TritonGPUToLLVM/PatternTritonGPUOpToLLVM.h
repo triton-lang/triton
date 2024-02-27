@@ -45,7 +45,7 @@ void populateViewOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
 void populateMinMaxFOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                     RewritePatternSet &patterns,
                                     ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                    bool enableWorkaround,
+                                    bool hwNanPropagationSupported,
                                     PatternBenefit benefit);
 } // namespace triton
 } // namespace mlir

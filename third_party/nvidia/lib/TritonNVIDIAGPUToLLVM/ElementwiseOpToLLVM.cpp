@@ -1090,7 +1090,7 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
-  mlir::triton::populateMinMaxFOpToLLVMPattern(typeConverter, patterns,
-                                               axisInfoAnalysis,
-                                               computeCapability < 80, benefit);
+  mlir::triton::populateMinMaxFOpToLLVMPattern(
+      typeConverter, patterns, axisInfoAnalysis,
+      computeCapability >= 80 /*hwNanPropagationSupported*/, benefit);
 }

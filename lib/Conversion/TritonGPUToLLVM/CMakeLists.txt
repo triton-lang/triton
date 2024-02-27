@@ -8,7 +8,6 @@ add_triton_library(TritonGPUToLLVM
     AssertOpToLLVM.cpp
     ViewOpToLLVM.cpp
     MakeRangeOpToLLVM.cpp
-    MinMaxFOpToLLVM.cpp
 
     LINK_LIBS PUBLIC
     MLIRIR

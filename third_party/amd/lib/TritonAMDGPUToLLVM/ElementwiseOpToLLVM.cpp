@@ -1575,7 +1575,7 @@ void populateElementwiseOpToLLVMPatterns(
   mlir::triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
                                                     axisInfoAnalysis, benefit);
   mlir::triton::populateMinMaxFOpToLLVMPattern(
-      typeConverter, patterns, axisInfoAnalysis, true /*enableWorkaround*/,
-      benefit);
+      typeConverter, patterns, axisInfoAnalysis,
+      true /*hwNanPropagationSupported*/, benefit);
 }
 } // namespace AMD
