@@ -744,7 +744,7 @@ emitOffsetForMmaLayoutV3(const NvidiaMmaEncodingAttr &mmaLayout,
 }
 
 static SmallVector<Value>
-emitBaseIndexForMfmaLayout(Location loc, ConversionPatternRewriter &rewriter,
+emitBaseIndexForMfmaLayout(Location loc, RewriterBase &rewriter,
                            const MfmaEncodingAttr &mfmaLayout,
                            RankedTensorType type) {
   auto shape = type.getShape();
