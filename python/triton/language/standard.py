@@ -416,3 +416,25 @@ def flip(x, dim=None):
         y = sum(y * flip2, i + 1, keep_dims=True)
     x = core.reshape(y, x.shape)
     return x
+
+
+@jit
+def interleave(a, b):
+    """
+    Interleaves the values of two tensors along their last dimension.
+
+    The two tensors must have the same shape.
+
+    Equivalent to `tl.join(a, b).reshape(a.shape[-1:] + [2 * a.shape[-1]])`
+    """
+    c = core.join(a, b)
+
+    assert isinstance(c.shape, list)
+    if len(c.shape) == 1:
+        # We must have interleaved two scalars.
+        return c
+    else:
+        # This `else` is necessary because Triton's AST parser doesn't
+        # understand that if we take the `if` above we definitely don't run this
+        # `else`.
+        return core.reshape(c, c.shape[:-2] + [2 * c.shape[-2]])

@@ -1026,11 +1026,12 @@ LogicalResult ReturnOp::verify() {
   return success();
 }
 
-// -- ExperimentalJoinOp --
-LogicalResult ExperimentalJoinOp::inferReturnTypes(
-    MLIRContext *context, std::optional<Location> location, ValueRange operands,
-    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
-    SmallVectorImpl<Type> &inferredReturnTypes) {
+// -- JoinOp --
+LogicalResult
+JoinOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
+                         ValueRange operands, DictionaryAttr attributes,
+                         OpaqueProperties properties, RegionRange regions,
+                         SmallVectorImpl<Type> &inferredReturnTypes) {
   // These should have been checked by tablegen-generated code.
   assert(operands.size() == 2);
   assert(operands[0].getType() == operands[1].getType());
@@ -1058,8 +1059,8 @@ LogicalResult ExperimentalJoinOp::inferReturnTypes(
   return success();
 }
 
-// -- ExperimentalSplitOp --
-LogicalResult ExperimentalSplitOp::inferReturnTypes(
+// -- SplitOp --
+LogicalResult SplitOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, ValueRange operands,
     DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
