@@ -649,7 +649,56 @@ struct MinMaxFOpConversion
 private:
   bool hwNanPropagationSupported;
 };
+
+struct ClampFOpConversion
+    : ElementwiseOpConversionBase<ClampFOp, ClampFOpConversion> {
+  using Base = ElementwiseOpConversionBase<ClampFOp, ClampFOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  explicit ClampFOpConversion(
+      LLVMTypeConverter &typeConverter,
+      ModuleAxisInfoAnalysis &axisAnalysisPass,
+      std::function<bool(ClampFOp, int)> optimizedClampPatternFound,
+      ClampFOpFunction emitOptimization, ClampFOpFunction emitDefault,
+      int computeCapability, PatternBenefit benefit = 1)
+      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
+        optimizedClampPatternFound(optimizedClampPatternFound),
+        emitOptimization(emitOptimization), emitDefault(emitDefault),
+        computeCapability(computeCapability) {}
+  SmallVector<Value> createDestOps(ClampFOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    bool clipPatternFound = optimizedClampPatternFound(op, computeCapability);
+    assert(elemTy.isF32() || elemTy.isF16());
+
+    if (clipPatternFound) {
+      return emitOptimization(op, rewriter, elemTy, operands, loc,
+                              computeCapability);
+    }
+    return emitDefault(op, rewriter, elemTy, operands, loc, computeCapability);
+  }
+
+private:
+  std::function<bool(ClampFOp, int)> optimizedClampPatternFound;
+  ClampFOpFunction emitOptimization;
+  ClampFOpFunction emitDefault;
+  int computeCapability;
+};
+
 } // namespace
+
+void mlir::triton::populateClampFOpToLLVMPattern(
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    std::function<bool(ClampFOp, int)> optimizedClampPatternFound,
+    ClampFOpFunction emitOptimization, ClampFOpFunction emitDefault,
+    int computeCapability, PatternBenefit benefit) {
+  patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
+                                   optimizedClampPatternFound, emitOptimization,
+                                   emitDefault, computeCapability, benefit);
+}
 
 void mlir::triton::populateMinMaxFOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
