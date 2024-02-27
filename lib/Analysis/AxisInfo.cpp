@@ -1222,12 +1222,12 @@ unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
        << order[0] << " maxMultipleBytes = " << maxMultipleBytes
        << " maxContig = " << maxContig << " elemNumBits = " << elemNumBits
        << " maxMultiple = " << maxMultiple << " alignment " << alignment);
-  {
+  LLVM_DEBUG({
     std::string axisStr;
     llvm::raw_string_ostream os(axisStr);
     axisInfo->print(os);
     LDBG("-- " << axisStr);
-  }
+  });
   return alignment;
 }
 
@@ -1242,12 +1242,12 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   auto alignment = std::max<unsigned>(axisInfo->getConstancy(maskOrder[0]), 1);
   LDBG("getMaskAlignment maskOrder[0] " << maskOrder[0] << " alignment "
                                         << alignment);
-  {
+  LLVM_DEBUG({
     std::string axisStr;
     llvm::raw_string_ostream os(axisStr);
     axisInfo->print(os);
     LDBG("-- " << axisStr);
-  }
+  });
   return alignment;
 }
 
