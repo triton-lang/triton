@@ -50,11 +50,12 @@ class LoopPipeliner {
 
   /// The new pipelined ForOp.
   scf::ForOp pplForOp;
-  
+
   /// Loads to be pipelined
   SetVector<Operation *> validLoads;
-  /// The value that each load will be mapped to (after layout conversion)
-  DenseMap<Value, Value> convertMapping;
+  /// The value that each load will be mapped to (after layout conversion),
+  /// as well as whether it will be tranposed before used by the dot operation.
+  DenseMap<Value, std::pair<Value, bool>> convertMapping;
   /// load => buffer
   DenseMap<Value, Value> loadsBuffer;
   /// load => buffer type (with shared layout after swizzling)
@@ -85,12 +86,12 @@ class LoopPipeliner {
   IRMapping curMapping;
   /// forOp value => prefetch value
   IRMapping nextMapping;
-  
+
   /// Dependency ops by program order
   SmallVector<Operation *> orderedDeps;
 
   SetVector<Operation*> currentDeps;
-  
+
   /// block arguments that loads depend on
   SetVector<BlockArgument> depArgs;
 
@@ -109,7 +110,7 @@ class LoopPipeliner {
                    MapVector<Operation *, SetVector<Operation*>> &opDeps);
 
   void collectDepChain(Operation *op, SetVector<Operation*> &ops);
-  
+
   /// Check if none of the for-ops has valid uses
   LogicalResult checkOpUses();
 
@@ -121,7 +122,7 @@ class LoopPipeliner {
   void createOrderedDeps();
 
   void createCurrentDeps();
-  
+
   /// Return the stage at which `v` is defined prior to `stage`
   int getValueDefStage(Value v, int stage);
 
@@ -154,7 +155,8 @@ class LoopPipeliner {
   void storeNextBuffer(OpBuilder &builder);
 
   bool isLoadChain(Operation *op) const;
-  
+  bool isLoadChainHelper(Operation *op) const;
+
   /// Assemble `pplForOp`'s yield op
   void finalizeYield(OpBuilder &builder);
 
@@ -250,12 +252,15 @@ LogicalResult LoopPipeliner::checkOpUses() {
     if (isCandidate && loadOp.getResult().hasOneUse()) {
       isCandidate = false;
       Operation *use = *loadOp.getResult().getUsers().begin();
-
+      // Negate `needTrans` when a TransOp is seen on the transitive use chain.
+      bool needTrans = false;
       // Advance to the first conversion as long as the use resides in shared
       // memory and it has a single use itself
       while (use) {
         if (use->getNumResults() != 1 || !use->getResult(0).hasOneUse())
           break;
+        if (isa<triton::TransOp>(use))
+          needTrans = !needTrans;
         auto tensorType =
           use->getResult(0).getType().dyn_cast<RankedTensorType>();
         if (!tensorType || !tensorType.getEncoding().isa<ttg::SharedEncodingAttr>())
@@ -271,7 +276,7 @@ LogicalResult LoopPipeliner::checkOpUses() {
           if (auto dotOpEnc = tensorType.getEncoding()
               .dyn_cast<ttg::DotOperandEncodingAttr>()) {
             isCandidate = true;
-            convertMapping[loadOp] = convertLayout;
+            convertMapping[loadOp] = {convertLayout, needTrans};
           }
     } else
       isCandidate = false;
@@ -391,7 +396,7 @@ Value LoopPipeliner::lookupOrDefault(Value origin, int stage) {
 void LoopPipeliner::createBufferTypes() {
   for (auto loadCvt : convertMapping) {
     auto loadOp = loadCvt.first;
-    Value cvt = loadCvt.second;
+    Value cvt = loadCvt.second.first;
     auto dotOpEnc = cvt.getType()
                         .cast<RankedTensorType>()
                         .getEncoding()
@@ -405,10 +410,17 @@ void LoopPipeliner::createBufferTypes() {
     // unsigned bitWidth = dotOpEnc.getMMAv2kWidth()
     //                         ? 32 / dotOpEnc.getMMAv2kWidth()
     //                         : ty.getElementType().getIntOrFloatBitWidth();
-    auto sharedEnc =
-        ttg::SharedEncodingAttr::get(ty.getContext(), dotOpEnc, ty.getShape(),
-                                     ttg::getOrder(ty.getEncoding()), CTALayout, eType);
-    loadsBufferType[loadOp] = RankedTensorType::get(bufferShape, eType, sharedEnc);
+    // set needTrans here. newXEncoding is computed based on the load type,
+    // which is before the transpose. without needTrans we will compute vec and
+    // maxPhase based on incorrect m, n and k size of mma. the type inference of
+    // TransOp simply swap the order but doesn't fix the vec and maxPhase, hence
+    // it would causing incorrect swizzling code.
+    bool needTrans = loadCvt.second.second;
+    auto sharedEnc = ttg::SharedEncodingAttr::get(
+        ty.getContext(), dotOpEnc, ty.getShape(),
+        ttg::getOrder(ty.getEncoding()), CTALayout, eType, needTrans);
+    loadsBufferType[loadOp] =
+        RankedTensorType::get(bufferShape, eType, sharedEnc);
   }
 }
 
@@ -497,16 +509,25 @@ Value LoopPipeliner::getLoadMask(triton::LoadOp loadOp, Value mappedMask,
   return mappedMask;
 }
 
-bool LoopPipeliner::isLoadChain(Operation *op) const {
+bool LoopPipeliner::isLoadChainHelper(Operation *op) const {
   if (auto cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
     Value loadVal = cvtOp.getSrc();
-    if (auto f2fOp = dyn_cast<triton::FpToFpOp>(op))
+    if (auto f2fOp = dyn_cast<triton::FpToFpOp>(loadVal.getDefiningOp()))
       loadVal = f2fOp.getFrom();
-    if (validLoads.contains(loadVal.getDefiningOp())) {
-      auto cvtDstTy = cvtOp.getResult().getType().cast<RankedTensorType>();
-      if (cvtDstTy.getEncoding().isa<ttg::DotOperandEncodingAttr>())
-        return true;
-    }
+    else if (auto transOp = dyn_cast<triton::TransOp>(loadVal.getDefiningOp()))
+      loadVal = transOp.getSrc();
+    return validLoads.contains(loadVal.getDefiningOp()) ||
+           isLoadChainHelper(loadVal.getDefiningOp());
+  }
+  return false;
+}
+
+bool LoopPipeliner::isLoadChain(Operation *op) const {
+  if (auto cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
+    auto cvtDstTy = cvtOp.getResult().getType().cast<RankedTensorType>();
+    if (!cvtDstTy.getEncoding().isa<ttg::DotOperandEncodingAttr>())
+      return false;
+    return isLoadChainHelper(op);
   }
   return false;
 }
@@ -658,7 +679,7 @@ scf::ForOp LoopPipeliner::cloneForOp(ArrayRef<Value> newLoopArgs,
   nextLoopCond =
       builder.create<arith::CmpIOp>(nextIV.getLoc(), arith::CmpIPredicate::slt,
                                     nextIV, pplForOp.getUpperBound());
-  
+
   return pplForOp;
 }
 
@@ -725,7 +746,7 @@ void LoopPipeliner::cloneCurrentBody(OpBuilder &builder) {
     }
   }
 }
-  
+
 void LoopPipeliner::storeNextBuffer(OpBuilder &builder) {
   // Store the next buffer at the end of the loop body for the next iteration
   for (Operation *op : orderedDeps) {
@@ -745,7 +766,7 @@ void LoopPipeliner::storeNextBuffer(OpBuilder &builder) {
       }
     }
   }
-  
+
   // PL loads -> store next to shared
   for (auto *loadOp : validLoads) {
     Value loadVal = nextMapping.lookup(loadOp->getResult(0));
