@@ -65,6 +65,12 @@ void populateControlFlowOpToLLVMPattern(LLVMTypeConverter &typeConverter,
 void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
                                  PatternBenefit benefit);
+
+void populateClampFOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                   RewritePatternSet &patterns,
+                                   ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                   int computeCapability,
+                                   PatternBenefit benefit);
 } // namespace NVIDIA
 } // namespace triton
 } // namespace mlir

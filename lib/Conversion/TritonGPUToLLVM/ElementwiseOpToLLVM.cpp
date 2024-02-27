@@ -649,6 +649,55 @@ struct MinMaxFOpConversion
 private:
   bool hwNanPropagationSupported;
 };
+
+struct ClampFOpConversion
+    : ElementwiseOpConversionBase<ClampFOp, ClampFOpConversion> {
+  using Base = ElementwiseOpConversionBase<ClampFOp, ClampFOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  explicit ClampFOpConversion(LLVMTypeConverter &typeConverter,
+                              ModuleAxisInfoAnalysis &axisAnalysisPass,
+                              bool hwNanPropagationSupported,
+                              PatternBenefit benefit = 1)
+      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
+        hwNanPropagationSupported(hwNanPropagationSupported) {}
+
+  SmallVector<Value> createDestOps(ClampFOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    // Clip pattern not found, use min/max.
+    if (op.getPropagateNan() == PropagateNan::ALL) {
+      if (hwNanPropagationSupported) {
+        auto v = rewriter.create<LLVM::MaximumOp>(loc, elemTy, operands[0][0],
+                                                  operands[0][1]);
+        return {rewriter.create<LLVM::MinimumOp>(loc, v, operands[0][2])};
+      }
+      // On pre-80 compute capability, we need to handle NaN propagation
+      // manually. We need to check only the first operand for clamp.
+      auto lhs = operands[0][0];
+      auto isNan = rewriter.create<LLVM::FCmpOp>(loc, LLVM::FCmpPredicate::une,
+                                                 lhs, lhs);
+      auto v = rewriter.create<LLVM::MaxNumOp>(loc, elemTy, operands[0][0],
+                                               operands[0][1]);
+      auto nonNanRes = rewriter.create<LLVM::MinNumOp>(loc, v, operands[0][2]);
+      auto nan = LLVM::createNaNConstant(loc, rewriter, elemTy);
+      // Select the result based on the isNan flag.
+      return {rewriter.create<LLVM::SelectOp>(loc, isNan, nan, nonNanRes)};
+    }
+
+    // No NaN propagation.
+    assert(op.getPropagateNan() == PropagateNan::NONE);
+    auto v = rewriter.create<LLVM::MaxNumOp>(loc, elemTy, operands[0][0],
+                                             operands[0][1]);
+    return {rewriter.create<LLVM::MinNumOp>(loc, v, operands[0][2])};
+  }
+
+protected:
+  bool hwNanPropagationSupported;
+};
+
 } // namespace
 
 void mlir::triton::populateMinMaxFOpToLLVMPattern(
@@ -659,6 +708,14 @@ void mlir::triton::populateMinMaxFOpToLLVMPattern(
       typeConverter, axisInfoAnalysis, hwNanPropagationSupported, benefit);
   patterns.add<MinMaxFOpConversion<arith::MaximumFOp>>(
       typeConverter, axisInfoAnalysis, hwNanPropagationSupported, benefit);
+}
+
+void mlir::triton::populateClampFOpToLLVMPattern(
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, bool hwNanPropagationSupported,
+    PatternBenefit benefit) {
+  patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
+                                   hwNanPropagationSupported, benefit);
 }
 
 void mlir::triton::populateElementwiseOpToLLVMPatterns(

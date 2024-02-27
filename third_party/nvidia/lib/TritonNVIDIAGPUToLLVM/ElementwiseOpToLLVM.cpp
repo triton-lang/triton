@@ -423,7 +423,8 @@ struct FpToFpOpConversion
 
   explicit FpToFpOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                              int computeCapability, PatternBenefit benefit = 1)
+                              int computeCapability,
+                              PatternBenefit benefit = patternBenefitDefault)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
         computeCapability(computeCapability) {}
 
@@ -895,19 +896,16 @@ struct ClampFOpConversion
 
   explicit ClampFOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                              int computeCapability, PatternBenefit benefit = 1)
+                              int computeCapability,
+                              PatternBenefit benefit = patternBenefitDefault)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
         computeCapability(computeCapability) {}
 
-  SmallVector<Value> createDestOps(ClampFOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
+  bool isClipPattern(ClampFOp op) const {
     bool xorsignAbsAvailable = (computeCapability >= 90);
-    // Pattern matching the sequence of clamp(x, -limit, limit) to generate more
-    // efficient PTX code.
-    // NOTE: This pattern matching is not general enough, but it is sufficient.
-    // We detect only two cases here:
+    // Pattern matching the sequence of clamp(x, -limit, limit) to generate
+    // more efficient PTX code. NOTE: This pattern matching is not general
+    // enough, but it is sufficient. We detect only two cases here:
     // 1. where the "-limit" is computed as 0 - limit:
     //   %cst = arith.constant dense<0.000000e+00>
     //   %8 = tt.load %7, %2
@@ -917,7 +915,7 @@ struct ClampFOpConversion
     //   %cst_6 = arith.constant dense<-6.0000e+00>
     //   %cst_7 = arith.constant dense<6.0000e+00>
     //   %160 = tt.clamp %158, %cst_6, %cst_7
-    bool clipPatternFound = false;
+    bool patternFound = false;
 
     auto getSplatInitializer = [](Value v) -> std::optional<double> {
       if (auto constOp = v.getDefiningOp<arith::ConstantOp>()) {
@@ -936,7 +934,7 @@ struct ClampFOpConversion
         if (subOp.getOperand(1) == op.getOperand(2)) {
           auto initializer = getSplatInitializer(subOp.getOperand(0));
           if (initializer.has_value() && initializer.value() == 0.0) {
-            clipPatternFound = true;
+            patternFound = true;
           }
         }
       } else {
@@ -944,65 +942,52 @@ struct ClampFOpConversion
         auto initializer2 = getSplatInitializer(op.getOperand(2));
         if (initializer1.has_value() && initializer2.has_value() &&
             initializer1.value() == -initializer2.value()) {
-          clipPatternFound = true;
+          patternFound = true;
         }
       }
     }
+    return patternFound;
+  }
 
-    assert(elemTy.isF32() || elemTy.isF16());
-
-    if (clipPatternFound) {
-      // min.xorsign.abs
-      PTXBuilder ptxBuilder;
-      bool propNan = (op.getPropagateNan() == PropagateNan::ALL);
-      auto &minXorsign = ptxBuilder.create<PTXInstr>("min")
-                             ->o("NaN", propNan)
-                             .o("xorsign")
-                             .o("abs");
-      const char *outType = nullptr;
-      const char *inType = nullptr;
-      if (elemTy.isF32()) {
-        minXorsign.o("f32");
-        outType = "=f";
-        inType = "f";
-      } else if (elemTy.isF16()) {
-        minXorsign.o("f16");
-        outType = "=h";
-        inType = "h";
-      }
-      auto output = ptxBuilder.newOperand(outType);
-      auto inputA = ptxBuilder.newOperand(operands[0][0], inType);
-      auto inputB = ptxBuilder.newOperand(operands[0][2], inType);
-      minXorsign(output, inputA, inputB);
-
-      return {ptxBuilder.launch(rewriter, loc, elemTy, false)};
+  SmallVector<Value> emitOptimization(ClampFOp op,
+                                      ConversionPatternRewriter &rewriter,
+                                      Type elemTy,
+                                      MultipleOperandsRange operands,
+                                      Location loc) const {
+    // min.xorsign.abs
+    PTXBuilder ptxBuilder;
+    bool propNan = (op.getPropagateNan() == PropagateNan::ALL);
+    auto &minXorsign = ptxBuilder.create<PTXInstr>("min")
+                           ->o("NaN", propNan)
+                           .o("xorsign")
+                           .o("abs");
+    const char *outType = nullptr;
+    const char *inType = nullptr;
+    if (elemTy.isF32()) {
+      minXorsign.o("f32");
+      outType = "=f";
+      inType = "f";
+    } else if (elemTy.isF16()) {
+      minXorsign.o("f16");
+      outType = "=h";
+      inType = "h";
     }
+    auto output = ptxBuilder.newOperand(outType);
+    auto inputA = ptxBuilder.newOperand(operands[0][0], inType);
+    auto inputB = ptxBuilder.newOperand(operands[0][2], inType);
+    minXorsign(output, inputA, inputB);
 
-    // Clip pattern not found, use min/max.
-    if (op.getPropagateNan() == PropagateNan::ALL) {
-      if (computeCapability >= 80) {
-        auto v = rewriter.create<LLVM::MaximumOp>(loc, elemTy, operands[0][0],
-                                                  operands[0][1]);
-        return {rewriter.create<LLVM::MinimumOp>(loc, v, operands[0][2])};
-      }
-      // On pre-80 compute capability, we need to handle NaN propagation
-      // manually. We need to check only the first operand for clamp.
-      auto lhs = operands[0][0];
-      auto isNan = rewriter.create<LLVM::FCmpOp>(loc, LLVM::FCmpPredicate::une,
-                                                 lhs, lhs);
-      auto v = rewriter.create<LLVM::MaxNumOp>(loc, elemTy, operands[0][0],
-                                               operands[0][1]);
-      auto nonNanRes = rewriter.create<LLVM::MinNumOp>(loc, v, operands[0][2]);
-      auto nan = LLVM::createNaNConstant(loc, rewriter, elemTy);
-      // Select the result based on the isNan flag.
-      return {rewriter.create<LLVM::SelectOp>(loc, isNan, nan, nonNanRes)};
+    return {ptxBuilder.launch(rewriter, loc, elemTy, false)};
+  }
+
+  SmallVector<Value> createDestOps(ClampFOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    if (isClipPattern(op)) {
+      return emitOptimization(op, rewriter, elemTy, operands, loc);
     }
-
-    // No NaN propagation.
-    assert(op.getPropagateNan() == PropagateNan::NONE);
-    auto v = rewriter.create<LLVM::MaxNumOp>(loc, elemTy, operands[0][0],
-                                             operands[0][1]);
-    return {rewriter.create<LLVM::MinNumOp>(loc, v, operands[0][2])};
+    return {};
   }
 
 private:
@@ -1064,7 +1049,6 @@ struct OpToExternCallConversion
 private:
   StringRef funcName;
 };
-
 } // namespace
 } // namespace gpu
 
@@ -1154,9 +1138,21 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   // __nv_expf for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  bool hwNanPropagationSupported = computeCapability >= 80;
+  mlir::triton::populateMinMaxFOpToLLVMPattern(
+      typeConverter, patterns, axisInfoAnalysis, hwNanPropagationSupported,
+      benefit);
+  mlir::triton::populateClampFOpToLLVMPattern(
+      typeConverter, patterns, axisInfoAnalysis, hwNanPropagationSupported,
+      benefit);
+}
+
+void mlir::triton::NVIDIA::populateClampFOpToLLVMPattern(
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
+    PatternBenefit benefit) {
+  using namespace mlir::triton::gpu;
+
   patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
-  mlir::triton::populateMinMaxFOpToLLVMPattern(
-      typeConverter, patterns, axisInfoAnalysis,
-      computeCapability >= 80 /*hwNanPropagationSupported*/, benefit);
 }

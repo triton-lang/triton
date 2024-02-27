@@ -93,7 +93,7 @@ struct ArithConstantSplatOpConversion
 struct CatOpConversion : public ConvertOpToLLVMPattern<CatOp> {
   using OpAdaptor = typename CatOp::Adaptor;
   explicit CatOpConversion(LLVMTypeConverter &typeConverter,
-                           PatternBenefit benefit = 1)
+                           PatternBenefit benefit = patternBenefitDefault)
       : ConvertOpToLLVMPattern<CatOp>(typeConverter, benefit) {}
   LogicalResult
   matchAndRewrite(CatOp op, OpAdaptor adaptor,
@@ -122,7 +122,7 @@ struct CatOpConversion : public ConvertOpToLLVMPattern<CatOp> {
 struct JoinOpConversion : public ConvertOpToLLVMPattern<JoinOp> {
   using OpAdaptor = typename JoinOp::Adaptor;
   explicit JoinOpConversion(LLVMTypeConverter &typeConverter,
-                            PatternBenefit benefit = 1)
+                            PatternBenefit benefit = patternBenefitDefault)
       : ConvertOpToLLVMPattern<JoinOp>(typeConverter, benefit) {}
   LogicalResult
   matchAndRewrite(JoinOp op, OpAdaptor adaptor,
@@ -195,7 +195,7 @@ struct SplitOpConversion : public ConvertOpToLLVMPattern<SplitOp> {
 struct ReshapeOpConversion : public ConvertOpToLLVMPattern<ReshapeOp> {
   using OpAdaptor = typename ReshapeOp::Adaptor;
   explicit ReshapeOpConversion(LLVMTypeConverter &typeConverter,
-                               PatternBenefit benefit = 1)
+                               PatternBenefit benefit = patternBenefitDefault)
       : ConvertOpToLLVMPattern<ReshapeOp>(typeConverter, benefit) {}
   LogicalResult
   matchAndRewrite(ReshapeOp op, OpAdaptor adaptor,
@@ -216,8 +216,9 @@ struct ReshapeOpConversion : public ConvertOpToLLVMPattern<ReshapeOp> {
 };
 struct ExpandDimsOpConversion : public ConvertOpToLLVMPattern<ExpandDimsOp> {
   using OpAdaptor = typename ExpandDimsOp::Adaptor;
-  explicit ExpandDimsOpConversion(LLVMTypeConverter &typeConverter,
-                                  PatternBenefit benefit = 1)
+  explicit ExpandDimsOpConversion(
+      LLVMTypeConverter &typeConverter,
+      PatternBenefit benefit = patternBenefitDefault)
       : ConvertOpToLLVMPattern<ExpandDimsOp>(typeConverter, benefit) {}
   LogicalResult
   matchAndRewrite(ExpandDimsOp op, OpAdaptor adaptor,
