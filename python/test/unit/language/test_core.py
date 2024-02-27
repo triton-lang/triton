@@ -45,7 +45,7 @@ GPU_DIALECT = "triton_gpu"
 if is_interpreter():
     THREADS_PER_WARP = 1
 elif is_hip():
-    THREADS_PER_WARP = 64
+    THREADS_PER_WARP = triton.runtime.driver.active.get_current_target()[2]
 else:
     THREADS_PER_WARP = 32
 
