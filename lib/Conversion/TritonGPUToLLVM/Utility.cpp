@@ -157,9 +157,10 @@ getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct, Type elemTy,
           /*offsets=*/{elems.begin() + 1 + rank, elems.end()}};
 }
 
-SmallVector<Value>
-getStridesFromShapeAndOrder(ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
-                            Location loc, ConversionPatternRewriter &rewriter) {
+SmallVector<Value> getStridesFromShapeAndOrder(ArrayRef<int64_t> shape,
+                                               ArrayRef<unsigned> order,
+                                               Location loc,
+                                               RewriterBase &rewriter) {
   auto rank = shape.size();
   SmallVector<Value> strides(rank);
   int64_t stride = 1;
@@ -172,9 +173,8 @@ getStridesFromShapeAndOrder(ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
 
 // Convert an \param index to a multi-dim coordinate given \param shape and
 // \param order.
-SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
-                               Location loc, Value linear,
-                               ArrayRef<unsigned> shape,
+SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
+                               Value linear, ArrayRef<unsigned> shape,
                                ArrayRef<unsigned> order) {
   unsigned rank = shape.size();
   assert(rank == order.size());
@@ -194,9 +194,8 @@ SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
   return multiDim;
 }
 
-SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
-                               Location loc, unsigned linear,
-                               ArrayRef<unsigned> shape) {
+SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
+                               unsigned linear, ArrayRef<unsigned> shape) {
   unsigned rank = shape.size();
   assert(rank > 0);
   SmallVector<Value> multiDim(rank);
@@ -209,9 +208,8 @@ SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
   return multiDim;
 }
 
-SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
-                               Location loc, Value linear,
-                               ArrayRef<unsigned> shape) {
+SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
+                               Value linear, ArrayRef<unsigned> shape) {
   unsigned rank = shape.size();
   assert(rank > 0);
   SmallVector<Value> multiDim(rank);
