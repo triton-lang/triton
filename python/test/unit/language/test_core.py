@@ -884,6 +884,33 @@ def test_abs_fp8(in_dtype, device):
 
 
 # ----------------
+# test passing shapes as individual params rather than tuples
+# ----------------
+
+
+def test_shapes_as_params(device):
+
+    @triton.jit
+    def kernel():
+        a = tl.arange(0, 32).expand_dims(-1).broadcast_to(32, 32)
+        tl.static_assert(a.shape == [tl.constexpr(32), tl.constexpr(32)])
+
+        a = tl.arange(0, 32).reshape(4, 8).permute(1, 0)
+        tl.static_assert(a.shape == [tl.constexpr(8), tl.constexpr(4)])
+
+        a = tl.arange(0, 32).reshape(4, 8).reshape(32)
+        tl.static_assert(a.shape == [tl.constexpr(32)])
+
+        a = tl.arange(0, 64).reshape(2, 4, 8).trans(2, 1, 0)
+        tl.static_assert(a.shape == [tl.constexpr(8), tl.constexpr(4), tl.constexpr(2)])
+
+        a = tl.arange(0, 64).view(2, 4, 8)
+        tl.static_assert(a.shape == [tl.constexpr(2), tl.constexpr(4), tl.constexpr(8)])
+
+    kernel[(1, )]()
+
+
+# ----------------
 # test transpose
 # ----------------
 
@@ -1484,7 +1511,7 @@ def test_join(device):
         offs = tl.arange(0, N)
         x = tl.load(X + offs)
         y = tl.load(Y + offs)
-        z = tl._experimental_join(x, y)
+        z = tl.join(x, y)
         tl.store(Z + tl.arange(0, N)[:, None] * 2 + tl.arange(0, 2)[None, :], z)
 
     x = torch.arange(0, 128, device=device).to(torch.int32)
@@ -1504,7 +1531,7 @@ def test_join_scalars(device):
     def kernel(X, Y, Z):
         x = tl.load(X)
         y = tl.load(Y)
-        z = tl._experimental_join(x, y)
+        z = tl.join(x, y)
         tl.static_assert(z.shape == [2])
         tl.store(Z + tl.arange(0, 2), z)
 
@@ -1523,7 +1550,7 @@ def test_join_with_mma(device):
     @triton.jit
     def kernel(X, Z):
         x = tl.load(X + 16 * tl.arange(0, 32)[:, None] + tl.arange(0, 16)[None, :])  # (32,16)
-        x2 = tl._experimental_join(x, 2 * x)  # (32,16,2)
+        x2 = tl.join(x, 2 * x)  # (32,16,2)
         x3 = tl.reshape(x2, (32, 32))
         z = tl.dot(x3, x3)  # (32,32)
         tl.store(Z + 32 * tl.arange(0, 32)[:, None] + tl.arange(0, 32)[None, :], z)
@@ -1537,6 +1564,40 @@ def test_join_with_mma(device):
     torch.testing.assert_close(z, z_ref)
 
 
+def test_interleave(device):
+    if is_hip():
+        pytest.skip("test_interleaves not supported on HIP")
+
+    @triton.jit
+    def kernel(Z, N: tl.constexpr):
+        z = tl.interleave(tl.arange(0, N), tl.arange(N, 2 * N))
+        tl.store(Z + tl.arange(0, 2 * N), z)
+
+    x = torch.arange(0, 128, device=device).to(torch.int32)
+    y = torch.arange(128, 256, device=device).to(torch.int32)
+    z_ref = torch.stack([x, y], dim=-1).reshape(256)
+    z = torch.zeros_like(z_ref)
+    kernel[(1, )](z, N=128)
+
+    np.testing.assert_equal(to_numpy(z_ref), to_numpy(z))
+
+
+def test_interleave_scalars(device):
+    if is_hip():
+        pytest.skip("test_interleaves not supported on HIP")
+
+    @triton.jit
+    def kernel(X, Y, Z):
+        z = tl.interleave(X, Y)
+        tl.static_assert(z.shape == [tl.constexpr(2)])
+        tl.store(Z + tl.arange(0, 2), z)
+
+    z = torch.zeros(2, device=device)
+    kernel[(1, )](10, 20, z)
+
+    np.testing.assert_equal([10, 20], to_numpy(z))
+
+
 def test_split(device):
     if is_hip():
         pytest.skip("test_split not supported on HIP")
@@ -1546,7 +1607,7 @@ def test_split(device):
         offs = tl.arange(0, N)
         x = tl.load(X + offs)
         x1 = tl.reshape(x, (N // 2, 2))
-        z1, z2 = tl._experimental_split(x1)
+        z1, z2 = tl.split(x1)
         tl.store(Z1 + tl.arange(0, N // 2), z1)
         tl.store(Z2 + tl.arange(0, N // 2), z2)
 
@@ -1568,7 +1629,7 @@ def test_split_to_scalar(device):
     def kernel(X, Z1, Z2):
         offs = tl.arange(0, 2)
         x = tl.load(X + offs)
-        z1, z2 = tl._experimental_split(x)
+        z1, z2 = tl.split(x)
         tl.static_assert(isinstance(z1, tl.tensor))
         tl.static_assert(isinstance(z2, tl.tensor))
         tl.static_assert(z1.shape == [])
@@ -2639,7 +2700,7 @@ def test_trans_4d(dtype_str, shape, perm, device):
             block_shape=(ou_shape1, ou_shape2, ou_shape3, ou_shape4),
             order=(3, 2, 1, 0),
         )
-        tl.store(out_ptr, tl.permute(tl.load(in_ptr), (trans1, trans2, trans3, trans4)))
+        tl.store(out_ptr, tl.load(in_ptr).permute((trans1, trans2, trans3, trans4)))
 
     input = torch.arange(math.prod(shape), dtype=getattr(torch, dtype_str), device=device).reshape(shape)
     expected = torch.permute(input, perm)

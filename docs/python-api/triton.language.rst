@@ -40,9 +40,12 @@ Shape Manipulation Ops
     broadcast
     broadcast_to
     expand_dims
+    interleave
+    join
     permute
     ravel
     reshape
+    split
     trans
     view
 

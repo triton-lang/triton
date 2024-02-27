@@ -286,8 +286,7 @@ static std::optional<Attribute> inferDstEncoding(triton::ExpandDimsOp op,
   return sliceEncoding.getParent();
 }
 
-static std::optional<Attribute> inferDstEncoding(ExperimentalJoinOp op,
-                                                 Attribute srcEnc) {
+static std::optional<Attribute> inferDstEncoding(JoinOp op, Attribute srcEnc) {
   Attribute dstEnc;
   if (srcEnc.getDialect()
           .getRegisteredInterface<DialectInferLayoutInterface>()
@@ -299,8 +298,7 @@ static std::optional<Attribute> inferDstEncoding(ExperimentalJoinOp op,
   return std::nullopt;
 }
 
-static std::optional<Attribute> inferDstEncoding(ExperimentalSplitOp op,
-                                                 Attribute srcEnc) {
+static std::optional<Attribute> inferDstEncoding(SplitOp op, Attribute srcEnc) {
   Attribute dstEnc;
   if (srcEnc.getDialect()
           .getRegisteredInterface<DialectInferLayoutInterface>()
@@ -328,8 +326,7 @@ static std::optional<Attribute> inferSrcEncoding(triton::ExpandDimsOp op,
                                              encoding);
 }
 
-static std::optional<Attribute> inferSrcEncoding(ExperimentalJoinOp op,
-                                                 Attribute dstEnc) {
+static std::optional<Attribute> inferSrcEncoding(JoinOp op, Attribute dstEnc) {
   // Split is the inverse of join.
   Attribute srcEnc;
   if (dstEnc.getDialect()
@@ -341,8 +338,7 @@ static std::optional<Attribute> inferSrcEncoding(ExperimentalJoinOp op,
   return std::nullopt;
 }
 
-static std::optional<Attribute> inferSrcEncoding(ExperimentalSplitOp op,
-                                                 Attribute dstEnc) {
+static std::optional<Attribute> inferSrcEncoding(SplitOp op, Attribute dstEnc) {
   // Join is the inverse of split.
   Attribute srcEnc;
   if (dstEnc.getDialect()
@@ -438,9 +434,9 @@ std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
     return inferSrcEncoding(reduceOp, encoding);
   if (auto expand = dyn_cast<triton::ExpandDimsOp>(op))
     return inferSrcEncoding(expand, encoding);
-  if (auto join = dyn_cast<triton::ExperimentalJoinOp>(op))
+  if (auto join = dyn_cast<triton::JoinOp>(op))
     return inferSrcEncoding(join, encoding);
-  if (auto split = dyn_cast<triton::ExperimentalSplitOp>(op))
+  if (auto split = dyn_cast<triton::SplitOp>(op))
     return inferSrcEncoding(split, encoding);
   if (auto trans = dyn_cast<triton::TransOp>(op))
     return inferSrcEncoding(trans, encoding);
@@ -464,9 +460,9 @@ std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
     return inferDstEncoding(reduceOp, encoding);
   if (auto expand = dyn_cast<triton::ExpandDimsOp>(op))
     return inferDstEncoding(expand, encoding);
-  if (auto join = dyn_cast<triton::ExperimentalJoinOp>(op))
+  if (auto join = dyn_cast<triton::JoinOp>(op))
     return inferDstEncoding(join, encoding);
-  if (auto split = dyn_cast<triton::ExperimentalSplitOp>(op))
+  if (auto split = dyn_cast<triton::SplitOp>(op))
     return inferDstEncoding(split, encoding);
   if (auto trans = dyn_cast<triton::TransOp>(op))
     return inferDstEncoding(trans, encoding);

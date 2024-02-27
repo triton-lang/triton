@@ -29,6 +29,7 @@ def _is_power_of_two(i: core.constexpr):
 # -----------------------
 
 
+@core._tensor_member_fn
 @jit
 def cdiv(x, div):
     """
@@ -42,12 +43,14 @@ def cdiv(x, div):
     return (x + div - 1) // div
 
 
+@core._tensor_member_fn
 @jit
 @core._add_math_1arg_docstr("sigmoid")
 def sigmoid(x):
     return 1 / (1 + core.exp(-x))
 
 
+@core._tensor_member_fn
 @jit
 @core._add_math_1arg_docstr("softmax")
 def softmax(x, ieee_rounding=False):
@@ -57,6 +60,7 @@ def softmax(x, ieee_rounding=False):
     return core.fdiv(num, den, ieee_rounding)
 
 
+@core._tensor_member_fn
 @jit
 def ravel(x):
     """
@@ -158,6 +162,7 @@ def _elementwise_max(a, b):
     return core.maximum(a, b)
 
 
+@core._tensor_member_fn
 @jit
 @core._add_reduction_docstr("maximum", return_indices_arg="return_indices",
                             tie_break_arg="return_indices_tie_break_left")
@@ -178,6 +183,7 @@ def max(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
         return core.reduce(input, axis, _elementwise_max, keep_dims=keep_dims)
 
 
+@core._tensor_member_fn
 @jit
 @core._add_reduction_docstr("maximum index", tie_break_arg="tie_break_left")
 def argmax(input, axis, tie_break_left=True, keep_dims=False):
@@ -215,6 +221,7 @@ def _elementwise_min(a, b):
     return core.minimum(a, b)
 
 
+@core._tensor_member_fn
 @jit
 @core._add_reduction_docstr("minimum", return_indices_arg="return_indices",
                             tie_break_arg="return_indices_tie_break_left")
@@ -235,6 +242,7 @@ def min(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
         return core.reduce(input, axis, _elementwise_min, keep_dims=keep_dims)
 
 
+@core._tensor_member_fn
 @jit
 @core._add_reduction_docstr("minimum index", tie_break_arg="tie_break_left")
 def argmin(input, axis, tie_break_left=True, keep_dims=False):
@@ -250,6 +258,7 @@ def _sum_combine(a, b):
 # sum
 
 
+@core._tensor_member_fn
 @jit
 @core._add_reduction_docstr("sum")
 def sum(input, axis=None, keep_dims=False):
@@ -265,6 +274,7 @@ def _xor_combine(a, b):
 # xor sum
 
 
+@core._tensor_member_fn
 @core.builtin
 @core._add_reduction_docstr("xor sum")
 def xor_sum(input, axis=None, keep_dims=False, _builder=None, _generator=None):
@@ -279,6 +289,7 @@ def xor_sum(input, axis=None, keep_dims=False, _builder=None, _generator=None):
 # cumsum
 
 
+@core._tensor_member_fn
 @jit
 @core._add_scan_docstr("cumsum")
 def cumsum(input, axis=0, reverse=False):
@@ -295,6 +306,7 @@ def _prod_combine(a, b):
     return a * b
 
 
+@core._tensor_member_fn
 @jit
 @core._add_scan_docstr("cumprod")
 def cumprod(input, axis=0, reverse=False):
@@ -351,8 +363,9 @@ def _bitonic_merge(x, stage: core.constexpr, order: core.constexpr, n_dims: core
     return x
 
 
+@core._tensor_member_fn
 @jit
-def sort(x, dim: core.constexpr = None, descending: core.constexpr = 0):
+def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.constexpr(0)):
     # handle default dimension or check that it is the most minor dim
     _dim: core.constexpr = len(x.shape) - 1 if dim is None else dim
     core.static_assert(_dim == len(x.shape) - 1, "only minor dimension is currently supported")
@@ -375,6 +388,7 @@ def _get_flip_dim(dim, shape):
     return core.constexpr(dim)
 
 
+@core._tensor_member_fn
 @jit
 def flip(x, dim=None):
     """
@@ -402,3 +416,25 @@ def flip(x, dim=None):
         y = sum(y * flip2, i + 1, keep_dims=True)
     x = core.reshape(y, x.shape)
     return x
+
+
+@jit
+def interleave(a, b):
+    """
+    Interleaves the values of two tensors along their last dimension.
+
+    The two tensors must have the same shape.
+
+    Equivalent to `tl.join(a, b).reshape(a.shape[-1:] + [2 * a.shape[-1]])`
+    """
+    c = core.join(a, b)
+
+    assert isinstance(c.shape, list)
+    if len(c.shape) == 1:
+        # We must have interleaved two scalars.
+        return c
+    else:
+        # This `else` is necessary because Triton's AST parser doesn't
+        # understand that if we take the `if` above we definitely don't run this
+        # `else`.
+        return core.reshape(c, c.shape[:-2] + [2 * c.shape[-2]])
