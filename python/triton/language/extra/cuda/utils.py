@@ -1,4 +1,4 @@
-from .. import core
+from triton.language import core
 
 
 @core.extern

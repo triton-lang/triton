@@ -768,11 +768,9 @@ minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
 
   int minCommitNumber = INT_MAX;
 
-  // TODO pawel: without TMA this does not need to be an optional.
   // DFS the def chain of the extract op to find the insert op. On each path
   // we calculate the number of async_commit. Then we select the minimum number
   // of async_commit ops among all the paths.
-  // If the wait is not needed return std::nullopt.
   std::function<int(Value, Operation *, int)> minOverHistories =
       [&](Value val, Operation *sinkOp, int thisHistorySum) -> int {
     if (Operation *defOp = val.getDefiningOp()) {
