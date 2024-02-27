@@ -6,8 +6,151 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 using namespace mlir::triton::gpu;
-namespace {
 
+namespace mlir::triton::gpu {
+
+Type getFunctionType(Type resultType, ValueRange operands) {
+  SmallVector<Type> operandTypes(operands.getTypes());
+  return LLVM::LLVMFunctionType::get(resultType, operandTypes);
+}
+
+LLVM::LLVMFuncOp appendOrGetExternFuncOp(ConversionPatternRewriter &rewriter,
+                                         Operation *op, StringRef funcName,
+                                         Type funcType,
+                                         StringRef libname /*= ""*/,
+                                         StringRef libpath /*= ""*/) {
+  using LLVM::LLVMFuncOp;
+
+  auto funcAttr = StringAttr::get(op->getContext(), funcName);
+  Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(op, funcAttr);
+  if (funcOp)
+    return cast<LLVMFuncOp>(*funcOp);
+
+  auto parent = op->getParentOfType<LLVM::LLVMFuncOp>();
+  OpBuilder b(parent);
+  auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
+  ret.getOperation()->setAttr("libname",
+                              StringAttr::get(op->getContext(), libname));
+  ret.getOperation()->setAttr("libpath",
+                              StringAttr::get(op->getContext(), libpath));
+  return ret;
+}
+
+Type getElementType(Value value) {
+  auto type = value.getType();
+  if (auto tensorType = type.dyn_cast<RankedTensorType>())
+    return tensorType.getElementType();
+  return type;
+}
+// MMA encoding has a different order depending on the element's bit width;
+// reorder if we're in this case.
+SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
+                                 Type ouType) {
+  auto inTensorTy = inType.dyn_cast<RankedTensorType>();
+  auto ouTensorTy = ouType.dyn_cast<RankedTensorType>();
+  if (!inTensorTy || !ouTensorTy)
+    return values;
+  auto inEncoding = dyn_cast<DotOperandEncodingAttr>(inTensorTy.getEncoding());
+  auto ouEncoding = dyn_cast<DotOperandEncodingAttr>(ouTensorTy.getEncoding());
+  assert(inEncoding == ouEncoding);
+  if (!inEncoding)
+    return values;
+  // If the parent of the dot operand is in block encoding, we don't need to
+  // reorder elements
+  auto parentEncoding = dyn_cast<NvidiaMmaEncodingAttr>(ouEncoding.getParent());
+  if (!parentEncoding)
+    return values;
+  size_t inBitWidth = inTensorTy.getElementType().getIntOrFloatBitWidth();
+  size_t ouBitWidth = ouTensorTy.getElementType().getIntOrFloatBitWidth();
+  auto ouEltTy = ouTensorTy.getElementType();
+  if (inBitWidth == ouBitWidth)
+    return values;
+  if (inBitWidth == 16 && ouBitWidth == 32) {
+    SmallVector<Value> ret;
+    for (unsigned i = 0; i < values.size(); i += 8) {
+      ret.push_back(values[i]);
+      ret.push_back(values[i + 1]);
+      ret.push_back(values[i + 4]);
+      ret.push_back(values[i + 5]);
+      ret.push_back(values[i + 2]);
+      ret.push_back(values[i + 3]);
+      ret.push_back(values[i + 6]);
+      ret.push_back(values[i + 7]);
+    }
+    return ret;
+  }
+  if (inBitWidth == 8 && ouBitWidth == 16) {
+    SmallVector<Value> ret;
+    for (unsigned i = 0; i < values.size(); i += 16) {
+      ret.push_back(values[i + 0]);
+      ret.push_back(values[i + 1]);
+      ret.push_back(values[i + 2]);
+      ret.push_back(values[i + 3]);
+      ret.push_back(values[i + 8]);
+      ret.push_back(values[i + 9]);
+      ret.push_back(values[i + 10]);
+      ret.push_back(values[i + 11]);
+      ret.push_back(values[i + 4]);
+      ret.push_back(values[i + 5]);
+      ret.push_back(values[i + 6]);
+      ret.push_back(values[i + 7]);
+      ret.push_back(values[i + 12]);
+      ret.push_back(values[i + 13]);
+      ret.push_back(values[i + 14]);
+      ret.push_back(values[i + 15]);
+    }
+    return ret;
+  }
+  llvm_unreachable("unimplemented code path");
+}
+
+SmallVector<Value> unpackI32(const SmallVector<Value> &inValues, Type srcTy,
+                             ConversionPatternRewriter &rewriter, Location loc,
+                             const LLVMTypeConverter *typeConverter) {
+  auto tensorTy = srcTy.dyn_cast<RankedTensorType>();
+  if (!tensorTy)
+    return inValues;
+  auto encoding = tensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
+  if (!(encoding && encoding.getParent().isa<NvidiaMmaEncodingAttr>()))
+    return inValues;
+  SmallVector<Value> outValues;
+  for (auto v : inValues) {
+    // cast i32 to appropriate eltType vector and extract elements
+    auto eltType = typeConverter->convertType(tensorTy.getElementType());
+    auto vecType = vec_ty(eltType, 32 / eltType.getIntOrFloatBitWidth());
+    auto vec = bitcast(v, vecType);
+    for (int i = 0; i < 32 / eltType.getIntOrFloatBitWidth(); i++) {
+      outValues.push_back(extract_element(vec, i32_val(i)));
+    }
+  }
+  return outValues;
+}
+
+SmallVector<Value> packI32(const SmallVector<Value> &inValues, Type srcTy,
+                           ConversionPatternRewriter &rewriter, Location loc,
+                           const LLVMTypeConverter *typeConverter) {
+  auto tensorTy = srcTy.dyn_cast<RankedTensorType>();
+  if (!tensorTy)
+    return inValues;
+  auto encoding = tensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
+  if (!(encoding && encoding.getParent().isa<NvidiaMmaEncodingAttr>()))
+    return inValues;
+  SmallVector<Value> outValues;
+  auto eltType = typeConverter->convertType(tensorTy.getElementType());
+  int vecWidth = 32 / eltType.getIntOrFloatBitWidth();
+  auto vecType = vec_ty(eltType, vecWidth);
+  for (int i = 0; i < inValues.size(); i += vecWidth) {
+    Value vec = undef(vecType);
+    for (int j = 0; j < vecWidth; j++) {
+      vec = insert_element(vec, inValues[i + j], i32_val(j));
+    }
+    outValues.push_back(bitcast(vec, i32_ty));
+  }
+  return outValues;
+}
+} // namespace mlir::triton::gpu
+
+namespace {
 struct AddPtrOpConversion : public ConvertOpToLLVMPattern<AddPtrOp> {
   using ConvertOpToLLVMPattern<AddPtrOp>::ConvertOpToLLVMPattern;
 
@@ -451,7 +594,72 @@ struct SelectOpConversion
         adaptor.getAttributes().getValue())};
   }
 };
+template <typename OpTy>
+struct MinMaxFOpConversion
+    : ElementwiseOpConversionBase<OpTy, MinMaxFOpConversion<OpTy>> {
+  using Base = ElementwiseOpConversionBase<OpTy, MinMaxFOpConversion<OpTy>>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  static_assert(std::is_same<OpTy, arith::MinimumFOp>::value ||
+                    std::is_same<OpTy, arith::MaximumFOp>::value,
+                "OpTy must be arith::MinimumFOp or arith::MaximumFOp");
+
+  // Choose the destination op based on the OpTy.
+  using DestOpNanProp =
+      typename std::conditional<std::is_same<OpTy, arith::MinimumFOp>::value,
+                                LLVM::MinimumOp, LLVM::MaximumOp>::type;
+  using DestOpNoNanProp =
+      typename std::conditional<std::is_same<OpTy, arith::MinimumFOp>::value,
+                                LLVM::MinNumOp, LLVM::MaxNumOp>::type;
+
+  explicit MinMaxFOpConversion(LLVMTypeConverter &typeConverter,
+                               ModuleAxisInfoAnalysis &axisAnalysisPass,
+                               bool hwNanPropagationSupported,
+                               PatternBenefit benefit = 1)
+      : Base::ElementwiseOpConversionBase(typeConverter, axisAnalysisPass,
+                                          benefit),
+        hwNanPropagationSupported(hwNanPropagationSupported) {}
+
+  SmallVector<Value> createDestOps(OpTy op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    if (hwNanPropagationSupported) {
+      return {rewriter.create<DestOpNanProp>(loc, elemTy, operands[0][0],
+                                             operands[0][1])};
+    }
+    // Handle workaround for NaN propagation, i.e. software emulation of NaN
+    // propagation. If any of the operands is NaN, return NaN.
+    auto lhs = operands[0][0];
+    auto rhs = operands[0][1];
+    auto lhsIsNan =
+        rewriter.create<LLVM::FCmpOp>(loc, LLVM::FCmpPredicate::une, lhs, lhs);
+    auto rhsIsNan =
+        rewriter.create<LLVM::FCmpOp>(loc, LLVM::FCmpPredicate::une, rhs, rhs);
+    auto isNan = rewriter.create<LLVM::OrOp>(loc, lhsIsNan, rhsIsNan);
+    auto nonNanRes = rewriter.create<DestOpNoNanProp>(loc, elemTy, lhs, rhs);
+
+    auto nan = LLVM::createNaNConstant(loc, rewriter, elemTy);
+
+    // Select the result based on the isNan flag.
+    return {rewriter.create<LLVM::SelectOp>(loc, isNan, nan, nonNanRes)};
+  }
+
+private:
+  bool hwNanPropagationSupported;
+};
 } // namespace
+
+void mlir::triton::populateMinMaxFOpToLLVMPattern(
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, bool hwNanPropagationSupported,
+    PatternBenefit benefit) {
+  patterns.add<MinMaxFOpConversion<arith::MinimumFOp>>(
+      typeConverter, axisInfoAnalysis, hwNanPropagationSupported, benefit);
+  patterns.add<MinMaxFOpConversion<arith::MaximumFOp>>(
+      typeConverter, axisInfoAnalysis, hwNanPropagationSupported, benefit);
+}
 
 void mlir::triton::populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,

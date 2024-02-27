@@ -49,6 +49,45 @@ DenseElementsAttr getConstantValue(Builder &builder, Attribute value,
   return res;
 }
 
+bool isAddPtrOffsetCombinable(Value first, Value second) {
+  auto GetConstantIntValue = [](Value val) -> std::optional<llvm::APInt> {
+    DenseElementsAttr constAttr;
+    auto defOp = val.getDefiningOp();
+    if (auto splatOp = llvm::dyn_cast_or_null<SplatOp>(defOp))
+      val = splatOp.getSrc();
+    else if (matchPattern(defOp, m_Constant(&constAttr)) &&
+             constAttr.isSplat()) {
+      auto attr = constAttr.getSplatValue<Attribute>();
+      // Check IntegerAttr
+      if (auto intAttr = dyn_cast_or_null<IntegerAttr>(attr))
+        return intAttr.getValue();
+    }
+
+    // Check constant value.
+    llvm::APInt intVal;
+    if (matchPattern(val, m_ConstantInt(&intVal)))
+      return intVal;
+
+    return std::nullopt;
+  };
+
+  if (first.getType() == second.getType()) {
+    // Whether bitwidth of element type is equal to pointer
+    if (getElementTypeOrSelf(first.getType()).getIntOrFloatBitWidth() == 64)
+      return true;
+
+    // first + second does not overflow
+    auto firstVal = GetConstantIntValue(first);
+    auto secondVal = GetConstantIntValue(second);
+    if (firstVal && secondVal) {
+      bool overflow = false;
+      auto resVal = firstVal->sadd_ov(*secondVal, overflow);
+      return !overflow;
+    }
+  }
+  return false;
+}
+
 // TODO(csigg): remove after next LLVM integrate.
 using FastMathFlags = arith::FastMathFlags;
 
@@ -195,7 +234,7 @@ public:
     patterns.add<CombineDotAddFRevPattern>(context);
     // %}
     patterns.add<CombineSelectMaskedLoadPattern>(context);
-    // patterns.add<CombineAddPtrPattern>(context);
+    patterns.add<CombineAddPtrPattern>(context);
     patterns.add<CombineBroadcastConstantPattern>(context);
     patterns.add<CombineBroadcastMulReducePattern>(context);
 
