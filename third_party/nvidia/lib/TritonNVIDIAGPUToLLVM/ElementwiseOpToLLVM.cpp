@@ -990,7 +990,7 @@ struct ClampFOpConversion
     return {};
   }
 
-protected:
+private:
   int computeCapability;
 };
 
