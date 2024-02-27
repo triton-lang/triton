@@ -4,9 +4,9 @@
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/Interfaces/FunctionImplementation.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 
 namespace mlir {
@@ -153,7 +153,6 @@ void StoreOp::print(OpAsmPrinter &printer) {
 
 // enum attribute definitions
 #include "triton/Dialect/Triton/IR/OpsEnums.cpp.inc"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 namespace mlir {
 namespace triton {

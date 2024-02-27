@@ -3,7 +3,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include <gtest/gtest.h>
 
 namespace mlir {
