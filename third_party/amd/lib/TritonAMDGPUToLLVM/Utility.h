@@ -22,6 +22,12 @@ Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                   int i);
 Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                   Value i);
+Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
+                  Value val, Value pred);
+Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
+                 Type elemTy, Value pred, const std::string& val);
+
+
 } // namespace AMD
 
 } // namespace LLVM

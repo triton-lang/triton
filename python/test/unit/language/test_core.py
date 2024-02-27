@@ -2494,8 +2494,8 @@ layouts = [
 @pytest.mark.parametrize("op", ["sum", "max"])
 @pytest.mark.parametrize("first_axis", [0, 1])
 def test_chain_reduce(M, N, src_layout, op, device, first_axis):
-    if is_hip():
-        pytest.skip("test_chain_reduce is not supported in HIP")
+    # if is_hip():
+    #     pytest.skip("test_chain_reduce is not supported in HIP")
 
     op_str = ""
     if op == "sum":

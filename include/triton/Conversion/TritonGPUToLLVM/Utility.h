@@ -112,6 +112,8 @@ using namespace mlir::triton;
 #define array_ty(elemTy, count) LLVM::LLVMArrayType::get(elemTy, count)
 
 // Constants
+#define f16_val(...) LLVM::createConstantF16(loc, rewriter, __VA_ARGS__)
+#define bf16_val(...) LLVM::createConstantBF16(loc, rewriter, __VA_ARGS__)
 #define f32_val(...) LLVM::createConstantF32(loc, rewriter, __VA_ARGS__)
 #define f64_val(...) LLVM::createConstantF64(loc, rewriter, __VA_ARGS__)
 #define i32_val(...) LLVM::createConstantI32(loc, rewriter, __VA_ARGS__)
@@ -188,6 +190,13 @@ T getLinearIndex(llvm::ArrayRef<T> multiDimIndex, llvm::ArrayRef<T> shape,
 
 namespace LLVM {
 using namespace mlir::triton;
+
+/// Create a 16-bit bfloat constant.
+Value createConstantBF16(Location loc, OpBuilder &rewriter, float v);
+
+/// Create a 16-bit float constant.
+Value createConstantF16(Location loc, OpBuilder &rewriter, float v);
+
 
 Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v);
 

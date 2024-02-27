@@ -122,6 +122,66 @@ Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                         i32_val(0x1f));
 }
 
+Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
+                  Value val, Value pred) {
+  auto ty = val.getType();
+  auto val_ty = vec_ty(ty, 1);
+  Value vec_val = undef(val_ty);
+  vec_val = insert_element(val_ty, vec_val, val, i32_val(0));
+
+  auto vec_ty = vec_ty(i1_ty, 1);
+  Value vec_pred = undef(vec_ty);
+  vec_pred = insert_element(vec_ty, vec_pred, pred, i32_val(0));
+
+  rewriter.create<LLVM::MaskedStoreOp>(loc, vec_val, ptr, vec_pred, 4);
+  return val;
+}
+
+template<class T>
+T getVal(const std::string& val) {
+  if (val == "max") {
+    return std::numeric_limits<T>::max();
+  } else if (val == "min") {
+    return std::numeric_limits<T>::min();
+  } else if (val == "zero") {
+    return T(0);
+  } else if (val == "one") {
+    return T(1);
+  }
+  return T(110);
+}
+
+Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
+                 Type elemTy, Value pred, const std::string& val) {
+  auto loaded = rewriter.create<scf::IfOp>(loc, pred,
+    [&](OpBuilder& builder, Location loc) {
+      auto loadVal = load(elemTy, ptr);
+      builder.create<scf::YieldOp>(loc, ValueRange(loadVal));
+    },
+    [&](OpBuilder& builder, Location loc) {
+      Value initVal;
+      if (elemTy.isF16()) {
+        float fVal = getVal<float>(val);
+        initVal = f16_val(fVal);
+      } else if (elemTy.isInteger(32)) {
+        int ival = getVal<int>(val);
+        initVal = i32_val(ival);
+      } else if (elemTy.isInteger(64)) {
+        int64_t i64Val = getVal<int64_t>(val);
+        initVal = int_val(64, i64Val);
+      } else if (elemTy.isF64()) {
+        double dVal = getVal<double>(val);
+        initVal = f64_val(dVal);
+      } else {
+        float fVal = getVal<float>(val);
+        initVal = f32_val(fVal);
+      }
+      builder.create<mlir::scf::YieldOp>(loc, ValueRange({initVal}));
+    });
+  return loaded->getResult(0);
+}
+
+
 } // namespace AMD
 
 } // namespace LLVM

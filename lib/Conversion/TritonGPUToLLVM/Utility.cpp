@@ -7,6 +7,18 @@ namespace mlir {
 namespace LLVM {
 using namespace mlir::triton;
 
+Value createConstantBF16(Location loc, OpBuilder &rewriter, float v) {
+  auto type = type::bf16Ty(rewriter.getContext());
+  return rewriter.create<LLVM::ConstantOp>(loc, type,
+                                           rewriter.getFloatAttr(type, v));
+}
+
+Value createConstantF16(Location loc, OpBuilder &rewriter, float v) {
+  auto type = type::f16Ty(rewriter.getContext());
+  return rewriter.create<LLVM::ConstantOp>(loc, type,
+                                           rewriter.getF16FloatAttr(v));
+}
+
 Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v) {
   auto i32ty = rewriter.getIntegerType(32);
   return rewriter.create<LLVM::ConstantOp>(loc, i32ty,

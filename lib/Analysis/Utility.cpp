@@ -217,6 +217,26 @@ bool ReduceOpHelper::isSupportedLayout() {
   return false;
 }
 
+std::string ReduceOpHelper::getLoadDefaultValue() {
+  Block *block = &(*op.getCombineOp().begin());
+  Operation *yield = block->getTerminator();
+  Operation *rOp = yield->getOperand(0).getDefiningOp();
+
+  if (!rOp || rOp->getNumOperands() != 2 ||
+      rOp->getNumResults() != 1)
+    return "zero";
+
+  if (isa<arith::AddIOp>(rOp) or isa<arith::AddFOp>(rOp) or isa<arith::OrIOp>(rOp) or isa<arith::XOrIOp>(rOp))
+    return "zero";
+  else if (isa<arith::AndIOp>(rOp))
+    return "one";
+  else if (isa<arith::MinSIOp>(rOp) or isa<arith::MinUIOp>(rOp) or isa<arith::MinNumFOp>(rOp))
+    return "max";
+  else if (isa<arith::MaxSIOp>(rOp) or isa<arith::MaxUIOp>(rOp) or isa<arith::MaxNumFOp>(rOp))
+    return "min";
+  return "zero";
+}
+
 unsigned ScanLoweringHelper::getAxisNumElementsPerThread() {
   return getEncoding().getSizePerThread()[getAxis()];
 }

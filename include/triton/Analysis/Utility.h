@@ -64,6 +64,8 @@ public:
 
   unsigned getAxis() { return axis; }
 
+  std::string getLoadDefaultValue();
+
 private:
   triton::ReduceOp op;
   ArrayRef<int64_t> srcShape;
