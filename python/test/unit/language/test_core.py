@@ -2553,10 +2553,6 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis):
 
 
 def test_generic_reduction(device):
-    if is_hip():
-        pytest.skip(
-            'test_generic_reduction for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
 
     @triton.jit
     def var_mean_kernel(X, out_mean, out_var, BLOCK: tl.constexpr):
