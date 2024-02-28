@@ -1233,12 +1233,6 @@ def cat(input, other, can_reorder=False, _builder=None):
 
 
 @builtin
-def _experimental_join(a, b, _builder=None):
-    """Forwards to core.join for temporary backwards compat."""
-    return join(a, b, _builder)
-
-
-@builtin
 def join(a, b, _builder=None):
     """
     Join the given tensors in a new, minor dimension.
@@ -1262,11 +1256,8 @@ def join(a, b, _builder=None):
     return semantic.join(a, b, _builder)
 
 
-@_tensor_member_fn
-@builtin
-def _experimental_split(a, _builder=None, _generator=None) -> tuple[tensor, tensor]:
-    """Forwards to core.split for temporary backwards compat."""
-    return split(a, _builder, _generator)
+# For temporary backwards compat.
+_experimental_join = join
 
 
 @jit
@@ -1307,6 +1298,10 @@ def split(a, _builder=None, _generator=None) -> tuple[tensor, tensor]:
         out_rhs = cast(tensor, reduce(out_rhs, None, _take_first, _builder=_builder, _generator=_generator))
 
     return out_lhs, out_rhs
+
+
+# For temporary backwards compat.
+_experimental_split = split
 
 
 @_tensor_member_fn
