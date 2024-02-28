@@ -2105,18 +2105,34 @@ def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, device):
         np.testing.assert_equal(z_ref, z_tri)
 
 
-scan_layouts = [
-    BlockedLayout([1, 4], [4, 8], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [8, 4], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([4, 1], [4, 8], [1, 4], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([2, 2], [4, 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([2, 2], [8, 4], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [8, 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([4, 1], [4, 8], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([2, 2], [4, 8], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([2, 2], [8, 4], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-]
+if THREADS_PER_WARP == 32:
+    scan_layouts = [
+        BlockedLayout([1, 4], [4, 8], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
+        BlockedLayout([1, 4], [8, 4], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
+        BlockedLayout([4, 1], [4, 8], [1, 4], [0, 1], [1, 1], [1, 1], [0, 1]),
+        BlockedLayout([2, 2], [4, 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
+        BlockedLayout([2, 2], [8, 4], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
+        BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+        BlockedLayout([1, 4], [8, 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+        BlockedLayout([4, 1], [4, 8], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
+        BlockedLayout([2, 2], [4, 8], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+        BlockedLayout([2, 2], [8, 4], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+    ]
+elif THREADS_PER_WARP == 64:
+    scan_layouts = [
+        BlockedLayout([1, 4], [4, 16], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
+        BlockedLayout([1, 4], [16, 4], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
+        BlockedLayout([4, 1], [4, 16], [1, 4], [0, 1], [1, 1], [1, 1], [0, 1]),
+        BlockedLayout([2, 2], [4, 16], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
+        BlockedLayout([2, 2], [16, 4], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
+        BlockedLayout([1, 4], [4, 16], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+        BlockedLayout([1, 4], [16, 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+        BlockedLayout([4, 1], [4, 16], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
+        BlockedLayout([2, 2], [4, 16], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+        BlockedLayout([2, 2], [16, 4], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+    ]
+else:
+    assert("Unsupported warp size")
 
 # ---------------
 # test histogram
@@ -2202,12 +2218,9 @@ def test_locality(op, BLOCK_N, N, num_pid_n, device):
 @pytest.mark.parametrize("src_layout", scan_layouts)
 @pytest.mark.parametrize("axis", [0, 1])
 def test_scan_layouts(M, N, src_layout, axis, device):
-    if is_hip():
-        pytest.skip("test_scan_layouts is not supported in HIP")
-
     ir = f"""
     #blocked = {src_layout}
-    module attributes {{"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32}} {{
+    module attributes {{"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
     tt.func public @kernel_0d1d(%arg0: !tt.ptr<i32, 1> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<i32, 1> {{tt.divisibility = 16 : i32}}) {{
       %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #blocked>
       %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #blocked}}>>
