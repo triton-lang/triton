@@ -2132,7 +2132,7 @@ elif THREADS_PER_WARP == 64:
         BlockedLayout([2, 2], [16, 4], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
     ]
 else:
-    assert("Unsupported warp size")
+    assert ("Unsupported warp size")
 
 # ---------------
 # test histogram
