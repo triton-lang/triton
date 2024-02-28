@@ -152,6 +152,7 @@ jobs:
         mv ./llvm-project/host-tools/bin ./host-tools
         HOST_TOOLS="$(pwd)/host-tools"
         rm -rf llvm-project/host-tools
+        sudo apt-get update
         sudo apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf qemu-user-static gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
         cp -r /usr/aarch64-linux-gnu/lib ./arm-sysroot
         cp -r /usr/aarch64-linux-gnu/include ./arm-sysroot
