@@ -261,6 +261,8 @@ void init_triton_ir(py::module &&m) {
   py::class_<Block>(m, "block", py::module_local())
       .def("arg",
            [](Block &self, int index) -> BlockArgument {
+             if (index >= self.getNumArguments())
+               throw pybind11::index_error("Block argument index out of range");
              return self.getArgument(index);
            })
       .def("add_argument",
@@ -332,17 +334,23 @@ void init_triton_ir(py::module &&m) {
            [](OpState &self) -> unsigned { return self->getNumResults(); })
       .def("get_result",
            [](OpState &self, unsigned idx) -> Value {
+             if (idx >= self->getNumResults())
+               throw pybind11::index_error("Op result index out of range");
              return self->getResult(idx);
            })
       .def(
           "get_region",
           [](OpState &self, unsigned idx) -> Region & {
+            if (idx >= self->getNumRegions())
+              throw pybind11::index_error("Op region index out of range");
             return self->getRegion(idx);
           },
           ret::reference)
       .def(
           "get_body",
           [](scf::ForOp &self, unsigned idx) -> Block * {
+            if (idx >= self->getNumRegions())
+              throw pybind11::index_error("Op region index out of range");
             return self.getBody(idx);
           },
           ret::reference)
@@ -443,6 +451,9 @@ void init_triton_ir(py::module &&m) {
       // .def("add_attr", &ir::function::add_attr);
       .def("args",
            [](FuncOp &self, unsigned idx) -> BlockArgument {
+             if (idx >= self.getNumArguments())
+               throw pybind11::index_error(
+                   "Function argument index out of range");
              return self.getArgument(idx);
            })
       .def(
@@ -727,7 +738,7 @@ void init_triton_ir(py::module &&m) {
                                   self.getBuilder().getBoolAttr(noinline))};
                return self.create<FuncOp>(funcName, funcTy, attrs);
              }
-             throw std::runtime_error("invalid function type");
+             throw std::invalid_argument("invalid function type");
            })
       .def(
           "create_block",
@@ -1197,7 +1208,7 @@ void init_triton_ir(py::module &&m) {
              auto rhsType = rhs.getType().dyn_cast<RankedTensorType>();
              if (!(lhsType.getShape().size() == 1 &&
                    rhsType.getShape().size() == 1))
-               throw std::runtime_error(
+               throw std::invalid_argument(
                    "shape not supported by cat. Expecting rank-1 inputs");
              std::vector<int64_t> shape{lhsType.getShape()[0] +
                                         rhsType.getShape()[0]};
@@ -1230,7 +1241,7 @@ void init_triton_ir(py::module &&m) {
              if (auto argType = arg.getType().dyn_cast<RankedTensorType>())
                return self.createOrFold<BroadcastOp>(
                    RankedTensorType::get(shape, argType.getElementType()), arg);
-             throw std::runtime_error(
+             throw std::invalid_argument(
                  "arg is not of RankedTensorType, use create_splat");
            })
       .def("create_splat",
@@ -1290,7 +1301,7 @@ void init_triton_ir(py::module &&m) {
       .def("create_get_program_id",
            [](TritonOpBuilder &self, int axis) -> Value {
              if (axis < 0 || axis > 3)
-               throw std::runtime_error("program_id must be in [0,3]");
+               throw pybind11::index_error("program_id must be in [0,3]");
              return self.create<GetProgramIdOp>(
                  self.getBuilder().getI32Type(),
                  ProgramIDDimAttr::get(self.getBuilder().getContext(),
