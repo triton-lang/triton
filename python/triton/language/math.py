@@ -203,4 +203,7 @@ def fma(x, y, z, _builder=None):
     x = core._to_tensor(x, _builder)
     y = core._to_tensor(y, _builder)
     z = core._to_tensor(z, _builder)
+    x, y = core.binary_op_type_legalization(x, y, _builder)
+    z, x = core.binary_op_type_legalization(z, x, _builder)
+    z, y = core.binary_op_type_legalization(z, y, _builder)
     return core.tensor(_builder.create_fma(x.handle, y.handle, z.handle), x.type)
