@@ -267,7 +267,7 @@ class Builder:
         # Triton has IEEE, not numpy/torch, semantics for %, and those carry
         # through to //, so we have to use a nonstandard expression to get a
         # reference result for //.
-        return TensorHandle((lhs.data - np.fmod(lhs.data, rhs.data)) / rhs.data, lhs.dtype)
+        return TensorHandle((lhs.data - np.fmod(lhs.data, rhs.data)) // rhs.data, lhs.dtype)
 
     def create_ashr(self, lhs, rhs):
         # Triton's rshift operator depends on the signedness of the left operand
@@ -279,7 +279,8 @@ class Builder:
 
     # ternary functions
     def ternary_op(self, lhs, rhs, other, op):
-        return TensorHandle(op(lhs.data, rhs.data, other.data), other.dtype)
+        ret = TensorHandle(op(lhs.data, rhs.data, other.data), other.dtype)
+        return ret
 
     create_select = lambda self, cond, lhs, rhs: self.ternary_op(cond, lhs, rhs, np.where)
 
@@ -311,7 +312,9 @@ class Builder:
 
     def create_addptr(self, ptr, offset):
         dtype_tt = ptr.dtype.element_ty
-        return TensorHandle(ptr.data + (dtype_tt.primitive_bitwidth // 8) * offset.data.astype(np.uint64), ptr.dtype)
+        # int1's bitwidth is 1, but we need to use 8 for pointer arithmetic
+        return TensorHandle(ptr.data + (max(1, dtype_tt.primitive_bitwidth // 8)) * offset.data.astype(np.uint64),
+                            ptr.dtype)
 
     def create_tensor_pointer_load(self, ptr, boundary_check, padding_option, cache_modifier, eviction_policy,
                                    is_volatile):
