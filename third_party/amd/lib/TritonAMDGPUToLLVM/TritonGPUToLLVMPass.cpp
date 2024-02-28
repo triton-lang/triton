@@ -445,37 +445,33 @@ struct ConvertTritonAMDGPUToLLVM
 
     RewritePatternSet patterns(context);
     AMD::TargetInfo targetInfo("gfx1200");
-
+    int benefit = patternBenefitPrioritizeOverLLVMConversions;
     auto populatePatterns1 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, indexCacheInfo,
-                   patternBenefitPrioritizeOverLLVMConversions);
+                   allocation, indexCacheInfo, benefit);
     };
 
     auto populatePatterns2 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, patternBenefitPrioritizeOverLLVMConversions);
+                   allocation, benefit);
     };
 
     auto populatePatterns3 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, indexCacheInfo,
-                   patternBenefitPrioritizeOverLLVMConversions);
+                   allocation, indexCacheInfo, benefit);
     };
 
     auto populatePatterns4 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, indexCacheInfo, computeCapability,
-                   patternBenefitPrioritizeOverLLVMConversions);
+                   allocation, indexCacheInfo, computeCapability, benefit);
     };
     auto populatePatterns4Temp = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
                    allocation, indexCacheInfo, computeCapability, targetInfo,
-                   patternBenefitPrioritizeOverLLVMConversions);
+                   benefit);
     };
     auto populatePatterns5 = [&](auto populateFunc) {
-      populateFunc(typeConverter, patterns,
-                   patternBenefitPrioritizeOverLLVMConversions);
+      populateFunc(typeConverter, patterns, benefit);
     };
 
     populatePatterns1(AMD::populateTritonGPUToLLVMPatterns);
@@ -486,6 +482,8 @@ struct ConvertTritonAMDGPUToLLVM
     populatePatterns4(AMD::populateReduceOpToLLVMPatterns);
     populatePatterns1(AMD::populateScanOpToLLVMPatterns);
     populatePatterns5(mlir::triton::populateViewOpToLLVMPatterns);
+    mlir::triton::populateHistogramOpToLLVMPatterns(typeConverter, patterns,
+                                                    targetInfo, benefit);
 
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
