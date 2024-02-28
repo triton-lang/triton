@@ -13,4 +13,10 @@ struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
   static StringRef name() { return "BreakStructPhiNodesPass"; }
 };
 
+struct RemoveBlockCSEPass : PassInfoMixin<RemoveBlockCSEPass> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+
+  static StringRef name() { return "RemoveBlockCSEPass"; }
+};
+
 } // namespace llvm

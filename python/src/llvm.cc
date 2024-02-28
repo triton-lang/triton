@@ -30,6 +30,11 @@ struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
   static StringRef name() { return "BreakStructPhiNodesPass"; }
 };
+
+struct RemoveBlockCSEPass : PassInfoMixin<RemoveBlockCSEPass> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+  static StringRef name() { return "RemoveBlockCSEPass"; }
+};
 } // namespace llvm
 
 using namespace llvm;
@@ -214,6 +219,7 @@ void init_triton_llvm(py::module &&m) {
           // all the struct are removed for the following passes.
           fpm.addPass(BreakStructPhiNodesPass());
           fpm.addPass(InstCombinePass());
+          fpm.addPass(RemoveBlockCSEPass());
         });
     mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
     mpm.run(*mod, mam);

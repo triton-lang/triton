@@ -1132,6 +1132,9 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   patterns.add<OpToExternCallConversion<triton::PreciseDivFOp>>(
       typeConverter, axisInfoAnalysis, "__nv_fdiv_rn", benefit);
 
+  patterns.add<OpToExternCallConversion<triton::BlockCSEOp>>(
+      typeConverter, axisInfoAnalysis, "__triton_block_cse", benefit);
+
   mlir::triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
                                                     axisInfoAnalysis, benefit);
 
