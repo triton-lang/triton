@@ -11,9 +11,8 @@
 
 namespace mlir {
 
-class ModuleAxisInfoAnalysis;
-
 namespace triton {
+class ModuleAxisInfoAnalysis;
 class LoadOp;
 class StoreOp;
 class FuncOp;
@@ -43,7 +42,7 @@ unsigned getElementBitWidth(RankedTensorType type);
 // along an axis with greatest continuity.
 unsigned
 getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
-                        mlir::ModuleAxisInfoAnalysis &axisInfoAnalysis);
+                        triton::ModuleAxisInfoAnalysis &axisInfoAnalysis);
 
 /* Dump Triton IR in graphviz dot format.
  *

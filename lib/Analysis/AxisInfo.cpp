@@ -6,10 +6,10 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
-namespace mlir {
+namespace mlir::triton {
+namespace {
 
-// Function for extended Euclidean Algorithm
-static int64_t gcdImpl(int64_t a, int64_t b, int64_t *x, int64_t *y) {
+int64_t gcdImpl(int64_t a, int64_t b, int64_t *x, int64_t *y) {
   // Base Case
   if (a == 0) {
     *x = 0;
@@ -25,7 +25,7 @@ static int64_t gcdImpl(int64_t a, int64_t b, int64_t *x, int64_t *y) {
   return gcd;
 }
 
-static int64_t gcd(int64_t a, int64_t b) {
+int64_t gcd(int64_t a, int64_t b) {
   if (a == 0)
     return b;
   if (b == 0)
@@ -34,114 +34,170 @@ static int64_t gcd(int64_t a, int64_t b) {
   return gcdImpl(a, b, &x, &y);
 }
 
-static constexpr int log2Int(int64_t num) {
+constexpr int log2Int(int64_t num) {
   return (num > 1) ? 1 + log2Int(num / 2) : 0;
 }
 
 // If lhs * rhs overflows, return max value possible value for the type
-static int64_t multiplyDivisor(int64_t lhs, int64_t rhs) {
+int64_t multiplyDivisor(int64_t lhs, int64_t rhs) {
   int64_t maxDivisor = highestPowOf2Divisor<int64_t>(0);
   if (lhs > maxDivisor / rhs)
     return maxDivisor;
   return lhs * rhs;
 }
 
-//===----------------------------------------------------------------------===//
-// AxisInfo
-//===----------------------------------------------------------------------===//
+class AxisInfoVisitor {
+public:
+  AxisInfoVisitor() = default;
+  virtual ~AxisInfoVisitor() = default;
 
-template <class T>
-void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
-                                            DimVectorT *contiguity,
-                                            DimVectorT *divisibility,
-                                            DimVectorT *constancy) {
-  // liast of attributes that we care about
-  SmallVector<std::pair<DimVectorT *, std::string>> retVecs;
-  retVecs.push_back({contiguity, "tt.contiguity"});
-  retVecs.push_back({divisibility, "tt.divisibility"});
-  retVecs.push_back({constancy, "tt.constancy"});
-  // initialize attributes one by one
-  for (auto [vec, attrName] : retVecs) {
-    Attribute attr = funcOp.getArgAttr(argNumber, attrName);
-    if (auto int_attr = attr.dyn_cast_or_null<IntegerAttr>())
-      *vec = DimVectorT(contiguity->size(), int_attr.getValue().getZExtValue());
-    if (auto dense_attr = attr.dyn_cast_or_null<DenseElementsAttr>()) {
-      auto vals = dense_attr.getValues<int>();
-      *vec = DimVectorT(vals.begin(), vals.end());
-    }
-  }
-}
-
-AxisInfo AxisInfo::getPessimisticValueState(Value value) {
-  auto rank = 1;
-  if (TensorType ty = value.getType().dyn_cast<TensorType>())
-    rank = ty.getRank();
-  if (triton::PointerType ty = value.getType().dyn_cast<triton::PointerType>())
-    if (TensorType elemTy = ty.getPointeeType().dyn_cast<TensorType>())
-      rank = elemTy.getRank();
-
-  DimVectorT knownContiguity(rank, 1);
-  DimVectorT knownDivisibility(rank, 1);
-  DimVectorT knownConstancy(rank, 1);
-
-  BlockArgument blockArg = value.dyn_cast<BlockArgument>();
-
-  if (blockArg && blockArg.getOwner()->isEntryBlock()) {
-    Operation *op = blockArg.getOwner()->getParentOp();
-    if (auto fun = dyn_cast<FunctionOpInterface>(op))
-      initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
-                                   &knownContiguity, &knownDivisibility,
-                                   &knownConstancy);
-    // llvm codegen check alignment to generate vector load/store
-    // would be nice if this wasn't the case
-    else if (auto fun = dyn_cast<LLVM::LLVMFuncOp>(op))
-      initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
-                                   &knownContiguity, &knownDivisibility,
-                                   &knownConstancy);
-  } else if (Operation *op = value.getDefiningOp()) {
-    if (Attribute attr = op->getDiscardableAttr("tt.divisibility")) {
-      auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
-      knownDivisibility = DimVectorT(vals.begin(), vals.end());
-    }
-    if (Attribute attr = op->getDiscardableAttr("tt.contiguity")) {
-      auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
-      knownContiguity = DimVectorT(vals.begin(), vals.end());
-    }
-    if (Attribute attr = op->getDiscardableAttr("tt.constancy")) {
-      auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
-      knownConstancy = DimVectorT(vals.begin(), vals.end());
-    }
+  static bool isContiguousDim(const AxisInfo &info, ArrayRef<int64_t> shape,
+                              int dim) {
+    return info.getContiguity(dim) == shape[dim];
   }
 
-  return AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
-}
-
-// The gcd of both arguments for each dimension
-AxisInfo AxisInfo::join(const AxisInfo &lhs, const AxisInfo &rhs) {
-  // If one argument is not initialized, return the other.
-  if (lhs.getRank() == 0)
-    return rhs;
-  if (rhs.getRank() == 0)
-    return lhs;
-  DimVectorT contiguity;
-  DimVectorT divisibility;
-  DimVectorT constancy;
-  for (auto d = 0; d < lhs.getRank(); ++d) {
-    contiguity.push_back(gcd(lhs.getContiguity(d), rhs.getContiguity(d)));
-    divisibility.push_back(gcd(lhs.getDivisibility(d), rhs.getDivisibility(d)));
-    constancy.push_back(gcd(lhs.getConstancy(d), rhs.getConstancy(d)));
+  static bool isConstantDim(const AxisInfo &info, ArrayRef<int64_t> shape,
+                            int dim) {
+    return info.getConstancy(dim) == shape[dim];
   }
-  std::optional<int64_t> constantValue;
-  if (lhs.getConstantValue().has_value() &&
-      rhs.getConstantValue().has_value() &&
-      lhs.getConstantValue() == rhs.getConstantValue())
-    constantValue = lhs.getConstantValue();
-  return AxisInfo(contiguity, divisibility, constancy, constantValue);
-}
 
-//===----------------------------------------------------------------------===//
-// AxisInfoVisitor
-//===----------------------------------------------------------------------===//
+  virtual AxisInfo
+  getAxisInfo(Operation *op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) = 0;
+
+  virtual bool match(Operation *op) = 0;
+};
+
+// Base class for all operations
+template <typename OpTy> class AxisInfoVisitorImpl : public AxisInfoVisitor {
+public:
+  using AxisInfoVisitor::AxisInfoVisitor;
+
+  AxisInfo
+  getAxisInfo(Operation *op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) final {
+    return getAxisInfo(cast<OpTy>(op), operands);
+  }
+
+  bool match(Operation *op) final { return isa<OpTy>(op); }
+
+  virtual AxisInfo
+  getAxisInfo(OpTy op, ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) {
+    llvm_unreachable("Unimplemented getAxisInfo");
+  }
+};
+
+// Binary operations
+template <typename OpTy>
+class BinaryOpVisitorImpl : public AxisInfoVisitorImpl<OpTy> {
+public:
+  using AxisInfoVisitorImpl<OpTy>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(OpTy op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    auto lhsInfo = operands[0]->getValue();
+    auto rhsInfo = operands[1]->getValue();
+    auto rank = lhsInfo.getRank();
+    assert(operands.size() == 2 && "Expected two operands");
+    AxisInfo::DimVectorT contiguity;
+    AxisInfo::DimVectorT divisibility;
+    AxisInfo::DimVectorT constancy;
+    auto constantValue = getConstantValue(op, lhsInfo, rhsInfo);
+    for (auto d = 0; d < rank; ++d) {
+      if (constantValue.has_value()) {
+        contiguity.push_back(1);
+        constancy.push_back(
+            std::max(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
+        divisibility.push_back(
+            highestPowOf2Divisor<int64_t>(constantValue.value()));
+      } else {
+        contiguity.push_back(getContiguity(op, lhsInfo, rhsInfo, d));
+        constancy.push_back(getConstancy(op, lhsInfo, rhsInfo, d));
+        divisibility.push_back(getDivisibility(op, lhsInfo, rhsInfo, d));
+      }
+    }
+    return AxisInfo(contiguity, divisibility, constancy, constantValue);
+  }
+
+protected:
+  virtual int64_t getContiguity(OpTy op, const AxisInfo &lhs,
+                                const AxisInfo &rhs, int dim) {
+    return 1;
+  }
+
+  virtual int64_t getDivisibility(OpTy op, const AxisInfo &lhs,
+                                  const AxisInfo &rhs, int dim) {
+    return 1;
+  }
+
+  virtual int64_t getConstancy(OpTy op, const AxisInfo &lhs,
+                               const AxisInfo &rhs, int dim) {
+    return 1;
+  }
+
+  virtual std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
+                                                  const AxisInfo &rhs) {
+    return {};
+  }
+};
+
+class AxisInfoVisitorList {
+public:
+  template <typename... Ts, typename = std::enable_if_t<sizeof...(Ts) != 0>>
+  void append() {
+    (visitors.emplace_back(std::make_unique<Ts>()), ...);
+  }
+
+  AxisInfo apply(Operation *op,
+                 ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) {
+    for (auto &visitor : visitors)
+      if (visitor->match(op))
+        return visitor->getAxisInfo(op, operands);
+    return AxisInfo();
+  }
+
+private:
+  std::vector<std::unique_ptr<AxisInfoVisitor>> visitors;
+};
+
+class AxisInfoAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
+                             dataflow::Lattice<AxisInfo>> {
+private:
+  AxisInfoVisitorList visitors;
+
+  void setToEntryState(dataflow::Lattice<AxisInfo> *lattice) override {
+    propagateIfChanged(
+        lattice,
+        lattice->join(AxisInfo::getPessimisticValueState(lattice->getPoint())));
+  }
+
+  void visitNonControlFlowArguments(
+      Operation *op, const RegionSuccessor &successor,
+      ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices,
+      unsigned firstIndex) override {
+    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+      visitForOpInductionVar(forOp, argLattices);
+    } else {
+      setAllToEntryStates(argLattices.take_front(firstIndex));
+      setAllToEntryStates(argLattices.drop_front(
+          firstIndex + successor.getSuccessorInputs().size()));
+    }
+  }
+
+public:
+  AxisInfoAnalysis(DataFlowSolver &solver);
+  using dataflow::SparseForwardDataFlowAnalysis<
+      dataflow::Lattice<AxisInfo>>::getLatticeElement;
+  using FuncAxisInfoMapT = DenseMap<FunctionOpInterface, AxisInfo>;
+
+  void visitOperation(Operation *op,
+                      ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
+                      ArrayRef<dataflow::Lattice<AxisInfo> *> results) override;
+  void
+  visitForOpInductionVar(scf::ForOp op,
+                         ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
+};
 
 template <typename OpTy>
 class CastOpAxisInfoVisitor final : public AxisInfoVisitorImpl<OpTy> {
@@ -1009,11 +1065,115 @@ void AxisInfoAnalysis::visitOperation(
     auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
     newConstancy = AxisInfo::DimVectorT(vals.begin(), vals.end());
   }
-  curr = mlir::AxisInfo(newContiguity, newDivisibility, newConstancy,
-                        curr.getConstantValue());
+  curr = AxisInfo(newContiguity, newDivisibility, newConstancy,
+                  curr.getConstantValue());
   // join all lattice elements
   for (auto *result : results)
     propagateIfChanged(result, result->join(curr));
+}
+
+void AxisInfoAnalysis::visitForOpInductionVar(
+    scf::ForOp op, ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
+  auto lb = getLatticeElementFor(op, op.getLowerBound())->getValue();
+  auto step = getLatticeElementFor(op, op.getStep())->getValue();
+
+  AxisInfo::DimVectorT knownContiguity(1, 1);
+  AxisInfo::DimVectorT knownDivisibility(1, 1);
+  AxisInfo::DimVectorT knownConstancy(1, 1);
+  knownDivisibility[0] = gcd(lb.getDivisibility(0), step.getDivisibility(0));
+  auto inductionVar =
+      AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
+  (void)argLattices[0]->join(inductionVar);
+}
+
+} // anonymous namespace
+
+template <class T>
+void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
+                                            DimVectorT *contiguity,
+                                            DimVectorT *divisibility,
+                                            DimVectorT *constancy) {
+  // liast of attributes that we care about
+  SmallVector<std::pair<DimVectorT *, std::string>> retVecs;
+  retVecs.push_back({contiguity, "tt.contiguity"});
+  retVecs.push_back({divisibility, "tt.divisibility"});
+  retVecs.push_back({constancy, "tt.constancy"});
+  // initialize attributes one by one
+  for (auto [vec, attrName] : retVecs) {
+    Attribute attr = funcOp.getArgAttr(argNumber, attrName);
+    if (auto int_attr = attr.dyn_cast_or_null<IntegerAttr>())
+      *vec = DimVectorT(contiguity->size(), int_attr.getValue().getZExtValue());
+    if (auto dense_attr = attr.dyn_cast_or_null<DenseElementsAttr>()) {
+      auto vals = dense_attr.getValues<int>();
+      *vec = DimVectorT(vals.begin(), vals.end());
+    }
+  }
+}
+
+/*static*/ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
+  auto rank = 1;
+  if (TensorType ty = value.getType().dyn_cast<TensorType>())
+    rank = ty.getRank();
+  if (triton::PointerType ty = value.getType().dyn_cast<triton::PointerType>())
+    if (TensorType elemTy = ty.getPointeeType().dyn_cast<TensorType>())
+      rank = elemTy.getRank();
+
+  DimVectorT knownContiguity(rank, 1);
+  DimVectorT knownDivisibility(rank, 1);
+  DimVectorT knownConstancy(rank, 1);
+
+  BlockArgument blockArg = value.dyn_cast<BlockArgument>();
+
+  if (blockArg && blockArg.getOwner()->isEntryBlock()) {
+    Operation *op = blockArg.getOwner()->getParentOp();
+    if (auto fun = dyn_cast<FunctionOpInterface>(op))
+      initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
+                                   &knownContiguity, &knownDivisibility,
+                                   &knownConstancy);
+    // llvm codegen check alignment to generate vector load/store
+    // would be nice if this wasn't the case
+    else if (auto fun = dyn_cast<LLVM::LLVMFuncOp>(op))
+      initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
+                                   &knownContiguity, &knownDivisibility,
+                                   &knownConstancy);
+  } else if (Operation *op = value.getDefiningOp()) {
+    if (Attribute attr = op->getDiscardableAttr("tt.divisibility")) {
+      auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+      knownDivisibility = DimVectorT(vals.begin(), vals.end());
+    }
+    if (Attribute attr = op->getDiscardableAttr("tt.contiguity")) {
+      auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+      knownContiguity = DimVectorT(vals.begin(), vals.end());
+    }
+    if (Attribute attr = op->getDiscardableAttr("tt.constancy")) {
+      auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+      knownConstancy = DimVectorT(vals.begin(), vals.end());
+    }
+  }
+
+  return AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
+}
+
+/*static*/ AxisInfo AxisInfo::join(const AxisInfo &lhs, const AxisInfo &rhs) {
+  // If one argument is not initialized, return the other.
+  if (lhs.getRank() == 0)
+    return rhs;
+  if (rhs.getRank() == 0)
+    return lhs;
+  DimVectorT contiguity;
+  DimVectorT divisibility;
+  DimVectorT constancy;
+  for (auto d = 0; d < lhs.getRank(); ++d) {
+    contiguity.push_back(gcd(lhs.getContiguity(d), rhs.getContiguity(d)));
+    divisibility.push_back(gcd(lhs.getDivisibility(d), rhs.getDivisibility(d)));
+    constancy.push_back(gcd(lhs.getConstancy(d), rhs.getConstancy(d)));
+  }
+  std::optional<int64_t> constantValue;
+  if (lhs.getConstantValue().has_value() &&
+      rhs.getConstantValue().has_value() &&
+      lhs.getConstantValue() == rhs.getConstantValue())
+    constantValue = lhs.getConstantValue();
+  return AxisInfo(contiguity, divisibility, constancy, constantValue);
 }
 
 unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
@@ -1035,20 +1195,6 @@ unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
   contiguity = std::min(align, contiguity);
 
   return contiguity;
-}
-
-void AxisInfoAnalysis::visitForOpInductionVar(
-    scf::ForOp op, ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
-  auto lb = getLatticeElementFor(op, op.getLowerBound())->getValue();
-  auto step = getLatticeElementFor(op, op.getStep())->getValue();
-
-  AxisInfo::DimVectorT knownContiguity(1, 1);
-  AxisInfo::DimVectorT knownDivisibility(1, 1);
-  AxisInfo::DimVectorT knownConstancy(1, 1);
-  knownDivisibility[0] = gcd(lb.getDivisibility(0), step.getDivisibility(0));
-  auto inductionVar =
-      AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
-  (void)argLattices[0]->join(inductionVar);
 }
 
 unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
@@ -1134,4 +1280,4 @@ void ModuleAxisInfoAnalysis::update(CallOpInterface callOp,
   }
 }
 
-} // namespace mlir
+} // namespace mlir::triton
