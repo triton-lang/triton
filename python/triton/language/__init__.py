@@ -99,7 +99,7 @@ from .core import (
     void,
     where,
 )
-from .math import (umulhi, exp, exp2, log, log2, cos, sin, sqrt, sqrt_rn, abs, fdiv, div_rn, erf, floor)
+from .math import (umulhi, exp, exp2, fma, log, log2, cos, sin, sqrt, sqrt_rn, abs, fdiv, div_rn, erf, floor)
 from .random import (
     pair_uniform_to_normal,
     philox,
@@ -165,6 +165,7 @@ __all__ = [
     "float8e4nv",
     "float8e5",
     "floor",
+    "fma",
     "full",
     "function_type",
     "histogram",

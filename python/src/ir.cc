@@ -930,6 +930,10 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return Value(self.create<arith::SubIOp>(lhs, rhs));
            })
+      .def("create_fma",
+           [](TritonOpBuilder &self, Value &a, Value &b, Value &c) -> Value {
+             return Value(self.create<math::FmaOp>(a, b, c));
+           })
       .def("create_shl",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return Value(self.create<arith::ShLIOp>(lhs, rhs));
