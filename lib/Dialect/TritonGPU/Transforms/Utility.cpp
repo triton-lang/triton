@@ -673,12 +673,7 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
 
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
       auto results = ifOp.getResults();
-      unsigned argIdx = 0;
-      for (; argIdx != results.size(); ++argIdx) {
-        if (results[argIdx] == currentValue) {
-          break;
-        }
-      }
+      unsigned argIdx = currentValue.cast<OpResult>().getResultNumber();
 
       auto thenValue = ifOp.thenYield().getOperand(argIdx);
       auto elseValue = ifOp.elseYield().getOperand(argIdx);
