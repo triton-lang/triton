@@ -5,7 +5,6 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "triton/Target/LLVMIR/Passes.h"
 
 #include <memory>
 

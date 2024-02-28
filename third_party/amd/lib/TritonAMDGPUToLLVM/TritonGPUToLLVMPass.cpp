@@ -472,15 +472,8 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
 
     // Native lowering patterns
-    switch (target) {
-    case Target::NVVM:
-      mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
-      break;
-    case Target::ROCDL:
-      mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
-                                                 mlir::gpu::amd::HIP);
-      break;
-    }
+    mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
+                                               mlir::gpu::amd::HIP);
 
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
