@@ -27,11 +27,6 @@ def ConvertTritonAMDGPUToLLVM : Pass<"convert-triton-amdgpu-to-llvm", "mlir::Mod
         Option<"computeCapability", "compute-capability",
                "int32_t", /*default*/"80",
                "device compute capability">,
-        Option<"target", "target", "enum Target", "mlir::triton::Target::Default",
-               "compile for target compatible LLVM",
-               "llvm::cl::values("
-               "clEnumValN(mlir::triton::Target::ROCDL, \"rocdl\", \"compile for "
-               "ROCDL-compatible LLVM\"))">,
     ];
 }
 
