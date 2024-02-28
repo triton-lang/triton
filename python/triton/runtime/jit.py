@@ -52,7 +52,7 @@ class DependenciesFinder(ast.NodeVisitor):
             if inspect.isbuiltin(node.func):
                 return True
             module = getattr(func, "__module__", "")
-            return module.startswith(TRITON_MODULE)
+            return module is None or module.startswith(TRITON_MODULE)
 
         func = self.visit(node.func)
         assert func is None or is_triton_builtin(func) or isinstance(
