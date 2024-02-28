@@ -2360,8 +2360,8 @@ def test_reduce_layouts(M, N, src_layout, axis, reduce2d, dtype_str, reduce_op, 
 
 
 layouts = [
-    BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [1, 32], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
     MmaLayout(version=(2, 0), warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1],
               instr_shape=[16, 8])
 ]
@@ -2370,9 +2370,6 @@ layouts = [
 @pytest.mark.parametrize("M", [32, 64, 128, 256])
 @pytest.mark.parametrize("src_layout", layouts)
 def test_store_op(M, src_layout, device):
-    if is_hip():
-        pytest.skip("test_convert1d is not supported yet in HIP")
-
     ir = f"""
     #src = {src_layout}
     module attributes {{"{GPU_DIALECT}.num-warps" = 4 : i32, "{GPU_DIALECT}.num-ctas" = 1 : i32, "{GPU_DIALECT}.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
@@ -3252,9 +3249,6 @@ def test_masked_load(dtype_str, size, size_diff, num_ctas, device):
 # FIXME: Shape too small for ldmatrix when num_ctas=4
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
 def test_masked_load_shared_memory(dtype, device):
-    if is_hip():
-        pytest.skip("test_masked_load_shared_memory is not supported in HIP")
-
     check_type_supported(dtype, device)  # bfloat16 on cc < 80 will not be tested
 
     M = 32
