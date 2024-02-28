@@ -66,7 +66,6 @@ def _add_math_2arg_docstr(name: str) -> core.Callable[[T], T]:
 @core.builtin
 @_check_dtype(dtypes=["int32", "int64", "uint32", "uint64"])
 @_add_math_2arg_docstr("most significant N bits of the 2N-bit product")
-@core._tensor_member_fn
 def umulhi(x, y, _builder=None):
     x = core._to_tensor(x, _builder)
     y = core._to_tensor(y, _builder)
@@ -164,7 +163,6 @@ def abs(x, _builder=None):
 
 @core.builtin
 @_add_math_2arg_docstr("fast division")
-@core._tensor_member_fn
 def fdiv(x, y, ieee_rounding=False, _builder=None):
     ieee_rounding = core._constexpr_to_value(ieee_rounding)
     x = core._to_tensor(x, _builder)
@@ -175,7 +173,6 @@ def fdiv(x, y, ieee_rounding=False, _builder=None):
 @core.builtin
 @_check_dtype(dtypes=["fp32"])
 @_add_math_2arg_docstr("precise division (rounding to nearest)")
-@core._tensor_member_fn
 def div_rn(x, y, _builder=None):
     x = core._to_tensor(x, _builder)
     y = core._to_tensor(y, _builder)
@@ -199,3 +196,11 @@ def erf(x, _builder=None):
 def floor(x, _builder=None):
     x = core._to_tensor(x, _builder)
     return core.tensor(_builder.create_floor(x.handle), x.type)
+
+
+@core.builtin
+def fma(x, y, z, _builder=None):
+    x = core._to_tensor(x, _builder)
+    y = core._to_tensor(y, _builder)
+    z = core._to_tensor(z, _builder)
+    return core.tensor(_builder.create_fma(x.handle, y.handle, z.handle), x.type)

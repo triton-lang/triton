@@ -1111,6 +1111,9 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
 
+  patterns.add<ElementwiseOpConversion<math::FmaOp, LLVM::FMAOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
+
   patterns.add<OpToExternCallConversion<triton::PreciseSqrtOp>>(
       typeConverter, axisInfoAnalysis, "__nv_fsqrt_rn", benefit);
   patterns.add<OpToExternCallConversion<triton::PreciseDivFOp>>(

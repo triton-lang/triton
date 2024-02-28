@@ -129,7 +129,8 @@ void populateMathPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
                GenericOpPattern<math::SinOp>, GenericOpPattern<math::LogOp>,
                GenericOpPattern<math::Log2Op>, GenericOpPattern<math::ErfOp>,
                GenericOpPattern<math::AbsFOp>, GenericOpPattern<math::AbsIOp>,
-               GenericOpPattern<math::SqrtOp>>(typeConverter, context);
+               GenericOpPattern<math::SqrtOp>, GenericOpPattern<math::FmaOp>>(
+      typeConverter, context);
 }
 
 //
