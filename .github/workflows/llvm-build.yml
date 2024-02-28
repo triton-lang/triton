@@ -176,7 +176,7 @@ jobs:
         -DLLVM_ENABLE_ZSTD=OFF \
         -DLLVM_INSTALL_UTILS=ON \
         -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}" \
-        -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU;X86" \
+        -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU" \
         -DCMAKE_CROSSCOMPILING=True \
         -DLLVM_TARGET_ARCH=AArch64 \
         -DLLVM_USE_HOST_TOOLS=OFF \
