@@ -14,8 +14,6 @@ template <typename T> class OperationPass;
 
 namespace triton {
 
-enum Target { NVVM, ROCDL, Default = NVVM };
-
 #define GEN_PASS_DECL
 #include "nvidia/include/TritonNVIDIAGPUToLLVM/Passes.h.inc"
 
@@ -29,7 +27,7 @@ std::unique_ptr<OperationPass<ModuleOp>> createAllocateSharedMemoryPass();
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass();
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonGPUToLLVMPass(int32_t computeCapability, Target target);
+createConvertTritonGPUToLLVMPass(int32_t computeCapability);
 
 #define GEN_PASS_REGISTRATION
 #include "nvidia/include/TritonNVIDIAGPUToLLVM/Passes.h.inc"
