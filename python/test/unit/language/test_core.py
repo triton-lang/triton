@@ -1338,9 +1338,6 @@ def test_atomic_cas(sem, num_ctas, device):
 @pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_tensor_atomic_cas(sem, num_ctas, device):
-    if is_hip():
-        pytest.skip('TODO test_tensor_atomic_cas for HIP currently broken')
-
     @triton.jit
     def change_value(X, BLOCK_SIZE: tl.constexpr):
         pid = tl.program_id(axis=0)
@@ -2471,11 +2468,13 @@ def _welford_combine(mean_1, m2_1, weight_1, mean_2, m2_2, weight_2):
     )
 
 
+    # def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order, ctas_per_cga, cta_split_num, cta_order):
+
 layouts = [
-    BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [1, 32], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [1, 32], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [8, 4], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1])
+    BlockedLayout([1, 4], [1, 64], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [1, 64], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [2, 32], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [8, 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1])
 ]
 
 
@@ -2484,9 +2483,6 @@ layouts = [
 @pytest.mark.parametrize("op", ["sum", "max"])
 @pytest.mark.parametrize("first_axis", [0, 1])
 def test_chain_reduce(M, N, src_layout, op, device, first_axis):
-    if is_hip():
-        pytest.skip("TODO test_chain_reduce is WIP on HIP")
-
     op_str = ""
     if op == "sum":
         op_str = """
