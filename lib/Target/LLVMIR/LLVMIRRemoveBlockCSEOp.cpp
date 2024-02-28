@@ -5,16 +5,23 @@ using namespace llvm;
 
 static bool runOnFunction(Function &F) {
   bool Changed = false;
+  SmallVector<CallInst *, 16> ToErase;
   for (BasicBlock &BB : F) {
-    for (Instruction &inst : BB) {
-      if (CallInst *callInst = dyn_cast<CallInst>(&inst)) {
-        if (callInst->getCalledFunction()->getName() == "__triton_block_cse") {
-          callInst->replaceAllUsesWith(callInst->getArgOperand(0));
-          callInst->eraseFromParent();
+    for (Instruction &Inst : BB) {
+      if (CallInst *CI = dyn_cast<CallInst>(&Inst)) {
+        if (CI->getCalledFunction() == nullptr) {
+          continue;
+        }
+        if (CI->getCalledFunction()->getName() == "__triton_block_cse") {
+          CI->replaceAllUsesWith(CI->getArgOperand(0));
+          ToErase.push_back(CI);
           Changed = true;
         }
       }
     }
+  }
+  for (CallInst *callInst : ToErase) {
+    callInst->eraseFromParent();
   }
   return Changed;
 }
