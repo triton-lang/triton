@@ -9,7 +9,7 @@ class TargetInfoBase {
 public:
   virtual bool isSupported() const = 0;
   virtual Value callBallotOp(ConversionPatternRewriter &rewriter, Location loc,
-                             Value threadMask, Value cmp) const = 0;
+                             Type type, Value threadMask, Value cmp) const = 0;
   virtual ~TargetInfoBase() {}
 };
 } // namespace mlir::triton

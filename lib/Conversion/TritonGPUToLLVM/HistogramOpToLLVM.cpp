@@ -35,19 +35,20 @@ static SmallVector<Value> computeWarpLevelHistogram(
     SmallVector<Value> ballotBits;
     for (int j = 0; j < numBits; ++j) {
       Value bitSet = and_(value, i32_val(1 << j));
-      Value threadMask = i32_val(-1);
+      Value threadMask = int_val(numThreadPerWarp, -1);
       Value cmp = icmp_ne(bitSet, zero);
-      Value bit = targetInfo.callBallotOp(rewriter, loc, threadMask, cmp);
+      Value bit = targetInfo.callBallotOp(
+          rewriter, loc, int_ty(numThreadPerWarp), threadMask, cmp);
       ballotBits.push_back(bit);
     }
-    Value fullMask = i32_val(0xFFFFFFFF);
+    Value fullMask = int_val(numThreadPerWarp, (1ULL << numThreadPerWarp) - 1);
     Value mask = fullMask;
     // If not all threads have unique data, mask out the redundant ones.
     if (numThreadWithUniqueData < numThreadPerWarp)
-      mask = i32_val((1 << numThreadWithUniqueData) - 1);
+      mask = int_val(numThreadPerWarp, (1ULL << numThreadWithUniqueData) - 1);
     for (int i = 0; i < numBitsLaneId; i++) {
       Value updateMask = select(icmp_ne(and_(threadId, i32_val(1 << i)), zero),
-                                zero, fullMask);
+                                int_val(numThreadPerWarp, 0), fullMask);
       mask =
           and_(mask, xor_(ballotBits[i + numBits - numBitsLaneId], updateMask));
     }
@@ -56,12 +57,16 @@ static SmallVector<Value> computeWarpLevelHistogram(
     for (int k = 0; k < warpLevelHistogram.size(); k++) {
       Value binMask = mask;
       for (int j = 0; j < numBits - numBitsLaneId; j++) {
-        Value updateMask = i32_val(((k & (1 << j)) ? 0 : 0xffffffff));
+        Value updateMask =
+            int_val(numThreadPerWarp, ((k & (1 << j)) ? 0 : 0xffffffff));
         binMask = and_(binMask, xor_(ballotBits[j], updateMask));
       }
       // at this point, 'bin_mask' tells you which elements are in the kth bin
       // owned by this thread.
-      Value bitCount = rewriter.create<LLVM::CtPopOp>(loc, i32_ty, binMask);
+      Value bitCount = rewriter.create<LLVM::CtPopOp>(
+          loc, int_ty(numThreadPerWarp), binMask);
+      if (numThreadPerWarp > 32)
+        bitCount = trunc(i32_ty, bitCount);
       warpLevelHistogram[k] = add(warpLevelHistogram[k], bitCount);
     }
   }
@@ -153,7 +158,10 @@ public:
     auto typeConverter = getTypeConverter();
     SmallVector<Value> srcValues = unpackLLElements(loc, input, rewriter);
     int numBins = op.getType().getDimSize(0);
-    int numThreadsPerWarp = 32;
+    auto mod = op->getParentOfType<ModuleOp>();
+    int numThreadsPerWarp =
+        triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     // Pad out the bins so that we have at least one bin per thread within a
     // warp.
     numBins = std::max(numBins, numThreadsPerWarp);
@@ -171,8 +179,6 @@ public:
     Value baseSharedMemPtr =
         LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
     auto dstType = op.getType();
-    auto mod = op->getParentOfType<ModuleOp>();
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     Attribute dstEncoding = dstType.getEncoding();
     auto indices =
         emitIndices(op.getLoc(), rewriter, dstEncoding, dstType, true);
