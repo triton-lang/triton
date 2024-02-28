@@ -549,8 +549,9 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
              triton::MakeRangeOp, triton::SplatOp, triton::HistogramOp>(op);
 }
 
-scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
-                                        ValueRange newIterOperands) {
+scf::ForOp replaceForOpWithNewSignature(
+    RewriterBase &rewriter, scf::ForOp loop, ValueRange newIterOperands,
+    SmallVectorImpl<std::tuple<Value, Value>> &replacements) {
   OpBuilder::InsertionGuard g(rewriter);
   rewriter.setInsertionPoint(loop);
 
@@ -569,8 +570,43 @@ scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
 
   for (auto it : llvm::zip(loop.getResults(), newLoop.getResults().take_front(
                                                   loop.getNumResults())))
-    std::get<0>(it).replaceAllUsesWith(std::get<1>(it));
+    replacements.push_back(it);
   return newLoop;
+}
+
+scf::ForOp replaceForOpWithNewSignature(RewriterBase &rewriter, scf::ForOp loop,
+                                        ValueRange newIterOperands) {
+  SmallVector<std::tuple<Value, Value>> replacements;
+  auto newForOp = replaceForOpWithNewSignature(rewriter, loop, newIterOperands,
+                                               replacements);
+  for (auto &kv : replacements) {
+    rewriter.replaceAllUsesWith(std::get<0>(kv), std::get<1>(kv));
+  }
+  return newForOp;
+}
+
+scf::IfOp replaceIfOpWithNewSignature(
+    RewriterBase &rewriter, scf::IfOp ifOp, TypeRange newResultTypes,
+    SmallVectorImpl<std::tuple<Value, Value>> &replacements) {
+  OpBuilder::InsertionGuard g(rewriter);
+  rewriter.setInsertionPoint(ifOp);
+
+  // Create a new loop before the existing one, with the extra operands.
+  auto resultTypes = llvm::to_vector<4>(ifOp.getResults().getTypes());
+  resultTypes.append(newResultTypes.begin(), newResultTypes.end());
+  scf::IfOp newIf = rewriter.create<scf::IfOp>(
+      ifOp.getLoc(), resultTypes, ifOp.getCondition(), /*withElse=*/true);
+  newIf->setAttrs(ifOp->getAttrs());
+
+  rewriter.inlineBlockBefore(ifOp.thenBlock(), newIf.thenBlock(),
+                             newIf.thenBlock()->begin());
+  rewriter.inlineBlockBefore(ifOp.elseBlock(), newIf.elseBlock(),
+                             newIf.elseBlock()->begin());
+
+  for (auto it : llvm::zip(ifOp.getResults(),
+                           newIf.getResults().take_front(ifOp.getNumResults())))
+    replacements.push_back(it);
+  return newIf;
 }
 
 Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
@@ -630,6 +666,19 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
         return failure();
     }
     layout[currentValue] = encoding;
+
+    if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
+      auto results = ifOp.getResults();
+      unsigned argIdx = currentValue.cast<OpResult>().getResultNumber();
+
+      auto thenValue = ifOp.thenYield().getOperand(argIdx);
+      auto elseValue = ifOp.elseYield().getOperand(argIdx);
+
+      queue.push_back({thenValue, encoding});
+      queue.push_back({elseValue, encoding});
+
+      continue;
+    }
     if (auto *definingOp = currentValue.getDefiningOp()) {
       // If the op has multiple results we need to update all results layout.
       for (Value result : definingOp->getResults()) {
