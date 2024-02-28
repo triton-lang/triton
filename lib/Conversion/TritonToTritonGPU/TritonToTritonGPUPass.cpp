@@ -8,6 +8,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "llvm/ADT/APSInt.h"
@@ -123,10 +124,13 @@ void populateMathPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
                                      TritonGPUConversionTarget &target) {
   MLIRContext *context = patterns.getContext();
   // Rewrite rule
-  patterns.add<GenericOpPattern<math::ExpOp>, GenericOpPattern<math::CosOp>,
+  patterns.add<GenericOpPattern<math::ExpOp>, GenericOpPattern<math::Exp2Op>,
+               GenericOpPattern<math::FloorOp>, GenericOpPattern<math::CosOp>,
                GenericOpPattern<math::SinOp>, GenericOpPattern<math::LogOp>,
+               GenericOpPattern<math::Log2Op>, GenericOpPattern<math::ErfOp>,
                GenericOpPattern<math::AbsFOp>, GenericOpPattern<math::AbsIOp>,
-               GenericOpPattern<math::SqrtOp>>(typeConverter, context);
+               GenericOpPattern<math::SqrtOp>, GenericOpPattern<math::FmaOp>>(
+      typeConverter, context);
 }
 
 //
@@ -321,27 +325,25 @@ struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
   }
 };
 
-struct TritonJoinOpPattern
-    : public OpConversionPattern<triton::ExperimentalJoinOp> {
+struct TritonJoinOpPattern : public OpConversionPattern<triton::JoinOp> {
   using OpConversionPattern::OpConversionPattern;
 
-  LogicalResult matchAndRewrite(ExperimentalJoinOp op, OpAdaptor adaptor,
+  LogicalResult matchAndRewrite(JoinOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const {
     // Simply rely on type inference for this op.  (Notably, GenericOpPattern
     // does not do this, instead it assigns the default layout to the ins and
     // outs.)
-    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::ExperimentalJoinOp>(
+    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::JoinOp>(
                       op, adaptor.getLhs(), adaptor.getRhs()),
                   adaptor.getAttributes());
     return success();
   }
 };
 
-struct TritonSplitOpPattern
-    : public OpConversionPattern<triton::ExperimentalSplitOp> {
+struct TritonSplitOpPattern : public OpConversionPattern<triton::SplitOp> {
   using OpConversionPattern::OpConversionPattern;
 
-  LogicalResult matchAndRewrite(ExperimentalSplitOp op, OpAdaptor adaptor,
+  LogicalResult matchAndRewrite(SplitOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const {
     auto src = adaptor.getSrc();
     auto srcTy = src.getType().cast<RankedTensorType>();
@@ -393,9 +395,8 @@ struct TritonSplitOpPattern
       src = rewriter.create<ConvertLayoutOp>(op.getLoc(), srcTy, src);
     }
 
-    addNamedAttrs(
-        rewriter.replaceOpWithNewOp<triton::ExperimentalSplitOp>(op, src),
-        adaptor.getAttributes());
+    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::SplitOp>(op, src),
+                  adaptor.getAttributes());
     return success();
   }
 };
@@ -560,6 +561,9 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       TritonBroadcastPattern, GenericOpPattern<triton::AddPtrOp>,
       TritonCatPattern, TritonJoinOpPattern, TritonSplitOpPattern,
       GenericOpPattern<triton::ClampFOp>,
+      GenericOpPattern<triton::PreciseSqrtOp>,
+      GenericOpPattern<triton::PreciseDivFOp>,
+      GenericOpPattern<triton::MulhiUIOp>,
       GenericOpPattern<triton::ElementwiseInlineAsmOp>, TritonReducePattern,
       GenericOpPattern<triton::ReduceReturnOp>, TritonScanPattern,
       GenericOpPattern<triton::ScanReturnOp>,
@@ -793,9 +797,6 @@ public:
     populateSCFPatterns(typeConverter, patterns);
     populateCFPatterns(typeConverter, patterns);
 
-    if (failed(applyPartialConversion(mod, target, std::move(patterns))))
-      return signalPassFailure();
-
     auto inti = llvm::APSInt(32, false);
     auto i32_ty = IntegerType::get(mod->getContext(), 32);
 
@@ -812,6 +813,9 @@ public:
     mod->setAttr(AttrComputeCapabilityName,
                  IntegerAttr::get(
                      i32_ty, llvm::APInt(32, computeCapability.getValue())));
+
+    if (failed(applyPartialConversion(mod, target, std::move(patterns))))
+      return signalPassFailure();
 
     // update layouts
     //  broadcast src => multicast, dst => broadcasted

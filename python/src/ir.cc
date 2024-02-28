@@ -16,9 +16,9 @@
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Analysis/Allocation.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -902,6 +902,10 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return self.create<arith::MulIOp>(lhs, rhs);
            })
+      .def("create_umulhi",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<triton::MulhiUIOp>(lhs, rhs);
+           })
       .def("create_sdiv",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return self.create<arith::DivSIOp>(lhs, rhs);
@@ -925,6 +929,10 @@ void init_triton_ir(py::module &&m) {
       .def("create_sub",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return Value(self.create<arith::SubIOp>(lhs, rhs));
+           })
+      .def("create_fma",
+           [](TritonOpBuilder &self, Value &a, Value &b, Value &c) -> Value {
+             return Value(self.create<math::FmaOp>(a, b, c));
            })
       .def("create_shl",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
@@ -982,6 +990,14 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &input, Value &min, Value &max,
               PropagateNan propagateNan) -> Value {
              return Value(self.create<ClampFOp>(input, min, max, propagateNan));
+           })
+      .def("create_precise_sqrt",
+           [](TritonOpBuilder &self, Value &input) -> Value {
+             return Value(self.create<PreciseSqrtOp>(input));
+           })
+      .def("create_precise_divf",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return Value(self.create<PreciseDivFOp>(lhs, rhs));
            })
       // AddPtr (similar to GEP)
       .def("create_addptr",
@@ -1191,11 +1207,11 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_join",
            [](TritonOpBuilder &self, Value &a, Value &b) -> Value {
-             return self.create<ExperimentalJoinOp>(a, b);
+             return self.create<JoinOp>(a, b);
            })
       .def("create_split",
            [](TritonOpBuilder &self, Value &a) -> std::vector<Value> {
-             auto op = self.create<ExperimentalSplitOp>(a);
+             auto op = self.create<SplitOp>(a);
              return std::vector<Value>(op->result_begin(), op->result_end());
            })
       // Implements tl.trans and tl.permute.
@@ -1292,9 +1308,17 @@ void init_triton_ir(py::module &&m) {
              return self.create<DotOp>(c.getType(), a, b, c, allowTF32,
                                        maxNumImpreciseAcc);
            })
+      .def("create_floor",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::FloorOp>(val);
+           })
       .def("create_exp",
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::ExpOp>(val);
+           })
+      .def("create_exp2",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::Exp2Op>(val);
            })
       .def("create_cos",
            [](TritonOpBuilder &self, Value &val) -> Value {
@@ -1307,6 +1331,14 @@ void init_triton_ir(py::module &&m) {
       .def("create_log",
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::LogOp>(val);
+           })
+      .def("create_log2",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::Log2Op>(val);
+           })
+      .def("create_erf",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::ErfOp>(val);
            })
       .def("create_sqrt",
            [](TritonOpBuilder &self, Value &val) -> Value {
@@ -1464,6 +1496,9 @@ void init_triton_ir(py::module &&m) {
           makeReproducer(anchorName, passes, op, reproducerPath);
         }
 
+        if (triton::tools::getBoolEnv("TRITON_ENABLE_LLVM_DEBUG")) {
+          ::llvm::DebugFlag = true;
+        }
         if (failed(self.run(mod.getOperation())))
           throw std::runtime_error("PassManager::run failed");
       });

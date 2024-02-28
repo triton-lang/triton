@@ -93,7 +93,7 @@ struct ArithConstantSplatOpConversion
 struct CatOpConversion : public ConvertOpToLLVMPattern<CatOp> {
   using OpAdaptor = typename CatOp::Adaptor;
   explicit CatOpConversion(LLVMTypeConverter &typeConverter,
-                           PatternBenefit benefit = 1)
+                           PatternBenefit benefit = patternBenefitDefault)
       : ConvertOpToLLVMPattern<CatOp>(typeConverter, benefit) {}
   LogicalResult
   matchAndRewrite(CatOp op, OpAdaptor adaptor,
@@ -119,13 +119,13 @@ struct CatOpConversion : public ConvertOpToLLVMPattern<CatOp> {
     return success();
   }
 };
-struct JoinOpConversion : public ConvertOpToLLVMPattern<ExperimentalJoinOp> {
-  using OpAdaptor = typename ExperimentalJoinOp::Adaptor;
+struct JoinOpConversion : public ConvertOpToLLVMPattern<JoinOp> {
+  using OpAdaptor = typename JoinOp::Adaptor;
   explicit JoinOpConversion(LLVMTypeConverter &typeConverter,
-                            PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern<ExperimentalJoinOp>(typeConverter, benefit) {}
+                            PatternBenefit benefit = patternBenefitDefault)
+      : ConvertOpToLLVMPattern<JoinOp>(typeConverter, benefit) {}
   LogicalResult
-  matchAndRewrite(ExperimentalJoinOp op, OpAdaptor adaptor,
+  matchAndRewrite(JoinOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // We rely on the following invariants of this op (which are checked by its
     // verifier):
@@ -157,11 +157,11 @@ struct JoinOpConversion : public ConvertOpToLLVMPattern<ExperimentalJoinOp> {
     return success();
   }
 };
-struct SplitOpConversion : public ConvertOpToLLVMPattern<ExperimentalSplitOp> {
-  using OpAdaptor = typename ExperimentalSplitOp::Adaptor;
+struct SplitOpConversion : public ConvertOpToLLVMPattern<SplitOp> {
+  using OpAdaptor = typename SplitOp::Adaptor;
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
   LogicalResult
-  matchAndRewrite(ExperimentalSplitOp op, OpAdaptor adaptor,
+  matchAndRewrite(SplitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // We rely on the following invariants of this op (which are checked by its
     // verifier):
@@ -195,7 +195,7 @@ struct SplitOpConversion : public ConvertOpToLLVMPattern<ExperimentalSplitOp> {
 struct ReshapeOpConversion : public ConvertOpToLLVMPattern<ReshapeOp> {
   using OpAdaptor = typename ReshapeOp::Adaptor;
   explicit ReshapeOpConversion(LLVMTypeConverter &typeConverter,
-                               PatternBenefit benefit = 1)
+                               PatternBenefit benefit = patternBenefitDefault)
       : ConvertOpToLLVMPattern<ReshapeOp>(typeConverter, benefit) {}
   LogicalResult
   matchAndRewrite(ReshapeOp op, OpAdaptor adaptor,
@@ -216,8 +216,9 @@ struct ReshapeOpConversion : public ConvertOpToLLVMPattern<ReshapeOp> {
 };
 struct ExpandDimsOpConversion : public ConvertOpToLLVMPattern<ExpandDimsOp> {
   using OpAdaptor = typename ExpandDimsOp::Adaptor;
-  explicit ExpandDimsOpConversion(LLVMTypeConverter &typeConverter,
-                                  PatternBenefit benefit = 1)
+  explicit ExpandDimsOpConversion(
+      LLVMTypeConverter &typeConverter,
+      PatternBenefit benefit = patternBenefitDefault)
       : ConvertOpToLLVMPattern<ExpandDimsOp>(typeConverter, benefit) {}
   LogicalResult
   matchAndRewrite(ExpandDimsOp op, OpAdaptor adaptor,

@@ -27,7 +27,7 @@ jobs:
       matrix:
         config:
         - {runner: 'Ubuntu 20.04', runs_on: 'ubuntu-20.04', target-os: 'ubuntu', arch: 'x64'}
-        - {runner: 'Ubuntu 20.04', runs_on: 'ubuntu-20.04', target-os: 'ubuntu', arch: 'arm64'}
+        - {runner: 'Ubuntu 20.04 ARM64', runs_on: 'ubuntu-20.04', target-os: 'ubuntu', arch: 'arm64'}
         - {runner: 'CentOS 7', runs_on: ['self-hosted', 'CPU'], target-os: 'centos', arch: 'x64'}
         - {runner: 'MacOS X64', runs_on: 'macos-12', target-os: 'macos', arch: 'x64'}
         - {runner: 'MacOS ARM64', runs_on: 'macos-12', target-os: 'macos', arch: 'arm64'}
@@ -144,7 +144,7 @@ jobs:
         mkdir arm-sysroot
         mkdir -p llvm-project/host-tools
         cd llvm-project/host-tools
-        cmake -G Ninja ../llvm -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS="mlir;llvm;clang"
+        cmake -GNinja ../llvm -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS="mlir;llvm;clang"
         ninja mlir-tblgen
         ninja llvm-tblgen
         ninja clang-tblgen
@@ -152,6 +152,7 @@ jobs:
         mv ./llvm-project/host-tools/bin ./host-tools
         HOST_TOOLS="$(pwd)/host-tools"
         rm -rf llvm-project/host-tools
+        sudo apt-get update
         sudo apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf qemu-user-static gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
         cp -r /usr/aarch64-linux-gnu/lib ./arm-sysroot
         cp -r /usr/aarch64-linux-gnu/include ./arm-sysroot
@@ -176,7 +177,7 @@ jobs:
         -DLLVM_ENABLE_ZSTD=OFF \
         -DLLVM_INSTALL_UTILS=ON \
         -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}" \
-        -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU;X86" \
+        -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU" \
         -DCMAKE_CROSSCOMPILING=True \
         -DLLVM_TARGET_ARCH=AArch64 \
         -DLLVM_USE_HOST_TOOLS=OFF \
@@ -205,6 +206,7 @@ jobs:
       if: matrix.config.arch == 'arm64' && matrix.config.target-os == 'macos'
       run: >
         python3 -m pip install -r llvm-project/mlir/python/requirements.txt
+
         cmake -GNinja -Bllvm-project/build
         -DCMAKE_BUILD_TYPE=Release
         -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++

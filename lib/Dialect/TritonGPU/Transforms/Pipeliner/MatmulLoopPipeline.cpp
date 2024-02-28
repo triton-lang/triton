@@ -6,7 +6,7 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -220,9 +220,11 @@ getBlockedEncoding(tt::LoadOp loadOp, ModuleAxisInfoAnalysis &axisInfo) {
   AxisInfo::DimVectorT contiguity = axisInfo.getAxisInfo(src)->getContiguity();
   SmallVector<unsigned> order = argSort(contiguity);
   unsigned currPerThread = getNumElementsPerThread(loadOp, order, axisInfo);
+  SmallVector<unsigned> sizePerThread(order.size(), 1);
+  sizePerThread[order[0]] = currPerThread;
   ttg::CTALayoutAttr CTALayout = ttg::getCTALayout(ty.getEncoding());
   return ttg::BlockedEncodingAttr::get(loadOp->getContext(), ty.getShape(),
-                                       currPerThread, order, numWarps,
+                                       sizePerThread, order, numWarps,
                                        threadsPerWarp, CTALayout);
 }
 
@@ -766,11 +768,9 @@ minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
 
   int minCommitNumber = INT_MAX;
 
-  // TODO pawel: without TMA this does not need to be an optional.
   // DFS the def chain of the extract op to find the insert op. On each path
   // we calculate the number of async_commit. Then we select the minimum number
   // of async_commit ops among all the paths.
-  // If the wait is not needed return std::nullopt.
   std::function<int(Value, Operation *, int)> minOverHistories =
       [&](Value val, Operation *sinkOp, int thisHistorySum) -> int {
     if (Operation *defOp = val.getDefiningOp()) {
