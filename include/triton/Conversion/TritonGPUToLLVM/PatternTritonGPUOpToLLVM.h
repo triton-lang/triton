@@ -56,6 +56,11 @@ void populateClampFOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                    const TargetInfoBase &targetInfo,
                                    PatternBenefit benefit);
+
+void populateHistogramOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                       RewritePatternSet &patterns,
+                                       const TargetInfoBase &targetInfo,
+                                       PatternBenefit benefit);
 } // namespace triton
 } // namespace mlir
 

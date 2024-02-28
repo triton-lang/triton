@@ -8,6 +8,7 @@ add_triton_library(TritonGPUToLLVM
     AssertOpToLLVM.cpp
     ViewOpToLLVM.cpp
     MakeRangeOpToLLVM.cpp
+    HistogramOpToLLVM.cpp
 
     LINK_LIBS PUBLIC
     MLIRIR

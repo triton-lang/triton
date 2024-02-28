@@ -6,7 +6,6 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     DotOpToLLVM/MMAv2.cpp
     DotOpToLLVM/WGMMA.cpp
     DotOpToLLVM.cpp
-    HistogramOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
     BarrierOpToLLVM.cpp

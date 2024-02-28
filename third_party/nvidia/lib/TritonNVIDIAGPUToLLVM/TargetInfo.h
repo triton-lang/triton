@@ -6,6 +6,8 @@ class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
   TargetInfo(int computeCapability) : computeCapability(computeCapability) {}
   bool isSupported() const override;
+  Value callBallotOp(ConversionPatternRewriter &rewriter, Location loc,
+                     Value threadMask, Value cmp) const override;
 
 private:
   int computeCapability;

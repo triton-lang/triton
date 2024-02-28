@@ -34,10 +34,6 @@ void populateElementwiseOpToLLVMPatterns(
     ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
     const TargetInfo &targetInfo, PatternBenefit benefit);
 
-void populateHistogramOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                       RewritePatternSet &patterns,
-                                       PatternBenefit benefit);
-
 void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        RewritePatternSet &patterns,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,

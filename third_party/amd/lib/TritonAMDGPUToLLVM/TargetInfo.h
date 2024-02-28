@@ -7,6 +7,8 @@ class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
   TargetInfo(std::string arch) : arch(arch) {}
   bool isSupported() const override;
+  Value callBallotOp(ConversionPatternRewriter &rewriter, Location loc,
+                     Value threadMask, Value cmp) const override;
 
 private:
   std::string arch;

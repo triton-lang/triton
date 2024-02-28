@@ -1,7 +1,7 @@
-#include "PatternTritonGPUOpToLLVM.h"
-#include "Utility.h"
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -14,11 +14,10 @@ static int log2Int(int64_t num) { return (num > 1) ? 1 + log2Int(num / 2) : 0; }
 // are only log2(num_bins) of these) and then apply bitwise operations to get
 // the indicator functions for the bins owned by this particular thread, and
 // only popcount those.
-static SmallVector<Value>
-computeWarpLevelHistogram(Location loc, RankedTensorType srcType,
-                          SmallVector<Value> &srcValues, int numBins,
-                          int numThreadPerWarp, Value threadId,
-                          ConversionPatternRewriter &rewriter) {
+static SmallVector<Value> computeWarpLevelHistogram(
+    Location loc, RankedTensorType srcType, SmallVector<Value> &srcValues,
+    int numBins, int numThreadPerWarp, Value threadId,
+    ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo) {
   assert(numBins % numThreadPerWarp == 0 &&
          "numBins must be divisible by numThreadPerWarp");
   Value zero = i32_val(0);
@@ -37,8 +36,8 @@ computeWarpLevelHistogram(Location loc, RankedTensorType srcType,
     for (int j = 0; j < numBits; ++j) {
       Value bitSet = and_(value, i32_val(1 << j));
       Value threadMask = i32_val(-1);
-      Value bit = rewriter.create<NVVM::VoteBallotOp>(loc, i32_ty, threadMask,
-                                                      icmp_ne(bitSet, zero));
+      Value cmp = icmp_ne(bitSet, zero);
+      Value bit = targetInfo.callBallotOp(rewriter, loc, threadMask, cmp);
       ballotBits.push_back(bit);
     }
     Value fullMask = i32_val(0xFFFFFFFF);
@@ -140,6 +139,12 @@ struct HistogramOpConversion
 public:
   using ConvertOpToLLVMPattern<triton::HistogramOp>::ConvertOpToLLVMPattern;
 
+  explicit HistogramOpConversion(LLVMTypeConverter &typeConverter,
+                                 const TargetInfoBase &targetInfo,
+                                 PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
+
   LogicalResult
   matchAndRewrite(triton::HistogramOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -155,9 +160,9 @@ public:
     Value threadId = getThreadId(rewriter, loc);
     auto srcType = op.getSrc().getType();
     // First compute a warp local histogram based on values owned by each warps.
-    SmallVector<Value> warpLevelHistogram =
-        computeWarpLevelHistogram(loc, srcType, srcValues, numBins,
-                                  numThreadsPerWarp, threadId, rewriter);
+    SmallVector<Value> warpLevelHistogram = computeWarpLevelHistogram(
+        loc, srcType, srcValues, numBins, numThreadsPerWarp, threadId, rewriter,
+        targetInfo);
 
     // Then use atomic to update the histogram in shared memory.
     // TODO: we could skip this for cases with num_warps=1 as long as we can
@@ -183,11 +188,14 @@ public:
     rewriter.replaceOp(op, results);
     return success();
   }
+
+private:
+  const TargetInfoBase &targetInfo;
 };
 } // namespace
 
-void mlir::triton::NVIDIA::populateHistogramOpToLLVMPatterns(
+void mlir::triton::populateHistogramOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
-  patterns.add<HistogramOpConversion>(typeConverter, benefit);
+    const TargetInfoBase &targetInfo, PatternBenefit benefit) {
+  patterns.add<HistogramOpConversion>(typeConverter, targetInfo, benefit);
 }
