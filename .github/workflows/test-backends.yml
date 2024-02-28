@@ -15,7 +15,7 @@ jobs:
         id: set-matrix
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
-            echo '::set-output name=matrix-optional::[["self-hosted", "rocm"], ["self-hosted", "arc770"]]'
+            echo '::set-output name=matrix-optional::[["self-hosted", "gfx90a"], ["self-hosted", "arc770"]]'
           else
             echo '::set-output name=matrix-optional::["ubuntu-latest"]'
           fi
@@ -64,7 +64,7 @@ jobs:
 
     strategy:
       matrix:
-        runner: ["rocm"]
+        runner: ["gfx90a"]
 
     container:
       image: rocm/pytorch:rocm5.7_ubuntu22.04_py3.10_pytorch_2.0.1
