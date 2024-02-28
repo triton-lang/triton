@@ -22,6 +22,7 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     AllocateSharedMemory.cpp
     PTXAsmFormat.cpp
     Utility.cpp
+    TargetInfo.cpp
 
     DEPENDS
     TritonNVIDIAGPUConversionPassIncGen

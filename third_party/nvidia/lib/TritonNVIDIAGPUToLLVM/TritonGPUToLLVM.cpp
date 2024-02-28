@@ -228,11 +228,13 @@ struct ConvertTritonGPUToLLVM
     OpBuilder::InsertPoint indexInsertPoint;
 
     RewritePatternSet patterns(context);
+    TargetInfo targetInfo(computeCapability);
     int benefit = patternBenefitPrioritizeOverLLVMConversions;
     populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, benefit);
     populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
-    populateElementwiseOpToLLVMPatterns(
-        typeConverter, patterns, axisInfoAnalysis, computeCapability, benefit);
+    populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
+                                        axisInfoAnalysis, computeCapability,
+                                        targetInfo, benefit);
     populateClampFOpToLLVMPattern(typeConverter, patterns, axisInfoAnalysis,
                                   computeCapability,
                                   patternBenefitClampOptimizedPattern);

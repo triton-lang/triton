@@ -1,5 +1,6 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 
+#include "TargetInfo.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
@@ -443,6 +444,7 @@ struct ConvertTritonAMDGPUToLLVM
     }
 
     RewritePatternSet patterns(context);
+    AMD::TargetInfo targetInfo("gfx1200");
 
     auto populatePatterns1 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
@@ -457,12 +459,18 @@ struct ConvertTritonAMDGPUToLLVM
 
     auto populatePatterns3 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, indexCacheInfo, patternBenefitPrioritizeOverLLVMConversions);
+                   allocation, indexCacheInfo,
+                   patternBenefitPrioritizeOverLLVMConversions);
     };
 
     auto populatePatterns4 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
                    allocation, indexCacheInfo, computeCapability,
+                   patternBenefitPrioritizeOverLLVMConversions);
+    };
+    auto populatePatterns4Temp = [&](auto populateFunc) {
+      populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
+                   allocation, indexCacheInfo, computeCapability, targetInfo,
                    patternBenefitPrioritizeOverLLVMConversions);
     };
     auto populatePatterns5 = [&](auto populateFunc) {
@@ -473,7 +481,7 @@ struct ConvertTritonAMDGPUToLLVM
     populatePatterns1(AMD::populateTritonGPUToLLVMPatterns);
     populatePatterns1(AMD::populateConvertLayoutOpToLLVMPatterns);
     populatePatterns2(AMD::populateDotOpToLLVMPatterns);
-    populatePatterns4(AMD::populateElementwiseOpToLLVMPatterns);
+    populatePatterns4Temp(AMD::populateElementwiseOpToLLVMPatterns);
     populatePatterns3(AMD::populateLoadStoreOpToLLVMPatterns);
     populatePatterns4(AMD::populateReduceOpToLLVMPatterns);
     populatePatterns1(AMD::populateScanOpToLLVMPatterns);

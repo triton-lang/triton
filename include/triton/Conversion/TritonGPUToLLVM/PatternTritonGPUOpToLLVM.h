@@ -1,6 +1,7 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_PATTERNS_TRITON_GPU_OP_TO_LLVM_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_PATTERNS_TRITON_GPU_OP_TO_LLVM_H
 
+#include "TargetInfoBase.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -53,7 +54,7 @@ void populateMinMaxFOpToLLVMPattern(LLVMTypeConverter &typeConverter,
 void populateClampFOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,
                                    ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                   bool hwNanPropagationSupported,
+                                   const TargetInfoBase &targetInfo,
                                    PatternBenefit benefit);
 } // namespace triton
 } // namespace mlir
