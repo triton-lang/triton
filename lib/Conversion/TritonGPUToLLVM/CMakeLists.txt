@@ -9,6 +9,10 @@ add_triton_library(TritonGPUToLLVM
     ViewOpToLLVM.cpp
     MakeRangeOpToLLVM.cpp
     HistogramOpToLLVM.cpp
+    AllocateSharedMemory.cpp
+
+    DEPENDS
+    TritonGPUConversionPassIncGen
 
     LINK_LIBS PUBLIC
     MLIRIR

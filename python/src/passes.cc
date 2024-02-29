@@ -5,6 +5,7 @@
 #include "passes.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Membar.h"
+#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -56,6 +57,8 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createRemoveLayoutConversionsPass);
   ADD_PASS_WRAPPER_0("add_reduce_data_duplication",
                      createReduceDataDuplicationPass);
+  ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
+                     createAllocateSharedMemoryPass);
 }
 
 void init_triton_passes_convert(py::module &&m) {
