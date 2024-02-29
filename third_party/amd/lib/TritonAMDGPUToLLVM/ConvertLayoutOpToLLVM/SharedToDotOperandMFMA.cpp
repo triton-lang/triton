@@ -316,7 +316,7 @@ std::optional<int> findConstValue(Value val) {
 bool fastPathAvailable(const SharedMemoryObject &smemObj,
                        const SharedEncodingAttr &srcEncoding,
                        const AMDMfmaEncodingAttr &dstEncoding) {
-  if (dstEncoding.getNonKDim() != 32)
+  if (dstEncoding.getMDim() != 32)
     return false;
   if (srcEncoding.getMaxPhase() > 1)
     return false;
@@ -433,7 +433,7 @@ Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value thread,
             TritonGPUToLLVMTypeConverter *typeConverter, Value tensor,
             const SharedMemoryObject &smemObj) {
   auto mfmaLayout = encoding.getParent().cast<AMDMfmaEncodingAttr>();
-  auto nonKDim = mfmaLayout.getNonKDim();
+  auto nonKDim = mfmaLayout.getMDim();
   assert(nonKDim == 32 || nonKDim == 16 || nonKDim == 4);
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 
@@ -578,7 +578,7 @@ Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value thread,
             TritonGPUToLLVMTypeConverter *typeConverter, Value tensor,
             const SharedMemoryObject &smemObj) {
   auto mfmaLayout = encoding.getParent().cast<AMDMfmaEncodingAttr>();
-  auto nonKDim = mfmaLayout.getNonKDim();
+  auto nonKDim = mfmaLayout.getMDim();
   assert(nonKDim == 32 || nonKDim == 16 || nonKDim == 4);
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 

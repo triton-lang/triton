@@ -753,7 +753,7 @@ AMDMfmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
   assert(rank == 2 && "Unexpected rank of mfma layout");
 
   SmallVector<unsigned> elemsPerThread(rank);
-  auto nonKDim = getNonKDim();
+  auto nonKDim = getMDim();
   auto elemsPerThreadPerTile = (nonKDim == 16 ? 4 : 16);
   if (getIsTransposed()) {
     unsigned elemsCol =
@@ -1173,22 +1173,33 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseGreater().failed())
     return {};
 
-  unsigned nonKDim = 0;
+  unsigned versionMajor = 0;
+  unsigned versionMinor = 0;
   SmallVector<unsigned> warpsPerCTA;
+  SmallVector<unsigned> instrShape;
   bool isTransposed;
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
 
   for (const NamedAttribute &attr : dict) {
-    if (attr.getName() == "nonKDim") {
-      if (parseUInt(parser, attr, nonKDim, "nonKDim").failed())
+    if (attr.getName() == "versionMajor") {
+      if (parseUInt(parser, attr, versionMajor, "versionMajor").failed())
+        return {};
+    }
+    if (attr.getName() == "versionMinor") {
+      if (parseUInt(parser, attr, versionMinor, "versionMinor").failed())
         return {};
     }
     if (attr.getName() == "warpsPerCTA") {
       if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
         return {};
-    } else if (attr.getName() == "isTransposed") {
+    }
+    if (attr.getName() == "instrShape") {
+      if (parseIntArrayAttr(parser, attr, instrShape, "instrShape").failed())
+        return {};
+    }
+    if (attr.getName() == "isTransposed") {
       if (parseBool(parser, attr, isTransposed, "isTransposed").failed())
         return {};
     }
@@ -1215,12 +1226,14 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
     return {};
 
   return parser.getChecked<AMDMfmaEncodingAttr>(
-      parser.getContext(), nonKDim, warpsPerCTA, isTransposed, *CTALayout);
+      parser.getContext(), versionMajor, versionMinor, warpsPerCTA,
+      instrShape[0], instrShape[1], isTransposed, *CTALayout);
 }
 
 void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
-          << "nonKDim = " << getNonKDim()                             //
+          << "versionMajor = " << getVersionMajor()                   //
+          << ", versionMinor = " << getVersionMinor()                 //
           << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]" //
           << ", isTransposed = " << getIsTransposed();
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
@@ -1395,7 +1408,7 @@ void SharedEncodingAttr::print(AsmPrinter &printer) const {
 
 SmallVector<unsigned>
 AMDMfmaEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
-  auto nonKDim = getNonKDim();
+  auto nonKDim = getMDim();
   return {nonKDim * getWarpsPerCTA()[0], nonKDim * getWarpsPerCTA()[1]};
 }
 
@@ -1419,7 +1432,7 @@ SmallVector<unsigned> AMDMfmaEncodingAttr::getThreadOrder() const {
 }
 SmallVector<unsigned> AMDMfmaEncodingAttr::getThreadsPerWarp() const {
   unsigned rows, cols;
-  if (getNonKDim() == 32) {
+  if (getMDim() == 32) {
     cols = 2;
     rows = 32;
   } else {
@@ -1435,10 +1448,10 @@ SmallVector<unsigned> AMDMfmaEncodingAttr::getThreadsPerWarp() const {
 
 SmallVector<unsigned> AMDMfmaEncodingAttr::getSizePerThread() const {
   unsigned rows, cols;
-  if (getNonKDim() == 32) {
+  if (getMDim() == 32) {
     rows = 16;
     cols = 1;
-  } else if (getNonKDim() == 16) {
+  } else if (getMDim() == 16) {
     rows = 4;
     cols = 1;
   } else
@@ -1454,7 +1467,7 @@ SmallVector<unsigned> AMDMfmaEncodingAttr::getSizePerThread() const {
 SmallVector<int64_t>
 AMDMfmaEncodingAttr::getMFMAElemsPerInstrForOperands(int kWidth,
                                                      int opIdx) const {
-  int64_t nonKDim = getNonKDim();
+  int64_t nonKDim = getMDim();
   assert(nonKDim == 32 || nonKDim == 16);
   int64_t kDim = kWidth * (nonKDim == 32 ? 2 : 4);
   if (opIdx == 0)

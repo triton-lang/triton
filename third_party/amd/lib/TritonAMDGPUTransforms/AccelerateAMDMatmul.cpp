@@ -295,8 +295,10 @@ public:
     auto warpsPerTile = warpsPerTileMFMA(dotOp, retShape, numWarps);
 
     bool isTransposed = isChainDot(dotOp);
-    mfmaEnc = ttg::AMDMfmaEncodingAttr::get(oldRetType.getContext(), nonKDim,
-                                         warpsPerTile, isTransposed, CTALayout);
+    mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
+        oldRetType.getContext(),
+        /*versionMajor*/ mfmaVersion, /*versionMinor*/ 0, warpsPerTile,
+        /*instrShape*/ nonKDim, nonKDim, isTransposed, CTALayout);
 
     Type mfmaAccType;
     if (oldRetType.getElementType().isIntOrIndex())
