@@ -180,6 +180,7 @@ jobs:
         -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU" \
         -DCMAKE_CROSSCOMPILING=True \
         -DLLVM_TARGET_ARCH=AArch64 \
+        -DLLVM_DEFAULT_TARGET_TRIPLE=aarch64-linux-gnu \
         -DLLVM_USE_HOST_TOOLS=OFF \
         -DCMAKE_C_COMPILER="/usr/bin/aarch64-linux-gnu-gcc" \
         -DCMAKE_CXX_COMPILER="/usr/bin/aarch64-linux-gnu-g++" \
