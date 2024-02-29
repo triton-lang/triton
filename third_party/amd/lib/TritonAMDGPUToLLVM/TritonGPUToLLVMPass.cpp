@@ -1,5 +1,6 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 
+#include "TargetInfo.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
@@ -429,41 +430,51 @@ struct ConvertTritonAMDGPUToLLVM
     }
 
     RewritePatternSet patterns(context);
-
+    AMD::TargetInfo targetInfo("gfx1200");
+    int benefit = patternBenefitPrioritizeOverLLVMConversions;
     auto populatePatterns1 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, indexCacheInfo,
-                   patternBenefitPrioritizeOverLLVMConversions);
+                   allocation, indexCacheInfo, benefit);
     };
 
     auto populatePatterns2 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, patternBenefitPrioritizeOverLLVMConversions);
+                   allocation, benefit);
     };
 
     auto populatePatterns3 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, indexCacheInfo, patternBenefitPrioritizeOverLLVMConversions);
+                   allocation, indexCacheInfo, benefit);
     };
 
     auto populatePatterns4 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, indexCacheInfo, computeCapability,
-                   patternBenefitPrioritizeOverLLVMConversions);
+                   allocation, indexCacheInfo, computeCapability, benefit);
     };
+
     auto populatePatterns5 = [&](auto populateFunc) {
-      populateFunc(typeConverter, patterns,
-                   patternBenefitPrioritizeOverLLVMConversions);
+      populateFunc(typeConverter, patterns, benefit);
+    };
+
+    auto populatePatterns6 = [&](auto populateFunc) {
+      populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
+                   allocation, indexCacheInfo, computeCapability, targetInfo,
+                   benefit);
+    };
+
+    auto populatePatterns7 = [&](auto populateFunc) {
+      populateFunc(typeConverter, patterns, targetInfo, benefit);
     };
 
     populatePatterns1(AMD::populateTritonGPUToLLVMPatterns);
     populatePatterns1(AMD::populateConvertLayoutOpToLLVMPatterns);
     populatePatterns2(AMD::populateDotOpToLLVMPatterns);
-    populatePatterns4(AMD::populateElementwiseOpToLLVMPatterns);
+    populatePatterns6(AMD::populateElementwiseOpToLLVMPatterns);
     populatePatterns3(AMD::populateLoadStoreOpToLLVMPatterns);
     populatePatterns4(AMD::populateReduceOpToLLVMPatterns);
     populatePatterns1(AMD::populateScanOpToLLVMPatterns);
     populatePatterns5(mlir::triton::populateViewOpToLLVMPatterns);
+    populatePatterns7(mlir::triton::populateHistogramOpToLLVMPatterns);
 
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
@@ -525,9 +536,6 @@ private:
       funcSmem = b.create<LLVM::BitcastOp>(loc, ptrTy, funcSmem);
       allocation.setFunctionSharedMemoryValue(funcOp, funcSmem);
     });
-    mod->setAttr("triton_gpu.shared",
-                 mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32),
-                                        allocation.getSharedMemorySize()));
   }
 
   void decomposeFp8e4b15Convert(ModuleOp mod) const {

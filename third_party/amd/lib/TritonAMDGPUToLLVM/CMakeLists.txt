@@ -12,6 +12,7 @@ add_triton_library(TritonAMDGPUToLLVM
     ScanOpToLLVM.cpp
     TypeConverter.cpp
     Utility.cpp
+    TargetInfo.cpp
 
     DEPENDS
     TritonAMDGPUConversionPassIncGen

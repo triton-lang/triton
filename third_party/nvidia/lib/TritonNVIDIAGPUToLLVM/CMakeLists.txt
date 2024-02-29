@@ -6,7 +6,6 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     DotOpToLLVM/MMAv2.cpp
     DotOpToLLVM/WGMMA.cpp
     DotOpToLLVM.cpp
-    HistogramOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
     BarrierOpToLLVM.cpp
@@ -19,9 +18,9 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     ScanOpToLLVM.cpp
     TensorPtrOpsToLLVM.cpp
     ClusterOpsToLLVM.cpp
-    AllocateSharedMemory.cpp
     PTXAsmFormat.cpp
     Utility.cpp
+    TargetInfo.cpp
 
     DEPENDS
     TritonNVIDIAGPUConversionPassIncGen
