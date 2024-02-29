@@ -211,13 +211,14 @@ bool loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3,
 };
 
 static ttg::BlockedEncodingAttr
-getBlockedEncoding(tt::LoadOp loadOp, ModuleAxisInfoAnalysis &axisInfo) {
+getBlockedEncoding(tt::LoadOp loadOp, tt::ModuleAxisInfoAnalysis &axisInfo) {
   Value src = loadOp.getPtr();
   auto ty = src.getType().cast<RankedTensorType>();
   auto mod = loadOp->getParentOfType<ModuleOp>();
   int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
   int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-  AxisInfo::DimVectorT contiguity = axisInfo.getAxisInfo(src)->getContiguity();
+  tt::AxisInfo::DimVectorT contiguity =
+      axisInfo.getAxisInfo(src)->getContiguity();
   SmallVector<unsigned> order = argSort(contiguity);
   unsigned currPerThread = getNumElementsPerThread(loadOp, order, axisInfo);
   SmallVector<unsigned> sizePerThread(order.size(), 1);
@@ -267,7 +268,7 @@ loadOpsToDistanceAndUse(scf::ForOp forOp) {
   DenseSet<Operation *> seen;
 
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
-  ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
+  tt::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
   auto isCandidate = [&](tt::LoadOp loadOp) -> bool {
     assert(!isLoadFromTensorPtr(loadOp) &&
@@ -335,7 +336,7 @@ collectOpsToPipeline(scf::ForOp forOp,
                      llvm::MapVector<Operation *, PipelineOpInfo> &opInfo,
                      int numStages, bool &hasMMAV3) {
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
-  ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
+  tt::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
   // Loads ordered by their dependency distance to the nearest dot op.
   llvm::MapVector<tt::LoadOp, std::pair<int, Operation *>> loadOpToDistAndUse =
