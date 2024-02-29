@@ -115,12 +115,7 @@ public:
 
     auto encoding =
         cvtOp.getSrc().getType().getEncoding();
-    if (!encoding.isa<triton::gpu::AMDMfmaEncodingAttr>())
-      return mlir::failure();
-    if (!cvtOp.getSrc()
-             .getType()
-             .getEncoding()
-             .isa<triton::gpu::MmaEncodingTrait>())
+    if (!encoding.isa<triton::gpu::MmaEncodingTrait>())
       return mlir::failure();
 
     if (!cvtOp.getResult().hasOneUse())
@@ -140,7 +135,8 @@ public:
       auto oldType =
           chainedOp->getResult(0).getType().cast<mlir::RankedTensorType>();
       chainedOp->setOperand(0, newVal);
-      newVal = llvm::cast<mlir::TypedValue<RankedTensorType>>(chainedOp->getResult(0));
+      newVal = llvm::cast<mlir::TypedValue<RankedTensorType>>(
+          chainedOp->getResult(0));
       auto newType = mlir::RankedTensorType::get(
           oldType.getShape(), oldType.getElementType(), newEncoding);
       newVal.setType(newType);
