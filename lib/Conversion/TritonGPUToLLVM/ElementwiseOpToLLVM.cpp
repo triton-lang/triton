@@ -670,7 +670,7 @@ struct ClampFOpConversion
                                    Location loc) const {
     // Clip pattern not found, use min/max.
     if (op.getPropagateNan() == PropagateNan::ALL) {
-      if (targetInfo.isSupported()) {
+      if (targetInfo.isHwNanPropagationSupported()) {
         auto v = rewriter.create<LLVM::MaximumOp>(loc, elemTy, operands[0][0],
                                                   operands[0][1]);
         return {rewriter.create<LLVM::MinimumOp>(loc, v, operands[0][2])};

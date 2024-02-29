@@ -7,7 +7,7 @@ using namespace mlir;
 namespace mlir::triton {
 class TargetInfoBase {
 public:
-  virtual bool isSupported() const = 0;
+  virtual bool isHwNanPropagationSupported() const = 0;
   virtual Value callBallotOp(ConversionPatternRewriter &rewriter, Location loc,
                              Type type, Value threadMask, Value cmp) const = 0;
   virtual ~TargetInfoBase() {}

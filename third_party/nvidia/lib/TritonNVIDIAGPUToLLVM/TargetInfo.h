@@ -5,7 +5,7 @@ namespace mlir::triton::NVIDIA {
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
   TargetInfo(int computeCapability) : computeCapability(computeCapability) {}
-  bool isSupported() const override;
+  bool isHwNanPropagationSupported() const override;
   Value callBallotOp(ConversionPatternRewriter &rewriter, Location loc,
                      Type type, Value threadMask, Value cmp) const override;
 

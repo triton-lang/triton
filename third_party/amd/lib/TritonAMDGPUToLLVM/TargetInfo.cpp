@@ -3,7 +3,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace AMD {
-bool TargetInfo::isSupported() const { return false; }
+bool TargetInfo::isHwNanPropagationSupported() const { return false; }
 Value TargetInfo::callBallotOp(ConversionPatternRewriter &rewriter,
                                Location loc, Type type, Value threadMask,
                                Value cmp) const {

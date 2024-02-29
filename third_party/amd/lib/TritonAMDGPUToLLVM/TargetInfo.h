@@ -6,7 +6,7 @@ namespace AMD {
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
   TargetInfo(std::string arch) : arch(arch) {}
-  bool isSupported() const override;
+  bool isHwNanPropagationSupported() const override;
   Value callBallotOp(ConversionPatternRewriter &rewriter, Location loc,
                      Type type, Value threadMask, Value cmp) const override;
 
