@@ -96,7 +96,6 @@ public:
         !valType.getEncoding().isa<triton::gpu::BlockedEncodingAttr>())
       return mlir::failure();
 
-#ifdef USE_ROCM
     llvm::SmallVector<mlir::Operation *> chainedOps;
     while (true) {
       auto chainedOp = val.getDefiningOp();
@@ -109,18 +108,15 @@ public:
       val = chainedOp->getOperand(0);
       chainedOps.push_back(chainedOp);
     }
-#endif
 
     auto cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(val.getDefiningOp());
     if (!cvtOp)
       return mlir::failure();
 
-#ifdef USE_ROCM
     auto encoding =
         cvtOp.getSrc().getType().getEncoding();
     if (!encoding.isa<triton::gpu::AMDMfmaEncodingAttr>())
       return mlir::failure();
-#endif
     if (!cvtOp.getSrc()
              .getType()
              .getEncoding()
@@ -140,17 +136,15 @@ public:
     Value newPtr = rewriter.create<triton::gpu::ConvertLayoutOp>(
         ptr.getLoc(), newPtrType, ptr);
 
-#ifdef USE_ROCM
     for (auto chainedOp : chainedOps) {
       auto oldType =
           chainedOp->getResult(0).getType().cast<mlir::RankedTensorType>();
       chainedOp->setOperand(0, newVal);
-      newVal = chainedOp->getResult(0);
+      newVal = llvm::cast<mlir::TypedValue<RankedTensorType>>(chainedOp->getResult(0));
       auto newType = mlir::RankedTensorType::get(
           oldType.getShape(), oldType.getElementType(), newEncoding);
       newVal.setType(newType);
     }
-#endif
 
     Value newMask = mask;
     if (mask) {
