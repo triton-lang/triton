@@ -41,11 +41,14 @@ static SmallVector<Value> computeWarpLevelHistogram(
           rewriter, loc, int_ty(numThreadPerWarp), threadMask, cmp);
       ballotBits.push_back(bit);
     }
-    Value fullMask = int_val(numThreadPerWarp, (1ULL << numThreadPerWarp) - 1);
+    uint64_t fullMaskValue =
+        numThreadPerWarp == 32 ? 0xFFFFFFFF : 0xFFFFFFFFFFFFFFFF;
+    Value fullMask = int_val(numThreadPerWarp, fullMaskValue);
     Value mask = fullMask;
     // If not all threads have unique data, mask out the redundant ones.
-    if (numThreadWithUniqueData < numThreadPerWarp)
+    if (numThreadWithUniqueData < numThreadPerWarp) {
       mask = int_val(numThreadPerWarp, (1ULL << numThreadWithUniqueData) - 1);
+    }
     for (int i = 0; i < numBitsLaneId; i++) {
       Value updateMask = select(icmp_ne(and_(threadId, i32_val(1 << i)), zero),
                                 int_val(numThreadPerWarp, 0), fullMask);
@@ -58,7 +61,7 @@ static SmallVector<Value> computeWarpLevelHistogram(
       Value binMask = mask;
       for (int j = 0; j < numBits - numBitsLaneId; j++) {
         Value updateMask =
-            int_val(numThreadPerWarp, ((k & (1 << j)) ? 0 : 0xffffffff));
+            int_val(numThreadPerWarp, ((k & (1 << j)) ? 0 : fullMaskValue));
         binMask = and_(binMask, xor_(ballotBits[j], updateMask));
       }
       // at this point, 'bin_mask' tells you which elements are in the kth bin
