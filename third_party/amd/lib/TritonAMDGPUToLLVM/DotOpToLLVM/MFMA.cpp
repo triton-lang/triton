@@ -35,7 +35,7 @@ namespace {
 using ::AMD::TritonGPUToLLVMTypeConverter;
 using ::mlir::LLVM::shflSync;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::MfmaEncodingAttr;
+using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 enum class MatrixCoreType : uint8_t {
@@ -62,7 +62,7 @@ struct MFMAInstrDescr {
 using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
 
 struct DotOpMFMAConversionHelper {
-  MfmaEncodingAttr mfmaLayout;
+  AMDMfmaEncodingAttr mfmaLayout;
 
   ConversionPatternRewriter &rewriter;
   TritonGPUToLLVMTypeConverter *typeConverter;
@@ -70,7 +70,7 @@ struct DotOpMFMAConversionHelper {
   MLIRContext *ctx{};
 
   explicit DotOpMFMAConversionHelper(
-      MfmaEncodingAttr mfmaLayout, ConversionPatternRewriter &rewriter,
+      AMDMfmaEncodingAttr mfmaLayout, ConversionPatternRewriter &rewriter,
       TritonGPUToLLVMTypeConverter *typeConverter, Location loc)
       : mfmaLayout(mfmaLayout), rewriter(rewriter),
         typeConverter(typeConverter), loc(loc), ctx(mfmaLayout.getContext()) {}
@@ -250,7 +250,7 @@ struct DotOpMFMAConversionHelper {
     auto bElemTy = bTensorTy.getElementType();
 
     auto dotOpEncoding = aTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-    auto mfmaEncoding = dotOpEncoding.getParent().cast<MfmaEncodingAttr>();
+    auto mfmaEncoding = dotOpEncoding.getParent().cast<AMDMfmaEncodingAttr>();
     if (aElemTy.isFloat8E4M3FNUZ() && bElemTy.isFloat8E4M3FNUZ())
       return MatrixCoreType::FP32_FP8_FP8_FP32;
     if (aElemTy.isFloat8E4M3FNUZ() && bElemTy.isFloat8E5M2FNUZ())
@@ -292,7 +292,7 @@ struct DotOpMFMAConversionHelper {
   static MFMAInstrDescr getMatrixInstrDescr(DotOp op) {
     MFMAInstrDescr descr;
     auto tensorTy = op.getD().getType().cast<RankedTensorType>();
-    auto encoding = tensorTy.getEncoding().cast<MfmaEncodingAttr>();
+    auto encoding = tensorTy.getEncoding().cast<AMDMfmaEncodingAttr>();
     descr.coreType = getMatrixCoreTypeFromDot(op);
     descr.size = encoding.getNonKDim();
     return descr;
@@ -477,7 +477,7 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   auto cTensorTy = rankedTType(op.getC());
   auto dTensorTy = rankedTType(op.getD());
-  assert(cTensorTy.getEncoding().isa<MfmaEncodingAttr>() &&
+  assert(cTensorTy.getEncoding().isa<AMDMfmaEncodingAttr>() &&
          "Currently, we only support $c with a mfma layout.");
 
   assert(cTensorTy.getShape()[0] == dTensorTy.getShape()[0] &&
@@ -489,7 +489,7 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                         .getType()
                         .cast<RankedTensorType>()
                         .getEncoding()
-                        .cast<MfmaEncodingAttr>();
+                        .cast<AMDMfmaEncodingAttr>();
 
   DotOpMFMAConversionHelper helper(mfmaLayout, rewriter, typeConverter, loc);
 

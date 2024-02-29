@@ -75,7 +75,7 @@ public:
 #ifdef USE_ROCM
     auto encoding =
         cvtOp.getSrc().getType().getEncoding();
-    if (!encoding.isa<triton::gpu::MfmaEncodingAttr>())
+    if (!encoding.isa<triton::gpu::AMDMfmaEncodingAttr>())
       return mlir::failure();
 #endif
     if (!cvtOp.getSrc()

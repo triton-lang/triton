@@ -22,7 +22,7 @@ using ::mlir::triton::gpu::getShapePerCTATile;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::isaDistributedLayout;
-using ::mlir::triton::gpu::MfmaEncodingAttr;
+using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 // Forward declarations
@@ -99,7 +99,7 @@ public:
       return lowerDistributedToDistributed(op, adaptor, rewriter);
     }
 #ifdef USE_ROCM
-    if (srcLayout.isa<MfmaEncodingAttr>() &&
+    if (srcLayout.isa<AMDMfmaEncodingAttr>() &&
         dstLayout.isa<DotOperandEncodingAttr>()) {
       return lowerMfmaToDotOperand(op, adaptor, rewriter);
     }
@@ -254,7 +254,7 @@ private:
     //   return multiDimOffset;
     // }
 #ifdef USE_ROCM
-    if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
+    if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
       auto multiDimBase =
           emitBaseIndexForLayout(loc, rewriter, layout, type, false);
       SmallVector<SmallVector<unsigned>> offsets;
@@ -648,7 +648,7 @@ private:
       if (srcLayout.isa<BlockedEncodingAttr>() ||
           srcLayout.isa<SliceEncodingAttr>() ||
 #ifdef USE_ROCM
-          srcLayout.isa<MfmaEncodingAttr>() ||
+          srcLayout.isa<AMDMfmaEncodingAttr>() ||
 #endif
           srcLayout.isa<NvidiaMmaEncodingAttr>()) {
         if (isSrcMmaV1)
@@ -668,7 +668,7 @@ private:
       if (dstLayout.isa<BlockedEncodingAttr>() ||
           dstLayout.isa<SliceEncodingAttr>() ||
 #ifdef USE_ROCM
-          dstLayout.isa<MfmaEncodingAttr>() ||
+          dstLayout.isa<AMDMfmaEncodingAttr>() ||
 #endif
           dstLayout.isa<NvidiaMmaEncodingAttr>()) {
         if (isDstMmaV1)
@@ -791,7 +791,7 @@ private:
     Value res;
 #ifdef USE_ROCM
     if (auto mfmaLayout =
-            dotOperandLayout.getParent().dyn_cast_or_null<MfmaEncodingAttr>()) {
+            dotOperandLayout.getParent().dyn_cast_or_null<AMDMfmaEncodingAttr>()) {
       res = lowerSharedToDotOperandMFMA(op, adaptor, rewriter, mfmaLayout,
                                         dotOperandLayout, isOuter);
 #endif
@@ -944,7 +944,7 @@ private:
   // shared -> dot_operand if the result layout is mfma
   Value lowerSharedToDotOperandMFMA(
       triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter, const MfmaEncodingAttr &mfmaLayout,
+      ConversionPatternRewriter &rewriter, const AMDMfmaEncodingAttr &mfmaLayout,
       const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) const {
     auto loc = op.getLoc();
     Value src = op.getSrc();

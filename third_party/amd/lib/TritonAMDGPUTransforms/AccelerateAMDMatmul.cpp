@@ -18,7 +18,7 @@ using tt::DotOp;
 using ttg::BlockedEncodingAttr;
 using ttg::ConvertLayoutOp;
 using ttg::DotOperandEncodingAttr;
-using ttg::MfmaEncodingAttr;
+using ttg::AMDMfmaEncodingAttr;
 using ttg::SliceEncodingAttr;
 
 SmallVector<unsigned, 2>
@@ -288,14 +288,14 @@ public:
     auto oldBType = b.getType().cast<RankedTensorType>();
     auto ctx = oldAType.getContext();
 
-    ttg::MfmaEncodingAttr mfmaEnc;
+    ttg::AMDMfmaEncodingAttr mfmaEnc;
 
     auto [nonKDim, kDim] = chooseMfmaDimensions(dotOp);
 
     auto warpsPerTile = warpsPerTileMFMA(dotOp, retShape, numWarps);
 
     bool isTransposed = isChainDot(dotOp);
-    mfmaEnc = ttg::MfmaEncodingAttr::get(oldRetType.getContext(), nonKDim,
+    mfmaEnc = ttg::AMDMfmaEncodingAttr::get(oldRetType.getContext(), nonKDim,
                                          warpsPerTile, isTransposed, CTALayout);
 
     Type mfmaAccType;

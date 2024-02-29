@@ -404,10 +404,10 @@ using LLVM::getMultiDimIndex;
 using LLVM::SharedMemoryObject;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::SharedMemoryObject;
+using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::MfmaEncodingAttr;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 
@@ -745,7 +745,7 @@ emitOffsetForMmaLayoutV3(const NvidiaMmaEncodingAttr &mmaLayout,
 
 static SmallVector<Value>
 emitBaseIndexForMfmaLayout(Location loc, RewriterBase &rewriter,
-                           const MfmaEncodingAttr &mfmaLayout,
+                           const AMDMfmaEncodingAttr &mfmaLayout,
                            RankedTensorType type) {
   auto shape = type.getShape();
   auto _warpsPerCTA = mfmaLayout.getWarpsPerCTA();
@@ -785,7 +785,7 @@ emitBaseIndexForMfmaLayout(Location loc, RewriterBase &rewriter,
   return multiDimBase;
 }
 
-static void emitMfmaOffsetForCTA(const MfmaEncodingAttr &mfmaLayout,
+static void emitMfmaOffsetForCTA(const AMDMfmaEncodingAttr &mfmaLayout,
                                  SmallVector<SmallVector<unsigned>> &offsets,
                                  unsigned ctaOffsetX, unsigned ctaOffsetY) {
   auto nonKDim = mfmaLayout.getNonKDim();
@@ -813,7 +813,7 @@ static void emitMfmaOffsetForCTA(const MfmaEncodingAttr &mfmaLayout,
 }
 
 static SmallVector<SmallVector<unsigned>>
-emitOffsetForMfmaLayout(const MfmaEncodingAttr &mfmaLayout,
+emitOffsetForMfmaLayout(const AMDMfmaEncodingAttr &mfmaLayout,
                         RankedTensorType type) {
   auto tensorShape = type.getShape();
   SmallVector<SmallVector<unsigned>> offsets;
@@ -917,7 +917,7 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter, Attribute layout,
     if (mmaLayout.isAmpere() || mmaLayout.isHopper())
       result = emitBaseIndexWithinCTAForMmaLayoutV2V3(loc, rewriter, mmaLayout,
                                                       type);
-  } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
+  } else if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
     result = emitBaseIndexForMfmaLayout(loc, rewriter, mfmaLayout, type);
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parentLayout = sliceLayout.getParent();
@@ -953,7 +953,7 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
     if (mmaLayout.isHopper())
       return emitOffsetForMmaLayoutV3(mmaLayout, type);
   }
-  if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
+  if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
     return emitOffsetForMfmaLayout(mfmaLayout, type);
   }
   if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>())

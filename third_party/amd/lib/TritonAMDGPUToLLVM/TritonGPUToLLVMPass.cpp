@@ -608,7 +608,7 @@ private:
       auto srcType = cvtOp.getSrc().getType();
       auto dstType = cvtOp.getType();
       auto srcMfma =
-          srcType.getEncoding().dyn_cast<triton::gpu::MfmaEncodingAttr>();
+          srcType.getEncoding().dyn_cast<triton::gpu::AMDMfmaEncodingAttr>();
       auto dstDotOp =
           dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
       // llvm::outs() << isMfmaToDotShortcut(srcType, dstType) << "\n";
@@ -669,8 +669,8 @@ private:
     auto dstType = cvtOp.getType();
 
     auto srcMfma =
-        srcType.getEncoding().dyn_cast<triton::gpu::MfmaEncodingAttr>();
-    auto newMfmaEnc = triton::gpu::MfmaEncodingAttr::get(
+        srcType.getEncoding().dyn_cast<triton::gpu::AMDMfmaEncodingAttr>();
+    auto newMfmaEnc = triton::gpu::AMDMfmaEncodingAttr::get(
         mod.getContext(), srcMfma.getNonKDim(), {warpsPerCtaX, warpsPerCtaY},
         srcMfma.getIsTransposed(), srcMfma.getCTALayout());
 
@@ -713,7 +713,7 @@ private:
       auto dstType = cvtOp.getType();
 
       auto srcMfma =
-          srcType.getEncoding().dyn_cast<triton::gpu::MfmaEncodingAttr>();
+          srcType.getEncoding().dyn_cast<triton::gpu::AMDMfmaEncodingAttr>();
       auto dstBlocked =
           dstType.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
 
@@ -1105,8 +1105,8 @@ private:
           return;
         promoteType = builder.getF16Type();
 #ifdef USE_ROCM
-      } else if (MfmaEncodingAttr mfmaLayout =
-                     D.getType().getEncoding().dyn_cast<MfmaEncodingAttr>()) {
+      } else if (AMDMfmaEncodingAttr mfmaLayout =
+                     D.getType().getEncoding().dyn_cast<AMDMfmaEncodingAttr>()) {
         Type BElType = dotOp.getB().getType().getElementType();
 
         auto maxBitWidth = std::max(AElType.getIntOrFloatBitWidth(),

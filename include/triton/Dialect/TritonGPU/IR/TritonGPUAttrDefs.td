@@ -228,7 +228,7 @@ compared to 1*64 when the hasLeadingOffset is false.
                      "bool":$needTrans), [{
 
         // ---- begin GFX908/GFX90A ----
-        auto mfmaEnc = dotOpEnc.getParent().dyn_cast<MfmaEncodingAttr>();
+        auto mfmaEnc = dotOpEnc.getParent().dyn_cast<AMDMfmaEncodingAttr>();
 
         if (mfmaEnc) {
           int kDimNum = dotOpEnc.getOpIdx() == 0 ? 1 : 0;
@@ -700,8 +700,8 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
   ];
 }
 
-def MfmaEncodingAttr : DistributedEncoding<"MfmaEncoding", "mfma_encoding", [MmaEncodingTrait]> {
-  let mnemonic = "mfma";
+def AMDMfmaEncodingAttr : DistributedEncoding<"AMDMfmaEncoding", "amd_mfma_encoding", [MmaEncodingTrait]> {
+  let mnemonic = "amd_mfma";
 
   let description = [{
 An encoding for tensors that have been produced by MI100 && MI200 tensor cores.
