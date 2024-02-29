@@ -1,5 +1,5 @@
-#ifndef TRITONGPU_CONVERSION_TRITONGPUTOLLVM_PASSES_H
-#define TRITONGPU_CONVERSION_TRITONGPUTOLLVM_PASSES_H
+#ifndef TRITONGPU_CONVERSION_TRITONNVIDIAGPUTOLLVM_PASSES_H
+#define TRITONGPU_CONVERSION_TRITONNVIDIAGPUTOLLVM_PASSES_H
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Pass/Pass.h"
@@ -20,8 +20,6 @@ namespace triton {
 namespace gpu {
 std::unique_ptr<OperationPass<ModuleOp>>
 createDecomposeUnsupportedConversionsPass();
-
-std::unique_ptr<OperationPass<ModuleOp>> createAllocateSharedMemoryPass();
 
 } // namespace gpu
 

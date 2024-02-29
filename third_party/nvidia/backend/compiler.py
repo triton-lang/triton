@@ -166,7 +166,7 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttgpuir.add_decompose_unsupported_conversions(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
-        nvidia.passes.ttgpuir.add_allocate_shared_memory(pm)
+        passes.ttgpuir.add_allocate_shared_memory(pm)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability)
         nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
         passes.convert.add_arith_to_llvmir(pm)

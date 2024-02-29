@@ -2,6 +2,7 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -658,10 +659,10 @@ struct ClampFOpConversion
 
   explicit ClampFOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                              bool hwNanPropagationSupported,
+                              const TargetInfoBase &targetInfo,
                               PatternBenefit benefit = 1)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
-        hwNanPropagationSupported(hwNanPropagationSupported) {}
+        targetInfo(targetInfo) {}
 
   SmallVector<Value> createDestOps(ClampFOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
@@ -669,7 +670,7 @@ struct ClampFOpConversion
                                    Location loc) const {
     // Clip pattern not found, use min/max.
     if (op.getPropagateNan() == PropagateNan::ALL) {
-      if (hwNanPropagationSupported) {
+      if (targetInfo.supportMaximumMinimum()) {
         auto v = rewriter.create<LLVM::MaximumOp>(loc, elemTy, operands[0][0],
                                                   operands[0][1]);
         return {rewriter.create<LLVM::MinimumOp>(loc, v, operands[0][2])};
@@ -695,7 +696,7 @@ struct ClampFOpConversion
   }
 
 protected:
-  bool hwNanPropagationSupported;
+  const TargetInfoBase &targetInfo;
 };
 
 } // namespace
@@ -712,10 +713,10 @@ void mlir::triton::populateMinMaxFOpToLLVMPattern(
 
 void mlir::triton::populateClampFOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, bool hwNanPropagationSupported,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfoBase &targetInfo,
     PatternBenefit benefit) {
-  patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
-                                   hwNanPropagationSupported, benefit);
+  patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
+                                   benefit);
 }
 
 void mlir::triton::populateElementwiseOpToLLVMPatterns(

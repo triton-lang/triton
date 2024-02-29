@@ -1,4 +1,5 @@
 #include "ElementwiseOpToLLVM.h"
+#include "TargetInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
@@ -1503,12 +1504,13 @@ void populateElementwiseOpToLLVMPatterns(
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-    int computeCapability, PatternBenefit benefit) {
+    int computeCapability, const TargetInfo &targetInfo,
+    PatternBenefit benefit) {
 #define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
   patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
       typeConverter, axisInfoAnalysis, benefit);
   POPULATE_BINARY_OP(arith::SubIOp, LLVM::SubOp) // -
-  POPULATE_BINARY_OP(arith::AddIOp, LLVM::AddOp) // + 
+  POPULATE_BINARY_OP(arith::AddIOp, LLVM::AddOp) // +
   POPULATE_BINARY_OP(arith::MulIOp, LLVM::MulOp) // *
   POPULATE_BINARY_OP(arith::DivSIOp, LLVM::SDivOp)
   POPULATE_BINARY_OP(arith::DivUIOp, LLVM::UDivOp)
@@ -1586,7 +1588,6 @@ void populateElementwiseOpToLLVMPatterns(
       typeConverter, patterns, axisInfoAnalysis,
       false /*hwNanPropagationSupported*/, benefit);
   mlir::triton::populateClampFOpToLLVMPattern(
-      typeConverter, patterns, axisInfoAnalysis,
-      false /*hwNanPropagationSupported*/, benefit);
+      typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
 }
 } // namespace AMD
