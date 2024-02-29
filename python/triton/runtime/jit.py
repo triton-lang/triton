@@ -28,7 +28,7 @@ class DependenciesFinder(ast.NodeVisitor):
 
     def __init__(self, globals, src) -> None:
         super().__init__()
-        self.hasher = hashlib.sha1(src.encode("utf-8"))
+        self.hasher = hashlib.sha256(src.encode("utf-8"))
         self.globals = globals
 
     @property
