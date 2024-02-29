@@ -35,10 +35,9 @@ static SmallVector<Value> computeWarpLevelHistogram(
     SmallVector<Value> ballotBits;
     for (int j = 0; j < numBits; ++j) {
       Value bitSet = and_(value, i32_val(1 << j));
-      Value threadMask = int_val(numThreadPerWarp, -1);
       Value cmp = icmp_ne(bitSet, zero);
-      Value bit = targetInfo.callBallotOp(
-          rewriter, loc, int_ty(numThreadPerWarp), threadMask, cmp);
+      Value bit =
+          targetInfo.callBallotOp(rewriter, loc, int_ty(numThreadPerWarp), cmp);
       ballotBits.push_back(bit);
     }
     uint64_t fullMaskValue =
@@ -164,6 +163,9 @@ public:
     auto mod = op->getParentOfType<ModuleOp>();
     int numThreadsPerWarp =
         triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    assert(numThreadsPerWarp == 32 ||
+           numThreadsPerWarp == 64 &&
+               "Only supports 32 or 64 threads per warp");
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     // Pad out the bins so that we have at least one bin per thread within a
     // warp.

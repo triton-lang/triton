@@ -3,10 +3,9 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace AMD {
-bool TargetInfo::isHwNanPropagationSupported() const { return false; }
+bool TargetInfo::supportMaximumMinimum() const { return false; }
 Value TargetInfo::callBallotOp(ConversionPatternRewriter &rewriter,
-                               Location loc, Type type, Value threadMask,
-                               Value cmp) const {
+                               Location loc, Type type, Value cmp) const {
   auto stringAttr = rewriter.getStringAttr("llvm.amdgcn.ballot");
   SmallVector<Value> operands = {cmp};
   Value asmResult =
