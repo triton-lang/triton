@@ -125,6 +125,7 @@ public:
   void rewriteYieldOp(scf::YieldOp yieldOp);
   void rewriteConditionOp(scf::ConditionOp conditionOp);
   void rewriteReduceToScalar(Operation *reduceOp);
+  void rewriteAssertOp(AssertOp assertOp);
   Operation *cloneElementwise(OpBuilder &rewriter, Operation *op,
                               Attribute encoding);
   // Map the original value to the rewritten one.
@@ -410,6 +411,8 @@ void LayoutPropagation::rewriteRegion(Region &region) {
         rewriteConditionOp(conditionOp);
       } else if (reduceToScalar(&op)) {
         rewriteReduceToScalar(&op);
+      } else if (auto assertOp = dyn_cast<AssertOp>(&op)) {
+        rewriteAssertOp(assertOp);
       } else {
         // If we don't need to rewrite the op we still need to remap the
         // operands.
@@ -669,6 +672,18 @@ void LayoutPropagation::rewriteReduceToScalar(Operation *reduceOp) {
     Value newOperand = getValueAs(operand.get(), srcEncoding);
     reduceOp->setOperand(operand.getOperandNumber(), newOperand);
   }
+}
+
+void LayoutPropagation::rewriteAssertOp(AssertOp assertOp) {
+  Attribute srcEncoding;
+  // Only need to deal with the first operand which is the condition tensor.
+  Value operand = assertOp->getOperand(0);
+  auto it = layouts.find(operand);
+  if (it == layouts.end())
+    return;
+  srcEncoding = it->second.encodings[0];
+  Value newOperand = getValueAs(operand, srcEncoding);
+  assertOp->setOperand(0, newOperand);
 }
 
 Operation *LayoutPropagation::rewriteOp(Operation *op) {

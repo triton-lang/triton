@@ -2238,4 +2238,21 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
     %7 = triton_gpu.convert_layout %1#0 : tensor<32xf32, #blocked1> -> tensor<32xf32, #blocked>
     tt.return %7, %1#1 : tensor<32xf32, #blocked>, tensor<32xf32, #blocked>
   }
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32} {
+// CHECK-LABEL: assertop
+// CHECK: %[[L:.+]] = tt.load %{{.*}} : tensor<1024xi1, #blocked>
+// CHECK: tt.assert %[[L]]
+
+tt.func @assertop(%ptr: tensor<1024x!tt.ptr<i1>, #blocked>) {
+  %0 = tt.load %ptr {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<1024xi1, #blocked>
+  %1 = triton_gpu.convert_layout %0 : tensor<1024xi1, #blocked> -> tensor<1024xi1, #blocked1>
+  tt.assert %1, "cond must be true ", "unknown", "unknown", 0 : tensor<1024xi1, #blocked1>
+  tt.return
+}
 }
