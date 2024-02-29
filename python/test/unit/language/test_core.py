@@ -412,6 +412,7 @@ def test_addptr(dtype, order, device):
     np.testing.assert_allclose(y, to_numpy(y_tri))
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, dtype_y", [  #
     (dtype_x, dtype_y) for dtype_x in int_dtypes for dtype_y in int_dtypes
 ] + [(dtype_x, dtype_y) for dtype_x in uint_dtypes for dtype_y in uint_dtypes])
@@ -461,6 +462,7 @@ def test_unsigned_name_mangling(device):
 
 # test bitwise ops
 # ---------------
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, dtype_y, op", [  #
     (dtype_x, dtype_y, op)
     for op in ['&', '|', '^']
@@ -478,12 +480,14 @@ def test_bitwise_op(dtype_x, dtype_y, op, num_ctas, device):
         numpy_expr = None
     if 'float' in dtype_x + dtype_y:
         # The CompilationError must have been caused by a C++ exception with this text.
-        with pytest.raises(triton.CompilationError, match='invalid operands of type'):
+        error = triton.CompilationError if not is_interpreter() else tl.semantic.IncompatibleTypeErrorImpl
+        with pytest.raises(error, match='invalid operands of type'):
             _test_binary(dtype_x, dtype_y, expr, numpy_expr='np.array([])', device=device, num_ctas=num_ctas)
     else:
         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, dtype_y, op", [  #
     (dtype_x, dtype_y, op)
     for op in ['<<', '>>']
@@ -508,6 +512,7 @@ def test_shift_op(dtype_x, dtype_y, op, num_ctas, device):
 ops = ['==', '!=', '>', '<', '>=', '<=']
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize(
     "dtype_x, dtype_y, op, mode_x, mode_y",
     # real
