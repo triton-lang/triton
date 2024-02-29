@@ -49,19 +49,6 @@ class BlockPointerHandle:
         return ptrs, masks
 
 
-def wrap_ret(compute_ret_ty):
-
-    def wrapper(fn):
-
-        def wrapped(*args, **kwargs):
-            ret = fn(*args, **kwargs)
-            return TensorHandle(ret.data, compute_ret_ty(*args, **kwargs))
-
-        return wrapped
-
-    return wrapper
-
-
 @dataclass(frozen=True)
 class InterpreterOptions:
     extern_libs: dict = None
@@ -69,6 +56,18 @@ class InterpreterOptions:
     arch: str = None
     allow_fp8e4nv: bool = False
     max_num_imprecise_acc_default: int = 0
+
+
+def _get_signed_np_dtype(dtype):
+    if dtype == np.uint8:
+        return np.int8
+    if dtype == np.uint16:
+        return np.int16
+    if dtype == np.uint32:
+        return np.int32
+    if dtype == np.uint64:
+        return np.int64
+    return dtype
 
 
 class Builder:
@@ -104,6 +103,8 @@ class Builder:
             tl.uint64: np.dtype(np.uint64),
         }
         if isinstance(tt_dtype, tl.block_type):
+            if isinstance(tt_dtype.element_ty, tl.pointer_type):
+                return np.dtype(np.uint64)
             return np_types[tt_dtype.element_ty]
         return np_types[tt_dtype]
 
@@ -219,8 +220,8 @@ class Builder:
     create_frem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.remainder)
     create_fsub = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.subtract)
     create_mul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
-    create_sdiv = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.floor_divide)
-    create_udiv = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.floor_divide)
+    create_sdiv = lambda self, lhs, rhs: self.create_idiv(lhs, rhs)
+    create_udiv = lambda self, lhs, rhs: self.create_idiv(lhs, rhs)
     # LLVM has 'numpy.fmod', not 'numpy.remainder', semantics on integer remainders.
     create_srem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.fmod)
     create_urem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.fmod)
@@ -228,7 +229,6 @@ class Builder:
     create_sub = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.subtract)
     create_shl = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.left_shift)
     create_lshr = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.right_shift)
-    create_ashr = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.right_shift)
     create_minsi = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.minimum)
     create_minui = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.minimum)
     create_minimumf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.minimum)
@@ -263,9 +263,24 @@ class Builder:
     create_xor = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.bitwise_xor)
     create_or = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.bitwise_or)
 
+    def create_idiv(self, lhs, rhs):
+        # Triton has IEEE, not numpy/torch, semantics for %, and those carry
+        # through to //, so we have to use a nonstandard expression to get a
+        # reference result for //.
+        return TensorHandle((lhs.data - np.fmod(lhs.data, rhs.data)) // rhs.data, lhs.dtype)
+
+    def create_ashr(self, lhs, rhs):
+        # Triton's rshift operator depends on the signedness of the left operand
+        lhs_dtype = _get_signed_np_dtype(lhs.data.dtype)
+        rhs_dtype = _get_signed_np_dtype(rhs.data.dtype)
+        lhs.data = lhs.data.astype(lhs_dtype)
+        rhs.data = rhs.data.astype(rhs_dtype)
+        return self.binary_op(lhs, rhs, np.right_shift)
+
     # ternary functions
     def ternary_op(self, lhs, rhs, other, op):
-        return TensorHandle(op(lhs.data, rhs.data, other.data), other.dtype)
+        ret = TensorHandle(op(lhs.data, rhs.data, other.data), other.dtype)
+        return ret
 
     create_select = lambda self, cond, lhs, rhs: self.ternary_op(cond, lhs, rhs, np.where)
 
@@ -297,7 +312,9 @@ class Builder:
 
     def create_addptr(self, ptr, offset):
         dtype_tt = ptr.dtype.element_ty
-        return TensorHandle(ptr.data + (dtype_tt.primitive_bitwidth // 8) * offset.data.astype(np.uint64), ptr.dtype)
+        # int1's bitwidth is 1, but we need to use 8 for pointer arithmetic
+        return TensorHandle(ptr.data + (max(1, dtype_tt.primitive_bitwidth // 8)) * offset.data.astype(np.uint64),
+                            ptr.dtype)
 
     def create_tensor_pointer_load(self, ptr, boundary_check, padding_option, cache_modifier, eviction_policy,
                                    is_volatile):
