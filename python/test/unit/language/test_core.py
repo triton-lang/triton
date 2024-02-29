@@ -4356,32 +4356,18 @@ def test_smid(device):
 # -----------------------
 # test layout conversions
 # -----------------------
+# TODO: backend should be tested separately
 
-if is_hip():
-    # limit layouts to fit scratch buffers into 64K LDS
-    # to guarantee that scratch buffer is not too large:
-    # elemsPerThread * threadsPerWarp * warps <= 64 for every spatial dimension
-    layouts = [
-        BlockedLayout([1, 16], [THREADS_PER_WARP // 4, 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-        BlockedLayout([1, 8], [THREADS_PER_WARP // 8, 8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-        BlockedLayout([1, 4], [THREADS_PER_WARP // 8, 8], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-        BlockedLayout([1, 1], [THREADS_PER_WARP // 32, 32], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-        BlockedLayout([8, 1], [8, THREADS_PER_WARP // 8], [1, 4], [0, 1], [1, 1], [1, 1], [0, 1]),
-        BlockedLayout([4, 1], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-        BlockedLayout([1, 1], [32, THREADS_PER_WARP // 32], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-        BlockedLayout([4, 4], [THREADS_PER_WARP // 16, 16], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1])
-    ]
-else:
-    layouts = [
-        BlockedLayout([1, 16], [8, 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-        BlockedLayout([1, 8], [2, 16], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-        BlockedLayout([1, 4], [4, 8], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-        BlockedLayout([1, 1], [1, 32], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-        BlockedLayout([8, 1], [16, 2], [1, 4], [0, 1], [1, 1], [1, 1], [0, 1]),
-        BlockedLayout([4, 1], [8, 4], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-        BlockedLayout([1, 1], [32, 1], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-        BlockedLayout([4, 4], [1, 32], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1])
-    ]
+layouts = [
+    BlockedLayout([1, 16], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 8], [2, THREADS_PER_WARP // 2], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 1], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([8, 1], [16, THREADS_PER_WARP // 16], [1, 4], [0, 1], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([4, 1], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([4, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1])
+]
 
 intermediate_layouts = [
     None,
