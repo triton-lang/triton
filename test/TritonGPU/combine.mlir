@@ -2238,6 +2238,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
     %7 = triton_gpu.convert_layout %1#0 : tensor<32xf32, #blocked1> -> tensor<32xf32, #blocked>
     tt.return %7, %1#1 : tensor<32xf32, #blocked>, tensor<32xf32, #blocked>
   }
+}
 
 // -----
 
