@@ -74,19 +74,12 @@ constexpr int kPtrBitWidth = 64;
 #endif
 class TritonLLVMFunctionConversionTarget : public ConversionTarget {
 public:
-  explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx, Target target)
+  explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
     addLegalDialect<index::IndexDialect>();
     addLegalDialect<LLVM::LLVMDialect>();
-    switch (target) {
-    case Target::NVVM:
-      addLegalDialect<NVVM::NVVMDialect>();
-      break;
-    case Target::ROCDL:
-      addLegalDialect<ROCDL::ROCDLDialect>();
-      addLegalDialect<mlir::scf::SCFDialect>();
-      break;
-    }
+    addLegalDialect<ROCDL::ROCDLDialect>();
+    addLegalDialect<mlir::scf::SCFDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
 };
@@ -321,18 +314,11 @@ private:
 
 class TritonLLVMConversionTarget : public ConversionTarget {
 public:
-  explicit TritonLLVMConversionTarget(MLIRContext &ctx, Target target)
+  explicit TritonLLVMConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
-    switch (target) {
-    case Target::NVVM:
-      addLegalDialect<NVVM::NVVMDialect>();
-      break;
-    case Target::ROCDL:
-      addLegalDialect<ROCDL::ROCDLDialect>();
-      addLegalDialect<mlir::scf::SCFDialect>();
-      break;
-    }
+    addLegalDialect<ROCDL::ROCDLDialect>();
+    addLegalDialect<mlir::scf::SCFDialect>();
     addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
@@ -353,8 +339,8 @@ struct ConvertTritonAMDGPUToLLVM
                     NVVM::NVVMDialect>();
   }
 
-  ConvertTritonAMDGPUToLLVM(int32_t computeCapability, Target target)
-      : ConvertTritonAMDGPUToLLVMBase({computeCapability, target}) {}
+  ConvertTritonAMDGPUToLLVM(int32_t computeCapability)
+      : ConvertTritonAMDGPUToLLVMBase({computeCapability}) {}
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -362,7 +348,7 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
     TritonGPUToLLVMTypeConverter typeConverter(context, option);
-    TritonLLVMConversionTarget convTarget(*context, target);
+    TritonLLVMConversionTarget convTarget(*context);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -396,10 +382,10 @@ struct ConvertTritonAMDGPUToLLVM
     {
       mlir::LowerToLLVMOptions option(context);
       TritonGPUToLLVMTypeConverter typeConverter(context, option);
-      TritonLLVMFunctionConversionTarget funcTarget(*context, target);
+      TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
       funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, allocation,
-                                         /*benefit=*/1);
+                                         patternBenefitDefault);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
       if (failed(
@@ -416,11 +402,12 @@ struct ConvertTritonAMDGPUToLLVM
     {
       mlir::LowerToLLVMOptions option(context);
       TritonGPUToLLVMTypeConverter typeConverter(context, option);
-      TritonLLVMFunctionConversionTarget funcTarget(*context, target);
+      TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
       funcPatterns.add<CallOpConversion>(typeConverter, numWarps, allocation,
-                                         /*benefit=*/1);
-      funcPatterns.add<ReturnOpConversion>(typeConverter, /*benefit=*/1);
+                                         patternBenefitDefault);
+      funcPatterns.add<ReturnOpConversion>(typeConverter,
+                                           patternBenefitDefault);
       if (failed(
               applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
         return signalPassFailure();
@@ -446,27 +433,27 @@ struct ConvertTritonAMDGPUToLLVM
     auto populatePatterns1 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
                    allocation, indexCacheInfo,
-                   /*benefit*/ 10);
+                   patternBenefitPrioritizeOverLLVMConversions);
     };
 
     auto populatePatterns2 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, /*benefit*/ 10);
+                   allocation, patternBenefitPrioritizeOverLLVMConversions);
     };
 
     auto populatePatterns3 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, indexCacheInfo, /*benefit*/ 10);
+                   allocation, indexCacheInfo, patternBenefitPrioritizeOverLLVMConversions);
     };
 
     auto populatePatterns4 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
                    allocation, indexCacheInfo, computeCapability,
-                   /*benefit*/ 10);
+                   patternBenefitPrioritizeOverLLVMConversions);
     };
     auto populatePatterns5 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns,
-                   /*benefit*/ 10);
+                   patternBenefitPrioritizeOverLLVMConversions);
     };
 
     populatePatterns1(AMD::populateTritonGPUToLLVMPatterns);
@@ -485,15 +472,8 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
 
     // Native lowering patterns
-    switch (target) {
-    case Target::NVVM:
-      mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
-      break;
-    case Target::ROCDL:
-      mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
-                                                 mlir::gpu::amd::HIP);
-      break;
-    }
+    mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
+                                               mlir::gpu::amd::HIP);
 
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
@@ -974,11 +954,13 @@ private:
     return builder.create<triton::FpToFpOp>(loc, tensorPromotedType, operand);
   }
 
-
-  static void promoteReduceOpResult(OpBuilder &builder, triton::ReduceOp op, Value result, Type promotedType){
+  static void promoteReduceOpResult(OpBuilder &builder, triton::ReduceOp op,
+                                    Value result, Type promotedType) {
     // save original type
     auto originalType = result.getType();
-    auto elemType = originalType.isa<RankedTensorType>() ? originalType.cast<RankedTensorType>().getElementType(): originalType;
+    auto elemType = originalType.isa<RankedTensorType>()
+                        ? originalType.cast<RankedTensorType>().getElementType()
+                        : originalType;
 
     // promote result type
     result.setType(promotedType);
@@ -1016,7 +998,8 @@ private:
         auto oldType = val.getType().cast<RankedTensorType>();
         auto elemType = oldType.getElementType();
         if (elemType.isInteger(16) || elemType.isInteger(8)) {
-          auto newType = oldType.cloneWith(std::nullopt, builder.getIntegerType(32));
+          auto newType =
+              oldType.cloneWith(std::nullopt, builder.getIntegerType(32));
           auto promotedVal =
               builder.create<mlir::arith::ExtSIOp>(op->getLoc(), newType, val);
           newOperands.push_back(promotedVal);
@@ -1035,16 +1018,21 @@ private:
       for (Value result : op.getResults()) {
         auto type = result.getType();
         if (type.isInteger(16) || type.isInteger(8)) {
-          promoteReduceOpResult(builder, op, result, builder.getIntegerType(32));
+          promoteReduceOpResult(builder, op, result,
+                                builder.getIntegerType(32));
         } else if (type.isF16()) {
           promoteReduceOpResult(builder, op, result, builder.getF32Type());
         } else if (type.isa<RankedTensorType>()) {
           auto oldType = type.cast<RankedTensorType>();
           auto elemType = oldType.getElementType();
           if (elemType.isInteger(16) || elemType.isInteger(8)) {
-            promoteReduceOpResult(builder, op, result, oldType.cloneWith(std::nullopt, builder.getIntegerType(32)));
+            promoteReduceOpResult(
+                builder, op, result,
+                oldType.cloneWith(std::nullopt, builder.getIntegerType(32)));
           } else if (elemType.isF16()) {
-            promoteReduceOpResult(builder, op, result, oldType.cloneWith(std::nullopt, builder.getF32Type()));
+            promoteReduceOpResult(
+                builder, op, result,
+                oldType.cloneWith(std::nullopt, builder.getF32Type()));
           }
         }
       }
@@ -1148,7 +1136,7 @@ namespace mlir {
 namespace triton {
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonAMDGPUToLLVMPass() {
-  return std::make_unique<ConvertTritonAMDGPUToLLVM>(90, triton::ROCDL);
+  return std::make_unique<ConvertTritonAMDGPUToLLVM>(90);
 }
 
 } // namespace triton

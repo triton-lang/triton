@@ -125,6 +125,7 @@ public:
   void rewriteYieldOp(scf::YieldOp yieldOp);
   void rewriteConditionOp(scf::ConditionOp conditionOp);
   void rewriteReduceToScalar(Operation *reduceOp);
+  void rewriteAssertOp(AssertOp assertOp);
   Operation *cloneElementwise(OpBuilder &rewriter, Operation *op,
                               Attribute encoding);
   // Map the original value to the rewritten one.
@@ -410,6 +411,8 @@ void LayoutPropagation::rewriteRegion(Region &region) {
         rewriteConditionOp(conditionOp);
       } else if (reduceToScalar(&op)) {
         rewriteReduceToScalar(&op);
+      } else if (auto assertOp = dyn_cast<AssertOp>(&op)) {
+        rewriteAssertOp(assertOp);
       } else {
         // If we don't need to rewrite the op we still need to remap the
         // operands.
@@ -671,6 +674,18 @@ void LayoutPropagation::rewriteReduceToScalar(Operation *reduceOp) {
   }
 }
 
+void LayoutPropagation::rewriteAssertOp(AssertOp assertOp) {
+  Attribute srcEncoding;
+  // Only need to deal with the first operand which is the condition tensor.
+  Value operand = assertOp->getOperand(0);
+  auto it = layouts.find(operand);
+  if (it == layouts.end())
+    return;
+  srcEncoding = it->second.encodings[0];
+  Value newOperand = getValueAs(operand, srcEncoding);
+  assertOp->setOperand(0, newOperand);
+}
+
 Operation *LayoutPropagation::rewriteOp(Operation *op) {
   opToDelete.insert(op);
   if (auto forOp = dyn_cast<scf::ForOp>(op))
@@ -724,7 +739,7 @@ bool canBeRemat(Operation *op) {
   if (isa<tensor::ExtractSliceOp, AllocTensorOp, InsertSliceAsyncOp,
           AtomicRMWOp, AtomicCASOp, DotOp>(op))
     return false;
-  if (isa<scf::IfOp, scf::WhileOp, scf::ConditionOp>(op))
+  if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;
 
   return true;
@@ -736,6 +751,10 @@ void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
   for (Value v : slice) {
     if (v.getDefiningOp()) {
       opsToRewrite.insert(v.getDefiningOp());
+      if (auto ifOp = v.getDefiningOp<scf::IfOp>()) {
+        opsToRewrite.insert(ifOp.thenYield().getOperation());
+        opsToRewrite.insert(ifOp.elseYield().getOperation());
+      }
     } else {
       opsToRewrite.insert(v.cast<BlockArgument>().getOwner()->getParentOp());
       // We also need to rewrite the yield op.
@@ -744,8 +763,12 @@ void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
   }
   opsToRewrite = multiRootTopologicalSort(opsToRewrite);
 
-  SmallVector<Operation *> deadLoops;
-  OpBuilder builder(slice.begin()->getContext());
+  // replaceAllUsesWith calls delayed until after initial rewrite.
+  // This is required for slice.count(value) to work mid rewrite.
+  SmallVector<std::tuple<Value, Value>> replacements;
+
+  SmallVector<Operation *> deadOps;
+  IRRewriter builder(slice.begin()->getContext());
   for (Operation *op : opsToRewrite) {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       // Keep a mapping of the operands index to the new operands index.
@@ -761,16 +784,43 @@ void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
         }
       }
       // Create a new for loop with the new operands.
-      scf::ForOp newForOp =
-          replaceForOpWithNewSignature(builder, forOp, newOperands);
-      deadLoops.push_back(forOp.getOperation());
+      scf::ForOp newForOp = replaceForOpWithNewSignature(
+          builder, forOp, newOperands, replacements);
+      deadOps.push_back(forOp.getOperation());
       Block &loopBody = *newForOp.getBody();
       for (auto m : argMapping) {
-        mapping.map(newForOp.getResult(m.first), newForOp.getResult(m.second));
+        mapping.map(forOp.getResult(m.first), newForOp.getResult(m.second));
         int numIndVars = newForOp.getNumInductionVars();
         mapping.map(loopBody.getArgument(m.first + numIndVars),
                     loopBody.getArgument(m.second + numIndVars));
       }
+      continue;
+    }
+    if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      SmallVector<Type> newTypes;
+      for (auto res : ifOp.getResults()) {
+        if (slice.count(res)) {
+          auto it = layout.find(res);
+          assert(it != layout.end());
+
+          auto oldType = res.getType().cast<RankedTensorType>();
+          auto newType = RankedTensorType::get(
+              oldType.getShape(), oldType.getElementType(), it->second);
+          newTypes.push_back(newType);
+        }
+      }
+      scf::IfOp newIfOp =
+          replaceIfOpWithNewSignature(builder, ifOp, newTypes, replacements);
+      unsigned oldIdx = 0;
+      unsigned newIdx = ifOp.getNumResults();
+      for (auto res : ifOp.getResults()) {
+        if (slice.count(res)) {
+          mapping.map(ifOp.getResult(oldIdx), newIfOp.getResult(newIdx));
+          ++newIdx;
+        }
+        ++oldIdx;
+      }
+      deadOps.push_back(ifOp.getOperation());
       continue;
     }
     builder.setInsertionPoint(op);
@@ -809,7 +859,12 @@ void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
   }
   convertOp.replaceAllUsesWith(mapping.lookup(convertOp.getSrc()));
   convertOp.erase();
-  for (Operation *op : deadLoops)
+
+  for (auto &kv : replacements) {
+    builder.replaceAllUsesWith(std::get<0>(kv), std::get<1>(kv));
+  }
+
+  for (Operation *op : deadOps)
     op->erase();
 }
 
@@ -1033,6 +1088,7 @@ public:
     RewritePatternSet cleanUpPatterns2(context);
     populateForOpDeadArgumentElimination(cleanUpPatterns2);
     scf::ForOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
+    scf::IfOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
     ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
     if (applyPatternsAndFoldGreedily(m, std::move(cleanUpPatterns2)).failed()) {
       signalPassFailure();

@@ -1233,12 +1233,6 @@ def cat(input, other, can_reorder=False, _builder=None):
 
 
 @builtin
-def _experimental_join(a, b, _builder=None):
-    """Forwards to core.join for temporary backwards compat."""
-    return join(a, b, _builder)
-
-
-@builtin
 def join(a, b, _builder=None):
     """
     Join the given tensors in a new, minor dimension.
@@ -1262,11 +1256,8 @@ def join(a, b, _builder=None):
     return semantic.join(a, b, _builder)
 
 
-@_tensor_member_fn
-@builtin
-def _experimental_split(a, _builder=None, _generator=None) -> tuple[tensor, tensor]:
-    """Forwards to core.split for temporary backwards compat."""
-    return split(a, _builder, _generator)
+# For temporary backwards compat.
+_experimental_join = join
 
 
 @jit
@@ -1307,6 +1298,10 @@ def split(a, _builder=None, _generator=None) -> tuple[tensor, tensor]:
         out_rhs = cast(tensor, reduce(out_rhs, None, _take_first, _builder=_builder, _generator=_generator))
 
     return out_lhs, out_rhs
+
+
+# For temporary backwards compat.
+_experimental_split = split
 
 
 @_tensor_member_fn
@@ -1698,38 +1693,6 @@ def where(condition, x, y, _builder=None):
 
 
 @builtin
-def umulhi(x, y, _builder=None):
-    """
-    Returns the most significant 32 bits of the product of x and y.
-
-    :param x: the input tensor
-    :type x: int32
-    :param y: the input tensor
-    :type y: int32
-    """
-    x = _to_tensor(x, _builder)
-    y = _to_tensor(y, _builder)
-    return semantic.umulhi(x, y, _builder)
-
-
-@builtin
-def fdiv(x, y, ieee_rounding=False, _builder=None):
-    """
-    Returns a floating-point resultant tensor of dividing x by y.
-
-    :param x: the input numerator value.
-    :param y: the input denominator value.
-    :param ieee_rounding: To follow IEEE-754 floating point number
-        rounding mechanism
-    :type ieee_rounding: bool
-    """
-    ieee_rounding = _constexpr_to_value(ieee_rounding)
-    x = _to_tensor(x, _builder)
-    y = _to_tensor(y, _builder)
-    return semantic.fdiv(x, y, ieee_rounding, _builder)
-
-
-@builtin
 def minimum(x, y, propagate_nan: constexpr = PropagateNan.NONE, _builder=None):
     """
     Computes the element-wise minimum of :code:`x` and :code:`y`.
@@ -1801,69 +1764,6 @@ def clamp(x, min, max, propagate_nan: constexpr = PropagateNan.NONE, _builder=No
     propagate_nan = _constexpr_to_value(propagate_nan)
 
     return semantic.clamp(x, min, max, propagate_nan, _builder)
-
-
-def _add_math_1arg_docstr(name: str) -> Callable[[T], T]:
-
-    def _decorator(func: T) -> T:
-        docstr = """
-    Computes the element-wise {name} of :code:`x`.
-
-    :param x: the input values
-    :type x: Block
-    """
-        func.__doc__ = docstr.format(name=name)
-        return func
-
-    return _decorator
-
-
-@_tensor_member_fn
-@builtin
-@_add_math_1arg_docstr("exponential")
-def exp(x, _builder=None):
-    x = _to_tensor(x, _builder)
-    return semantic.exp(x, _builder)
-
-
-@_tensor_member_fn
-@builtin
-@_add_math_1arg_docstr("natural logarithm")
-def log(x, _builder=None):
-    x = _to_tensor(x, _builder)
-    return semantic.log(x, _builder)
-
-
-@_tensor_member_fn
-@builtin
-@_add_math_1arg_docstr("cosine")
-def cos(x, _builder=None):
-    x = _to_tensor(x, _builder)
-    return semantic.cos(x, _builder)
-
-
-@_tensor_member_fn
-@builtin
-@_add_math_1arg_docstr("sine")
-def sin(x, _builder=None):
-    x = _to_tensor(x, _builder)
-    return semantic.sin(x, _builder)
-
-
-@_tensor_member_fn
-@builtin
-@_add_math_1arg_docstr("square root")
-def sqrt(x, _builder=None):
-    x = _to_tensor(x, _builder)
-    return semantic.sqrt(x, _builder)
-
-
-@_tensor_member_fn
-@builtin
-@_add_math_1arg_docstr("absolute value")
-def abs(x, _builder=None):
-    x = _to_tensor(x, _builder)
-    return semantic.abs(x, _builder)
 
 
 # -----------------------

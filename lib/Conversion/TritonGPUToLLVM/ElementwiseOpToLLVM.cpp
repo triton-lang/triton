@@ -9,6 +9,33 @@ using namespace mlir::triton::gpu;
 
 namespace mlir::triton::gpu {
 
+Type getFunctionType(Type resultType, ValueRange operands) {
+  SmallVector<Type> operandTypes(operands.getTypes());
+  return LLVM::LLVMFunctionType::get(resultType, operandTypes);
+}
+
+LLVM::LLVMFuncOp appendOrGetExternFuncOp(ConversionPatternRewriter &rewriter,
+                                         Operation *op, StringRef funcName,
+                                         Type funcType,
+                                         StringRef libname /*= ""*/,
+                                         StringRef libpath /*= ""*/) {
+  using LLVM::LLVMFuncOp;
+
+  auto funcAttr = StringAttr::get(op->getContext(), funcName);
+  Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(op, funcAttr);
+  if (funcOp)
+    return cast<LLVMFuncOp>(*funcOp);
+
+  auto parent = op->getParentOfType<LLVM::LLVMFuncOp>();
+  OpBuilder b(parent);
+  auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
+  ret.getOperation()->setAttr("libname",
+                              StringAttr::get(op->getContext(), libname));
+  ret.getOperation()->setAttr("libpath",
+                              StringAttr::get(op->getContext(), libpath));
+  return ret;
+}
+
 Type getElementType(Value value) {
   auto type = value.getType();
   if (auto tensorType = type.dyn_cast<RankedTensorType>())
@@ -266,36 +293,10 @@ struct ExternElementwiseOpConversion
       llvm::errs() << "ExternElementwiseOpConversion";
 
     Type funcType = getFunctionType(elemTy, operands[0]);
-    LLVM::LLVMFuncOp funcOp =
-        appendOrGetFuncOp(rewriter, op, funcName, funcType);
+    LLVM::LLVMFuncOp funcOp = appendOrGetExternFuncOp(
+        rewriter, op, funcName, funcType, op.getLibname(), op.getLibpath());
     return {
         rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
-  }
-
-private:
-  Type getFunctionType(Type resultType, ValueRange operands) const {
-    SmallVector<Type> operandTypes(operands.getTypes());
-    return LLVM::LLVMFunctionType::get(resultType, operandTypes);
-  }
-
-  LLVM::LLVMFuncOp appendOrGetFuncOp(ConversionPatternRewriter &rewriter,
-                                     ExternElementwiseOp op, StringRef funcName,
-                                     Type funcType) const {
-    using LLVM::LLVMFuncOp;
-
-    auto funcAttr = StringAttr::get(op->getContext(), funcName);
-    Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(op, funcAttr);
-    if (funcOp)
-      return cast<LLVMFuncOp>(*funcOp);
-
-    auto parent = ((Operation *)op)->getParentOfType<LLVM::LLVMFuncOp>();
-    OpBuilder b(parent);
-    auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
-    ret.getOperation()->setAttr(
-        "libname", StringAttr::get(op->getContext(), op.getLibname()));
-    ret.getOperation()->setAttr(
-        "libpath", StringAttr::get(op->getContext(), op.getLibpath()));
-    return ret;
   }
 };
 
@@ -593,7 +594,129 @@ struct SelectOpConversion
         adaptor.getAttributes().getValue())};
   }
 };
+template <typename OpTy>
+struct MinMaxFOpConversion
+    : ElementwiseOpConversionBase<OpTy, MinMaxFOpConversion<OpTy>> {
+  using Base = ElementwiseOpConversionBase<OpTy, MinMaxFOpConversion<OpTy>>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  static_assert(std::is_same<OpTy, arith::MinimumFOp>::value ||
+                    std::is_same<OpTy, arith::MaximumFOp>::value,
+                "OpTy must be arith::MinimumFOp or arith::MaximumFOp");
+
+  // Choose the destination op based on the OpTy.
+  using DestOpNanProp =
+      typename std::conditional<std::is_same<OpTy, arith::MinimumFOp>::value,
+                                LLVM::MinimumOp, LLVM::MaximumOp>::type;
+  using DestOpNoNanProp =
+      typename std::conditional<std::is_same<OpTy, arith::MinimumFOp>::value,
+                                LLVM::MinNumOp, LLVM::MaxNumOp>::type;
+
+  explicit MinMaxFOpConversion(LLVMTypeConverter &typeConverter,
+                               ModuleAxisInfoAnalysis &axisAnalysisPass,
+                               bool hwNanPropagationSupported,
+                               PatternBenefit benefit = 1)
+      : Base::ElementwiseOpConversionBase(typeConverter, axisAnalysisPass,
+                                          benefit),
+        hwNanPropagationSupported(hwNanPropagationSupported) {}
+
+  SmallVector<Value> createDestOps(OpTy op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    if (hwNanPropagationSupported) {
+      return {rewriter.create<DestOpNanProp>(loc, elemTy, operands[0][0],
+                                             operands[0][1])};
+    }
+    // Handle workaround for NaN propagation, i.e. software emulation of NaN
+    // propagation. If any of the operands is NaN, return NaN.
+    auto lhs = operands[0][0];
+    auto rhs = operands[0][1];
+    auto lhsIsNan =
+        rewriter.create<LLVM::FCmpOp>(loc, LLVM::FCmpPredicate::une, lhs, lhs);
+    auto rhsIsNan =
+        rewriter.create<LLVM::FCmpOp>(loc, LLVM::FCmpPredicate::une, rhs, rhs);
+    auto isNan = rewriter.create<LLVM::OrOp>(loc, lhsIsNan, rhsIsNan);
+    auto nonNanRes = rewriter.create<DestOpNoNanProp>(loc, elemTy, lhs, rhs);
+
+    auto nan = LLVM::createNaNConstant(loc, rewriter, elemTy);
+
+    // Select the result based on the isNan flag.
+    return {rewriter.create<LLVM::SelectOp>(loc, isNan, nan, nonNanRes)};
+  }
+
+private:
+  bool hwNanPropagationSupported;
+};
+
+struct ClampFOpConversion
+    : ElementwiseOpConversionBase<ClampFOp, ClampFOpConversion> {
+  using Base = ElementwiseOpConversionBase<ClampFOp, ClampFOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  explicit ClampFOpConversion(LLVMTypeConverter &typeConverter,
+                              ModuleAxisInfoAnalysis &axisAnalysisPass,
+                              bool hwNanPropagationSupported,
+                              PatternBenefit benefit = 1)
+      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
+        hwNanPropagationSupported(hwNanPropagationSupported) {}
+
+  SmallVector<Value> createDestOps(ClampFOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    // Clip pattern not found, use min/max.
+    if (op.getPropagateNan() == PropagateNan::ALL) {
+      if (hwNanPropagationSupported) {
+        auto v = rewriter.create<LLVM::MaximumOp>(loc, elemTy, operands[0][0],
+                                                  operands[0][1]);
+        return {rewriter.create<LLVM::MinimumOp>(loc, v, operands[0][2])};
+      }
+      // On pre-80 compute capability, we need to handle NaN propagation
+      // manually. We need to check only the first operand for clamp.
+      auto lhs = operands[0][0];
+      auto isNan = rewriter.create<LLVM::FCmpOp>(loc, LLVM::FCmpPredicate::une,
+                                                 lhs, lhs);
+      auto v = rewriter.create<LLVM::MaxNumOp>(loc, elemTy, operands[0][0],
+                                               operands[0][1]);
+      auto nonNanRes = rewriter.create<LLVM::MinNumOp>(loc, v, operands[0][2]);
+      auto nan = LLVM::createNaNConstant(loc, rewriter, elemTy);
+      // Select the result based on the isNan flag.
+      return {rewriter.create<LLVM::SelectOp>(loc, isNan, nan, nonNanRes)};
+    }
+
+    // No NaN propagation.
+    assert(op.getPropagateNan() == PropagateNan::NONE);
+    auto v = rewriter.create<LLVM::MaxNumOp>(loc, elemTy, operands[0][0],
+                                             operands[0][1]);
+    return {rewriter.create<LLVM::MinNumOp>(loc, v, operands[0][2])};
+  }
+
+protected:
+  bool hwNanPropagationSupported;
+};
+
 } // namespace
+
+void mlir::triton::populateMinMaxFOpToLLVMPattern(
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, bool hwNanPropagationSupported,
+    PatternBenefit benefit) {
+  patterns.add<MinMaxFOpConversion<arith::MinimumFOp>>(
+      typeConverter, axisInfoAnalysis, hwNanPropagationSupported, benefit);
+  patterns.add<MinMaxFOpConversion<arith::MaximumFOp>>(
+      typeConverter, axisInfoAnalysis, hwNanPropagationSupported, benefit);
+}
+
+void mlir::triton::populateClampFOpToLLVMPattern(
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, bool hwNanPropagationSupported,
+    PatternBenefit benefit) {
+  patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
+                                   hwNanPropagationSupported, benefit);
+}
 
 void mlir::triton::populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,

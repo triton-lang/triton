@@ -6,7 +6,7 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -211,13 +211,14 @@ bool loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3,
 };
 
 static ttg::BlockedEncodingAttr
-getBlockedEncoding(tt::LoadOp loadOp, ModuleAxisInfoAnalysis &axisInfo) {
+getBlockedEncoding(tt::LoadOp loadOp, tt::ModuleAxisInfoAnalysis &axisInfo) {
   Value src = loadOp.getPtr();
   auto ty = src.getType().cast<RankedTensorType>();
   auto mod = loadOp->getParentOfType<ModuleOp>();
   int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
   int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-  AxisInfo::DimVectorT contiguity = axisInfo.getAxisInfo(src)->getContiguity();
+  tt::AxisInfo::DimVectorT contiguity =
+      axisInfo.getAxisInfo(src)->getContiguity();
   SmallVector<unsigned> order = argSort(contiguity);
   unsigned currPerThread = getNumElementsPerThread(loadOp, order, axisInfo);
   SmallVector<unsigned> sizePerThread(order.size(), 1);
@@ -267,7 +268,7 @@ loadOpsToDistanceAndUse(scf::ForOp forOp) {
   DenseSet<Operation *> seen;
 
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
-  ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
+  tt::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
   auto isCandidate = [&](tt::LoadOp loadOp) -> bool {
     assert(!isLoadFromTensorPtr(loadOp) &&
@@ -335,7 +336,7 @@ collectOpsToPipeline(scf::ForOp forOp,
                      llvm::MapVector<Operation *, PipelineOpInfo> &opInfo,
                      int numStages, bool &hasMMAV3) {
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
-  ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
+  tt::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
   // Loads ordered by their dependency distance to the nearest dot op.
   llvm::MapVector<tt::LoadOp, std::pair<int, Operation *>> loadOpToDistAndUse =
@@ -438,7 +439,9 @@ createAsynOps(scf::ForOp &forOp,
     }
   }
 
-  OpBuilder builder(forOp);
+  IRRewriter builder(forOp.getContext());
+  builder.setInsertionPoint(forOp);
+
   Location loc = forOp.getLoc();
   // Create two new counters to index into the allocs.
   Value minusOne = builder.create<arith::ConstantIntOp>(loc, -1, 32);
@@ -768,11 +771,9 @@ minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
 
   int minCommitNumber = INT_MAX;
 
-  // TODO pawel: without TMA this does not need to be an optional.
   // DFS the def chain of the extract op to find the insert op. On each path
   // we calculate the number of async_commit. Then we select the minimum number
   // of async_commit ops among all the paths.
-  // If the wait is not needed return std::nullopt.
   std::function<int(Value, Operation *, int)> minOverHistories =
       [&](Value val, Operation *sinkOp, int thisHistorySum) -> int {
     if (Operation *defOp = val.getDefiningOp()) {

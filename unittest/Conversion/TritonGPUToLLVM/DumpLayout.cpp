@@ -78,7 +78,7 @@ private:
   LowerToLLVMOptions option;
   TritonGPUToLLVMTypeConverter typeConverter;
   Block block;
-  ConversionPatternRewriter rewriter;
+  IRRewriter rewriter;
   Location loc;
 };
 

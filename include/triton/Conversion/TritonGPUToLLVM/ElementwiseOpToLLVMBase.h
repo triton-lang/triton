@@ -4,6 +4,7 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 using namespace mlir;
@@ -12,6 +13,13 @@ using namespace mlir::triton;
 namespace mlir::triton {
 
 namespace gpu {
+
+Type getFunctionType(Type resultType, ValueRange operands);
+
+LLVM::LLVMFuncOp appendOrGetExternFuncOp(ConversionPatternRewriter &rewriter,
+                                         Operation *op, StringRef funcName,
+                                         Type funcType, StringRef libname = "",
+                                         StringRef libpath = "");
 
 SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
                                  Type ouType);
@@ -53,9 +61,10 @@ class ElementwiseOpConversionBase : public ConvertOpToLLVMPattern<SourceOp> {
 public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
-  explicit ElementwiseOpConversionBase(LLVMTypeConverter &typeConverter,
-                                       ModuleAxisInfoAnalysis &axisAnalysisPass,
-                                       PatternBenefit benefit = 1)
+  explicit ElementwiseOpConversionBase(
+      LLVMTypeConverter &typeConverter,
+      ModuleAxisInfoAnalysis &axisAnalysisPass,
+      PatternBenefit benefit = patternBenefitDefault)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         axisAnalysisPass(axisAnalysisPass) {}
 
@@ -213,9 +222,6 @@ public:
 
 protected:
   ModuleAxisInfoAnalysis &axisAnalysisPass;
-
-private:
-  int computeCapability;
 };
 
 } // namespace gpu

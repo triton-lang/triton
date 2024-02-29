@@ -1082,7 +1082,8 @@ struct FpToFpOpConversion
 
   explicit FpToFpOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                              int computeCapability, PatternBenefit benefit = 1)
+                              int computeCapability,
+                              PatternBenefit benefit = patternBenefitDefault)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
         computeCapability(computeCapability) {}
 
@@ -1507,7 +1508,7 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
       typeConverter, axisInfoAnalysis, benefit);
   POPULATE_BINARY_OP(arith::SubIOp, LLVM::SubOp) // -
-  POPULATE_BINARY_OP(arith::AddIOp, LLVM::AddOp) // +
+  POPULATE_BINARY_OP(arith::AddIOp, LLVM::AddOp) // + 
   POPULATE_BINARY_OP(arith::MulIOp, LLVM::MulOp) // *
   POPULATE_BINARY_OP(arith::DivSIOp, LLVM::SDivOp)
   POPULATE_BINARY_OP(arith::DivUIOp, LLVM::UDivOp)
@@ -1544,15 +1545,22 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(arith::ExtUIOp, LLVM::ZExtOp)
   POPULATE_UNARY_OP(arith::FPToUIOp, LLVM::FPToUIOp)
   POPULATE_UNARY_OP(arith::UIToFPOp, LLVM::UIToFPOp)
+  POPULATE_UNARY_OP(math::FloorOp, math::FloorOp)
   POPULATE_UNARY_OP(math::LogOp, math::LogOp)
+  POPULATE_UNARY_OP(math::Log2Op, math::Log2Op)
   POPULATE_UNARY_OP(math::CosOp, math::CosOp)
   POPULATE_UNARY_OP(math::SinOp, math::SinOp)
   POPULATE_UNARY_OP(math::SqrtOp, math::SqrtOp)
   POPULATE_UNARY_OP(math::ExpOp, math::ExpOp)
+  POPULATE_UNARY_OP(math::Exp2Op, math::Exp2Op)
+  POPULATE_UNARY_OP(math::ErfOp, math::ErfOp)
   POPULATE_UNARY_OP(triton::BitcastOp, LLVM::BitcastOp)
   POPULATE_UNARY_OP(triton::IntToPtrOp, LLVM::IntToPtrOp)
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
+
+  patterns.add<ElementwiseOpConversion<math::FmaOp, LLVM::FMAOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
 
   patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FSubOpConversion>(typeConverter, axisInfoAnalysis, benefit);
@@ -1574,5 +1582,11 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
   mlir::triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
                                                     axisInfoAnalysis, benefit);
+  mlir::triton::populateMinMaxFOpToLLVMPattern(
+      typeConverter, patterns, axisInfoAnalysis,
+      false /*hwNanPropagationSupported*/, benefit);
+  mlir::triton::populateClampFOpToLLVMPattern(
+      typeConverter, patterns, axisInfoAnalysis,
+      false /*hwNanPropagationSupported*/, benefit);
 }
 } // namespace AMD

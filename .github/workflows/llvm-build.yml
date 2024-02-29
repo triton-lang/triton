@@ -152,6 +152,7 @@ jobs:
         mv ./llvm-project/host-tools/bin ./host-tools
         HOST_TOOLS="$(pwd)/host-tools"
         rm -rf llvm-project/host-tools
+        sudo apt-get update
         sudo apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf qemu-user-static gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
         cp -r /usr/aarch64-linux-gnu/lib ./arm-sysroot
         cp -r /usr/aarch64-linux-gnu/include ./arm-sysroot
@@ -176,9 +177,10 @@ jobs:
         -DLLVM_ENABLE_ZSTD=OFF \
         -DLLVM_INSTALL_UTILS=ON \
         -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}" \
-        -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU;X86" \
+        -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU" \
         -DCMAKE_CROSSCOMPILING=True \
         -DLLVM_TARGET_ARCH=AArch64 \
+        -DLLVM_DEFAULT_TARGET_TRIPLE=aarch64-linux-gnu \
         -DLLVM_USE_HOST_TOOLS=OFF \
         -DCMAKE_C_COMPILER="/usr/bin/aarch64-linux-gnu-gcc" \
         -DCMAKE_CXX_COMPILER="/usr/bin/aarch64-linux-gnu-g++" \
