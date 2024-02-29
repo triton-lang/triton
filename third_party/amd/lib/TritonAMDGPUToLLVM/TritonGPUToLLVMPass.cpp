@@ -465,25 +465,30 @@ struct ConvertTritonAMDGPUToLLVM
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
                    allocation, indexCacheInfo, computeCapability, benefit);
     };
-    auto populatePatterns4Temp = [&](auto populateFunc) {
+
+    auto populatePatterns5 = [&](auto populateFunc) {
+      populateFunc(typeConverter, patterns, benefit);
+    };
+
+    auto populatePatterns6 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
                    allocation, indexCacheInfo, computeCapability, targetInfo,
                    benefit);
     };
-    auto populatePatterns5 = [&](auto populateFunc) {
-      populateFunc(typeConverter, patterns, benefit);
+
+    auto populatePatterns7 = [&](auto populateFunc) {
+      populateFunc(typeConverter, patterns, targetInfo, benefit);
     };
 
     populatePatterns1(AMD::populateTritonGPUToLLVMPatterns);
     populatePatterns1(AMD::populateConvertLayoutOpToLLVMPatterns);
     populatePatterns2(AMD::populateDotOpToLLVMPatterns);
-    populatePatterns4Temp(AMD::populateElementwiseOpToLLVMPatterns);
+    populatePatterns6(AMD::populateElementwiseOpToLLVMPatterns);
     populatePatterns3(AMD::populateLoadStoreOpToLLVMPatterns);
     populatePatterns4(AMD::populateReduceOpToLLVMPatterns);
     populatePatterns1(AMD::populateScanOpToLLVMPatterns);
     populatePatterns5(mlir::triton::populateViewOpToLLVMPatterns);
-    mlir::triton::populateHistogramOpToLLVMPatterns(typeConverter, patterns,
-                                                    targetInfo, benefit);
+    populatePatterns7(mlir::triton::populateHistogramOpToLLVMPatterns);
 
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
