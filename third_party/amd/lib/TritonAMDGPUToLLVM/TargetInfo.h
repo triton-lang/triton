@@ -21,6 +21,9 @@ public:
                     Value val, int i) const override;
   Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter,
                     Value val, Value i) const override;
+  bool warpReduce(ConversionPatternRewriter &rewriter, Location loc,
+                  SmallVector<Value> &acc, triton::ReduceOp op,
+                  unsigned numLaneToReduce) const override;
 
 private:
   std::string arch;

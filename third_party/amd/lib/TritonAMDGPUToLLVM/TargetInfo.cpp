@@ -135,4 +135,10 @@ Value TargetInfo::shflIdxSync(Location loc, ConversionPatternRewriter &rewriter,
   return commonShflSync(loc, rewriter, val, i, 0, NVVM::ShflKind::idx,
                         i32_val(0x1f));
 }
+
+bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
+                            SmallVector<Value> &acc, triton::ReduceOp op,
+                            unsigned numLaneToReduce) const {
+  return false;
+}
 } // namespace AMD
