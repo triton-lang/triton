@@ -20,6 +20,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
+#include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -249,14 +250,22 @@ void init_triton_ir(py::module &&m) {
            [](Value &self, Value &newValue) {
              self.replaceAllUsesWith(newValue);
            })
-      .def("get_type", &Value::getType);
+      .def("get_type", &Value::getType)
+      .def("id", [](Value &self) {
+        // The Value is identified by and compared with
+        // other Values via the underlying ValueImpl
+        return (uint64_t)self.getImpl();
+      });
+
+  py::class_<OpResult, Value>(m, "op_result", py::module_local());
 
   py::class_<BlockArgument, Value>(m, "block_argument", py::module_local());
 
   py::class_<Region>(m, "region", py::module_local())
       .def("get_parent_region", &Region::getParentRegion, ret::reference)
       .def("size", [](Region &self) { return self.getBlocks().size(); })
-      .def("empty", &Region::empty);
+      .def("empty", &Region::empty)
+      .def("id", [](Region &self) { return (uint64_t)&self; });
 
   py::class_<Block>(m, "block", py::module_local())
       .def("arg",
@@ -271,6 +280,7 @@ void init_triton_ir(py::module &&m) {
              self.addArgument(ty, loc);
            })
       .def("get_num_arguments", &Block::getNumArguments)
+      .def("get_argument", &Block::getArgument)
       .def("dump", &Block::dump)
       .def("move_before",
            [](Block &self, Block &dst) { self.moveBefore(&dst); })
@@ -318,7 +328,8 @@ void init_triton_ir(py::module &&m) {
              return !self.empty() &&
                     self.back().hasTrait<OpTrait::ReturnLike>();
            })
-      .def("erase", [](Block &self) { self.erase(); });
+      .def("erase", [](Block &self) { self.erase(); })
+      .def("id", [](Block &self) { return (uint64_t)&self; });
 
   py::class_<Attribute>(m, "attribute", py::module_local());
   py::class_<IntegerAttr, Attribute>(m, "integer_attr", py::module_local());
@@ -386,6 +397,35 @@ void init_triton_ir(py::module &&m) {
       .def("get_after", &scf::WhileOp::getAfter, ret::reference);
   py::class_<scf::ConditionOp, OpState>(m, "ConditionOp", py::module_local());
 
+  py::class_<Operation, std::unique_ptr<Operation, py::nodelete>>(
+      m, "operation", py::module_local())
+      .def("get_name",
+           [](Operation &self) {
+             llvm::StringRef opName = self.getName().getStringRef();
+             return opName.str();
+           })
+      .def("get_num_operands", &Operation::getNumOperands)
+      .def("get_operand", &Operation::getOperand)
+      .def("get_num_results", &Operation::getNumResults)
+      .def("get_result", &Operation::getResult)
+      .def("get_num_regions", &Operation::getNumRegions)
+      .def("get_region", &Operation::getRegion, ret::reference)
+      .def("get_block", &Operation::getBlock, ret::reference)
+      .def("get_str_attr",
+           [](Operation &self, const std::string &name) -> py::object {
+             auto ret = self.getAttrOfType<StringAttr>(name);
+             if (!ret)
+               return py::none();
+             return py::str(ret.getValue().str());
+           })
+      .def("get_flat_symbol_ref_attr",
+           [](Operation &self, const std::string &name) -> py::object {
+             auto ret = self.getAttrOfType<FlatSymbolRefAttr>(name);
+             if (!ret)
+               return py::none();
+             return py::str(ret.getValue().str());
+           });
+
   // dynamic_attr is used to transfer ownership of the MLIR context to the
   // module
   py::class_<ModuleOp, OpState>(m, "module", py::module_local(),
@@ -414,12 +454,17 @@ void init_triton_ir(py::module &&m) {
            [](ModuleOp &self, std::string &funcName) -> FuncOp {
              return self.lookupSymbol<FuncOp>(funcName);
            })
-      .def("get_int_attr", [](ModuleOp &self, std::string name) -> py::object {
-        auto ret = self->getAttrOfType<IntegerAttr>(name);
-        if (!ret)
-          return py::none();
-        return py::int_(ret.getInt());
-      });
+      .def("get_int_attr",
+           [](ModuleOp &self, std::string name) -> py::object {
+             auto ret = self->getAttrOfType<IntegerAttr>(name);
+             if (!ret)
+               return py::none();
+             return py::int_(ret.getInt());
+           })
+      .def("walk",
+           [](ModuleOp &self, const std::function<void(Operation *)> &fn) {
+             self.walk(fn);
+           });
 
   m.def("make_attr", [](const std::vector<int> &values, MLIRContext &context) {
     return DenseIntElementsAttr::get(
