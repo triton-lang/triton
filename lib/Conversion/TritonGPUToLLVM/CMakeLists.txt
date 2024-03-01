@@ -3,11 +3,16 @@ add_triton_library(TritonGPUToLLVM
     DotOpToLLVM/FMA.cpp
     TypeConverter.cpp
     Utility.cpp
-    AddPtrOpToLLVM.cpp
+    ElementwiseOpToLLVM.cpp
     MemoryOpToLLVM.cpp
     AssertOpToLLVM.cpp
     ViewOpToLLVM.cpp
     MakeRangeOpToLLVM.cpp
+    HistogramOpToLLVM.cpp
+    AllocateSharedMemory.cpp
+
+    DEPENDS
+    TritonGPUConversionPassIncGen
 
     LINK_LIBS PUBLIC
     MLIRIR

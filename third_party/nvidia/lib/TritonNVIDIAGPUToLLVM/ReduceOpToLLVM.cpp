@@ -472,7 +472,7 @@ private:
 };
 } // namespace
 
-void mlir::triton::populateReduceOpToLLVMPatterns(
+void mlir::triton::NVIDIA::populateReduceOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int computeCapability, PatternBenefit benefit) {
   patterns.add<ReduceOpConversion>(typeConverter, computeCapability, benefit);

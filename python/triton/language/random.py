@@ -1,5 +1,6 @@
 from ..runtime.jit import jit
 from . import core as tl
+from . import math
 
 N_ROUNDS_DEFAULT = 10  # Default number of rounds for philox
 
@@ -31,8 +32,8 @@ def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds: tl.constexpr = N_ROUNDS_DEFAUL
         A = PHILOX_ROUND_A
         B = PHILOX_ROUND_B
         _c0, _c2 = c0, c2
-        c0 = tl.umulhi(B, _c2) ^ c1 ^ k0
-        c2 = tl.umulhi(A, _c0) ^ c3 ^ k1
+        c0 = math.umulhi(B, _c2) ^ c1 ^ k0
+        c2 = math.umulhi(A, _c0) ^ c3 ^ k1
         c1 = B * _c2
         c3 = A * _c0
         # raise key
@@ -166,8 +167,8 @@ def pair_uniform_to_normal(u1, u2):
     """Box-Muller transform"""
     u1 = tl.maximum(1.0e-7, u1)
     th = 6.283185307179586 * u2
-    r = tl.sqrt(-2.0 * tl.log(u1))
-    return r * tl.cos(th), r * tl.sin(th)
+    r = math.sqrt(-2.0 * math.log(u1))
+    return r * math.cos(th), r * math.sin(th)
 
 
 @jit

@@ -363,7 +363,7 @@ tt.func @loop_if(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: !tt.ptr<f32>, %arg3: i3
   %9 = triton_gpu.convert_layout %8 : tensor<64x64xi32, #blocked2> -> tensor<64x64xi32, #blocked1>
   %10 = tt.addptr %7, %9 : tensor<64x64x!tt.ptr<f32>, #blocked1>, tensor<64x64xi32, #blocked1>
   %11:2 = scf.for %arg5 = %c0 to %c32 step %c1 iter_args(%arg6 = %cst_1, %arg7 = %10) -> (tensor<64x64xf32, #blocked1>, tensor<64x64x!tt.ptr<f32>, #blocked1>) {
-    %33 = arith.cmpi "sgt", %i0, %i0 : i32
+    %33 = arith.cmpi "sgt", %arg5, %c0 : index
     %34 = scf.if %33 -> (tensor<64x64xf32, #blocked1>) {
       %23 = triton_gpu.convert_layout %arg7 : tensor<64x64x!tt.ptr<f32>, #blocked1> -> tensor<64x64x!tt.ptr<f32>, #blocked3>
       %24 = triton_gpu.convert_layout %cst : tensor<64x64xi1, #blocked1> -> tensor<64x64xi1, #blocked3>
@@ -2169,4 +2169,91 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     tt.store %arg1, %2 {cache = 1 : i32, evict = 1 : i32} : tensor<1024x4xi32, #blocked1>
     tt.return
   }
+}
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+// CHECK-LABEL: @rematerialize_through_if
+  tt.func public @rematerialize_through_if(%arg0: i1, %arg1: f32) -> tensor<32xf32, #blocked> {
+    // CHECK: arith.constant {{.*}} : tensor<32xf32, #blocked>
+    // CHECK: arith.constant {{.*}} : tensor<32xf32, #blocked>
+    // CHECK: scf.if %arg0 -> (tensor<32xf32, #blocked>) {
+    // CHECK-NOT: triton_gpu.convert_layout
+    %cst = arith.constant dense<1.000000e+00> : tensor<32xf32, #blocked1>
+    %cst_0 = arith.constant dense<2.000000e+00> : tensor<32xf32, #blocked1>
+    %0 = tt.splat %arg1 : f32 -> tensor<32xf32, #blocked1>
+    %3 = scf.if %arg0 -> (tensor<32xf32, #blocked1>) {
+      %1 = arith.addf %cst, %0 : tensor<32xf32, #blocked1>
+      scf.yield %1 : tensor<32xf32, #blocked1>
+    } else {
+      %2 = arith.addf %cst_0, %0 : tensor<32xf32, #blocked1>
+      scf.yield %2 : tensor<32xf32, #blocked1>
+    }
+    %4 = triton_gpu.convert_layout %3 : tensor<32xf32, #blocked1> -> tensor<32xf32, #blocked>
+    tt.return %4 : tensor<32xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+// CHECK-LABEL: @rematerialize_if_inside_loop
+  tt.func public @rematerialize_if_inside_loop() -> (tensor<32xf32, #blocked>, tensor<32xf32, #blocked>) {
+    // CHECK: arith.constant {{.*}} : tensor<32xf32, #blocked>
+    // CHECK: arith.constant {{.*}} : tensor<32xf32, #blocked>
+    // CHECK-NOT: triton_gpu.convert_layout
+    // CHECK: %[[for:[0-9]*]]:3 = scf.for {{.*}} -> (tensor<32xf32, #blocked1>, tensor<32xf32, #blocked>, tensor<32xf32, #blocked>)
+
+    // CHECK-NOT: triton_gpu.convert_layout
+    // CHECK: scf.if %{{.*}} -> (tensor<32xf32, #blocked1>, tensor<32xf32, #blocked>, tensor<32xf32, #blocked>)
+    // CHECK-NOT: triton_gpu.convert_layout
+    // CHECK: scf.yield {{.*}} : tensor<32xf32, #blocked1>, tensor<32xf32, #blocked>, tensor<32xf32, #blocked>
+    // CHECK: scf.yield {{.*}} : tensor<32xf32, #blocked1>, tensor<32xf32, #blocked>, tensor<32xf32, #blocked>
+    // TODO: This should be rematerialized as %1#2
+    // CHECK: triton_gpu.convert_layout %[[for]]#0
+    %cst = arith.constant dense<1.000000e+00> : tensor<32xf32, #blocked1>
+    %cst_0 = arith.constant dense<2.000000e+00> : tensor<32xf32, #blocked>
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c4096_i32 = arith.constant 4096 : i32
+    %1:2 = scf.for %arg0 = %c0_i32 to %c4096_i32 step %c32_i32 iter_args(%arg1 = %cst, %arg3 = %cst_0) -> (tensor<32xf32, #blocked1>, tensor<32xf32, #blocked>) : i32 {
+      %2 = arith.cmpi eq, %arg0, %c0_i32 : i32
+      %3:2 = scf.if %2 -> (tensor<32xf32, #blocked1>, tensor<32xf32, #blocked>) {
+        scf.yield %cst, %cst_0 : tensor<32xf32, #blocked1>, tensor<32xf32, #blocked>
+      } else {
+        %4 = arith.addf %arg1, %cst : tensor<32xf32, #blocked1>
+        %5 = triton_gpu.convert_layout %4 : tensor<32xf32, #blocked1> -> tensor<32xf32, #blocked>
+        %6 = arith.mulf %arg3, %5 : tensor<32xf32, #blocked>
+        scf.yield %4, %6 : tensor<32xf32, #blocked1>, tensor<32xf32, #blocked>
+      }
+      scf.yield %3#0, %3#1 : tensor<32xf32, #blocked1>, tensor<32xf32, #blocked>
+    }
+    %7 = triton_gpu.convert_layout %1#0 : tensor<32xf32, #blocked1> -> tensor<32xf32, #blocked>
+    tt.return %7, %1#1 : tensor<32xf32, #blocked>, tensor<32xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32} {
+// CHECK-LABEL: assertop
+// CHECK: %[[L:.+]] = tt.load %{{.*}} : tensor<1024xi1, #blocked>
+// CHECK: tt.assert %[[L]]
+
+tt.func @assertop(%ptr: tensor<1024x!tt.ptr<i1>, #blocked>) {
+  %0 = tt.load %ptr {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<1024xi1, #blocked>
+  %1 = triton_gpu.convert_layout %0 : tensor<1024xi1, #blocked> -> tensor<1024xi1, #blocked1>
+  tt.assert %1, "cond must be true ", "unknown", "unknown", 0 : tensor<1024xi1, #blocked1>
+  tt.return
+}
 }

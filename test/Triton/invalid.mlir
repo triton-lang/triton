@@ -29,7 +29,7 @@ tt.func public @reshape_different_num_elements(%arg0: tensor<32x128xf16>) {
 // expected-note @+1 {{prior use}}
 tt.func public @fn(%arg0: tensor<32xf32>, %arg1: tensor<33xf32>) {
     // expected-error @+1 {{expects different type}}
-    %a = tt.experimental_join %arg0, %arg1 : tensor<32xf32> -> tensor<32x2xf32>
+    %a = tt.join %arg0, %arg1 : tensor<32xf32> -> tensor<32x2xf32>
     tt.return
 }
 
@@ -38,7 +38,7 @@ tt.func public @fn(%arg0: tensor<32xf32>, %arg1: tensor<33xf32>) {
 // expected-note @+1 {{prior use}}
 tt.func public @fn(%arg0: tensor<32x32xf32>, %arg1: tensor<32x32xf16>) {
     // expected-error @+1 {{expects different type}}
-    %a = tt.experimental_join %arg0, %arg1 : tensor<32x32xf32> -> tensor<32x32x2xf32>
+    %a = tt.join %arg0, %arg1 : tensor<32x32xf32> -> tensor<32x32x2xf32>
     tt.return
 }
 
@@ -47,7 +47,7 @@ tt.func public @fn(%arg0: tensor<32x32xf32>, %arg1: tensor<32x32xf16>) {
 tt.func public @fn(%arg0: tensor<32xf32>, %arg1: tensor<32xf32>) {
     // expected-error @+2 {{op failed to infer returned types}}
     // expected-error @+1 {{incompatible with return type}}
-    %a = tt.experimental_join %arg0, %arg1 : tensor<32xf32> -> tensor<64xf32>
+    %a = tt.join %arg0, %arg1 : tensor<32xf32> -> tensor<64xf32>
     tt.return
 }
 
@@ -56,7 +56,7 @@ tt.func public @fn(%arg0: tensor<32xf32>, %arg1: tensor<32xf32>) {
 tt.func public @fn(%arg0: tensor<32x32xf32>, %arg1: tensor<32x32xf32>) {
     // expected-error @+2 {{op failed to infer returned types}}
     // expected-error @+1 {{incompatible with return type}}
-    %a = tt.experimental_join %arg0, %arg1 : tensor<32x32xf32> -> tensor<32x64xf32>
+    %a = tt.join %arg0, %arg1 : tensor<32x32xf32> -> tensor<32x64xf32>
     tt.return
 }
 
@@ -64,7 +64,7 @@ tt.func public @fn(%arg0: tensor<32x32xf32>, %arg1: tensor<32x32xf32>) {
 
 // This one is OK
 tt.func public @fn(%arg0: tensor<f32>, %arg1: tensor<f32>) {
-    %a = tt.experimental_join %arg0, %arg1 : tensor<f32> -> tensor<2xf32>
+    %a = tt.join %arg0, %arg1 : tensor<f32> -> tensor<2xf32>
     tt.return
 }
 
@@ -72,7 +72,7 @@ tt.func public @fn(%arg0: tensor<f32>, %arg1: tensor<f32>) {
 
 tt.func public @fn(%arg0: f32, %arg1: f32) {
     // expected-error @+1 {{kind of type}}
-    %a = tt.experimental_join %arg0, %arg1 : f32 -> tensor<2xf32>
+    %a = tt.join %arg0, %arg1 : f32 -> tensor<2xf32>
     tt.return
 }
 
@@ -131,7 +131,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 tt.func public @fn(%arg0: tensor<32xf32, #blocked>) {
     // expected-error @+2 {{op failed to infer returned types}}
     // expected-error @+1 {{incompatible with return type}}
-    %a = tt.experimental_join %arg0, %arg0 : tensor<32xf32, #blocked> -> tensor<32x2xf32>
+    %a = tt.join %arg0, %arg0 : tensor<32xf32, #blocked> -> tensor<32x2xf32>
     tt.return
 }
 }  // end module
@@ -143,7 +143,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 tt.func public @fn(%arg0: tensor<32xf32>) {
     // expected-error @+2 {{op failed to infer returned types}}
     // expected-error @+1 {{incompatible with return type}}
-    %a = tt.experimental_join %arg0, %arg0 : tensor<32xf32> -> tensor<32x2xf32, #shared>
+    %a = tt.join %arg0, %arg0 : tensor<32xf32> -> tensor<32x2xf32, #shared>
     tt.return
 }
 }  // end module
@@ -156,7 +156,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 tt.func public @fn(%arg0: tensor<32xf32, #shared>) {
     // expected-error @+2 {{can only operate on BlockedEncoding}}
     // expected-error @+1 {{op failed to infer returned types}}
-    %a = tt.experimental_join %arg0, %arg0 : tensor<32xf32, #shared> -> tensor<32x2xf32, #blocked>
+    %a = tt.join %arg0, %arg0 : tensor<32xf32, #shared> -> tensor<32x2xf32, #blocked>
     tt.return
 }
 }  // end module
@@ -170,7 +170,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 tt.func public @fn(%arg0: tensor<32xf32, #blocked>) {
     // expected-error @+2 {{order}}
     // expected-error @+1 {{op failed to infer returned types}}
-    %a = tt.experimental_join %arg0, %arg0 : tensor<32xf32, #blocked> -> tensor<32x2xf32, #blocked1>
+    %a = tt.join %arg0, %arg0 : tensor<32xf32, #blocked> -> tensor<32x2xf32, #blocked1>
     tt.return
 }
 }  // end module
@@ -180,7 +180,7 @@ tt.func public @fn(%arg0: tensor<32xf32, #blocked>) {
 tt.func public @fn(%arg0: tensor<32xf32>) {
     // expected-error @+2 {{last dimension}}
     // expected-error @+1 {{op failed to infer returned types}}
-    %a, %b = tt.experimental_split %arg0 : tensor<32xf32> -> tensor<16xf32>
+    %a, %b = tt.split %arg0 : tensor<32xf32> -> tensor<16xf32>
     tt.return
 }
 
@@ -189,7 +189,7 @@ tt.func public @fn(%arg0: tensor<32xf32>) {
 tt.func public @fn(%arg0: tensor<32x2xf32>) {
     // expected-error @+2 {{op inferred type}}
     // expected-error @+1 {{op failed to infer returned types}}
-    %a, %b = tt.experimental_split %arg0 : tensor<32x2xf32> -> tensor<32xf16>
+    %a, %b = tt.split %arg0 : tensor<32x2xf32> -> tensor<32xf16>
     tt.return
 }
 
@@ -197,13 +197,13 @@ tt.func public @fn(%arg0: tensor<32x2xf32>) {
 
 tt.func public @fn(%arg0: f32) {
     // expected-error @+1 {{invalid kind of type}}
-    %a, %b = tt.experimental_split %arg0 : f32 -> f16
+    %a, %b = tt.split %arg0 : f32 -> f16
     tt.return
 }
 // -----
 
 tt.func public @fn(%arg0: tensor<2xf32>) {
-    %a, %b = tt.experimental_split %arg0 : tensor<2xf32> -> tensor<f32> // OK
+    %a, %b = tt.split %arg0 : tensor<2xf32> -> tensor<f32> // OK
     tt.return
 }
 
@@ -217,7 +217,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 tt.func public @fn(%arg0: tensor<2x2x2xf32, #blocked>) {
     // expected-error @+2 {{last dimension}}
     // expected-error @+1 {{op failed to infer returned types}}
-    %a, %b = tt.experimental_split %arg0 : tensor<2x2x2xf32, #blocked> -> tensor<2x2xf32, #blocked1>
+    %a, %b = tt.split %arg0 : tensor<2x2x2xf32, #blocked> -> tensor<2x2xf32, #blocked1>
     tt.return
 }
 }  // end module
@@ -232,7 +232,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 tt.func public @fn(%arg0: tensor<2x2x2xf32, #blocked>) {
     // expected-error @+2 {{op inferred type}}
     // expected-error @+1 {{op failed to infer returned types}}
-    %a, %b = tt.experimental_split %arg0 : tensor<2x2x2xf32, #blocked> -> tensor<2x2xf32, #blocked1>
+    %a, %b = tt.split %arg0 : tensor<2x2x2xf32, #blocked> -> tensor<2x2xf32, #blocked1>
     tt.return
 }
 }  // end module
@@ -247,7 +247,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 tt.func public @fn(%arg0: tensor<2x2x2xf32, #blocked>) {
     // expected-error @+2 {{op inferred type}}
     // expected-error @+1 {{op failed to infer returned types}}
-    %a, %b = tt.experimental_split %arg0 : tensor<2x2x2xf32, #blocked> -> tensor<2x2xf32, #blocked1>
+    %a, %b = tt.split %arg0 : tensor<2x2x2xf32, #blocked> -> tensor<2x2xf32, #blocked1>
     tt.return
 }
 }  // end module

@@ -22,10 +22,10 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetPlatform.hpp"
 
-#include "../lib/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 
 namespace mlir {
 namespace triton {
@@ -42,7 +42,7 @@ convertFuncOpToLLVMFuncOp(FunctionOpInterface funcOp,
 }
 
 using namespace mlir;
-using namespace mlir::triton;
+using namespace mlir::triton::NVIDIA;
 namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace {
@@ -55,7 +55,7 @@ static void addAttrs(Operation *op, ArrayRef<mlir::NamedAttribute> attrs) {
 
 class TritonLLVMFunctionConversionTarget : public ConversionTarget {
 public:
-  explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx, Target target)
+  explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
     addLegalDialect<index::IndexDialect>();
     addLegalDialect<LLVM::LLVMDialect>();
@@ -163,7 +163,7 @@ private:
 
 class TritonLLVMConversionTarget : public ConversionTarget {
 public:
-  explicit TritonLLVMConversionTarget(MLIRContext &ctx, Target target)
+  explicit TritonLLVMConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
     addLegalDialect<NVVM::NVVMDialect>();
@@ -185,8 +185,8 @@ struct ConvertTritonGPUToLLVM
                     NVVM::NVVMDialect>();
   }
 
-  ConvertTritonGPUToLLVM(int32_t computeCapability, Target target)
-      : ConvertTritonGPUToLLVMBase({computeCapability, target}) {}
+  ConvertTritonGPUToLLVM(int32_t computeCapability)
+      : ConvertTritonGPUToLLVMBase({computeCapability}) {}
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -195,7 +195,7 @@ struct ConvertTritonGPUToLLVM
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
     TritonGPUToLLVMTypeConverter typeConverter(context, option);
-    TritonLLVMConversionTarget convTarget(*context, target);
+    TritonLLVMConversionTarget convTarget(*context);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -209,10 +209,10 @@ struct ConvertTritonGPUToLLVM
     {
       mlir::LowerToLLVMOptions option(context);
       TritonGPUToLLVMTypeConverter typeConverter(context, option);
-      TritonLLVMFunctionConversionTarget funcTarget(*context, target);
+      TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
       funcPatterns.add<FuncOpConversion>(typeConverter, numWarps,
-                                         /*benefit=*/1);
+                                         patternBenefitDefault);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
       if (failed(
@@ -228,11 +228,16 @@ struct ConvertTritonGPUToLLVM
     OpBuilder::InsertPoint indexInsertPoint;
 
     RewritePatternSet patterns(context);
-    int benefit = 10;
+    TargetInfo targetInfo(computeCapability);
+    int benefit = patternBenefitPrioritizeOverLLVMConversions;
     populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, benefit);
     populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
-    populateElementwiseOpToLLVMPatterns(
-        typeConverter, patterns, axisInfoAnalysis, computeCapability, benefit);
+    populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
+                                        axisInfoAnalysis, computeCapability,
+                                        targetInfo, benefit);
+    populateClampFOpToLLVMPattern(typeConverter, patterns, axisInfoAnalysis,
+                                  computeCapability,
+                                  patternBenefitClampOptimizedPattern);
     populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,
                                       benefit);
     populateReduceOpToLLVMPatterns(typeConverter, patterns, computeCapability,
@@ -241,7 +246,8 @@ struct ConvertTritonGPUToLLVM
     populateBarrierOpToLLVMPatterns(typeConverter, patterns, benefit);
     populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns, benefit);
     populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit);
-    populateHistogramOpToLLVMPatterns(typeConverter, patterns, benefit);
+    mlir::triton::populateHistogramOpToLLVMPatterns(typeConverter, patterns,
+                                                    targetInfo, benefit);
     populatePrintOpToLLVMPattern(typeConverter, patterns, benefit);
     populateControlFlowOpToLLVMPattern(typeConverter, patterns, benefit);
     populateSPMDOpToLLVMPattern(typeConverter, patterns, benefit);
@@ -312,8 +318,8 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass() {
   return std::make_unique<ConvertTritonGPUToLLVM>();
 }
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonGPUToLLVMPass(int32_t computeCapability, Target target) {
-  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability, target);
+createConvertTritonGPUToLLVMPass(int32_t computeCapability) {
+  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability);
 }
 
 } // namespace triton

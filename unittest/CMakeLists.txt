@@ -20,6 +20,8 @@ function(add_triton_ut)
           gmock
           ${__LIBS})
 
+  target_compile_options(${__NAME} PRIVATE -fno-rtti)
+
   # Without the TEST_DISCOVERY_TIMEOUT, the tests randomly time out on my mac
   # laptop.  I think the issue may be that the very first time you run a program
   # it's a bit slow.

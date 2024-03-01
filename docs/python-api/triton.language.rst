@@ -11,6 +11,7 @@ Programming Model
     :toctree: generated
     :nosignatures:
 
+    tensor
     program_id
     num_programs
 
@@ -26,6 +27,7 @@ Creation Ops
     cat
     full
     zeros
+    zeros_like
 
 
 Shape Manipulation Ops
@@ -38,8 +40,12 @@ Shape Manipulation Ops
     broadcast
     broadcast_to
     expand_dims
+    interleave
+    join
+    permute
     ravel
     reshape
+    split
     trans
     view
 
@@ -54,7 +60,7 @@ Linear Algebra Ops
     dot
 
 
-Memory Ops
+Memory/Pointer Ops
 ----------
 
 .. autosummary::
@@ -63,6 +69,8 @@ Memory Ops
 
     load
     store
+    make_block_ptr
+    advance
 
 
 Indexing Ops
@@ -74,6 +82,7 @@ Indexing Ops
 
     flip
     where
+    swizzle2d
 
 
 Math Ops
@@ -84,14 +93,18 @@ Math Ops
     :nosignatures:
 
     abs
-    exp
-    log
-    fdiv
+    cdiv
+    clamp
     cos
-    sin
-    sqrt
+    exp
+    fdiv
+    log
+    maximum
+    minimum
     sigmoid
+    sin
     softmax
+    sqrt
     umulhi
 
 
@@ -110,7 +123,7 @@ Reduction Ops
     sum
     xor_sum
 
-Scan Ops
+Scan/Sort Ops
 -------------
 
 .. autosummary::
@@ -118,8 +131,10 @@ Scan Ops
     :nosignatures:
 
     associative_scan
-    cumsum
     cumprod
+    cumsum
+    histogram
+    sort
 
 Atomic Ops
 ----------
@@ -129,23 +144,13 @@ Atomic Ops
     :nosignatures:
 
     atomic_add
+    atomic_and
     atomic_cas
     atomic_max
     atomic_min
+    atomic_or
     atomic_xchg
-
-
-Comparison ops
---------------
-
-.. autosummary::
-    :toctree: generated
-    :nosignatures:
-
-    minimum
-    maximum
-
-.. _Random Number Generation:
+    atomic_xor
 
 Random Number Generation
 ------------------------

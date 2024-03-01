@@ -15,7 +15,7 @@ jobs:
         id: set-matrix
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
-            echo '::set-output name=matrix-optional::[["self-hosted", "gfx908"], ["self-hosted", "arc770"]]'
+            echo '::set-output name=matrix-optional::[["self-hosted", "gfx90a"], ["self-hosted", "arc770"]]'
           else
             echo '::set-output name=matrix-optional::["ubuntu-latest"]'
           fi
@@ -64,7 +64,11 @@ jobs:
 
     strategy:
       matrix:
-        runner: ["gfx908"]
+        runner: ["gfx90a"]
+
+    container:
+      image: rocm/pytorch:rocm5.7_ubuntu22.04_py3.10_pytorch_2.0.1
+      options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
 
     steps:
       - name: Checkout PR
@@ -92,26 +96,21 @@ jobs:
         run: |
           echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
 
-      - name: Install Dependencies
-        run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install ninja wheel pytest pytest-xdist numpy lit autopep8 flake8 isort
-          python3 -m pip install scipy>=1.7.1
-          python3 -m pip install cmake==3.24
-          python3 -m pip install torch==1.13.1 --index-url https://download.pytorch.org/whl/rocm5.2 # important for detecting ROCM!
-
       - name: Check pre-commit
         run: |
           python3 -m pip install --upgrade pre-commit
+          git config --global --add safe.directory /__w/triton/triton
           python3 -m pre_commit run --all-files --verbose
 
       - name: Install Triton on ROCM
         run: |
+          pip uninstall -y triton
           cd python
-          python3 -m pip install .
+          pip install -e .
       - name: Run python tests on ROCM
         run: |
-          python3 -m pytest -n 32 --capture=tee-sys -rfs --verbose "python/test/unit/language/test_core.py" -k "not test_flip"
+          cd python
+          pytest --capture=tee-sys -rfs -v ./test/unit/language/test_core.py
 
   Integration-Tests-Intel:
     needs: Runner-Preparation
