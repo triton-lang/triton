@@ -24,6 +24,8 @@ public:
   bool warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                   SmallVector<Value> &acc, triton::ReduceOp op,
                   unsigned numLaneToReduce) const override;
+  unsigned getShuffleIndex(triton::ReduceOp op, unsigned N,
+                           unsigned numLaneToReduce) const override;
 
 private:
   std::string arch;

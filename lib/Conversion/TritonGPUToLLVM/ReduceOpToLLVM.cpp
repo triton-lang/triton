@@ -171,8 +171,10 @@ private:
       return;
     for (unsigned N = numLaneToReduce / 2; N > 0; N >>= 1) {
       SmallVector<Value> shfl(acc.size());
+      auto shuffleIndex = targetInfo.getShuffleIndex(op, N, numLaneToReduce);
       for (unsigned i = 0; i < acc.size(); ++i) {
-        shfl[i] = targetInfo.shflSync(loc, rewriter, acc[i], N * interleave);
+        shfl[i] = targetInfo.shflSync(loc, rewriter, acc[i],
+                                      shuffleIndex * interleave);
       }
       accumulate(rewriter, op.getCombineOp(), acc, shfl, false);
     }

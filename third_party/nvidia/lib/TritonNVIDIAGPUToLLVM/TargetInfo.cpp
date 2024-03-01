@@ -179,4 +179,8 @@ bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
   }
   return false;
 }
+unsigned TargetInfo::getShuffleIndex(triton::ReduceOp op, unsigned N,
+                                     unsigned numLaneToReduce) const {
+  return N;
+}
 } // namespace mlir::triton::NVIDIA
