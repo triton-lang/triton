@@ -33,9 +33,9 @@ using namespace mlir::triton;
 namespace {
 
 using ::AMD::TritonGPUToLLVMTypeConverter;
-using ::mlir::LLVM::shflSync;
-using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::LLVM::AMD::shflSync;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
+using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
