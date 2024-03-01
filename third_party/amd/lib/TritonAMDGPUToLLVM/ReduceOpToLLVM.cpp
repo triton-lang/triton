@@ -441,7 +441,6 @@ private:
       Value laneIdModSizeInterWarpsIsZero =
           icmp_eq(laneIdModSizeInterWarps, zero);
       Value pred = and_(threadIsNeeded, laneIdModSizeInterWarpsIsZero);
-      unsigned wavefront_size = triton::gpu::getWarpSize(srcLayout);
 
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
 #if USE_ROCM
