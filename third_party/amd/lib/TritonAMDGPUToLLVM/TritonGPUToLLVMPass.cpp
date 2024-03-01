@@ -536,6 +536,9 @@ private:
       funcSmem = b.create<LLVM::BitcastOp>(loc, ptrTy, funcSmem);
       allocation.setFunctionSharedMemoryValue(funcOp, funcSmem);
     });
+    mod->setAttr("triton_gpu.shared",
+                 mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32),
+                                        allocation.getSharedMemorySize()));
   }
 
   void decomposeFp8e4b15Convert(ModuleOp mod) const {
