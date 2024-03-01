@@ -102,25 +102,36 @@ Value TargetInfo::callBallotOp(ConversionPatternRewriter &rewriter,
   return asmResult;
 }
 
+Value TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
+                              Value ptr, Value val, Value pred) const {
+  store(val, ptr);
+  return val;
+}
+
+Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
+                             Value ptr, Type elemTy, Value pred) const {
+  return load(elemTy, ptr);
+}
+
 Value TargetInfo::shflSync(Location loc, ConversionPatternRewriter &rewriter,
-                           Value val, int i) {
+                           Value val, int i) const {
   return commonShflSync(loc, rewriter, val, i32_val(i), i, NVVM::ShflKind::bfly,
                         i32_val(0x1f));
 }
 
 Value TargetInfo::shflUpSync(Location loc, ConversionPatternRewriter &rewriter,
-                             Value val, int i) {
+                             Value val, int i) const {
   return commonShflSync(loc, rewriter, val, i32_val(i), i, NVVM::ShflKind::up,
                         i32_val(0x0));
 }
 
 Value TargetInfo::shflIdxSync(Location loc, ConversionPatternRewriter &rewriter,
-                              Value val, int i) {
+                              Value val, int i) const {
   return shflIdxSync(loc, rewriter, val, i32_val(i));
 }
 
 Value TargetInfo::shflIdxSync(Location loc, ConversionPatternRewriter &rewriter,
-                              Value val, Value i) {
+                              Value val, Value i) const {
   return commonShflSync(loc, rewriter, val, i, 0, NVVM::ShflKind::idx,
                         i32_val(0x1f));
 }

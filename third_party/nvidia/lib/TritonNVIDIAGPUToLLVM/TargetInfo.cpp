@@ -1,8 +1,11 @@
 #include "TargetInfo.h"
+#include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
+using namespace mlir;
 namespace mlir::triton::NVIDIA {
 static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
                             Value val, Value i, NVVM::ShflKind mode,
@@ -46,8 +49,8 @@ Value TargetInfo::callBallotOp(ConversionPatternRewriter &rewriter,
   Value threadMask = int_val(type.getIntOrFloatBitWidth(), -1);
   return rewriter.create<NVVM::VoteBallotOp>(loc, type, threadMask, cmp);
 }
-void TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
-                             Value ptr, Value val, Value pred) const {
+Value TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
+                              Value ptr, Value val, Value pred) const {
   MLIRContext *ctx = rewriter.getContext();
   unsigned bits = std::max(8u, val.getType().getIntOrFloatBitWidth());
   const char *c = bits == 64 ? "l" : (bits == 16 ? "h" : "r");
@@ -63,7 +66,7 @@ void TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
 Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
                              Value ptr, Type elemTy, Value pred) const {
   MLIRContext *ctx = rewriter.getContext();
-  auto ptrTy = ptr.getType().cast<LLVMPointerType>();
+  auto ptrTy = ptr.getType().cast<LLVM::LLVMPointerType>();
   assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for loadShared");
   unsigned bitwidth = std::max(8u, elemTy.getIntOrFloatBitWidth());
 
