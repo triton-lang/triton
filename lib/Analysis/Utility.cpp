@@ -531,7 +531,7 @@ bool supportMMA(Value value, int version) {
 bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
   auto srcLayout = srcTy.getEncoding();
   auto dstLayout = dstTy.getEncoding();
-  auto mfmaLayout = srcLayout.cast<MfmaEncodingAttr>();
+  auto mfmaLayout = srcLayout.cast<AMDMfmaEncodingAttr>();
   auto dotOperandLayout = dstLayout.cast<DotOperandEncodingAttr>();
   // TODO: Remove the restriction on the warpsPerCTA once chain dot testing is
   // improved. In addition, we can enable this shortcut for regular MFMA
@@ -540,7 +540,8 @@ bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
          dotOperandLayout.getOpIdx() == 0 &&
          dotOperandLayout.getKWidth() == 4 &&
          dotOperandLayout.getParent() == mfmaLayout &&
-         mfmaLayout.getNonKDim() == 32 && mfmaLayout.getIsTransposed() &&
+         (mfmaLayout.getMDim() == 32 || mfmaLayout.getMDim() == 16) &&
+         mfmaLayout.getIsTransposed() &&
          (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16());
 }
 
