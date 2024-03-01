@@ -35,7 +35,6 @@
 #include "LoadStoreOpToLLVM.h"
 #include "ReduceOpToLLVM.h"
 // #include "RegReallocOpToLLVM.h"
-#include "ScanOpToLLVM.h"
 // #include "TensorPtrOpsToLLVM.h"
 #include "TritonGPUToLLVM.h"
 #include "TritonGPUToLLVMBase.h"
@@ -472,7 +471,8 @@ struct ConvertTritonAMDGPUToLLVM
     populatePatterns6(AMD::populateElementwiseOpToLLVMPatterns);
     populatePatterns3(AMD::populateLoadStoreOpToLLVMPatterns);
     populatePatterns4(AMD::populateReduceOpToLLVMPatterns);
-    populatePatterns1(AMD::populateScanOpToLLVMPatterns);
+    mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
+                                               targetInfo, benefit);
     populatePatterns5(mlir::triton::populateViewOpToLLVMPatterns);
     populatePatterns7(mlir::triton::populateHistogramOpToLLVMPatterns);
 

@@ -9,7 +9,6 @@ add_triton_library(TritonAMDGPUToLLVM
     GCNAsmFormat.cpp
     TritonGPUToLLVMPass.cpp
     ReduceOpToLLVM.cpp
-    ScanOpToLLVM.cpp
     TypeConverter.cpp
     Utility.cpp
     TargetInfo.cpp
