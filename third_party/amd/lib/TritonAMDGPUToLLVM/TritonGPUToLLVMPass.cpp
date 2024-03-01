@@ -469,10 +469,8 @@ struct ConvertTritonAMDGPUToLLVM
     populatePatterns2(AMD::populateDotOpToLLVMPatterns);
     populatePatterns6(AMD::populateElementwiseOpToLLVMPatterns);
     populatePatterns3(AMD::populateLoadStoreOpToLLVMPatterns);
-    mlir::triton::populateReduceOpToLLVMPatterns(typeConverter, patterns,
-                                                 targetInfo, benefit);
-    mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
-                                               targetInfo, benefit);
+    populatePatterns7(mlir::triton::populateReduceOpToLLVMPatterns);
+    populatePatterns7(mlir::triton::populateScanOpToLLVMPatterns);
     populatePatterns5(mlir::triton::populateViewOpToLLVMPatterns);
     populatePatterns7(mlir::triton::populateHistogramOpToLLVMPatterns);
 
