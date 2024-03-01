@@ -1329,6 +1329,7 @@ def test_atomic_cas(sem, num_ctas, device):
 @pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_tensor_atomic_cas(sem, num_ctas, device):
+
     @triton.jit
     def change_value(X, BLOCK_SIZE: tl.constexpr):
         pid = tl.program_id(axis=0)
@@ -2458,11 +2459,12 @@ def _welford_combine(mean_1, m2_1, weight_1, mean_2, m2_2, weight_2):
         new_weight,
     )
 
+
 layouts = [
     BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [THREADS_PER_WARP//32, 32], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [8, THREADS_PER_WARP//8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1])
+    BlockedLayout([1, 4], [THREADS_PER_WARP // 32, 32], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1])
 ]
 
 
