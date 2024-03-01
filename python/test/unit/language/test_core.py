@@ -192,6 +192,9 @@ class BlockedLayout:
     def __str__(self):
         return f"#{GPU_DIALECT}.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
 
+    def isEqual(self, other):
+        return self.sz_per_thread == other.sz_per_thread and self.threads_per_warp == other.threads_per_warp and self.warps_per_cta == other.warps_per_cta and self.order == other.order and self.ctas_per_cga == other.ctas_per_cga and self.cta_split_num == other.cta_split_num and self.cta_order == other.cta_order
+
 
 class SharedLayout:
 
@@ -2254,6 +2257,11 @@ layouts = [
               instr_shape=[16, 8]),
     MmaLayout(version=(3, 0), warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0],
               instr_shape=[16, 16, 16]),
+] if not is_hip() else [
+    # TODO (Ognjen): Add MfmaLayout
+    BlockedLayout([1, 4], [8, 8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [8, 8], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([4, 4], [2, 32], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
 ]
 
 
@@ -2264,8 +2272,9 @@ layouts = [
 @pytest.mark.parametrize("dtype_str", ["int32", "float32", "float16"])
 @pytest.mark.parametrize("reduce_op", ["sum", "max"])
 def test_reduce_layouts(M, N, src_layout, axis, reduce2d, dtype_str, reduce_op, device):
-    if is_hip():
-        pytest.skip("TODO test_reduce_layouts is not supported in HIP")
+    if is_hip() and M == 128 and N == 128 and src_layout.isEqual(
+            BlockedLayout([4, 4], [2, 32], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1])) and dtype_str != 'float16':
+        pytest.skip("TOD Out of LDS on HIP")
     if reduce_op == "sum" and dtype_str == "float16" and M * N > 1024:
         pytest.skip("Skipping sum reduction on float16 due to accuracy issues")
 
@@ -2278,7 +2287,7 @@ def test_reduce_layouts(M, N, src_layout, axis, reduce2d, dtype_str, reduce_op, 
     rdims_1d = f"{N}" if axis == 0 else f"{M}"
     rdims_2d = f"1x{N}" if axis == 0 else f"{M}x1"
     store_range = "%7" if axis == 0 else "%1"
-    blocked = BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1])
+    blocked = BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1])
     epilogue = f"""
         %14 = "tt.reduce"(%13) ({{
         ^bb0(%arg3: {ty}, %arg4: {ty}):
@@ -2303,7 +2312,7 @@ def test_reduce_layouts(M, N, src_layout, axis, reduce2d, dtype_str, reduce_op, 
     ir = f"""
     #blocked = {blocked}
     #src = {src_layout}
-    module attributes {{"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32}} {{
+    module attributes {{"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
     tt.func public @kernel_0d1d2c3d4c(%arg0: !tt.ptr<{ty}, 1> {{tt.divisibility = 16 : i32}}, %arg1: i32 {{tt.divisibility = 16 : i32}}, %arg2: !tt.ptr<{ty}, 1> {{tt.divisibility = 16 : i32}}) {{
         %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = 1, parent = #blocked}}>>
         %1 = tt.expand_dims %0 {{axis = 1 : i32}} : tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = 1, parent = #blocked}}>> -> tensor<{M}x1xi32, #blocked>
