@@ -21,6 +21,7 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
@@ -31,8 +32,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "TritonAMDGPUTransforms/Passes.h"
-
 
 using namespace mlir;
 
@@ -55,8 +54,8 @@ bool isOneOperandElementwiseOp(Operation *op) {
                 triton::FpToFpOp>(op))
     return true;
   if (auto externElementwiseOp = dyn_cast<triton::ExternElementwiseOp>(op))
-    return op->getNumOperands() == 1 &&
-           op->getNumResults() == 1 & externElementwiseOp.getPure();
+    return op->getNumOperands() == 1 && op->getNumResults() == 1 &&
+           externElementwiseOp.getPure();
   return false;
 }
 
@@ -113,8 +112,7 @@ public:
     if (!cvtOp)
       return mlir::failure();
 
-    auto encoding =
-        cvtOp.getSrc().getType().getEncoding();
+    auto encoding = cvtOp.getSrc().getType().getEncoding();
     if (!encoding.isa<triton::gpu::MmaEncodingTrait>())
       return mlir::failure();
 
@@ -163,7 +161,8 @@ public:
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
 class TritonAMDGPUOptimizeEpiloguePass
-    : public TritonAMDGPUOptimizeEpilogueBase<TritonAMDGPUOptimizeEpiloguePass> {
+    : public TritonAMDGPUOptimizeEpilogueBase<
+          TritonAMDGPUOptimizeEpiloguePass> {
 
 public:
   TritonAMDGPUOptimizeEpiloguePass() = default;
