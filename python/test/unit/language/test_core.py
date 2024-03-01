@@ -1246,11 +1246,6 @@ def test_atomic_rmw_predicate(num_ctas, device):
                                                    for axis in [0, 1]
                                                    for num_ctas in num_ctas_list])
 def test_tensor_atomic_rmw(shape, axis, num_ctas, device):
-    if is_hip():
-        pytest.skip(
-            'test_tensor_atomic_rmw for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
-
     shape0, shape1 = shape
     # triton kernel
 
@@ -1279,10 +1274,6 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, device):
 
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_tensor_atomic_rmw_block(num_ctas, device):
-    if is_hip():
-        pytest.skip(
-            'test_tensor_atomic_rmw_block for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
     shape = (8, 8)
 
     @triton.jit
