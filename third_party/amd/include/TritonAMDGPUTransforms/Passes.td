@@ -7,8 +7,7 @@ def TritonAMDGPUPipeline : Pass<"tritonamdgpu-pipeline", "mlir::ModuleOp"> {
   let summary = "pipeline";
 
   let description = [{
-    Replace `LoadOp` in loops by `InsertSliceAsyncOp` instructions that asynchronously construct the data
-    needed at the next iteration
+    Applies software pipelining to loops.
   }];
 
   let constructor = "mlir::createTritonAMDGPUPipelinePass()";

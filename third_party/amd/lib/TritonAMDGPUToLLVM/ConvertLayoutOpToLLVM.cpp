@@ -699,7 +699,7 @@ private:
     auto loc = op.getLoc();
     Value src = op.getSrc();
     Value dst = op.getResult();
-    auto srcTy = src.getType().cast<RankedTensorType>();
+    auto srcTy = src.getType().cast<MemDescType>();
     auto srcShape = srcTy.getShape();
     auto dstTy = dst.getType().cast<RankedTensorType>();
     auto dstShape = dstTy.getShape();
@@ -739,7 +739,7 @@ private:
     Value dst = op.getResult();
     auto srcTy = src.getType().cast<RankedTensorType>();
     auto srcShape = srcTy.getShape();
-    auto dstTy = dst.getType().cast<RankedTensorType>();
+    auto dstTy = dst.getType().cast<MemDescType>();
     auto dstShapePerCTA = triton::gpu::getShapePerCTA(dstTy);
     assert(srcShape.size() == 2 &&
            "Unexpected rank of ConvertLayout(blocked->shared)");
@@ -774,7 +774,7 @@ private:
     Value src = op.getSrc();
     Value dst = op.getResult();
     auto dstTensorTy = dst.getType().cast<RankedTensorType>();
-    auto srcTensorTy = src.getType().cast<RankedTensorType>();
+    auto srcTensorTy = src.getType().cast<MemDescType>();
     auto dotOperandLayout =
         dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
     auto sharedLayout = srcTensorTy.getEncoding().cast<SharedEncodingAttr>();

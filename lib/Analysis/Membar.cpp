@@ -103,10 +103,13 @@ void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
-  if (isa<triton::gpu::ExtractSliceOp, triton::gpu::AllocTensorOp,
-          triton::gpu::DeallocTensorOp, triton::TransOp>(op)) {
-    // FIXME(Keren): extract_slice is always alias for now
+  if (isa<triton::gpu::DeallocOp, triton::gpu::SubviewOp, triton::TransOp>(
+          op)) {
     return;
+  }
+  if (auto alloc = dyn_cast<triton::gpu::AllocOp>(op)) {
+    if (!alloc.getInit())
+      return;
   }
 
   if (isa<gpu::BarrierOp>(op)) {
@@ -138,9 +141,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     for (Value value : op->getOperands()) {
       for (auto bufferId : allocation->getBufferIds(value)) {
         if (bufferId != Allocation::InvalidBufferId) {
-          if (isa<triton::gpu::InsertSliceAsyncOp, tensor::InsertSliceOp>(op)) {
-            // FIXME(Keren): insert_slice and insert_slice_async are always
-            // alias for now
+          if (isa<triton::gpu::AsyncSharedCopy>(op)) {
+            // Global -> shared memory
             curBlockInfo.syncWriteIntervals.insert(
                 allocation->getAllocatedInterval(bufferId));
           } else {

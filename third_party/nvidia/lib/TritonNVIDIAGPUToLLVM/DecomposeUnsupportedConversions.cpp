@@ -128,16 +128,16 @@ struct DecomposeUnsupportedConversions
       auto dstDotOp =
           dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
       if (srcBlocked && dstDotOp) {
-        auto tmpType = RankedTensorType::get(
+        auto tmpType = MemDescType::get(
             dstType.getShape(), dstType.getElementType(),
             triton::gpu::SharedEncodingAttr::get(
                 mod.getContext(), dstDotOp, srcType.getShape(),
                 srcBlocked.getOrder(), srcBlocked.getCTALayout(),
                 srcType.getElementType()));
-        auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
-            cvtOp.getLoc(), tmpType, cvtOp.getSrc());
+        auto tmp = builder.create<triton::gpu::AllocOp>(cvtOp.getLoc(), tmpType,
+                                                        cvtOp.getSrc());
         addAttrs(tmp, cvtOp->getAttrs());
-        auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
+        auto newConvert = builder.create<triton::gpu::SharedLoad>(
             cvtOp.getLoc(), dstType, tmp);
         addAttrs(newConvert, cvtOp->getAttrs());
         cvtOp.replaceAllUsesWith(newConvert.getResult());

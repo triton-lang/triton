@@ -364,7 +364,7 @@ LogicalResult TransOp::inferReturnTypes(
     DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // type is the same as the input
-  auto argTy = operands[0].getType().cast<RankedTensorType>();
+  auto argTy = operands[0].getType().cast<TensorOrMemDesc>();
   auto order = properties.as<Properties *>()->order.asArrayRef();
   SmallVector<int64_t> retShape = applyPermutation(argTy.getShape(), order);
 
@@ -380,8 +380,13 @@ LogicalResult TransOp::inferReturnTypes(
       return failure();
     }
   }
-  inferredReturnTypes.push_back(
-      RankedTensorType::get(retShape, retEltTy, retEncoding));
+  if (argTy.isa<MemDescType>()) {
+    inferredReturnTypes.push_back(
+        MemDescType::get(retShape, retEltTy, retEncoding));
+  } else {
+    inferredReturnTypes.push_back(
+        RankedTensorType::get(retShape, retEltTy, retEncoding));
+  }
   return success();
 }
 
@@ -417,8 +422,8 @@ DotOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
   inferredReturnTypes.push_back(accTy);
 
   // verify encodings
-  auto aEnc = operands[0].getType().cast<RankedTensorType>().getEncoding();
-  auto bEnc = operands[1].getType().cast<RankedTensorType>().getEncoding();
+  auto aEnc = operands[0].getType().cast<TensorOrMemDesc>().getEncoding();
+  auto bEnc = operands[1].getType().cast<TensorOrMemDesc>().getEncoding();
   auto retEnc = accTy.getEncoding();
   if (aEnc) {
     assert(bEnc);

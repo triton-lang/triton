@@ -5,22 +5,48 @@ namespace {
 
 using namespace mlir;
 using namespace mlir::triton;
+using namespace mlir::triton::gpu;
 
-struct AllocTensorOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::AllocTensorOp> {
-  using ConvertOpToLLVMPattern<
-      triton::gpu::AllocTensorOp>::ConvertOpToLLVMPattern;
+// blocked -> shared.
+// Swizzling in shared memory to avoid bank conflict. Normally used for
+// A/B operands of dots.
+void lowerDistributedToShared(AllocOp op, AllocOpAdaptor adaptor,
+                              const LLVMTypeConverter *typeConverter,
+                              ConversionPatternRewriter &rewriter) {
+  auto loc = op.getLoc();
+  auto srcTy = op.getInit().getType();
+  auto dstTy = op.getType();
+  auto dstShapePerCTA = triton::gpu::getShapePerCTA(dstTy);
+  auto srcLayout = srcTy.getEncoding();
+  auto outOrd = dstTy.getEncoding().cast<SharedEncodingAttr>().getOrder();
+  assert(srcTy.getShape().size() == 2 ||
+         (srcTy.getShape().size() <= 3 && outOrd[2] == 0) &&
+             "Unexpected rank of ConvertLayout(blocked->shared)");
+  Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
+  auto elemTy = typeConverter->convertType(srcTy.getElementType());
+
+  int32_t elemSize = elemTy.getIntOrFloatBitWidth();
+  auto mmaLayout = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>();
+  unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
+  auto dstStrides =
+      LLVM::getStridesFromShapeAndOrder(dstShapePerCTA, outOrd, loc, rewriter);
+  auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy, false);
+  auto inVals = unpackLLElements(loc, adaptor.getInit(), rewriter);
+  storeDistributedToShared(op.getInit(), inVals, dstStrides, srcIndices,
+                           op.getResult(), smemBase, elemTy, loc, rewriter);
+}
+
+struct AllocOpConversion : public ConvertOpToLLVMPattern<triton::gpu::AllocOp> {
+  using ConvertOpToLLVMPattern<triton::gpu::AllocOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::gpu::AllocTensorOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::gpu::AllocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     Value smemBase =
         LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
-    auto resultTy = op.getType().dyn_cast<RankedTensorType>();
-    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+    auto resultTy = op.getType().cast<MemDescType>();
     auto typeConverter = getTypeConverter();
-    smemBase = bitcast(smemBase, elemPtrTy);
     auto sharedLayout =
         resultTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
     auto order = sharedLayout.getOrder();
@@ -36,6 +62,11 @@ struct AllocTensorOpConversion
       newOrder = SmallVector<unsigned>(order.begin(), order.end());
     }
 
+    // If there is an initial tensor, store it into the shared memory.
+    if (op.getInit()) {
+      lowerDistributedToShared(op, adaptor, typeConverter, rewriter);
+    }
+
     auto llvmElemTy = typeConverter->convertType(resultTy.getElementType());
     auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
     auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, shapePerCTA,
@@ -46,13 +77,12 @@ struct AllocTensorOpConversion
   }
 };
 
-struct DeallocTensorOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::DeallocTensorOp> {
-  using ConvertOpToLLVMPattern<
-      triton::gpu::DeallocTensorOp>::ConvertOpToLLVMPattern;
+struct DeallocOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::DeallocOp> {
+  using ConvertOpToLLVMPattern<triton::gpu::DeallocOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::gpu::DeallocTensorOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::gpu::DeallocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.eraseOp(op);
     return success();
@@ -64,6 +94,6 @@ struct DeallocTensorOpConversion
 void mlir::triton::populateMemoryOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
-  patterns.add<AllocTensorOpConversion>(typeConverter, benefit);
-  patterns.add<DeallocTensorOpConversion>(typeConverter, benefit);
+  patterns.add<AllocOpConversion>(typeConverter, benefit);
+  patterns.add<DeallocOpConversion>(typeConverter, benefit);
 }

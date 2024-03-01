@@ -27,8 +27,9 @@ bool getOuterLoopSchedule(scf::ForOp &forOp, int numStages,
 // wait modeling is problematic.
 void asyncLaunchDots(scf::ForOp forOp);
 
-/// Post process the pipelined loop by inserting sync operations if necessary
-void insertWaits(ModuleOp module);
+/// Post process the pipelined loop by updating the wait ops with the right
+/// number of groups in flight.
+void updateWaits(ModuleOp module);
 
 } // namespace triton
 } // namespace mlir

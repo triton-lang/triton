@@ -41,8 +41,8 @@ mlir::LogicalResult DotAsyncOp::inferReturnTypes(
   inferredReturnTypes.push_back(accTy);
 
   // verify encodings
-  auto aEnc = operands[0].getType().cast<RankedTensorType>().getEncoding();
-  auto bEnc = operands[1].getType().cast<RankedTensorType>().getEncoding();
+  auto aEnc = operands[0].getType().cast<TensorOrMemDesc>().getEncoding();
+  auto bEnc = operands[1].getType().cast<TensorOrMemDesc>().getEncoding();
   auto retEnc = accTy.getEncoding();
   if (aEnc) {
     assert(bEnc);
