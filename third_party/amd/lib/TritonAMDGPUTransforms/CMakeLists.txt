@@ -5,6 +5,7 @@ add_triton_library(TritonAMDGPUTransforms
   RemoveLayoutConversions.cpp
   ReorderInstructions.cpp
   StreamPipeline.cpp
+  MfmaGroup.cpp
 
   DEPENDS
   TritonAMDGPUTransformsIncGen

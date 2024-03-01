@@ -7,7 +7,7 @@ using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::triton::gpu::BlockedEncodingAttr;
-using ::mlir::triton::gpu::MfmaEncodingAttr;
+using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
@@ -127,7 +127,7 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
   if (!dotOpLayout)
     return elemTy;
 #ifdef USE_ROCM
-  if (auto mfmaParent = dotOpLayout.getParent().dyn_cast<MfmaEncodingAttr>()) {
+  if (auto mfmaParent = dotOpLayout.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
     if (elemTy.isF32())
       return elemTy;
     if (elemTy.isInteger(16)) // aka BF16

@@ -45,10 +45,10 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
                                           .getEncoding()
                                           .dyn_cast<NvidiaMmaEncodingAttr>();
 #ifdef USE_ROCM
-    MfmaEncodingAttr mfmaLayout = D.getType()
+    AMDMfmaEncodingAttr mfmaLayout = D.getType()
                                       .cast<RankedTensorType>()
                                       .getEncoding()
-                                      .dyn_cast<MfmaEncodingAttr>();
+                                      .dyn_cast<AMDMfmaEncodingAttr>();
     if (!isOuter && mfmaLayout && supportMFMA(op)) {
       return AMD::convertMFMA(op, adaptor, getTypeConverter(), rewriter);
     }

@@ -254,7 +254,7 @@ private:
       auto srcTys = op.getInputTypes();
       auto inputTy = srcTys[0].cast<RankedTensorType>();
       auto inMfma =
-          inputTy.getEncoding().dyn_cast<triton::gpu::MfmaEncodingAttr>();
+          inputTy.getEncoding().dyn_cast<triton::gpu::AMDMfmaEncodingAttr>();
       if (inMfma && inMfma.getIsTransposed()) {
         assert(numLaneToReduce == 2 || numLaneToReduce == 4);
         // for mfma 32x32 adjacent threads in y dimension in transposed MFMA
