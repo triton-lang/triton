@@ -1,8 +1,10 @@
 #include "TargetInfo.h"
+#include "Utility.h"
 #include "amd/include/TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+using namespace mlir;
 namespace AMD {
 static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
                             Value val, Value i, int strideInt,
@@ -115,25 +117,22 @@ Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
 
 Value TargetInfo::shflSync(Location loc, ConversionPatternRewriter &rewriter,
                            Value val, int i) const {
-  return commonShflSync(loc, rewriter, val, i32_val(i), i, NVVM::ShflKind::bfly,
-                        i32_val(0x1f));
+  return LLVM::AMD::shflSync(loc, rewriter, val, i);
 }
 
 Value TargetInfo::shflUpSync(Location loc, ConversionPatternRewriter &rewriter,
                              Value val, int i) const {
-  return commonShflSync(loc, rewriter, val, i32_val(i), i, NVVM::ShflKind::up,
-                        i32_val(0x0));
+  return LLVM::AMD::shflUpSync(loc, rewriter, val, i);
 }
 
 Value TargetInfo::shflIdxSync(Location loc, ConversionPatternRewriter &rewriter,
                               Value val, int i) const {
-  return shflIdxSync(loc, rewriter, val, i32_val(i));
+  return LLVM::AMD::shflIdxSync(loc, rewriter, val, i);
 }
 
 Value TargetInfo::shflIdxSync(Location loc, ConversionPatternRewriter &rewriter,
                               Value val, Value i) const {
-  return commonShflSync(loc, rewriter, val, i, 0, NVVM::ShflKind::idx,
-                        i32_val(0x1f));
+  return LLVM::AMD::shflIdxSync(loc, rewriter, val, i);
 }
 
 bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
