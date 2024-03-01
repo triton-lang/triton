@@ -1,7 +1,7 @@
-#include "PatternTritonGPUOpToLLVM.h"
 #include "ReduceScanCommon.h"
-#include "Utility.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using namespace mlir;
@@ -9,9 +9,6 @@ using namespace mlir::triton;
 
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::linearize;
-using ::mlir::LLVM::shflSync;
-using ::mlir::LLVM::NVIDIA::loadShared;
-using ::mlir::LLVM::NVIDIA::storeShared;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
@@ -19,11 +16,11 @@ namespace {
 struct ReduceOpConversion
     : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp> {
 public:
-  ReduceOpConversion(LLVMTypeConverter &typeConverter, int computeCapability,
-                     PatternBenefit benefit)
+  ReduceOpConversion(LLVMTypeConverter &typeConverter,
+                     const TargetInfoBase &targetInfo, PatternBenefit benefit)
       : ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp>(typeConverter,
                                                                   benefit),
-        computeCapability(computeCapability) {}
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
@@ -79,7 +76,7 @@ public:
   }
 
 private:
-  int computeCapability;
+  const TargetInfoBase &targetInfo;
 
   void accumulate(ConversionPatternRewriter &rewriter, Region &combineOp,
                   SmallVector<Value> &acc, ValueRange cur, bool isFirst) const {
@@ -138,8 +135,9 @@ private:
 
   // Check if the reduction can use a redux op and return the kind.
   std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op) const {
-    if (computeCapability < 80)
-      return std::nullopt;
+    // TODO: uncomment!
+    // if (computeCapability < 80)
+    //   return std::nullopt;
     if (op.getNumOperands() != 1 || op.getNumResults() != 1)
       return std::nullopt;
     Block *block = &(*op.getCombineOp().begin());
@@ -243,7 +241,7 @@ private:
     for (unsigned N = numLaneToReduce / 2; N > 0; N >>= 1) {
       SmallVector<Value> shfl(acc.size());
       for (unsigned i = 0; i < acc.size(); ++i) {
-        shfl[i] = shflSync(loc, rewriter, acc[i], N * interleave);
+        shfl[i] = targetInfo.shflSync(loc, rewriter, acc[i], N * interleave);
       }
       accumulate(rewriter, op.getCombineOp(), acc, shfl, false);
     }
@@ -364,7 +362,7 @@ private:
         auto elemTy = getElementType(op, i);
         Value writePtr = gep(ptr_ty(rewriter.getContext(), 3), elemTy,
                              smemBases[i], writeOffset);
-        storeShared(rewriter, loc, writePtr, acc[i], laneZero);
+        targetInfo.storeShared(rewriter, loc, writePtr, acc[i], laneZero);
       }
     }
   }
@@ -399,7 +397,8 @@ private:
         auto elemTy = getElementType(op, i);
         Value readPtr = gep(ptr_ty(rewriter.getContext(), 3), elemTy,
                             smemBases[i], readOffset);
-        acc[i] = loadShared(rewriter, loc, readPtr, elemTy, threadIsNeeded);
+        acc[i] = targetInfo.loadShared(rewriter, loc, readPtr, elemTy,
+                                       threadIsNeeded);
       }
       warpReduce(rewriter, loc, acc, op, sizeInterWarps, 1 /* interleave */);
       // only the first thread in each sizeInterWarps is writing
@@ -417,7 +416,7 @@ private:
       Value pred = and_(threadIsNeeded, laneIdModSizeInterWarpsIsZero);
 
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-        storeShared(rewriter, loc, writePtrs[i], acc[i], pred);
+        targetInfo.storeShared(rewriter, loc, writePtrs[i], acc[i], pred);
       }
 
       if (round != elemsPerThread - 1) {
@@ -472,8 +471,8 @@ private:
 };
 } // namespace
 
-void mlir::triton::NVIDIA::populateReduceOpToLLVMPatterns(
+void mlir::triton::populateReduceOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int computeCapability, PatternBenefit benefit) {
-  patterns.add<ReduceOpConversion>(typeConverter, computeCapability, benefit);
+    const TargetInfoBase &targetInfo, PatternBenefit benefit) {
+  patterns.add<ReduceOpConversion>(typeConverter, targetInfo, benefit);
 }

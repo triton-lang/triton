@@ -194,8 +194,8 @@ private:
         emitOffsetForLayout(helper.getSrcLayout(), operandType);
     unsigned srcElems = getTotalElemsPerThread(operandType);
     auto *combineOp = &op.getCombineOp();
-    auto srcIndices =
-        emitIndices(op.getLoc(), rewriter, helper.getSrcLayout(), operandType, true);
+    auto srcIndices = emitIndices(op.getLoc(), rewriter, helper.getSrcLayout(),
+                                  operandType, true);
     // reduce within threads
     for (unsigned i = 0; i < srcElems; ++i) {
       SmallVector<unsigned> key = offset[i];
@@ -480,7 +480,8 @@ private:
         // nd-tensor where n >= 1
         auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
         unsigned resultElems = getTotalElemsPerThread(resultTy);
-        auto resultIndices = emitIndices(loc, rewriter, resultLayout, resultTy, true);
+        auto resultIndices =
+            emitIndices(loc, rewriter, resultLayout, resultTy, true);
         assert(resultIndices.size() == resultElems);
 
         SmallVector<Value> resultVals(resultElems);

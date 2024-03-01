@@ -34,12 +34,6 @@ namespace LLVM {
 
 namespace NVIDIA {
 
-Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                  Value val, Value pred);
-
-Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                 Type elemTy, Value pred);
-
 Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr);
 
 static Value llGetPid(int axis, Location loc, ModuleOp moduleOp,

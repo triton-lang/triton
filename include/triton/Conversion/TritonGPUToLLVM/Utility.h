@@ -329,7 +329,7 @@ Value linearize(ConversionPatternRewriter &rewriter, Location loc,
 
 Value linearize(ConversionPatternRewriter &rewriter, Location loc,
                 ArrayRef<Value> multiDim, ArrayRef<unsigned> shape);
-
+// todo: delete shflSync ops, moved to TargetInfo
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i);
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
