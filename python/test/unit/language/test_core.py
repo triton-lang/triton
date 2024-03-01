@@ -2467,9 +2467,6 @@ def _welford_combine(mean_1, m2_1, weight_1, mean_2, m2_2, weight_2):
         new_weight,
     )
 
-
-    # def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order, ctas_per_cga, cta_split_num, cta_order):
-
 layouts = [
     BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
