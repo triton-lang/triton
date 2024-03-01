@@ -1995,10 +1995,7 @@ void init_triton_translation(py::module &m) {
       ret::take_ownership);
 
   m.def(
-      "get_warp_size",
-      []() {
-        return std::get<1>(getArchInfo());
-      },
+      "get_warp_size", []() { return std::get<1>(getArchInfo()); },
       ret::take_ownership);
 
   m.def(
