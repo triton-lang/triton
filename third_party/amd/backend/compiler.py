@@ -76,7 +76,7 @@ class HIPOptions:
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
-        return hashlib.md5(key.encode("utf-8")).hexdigest()
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
 class HIPBackend(BaseBackend):
