@@ -337,7 +337,7 @@ struct ConvertTritonAMDGPUToLLVM
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<triton::nvgpu::NVGPUDialect, LLVM::LLVMDialect,
-                    NVVM::NVVMDialect>();
+                    NVVM::NVVMDialect, mlir::ROCDL::ROCDLDialect>();
   }
 
   ConvertTritonAMDGPUToLLVM(int32_t computeCapability)
