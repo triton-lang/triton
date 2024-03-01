@@ -1335,10 +1335,10 @@ def test_atomic_cas(sem, num_ctas, device):
 @pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_tensor_atomic_cas(sem, num_ctas, device):
-    if is_hip():
-        pytest.skip(
-            'test_tensor_atomic_cas for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
+    # if is_hip():
+    #     pytest.skip(
+    #         'test_tensor_atomic_cas for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
+    #     )
 
     @triton.jit
     def change_value(X, BLOCK_SIZE: tl.constexpr):
