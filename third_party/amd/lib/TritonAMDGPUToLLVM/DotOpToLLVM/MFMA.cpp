@@ -208,9 +208,9 @@ struct DotOpMFMAConversionHelper {
     auto numRepK = repA[1];
 
     ValueTable ha = getValuesFromDotOperandLayoutStruct(
-        loadedA, numRepM, numRepK, aTensorTy.getElementType());
+        loadedA, numRepM, numRepK, kWidth, aTensorTy.getElementType());
     ValueTable hb = getValuesFromDotOperandLayoutStruct(
-        loadedB, numRepN, numRepK, aTensorTy.getElementType());
+        loadedB, numRepN, numRepK, kWidth, aTensorTy.getElementType());
     auto dstElemTy = dTensorTy.getElementType();
     auto fc = typeConverter->unpackLLElements(loc, loadedC, rewriter);
 
@@ -253,16 +253,32 @@ struct DotOpMFMAConversionHelper {
     return success();
   }
 
-  ValueTable getValuesFromDotOperandLayoutStruct(Value value, int n0, int n1,
+/**
+ * @brief Converts dot operand structure to value table and converts types appropriate for mfma instructions
+ */
+  ValueTable getValuesFromDotOperandLayoutStruct(Value value, int n0, int n1, int kWidth,
                                                  Type type) const {
-    auto elems = typeConverter->unpackLLElements(loc, value, rewriter);
-    ValueTable vals;
-    for (int i = 0; i < n0; i++) {
-      for (int j = 0; j < n1; j++) {
-        vals[{i, j}] = elems[n1 * i + j];
+      auto elems = typeConverter->unpackLLElements(loc, value, rewriter);
+      ValueTable vals;
+      for (int i = 0; i < n0; i++) {
+          for (int j = 0; j < n1; j++) {
+              auto rawElems = elems[n1 * i + j];
+              Value convertedElems;
+              if (type.isF32()) {
+                  convertedElems = extract_element(type, rawElems, i32_val(0));
+              } else if (type.getIntOrFloatBitWidth() == 8) {
+                  if (kWidth == 4)
+                      convertedElems = bitcast(rawElems, i32_ty);
+                  if (kWidth == 8)
+                      convertedElems = bitcast(rawElems, i64_ty);
+              } else {
+                  assert(type.isBF16() || type.isF16());
+                  convertedElems = rawElems;
+              }
+              vals[{i, j}] = convertedElems;
+          }
       }
-    }
-    return vals;
+      return vals;
   }
 };
 
