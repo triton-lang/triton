@@ -526,7 +526,19 @@ def _patch_lang_core(lang, builder):
     lang.max = functools.partial(_new_reduce_scan_wrapper, "max")
     lang.sum = functools.partial(_new_reduce_scan_wrapper, "sum")
     lang.cumsum = functools.partial(_new_reduce_scan_wrapper, "cumsum")
-    lang.static_range = range
+
+    # can't just map lang.static_range to `range`, because `tl.static_range`
+    # can get `step` passed by keyword
+    def _static_range(arg1, arg2=None, step=None):
+        if step is None:
+            step = 1
+        if arg2 is None:
+            start, end = 0, arg1
+        else:
+            start, end = arg1, arg2
+        return range(start, end, step)
+
+    lang.static_range = _static_range
     lang.dtype.to_ir = _new_to_ir
 
 
