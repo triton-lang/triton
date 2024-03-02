@@ -1033,6 +1033,25 @@ struct MulhiUIOpConversion
   }
 };
 
+struct BlockCSEOpConversion
+    : public ElementwiseOpConversionBase<BlockCSEOp, BlockCSEOpConversion> {
+  using Base = ElementwiseOpConversionBase<BlockCSEOp, BlockCSEOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(BlockCSEOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    PTXBuilder builder;
+    auto &mov = *builder.create("mov.u32");
+    auto res = builder.newOperand("=r");
+    auto operand = builder.newOperand(operands[0][0], "r");
+    mov(res, operand);
+    return {builder.launch(rewriter, loc, i32_ty, false)};
+  }
+};
+
 template <typename TritonOp>
 struct OpToExternCallConversion
     : public ElementwiseOpConversionBase<TritonOp,
@@ -1132,8 +1151,10 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   patterns.add<OpToExternCallConversion<triton::PreciseDivFOp>>(
       typeConverter, axisInfoAnalysis, "__nv_fdiv_rn", benefit);
 
-  patterns.add<OpToExternCallConversion<triton::BlockCSEOp>>(
-      typeConverter, axisInfoAnalysis, "__triton_block_cse", benefit);
+  /*patterns.add<OpToExternCallConversion<triton::BlockCSEOp>>(
+      typeConverter, axisInfoAnalysis, "__triton_block_cse", benefit);*/
+
+  patterns.add<BlockCSEOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
   mlir::triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
                                                     axisInfoAnalysis, benefit);

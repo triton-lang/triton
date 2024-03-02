@@ -28,6 +28,7 @@ static bool runOnFunction(Function &F) {
 
 PreservedAnalyses RemoveBlockCSEPass::run(Function &F,
                                           FunctionAnalysisManager &AM) {
+  // assert(0 && "RemoveBlockCSEPass::run");
   bool b = runOnFunction(F);
   return b ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }

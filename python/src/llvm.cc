@@ -219,7 +219,7 @@ void init_triton_llvm(py::module &&m) {
           // all the struct are removed for the following passes.
           fpm.addPass(BreakStructPhiNodesPass());
           fpm.addPass(InstCombinePass());
-          fpm.addPass(RemoveBlockCSEPass());
+          // fpm.addPass(RemoveBlockCSEPass());
         });
     mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
     mpm.run(*mod, mam);
