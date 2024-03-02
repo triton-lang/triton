@@ -256,22 +256,16 @@ def attn_fwd(
     stride_oz, stride_oh, stride_om, stride_on,
     stride_bz, stride_bh, stride_bm, stride_bn,
     cu_seqlens_q, cu_seqlens_k,
-    dropout_p,
-    philox_seed,
-    philox_offset_base,
-    encoded_softmax,
-    actual_block_dmodel,
-    max_seqlens_q, max_seqlens_k,
+    dropout_p, philox_seed, philox_offset_base, encoded_softmax,
     hq, hk,
+    ACTUAL_BLOCK_DMODEL:tl.constexpr,
+    MAX_SEQLENS_Q:tl.constexpr, MAX_SEQLENS_K:tl.constexpr,
     VARLEN: tl.constexpr,
     IS_CAUSAL: tl.constexpr,
-    BLOCK_M: tl.constexpr,
-    BLOCK_DMODEL: tl.constexpr,
-    BLOCK_N: tl.constexpr,
+    BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr,
     PRE_LOAD_V: tl.constexpr,
     BIAS_TYPE: tl.constexpr,
-    ENABLE_DROPOUT: tl.constexpr,
-    RETURN_ENCODED_SOFTMAX: tl.constexpr
+    ENABLE_DROPOUT: tl.constexpr, RETURN_ENCODED_SOFTMAX: tl.constexpr
 ):
     start_m = tl.program_id(0)
     off_h_q = tl.program_id(1)
@@ -292,8 +286,8 @@ def attn_fwd(
     else:
         cu_seqlens_q_start = 0
         cu_seqlens_k_start = 0
-        seqlen_q = max_seqlens_q
-        seqlen_k = max_seqlens_k
+        seqlen_q = MAX_SEQLENS_Q
+        seqlen_k = MAX_SEQLENS_K
 
     # Now we compute whether we need to exit early due to causal masking.
     # This is because for seqlen_q > seqlen_k, M rows of the attn scores
@@ -330,7 +324,7 @@ def attn_fwd(
             acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=Out.type.element_ty)
             # We still need to write 0s to the result
             tl.store(O_block_ptr, acc.to(Out.type.element_ty), boundary_check=(0,1))
-            l_ptrs = L + off_z * hq * max_seqlens_q + off_h_q * max_seqlens_q + offs_m
+            l_ptrs = L + off_z * hq * MAX_SEQLENS_Q + off_h_q * MAX_SEQLENS_Q + offs_m
             # We store inf to LSE, not -inf because in the bwd pass, we subtract this
             # from qk which makes it -inf, such that exp(qk - inf) = 0 for these masked blocks.
             l = tl.full([BLOCK_M], value=float("inf"), dtype=tl.float32)
@@ -348,13 +342,13 @@ def attn_fwd(
     elif seqlen_k % BLOCK_N:
         need_padding = True
         n_extra_tokens = seqlen_k % BLOCK_N
-    padded_head = (actual_block_dmodel != BLOCK_DMODEL)
+    padded_head = (ACTUAL_BLOCK_DMODEL != BLOCK_DMODEL)
 
     # Compute pointers for all the tensors used in this kernel.
     q_offset = off_z * stride_qz +  off_h_q * stride_qh + cu_seqlens_q_start * stride_qm
     Q_block_ptr = tl.make_block_ptr(
         base=Q + q_offset,
-        shape=(seqlen_q, actual_block_dmodel),
+        shape=(seqlen_q, ACTUAL_BLOCK_DMODEL),
         strides=(stride_qm, stride_qk),
         offsets=(start_m * BLOCK_M, 0),
         block_shape=(BLOCK_M, BLOCK_DMODEL),
@@ -363,7 +357,7 @@ def attn_fwd(
     k_offset = off_z * stride_kz + off_h_k * stride_kh + cu_seqlens_k_start * stride_kn
     K_block_ptr = tl.make_block_ptr(
         base=K + k_offset,
-        shape=(actual_block_dmodel, seqlen_k),
+        shape=(ACTUAL_BLOCK_DMODEL, seqlen_k),
         strides=(stride_kk, stride_kn),
         offsets=(0, 0),
         block_shape=(BLOCK_DMODEL, BLOCK_N),
@@ -372,7 +366,7 @@ def attn_fwd(
     v_offset = off_z * stride_vz + off_h_k * stride_vh + cu_seqlens_k_start * stride_vk
     V_block_ptr = tl.make_block_ptr(
         base=V + v_offset,
-        shape=(seqlen_k, actual_block_dmodel),
+        shape=(seqlen_k, ACTUAL_BLOCK_DMODEL),
         strides=(stride_vk, stride_vn),
         offsets=(0, 0),
         block_shape=(BLOCK_N, BLOCK_DMODEL),
@@ -494,7 +488,7 @@ def attn_fwd(
             out_ptrs_mask = mask_m_offsets[:, None] >= out_mask_boundary[None, :]
             acc = tl.where(out_ptrs_mask, acc, 0)
     # write back LSE
-    l_ptrs = L + off_z * hq * max_seqlens_q + off_h_q * max_seqlens_q + offs_m
+    l_ptrs = L + off_z * hq * MAX_SEQLENS_Q + off_h_q * MAX_SEQLENS_Q + offs_m
     # If seqlen_q not multiple of BLOCK_M, we need to mask out the last few rows.
     # This is only true for the last M block. For others, overflow_size will be -ve
     overflow_size = end_m_idx - seqlen_q
@@ -510,7 +504,7 @@ def attn_fwd(
     o_offset = off_z * stride_oz + cu_seqlens_q_start * stride_om + off_h_q * stride_oh
     O_block_ptr = tl.make_block_ptr(
         base=Out + o_offset,
-        shape=(seqlen_q, actual_block_dmodel),
+        shape=(seqlen_q, ACTUAL_BLOCK_DMODEL),
         strides=(stride_om, stride_on),
         offsets=(start_m * BLOCK_M, 0),
         block_shape=(BLOCK_M, BLOCK_DMODEL),
@@ -853,10 +847,10 @@ class _attention(torch.autograd.Function):
             philox_seed=philox_seed,
             philox_offset_base=philox_offset,
             encoded_softmax=encoded_softmax,
-            actual_block_dmodel=head_size,
-            max_seqlens_q=metadata.max_seqlens_q,
-            max_seqlens_k=metadata.max_seqlens_k,
             hq=nheads_q, hk=nheads_k,
+            ACTUAL_BLOCK_DMODEL=head_size,
+            MAX_SEQLENS_Q=metadata.max_seqlens_q,
+            MAX_SEQLENS_K=metadata.max_seqlens_k,
             IS_CAUSAL=metadata.causal,
             VARLEN=metadata.varlen,
             BLOCK_DMODEL=padded_d_model,
