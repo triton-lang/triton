@@ -90,6 +90,7 @@ class Builder:
         if isinstance(tt_dtype, tl.pointer_type):
             return np.dtype(np.uint64)
         np_types = {
+            tl.int1: np.dtype(bool),
             tl.float16: np.dtype(np.float16),
             tl.float32: np.dtype(np.float32),
             tl.float64: np.dtype(np.float64),
@@ -147,6 +148,12 @@ class Builder:
 
     def get_block_ty(self, dtype, shape):
         return tl.block_type(dtype, shape)
+
+    def get_int1(self, value):
+        return TensorHandle(np.array([value], dtype=bool), tl.int1)
+
+    def get_uint32(self, value):
+        return TensorHandle(np.array([value], dtype=np.uint32), tl.uint32)
 
     def get_int32(self, value):
         return TensorHandle(np.array([value], dtype=np.int32), tl.int32)
@@ -412,7 +419,16 @@ def _patch_lang_tensor(tensor, builder):
         if tl.core.is_builtin(member):
             _patch_attr(tensor, name, member, builder)
     tensor.__index__ = lambda self: int(self.handle.data)
-    tensor.__bool__ = lambda self: True
+
+    def _get_bool(self):
+        if self is None:
+            return False
+        data = self.handle.data
+        # in triton, only scalars can be converted to booleans
+        # here we need this hack because all scalars are tensors
+        return bool(data) if data.size == 1 else True
+
+    tensor.__bool__ = lambda self: _get_bool(self)
 
     def handle_slice(self, slices):
         data = self.handle.data.__getitem__(slices)
@@ -421,6 +437,8 @@ def _patch_lang_tensor(tensor, builder):
         return tl.core.tensor(tensor_handle, tensor_type)
 
     tensor.__getitem__ = handle_slice
+    tensor.__repr__ = lambda self: repr(self.handle.data)
+    tensor.__str__ = lambda self: str(self.handle.data)
 
 
 def _patch_lang_core(lang, builder):
@@ -438,19 +456,30 @@ def _patch_lang_core(lang, builder):
             "_sum_combine": np.sum,
         }
         ret = mapping[fn](input.handle.data, axis=axis, keepdims=keep_dims)
+        if not ret.shape:
+            ret = ret[None]
         ret_type = tl.block_type(input.dtype, ret.shape)
         return tl.core.tensor(TensorHandle(ret, input.dtype), ret_type)
 
-    def _new_reduce_wrapper(mode, input, axis=None, return_indices=False, return_indices_tie_break_left=True,
-                            keep_dims=False):
-        if mode == "min":
-            return _new_reduce(input, axis, tl.standard._elementwise_min, keep_dims)
-        elif mode == "max":
-            return _new_reduce(input, axis, tl.standard._elementwise_max, keep_dims)
-        elif mode == "sum":
-            return _new_reduce(input, axis, tl.standard._sum_combine, keep_dims)
-        else:
+    def _new_scan(input, axis, combine_fn, keep_dims=False):
+        fn = combine_fn.fn.__name__
+        mapping = {
+            "_sum_combine": np.cumsum,
+        }
+        ret = mapping[fn](input.handle.data, axis=axis)
+        ret_type = tl.block_type(input.dtype, ret.shape)
+        return tl.core.tensor(TensorHandle(ret, input.dtype), ret_type)
+
+    def _new_reduce_scan_wrapper(mode, input, axis=None, return_indices=False, return_indices_tie_break_left=True,
+                                 keep_dims=False):
+        impl_fn = _new_scan if mode.startswith("cum") else _new_reduce
+        mode = mode[3:] if mode.startswith("cum") else mode
+        combine_fn = {
+            "min": tl.standard._elementwise_min, "max": tl.standard._elementwise_max, "sum": tl.standard._sum_combine
+        }
+        if mode not in combine_fn:
             raise ValueError(f"mode {mode} not supported")
+        return impl_fn(input, axis, combine_fn[mode], keep_dims)
 
     def _new_to_ir(self, builder):
         # We need to specify signedness for integer types in the numpy mode
@@ -493,10 +522,23 @@ def _patch_lang_core(lang, builder):
         raise ValueError(f'fail to convert {self} to ir type')
 
     lang.reduce = _new_reduce
-    lang.min = functools.partial(_new_reduce_wrapper, "min")
-    lang.max = functools.partial(_new_reduce_wrapper, "max")
-    lang.sum = functools.partial(_new_reduce_wrapper, "sum")
-    lang.static_range = lambda start, stop, step: range(start, stop, step)
+    lang.min = functools.partial(_new_reduce_scan_wrapper, "min")
+    lang.max = functools.partial(_new_reduce_scan_wrapper, "max")
+    lang.sum = functools.partial(_new_reduce_scan_wrapper, "sum")
+    lang.cumsum = functools.partial(_new_reduce_scan_wrapper, "cumsum")
+
+    # can't just map lang.static_range to `range`, because `tl.static_range`
+    # can get `step` passed by keyword
+    def _static_range(arg1, arg2=None, step=None):
+        if step is None:
+            step = 1
+        if arg2 is None:
+            start, end = 0, arg1
+        else:
+            start, end = arg1, arg2
+        return range(start, end, step)
+
+    lang.static_range = _static_range
     lang.dtype.to_ir = _new_to_ir
 
 
