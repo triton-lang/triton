@@ -498,68 +498,72 @@ class constexpr:
     def __index__(self):
         return self.value
 
+    # In interpreter mode, constant values are not wrapped in constexpr,
+    # and therefore do not have a .value attribute.
+    # As a result, from here and below, we need to call the _constexpr_to_value
+    # function to obtain either constexpr.value or the value itself.
     def __add__(self, other):
-        return constexpr(self.value + other.value)
+        return constexpr(self.value + _constexpr_to_value(other))
 
     def __radd__(self, other):
-        return constexpr(other.value + self.value)
+        return constexpr(_constexpr_to_value(other) + self.value)
 
     def __sub__(self, other):
-        return constexpr(self.value - other.value)
+        return constexpr(self.value - _constexpr_to_value(other))
 
     def __rsub__(self, other):
-        return constexpr(other.value - self.value)
+        return constexpr(_constexpr_to_value(other) - self.value)
 
     def __mul__(self, other):
-        return constexpr(self.value * other.value)
+        return constexpr(self.value * _constexpr_to_value(other))
 
     def __mod__(self, other):
-        return constexpr(self.value % other.value)
+        return constexpr(self.value % _constexpr_to_value(other))
 
     def __rmul__(self, other):
-        return constexpr(other.value * self.value)
+        return constexpr(_constexpr_to_value(other) * self.value)
 
     def __truediv__(self, other):
-        return constexpr(self.value / other.value)
+        return constexpr(self.value / _constexpr_to_value(other))
 
     def __rtruediv__(self, other):
-        return constexpr(other.value / self.value)
+        return constexpr(_constexpr_to_value(other) / self.value)
 
     def __floordiv__(self, other):
-        return constexpr(self.value // other.value)
+        return constexpr(self.value // _constexpr_to_value(other))
 
     def __rfloordiv__(self, other):
-        return constexpr(other.value // self.value)
+        return constexpr(_constexpr_to_value(other) // self.value)
 
     def __gt__(self, other):
-        return constexpr(self.value > other.value)
+        return constexpr(self.value > _constexpr_to_value(other))
 
     def __rgt__(self, other):
-        return constexpr(other.value > self.value)
+        return constexpr(_constexpr_to_value(other) > self.value)
 
     def __ge__(self, other):
-        return constexpr(self.value >= other.value)
+        return constexpr(self.value >= _constexpr_to_value(other))
 
     def __rge__(self, other):
-        return constexpr(other.value >= self.value)
+        return constexpr(_constexpr_to_value(other) >= self.value)
 
     def __lt__(self, other):
-        return constexpr(self.value < other.value)
+        return constexpr(self.value < _constexpr_to_value(other))
 
     def __rlt__(self, other):
-        return constexpr(other.value < self.value)
+        return constexpr(_constexpr_to_value(other) < self.value)
 
     def __le__(self, other):
-        return constexpr(self.value <= other.value)
+        return constexpr(self.value <= _constexpr_to_value(other))
 
     def __rle__(self, other):
-        return constexpr(other.value <= self.value)
+        return constexpr(_constexpr_to_value(other) <= self.value)
 
     def __eq__(self, other):
-        return constexpr(self.value == other.value)
+        return constexpr(self.value == _constexpr_to_value(other))
 
     def __ne__(self, other):
-        return constexpr(self.value != other.value)
+        return constexpr(self.value != _constexpr_to_value(other))
 
     def __bool__(self):
         return bool(self.value)
@@ -568,19 +572,19 @@ class constexpr:
         return constexpr(-self.value)
 
     def __and__(self, other):
-        return constexpr(self.value & other.value)
+        return constexpr(self.value & _constexpr_to_value(other))
 
     def logical_and(self, other):
-        return constexpr(self.value and other.value)
+        return constexpr(self.value and _constexpr_to_value(other))
 
     def __or__(self, other):
-        return constexpr(self.value | other.value)
+        return constexpr(self.value | _constexpr_to_value(other))
 
     def __xor__(self, other):
-        return constexpr(self.value ^ other.value)
+        return constexpr(self.value ^ _constexpr_to_value(other))
 
     def logical_or(self, other):
-        return constexpr(self.value or other.value)
+        return constexpr(self.value or _constexpr_to_value(other))
 
     def __pos__(self):
         return constexpr(+self.value)
@@ -589,13 +593,13 @@ class constexpr:
         return constexpr(~self.value)
 
     def __pow__(self, other):
-        return constexpr(self.value**other.value)
+        return constexpr(self.value**_constexpr_to_value(other))
 
     def __rshift__(self, other):
-        return constexpr(self.value >> other.value)
+        return constexpr(self.value >> _constexpr_to_value(other))
 
     def __lshift__(self, other):
-        return constexpr(self.value << other.value)
+        return constexpr(self.value << _constexpr_to_value(other))
 
     def __not__(self):
         return constexpr(not self.value)
@@ -871,7 +875,7 @@ class tensor:
 
     @builtin
     def __getitem__(self, slices, _builder=None):
-        if isinstance(slices, (slice, constexpr)):
+        if isinstance(slices, (slice, constexpr)) or slices is None:
             slices = [slices]
         ret = self
         for dim, sl in enumerate(slices):
@@ -880,7 +884,7 @@ class tensor:
             elif isinstance(sl, slice) and sl.start is None and sl.stop is None and sl.step is None:
                 pass
             else:
-                assert False, f"unsupported tensor index: {sl}"
+                raise ValueError(f"unsupported tensor index: {sl}")
         return ret
 
     @property
