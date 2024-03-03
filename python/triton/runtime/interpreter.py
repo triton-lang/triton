@@ -18,6 +18,12 @@ class TensorHandle:
     def __bool__(self):
         return bool(self.data.all())
 
+    def get_element_ty(self):
+        dtype = self.dtype
+        while hasattr(dtype, "element_ty"):
+            dtype = dtype.element_ty
+        return dtype
+
     def clone(self):
         return TensorHandle(self.data.copy(), self.dtype)
 
@@ -189,7 +195,7 @@ class Builder:
         return self.create_masked_store(ptr, val, mask, None, None)
 
     def create_masked_load(self, ptrs, mask, other, cache_modifier, eviction_policy, is_volatile):
-        dtype_tt = ptrs.dtype.element_ty
+        dtype_tt = ptrs.get_element_ty()
         dtype_np = self.np_dtype(dtype_tt)
         if other is None:
             other = TensorHandle(np.ones_like(ptrs.data, dtype=dtype_np), dtype_tt)
@@ -286,8 +292,7 @@ class Builder:
 
     # ternary functions
     def ternary_op(self, lhs, rhs, other, op):
-        ret = TensorHandle(op(lhs.data, rhs.data, other.data), other.dtype)
-        return ret
+        return TensorHandle(op(lhs.data, rhs.data, other.data), other.dtype)
 
     create_select = lambda self, cond, lhs, rhs: self.ternary_op(cond, lhs, rhs, np.where)
 
@@ -304,12 +309,12 @@ class Builder:
     create_iabs = lambda self, arg: self.unary_op(arg, np.abs)
 
     # tensor operators
-    create_reshape = lambda self, arg, shape, allowReorder: TensorHandle(arg.data.reshape(shape), arg.dtype)
+    create_reshape = lambda self, arg, shape, allow_reorder: TensorHandle(arg.data.reshape(shape), arg.dtype)
 
     def create_trans(self, arg, perm):
         return TensorHandle(np.transpose(arg.data, perm), arg.dtype)
 
-    def create_dot(self, a, b, d, allow_tf32, maxNumImpreciseAcc):
+    def create_dot(self, a, b, d, allow_tf32, max_num_imprecise_acc):
         return TensorHandle(np.dot(a.data, b.data) + d.data, d.dtype)
 
     def create_make_range(self, start, stop):
@@ -318,10 +323,11 @@ class Builder:
     # pointer arithmetic
 
     def create_addptr(self, ptr, offset):
-        dtype_tt = ptr.dtype.element_ty
+        dtype_tt = ptr.get_element_ty()
+        element_bitwidth = dtype_tt.primitive_bitwidth
         # int1's bitwidth is 1, but we need to use 8 for pointer arithmetic
-        return TensorHandle(ptr.data + (max(1, dtype_tt.primitive_bitwidth // 8)) * offset.data.astype(np.uint64),
-                            ptr.dtype)
+        element_bytewidth = max(1, element_bitwidth // 8)
+        return TensorHandle(ptr.data + element_bytewidth * offset.data.astype(np.uint64), ptr.dtype)
 
     def create_tensor_pointer_load(self, ptr, boundary_check, padding_option, cache_modifier, eviction_policy,
                                    is_volatile):
@@ -343,11 +349,18 @@ class Builder:
     def create_int_to_ptr(self, val, dst_ty):
         return TensorHandle(val.data.astype(np.uint64), dst_ty)
 
+    def create_ptr_to_int(self, val, dst_ty):
+        return TensorHandle(val.data.astype(np.uint64), dst_ty)
+
     # def create_cat(self, lhs, rhs):
     #     pass
 
     def create_splat(self, arg, shape):
-        return TensorHandle(np.full(shape, arg.data[0], dtype=self.np_dtype(arg.dtype)), arg.dtype)
+        if isinstance(arg.dtype, tl.block_type):
+            return TensorHandle(np.full(shape, arg.data[0], dtype=self.np_dtype(arg.dtype)), arg.dtype)
+        else:  # scalar
+            block_type = tl.block_type(arg.dtype, shape)
+            return TensorHandle(np.full(shape, arg.data, dtype=self.np_dtype(arg.dtype)), block_type)
 
     # def create_atomic_cas(self, ptr, cmp, val, sem):
     #     pass
@@ -356,21 +369,6 @@ class Builder:
     #     pass
 
     # def create_extern_elementwise(self, libName, libPath, symbol, argList, retType, isPure):
-    #     pass
-
-    # def create_reduce(self, operands, axis):
-    #     pass
-
-    # def create_reduce_ret(self, args):
-    #     pass
-
-    # def create_scan(self, operands, axis):
-    #     pass
-
-    # def create_scan_ret(self, args):
-    #     pass
-
-    # def create_ptr_to_int(self, val, type):
     #     pass
 
     # def create_int_to_ptr(self, val, type):
@@ -429,14 +427,6 @@ def _patch_lang_tensor(tensor, builder):
         return bool(data) if data.size == 1 else True
 
     tensor.__bool__ = lambda self: _get_bool(self)
-
-    def handle_slice(self, slices):
-        data = self.handle.data.__getitem__(slices)
-        tensor_handle = TensorHandle(data, self.dtype)
-        tensor_type = tl.block_type(self.dtype, data.shape)
-        return tl.core.tensor(tensor_handle, tensor_type)
-
-    tensor.__getitem__ = handle_slice
     tensor.__repr__ = lambda self: repr(self.handle.data)
     tensor.__str__ = lambda self: str(self.handle.data)
 
@@ -456,9 +446,10 @@ def _patch_lang_core(lang, builder):
             "_sum_combine": np.sum,
         }
         ret = mapping[fn](input.handle.data, axis=axis, keepdims=keep_dims)
-        if not ret.shape:
-            ret = ret[None]
-        ret_type = tl.block_type(input.dtype, ret.shape)
+        if ret.shape:
+            ret_type = tl.block_type(input.dtype, ret.shape)
+        else:
+            ret_type = input.dtype
         return tl.core.tensor(TensorHandle(ret, input.dtype), ret_type)
 
     def _new_scan(input, axis, combine_fn, keep_dims=False):
@@ -538,7 +529,11 @@ def _patch_lang_core(lang, builder):
             start, end = arg1, arg2
         return range(start, end, step)
 
+    def _static_assert(cond, msg=""):
+        assert cond, msg
+
     lang.static_range = _static_range
+    lang.static_assert = _static_assert
     lang.dtype.to_ir = _new_to_ir
 
 
