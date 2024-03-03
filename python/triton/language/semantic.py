@@ -1391,6 +1391,15 @@ def where(condition: tl.tensor, x: tl.tensor, y: tl.tensor, builder: ir.builder)
 # ===----------------------------------------------------------------------===
 
 
+def wrap_tensor(x, scalar_ty, ret_shape):
+    if ret_shape:
+        res_ty = tl.block_type(scalar_ty, ret_shape)
+    else:
+        # 0d-tensor -> scalar
+        res_ty = scalar_ty
+    return tl.tensor(x, res_ty)
+
+
 def reduction(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, builder: ir.builder) -> Tuple[tl.tensor, ...]:
     if axis is None:
         new_inputs = []
@@ -1407,19 +1416,11 @@ def reduction(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, builder
     for t in inputs:
         assert t.type.shape == shape, "all reduction inputs must have the same shape"
 
-    def wrap_tensor(x, scalar_ty):
-        if ret_shape:
-            res_ty = tl.block_type(scalar_ty, ret_shape)
-        else:
-            # 0d-tensor -> scalar
-            res_ty = scalar_ty
-        return tl.tensor(x, res_ty)
-
     reduce_op = builder.create_reduce([t.handle for t in inputs], axis)
     region_builder_fn(reduce_op)
     reduce_op.verify()
 
-    return tuple(wrap_tensor(reduce_op.get_result(i), inputs[i].type.scalar) for i in range(len(inputs)))
+    return tuple(wrap_tensor(reduce_op.get_result(i), inputs[i].type.scalar, ret_shape) for i in range(len(inputs)))
 
 
 # ===----------------------------------------------------------------------===
@@ -1440,15 +1441,11 @@ def associative_scan(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, 
     for t in inputs:
         assert t.type.shape == shape, "all scan inputs must have the same shape"
 
-    def wrap_tensor(x, scalar_ty):
-        res_ty = tl.block_type(scalar_ty, shape)
-        return tl.tensor(x, res_ty)
-
     scan_op = builder.create_scan([t.handle for t in inputs], axis, reverse)
     region_builder_fn(scan_op)
     scan_op.verify()
 
-    return tuple(wrap_tensor(scan_op.get_result(i), inputs[i].type.scalar) for i in range(len(inputs)))
+    return tuple(wrap_tensor(scan_op.get_result(i), inputs[i].type.scalar, shape) for i in range(len(inputs)))
 
 
 # ===----------------------------------------------------------------------===
