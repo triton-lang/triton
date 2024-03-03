@@ -362,7 +362,6 @@ class Builder:
             block_type = tl.block_type(arg.dtype, shape)
             return TensorHandle(np.full(shape, arg.data, dtype=self.np_dtype(arg.dtype)), block_type)
 
-
     # def create_atomic_cas(self, ptr, cmp, val, sem):
     #     pass
 

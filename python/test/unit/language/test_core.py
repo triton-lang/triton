@@ -569,6 +569,7 @@ def test_broadcast(dtype, device):
 # test slice
 # ----------
 
+
 @pytest.mark.interpreter
 def test_slice(device):
 
@@ -598,6 +599,7 @@ def test_slice(device):
 # ------------------
 # test invalid slice
 # ------------------
+
 
 @pytest.mark.interpreter
 def test_invalid_slice(device):
@@ -701,7 +703,8 @@ def test_expand_dims_error_cases(device):
 
     N = 32
     dummy_tensor = torch.empty((), device=device)
-    error_class = ValueError if is_interpreter() else triton.CompilationError 
+    error_class = ValueError if is_interpreter() else triton.CompilationError
+
     def get_error_message(e):
         if is_interpreter():
             return str(e.value)
@@ -739,7 +742,7 @@ def test_invalid_pid_axis(device):
     @triton.jit
     def _kernel(dst):
         pid = tl.program_id(20)
-    
+
     error_class = ValueError if is_interpreter() else triton.CompilationError
     with pytest.raises(error_class) as exc_info:
         _kernel[(1, )](dst)
