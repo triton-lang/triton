@@ -647,7 +647,7 @@ class GridExecutor:
         # we need to copy arguments to the host for the interpreter
         # implicitly convert tensor arguments to their base pointers
         args = inspect.getcallargs(self.fn, *args_hst, **kwargs)
-        args = {name: tl.constexpr(arg) if name in self.constexprs else _implicit_cvt(arg) for name, arg in args.items()}
+        args = {name: arg if name in self.constexprs else _implicit_cvt(arg) for name, arg in args.items()}
         # iterate through grid
         grid = self.grid(args) if callable(self.grid) else self.grid
         assert len(grid) <= 3

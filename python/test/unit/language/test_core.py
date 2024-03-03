@@ -480,8 +480,8 @@ def test_bitwise_op(dtype_x, dtype_y, op, num_ctas, device):
         numpy_expr = None
     if 'float' in dtype_x + dtype_y:
         # The CompilationError must have been caused by a C++ exception with this text.
-        error = triton.CompilationError if not is_interpreter() else tl.semantic.IncompatibleTypeErrorImpl
-        with pytest.raises(error, match='invalid operands of type'):
+        error_class = tl.semantic.IncompatibleTypeErrorImpl if is_interpreter() else triton.CompilationError
+        with pytest.raises(error_class, match='invalid operands of type'):
             _test_binary(dtype_x, dtype_y, expr, numpy_expr='np.array([])', device=device, num_ctas=num_ctas)
     else:
         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
@@ -607,8 +607,8 @@ def test_invalid_slice(device):
     def _kernel(dst):
         dst[10:]
 
-    error = triton.CompilationError if not is_interpreter() else ValueError
-    with pytest.raises(error, match='unsupported tensor index'):
+    error_class = ValueError if is_interpreter() else triton.CompilationError
+    with pytest.raises(error_class, match='unsupported tensor index'):
         _kernel[(1, )](dst=dst)
 
 
@@ -701,30 +701,30 @@ def test_expand_dims_error_cases(device):
 
     N = 32
     dummy_tensor = torch.empty((), device=device)
-    error = triton.CompilationError if not is_interpreter() else ValueError
+    error_class = ValueError if is_interpreter() else triton.CompilationError 
     def get_error_message(e):
         if is_interpreter():
             return str(e.value)
         else:
             return str(e.value.__cause__)
 
-    with pytest.raises(error) as exc_info:
+    with pytest.raises(error_class) as exc_info:
         dim_out_of_range1[(1, )](dummy_tensor, N)
     assert "invalid axis -3" in get_error_message(exc_info)
 
-    with pytest.raises(error) as exc_info:
+    with pytest.raises(error_class) as exc_info:
         dim_out_of_range2[(1, )](dummy_tensor, N)
     assert "invalid axis 2" in get_error_message(exc_info)
 
-    with pytest.raises(error) as exc_info:
+    with pytest.raises(error_class) as exc_info:
         dim_out_of_range3[(1, )](dummy_tensor, N)
     assert "invalid axis 1" in get_error_message(exc_info)
 
-    with pytest.raises(error) as exc_info:
+    with pytest.raises(error_class) as exc_info:
         duplicate_dim1[(1, )](dummy_tensor, N)
     assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", get_error_message(exc_info))
 
-    with pytest.raises(error) as exc_info:
+    with pytest.raises(error_class) as exc_info:
         duplicate_dim2[(1, )](dummy_tensor, N)
     assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", get_error_message(exc_info))
 
@@ -740,16 +740,11 @@ def test_invalid_pid_axis(device):
     def _kernel(dst):
         pid = tl.program_id(20)
     
-    error = triton.CompilationError if not is_interpreter() else ValueError
-    def get_error_message(e):
-        if is_interpreter():
-            return str(e.value)
-        else:
-            return str(e.value.__cause__)
-
-    with pytest.raises(error) as exc_info:
+    error_class = ValueError if is_interpreter() else triton.CompilationError
+    with pytest.raises(error_class) as exc_info:
         _kernel[(1, )](dst)
-    assert re.search(r"program_id axis must be 0, 1, or 2 but got 20", get_error_message(exc_info))
+    error_msg = str(exc_info.value) if is_interpreter() else str(exc_info.value.__cause__)
+    assert re.search(r"program_id axis must be 0, 1, or 2 but got 20", error_msg)
 
 
 # ---------------
