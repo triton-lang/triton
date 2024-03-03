@@ -498,6 +498,10 @@ class constexpr:
     def __index__(self):
         return self.value
 
+    # In interpreter mode, constant values are not wrapped in constexpr,
+    # and therefore do not have a .value attribute.
+    # As a result, from here and below, we need to call the _constexpr_to_value
+    # function to obtain either constexpr.value or the value itself.
     def __add__(self, other):
         return constexpr(self.value + _constexpr_to_value(other))
 
