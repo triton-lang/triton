@@ -1466,24 +1466,29 @@ SmallVector<unsigned> AMDMfmaEncodingAttr::getSizePerThread() const {
 }
 
 SmallVector<int64_t>
-AMDMfmaEncodingAttr::getMFMAElemsPerInstrForOperands(int kWidth,
-                                                     int opIdx) const {
-  int64_t nonKDim = getMDim();
-  assert(nonKDim == 32 || nonKDim == 16);
-  int64_t kDim = kWidth * (nonKDim == 32 ? 2 : 4);
+AMDMfmaEncodingAttr::getMFMAInstrShapeForOperands(int kWidth, int opIdx) const {
+  unsigned mDim = getMDim();
+  unsigned nDim = getNDim();
+  assert((mDim == nDim) && (mDim == 32 || mDim == 16 || mDim == 4) ||
+         (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
+  constexpr int waveSize = 64; // MFMA is used on wave64 architectures only
+  int kGroups = -1;
+  if (mDim == nDim)
+    kGroups = waveSize / mDim;
+  if (mDim == 64 && nDim == 4 || mDim == 4 && nDim == 64)
+    kGroups = 1;
+  int64_t kDim = kWidth * kGroups;
   if (opIdx == 0)
-    return {nonKDim, kDim};
-  else {
+    return {mDim, kDim};
+  else
     assert(opIdx == 1);
-    return {kDim, nonKDim};
-  }
+  return {kDim, nDim};
 }
 
 SmallVector<int64_t>
 AMDMfmaEncodingAttr::getMFMARepForOperands(ArrayRef<int64_t> operandShape,
-                                           Type elemType, int kWidth,
-                                           int opIdx) const {
-  auto operandTileShape = getMFMAElemsPerInstrForOperands(kWidth, opIdx);
+                                           int kWidth, int opIdx) const {
+  auto operandTileShape = getMFMAInstrShapeForOperands(kWidth, opIdx);
   auto warpsPerCTA = getWarpsPerCTA();
   if (opIdx == 0)
     return {std::max<int64_t>(1, operandShape[0] /
@@ -1502,8 +1507,8 @@ unsigned AMDMfmaEncodingAttr::getTotalElemsPerThreadForOperands(
   int warpsPerCTAM = getWarpsPerCTA()[0];
   int warpsPerCTAN = getWarpsPerCTA()[1];
   constexpr int waveSize = 64;
-  auto tileSize = getMFMAElemsPerInstrForOperands(kWidth, opIdx);
-  auto rep = getMFMARepForOperands(shape, eltTy, kWidth, opIdx);
+  auto tileSize = getMFMAInstrShapeForOperands(kWidth, opIdx);
+  auto rep = getMFMARepForOperands(shape, kWidth, opIdx);
   return rep[0] * rep[1];
 }
 
