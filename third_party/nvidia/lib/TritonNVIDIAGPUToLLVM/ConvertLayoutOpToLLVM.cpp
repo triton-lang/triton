@@ -544,6 +544,15 @@ private:
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
 
+    if (product(srcTy.getShape()) == 1) {
+      auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+      SmallVector<Value> outVals(getTotalElemsPerThread(dstTy), inVals[0]);
+      Value result =
+          packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
     if (shouldUseDistSmem(srcLayout, dstLayout))
       return lowerDistToDistWithDistSmem(op, adaptor, rewriter);
     Value smemBase =
