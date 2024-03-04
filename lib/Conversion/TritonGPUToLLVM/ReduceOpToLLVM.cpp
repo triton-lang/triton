@@ -1,7 +1,7 @@
-#include "PatternTritonGPUOpToLLVM.h"
 #include "ReduceScanCommon.h"
-#include "Utility.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using namespace mlir;
@@ -9,9 +9,6 @@ using namespace mlir::triton;
 
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::linearize;
-using ::mlir::LLVM::shflSync;
-using ::mlir::LLVM::NVIDIA::loadShared;
-using ::mlir::LLVM::NVIDIA::storeShared;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
@@ -19,11 +16,11 @@ namespace {
 struct ReduceOpConversion
     : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp> {
 public:
-  ReduceOpConversion(LLVMTypeConverter &typeConverter, int computeCapability,
-                     PatternBenefit benefit)
+  ReduceOpConversion(LLVMTypeConverter &typeConverter,
+                     const TargetInfoBase &targetInfo, PatternBenefit benefit)
       : ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp>(typeConverter,
                                                                   benefit),
-        computeCapability(computeCapability) {}
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
@@ -79,7 +76,7 @@ public:
   }
 
 private:
-  int computeCapability;
+  const TargetInfoBase &targetInfo;
 
   void accumulate(ConversionPatternRewriter &rewriter, Region &combineOp,
                   SmallVector<Value> &acc, ValueRange cur, bool isFirst) const {
@@ -136,43 +133,6 @@ private:
     barrier();
   }
 
-  // Check if the reduction can use a redux op and return the kind.
-  std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op) const {
-    if (computeCapability < 80)
-      return std::nullopt;
-    if (op.getNumOperands() != 1 || op.getNumResults() != 1)
-      return std::nullopt;
-    Block *block = &(*op.getCombineOp().begin());
-    Operation *yield = block->getTerminator();
-    Operation *reduceOp = yield->getOperand(0).getDefiningOp();
-    if (!reduceOp || reduceOp->getNumOperands() != 2 ||
-        reduceOp->getNumResults() != 1)
-      return std::nullopt;
-    auto intType = reduceOp->getResultTypes()[0].dyn_cast<IntegerType>();
-    if (!intType || intType.getWidth() > 32)
-      return std::nullopt;
-    if (reduceOp->getOperand(0) != block->getArgument(0) ||
-        reduceOp->getOperand(1) != block->getArgument(1))
-      return std::nullopt;
-    if (isa<arith::AddIOp>(reduceOp))
-      return NVVM::ReduxKind::ADD;
-    if (isa<arith::AndIOp>(reduceOp))
-      return NVVM::ReduxKind::AND;
-    if (isa<arith::OrIOp>(reduceOp))
-      return NVVM::ReduxKind::OR;
-    if (isa<arith::XOrIOp>(reduceOp))
-      return NVVM::ReduxKind::XOR;
-    if (isa<arith::MinSIOp>(reduceOp))
-      return NVVM::ReduxKind::MIN;
-    if (isa<arith::MinUIOp>(reduceOp))
-      return NVVM::ReduxKind::UMIN;
-    if (isa<arith::MaxSIOp>(reduceOp))
-      return NVVM::ReduxKind::MAX;
-    if (isa<arith::MaxUIOp>(reduceOp))
-      return NVVM::ReduxKind::UMAX;
-    return std::nullopt;
-  }
-
   // Reduce along op axis for elements that are in the same thread. The
   // accumulated value is stored in accs.
   void reduceWithinThreads(
@@ -205,45 +165,14 @@ private:
   void warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                   SmallVector<Value> &acc, triton::ReduceOp op,
                   unsigned numLaneToReduce, unsigned interleave) const {
-    if (auto kind = matchReduxKind(op)) {
-      // Based on benchmarking on A100 redux op gives a speed up only when doing
-      // a single reduction (not partitioned) and when the mask is static.
-      // Therefore we currently only enable it to reduce across all the lanes.
-      if (numLaneToReduce == 32) {
-        assert(acc.size() == 1);
-        Value mask = i32_val(0xFFFFFFFF);
-        // Even though we currently don't use redux for partitioned reduction
-        // the code below supports it in case we want to tweak the heuristic.
-        if (numLaneToReduce < 32) {
-          // For partitioned reduction we need to calculate the mask so that
-          // each group of numLaneToReduce threads has the correct mask.
-          unsigned bitmask = (1 << numLaneToReduce) - 1;
-          Value threadId = getThreadId(rewriter, loc);
-          Value laneId = urem(threadId, i32_val(32));
-          mask = shl(i32_val(bitmask),
-                     and_(laneId, i32_val(~(numLaneToReduce - 1))));
-        }
-        for (unsigned i = 0; i < acc.size(); ++i) {
-          unsigned bitwidth = acc[i].getType().cast<IntegerType>().getWidth();
-          if (bitwidth < 32) {
-            if (*kind == NVVM::ReduxKind::MIN || *kind == NVVM::ReduxKind::MAX)
-              acc[i] = sext(i32_ty, acc[i]);
-            else
-              acc[i] = zext(i32_ty, acc[i]);
-          }
-          acc[i] = rewriter.create<NVVM::ReduxOp>(loc, acc[i].getType(), acc[0],
-                                                  *kind, mask);
-          if (bitwidth < 32)
-            acc[i] = trunc(int_ty(bitwidth), acc[i]);
-        }
-        return;
-      }
-    }
-
+    auto success =
+        targetInfo.warpReduce(rewriter, loc, acc, op, numLaneToReduce);
+    if (success)
+      return;
     for (unsigned N = numLaneToReduce / 2; N > 0; N >>= 1) {
       SmallVector<Value> shfl(acc.size());
       for (unsigned i = 0; i < acc.size(); ++i) {
-        shfl[i] = shflSync(loc, rewriter, acc[i], N * interleave);
+        shfl[i] = targetInfo.shuffleXor(loc, rewriter, acc[i], N * interleave);
       }
       accumulate(rewriter, op.getCombineOp(), acc, shfl, false);
     }
@@ -330,10 +259,10 @@ private:
     triton::ReduceOp op = helper.getOperation();
     Location loc = op.getLoc();
     Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = i32_val(32);
+    auto srcLayout = helper.getSrcLayout();
+    Value warpSize = i32_val(triton::gpu::getWarpSize(srcLayout));
     Value warpId = udiv(threadId, warpSize);
     Value laneId = urem(threadId, warpSize);
-    auto srcLayout = helper.getSrcLayout();
     auto srcShape = helper.getSrcShape();
     unsigned axis = op.getAxis();
     auto smemShape = helper.getScratchConfig();
@@ -364,7 +293,7 @@ private:
         auto elemTy = getElementType(op, i);
         Value writePtr = gep(ptr_ty(rewriter.getContext(), 3), elemTy,
                              smemBases[i], writeOffset);
-        storeShared(rewriter, loc, writePtr, acc[i], laneZero);
+        targetInfo.storeShared(rewriter, loc, writePtr, acc[i], laneZero);
       }
     }
   }
@@ -382,7 +311,7 @@ private:
     Location loc = op.getLoc();
 
     Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = i32_val(32);
+    Value warpSize = i32_val(triton::gpu::getWarpSize(srcLayout));
     Value laneId = urem(threadId, warpSize);
     Value zero = i32_val(0);
 
@@ -399,7 +328,8 @@ private:
         auto elemTy = getElementType(op, i);
         Value readPtr = gep(ptr_ty(rewriter.getContext(), 3), elemTy,
                             smemBases[i], readOffset);
-        acc[i] = loadShared(rewriter, loc, readPtr, elemTy, threadIsNeeded);
+        acc[i] = targetInfo.loadShared(rewriter, loc, readPtr, elemTy,
+                                       threadIsNeeded);
       }
       warpReduce(rewriter, loc, acc, op, sizeInterWarps, 1 /* interleave */);
       // only the first thread in each sizeInterWarps is writing
@@ -417,7 +347,7 @@ private:
       Value pred = and_(threadIsNeeded, laneIdModSizeInterWarpsIsZero);
 
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-        storeShared(rewriter, loc, writePtrs[i], acc[i], pred);
+        targetInfo.storeShared(rewriter, loc, writePtrs[i], acc[i], pred);
       }
 
       if (round != elemsPerThread - 1) {
@@ -472,8 +402,8 @@ private:
 };
 } // namespace
 
-void mlir::triton::NVIDIA::populateReduceOpToLLVMPatterns(
+void mlir::triton::populateReduceOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int computeCapability, PatternBenefit benefit) {
-  patterns.add<ReduceOpConversion>(typeConverter, computeCapability, benefit);
+    const TargetInfoBase &targetInfo, PatternBenefit benefit) {
+  patterns.add<ReduceOpConversion>(typeConverter, targetInfo, benefit);
 }

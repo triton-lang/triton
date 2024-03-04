@@ -37,7 +37,7 @@ static SmallVector<Value> computeWarpLevelHistogram(
       Value bitSet = and_(value, i32_val(1 << j));
       Value cmp = icmp_ne(bitSet, zero);
       Value bit =
-          targetInfo.callBallotOp(rewriter, loc, int_ty(numThreadPerWarp), cmp);
+          targetInfo.ballot(rewriter, loc, int_ty(numThreadPerWarp), cmp);
       ballotBits.push_back(bit);
     }
     uint64_t fullMaskValue =

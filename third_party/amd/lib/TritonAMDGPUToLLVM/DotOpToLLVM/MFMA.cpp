@@ -33,9 +33,9 @@ using namespace mlir::triton;
 namespace {
 
 using ::AMD::TritonGPUToLLVMTypeConverter;
-using ::mlir::LLVM::shflSync;
-using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::LLVM::AMD::shuffleXor;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
+using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
@@ -114,7 +114,8 @@ struct DotOpMFMAConversionHelper {
     if (reduceSubBlocks) {
       while (subBlockSize < waveSize) {
         for (int i = 0; i < numScalars; ++i) {
-          Value other_acc = shflSync(loc, rewriter, accScalar[i], subBlockSize);
+          Value other_acc =
+              shuffleXor(loc, rewriter, accScalar[i], subBlockSize);
           if (elemType.isInteger(32))
             accScalar[i] = add(accScalar[i], other_acc);
           else
