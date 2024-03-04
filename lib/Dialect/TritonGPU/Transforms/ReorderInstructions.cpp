@@ -112,12 +112,10 @@ public:
       int opIdx = dstEncoding.getOpIdx();
       if (opIdx != 1)
         return;
-      if (op->getUsers().empty())
+      if (!llvm::hasSingleElement(op->getUsers()))
         return;
       auto dotUser = dyn_cast<triton::DotOp>(*op->user_begin());
       if (!dotUser)
-        return;
-      if (std::distance(op->user_begin(), op->user_end()) > 1)
         return;
       auto AOp =
           dotUser.getOperand(0).getDefiningOp<triton::gpu::LocalLoadOp>();
