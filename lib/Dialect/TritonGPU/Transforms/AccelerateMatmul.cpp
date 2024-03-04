@@ -20,8 +20,7 @@ using ttg::DotOperandEncodingAttr;
 using ttg::NvidiaMmaEncodingAttr;
 using ttg::SliceEncodingAttr;
 
-// higher mma version is preferred, will fallback to lower version if not
-// supported
+// Get the highest version supported for the hardware and the dot.
 static int getMMAVersionSafe(int computeCapability, tt::DotOp op) {
   int baseVersion = 0;
   if (computeCapability < 75) {
@@ -397,7 +396,7 @@ public:
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }
-    // now that we pick the mma type decompose dot that are not natively
+    // Now that we have picked the mma type, decompose dot that are not natively
     // supported.
     decomposeMixedModeDotOp(m);
   }

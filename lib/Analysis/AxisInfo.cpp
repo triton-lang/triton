@@ -82,9 +82,8 @@ public:
   bool match(Operation *op) final { return isa<OpTy>(op); }
 
   virtual AxisInfo
-  getAxisInfo(OpTy op, ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) {
-    llvm_unreachable("Unimplemented getAxisInfo");
-  }
+  getAxisInfo(OpTy op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) = 0;
 };
 
 // Binary operations
@@ -1008,7 +1007,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   CastOpAxisInfoVisitor<mlir::UnrealizedConversionCastOp>,
                   CastOpAxisInfoVisitor<triton::BitcastOp>>();
   // TODO: Remove rules for LLVM::ConstantOp, LLVM::AddOp
-  // when scf.for supports integers induction variable
+  // when scf.for supports integer induction variables
   visitors.append<MakeRangeOpAxisInfoVisitor>();
   visitors.append<ConstantOpAxisInfoVisitor<arith::ConstantOp>,
                   ConstantOpAxisInfoVisitor<LLVM::ConstantOp>>();

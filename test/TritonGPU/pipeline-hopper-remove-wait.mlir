@@ -114,6 +114,10 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
       %116 = arith.truncf %115 : tensor<128x64xf32, #mma> to tensor<128x64xf16, #mma>
       %117 = triton_gpu.local_alloc %112 : (tensor<64x128xf16, #blocked>) -> !tt.memdesc<64x128xf16, #shared>
       %118 = triton_gpu.convert_layout %116 : tensor<128x64xf16, #mma> -> tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>>
+      // The first dot gets converted to dot-async + wait.  The second one
+      // doesn't have a wait because the first wait is sufficient.
+      // CHECK: triton_nvidia_gpu.dot_async
+      // CHECK: triton_nvidia_gpu.dot_wait {{.*}} {pendings = 0 : i32}
       // CHECK: triton_nvidia_gpu.dot_async
       // CHECK-NOT: triton_nvidia_gpu.dot_wait
       // CHECK: scf.yield
