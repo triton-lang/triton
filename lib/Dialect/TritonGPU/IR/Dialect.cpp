@@ -1232,9 +1232,10 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
 
 void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
-          << "versionMajor = " << getVersionMajor()                   //
-          << ", versionMinor = " << getVersionMinor()                 //
-          << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]" //
+          << "versionMajor = " << getVersionMajor()                      //
+          << ", versionMinor = " << getVersionMinor()                    //
+          << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]"    //
+          << ", instrShape = [" << ArrayRef{getMDim(), getNDim()} << "]" //
           << ", isTransposed = " << getIsTransposed();
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getWarpsPerCTA().size());
