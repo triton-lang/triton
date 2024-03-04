@@ -330,14 +330,6 @@ Value linearize(ConversionPatternRewriter &rewriter, Location loc,
 Value linearize(ConversionPatternRewriter &rewriter, Location loc,
                 ArrayRef<Value> multiDim, ArrayRef<unsigned> shape);
 
-Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-               int i);
-Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 int i);
-Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  int i);
-Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  Value i);
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content);
 
