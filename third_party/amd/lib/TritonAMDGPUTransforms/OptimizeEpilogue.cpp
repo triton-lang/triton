@@ -59,20 +59,22 @@ bool isOneOperandElementwiseOp(Operation *op) {
   return false;
 }
 
-// convert(val) : mma -> blocked
+// convert(val) : xmma -> blocked
 // elementWiseOp(val) : blocked
 // ...
 // elementWiseOp(val) : blocked
 // tt.store(ptr, val, mask, ...) : blocked
 // ==>
-// convert(ptr) : blocked -> mma
-// convert(mask) : blocked -> mma
-// elementWiseOp(val) : mma
+// convert(ptr) : blocked -> xmma
+// convert(mask) : blocked -> xmma
+// elementWiseOp(val) : xmma
 // ...
-// elementWiseOp(val) : mma
-// tt.store(ptr, val, mask, ...) : mma
+// elementWiseOp(val) : xmma
+// tt.store(ptr, val, mask, ...) : xmma
 //
-// Store with mma layout directly
+// Store with xmma layout directly
+//
+// xmma layout is either MFMA or WMMA
 class BypassEpilogueSMEM : public mlir::RewritePattern {
 
 public:
