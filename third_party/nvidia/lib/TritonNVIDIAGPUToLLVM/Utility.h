@@ -35,14 +35,14 @@ namespace LLVM {
 namespace NVIDIA {
 
 Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr);
-Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-               int i);
-Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+Value shuffleXor(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i);
-Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  int i);
-Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  Value i);
+Value shuffleUp(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                int i);
+Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                 int i);
+Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                 Value i);
 
 static Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
                       ConversionPatternRewriter &rewriter) {

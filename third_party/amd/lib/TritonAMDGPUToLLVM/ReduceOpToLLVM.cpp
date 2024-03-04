@@ -11,7 +11,7 @@ using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
 using ::AMD::TritonGPUToLLVMTypeConverter;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::linearize;
-using ::mlir::LLVM::AMD::shflSync;
+using ::mlir::LLVM::AMD::shuffleXor;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
@@ -267,7 +267,7 @@ private:
       }
 #endif
       for (unsigned i = 0; i < acc.size(); ++i) {
-        shfl[i] = shflSync(loc, rewriter, acc[i], shuffleIdx * interleave);
+        shfl[i] = shuffleXor(loc, rewriter, acc[i], shuffleIdx * interleave);
       }
       accumulate(rewriter, op.getCombineOp(), acc, shfl, false);
     }

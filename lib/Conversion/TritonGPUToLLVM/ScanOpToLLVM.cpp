@@ -87,8 +87,7 @@ static void warpScan(SmallVector<SmallVector<Value>> &srcValues,
     for (unsigned i = 1; i <= scanDim / 2; i <<= 1) {
       SmallVector<Value> shfl(acc.size());
       for (unsigned j = 0; j < acc.size(); ++j) {
-        shfl[j] =
-            targetInfo.shflUpSync(loc, rewriter, acc[j], i * threadStride);
+        shfl[j] = targetInfo.shuffleUp(loc, rewriter, acc[j], i * threadStride);
       }
       SmallVector<Value> tempAcc =
           accumulate(rewriter, helper.getCombineOp(), shfl, acc);
@@ -229,7 +228,7 @@ static void AddPartialReduce(SmallVector<SmallVector<Value>> &srcValues,
     // Update the rest of the contiguous elements.
     SmallVector<Value> lastElement(helper.getNumOperands());
     for (unsigned i = 0; i < helper.getNumOperands(); ++i) {
-      auto elem = targetInfo.shflUpSync(loc, rewriter, temp[i], threadStride);
+      auto elem = targetInfo.shuffleUp(loc, rewriter, temp[i], threadStride);
       lastElement[i] = select(maskFirstLane, accumulator.maskedAcc[i], elem);
     }
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
@@ -301,12 +300,12 @@ static void AddPartialReduceOneWarp(SmallVector<SmallVector<Value>> &srcValues,
     auto lastElement = srcValues[srcIndex];
     if (scanDim > 1) {
       for (unsigned i = 0; i < helper.getNumOperands(); ++i) {
-        lastElement[i] = targetInfo.shflUpSync(
+        lastElement[i] = targetInfo.shuffleUp(
             loc, rewriter, srcValues[srcIndex][i], threadStride);
         lastElement[i] = select(maskFirstLane, accumulator[i], lastElement[i]);
         if (numScanBlocks > 1)
           // Update accumulator with the value from the last lane.
-          accumulator[i] = targetInfo.shflIdxSync(
+          accumulator[i] = targetInfo.shuffleIdx(
               loc, rewriter, srcValues[srcIndex][i], laneIdLast);
       }
     }
@@ -463,7 +462,7 @@ flipSrcValues(Location loc, triton::ScanOp op,
     for (unsigned j = 0; j < op.getNumOperands(); ++j) {
       for (unsigned k = iWarpSize / 2; k >= 1; k = k / 2) {
         srcValues[revIndex][j] =
-            targetInfo.shflSync(loc, rewriter, srcValues[revIndex][j], k);
+            targetInfo.shuffleXor(loc, rewriter, srcValues[revIndex][j], k);
       }
       values[i].push_back(srcValues[revIndex][j]);
     }

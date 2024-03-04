@@ -14,14 +14,14 @@ public:
                             Value ptr, Value val, Value pred) const = 0;
   virtual Value loadShared(ConversionPatternRewriter &rewriter, Location loc,
                            Value ptr, Type elemTy, Value pred) const = 0;
-  virtual Value shflSync(Location loc, ConversionPatternRewriter &rewriter,
-                         Value val, int i) const = 0;
-  virtual Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter,
+  virtual Value shuffleXor(Location loc, ConversionPatternRewriter &rewriter,
                            Value val, int i) const = 0;
-  virtual Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter,
-                            Value val, int i) const = 0;
-  virtual Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter,
-                            Value val, Value i) const = 0;
+  virtual Value shuffleUp(Location loc, ConversionPatternRewriter &rewriter,
+                          Value val, int i) const = 0;
+  virtual Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
+                           Value val, int i) const = 0;
+  virtual Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
+                           Value val, Value i) const = 0;
   virtual bool warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                           SmallVector<Value> &acc, triton::ReduceOp op,
                           unsigned numLaneToReduce) const = 0;

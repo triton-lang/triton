@@ -85,24 +85,24 @@ Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
   return builder.launch(rewriter, loc, elemTy);
 }
 
-Value TargetInfo::shflSync(Location loc, ConversionPatternRewriter &rewriter,
-                           Value val, int i) const {
-  return LLVM::NVIDIA::shflSync(loc, rewriter, val, i);
-}
-
-Value TargetInfo::shflUpSync(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::shuffleXor(Location loc, ConversionPatternRewriter &rewriter,
                              Value val, int i) const {
-  return LLVM::NVIDIA::shflUpSync(loc, rewriter, val, i);
+  return LLVM::NVIDIA::shuffleXor(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shflIdxSync(Location loc, ConversionPatternRewriter &rewriter,
-                              Value val, int i) const {
-  return LLVM::NVIDIA::shflIdxSync(loc, rewriter, val, i);
+Value TargetInfo::shuffleUp(Location loc, ConversionPatternRewriter &rewriter,
+                            Value val, int i) const {
+  return LLVM::NVIDIA::shuffleUp(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shflIdxSync(Location loc, ConversionPatternRewriter &rewriter,
-                              Value val, Value i) const {
-  return LLVM::NVIDIA::shflIdxSync(loc, rewriter, val, i);
+Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
+                             Value val, int i) const {
+  return LLVM::NVIDIA::shuffleIdx(loc, rewriter, val, i);
+}
+
+Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
+                             Value val, Value i) const {
+  return LLVM::NVIDIA::shuffleIdx(loc, rewriter, val, i);
 }
 
 bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,

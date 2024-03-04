@@ -13,14 +13,14 @@ public:
                     Value ptr, Value val, Value pred) const override;
   Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
                    Type elemTy, Value pred) const override;
-  Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 int i) const override;
-  Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+  Value shuffleXor(Location loc, ConversionPatternRewriter &rewriter, Value val,
                    int i) const override;
-  Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter,
-                    Value val, int i) const override;
-  Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter,
-                    Value val, Value i) const override;
+  Value shuffleUp(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                  int i) const override;
+  Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                   int i) const override;
+  Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                   Value i) const override;
   bool warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                   SmallVector<Value> &acc, triton::ReduceOp op,
                   unsigned numLaneToReduce) const override;

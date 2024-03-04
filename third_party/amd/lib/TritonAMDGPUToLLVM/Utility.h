@@ -13,14 +13,14 @@ namespace LLVM {
 using namespace mlir::triton;
 namespace AMD {
 
-Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-               int i);
-Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+Value shuffleXor(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i);
-Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  int i);
-Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  Value i);
+Value shuffleUp(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                int i);
+Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                 int i);
+Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                 Value i);
 } // namespace AMD
 
 } // namespace LLVM

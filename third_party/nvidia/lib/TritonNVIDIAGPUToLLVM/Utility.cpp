@@ -9,8 +9,8 @@ namespace LLVM {
 namespace NVIDIA {
 using namespace mlir::triton;
 
-Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
-                     Value val, Value i, NVVM::ShflKind mode, Value clamp) {
+Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
+                    Value val, Value i, NVVM::ShflKind mode, Value clamp) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   if (bits == 64) {
@@ -18,8 +18,8 @@ Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
     Value vec = bitcast(val, vecTy);
     Value val0 = extract_element(f32_ty, vec, i32_val(0));
     Value val1 = extract_element(f32_ty, vec, i32_val(1));
-    val0 = commonShflSync(loc, rewriter, val0, i, mode, clamp);
-    val1 = commonShflSync(loc, rewriter, val1, i, mode, clamp);
+    val0 = shuffleCommon(loc, rewriter, val0, i, mode, clamp);
+    val1 = shuffleCommon(loc, rewriter, val1, i, mode, clamp);
     vec = undef(vecTy);
     vec = insert_element(vecTy, vec, val0, i32_val(0));
     vec = insert_element(vecTy, vec, val1, i32_val(1));
@@ -42,27 +42,27 @@ Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
   return result;
 }
 
-Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-               int i) {
-  return commonShflSync(loc, rewriter, val, i32_val(i), NVVM::ShflKind::bfly,
-                        i32_val(0x1f));
-}
-
-Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+Value shuffleXor(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i) {
-  return commonShflSync(loc, rewriter, val, i32_val(i), NVVM::ShflKind::up,
-                        i32_val(0x0));
+  return shuffleCommon(loc, rewriter, val, i32_val(i), NVVM::ShflKind::bfly,
+                       i32_val(0x1f));
 }
 
-Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  int i) {
-  return shflIdxSync(loc, rewriter, val, i32_val(i));
+Value shuffleUp(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                int i) {
+  return shuffleCommon(loc, rewriter, val, i32_val(i), NVVM::ShflKind::up,
+                       i32_val(0x0));
 }
 
-Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  Value i) {
-  return commonShflSync(loc, rewriter, val, i, NVVM::ShflKind::idx,
-                        i32_val(0x1f));
+Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                 int i) {
+  return shuffleIdx(loc, rewriter, val, i32_val(i));
+}
+
+Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                 Value i) {
+  return shuffleCommon(loc, rewriter, val, i, NVVM::ShflKind::idx,
+                       i32_val(0x1f));
 }
 
 Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr) {

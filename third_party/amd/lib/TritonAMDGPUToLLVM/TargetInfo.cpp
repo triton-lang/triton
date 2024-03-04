@@ -6,9 +6,9 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 using namespace mlir;
 namespace AMD {
-static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
-                            Value val, Value i, int strideInt,
-                            NVVM::ShflKind mode, Value clamp) {
+static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
+                           Value val, Value i, int strideInt,
+                           NVVM::ShflKind mode, Value clamp) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   // On AMD, the ds_swizzle_b32 and ds_permute_b32 instructions work on
@@ -20,7 +20,7 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
     if (bits < 32)
       val = sext(i32_ty, val);
 
-    val = commonShflSync(loc, rewriter, val, i, strideInt, mode, clamp);
+    val = shuffleCommon(loc, rewriter, val, i, strideInt, mode, clamp);
 
     if (bits < 32)
       val = trunc(int_ty(bits), val);
@@ -34,8 +34,8 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
     Value vec = bitcast(val, vecTy);
     Value val0 = extract_element(f32_ty, vec, i32_val(0));
     Value val1 = extract_element(f32_ty, vec, i32_val(1));
-    val0 = commonShflSync(loc, rewriter, val0, i, strideInt, mode, clamp);
-    val1 = commonShflSync(loc, rewriter, val1, i, strideInt, mode, clamp);
+    val0 = shuffleCommon(loc, rewriter, val0, i, strideInt, mode, clamp);
+    val1 = shuffleCommon(loc, rewriter, val1, i, strideInt, mode, clamp);
     vec = undef(vecTy);
     vec = insert_element(vecTy, vec, val0, i32_val(0));
     vec = insert_element(vecTy, vec, val1, i32_val(1));
@@ -115,24 +115,24 @@ Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
   return load(elemTy, ptr);
 }
 
-Value TargetInfo::shflSync(Location loc, ConversionPatternRewriter &rewriter,
-                           Value val, int i) const {
-  return LLVM::AMD::shflSync(loc, rewriter, val, i);
-}
-
-Value TargetInfo::shflUpSync(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::shuffleXor(Location loc, ConversionPatternRewriter &rewriter,
                              Value val, int i) const {
-  return LLVM::AMD::shflUpSync(loc, rewriter, val, i);
+  return LLVM::AMD::shuffleXor(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shflIdxSync(Location loc, ConversionPatternRewriter &rewriter,
-                              Value val, int i) const {
-  return LLVM::AMD::shflIdxSync(loc, rewriter, val, i);
+Value TargetInfo::shuffleUp(Location loc, ConversionPatternRewriter &rewriter,
+                            Value val, int i) const {
+  return LLVM::AMD::shuffleUp(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shflIdxSync(Location loc, ConversionPatternRewriter &rewriter,
-                              Value val, Value i) const {
-  return LLVM::AMD::shflIdxSync(loc, rewriter, val, i);
+Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
+                             Value val, int i) const {
+  return LLVM::AMD::shuffleIdx(loc, rewriter, val, i);
+}
+
+Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
+                             Value val, Value i) const {
+  return LLVM::AMD::shuffleIdx(loc, rewriter, val, i);
 }
 
 bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
