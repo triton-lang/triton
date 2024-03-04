@@ -1972,9 +1972,6 @@ def roll(a1, b1_last, b1_cur, a2, b2_last, b2_cur):
 def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, device):
     check_type_supported(dtype_str, device)
 
-    if is_hip() and reverse:
-        pytest.skip("TODO reverse scan (added in https://github.com/openai/triton/pull/3177) not support on HIP")
-
     # triton kernel
     @triton.jit
     def kernel(X, Y, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, AXIS: tl.constexpr):
