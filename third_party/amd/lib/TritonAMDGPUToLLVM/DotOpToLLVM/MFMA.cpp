@@ -192,21 +192,22 @@ struct DotOpMFMAConversionHelper {
     auto aEncoding = aTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
     auto bEncoding = bTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
     int kWidth = aEncoding.getKWidth();
+    auto rank = aTensorTy.getShape().size();
 
     auto repA =
         mfmaLayout.getMFMARepForOperands(aTensorTy.getShape(), kWidth, 0);
     auto repB =
         mfmaLayout.getMFMARepForOperands(bTensorTy.getShape(), kWidth, 1);
 
-    assert(repA[1] == repB[0]);
+    assert(repA[2] == repB[1]);
 
     Value loadedA = adaptor.getA();
     Value loadedB = adaptor.getB();
     Value loadedC = adaptor.getC();
 
-    auto numRepM = repA[0];
-    auto numRepN = repB[1];
-    auto numRepK = repA[1];
+    auto numRepM = repA[1];
+    auto numRepN = repB[2];
+    auto numRepK = repA[2];
 
     ValueTable ha = getValuesFromDotOperandLayoutStruct(
         loadedA, numRepM, numRepK, kWidth, aTensorTy.getElementType());
