@@ -87,7 +87,7 @@ class HIPBackend(BaseBackend):
 
     def __init__(self, target: tuple) -> None:
         super().__init__(target)
-        assert isinstance(target, tuple) and len(target) == 2
+        assert isinstance(target, tuple) and len(target) == 3
         assert isinstance(target[1], str)
 
     def parse_options(self, opts) -> Any:
