@@ -140,23 +140,5 @@ bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                             unsigned numLaneToReduce) const {
   return false;
 }
-unsigned TargetInfo::getShuffleIndex(triton::ReduceOp op, unsigned N,
-                                     unsigned numLaneToReduce) const {
-  unsigned shuffleIdx = N;
-  auto srcTys = op.getInputTypes();
-  auto inputTy = srcTys[0].cast<RankedTensorType>();
-  auto inMfma =
-      inputTy.getEncoding().dyn_cast<triton::gpu::AMDMfmaEncodingAttr>();
-  if (inMfma && inMfma.getIsTransposed()) {
-    assert(numLaneToReduce == 2 || numLaneToReduce == 4);
-    // for mfma 32x32 adjacent threads in y dimension in transposed MFMA
-    // layout are 32 apart: [[0 0 0 0 32 32 32 32 ...] [1 1 1 1 33 33 33 33
-    // ...] ...]. for mfma 16x16 adjacent threads in y dimension in
-    // transposed MFMA layout are 16 apart: [[0 0 0 0 16 16 16 16 32 32 32
-    // 32 ...] [1 1 1 1 33 33 33 33 ...] ...].
-    const int warpSize = 64;
-    shuffleIdx = warpSize / N / 2;
-  }
-  return shuffleIdx;
-}
+
 } // namespace AMD

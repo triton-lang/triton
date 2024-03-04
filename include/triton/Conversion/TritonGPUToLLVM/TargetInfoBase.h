@@ -25,8 +25,7 @@ public:
   virtual bool warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                           SmallVector<Value> &acc, triton::ReduceOp op,
                           unsigned numLaneToReduce) const = 0;
-  virtual unsigned getShuffleIndex(triton::ReduceOp op, unsigned N,
-                                   unsigned numLaneToReduce) const = 0;
+
   virtual ~TargetInfoBase() {}
 };
 } // namespace mlir::triton
