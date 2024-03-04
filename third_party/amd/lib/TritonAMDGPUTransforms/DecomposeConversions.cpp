@@ -51,7 +51,7 @@ public:
       }
 #ifdef USE_ROCM
       if (auto srcMfmaEncoding =
-              srcEncoding.dyn_cast<triton::gpu::MfmaEncodingAttr>()) {
+              srcEncoding.dyn_cast<triton::gpu::AMDMfmaEncodingAttr>()) {
 
         if (srcMfmaEncoding.getWarpsPerCTA()[1] == 1 &&
             srcMfmaEncoding.getIsTransposed() &&

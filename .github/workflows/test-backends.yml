@@ -20,41 +20,6 @@ jobs:
             echo '::set-output name=matrix-optional::["ubuntu-latest"]'
           fi
 
-
-  Integration-Tests-Shared-Middle-Layer:
-    if: (github.event_name == 'workflow_dispatch') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-
-      - name: Clear cache
-        run: |
-          rm -rf ~/.triton
-
-      - name: Update PATH
-        run: |
-          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
-
-      - name: Check pre-commit
-        run: |
-          python3 -m pip install --upgrade pre-commit
-          python3 -m pre_commit run --all-files --verbose
-
-      - name: Install Triton
-        run: |
-          export TRITON_CODEGEN_TRITON_SHARED=1
-          git submodule update --init --recursive
-          cd python
-          python3 -m pip install --upgrade pip
-          python3 -m pip install cmake==3.24
-          python3 -m pip install ninja
-          python3 -m pip uninstall -y triton
-          python3 setup.py build
-          python3 -m pip install --no-build-isolation -vvv '.[tests]'
-
   Integration-Tests-AMD:
     if: (github.event_name == 'workflow_dispatch') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     needs: Runner-Preparation

@@ -480,8 +480,8 @@ def test_bitwise_op(dtype_x, dtype_y, op, num_ctas, device):
         numpy_expr = None
     if 'float' in dtype_x + dtype_y:
         # The CompilationError must have been caused by a C++ exception with this text.
-        error = triton.CompilationError if not is_interpreter() else tl.semantic.IncompatibleTypeErrorImpl
-        with pytest.raises(error, match='invalid operands of type'):
+        error_class = tl.semantic.IncompatibleTypeErrorImpl if is_interpreter() else triton.CompilationError
+        with pytest.raises(error_class, match='invalid operands of type'):
             _test_binary(dtype_x, dtype_y, expr, numpy_expr='np.array([])', device=device, num_ctas=num_ctas)
     else:
         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
@@ -536,8 +536,10 @@ def test_compare_op(dtype_x, dtype_y, op, mode_x, mode_y, num_ctas, device):
 # ---------------
 # test broadcast
 # ---------------
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype", dtypes_with_bfloat16)
 def test_broadcast(dtype, device):
+    check_type_supported(dtype, device)
 
     @triton.jit
     def broadcast_kernel(x_ptr, y_ptr, y_broadcasted_ptr, M: tl.constexpr, N: tl.constexpr):
@@ -568,6 +570,7 @@ def test_broadcast(dtype, device):
 # ----------
 
 
+@pytest.mark.interpreter
 def test_slice(device):
 
     @triton.jit
@@ -598,6 +601,7 @@ def test_slice(device):
 # ------------------
 
 
+@pytest.mark.interpreter
 def test_invalid_slice(device):
     dst = torch.empty(128, device=device)
 
@@ -605,13 +609,15 @@ def test_invalid_slice(device):
     def _kernel(dst):
         dst[10:]
 
-    with pytest.raises(triton.CompilationError, match='unsupported tensor index'):
+    error_class = ValueError if is_interpreter() else triton.CompilationError
+    with pytest.raises(error_class, match='unsupported tensor index'):
         _kernel[(1, )](dst=dst)
 
 
 # ----------------
 # test expand_dims
 # ----------------
+@pytest.mark.interpreter
 def test_expand_dims(device):
 
     @triton.jit
@@ -659,6 +665,7 @@ def test_expand_dims(device):
     expand_dims_kernel[(1, )](dummy_tensor, N)
 
 
+@pytest.mark.interpreter
 def test_expand_dims_error_cases(device):
 
     @triton.jit
@@ -696,31 +703,39 @@ def test_expand_dims_error_cases(device):
 
     N = 32
     dummy_tensor = torch.empty((), device=device)
+    error_class = ValueError if is_interpreter() else triton.CompilationError
 
-    with pytest.raises(triton.CompilationError) as exc_info:
+    def get_error_message(e):
+        if is_interpreter():
+            return str(e.value)
+        else:
+            return str(e.value.__cause__)
+
+    with pytest.raises(error_class) as exc_info:
         dim_out_of_range1[(1, )](dummy_tensor, N)
-    assert "invalid axis -3" in str(exc_info.value.__cause__)
+    assert "invalid axis -3" in get_error_message(exc_info)
 
-    with pytest.raises(triton.CompilationError) as exc_info:
+    with pytest.raises(error_class) as exc_info:
         dim_out_of_range2[(1, )](dummy_tensor, N)
-    assert "invalid axis 2" in str(exc_info.value.__cause__)
+    assert "invalid axis 2" in get_error_message(exc_info)
 
-    with pytest.raises(triton.CompilationError) as exc_info:
+    with pytest.raises(error_class) as exc_info:
         dim_out_of_range3[(1, )](dummy_tensor, N)
-    assert "invalid axis 1" in str(exc_info.value.__cause__)
+    assert "invalid axis 1" in get_error_message(exc_info)
 
-    with pytest.raises(triton.CompilationError) as exc_info:
+    with pytest.raises(error_class) as exc_info:
         duplicate_dim1[(1, )](dummy_tensor, N)
-    assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", str(exc_info.value.__cause__))
+    assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", get_error_message(exc_info))
 
-    with pytest.raises(triton.CompilationError) as exc_info:
+    with pytest.raises(error_class) as exc_info:
         duplicate_dim2[(1, )](dummy_tensor, N)
-    assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", str(exc_info.value.__cause__))
+    assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", get_error_message(exc_info))
 
 
 # ----------------------------
 # test invalid program id axis
 # ----------------------------
+@pytest.mark.interpreter
 def test_invalid_pid_axis(device):
     dst = torch.empty(128, device=device)
 
@@ -728,14 +743,17 @@ def test_invalid_pid_axis(device):
     def _kernel(dst):
         pid = tl.program_id(20)
 
-    with pytest.raises(triton.CompilationError) as exc_info:
+    error_class = ValueError if is_interpreter() else triton.CompilationError
+    with pytest.raises(error_class) as exc_info:
         _kernel[(1, )](dst)
-    assert re.search(r"program_id axis must be 0, 1, or 2 but got 20", str(exc_info.value.__cause__))
+    error_msg = str(exc_info.value) if is_interpreter() else str(exc_info.value.__cause__)
+    assert re.search(r"program_id axis must be 0, 1, or 2 but got 20", error_msg)
 
 
 # ---------------
 # test where
 # ---------------
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype", dtypes_with_bfloat16 + ["*int32"])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_where(dtype, num_ctas, device):
@@ -787,6 +805,7 @@ def test_where(dtype, num_ctas, device):
         assert (z == to_numpy(z_tri)).all()
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_where_broadcast(num_ctas, device):
 
@@ -1246,11 +1265,6 @@ def test_atomic_rmw_predicate(num_ctas, device):
                                                    for axis in [0, 1]
                                                    for num_ctas in num_ctas_list])
 def test_tensor_atomic_rmw(shape, axis, num_ctas, device):
-    if is_hip():
-        pytest.skip(
-            'test_tensor_atomic_rmw for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
-
     shape0, shape1 = shape
     # triton kernel
 
@@ -1279,10 +1293,6 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, device):
 
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_tensor_atomic_rmw_block(num_ctas, device):
-    if is_hip():
-        pytest.skip(
-            'test_tensor_atomic_rmw_block for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
     shape = (8, 8)
 
     @triton.jit
@@ -1338,8 +1348,6 @@ def test_atomic_cas(sem, num_ctas, device):
 @pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_tensor_atomic_cas(sem, num_ctas, device):
-    if is_hip():
-        pytest.skip('TODO test_tensor_atomic_cas for HIP currently broken')
 
     @triton.jit
     def change_value(X, BLOCK_SIZE: tl.constexpr):
@@ -2472,10 +2480,12 @@ def _welford_combine(mean_1, m2_1, weight_1, mean_2, m2_2, weight_2):
 
 
 layouts = [
-    BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [1, 32], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [1, 32], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [8, 4], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1])
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+    # [HIP] TO DO: some tests are flaky with the layout, so turn off them for now.
+    # BlockedLayout([1, 4], [1, THREADS_PER_WARP], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [THREADS_PER_WARP // 32, 32], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1])
 ]
 
 
@@ -2484,8 +2494,6 @@ layouts = [
 @pytest.mark.parametrize("op", ["sum", "max"])
 @pytest.mark.parametrize("first_axis", [0, 1])
 def test_chain_reduce(M, N, src_layout, op, device, first_axis):
-    if is_hip():
-        pytest.skip("TODO test_chain_reduce is WIP on HIP")
 
     op_str = ""
     if op == "sum":
@@ -2742,9 +2750,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         pytest.skip(
             "numpy.dot with int8 inputs will overflow while tl.dot doesn't because MMA instruction's accumulator is 32-bit"
         )
-
-    if (M, N, K, num_warps) in [(128, 256, 32, 8)]:
-        pytest.skip(f"test_dot{(M, N, K)} not supported on HIP: memory out of resource")
 
     torch.backends.cuda.matmul.allow_tf32 = allow_tf32
 

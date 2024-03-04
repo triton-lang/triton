@@ -261,7 +261,7 @@ void LayoutPropagation::initAnchorLayout() {
           //
           // TODO: rework this heuristic if we can store MFMA layout directly
           // into global memory.
-          if (tensorType.getEncoding().isa<triton::gpu::MfmaEncodingAttr>() &&
+          if (tensorType.getEncoding().isa<triton::gpu::AMDMfmaEncodingAttr>() &&
               !hasConvertToMFMATransisitiveUse(op, tensorType.getEncoding()))
             continue;
 #endif

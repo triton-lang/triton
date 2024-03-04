@@ -18,6 +18,12 @@ class TensorHandle:
     def __bool__(self):
         return bool(self.data.all())
 
+    def get_element_ty(self):
+        dtype = self.dtype
+        while hasattr(dtype, "element_ty"):
+            dtype = dtype.element_ty
+        return dtype
+
     def clone(self):
         return TensorHandle(self.data.copy(), self.dtype)
 
@@ -90,6 +96,7 @@ class Builder:
         if isinstance(tt_dtype, tl.pointer_type):
             return np.dtype(np.uint64)
         np_types = {
+            tl.int1: np.dtype(bool),
             tl.float16: np.dtype(np.float16),
             tl.float32: np.dtype(np.float32),
             tl.float64: np.dtype(np.float64),
@@ -148,6 +155,12 @@ class Builder:
     def get_block_ty(self, dtype, shape):
         return tl.block_type(dtype, shape)
 
+    def get_int1(self, value):
+        return TensorHandle(np.array([value], dtype=bool), tl.int1)
+
+    def get_uint32(self, value):
+        return TensorHandle(np.array([value], dtype=np.uint32), tl.uint32)
+
     def get_int32(self, value):
         return TensorHandle(np.array([value], dtype=np.int32), tl.int32)
 
@@ -182,7 +195,7 @@ class Builder:
         return self.create_masked_store(ptr, val, mask, None, None)
 
     def create_masked_load(self, ptrs, mask, other, cache_modifier, eviction_policy, is_volatile):
-        dtype_tt = ptrs.dtype.element_ty
+        dtype_tt = ptrs.get_element_ty()
         dtype_np = self.np_dtype(dtype_tt)
         if other is None:
             other = TensorHandle(np.ones_like(ptrs.data, dtype=dtype_np), dtype_tt)
@@ -279,8 +292,7 @@ class Builder:
 
     # ternary functions
     def ternary_op(self, lhs, rhs, other, op):
-        ret = TensorHandle(op(lhs.data, rhs.data, other.data), other.dtype)
-        return ret
+        return TensorHandle(op(lhs.data, rhs.data, other.data), other.dtype)
 
     create_select = lambda self, cond, lhs, rhs: self.ternary_op(cond, lhs, rhs, np.where)
 
@@ -297,12 +309,12 @@ class Builder:
     create_iabs = lambda self, arg: self.unary_op(arg, np.abs)
 
     # tensor operators
-    create_reshape = lambda self, arg, shape, allowReorder: TensorHandle(arg.data.reshape(shape), arg.dtype)
+    create_reshape = lambda self, arg, shape, allow_reorder: TensorHandle(arg.data.reshape(shape), arg.dtype)
 
     def create_trans(self, arg, perm):
         return TensorHandle(np.transpose(arg.data, perm), arg.dtype)
 
-    def create_dot(self, a, b, d, allow_tf32, maxNumImpreciseAcc):
+    def create_dot(self, a, b, d, allow_tf32, max_num_imprecise_acc):
         return TensorHandle(np.dot(a.data, b.data) + d.data, d.dtype)
 
     def create_make_range(self, start, stop):
@@ -311,10 +323,11 @@ class Builder:
     # pointer arithmetic
 
     def create_addptr(self, ptr, offset):
-        dtype_tt = ptr.dtype.element_ty
+        dtype_tt = ptr.get_element_ty()
+        element_bitwidth = dtype_tt.primitive_bitwidth
         # int1's bitwidth is 1, but we need to use 8 for pointer arithmetic
-        return TensorHandle(ptr.data + (max(1, dtype_tt.primitive_bitwidth // 8)) * offset.data.astype(np.uint64),
-                            ptr.dtype)
+        element_bytewidth = max(1, element_bitwidth // 8)
+        return TensorHandle(ptr.data + element_bytewidth * offset.data.astype(np.uint64), ptr.dtype)
 
     def create_tensor_pointer_load(self, ptr, boundary_check, padding_option, cache_modifier, eviction_policy,
                                    is_volatile):
@@ -336,11 +349,18 @@ class Builder:
     def create_int_to_ptr(self, val, dst_ty):
         return TensorHandle(val.data.astype(np.uint64), dst_ty)
 
+    def create_ptr_to_int(self, val, dst_ty):
+        return TensorHandle(val.data.astype(np.uint64), dst_ty)
+
     # def create_cat(self, lhs, rhs):
     #     pass
 
     def create_splat(self, arg, shape):
-        return TensorHandle(np.full(shape, arg.data[0], dtype=self.np_dtype(arg.dtype)), arg.dtype)
+        if isinstance(arg.dtype, tl.block_type):
+            return TensorHandle(np.full(shape, arg.data[0], dtype=self.np_dtype(arg.dtype)), arg.dtype)
+        else:  # scalar
+            block_type = tl.block_type(arg.dtype, shape)
+            return TensorHandle(np.full(shape, arg.data, dtype=self.np_dtype(arg.dtype)), block_type)
 
     # def create_atomic_cas(self, ptr, cmp, val, sem):
     #     pass
@@ -349,21 +369,6 @@ class Builder:
     #     pass
 
     # def create_extern_elementwise(self, libName, libPath, symbol, argList, retType, isPure):
-    #     pass
-
-    # def create_reduce(self, operands, axis):
-    #     pass
-
-    # def create_reduce_ret(self, args):
-    #     pass
-
-    # def create_scan(self, operands, axis):
-    #     pass
-
-    # def create_scan_ret(self, args):
-    #     pass
-
-    # def create_ptr_to_int(self, val, type):
     #     pass
 
     # def create_int_to_ptr(self, val, type):
@@ -412,15 +417,18 @@ def _patch_lang_tensor(tensor, builder):
         if tl.core.is_builtin(member):
             _patch_attr(tensor, name, member, builder)
     tensor.__index__ = lambda self: int(self.handle.data)
-    tensor.__bool__ = lambda self: True
 
-    def handle_slice(self, slices):
-        data = self.handle.data.__getitem__(slices)
-        tensor_handle = TensorHandle(data, self.dtype)
-        tensor_type = tl.block_type(self.dtype, data.shape)
-        return tl.core.tensor(tensor_handle, tensor_type)
+    def _get_bool(self):
+        if self is None:
+            return False
+        data = self.handle.data
+        # in triton, only scalars can be converted to booleans
+        # here we need this hack because all scalars are tensors
+        return bool(data) if data.size == 1 else True
 
-    tensor.__getitem__ = handle_slice
+    tensor.__bool__ = lambda self: _get_bool(self)
+    tensor.__repr__ = lambda self: repr(self.handle.data)
+    tensor.__str__ = lambda self: str(self.handle.data)
 
 
 def _patch_lang_core(lang, builder):
@@ -438,19 +446,31 @@ def _patch_lang_core(lang, builder):
             "_sum_combine": np.sum,
         }
         ret = mapping[fn](input.handle.data, axis=axis, keepdims=keep_dims)
+        if ret.shape:
+            ret_type = tl.block_type(input.dtype, ret.shape)
+        else:
+            ret_type = input.dtype
+        return tl.core.tensor(TensorHandle(ret, input.dtype), ret_type)
+
+    def _new_scan(input, axis, combine_fn, keep_dims=False):
+        fn = combine_fn.fn.__name__
+        mapping = {
+            "_sum_combine": np.cumsum,
+        }
+        ret = mapping[fn](input.handle.data, axis=axis)
         ret_type = tl.block_type(input.dtype, ret.shape)
         return tl.core.tensor(TensorHandle(ret, input.dtype), ret_type)
 
-    def _new_reduce_wrapper(mode, input, axis=None, return_indices=False, return_indices_tie_break_left=True,
-                            keep_dims=False):
-        if mode == "min":
-            return _new_reduce(input, axis, tl.standard._elementwise_min, keep_dims)
-        elif mode == "max":
-            return _new_reduce(input, axis, tl.standard._elementwise_max, keep_dims)
-        elif mode == "sum":
-            return _new_reduce(input, axis, tl.standard._sum_combine, keep_dims)
-        else:
+    def _new_reduce_scan_wrapper(mode, input, axis=None, return_indices=False, return_indices_tie_break_left=True,
+                                 keep_dims=False):
+        impl_fn = _new_scan if mode.startswith("cum") else _new_reduce
+        mode = mode[3:] if mode.startswith("cum") else mode
+        combine_fn = {
+            "min": tl.standard._elementwise_min, "max": tl.standard._elementwise_max, "sum": tl.standard._sum_combine
+        }
+        if mode not in combine_fn:
             raise ValueError(f"mode {mode} not supported")
+        return impl_fn(input, axis, combine_fn[mode], keep_dims)
 
     def _new_to_ir(self, builder):
         # We need to specify signedness for integer types in the numpy mode
@@ -493,10 +513,27 @@ def _patch_lang_core(lang, builder):
         raise ValueError(f'fail to convert {self} to ir type')
 
     lang.reduce = _new_reduce
-    lang.min = functools.partial(_new_reduce_wrapper, "min")
-    lang.max = functools.partial(_new_reduce_wrapper, "max")
-    lang.sum = functools.partial(_new_reduce_wrapper, "sum")
-    lang.static_range = lambda start, stop, step: range(start, stop, step)
+    lang.min = functools.partial(_new_reduce_scan_wrapper, "min")
+    lang.max = functools.partial(_new_reduce_scan_wrapper, "max")
+    lang.sum = functools.partial(_new_reduce_scan_wrapper, "sum")
+    lang.cumsum = functools.partial(_new_reduce_scan_wrapper, "cumsum")
+
+    # can't just map lang.static_range to `range`, because `tl.static_range`
+    # can get `step` passed by keyword
+    def _static_range(arg1, arg2=None, step=None):
+        if step is None:
+            step = 1
+        if arg2 is None:
+            start, end = 0, arg1
+        else:
+            start, end = arg1, arg2
+        return range(start, end, step)
+
+    def _static_assert(cond, msg=""):
+        assert cond, msg
+
+    lang.static_range = _static_range
+    lang.static_assert = _static_assert
     lang.dtype.to_ir = _new_to_ir
 
 

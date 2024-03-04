@@ -12,6 +12,7 @@
 #include <limits>
 #include <numeric>
 
+using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getContigPerThread;
@@ -20,7 +21,6 @@ using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getUniqueContigPerThread;
-using ::mlir::triton::gpu::MfmaEncodingAttr;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
@@ -109,8 +109,8 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
 
-  if (srcLayout.isa<MfmaEncodingAttr>() &&
-      srcLayout.dyn_cast<MfmaEncodingAttr>().getIsTransposed() &&
+  if (srcLayout.isa<AMDMfmaEncodingAttr>() &&
+      srcLayout.dyn_cast<AMDMfmaEncodingAttr>().getIsTransposed() &&
       dstLayout.isa<DotOperandEncodingAttr>())
     if (isMfmaToDotShortcut(srcTy, dstTy))
       return {};

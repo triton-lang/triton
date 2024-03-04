@@ -23,7 +23,7 @@
 #ifdef USE_ROCM
 
 #include "../DotOpToLLVM.h"
-#include "Utility.h"
+#include "TritonAMDGPUTransforms/MfmaGroup.h"
 
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 
@@ -35,34 +35,13 @@ namespace {
 using ::AMD::TritonGPUToLLVMTypeConverter;
 using ::mlir::LLVM::shflSync;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::MfmaEncodingAttr;
+using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
-
-enum class MatrixCoreType : uint8_t {
-  // D = AB + C
-  FP32_FP8_FP8_FP32,
-  FP32_FP8_BF8_FP32,
-  FP32_BF8_FP8_FP32,
-  FP32_BF8_BF8_FP32,
-  FP32_FP16_FP16_FP32,
-  FP32_BF16_BF16_FP32,
-  FP32_BF16_BF16_FP32_1K,
-  FP32_FP32_FP32_FP32,
-  FP64_FP64_FP64_FP64,
-  INT32_INT8_INT8_INT32,
-  INT32_INT8_INT8_INT32_CDNA3,
-  NOT_APPLICABLE,
-};
-
-struct MFMAInstrDescr {
-  MatrixCoreType coreType;
-  unsigned size;
-};
 
 using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
 
 struct DotOpMFMAConversionHelper {
-  MfmaEncodingAttr mfmaLayout;
+  AMDMfmaEncodingAttr mfmaLayout;
 
   ConversionPatternRewriter &rewriter;
   TritonGPUToLLVMTypeConverter *typeConverter;
@@ -70,7 +49,7 @@ struct DotOpMFMAConversionHelper {
   MLIRContext *ctx{};
 
   explicit DotOpMFMAConversionHelper(
-      MfmaEncodingAttr mfmaLayout, ConversionPatternRewriter &rewriter,
+      AMDMfmaEncodingAttr mfmaLayout, ConversionPatternRewriter &rewriter,
       TritonGPUToLLVMTypeConverter *typeConverter, Location loc)
       : mfmaLayout(mfmaLayout), rewriter(rewriter),
         typeConverter(typeConverter), loc(loc), ctx(mfmaLayout.getContext()) {}
@@ -82,147 +61,21 @@ struct DotOpMFMAConversionHelper {
     return rewriter.create<arith::TruncIOp>(loc, i32_ty, tid);
   }
 
-  Value generateMFMA32Op(MatrixCoreType coreType, Value valA, Value valB,
-                         Value valC) const {
-    auto resType = valC.getType();
-    Value zeroFlag = i32_val(0);
-    switch (coreType) {
-    case MatrixCoreType::FP32_FP8_FP8_FP32:
-      return rewriter.create<ROCDL::mfma_f32_32x32x16_fp8_fp8>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    case MatrixCoreType::FP32_FP8_BF8_FP32:
-      return rewriter.create<ROCDL::mfma_f32_32x32x16_fp8_bf8>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    case MatrixCoreType::FP32_BF8_FP8_FP32:
-      return rewriter.create<ROCDL::mfma_f32_32x32x16_bf8_fp8>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    case MatrixCoreType::FP32_BF8_BF8_FP32:
-      return rewriter.create<ROCDL::mfma_f32_32x32x16_bf8_bf8>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    case MatrixCoreType::FP32_FP16_FP16_FP32:
-      return rewriter.create<ROCDL::mfma_f32_32x32x8f16>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    case MatrixCoreType::FP32_BF16_BF16_FP32:
-      return rewriter.create<ROCDL::mfma_f32_32x32x4bf16>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    case MatrixCoreType::FP32_BF16_BF16_FP32_1K:
-      return rewriter.create<ROCDL::mfma_f32_32x32x8bf16_1k>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    case MatrixCoreType::FP32_FP32_FP32_FP32:
-      return rewriter.create<ROCDL::mfma_f32_32x32x2f32>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    case MatrixCoreType::INT32_INT8_INT8_INT32:
-      return rewriter.create<ROCDL::mfma_i32_32x32x8i8>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    case MatrixCoreType::INT32_INT8_INT8_INT32_CDNA3:
-      return rewriter.create<ROCDL::mfma_i32_32x32x16_i8>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    case MatrixCoreType::FP64_FP64_FP64_FP64:
-      return rewriter.create<ROCDL::mfma_f64_16x16x4f64>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    default:
-      llvm::report_fatal_error("MFMA 32x32 data type not supported");
-    }
-  }
-
-  Value generateMFMA16Op(MatrixCoreType coreType, Value valA, Value valB,
-                         Value valC) const {
-    auto resType = valC.getType();
-    Value zeroFlag = i32_val(0);
-    switch (coreType) {
-    case MatrixCoreType::FP32_FP16_FP16_FP32:
-      return rewriter.create<ROCDL::mfma_f32_16x16x16f16>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    case MatrixCoreType::FP32_BF16_BF16_FP32:
-      return rewriter.create<ROCDL::mfma_f32_16x16x8bf16>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    case MatrixCoreType::FP32_BF16_BF16_FP32_1K:
-      return rewriter.create<ROCDL::mfma_f32_16x16x16bf16_1k>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    case MatrixCoreType::FP32_FP32_FP32_FP32:
-      return rewriter.create<ROCDL::mfma_f32_16x16x4f32>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    case MatrixCoreType::INT32_INT8_INT8_INT32:
-      return rewriter.create<ROCDL::mfma_i32_16x16x16i8>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    case MatrixCoreType::INT32_INT8_INT8_INT32_CDNA3:
-      return rewriter.create<ROCDL::mfma_i32_16x16x32_i8>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    case MatrixCoreType::FP64_FP64_FP64_FP64:
-      return rewriter.create<ROCDL::mfma_f64_16x16x4f64>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    default:
-      llvm::report_fatal_error("MFMA data type not supported");
-    }
-  }
-
-  Value generateMFMA4Op(MatrixCoreType coreType, Value valA, Value valB,
-                        Value valC) const {
-    auto resType = valC.getType();
-    Value zeroFlag = i32_val(0);
-    switch (coreType) {
-    case MatrixCoreType::FP32_FP16_FP16_FP32:
-      return rewriter.create<ROCDL::mfma_f32_4x4x4f16>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    case MatrixCoreType::FP32_BF16_BF16_FP32:
-      return rewriter.create<ROCDL::mfma_f32_4x4x2bf16>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    case MatrixCoreType::FP32_BF16_BF16_FP32_1K:
-      return rewriter.create<ROCDL::mfma_f32_4x4x4bf16_1k>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    case MatrixCoreType::FP32_FP32_FP32_FP32:
-      return rewriter.create<ROCDL::mfma_f32_4x4x1f32>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    case MatrixCoreType::INT32_INT8_INT8_INT32:
-      return rewriter.create<ROCDL::mfma_i32_4x4x4i8>(
-          loc, TypeRange{resType},
-          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
-    default:
-      llvm::report_fatal_error("MFMA4 data type not supported");
-    }
-  }
-
-  Value generateMFMAOp(MFMAInstrDescr mfmaDescr, Value valA, Value valB,
+  Value generateMFMAOp(StringRef mfmaInsnName, Value valA, Value valB,
                        Value valC) const {
-    switch (mfmaDescr.size) {
-    case 32:
-      return generateMFMA32Op(mfmaDescr.coreType, valA, valB, valC);
-      break;
-    case 16:
-      return generateMFMA16Op(mfmaDescr.coreType, valA, valB, valC);
-      break;
-    case 4:
-      return generateMFMA4Op(mfmaDescr.coreType, valA, valB, valC);
-    default:
-      llvm::report_fatal_error("MFMA nonkDim size is not supported");
-    }
-    return Value();
+    auto resType = valC.getType();
+    Value zeroFlag = i32_val(0);
+    OperationState loweredOp(loc, mfmaInsnName);
+    loweredOp.addTypes(resType);
+    loweredOp.addOperands({valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
+    return rewriter.create(loweredOp)->getResult(0);
   }
 
-  int getNumSubmatrices(Type elementType, int nonKDim) const {
-    switch (nonKDim) {
+  int getNumSubmatrices(Type elementType, int mDim, int nDim) const {
+    if (mDim == 64 && nDim == 4 || mDim == 4 && nDim == 64)
+      return 1;
+    assert(mDim == nDim);
+    switch (mDim) {
     case 32:
     case 16:
       return 1;
@@ -238,64 +91,6 @@ struct DotOpMFMAConversionHelper {
       llvm::report_fatal_error("unsupported nonKDim in MFMA dot");
     }
     return -1;
-  }
-
-  // TODO unify this function with Utility.cpp:supportMFMATypes
-  static MatrixCoreType getMatrixCoreTypeFromDot(DotOp op) {
-    auto aOperandTy = op.getA().getType();
-    auto aTensorTy = aOperandTy.cast<RankedTensorType>();
-    auto aElemTy = aTensorTy.getElementType();
-    auto bOperandTy = op.getB().getType();
-    auto bTensorTy = bOperandTy.cast<RankedTensorType>();
-    auto bElemTy = bTensorTy.getElementType();
-
-    auto dotOpEncoding = aTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-    auto mfmaEncoding = dotOpEncoding.getParent().cast<MfmaEncodingAttr>();
-    if (aElemTy.isFloat8E4M3FNUZ() && bElemTy.isFloat8E4M3FNUZ())
-      return MatrixCoreType::FP32_FP8_FP8_FP32;
-    if (aElemTy.isFloat8E4M3FNUZ() && bElemTy.isFloat8E5M2FNUZ())
-      return MatrixCoreType::FP32_FP8_BF8_FP32;
-    if (aElemTy.isFloat8E5M2FNUZ() && bElemTy.isFloat8E4M3FNUZ())
-      return MatrixCoreType::FP32_BF8_FP8_FP32;
-    if (aElemTy.isFloat8E5M2FNUZ() && bElemTy.isFloat8E5M2FNUZ())
-      return MatrixCoreType::FP32_BF8_BF8_FP32;
-    if (aElemTy.isF16())
-      return MatrixCoreType::FP32_FP16_FP16_FP32;
-    if (aElemTy.isF32())
-      return MatrixCoreType::FP32_FP32_FP32_FP32;
-    if (aElemTy.isBF16()) {
-      auto nonKDim = mfmaEncoding.getNonKDim();
-      auto kWidth = dotOpEncoding.getKWidth();
-      if ((nonKDim == 32 || nonKDim == 16 || nonKDim == 4) && kWidth == 4) {
-        return MatrixCoreType::FP32_BF16_BF16_FP32_1K;
-      } else {
-        assert((nonKDim == 32 && kWidth == 2) ||
-               (nonKDim == 16 && kWidth == 2) || (nonKDim == 4 && kWidth == 2));
-        return MatrixCoreType::FP32_BF16_BF16_FP32;
-      }
-    }
-    if (aElemTy.isInteger(8)) {
-      auto nonKDim = mfmaEncoding.getNonKDim();
-      auto kWidth = dotOpEncoding.getKWidth();
-      if ((nonKDim == 32 || nonKDim == 16 || nonKDim == 4) && kWidth == 8) {
-        return MatrixCoreType::INT32_INT8_INT8_INT32_CDNA3;
-      } else {
-        assert((nonKDim == 32 || nonKDim == 16 || nonKDim == 4) && kWidth == 4);
-        return MatrixCoreType::INT32_INT8_INT8_INT32;
-      }
-    }
-    if (aElemTy.isF64())
-      return MatrixCoreType::FP64_FP64_FP64_FP64;
-    return MatrixCoreType::NOT_APPLICABLE;
-  }
-
-  static MFMAInstrDescr getMatrixInstrDescr(DotOp op) {
-    MFMAInstrDescr descr;
-    auto tensorTy = op.getD().getType().cast<RankedTensorType>();
-    auto encoding = tensorTy.getEncoding().cast<MfmaEncodingAttr>();
-    descr.coreType = getMatrixCoreTypeFromDot(op);
-    descr.size = encoding.getNonKDim();
-    return descr;
   }
 
   Value processSubBlocks(int numSubBlocks, Value acc, bool reduceSubBlocks,
@@ -370,9 +165,11 @@ struct DotOpMFMAConversionHelper {
   // Conduct the Dot conversion.
   LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor) const {
     auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
-    auto nonKDim = mfmaLayout.getNonKDim();
-    assert(nonKDim == 32 || nonKDim == 16 || nonKDim == 4);
-    auto mfmaInstrDescr = getMatrixInstrDescr(op);
+    auto mDim = mfmaLayout.getMDim();
+    auto nDim = mfmaLayout.getNDim();
+    auto mfmaVersion = mfmaLayout.getVersionMajor();
+    assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
+           (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
 
     Value a = op.getA();
     Value b = op.getB();
@@ -380,15 +177,24 @@ struct DotOpMFMAConversionHelper {
     auto aTensorTy = a.getType().cast<RankedTensorType>();
     auto bTensorTy = b.getType().cast<RankedTensorType>();
     auto dTensorTy = d.getType().cast<RankedTensorType>();
-    auto elemTy = aTensorTy.getElementType();
+    auto elemTyA = aTensorTy.getElementType();
+    auto elemTyB = bTensorTy.getElementType();
+
+    StringRef mfmaInsnName;
+    auto maybeMfmaInsn =
+        MfmaInsn::selectMfma(mDim, nDim, elemTyA, elemTyB, mfmaVersion);
+    if (failed(maybeMfmaInsn))
+      llvm::report_fatal_error("No match found in MFMA database\n");
+    else
+      mfmaInsnName = (*maybeMfmaInsn).getInsnName();
 
     auto aEncoding = aTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
     auto bEncoding = bTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
     int kWidth = aEncoding.getKWidth();
 
-    auto repA = mfmaLayout.getMFMARepForOperands(aTensorTy.getShape(), elemTy,
+    auto repA = mfmaLayout.getMFMARepForOperands(aTensorTy.getShape(), elemTyA,
                                                  kWidth, 0);
-    auto repB = mfmaLayout.getMFMARepForOperands(bTensorTy.getShape(), elemTy,
+    auto repB = mfmaLayout.getMFMARepForOperands(bTensorTy.getShape(), elemTyB,
                                                  kWidth, 1);
 
     assert(repA[1] == repB[0]);
@@ -412,8 +218,8 @@ struct DotOpMFMAConversionHelper {
     // compute number of output elements that each thread holds for one MFMA
     // instruction. subBlocks
     const int subBlocks =
-        getNumSubmatrices(aTensorTy.getElementType(), nonKDim);
-    auto elemsPerVec = nonKDim * nonKDim * subBlocks / warpSize;
+        getNumSubmatrices(aTensorTy.getElementType(), mDim, nDim);
+    auto elemsPerVec = mDim * nDim * subBlocks / warpSize;
 
     auto vecTy = vec_ty(dstElemTy, elemsPerVec);
     for (int m = 0; m < numRepM; ++m) {
@@ -426,10 +232,9 @@ struct DotOpMFMAConversionHelper {
         }
         acc = zeroAuxiliarBlocks(subBlocks, acc);
         for (size_t k = 0; k < numRepK; k++) {
-          acc =
-              mfmaLayout.getIsTransposed()
-                  ? generateMFMAOp(mfmaInstrDescr, hb[{n, k}], ha[{m, k}], acc)
-                  : generateMFMAOp(mfmaInstrDescr, ha[{m, k}], hb[{n, k}], acc);
+          acc = mfmaLayout.getIsTransposed()
+                    ? generateMFMAOp(mfmaInsnName, hb[{n, k}], ha[{m, k}], acc)
+                    : generateMFMAOp(mfmaInsnName, ha[{m, k}], hb[{n, k}], acc);
         }
         acc = reduceSubBlocks(subBlocks, acc);
         for (unsigned v = 0; v < elemsPerVec; ++v) {
@@ -477,7 +282,7 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   auto cTensorTy = rankedTType(op.getC());
   auto dTensorTy = rankedTType(op.getD());
-  assert(cTensorTy.getEncoding().isa<MfmaEncodingAttr>() &&
+  assert(cTensorTy.getEncoding().isa<AMDMfmaEncodingAttr>() &&
          "Currently, we only support $c with a mfma layout.");
 
   assert(cTensorTy.getShape()[0] == dTensorTy.getShape()[0] &&
@@ -489,7 +294,7 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                         .getType()
                         .cast<RankedTensorType>()
                         .getEncoding()
-                        .cast<MfmaEncodingAttr>();
+                        .cast<AMDMfmaEncodingAttr>();
 
   DotOpMFMAConversionHelper helper(mfmaLayout, rewriter, typeConverter, loc);
 

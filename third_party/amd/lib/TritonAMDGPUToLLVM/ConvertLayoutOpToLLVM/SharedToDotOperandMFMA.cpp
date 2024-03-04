@@ -25,7 +25,7 @@
 #include "../ConvertLayoutOpToLLVM.h"
 #include "Utility.h"
 
-using ::mlir::triton::gpu::MfmaEncodingAttr;
+using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
@@ -315,8 +315,8 @@ std::optional<int> findConstValue(Value val) {
 
 bool fastPathAvailable(const SharedMemoryObject &smemObj,
                        const SharedEncodingAttr &srcEncoding,
-                       const MfmaEncodingAttr &dstEncoding) {
-  if (dstEncoding.getNonKDim() != 32)
+                       const AMDMfmaEncodingAttr &dstEncoding) {
+  if (dstEncoding.getMDim() != 32)
     return false;
   if (srcEncoding.getMaxPhase() > 1)
     return false;
@@ -432,8 +432,8 @@ Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value thread,
             DotOperandEncodingAttr encoding,
             TritonGPUToLLVMTypeConverter *typeConverter, Value tensor,
             const SharedMemoryObject &smemObj) {
-  auto mfmaLayout = encoding.getParent().cast<MfmaEncodingAttr>();
-  auto nonKDim = mfmaLayout.getNonKDim();
+  auto mfmaLayout = encoding.getParent().cast<AMDMfmaEncodingAttr>();
+  auto nonKDim = mfmaLayout.getMDim();
   assert(nonKDim == 32 || nonKDim == 16 || nonKDim == 4);
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 
@@ -577,8 +577,8 @@ Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value thread,
             DotOperandEncodingAttr encoding,
             TritonGPUToLLVMTypeConverter *typeConverter, Value tensor,
             const SharedMemoryObject &smemObj) {
-  auto mfmaLayout = encoding.getParent().cast<MfmaEncodingAttr>();
-  auto nonKDim = mfmaLayout.getNonKDim();
+  auto mfmaLayout = encoding.getParent().cast<AMDMfmaEncodingAttr>();
+  auto nonKDim = mfmaLayout.getMDim();
   assert(nonKDim == 32 || nonKDim == 16 || nonKDim == 4);
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 

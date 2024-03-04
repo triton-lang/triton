@@ -21,6 +21,7 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
@@ -31,18 +32,44 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "TritonAMDGPUTransforms/Passes.h"
-
 
 using namespace mlir;
 
 namespace {
 
+bool isOneOperandElementwiseOp(Operation *op) {
+  if (llvm::isa<arith::ExtFOp, arith::ExtSIOp, arith::ExtUIOp, arith::FPToSIOp,
+                arith::FPToUIOp, arith::NegFOp, arith::SIToFPOp,
+                arith::TruncFOp, arith::TruncIOp, arith::UIToFPOp>(op))
+    return true;
+  if (llvm::isa<math::AbsFOp, math::AbsIOp, math::AtanOp, math::Atan2Op,
+                math::CeilOp, math::CosOp, math::SinOp,
+                math::CountLeadingZerosOp, math::CountTrailingZerosOp,
+                math::CtPopOp, math::ErfOp, math::ExpOp, math::Exp2Op,
+                math::ExpM1Op, math::FloorOp, math::LogOp, math::Log10Op,
+                math::Log1pOp, math::Log2Op, math::RsqrtOp, math::SqrtOp,
+                math::TanhOp>(op))
+    return true;
+  if (llvm::isa<triton::IntToPtrOp, triton::PtrToIntOp, triton::BitcastOp,
+                triton::FpToFpOp>(op))
+    return true;
+  if (auto externElementwiseOp = dyn_cast<triton::ExternElementwiseOp>(op))
+    return op->getNumOperands() == 1 && op->getNumResults() == 1 &&
+           externElementwiseOp.getPure();
+  return false;
+}
+
 // convert(val) : mma -> blocked
+// elementWiseOp(val) : blocked
+// ...
+// elementWiseOp(val) : blocked
 // tt.store(ptr, val, mask, ...) : blocked
 // ==>
 // convert(ptr) : blocked -> mma
 // convert(mask) : blocked -> mma
+// elementWiseOp(val) : mma
+// ...
+// elementWiseOp(val) : mma
 // tt.store(ptr, val, mask, ...) : mma
 //
 // Store with mma layout directly
@@ -68,20 +95,25 @@ public:
         !valType.getEncoding().isa<triton::gpu::BlockedEncodingAttr>())
       return mlir::failure();
 
+    llvm::SmallVector<mlir::Operation *> chainedOps;
+    while (true) {
+      auto chainedOp = val.getDefiningOp();
+      if (llvm::isa<triton::gpu::ConvertLayoutOp>(chainedOp))
+        break;
+      if (!chainedOp->hasOneUse())
+        return mlir::failure();
+      if (!isOneOperandElementwiseOp(chainedOp))
+        return mlir::failure();
+      val = chainedOp->getOperand(0);
+      chainedOps.push_back(chainedOp);
+    }
+
     auto cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(val.getDefiningOp());
     if (!cvtOp)
       return mlir::failure();
 
-#ifdef USE_ROCM
-    auto encoding =
-        cvtOp.getSrc().getType().getEncoding();
-    if (!encoding.isa<triton::gpu::MfmaEncodingAttr>())
-      return mlir::failure();
-#endif
-    if (!cvtOp.getSrc()
-             .getType()
-             .getEncoding()
-             .isa<triton::gpu::MmaEncodingTrait>())
+    auto encoding = cvtOp.getSrc().getType().getEncoding();
+    if (!encoding.isa<triton::gpu::MmaEncodingTrait>())
       return mlir::failure();
 
     if (!cvtOp.getResult().hasOneUse())
@@ -96,6 +128,17 @@ public:
         ptrType.getShape(), ptrType.getElementType(), newEncoding);
     Value newPtr = rewriter.create<triton::gpu::ConvertLayoutOp>(
         ptr.getLoc(), newPtrType, ptr);
+
+    for (auto chainedOp : chainedOps) {
+      auto oldType =
+          chainedOp->getResult(0).getType().cast<mlir::RankedTensorType>();
+      chainedOp->setOperand(0, newVal);
+      newVal = llvm::cast<mlir::TypedValue<RankedTensorType>>(
+          chainedOp->getResult(0));
+      auto newType = mlir::RankedTensorType::get(
+          oldType.getShape(), oldType.getElementType(), newEncoding);
+      newVal.setType(newType);
+    }
 
     Value newMask = mask;
     if (mask) {
@@ -118,7 +161,8 @@ public:
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
 class TritonAMDGPUOptimizeEpiloguePass
-    : public TritonAMDGPUOptimizeEpilogueBase<TritonAMDGPUOptimizeEpiloguePass> {
+    : public TritonAMDGPUOptimizeEpilogueBase<
+          TritonAMDGPUOptimizeEpiloguePass> {
 
 public:
   TritonAMDGPUOptimizeEpiloguePass() = default;
