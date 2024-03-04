@@ -819,9 +819,8 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
     SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx) const;
     SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int opIdx) const;
     unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
-    SmallVector<int64_t> getMFMAElemsPerInstrForOperands(int kWidth, int opIdx) const;
-    SmallVector<int64_t> getMFMARepForOperands(ArrayRef<int64_t> operandShape,
-                                      Type elemType, int kWidth, int opIdx) const;
+    SmallVector<int64_t> getMFMAInstrShapeForOperands(int kWidth, int opIdx) const;
+    SmallVector<int64_t> getMFMARepForOperands(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
 
 
   }];
