@@ -175,13 +175,7 @@ class MmaLayout:
         self.instr_shape = instr_shape
 
     def __str__(self):
-        version = self.version
-        warps_per_cta = str(self.warps_per_cta)
-        ctas_per_cga = str(self.ctas_per_cga)
-        cta_split_num = str(self.cta_split_num)
-        cta_order = str(self.cta_order)
-        instr_shape = str(self.instr_shape)
-        return f"#{GPU_DIALECT}.nvidia_mma<{{versionMajor={version[0]}, versionMinor={version[1]}, warpsPerCTA={warps_per_cta}, CTAsPerCGA={ctas_per_cga}, CTASplitNum={cta_split_num}, CTAOrder={cta_order}, instrShape={instr_shape}}}>"
+        return f"#{GPU_DIALECT}.nvidia_mma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA={self.warps_per_cta}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}, instrShape={self.instr_shape}}}>"
 
 
 class BlockedLayout:
@@ -196,14 +190,7 @@ class BlockedLayout:
         self.cta_order = cta_order
 
     def __str__(self):
-        sz_per_thread = str(self.sz_per_thread)
-        threads_per_warp = str(self.threads_per_warp)
-        warps_per_cta = str(self.warps_per_cta)
-        order = str(self.order)
-        ctas_per_cga = str(self.ctas_per_cga)
-        cta_split_num = str(self.cta_split_num)
-        cta_order = str(self.cta_order)
-        return f"#{GPU_DIALECT}.blocked<{{sizePerThread={sz_per_thread}, threadsPerWarp={threads_per_warp}, warpsPerCTA={warps_per_cta}, order={order}, CTAsPerCGA={ctas_per_cga}, CTASplitNum={cta_split_num}, CTAOrder={cta_order}}}>"
+        return f"#{GPU_DIALECT}.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
 
 
 class SharedLayout:
@@ -218,14 +205,7 @@ class SharedLayout:
         self.cta_order = cta_order
 
     def __str__(self):
-        vec = str(self.vec)
-        per_phase = str(self.per_phase)
-        max_phase = str(self.max_phase)
-        order = str(self.order)
-        ctas_per_cga = str(self.ctas_per_cga)
-        cta_split_num = str(self.cta_split_num)
-        cta_order = str(self.cta_order)
-        return f"#{GPU_DIALECT}.shared<{{vec={vec}, perPhase={per_phase}, maxPhase={max_phase}, order={order}, CTAsPerCGA={ctas_per_cga}, CTASplitNum={cta_split_num}, CTAOrder={cta_order}}}>"
+        return f"#{GPU_DIALECT}.shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
 
 
 @pytest.mark.interpreter
