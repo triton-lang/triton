@@ -40,7 +40,8 @@ Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
         builder.create<mlir::scf::YieldOp>(loc, ValueRange({loadVal}));
       },
       [&](OpBuilder &builder, Location loc) {
-        Value falseVal = bitcast(int_val(width, 0), elemTy);
+        Value falseVal = builder.create<arith::ConstantOp>(
+            loc, elemTy, builder.getZeroAttr(elemTy));
         builder.create<mlir::scf::YieldOp>(loc, ValueRange({falseVal}));
       });
   return loaded.getResult(0);
