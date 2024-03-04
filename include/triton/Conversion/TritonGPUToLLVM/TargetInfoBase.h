@@ -8,8 +8,8 @@ namespace mlir::triton {
 class TargetInfoBase {
 public:
   virtual bool supportMaximumMinimum() const = 0;
-  virtual Value callBallotOp(ConversionPatternRewriter &rewriter, Location loc,
-                             Type type, Value cmp) const = 0;
+  virtual Value ballot(ConversionPatternRewriter &rewriter, Location loc,
+                       Type type, Value cmp) const = 0;
   virtual Value storeShared(ConversionPatternRewriter &rewriter, Location loc,
                             Value ptr, Value val, Value pred) const = 0;
   virtual Value loadShared(ConversionPatternRewriter &rewriter, Location loc,

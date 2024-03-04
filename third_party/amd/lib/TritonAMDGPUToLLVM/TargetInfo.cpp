@@ -94,8 +94,8 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
   return Value();
 }
 bool TargetInfo::supportMaximumMinimum() const { return false; }
-Value TargetInfo::callBallotOp(ConversionPatternRewriter &rewriter,
-                               Location loc, Type type, Value cmp) const {
+Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
+                         Type type, Value cmp) const {
   auto stringAttr = rewriter.getStringAttr("llvm.amdgcn.ballot");
   SmallVector<Value> operands = {cmp};
   Value asmResult =

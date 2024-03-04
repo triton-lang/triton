@@ -7,8 +7,8 @@ class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
   TargetInfo(std::string arch) : arch(arch) {}
   bool supportMaximumMinimum() const override;
-  Value callBallotOp(ConversionPatternRewriter &rewriter, Location loc,
-                     Type type, Value cmp) const override;
+  Value ballot(ConversionPatternRewriter &rewriter, Location loc, Type type,
+               Value cmp) const override;
   Value storeShared(ConversionPatternRewriter &rewriter, Location loc,
                     Value ptr, Value val, Value pred) const override;
   Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,

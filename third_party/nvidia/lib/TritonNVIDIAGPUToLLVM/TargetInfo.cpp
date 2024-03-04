@@ -49,8 +49,8 @@ static std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op) {
 bool TargetInfo::supportMaximumMinimum() const {
   return computeCapability >= 80;
 }
-Value TargetInfo::callBallotOp(ConversionPatternRewriter &rewriter,
-                               Location loc, Type type, Value cmp) const {
+Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
+                         Type type, Value cmp) const {
   Value threadMask = int_val(type.getIntOrFloatBitWidth(), -1);
   return rewriter.create<NVVM::VoteBallotOp>(loc, type, threadMask, cmp);
 }
