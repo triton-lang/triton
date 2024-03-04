@@ -1286,7 +1286,16 @@ def atomic_xchg(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope
 # ===----------------------------------------------------------------------===//
 
 
-def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_num_imprecise_acc: int,
+def _str_to_dot_f32_backend(input_precision, builder):
+    assert input_precision.lower() in builder.options.allowed_dot_input_precisions, \
+        f"input_precision must be one of {builder.options.allowed_dot_input_precisions}. Got {input_precision}"
+    input_precision = input_precision.upper()
+    if input_precision == "TF32X3":
+        input_precision = "TF32x3"
+    return getattr(ir.F32BACKEND, input_precision)
+
+
+def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optional[str], max_num_imprecise_acc: int,
         out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
 
     def assert_dtypes_valid(lhs_dtype, rhs_dtype, options):
@@ -1321,6 +1330,11 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
     if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():
         lhs = cast(lhs, tl.float16, builder)
         rhs = cast(rhs, tl.float16, builder)
+
+    if input_precision is None:
+        input_precision = builder.options.default_dot_input_precision
+
+    f32_backend = _str_to_dot_f32_backend(input_precision, builder)
 
     lhs_rank = len(lhs.shape)
     rhs_rank = len(rhs.shape)
@@ -1363,7 +1377,7 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
         else:
             max_num_imprecise_acc = 0
 
-    return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, acc_handle, allow_tf32, max_num_imprecise_acc), ret_ty)
+    return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, acc_handle, f32_backend, max_num_imprecise_acc), ret_ty)
 
 
 # ===----------------------------------------------------------------------===//
