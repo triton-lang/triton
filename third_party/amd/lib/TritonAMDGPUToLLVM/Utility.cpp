@@ -5,6 +5,15 @@
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 
+namespace {
+enum class ShflKind : uint32_t {
+  bfly = 0,
+  up = 1,
+  down = 2,
+  idx = 3,
+};
+}
+
 namespace mlir {
 
 namespace LLVM {
@@ -12,8 +21,8 @@ using namespace mlir::triton;
 
 namespace AMD {
 static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
-                           Value val, Value i, int strideInt,
-                           NVVM::ShflKind mode, Value clamp) {
+                           Value val, Value i, int strideInt, ShflKind mode,
+                           Value clamp) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   // On AMD, the ds_swizzle_b32 and ds_permute_b32 instructions work on
@@ -63,7 +72,7 @@ static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
   };
 
   switch (mode) {
-  case NVVM::ShflKind::bfly:
+  case ShflKind::bfly:
     if (strideInt > 16) {
       Value threadId =
           rewriter
@@ -84,13 +93,13 @@ static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
       return rewriter.create<ROCDL::DsSwizzleOp>(loc, valType, val, offset);
     }
     break;
-  case NVVM::ShflKind::up: {
+  case ShflKind::up: {
     Value mask = icmp_slt(laneId, i);
     Value delta = sub(laneId, i);
     Value index = select(mask, laneId, delta);
     return bpermute(index);
   }
-  case NVVM::ShflKind::idx:
+  case ShflKind::idx:
     return bpermute(i);
   default:
     assert(false && "Unsupported ShflKind");
@@ -101,13 +110,13 @@ static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
 
 Value shuffleXor(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i) {
-  return shuffleCommon(loc, rewriter, val, i32_val(i), i, NVVM::ShflKind::bfly,
+  return shuffleCommon(loc, rewriter, val, i32_val(i), i, ShflKind::bfly,
                        i32_val(0x1f));
 }
 
 Value shuffleUp(Location loc, ConversionPatternRewriter &rewriter, Value val,
                 int i) {
-  return shuffleCommon(loc, rewriter, val, i32_val(i), i, NVVM::ShflKind::up,
+  return shuffleCommon(loc, rewriter, val, i32_val(i), i, ShflKind::up,
                        i32_val(0x0));
 }
 
@@ -118,8 +127,7 @@ Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
 
 Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  Value i) {
-  return shuffleCommon(loc, rewriter, val, i, 0, NVVM::ShflKind::idx,
-                       i32_val(0x1f));
+  return shuffleCommon(loc, rewriter, val, i, 0, ShflKind::idx, i32_val(0x1f));
 }
 
 } // namespace AMD
