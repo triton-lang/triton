@@ -169,25 +169,25 @@ class MmaLayout:
     def __init__(self, version, warps_per_cta, ctas_per_cga, cta_split_num, cta_order, instr_shape):
         self.version = version
         self.warps_per_cta = warps_per_cta
-        self.ctas_per_cga = str(ctas_per_cga)
-        self.cta_split_num = str(cta_split_num)
-        self.cta_order = str(cta_order)
-        self.instr_shape = str(instr_shape)
+        self.ctas_per_cga = ctas_per_cga
+        self.cta_split_num = cta_split_num
+        self.cta_order = cta_order
+        self.instr_shape = instr_shape
 
     def __str__(self):
-        return f"#{GPU_DIALECT}.nvidia_mma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA={str(self.warps_per_cta)}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}, instrShape={self.instr_shape}}}>"
+        return f"#{GPU_DIALECT}.nvidia_mma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA={self.warps_per_cta}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}, instrShape={self.instr_shape}}}>"
 
 
 class BlockedLayout:
 
     def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order, ctas_per_cga, cta_split_num, cta_order):
-        self.sz_per_thread = str(size_per_thread)
-        self.threads_per_warp = str(threads_per_warp)
-        self.warps_per_cta = str(warps_per_cta)
-        self.order = str(order)
-        self.ctas_per_cga = str(ctas_per_cga)
-        self.cta_split_num = str(cta_split_num)
-        self.cta_order = str(cta_order)
+        self.sz_per_thread = size_per_thread
+        self.threads_per_warp = threads_per_warp
+        self.warps_per_cta = warps_per_cta
+        self.order = order
+        self.ctas_per_cga = ctas_per_cga
+        self.cta_split_num = cta_split_num
+        self.cta_order = cta_order
 
     def __str__(self):
         return f"#{GPU_DIALECT}.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
@@ -196,13 +196,13 @@ class BlockedLayout:
 class SharedLayout:
 
     def __init__(self, vec, per_phase, max_phase, order, ctas_per_cga, cta_split_num, cta_order):
-        self.vec = str(vec)
-        self.per_phase = str(per_phase)
-        self.max_phase = str(max_phase)
-        self.order = str(order)
-        self.ctas_per_cga = str(ctas_per_cga)
-        self.cta_split_num = str(cta_split_num)
-        self.cta_order = str(cta_order)
+        self.vec = vec
+        self.per_phase = per_phase
+        self.max_phase = max_phase
+        self.order = order
+        self.ctas_per_cga = ctas_per_cga
+        self.cta_split_num = cta_split_num
+        self.cta_order = cta_order
 
     def __str__(self):
         return f"#{GPU_DIALECT}.shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
@@ -4377,18 +4377,42 @@ intermediate_layouts = [
 ]
 
 
+def compute_rep_shape(layout):
+    if type(layout) is BlockedLayout:
+        warp_shape = np.multiply(layout.sz_per_thread, layout.threads_per_warp)
+        rep_shape = np.multiply(warp_shape, layout.warps_per_cta)
+        return rep_shape
+    else:
+        assert "TODO: support compute_rep_shape for layout " + str(type(layout))
+
+
+# This function gives a lower bound approximation of scratch buffer shape for convert_layout operation
+def compute_scratch_buffer_shape(src_layout, dst_layout, shape):
+    src_rep_shape = compute_rep_shape(src_layout)
+    dst_rep_shape = compute_rep_shape(dst_layout)
+    full_scratch_shape = np.maximum(src_rep_shape, dst_rep_shape)
+    return np.minimum(full_scratch_shape, shape)
+
+
 @pytest.mark.parametrize("M, N", [[64, 1], [64, 64], [128, 128], [1, 64]])
 @pytest.mark.parametrize("dtype", ['float16'])
 @pytest.mark.parametrize("src_layout", layouts)
 @pytest.mark.parametrize("interm_layout", intermediate_layouts)
 @pytest.mark.parametrize("dst_layout", layouts)
 def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
-    if is_hip():
-        pytest.skip("TODO some tests fail due to out of LDS")
     if (M == 1 or N == 1) and interm_layout:
         pytest.skip("Out of bound access when maxPhase > 1")
     if str(src_layout) == str(dst_layout):
         pytest.skip()
+    if is_hip():
+        scratch_shape = compute_scratch_buffer_shape(src_layout, dst_layout, (M, N))
+        lds_size = 65536
+        # consider int32 dtype in scratch buffer size,
+        # because it is the largest dtype used in convert_layout in this test
+        int32_size = 4
+        # skip even if scratch buffer equal to lds_size, because real scratch buffer is typically larger due to padding
+        if scratch_shape[0] * scratch_shape[1] * int32_size >= lds_size:
+            pytest.skip("Scratch buffer is too large")
 
     layouts = f"""
     #src = {src_layout}
