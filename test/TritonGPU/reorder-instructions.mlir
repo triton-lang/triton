@@ -75,8 +75,8 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
 
 // check that we don't sink convert_layout if it has multi users
 // CHECK-LABEL: convert_cannot_sink
-//       CHECK: triton_gpu.convert_layout %{{.*}} : tensor<32x32xf32, #shared> -> tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
 //       CHECK: triton_gpu.convert_layout %{{.*}} : tensor<32x32xf32, #shared> -> tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+//       CHECK: triton_gpu.convert_layout %{{.*}} : tensor<32x32xf32, #shared> -> tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
 //       CHECK: tt.dot
 //       CHECK: triton_gpu.convert_layout %{{.*}} : tensor<32x32xf32, #shared> -> tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
 //       CHECK: tt.dot
@@ -89,11 +89,13 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     %B = tt.load %arg0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32xf32, #blocked>
     %BS = triton_gpu.convert_layout %B : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #shared>
     %BD = triton_gpu.convert_layout %BS : tensor<32x32xf32, #shared> -> tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
-    %A = tt.load %arg0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32xf32, #blocked>
-    %AS = triton_gpu.convert_layout %A : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #shared>
-    %AD0 = triton_gpu.convert_layout %AS : tensor<32x32xf32, #shared> -> tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    %A0 = tt.load %arg0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32xf32, #blocked>
+    %AS0 = triton_gpu.convert_layout %A0 : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #shared>
+    %AD0 = triton_gpu.convert_layout %AS0 : tensor<32x32xf32, #shared> -> tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
     %12 = tt.dot %AD0, %BD, %cst {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<32x32xf32, #mma>
-    %AD1 = triton_gpu.convert_layout %AS : tensor<32x32xf32, #shared> -> tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    %A1 = tt.load %arg0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32xf32, #blocked>
+    %AS1 = triton_gpu.convert_layout %A1 : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #shared>
+    %AD1 = triton_gpu.convert_layout %AS1 : tensor<32x32xf32, #shared> -> tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
     %13 = tt.dot %AD1, %BD, %cst {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<32x32xf32, #mma>
     tt.return
   }
