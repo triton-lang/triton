@@ -9,10 +9,10 @@
 using namespace mlir;
 namespace mlir::triton::NVIDIA {
 // Check if the reduction can use a redux op and return the kind.
-static std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op) {
-  // TODO: uncomment!
-  // if (computeCapability < 80)
-  //   return std::nullopt;
+static std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op,
+                                                     int computeCapability) {
+  if (computeCapability < 80)
+    return std::nullopt;
   if (op.getNumOperands() != 1 || op.getNumResults() != 1)
     return std::nullopt;
   Block *block = &(*op.getCombineOp().begin());
@@ -108,7 +108,7 @@ Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
 bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce) const {
-  if (auto kind = matchReduxKind(op)) {
+  if (auto kind = matchReduxKind(op, computeCapability)) {
     // Based on benchmarking on A100 redux op gives a speed up only when doing
     // a single reduction (not partitioned) and when the mask is static.
     // Therefore we currently only enable it to reduce across all the lanes.
