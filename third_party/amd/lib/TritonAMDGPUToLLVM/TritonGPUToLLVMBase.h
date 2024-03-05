@@ -339,7 +339,7 @@ public:
         swizzlingByteWidth * 8 / resElemTy.getIntOrFloatBitWidth();
     Value numElemsPerSwizzlingRowVal = i32_val(numElemsPerSwizzlingRow);
     unsigned leadingDimOffset;
-    if (outOrder.size() == 2) {
+    if (outOrder.size() >= 2) {
       leadingDimOffset = numElemsPerSwizzlingRow * srcShapePerCTA[outOrder[1]];
     } else {
       leadingDimOffset = numElemsPerSwizzlingRow;
@@ -357,7 +357,7 @@ public:
       auto idx = srcIndices[elemIdx];
       Value idxCol = idx[outOrder[0]]; // contiguous dimension
       Value idxRow, strideRow;
-      if (outOrder.size() == 2) {
+      if (outOrder.size() >= 2) {
         idxRow = idx[outOrder[1]]; // discontiguous dimension
         strideRow = srcStrides[outOrder[1]];
       } else {
@@ -413,12 +413,14 @@ public:
       colOffOrdered = mul(colOffOrdered, i32_val(minVec));
       Value colOff = add(colOffSwizzled, colOffOrdered);
       // compute non-immediate offset
+      if (outOrder.size() == 3)
+        offset = add(offset, mul(idx[outOrder[2]], srcStrides[outOrder[2]]));
       offset = add(offset, add(rowOff, mul(colOff, strideCol)));
       Value currPtr = gep(dstPtrTy, getTypeConverter()->convertType(resElemTy),
                           dstPtrBase, offset);
       // compute immediate offset
       Value immediateOff;
-      if (outOrder.size() == 2) {
+      if (outOrder.size() >= 2) {
         immediateOff =
             add(mul(i32_val(immedateOffRow), srcStrides[outOrder[1]]),
                 i32_val(immedateOffCol));
@@ -491,8 +493,9 @@ public:
                                 ConversionPatternRewriter &rewriter) const {
     auto srcTy = src.getType().cast<RankedTensorType>();
     auto srcShape = srcTy.getShape();
-    assert(srcShape.size() == 2 &&
-           "Unexpected rank of storeDistributedToShared");
+    auto rank = srcShape.size();
+    assert(rank == 2 ||
+           rank == 3 && "Unexpected rank of storeDistributedToShared");
     auto dstTy = dst.getType().cast<RankedTensorType>();
     auto srcDistributedLayout = srcTy.getEncoding();
     if (auto mmaLayout =
@@ -517,8 +520,8 @@ public:
     auto wordTy = vec_ty(elemTy, minVec);
     Value word;
 
-    SmallVector<Value> srcStrides = {dstStrides[0], dstStrides[1]};
-    SmallVector<Value> offsetVals = {i32_val(0), i32_val(0)};
+    SmallVector<Value, 3> srcStrides(dstStrides);
+    SmallVector<Value, 3> offsetVals(rank, i32_val(0));
     SharedMemoryObject smemObj(smemBase, elemTy, srcStrides, offsetVals);
 
     DenseMap<unsigned, Value> sharedPtrs =

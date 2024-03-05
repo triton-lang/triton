@@ -192,6 +192,12 @@ SmallVector<unsigned> getUniqueContigPerThread(Attribute layout,
   auto rank = shape.size();
   SmallVector<unsigned> ret(rank);
   auto contigPerThread = getContigPerThread(layout);
+
+  llvm::outs() << "Calling getUniqueContigPerThread ... rank = " << rank
+               << "\n";
+  llvm::outs() << "contigPerThread.size() = " << contigPerThread.size() << "\n";
+  llvm::outs() << layout << "\n";
+
   assert(contigPerThread.size() == rank && "Unexpected contigPerThread size");
   for (int d = 0; d < rank; ++d) {
     ret[d] = std::min<unsigned>(shape[d], contigPerThread[d]);

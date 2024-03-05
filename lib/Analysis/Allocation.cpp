@@ -101,6 +101,7 @@ SmallVector<unsigned>
 getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
                              unsigned &outVec) {
   auto repShape = getRepShapeForCvtLayout(op);
+  llvm::outs() << ">>> Calling getScratchConfigForCvtLayout <<<\n";
   if (repShape.empty())
     return repShape;
   auto rank = repShape.size();
