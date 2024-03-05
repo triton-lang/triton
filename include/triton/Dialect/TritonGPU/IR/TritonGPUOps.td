@@ -34,7 +34,7 @@ def TTG_AsyncToken : TTG_Type<"AsyncToken",
   let summary = "async token type";
   let description = [{
     `ttg.async.token` is a type returned by an asynchronous operation.
-    It is used to establish an SSA-based link between the async operation (e.g. AsyncCopy)
+    It is used to establish an SSA-based link between async operations
     and operations that group or synchronize the async operations.
   }];
 }
@@ -124,7 +124,10 @@ def TTG_AsyncCopyToLocalOp : TTG_Op<"async_copy_to_local",
   let summary = "copy data from global memory to local memory asynchronously";
 
   let description = [{
-
+    This operation copies data from global memory to local memory asynchronously.
+    This is analogue to tt.load except the data are copied to local memory pointed
+    by by the memory descriptor instread of a distributed tensor. The rest of the
+    operands are the same as tt.load.
   }];
 
   let arguments = (ins TT_PtrTensor:$src, TT_MemDescType:$dst,
@@ -166,7 +169,7 @@ def TTG_AsyncCopyToLocalOp : TTG_Op<"async_copy_to_local",
 def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "allocate tensor";
   let description = [{
-    This operation allocates buffer in the shared memory and return a descriptor
+    This operation allocates buffer in shared memory and return a descriptor
     containing the address and a view of the buffer.
   }];
   let arguments = (ins Optional<TT_Tensor>:$init);
