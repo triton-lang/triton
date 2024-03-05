@@ -1472,3 +1472,39 @@ module attributes {"triton_gpu.compute-capability" = 70 : i32, "triton_gpu.num-c
     tt.return
   }
 }
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+module attributes {"triton_gpu.compute-capability" = 75 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: convert_single_element
+  // CHECK-NOT: llvm.store
+  // CHECK-NOT: llvm.load
+  // CHECK: llvm.insertvalue
+  // CHECK: llvm.extractvalue
+  tt.func public @convert_single_element() attributes {noinline = false} {
+    %cst = arith.constant dense<1.000000e+03> : tensor<1xf32, #blocked1>
+    %0 = triton_gpu.convert_layout %cst : tensor<1xf32, #blocked1> -> tensor<1xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+module attributes {"triton_gpu.compute-capability" = 75 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: convert_single_element_and_add
+  // CHECK-NOT: llvm.store
+  // CHECK-NOT: llvm.load
+  // CHECK: llvm.insertvalue
+  // CHECK: llvm.extractvalue
+  tt.func public @convert_single_element_and_add() attributes {noinline = false} {
+    %cst = arith.constant dense<1.000000e+03> : tensor<1xf32, #blocked1>
+    %cst2 = arith.constant dense<1.000000e+03> : tensor<1xf32, #blocked>
+    %0 = triton_gpu.convert_layout %cst : tensor<1xf32, #blocked1> -> tensor<1xf32, #blocked>
+    %1 = arith.addf %0, %cst2 : tensor<1xf32, #blocked>
+    tt.return
+  }
+}
