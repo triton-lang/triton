@@ -127,7 +127,7 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
     }
 
     // schedule the waits
-    mlir::triton::insertWaits(getOperation());
+    mlir::triton::updateWaits(getOperation());
 
     // Clean up arithmetic before applying the next level of pipelining to
     // simplify the IR.

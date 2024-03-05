@@ -46,7 +46,7 @@ triton::nvgpu::WGMMAEltType getMmaRetType(Value d) {
 }
 
 triton::nvgpu::WGMMAEltType getMmaOperandType(Value a, bool allowTF32) {
-  auto aTy = a.getType().cast<RankedTensorType>().getElementType();
+  auto aTy = a.getType().cast<TensorOrMemDesc>().getElementType();
   if (aTy.isF16()) {
     return triton::nvgpu::WGMMAEltType::f16;
   } else if (aTy.isBF16()) {
@@ -139,12 +139,12 @@ public:
                        ConversionPatternRewriter &rewriter, Location loc)
       : base(base), shape(shape), warpId(warpId), dimWpt(dimWpt), trans(trans),
         instrShape(instrShape) {
-    auto tensorTy = tensor.getType().cast<RankedTensorType>();
-    auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
+    auto ty = tensor.getType().cast<MemDescType>();
+    auto sharedLayout = ty.getEncoding().cast<SharedEncodingAttr>();
     ord = sharedLayout.getOrder();
     const int perPhase = sharedLayout.getPerPhase();
     const int maxPhase = sharedLayout.getMaxPhase();
-    elemBytes = tensorTy.getElementTypeBitWidth() / 8;
+    elemBytes = ty.getElementTypeBitWidth() / 8;
     elemsPerSwizzlingRow = 128 / perPhase / elemBytes;
     elemsPerSwizzlingRowVal = i32_val(elemsPerSwizzlingRow);
 
@@ -196,14 +196,14 @@ DotOpMmaV3SmemLoader loadA(const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Location loc,
                            const NvidiaMmaEncodingAttr &mmaEncoding,
                            Value tensor, Value smemObjBase, Value thread) {
-  auto aTensorTy = tensor.getType().cast<RankedTensorType>();
-  auto aSharedLayout = aTensorTy.getEncoding().dyn_cast<SharedEncodingAttr>();
+  auto aTy = tensor.getType().cast<TensorOrMemDesc>();
+  auto aSharedLayout = aTy.getEncoding().dyn_cast<SharedEncodingAttr>();
   assert(aSharedLayout && "only support load dot operand from shared.");
   auto instrShape = mmaEncoding.getInstrShape();
   auto wpt = mmaEncoding.getWarpsPerCTA();
   auto aOrd = aSharedLayout.getOrder();
   bool transA = aOrd[0] == 0;
-  auto shapePerCTA = getShapePerCTA(aTensorTy);
+  auto shapePerCTA = getShapePerCTA(aTy);
 
   int numRepM = ceil<unsigned>(shapePerCTA[0], instrShape[0] * wpt[0]);
   int numRepK = ceil<unsigned>(shapePerCTA[1], instrShape[2]);
@@ -233,14 +233,14 @@ DotOpMmaV3SmemLoader loadB(const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Location loc,
                            NvidiaMmaEncodingAttr &mmaEncoding, Value tensor,
                            Value base, Value thread) {
-  auto bTensorTy = tensor.getType().cast<RankedTensorType>();
-  auto bSharedLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto bTy = tensor.getType().cast<MemDescType>();
+  auto bSharedLayout = bTy.getEncoding().cast<SharedEncodingAttr>();
   assert(bSharedLayout && "only support load B from shared.");
   auto instrShape = mmaEncoding.getInstrShape();
   auto wpt = mmaEncoding.getWarpsPerCTA();
   auto bOrd = bSharedLayout.getOrder();
   bool transB = bOrd[0] == 1;
-  auto shapePerCTA = triton::gpu::getShapePerCTA(bTensorTy);
+  auto shapePerCTA = triton::gpu::getShapePerCTA(bTy);
 
   int numRepK = ceil<unsigned>(shapePerCTA[0], instrShape[2]);
   int numRepN = ceil<unsigned>(shapePerCTA[1], instrShape[1] * wpt[1]);
@@ -371,8 +371,8 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          Value loadedA, Value loadedB, Value loadedC,
                          bool allowTF32, uint32_t maxNumImpreciseAcc, bool sync,
                          Value thread) {
-  auto aTensorTy = a.getType().cast<RankedTensorType>();
-  auto bTensorTy = b.getType().cast<RankedTensorType>();
+  auto aTensorTy = a.getType().cast<TensorOrMemDesc>();
+  auto bTensorTy = b.getType().cast<TensorOrMemDesc>();
   auto dTensorTy = d.getType().cast<RankedTensorType>();
   auto aSharedLayout = aTensorTy.getEncoding().dyn_cast<SharedEncodingAttr>();
   auto bSharedLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();

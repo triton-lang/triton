@@ -32,9 +32,7 @@
 // TritonNvidiaGPU depends on Triton
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Traits.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h.inc"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Traits.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Types.h"
 
 #define GET_ATTRDEF_CLASSES

@@ -147,7 +147,7 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     // Convert output types
     SmallVector<Type, 4> newTypes;
     for (auto t : op->getResultTypes()) {
-      bool isAsync = isa<triton::gpu::InsertSliceAsyncOp>(op);
+      bool isAsync = isa<triton::gpu::AsyncCopyGlobalToLocalOp>(op);
       newTypes.push_back(isAsync ? t : getNewType(t, encoding));
     }
 

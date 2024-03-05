@@ -1145,7 +1145,7 @@ loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
   auto dstTy = dst.getType().cast<RankedTensorType>();
   auto dstShape = dstTy.getShape();
   assert(dstShape.size() <= 2 && "Unexpected rank of loadSharedToDistributed");
-  auto srcTy = src.getType().cast<RankedTensorType>();
+  auto srcTy = src.getType().cast<MemDescType>();
   auto dstDistributedLayout = dstTy.getEncoding();
   if (auto mmaLayout = dstDistributedLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
     assert((!mmaLayout.isVolta()) &&
@@ -1197,7 +1197,7 @@ static void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
   auto rank = srcShape.size();
   assert(rank == 2 ||
          rank == 3 && "Unexpected rank of storeDistributedToShared");
-  auto dstTy = dst.getType().cast<RankedTensorType>();
+  auto dstTy = dst.getType().cast<MemDescType>();
   auto srcDistributedLayout = srcTy.getEncoding();
   if (auto mmaLayout = srcDistributedLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
     assert((!mmaLayout.isVolta()) &&

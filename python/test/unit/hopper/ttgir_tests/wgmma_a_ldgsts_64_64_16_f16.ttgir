@@ -31,7 +31,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     %ci0 = arith.constant 0 : i32
     %i1_true = arith.constant 1 : i1
     %i1_false = arith.constant 0 : i1
-    %t = triton_gpu.alloc_tensor : tensor<1x64x16xf16, #shared0>
+    %t = triton_gpu.alloc : tensor<1x64x16xf16, #shared0>
     %mask0 = tt.splat %i1_true : (i1) -> tensor<64x16xi1, #blocked0>
     %t0 = triton_gpu.insert_slice_async %20, %t, %ci0, %mask0 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, type = 1 : i32} : tensor<64x16x!tt.ptr<f16>, #blocked0> -> tensor<1x64x16xf16, #shared0>
     triton_gpu.async_commit_group

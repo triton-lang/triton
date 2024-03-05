@@ -524,22 +524,22 @@ Value composeValuesToDotOperandLayoutStruct(
 }
 
 std::function<void(int, int, int)>
-getLoadMatrixFn(RankedTensorType tensorTy, const SharedMemoryObject &smemObj,
+getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
                 NvidiaMmaEncodingAttr mmaLayout, int warpsPerTile,
                 uint32_t kOrder, int kWidth, SmallVector<int> instrShape,
                 SmallVector<int> matShape, SmallVector<Value> multiDimWarpId,
                 Value lane, ValueTable &vals, bool isA,
                 const LLVMTypeConverter *typeConverter,
                 ConversionPatternRewriter &rewriter, Location loc) {
-  auto shapePerCTA = getShapePerCTA(tensorTy);
-  Type eltTy = tensorTy.getElementType();
+  auto shapePerCTA = getShapePerCTA(descTy);
+  Type eltTy = descTy.getElementType();
   // We assumes that the input operand of Dot should be from shared layout.
   // TODO(Superjomn) Consider other layouts if needed later.
-  auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto sharedLayout = descTy.getEncoding().cast<SharedEncodingAttr>();
   const int perPhase = sharedLayout.getPerPhase();
   const int maxPhase = sharedLayout.getMaxPhase();
   const int vecPhase = sharedLayout.getVec();
-  const int elemBytes = tensorTy.getElementTypeBitWidth() / 8;
+  const int elemBytes = descTy.getElementTypeBitWidth() / 8;
   auto order = sharedLayout.getOrder();
 
   if (kWidth != (4 / elemBytes))
@@ -590,11 +590,11 @@ getLoadMatrixFn(RankedTensorType tensorTy, const SharedMemoryObject &smemObj,
 }
 
 Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
-              RankedTensorType tensorTy, DotOperandEncodingAttr encoding,
+              MemDescType descTy, DotOperandEncodingAttr encoding,
               const SharedMemoryObject &smemObj,
               const LLVMTypeConverter *typeConverter, Value thread, bool isA) {
-  auto shapePerCTA = getShapePerCTA(tensorTy);
-  int bitwidth = tensorTy.getElementTypeBitWidth();
+  auto shapePerCTA = getShapePerCTA(descTy);
+  int bitwidth = descTy.getElementTypeBitWidth();
   auto mmaLayout = encoding.getParent().cast<NvidiaMmaEncodingAttr>();
 
   ValueTable vals;
@@ -624,16 +624,16 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
   std::function<void(int, int, int)> loadFn;
   if (isA)
     loadFn = getLoadMatrixFn(
-        tensorTy, smemObj, mmaLayout, warpsPerTile /*warpsPerTile*/,
-        2 /*kOrder*/, kWidth, {1, mmaInstrM, mmaInstrK} /*instrShape*/,
+        descTy, smemObj, mmaLayout, warpsPerTile /*warpsPerTile*/, 2 /*kOrder*/,
+        kWidth, {1, mmaInstrM, mmaInstrK} /*instrShape*/,
         {1, matShapeM, matShapeK} /*matShape*/,
         {warpB, warpM, warpN} /*multiDimWarpId*/, lane /*laneId*/,
         vals /*vals*/, isA /*isA*/, typeConverter /* typeConverter */,
         rewriter /*rewriter*/, loc /*loc*/);
   else
     loadFn = getLoadMatrixFn(
-        tensorTy, smemObj, mmaLayout, warpsPerTile /*warpsPerTile*/,
-        1 /*kOrder*/, kWidth, {1, mmaInstrK, mmaInstrN} /*instrShape*/,
+        descTy, smemObj, mmaLayout, warpsPerTile /*warpsPerTile*/, 1 /*kOrder*/,
+        kWidth, {1, mmaInstrK, mmaInstrN} /*instrShape*/,
         {1, matShapeK, matShapeN} /*matShape*/,
         {warpB, warpM, warpN} /*multiDimWarpId*/, lane /*laneId*/,
         vals /*vals*/, isA /*isA*/, typeConverter /* typeConverter */,
@@ -726,22 +726,21 @@ Attribute getExpandedEncoding(Attribute encoding) {
     llvm_unreachable("unsupported encoding");
 }
 
-RankedTensorType getExpandedTensor(RankedTensorType tensorTy) {
-  auto shapePerCTA = getShapePerCTA(tensorTy);
+MemDescType getExpandedDesc(MemDescType descTy) {
+  auto shapePerCTA = getShapePerCTA(descTy);
   auto rank = shapePerCTA.size();
   if (rank == 3)
-    return tensorTy;
+    return descTy;
 
-  auto elTy = tensorTy.getElementType();
-  auto shape = tensorTy.getShape();
+  auto elTy = descTy.getElementType();
+  auto shape = descTy.getShape();
   auto expandedShape = SmallVector<int64_t>(3, 1);
   expandedShape[1] = shape[0];
   expandedShape[2] = shape[1];
-  auto encoding = tensorTy.getEncoding();
+  auto encoding = descTy.getEncoding();
   auto expandedEncoding = getExpandedEncoding(encoding);
-  auto expandedTensor =
-      RankedTensorType::get(expandedShape, elTy, expandedEncoding);
-  return expandedTensor;
+  auto expandedDesc = MemDescType::get(expandedShape, elTy, expandedEncoding);
+  return expandedDesc;
 }
 
 SharedMemoryObject
@@ -767,18 +766,18 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread) {
   // Expand shared/dotOp to 3D before calling loadArg.
-  auto tensorTy = tensor.getType().cast<RankedTensorType>();
-  auto expandedTensorTy = getExpandedTensor(tensorTy);
+  auto descTy = tensor.getType().cast<MemDescType>();
+  auto expandedDescTy = getExpandedDesc(descTy);
   auto expandedEncoding =
       getExpandedEncoding(encoding).cast<DotOperandEncodingAttr>();
-  auto expandedSmemObj = getExpandedSharedMemoryObject(rewriter, loc, smemObj,
-                                                       tensorTy.getShape());
+  auto expandedSmemObj =
+      getExpandedSharedMemoryObject(rewriter, loc, smemObj, descTy.getShape());
   if (opIdx == 0)
-    return loadArg(rewriter, loc, expandedTensorTy, expandedEncoding,
+    return loadArg(rewriter, loc, expandedDescTy, expandedEncoding,
                    expandedSmemObj, typeConverter, thread, true);
   else {
     assert(opIdx == 1);
-    return loadArg(rewriter, loc, expandedTensorTy, expandedEncoding,
+    return loadArg(rewriter, loc, expandedDescTy, expandedEncoding,
                    expandedSmemObj, typeConverter, thread, false);
   }
 }

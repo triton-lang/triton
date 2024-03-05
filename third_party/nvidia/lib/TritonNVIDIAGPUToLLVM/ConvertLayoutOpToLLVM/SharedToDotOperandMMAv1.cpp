@@ -100,7 +100,7 @@ static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
   auto wpt = mmaEncoding.getWarpsPerCTA();
 
   auto *ctx = rewriter.getContext();
-  auto tensorTy = tensor.getType().cast<RankedTensorType>();
+  auto tensorTy = tensor.getType().cast<MemDescType>();
   auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
   auto shape = tensorTy.getShape();
   auto order = sharedLayout.getOrder();
@@ -229,7 +229,7 @@ static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
   auto strides = smemObj.strides;
 
   auto *ctx = rewriter.getContext();
-  auto tensorTy = tensor.getType().cast<RankedTensorType>();
+  auto tensorTy = tensor.getType().cast<MemDescType>();
   auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
 
   auto shape = tensorTy.getShape();
