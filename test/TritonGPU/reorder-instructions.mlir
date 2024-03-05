@@ -75,8 +75,8 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
 
 // check that we don't sink convert_layout if it has multi users
 // CHECK-LABEL: convert_cannot_sink
-//       CHECK: triton_gpu.convert_layout %{{.*}} : tensor<32x32xf32, #shared> -> tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
 //       CHECK: triton_gpu.convert_layout %{{.*}} : tensor<32x32xf32, #shared> -> tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+//       CHECK: triton_gpu.convert_layout %{{.*}} : tensor<32x32xf32, #shared> -> tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
 //       CHECK: tt.dot
 //       CHECK: triton_gpu.convert_layout %{{.*}} : tensor<32x32xf32, #shared> -> tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
 //       CHECK: tt.dot
