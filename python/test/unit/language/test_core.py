@@ -3196,9 +3196,6 @@ def test_dot_without_load(dtype_str, device):
     else:
         allow_tf32 = True
 
-    if is_hip() and dtype_str == "float16":
-        pytest.skip("TODO test_dot_without_load[float16] not supported in HIP")
-
     @triton.jit
     def _kernel(out, ALLOW_TF32: tl.constexpr):
         a = GENERATE_TEST_HERE

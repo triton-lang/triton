@@ -39,6 +39,14 @@ struct SplatOpConversion : public ConvertOpToLLVMPattern<triton::SplatOp> {
       for (unsigned i = 0; i < ratio; ++i)
         vec = insert_element(vecType, vec, intCst, int_val(32, i));
       constVal = vec;
+    } else if (mlir::VectorType srcElemTy = srcType.dyn_cast_or_null<mlir::VectorType>()) {
+      // elem is a vector type
+      unsigned size = srcElemTy.getNumElements();
+      Value vec = undef(srcElemTy);
+      for (unsigned i = 0; i < size; ++i) {
+        vec = insert_element(srcElemTy, vec, constVal, i32_val(i));
+      }
+      constVal = vec;
     }
     auto llSrc = bitcast(constVal, srcType);
     size_t elemsPerThread = getTotalElemsPerThread(tensorTy);
