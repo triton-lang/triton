@@ -403,6 +403,13 @@ class Builder:
             ret.offsets[i].data += offsets[i].data
         return ret
 
+    def get_all_ones_value(self, type):
+        np_type = self.np_dtype(type)
+        if "int" in np_type.name:
+            return TensorHandle(np.full(1, -1, dtype=np_type), type)
+        else:
+            raise TypeError(f"unsupported type {type}")
+
 
 def _patch_attr(obj, name, member, builder):
     new_member = lambda *args, member=member, **kwargs: (member(*args, **
@@ -577,7 +584,7 @@ to the mapping in python/triton/interpreter/new_interpreter.py:_patch_lang_math.
     for name, member in inspect.getmembers(math):
         if name in mapping:
             setattr(math, name, make_numpy(name))
-        else:
+        elif callable(member):  # We only wrap functions
             setattr(math, name, make_fallback(name))
 
 

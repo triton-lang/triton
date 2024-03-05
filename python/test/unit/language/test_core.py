@@ -244,7 +244,7 @@ def _test_unary(dtype_x, expr, numpy_expr=None, device='cuda', num_ctas=1):
     z_ref = eval(expr if numpy_expr is None else numpy_expr)
     # triton result
     x_tri = to_triton(x, device=device, dst_type=dtype_x)
-    z_tri = to_triton(np.empty_like(z_ref), device=device, dst_type=dtype_x)
+    z_tri = to_triton(np.empty_like(x), device=device, dst_type=dtype_x)
     kernel[(1, )](z_tri, x_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
     # compare
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
@@ -849,6 +849,7 @@ def test_where_broadcast(num_ctas, device):
 # ---------------
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, expr",
                          [(dtype_x, ' -x') for dtype_x in dtypes_with_bfloat16] + [(dtype_x, ' ~x')
                                                                                    for dtype_x in int_dtypes])
@@ -862,6 +863,7 @@ def test_unary_op(dtype_x, expr, num_ctas, device):
 # ----------------
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, expr, x", [(dtype_x, expr, x)
                                               for dtype_x in ["float32", "float64"]
                                               for expr in ['exp', 'log', 'cos', 'sin']
@@ -875,6 +877,7 @@ def test_math_op(dtype_x, expr, device, x):
 # ----------------
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x", [(dtype_x) for dtype_x in dtypes_with_bfloat16])
 def test_abs(dtype_x, device):
     _test_unary(dtype_x, 'tl.abs(x)', 'np.abs(x) ', device=device)
