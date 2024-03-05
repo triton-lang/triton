@@ -10,6 +10,7 @@ add_triton_library(TritonAMDGPUToLLVM
     TritonGPUToLLVMPass.cpp
     Utility.cpp
     TargetInfo.cpp
+    DecomposeUnsupportedConversions.cpp
 
     DEPENDS
     TritonAMDGPUConversionPassIncGen

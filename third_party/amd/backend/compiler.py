@@ -152,6 +152,7 @@ class HIPBackend(BaseBackend):
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        amd.passes.ttgpuir.add_decompose_unsupported_conversions(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         pm.run(mod)
