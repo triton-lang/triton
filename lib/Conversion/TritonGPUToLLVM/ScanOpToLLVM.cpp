@@ -308,6 +308,8 @@ static void AddPartialReduceOneWarp(SmallVector<SmallVector<Value>> &srcValues,
           accumulator[i] = targetInfo.shuffleIdx(
               loc, rewriter, srcValues[srcIndex][i], laneIdLast);
       }
+    } else if (numScanBlocks > 1) {
+      accumulator = srcValues[srcIndex];
     }
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
       auto laneValue = srcValues[srcIndex - i * elementStride];
