@@ -1542,9 +1542,9 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     %20 = triton_gpu.convert_layout %16 : tensor<32x32x!tt.ptr<f16>, #blocked> -> tensor<32x32x!tt.ptr<f16>, #blocked4>
     %21 = tt.load %20 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32xf16, #blocked4>
     %22 = triton_gpu.convert_layout %21 : tensor<32x32xf16, #blocked4> -> tensor<32x32xf16, #blocked>
-    %23 = triton_gpu.convert_layout %22 : tensor<32x32xf16, #blocked> -> tensor<32x32xf16, #shared>
-    %24 = tt.trans %23 {order=array<i32: 1,0>} : tensor<32x32xf16, #shared> -> tensor<32x32xf16, #shared1>
-    %25 = triton_gpu.convert_layout %24 : tensor<32x32xf16, #shared1> -> tensor<32x32xf16, #blocked>
+    %23 = triton_gpu.local_alloc %22 : (tensor<32x32xf16, #blocked>) -> !tt.memdesc<32x32xf16, #shared>
+    %24 = tt.trans %23 {order=array<i32: 1,0>} : !tt.memdesc<32x32xf16, #shared> -> !tt.memdesc<32x32xf16, #shared1>
+    %25 = triton_gpu.local_load %24 : !tt.memdesc<32x32xf16, #shared1> -> tensor<32x32xf16, #blocked>
     %26 = triton_gpu.convert_layout %19 : tensor<32x32xf16, #blocked> -> tensor<32x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked5}>>
     %27 = triton_gpu.convert_layout %25 : tensor<32x32xf16, #blocked> -> tensor<32x32xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked5}>>
     %28 = triton_gpu.convert_layout %cst : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #blocked5>
@@ -1973,10 +1973,10 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       %67 = tt.load %66 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x64xf16, #blocked>
       %68 = tt.addptr %17, %65 : tensor<256x64x!tt.ptr<f16, 1>, #blocked>, tensor<256x64xi32, #blocked>
       %69 = tt.load %68 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256x64xf16, #blocked>
-      %70 = triton_gpu.convert_layout %69 : tensor<256x64xf16, #blocked> -> tensor<256x64xf16, #shared>
-      %71 = tt.trans %70 {order=array<i32: 1,0>} : tensor<256x64xf16, #shared> -> tensor<64x256xf16, #shared1>
+      %70 = triton_gpu.local_alloc %69 : (tensor<256x64xf16, #blocked>) -> !tt.memdesc<256x64xf16, #shared>
+      %71 = tt.trans %70 {order=array<i32: 1,0>} : !tt.memdesc<256x64xf16, #shared> -> !tt.memdesc<64x256xf16, #shared1>
       %72 = triton_gpu.convert_layout %67 : tensor<32x64xf16, #blocked> -> tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked3}>>
-      %73 = triton_gpu.convert_layout %71 : tensor<64x256xf16, #shared1> -> tensor<64x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked3}>>
+      %73 = triton_gpu.local_load %71 : !tt.memdesc<64x256xf16, #shared1> -> tensor<64x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked3}>>
       %74 = triton_gpu.convert_layout %arg8 : tensor<32x256xf32, #blocked3> -> tensor<32x256xf32, #mma>
       %75 = triton_gpu.convert_layout %72 : tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked3}>> -> tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
       %76 = triton_gpu.convert_layout %73 : tensor<64x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked3}>> -> tensor<64x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>

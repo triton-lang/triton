@@ -28,6 +28,7 @@ include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.td"
 include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
+include "triton/Dialect/Triton/IR/TritonTypeInterfaces.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
@@ -36,10 +37,6 @@ include "mlir/Interfaces/ViewLikeInterface.td"
 
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
-
-def Source1IsSharedEncoding: NativeOpTrait<"Source1IsSharedEncoding">;
-
-def ResultsAreSharedEncoding: NativeOpTrait<"ResultsAreSharedEncoding">;
 
 class TTNG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonNvidiaGPU_Dialect, mnemonic,
@@ -91,8 +88,8 @@ def TTNG_DotAsyncOp : TTNG_Op<"dot_async", [Pure,
         $d = matrix_multiply($a, $b) + $c
     }];
 
-    let arguments = (ins TT_FpIntTensor:$a,
-                         TT_FpIntTensor:$b,
+    let arguments = (ins TT_TensorOrMemDesc:$a,
+                         TT_TensorOrMemDesc:$b,
                          TT_FpIntTensor:$c,
                          BoolAttr:$allowTF32,
                          I32Attr:$maxNumImpreciseAcc);

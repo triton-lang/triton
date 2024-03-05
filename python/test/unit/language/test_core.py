@@ -3099,9 +3099,9 @@ def test_dot_mulbroadcastred(in_dtype, device):
     # operand is in colmajor because transpose is not supported for MMAv3
     # with float32 input.
     if capability[0] >= 9:
-        assert "triton_gpu.async_wait {num = 1 : i32}" in h.asm['ttgir']
+        assert re.search(r"triton_gpu.async_wait %.* {num = 1 : i32}", h.asm["ttgir"]) is not None
     else:
-        assert "triton_gpu.async_wait {num = 2 : i32}" in h.asm['ttgir']
+        assert re.search(r"triton_gpu.async_wait %.* {num = 2 : i32}", h.asm["ttgir"]) is not None
 
 
 @pytest.mark.parametrize("dtype_str", int_dtypes + uint_dtypes + float_dtypes + ['bfloat16'])
@@ -4428,10 +4428,10 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     %12 = triton_gpu.convert_layout %9 : tensor<{M}x{N}xi32, #src> -> tensor<{M}x{N}xi32, #dst>
     %13 = triton_gpu.convert_layout %11 : tensor<{M}x{N}xf16, #src> -> tensor<{M}x{N}xf16, #dst>
     """ if interm_layout is None else f"""
-    %15 = triton_gpu.convert_layout %9 : tensor<{M}x{N}xi32, #src> -> tensor<{M}x{N}xi32, #interm>
-    %16 = triton_gpu.convert_layout %15 : tensor<{M}x{N}xi32, #interm> -> tensor<{M}x{N}xi32, #src>
-    %17 = triton_gpu.convert_layout %11 : tensor<{M}x{N}xf16, #src> -> tensor<{M}x{N}xf16, #interm>
-    %18 = triton_gpu.convert_layout %17 : tensor<{M}x{N}xf16, #interm> -> tensor<{M}x{N}xf16, #src>
+    %15 = triton_gpu.local_alloc %9 : (tensor<{M}x{N}xi32, #src>) -> !tt.memdesc<{M}x{N}xi32, #interm>
+    %16 = triton_gpu.local_load %15 : !tt.memdesc<{M}x{N}xi32, #interm> -> tensor<{M}x{N}xi32, #src>
+    %17 = triton_gpu.local_alloc %11 : (tensor<{M}x{N}xf16, #src>) -> !tt.memdesc<{M}x{N}xf16, #interm>
+    %18 = triton_gpu.local_load %17 : !tt.memdesc<{M}x{N}xf16, #interm> -> tensor<{M}x{N}xf16, #src>
 
     %12 = triton_gpu.convert_layout %16 : tensor<{M}x{N}xi32, #src> -> tensor<{M}x{N}xi32, #dst>
     %13 = triton_gpu.convert_layout %18 : tensor<{M}x{N}xf16, #src> -> tensor<{M}x{N}xf16, #dst>

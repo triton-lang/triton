@@ -410,11 +410,6 @@ bool maybeSharedAllocationOp(Operation *op) {
           dialect->getTypeID() == TypeID::get<tensor::TensorDialect>());
 }
 
-bool maybeAliasOp(Operation *op) {
-  return isa<ExtractSliceOp, triton::TransOp, InsertSliceAsyncOp,
-             tensor::InsertSliceOp>(op);
-}
-
 static bool supportMFMAGranularity(int m, int n, int k) {
   // these limitations are dtype dependent, in future we may relax them
   const static std::pair<int, int> mfmaTypes[2] = {{32, 8}, {16, 16}};
@@ -481,8 +476,8 @@ bool supportMMA(triton::DotOp op, int version) {
   // Refer to mma section for the data type supported by Volta and Hopper
   // Tensor Core in
   // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-fragment-mma-884-f16
-  auto aElemTy = op.getA().getType().cast<RankedTensorType>().getElementType();
-  auto bElemTy = op.getB().getType().cast<RankedTensorType>().getElementType();
+  auto aElemTy = op.getA().getType().getElementType();
+  auto bElemTy = op.getB().getType().getElementType();
   if (version == 3) {
     if (triton::tools::getBoolEnv("DISABLE_MMA_V3"))
       return false;
@@ -517,7 +512,7 @@ bool supportMMA(Value value, int version) {
   // types of both the operands are identical here.
   assert((version == 1 || version == 2 || version == 3) &&
          "Unexpected MMA layout version found");
-  auto elemTy = value.getType().cast<RankedTensorType>().getElementType();
+  auto elemTy = value.getType().cast<TensorOrMemDesc>().getElementType();
   // FP8 is not natively supported on all mma versions but it can always be
   // promoted to fp16 therefore we can always support it.
   bool isFP8 = elemTy.isFloat8E5M2() || elemTy.isFloat8E4M3FN() ||

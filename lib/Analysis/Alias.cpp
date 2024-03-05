@@ -26,20 +26,19 @@ void SharedMemoryAliasAnalysis::visitOperation(
   bool pessimistic = true;
   // These ops may allocate a new shared memory buffer.
   auto result = op->getResult(0);
-  // XXX(Keren): the following ops are always aliasing for now
-  if (isa<triton::gpu::ExtractSliceOp, triton::TransOp>(op)) {
+
+  // Only LocalAllocOp creates a new buffer.
+  if (isa<triton::gpu::LocalAllocOp>(op)) {
+    aliasInfo.insert(result);
+    pessimistic = false;
+  } else if (isa<triton::gpu::MemDescSubviewOp, triton::TransOp>(op)) {
     // extract_slice %src
     // trans %src
     aliasInfo = AliasInfo(operands[0]->getValue());
     pessimistic = false;
-  } else if (isa<tensor::InsertSliceOp, triton::gpu::InsertSliceAsyncOp>(op)) {
-    // insert_slice_async %src, %dst, %index
-    // insert_slice %src into %dst[%offsets]
-    aliasInfo = AliasInfo(operands[1]->getValue());
-    pessimistic = false;
-  } else if (triton::gpu::hasSharedEncoding(result)) {
-    aliasInfo.insert(result);
-    pessimistic = false;
+  } else {
+    assert(!result.getType().isa<triton::MemDescType>() &&
+           "unknown operation creating memory descriptor");
   }
 
   if (pessimistic) {

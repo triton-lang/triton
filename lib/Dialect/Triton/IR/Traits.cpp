@@ -117,6 +117,8 @@ LogicalResult OpTrait::impl::verifyTensorLayouts(Operation *op) {
     if (!layout)
       return success();
 
+    if (isa<ttg::SharedEncodingAttr>(layout))
+      return makeErr() << "Shared layout is not allowed on tensor type.";
     // TODO(jlebar): Currently this only checks blocked layouts, but other
     // layouts also have invariants!
 
