@@ -8,7 +8,6 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
 using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
-using ::AMD::TritonGPUToLLVMTypeConverter;
 
 typedef std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
                                          const SmallVector<Value> &)>
