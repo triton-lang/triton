@@ -66,9 +66,9 @@ public:
               triton::gpu::getOrder(srcEncoding),
               triton::gpu::getCTALayout(srcEncoding),
               srcType.getElementType()));
-      auto tmp = builder.create<triton::gpu::AllocOp>(
+      auto tmp = builder.create<triton::gpu::LocalAllocOp>(
           cvtOp.getLoc(), tmpType, cvtOp.getSrc());
-      auto newConvert = builder.create<triton::gpu::SharedLoad>(
+      auto newConvert = builder.create<triton::gpu::LocalLoadOp>(
           cvtOp.getLoc(), dstType, tmp);
       cvtOp.replaceAllUsesWith(newConvert.getResult());
       cvtOp.erase();

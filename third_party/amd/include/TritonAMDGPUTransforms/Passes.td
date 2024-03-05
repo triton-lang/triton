@@ -7,7 +7,8 @@ def TritonAMDGPUPipeline : Pass<"tritonamdgpu-pipeline", "mlir::ModuleOp"> {
   let summary = "pipeline";
 
   let description = [{
-    Applies software pipelining to loops.
+    Applies software pipelining to loops in the module based on number of stages.
+    This may convert some load into asynchronous loads, and multi-buffer the data.
   }];
 
   let constructor = "mlir::createTritonAMDGPUPipelinePass()";

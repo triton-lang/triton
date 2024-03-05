@@ -10,7 +10,7 @@ using namespace mlir::triton::gpu;
 // blocked -> shared.
 // Swizzling in shared memory to avoid bank conflict. Normally used for
 // A/B operands of dots.
-void lowerDistributedToShared(AllocOp op, AllocOpAdaptor adaptor,
+void lowerDistributedToShared(LocalAllocOp op, LocalAllocOpAdaptor adaptor,
                               const LLVMTypeConverter *typeConverter,
                               ConversionPatternRewriter &rewriter) {
   auto loc = op.getLoc();
@@ -36,11 +36,13 @@ void lowerDistributedToShared(AllocOp op, AllocOpAdaptor adaptor,
                            op.getResult(), smemBase, elemTy, loc, rewriter);
 }
 
-struct AllocOpConversion : public ConvertOpToLLVMPattern<triton::gpu::AllocOp> {
-  using ConvertOpToLLVMPattern<triton::gpu::AllocOp>::ConvertOpToLLVMPattern;
+struct LocalAllocOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::LocalAllocOp> {
+  using ConvertOpToLLVMPattern<
+      triton::gpu::LocalAllocOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::gpu::AllocOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::gpu::LocalAllocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     Value smemBase =
@@ -94,6 +96,6 @@ struct DeallocOpConversion
 void mlir::triton::populateMemoryOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
-  patterns.add<AllocOpConversion>(typeConverter, benefit);
+  patterns.add<LocalAllocOpConversion>(typeConverter, benefit);
   patterns.add<DeallocOpConversion>(typeConverter, benefit);
 }

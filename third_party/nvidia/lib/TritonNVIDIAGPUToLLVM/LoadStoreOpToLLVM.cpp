@@ -748,21 +748,21 @@ struct AtomicRMWOpConversion
   }
 };
 
-struct AsyncSharedCopyConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::AsyncSharedCopy>,
+struct AsyncCopyToLocalOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::AsyncCopyToLocalOp>,
       public LoadStoreConversionBase {
   using ConvertOpToLLVMPattern<
-      triton::gpu::AsyncSharedCopy>::ConvertOpToLLVMPattern;
+      triton::gpu::AsyncCopyToLocalOp>::ConvertOpToLLVMPattern;
 
-  AsyncSharedCopyConversion(LLVMTypeConverter &converter,
-                            ModuleAxisInfoAnalysis &axisAnalysisPass,
-                            PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::gpu::AsyncSharedCopy>(converter,
-                                                             benefit),
+  AsyncCopyToLocalOpConversion(LLVMTypeConverter &converter,
+                               ModuleAxisInfoAnalysis &axisAnalysisPass,
+                               PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::gpu::AsyncCopyToLocalOp>(converter,
+                                                                benefit),
         LoadStoreConversionBase(axisAnalysisPass) {}
 
   LogicalResult
-  matchAndRewrite(triton::gpu::AsyncSharedCopy op, OpAdaptor adaptor,
+  matchAndRewrite(triton::gpu::AsyncCopyToLocalOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     Value res = op.getResult();
@@ -775,7 +775,7 @@ struct AsyncSharedCopyConversion
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     auto srcLayout = srcTy.getEncoding();
     assert((srcLayout.isa<BlockedEncodingAttr, SliceEncodingAttr>() &&
-            "Unexpected srcLayout in AsyncSharedCopyConversion"));
+            "Unexpected srcLayout in AsyncCopyToLocalOpConversion"));
     auto resSharedLayout = dstTy.getEncoding().cast<SharedEncodingAttr>();
     auto srcShape = srcTy.getShape();
     assert((srcShape.size() <= 3) &&
@@ -993,8 +993,8 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
   patterns.add<StoreOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AtomicCASOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AtomicRMWOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<AsyncSharedCopyConversion>(typeConverter, axisInfoAnalysis,
-                                          benefit);
+  patterns.add<AsyncCopyToLocalOpConversion>(typeConverter, axisInfoAnalysis,
+                                             benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
   patterns.add<AsyncBulkCommitGroupOpConversion>(typeConverter, benefit);

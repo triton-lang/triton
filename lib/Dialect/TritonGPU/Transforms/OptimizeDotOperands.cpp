@@ -17,7 +17,7 @@ using namespace triton::gpu;
 
 // Given
 //   convert(trans(src)) #dot_operand ->
-//   convert(shared_load(trans(alloc(src))))
+//   convert(local_load(trans(alloc(src))))
 // change the encoding of the inner convert to a special, swizzled shared
 // encoding.
 class SwizzleShmemConvert : public OpRewritePattern<ConvertLayoutOp> {
@@ -61,14 +61,14 @@ public:
       return failure();
 
     rewriter.setInsertionPoint(trans);
-    auto alloc = rewriter.create<AllocOp>(
+    auto alloc = rewriter.create<LocalAllocOp>(
         trans.getLoc(),
         MemDescType::get(srcTy.getShape(), srcTy.getElementType(),
                          newInnerCvtEnc),
         trans.getSrc());
     auto newTrans = rewriter.create<TransOp>(trans.getLoc(), alloc,
                                              ArrayRef<int32_t>({1, 0}));
-    rewriter.replaceOpWithNewOp<SharedLoad>(trans, sharedLoadTy, newTrans);
+    rewriter.replaceOpWithNewOp<LocalLoadOp>(trans, sharedLoadTy, newTrans);
     return success();
   }
 };
@@ -202,11 +202,11 @@ public:
 //   dot(trans(alloc() #shared2))
 //
 // if dot is an MMAv3 (because MMAv3 allows us to fold transposes).
-class FuseTransHopper : public OpRewritePattern<AllocOp> {
+class FuseTransHopper : public OpRewritePattern<LocalAllocOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(AllocOp allocOp,
+  LogicalResult matchAndRewrite(LocalAllocOp allocOp,
                                 PatternRewriter &rewriter) const override {
     if (!allocOp->hasOneUse() ||
         !isa<DotOp, nvidia_gpu::DotAsyncOp>(*allocOp->getUsers().begin()))
@@ -257,8 +257,8 @@ public:
 
     MemDescType innerTy =
         MemDescType::get(srcTy.getShape(), srcTy.getElementType(), newInnerEnc);
-    auto newAlloc =
-        rewriter.create<AllocOp>(allocOp.getLoc(), innerTy, trans.getSrc());
+    auto newAlloc = rewriter.create<LocalAllocOp>(allocOp.getLoc(), innerTy,
+                                                  trans.getSrc());
     rewriter.replaceOpWithNewOp<TransOp>(allocOp, newAlloc,
                                          ArrayRef<int32_t>({1, 0}));
     return success();
@@ -274,7 +274,7 @@ struct MMAV3UseRegOperand : public OpRewritePattern<DotOp> {
 
   LogicalResult matchAndRewrite(DotOp dotOp,
                                 PatternRewriter &rewriter) const override {
-    auto alloc = dotOp.getOperand(0).getDefiningOp<AllocOp>();
+    auto alloc = dotOp.getOperand(0).getDefiningOp<LocalAllocOp>();
     if (!alloc || !alloc.getInit())
       return failure();
 
@@ -332,11 +332,10 @@ public:
     auto ret = pm.run(m);
 
     mlir::RewritePatternSet patterns(context);
-
+    patterns.add<SwizzleShmemConvert>(context);
     if (triton::gpu::TritonGPUDialect::getComputeCapability(m) >= 80)
       patterns.add<HoistLayoutConversion>(context);
     patterns.add<FuseTransHopper>(context);
-    patterns.add<SwizzleShmemConvert>(context);
     patterns.add<MMAV3UseRegOperand>(context);
     ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())

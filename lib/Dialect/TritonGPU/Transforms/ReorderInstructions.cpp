@@ -24,7 +24,7 @@
 using namespace mlir;
 
 static bool willIncreaseRegisterPressure(Operation *op) {
-  if (isa<triton::gpu::SharedLoad>(op))
+  if (isa<triton::gpu::LocalLoadOp>(op))
     return true;
   auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
   if (!cvt)
@@ -85,7 +85,7 @@ public:
     for (auto &kv : opToMove)
       kv.first->moveBefore(kv.second);
     // Move alloc(load) immediately after dependent load
-    m.walk([&](triton::gpu::AllocOp op) {
+    m.walk([&](triton::gpu::LocalAllocOp op) {
       if (!op.getInit())
         return;
       Operation *argOp = op.getInit().getDefiningOp();
@@ -103,7 +103,7 @@ public:
     });
     // Move `dot` operand so that conversions to opIdx=1 happens after
     // conversions to opIdx=0
-    m.walk([&](triton::gpu::SharedLoad op) {
+    m.walk([&](triton::gpu::LocalLoadOp op) {
       auto dstEncoding = op.getType()
                              .getEncoding()
                              .dyn_cast<triton::gpu::DotOperandEncodingAttr>();
@@ -117,7 +117,8 @@ public:
       auto dotUser = dyn_cast<triton::DotOp>(*op->user_begin());
       if (!dotUser)
         return;
-      auto AOp = dotUser.getOperand(0).getDefiningOp<triton::gpu::SharedLoad>();
+      auto AOp =
+          dotUser.getOperand(0).getDefiningOp<triton::gpu::LocalLoadOp>();
       if (!AOp)
         return;
       // Check that the conversion to OpIdx=1 happens before and can be moved

@@ -141,7 +141,7 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
 
   auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(
       builder.getContext(), opIdx, dotEncoding, prefetchWidth / 8);
-  Value prefetchSlice = builder.create<triton::gpu::SharedLoad>(
+  Value prefetchSlice = builder.create<triton::gpu::LocalLoadOp>(
       v.getLoc(), RankedTensorType::get(shape, elementType, dotOperandEnc),
       newSmem);
 
@@ -179,7 +179,7 @@ LogicalResult Prefetcher::initialize() {
       if (!op->getResult(0).hasOneUse())
         break;
       rets.push_back(op->getOperand(0));
-      if (auto cvt = dyn_cast<triton::gpu::SharedLoad>(op)) {
+      if (auto cvt = dyn_cast<triton::gpu::LocalLoadOp>(op)) {
         foundConvertFromShared = true;
         break;
       }

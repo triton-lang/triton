@@ -2571,18 +2571,18 @@ struct CanonicalizeConvertFromHistogram
 
 // alloc(cvt) -> alloc
 struct CanonicalizeConvertFromAlloc
-    : public mlir::OpRewritePattern<triton::gpu::AllocOp> {
+    : public mlir::OpRewritePattern<triton::gpu::LocalAllocOp> {
   using OpRewritePattern::OpRewritePattern;
 
   mlir::LogicalResult
-  matchAndRewrite(triton::gpu::AllocOp op,
+  matchAndRewrite(triton::gpu::LocalAllocOp op,
                   PatternRewriter &rewriter) const override {
     if (!op.getInit())
       return failure();
     auto convert = op.getInit().getDefiningOp<ConvertLayoutOp>();
     if (!convert)
       return failure();
-    rewriter.replaceOpWithNewOp<triton::gpu::AllocOp>(
+    rewriter.replaceOpWithNewOp<triton::gpu::LocalAllocOp>(
         op, op->getResult(0).getType(), convert.getSrc());
     return mlir::success();
   }
@@ -2653,12 +2653,12 @@ struct CanonicalizeConvertFromConvert
       return success();
     }
 
-    // cvt(shared_load) -> shared_load.
-    if (auto sharedLoad = dyn_cast<SharedLoad>(arg)) {
+    // cvt(local_load) -> local_load.
+    if (auto sharedLoad = dyn_cast<LocalLoadOp>(arg)) {
       // Shared_load can load to any layout so we can always fold convert into
       // it.
-      rewriter.replaceOpWithNewOp<SharedLoad>(op, op->getResult(0).getType(),
-                                              sharedLoad.getSrc());
+      rewriter.replaceOpWithNewOp<LocalLoadOp>(op, op->getResult(0).getType(),
+                                               sharedLoad.getSrc());
       return success();
     }
 
@@ -2715,8 +2715,8 @@ void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
   patterns.add<CanonicalizeConvertFromAlloc>(context);
 }
 
-// AllocOp
-void AllocOp::getEffects(
+// LocalAllocOp
+void LocalAllocOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   // For alloc that cannot be mutated we mark them as no-side effect. This is

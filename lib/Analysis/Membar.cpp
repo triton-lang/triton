@@ -107,7 +107,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
           op)) {
     return;
   }
-  if (auto alloc = dyn_cast<triton::gpu::AllocOp>(op)) {
+  if (auto alloc = dyn_cast<triton::gpu::LocalAllocOp>(op)) {
     if (!alloc.getInit())
       return;
   }
@@ -141,7 +141,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     for (Value value : op->getOperands()) {
       for (auto bufferId : allocation->getBufferIds(value)) {
         if (bufferId != Allocation::InvalidBufferId) {
-          if (isa<triton::gpu::AsyncSharedCopy>(op)) {
+          if (isa<triton::gpu::AsyncCopyToLocalOp>(op)) {
             // Global -> shared memory
             curBlockInfo.syncWriteIntervals.insert(
                 allocation->getAllocatedInterval(bufferId));

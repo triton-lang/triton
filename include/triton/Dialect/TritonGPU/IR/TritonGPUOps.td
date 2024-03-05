@@ -112,7 +112,7 @@ def TTG_AsyncBulkCommitGroupOp : TTG_Op<"async_bulk_commit_group"> {
   }];
 }
 
-def TTG_AsyncSharedCopy : TTG_Op<"async_shared_copy",
+def TTG_AsyncCopyToLocalOp : TTG_Op<"async_copy_to_local",
                                     [AttrSizedOperandSegments,
                                      MemoryEffects<[MemRead<GlobalMemory>, MemWrite<SharedMemory>]>,
                                      TypesMatchWith<"infer mask type from src type",
@@ -121,7 +121,7 @@ def TTG_AsyncSharedCopy : TTG_Op<"async_shared_copy",
                                      TypesMatchWith<"infer other type from src type",
                                                     "src", "other", "getPointeeType($_self)",
                                                     "($_op.getOperands().size() <= 4) || std::equal_to<>()">]> {
-  let summary = "copy data from global memory to shared memory asynchronously";
+  let summary = "copy data from global memory to local memory asynchronously";
 
   let description = [{
 
@@ -163,7 +163,7 @@ def TTG_AsyncSharedCopy : TTG_Op<"async_shared_copy",
 
 
 // Allocate shared memory
-def TTG_AllocOp : TTG_Op<"alloc", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "allocate tensor";
   let description = [{
     This operation allocates buffer in the shared memory and return a descriptor
@@ -204,11 +204,11 @@ def TTG_SubviewOp : TTG_Op<"subview", [Pure]> {
   let results = (outs TT_MemDescType:$result);
 }
 
-def TTG_SharedLoad : TTG_Op<"shared_load", [MemoryEffects<[MemRead<SharedMemory>]>]> {
+def TTG_LocalLoadOp : TTG_Op<"local_load", [MemoryEffects<[MemRead<SharedMemory>]>]> {
   let summary = "Load a buffer from shared memory into a distributed tensor";
 
   let description = [{
-    // TODO
+    Load a tensor from the local memory descriptor into a distributed tensor.
   }];
   let arguments = (ins TT_MemDescType:$src);
   let assemblyFormat = [{$src attr-dict `:` qualified(type($src)) `->` type($result)}];

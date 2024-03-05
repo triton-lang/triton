@@ -216,7 +216,7 @@ public:
     auto newType = tt::MemDescType::get(argType.getShape(),
                                         argType.getElementType(), newLayout);
     rewriter.setInsertionPointAfterValue(arg);
-    return rewriter.create<ttg::AllocOp>(arg.getLoc(), newType, arg);
+    return rewriter.create<ttg::LocalAllocOp>(arg.getLoc(), newType, arg);
   }
 
   mlir::LogicalResult

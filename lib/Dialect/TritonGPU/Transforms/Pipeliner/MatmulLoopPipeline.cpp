@@ -90,7 +90,7 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
       allocTy.getEncoding(), /*mutableMemory=*/true);
   auto view =
       builder.create<ttg::SubviewOp>(loc, subviewTy, alloc, copyOffsets);
-  Operation *copy = builder.create<ttg::AsyncSharedCopy>(
+  Operation *copy = builder.create<ttg::AsyncCopyToLocalOp>(
       loc, src, view, loadOp.getMask(), loadOp.getOther(), loadOp.getCache(),
       loadOp.getEvict(), loadOp.getIsVolatile());
   Operation *commmit =
@@ -108,18 +108,18 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   auto viewLoad =
       builder.create<ttg::SubviewOp>(loc, subviewTy, alloc, loadOffsets);
   if (isMMV3Load) {
-    auto alloc = cast<ttg::AllocOp>((*loadOp->getUsers().begin()));
+    auto alloc = cast<ttg::LocalAllocOp>((*loadOp->getUsers().begin()));
     alloc.replaceAllUsesWith(viewLoad.getResult());
     alloc.erase();
   } else {
     for (Operation *user : loadOp->getUsers()) {
-      if (auto alloc = dyn_cast<ttg::AllocOp>(user)) {
+      if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
         alloc.replaceAllUsesWith(viewLoad.getResult());
         alloc.erase();
       }
     }
     auto sharedLoad =
-        builder.create<ttg::SharedLoad>(loc, loadOp.getType(), viewLoad);
+        builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewLoad);
     loadOp->replaceAllUsesWith(sharedLoad->getResults());
   }
   loadOp.erase();
@@ -156,7 +156,7 @@ allTransitiveUsesHaveDotEncoding(Value val,
       if (!hasDotEncodingUse)
         return false;
     } else {
-      if (!isa<ttg::SharedLoad, ttg::ConvertLayoutOp>(user))
+      if (!isa<ttg::LocalLoadOp, ttg::ConvertLayoutOp>(user))
         return false;
       auto dotOpEnc = user->getResult(0)
                           .getType()
@@ -188,7 +188,7 @@ bool loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3,
                     ttg::SharedEncodingAttr &enc) {
   if (loadOp.getResult().hasOneUse()) {
     Operation *use = *loadOp.getResult().getUsers().begin();
-    if (auto alloc = llvm::dyn_cast<ttg::AllocOp>(use)) {
+    if (auto alloc = llvm::dyn_cast<ttg::LocalAllocOp>(use)) {
       auto sharedEnc =
           alloc.getType().getEncoding().cast<ttg::SharedEncodingAttr>();
       if (sharedEnc.getHasLeadingOffset()) {
@@ -414,7 +414,7 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
   bufferShape.insert(bufferShape.begin(), distance);
   Type memdescType = mlir::triton::MemDescType::get(
       bufferShape, ty.getElementType(), sharedEnc, /*mutableMemory*/ true);
-  Value alloc = builder.create<mlir::triton::gpu::AllocOp>(
+  Value alloc = builder.create<mlir::triton::gpu::LocalAllocOp>(
       loadOp.getLoc(), memdescType, Value());
   return alloc;
 }
@@ -559,7 +559,7 @@ createSchedule(scf::ForOp forOp, int numStages,
 
   SmallVector<DenseSet<Operation *>> insertOps(numStages);
   for (auto &[op, info] : opToInfo) {
-    if (isa<ttg::AsyncSharedCopy, ttg::AsyncCommitGroupOp>(op)) {
+    if (isa<ttg::AsyncCopyToLocalOp, ttg::AsyncCommitGroupOp>(op)) {
       insertOps[info.stage].insert(op);
     }
   }
@@ -983,9 +983,8 @@ void mlir::triton::asyncLaunchDots(scf::ForOp forOp) {
                   transitiveOperand.getDefiningOp()->getOperand(0);
             if (forOp.isDefinedOutsideOfLoop(transitiveOperand))
               continue;
-            //  if (transitiveOperand.getDefiningOp<ttg::ExtractSliceOp>() ==
-            //      nullptr)
-            //    valid = false;
+            if (transitiveOperand.getDefiningOp<ttg::SubviewOp>() == nullptr)
+              valid = false;
           }
 
           if (valid) {

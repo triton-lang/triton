@@ -202,7 +202,7 @@ private:
     // XXX(Keren): Why this hard-coded alignment?
     size_t kAlignment = 8;
     for (Value result : op->getResults()) {
-      if (auto alloc = result.getDefiningOp<triton::gpu::AllocOp>()) {
+      if (auto alloc = result.getDefiningOp<triton::gpu::LocalAllocOp>()) {
         // Bytes could be a different value once we support padding or other
         // allocation policies.
         auto allocType = alloc.getType();

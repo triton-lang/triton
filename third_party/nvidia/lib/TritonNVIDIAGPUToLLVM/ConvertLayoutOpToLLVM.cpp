@@ -53,8 +53,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 namespace {
 
 // shared -> dot_operand if the result layout is mma
-Value lowerSharedToDotOperandMMA(triton::gpu::SharedLoad op,
-                                 triton::gpu::SharedLoadAdaptor adaptor,
+Value lowerSharedToDotOperandMMA(triton::gpu::LocalLoadOp op,
+                                 triton::gpu::LocalLoadOpAdaptor adaptor,
                                  const LLVMTypeConverter *typeConverter,
                                  ConversionPatternRewriter &rewriter,
                                  const NvidiaMmaEncodingAttr &mmaLayout,
@@ -96,8 +96,8 @@ Value lowerSharedToDotOperandMMA(triton::gpu::SharedLoad op,
 };
 
 // shared -> mma_operand
-LogicalResult lowerSharedToDotOperand(triton::gpu::SharedLoad op,
-                                      triton::gpu::SharedLoadAdaptor adaptor,
+LogicalResult lowerSharedToDotOperand(triton::gpu::LocalLoadOp op,
+                                      triton::gpu::LocalLoadOpAdaptor adaptor,
                                       const LLVMTypeConverter *typeConverter,
                                       ConversionPatternRewriter &rewriter) {
   auto loc = op.getLoc();
@@ -131,8 +131,8 @@ LogicalResult lowerSharedToDotOperand(triton::gpu::SharedLoad op,
   return success();
 }
 
-LogicalResult lowerSharedToDistributed(triton::gpu::SharedLoad op,
-                                       triton::gpu::SharedLoadAdaptor adaptor,
+LogicalResult lowerSharedToDistributed(triton::gpu::LocalLoadOp op,
+                                       triton::gpu::LocalLoadOpAdaptor adaptor,
                                        const LLVMTypeConverter *typeConverter,
                                        ConversionPatternRewriter &rewriter) {
   auto loc = op.getLoc();
@@ -163,13 +163,14 @@ LogicalResult lowerSharedToDistributed(triton::gpu::SharedLoad op,
   return success();
 }
 
-struct SharedLoadConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::SharedLoad> {
+struct LocalLoadOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::LocalLoadOp> {
 public:
-  using ConvertOpToLLVMPattern<triton::gpu::SharedLoad>::ConvertOpToLLVMPattern;
+  using ConvertOpToLLVMPattern<
+      triton::gpu::LocalLoadOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::gpu::SharedLoad op, OpAdaptor adaptor,
+  matchAndRewrite(triton::gpu::LocalLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     MemDescType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
@@ -1009,5 +1010,5 @@ void mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<ConvertLayoutOpConversion>(typeConverter, benefit);
-  patterns.add<SharedLoadConversion>(typeConverter, benefit);
+  patterns.add<LocalLoadOpConversion>(typeConverter, benefit);
 }
