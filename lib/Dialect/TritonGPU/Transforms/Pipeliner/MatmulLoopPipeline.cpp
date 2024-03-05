@@ -985,7 +985,8 @@ void mlir::triton::asyncLaunchDots(scf::ForOp forOp) {
                   transitiveOperand.getDefiningOp()->getOperand(0);
             if (forOp.isDefinedOutsideOfLoop(transitiveOperand))
               continue;
-            if (transitiveOperand.getDefiningOp<ttg::MemDescSubviewOp>() == nullptr)
+            if (transitiveOperand.getDefiningOp<ttg::MemDescSubviewOp>() ==
+                nullptr)
               valid = false;
           }
 

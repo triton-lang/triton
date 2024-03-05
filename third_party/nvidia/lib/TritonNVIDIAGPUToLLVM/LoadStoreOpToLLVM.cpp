@@ -755,10 +755,10 @@ struct AsyncCopyGlobalToLocalOpConversion
       triton::gpu::AsyncCopyGlobalToLocalOp>::ConvertOpToLLVMPattern;
 
   AsyncCopyGlobalToLocalOpConversion(LLVMTypeConverter &converter,
-                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                               PatternBenefit benefit)
+                                     ModuleAxisInfoAnalysis &axisAnalysisPass,
+                                     PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::gpu::AsyncCopyGlobalToLocalOp>(converter,
-                                                                benefit),
+                                                                      benefit),
         LoadStoreConversionBase(axisAnalysisPass) {}
 
   LogicalResult
@@ -993,8 +993,8 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
   patterns.add<StoreOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AtomicCASOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AtomicRMWOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<AsyncCopyGlobalToLocalOpConversion>(typeConverter, axisInfoAnalysis,
-                                             benefit);
+  patterns.add<AsyncCopyGlobalToLocalOpConversion>(typeConverter,
+                                                   axisInfoAnalysis, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
   patterns.add<AsyncBulkCommitGroupOpConversion>(typeConverter, benefit);

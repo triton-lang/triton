@@ -344,7 +344,8 @@ struct BroadcastOpConversion
 
 struct MemDescSubviewOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::MemDescSubviewOp> {
-  using ConvertOpToLLVMPattern<triton::gpu::MemDescSubviewOp>::ConvertOpToLLVMPattern;
+  using ConvertOpToLLVMPattern<
+      triton::gpu::MemDescSubviewOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::gpu::MemDescSubviewOp op, OpAdaptor adaptor,
