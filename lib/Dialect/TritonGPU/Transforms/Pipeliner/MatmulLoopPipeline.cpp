@@ -89,8 +89,8 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
       allocTy.getShape().drop_front(), allocTy.getElementType(),
       allocTy.getEncoding(), /*mutableMemory=*/true);
   auto view =
-      builder.create<ttg::SubviewOp>(loc, subviewTy, alloc, copyOffsets);
-  Operation *copy = builder.create<ttg::AsyncCopyToLocalOp>(
+      builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, copyOffsets);
+  Operation *copy = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
       loc, src, view, loadOp.getMask(), loadOp.getOther(), loadOp.getCache(),
       loadOp.getEvict(), loadOp.getIsVolatile());
   Operation *commmit =
@@ -106,7 +106,7 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   // Extract part.
   SmallVector<Value> loadOffsets = {extractIdx, zero, zero};
   auto viewLoad =
-      builder.create<ttg::SubviewOp>(loc, subviewTy, alloc, loadOffsets);
+      builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
   if (isMMV3Load) {
     auto alloc = cast<ttg::LocalAllocOp>((*loadOp->getUsers().begin()));
     alloc.replaceAllUsesWith(viewLoad.getResult());
@@ -546,7 +546,7 @@ createSchedule(scf::ForOp forOp, int numStages,
   // `numStages - 2`. All the other operations will go in stage `numStages - 1`.
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (prefetchExtract) {
-      if (isa<ttg::SubviewOp, ttg::AsyncWaitOp>(op))
+      if (isa<ttg::MemDescSubviewOp, ttg::AsyncWaitOp>(op))
         extractOps.push_back(&op);
     }
   }
@@ -559,7 +559,7 @@ createSchedule(scf::ForOp forOp, int numStages,
 
   SmallVector<DenseSet<Operation *>> insertOps(numStages);
   for (auto &[op, info] : opToInfo) {
-    if (isa<ttg::AsyncCopyToLocalOp, ttg::AsyncCommitGroupOp>(op)) {
+    if (isa<ttg::AsyncCopyGlobalToLocalOp, ttg::AsyncCommitGroupOp>(op)) {
       insertOps[info.stage].insert(op);
     }
   }
@@ -823,7 +823,7 @@ combineRedundantWaitOps(llvm::SmallSetVector<ttg::AsyncWaitOp, 8> &waitOps) {
     SmallVector<Value> depTokens;
     unsigned minWaitNumber = waitOp.getNum();
     Operation *next = waitOp->getNextNode();
-    while (next && isa<ttg::SubviewOp, ttg::AsyncWaitOp>(next)) {
+    while (next && isa<ttg::MemDescSubviewOp, ttg::AsyncWaitOp>(next)) {
       if (auto nextWait = dyn_cast<ttg::AsyncWaitOp>(next)) {
         waitGroup.push_back(nextWait);
         minWaitNumber = std::min(minWaitNumber, nextWait.getNum());
@@ -985,7 +985,7 @@ void mlir::triton::asyncLaunchDots(scf::ForOp forOp) {
                   transitiveOperand.getDefiningOp()->getOperand(0);
             if (forOp.isDefinedOutsideOfLoop(transitiveOperand))
               continue;
-            if (transitiveOperand.getDefiningOp<ttg::SubviewOp>() == nullptr)
+            if (transitiveOperand.getDefiningOp<ttg::MemDescSubviewOp>() == nullptr)
               valid = false;
           }
 

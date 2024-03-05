@@ -476,7 +476,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     %index = arith.constant 1 : i32
     %zero = arith.constant 0 : i32
     %0 = triton_gpu.local_alloc : () -> !tt.memdesc<128x16x32xf32, #shared0>
-    %1 = triton_gpu.subview %0[%index, %zero, %zero] : !tt.memdesc<128x16x32xf32, #shared0> -> !tt.memdesc<16x32xf32, #shared0>
+    %1 = triton_gpu.memdesc_subview %0[%index, %zero, %zero] : !tt.memdesc<128x16x32xf32, #shared0> -> !tt.memdesc<16x32xf32, #shared0>
     tt.return
   }
 }
@@ -517,7 +517,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     // CHECK: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x8, 0x8
     // CHECK: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x8, 0x8
     // CHECK: cp.async.commit_group
-    %73 = triton_gpu.async_copy_to_local %66, %71 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64x!tt.ptr<i64, 1>, #slice1d0> -> !tt.memdesc<2x64xi64, #shared>
+    %73 = triton_gpu.async_copy_global_to_local %66, %71 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64x!tt.ptr<i64, 1>, #slice1d0> -> !tt.memdesc<2x64xi64, #shared>
     triton_gpu.async_commit_group %73
     tt.return
   }
@@ -559,7 +559,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK-SAME: cp.async.cg.shared.global [ ${{.*}} + 16 ], [ ${{.*}} + 0 ], 0x10, 0x10
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
     // CHECK-SAME: cp.async.commit_group
-    %a = triton_gpu.async_copy_to_local %a_ptr, %tensor {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x64x!tt.ptr<f32>, #AL> -> !tt.memdesc<16x64xf32, #A>
+    %a = triton_gpu.async_copy_global_to_local %a_ptr, %tensor {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x64x!tt.ptr<f32>, #AL> -> !tt.memdesc<16x64xf32, #A>
     triton_gpu.async_commit_group
     tt.return
   }
@@ -605,7 +605,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
     // CHECK: llvm.inline_asm
     // CHECK-SAME: cp.async.commit_group
-    %a = triton_gpu.async_copy_to_local %a_ptr, %tensor {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x32x!tt.ptr<f32>, #AL> -> !tt.memdesc<16x32xf32, #A>
+    %a = triton_gpu.async_copy_global_to_local %a_ptr, %tensor {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x32x!tt.ptr<f32>, #AL> -> !tt.memdesc<16x32xf32, #A>
     triton_gpu.async_commit_group
     tt.return
   }
@@ -662,7 +662,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
     // CHECK: llvm.inline_asm
     // CHECK-SAME: cp.async.commit_group
-    %a = triton_gpu.async_copy_to_local %a_ptr, %tensor {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32x!tt.ptr<f32>, #AL> -> !tt.memdesc<32x32xf32, #A>
+    %a = triton_gpu.async_copy_global_to_local %a_ptr, %tensor {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32x!tt.ptr<f32>, #AL> -> !tt.memdesc<32x32xf32, #A>
     triton_gpu.async_commit_group
     tt.return
   }

@@ -342,12 +342,12 @@ struct BroadcastOpConversion
   }
 };
 
-struct SubviewOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::SubviewOp> {
-  using ConvertOpToLLVMPattern<triton::gpu::SubviewOp>::ConvertOpToLLVMPattern;
+struct MemDescSubviewOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::MemDescSubviewOp> {
+  using ConvertOpToLLVMPattern<triton::gpu::MemDescSubviewOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::gpu::SubviewOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::gpu::MemDescSubviewOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // %dst = extract_slice %src[%offsets]
     Location loc = op->getLoc();
@@ -392,5 +392,5 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<SplitOpConversion>(typeConverter, benefit);
   patterns.add<TransOpConversion>(typeConverter, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
-  patterns.add<SubviewOpConversion>(typeConverter, benefit);
+  patterns.add<MemDescSubviewOpConversion>(typeConverter, benefit);
 }

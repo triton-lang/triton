@@ -68,7 +68,7 @@ tt.func @subview(%A : !tt.memdesc<1x16x16xf16, #A_SHARED>) {
   // CHECK: %0 -> %0
   %a = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED>
   // CHECK-NEXT: %1 -> %0
-  %cst1 = triton_gpu.subview %a[%index, %index, %index] : !tt.memdesc<1x16x16xf16, #A_SHARED> -> !tt.memdesc<16x16xf16, #A_SHARED>
+  %cst1 = triton_gpu.memdesc_subview %a[%index, %index, %index] : !tt.memdesc<1x16x16xf16, #A_SHARED> -> !tt.memdesc<16x16xf16, #A_SHARED>
   tt.return
 }
 
@@ -127,7 +127,7 @@ tt.func @for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B :
     scf.if %i1 {
       %index = arith.constant 8 : i32
       // CHECK-NEXT: %4 -> %0,%1
-      %cst0 = triton_gpu.subview %a_shared[%index, %index] : !tt.memdesc<128x32xf16, #A_SHARED> -> !tt.memdesc<32xf16, #A_SHARED>
+      %cst0 = triton_gpu.memdesc_subview %a_shared[%index, %index] : !tt.memdesc<128x32xf16, #A_SHARED> -> !tt.memdesc<32xf16, #A_SHARED>
       scf.yield
     }
     scf.yield %b_shared, %a_shared, %a_shared : !tt.memdesc<128x32xf16, #A_SHARED>, !tt.memdesc<128x32xf16, #A_SHARED>, !tt.memdesc<128x32xf16, #A_SHARED>
@@ -179,7 +179,7 @@ tt.func @cf_for(%arg0: index, %arg1: index, %arg2: index, %arg3: !tt.ptr<f16>, %
   // CHECK-NEXT: %1 -> %1
   %cst_0 = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED>
   // CHECK-NEXT: %2 -> %0
-  %0 = triton_gpu.subview %cst[%idx, %idx] : !tt.memdesc<128x32xf16, #A_SHARED> -> !tt.memdesc<128x32xf16, #A_SHARED>
+  %0 = triton_gpu.memdesc_subview %cst[%idx, %idx] : !tt.memdesc<128x32xf16, #A_SHARED> -> !tt.memdesc<128x32xf16, #A_SHARED>
   gpu.barrier
   // CHECK-NEXT: %3 -> %3
   %cst_1 = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED>
@@ -197,7 +197,7 @@ tt.func @cf_for(%arg0: index, %arg1: index, %arg2: index, %arg3: !tt.ptr<f16>, %
 ^bb3:  // pred: ^bb1
   gpu.barrier
   // CHECK-NEXT: %10 -> %0
-  %9 = triton_gpu.subview %0[%idx, %idx] : !tt.memdesc<128x32xf16, #A_SHARED> -> !tt.memdesc<128x32xf16, #A_SHARED>
+  %9 = triton_gpu.memdesc_subview %0[%idx, %idx] : !tt.memdesc<128x32xf16, #A_SHARED> -> !tt.memdesc<128x32xf16, #A_SHARED>
   tt.return
 }
 

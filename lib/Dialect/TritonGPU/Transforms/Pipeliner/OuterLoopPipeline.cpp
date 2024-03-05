@@ -13,7 +13,7 @@ static std::vector<std::pair<Operation *, unsigned>>
 createSchedule(scf::ForOp forOp, int numStages) {
   SmallVector<Operation *> insertOps;
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (isa<ttg::AsyncCopyToLocalOp, ttg::AsyncCommitGroupOp>(op))
+    if (isa<ttg::AsyncCopyGlobalToLocalOp, ttg::AsyncCommitGroupOp>(op))
       insertOps.emplace_back(&op);
   }
   DenseSet<Operation *> insertAndDeps;
@@ -77,7 +77,7 @@ static bool preCondition(scf::ForOp forOp) {
   SmallVector<Operation *> insertOps;
   int numForOps = 0;
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (isa<ttg::AsyncCopyToLocalOp, ttg::AsyncCommitGroupOp>(op))
+    if (isa<ttg::AsyncCopyGlobalToLocalOp, ttg::AsyncCommitGroupOp>(op))
       insertOps.emplace_back(&op);
     if (isa<scf::ForOp>(op))
       numForOps++;

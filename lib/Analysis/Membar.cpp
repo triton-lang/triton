@@ -103,7 +103,7 @@ void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
-  if (isa<triton::gpu::LocalDeallocOp, triton::gpu::SubviewOp, triton::TransOp>(
+  if (isa<triton::gpu::LocalDeallocOp, triton::gpu::MemDescSubviewOp, triton::TransOp>(
           op)) {
     return;
   }
@@ -141,7 +141,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     for (Value value : op->getOperands()) {
       for (auto bufferId : allocation->getBufferIds(value)) {
         if (bufferId != Allocation::InvalidBufferId) {
-          if (isa<triton::gpu::AsyncCopyToLocalOp>(op)) {
+          if (isa<triton::gpu::AsyncCopyGlobalToLocalOp>(op)) {
             // Global -> shared memory
             curBlockInfo.syncWriteIntervals.insert(
                 allocation->getAllocatedInterval(bufferId));

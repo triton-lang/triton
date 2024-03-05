@@ -19,21 +19,21 @@
 // CHECK: %[[BBUFFER:.*]] = triton_gpu.local_alloc
 // CHECK-DAG: %[[LOOP_COND_0:.*]] = arith.cmpi slt, %[[LB:.*]], %[[UB:.*]]
 // CHECK-DAG: %[[LOOP_COND_0_SPLAT_A:.*]] = tt.splat %[[LOOP_COND_0]]
-// CHECK-DAG: %[[ASUB:.*]] = triton_gpu.subview %[[ABUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]] : !tt.memdesc<2x128x32xf16, #shared, mutable> -> !tt.memdesc<128x32xf16, #shared, mutable>
-// CHECK: %[[T_A0:.*]] = triton_gpu.async_copy_to_local %{{.*}}, %[[ASUB]] mask %[[LOOP_COND_0_SPLAT_A]] {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x32x!tt.ptr<f16, 1>, #blocked1> -> <128x32xf16, #shared, mutable>
+// CHECK-DAG: %[[ASUB:.*]] = triton_gpu.memdesc_subview %[[ABUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]] : !tt.memdesc<2x128x32xf16, #shared, mutable> -> !tt.memdesc<128x32xf16, #shared, mutable>
+// CHECK: %[[T_A0:.*]] = triton_gpu.async_copy_global_to_local %{{.*}}, %[[ASUB]] mask %[[LOOP_COND_0_SPLAT_A]] {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x32x!tt.ptr<f16, 1>, #blocked1> -> <128x32xf16, #shared, mutable>
 // CHECK-DAG: %[[LOOP_COND_0_SPLAT_B:.*]] = tt.splat %[[LOOP_COND_0]]
-// CHECK-DAG: %[[BSUB:.*]] = triton_gpu.subview %[[BBUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK: %[[T_B0:.*]] = triton_gpu.async_copy_to_local %{{.*}}, %[[BSUB]] mask %[[LOOP_COND_0_SPLAT_B]] other %{{.*}} {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128x!tt.ptr<f16, 1>, #blocked> -> <32x128xf16, #shared1, mutable>
+// CHECK-DAG: %[[BSUB:.*]] = triton_gpu.memdesc_subview %[[BBUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK: %[[T_B0:.*]] = triton_gpu.async_copy_global_to_local %{{.*}}, %[[BSUB]] mask %[[LOOP_COND_0_SPLAT_B]] other %{{.*}} {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128x!tt.ptr<f16, 1>, #blocked> -> <32x128xf16, #shared1, mutable>
 // CHECK-DAG: %[[IV_1:.*]] = arith.addi %[[LB]], %[[STEP:.*]]
 // CHECK-DAG: %[[LOOP_COND_1:.*]] = arith.cmpi slt, %[[IV_1]], %[[UB]]
 // CHECK-DAG: %[[LOOP_COND_1_SPLAT_A:.*]] = tt.splat %[[LOOP_COND_1]]
-// CHECK-DAG: %[[ASUB1:.*]] = triton_gpu.subview %[[ABUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK: %[[T_A1:.*]] = triton_gpu.async_copy_to_local %{{.*}}, %[[ASUB1]] mask %[[LOOP_COND_1_SPLAT_A]]
+// CHECK-DAG: %[[ASUB1:.*]] = triton_gpu.memdesc_subview %[[ABUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK: %[[T_A1:.*]] = triton_gpu.async_copy_global_to_local %{{.*}}, %[[ASUB1]] mask %[[LOOP_COND_1_SPLAT_A]]
 // CHECK-DAG: %[[LOOP_COND_1_SPLAT_B:.*]] = tt.splat %[[LOOP_COND_1]]
-// CHECK-DAG: %[[BSUB1:.*]] = triton_gpu.subview %[[BBUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK: %[[T_B1:.*]] = triton_gpu.async_copy_to_local %{{.*}}, %[[BSUB1]] mask %[[LOOP_COND_1_SPLAT_B]]
-// CHECK-DAG: %[[A0:.*]] = triton_gpu.subview %[[ABUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK-DAG: %[[B0:.*]] = triton_gpu.subview %[[BBUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK-DAG: %[[BSUB1:.*]] = triton_gpu.memdesc_subview %[[BBUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK: %[[T_B1:.*]] = triton_gpu.async_copy_global_to_local %{{.*}}, %[[BSUB1]] mask %[[LOOP_COND_1_SPLAT_B]]
+// CHECK-DAG: %[[A0:.*]] = triton_gpu.memdesc_subview %[[ABUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK-DAG: %[[B0:.*]] = triton_gpu.memdesc_subview %[[BBUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
 // CHECK-DAG:   triton_gpu.async_wait {{.*}} {num = 2 : i32}
 // CHECK: scf.for {{.*}} iter_args({{.*}}, %[[INS_IDX:.*]] = %[[CONSTANT_1]], %[[EXT_IDX:.*]] = %[[CONSTANT_0]]{{.*}}, %[[arg_a0:.*]] = %[[A0]], %[[arg_b0:.*]] = %[[B0]]
 // CHECK:   %[[arg_a0_dot_op:.*]] = triton_gpu.local_load %[[arg_a0]]
@@ -43,15 +43,15 @@
 // CHECK-DAG: %[[INS_IDX_2:.*]] = arith.addi %[[INS_IDX]], %[[CONSTANT_1]] : i32
 // CHECK-DAG: %[[CMP_INS:.*]] = arith.cmpi slt, %[[INS_IDX_2]], %[[CONSTANT_2]]
 // CHECK-DAG: %[[INS_IDX_3:.*]] = arith.select %[[CMP_INS]], %[[INS_IDX_2]], %[[CONSTANT_0]]
-// CHECK:   %[[ASUB3:.*]] = triton_gpu.subview %[[ABUFFER]][%[[INS_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:   %[[NEXT_A_BUFFER:.*]] = triton_gpu.async_copy_to_local {{.*}}, %[[ASUB3]]
-// CHECK:   %[[BSUB3:.*]] = triton_gpu.subview %[[BBUFFER]][%[[INS_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:   %[[NEXT_B_BUFFER:.*]] = triton_gpu.async_copy_to_local {{.*}}, %[[BSUB3]]
+// CHECK:   %[[ASUB3:.*]] = triton_gpu.memdesc_subview %[[ABUFFER]][%[[INS_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   %[[NEXT_A_BUFFER:.*]] = triton_gpu.async_copy_global_to_local {{.*}}, %[[ASUB3]]
+// CHECK:   %[[BSUB3:.*]] = triton_gpu.memdesc_subview %[[BBUFFER]][%[[INS_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   %[[NEXT_B_BUFFER:.*]] = triton_gpu.async_copy_global_to_local {{.*}}, %[[BSUB3]]
 // CHECK-DAG: %[[EXT_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
 // CHECK-DAG: %[[CMP_EXT:.*]] = arith.cmpi slt, %[[EXT_IDX_2]], %[[CONSTANT_2]]
 // CHECK-DAG: %[[EXT_IDX_3:.*]] = arith.select %[[CMP_EXT]], %[[EXT_IDX_2]], %[[CONSTANT_0]]
-// CHECK-DAG: %[[NEXT_A:.*]] = triton_gpu.subview %{{.+}}[%[[EXT_IDX_3]],
-// CHECK-DAG: %[[NEXT_B:.*]] = triton_gpu.subview %{{.+}}[%[[EXT_IDX_3]],
+// CHECK-DAG: %[[NEXT_A:.*]] = triton_gpu.memdesc_subview %{{.+}}[%[[EXT_IDX_3]],
+// CHECK-DAG: %[[NEXT_B:.*]] = triton_gpu.memdesc_subview %{{.+}}[%[[EXT_IDX_3]],
 // CHECK-DAG: triton_gpu.async_wait {{.*}} {num = 2 : i32}
 // CHECK:   scf.yield {{.*}}, %[[INS_IDX_3]], %[[EXT_IDX_3]], %[[NEXT_A]], %[[NEXT_B]]
 module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.compute-capability" = 80} {
@@ -105,17 +105,17 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 // CHECK-DAG: %[[CONSTANT_2:.*]] = arith.constant 2 : i32
 // CHECK:   %[[ABUFFER:.*]] = triton_gpu.local_alloc
 // CHECK:   %[[BBUFFER:.*]] = triton_gpu.local_alloc
-// CHECK:   triton_gpu.subview %[[ABUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:   triton_gpu.async_copy_to_local
-// CHECK:   triton_gpu.subview %[[BBUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:   triton_gpu.async_copy_to_local
-// CHECK:   triton_gpu.subview %[[ABUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:   triton_gpu.async_copy_to_local
-// CHECK:   triton_gpu.subview %[[BBUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:   triton_gpu.async_copy_to_local
+// CHECK:   triton_gpu.memdesc_subview %[[ABUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   triton_gpu.async_copy_global_to_local
+// CHECK:   triton_gpu.memdesc_subview %[[BBUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   triton_gpu.async_copy_global_to_local
+// CHECK:   triton_gpu.memdesc_subview %[[ABUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   triton_gpu.async_copy_global_to_local
+// CHECK:   triton_gpu.memdesc_subview %[[BBUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   triton_gpu.async_copy_global_to_local
 // CHECK: scf.for
-// CHECK-DAG:   %[[A0:.*]] = triton_gpu.subview %[[ABUFFER]][%[[CONSTANT_0]],
-// CHECK-DAG:   %[[B0:.*]] = triton_gpu.subview %[[BBUFFER]][%[[CONSTANT_0]],
+// CHECK-DAG:   %[[A0:.*]] = triton_gpu.memdesc_subview %[[ABUFFER]][%[[CONSTANT_0]],
+// CHECK-DAG:   %[[B0:.*]] = triton_gpu.memdesc_subview %[[BBUFFER]][%[[CONSTANT_0]],
 // CHECK-DAG:   triton_gpu.async_wait {{.*}} {num = 2 : i32}
 // CHECK:   scf.for {{.*}} iter_args({{.*}}, %[[INS_IDX:.*]] = %[[CONSTANT_1]], %[[EXT_IDX:.*]] = %[[CONSTANT_0]]{{.*}}, %[[arg_a0:.*]] = %[[A0]], %[[arg_b0:.*]] = %[[B0]]
 // CHECK:   %[[arg_a0_dot_op:.*]] = triton_gpu.local_load %[[arg_a0]]
@@ -124,26 +124,26 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 // CHECK-DAG: %[[INS_IDX_2:.*]] = arith.addi %[[INS_IDX]], %[[CONSTANT_1]] : i32
 // CHECK-DAG: %[[CMP_INS:.*]] = arith.cmpi slt, %[[INS_IDX_2]], %[[CONSTANT_2]]
 // CHECK-DAG: %[[INS_IDX_3:.*]] = arith.select %[[CMP_INS]], %[[INS_IDX_2]], %[[CONSTANT_0]]
-// CHECK:   triton_gpu.subview %[[ABUFFER]][%[[INS_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:   triton_gpu.async_copy_to_local
-// CHECK:   triton_gpu.subview %[[BBUFFER]][%[[INS_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:   triton_gpu.async_copy_to_local
+// CHECK:   triton_gpu.memdesc_subview %[[ABUFFER]][%[[INS_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   triton_gpu.async_copy_global_to_local
+// CHECK:   triton_gpu.memdesc_subview %[[BBUFFER]][%[[INS_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   triton_gpu.async_copy_global_to_local
 // CHECK-DAG: %[[EXT_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
 // CHECK-DAG: %[[CMP_EXT:.*]] = arith.cmpi slt, %[[EXT_IDX_2]], %[[CONSTANT_2]]
 // CHECK-DAG: %[[EXT_IDX_3:.*]] = arith.select %[[CMP_EXT]], %[[EXT_IDX_2]], %[[CONSTANT_0]]
-// CHECK-DAG: %[[NEXT_A:.*]] = triton_gpu.subview %[[ABUFFER]][%[[EXT_IDX_3]]
-// CHECK-DAG: %[[NEXT_B:.*]] = triton_gpu.subview %[[BBUFFER]][%[[EXT_IDX_3]]
+// CHECK-DAG: %[[NEXT_A:.*]] = triton_gpu.memdesc_subview %[[ABUFFER]][%[[EXT_IDX_3]]
+// CHECK-DAG: %[[NEXT_B:.*]] = triton_gpu.memdesc_subview %[[BBUFFER]][%[[EXT_IDX_3]]
 // CHECK-DAG: triton_gpu.async_wait {{.*}} {num = 2 : i32}
 // CHECK:   scf.yield {{.*}}, %[[INS_IDX_3]], %[[EXT_IDX_3]], %[[NEXT_A]], %[[NEXT_B]]
 // CHECK:   triton_gpu.async_wait {num = 0 : i32}
-// CHECK:   triton_gpu.subview %[[ABUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:   triton_gpu.async_copy_to_local
-// CHECK:   triton_gpu.subview %[[BBUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:   triton_gpu.async_copy_to_local
-// CHECK:   triton_gpu.subview %[[ABUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:   triton_gpu.async_copy_to_local
-// CHECK:   triton_gpu.subview %[[BBUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:   triton_gpu.async_copy_to_local
+// CHECK:   triton_gpu.memdesc_subview %[[ABUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   triton_gpu.async_copy_global_to_local
+// CHECK:   triton_gpu.memdesc_subview %[[BBUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   triton_gpu.async_copy_global_to_local
+// CHECK:   triton_gpu.memdesc_subview %[[ABUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   triton_gpu.async_copy_global_to_local
+// CHECK:   triton_gpu.memdesc_subview %[[BBUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   triton_gpu.async_copy_global_to_local
 // CHECK    scf.yield
 tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
                          %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
@@ -195,11 +195,11 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 // CHECK-DAG: %[[CONSTANT_1:.*]] = arith.constant 1 : i32
 // CHECK-DAG: %[[CONSTANT_2:.*]] = arith.constant 2 : i32
 // CHECK: %[[BBUFFER:.*]] = triton_gpu.local_alloc
-// CHECK: triton_gpu.subview %[[BBUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK: triton_gpu.async_copy_to_local
-// CHECK: triton_gpu.subview %[[BBUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK: triton_gpu.async_copy_to_local
-// CHECK-DAG: %[[B0:.*]] = triton_gpu.subview %[[BBUFFER]][%[[CONSTANT_0]]
+// CHECK: triton_gpu.memdesc_subview %[[BBUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK: triton_gpu.async_copy_global_to_local
+// CHECK: triton_gpu.memdesc_subview %[[BBUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK: triton_gpu.async_copy_global_to_local
+// CHECK-DAG: %[[B0:.*]] = triton_gpu.memdesc_subview %[[BBUFFER]][%[[CONSTANT_0]]
 // CHECK-DAG: triton_gpu.async_wait {{.*}} {num = 1 : i32}
 // CHECK:   scf.for {{.*}} iter_args({{.*}}, %[[INS_IDX:.*]] = %[[CONSTANT_1]], %[[EXT_IDX:.*]] = %[[CONSTANT_0]]{{.*}}, %[[arg_b0:.*]] = %[[B0]]
 // CHECK:   %[[arg_b0_dot_op:.*]] = triton_gpu.local_load %[[arg_b0]]
@@ -207,12 +207,12 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 // CHECK-DAG: %[[INS_IDX_2:.*]] = arith.addi %[[INS_IDX]], %[[CONSTANT_1]] : i32
 // CHECK-DAG: %[[CMP_INS:.*]] = arith.cmpi slt, %[[INS_IDX_2]], %[[CONSTANT_2]]
 // CHECK-DAG: %[[INS_IDX_3:.*]] = arith.select %[[CMP_INS]], %[[INS_IDX_2]], %[[CONSTANT_0]]
-// CHECK:     triton_gpu.subview %[[BBUFFER]][%[[INS_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:     triton_gpu.async_copy_to_local
+// CHECK:     triton_gpu.memdesc_subview %[[BBUFFER]][%[[INS_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:     triton_gpu.async_copy_global_to_local
 // CHECK-DAG: %[[EXT_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
 // CHECK-DAG: %[[CMP_EXT:.*]] = arith.cmpi slt, %[[EXT_IDX_2]], %[[CONSTANT_2]]
 // CHECK-DAG: %[[EXT_IDX_3:.*]] = arith.select %[[CMP_EXT]], %[[EXT_IDX_2]], %[[CONSTANT_0]]
-// CHECK-DAG: %[[NEXT_B:.*]] = triton_gpu.subview %{{.+}}[%[[EXT_IDX_3]]
+// CHECK-DAG: %[[NEXT_B:.*]] = triton_gpu.memdesc_subview %{{.+}}[%[[EXT_IDX_3]]
 // CHECK-DAG: triton_gpu.async_wait {{.*}} {num = 1 : i32}
 // CHECK:   scf.yield {{.*}}, %[[INS_IDX_3]], %[[EXT_IDX_3]], %[[NEXT_B]]
 tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
@@ -254,18 +254,18 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 }
 
 // CHECK-LABEL: tt.func @indirect_bmm_scalar
-// CHECK: triton_gpu.async_copy_to_local
-// CHECK: triton_gpu.async_copy_to_local
-// CHECK: triton_gpu.async_copy_to_local
-// CHECK: triton_gpu.async_copy_to_local
+// CHECK: triton_gpu.async_copy_global_to_local
+// CHECK: triton_gpu.async_copy_global_to_local
+// CHECK: triton_gpu.async_copy_global_to_local
+// CHECK: triton_gpu.async_copy_global_to_local
 // CHECK: triton_gpu.async_commit_group
 // CHECK: %[[NEXT_BUFFER_1:.*]] = tt.addptr %{{.*}}, {{.*}}
-// CHECK: triton_gpu.async_copy_to_local %[[NEXT_BUFFER_1]]
+// CHECK: triton_gpu.async_copy_global_to_local %[[NEXT_BUFFER_1]]
 // CHECK: %[[IND_BUFFER_0:.*]] = tt.load %{{.*}}, {{.*}}
 // CHECK: %[[IND_BUFFER_1:.*]] = arith.muli {{.*}}, %[[IND_BUFFER_0]]
 // CHECK: %[[IND_BUFFER_2:.*]] = tt.splat %[[IND_BUFFER_1]]
 // CHECK: %[[NEXT_BUFFER_0:.*]] = tt.addptr {{.*}}, %[[IND_BUFFER_2]]
-// CHECK: triton_gpu.async_copy_to_local %[[NEXT_BUFFER_0]]
+// CHECK: triton_gpu.async_copy_global_to_local %[[NEXT_BUFFER_0]]
 // CHECK: triton_gpu.async_wait {{.*}} {num = 2 : i32}
 tt.func @indirect_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
                    %76: index,
@@ -297,19 +297,19 @@ tt.func @indirect_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
 }
 
 // CHECK-LABEL: tt.func @indirect_bmm_scalar_dist_one
-// CHECK: triton_gpu.async_copy_to_local
-// CHECK: triton_gpu.async_copy_to_local
-// CHECK: triton_gpu.async_copy_to_local
-// CHECK: triton_gpu.async_copy_to_local
+// CHECK: triton_gpu.async_copy_global_to_local
+// CHECK: triton_gpu.async_copy_global_to_local
+// CHECK: triton_gpu.async_copy_global_to_local
+// CHECK: triton_gpu.async_copy_global_to_local
 // CHECK: triton_gpu.async_commit_group
 // CHECK: scf.for %{{.*}} iter_args(%{{.*}}, %{{.*}}, %{{.*}}, %[[IND_BUFFER_PREV:.*]] = {{.*}}, %{{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}) ->
 // CHECK: %[[NEXT_BUFFER_1:.*]] = tt.addptr %{{.*}}, {{.*}}
-// CHECK: triton_gpu.async_copy_to_local %[[NEXT_BUFFER_1]]
+// CHECK: triton_gpu.async_copy_global_to_local %[[NEXT_BUFFER_1]]
 // CHECK: %[[IND_BUFFER_0:.*]] = tt.load %{{.*}}, {{.*}}
 // CHECK: %[[IND_BUFFER_1:.*]] = arith.muli {{.*}}, %[[IND_BUFFER_PREV]]
 // CHECK: %[[IND_BUFFER_2:.*]] = tt.splat %[[IND_BUFFER_1]]
 // CHECK: %[[NEXT_BUFFER_0:.*]] = tt.addptr {{.*}}, %[[IND_BUFFER_2]]
-// CHECK: triton_gpu.async_copy_to_local %[[NEXT_BUFFER_0]]
+// CHECK: triton_gpu.async_copy_global_to_local %[[NEXT_BUFFER_0]]
 // CHECK: triton_gpu.async_wait {{.*}} {num = 2 : i32}
 // CHECK: scf.yield {{.*}}, {{.*}}, {{.*}}, %[[IND_BUFFER_0]]
 tt.func @indirect_bmm_scalar_dist_one(%77: i64 {tt.divisibility=16: i32},
@@ -344,20 +344,20 @@ tt.func @indirect_bmm_scalar_dist_one(%77: i64 {tt.divisibility=16: i32},
 }
 
 // CHECK-LABEL: tt.func @indirect_bmm_vector
-// CHECK: triton_gpu.async_copy_to_local
-// CHECK: triton_gpu.async_copy_to_local
-// CHECK: triton_gpu.async_copy_to_local
-// CHECK: triton_gpu.async_copy_to_local
+// CHECK: triton_gpu.async_copy_global_to_local
+// CHECK: triton_gpu.async_copy_global_to_local
+// CHECK: triton_gpu.async_copy_global_to_local
+// CHECK: triton_gpu.async_copy_global_to_local
 // CHECK: triton_gpu.async_commit_group
 // CHECK: %[[NEXT_BUFFER_1:.*]] = tt.addptr %{{.*}}, {{.*}}
-// CHECK: triton_gpu.async_copy_to_local %[[NEXT_BUFFER_1]]
-// CHECK: %[[IND_BUFFER_0:.*]] = triton_gpu.subview
+// CHECK: triton_gpu.async_copy_global_to_local %[[NEXT_BUFFER_1]]
+// CHECK: %[[IND_BUFFER_0:.*]] = triton_gpu.memdesc_subview
 // CHECK: %[[IND_BUFFER_1:.*]] = triton_gpu.local_load %[[IND_BUFFER_0]]
 // CHECK: %[[IND_BUFFER_2:.*]] = tt.expand_dims %[[IND_BUFFER_1]] {axis = 1 : i32}
 // CHECK: %[[IND_BUFFER_3:.*]] = tt.broadcast %[[IND_BUFFER_2]]
 // CHECK: %[[IND_BUFFER_4:.*]] = arith.muli {{.*}}, %[[IND_BUFFER_3]]
 // CHECK: %[[NEXT_BUFFER_0:.*]] = tt.addptr {{.*}}, %[[IND_BUFFER_4]]
-// CHECK: triton_gpu.async_copy_to_local %[[NEXT_BUFFER_0]]
+// CHECK: triton_gpu.async_copy_global_to_local %[[NEXT_BUFFER_0]]
 // CHECK: triton_gpu.async_wait {{.*}} {num = 1 : i32}
 tt.func @indirect_bmm_vector(%77: tensor<16x16xi64, #BL> {tt.divisibility=16: i32, tt.constancy=16: i32},
                    %76: index,
@@ -608,7 +608,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     // CHECK: scf.for
     // CHECK:   tt.dot
     // CHECK:   tt.dot
-    // CHECK:   triton_gpu.async_copy_to_local
+    // CHECK:   triton_gpu.async_copy_global_to_local
     // CHECK:   triton_gpu.async_wait {{.*}} {num = 1 : i32}
     // CHECK:   scf.yield
     // CHECK: triton_gpu.async_wait {num = 0 : i32}
@@ -693,9 +693,9 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 // CHECK:   scf.for
 // CHECK:     scf.yield
 // CHECK:   triton_gpu.async_wait {num = 0 : i32}
-// CHECK:   triton_gpu.async_copy_to_local
+// CHECK:   triton_gpu.async_copy_global_to_local
 // CHECK:   triton_gpu.async_commit_group
-// CHECK:   triton_gpu.async_copy_to_local
+// CHECK:   triton_gpu.async_copy_global_to_local
 // CHECK:   triton_gpu.async_commit_group
 // CHECK:   scf.yield
 //
@@ -881,14 +881,14 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 // CHECK-LABEL: tt.func @indirect_load_shared_layout
 // CHECK: scf.for
 // CHECK: %[[NEXT_BUFFER_1:.*]] = tt.addptr %{{.*}}, {{.*}}
-// CHECK: triton_gpu.async_copy_to_local %[[NEXT_BUFFER_1]]
-// CHECK: %[[IND_BUFFER_0:.*]] = triton_gpu.subview {{.*}} : !tt.memdesc<1x16xi64, #[[SHARED_LAYOUT]], mutable> -> !tt.memdesc<16xi64, #[[SHARED_LAYOUT]], mutable>
+// CHECK: triton_gpu.async_copy_global_to_local %[[NEXT_BUFFER_1]]
+// CHECK: %[[IND_BUFFER_0:.*]] = triton_gpu.memdesc_subview {{.*}} : !tt.memdesc<1x16xi64, #[[SHARED_LAYOUT]], mutable> -> !tt.memdesc<16xi64, #[[SHARED_LAYOUT]], mutable>
 // CHECK: %[[IND_BUFFER_1:.*]] = triton_gpu.local_load %[[IND_BUFFER_0]]
 // CHECK: %[[IND_BUFFER_2:.*]] = tt.expand_dims %[[IND_BUFFER_1]] {axis = 1 : i32}
 // CHECK: %[[IND_BUFFER_3:.*]] = tt.broadcast %[[IND_BUFFER_2]]
 // CHECK: %[[IND_BUFFER_4:.*]] = arith.muli {{.*}}, %[[IND_BUFFER_3]]
 // CHECK: %[[NEXT_BUFFER_0:.*]] = tt.addptr {{.*}}, %[[IND_BUFFER_4]]
-// CHECK: triton_gpu.async_copy_to_local %[[NEXT_BUFFER_0]]
+// CHECK: triton_gpu.async_copy_global_to_local %[[NEXT_BUFFER_0]]
 // CHECK: triton_gpu.async_wait {{.*}} {num = 1 : i32}
 #AL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #BL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -933,11 +933,11 @@ tt.func @indirect_load_shared_layout(%77: tensor<16x16xi64, #BL> {tt.divisibilit
 // -----
 
 // CHECK-LABEL: @kernel_yield_constant
-// CHECK: triton_gpu.async_copy_to_local
-// CHECK: triton_gpu.subview
+// CHECK: triton_gpu.async_copy_global_to_local
+// CHECK: triton_gpu.memdesc_subview
 // CHECK: scf.for
-// CHECK: triton_gpu.async_copy_to_local
-// CHECK: triton_gpu.subview
+// CHECK: triton_gpu.async_copy_global_to_local
+// CHECK: triton_gpu.memdesc_subview
 // CHECK: tt.return
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mma = #triton_gpu.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [16, 8]}>
@@ -986,14 +986,14 @@ module attributes {"triton_gpu.compute-capability" = 86 : i32, "triton_gpu.num-c
 // CHECK-DAG: %[[CONSTANT_1:.*]] = arith.constant 1 : i32
 // CHECK:   %[[ABUFFER:.*]] = triton_gpu.local_alloc
 // CHECK:   %[[BBUFFER:.*]] = triton_gpu.local_alloc
-// CHECK:   %[[A0BUFFER:.*]] = triton_gpu.subview %[[ABUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:   triton_gpu.async_copy_to_local {{.*}}, %[[A0BUFFER]]
-// CHECK:   %[[B0BUFFER:.*]] = triton_gpu.subview %[[BBUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:   triton_gpu.async_copy_to_local {{.*}}, %[[B0BUFFER]]
-// CHECK:   %[[A1BUFFER:.*]] = triton_gpu.subview %[[ABUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:   triton_gpu.async_copy_to_local {{.*}}, %[[A1BUFFER]]
-// CHECK:   %[[B1BUFFER:.*]] = triton_gpu.subview %[[BBUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:   triton_gpu.async_copy_to_local {{.*}}, %[[B1BUFFER]]
+// CHECK:   %[[A0BUFFER:.*]] = triton_gpu.memdesc_subview %[[ABUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   triton_gpu.async_copy_global_to_local {{.*}}, %[[A0BUFFER]]
+// CHECK:   %[[B0BUFFER:.*]] = triton_gpu.memdesc_subview %[[BBUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   triton_gpu.async_copy_global_to_local {{.*}}, %[[B0BUFFER]]
+// CHECK:   %[[A1BUFFER:.*]] = triton_gpu.memdesc_subview %[[ABUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   triton_gpu.async_copy_global_to_local {{.*}}, %[[A1BUFFER]]
+// CHECK:   %[[B1BUFFER:.*]] = triton_gpu.memdesc_subview %[[BBUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   triton_gpu.async_copy_global_to_local {{.*}}, %[[B1BUFFER]]
 // CHECK:   scf.for
 #blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {

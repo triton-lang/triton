@@ -14,23 +14,23 @@
 // CHECK: tt.func @matmul_loop_mixed
 // CHECK-DAG: %[[C0:.+]] = arith.constant 0 : i32
 // CHECK-DAG: %[[C16:.+]] = arith.constant 16 : i32
-// CHECK-DAG: %[[A0_PREFETCH_SMEM:.*]] = triton_gpu.subview %[[A0:.*]][%[[C0]], %[[C0]]]
+// CHECK-DAG: %[[A0_PREFETCH_SMEM:.*]] = triton_gpu.memdesc_subview %[[A0:.*]][%[[C0]], %[[C0]]]
 // CHECK-DAG: %[[A0_PREFETCH:.*]] = triton_gpu.local_load %[[A0_PREFETCH_SMEM]]
 // CHECK-DAG: %[[A0_CVT:.*]] = tt.fp_to_fp %[[A0_PREFETCH]]
-// CHECK-DAG: %[[B0_PREFETCH_SMEM:.*]] = triton_gpu.subview %[[B0:.*]][%[[C0]], %[[C0]]]
+// CHECK-DAG: %[[B0_PREFETCH_SMEM:.*]] = triton_gpu.memdesc_subview %[[B0:.*]][%[[C0]], %[[C0]]]
 // CHECK-DAG: %[[B0_PREFETCH:.*]] = triton_gpu.local_load %[[B0_PREFETCH_SMEM]]
 // CHECK:     scf.for {{.*}} iter_args({{.*}}, {{.*}}, %[[arg_a0:.*]] = %[[A0]], %[[arg_b0:.*]] = %[[B0]], {{.*}}, %[[a0_prefetch:.*]] = %[[A0_CVT]], %[[b0_prefetch:.*]] = %[[B0_PREFETCH]]
-// CHECK-DAG:   %[[A_REM_SMEM:.*]] = triton_gpu.subview %[[arg_a0]][%[[C0]], %[[C16]]]
+// CHECK-DAG:   %[[A_REM_SMEM:.*]] = triton_gpu.memdesc_subview %[[arg_a0]][%[[C0]], %[[C16]]]
 // CHECK-DAG:   %[[A_REM:.*]] = triton_gpu.local_load %[[A_REM_SMEM]]
 // CHECK-DAG:   %[[A_REM_CVT:.*]] = tt.fp_to_fp %[[A_REM]]
-// CHECK-DAG:   %[[B_REM_SMEM:.*]] = triton_gpu.subview %[[arg_b0]][%[[C16]], %[[C0]]]
+// CHECK-DAG:   %[[B_REM_SMEM:.*]] = triton_gpu.memdesc_subview %[[arg_b0]][%[[C16]], %[[C0]]]
 // CHECK-DAG:   %[[B_REM:.*]] = triton_gpu.local_load %[[B_REM_SMEM]]
 // CHECK:       %[[D_FIRST:.*]] = tt.dot %[[a0_prefetch]], %[[b0_prefetch:.*]], {{.*}}
 // CHECK:       tt.dot %[[A_REM_CVT]], %[[B_REM]], %[[D_FIRST:.*]]
-// CHECK-DAG:   %[[NEXT_A_PREFETCH_SMEM:.*]] = triton_gpu.subview {{.*}}[%[[C0]], %[[C0]]]
+// CHECK-DAG:   %[[NEXT_A_PREFETCH_SMEM:.*]] = triton_gpu.memdesc_subview {{.*}}[%[[C0]], %[[C0]]]
 // CHECK-DAG:   %[[NEXT_A_PREFETCH:.*]] = triton_gpu.local_load %[[NEXT_A_PREFETCH_SMEM]]
 // CHECK-DAG:   %[[NEXT_A_PREFETCH_CVT:.*]] = tt.fp_to_fp %[[NEXT_A_PREFETCH]]
-// CHECK-DAG:   %[[NEXT_B_PREFETCH_SMEM:.*]] = triton_gpu.subview {{.*}}[%[[C0]], %[[C0]]]
+// CHECK-DAG:   %[[NEXT_B_PREFETCH_SMEM:.*]] = triton_gpu.memdesc_subview {{.*}}[%[[C0]], %[[C0]]]
 // CHECK-DAG:   %[[NEXT_B_PREFETCH:.*]] = triton_gpu.local_load %[[NEXT_B_PREFETCH_SMEM]]
 // CHECK:     scf.yield {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[NEXT_A_PREFETCH_CVT]], %[[NEXT_B_PREFETCH]]
 module attributes { "triton_gpu.num-warps" = 4 : i32 } {

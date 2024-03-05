@@ -748,21 +748,21 @@ struct AtomicRMWOpConversion
   }
 };
 
-struct AsyncCopyToLocalOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::AsyncCopyToLocalOp>,
+struct AsyncCopyGlobalToLocalOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::AsyncCopyGlobalToLocalOp>,
       public LoadStoreConversionBase {
   using ConvertOpToLLVMPattern<
-      triton::gpu::AsyncCopyToLocalOp>::ConvertOpToLLVMPattern;
+      triton::gpu::AsyncCopyGlobalToLocalOp>::ConvertOpToLLVMPattern;
 
-  AsyncCopyToLocalOpConversion(LLVMTypeConverter &converter,
+  AsyncCopyGlobalToLocalOpConversion(LLVMTypeConverter &converter,
                                ModuleAxisInfoAnalysis &axisAnalysisPass,
                                PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::gpu::AsyncCopyToLocalOp>(converter,
+      : ConvertOpToLLVMPattern<triton::gpu::AsyncCopyGlobalToLocalOp>(converter,
                                                                 benefit),
         LoadStoreConversionBase(axisAnalysisPass) {}
 
   LogicalResult
-  matchAndRewrite(triton::gpu::AsyncCopyToLocalOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::gpu::AsyncCopyGlobalToLocalOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     Value res = op.getResult();
@@ -775,7 +775,7 @@ struct AsyncCopyToLocalOpConversion
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     auto srcLayout = srcTy.getEncoding();
     assert((srcLayout.isa<BlockedEncodingAttr, SliceEncodingAttr>() &&
-            "Unexpected srcLayout in AsyncCopyToLocalOpConversion"));
+            "Unexpected srcLayout in AsyncCopyGlobalToLocalOpConversion"));
     auto resSharedLayout = dstTy.getEncoding().cast<SharedEncodingAttr>();
     auto srcShape = srcTy.getShape();
     assert((srcShape.size() <= 3) &&
@@ -993,7 +993,7 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
   patterns.add<StoreOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AtomicCASOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AtomicRMWOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<AsyncCopyToLocalOpConversion>(typeConverter, axisInfoAnalysis,
+  patterns.add<AsyncCopyGlobalToLocalOpConversion>(typeConverter, axisInfoAnalysis,
                                              benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);

@@ -103,7 +103,7 @@ tt.func @subview() {
   %cst0 = arith.constant dense<0.000000e+00> : tensor<32x16xf16, #AL>
   %a = triton_gpu.local_alloc %cst0 : (tensor<32x16xf16, #AL>) -> !tt.memdesc<32x16xf16, #A_SHARED>
   %index = arith.constant 0 : i32
-  %0 = triton_gpu.subview %a[%index, %index, %index] : !tt.memdesc<32x16xf16, #A_SHARED> -> !tt.memdesc<16x16xf16, #A_SHARED>
+  %0 = triton_gpu.memdesc_subview %a[%index, %index, %index] : !tt.memdesc<32x16xf16, #A_SHARED> -> !tt.memdesc<16x16xf16, #A_SHARED>
   // CHECK: gpu.barrier
   // CHECK-NEXT: triton_gpu.local_load
   %1 = triton_gpu.local_load %0 : !tt.memdesc<16x16xf16, #A_SHARED> -> tensor<16x16xf16, #AL>
@@ -120,15 +120,15 @@ tt.func @trans(%a: !tt.memdesc<16x32xf16, #A_SHARED>) {
   tt.return
 }
 
-// CHECK-LABEL: async_copy_to_local
-tt.func @async_copy_to_local(%A : !tt.ptr<f16>, %i1 : i1) {
+// CHECK-LABEL: async_copy_global_to_local
+tt.func @async_copy_global_to_local(%A : !tt.ptr<f16>, %i1 : i1) {
   %index = arith.constant 0 : i32
   %a_ptr = tt.splat %A : !tt.ptr<f16> -> tensor<16x16x!tt.ptr<f16>, #AL>
   %mask = tt.splat %i1 : i1 -> tensor<16x16xi1, #AL>
   %other = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   %alloc = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, mutable>
-  %subview = triton_gpu.subview %alloc[%index, %index, %index] : !tt.memdesc<1x16x16xf16, #A_SHARED, mutable> -> !tt.memdesc<16x16xf16, #A_SHARED, mutable>
-  %1 = triton_gpu.async_copy_to_local %a_ptr, %subview {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x16x!tt.ptr<f16>, #AL> -> !tt.memdesc<16x16xf16, #A_SHARED, mutable>
+  %subview = triton_gpu.memdesc_subview %alloc[%index, %index, %index] : !tt.memdesc<1x16x16xf16, #A_SHARED, mutable> -> !tt.memdesc<16x16xf16, #A_SHARED, mutable>
+  %1 = triton_gpu.async_copy_global_to_local %a_ptr, %subview {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x16x!tt.ptr<f16>, #AL> -> !tt.memdesc<16x16xf16, #A_SHARED, mutable>
   // CHECK: gpu.barrier
   // CHECK-NEXT: triton_gpu.local_load
   %4 = triton_gpu.local_load %subview : !tt.memdesc<16x16xf16, #A_SHARED, mutable> -> tensor<16x16xf16, #AL>

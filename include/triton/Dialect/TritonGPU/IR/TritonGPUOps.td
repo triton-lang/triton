@@ -112,7 +112,7 @@ def TTG_AsyncBulkCommitGroupOp : TTG_Op<"async_bulk_commit_group"> {
   }];
 }
 
-def TTG_AsyncCopyToLocalOp : TTG_Op<"async_copy_to_local",
+def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local",
                                     [AttrSizedOperandSegments,
                                      MemoryEffects<[MemRead<GlobalMemory>, MemWrite<SharedMemory>]>,
                                      TypesMatchWith<"infer mask type from src type",
@@ -192,7 +192,7 @@ def TTG_LocalDeallocOp : TTG_Op<"local_dealloc", [MemoryEffects<[MemFree<SharedM
   let assemblyFormat = [{$ptr attr-dict `:` qualified(type($ptr))}];
 }
 
-def TTG_SubviewOp : TTG_Op<"subview", [Pure]> {
+def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
   let summary = "take a subview of the descriptor.";
 
   let description = [{
