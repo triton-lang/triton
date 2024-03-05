@@ -165,7 +165,7 @@ SmallVector<unsigned> getContigPerThread(Attribute layout) {
     SmallVector<unsigned> contigPerThread(rank, 1);
     contigPerThread[rank - 1] = 2;
     return contigPerThread;
-  } else if (layout.isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>()) {
+  } else if (layout.isa<AMDMfmaEncodingAttr>()) {
     return {1, 1};
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parentLayout = sliceLayout.getParent();
@@ -286,7 +286,7 @@ SmallVector<unsigned> getCTAsPerCGA(Attribute layout) {
   ArrayRef<unsigned> ref;
   if (auto distributedLayout = layout.dyn_cast<DistributedEncodingTrait>())
     return distributedLayout.getCTAsPerCGA();
-  else if (layout.isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>())
+  else if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>())
     return {1, 1};
   else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>())
     ref = sharedLayout.getCTALayout().getCTAsPerCGA();
@@ -299,7 +299,7 @@ SmallVector<unsigned> getCTASplitNum(Attribute layout) {
   SmallVector<unsigned> res;
   if (auto distributedLayout = layout.dyn_cast<DistributedEncodingTrait>()) {
     return distributedLayout.getCTASplitNum();
-  } else if (layout.isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>()) {
+  } else if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
     res.resize(2);
     res[0] = res[1] = 1;
   } else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
@@ -315,7 +315,7 @@ SmallVector<unsigned> getCTAOrder(Attribute layout) {
   SmallVector<unsigned> res;
   if (auto distributedLayout = layout.dyn_cast<DistributedEncodingTrait>()) {
     res = distributedLayout.getCTAOrder();
-  } else if (layout.isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>()) {
+  } else if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
     return {0, 1};
   } else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
     res = SmallVector<unsigned>(sharedLayout.getCTALayout().getCTAOrder());
@@ -370,8 +370,6 @@ unsigned getNumWarpsPerCTA(Attribute layout) {
     warpsPerCTA = distributedLayout.getWarpsPerCTA();
   } else if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>())
     warpsPerCTA = mfmaLayout.getWarpsPerCTA();
-  else if (auto wmmaLayout = layout.dyn_cast<AMDWmmaEncodingAttr>())
-    warpsPerCTA = wmmaLayout.getWarpsPerCTA();
   else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>())
     return getNumWarpsPerCTA(dotLayout.getParent());
   else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>())
@@ -786,13 +784,15 @@ SmallVector<unsigned>
 AMDWmmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
                                        Type eltTy) const {
   size_t rank = shape.size();
-  assert(rank == 2 && "Unexpected rank of wmma layout");
+  assert(rank == 2 && "Unexpected rank of mfma layout");
 
   SmallVector<unsigned> elemsPerThread(rank);
-  auto mnkDim = getMNKDimPerWMMAInstr();
+  auto nonKDim = getMNKDimPerWMMAInstr()[0];
   auto elemsPerThreadPerTile = getSizePerThread();
-  return {ceil<unsigned>(shape[0], mnkDim[0]) * elemsPerThreadPerTile[0],
-          ceil<unsigned>(shape[1], mnkDim[1]) * elemsPerThreadPerTile[1]};
+  return {ceil<unsigned>(shape[0], nonKDim * getWarpsPerCTA()[0]) *
+              elemsPerThreadPerTile[0],
+          ceil<unsigned>(shape[1], nonKDim * getWarpsPerCTA()[1]) *
+              elemsPerThreadPerTile[1]};
 }
 
 unsigned AMDWmmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
@@ -1594,11 +1594,11 @@ AMDWmmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
 
 unsigned AMDWmmaEncodingAttr::getTotalElemsPerThreadForOperands(
     ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const {
-  auto warpsPerCTA = getWarpsPerCTA();
-  auto instSize = getWMMAElemsPerInstrForOperands();
-  SmallVector<int64_t> shapePerWarp;
+  int warpsPerCTAM = getWarpsPerCTA()[0];
+  int warpsPerCTAN = getWarpsPerCTA()[1];
+  auto tileSize = getWMMAElemsPerInstrForOperands();
   auto rep = getWMMARepForOperands(shape, eltTy, kWidth, opIdx);
-  return rep[0] * rep[1];
+  return product(tileSize) * product(rep) * warpsPerCTAN * warpsPerCTAM;
 }
 
 SmallVector<int64_t>
