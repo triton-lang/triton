@@ -9,7 +9,8 @@
 using namespace mlir;
 namespace mlir::triton::NVIDIA {
 // Check if the reduction can use a redux op and return the kind.
-static std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op, int computeCapability) {
+static std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op,
+                                                     int computeCapability) {
   if (computeCapability < 80)
     return std::nullopt;
   if (op.getNumOperands() != 1 || op.getNumResults() != 1)
