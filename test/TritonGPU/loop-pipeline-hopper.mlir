@@ -286,11 +286,11 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 //// C-HECK-DAG: %[[CONSTANT_3:.*]] = arith.constant 3 : i32
 //// C-HECK: %[[MBARRIER_AB:.*]] = triton_nvidia_gpu.alloc_mbarrier {count = 1 : i32}
 //// C-HECK: %[[EMPTY_BARRIER_B:.*]] = triton_nvidia_gpu.alloc_mbarrier {count = 2 : i32}
-//// C-HECK: %[[ABUFFER:.*]] = triton_gpu.local_alloc_tensor
+//// C-HECK: %[[ABUFFER:.*]] = triton_gpu.alloc
 //// C-HECK: %[[MBARRIER_AB0:.*]] = triton_nvidia_gpu.extract_mbarrier %[[MBARRIER_AB]][%c0_i32]
 //// C-HECK: triton_nvidia_gpu.mbarrier_arrive %[[MBARRIER_AB0]]
 //// C-HECK: %[[A0BUFFER:.*]] = triton_nvidia_gpu.insert_slice_tma {{.*}}, {{.*}}, %[[CONSTANT_0]], %[[MBARRIER_AB0]]
-//// C-HECK: %[[BBUFFER:.*]] = triton_gpu.local_alloc_tensor
+//// C-HECK: %[[BBUFFER:.*]] = triton_gpu.alloc
 //// C-HECK: %[[EMPTY_BARRIER_B0:.*]] = triton_nvidia_gpu.extract_mbarrier %[[EMPTY_BARRIER_B]][%c0_i32]
 //// C-HECK: triton_nvidia_gpu.mbarrier_wait %[[EMPTY_BARRIER_B0]], %true
 //// C-HECK: %[[B0BUFFER:.*]] = triton_nvidia_gpu.insert_slice_tma {{.*}}, {{.*}}, %[[CONSTANT_0]], %[[MBARRIER_AB0]]
