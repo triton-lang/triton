@@ -6,6 +6,7 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
@@ -75,6 +76,10 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
   auto dotOpLayout = layout.dyn_cast<DotOperandEncodingAttr>();
   if (!dotOpLayout)
     return elemTy;
+  if (auto mfmaParent =
+          dotOpLayout.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
+    return vec_ty(elemTy, dotOpLayout.getKWidth());
+  }
   auto mmaParent = dotOpLayout.getParent().dyn_cast<NvidiaMmaEncodingAttr>();
   if (!mmaParent || mmaParent.isHopper())
     return elemTy;
