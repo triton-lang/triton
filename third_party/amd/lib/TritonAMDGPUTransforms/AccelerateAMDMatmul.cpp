@@ -45,7 +45,7 @@ SmallVector<unsigned> warpsPerTileMFMA(tt::DotOp dotOp,
       return {(unsigned)numWarps, 1};
 
   SmallVector<int64_t, 2> tensorShape = {shape[0], shape[1]};
-  SmallVector<unsigned, 2> ret = {1, 1};
+  SmallVector<unsigned> ret = {1, 1};
   bool changed = false;
 
   do {
