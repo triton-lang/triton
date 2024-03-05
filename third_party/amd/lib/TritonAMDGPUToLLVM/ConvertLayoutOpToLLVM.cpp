@@ -75,7 +75,7 @@ Value lowerSharedToDotOperandMFMA(
   Value src = op.getSrc();
   Value dst = op.getResult();
   auto llvmElemTy = typeConverter->convertType(
-      src.getType().cast<RankedTensorType>().getElementType());
+      src.getType().cast<MemDescType>().getElementType());
 
   auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                  llvmElemTy, rewriter);
