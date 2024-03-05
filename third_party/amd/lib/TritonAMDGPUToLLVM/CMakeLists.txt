@@ -2,7 +2,6 @@ add_triton_library(TritonAMDGPUToLLVM
     ConvertLayoutOpToLLVM/SharedToDotOperandMFMA.cpp
     ConvertLayoutOpToLLVM.cpp
     DotOpToLLVM/MFMA.cpp
-    DotOpToLLVM/WMMA.cpp
     DotOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
