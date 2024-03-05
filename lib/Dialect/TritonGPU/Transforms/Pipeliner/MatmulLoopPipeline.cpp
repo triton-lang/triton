@@ -749,9 +749,10 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   return true;
 }
 
-/// Find the minimum number of async_commit_group ops between the extract
-/// and the insert. Wait number is the number of commits-1.
-static int minWaitNumberForExtract(Operation *waitOp) {
+/// Find the minimum number of async_commit_group ops between the wait
+/// and the associated async_commit_group. This can be safely used as the wait
+/// number.
+static int minNumInterleavedCommitOps(Operation *waitOp) {
   auto countCommitsBetween = [](Operation *op1, Operation *op2) {
     int count = 0;
     for (auto op = op1; op != op2; op = op->getNextNode()) {
@@ -843,11 +844,12 @@ combineRedundantWaitOps(llvm::SmallSetVector<ttg::AsyncWaitOp, 8> &waitOps) {
   }
 }
 
-/// Insert wait ops after the extract_slice ops.
+/// Update wait op number by analyzing the number of async_commit_group ops
+/// along all paths.
 void mlir::triton::updateWaits(ModuleOp module) {
   llvm::SmallSetVector<ttg::AsyncWaitOp, 8> waitOps;
   module.walk([&](ttg::AsyncWaitOp waitOp) {
-    int minNumCommits = minWaitNumberForExtract(waitOp);
+    int minNumCommits = minNumInterleavedCommitOps(waitOp);
     waitOp.setNum(minNumCommits);
     waitOps.insert(waitOp);
   });
