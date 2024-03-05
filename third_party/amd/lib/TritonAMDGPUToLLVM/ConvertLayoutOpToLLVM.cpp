@@ -742,12 +742,18 @@ private:
     auto srcShape = srcTy.getShape();
     auto dstTy = dst.getType().cast<RankedTensorType>();
     auto dstShapePerCTA = triton::gpu::getShapePerCTA(dstTy);
-    assert(srcShape.size() == 2 &&
-           "Unexpected rank of ConvertLayout(blocked->shared)");
+
     auto srcLayout = srcTy.getEncoding();
     auto dstSharedLayout = dstTy.getEncoding().cast<SharedEncodingAttr>();
     auto inOrd = getOrder(srcLayout);
     auto outOrd = dstSharedLayout.getOrder();
+    llvm::outs() << "shared layout order: ";
+    for (int i = 0; i < outOrd.size(); ++i)
+      llvm::outs() << outOrd[i] << " ";
+    llvm::outs() << "\n";
+    assert(srcShape.size() == 2 ||
+           (srcShape.size() <= 3 && outOrd[2] == 0) &&
+               "Unexpected rank of ConvertLayout(blocked->shared)");
     Value smemBase = getSharedMemoryBase(loc, rewriter, dst);
     auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);

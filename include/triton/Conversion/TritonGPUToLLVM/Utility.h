@@ -1185,6 +1185,7 @@ loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
   auto dstElemTy = dstTy.getElementType();
   auto inOrd = triton::gpu::getOrder(srcSharedLayout);
   auto outOrd = triton::gpu::getOrder(dstDistributedLayout);
+  llvm::outs() << ">>> Calling loadSharedToDistributed <<<\n";
   unsigned outVec = inOrd == outOrd
                         ? triton::gpu::getUniqueContigPerThread(
                               dstDistributedLayout, dstShape)[outOrd[0]]

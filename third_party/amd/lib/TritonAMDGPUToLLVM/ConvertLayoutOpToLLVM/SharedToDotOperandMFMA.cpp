@@ -381,16 +381,17 @@ fastPathComputeOffsets(ConversionPatternRewriter &rewriter, Location loc,
 }
 
 bool isColMajor(::llvm::ArrayRef<unsigned> order) {
-  assert(order.size() == 2 && (order[0] & ~1ul) == 0 &&
-         order[0] + order[1] == 1);
-  return order[0] == 0;
+  auto rank = order.size();
+  return order[0] == (rank - 2);
 }
 
 bool isKMajor(::llvm::ArrayRef<unsigned> order, int opIdx) {
-  if (order[0] + opIdx == 1)
+  auto rank = order.size();
+  if ((rank == 2) && (order[0] + opIdx == 1))
     return true;
-  else
-    return false;
+  if ((rank == 3) && (order[0] + opIdx == 2))
+    return true;
+  return false;
 }
 
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
@@ -404,6 +405,9 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   int kDimIdx = opIdx == 0 ? rank - 1 : rank - 2;
   int nonKDimIdx = opIdx == 0 ? rank - 2 : rank - 1;
 
+  llvm::outs() << ">>>> sharedToDotOperand MFMA for opIdx" << opIdx
+               << " <<<<< \n";
+
   auto mfmaLayout = encoding.getParent().cast<AMDMfmaEncodingAttr>();
   auto mDim = mfmaLayout.getMDim();
   auto nDim = mfmaLayout.getNDim();
@@ -414,17 +418,28 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   auto sharedLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
   auto order = sharedLayout.getOrder();
 
+  llvm::outs() << "nonKDimIdx, kDimIdx = " << nonKDimIdx << ", " << kDimIdx
+               << "\n";
+
   auto elemTy = aTensorTy.getElementType();
   auto kWidth = encoding.getKWidth();
   auto elemsPerInstr = mfmaLayout.getMFMAInstrShapeForOperands(kWidth, opIdx);
-  auto mfmaInstrNonK = elemsPerInstr[nonKDimIdx];
-  auto mfmaInstrK = elemsPerInstr[kDimIdx];
+
+  llvm::outs() << "elemsPerInstr.size() = " << elemsPerInstr.size() << "\n";
+
+  int64_t mfmaInstrNonK;
+  int64_t mfmaInstrK;
   // TODO(Lixun): make it simpler
   // getMFMAInstrShapeForOperands always returns a 2D vector
   if (rank == 3) {
     mfmaInstrNonK = elemsPerInstr[nonKDimIdx - 1];
     mfmaInstrK = elemsPerInstr[kDimIdx - 1];
+  } else {
+    mfmaInstrNonK = elemsPerInstr[nonKDimIdx];
+    mfmaInstrK = elemsPerInstr[kDimIdx];
   }
+
+  llvm::outs() << "accessed instrShape\n";
 
   auto numReps = mfmaLayout.getMFMARepForOperands(shape, kWidth, opIdx);
   auto numRepNonK = numReps[nonKDimIdx];
@@ -435,6 +450,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     numRepNonK = numReps[nonKDimIdx + 1];
     numRepK = numReps[kDimIdx + 1];
   }
+
+  llvm::outs() << ">> SharedToDotOperandMFMA <<\n";
 
   unsigned iWaveSize = triton::gpu::getWarpSize(mfmaLayout);
   assert(iWaveSize == 64);
