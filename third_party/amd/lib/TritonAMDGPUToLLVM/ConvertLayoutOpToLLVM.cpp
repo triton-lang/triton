@@ -1036,5 +1036,6 @@ void populateConvertLayoutOpToLLVMPatterns(
     PatternBenefit benefit) {
   patterns.add<ConvertLayoutOpConversion>(typeConverter, allocation,
                                           indexCacheInfo, benefit);
+  patterns.add<LocalLoadOpConversion>(typeConverter, benefit);
 }
 } // namespace AMD
