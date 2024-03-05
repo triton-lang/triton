@@ -14,7 +14,6 @@ using namespace mlir::triton;
 
 using ::AMD::ConvertTritonGPUOpToLLVMPattern;
 using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
-using ::AMD::TritonGPUToLLVMTypeConverter;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::linearize;
@@ -94,13 +93,13 @@ struct LoadOpConversion
       vec = std::min<size_t>(vec, getMaskAlignment(mask));
 
     // Get the LLVM values for pointers
-    auto ptrElems = getTypeConverter()->unpackLLElements(loc, llPtr, rewriter);
+    auto ptrElems = unpackLLElements(loc, llPtr, rewriter);
     assert(ptrElems.size() == numElems);
 
     // Get the LLVM values for mask
     SmallVector<Value> maskElems;
     if (llMask) {
-      maskElems = getTypeConverter()->unpackLLElements(loc, llMask, rewriter);
+      maskElems = unpackLLElements(loc, llMask, rewriter);
       assert(maskElems.size() == numElems);
     }
 
@@ -118,7 +117,7 @@ struct LoadOpConversion
     }
     SmallVector<Value> otherElems;
     if (other) {
-      otherElems = getTypeConverter()->unpackLLElements(loc, llOther, rewriter);
+      otherElems = unpackLLElements(loc, llOther, rewriter);
     }
 
     // vectorized iteration through all the pointer/mask/other elements
@@ -182,8 +181,8 @@ struct LoadOpConversion
     } // end vec
 
     Type llvmResultStructTy = getTypeConverter()->convertType(valueTy);
-    Value resultStruct = getTypeConverter()->packLLElements(
-        loc, loadedVals, rewriter, llvmResultStructTy);
+    Value resultStruct = packLLElements(
+        loc, getTypeConverter(), loadedVals, rewriter, llvmResultStructTy);
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -221,16 +220,16 @@ struct StoreOpConversion
     unsigned vec = getVectorSize(ptr);
     unsigned elemsPerThread = getTotalElemsPerThread(ptr.getType());
 
-    auto ptrElems = getTypeConverter()->unpackLLElements(loc, llPtr, rewriter);
+    auto ptrElems = unpackLLElements(loc, llPtr, rewriter);
     auto valueElems =
-        getTypeConverter()->unpackLLElements(loc, llValue, rewriter);
+        unpackLLElements(loc, llValue, rewriter);
     assert(ptrElems.size() == valueElems.size());
 
     // Determine the vectorization size
     SmallVector<Value> maskElems;
     if (llMask) {
       Value mask = op.getMask();
-      maskElems = getTypeConverter()->unpackLLElements(loc, llMask, rewriter);
+      maskElems = unpackLLElements(loc, llMask, rewriter);
       assert(valueElems.size() == maskElems.size());
 
       unsigned maskAlign = getMaskAlignment(mask);
@@ -332,11 +331,11 @@ struct AtomicCASOpConversion
     Value llVal = adaptor.getVal();
 
     // prep data by unpacking to get data ready
-    auto ptrElements = getTypeConverter()->unpackLLElements(
+    auto ptrElements = unpackLLElements(
         loc, llPtr, rewriter);
-    auto cmpElements = getTypeConverter()->unpackLLElements(
+    auto cmpElements = unpackLLElements(
         loc, llCmp, rewriter);
-    auto valElements = getTypeConverter()->unpackLLElements(
+    auto valElements = unpackLLElements(
         loc, llVal, rewriter);
 
     // deal with tensor or scalar
@@ -435,8 +434,8 @@ struct AtomicCASOpConversion
     // replace op
     if (TensorTy) {
       Type structTy = getTypeConverter()->convertType(TensorTy);
-      Value resultStruct = getTypeConverter()->packLLElements(
-          loc, resultVals, rewriter, structTy);
+      Value resultStruct = packLLElements(
+          loc, getTypeConverter(), resultVals, rewriter, structTy);
       rewriter.replaceOp(op, {resultStruct});
     }
     return success();
@@ -501,13 +500,13 @@ struct AtomicRMWOpConversion
     Value llMask = adaptor.getMask();
 
     auto valElements =
-        getTypeConverter()->unpackLLElements(loc, llVal, rewriter);
+        unpackLLElements(loc, llVal, rewriter);
     auto ptrElements =
-        getTypeConverter()->unpackLLElements(loc, llPtr, rewriter);
+        unpackLLElements(loc, llPtr, rewriter);
     SmallVector<Value> maskElements;
     if (llMask)
       maskElements =
-          getTypeConverter()->unpackLLElements(loc, llMask, rewriter);
+          unpackLLElements(loc, llMask, rewriter);
 
     Value opResult = op.getResult();
     auto tensorTy = opResult.getType().dyn_cast<RankedTensorType>();
@@ -595,8 +594,8 @@ struct AtomicRMWOpConversion
     }
     if (tensorTy) {
       Type structTy = getTypeConverter()->convertType(tensorTy);
-      Value resultStruct = getTypeConverter()->packLLElements(
-          loc, resultVals, rewriter, structTy);
+      Value resultStruct = packLLElements(
+          loc, getTypeConverter(), resultVals, rewriter, structTy);
       rewriter.replaceOp(op, {resultStruct});
     }
     return success();

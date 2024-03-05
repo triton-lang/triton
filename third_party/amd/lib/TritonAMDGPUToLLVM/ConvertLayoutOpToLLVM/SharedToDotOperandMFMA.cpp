@@ -29,7 +29,6 @@ using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::SharedEncodingAttr;
-using ::AMD::TritonGPUToLLVMTypeConverter;
 
 namespace {
 
@@ -545,7 +544,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(loadedValues.size(), loadedValues[0].getType()));
   auto result =
-      typeConverter->packLLElements(loc, loadedValues, rewriter, structTy);
+      packLLElements(loc, typeConverter, loadedValues, rewriter, structTy);
   return result;
 }
 

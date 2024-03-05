@@ -37,7 +37,7 @@
 // #include "TensorPtrOpsToLLVM.h"
 #include "TritonGPUToLLVM.h"
 #include "TritonGPUToLLVMBase.h"
-#include "TypeConverter.h"
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
@@ -55,7 +55,6 @@ using namespace mlir::triton;
 namespace ttng = mlir::triton::nvidia_gpu;
 using ::AMD::ConvertTritonGPUOpToLLVMPattern;
 using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
-using ::AMD::TritonGPUToLLVMTypeConverter;
 
 namespace {
 

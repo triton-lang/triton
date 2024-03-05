@@ -6,7 +6,7 @@
 // and <atomic>
 #include "triton/Analysis/Allocation.h"
 
-#include "TypeConverter.h"
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 //
 #include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -513,7 +513,7 @@ public:
     unsigned minVec = std::min(outVec, inVec);
     unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
     assert(numElems == srcIndices.size());
-    auto inVals = getTypeConverter()->unpackLLElements(loc, llSrc, rewriter);
+    auto inVals = unpackLLElements(loc, llSrc, rewriter);
     auto wordTy = vec_ty(elemTy, minVec);
     Value word;
 
