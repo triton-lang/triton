@@ -103,7 +103,7 @@ void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
-  if (isa<triton::gpu::DeallocOp, triton::gpu::SubviewOp, triton::TransOp>(
+  if (isa<triton::gpu::LocalDeallocOp, triton::gpu::SubviewOp, triton::TransOp>(
           op)) {
     return;
   }

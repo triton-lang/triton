@@ -745,7 +745,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   builder.create<ttg::AsyncWaitOp>(forOp.getLoc(), ValueRange({}), 0);
   // Explicitly deallocate allocated tensors after the wait op
   for (auto alloc : allocs)
-    builder.create<ttg::DeallocOp>(forOp.getLoc(), alloc);
+    builder.create<ttg::LocalDeallocOp>(forOp.getLoc(), alloc);
   return true;
 }
 

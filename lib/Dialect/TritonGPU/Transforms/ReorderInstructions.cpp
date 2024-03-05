@@ -61,7 +61,7 @@ public:
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
       auto curr = mlir::Block::iterator(op);
       for (; &*curr != getFirstUse(op); curr++)
-        if (isa<triton::gpu::DeallocOp>(&*curr))
+        if (isa<triton::gpu::LocalDeallocOp>(&*curr))
           op->moveAfter(&*curr);
     });
     // Sink conversions into loops when they will increase

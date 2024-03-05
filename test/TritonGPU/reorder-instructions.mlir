@@ -26,8 +26,8 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
 
 // CHECK-LABEL: sink_convert_dealloc
 //       CHECK: triton_gpu.async_wait {num = 0 : i32}
-//       CHECK: triton_gpu.dealloc %0 : !tt.memdesc<4x128x64xf16, #shared>
-//       CHECK: triton_gpu.dealloc %1 : !tt.memdesc<4x128x64xf16, #shared>
+//       CHECK: triton_gpu.local_dealloc %0 : !tt.memdesc<4x128x64xf16, #shared>
+//       CHECK: triton_gpu.local_dealloc %1 : !tt.memdesc<4x128x64xf16, #shared>
 //       CHECK: %2 = triton_gpu.convert_layout %arg0 : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #blocked1>
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
@@ -38,8 +38,8 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     %1 = triton_gpu.local_alloc : () -> !tt.memdesc<4x128x64xf16, #shared>
     %2 = triton_gpu.convert_layout %arg0 : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #blocked1>
     triton_gpu.async_wait {num = 0 : i32}
-    triton_gpu.dealloc %0 : !tt.memdesc<4x128x64xf16, #shared>
-    triton_gpu.dealloc %1 : !tt.memdesc<4x128x64xf16, #shared>
+    triton_gpu.local_dealloc %0 : !tt.memdesc<4x128x64xf16, #shared>
+    triton_gpu.local_dealloc %1 : !tt.memdesc<4x128x64xf16, #shared>
     %3 = arith.addf %2, %2 : tensor<32x32xf32, #blocked1>
     tt.return
   }

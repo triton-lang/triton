@@ -90,37 +90,37 @@ tt.func @preallocate(%A : !tt.ptr<f16>) {
   // CHECK-NEXT: offset = 4096, size = 1024
   %b = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED>
 
-  triton_gpu.dealloc %cst0 : !tt.memdesc<1x16x16xf16, #A_SHARED>
+  triton_gpu.local_dealloc %cst0 : !tt.memdesc<1x16x16xf16, #A_SHARED>
   // CHECK-NEXT: offset = 0, size = 1024
   %c = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED>
 
-  triton_gpu.dealloc %cst1 : !tt.memdesc<1x16x16xf16, #A_SHARED>
-  triton_gpu.dealloc %cst2 : !tt.memdesc<1x16x16xf16, #A_SHARED>
+  triton_gpu.local_dealloc %cst1 : !tt.memdesc<1x16x16xf16, #A_SHARED>
+  triton_gpu.local_dealloc %cst2 : !tt.memdesc<1x16x16xf16, #A_SHARED>
 
   // CHECK-NEXT: offset = 1024, size = 1024
   %cst4 = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED>
   // CHECK-NEXT: offset = 6144, size = 2048
   %e = triton_gpu.local_alloc : () -> !tt.memdesc<64x16xf16, #A_SHARED>
-  triton_gpu.dealloc %a : !tt.memdesc<32x16xf16, #A_SHARED>
+  triton_gpu.local_dealloc %a : !tt.memdesc<32x16xf16, #A_SHARED>
   // CHECK-NEXT: offset = 8192, size = 2048
   %d = triton_gpu.local_alloc : () -> !tt.memdesc<64x16xf16, #A_SHARED>
-  triton_gpu.dealloc %b : !tt.memdesc<32x16xf16, #A_SHARED>
+  triton_gpu.local_dealloc %b : !tt.memdesc<32x16xf16, #A_SHARED>
   // CHECK-NEXT: offset = 10240, size = 2048
   %f = triton_gpu.local_alloc : () -> !tt.memdesc<64x16xf16, #A_SHARED>
-  triton_gpu.dealloc %cst4 : !tt.memdesc<32x16xf16, #A_SHARED>
-  triton_gpu.dealloc %c : !tt.memdesc<32x16xf16, #A_SHARED>
+  triton_gpu.local_dealloc %cst4 : !tt.memdesc<32x16xf16, #A_SHARED>
+  triton_gpu.local_dealloc %c : !tt.memdesc<32x16xf16, #A_SHARED>
   // CHECK-NEXT: offset = 0, size = 2048
   %cst5 = triton_gpu.local_alloc : () -> !tt.memdesc<64x16xf16, #A_SHARED>
   // CHECK-NEXT: offset = 2048, size = 4096
   %g = triton_gpu.local_alloc : () -> !tt.memdesc<128x16xf16, #A_SHARED>
-  triton_gpu.dealloc %e : !tt.memdesc<64x16xf16, #A_SHARED>
+  triton_gpu.local_dealloc %e : !tt.memdesc<64x16xf16, #A_SHARED>
   // CHECK-NEXT: offset = 2048, size = 4096
   %h = triton_gpu.local_alloc : () -> !tt.memdesc<128x16xf16, #A_SHARED>
-  triton_gpu.dealloc %d : !tt.memdesc<64x16xf16, #A_SHARED>
+  triton_gpu.local_dealloc %d : !tt.memdesc<64x16xf16, #A_SHARED>
   // CHECK-NEXT: offset = 2048, size = 4096
   %i = triton_gpu.local_alloc : () -> !tt.memdesc<128x16xf16, #A_SHARED>
-  triton_gpu.dealloc %f : !tt.memdesc<64x16xf16, #A_SHARED>
-  triton_gpu.dealloc %cst5 : !tt.memdesc<64x16xf16, #A_SHARED>
+  triton_gpu.local_dealloc %f : !tt.memdesc<64x16xf16, #A_SHARED>
+  triton_gpu.local_dealloc %cst5 : !tt.memdesc<64x16xf16, #A_SHARED>
   tt.return
   // CHECK-NEXT: size = 12288
 }
@@ -150,8 +150,8 @@ tt.func @longlive(%A : !tt.ptr<f16>) {
   %cst2 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED>
   // CHECK-NEXT: offset = 3072, size = 1024
   %a = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED>
-  triton_gpu.dealloc %cst1 : !tt.memdesc<1x16x16xf16, #A_SHARED>
-  triton_gpu.dealloc %cst2 : !tt.memdesc<1x16x16xf16, #A_SHARED>
+  triton_gpu.local_dealloc %cst1 : !tt.memdesc<1x16x16xf16, #A_SHARED>
+  triton_gpu.local_dealloc %cst2 : !tt.memdesc<1x16x16xf16, #A_SHARED>
 
   // CHECK-NEXT: offset = 1024, size = 512
   %cst3 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED>
@@ -165,11 +165,11 @@ tt.func @longlive(%A : !tt.ptr<f16>) {
   %cst6 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED>
   // CHECK-NEXT: offset = 3072, size = 1024
   %c = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED>
-  triton_gpu.dealloc %cst3 : !tt.memdesc<1x16x16xf16, #A_SHARED>
-  triton_gpu.dealloc %cst4 : !tt.memdesc<1x16x16xf16, #A_SHARED>
+  triton_gpu.local_dealloc %cst3 : !tt.memdesc<1x16x16xf16, #A_SHARED>
+  triton_gpu.local_dealloc %cst4 : !tt.memdesc<1x16x16xf16, #A_SHARED>
   // CHECK-NEXT: offset = 1024, size = 1024
   %d = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED>
-  triton_gpu.dealloc %cst0 : !tt.memdesc<1x16x16xf16, #A_SHARED>
+  triton_gpu.local_dealloc %cst0 : !tt.memdesc<1x16x16xf16, #A_SHARED>
   tt.return
   // CHECK-NEXT: size = 4096
 }
@@ -267,7 +267,7 @@ tt.func @dealloc(%A : !tt.ptr<f16>) {
   %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED>
   // CHECK: offset = 1024, size = 1024
   %cst1 = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED>
-  triton_gpu.dealloc %cst0 : !tt.memdesc<32x16xf16, #A_SHARED>
+  triton_gpu.local_dealloc %cst0 : !tt.memdesc<32x16xf16, #A_SHARED>
   tt.return
   // CHECK-NEXT: size = 2048
 }
@@ -317,8 +317,8 @@ tt.func @if(%i1 : i1) {
     %a = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED>
     // CHECK-NEXT: offset = 2048, size = 1024
     %b = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED>
-    triton_gpu.dealloc %cst0 : !tt.memdesc<1x16x16xf16, #A_SHARED>
-    triton_gpu.dealloc %cst1 : !tt.memdesc<1x16x16xf16, #A_SHARED>
+    triton_gpu.local_dealloc %cst0 : !tt.memdesc<1x16x16xf16, #A_SHARED>
+    triton_gpu.local_dealloc %cst1 : !tt.memdesc<1x16x16xf16, #A_SHARED>
   }
   // CHECK-NEXT: offset = 0, size = 512
   %cst2 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED>
@@ -326,8 +326,8 @@ tt.func @if(%i1 : i1) {
   %cst3 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED>
   // CHECK-NEXT: offset = 2048, size = 1024
   %a = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED>
-  triton_gpu.dealloc %cst2 : !tt.memdesc<1x16x16xf16, #A_SHARED>
-  triton_gpu.dealloc %cst3 : !tt.memdesc<1x16x16xf16, #A_SHARED>
+  triton_gpu.local_dealloc %cst2 : !tt.memdesc<1x16x16xf16, #A_SHARED>
+  triton_gpu.local_dealloc %cst3 : !tt.memdesc<1x16x16xf16, #A_SHARED>
   tt.return
   // CHECK-NEXT: size = 3072
 }
@@ -352,13 +352,13 @@ tt.func @if_else(%i1 : i1) {
     %cst3 = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED>
     // CHECK-NEXT: offset = 4096, size = 1024
     %a = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED>
-    triton_gpu.dealloc %cst2 : !tt.memdesc<1x16x16xf16, #A_SHARED>
-    triton_gpu.dealloc %cst3 : !tt.memdesc<1x16x16xf16, #A_SHARED>
+    triton_gpu.local_dealloc %cst2 : !tt.memdesc<1x16x16xf16, #A_SHARED>
+    triton_gpu.local_dealloc %cst3 : !tt.memdesc<1x16x16xf16, #A_SHARED>
   }
   // CHECK-NEXT: offset = 2048, size = 1024
   %a = triton_gpu.local_alloc : () -> !tt.memdesc<32x16xf16, #A_SHARED>
-  triton_gpu.dealloc %cst0 : !tt.memdesc<1x16x16xf16, #A_SHARED>
-  triton_gpu.dealloc %cst1 : !tt.memdesc<1x16x16xf16, #A_SHARED>
+  triton_gpu.local_dealloc %cst0 : !tt.memdesc<1x16x16xf16, #A_SHARED>
+  triton_gpu.local_dealloc %cst1 : !tt.memdesc<1x16x16xf16, #A_SHARED>
   tt.return
   // CHECK-NEXT: size = 5120
 }

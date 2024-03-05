@@ -180,7 +180,7 @@ def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEf
 }
 
 // Deallocate shared memory
-def TTG_DeallocOp : TTG_Op<"dealloc", [MemoryEffects<[MemFree<SharedMemory>]>]> {
+def TTG_LocalDeallocOp : TTG_Op<"local_dealloc", [MemoryEffects<[MemFree<SharedMemory>]>]> {
   let summary = "dealloc buffer";
 
   let description = [{
@@ -208,7 +208,7 @@ def TTG_SubviewOp : TTG_Op<"subview", [Pure]> {
 }
 
 def TTG_LocalLoadOp : TTG_Op<"local_load", [MemoryEffects<[MemRead<SharedMemory>]>]> {
-  let summary = "Load a buffer from shared memory into a distributed tensor";
+  let summary = "Load a buffer from local memory into a distributed tensor";
 
   let description = [{
     Load a tensor from the local memory descriptor into a distributed tensor.

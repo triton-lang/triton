@@ -64,7 +64,7 @@ static void hoistAllocAndConst(scf::ForOp forOp) {
     if (!allocOp)
       continue;
     for (Operation *user : allocOp->getUsers()) {
-      if (auto dealloc = dyn_cast<ttg::DeallocOp>(user)) {
+      if (auto dealloc = dyn_cast<ttg::LocalDeallocOp>(user)) {
         dealloc->moveAfter(forOp);
       }
     }

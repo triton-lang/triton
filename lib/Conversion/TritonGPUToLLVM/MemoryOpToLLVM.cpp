@@ -79,12 +79,13 @@ struct LocalAllocOpConversion
   }
 };
 
-struct DeallocOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::DeallocOp> {
-  using ConvertOpToLLVMPattern<triton::gpu::DeallocOp>::ConvertOpToLLVMPattern;
+struct LocalDeallocOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::LocalDeallocOp> {
+  using ConvertOpToLLVMPattern<
+      triton::gpu::LocalDeallocOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::gpu::DeallocOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::gpu::LocalDeallocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.eraseOp(op);
     return success();
@@ -97,5 +98,5 @@ void mlir::triton::populateMemoryOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<LocalAllocOpConversion>(typeConverter, benefit);
-  patterns.add<DeallocOpConversion>(typeConverter, benefit);
+  patterns.add<LocalDeallocOpConversion>(typeConverter, benefit);
 }
