@@ -133,9 +133,10 @@ struct DecomposeUnsupportedAMDConversions
       if (!getElementTypeOrSelf(cvtOp)
                .isa<mlir::Float8E4M3B11FNUZType, mlir::Float8E4M3FNType>())
         return;
-      auto shape = cvtOp.getType().getShape();
-      auto argEncoding = cvtOp.getSrc().getType().getEncoding();
-      auto cvtEncoding = cvtOp.getType().getEncoding();
+      auto shape = cvtOp.getType().cast<RankedTensorType>().getShape();
+      auto argEncoding =
+          cvtOp.getSrc().getType().cast<RankedTensorType>().getEncoding();
+      auto cvtEncoding = cvtOp.getType().cast<RankedTensorType>().getEncoding();
       if (argEncoding.isa<triton::gpu::DotOperandEncodingAttr>() ||
           cvtEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
         return;
@@ -145,15 +146,15 @@ struct DecomposeUnsupportedAMDConversions
       auto newCvtType = RankedTensorType::get(shape, F16Ty, cvtEncoding);
       auto newArg = builder.create<mlir::triton::FpToFpOp>(
           cvtOp.getLoc(), newArgType, cvtOp.getSrc());
-      addWSNamedAttrs(newArg, cvtOp->getAttrs());
+      addAttrs(newArg, cvtOp->getAttrs());
       auto newCvt = builder.create<mlir::triton::gpu::ConvertLayoutOp>(
           cvtOp.getLoc(), newCvtType, newArg);
-      addWSNamedAttrs(newCvt, cvtOp->getAttrs());
+      addAttrs(newCvt, cvtOp->getAttrs());
       auto newRet = builder.create<mlir::triton::FpToFpOp>(
           cvtOp.getLoc(), cvtOp.getType(), newCvt.getResult());
       newRet.setRounding(
           triton::RoundingMode::RTNE); // Downcast requires rounding mode
-      addWSNamedAttrs(newRet, cvtOp->getAttrs());
+      addAttrs(newRet, cvtOp->getAttrs());
       cvtOp.replaceAllUsesWith(newRet.getResult());
       cvtOp.erase();
     });
@@ -296,25 +297,25 @@ struct DecomposeUnsupportedAMDConversions
     /* -------------------------------- */
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
-      auto srcType = cvtOp.getSrc().getType();
-      auto dstType = cvtOp.getType();
+      auto srcType = cvtOp.getSrc().getType().cast<RankedTensorType>();
+      auto dstType = cvtOp.getType().cast<RankedTensorType>();
       auto srcBlocked =
           srcType.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
       auto dstDotOp =
           dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
       if (srcBlocked && dstDotOp) {
-        auto tmpType = RankedTensorType::get(
+        auto tmpType = MemDescType::get(
             dstType.getShape(), dstType.getElementType(),
             triton::gpu::SharedEncodingAttr::get(
                 mod.getContext(), dstDotOp, srcType.getShape(),
                 srcBlocked.getOrder(), srcBlocked.getCTALayout(),
                 srcType.getElementType()));
-        auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
+        auto tmp = builder.create<triton::gpu::LocalAllocOp>(
             cvtOp.getLoc(), tmpType, cvtOp.getSrc());
-        addWSNamedAttrs(tmp, cvtOp->getAttrs());
-        auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
+        addAttrs(tmp, cvtOp->getAttrs());
+        auto newConvert = builder.create<triton::gpu::LocalLoadOp>(
             cvtOp.getLoc(), dstType, tmp);
-        addWSNamedAttrs(newConvert, cvtOp->getAttrs());
+        addAttrs(newConvert, cvtOp->getAttrs());
         cvtOp.replaceAllUsesWith(newConvert.getResult());
         cvtOp.erase();
       }
