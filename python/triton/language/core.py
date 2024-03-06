@@ -220,6 +220,9 @@ class dtype:
     def is_fp8e4nv(self):
         return self.name == 'fp8e4nv'
 
+    def is_fp8e4b8(self):
+        return self.name == 'fp8e4b8'
+
     def is_fp8e4b15(self):
         return self.name == 'fp8e4b15'
 

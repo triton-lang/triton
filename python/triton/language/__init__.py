@@ -257,7 +257,9 @@ def str_to_ty(name):
         return pointer_type(ty)
     tys = {
         "fp8e4nv": float8e4nv,
+        "fp8e4b8": float8e4b8,
         "fp8e5": float8e5,
+        "fp8e5b16": float8e5b16,
         "fp8e4b15": float8e4b15,
         "fp8e4b8": float8e4b8,
         "fp8e5b16": float8e5b16,
