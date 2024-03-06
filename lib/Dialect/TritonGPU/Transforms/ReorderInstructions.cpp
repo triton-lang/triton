@@ -112,7 +112,7 @@ public:
       int opIdx = dstEncoding.getOpIdx();
       if (opIdx != 1)
         return;
-      if (!llvm::hasSingleElement(op->getUsers()))
+      if (!op->hasOneUse())
         return;
       auto dotUser = dyn_cast<triton::DotOp>(*op->user_begin());
       if (!dotUser)
