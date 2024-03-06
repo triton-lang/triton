@@ -1039,6 +1039,11 @@ class tensor:
         ...
 
 
+def get_bool_env_var(var_name):
+    v = os.getenv(var_name, "0")
+    return v == "1" or v == "true" or v == "on"
+
+
 # -----------------------
 # SPMD Programming Model
 # -----------------------
@@ -1406,7 +1411,7 @@ def dot(input, other, acc=None, allow_tf32=None, max_num_imprecise_acc=None, out
     :type other: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
     """
     if allow_tf32 is None:
-        if os.getenv("TRITON_F32_DEFAULT", "0") == "1":
+        if get_bool_env_var("TRITON_F32_DEFAULT"):
             allow_tf32 = False
         else:
             allow_tf32 = True
