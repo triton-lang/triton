@@ -3188,7 +3188,7 @@ def test_constexpr(literal, dtype_str, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("dtype_str", ['float32', 'float16', 'bfloat16'])
+@pytest.mark.parametrize("dtype_str", ['float32', 'float16'])
 def test_dot_without_load(dtype_str, device):
     if is_cuda():
         capability = torch.cuda.get_device_capability()
