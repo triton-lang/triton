@@ -8,6 +8,7 @@ from typing import Union, Callable, List, Sequence, TypeVar, cast
 import builtins
 from ..runtime.jit import jit
 import inspect
+import os
 
 from .._C.libtriton import ir
 from . import semantic
@@ -1393,7 +1394,7 @@ def expand_dims(input, axis, _builder=None):
 
 
 @builtin
-def dot(input, other, acc=None, allow_tf32=True, max_num_imprecise_acc=None, out_dtype=float32, _builder=None):
+def dot(input, other, acc=None, allow_tf32=None, max_num_imprecise_acc=None, out_dtype=float32, _builder=None):
     """
     Returns the matrix product of two blocks.
 
@@ -1404,6 +1405,11 @@ def dot(input, other, acc=None, allow_tf32=True, max_num_imprecise_acc=None, out
     :param other: The second tensor to be multiplied.
     :type other: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
     """
+    if allow_tf32 is None:
+        if os.getenv("TRITON_F32_DEFAULT", "0") == "1":
+            allow_tf32 = False
+        else:
+            allow_tf32 = True
     allow_tf32 = _constexpr_to_value(allow_tf32)
     out_dtype = _constexpr_to_value(out_dtype)
     max_num_imprecise_acc = _constexpr_to_value(max_num_imprecise_acc)
