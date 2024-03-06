@@ -41,15 +41,6 @@ public:
           dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
       if (!dstDotOp)
         return;
-      if (auto srcMmaEncoding =
-              srcEncoding.dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>()) {
-
-        if (srcMmaEncoding.getVersionMajor() == 1 ||
-            (srcMmaEncoding.getWarpsPerCTA()[1] == 1 &&
-             dstDotOp.getParent() == srcMmaEncoding))
-          return;
-      }
-#ifdef USE_ROCM
       if (auto srcMfmaEncoding =
               srcEncoding.dyn_cast<triton::gpu::AMDMfmaEncodingAttr>()) {
 
@@ -58,7 +49,6 @@ public:
             dstDotOp.getParent() == srcMfmaEncoding)
           return;
       }
-#endif
       auto tmpType = triton::MemDescType::get(
           dstType.getShape(), dstType.getElementType(),
           triton::gpu::SharedEncodingAttr::get(
