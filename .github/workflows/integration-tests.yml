@@ -98,14 +98,14 @@ jobs:
         if: ${{ env.BACKEND == 'CUDA' }}
         run: |
           cd python/test/unit
-          python3 -m pytest -vvv -n 8 --ignore=runtime --ignore=operators --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+          python3 -m pytest -vvv -n 8 --ignore=hopper/test_flashattention.py --ignore=runtime --ignore=operators --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
           python3 -m pytest -vvv -n 8 language/test_subprocess.py
-          # run runtime tests serially to avoid race condition with cache handling.
+          # Run runtime tests serially to avoid race condition with cache handling
           python3 -m pytest -vvv runtime/
-          # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+          # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -vvv language/test_line_info.py
-          #run hopper/test_flashattention.py to avoid out of gpu memory
-          python3 -m pytest -vvv hopper/test_flashattention.py
+          # Run hopper/test_flashattention.py separately to avoid out of gpu memory
+          python3 -m pytest -vs hopper/test_flashattention.py
 
       - name: Clear cache
         run: |
