@@ -52,7 +52,7 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
         if (auto rankedTy =
                 op.getOperand(i).getType().dyn_cast<RankedTensorType>()) {
           indices = emitIndices(loc, rewriter, rankedTy.getEncoding(), rankedTy,
-                                true);
+                                true, false);
           for (int64_t dim : rankedTy.getShape()) {
             if (dim > 0) {
               dimWidths.push_back(static_cast<int>(std::ceil(std::log10(dim))));

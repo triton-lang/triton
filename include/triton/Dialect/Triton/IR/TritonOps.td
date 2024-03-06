@@ -686,7 +686,7 @@ def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
     // uint32_t, even though these arguments are to be interpreted as *signed*
     // int32 values.  If this matters, use get{Start,End}Attr().getInt(), which
     // return int64_t.
-    let arguments = (ins I32Attr:$start, I32Attr:$end);
+    let arguments = (ins I32Attr:$start, I32Attr:$end, I32Attr:$uniqueId);
 
     let results = (outs TT_IntTensor:$result);
 

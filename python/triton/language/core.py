@@ -1080,7 +1080,7 @@ def num_programs(axis, _builder=None):
 
 
 @builtin
-def arange(start, end, _builder=None):
+def arange(start, end, unique=False, _builder=None):
     """
     Returns contiguous values within the half-open interval :code:`[start,
     end)`.  :code:`end - start` must be less than or equal to
@@ -1094,7 +1094,8 @@ def arange(start, end, _builder=None):
     """
     start = _constexpr_to_value(start)
     end = _constexpr_to_value(end)
-    return semantic.arange(start, end, _builder)
+    unique = _constexpr_to_value(unique)
+    return semantic.arange(start, end, unique, _builder)
 
 
 def _shape_check_impl(shape):

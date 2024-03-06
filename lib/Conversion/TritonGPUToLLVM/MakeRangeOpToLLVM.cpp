@@ -19,7 +19,9 @@ struct MakeRangeOpConversion
     auto elemTy = ty.getElementType();
     assert(elemTy.isInteger(32));
     Value start = createIndexAttrConstant(rewriter, loc, elemTy, op.getStart());
-    auto idxs = emitIndices(loc, rewriter, layout, ty, true);
+    uint32_t uid = op.getUniqueId();
+    bool uniqueTid = uid != 0;
+    auto idxs = emitIndices(loc, rewriter, layout, ty, true, uniqueTid);
     unsigned elems = idxs.size();
     SmallVector<Value> retVals(elems);
     // TODO: slice layout has more elements than expected.

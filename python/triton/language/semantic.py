@@ -500,7 +500,7 @@ def not_equal(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.ten
 # ===----------------------------------------------------------------------===//
 
 
-def arange(start: int, end: int, builder: ir.builder) -> tl.tensor:
+def arange(start: int, end: int, unique: bool, builder: ir.builder) -> tl.tensor:
     if not isinstance(start, int) or not isinstance(end, int):
         raise ValueError("arange's arguments must be of type tl.constexpr")
     is_start_int64 = bool(start >> 32)
@@ -512,6 +512,8 @@ def arange(start: int, end: int, builder: ir.builder) -> tl.tensor:
 
     shape = [end - start]
     ret_ty = tl.block_type(tl.int32, shape)
+    if unique:
+        return tl.tensor(builder.create_make_range_unique(start, end), ret_ty)
     return tl.tensor(builder.create_make_range(start, end), ret_ty)
 
 

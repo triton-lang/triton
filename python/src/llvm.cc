@@ -180,14 +180,19 @@ void init_triton_llvm(py::module &&m) {
     StandardInstrumentations standardInstr(mod->getContext(),
                                            /*DebugLogging*/ true);
     if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
-      standardInstr.registerCallbacks(passInstrCb, &mam);
-      instrCbPtr = &passInstrCb;
       auto optMap = llvm::cl::getRegisteredOptions();
       auto optIt = optMap.find("print-after-all");
       if (optIt != optMap.end()) {
         auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
         *optPtr = true;
       }
+      optIt = optMap.find("print-module-scope");
+      if (optIt != optMap.end()) {
+        auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+        *optPtr = true;
+      }
+      standardInstr.registerCallbacks(passInstrCb, &mam);
+      instrCbPtr = &passInstrCb;
     }
 
     PipelineTuningOptions tuningOptions;

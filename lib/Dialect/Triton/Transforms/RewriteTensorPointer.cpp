@@ -71,7 +71,7 @@ public:
     Value splatOffset =
         builder.create<triton::SplatOp>(loc, indexRowType, offsets[i]);
     Value range = builder.create<triton::MakeRangeOp>(loc, indexI32RowType, 0,
-                                                      tensorShape[i]);
+                                                      tensorShape[i], 0);
     Value i64Range = builder.create<arith::ExtSIOp>(loc, indexRowType, range);
 
     // Expand dimensions

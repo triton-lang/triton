@@ -128,7 +128,7 @@ private:
     unsigned rank = shape.size();
     if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
       auto multiDimOffsetFirstElem =
-          emitBaseIndexForLayout(loc, rewriter, blockedLayout, type, false);
+          emitBaseIndexForLayout(loc, rewriter, blockedLayout, type, false, false);
       SmallVector<Value> multiDimOffset(rank);
       SmallVector<unsigned> multiDimElemId = getMultiDimIndex<unsigned>(
           elemId, getSizePerThread(layout), getOrder(layout));
@@ -256,7 +256,7 @@ private:
 #ifdef USE_ROCM
     if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
       auto multiDimBase =
-          emitBaseIndexForLayout(loc, rewriter, layout, type, false);
+          emitBaseIndexForLayout(loc, rewriter, layout, type, false, false);
       SmallVector<SmallVector<unsigned>> offsets;
       assert(rank == 2);
       SmallVector<Value> multiDimOffset(rank);

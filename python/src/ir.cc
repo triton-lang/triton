@@ -799,7 +799,15 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, int start, int end) -> Value {
              auto retType = RankedTensorType::get(
                  {end - start}, self.getBuilder().getI32Type());
-             return self.create<MakeRangeOp>(retType, start, end);
+             return self.create<MakeRangeOp>(retType, start, end, 0);
+           })
+
+      .def("create_make_range_unique",
+           [](TritonOpBuilder &self, int start, int end) -> Value {
+             int uniqueId = rand();
+             auto retType = RankedTensorType::get(
+                 {end - start}, self.getBuilder().getI32Type());
+             return self.create<MakeRangeOp>(retType, start, end, uniqueId);
            })
 
       // Cast instructions

@@ -2786,7 +2786,7 @@ struct CanonicalizeConvertFromConvert
     // cvt(type1, make_range(type2, x)) -> make_range(type1, x)
     if (auto range = dyn_cast<MakeRangeOp>(arg)) {
       rewriter.replaceOpWithNewOp<MakeRangeOp>(
-          op, op->getResultTypes(), range.getStart(), range.getEnd());
+          op, op->getResultTypes(), range.getStart(), range.getEnd(), 0);
       return success();
     }
 

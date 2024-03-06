@@ -105,8 +105,8 @@ private:
     auto shape = type.getShape();
     unsigned rank = shape.size();
     if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
-      auto multiDimOffsetFirstElem =
-          emitBaseIndexForLayout(loc, rewriter, blockedLayout, type, false);
+      auto multiDimOffsetFirstElem = emitBaseIndexForLayout(
+          loc, rewriter, blockedLayout, type, false, false);
       SmallVector<Value> multiDimOffset(rank);
       SmallVector<unsigned> multiDimElemId = getMultiDimIndex<unsigned>(
           elemId, getSizePerThread(layout), getOrder(layout));
@@ -474,8 +474,8 @@ private:
     // Store to local shared memory
     {
       auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-      auto inIndices =
-          emitIndices(loc, rewriter, srcLayout, srcTy, /*withCTAOffset*/ false);
+      auto inIndices = emitIndices(loc, rewriter, srcLayout, srcTy,
+                                   /*withCTAOffset*/ false, false);
 
       assert(inIndices.size() == inVals.size() &&
              "Unexpected number of indices emitted");
@@ -498,8 +498,8 @@ private:
         srcShapePerCTACache.push_back(i32_val(srcShapePerCTA[i]));
 
       SmallVector<Value> outVals;
-      auto outIndices =
-          emitIndices(loc, rewriter, dstLayout, dstTy, /*withCTAOffset*/ true);
+      auto outIndices = emitIndices(loc, rewriter, dstLayout, dstTy,
+                                    /*withCTAOffset*/ true, false);
 
       for (unsigned i = 0; i < outIndices.size(); ++i) {
         auto coord = outIndices[i];
@@ -685,7 +685,7 @@ private:
 
     auto srcStrides =
         getStridesFromShapeAndOrder(srcTy.getShape(), inOrd, loc, rewriter);
-    auto dstIndices = emitIndices(loc, rewriter, dstLayout, dstTy, true);
+    auto dstIndices = emitIndices(loc, rewriter, dstLayout, dstTy, true, false);
 
     SmallVector<Value> outVals =
         loadSharedToDistributed(op.getResult(), dstIndices, op.getSrc(),
@@ -820,7 +820,8 @@ private:
     unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
     auto dstStrides =
         getStridesFromShapeAndOrder(dstShapePerCTA, outOrd, loc, rewriter);
-    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy, false);
+    auto srcIndices =
+        emitIndices(loc, rewriter, srcLayout, srcTy, false, false);
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     storeDistributedToShared(op.getSrc(), inVals, dstStrides, srcIndices,
                              op.getResult(), smemBase, elemTy, loc, rewriter);

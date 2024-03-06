@@ -1,6 +1,8 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_UTILITY_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_UTILITY_H
 
+#include "nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
+
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Analysis/Utility.h"
@@ -430,11 +432,24 @@ static Value dot(ConversionPatternRewriter &rewriter, Location loc,
 // -----------------------------------------------------------------------
 
 // Get an index-base for each dimension for a \param blockedLayout.
-static SmallVector<Value> emitBaseIndexWithinCTAForBlockedLayout(
-    Location loc, ConversionPatternRewriter &rewriter,
-    const BlockedEncodingAttr &blockedLayout, RankedTensorType type) {
+static SmallVector<Value>
+emitBaseIndexWithinCTAForBlockedLayout(Location loc,
+                                       ConversionPatternRewriter &rewriter,
+                                       const BlockedEncodingAttr &blockedLayout,
+                                       RankedTensorType type, bool uniqueTid) {
   auto shape = type.getShape();
   Value threadId = getThreadId(rewriter, loc);
+  /*if (uniqueTid) {
+     PTXBuilder builder;
+     auto &mov = *builder.create("mov.u32");
+     auto res = builder.newOperand("=r");
+     auto operand = builder.newOperand(threadId, "r");
+     mov(res, operand);
+     threadId = builder.launch(rewriter, loc, i32_ty, false);
+  }*/
+  if (uniqueTid) {
+    threadId = rewriter.create<triton::BlockCSEOp>(loc, i32_ty, threadId);
+  }
   Value warpSize = i32_val(triton::gpu::getWarpSize(blockedLayout));
   Value laneId = urem(threadId, warpSize);
   Value warpId = udiv(threadId, warpSize);
@@ -513,9 +528,11 @@ emitOffsetForBlockedLayout(const BlockedEncodingAttr &blockedLayout,
 // Mma layout indices
 // -----------------------------------------------------------------------
 
-static SmallVector<Value> emitBaseIndexWithinCTAForMmaLayoutV1(
-    Location loc, ConversionPatternRewriter &rewriter,
-    const NvidiaMmaEncodingAttr &mmaLayout, RankedTensorType type) {
+static SmallVector<Value>
+emitBaseIndexWithinCTAForMmaLayoutV1(Location loc,
+                                     ConversionPatternRewriter &rewriter,
+                                     const NvidiaMmaEncodingAttr &mmaLayout,
+                                     RankedTensorType type, bool uniqueTid) {
   auto shape = type.getShape();
   auto wpt = mmaLayout.getWarpsPerCTA();
   static constexpr std::array<int, 3> fpw{{2, 2, 1}};
@@ -523,6 +540,17 @@ static SmallVector<Value> emitBaseIndexWithinCTAForMmaLayoutV1(
       mmaLayout.decodeVoltaLayoutStates();
 
   Value thread = getThreadId(rewriter, loc);
+  /*if (uniqueTid) {
+     PTXBuilder builder;
+     auto &mov = *builder.create("mov.u32");
+     auto res = builder.newOperand("=r");
+     auto operand = builder.newOperand(thread, "r");
+     mov(res, operand);
+     thread = builder.launch(rewriter, loc, i32_ty, false);
+  }*/
+  if (uniqueTid) {
+    thread = rewriter.create<triton::BlockCSEOp>(loc, i32_ty, thread);
+  }
   auto *ctx = thread.getContext();
   Value _1 = i32_val(1);
   Value _2 = i32_val(2);
@@ -656,9 +684,11 @@ emitOffsetForMmaLayoutV2(const NvidiaMmaEncodingAttr &mmaLayout,
   return ret;
 }
 
-static SmallVector<Value> emitBaseIndexWithinCTAForMmaLayoutV2V3(
-    Location loc, ConversionPatternRewriter &rewriter,
-    const NvidiaMmaEncodingAttr &mmaLayout, RankedTensorType type) {
+static SmallVector<Value>
+emitBaseIndexWithinCTAForMmaLayoutV2V3(Location loc,
+                                       ConversionPatternRewriter &rewriter,
+                                       const NvidiaMmaEncodingAttr &mmaLayout,
+                                       RankedTensorType type, bool uniqueTid) {
   auto shape = type.getShape();
   auto _warpsPerCTA = mmaLayout.getWarpsPerCTA();
   auto rank = shape.size();
@@ -671,6 +701,17 @@ static SmallVector<Value> emitBaseIndexWithinCTAForMmaLayoutV2V3(
   auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
 
   Value threadId = getThreadId(rewriter, loc);
+  /*if (uniqueTid) {
+     PTXBuilder builder;
+     auto &mov = *builder.create("mov.u32");
+     auto res = builder.newOperand("=r");
+     auto operand = builder.newOperand(threadId, "r");
+     mov(res, operand);
+     threadId = builder.launch(rewriter, loc, i32_ty, false);
+  }*/
+  if (uniqueTid) {
+    threadId = rewriter.create<triton::BlockCSEOp>(loc, i32_ty, threadId);
+  }
   Value warpSize = i32_val(32);
   Value laneId = urem(threadId, warpSize);
   Value warpId = udiv(threadId, warpSize);
@@ -747,7 +788,7 @@ emitOffsetForMmaLayoutV3(const NvidiaMmaEncodingAttr &mmaLayout,
 static SmallVector<Value>
 emitBaseIndexForMfmaLayout(Location loc, ConversionPatternRewriter &rewriter,
                            const MfmaEncodingAttr &mfmaLayout,
-                           RankedTensorType type) {
+                           RankedTensorType type, bool uniqueTid) {
   auto shape = type.getShape();
   auto _warpsPerCTA = mfmaLayout.getWarpsPerCTA();
   assert(_warpsPerCTA.size() == 2);
@@ -756,6 +797,17 @@ emitBaseIndexForMfmaLayout(Location loc, ConversionPatternRewriter &rewriter,
   int nonKDim = mfmaLayout.getNonKDim();
 
   Value threadId = getThreadId(rewriter, loc);
+  /*if (uniqueTid) {
+     PTXBuilder builder;
+     auto &mov = *builder.create("mov.u32");
+     auto res = builder.newOperand("=r");
+     auto operand = builder.newOperand(threadId, "r");
+     mov(res, operand);
+     threadId = builder.launch(rewriter, loc, i32_ty, false);
+  }*/
+  if (uniqueTid) {
+    threadId = rewriter.create<triton::BlockCSEOp>(loc, i32_ty, threadId);
+  }
   Value warpSize = i32_val(triton::gpu::getWarpSize(mfmaLayout));
   Value effectiveWarpSize = warpSize;
   if (nonKDim == 4) {
@@ -902,31 +954,32 @@ emitCTAOffsetForLayout(Location loc, ConversionPatternRewriter &rewriter,
 static SmallVector<Value>
 emitBaseIndexForLayout(Location loc, ConversionPatternRewriter &rewriter,
                        Attribute layout, RankedTensorType type,
-                       bool withCTAOffset) {
+                       bool withCTAOffset, bool uniqueTid) {
   auto shape = type.getShape();
 
   SmallVector<Value> baseIndex;
   ConversionPatternRewriter::InsertionGuard guard(rewriter);
   SmallVector<Value> result;
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
-    result = emitBaseIndexWithinCTAForBlockedLayout(loc, rewriter,
-                                                    blockedLayout, type);
+    result = emitBaseIndexWithinCTAForBlockedLayout(
+        loc, rewriter, blockedLayout, type, uniqueTid);
   } else if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
     if (mmaLayout.isVolta())
-      result =
-          emitBaseIndexWithinCTAForMmaLayoutV1(loc, rewriter, mmaLayout, type);
+      result = emitBaseIndexWithinCTAForMmaLayoutV1(loc, rewriter, mmaLayout,
+                                                    type, uniqueTid);
     if (mmaLayout.isAmpere() || mmaLayout.isHopper())
       result = emitBaseIndexWithinCTAForMmaLayoutV2V3(loc, rewriter, mmaLayout,
-                                                      type);
+                                                      type, uniqueTid);
   } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
-    result = emitBaseIndexForMfmaLayout(loc, rewriter, mfmaLayout, type);
+    result =
+        emitBaseIndexForMfmaLayout(loc, rewriter, mfmaLayout, type, uniqueTid);
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parentLayout = sliceLayout.getParent();
     auto parentShape = sliceLayout.paddedShape(type.getShape());
     RankedTensorType parentTy =
         RankedTensorType::get(parentShape, type.getElementType(), parentLayout);
     result = emitBaseIndexForLayout(loc, rewriter, parentLayout, parentTy,
-                                    withCTAOffset);
+                                    withCTAOffset, uniqueTid);
     result.erase(result.begin() + sliceLayout.getDim());
     // CTAOffset has been added in emitBaseIndexForLayout of parentLayout
     return result;
@@ -966,10 +1019,10 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
 // [elemsPerThread X rank] index matrix.
 static SmallVector<SmallVector<Value>>
 emitIndices(Location loc, ConversionPatternRewriter &rewriter, Attribute layout,
-            RankedTensorType type, bool withCTAOffset) {
+            RankedTensorType type, bool withCTAOffset, bool uniqueTid = false) {
   // step 1, delinearize threadId to get the base index
-  auto multiDimBase =
-      emitBaseIndexForLayout(loc, rewriter, layout, type, withCTAOffset);
+  auto multiDimBase = emitBaseIndexForLayout(loc, rewriter, layout, type,
+                                             withCTAOffset, uniqueTid);
   // step 2, get offset of each element
   auto offset = emitOffsetForLayout(layout, type);
   // step 3, add offset to base, and reorder the sequence
@@ -1038,7 +1091,8 @@ DenseMap<unsigned, Value> static getSwizzledSharedPtrs(
          outVec * maxPhase <= srcShape[outOrder[0]] &&
              "Swizzling would generate out of bounds memory accesses");
   // Tensor indices held by the current thread, as LLVM values
-  auto srcIndices = emitIndices(loc, rewriter, srcEncoding, srcTy, false);
+  auto srcIndices =
+      emitIndices(loc, rewriter, srcEncoding, srcTy, false, false);
   // Swizzling with leading offsets (e.g. Hopper GMMA)
   unsigned swizzlingByteWidth = 0;
   if (resSharedLayout.getHasLeadingOffset()) {
