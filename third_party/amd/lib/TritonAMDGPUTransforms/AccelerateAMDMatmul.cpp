@@ -22,10 +22,15 @@ using ttg::ConvertLayoutOp;
 using ttg::DotOperandEncodingAttr;
 using ttg::SliceEncodingAttr;
 
-SmallVector<unsigned, 2>
-warpsPerTileMFMA(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps,
-                 SmallVector<int64_t, 2> shapePerWarp) {
-  // TODO: needs to be updated with appropriate shapePerWarp etc.
+SmallVector<unsigned> warpsPerTileMFMA(tt::DotOp dotOp,
+                                       const ArrayRef<int64_t> shape,
+                                       int numWarps,
+                                       SmallVector<int64_t, 2> shapePerWarp) {
+  auto rank = shape.size();
+  // Early exit for batched matmul
+  if (rank == 3)
+    return {(unsigned)numWarps, 1, 1};
+
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
@@ -40,7 +45,7 @@ warpsPerTileMFMA(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps,
       return {(unsigned)numWarps, 1};
 
   SmallVector<int64_t, 2> tensorShape = {shape[0], shape[1]};
-  SmallVector<unsigned, 2> ret = {1, 1};
+  SmallVector<unsigned> ret = {1, 1};
   bool changed = false;
 
   do {
@@ -105,6 +110,9 @@ public:
 
     auto resType = dot.getD().getType().cast<RankedTensorType>();
     auto resShape = resType.getShape();
+    auto rank = resShape.size();
+    auto M = resShape[rank - 2];
+    auto N = resShape[rank - 1];
 
     unsigned mDim = 0;
     unsigned nDim = 0;
@@ -112,7 +120,7 @@ public:
       mDim = enforcedNonKDim;
       nDim = enforcedNonKDim;
     } else {
-      int minSize = std::min(resShape[0], resShape[1]);
+      int minSize = std::min(M, N);
       if (minSize >= 32) {
         mDim = 32;
         nDim = 32;
@@ -122,14 +130,14 @@ public:
         nDim = 16;
       }
       if (minSize < 16) {
-        if (resShape[0] < 16 && resShape[1] >= 64) {
+        if (M < 16 && N >= 64) {
           mDim = 4;
           nDim = 64;
-        } else if (resShape[0] >= 64 && resShape[1] < 16) {
+        } else if (M >= 64 && N < 16) {
           mDim = 64;
           nDim = 4;
         } else {
-          assert(opType.getShape()[1] >= 64 &&
+          assert(opType.getShape()[rank - 1] >= 64 &&
                  "k should be at least 64 to use this layout");
           mDim = 4;
           nDim = 4;
@@ -146,8 +154,8 @@ public:
       kDim = (*maybeMfmaInsn).getKDim();
     assert(kDim != 0);
 
-    assert(resShape[0] % mDim == 0 && resShape[1] % nDim == 0);
-    assert(opType.getShape()[1] % kDim == 0);
+    assert(M % mDim == 0 && N % nDim == 0);
+    assert(opType.getShape()[rank - 1] % kDim == 0);
     return {mDim, nDim, kDim};
   }
 

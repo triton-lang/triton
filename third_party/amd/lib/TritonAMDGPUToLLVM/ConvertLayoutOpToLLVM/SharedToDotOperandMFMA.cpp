@@ -134,8 +134,8 @@ computeTensorElemMapping(ConversionPatternRewriter &rewriter, Location loc,
                          Value laneId, int warpsPerGroup, int numOfElems,
                          ArrayRef<int64_t> reps, ArrayRef<Value> smemOffsets,
                          int loadVecSize, unsigned iNonKDim, unsigned iKDim) {
-  auto numM = reps[0];
-  auto numK = reps[1];
+  auto numM = reps[1];
+  auto numK = reps[2];
   const int loadsPerThread = numOfElems / loadVecSize;
   llvm::SmallVector<llvm::SmallVector<Value>> mapping(numK * loadsPerThread);
 
@@ -233,7 +233,7 @@ computeOffsetsBType(ConversionPatternRewriter &rewriter, Location loc,
   // transpose reps and offsets, because operand B has layout equal to
   // transposed operand A layout
   SmallVector<int64_t> tElemsPerInstr{elemsPerInstr[1], elemsPerInstr[0]};
-  SmallVector<int64_t> tReps{reps[1], reps[0]};
+  SmallVector<int64_t> tReps{reps[0], reps[2], reps[1]};
   SmallVector<Value> toffsets{smemObj.offsets[1], smemObj.offsets[0]};
 
   int vectorSize = 1;
@@ -335,8 +335,8 @@ fastPathComputeOffsets(ConversionPatternRewriter &rewriter, Location loc,
                        const ArrayRef<int64_t> &elemsPerInstr, Value waveId,
                        Value laneId, int warpsPerGroup, int numOfElems,
                        ArrayRef<int64_t> reps, Value cSwizzleOffset) {
-  auto numK = reps[0];
-  auto numN = reps[1];
+  auto numK = reps[1];
+  auto numN = reps[2];
   SmallVector<Value> offsets(numK * numN * numOfElems);
 
   auto iKDim = elemsPerInstr[0];
@@ -381,16 +381,17 @@ fastPathComputeOffsets(ConversionPatternRewriter &rewriter, Location loc,
 }
 
 bool isColMajor(::llvm::ArrayRef<unsigned> order) {
-  assert(order.size() == 2 && (order[0] & ~1ul) == 0 &&
-         order[0] + order[1] == 1);
-  return order[0] == 0;
+  auto rank = order.size();
+  return order[0] == (rank - 2);
 }
 
 bool isKMajor(::llvm::ArrayRef<unsigned> order, int opIdx) {
-  if (order[0] + opIdx == 1)
+  auto rank = order.size();
+  if ((rank == 2) && (order[0] + opIdx == 1))
     return true;
-  else
-    return false;
+  if ((rank == 3) && (order[0] + opIdx == 2))
+    return true;
+  return false;
 }
 
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
@@ -398,9 +399,11 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread) {
   assert((opIdx == 0 || opIdx == 1) && "unexpected operand idx");
-
-  int kDimIdx = opIdx == 0 ? 1 : 0;
-  int nonKDimIdx = opIdx == 0 ? 0 : 1;
+  auto aTensorTy = tensor.getType().cast<MemDescType>();
+  ArrayRef<int64_t> shape = aTensorTy.getShape();
+  auto rank = shape.size();
+  int kDimIdx = opIdx == 0 ? rank - 1 : rank - 2;
+  int nonKDimIdx = opIdx == 0 ? rank - 2 : rank - 1;
 
   auto mfmaLayout = encoding.getParent().cast<AMDMfmaEncodingAttr>();
   auto mDim = mfmaLayout.getMDim();
@@ -409,20 +412,34 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
          (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 
-  auto aTensorTy = tensor.getType().cast<MemDescType>();
-  ArrayRef<int64_t> shape = aTensorTy.getShape();
   auto sharedLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
   auto order = sharedLayout.getOrder();
 
   auto elemTy = aTensorTy.getElementType();
   auto kWidth = encoding.getKWidth();
   auto elemsPerInstr = mfmaLayout.getMFMAInstrShapeForOperands(kWidth, opIdx);
-  auto mfmaInstrNonK = elemsPerInstr[nonKDimIdx];
-  auto mfmaInstrK = elemsPerInstr[kDimIdx];
+
+  int64_t mfmaInstrNonK;
+  int64_t mfmaInstrK;
+  // TODO(Lixun): make it simpler
+  // getMFMAInstrShapeForOperands always returns a 2D vector
+  if (rank == 3) {
+    mfmaInstrNonK = elemsPerInstr[nonKDimIdx - 1];
+    mfmaInstrK = elemsPerInstr[kDimIdx - 1];
+  } else {
+    mfmaInstrNonK = elemsPerInstr[nonKDimIdx];
+    mfmaInstrK = elemsPerInstr[kDimIdx];
+  }
 
   auto numReps = mfmaLayout.getMFMARepForOperands(shape, kWidth, opIdx);
   auto numRepNonK = numReps[nonKDimIdx];
   auto numRepK = numReps[kDimIdx];
+  // TODO(Lixun): make it simpler
+  // getMFMARepForOperands always returns a 3D vector
+  if (rank == 2) {
+    numRepNonK = numReps[nonKDimIdx + 1];
+    numRepK = numReps[kDimIdx + 1];
+  }
 
   unsigned iWaveSize = triton::gpu::getWarpSize(mfmaLayout);
   assert(iWaveSize == 64);
@@ -458,7 +475,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     if (opIdx == 0) {
       if (isColMajor(order)) {
         SmallVector<int64_t> elemsPerInstr{mfmaInstrK, mfmaInstrNonK};
-        SmallVector<int64_t> reps{numReps[1], numReps[0]};
+        SmallVector<int64_t> reps{numReps[0], numReps[2], numReps[1]};
         offsets = fastPathComputeOffsets(rewriter, loc, elemsPerInstr,
                                          spatialWaveId, lane, warpsPerGroupNonK,
                                          numOfElems, reps, cSwizzleOffset);
