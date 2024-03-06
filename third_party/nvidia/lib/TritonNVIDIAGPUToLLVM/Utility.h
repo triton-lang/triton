@@ -44,22 +44,16 @@ Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
 Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  Value i);
 
-static Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
-                      ConversionPatternRewriter &rewriter) {
-  assert(axis >= 0);
-  assert(axis < 3);
-  assert(moduleOp);
+void storeDistributedToSharedWithStMatrix(
+    RankedTensorType tensorTy, Type elemTy, SmallVector<Value> &inVals,
+    Value smemBase, ArrayRef<unsigned> paddedRepShape,
+    ArrayRef<unsigned> origRepShape, Location loc,
+    ConversionPatternRewriter &rewriter);
 
-  // It is not easy to get the compute capability here, so we use numCTAs to
-  // decide the semantic of GetProgramIdOp. If numCTAs = 1, then
-  // GetProgramIdOp is converted to "%ctaid", otherwise it is converted to
-  // "%clusterid".
-  int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
+bool isStMatrixCompatible(RankedTensorType tensorTy);
 
-  std::string sreg = numCTAs == 1 ? "%ctaid." : "%clusterid.";
-  sreg.append(1, 'x' + axis); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
-  return getSRegValue(rewriter, loc, sreg);
-}
+Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
+               ConversionPatternRewriter &rewriter);
 } // namespace NVIDIA
 } // namespace LLVM
 

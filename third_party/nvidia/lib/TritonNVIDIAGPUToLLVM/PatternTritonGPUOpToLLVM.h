@@ -22,6 +22,7 @@ void populateClusterOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                       PatternBenefit benefit);
 
 void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                           const TargetInfo &targetInfo,
                                            RewritePatternSet &patterns,
                                            PatternBenefit benefit);
 

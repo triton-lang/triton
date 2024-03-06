@@ -333,6 +333,17 @@ Value linearize(ConversionPatternRewriter &rewriter, Location loc,
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content);
 
+SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
+                                     ConversionPatternRewriter &rewriter,
+                                     unsigned elemId, RankedTensorType type,
+                                     ArrayRef<unsigned> multiDimCTAInRepId,
+                                     ArrayRef<unsigned> shapePerCTATile);
+
+SmallVector<Value> getWrappedMultiDimOffset(
+    ConversionPatternRewriter &rewriter, Location loc,
+    ArrayRef<Value> multiDimOffset, ArrayRef<unsigned> shape,
+    SmallVector<unsigned> shapePerCTATile, SmallVector<int64_t> shapePerCTA);
+
 static bool isKernel(FunctionOpInterface funcOp) {
   return funcOp.getVisibility() == SymbolTable::Visibility::Public;
 }

@@ -8,6 +8,7 @@
 
 using namespace mlir;
 namespace mlir::triton::NVIDIA {
+
 // Check if the reduction can use a redux op and return the kind.
 static std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op,
                                                      int computeCapability) {
@@ -141,6 +142,20 @@ bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
       }
       return true;
     }
+  }
+  return false;
+}
+bool TargetInfo::processReplicaUsingStMatrix(
+    ConversionPatternRewriter &rewriter, Location loc, Value smemBase,
+    SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
+    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
+    ArrayRef<unsigned> outOrd, unsigned accumNumReplicates) const {
+  if (mlir::LLVM::NVIDIA::isStMatrixCompatible(srcTy) &&
+      accumNumReplicates == 1 && outOrd[0] == 1 && paddedRepShape[1] % 8 == 0) {
+    mlir::LLVM::NVIDIA::storeDistributedToSharedWithStMatrix(
+        srcTy, elemTy, vals, smemBase, paddedRepShape, origRepShape, loc,
+        rewriter);
+    return true;
   }
   return false;
 }

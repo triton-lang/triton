@@ -70,6 +70,11 @@ void populateScanOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                   const TargetInfoBase &targetInfo,
                                   PatternBenefit benefit);
 
+void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                           const TargetInfoBase &targetInfo,
+                                           RewritePatternSet &patterns,
+                                           PatternBenefit benefit);
+
 } // namespace triton
 } // namespace mlir
 
