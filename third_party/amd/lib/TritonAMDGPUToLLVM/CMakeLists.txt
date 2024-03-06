@@ -8,11 +8,9 @@ add_triton_library(TritonAMDGPUToLLVM
     TritonGPUToLLVM.cpp
     GCNAsmFormat.cpp
     TritonGPUToLLVMPass.cpp
-    ReduceOpToLLVM.cpp
-    ScanOpToLLVM.cpp
-    TypeConverter.cpp
     Utility.cpp
     TargetInfo.cpp
+    DecomposeUnsupportedConversions.cpp
 
     DEPENDS
     TritonAMDGPUConversionPassIncGen

@@ -6,11 +6,13 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "triton-matmul-loop-pipeline"
@@ -37,6 +39,7 @@ struct PipelineOpInfo {
   ttg::SharedEncodingAttr sharedEncoding = nullptr;
   // Blocked encoding is used for loads feeding into other loads.
   ttg::BlockedEncodingAttr blockedEncoding = nullptr;
+  bool loadIsMMAV3 = false;
 };
 
 }; // namespace
@@ -58,6 +61,7 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
                 Value insertIdx, Value extractIdx,
                 llvm::MapVector<Operation *, PipelineOpInfo> &opToInfo) {
   OpBuilder builder(forOp);
+  Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
   // Replace the load with insert/extract slice.
   builder.setInsertionPoint(loadOp);
   Location loc = loadOp.getLoc();
@@ -78,46 +82,47 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
     src = convertBlockLayout(src);
     mask = convertBlockLayout(src);
   }
-  auto insertOp = builder.create<ttg::InsertSliceAsyncOp>(
-      loc, alloc.getType(), src, alloc, insertIdx, loadOp.getMask(),
-      loadOp.getOther(), loadOp.getCache(), loadOp.getEvict(),
-      loadOp.getIsVolatile(), /*axis*/ 0);
-  auto commmit = builder.create<ttg::AsyncCommitGroupOp>(loc);
+
+  SmallVector<Value> copyOffsets = {insertIdx, zero, zero};
+  tt::MemDescType allocTy = alloc.getType().cast<tt::MemDescType>();
+  tt::MemDescType subviewTy = tt::MemDescType::get(
+      allocTy.getShape().drop_front(), allocTy.getElementType(),
+      allocTy.getEncoding(), /*mutableMemory=*/true);
+  auto view =
+      builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, copyOffsets);
+  Operation *copy = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
+      loc, src, view, loadOp.getMask(), loadOp.getOther(), loadOp.getCache(),
+      loadOp.getEvict(), loadOp.getIsVolatile());
+  Operation *commmit =
+      builder.create<ttg::AsyncCommitGroupOp>(loc, copy->getResult(0));
+  builder.create<ttg::AsyncWaitOp>(loc, commmit->getResult(0), 0);
 
   int stage = opToInfo[loadOp].stage;
-  opToInfo.insert({insertOp, {.stage = stage}});
+  bool isMMV3Load = opToInfo[loadOp].loadIsMMAV3;
+  opToInfo.insert({copy, {.stage = stage}});
   opToInfo.insert({commmit, {.stage = stage}});
   opToInfo.erase(loadOp);
 
   // Extract part.
-  auto allocType = alloc.getType().cast<RankedTensorType>();
-  auto rank = allocType.getShape().size();
-  SmallVector<int64_t> sliceShape;
-  for (unsigned i = 1; i < rank; ++i)
-    sliceShape.push_back(allocType.getShape()[i]);
-  RankedTensorType sliceType = RankedTensorType::get(
-      sliceShape, allocType.getElementType(), allocType.getEncoding());
-  SmallVector<OpFoldResult> sliceOffsets, sliceSizes, sliceStrides;
-  for (unsigned i = 0; i < rank; ++i) {
-    if (i == 0) {
-      sliceOffsets.push_back(extractIdx);
-      sliceSizes.push_back(int_attr(1));
-    } else {
-      sliceOffsets.push_back(int_attr(0));
-      sliceSizes.push_back(int_attr(sliceType.getShape()[i - 1]));
+  SmallVector<Value> loadOffsets = {extractIdx, zero, zero};
+  auto viewLoad =
+      builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
+  if (isMMV3Load) {
+    auto alloc = cast<ttg::LocalAllocOp>((*loadOp->getUsers().begin()));
+    alloc.replaceAllUsesWith(viewLoad.getResult());
+    alloc.erase();
+  } else {
+    for (Operation *user : loadOp->getUsers()) {
+      if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
+        alloc.replaceAllUsesWith(viewLoad.getResult());
+        alloc.erase();
+      }
     }
-    sliceStrides.push_back(int_attr(1));
+    auto sharedLoad =
+        builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewLoad);
+    loadOp->replaceAllUsesWith(sharedLoad->getResults());
   }
-  auto extract = builder.create<ttg::ExtractSliceOp>(
-      loc, sliceType, insertOp.getResult(), sliceOffsets, sliceSizes,
-      sliceStrides);
-  auto newCvt = builder.create<ttg::ConvertLayoutOp>(
-      loadOp->getLoc(), loadOp.getType(), extract.getResult());
-  loadOp->replaceAllUsesWith(newCvt->getResults());
   loadOp.erase();
-
-  // Fix up the yield op.
-  appendToYield(forOp, {insertOp});
 }
 
 /// Create an async load equivalent to the given load.
@@ -139,27 +144,28 @@ allTransitiveUsesHaveDotEncoding(Value val,
     ttg::SharedEncodingAttr tempAttr;
     if (user->getNumResults() != 1)
       return false;
-    auto tensorType = user->getResult(0).getType().dyn_cast<RankedTensorType>();
-    if (!tensorType)
-      return false;
-    if (tensorType.getEncoding().isa<ttg::SharedEncodingAttr>()) {
+    if (auto memDesc =
+            user->getResult(0).getType().dyn_cast<triton::MemDescType>()) {
       // First time we find a shared encoding in the chain, save it and try to
       // use it if it is compatible with the other users.
       if (!tempAttr)
-        tempAttr = tensorType.getEncoding().cast<ttg::SharedEncodingAttr>();
+        tempAttr = memDesc.getEncoding().cast<ttg::SharedEncodingAttr>();
       ttg::SharedEncodingAttr nextEncoding;
       bool hasDotEncodingUse =
           allTransitiveUsesHaveDotEncoding(user->getResult(0), nextEncoding);
       if (!hasDotEncodingUse)
         return false;
     } else {
-      auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(user);
-      if (!convertLayout)
+      if (!isa<ttg::LocalLoadOp, ttg::ConvertLayoutOp>(user))
         return false;
-      auto dotOpEnc = convertLayout.getType()
+      auto dotOpEnc = user->getResult(0)
+                          .getType()
+                          .cast<TensorOrMemDesc>()
                           .getEncoding()
                           .dyn_cast<ttg::DotOperandEncodingAttr>();
-      auto srcTensorType = val.getType().cast<RankedTensorType>();
+      if (!dotOpEnc)
+        return false;
+      auto srcTensorType = val.getType().cast<TensorOrMemDesc>();
       auto CTALayout = ttg::getCTALayout(srcTensorType.getEncoding());
       auto order = ttg::getOrder(srcTensorType.getEncoding());
       unsigned bitWidth =
@@ -182,25 +188,23 @@ bool loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3,
                     ttg::SharedEncodingAttr &enc) {
   if (loadOp.getResult().hasOneUse()) {
     Operation *use = *loadOp.getResult().getUsers().begin();
-    if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
-      auto tensorType = convertLayout.getType().cast<RankedTensorType>();
-      if (auto sharedEnc =
-              tensorType.getEncoding().dyn_cast<ttg::SharedEncodingAttr>()) {
-        if (sharedEnc.getHasLeadingOffset()) {
-          // MMA V3 case.
-          auto newOrder = sharedEnc.getOrder();
-          auto ty = loadOp.getType().cast<RankedTensorType>();
-          auto oldOrder = ttg::getOrder(ty.getEncoding());
-          if (newOrder[0] == oldOrder[0] || newOrder[1] == oldOrder[1]) {
-            // The operand of MMAv3 is in SharedEncoding and it's order should
-            // not be changed after FuseTranspositions Pass. So we only pipeline
-            // the load if the order of the loaded BlockedEncoding is the same
-            // as the order of the SharedEncoding it is converted to.
-            // TODO: remove this constraint once the LoadOp supports transpose
-            // fusion
-            hasMMAV3 = true;
-            return true;
-          }
+    if (auto alloc = llvm::dyn_cast<ttg::LocalAllocOp>(use)) {
+      auto sharedEnc =
+          alloc.getType().getEncoding().cast<ttg::SharedEncodingAttr>();
+      if (sharedEnc.getHasLeadingOffset()) {
+        // MMA V3 case.
+        auto newOrder = sharedEnc.getOrder();
+        auto ty = loadOp.getType().cast<RankedTensorType>();
+        auto oldOrder = ttg::getOrder(ty.getEncoding());
+        if (newOrder[0] == oldOrder[0] || newOrder[1] == oldOrder[1]) {
+          // The operand of MMAv3 is in SharedEncoding and it's order should
+          // not be changed after FuseTranspositions Pass. So we only pipeline
+          // the load if the order of the loaded BlockedEncoding is the same
+          // as the order of the SharedEncoding it is converted to.
+          // TODO: remove this constraint once the LoadOp supports transpose
+          // fusion
+          hasMMAV3 = true;
+          return true;
         }
       }
     }
@@ -377,6 +381,7 @@ collectOpsToPipeline(scf::ForOp forOp,
     if (!loadInfo.sharedEncoding)
       loadInfo.sharedEncoding =
           getSharedEncoding(loadOp, distAndUse.second, loadIsMMAV3);
+    loadInfo.loadIsMMAV3 = loadIsMMAV3;
     int stage = (maxDistance - distAndUse.first) * stagesBetweenLoads;
     loadInfo.stage = stage;
     loadInfo.use = distAndUse.second;
@@ -407,10 +412,10 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
   auto ty = loadOp.getType().cast<RankedTensorType>();
   SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
   bufferShape.insert(bufferShape.begin(), distance);
-  Type allocType =
-      RankedTensorType::get(bufferShape, ty.getElementType(), sharedEnc);
-  Value alloc = builder.create<mlir::triton::gpu::AllocTensorOp>(
-      loadOp.getLoc(), allocType);
+  Type memdescType = mlir::triton::MemDescType::get(
+      bufferShape, ty.getElementType(), sharedEnc, /*mutableMemory*/ true);
+  Value alloc = builder.create<mlir::triton::gpu::LocalAllocOp>(
+      loadOp.getLoc(), memdescType, Value());
   return alloc;
 }
 
@@ -427,13 +432,11 @@ createAsynOps(scf::ForOp &forOp,
   };
   SmallVector<AsyncLoad> asyncLoads;
   SmallVector<Value> allocs;
-  SmallVector<Value> newOperands;
   for (auto &[op, info] : opToInfo) {
     if (tt::LoadOp loadOp = dyn_cast<tt::LoadOp>(op)) {
       assert(info.sharedEncoding && "LoadOp shared encoding not defined.");
       Value alloc = createAlloc(forOp, loadOp, info.sharedEncoding, numBuffers);
       assert(alloc && "Failed to create alloc for the async load.");
-      newOperands.push_back(alloc);
       allocs.push_back(alloc);
       asyncLoads.emplace_back(loadOp, alloc);
     }
@@ -451,6 +454,7 @@ createAsynOps(scf::ForOp &forOp,
   Value extractIdx = minusOne;
   Value numBuffersVal =
       builder.create<arith::ConstantIntOp>(loc, numBuffers, 32);
+  SmallVector<Value> newOperands;
   newOperands.push_back(insertIdx);
   newOperands.push_back(extractIdx);
   Value phase;
@@ -460,13 +464,8 @@ createAsynOps(scf::ForOp &forOp,
       replaceForOpWithNewSignature(builder, forOp, newOperands);
   forOp.erase();
   forOp = newForOp;
-  for (int i = 0; i < asyncLoads.size(); i++) {
-    asyncLoads[i].alloc = newForOp.getBody()->getArgument(newOperandIndex + i);
-  }
-  insertIdx =
-      newForOp.getBody()->getArgument(newOperandIndex + asyncLoads.size());
-  extractIdx =
-      newForOp.getBody()->getArgument(newOperandIndex + asyncLoads.size() + 1);
+  insertIdx = newForOp.getBody()->getArgument(newOperandIndex);
+  extractIdx = newForOp.getBody()->getArgument(newOperandIndex + 1);
 
   // Create two counters for the insert and extract indices to avoid creating
   // long liverange.
@@ -547,7 +546,7 @@ createSchedule(scf::ForOp forOp, int numStages,
   // `numStages - 2`. All the other operations will go in stage `numStages - 1`.
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (prefetchExtract) {
-      if (isa<ttg::ExtractSliceOp, ttg::AsyncWaitOp>(op))
+      if (isa<ttg::MemDescSubviewOp, ttg::AsyncWaitOp>(op))
         extractOps.push_back(&op);
     }
   }
@@ -560,7 +559,7 @@ createSchedule(scf::ForOp forOp, int numStages,
 
   SmallVector<DenseSet<Operation *>> insertOps(numStages);
   for (auto &[op, info] : opToInfo) {
-    if (isa<ttg::InsertSliceAsyncOp, ttg::AsyncCommitGroupOp>(op)) {
+    if (isa<ttg::AsyncCopyGlobalToLocalOp, ttg::AsyncCommitGroupOp>(op)) {
       insertOps[info.stage].insert(op);
     }
   }
@@ -739,25 +738,21 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   options.supportDynamicLoops = true;
   options.annotateFn = [](Operation *op,
                           mlir::triton::PipeliningOption::PipelinerPart part,
-                          unsigned iteration) {
-    if (isa<ttg::ExtractSliceOp>(op)) {
-      op->setAttr(kNeedWaitAttrName, UnitAttr::get(op->getContext()));
-    }
-  };
+                          unsigned iteration) {};
   // Insert a wait 0 after the loop
   OpBuilder builder(forOp);
   builder.setInsertionPointAfter(forOp);
-  builder.create<ttg::AsyncWaitOp>(forOp.getLoc(), 0);
+  builder.create<ttg::AsyncWaitOp>(forOp.getLoc(), ValueRange({}), 0);
   // Explicitly deallocate allocated tensors after the wait op
   for (auto alloc : allocs)
-    builder.create<ttg::DeallocTensorOp>(forOp.getLoc(), alloc);
+    builder.create<ttg::LocalDeallocOp>(forOp.getLoc(), alloc);
   return true;
 }
 
-/// Find the minimum number of async_commit_group ops between the extract
-/// and the insert. Wait number is the number of commits-1.
-static std::optional<int>
-minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
+/// Find the minimum number of async_commit_group ops between the wait
+/// and the associated async_commit_group. This can be safely used as the wait
+/// number.
+static int minNumInterleavedCommitOps(Operation *waitOp) {
   auto countCommitsBetween = [](Operation *op1, Operation *op2) {
     int count = 0;
     for (auto op = op1; op != op2; op = op->getNextNode()) {
@@ -777,21 +772,17 @@ minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
   std::function<int(Value, Operation *, int)> minOverHistories =
       [&](Value val, Operation *sinkOp, int thisHistorySum) -> int {
     if (Operation *defOp = val.getDefiningOp()) {
-      if (isa<ttg::InsertSliceAsyncOp>(defOp)) {
-        thisHistorySum += countCommitsBetween(defOp->getNextNode(), sinkOp);
-        minCommitNumber = std::min(minCommitNumber, thisHistorySum);
-        return minCommitNumber;
-      }
-      // Failed to track, return 1 conservatively.
-      return 1;
+      thisHistorySum += countCommitsBetween(defOp->getNextNode(), sinkOp);
+      minCommitNumber = std::min(minCommitNumber, thisHistorySum);
+      return minCommitNumber;
     }
     if (auto arg = val.dyn_cast<BlockArgument>()) {
       Block *block = arg.getOwner();
       auto forOp = dyn_cast<scf::ForOp>(block->getParentOp());
 
-      // Failed to track, return 1 conservatively.
+      // Failed to track, return 0 conservatively.
       if (!forOp)
-        return 1;
+        return 0;
 
       Operation *firstForInst = &*forOp.getBody()->begin();
       int insertsBetween = countCommitsBetween(firstForInst, sinkOp);
@@ -811,46 +802,58 @@ minWaitNumberForExtract(ttg::ExtractSliceOp extractOp) {
       int min2 = minOverHistories(prevVal, yieldOp, thisHistorySum);
       return std::min(std::min(min1, min2), minCommitNumber);
     }
-    // Failed to track, return 1 conservatively.
-    return 1;
+    // Failed to track, return 0 conservatively.
+    return 0;
   };
 
-  int minCommits = minOverHistories(extractOp.getOperand(0), extractOp, 0);
-  if (minCommits == 0)
-    llvm::report_fatal_error("No commits between insert and extract!");
-  return minCommits - 1;
+  if (waitOp->getNumOperands() != 1)
+    return 0;
+  int minCommits = minOverHistories(waitOp->getOperand(0), waitOp, 0);
+  return minCommits;
 }
 
-/// Insert wait ops after the extract_slice ops.
-void mlir::triton::insertWaits(ModuleOp module) {
-  module.walk([&](ttg::ExtractSliceOp firstExtractOp) {
-    if (!firstExtractOp->hasAttr(kNeedWaitAttrName))
-      return;
-
-    Operation *extractOp = firstExtractOp;
-    ttg::ExtractSliceOp lastExtractOp = firstExtractOp;
-
-    // If there is no meaningful work between the extracts, don't insert
-    // multiple waits. Insert just one wait per group of extracts.
-    std::optional<int> minWaitNumber = std::nullopt;
-    while (extractOp) {
-      lastExtractOp = cast<ttg::ExtractSliceOp>(extractOp);
-      std::optional<int> currMin = minWaitNumberForExtract(lastExtractOp);
-      if (currMin.has_value())
-        minWaitNumber =
-            std::min(minWaitNumber.value_or(INT_MAX), currMin.value());
-
-      extractOp->removeAttr(kNeedWaitAttrName);
-      extractOp = dyn_cast<ttg::ExtractSliceOp>(extractOp->getNextNode());
+// Look for consecutive wait ops and combine them into a single wait op.
+static void
+combineRedundantWaitOps(llvm::SmallSetVector<ttg::AsyncWaitOp, 8> &waitOps) {
+  llvm::SmallSetVector<ttg::AsyncWaitOp, 8> toDelete;
+  for (auto waitOp : waitOps) {
+    if (toDelete.count(waitOp))
+      continue;
+    SmallVector<ttg::AsyncWaitOp> waitGroup = {waitOp};
+    SmallVector<Value> depTokens;
+    unsigned minWaitNumber = waitOp.getNum();
+    Operation *next = waitOp->getNextNode();
+    while (next && isa<ttg::MemDescSubviewOp, ttg::AsyncWaitOp>(next)) {
+      if (auto nextWait = dyn_cast<ttg::AsyncWaitOp>(next)) {
+        waitGroup.push_back(nextWait);
+        minWaitNumber = std::min(minWaitNumber, nextWait.getNum());
+        depTokens.append(nextWait.getOperands().begin(),
+                         nextWait.getOperands().end());
+      }
+      next = next->getNextNode();
     }
+    if (waitGroup.size() == 1)
+      continue;
+    OpBuilder builder(waitGroup.back());
+    auto newWaitOp = builder.create<ttg::AsyncWaitOp>(waitOp.getLoc(),
+                                                      depTokens, minWaitNumber);
+    toDelete.insert(waitGroup.begin(), waitGroup.end());
+  }
+  for (auto waitOp : toDelete) {
+    waitOp->erase();
+  }
+}
 
-    if (!minWaitNumber.has_value())
-      return; // Wait is not needed.
-    OpBuilder builder(lastExtractOp);
-    builder.setInsertionPointAfter(lastExtractOp);
-    builder.create<ttg::AsyncWaitOp>(lastExtractOp.getLoc(),
-                                     minWaitNumber.value());
+/// Update wait op number by analyzing the number of async_commit_group ops
+/// along all paths.
+void mlir::triton::updateWaits(ModuleOp module) {
+  llvm::SmallSetVector<ttg::AsyncWaitOp, 8> waitOps;
+  module.walk([&](ttg::AsyncWaitOp waitOp) {
+    int minNumCommits = minNumInterleavedCommitOps(waitOp);
+    waitOp.setNum(minNumCommits);
+    waitOps.insert(waitOp);
   });
+  combineRedundantWaitOps(waitOps);
 }
 
 /// MMA V3 post-processing.
@@ -972,7 +975,7 @@ void mlir::triton::asyncLaunchDots(scf::ForOp forOp) {
           // allocated enough buffers to pipeline dot operation with 2 stages.
           for (Value operand : {dotOp.getOperand(0), dotOp.getOperand(1)}) {
             auto operandEncoding =
-                operand.getType().cast<RankedTensorType>().getEncoding();
+                operand.getType().cast<TensorOrMemDesc>().getEncoding();
             if (!operandEncoding.isa<ttg::SharedEncodingAttr>())
               continue;
             Value transitiveOperand = operand;
@@ -982,7 +985,7 @@ void mlir::triton::asyncLaunchDots(scf::ForOp forOp) {
                   transitiveOperand.getDefiningOp()->getOperand(0);
             if (forOp.isDefinedOutsideOfLoop(transitiveOperand))
               continue;
-            if (transitiveOperand.getDefiningOp<ttg::ExtractSliceOp>() ==
+            if (transitiveOperand.getDefiningOp<ttg::MemDescSubviewOp>() ==
                 nullptr)
               valid = false;
           }

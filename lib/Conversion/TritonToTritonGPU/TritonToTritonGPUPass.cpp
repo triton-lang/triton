@@ -412,32 +412,6 @@ struct TritonTransPattern : public OpConversionPattern<TransOp> {
     auto srcEnc = srcTy.getEncoding();
     if (!srcEnc)
       return failure();
-
-    // inferTransOpEncoding chooses a layout for the transpose that makes it a
-    // "nop".  For example, if the src layout has thread [i,j] holding element
-    // [i,j] of the tensor, then the transposed layout has thread [i,j] holding
-    // element [j,i].  In other words, the transpose simply "renames" the
-    // elements, while leaving them in place.
-    //
-    // This will be called automatically, but it only works if the src encoding
-    // is blocked or shared.  If it's anything else, materialize to shared
-    // first.
-    //
-    // Unrelatedly, if the transpose feeds into a dot op, we also force it
-    // into shared memory.  Dot ops expect this.
-    if ((!srcEnc.isa<BlockedEncodingAttr>() &&
-         !srcEnc.isa<SharedEncodingAttr>()) ||
-        (!srcEnc.isa<SharedEncodingAttr>() &&
-         any_of(op->getUsers(),
-                [](Operation *user) { return isa<DotOp>(user); }))) {
-      srcEnc = SharedEncodingAttr::get(
-          getContext(), 1, 1, 1, /*order=*/SmallVector<unsigned>(op.getOrder()),
-          getCTALayout(srcEnc));
-      srcTy = RankedTensorType::get(srcTy.getShape(), srcTy.getElementType(),
-                                    srcEnc);
-      src = rewriter.create<ConvertLayoutOp>(src.getLoc(), srcTy, src);
-    }
-
     addNamedAttrs(rewriter.replaceOpWithNewOp<TransOp>(op, src, op.getOrder()),
                   adaptor.getAttributes());
     return success();

@@ -14,8 +14,6 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     PrintOpToLLVM.cpp
     ControlFlowOpToLLVM.cpp
     SPMDOpToLLVM.cpp
-    ReduceOpToLLVM.cpp
-    ScanOpToLLVM.cpp
     TensorPtrOpsToLLVM.cpp
     ClusterOpsToLLVM.cpp
     PTXAsmFormat.cpp

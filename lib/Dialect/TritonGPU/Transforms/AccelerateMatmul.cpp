@@ -190,6 +190,7 @@ public:
 
   static Value getMMAv3Operand(Value v, mlir::PatternRewriter &rewriter,
                                int opIdx) {
+    OpBuilder::InsertionGuard g(rewriter);
     Value arg = v;
     if (auto cvtOp = v.getDefiningOp<ttg::ConvertLayoutOp>())
       arg = cvtOp.getSrc();
@@ -212,10 +213,10 @@ public:
     auto newLayout = ttg::SharedEncodingAttr::get(
         argType.getContext(), argType.getShape(), newOrder, CTALayout,
         argType.getElementType());
-    auto newType = RankedTensorType::get(argType.getShape(),
-                                         argType.getElementType(), newLayout);
-
-    return rewriter.create<ttg::ConvertLayoutOp>(arg.getLoc(), newType, arg);
+    auto newType = tt::MemDescType::get(argType.getShape(),
+                                        argType.getElementType(), newLayout);
+    rewriter.setInsertionPointAfterValue(arg);
+    return rewriter.create<ttg::LocalAllocOp>(arg.getLoc(), newType, arg);
   }
 
   mlir::LogicalResult

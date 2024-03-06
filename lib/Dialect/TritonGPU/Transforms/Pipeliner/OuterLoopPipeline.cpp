@@ -13,7 +13,7 @@ static std::vector<std::pair<Operation *, unsigned>>
 createSchedule(scf::ForOp forOp, int numStages) {
   SmallVector<Operation *> insertOps;
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (isa<ttg::InsertSliceAsyncOp, ttg::AsyncCommitGroupOp>(op))
+    if (isa<ttg::AsyncCopyGlobalToLocalOp, ttg::AsyncCommitGroupOp>(op))
       insertOps.emplace_back(&op);
   }
   DenseSet<Operation *> insertAndDeps;
@@ -55,16 +55,16 @@ createSchedule(scf::ForOp forOp, int numStages) {
 static void hoistAllocAndConst(scf::ForOp forOp) {
   SmallVector<Operation *> toHoist;
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (isa<ttg::AllocTensorOp, arith::ConstantOp>(op))
+    if (isa<ttg::LocalAllocOp, arith::ConstantOp>(op))
       toHoist.push_back(&op);
   }
   for (Operation *op : toHoist) {
     op->moveBefore(forOp);
-    auto allocOp = dyn_cast<ttg::AllocTensorOp>(op);
+    auto allocOp = dyn_cast<ttg::LocalAllocOp>(op);
     if (!allocOp)
       continue;
     for (Operation *user : allocOp->getUsers()) {
-      if (auto dealloc = dyn_cast<ttg::DeallocTensorOp>(user)) {
+      if (auto dealloc = dyn_cast<ttg::LocalDeallocOp>(user)) {
         dealloc->moveAfter(forOp);
       }
     }
@@ -77,7 +77,7 @@ static bool preCondition(scf::ForOp forOp) {
   SmallVector<Operation *> insertOps;
   int numForOps = 0;
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (isa<ttg::InsertSliceAsyncOp, ttg::AsyncCommitGroupOp>(op))
+    if (isa<ttg::AsyncCopyGlobalToLocalOp, ttg::AsyncCommitGroupOp>(op))
       insertOps.emplace_back(&op);
     if (isa<scf::ForOp>(op))
       numForOps++;

@@ -1,9 +1,18 @@
 #include "Utility.h"
 #include "TritonGPUToLLVMBase.h"
-#include "TypeConverter.h"
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
+
+namespace {
+enum class ShflKind : uint32_t {
+  bfly = 0,
+  up = 1,
+  down = 2,
+  idx = 3,
+};
+}
 
 namespace mlir {
 
@@ -11,9 +20,9 @@ namespace LLVM {
 using namespace mlir::triton;
 
 namespace AMD {
-static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
-                            Value val, Value i, int strideInt,
-                            NVVM::ShflKind mode, Value clamp) {
+static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
+                           Value val, Value i, int strideInt, ShflKind mode,
+                           Value clamp) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   // On AMD, the ds_swizzle_b32 and ds_permute_b32 instructions work on
@@ -25,7 +34,7 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
     if (bits < 32)
       val = sext(i32_ty, val);
 
-    val = commonShflSync(loc, rewriter, val, i, strideInt, mode, clamp);
+    val = shuffleCommon(loc, rewriter, val, i, strideInt, mode, clamp);
 
     if (bits < 32)
       val = trunc(int_ty(bits), val);
@@ -39,8 +48,8 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
     Value vec = bitcast(val, vecTy);
     Value val0 = extract_element(f32_ty, vec, i32_val(0));
     Value val1 = extract_element(f32_ty, vec, i32_val(1));
-    val0 = commonShflSync(loc, rewriter, val0, i, strideInt, mode, clamp);
-    val1 = commonShflSync(loc, rewriter, val1, i, strideInt, mode, clamp);
+    val0 = shuffleCommon(loc, rewriter, val0, i, strideInt, mode, clamp);
+    val1 = shuffleCommon(loc, rewriter, val1, i, strideInt, mode, clamp);
     vec = undef(vecTy);
     vec = insert_element(vecTy, vec, val0, i32_val(0));
     vec = insert_element(vecTy, vec, val1, i32_val(1));
@@ -63,7 +72,7 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
   };
 
   switch (mode) {
-  case NVVM::ShflKind::bfly:
+  case ShflKind::bfly:
     if (strideInt > 16) {
       Value threadId =
           rewriter
@@ -84,13 +93,13 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
       return rewriter.create<ROCDL::DsSwizzleOp>(loc, valType, val, offset);
     }
     break;
-  case NVVM::ShflKind::up: {
+  case ShflKind::up: {
     Value mask = icmp_slt(laneId, i);
     Value delta = sub(laneId, i);
     Value index = select(mask, laneId, delta);
     return bpermute(index);
   }
-  case NVVM::ShflKind::idx:
+  case ShflKind::idx:
     return bpermute(i);
   default:
     assert(false && "Unsupported ShflKind");
@@ -99,27 +108,26 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
   return Value();
 }
 
-Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-               int i) {
-  return commonShflSync(loc, rewriter, val, i32_val(i), i, NVVM::ShflKind::bfly,
-                        i32_val(0x1f));
-}
-
-Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+Value shuffleXor(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i) {
-  return commonShflSync(loc, rewriter, val, i32_val(i), i, NVVM::ShflKind::up,
-                        i32_val(0x0));
+  return shuffleCommon(loc, rewriter, val, i32_val(i), i, ShflKind::bfly,
+                       i32_val(0x1f));
 }
 
-Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  int i) {
-  return shflIdxSync(loc, rewriter, val, i32_val(i));
+Value shuffleUp(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                int i) {
+  return shuffleCommon(loc, rewriter, val, i32_val(i), i, ShflKind::up,
+                       i32_val(0x0));
 }
 
-Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  Value i) {
-  return commonShflSync(loc, rewriter, val, i, 0, NVVM::ShflKind::idx,
-                        i32_val(0x1f));
+Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                 int i) {
+  return shuffleIdx(loc, rewriter, val, i32_val(i));
+}
+
+Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                 Value i) {
+  return shuffleCommon(loc, rewriter, val, i, 0, ShflKind::idx, i32_val(0x1f));
 }
 
 } // namespace AMD

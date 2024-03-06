@@ -20,6 +20,7 @@
 #include "triton/Target/LLVMIR/Passes.h"
 
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/InitAllPasses.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 
@@ -76,5 +77,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
                   mlir::triton::gpu::TritonGPUDialect, mlir::math::MathDialect,
                   mlir::arith::ArithDialect, mlir::scf::SCFDialect,
                   mlir::gpu::GPUDialect, mlir::LLVM::LLVMDialect,
-                  mlir::NVVM::NVVMDialect, mlir::triton::nvgpu::NVGPUDialect>();
+                  mlir::NVVM::NVVMDialect, mlir::triton::nvgpu::NVGPUDialect,
+                  mlir::ROCDL::ROCDLDialect>();
 }

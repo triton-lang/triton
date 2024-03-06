@@ -17,7 +17,7 @@ using namespace triton;
 
 SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 const ArrayRef<int64_t> &shape,
-                                                RankedTensorType type) {
+                                                TensorOrMemDesc type) {
   if (version == 1)
     return {16, 16};
   else if (version == 2) {
@@ -81,8 +81,8 @@ Value getMemAccessPtr(Operation *op) {
     return atomic.getPtr();
   if (auto atomic = dyn_cast<triton::AtomicCASOp>(op))
     return atomic.getPtr();
-  if (auto insert = dyn_cast<triton::gpu::InsertSliceAsyncOp>(op))
-    return insert.getSrc();
+  if (auto copy = dyn_cast<triton::gpu::AsyncCopyGlobalToLocalOp>(op))
+    return copy.getSrc();
   if (auto store = dyn_cast<triton::StoreOp>(op))
     return store.getPtr();
   return nullptr;
@@ -512,8 +512,7 @@ bool isExpensiveToRemat(Operation *op, Attribute &targetEncoding) {
     return isExpensiveLoadOrStore(op);
   if (isa<triton::CatOp>(op))
     return triton::gpu::isExpensiveCat(cast<triton::CatOp>(op), targetEncoding);
-  if (isa<tensor::ExtractSliceOp, triton::gpu::AllocTensorOp,
-          triton::gpu::InsertSliceAsyncOp, triton::AtomicRMWOp,
+  if (isa<triton::gpu::AsyncCopyGlobalToLocalOp, triton::AtomicRMWOp,
           triton::AtomicCASOp, triton::DotOp>(op))
     return true;
   if (isa<scf::YieldOp, scf::ForOp, scf::IfOp, scf::WhileOp, scf::ConditionOp>(
@@ -546,7 +545,8 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
                                          newDstType);
   }
   return isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
-             triton::MakeRangeOp, triton::SplatOp, triton::HistogramOp>(op);
+             triton::MakeRangeOp, triton::SplatOp, triton::HistogramOp,
+             triton::gpu::LocalAllocOp>(op);
 }
 
 scf::ForOp replaceForOpWithNewSignature(
