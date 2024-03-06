@@ -3181,8 +3181,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
 @pytest.mark.parametrize("in_dtype_str, out_dtype_str", [('int8', 'int8'), ('float16', 'float16'),
                                                          ('float16', 'float32'), ('float32', 'float32')])
 def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
-    if is_hip():
-        pytest.skip('TODO test_dot3d not supported on HIP.')
+    if in_dtype_str == 'int8' and is_interpreter():
+        pytest.skip('numpy.dot with int8 inputs will overflow')
 
     @triton.jit
     def kernel(
