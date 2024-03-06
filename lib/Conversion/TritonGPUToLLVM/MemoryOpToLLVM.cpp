@@ -26,7 +26,6 @@ void lowerDistributedToShared(LocalAllocOp op, LocalAllocOpAdaptor adaptor,
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
   int32_t elemSize = elemTy.getIntOrFloatBitWidth();
-  auto mmaLayout = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>();
   unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
   auto dstStrides =
       LLVM::getStridesFromShapeAndOrder(dstShapePerCTA, outOrd, loc, rewriter);

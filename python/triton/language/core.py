@@ -8,6 +8,7 @@ from typing import Union, Callable, List, Sequence, TypeVar, cast
 import builtins
 from ..runtime.jit import jit
 import inspect
+import os
 
 from .._C.libtriton import ir
 from . import semantic
@@ -1038,6 +1039,11 @@ class tensor:
         ...
 
 
+def get_bool_env_var(var_name):
+    v = os.getenv(var_name, "0")
+    return v == "1" or v == "true" or v == "on"
+
+
 # -----------------------
 # SPMD Programming Model
 # -----------------------
@@ -1393,7 +1399,7 @@ def expand_dims(input, axis, _builder=None):
 
 
 @builtin
-def dot(input, other, acc=None, allow_tf32=True, max_num_imprecise_acc=None, out_dtype=float32, _builder=None):
+def dot(input, other, acc=None, allow_tf32=None, max_num_imprecise_acc=None, out_dtype=float32, _builder=None):
     """
     Returns the matrix product of two blocks.
 
@@ -1404,6 +1410,11 @@ def dot(input, other, acc=None, allow_tf32=True, max_num_imprecise_acc=None, out
     :param other: The second tensor to be multiplied.
     :type other: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
     """
+    if allow_tf32 is None:
+        if get_bool_env_var("TRITON_F32_DEFAULT"):
+            allow_tf32 = False
+        else:
+            allow_tf32 = True
     allow_tf32 = _constexpr_to_value(allow_tf32)
     out_dtype = _constexpr_to_value(out_dtype)
     max_num_imprecise_acc = _constexpr_to_value(max_num_imprecise_acc)
@@ -1460,9 +1471,11 @@ def load(pointer, mask=None, other=None, boundary_check=tuple(), padding_option=
     :type volatile: bool, optional
     """
     # `mask` and `other` can be constexpr
-    if _constexpr_to_value(mask) is not None:
+    mask = _constexpr_to_value(mask)
+    other = _constexpr_to_value(other)
+    if mask is not None:
         mask = _to_tensor(mask, _builder)
-    if _constexpr_to_value(other) is not None:
+    if other is not None:
         other = _to_tensor(other, _builder)
     padding_option = _constexpr_to_value(padding_option)
     cache_modifier = _constexpr_to_value(cache_modifier)
@@ -1513,7 +1526,8 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
     """
     # `value` can be constexpr
     value = _to_tensor(value, _builder)
-    if _constexpr_to_value(mask) is not None:
+    mask = _constexpr_to_value(mask)
+    if mask is not None:
         mask = _to_tensor(mask, _builder)
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
