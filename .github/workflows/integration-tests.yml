@@ -98,8 +98,12 @@ jobs:
         if: ${{ env.BACKEND == 'CUDA' }}
         run: |
           cd python/test/unit
-          python3 -m pytest -vvv -n 8 --ignore=runtime --ignore=operators --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+          python3 -m pytest -vvv -n 8 --ignore=hopper/test_flashattention.py --ignore=runtime --ignore=operators --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
           python3 -m pytest -vvv -n 8 language/test_subprocess.py
+          # run flash attention test separately and disable the caching allocator to avoid out of gpu memory.
+          # with the caching allocator test_flashattention.py::test_op[4-48-4096-64] takes ~75GB memory.
+          # without the caching allocator it takes ~35GB memory.
+          PYTORCH_NO_CUDA_MEMORY_CACHING=1 python -m pytest -vs hopper/test_flashattention.py::test_op
           # run runtime tests serially to avoid race condition with cache handling.
           python3 -m pytest -vvv runtime/
           # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
