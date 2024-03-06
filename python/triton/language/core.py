@@ -1460,9 +1460,11 @@ def load(pointer, mask=None, other=None, boundary_check=tuple(), padding_option=
     :type volatile: bool, optional
     """
     # `mask` and `other` can be constexpr
-    if _constexpr_to_value(mask) is not None:
+    mask = _constexpr_to_value(mask)
+    other = _constexpr_to_value(other)
+    if mask is not None:
         mask = _to_tensor(mask, _builder)
-    if _constexpr_to_value(other) is not None:
+    if other is not None:
         other = _to_tensor(other, _builder)
     padding_option = _constexpr_to_value(padding_option)
     cache_modifier = _constexpr_to_value(cache_modifier)
@@ -1513,7 +1515,8 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
     """
     # `value` can be constexpr
     value = _to_tensor(value, _builder)
-    if _constexpr_to_value(mask) is not None:
+    mask = _constexpr_to_value(mask)
+    if mask is not None:
         mask = _to_tensor(mask, _builder)
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
