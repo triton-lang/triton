@@ -877,12 +877,12 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 } // end module
 
 // -----
-// CHECK: #[[SHARED_LAYOUT:shared.*]] = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], hasLeadingOffset = false}>
+// CHECK: #[[$SHARED_LAYOUT:shared.*]] = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], hasLeadingOffset = false}>
 // CHECK-LABEL: tt.func @indirect_load_shared_layout
 // CHECK: scf.for
 // CHECK: %[[NEXT_BUFFER_1:.*]] = tt.addptr %{{.*}}, {{.*}}
 // CHECK: triton_gpu.async_copy_global_to_local %[[NEXT_BUFFER_1]]
-// CHECK: %[[IND_BUFFER_0:.*]] = triton_gpu.memdesc_subview {{.*}} : !tt.memdesc<1x16xi64, #[[SHARED_LAYOUT]], mutable> -> !tt.memdesc<16xi64, #[[SHARED_LAYOUT]], mutable>
+// CHECK: %[[IND_BUFFER_0:.*]] = triton_gpu.memdesc_subview {{.*}} : !tt.memdesc<1x16xi64, #[[$SHARED_LAYOUT]], mutable> -> !tt.memdesc<16xi64, #[[$SHARED_LAYOUT]], mutable>
 // CHECK: %[[IND_BUFFER_1:.*]] = triton_gpu.local_load %[[IND_BUFFER_0]]
 // CHECK: %[[IND_BUFFER_2:.*]] = tt.expand_dims %[[IND_BUFFER_1]] {axis = 1 : i32}
 // CHECK: %[[IND_BUFFER_3:.*]] = tt.broadcast %[[IND_BUFFER_2]]
