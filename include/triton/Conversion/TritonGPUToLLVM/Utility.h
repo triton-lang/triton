@@ -1062,11 +1062,10 @@ DenseMap<unsigned, Value> static getSwizzledSharedPtrs(
   unsigned minVec = std::min(outVec, inVec);
   Value strideRow = outOrder.size() == 2 ? srcStrides[outOrder[1]] : i32_val(0);
   Value strideCol = srcStrides[outOrder[0]];
-  LLVM_DEBUG(DBGS() << "getSwizzledSharedPtrs: perPhase = " << perPhase
-                    << " maxPhase = " << maxPhase << " minVec = " << minVec
-                    << " inVec = " << inVec << " outVec = " << outVec
-                    << " strideRow " << strideRow << " strideCol " << strideCol
-                    << "\n");
+  LDBG("getSwizzledSharedPtrs: perPhase = "
+       << perPhase << " maxPhase = " << maxPhase << " minVec = " << minVec
+       << " inVec = " << inVec << " outVec = " << outVec << " strideRow "
+       << strideRow << " strideCol " << strideCol);
   for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
     Value offset = i32_val(0);
     // Extract multi dimensional index for current element
@@ -1180,8 +1179,8 @@ loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
   unsigned numVecs = outElems / minVec;
   auto wordTy = vec_ty(elemTy, minVec);
   SmallVector<Value> outVals(outElems);
-  LLVM_DEBUG(DBGS() << "loadSharedToDistributed: numVecs = " << numVecs
-                    << " minVec = " << minVec << " " << wordTy << "\n");
+  LDBG("loadSharedToDistributed: numVecs = " << numVecs << " minVec = "
+                                             << minVec << " " << wordTy);
   for (unsigned i = 0; i < numVecs; ++i) {
     Value smemAddr = sharedPtrs[i * minVec];
     smemAddr = bitcast(smemAddr, ptr_ty(rewriter.getContext(), 3));
@@ -1234,8 +1233,8 @@ static void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
   DenseMap<unsigned, Value> sharedPtrs =
       getSwizzledSharedPtrs(loc, inVec, srcTy, dstSharedLayout, elemTy, smemObj,
                             rewriter, offsetVals, srcStrides);
-  LLVM_DEBUG(DBGS() << "storeDistributedToShared: numElems = " << numElems
-                    << " minVec = " << minVec << " " << wordTy << "\n");
+  LDBG("storeDistributedToShared: numElems = " << numElems << " minVec = "
+                                               << minVec << " " << wordTy);
   for (unsigned i = 0; i < numElems; ++i) {
     if (i % minVec == 0)
       word = undef(wordTy);
