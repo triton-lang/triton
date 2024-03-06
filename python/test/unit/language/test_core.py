@@ -159,7 +159,7 @@ def check_type_supported(dtype, device):
     if is_interpreter():
         if dtype in [
                 tl.float8e4nv, "float8e4nv", tl.bfloat16, "bfloat16", tl.float8e5, "float8e5", tl.float8e4b15,
-                "float8e4b15", tl.float8e4b15x4, "float8e4b15x4"
+                "float8e4b15", tl.float8e4b15x4, "float8e4b15x4", torch.bfloat16, torch.float8_e4m3fn, torch.float8_e5m2
         ]:
             pytest.skip("bfloat16 and float8 are not supported in the interpreter")
 
@@ -387,6 +387,7 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype, order", [(dtype, order) for dtype in dtypes_with_bfloat16 for order in [0, 1]])
 def test_addptr(dtype, order, device):
     check_type_supported(dtype, device)
@@ -1047,6 +1048,7 @@ def tuples_fn(a, b):
         a * b
 
 
+@pytest.mark.interpreter
 def test_tuples(device):
 
     @triton.jit
@@ -3160,6 +3162,7 @@ def test_constexpr(literal, dtype_str, device):
     assert re.search(r"arith.constant .* : " + dtype_str, h.asm["ttir"]) is not None
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", ['float32', 'float16'])
 def test_dot_without_load(dtype_str, device):
     if is_cuda():
@@ -3193,6 +3196,7 @@ def test_dot_without_load(dtype_str, device):
 # ---------------
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("start", [0, 1, 7, 16])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_arange(start, num_ctas, device):
@@ -3215,12 +3219,14 @@ def test_arange(start, num_ctas, device):
 # ---------------
 
 
-@pytest.mark.parametrize("dtype_str, size, size_diff", [(dtype_str, size, size_diff)
-                                                        for dtype_str in torch_dtypes
-                                                        for size in [128, 512]
-                                                        for size_diff in [0, 1, 2, 3, 4]])
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str, size, size_diff, other", [(dtype_str, size, size_diff, other)
+                                                               for dtype_str in torch_dtypes
+                                                               for size in [128, 512]
+                                                               for size_diff in [0, 1, 2, 3, 4]
+                                                               for other in [0, 1]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_masked_load(dtype_str, size, size_diff, num_ctas, device):
+def test_masked_load(dtype_str, size, size_diff, other, num_ctas, device):
     dtype = getattr(torch, dtype_str)
     check_type_supported(dtype, device)  # bfloat16 on cc < 80 will not be tested
 
@@ -3243,11 +3249,11 @@ def test_masked_load(dtype_str, size, size_diff, num_ctas, device):
         output_offsets = tl.arange(0, out_size)
         tl.store(out_ptr + output_offsets, x)
 
-    mask_str = "mask=in_offsets < in_size, other=1" if size_diff > 0 else "None"
+    mask_str = f"mask=in_offsets < in_size, other={other}" if size_diff > 0 else "None"
     kernel = patch_kernel(_kernel, {'GENERATE_TEST_HERE': f"tl.load(in_ptr + in_offsets, {mask_str})"})
     kernel[(1, )](input, output, input_size, output_size, num_ctas=num_ctas)
 
-    reference_out = torch.cat((input, torch.ones((size_diff, ), dtype=dtype, device=device)))
+    reference_out = torch.cat((input, torch.full((size_diff, ), other, dtype=dtype, device=device)))
     # print((output - reference_out).nonzero())
     torch.testing.assert_close(output, reference_out)
 
@@ -3256,6 +3262,7 @@ def test_masked_load(dtype_str, size, size_diff, num_ctas, device):
 
 
 # FIXME: Shape too small for ldmatrix when num_ctas=4
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
 def test_masked_load_shared_memory(dtype, device):
 
@@ -3298,6 +3305,7 @@ def test_masked_load_shared_memory(dtype, device):
     torch.testing.assert_close(out, reference_out, atol=1e-2, rtol=0)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("cache", ["", ".ca", ".cg"])
 def test_load_cache_modifier(cache, device):
     src = torch.empty(128, device=device)
@@ -3382,6 +3390,7 @@ def test_vectorization_hints(has_hints, device):
 # ---------------
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("cache", ["", ".wb", ".cg", ".cs", ".wt"])
 def test_store_cache_modifier(cache, device):
     src = torch.empty(128, device=device)
@@ -3435,6 +3444,7 @@ def _impl(value=10):
     return value
 
 
+@pytest.mark.interpreter
 def test_default(device):
     value = 5
     ret0 = torch.zeros(1, dtype=torch.int32, device=device)
@@ -3570,6 +3580,7 @@ def test_bin_op_constexpr(op, is_lhs_constexpr, is_rhs_constexpr, device):
     np.testing.assert_allclose(z, to_numpy(z_tri))
 
 
+@pytest.mark.interpreter
 def test_constexpr_shape(device):
 
     @triton.jit
@@ -3582,6 +3593,7 @@ def test_constexpr_shape(device):
     np.testing.assert_equal(to_numpy(x_tri), np.arange(0, 256))
 
 
+@pytest.mark.interpreter
 def test_constexpr_scalar_shape(device):
 
     @triton.jit
@@ -4576,6 +4588,7 @@ def test_convertmma2mma(M, N, mma_pair, dtype, device):
     do_test(mma_pair[1], mma_pair[0])
 
 
+@pytest.mark.interpreter
 def test_load_scalar_with_mask(device):
 
     @triton.jit
