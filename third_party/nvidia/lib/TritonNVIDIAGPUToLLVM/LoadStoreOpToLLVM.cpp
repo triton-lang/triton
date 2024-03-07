@@ -114,6 +114,8 @@ struct LoadStoreConversionBase {
       return 1;
     auto contiguity = getContiguity(ptr);
     auto pointeeBitWidth = triton::getPointeeBitWidth(tensorTy);
+    LDBG("getVectorSize contiguity = " << contiguity << " pointeeBitWidth = "
+                                       << pointeeBitWidth);
     // The maximum vector size is 128 bits on NVIDIA GPUs.
     return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
   }
@@ -146,6 +148,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Value ptr = op.getPtr();
     Value mask = op.getMask();
     Value other = op.getOther();
+    LDBG("Lower LoadOp for " << ptr);
 
     // adaptor values
     assert(!isTensorPointerType(ptr.getType()) &&
@@ -160,8 +163,12 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         typeConverter->convertType(getElementTypeOrSelf(op.getType()));
     unsigned vec = getVectorSize(ptr);
     unsigned numElems = getTotalElemsPerThread(ptr.getType());
-    if (llMask)
+    if (llMask) {
+      LLVM_DEBUG(DBGS() << "vec = " << vec
+                        << " mask_alignment = " << getMaskAlignment(mask));
       vec = std::min<size_t>(vec, getMaskAlignment(mask));
+      LLVM_DEBUG(llvm::dbgs() << " vec = " << vec << '\n');
+    }
 
     // Get the LLVM values for pointers
     auto ptrElems = unpackLLElements(loc, llPtr, rewriter);
@@ -196,6 +203,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         std::max(8u, valueElemTy.getIntOrFloatBitWidth());
     const int numVecs = numElems / vec;
 
+    LDBG("LoadOp numElems = " << numElems << " vec = " << vec
+                              << " valueElemNBits = " << valueElemNBits << " "
+                              << op.getType());
     SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       // TODO: optimization when ptr is GEP with constant offset

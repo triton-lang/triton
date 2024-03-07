@@ -11,6 +11,8 @@
 #include <set>
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -1077,20 +1079,23 @@ DenseMap<unsigned, Value> static getSwizzledSharedPtrs(
   // cache for non-immediate offsets
   DenseMap<unsigned, Value> cacheCol, cacheRow;
   unsigned minVec = std::min(outVec, inVec);
+  Value strideRow = outOrder.size() >= 2 ? srcStrides[outOrder[1]] : i32_val(0);
+  Value strideCol = srcStrides[outOrder[0]];
+  LDBG("getSwizzledSharedPtrs: perPhase = "
+       << perPhase << " maxPhase = " << maxPhase << " minVec = " << minVec
+       << " inVec = " << inVec << " outVec = " << outVec << " strideRow "
+       << strideRow << " strideCol " << strideCol);
   for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
     Value offset = i32_val(0);
     // Extract multi dimensional index for current element
     auto idx = srcIndices[elemIdx];
     Value idxCol = idx[outOrder[0]]; // contiguous dimension
-    Value idxRow, strideRow;
+    Value idxRow;
     if (outOrder.size() >= 2) {
       idxRow = idx[outOrder[1]]; // discontiguous dimension
-      strideRow = srcStrides[outOrder[1]];
     } else {
       idxRow = i32_val(0);
-      strideRow = i32_val(0);
     }
-    Value strideCol = srcStrides[outOrder[0]];
     // compute phase = (row // perPhase) % maxPhase
     Value phase = urem(udiv(idxRow, i32_val(perPhase)), i32_val(maxPhase));
     // extract dynamic/static offset for immediate offsetting
@@ -1193,6 +1198,8 @@ loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
   unsigned numVecs = outElems / minVec;
   auto wordTy = vec_ty(elemTy, minVec);
   SmallVector<Value> outVals(outElems);
+  LDBG("loadSharedToDistributed: numVecs = " << numVecs << " minVec = "
+                                             << minVec << " " << wordTy);
   for (unsigned i = 0; i < numVecs; ++i) {
     Value smemAddr = sharedPtrs[i * minVec];
     smemAddr = bitcast(smemAddr, ptr_ty(rewriter.getContext(), 3));
@@ -1245,7 +1252,8 @@ static void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
   DenseMap<unsigned, Value> sharedPtrs =
       getSwizzledSharedPtrs(loc, inVec, srcTy, dstSharedLayout, elemTy, smemObj,
                             rewriter, offsetVals, srcStrides);
-
+  LDBG("storeDistributedToShared: numElems = " << numElems << " minVec = "
+                                               << minVec << " " << wordTy);
   for (unsigned i = 0; i < numElems; ++i) {
     if (i % minVec == 0)
       word = undef(wordTy);
