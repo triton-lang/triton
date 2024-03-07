@@ -372,23 +372,23 @@ class CMakeBuild(build_ext):
 download_and_copy(
     src_path="bin/ptxas",
     variable="TRITON_PTXAS_PATH",
-    version="12.3.52",
+    version="12.4.99",
     url_func=lambda arch, version:
-    f"https://anaconda.org/nvidia/cuda-nvcc/12.3.52/download/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2",
+    f"https://anaconda.org/nvidia/cuda-nvcc/{version}/download/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2",
 )
 download_and_copy(
     src_path="bin/cuobjdump",
     variable="TRITON_CUOBJDUMP_PATH",
-    version="12.3.52",
+    version="12.4.99",
     url_func=lambda arch, version:
-    f"https://anaconda.org/nvidia/cuda-cuobjdump/12.3.52/download/linux-{arch}/cuda-cuobjdump-{version}-0.tar.bz2",
+    f"https://anaconda.org/nvidia/cuda-cuobjdump/{version}/download/linux-{arch}/cuda-cuobjdump-{version}-0.tar.bz2",
 )
 download_and_copy(
     src_path="bin/nvdisasm",
     variable="TRITON_NVDISASM_PATH",
-    version="12.3.52",
+    version="12.4.99",
     url_func=lambda arch, version:
-    f"https://anaconda.org/nvidia/cuda-nvdisasm/12.3.52/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
+    f"https://anaconda.org/nvidia/cuda-nvdisasm/{version}/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
 
 backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
