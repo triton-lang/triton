@@ -51,10 +51,11 @@ public:
   }
 
 private:
-  LogicalResult lowerSharedToDotOpFMA(triton::gpu::LocalLoadOp op,
-                                      triton::gpu::LocalLoadOpAdaptor adaptor,
-                                      const LLVMTypeConverter *typeConverter,
-                                      ConversionPatternRewriter &rewriter) {
+  LogicalResult
+  lowerSharedToDotOpFMA(triton::gpu::LocalLoadOp op,
+                        triton::gpu::LocalLoadOpAdaptor adaptor,
+                        const LLVMTypeConverter *typeConverter,
+                        ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     RankedTensorType dstTy = op.getType();
     Attribute dstLayout = dstTy.getEncoding();
@@ -73,7 +74,7 @@ private:
   lowerSharedToDistributed(triton::gpu::LocalLoadOp op,
                            triton::gpu::LocalLoadOpAdaptor adaptor,
                            const LLVMTypeConverter *typeConverter,
-                           ConversionPatternRewriter &rewriter) {
+                           ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();

@@ -70,7 +70,7 @@ private:
       const LLVMTypeConverter *typeConverter,
       ConversionPatternRewriter &rewriter,
       const NvidiaMmaEncodingAttr &mmaLayout,
-      const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) {
+      const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) const {
     auto loc = op.getLoc();
     auto src = op.getSrc();
     auto dst = op.getResult();
@@ -108,10 +108,11 @@ private:
   };
 
   // shared -> mma_operand
-  LogicalResult lowerSharedToDotOperand(triton::gpu::LocalLoadOp op,
-                                        triton::gpu::LocalLoadOpAdaptor adaptor,
-                                        const LLVMTypeConverter *typeConverter,
-                                        ConversionPatternRewriter &rewriter) {
+  LogicalResult
+  lowerSharedToDotOperand(triton::gpu::LocalLoadOp op,
+                          triton::gpu::LocalLoadOpAdaptor adaptor,
+                          const LLVMTypeConverter *typeConverter,
+                          ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto dstEnc = op.getType().getEncoding().cast<DotOperandEncodingAttr>();
     auto sharedLayout =

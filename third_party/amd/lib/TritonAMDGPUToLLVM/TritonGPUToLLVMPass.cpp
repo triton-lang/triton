@@ -451,7 +451,6 @@ struct ConvertTritonAMDGPUToLLVM
     };
 
     populatePatterns1(AMD::populateTritonGPUToLLVMPatterns);
-    // populatePatterns1(AMD::populateConvertLayoutOpToLLVMPatterns);
     AMD::populateConvertLayoutOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, numWarps, axisInfoAnalysis,
         allocation, indexCacheInfo, benefit);

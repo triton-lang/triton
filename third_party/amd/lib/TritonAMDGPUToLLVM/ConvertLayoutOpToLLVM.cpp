@@ -52,7 +52,7 @@ private:
       const LLVMTypeConverter *typeConverter,
       ConversionPatternRewriter &rewriter,
       const AMDMfmaEncodingAttr &mfmaLayout,
-      const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) {
+      const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) const {
     auto loc = op.getLoc();
     Value src = op.getSrc();
     Value dst = op.getResult();
@@ -74,10 +74,11 @@ private:
   }
 
   // shared -> mfma_operand
-  LogicalResult lowerSharedToDotOperand(triton::gpu::LocalLoadOp op,
-                                        triton::gpu::LocalLoadOpAdaptor adaptor,
-                                        const LLVMTypeConverter *typeConverter,
-                                        ConversionPatternRewriter &rewriter) {
+  LogicalResult
+  lowerSharedToDotOperand(triton::gpu::LocalLoadOp op,
+                          triton::gpu::LocalLoadOpAdaptor adaptor,
+                          const LLVMTypeConverter *typeConverter,
+                          ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     Value src = op.getSrc();
     Value dst = op.getResult();
