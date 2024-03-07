@@ -6,11 +6,10 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-namespace AMD{
-void populateDotOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
+namespace AMD {
+void populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns, int numWarps,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                 ModuleAllocation &allocation,
                                  PatternBenefit benefit);
 }
 

@@ -30,8 +30,8 @@ using namespace mlir;
 using namespace mlir::triton;
 
 void populateTensorPtrOpsToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation, PatternBenefit benefit);
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
+    PatternBenefit benefit);
 
 #endif

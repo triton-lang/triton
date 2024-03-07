@@ -50,11 +50,15 @@ namespace triton {
 } // namespace triton
 } // namespace mlir
 
+namespace mlir {
+FailureOr<LLVM::LLVMFuncOp>
+convertFuncOpToLLVMFuncOp(FunctionOpInterface funcOp,
+                          ConversionPatternRewriter &rewriter,
+                          const LLVMTypeConverter &converter);
+}
+
 using namespace mlir;
 using namespace mlir::triton;
-namespace ttng = mlir::triton::nvidia_gpu;
-using ::AMD::ConvertTritonGPUOpToLLVMPattern;
-using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
 
 namespace {
 
@@ -127,11 +131,26 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
 /// FuncOp legalization pattern that converts MemRef arguments to pointers to
 /// MemRef descriptors (LLVM struct data types) containing all the MemRef type
 /// information.
-struct FuncOpConversion : public FuncOpConversionBase {
+struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
-                   ModuleAllocation &allocation, PatternBenefit benefit)
-      : FuncOpConversionBase(converter, benefit), numWarps(numWarps),
-        allocation(allocation) {}
+                   PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), numWarps(numWarps) {}
+
+  /// Only retain those attributes that are not constructed by
+  /// `LLVMFuncOp::build`. If `filterArgAttrs` is set, also filter out argument
+  /// attributes.
+  static void filterFuncAttributes(triton::FuncOp op, bool filterArgAttrs,
+                                   SmallVectorImpl<NamedAttribute> &result) {
+
+    for (const auto &attr : op->getAttrs()) {
+      if (attr.getName() == SymbolTable::getSymbolAttrName() ||
+          attr.getName() == op.getFunctionTypeAttrName() ||
+          attr.getName() == "std.varargs" ||
+          (filterArgAttrs && attr.getName() == op.getArgAttrsAttrName()))
+        continue;
+      result.push_back(attr);
+    }
+  }
 
   triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
                              ConversionPatternRewriter &rewriter) const {
@@ -168,17 +187,18 @@ struct FuncOpConversion : public FuncOpConversionBase {
                   ConversionPatternRewriter &rewriter) const override {
     // Prevent LLVM's inliner to inline this function
     auto amendedFuncOp = funcOp;
-    if (!allocation.isRoot(funcOp))
+    if (!LLVM::isKernel(funcOp))
       amendedFuncOp = amendFuncOp(funcOp, rewriter);
 
-    auto newFuncOp = convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter);
+    LLVM::LLVMFuncOp newFuncOp = *mlir::convertFuncOpToLLVMFuncOp(
+        amendedFuncOp, rewriter, *getTypeConverter());
     if (!newFuncOp) {
       return failure();
     }
 
     auto ctx = funcOp->getContext();
 
-    if (allocation.isRoot(funcOp)) {
+    if (LLVM::isKernel(funcOp)) {
       // Set an attribute to indicate this function is a kernel entry.
       newFuncOp->setAttr("nvvm.kernel",
                          rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
@@ -190,26 +210,18 @@ struct FuncOpConversion : public FuncOpConversionBase {
           ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
       rewriter.eraseOp(amendedFuncOp);
     }
-#ifndef USE_ROCM
     // Set an attribute for maxntidx, it could be used in latter LLVM codegen
     // for `nvvm.annotation` metadata.
-    newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
-#endif
-    // The call graph is updated by mapping the old function to the new one.
-    allocation.mapFuncOp(funcOp, newFuncOp);
+    newFuncOp->setAttr("nvvm.maxntid",
+                       rewriter.getDenseI32ArrayAttr(32 * numWarps));
 
-    auto funcTy = newFuncOp.getFunctionType().cast<LLVM::LLVMFunctionType>();
-    SmallVector<Type> newInputsTy(funcTy.getParams().begin(),
-                                  funcTy.getParams().end());
-    newFuncOp.setType(
-        LLVM::LLVMFunctionType::get(funcTy.getReturnType(), newInputsTy));
+    // required by AxisInfoAnalysis
     rewriter.eraseOp(funcOp);
     return success();
   }
 
 private:
   int numWarps{0};
-  ModuleAllocation &allocation;
 };
 
 // CallOpInterfaceLowering is adapted from
@@ -369,7 +381,7 @@ struct ConvertTritonAMDGPUToLLVM
       TritonGPUToLLVMTypeConverter typeConverter(context, option);
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
-      funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, allocation,
+      funcPatterns.add<FuncOpConversion>(typeConverter, numWarps,
                                          patternBenefitDefault);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
@@ -406,19 +418,13 @@ struct ConvertTritonAMDGPUToLLVM
     // clusterCTAId will be emitted only when numCTAs is larger than 1, and
     // other values will be DCEed if not used hereafter.
     OpBuilder::InsertPoint indexInsertPoint;
-    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo indexCacheInfo{
-        &baseIndexCache, &indexCache, &indexInsertPoint};
-    // TODO: enable index cache if there are multiple functions
-    if (axisInfoAnalysis.getNumFunctions() > 1) {
-      indexCacheInfo = {nullptr, nullptr, nullptr};
-    }
 
     RewritePatternSet patterns(context);
     AMD::TargetInfo targetInfo("gfx1200");
     int benefit = patternBenefitPrioritizeOverLLVMConversions;
     auto populatePatterns1 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, indexCacheInfo, benefit);
+                   allocation, benefit);
     };
 
     auto populatePatterns2 = [&](auto populateFunc) {
@@ -428,12 +434,12 @@ struct ConvertTritonAMDGPUToLLVM
 
     auto populatePatterns3 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, indexCacheInfo, benefit);
+                   allocation, benefit);
     };
 
     auto populatePatterns4 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, indexCacheInfo, computeCapability, benefit);
+                   allocation, computeCapability, benefit);
     };
 
     auto populatePatterns5 = [&](auto populateFunc) {
@@ -442,8 +448,7 @@ struct ConvertTritonAMDGPUToLLVM
 
     auto populatePatterns6 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, indexCacheInfo, computeCapability, targetInfo,
-                   benefit);
+                   allocation, computeCapability, targetInfo, benefit);
     };
 
     auto populatePatterns7 = [&](auto populateFunc) {
@@ -451,12 +456,14 @@ struct ConvertTritonAMDGPUToLLVM
     };
 
     populatePatterns1(AMD::populateTritonGPUToLLVMPatterns);
-    AMD::populateConvertLayoutOpToLLVMPatterns(
-        typeConverter, targetInfo, patterns, numWarps, axisInfoAnalysis,
-        allocation, indexCacheInfo, benefit);
-    populatePatterns2(AMD::populateDotOpToLLVMPatterns);
+    AMD::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
+                                               patterns, numWarps,
+                                               axisInfoAnalysis, benefit);
+    AMD::populateDotOpToLLVMPatterns(typeConverter, patterns, numWarps,
+                                     axisInfoAnalysis, benefit);
     populatePatterns6(AMD::populateElementwiseOpToLLVMPatterns);
-    populatePatterns3(AMD::populateLoadStoreOpToLLVMPatterns);
+    AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, numWarps,
+                                           axisInfoAnalysis, benefit);
     populatePatterns7(mlir::triton::populateReduceOpToLLVMPatterns);
     populatePatterns7(mlir::triton::populateScanOpToLLVMPatterns);
     populatePatterns5(mlir::triton::populateViewOpToLLVMPatterns);
@@ -489,13 +496,8 @@ struct ConvertTritonAMDGPUToLLVM
   }
 
 private:
-  DenseMap<IndexCacheKeyT, SmallVector<Value>, CacheKeyDenseMapInfo>
-      baseIndexCache;
-  DenseMap<IndexCacheKeyT, SmallVector<SmallVector<Value>>,
-           CacheKeyDenseMapInfo>
-      indexCache;
   void initSharedMemory(ModuleAllocation &allocation,
-                        TritonGPUToLLVMTypeConverter &typeConverter) {
+                        LLVMTypeConverter &typeConverter) {
     ModuleOp mod = getOperation();
     OpBuilder b(mod.getBodyRegion());
     auto ctx = mod.getContext();

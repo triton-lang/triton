@@ -7,12 +7,11 @@ using namespace mlir;
 using namespace mlir::triton;
 
 namespace AMD {
-void populateTritonGPUToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation,
-    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-    PatternBenefit benefit);
+void populateTritonGPUToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                     RewritePatternSet &patterns, int numWarps,
+                                     ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                     ModuleAllocation &allocation,
+                                     PatternBenefit benefit);
 } // namespace AMD
 
 #endif

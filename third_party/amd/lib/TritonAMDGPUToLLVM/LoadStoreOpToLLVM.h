@@ -6,13 +6,12 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-namespace AMD{
-void populateLoadStoreOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation,
-    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-    PatternBenefit benefit);
+namespace AMD {
+void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                       RewritePatternSet &patterns,
+                                       int numWarps,
+                                       ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                       PatternBenefit benefit);
 }
 
 #endif
