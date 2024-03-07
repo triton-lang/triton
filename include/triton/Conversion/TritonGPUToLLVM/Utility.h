@@ -1060,7 +1060,7 @@ DenseMap<unsigned, Value> static getSwizzledSharedPtrs(
   // cache for non-immediate offsets
   DenseMap<unsigned, Value> cacheCol, cacheRow;
   unsigned minVec = std::min(outVec, inVec);
-  Value strideRow = outOrder.size() == 2 ? srcStrides[outOrder[1]] : i32_val(0);
+  Value strideRow = outOrder.size() >= 2 ? srcStrides[outOrder[1]] : i32_val(0);
   Value strideCol = srcStrides[outOrder[0]];
   LDBG("getSwizzledSharedPtrs: perPhase = "
        << perPhase << " maxPhase = " << maxPhase << " minVec = " << minVec
