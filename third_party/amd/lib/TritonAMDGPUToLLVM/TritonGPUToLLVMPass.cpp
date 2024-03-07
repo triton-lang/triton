@@ -133,12 +133,13 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
 /// information.
 struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
-                   PatternBenefit benefit)
-      : ConvertOpToLLVMPattern(converter, benefit), numWarps(numWarps) {}
-
-  /// Only retain those attributes that are not constructed by
-  /// `LLVMFuncOp::build`. If `filterArgAttrs` is set, also filter out argument
-  /// attributes.
+                   ModuleAllocation &allocation, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), numWarps(numWarps),
+        allocation(allocation) {}
+  static auto wrapAsStructAttrs(OpBuilder &b, ArrayAttr attrs) {
+    return DictionaryAttr::get(b.getContext(),
+                               b.getNamedAttr("llvm.struct_attrs", attrs));
+  }
   static void filterFuncAttributes(triton::FuncOp op, bool filterArgAttrs,
                                    SmallVectorImpl<NamedAttribute> &result) {
 
@@ -151,7 +152,6 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       result.push_back(attr);
     }
   }
-
   triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
                              ConversionPatternRewriter &rewriter) const {
     // Push back a variable that indicates the current stack pointer of shared
@@ -182,23 +182,93 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     return amendedFuncOp;
   }
 
+  LLVM::LLVMFuncOp
+  convertFuncOpToLLVMFuncOp(triton::FuncOp funcOp,
+                            ConversionPatternRewriter &rewriter) const {
+    // Convert the original function arguments. They are converted using the
+    // LLVMTypeConverter provided to this legalization pattern.
+    auto varargsAttr = funcOp->getAttrOfType<BoolAttr>("func.varargs");
+    TypeConverter::SignatureConversion result(funcOp.getNumArguments());
+    auto llvmType = getTypeConverter()->convertFunctionSignature(
+        funcOp.getFunctionType(), varargsAttr && varargsAttr.getValue(), false,
+        result);
+    if (!llvmType)
+      return nullptr;
+
+    // Propagate argument/result attributes to all converted arguments/result
+    // obtained after converting a given original argument/result.
+    SmallVector<NamedAttribute, 4> attributes;
+    filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, attributes);
+    if (ArrayAttr resAttrDicts = funcOp.getAllResultAttrs()) {
+      assert(!resAttrDicts.empty() && "expected array to be non-empty");
+      auto newResAttrDicts =
+          (funcOp.getNumResults() == 1)
+              ? resAttrDicts
+              : rewriter.getArrayAttr(
+                    {wrapAsStructAttrs(rewriter, resAttrDicts)});
+      attributes.push_back(
+          rewriter.getNamedAttr(funcOp.getResAttrsAttrName(), newResAttrDicts));
+    }
+    if (ArrayAttr argAttrDicts = funcOp.getAllArgAttrs()) {
+      SmallVector<Attribute, 4> newArgAttrs(
+          llvmType.cast<LLVM::LLVMFunctionType>().getNumParams());
+      for (unsigned i = 0, e = funcOp.getNumArguments(); i < e; ++i) {
+        auto mapping = result.getInputMapping(i);
+        assert(mapping && "unexpected deletion of function argument");
+        for (size_t j = 0; j < mapping->size; ++j)
+          newArgAttrs[mapping->inputNo + j] = argAttrDicts[i];
+      }
+      attributes.push_back(rewriter.getNamedAttr(
+          funcOp.getArgAttrsAttrName(), rewriter.getArrayAttr(newArgAttrs)));
+    }
+    for (const auto &pair : llvm::enumerate(attributes)) {
+      if (pair.value().getName() == "llvm.linkage") {
+        attributes.erase(attributes.begin() + pair.index());
+        break;
+      }
+    }
+
+    // Create an LLVM function, use external linkage by default until MLIR
+    // functions have linkage.
+    LLVM::Linkage linkage = LLVM::Linkage::External;
+    if (auto linkageAttr = funcOp->getDiscardableAttr("llvm.linkage")) {
+      auto attr = linkageAttr.dyn_cast<mlir::LLVM::LinkageAttr>();
+      if (!attr) {
+        funcOp->emitError()
+            << "Contains llvm.linkage attribute not of type LLVM::LinkageAttr ";
+        return nullptr;
+      }
+      linkage = attr.getLinkage();
+    }
+    auto newFuncOp = rewriter.create<LLVM::LLVMFuncOp>(
+        funcOp.getLoc(), funcOp.getName(), llvmType, linkage,
+        /*dsoLocal*/ false, LLVM::CConv::C, /*comdat=*/SymbolRefAttr{},
+        attributes);
+    rewriter.inlineRegionBefore(funcOp.getBody(), newFuncOp.getBody(),
+                                newFuncOp.end());
+    if (failed(rewriter.convertRegionTypes(&newFuncOp.getBody(), *typeConverter,
+                                           &result)))
+      return nullptr;
+
+    return newFuncOp;
+  }
+
   LogicalResult
   matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // Prevent LLVM's inliner to inline this function
     auto amendedFuncOp = funcOp;
-    if (!LLVM::isKernel(funcOp))
+    if (!allocation.isRoot(funcOp))
       amendedFuncOp = amendFuncOp(funcOp, rewriter);
 
-    LLVM::LLVMFuncOp newFuncOp = *mlir::convertFuncOpToLLVMFuncOp(
-        amendedFuncOp, rewriter, *getTypeConverter());
+    auto newFuncOp = convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter);
     if (!newFuncOp) {
       return failure();
     }
 
     auto ctx = funcOp->getContext();
 
-    if (LLVM::isKernel(funcOp)) {
+    if (allocation.isRoot(funcOp)) {
       // Set an attribute to indicate this function is a kernel entry.
       newFuncOp->setAttr("nvvm.kernel",
                          rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
@@ -210,18 +280,26 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
           ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
       rewriter.eraseOp(amendedFuncOp);
     }
+#ifndef USE_ROCM
     // Set an attribute for maxntidx, it could be used in latter LLVM codegen
     // for `nvvm.annotation` metadata.
-    newFuncOp->setAttr("nvvm.maxntid",
-                       rewriter.getDenseI32ArrayAttr(32 * numWarps));
+    newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
+#endif
+    // The call graph is updated by mapping the old function to the new one.
+    allocation.mapFuncOp(funcOp, newFuncOp);
 
-    // required by AxisInfoAnalysis
+    auto funcTy = newFuncOp.getFunctionType().cast<LLVM::LLVMFunctionType>();
+    SmallVector<Type> newInputsTy(funcTy.getParams().begin(),
+                                  funcTy.getParams().end());
+    newFuncOp.setType(
+        LLVM::LLVMFunctionType::get(funcTy.getReturnType(), newInputsTy));
     rewriter.eraseOp(funcOp);
     return success();
   }
 
 private:
   int numWarps{0};
+  ModuleAllocation &allocation;
 };
 
 // CallOpInterfaceLowering is adapted from
@@ -381,7 +459,7 @@ struct ConvertTritonAMDGPUToLLVM
       TritonGPUToLLVMTypeConverter typeConverter(context, option);
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
-      funcPatterns.add<FuncOpConversion>(typeConverter, numWarps,
+      funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, allocation,
                                          patternBenefitDefault);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
