@@ -105,8 +105,11 @@ def TTNG_DotWaitOp : TTNG_Op<"dot_wait", [DeclareOpInterfaceMethods<InferTypeOpI
   let arguments = (ins Variadic<TT_FpIntTensor>:$inputs, I32Attr:$pendings);
   let results = (outs Variadic<TT_FpIntTensor>:$outputs);
   let description = [{
-    This operation defining the waiting action for a async dot, MMAv3 .e.g.
-    The subsequent operations should not execute until this operation completes waiting.
+    Waits until there are $pendings or fewer outstanding async dot operations.
+
+    $inputs must be the tensors corresponding to the async dot ops that we're
+    waiting on.  For example, if there are N pending async dot ops and we call
+    `dot_wait 1`, then $inputs must be the result of the first dot op.
   }];
 
   let assemblyFormat = "$inputs attr-dict `:` type($inputs)";
