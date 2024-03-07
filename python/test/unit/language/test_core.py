@@ -2200,7 +2200,6 @@ def test_locality(op, BLOCK_N, N, num_pid_n, device):
         'min': np.min,
     }[op]
     kernel = patch_kernel(kernel, {'ACCUMULATE_PATCH': reduce_patch, 'INITIALIZE_PATCH': initialize_patch})
-    print(f"kernel_src = \n{kernel.src}")
     torch.manual_seed(0)
     BLOCK_M = 32
     x = torch.randn((BLOCK_M, N), dtype=torch.float32, device=device)
