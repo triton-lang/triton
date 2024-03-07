@@ -187,7 +187,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
                   ConversionPatternRewriter &rewriter) const override {
     // Prevent LLVM's inliner to inline this function
     auto amendedFuncOp = funcOp;
-    if (!allocation.isRoot(funcOp))
+    if (!LLVM::isKernel(funcOp))
       amendedFuncOp = amendFuncOp(funcOp, rewriter);
 
     auto newFuncOp = *mlir::convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter,
@@ -198,7 +198,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
     auto ctx = funcOp->getContext();
 
-    if (allocation.isRoot(funcOp)) {
+    if (LLVM::isKernel(funcOp)) {
       // Set an attribute to indicate this function is a kernel entry.
       newFuncOp->setAttr("nvvm.kernel",
                          rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
@@ -210,11 +210,10 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
           ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
       rewriter.eraseOp(amendedFuncOp);
     }
-#ifndef USE_ROCM
     // Set an attribute for maxntidx, it could be used in latter LLVM codegen
     // for `nvvm.annotation` metadata.
-    newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
-#endif
+    newFuncOp->setAttr("nvvm.maxntid",
+                       rewriter.getDenseI32ArrayAttr(32 * numWarps));
     // The call graph is updated by mapping the old function to the new one.
     allocation.mapFuncOp(funcOp, newFuncOp);
 
