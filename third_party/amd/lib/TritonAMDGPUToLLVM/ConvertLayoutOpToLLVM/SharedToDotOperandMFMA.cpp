@@ -33,12 +33,26 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 
 namespace {
 
-// Get waveId inside block of waves.
+/* Get waveId inside block of waves.
+ * For operand A or B, each wave will load elements of shape
+ * elemsPerInstrNonK x K (for opA) or K x elemsPerInstrNonK (for opB).
+ * All waves in the workgroup will load multiple of the above shape
+ * based on warpsPerCTA. The block that is loaded by the workgroup
+ * is referred to as a wave-block.
+ * For some tile sizes, each wave may need to load more than one wave-blocks.
+ * This function computes the id of the first wave-block in opA or opB
+ * of the current wave (identified by waveId)
+ */
 Value getWaveIdInBlock(ConversionPatternRewriter &rewriter, Location loc,
                        Value waveId, const ArrayRef<unsigned int> &wpt,
                        int elemPerInstrNonK, int tensorSizeNonK, int nonKIdx) {
-  if (nonKIdx == 1)
+  auto rank = wpt.size();
+  if (rank == 3)
     waveId = udiv(waveId, i32_val(wpt[0]));
+  if (nonKIdx == rank - 1)
+    waveId = udiv(waveId, i32_val(wpt[rank - 2]));
+  // The urem( ,i32_val(tensorSizeNonK / elemPerInstrNonK)) part is to make sure
+  // warps wrap to the begining when they go beyond M or N dim
   return urem(urem(waveId, i32_val(wpt[nonKIdx])),
               i32_val(tensorSizeNonK / elemPerInstrNonK));
 }
@@ -63,7 +77,8 @@ std::pair<mlir::Value, mlir::Value>
 swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
                Value col, SharedMemoryObject smemObj, SharedEncodingAttr attr) {
   (void)smemObj; // unused in current pattern
-  bool transposed = (attr.getOrder()[0] != 1);
+  auto rank = attr.getOrder().size();
+  bool transposed = (attr.getOrder()[0] != rank - 1);
   if (transposed) {
     // tensor is column-wise, so swapping col and row in computations
     std::swap(row, col);
@@ -116,7 +131,7 @@ swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
  * @param rewriter
  * @param loc
  * @param elemsPerInstr operand tile shape consumed by one MFMA instruction
- * @param waveId id component of 2d wave grid along nono-K axis
+ * @param waveId id component of 2d wave grid along non-K axis
  * @param laneId lane id in warp [0..63]
  * @param warpsPerGroup number of warps in one block
  * @param numOfElems number of elements accessed by thread per repetition
@@ -143,6 +158,8 @@ computeTensorElemMapping(ConversionPatternRewriter &rewriter, Location loc,
   Value _32 = i32_val(32);
   Value nonKDim = i32_val(iNonKDim);
   Value waveVOffset = mul(waveId, i32_val(elemsPerInstr[0]));
+
+  auto rank = smemOffsets.size();
 
   for (int tile = 0; tile < numK; ++tile) {
     Value tileVOffset = _0;
@@ -171,8 +188,8 @@ computeTensorElemMapping(ConversionPatternRewriter &rewriter, Location loc,
           add(add(add(tileVOffset, laneVOffset), elemVOffset), waveVOffset);
       Value sliceHOffset = add(add(tileHOffset, laneHOffset), elemHOffset);
 
-      Value row = add(sliceVOffset, smemOffsets[0]);
-      Value col = add(sliceHOffset, smemOffsets[1]);
+      Value row = add(sliceVOffset, smemOffsets[rank - 2]);
+      Value col = add(sliceHOffset, smemOffsets[rank - 1]);
 
       mapping[loadsPerThread * tile + loadId] = {row, col};
     }
@@ -187,9 +204,10 @@ Value computeOffset(ConversionPatternRewriter &rewriter, Location loc,
                     SharedEncodingAttr srcLayout) {
   auto [swizzledRow, swizzledCol] =
       swizzleIndexes(rewriter, loc, row, col, smemObj, srcLayout);
-  auto &strides = smemObj.strides;
-  Value rowOffset = mul(swizzledRow, strides[0]);
-  Value colOffset = mul(swizzledCol, strides[1]);
+  auto strides = smemObj.getStrides();
+  auto rank = strides.size();
+  Value rowOffset = mul(swizzledRow, strides[rank - 2]);
+  Value colOffset = mul(swizzledCol, strides[rank - 1]);
   return add(rowOffset, colOffset);
 }
 
@@ -200,21 +218,31 @@ computeOffsetsAType(ConversionPatternRewriter &rewriter, Location loc,
                     ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
                     SharedEncodingAttr srcLayout, unsigned nonKDim,
                     unsigned kDim) {
-  SmallVector<Value> strides{smemObj.strides[0], smemObj.strides[1]};
-  SmallVector<Value> offsets{smemObj.offsets[0], smemObj.offsets[1]};
+  // SmallVector<Value> offsets{smemObj.offsets[0], smemObj.offsets[1]};
+  auto offsets = smemObj.getOffsets();
+  auto rank = offsets.size();
+
+  llvm::outs() << "offsets.size() = " << offsets.size() << "\n";
+  llvm::outs() << "srcLayout.order: ";
+  for (int i = 0; i < rank; i++)
+    llvm::outs() << srcLayout.getOrder()[i] << ", ";
+  llvm::outs() << "\n";
 
   int vectorSize = 1;
-  if (srcLayout.getOrder()[0] == 1) {
+  if (srcLayout.getOrder()[0] == rank - 1) {
     if (isSwizzled(srcLayout))
       vectorSize = std::min(static_cast<int>(srcLayout.getVec()), numOfElems);
     else
       vectorSize = numOfElems;
   }
 
+  llvm::outs() << "vectorSize = " << vectorSize << "\n";
+
   auto mapping = computeTensorElemMapping(
       rewriter, loc, elemsPerInstr, waveId, laneId, warpsPerGroup, numOfElems,
       reps, offsets, vectorSize, nonKDim, kDim);
   llvm::SmallVector<Value> aOffsets(mapping.size());
+  llvm::outs() << "mapping.size() = " << mapping.size() << "\n";
   for (int i = 0; i < mapping.size(); ++i) {
     Value row = mapping[i][0];
     Value col = mapping[i][1];
@@ -234,10 +262,14 @@ computeOffsetsBType(ConversionPatternRewriter &rewriter, Location loc,
   // transposed operand A layout
   SmallVector<int64_t> tElemsPerInstr{elemsPerInstr[1], elemsPerInstr[0]};
   SmallVector<int64_t> tReps{reps[0], reps[2], reps[1]};
-  SmallVector<Value> toffsets{smemObj.offsets[1], smemObj.offsets[0]};
+  auto _offsets = smemObj.getOffsets();
+  auto rank = _offsets.size();
+  SmallVector<Value> toffsets(rank, _offsets[0]);
+  toffsets[rank - 2] = _offsets[rank - 1];
+  toffsets[rank - 1] = _offsets[rank - 2];
 
   int vectorSize = 1;
-  if (srcLayout.getOrder()[0] == 0) {
+  if (srcLayout.getOrder()[0] == rank - 2) {
     if (isSwizzled(srcLayout))
       vectorSize = std::min(static_cast<int>(srcLayout.getVec()), numOfElems);
     else
@@ -341,6 +373,10 @@ fastPathComputeOffsets(ConversionPatternRewriter &rewriter, Location loc,
 
   auto iKDim = elemsPerInstr[0];
   auto iNonKDim = elemsPerInstr[1];
+
+  llvm::outs() << "  In fast path\n";
+  llvm::outs() << "  iKDim, iNonKDim: " << iKDim << ", " << iNonKDim << "\n";
+
   int lineSize = warpsPerGroup * iNonKDim * numN;
   Value _nonKDim = i32_val(iNonKDim);
   Value waveOffset = mul(waveId, i32_val(iNonKDim));
@@ -399,6 +435,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread) {
   assert((opIdx == 0 || opIdx == 1) && "unexpected operand idx");
+  llvm::outs() << ">>> SharedToDotOperand with opIdx = " << opIdx << " <<<\n";
   auto aTensorTy = tensor.getType().cast<MemDescType>();
   ArrayRef<int64_t> shape = aTensorTy.getShape();
   auto rank = shape.size();
@@ -447,7 +484,18 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   Value linearWaveId = udiv(thread, waveSize);
   Value lane = urem(thread, waveSize);
 
-  Value spatialWaveId =
+  llvm::outs() << "kDimIdx, nonKDimIdx = " << kDimIdx << ", " << nonKDimIdx
+               << "\n";
+  llvm::outs() << "warpsPerCTA: ";
+  for (int i = 0; i < warpsPerCTA.size(); i++)
+    llvm::outs() << warpsPerCTA[i] << ",";
+  llvm::outs() << "\n";
+  llvm::outs() << "kWidth = " << kWidth << "\n";
+  llvm::outs() << "mfmaInstrShape: " << mfmaInstrNonK << ", " << mfmaInstrK
+               << "\n";
+  llvm::outs() << "repNonK, repK: " << numRepNonK << ", " << numRepK << "\n";
+
+  Value waveIdInBlock =
       getWaveIdInBlock(rewriter, loc, linearWaveId, warpsPerCTA, mfmaInstrNonK,
                        shape[nonKDimIdx], nonKDimIdx);
   // number of duplicates of elements in wave
@@ -455,12 +503,16 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   int numSubBlocks = 1;
   if ((mfmaInstrK == 4 || mfmaInstrK == 1) && mfmaInstrNonK == 4)
     numSubBlocks = 16;
+  // numOfElemsPerThreadPerMfmaInstr
   int numOfElems = mfmaInstrNonK * mfmaInstrK * numSubBlocks / iWaveSize;
   assert(numOfElems >= 1);
 
   unsigned int maxNumWarps = shape[nonKDimIdx] / mfmaInstrNonK;
   int warpsPerGroupNonK = std::min(warpsPerCTA[nonKDimIdx], maxNumWarps);
   elemTy = typeConverter->convertType(elemTy);
+
+  llvm::outs() << "numOfElems, warpsPerGroupNonK: " << numOfElems << ", "
+               << warpsPerGroupNonK << "\n";
 
   SmallVector<Value> loadedValues;
   SmallVector<Value> offsets;
@@ -471,13 +523,15 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     // disabled, in which case offsets computation can be simplified
     // TODO (zhanglx): later when we enable vector access to LDS for non k-major
     // tensors, we'll refactor the scope of fast and normal path
+
+    llvm::outs() << "go to fast path\n";
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
     if (opIdx == 0) {
       if (isColMajor(order)) {
         SmallVector<int64_t> elemsPerInstr{mfmaInstrK, mfmaInstrNonK};
         SmallVector<int64_t> reps{numReps[0], numReps[2], numReps[1]};
         offsets = fastPathComputeOffsets(rewriter, loc, elemsPerInstr,
-                                         spatialWaveId, lane, warpsPerGroupNonK,
+                                         waveIdInBlock, lane, warpsPerGroupNonK,
                                          numOfElems, reps, cSwizzleOffset);
       } else {
         llvm_unreachable(
@@ -489,7 +543,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
             "col major operand B should be handled in the normal path");
       } else {
         offsets = fastPathComputeOffsets(rewriter, loc, elemsPerInstr,
-                                         spatialWaveId, lane, warpsPerGroupNonK,
+                                         waveIdInBlock, lane, warpsPerGroupNonK,
                                          numOfElems, numReps, cSwizzleOffset);
       }
     }
@@ -503,14 +557,15 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     //   3. non k-major + swizzling is enabled <-- for testing purpose only
     //
     // In this path, it requires a 2-step method to compute the offsets.
+    llvm::outs() << "go to normal path\n";
     if (opIdx == 0) {
       offsets = computeOffsetsAType(
-          rewriter, loc, elemsPerInstr, spatialWaveId, lane, warpsPerGroupNonK,
+          rewriter, loc, elemsPerInstr, waveIdInBlock, lane, warpsPerGroupNonK,
           numOfElems, numReps, smemObj, sharedLayout, mDim, mfmaInstrK);
     } else {
       assert(opIdx == 1);
       offsets = computeOffsetsBType(
-          rewriter, loc, elemsPerInstr, spatialWaveId, lane, warpsPerGroupNonK,
+          rewriter, loc, elemsPerInstr, waveIdInBlock, lane, warpsPerGroupNonK,
           numOfElems, numReps, smemObj, sharedLayout, nDim, mfmaInstrK);
     }
     smemBase = computeBasePtr(rewriter, loc, smemObj);
@@ -563,6 +618,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
       ctx, SmallVector<Type>(loadedValues.size(), loadedValues[0].getType()));
   auto result =
       packLLElements(loc, typeConverter, loadedValues, rewriter, structTy);
+  llvm::outs() << ">>> END SharedToDotOperand with opIdx = " << opIdx
+               << ", loadedValues.size() = " << loadedValues.size() << " <<<\n";
   return result;
 }
 
