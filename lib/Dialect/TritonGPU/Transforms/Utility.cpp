@@ -8,8 +8,12 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "llvm/Support/Debug.h"
 
 #include <fstream>
+#define DEBUG_TYPE "ttg-utility"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir {
 
@@ -110,6 +114,10 @@ unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
       std::min(valInfo.getContiguity(order[0]), shapePerCTA[order[0]]);
   unsigned alignment = std::min(maxMultiple, maxContig);
   unsigned currPerThread = std::min(alignment, 128 / elemNumBits);
+  LDBG("elemNumBytes: " << elemNumBytes
+                        << ", divisibility: " << maxMultipleBytes
+                        << ", contig: " << valInfo.getContiguity(order[0])
+                        << ", alignment: " << alignment);
   return currPerThread;
 }
 
