@@ -25,6 +25,11 @@ public:
   virtual bool warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                           SmallVector<Value> &acc, triton::ReduceOp op,
                           unsigned numLaneToReduce) const = 0;
+  virtual bool processReplicaUsingStMatrix(
+      ConversionPatternRewriter &rewriter, Location loc, Value smemBase,
+      SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
+      ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
+      ArrayRef<unsigned> outOrd, unsigned accumNumReplicates) const = 0;
 
   virtual ~TargetInfoBase() {}
 };
