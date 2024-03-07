@@ -333,6 +333,25 @@ Value linearize(ConversionPatternRewriter &rewriter, Location loc,
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content);
 
+// Given an elemId which represents the index of an element from the list of
+// elements that are in the thread's registers (i.e. total of
+// numel(sizePerThread)), it calculates the multi dim offset of the element in
+// the smem buffer. Recall that the smem buffer will only store a single replica
+// when converting distributed to distributed layout. Also, a replica is the
+// smallest CTA tile that is common between input and output layouts.
+SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
+                                     ConversionPatternRewriter &rewriter,
+                                     unsigned elemId, RankedTensorType type,
+                                     ArrayRef<unsigned> multiDimCTAInRepId,
+                                     ArrayRef<unsigned> shapePerCTATile);
+
+// Given a multiDimOffset, this function wraps around each dimension to be
+// within shape.
+SmallVector<Value> getWrappedMultiDimOffset(
+    ConversionPatternRewriter &rewriter, Location loc,
+    ArrayRef<Value> multiDimOffset, ArrayRef<unsigned> shape,
+    SmallVector<unsigned> shapePerCTATile, SmallVector<int64_t> shapePerCTA);
+
 static bool isKernel(FunctionOpInterface funcOp) {
   return funcOp.getVisibility() == SymbolTable::Visibility::Public;
 }
@@ -1305,6 +1324,18 @@ static Value packLLElements(Location loc,
     llvmStruct = insert_val(structType, llvmStruct, v.value(), v.index());
   }
   return llvmStruct;
+}
+
+static bool isLayoutMmaV1(Attribute layout) {
+  bool isMmaV1 = false;
+  if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+    isMmaV1 = mmaLayout.isVolta();
+  }
+  if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+    isMmaV1 = sliceLayout.getParent().isa<NvidiaMmaEncodingAttr>() &&
+              sliceLayout.getParent().cast<NvidiaMmaEncodingAttr>().isVolta();
+  }
+  return isMmaV1;
 }
 
 } // namespace mlir
