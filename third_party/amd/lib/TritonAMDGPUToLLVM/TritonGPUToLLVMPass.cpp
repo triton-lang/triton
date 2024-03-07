@@ -139,10 +139,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
                    ModuleAllocation &allocation, PatternBenefit benefit)
       : ConvertOpToLLVMPattern(converter, benefit), numWarps(numWarps),
         allocation(allocation) {}
-  static auto wrapAsStructAttrs(OpBuilder &b, ArrayAttr attrs) {
-    return DictionaryAttr::get(b.getContext(),
-                               b.getNamedAttr("llvm.struct_attrs", attrs));
-  }
+
   static void filterFuncAttributes(triton::FuncOp op, bool filterArgAttrs,
                                    SmallVectorImpl<NamedAttribute> &result) {
 
@@ -184,144 +181,6 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
                                 amendedFuncOp.end());
     return amendedFuncOp;
   }
-  static bool shouldUseBarePtrCallConv(Operation *op,
-                                       const LLVMTypeConverter *typeConverter) {
-    return (op && op->hasAttr(barePtrAttrName)) ||
-           typeConverter->getOptions().useBarePtrCallConv;
-  }
-  FailureOr<LLVM::LLVMFuncOp>
-  convertFuncOpToLLVMFuncOp(triton::FuncOp funcOp,
-                            ConversionPatternRewriter &rewriter,
-                            const LLVMTypeConverter &converter) const {
-    // Check the funcOp has `FunctionType`.
-    auto funcTy = dyn_cast<FunctionType>(funcOp.getFunctionType());
-    if (!funcTy)
-      return rewriter.notifyMatchFailure(
-          funcOp, "Only support FunctionOpInterface with FunctionType");
-
-    // Convert the original function arguments. They are converted using the
-    // LLVMTypeConverter provided to this legalization pattern.
-    auto varargsAttr = funcOp->getAttrOfType<BoolAttr>(varargsAttrName);
-    TypeConverter::SignatureConversion result(funcOp.getNumArguments());
-    auto llvmType = converter.convertFunctionSignature(
-        funcTy, varargsAttr && varargsAttr.getValue(),
-        shouldUseBarePtrCallConv(funcOp, &converter), result);
-    if (!llvmType)
-      return rewriter.notifyMatchFailure(funcOp, "signature conversion failed");
-
-    // Create an LLVM function, use external linkage by default until MLIR
-    // functions have linkage.
-    LLVM::Linkage linkage = LLVM::Linkage::External;
-    if (funcOp->hasAttr(linkageAttrName)) {
-      auto attr =
-          dyn_cast<mlir::LLVM::LinkageAttr>(funcOp->getAttr(linkageAttrName));
-      if (!attr) {
-        funcOp->emitError() << "Contains " << linkageAttrName
-                            << " attribute not of type LLVM::LinkageAttr";
-        return rewriter.notifyMatchFailure(
-            funcOp, "Contains linkage attribute not of type LLVM::LinkageAttr");
-      }
-      linkage = attr.getLinkage();
-    }
-
-    SmallVector<NamedAttribute, 4> attributes;
-    filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, attributes);
-    auto newFuncOp = rewriter.create<LLVM::LLVMFuncOp>(
-        funcOp.getLoc(), funcOp.getName(), llvmType, linkage,
-        /*dsoLocal=*/false, /*cconv=*/LLVM::CConv::C, /*comdat=*/nullptr,
-        attributes);
-    cast<FunctionOpInterface>(newFuncOp.getOperation())
-        .setVisibility(funcOp.getVisibility());
-
-    // Create a memory effect attribute corresponding to readnone.
-    StringRef readnoneAttrName = LLVM::LLVMDialect::getReadnoneAttrName();
-    if (funcOp->hasAttr(readnoneAttrName)) {
-      auto attr = funcOp->getAttrOfType<UnitAttr>(readnoneAttrName);
-      if (!attr) {
-        funcOp->emitError() << "Contains " << readnoneAttrName
-                            << " attribute not of type UnitAttr";
-        return rewriter.notifyMatchFailure(
-            funcOp, "Contains readnone attribute not of type UnitAttr");
-      }
-      auto memoryAttr = LLVM::MemoryEffectsAttr::get(
-          rewriter.getContext(),
-          {LLVM::ModRefInfo::NoModRef, LLVM::ModRefInfo::NoModRef,
-           LLVM::ModRefInfo::NoModRef});
-      newFuncOp.setMemoryAttr(memoryAttr);
-    }
-
-    // Propagate argument/result attributes to all converted arguments/result
-    // obtained after converting a given original argument/result.
-    if (ArrayAttr resAttrDicts = funcOp.getAllResultAttrs()) {
-      assert(!resAttrDicts.empty() && "expected array to be non-empty");
-      if (funcOp.getNumResults() == 1)
-        newFuncOp.setAllResultAttrs(resAttrDicts);
-    }
-    if (ArrayAttr argAttrDicts = funcOp.getAllArgAttrs()) {
-      SmallVector<Attribute> newArgAttrs(
-          cast<LLVM::LLVMFunctionType>(llvmType).getNumParams());
-      for (unsigned i = 0, e = funcOp.getNumArguments(); i < e; ++i) {
-        // Some LLVM IR attribute have a type attached to them. During FuncOp ->
-        // LLVMFuncOp conversion these types may have changed. Account for that
-        // change by converting attributes' types as well.
-        SmallVector<NamedAttribute, 4> convertedAttrs;
-        auto attrsDict = cast<DictionaryAttr>(argAttrDicts[i]);
-        convertedAttrs.reserve(attrsDict.size());
-        for (const NamedAttribute &attr : attrsDict) {
-          const auto convert = [&](const NamedAttribute &attr) {
-            return TypeAttr::get(converter.convertType(
-                cast<TypeAttr>(attr.getValue()).getValue()));
-          };
-          if (attr.getName().getValue() ==
-              LLVM::LLVMDialect::getByValAttrName()) {
-            convertedAttrs.push_back(rewriter.getNamedAttr(
-                LLVM::LLVMDialect::getByValAttrName(), convert(attr)));
-          } else if (attr.getName().getValue() ==
-                     LLVM::LLVMDialect::getByRefAttrName()) {
-            convertedAttrs.push_back(rewriter.getNamedAttr(
-                LLVM::LLVMDialect::getByRefAttrName(), convert(attr)));
-          } else if (attr.getName().getValue() ==
-                     LLVM::LLVMDialect::getStructRetAttrName()) {
-            convertedAttrs.push_back(rewriter.getNamedAttr(
-                LLVM::LLVMDialect::getStructRetAttrName(), convert(attr)));
-          } else if (attr.getName().getValue() ==
-                     LLVM::LLVMDialect::getInAllocaAttrName()) {
-            convertedAttrs.push_back(rewriter.getNamedAttr(
-                LLVM::LLVMDialect::getInAllocaAttrName(), convert(attr)));
-          } else {
-            convertedAttrs.push_back(attr);
-          }
-        }
-        auto mapping = result.getInputMapping(i);
-        assert(mapping && "unexpected deletion of function argument");
-        // Only attach the new argument attributes if there is a one-to-one
-        // mapping from old to new types. Otherwise, attributes might be
-        // attached to types that they do not support.
-        if (mapping->size == 1) {
-          newArgAttrs[mapping->inputNo] =
-              DictionaryAttr::get(rewriter.getContext(), convertedAttrs);
-          continue;
-        }
-        // TODO: Implement custom handling for types that expand to multiple
-        // function arguments.
-        for (size_t j = 0; j < mapping->size; ++j)
-          newArgAttrs[mapping->inputNo + j] =
-              DictionaryAttr::get(rewriter.getContext(), {});
-      }
-      if (!newArgAttrs.empty())
-        newFuncOp.setAllArgAttrs(rewriter.getArrayAttr(newArgAttrs));
-    }
-
-    rewriter.inlineRegionBefore(funcOp.getFunctionBody(), newFuncOp.getBody(),
-                                newFuncOp.end());
-    if (failed(rewriter.convertRegionTypes(&newFuncOp.getBody(), converter,
-                                           &result))) {
-      return rewriter.notifyMatchFailure(funcOp,
-                                         "region types conversion failed");
-    }
-
-    return newFuncOp;
-  }
 
   LogicalResult
   matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
@@ -331,8 +190,8 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     if (!allocation.isRoot(funcOp))
       amendedFuncOp = amendFuncOp(funcOp, rewriter);
 
-    auto newFuncOp = *convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter,
-                                                *getTypeConverter());
+    auto newFuncOp = *mlir::convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter,
+                                                      *getTypeConverter());
     if (!newFuncOp) {
       return failure();
     }
