@@ -6,11 +6,11 @@
 
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
-using ::mlir::LLVM::linearize;
-
+using mlir::isLayoutMmaV1;
 using ::mlir::LLVM::getMultiDimOffset;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getWrappedMultiDimOffset;
+using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
@@ -154,8 +154,8 @@ public:
     if (isaDistributedLayout(srcLayout) && isaDistributedLayout(dstLayout)) {
       if (shouldUseDistSmem(srcLayout, dstLayout))
         return lowerDistToDistWithDistSmem(op, adaptor, rewriter);
-      // Only for MmaV1 case, to be deleted soon
-      return lowerDistributedToDistributed(op, adaptor, rewriter);
+      if (isLayoutMmaV1(srcLayout) || isLayoutMmaV1(dstLayout))
+        return lowerDistributedToDistributed(op, adaptor, rewriter);
     }
     if (srcLayout.isa<NvidiaMmaEncodingAttr>() &&
         dstLayout.isa<DotOperandEncodingAttr>()) {
@@ -437,17 +437,6 @@ private:
     return success();
   }
 
-  bool isLayoutMmaV1(Attribute layout) const {
-    bool isMmaV1 = false;
-    if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
-      isMmaV1 = mmaLayout.isVolta();
-    }
-    if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-      isMmaV1 = sliceLayout.getParent().isa<NvidiaMmaEncodingAttr>() &&
-                sliceLayout.getParent().cast<NvidiaMmaEncodingAttr>().isVolta();
-    }
-    return isMmaV1;
-  }
   // blocked/mma -> blocked/mma.
   // Data padding in shared memory to avoid bank conflict.
   LogicalResult
@@ -475,13 +464,6 @@ private:
     auto srcShapePerCTATile = getShapePerCTATile(srcLayout, srcTy.getShape());
     auto dstShapePerCTATile = getShapePerCTATile(dstLayout, shape);
     auto shapePerCTA = getShapePerCTA(srcLayout, shape);
-
-    auto isSrcMmaV1 = isLayoutMmaV1(srcLayout);
-    auto isDstMmaV1 = isLayoutMmaV1(dstLayout);
-
-    if (!(isSrcMmaV1 || isDstMmaV1)) {
-      return failure();
-    }
 
     for (unsigned d = 0; d < rank; ++d) {
       unsigned inPerCTA =
@@ -519,41 +501,26 @@ private:
       if (repId != 0) {
         barrier();
       }
-      if (srcLayout.isa<BlockedEncodingAttr>() ||
-          srcLayout.isa<SliceEncodingAttr>() ||
-          srcLayout.isa<NvidiaMmaEncodingAttr>()) {
-        if (isSrcMmaV1)
-          processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ true, srcTy,
-                                 multiDimRepId, inVec, paddedRepShape, outOrd,
-                                 vals, smemBase, shape);
-        else
-          processReplica(loc, rewriter, /*stNotRd*/ true, srcTy,
-                         inNumCTAsEachRep, multiDimRepId, inVec, paddedRepShape,
-                         origRepShape, outOrd, vals, smemBase);
-      } else {
-        llvm::report_fatal_error(
-            "ConvertLayout with input layout not implemented");
-        return failure();
-      }
+
+      if (isLayoutMmaV1(srcLayout))
+        processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ true, srcTy,
+                               multiDimRepId, inVec, paddedRepShape, outOrd,
+                               vals, smemBase, shape);
+      else
+        processReplica(loc, rewriter, /*stNotRd*/ true, srcTy, inNumCTAsEachRep,
+                       multiDimRepId, inVec, paddedRepShape, origRepShape,
+                       outOrd, vals, smemBase);
 
       barrier();
-      if (dstLayout.isa<BlockedEncodingAttr>() ||
-          dstLayout.isa<SliceEncodingAttr>() ||
-          dstLayout.isa<NvidiaMmaEncodingAttr>()) {
-        if (isDstMmaV1)
-          processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ false, dstTy,
-                                 multiDimRepId, outVec, paddedRepShape, outOrd,
-                                 outVals, smemBase, shape, /*isDestMma=*/true);
-        else
-          processReplica(loc, rewriter, /*stNotRd*/ false, dstTy,
-                         outNumCTAsEachRep, multiDimRepId, outVec,
-                         paddedRepShape, origRepShape, outOrd, outVals,
-                         smemBase);
-      } else {
-        llvm::report_fatal_error(
-            "ConvertLayout with output layout not implemented");
-        return failure();
-      }
+
+      if (isLayoutMmaV1(dstLayout))
+        processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ false, dstTy,
+                               multiDimRepId, outVec, paddedRepShape, outOrd,
+                               outVals, smemBase, shape, /*isDestMma=*/true);
+      else
+        processReplica(loc, rewriter, /*stNotRd*/ false, dstTy,
+                       outNumCTAsEachRep, multiDimRepId, outVec, paddedRepShape,
+                       origRepShape, outOrd, outVals, smemBase);
     }
 
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);

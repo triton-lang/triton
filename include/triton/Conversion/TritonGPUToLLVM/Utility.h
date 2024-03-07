@@ -1326,6 +1326,18 @@ static Value packLLElements(Location loc,
   return llvmStruct;
 }
 
+static bool isLayoutMmaV1(Attribute layout) {
+  bool isMmaV1 = false;
+  if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+    isMmaV1 = mmaLayout.isVolta();
+  }
+  if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+    isMmaV1 = sliceLayout.getParent().isa<NvidiaMmaEncodingAttr>() &&
+              sliceLayout.getParent().cast<NvidiaMmaEncodingAttr>().isVolta();
+  }
+  return isMmaV1;
+}
+
 } // namespace mlir
 
 #endif

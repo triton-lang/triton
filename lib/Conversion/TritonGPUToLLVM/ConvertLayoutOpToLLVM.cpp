@@ -5,16 +5,13 @@
 
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::getStridesFromShapeAndOrder;
-using ::mlir::LLVM::linearize;
-
+using mlir::isLayoutMmaV1;
 using mlir::LLVM::getMultiDimOffset;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
 using mlir::LLVM::getWrappedMultiDimOffset;
+using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::getContigPerThread;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
@@ -113,13 +110,17 @@ public:
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    if (isaDistributedLayout(srcLayout) && isaDistributedLayout(dstLayout)) {
+    if (isSupported(srcLayout, dstLayout)) {
       return lowerDistributedToDistributed(op, adaptor, rewriter);
     }
     return failure();
   }
 
 private:
+  bool isSupported(Attribute srcLayout, Attribute dstLayout) const {
+    return isaDistributedLayout(srcLayout) && isaDistributedLayout(dstLayout) &&
+           !isLayoutMmaV1(srcLayout) && !isLayoutMmaV1(dstLayout);
+  }
   // shared memory rd/st for blocked or mma layout with data padding
   void processReplica(Location loc, ConversionPatternRewriter &rewriter,
                       bool stNotRd, RankedTensorType type,
@@ -206,17 +207,6 @@ private:
       }
     }
   }
-  bool isLayoutMmaV1(Attribute layout) const {
-    bool isMmaV1 = false;
-    if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
-      isMmaV1 = mmaLayout.isVolta();
-    }
-    if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-      isMmaV1 = sliceLayout.getParent().isa<NvidiaMmaEncodingAttr>() &&
-                sliceLayout.getParent().cast<NvidiaMmaEncodingAttr>().isVolta();
-    }
-    return isMmaV1;
-  }
   // blocked/mma -> blocked/mma.
   // Data padding in shared memory to avoid bank conflict.
   LogicalResult
@@ -253,10 +243,6 @@ private:
     auto srcShapePerCTATile = getShapePerCTATile(srcLayout, srcTy.getShape());
     auto dstShapePerCTATile = getShapePerCTATile(dstLayout, shape);
     auto shapePerCTA = getShapePerCTA(srcLayout, shape);
-
-    if (isLayoutMmaV1(srcLayout) || isLayoutMmaV1(dstLayout)) {
-      return failure();
-    }
 
     for (unsigned d = 0; d < rank; ++d) {
       unsigned inPerCTA =
