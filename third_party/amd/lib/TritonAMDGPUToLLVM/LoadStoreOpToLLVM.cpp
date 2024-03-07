@@ -34,7 +34,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
     auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
     auto order = triton::gpu::getOrder(layout);
     auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout, shape);
-    Value warpSize = i32_val(32);
+    Value warpSize = i32_val(triton::gpu::getWarpSize(layout));
     Value laneId = urem(tid, warpSize);
     Value warpId = udiv(tid, warpSize);
     SmallVector<Value> multiDimWarpId =
