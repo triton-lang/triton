@@ -130,9 +130,16 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
 
   // For conversions to MmaV1 (Nvidia V100), this inVec is hardcoded in the
   // codegen.
-  if (auto mma = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>())
-    if (mma.getVersionMajor() == 1)
+  if (auto mma = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+    if (mma.getVersionMajor() == 1) {
       inVec = srcContigPerThread;
+    } else if (dstLayout.isa<BlockedEncodingAttr>()) {
+      // when storing from mma layout and loading in blocked layout vectorizing
+      // the load back gives better performance even if there is a
+      // transposition.
+      outVec = dstContigPerThread;
+    }
+  }
 
   if (rank <= 1)
     return repShape;
