@@ -41,73 +41,6 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 
 namespace {
 
-// shared -> dot_operand if the result layout is mma
-Value lowerSharedToDotOperandMMA(triton::gpu::LocalLoadOp op,
-                                 triton::gpu::LocalLoadOpAdaptor adaptor,
-                                 const LLVMTypeConverter *typeConverter,
-                                 ConversionPatternRewriter &rewriter,
-                                 const NvidiaMmaEncodingAttr &mmaLayout,
-                                 const DotOperandEncodingAttr &dotOperandLayout,
-                                 bool isOuter) {
-  auto loc = op.getLoc();
-  auto src = op.getSrc();
-  auto dst = op.getResult();
-  bool isMMA = supportMMA(dst, mmaLayout.getVersionMajor());
-
-  auto llvmElemTy = typeConverter->convertType(src.getType().getElementType());
-
-  auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
-                                                 llvmElemTy, rewriter);
-  Value res;
-  if (!isOuter && mmaLayout.isAmpere()) { // tensor core v2
-    res = SharedToDotOperandMMAv2::convertLayout(
-        dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
-        smemObj, typeConverter, getThreadId(rewriter, loc));
-  } else if (!isOuter && mmaLayout.isVolta() && isMMA) { // tensor core v1
-    bool isMMAv1Row = mmaLayout.getMMAv1IsRow(dotOperandLayout.getOpIdx());
-    auto srcSharedLayout =
-        src.getType().getEncoding().cast<SharedEncodingAttr>();
-
-    // Can only convert [1, 0] to row or [0, 1] to col for now
-    if ((srcSharedLayout.getOrder()[0] == 1 && !isMMAv1Row) ||
-        (srcSharedLayout.getOrder()[0] == 0 && isMMAv1Row)) {
-      llvm::errs() << "Unsupported Shared -> DotOperand[MMAv1] conversion\n";
-      return Value();
-    }
-
-    res = SharedToDotOperandMMAv1::convertLayout(
-        dotOperandLayout.getOpIdx(), src, smemObj, getThreadId(rewriter, loc),
-        loc, typeConverter, rewriter, dst.getType());
-  } else {
-    assert(false && "Unsupported mma layout found");
-  }
-  return res;
-};
-
-// shared -> mma_operand
-LogicalResult lowerSharedToDotOperand(triton::gpu::LocalLoadOp op,
-                                      triton::gpu::LocalLoadOpAdaptor adaptor,
-                                      const LLVMTypeConverter *typeConverter,
-                                      ConversionPatternRewriter &rewriter) {
-  auto loc = op.getLoc();
-  auto dstEnc = op.getType().getEncoding().cast<DotOperandEncodingAttr>();
-  auto sharedLayout =
-      op.getSrc().getType().getEncoding().cast<SharedEncodingAttr>();
-
-  int K;
-  if (dstEnc.getOpIdx() == 0) // $a
-    K = op.getType().getShape()[sharedLayout.getOrder()[0]];
-  else // $b
-    K = op.getType().getShape()[sharedLayout.getOrder()[1]];
-  bool isOuter = K == 1;
-  auto mmaLayout = dstEnc.getParent().cast<NvidiaMmaEncodingAttr>();
-  Value res = lowerSharedToDotOperandMMA(op, adaptor, typeConverter, rewriter,
-                                         mmaLayout, dstEnc, isOuter);
-
-  rewriter.replaceOp(op, res);
-  return success();
-}
-
 struct LocalLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::LocalLoadOp> {
 public:
@@ -128,6 +61,74 @@ public:
       return lowerSharedToDotOperand(op, adaptor, getTypeConverter(), rewriter);
     }
     return failure();
+  }
+
+private:
+  // shared -> dot_operand if the result layout is mma
+  Value lowerSharedToDotOperandMMA(
+      triton::gpu::LocalLoadOp op, triton::gpu::LocalLoadOpAdaptor adaptor,
+      const LLVMTypeConverter *typeConverter,
+      ConversionPatternRewriter &rewriter,
+      const NvidiaMmaEncodingAttr &mmaLayout,
+      const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) {
+    auto loc = op.getLoc();
+    auto src = op.getSrc();
+    auto dst = op.getResult();
+    bool isMMA = supportMMA(dst, mmaLayout.getVersionMajor());
+
+    auto llvmElemTy =
+        typeConverter->convertType(src.getType().getElementType());
+
+    auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                   llvmElemTy, rewriter);
+    Value res;
+    if (!isOuter && mmaLayout.isAmpere()) { // tensor core v2
+      res = SharedToDotOperandMMAv2::convertLayout(
+          dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
+          smemObj, typeConverter, getThreadId(rewriter, loc));
+    } else if (!isOuter && mmaLayout.isVolta() && isMMA) { // tensor core v1
+      bool isMMAv1Row = mmaLayout.getMMAv1IsRow(dotOperandLayout.getOpIdx());
+      auto srcSharedLayout =
+          src.getType().getEncoding().cast<SharedEncodingAttr>();
+
+      // Can only convert [1, 0] to row or [0, 1] to col for now
+      if ((srcSharedLayout.getOrder()[0] == 1 && !isMMAv1Row) ||
+          (srcSharedLayout.getOrder()[0] == 0 && isMMAv1Row)) {
+        llvm::errs() << "Unsupported Shared -> DotOperand[MMAv1] conversion\n";
+        return Value();
+      }
+
+      res = SharedToDotOperandMMAv1::convertLayout(
+          dotOperandLayout.getOpIdx(), src, smemObj, getThreadId(rewriter, loc),
+          loc, typeConverter, rewriter, dst.getType());
+    } else {
+      assert(false && "Unsupported mma layout found");
+    }
+    return res;
+  };
+
+  // shared -> mma_operand
+  LogicalResult lowerSharedToDotOperand(triton::gpu::LocalLoadOp op,
+                                        triton::gpu::LocalLoadOpAdaptor adaptor,
+                                        const LLVMTypeConverter *typeConverter,
+                                        ConversionPatternRewriter &rewriter) {
+    auto loc = op.getLoc();
+    auto dstEnc = op.getType().getEncoding().cast<DotOperandEncodingAttr>();
+    auto sharedLayout =
+        op.getSrc().getType().getEncoding().cast<SharedEncodingAttr>();
+
+    int K;
+    if (dstEnc.getOpIdx() == 0) // $a
+      K = op.getType().getShape()[sharedLayout.getOrder()[0]];
+    else // $b
+      K = op.getType().getShape()[sharedLayout.getOrder()[1]];
+    bool isOuter = K == 1;
+    auto mmaLayout = dstEnc.getParent().cast<NvidiaMmaEncodingAttr>();
+    Value res = lowerSharedToDotOperandMMA(op, adaptor, typeConverter, rewriter,
+                                           mmaLayout, dstEnc, isOuter);
+
+    rewriter.replaceOp(op, res);
+    return success();
   }
 };
 

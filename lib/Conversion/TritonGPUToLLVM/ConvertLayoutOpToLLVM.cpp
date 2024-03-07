@@ -22,38 +22,6 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 
 namespace {
 
-LogicalResult lowerSharedToDistributed(triton::gpu::LocalLoadOp op,
-                                       triton::gpu::LocalLoadOpAdaptor adaptor,
-                                       const LLVMTypeConverter *typeConverter,
-                                       ConversionPatternRewriter &rewriter) {
-  auto loc = op.getLoc();
-  auto srcTy = op.getSrc().getType();
-  auto dstTy = op.getResult().getType();
-  auto dstShape = dstTy.getShape();
-  assert(dstShape.size() <= 2 &&
-         "Unexpected rank of ConvertLayout(shared->blocked)");
-  auto srcSharedLayout = srcTy.getEncoding().cast<SharedEncodingAttr>();
-  auto dstLayout = dstTy.getEncoding();
-  auto inOrd = getOrder(srcSharedLayout);
-
-  auto smemObj = getSharedMemoryObjectFromStruct(
-      loc, adaptor.getSrc(), typeConverter->convertType(srcTy.getElementType()),
-      rewriter);
-  auto elemTy = typeConverter->convertType(dstTy.getElementType());
-
-  auto srcStrides =
-      getStridesFromShapeAndOrder(srcTy.getShape(), inOrd, loc, rewriter);
-  auto dstIndices = emitIndices(loc, rewriter, dstLayout, dstTy, true);
-
-  SmallVector<Value> outVals = loadSharedToDistributed(
-      op.getResult(), dstIndices, op.getSrc(), smemObj, elemTy, loc, rewriter);
-
-  Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
-  rewriter.replaceOp(op, result);
-
-  return success();
-}
-
 struct LocalLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::LocalLoadOp> {
 public:
@@ -77,19 +45,62 @@ public:
         dstLayout.cast<DotOperandEncodingAttr>()
             .getParent()
             .isa<BlockedEncodingAttr>()) {
-      auto dotLayout = dstLayout.cast<DotOperandEncodingAttr>();
-      auto blockedLayout = dstLayout.cast<DotOperandEncodingAttr>()
-                               .getParent()
-                               .cast<BlockedEncodingAttr>();
-      auto loc = op.getLoc();
-      auto thread = getThreadId(rewriter, loc);
-      Value res = SharedToDotOperandFMA::convertLayout(
-          dotLayout.getOpIdx(), op.getSrc(), adaptor.getSrc(), blockedLayout,
-          thread, loc, getTypeConverter(), rewriter);
-      rewriter.replaceOp(op, res);
-      return success();
+      return lowerSharedToDotOpFMA(op, adaptor, getTypeConverter(), rewriter);
     }
     return failure();
+  }
+
+private:
+  LogicalResult lowerSharedToDotOpFMA(triton::gpu::LocalLoadOp op,
+                                      triton::gpu::LocalLoadOpAdaptor adaptor,
+                                      const LLVMTypeConverter *typeConverter,
+                                      ConversionPatternRewriter &rewriter) {
+    auto loc = op.getLoc();
+    RankedTensorType dstTy = op.getType();
+    Attribute dstLayout = dstTy.getEncoding();
+    auto dotLayout = dstLayout.cast<DotOperandEncodingAttr>();
+    auto blockedLayout = dstLayout.cast<DotOperandEncodingAttr>()
+                             .getParent()
+                             .cast<BlockedEncodingAttr>();
+    auto thread = getThreadId(rewriter, loc);
+    Value res = SharedToDotOperandFMA::convertLayout(
+        dotLayout.getOpIdx(), op.getSrc(), adaptor.getSrc(), blockedLayout,
+        thread, loc, getTypeConverter(), rewriter);
+    rewriter.replaceOp(op, res);
+    return success();
+  }
+  LogicalResult
+  lowerSharedToDistributed(triton::gpu::LocalLoadOp op,
+                           triton::gpu::LocalLoadOpAdaptor adaptor,
+                           const LLVMTypeConverter *typeConverter,
+                           ConversionPatternRewriter &rewriter) {
+    auto loc = op.getLoc();
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getResult().getType();
+    auto dstShape = dstTy.getShape();
+    assert(dstShape.size() <= 2 &&
+           "Unexpected rank of ConvertLayout(shared->blocked)");
+    auto srcSharedLayout = srcTy.getEncoding().cast<SharedEncodingAttr>();
+    auto dstLayout = dstTy.getEncoding();
+    auto inOrd = getOrder(srcSharedLayout);
+
+    auto smemObj = getSharedMemoryObjectFromStruct(
+        loc, adaptor.getSrc(),
+        typeConverter->convertType(srcTy.getElementType()), rewriter);
+    auto elemTy = typeConverter->convertType(dstTy.getElementType());
+
+    auto srcStrides =
+        getStridesFromShapeAndOrder(srcTy.getShape(), inOrd, loc, rewriter);
+    auto dstIndices = emitIndices(loc, rewriter, dstLayout, dstTy, true);
+
+    SmallVector<Value> outVals =
+        loadSharedToDistributed(op.getResult(), dstIndices, op.getSrc(),
+                                smemObj, elemTy, loc, rewriter);
+
+    Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
+    rewriter.replaceOp(op, result);
+
+    return success();
   }
 };
 
