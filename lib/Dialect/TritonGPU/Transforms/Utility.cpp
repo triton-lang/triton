@@ -99,7 +99,6 @@ unsigned getElementBitWidth(RankedTensorType type) {
 unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   Value val = getMemAccessPtr(op);
-  assert(val.getType().isa<RankedTensorType>());
   auto ty = val.getType().cast<RankedTensorType>();
   auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
   AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);

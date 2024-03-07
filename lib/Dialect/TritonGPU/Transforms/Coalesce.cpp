@@ -26,37 +26,24 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     Value ptr = getMemAccessPtr(op);
     auto refTensorType = ptr.getType().cast<RankedTensorType>();
 
-    LDBG("op is: " << *op);
-    // Get the contiguity order of `ptr`
+    LDBG("Considering op: " << *op);
+    LLVM_DEBUG({
+      DBGS() << "axis info of pointer: ";
+      axisInfoAnalysis.getAxisInfo(ptr)->print(llvm::dbgs());
+      llvm::dbgs() << "\n";
+    });
+
     auto contiguity = axisInfoAnalysis.getAxisInfo(ptr)->getContiguity();
     SmallVector<unsigned> order = argSort(contiguity);
-    LLVM_DEBUG({
-      DBGS() << "contiguity is: ";
-      for (const auto &O : contiguity) {
-        llvm::dbgs() << O << " ";
-      }
-      llvm::dbgs() << "\n";
-    });
-    LLVM_DEBUG({
-      DBGS() << "order is: ";
-      for (const auto &O : order) {
-        llvm::dbgs() << O << " ";
-      }
-      llvm::dbgs() << "\n";
-    });
+    LDBG("order=[" << triton::join(order, ", ") << "]");
 
     auto matchesShape = [&refTensorType](const Value &val) {
-      if (val.getType() == refTensorType) {
-        return true;
-      }
-
       auto rttType = val.getType().dyn_cast<RankedTensorType>();
-      return rttType ? rttType.getShape() == refTensorType.getShape() : false;
+      return rttType && rttType.getShape() == refTensorType.getShape();
     };
 
-    // The desired divisibility is the maximum divisibility
-    // among all dependent pointers who have the same order as
-    // `ptr`.
+    // The desired divisibility is the maximum divisibility among all dependent
+    // pointers which have the same shape and order as `ptr`.
     llvm::SmallSetVector<Operation *, 32> memAccessesSameOrder;
     memAccessesSameOrder.insert(op);
     if (ptr.getDefiningOp()) {
@@ -74,19 +61,14 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     }
 
     auto shapePerCTA = triton::gpu::getShapePerCTA(refTensorType);
-    LLVM_DEBUG({
-      DBGS() << "shapePerCTA is ";
-      for (const auto &O : shapePerCTA) {
-        llvm::dbgs() << O << " ";
-      }
-      llvm::dbgs() << "\n";
-    });
+    LDBG("shapePerCTA=[" << triton::join(shapePerCTA, ", ") << "]");
+
     int numElems = product<int64_t>(shapePerCTA);
     int numThreads = numWarps * threadsPerWarp;
-    int numElemsPerThread = std::max(numElems / numThreads, 1);
 
     unsigned perThread = getNumElementsPerThread(op, order, axisInfoAnalysis);
     LDBG("perThread for op: " << perThread);
+
     for (Operation *opSameOrder : memAccessesSameOrder) {
       if (opSameOrder == op)
         continue;
@@ -96,7 +78,7 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
       perThread = std::max(perThread, currPerThread);
     }
 
-    perThread = std::min<int>(perThread, numElemsPerThread);
+    perThread = std::min<int>(perThread, std::max(numElems / numThreads, 1));
     LDBG("perThread: " << perThread);
 
     if (!dyn_cast<triton::LoadOp>(op)) {
