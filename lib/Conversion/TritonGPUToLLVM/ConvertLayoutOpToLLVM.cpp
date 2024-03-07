@@ -292,12 +292,11 @@ private:
       if (repId != 0) {
         barrier();
       }
-      // TODO: split this into two APIs
-      auto storeSuccessful = targetInfo.processReplicaUsingStMatrix(
+      auto successful = targetInfo.processReplicaUsingStMatrix(
           rewriter, loc, smemBase, vals, srcTy,
           getTypeConverter()->convertType(srcTy.getElementType()),
           paddedRepShape, origRepShape, outOrd, accumNumReplicates);
-      if (!storeSuccessful) {
+      if (!successful) {
         processReplica(loc, rewriter, /*stNotRd*/ true, srcTy, inNumCTAsEachRep,
                        multiDimRepId, inVec, paddedRepShape, origRepShape,
                        outOrd, vals, smemBase);

@@ -44,14 +44,6 @@ Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
 Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  Value i);
 
-void storeDistributedToSharedWithStMatrix(
-    RankedTensorType tensorTy, Type elemTy, SmallVector<Value> &inVals,
-    Value smemBase, ArrayRef<unsigned> paddedRepShape,
-    ArrayRef<unsigned> origRepShape, Location loc,
-    ConversionPatternRewriter &rewriter);
-
-bool isStMatrixCompatible(RankedTensorType tensorTy);
-
 Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
                ConversionPatternRewriter &rewriter);
 } // namespace NVIDIA
