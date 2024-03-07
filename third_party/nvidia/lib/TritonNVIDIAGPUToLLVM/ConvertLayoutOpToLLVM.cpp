@@ -131,12 +131,11 @@ public:
   }
 };
 
-struct ConvertLayoutOpConversion
+struct ConvertLayoutOpOptimizedConversion
     : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
 public:
   using ConvertOpToLLVMPattern<
       triton::gpu::ConvertLayoutOp>::ConvertOpToLLVMPattern;
-
   LogicalResult
   matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -151,6 +150,60 @@ public:
         return lowerMmaToMma(op, adaptor, rewriter);
       }
     }
+    return failure();
+  }
+
+private:
+  // mma -> mma
+  LogicalResult lowerMmaToMma(triton::gpu::ConvertLayoutOp op,
+                              OpAdaptor adaptor,
+                              ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    RankedTensorType srcTy = op.getSrc().getType();
+    RankedTensorType dstTy = op.getType();
+    if (triton::gpu::getTotalElemsPerThread(srcTy) ==
+        triton::gpu::getTotalElemsPerThread(dstTy)) {
+      rewriter.replaceOp(op, adaptor.getSrc());
+      return success();
+    }
+    // get source values
+    auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    SmallVector<Value> retVals;
+    SmallVector<unsigned> dstElementPerThread =
+        triton::gpu::getElemsPerThread(dstTy);
+    SmallVector<unsigned> srcElementPerThread =
+        triton::gpu::getElemsPerThread(srcTy);
+    for (unsigned j = 0; j < dstElementPerThread[0]; j++) {
+      for (unsigned i = 0; i < dstElementPerThread[1]; i++) {
+        if (i >= srcElementPerThread[1] || j >= srcElementPerThread[0]) {
+          retVals.push_back(undef(vals[0].getType()));
+          continue;
+        }
+        unsigned index = i + j * srcElementPerThread[1];
+        retVals.push_back(vals[index]);
+      }
+    }
+    assert(retVals.size() == triton::gpu::getTotalElemsPerThread(dstTy));
+    Value view =
+        packLLElements(loc, getTypeConverter(), retVals, rewriter, dstTy);
+    rewriter.replaceOp(op, view);
+    return success();
+  }
+};
+
+struct ConvertLayoutOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
+public:
+  using ConvertOpToLLVMPattern<
+      triton::gpu::ConvertLayoutOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    RankedTensorType srcTy = op.getSrc().getType();
+    RankedTensorType dstTy = op.getType();
+    Attribute srcLayout = srcTy.getEncoding();
+    Attribute dstLayout = dstTy.getEncoding();
     if (isaDistributedLayout(srcLayout) && isaDistributedLayout(dstLayout)) {
       if (shouldUseDistSmem(srcLayout, dstLayout))
         return lowerDistToDistWithDistSmem(op, adaptor, rewriter);
@@ -600,54 +653,23 @@ private:
     }
     return failure();
   }
-
-  // mma -> mma
-  LogicalResult lowerMmaToMma(triton::gpu::ConvertLayoutOp op,
-                              OpAdaptor adaptor,
-                              ConversionPatternRewriter &rewriter) const {
-    auto loc = op.getLoc();
-    RankedTensorType srcTy = op.getSrc().getType();
-    RankedTensorType dstTy = op.getType();
-    if (triton::gpu::getTotalElemsPerThread(srcTy) ==
-        triton::gpu::getTotalElemsPerThread(dstTy)) {
-      rewriter.replaceOp(op, adaptor.getSrc());
-      return success();
-    }
-    // get source values
-    auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    SmallVector<Value> retVals;
-    SmallVector<unsigned> dstElementPerThread =
-        triton::gpu::getElemsPerThread(dstTy);
-    SmallVector<unsigned> srcElementPerThread =
-        triton::gpu::getElemsPerThread(srcTy);
-    for (unsigned j = 0; j < dstElementPerThread[0]; j++) {
-      for (unsigned i = 0; i < dstElementPerThread[1]; i++) {
-        if (i >= srcElementPerThread[1] || j >= srcElementPerThread[0]) {
-          retVals.push_back(undef(vals[0].getType()));
-          continue;
-        }
-        unsigned index = i + j * srcElementPerThread[1];
-        retVals.push_back(vals[index]);
-      }
-    }
-    assert(retVals.size() == triton::gpu::getTotalElemsPerThread(dstTy));
-    Value view =
-        packLLElements(loc, getTypeConverter(), retVals, rewriter, dstTy);
-    rewriter.replaceOp(op, view);
-    return success();
-  }
 };
 } // namespace
+
+void mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMOptimizedPatterns(
+    LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
+    RewritePatternSet &patterns, PatternBenefit benefit) {
+  patterns.add<ConvertLayoutOpOptimizedConversion>(typeConverter, benefit);
+}
 
 void mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
   // For now give ConvertLayoutOpConversion higher benefit, I can split before
   // merging
-  patterns.add<ConvertLayoutOpConversion>(typeConverter, 100);
+  patterns.add<ConvertLayoutOpConversion>(typeConverter, benefit);
   // Same default benefit
-  patterns.add<LocalLoadOpConversion>(typeConverter, patternBenefitDefault);
-
-  mlir::triton::populateConvertLayoutOpToLLVMPatterns(
-      typeConverter, targetInfo, patterns, patternBenefitDefault);
+  patterns.add<LocalLoadOpConversion>(typeConverter, benefit);
+  mlir::triton::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
+                                                      patterns, benefit);
 }
