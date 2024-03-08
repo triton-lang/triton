@@ -13,9 +13,9 @@ struct GetProgramIdOpConversion
   LogicalResult
   matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Value programId =
-        LLVM::NVIDIA::llGetPid(op.getAxisAsInt(), op->getLoc(),
-                               op->getParentOfType<ModuleOp>(), rewriter);
+    Value programId = LLVM::NVIDIA::llGetPid(op->getLoc(), rewriter,
+                                             op->getParentOfType<ModuleOp>(),
+                                             op.getAxisAsInt());
     rewriter.replaceOp(op, programId);
     return success();
   }

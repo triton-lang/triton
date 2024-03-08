@@ -14,8 +14,8 @@ struct GetProgramIdOpConversion
   matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Value programId =
-        LLVM::AMD::llGetPid(op.getAxisAsInt(), op->getLoc(),
-                            op->getParentOfType<ModuleOp>(), rewriter);
+        LLVM::AMD::llGetPid(op->getLoc(), rewriter,
+                            op->getParentOfType<ModuleOp>(), op.getAxisAsInt());
     return success();
   }
 };

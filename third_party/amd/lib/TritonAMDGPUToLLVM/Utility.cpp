@@ -130,8 +130,8 @@ Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
   return shuffleCommon(loc, rewriter, val, i, 0, ShflKind::idx, i32_val(0x1f));
 }
 
-Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
-               ConversionPatternRewriter &rewriter) {
+Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
+               ModuleOp moduleOp, int axis) {
   assert(axis >= 0);
   assert(axis < 3);
   assert(moduleOp);

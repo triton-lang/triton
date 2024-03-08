@@ -23,8 +23,8 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
         LLVM::addStringToModule(loc, rewriter, "printfPrefix_", op.getPrefix());
 
     auto getPid = [&](int axis) {
-      return LLVM::AMD::llGetPid(axis, loc, op->getParentOfType<ModuleOp>(),
-                                 rewriter);
+      return LLVM::AMD::llGetPid(loc, rewriter, op->getParentOfType<ModuleOp>(),
+                                 axis);
     };
     std::array<Value, 3> pid = {getPid(0), getPid(1), getPid(2)};
 

@@ -1,5 +1,5 @@
-#include "PatternTritonGPUOpToLLVM.h"
-#include "Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace {
 
@@ -13,7 +13,11 @@ using namespace mlir::triton;
 // For each operand, we print all of the values contained in this GPU thread,
 // one per line, along with the index of the value in its tensor.
 struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
-  using ConvertOpToLLVMPattern<triton::PrintOp>::ConvertOpToLLVMPattern;
+  explicit PrintOpConversion(LLVMTypeConverter &typeConverter,
+                             const TargetInfoBase &targetInfo,
+                             PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<triton::PrintOp>(typeConverter, benefit),
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::PrintOp op, OpAdaptor adaptor,
@@ -23,8 +27,8 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
         LLVM::addStringToModule(loc, rewriter, "printfPrefix_", op.getPrefix());
 
     auto getPid = [&](int axis) {
-      return LLVM::NVIDIA::llGetPid(axis, loc, op->getParentOfType<ModuleOp>(),
-                                    rewriter);
+      return targetInfo.llGetPid(loc, rewriter, op->getParentOfType<ModuleOp>(),
+                                 axis);
     };
     std::array<Value, 3> pid = {getPid(0), getPid(1), getPid(2)};
 
@@ -314,12 +318,15 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
     SmallVector<Value> operands{msg, bufferPtr};
     call(funcOp, operands);
   }
+
+private:
+  const TargetInfoBase &targetInfo;
 };
 
 } // namespace
 
-void mlir::triton::NVIDIA::populatePrintOpToLLVMPattern(
+void mlir::triton::populatePrintOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
-  patterns.add<PrintOpConversion>(typeConverter, benefit);
+    const TargetInfoBase &targetInfo, PatternBenefit benefit) {
+  patterns.add<PrintOpConversion>(typeConverter, targetInfo, benefit);
 }
