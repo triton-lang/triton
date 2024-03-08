@@ -12,7 +12,6 @@ add_triton_library(TritonAMDGPUToLLVM
     TargetInfo.cpp
     DecomposeUnsupportedConversions.cpp
     SPMDOpToLLVM.cpp
-    PrintOpToLLVM.cpp
     ControlFlowOpToLLVM.cpp
 
     DEPENDS

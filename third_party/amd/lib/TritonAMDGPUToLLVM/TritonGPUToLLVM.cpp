@@ -311,7 +311,8 @@ struct ConvertTritonAMDGPUToLLVM
     populatePatterns7(mlir::triton::populateScanOpToLLVMPatterns);
     populatePatterns5(mlir::triton::populateViewOpToLLVMPatterns);
     populatePatterns7(mlir::triton::populateHistogramOpToLLVMPatterns);
-    AMD::populatePrintOpToLLVMPattern(typeConverter, patterns, benefit);
+    mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
+                                               targetInfo, benefit);
     mlir::triton::populateMemoryOpToLLVMPattern(typeConverter, patterns,
                                                 benefit);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, patterns,
