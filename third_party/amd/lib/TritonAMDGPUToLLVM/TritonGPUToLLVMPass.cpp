@@ -440,7 +440,10 @@ struct ConvertTritonAMDGPUToLLVM
     populatePatterns7(mlir::triton::populateScanOpToLLVMPatterns);
     populatePatterns5(mlir::triton::populateViewOpToLLVMPatterns);
     populatePatterns7(mlir::triton::populateHistogramOpToLLVMPatterns);
-
+    AMD::populatePrintOpToLLVMPattern(typeConverter, patterns, benefit);
+    // AMD::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
+    // benefit);
+    AMD::populateSPMDOpToLLVMPattern(typeConverter, patterns, benefit);
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
     // to help convert scalar expression to LLVM.
