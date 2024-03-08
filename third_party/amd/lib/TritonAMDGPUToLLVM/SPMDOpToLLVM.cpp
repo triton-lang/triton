@@ -13,15 +13,9 @@ struct GetProgramIdOpConversion
   LogicalResult
   matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
-                                                    mlir::gpu::Dimension::y,
-                                                    mlir::gpu::Dimension::z};
-    Location loc = op->getLoc();
-    assert(op.getAxisAsInt() < 3);
-
-    Value blockId =
-        rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[op.getAxisAsInt()]);
-    rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, i32_ty, blockId);
+    Value programId =
+        LLVM::AMD::llGetPid(op.getAxisAsInt(), op->getLoc(),
+                            op->getParentOfType<ModuleOp>(), rewriter);
     return success();
   }
 };

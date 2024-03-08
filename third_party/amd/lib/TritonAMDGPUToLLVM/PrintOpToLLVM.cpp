@@ -6,18 +6,6 @@ namespace {
 using namespace mlir;
 using namespace mlir::triton;
 
-Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
-               ConversionPatternRewriter &rewriter) {
-  assert(axis >= 0);
-  assert(axis < 3);
-  assert(moduleOp);
-  static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
-                                                  mlir::gpu::Dimension::y,
-                                                  mlir::gpu::Dimension::z};
-  Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[axis]);
-  return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
-}
-
 // The input print op contains:
 //  - a "prefix" (string) specified by the user, and
 //  - one or more "operands" (tensors).
@@ -35,7 +23,8 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
         LLVM::addStringToModule(loc, rewriter, "printfPrefix_", op.getPrefix());
 
     auto getPid = [&](int axis) {
-      return llGetPid(axis, loc, op->getParentOfType<ModuleOp>(), rewriter);
+      return LLVM::AMD::llGetPid(axis, loc, op->getParentOfType<ModuleOp>(),
+                                 rewriter);
     };
     std::array<Value, 3> pid = {getPid(0), getPid(1), getPid(2)};
 
