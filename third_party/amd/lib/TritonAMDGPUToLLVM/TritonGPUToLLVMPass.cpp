@@ -204,8 +204,6 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     // for `nvvm.annotation` metadata.
     newFuncOp->setAttr("nvvm.maxntid",
                        rewriter.getDenseI32ArrayAttr(32 * numWarps));
-
-    // required by AxisInfoAnalysis
     rewriter.eraseOp(funcOp);
     return success();
   }
