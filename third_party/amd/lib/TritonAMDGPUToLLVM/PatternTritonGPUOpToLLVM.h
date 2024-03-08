@@ -33,9 +33,6 @@ void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
                                  PatternBenefit benefit);
 
-void populateControlFlowOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                        RewritePatternSet &patterns,
-                                        PatternBenefit benefit);
 } // namespace AMD
 
 #endif

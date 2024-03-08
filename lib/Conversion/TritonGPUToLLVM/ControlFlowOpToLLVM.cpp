@@ -1,5 +1,5 @@
-#include "PatternTritonGPUOpToLLVM.h"
-#include "Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace {
 
@@ -47,6 +47,7 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
     return success();
   }
 };
+
 // CallOpInterfaceLowering is adapted from
 // https://github.com/llvm/llvm-project/blob/fae656b2dd80246c3c6f01e9c77c49560368752c/mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp#L485
 struct CallOpConversion : public ConvertOpToLLVMPattern<triton::CallOp> {
@@ -132,9 +133,9 @@ private:
 
 } // namespace
 
-void AMD::populateControlFlowOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                             RewritePatternSet &patterns,
-                                             PatternBenefit benefit) {
+void mlir::triton::populateControlFlowOpToLLVMPattern(
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    PatternBenefit benefit) {
   patterns.add<ReturnOpConversion>(typeConverter, benefit);
   patterns.add<CallOpConversion>(typeConverter, benefit);
 }
