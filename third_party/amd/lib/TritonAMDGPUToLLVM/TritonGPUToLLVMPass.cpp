@@ -131,9 +131,6 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
 /// FuncOp legalization pattern that converts MemRef arguments to pointers to
 /// MemRef descriptors (LLVM struct data types) containing all the MemRef type
 /// information.
-static constexpr StringRef varargsAttrName = "func.varargs";
-static constexpr StringRef linkageAttrName = "llvm.linkage";
-static constexpr StringRef barePtrAttrName = "llvm.bareptr";
 struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
                    ModuleAllocation &allocation, PatternBenefit benefit)
@@ -215,7 +212,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     newFuncOp->setAttr("nvvm.maxntid",
                        rewriter.getDenseI32ArrayAttr(32 * numWarps));
     // The call graph is updated by mapping the old function to the new one.
-    allocation.mapFuncOp(funcOp, newFuncOp);
+    // allocation.mapFuncOp(funcOp, newFuncOp);
 
     auto funcTy = newFuncOp.getFunctionType().cast<LLVM::LLVMFunctionType>();
     SmallVector<Type> newInputsTy(funcTy.getParams().begin(),
@@ -234,10 +231,8 @@ private:
 // CallOpInterfaceLowering is adapted from
 // https://github.com/llvm/llvm-project/blob/fae656b2dd80246c3c6f01e9c77c49560368752c/mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp#L485
 struct CallOpConversion : public ConvertOpToLLVMPattern<triton::CallOp> {
-  CallOpConversion(LLVMTypeConverter &converter, int numWarps,
-                   ModuleAllocation &allocation, PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::CallOp>(converter, benefit),
-        numWarps(numWarps), allocation(allocation) {}
+  CallOpConversion(LLVMTypeConverter &converter, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::CallOp>(converter, benefit) {}
 
   LogicalResult
   matchAndRewrite(triton::CallOp callOp,
@@ -248,7 +243,6 @@ struct CallOpConversion : public ConvertOpToLLVMPattern<triton::CallOp> {
         convertCallOpToLLVMCallOp(callOp, promotedOperands, rewriter);
     if (!newCallOp)
       return failure();
-    allocation.mapCallOp(callOp, newCallOp);
     auto results = getCallOpResults(callOp, newCallOp, rewriter);
     rewriter.replaceOp(callOp, results);
     return success();
@@ -263,25 +257,16 @@ private:
     // of shared memory and append it to the operands of the callOp.
     auto loc = callOp.getLoc();
     auto caller = callOp->getParentOfType<FunctionOpInterface>();
-    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
-                                            NVVM::kSharedMemorySpace);
     auto promotedOperands = this->getTypeConverter()->promoteOperands(
         callOp.getLoc(), /*opOperands=*/callOp->getOperands(),
         adaptor.getOperands(), rewriter);
-    auto base = allocation.getFunctionSharedMemoryBase(caller);
-    auto *funcAllocation = allocation.getFuncData(caller);
-    auto bufferId = funcAllocation->getBufferId(callOp);
-    // function doesn't have a shared mem buffer
-    if (bufferId == (size_t)-1) {
+    if (!caller->hasAttr("allocation.offset")) {
+      auto base = LLVM::getStackPointer(rewriter, caller);
       promotedOperands.push_back(base);
       return promotedOperands;
     }
-    // function has a shared mem buffer
-    auto offset = funcAllocation->getOffset(bufferId);
-    auto offsetValue =
-        gep(ptrTy, this->getTypeConverter()->convertType(rewriter.getI8Type()),
-            base, i32_val(offset));
-    promotedOperands.push_back(offsetValue);
+    promotedOperands.push_back(
+        LLVM::getSharedMemoryBase(callOp->getLoc(), rewriter, callOp));
     return promotedOperands;
   }
 
@@ -324,9 +309,6 @@ private:
     }
     return results;
   }
-
-  int numWarps{0};
-  ModuleAllocation &allocation;
 };
 
 class TritonLLVMConversionTarget : public ConversionTarget {
@@ -400,7 +382,7 @@ struct ConvertTritonAMDGPUToLLVM
     // initSharedMemory is run before the conversion of call and ret ops,
     // because the call op has to know the shared memory base address of each
     // function
-    initSharedMemory(allocation, typeConverter);
+    initSharedMemory(typeConverter);
 
     // Convert call and ret ops
     {
@@ -408,8 +390,7 @@ struct ConvertTritonAMDGPUToLLVM
       TritonGPUToLLVMTypeConverter typeConverter(context, option);
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
-      funcPatterns.add<CallOpConversion>(typeConverter, numWarps, allocation,
-                                         patternBenefitDefault);
+      funcPatterns.add<CallOpConversion>(typeConverter, patternBenefitDefault);
       funcPatterns.add<ReturnOpConversion>(typeConverter,
                                            patternBenefitDefault);
       if (failed(
@@ -503,8 +484,7 @@ struct ConvertTritonAMDGPUToLLVM
   }
 
 private:
-  void initSharedMemory(ModuleAllocation &allocation,
-                        LLVMTypeConverter &typeConverter) {
+  void initSharedMemory(LLVMTypeConverter &typeConverter) {
     ModuleOp mod = getOperation();
     OpBuilder b(mod.getBodyRegion());
     auto ctx = mod.getContext();
@@ -512,25 +492,15 @@ private:
     auto elemTy = typeConverter.convertType(b.getIntegerType(8));
     // Set array size 0 and external linkage indicates that we use dynamic
     // shared allocation to allow a larger shared memory size for each kernel.
+    //
+    // Ask for 16B alignment on global_smem because that's the largest we should
+    // ever need (4xi32).
     auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
     auto global = b.create<LLVM::GlobalOp>(
         loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
-        "global_smem", /*value=*/Attribute(), /*alignment=*/0,
+        "global_smem", /*value=*/Attribute(), /*alignment=*/16,
         // Add ROCm support.
         static_cast<unsigned>(NVVM::NVVMMemorySpace::kSharedMemorySpace));
-    mod.walk([&](FunctionOpInterface funcOp) {
-      Value funcSmem;
-      b.setInsertionPointToStart(&funcOp.getFunctionBody().front());
-      if (allocation.isRoot(funcOp)) {
-        funcSmem = b.create<LLVM::AddressOfOp>(loc, global);
-      } else {
-        funcSmem = funcOp.getArgument(funcOp.getNumArguments() - 1);
-      }
-      auto ptrTy = LLVM::LLVMPointerType::get(
-          ctx, NVVM::NVVMMemorySpace::kSharedMemorySpace);
-      funcSmem = b.create<LLVM::BitcastOp>(loc, ptrTy, funcSmem);
-      allocation.setFunctionSharedMemoryValue(funcOp, funcSmem);
-    });
   }
 };
 
