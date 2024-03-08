@@ -856,26 +856,27 @@ emitOffsetForMfmaLayout(const AMDMfmaEncodingAttr &mfmaLayout,
 
   auto rank = tensorShape.size();
 
-  SmallVector<unsigned> numWarpsPerDim(rank);
+  SmallVector<unsigned> numReps(rank);
   unsigned mDim = mfmaLayout.getMDim();
   unsigned nDim = mfmaLayout.getNDim();
   assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
          (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
-  SmallVector<unsigned> tileShape(rank, 1);
-  tileShape[rank - 2] = mDim;
-  tileShape[rank - 1] = nDim;
+  SmallVector<unsigned> shapePerWarp(rank, 1);
+  shapePerWarp[rank - 2] = mDim;
+  shapePerWarp[rank - 1] = nDim;
   for (unsigned d = 0; d < rank; ++d) {
     unsigned inPerCTA = std::min<unsigned>(tensorShape[d], shapePerCTA[d]);
     unsigned inPerWarp = ceil<unsigned>(inPerCTA, warpsPerCTA[d]);
-    numWarpsPerDim[d] = ceil<unsigned>(inPerWarp, tileShape[d]);
+    numReps[d] = ceil<unsigned>(inPerWarp, shapePerWarp[d]);
   }
 
-  unsigned repBatch = rank == 3 ? numWarpsPerDim[0] : 1;
+  unsigned repBatch = rank == 3 ? numReps[0] : 1;
   auto warpsPerBatch =
       rank == 3 ? std::min<unsigned>(tensorShape[0], warpsPerCTA[0]) : 1;
+
   for (unsigned b = 0; b < repBatch; ++b) {
-    for (unsigned i = 0; i < numWarpsPerDim[rank - 2]; ++i) {
-      for (unsigned j = 0; j < numWarpsPerDim[rank - 1]; ++j) {
+    for (unsigned i = 0; i < numReps[rank - 2]; ++i) {
+      for (unsigned j = 0; j < numReps[rank - 1]; ++j) {
         emitMfmaOffsetForCTA(mfmaLayout, offsets, b * warpsPerBatch, i, j);
       }
     }
