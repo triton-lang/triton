@@ -1,4 +1,4 @@
-#include "TritonGPUToLLVM.h"
+#include "PatternTritonGPUOpToLLVM.h"
 
 #include "Utility.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"

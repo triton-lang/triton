@@ -1,6 +1,7 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 
 #include "TargetInfo.h"
+#include "Utility.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
@@ -22,21 +23,10 @@
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#ifndef USE_ROCM
-#else
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#endif
 #include "triton/Tools/Sys/GetPlatform.hpp"
 
-// #include "ClusterOpsToLLVM.h"
-#include "ConvertLayoutOpToLLVM.h"
-#include "DotOpToLLVM.h"
-#include "ElementwiseOpToLLVM.h"
-#include "LoadStoreOpToLLVM.h"
-// #include "RegReallocOpToLLVM.h"
-// #include "TensorPtrOpsToLLVM.h"
-#include "TritonGPUToLLVM.h"
-#include "TritonGPUToLLVMBase.h"
+#include "PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"

@@ -22,8 +22,9 @@
  */
 #ifdef USE_ROCM
 
-#include "../DotOpToLLVM.h"
+#include "../PatternTritonGPUOpToLLVM.h"
 #include "TritonAMDGPUTransforms/MfmaGroup.h"
+#include "Utility.h"
 
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 

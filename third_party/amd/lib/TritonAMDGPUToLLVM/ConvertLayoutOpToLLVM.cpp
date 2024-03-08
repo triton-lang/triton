@@ -1,5 +1,4 @@
-#include "ConvertLayoutOpToLLVM.h"
-#include "TritonGPUToLLVMBase.h"
+#include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 

@@ -1,4 +1,3 @@
-#include "DotOpToLLVM.h"
 #include "Utility.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"

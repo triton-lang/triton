@@ -21,7 +21,7 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "../DotOpToLLVM.h"
+#include "../PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"

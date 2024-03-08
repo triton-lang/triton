@@ -1,5 +1,6 @@
-#include "ElementwiseOpToLLVM.h"
 #include "TargetInfo.h"
+#include "Utility.h"
+#include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
