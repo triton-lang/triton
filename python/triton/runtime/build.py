@@ -40,15 +40,16 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     if scheme == 'posix_local':
         scheme = 'posix_prefix'
     py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
+    cflags = os.environ.get("CFLAGS, "")
     include_dirs = include_dirs + [srcdir, py_include_dir]
-    cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-o", so]
+    cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-o", so, cflags]
     cc_cmd += [f'-l{lib}' for lib in libraries]
     cc_cmd += [f"-L{dir}" for dir in library_dirs]
     cc_cmd += [f"-I{dir}" for dir in include_dirs]
     ret = subprocess.check_call(cc_cmd)
     if ret == 0:
         return so
-    # fallback on setuptools
+    # fallback on setuptools (dead path due to https://github.com/openai/triton/pull/3311)
     extra_compile_args = []
     # extra arguments
     extra_link_args = []

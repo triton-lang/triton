@@ -42,11 +42,12 @@ def build_for_backend(name, src, srcdir):
     if scheme == 'posix_local':
         scheme = 'posix_prefix'
     py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
+    cflags = os.environ.get("CFLAGS, "")
 
-    ret = subprocess.check_call([cc, src, f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-o", so])
+    ret = subprocess.check_call([cc, src, f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-o", so, cflags])
     if ret == 0:
         return so
-    # fallback on setuptools
+    # fallback on setuptools (dead path due to https://github.com/openai/triton/pull/3311)
     extra_compile_args = []
     library_dirs = []
     include_dirs = [srcdir]
