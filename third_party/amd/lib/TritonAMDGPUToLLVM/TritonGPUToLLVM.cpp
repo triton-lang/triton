@@ -1,4 +1,4 @@
-#include "TritonGPUToLLVM.h"
+#include "PatternTritonGPUOpToLLVM.h"
 
 #include "Utility.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -8,8 +8,6 @@ namespace {
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::AMD::ConvertTritonGPUOpToLLVMPattern;
-using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
@@ -53,10 +51,8 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
 //
 // For each operand, we print all of the values contained in this GPU thread,
 // one per line, along with the index of the value in its tensor.
-struct PrintOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::PrintOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::PrintOp>::ConvertTritonGPUOpToLLVMPattern;
+struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
+  using ConvertOpToLLVMPattern<triton::PrintOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::PrintOp op, OpAdaptor adaptor,
@@ -80,8 +76,7 @@ struct PrintOpConversion
     } else {
       for (size_t i = 0; i < op.getNumOperands(); i++) {
         // Elements of the tensor that are resident in this GPU thread.
-        auto elems = unpackLLElements(
-            loc, adaptor.getOperands()[i], rewriter);
+        auto elems = unpackLLElements(loc, adaptor.getOperands()[i], rewriter);
 
         // Get the indices of `elems` within the tensor.  Note that if `elems`
         // has an "interesting" layout, then these will not be in any
@@ -338,9 +333,8 @@ struct PrintOpConversion
 };
 
 struct GetProgramIdOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::GetProgramIdOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::GetProgramIdOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::GetProgramIdOp> {
+  using ConvertOpToLLVMPattern<triton::GetProgramIdOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
@@ -367,9 +361,9 @@ struct GetProgramIdOpConversion
 };
 
 struct GetNumProgramsOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::GetNumProgramsOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::GetNumProgramsOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::GetNumProgramsOp> {
+  using ConvertOpToLLVMPattern<
+      triton::GetNumProgramsOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::GetNumProgramsOp op, OpAdaptor adaptor,
@@ -388,12 +382,11 @@ struct GetNumProgramsOpConversion
 } // namespace
 
 namespace AMD {
-void populateTritonGPUToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &moduleAllocation,
-    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-    PatternBenefit benefit) {
+void populateTritonGPUToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                     RewritePatternSet &patterns, int numWarps,
+                                     ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                     ModuleAllocation &moduleAllocation,
+                                     PatternBenefit benefit) {
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
   patterns.add<GetNumProgramsOpConversion>(typeConverter, benefit);
   patterns.add<ReturnOpConversion>(typeConverter, benefit);

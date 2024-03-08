@@ -22,7 +22,8 @@
  */
 #ifdef USE_ROCM
 
-#include "../ConvertLayoutOpToLLVM.h"
+#include "../PatternTritonGPUOpToLLVM.h"
+#include "Utility.h"
 
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;

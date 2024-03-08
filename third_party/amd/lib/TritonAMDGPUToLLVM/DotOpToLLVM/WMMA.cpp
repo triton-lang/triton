@@ -21,7 +21,7 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "../DotOpToLLVM.h"
+#include "../PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -131,7 +131,7 @@ Value generateWMMAOp(ConversionPatternRewriter &rewriter, Location loc,
 // Conduct the Dot conversion.
 LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
                          ConversionPatternRewriter &rewriter,
-                         TritonGPUToLLVMTypeConverter *typeConverter) {
+                         const LLVMTypeConverter *typeConverter) {
   auto wmmaLayout = op.getResult()
                         .getType()
                         .cast<RankedTensorType>()
@@ -217,7 +217,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
 } // namespace
 
 LogicalResult convertWMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                          TritonGPUToLLVMTypeConverter *typeConverter,
+                          const LLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) {
   auto rankedTType = [](Value tensor) {
     return tensor.getType().cast<RankedTensorType>();

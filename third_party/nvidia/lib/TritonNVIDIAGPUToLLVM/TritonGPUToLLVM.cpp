@@ -230,7 +230,11 @@ struct ConvertTritonGPUToLLVM
     RewritePatternSet patterns(context);
     TargetInfo targetInfo(computeCapability);
     int benefit = patternBenefitPrioritizeOverLLVMConversions;
-    populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, benefit);
+    mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMOptimizedPatterns(
+        typeConverter, targetInfo, patterns,
+        patternBenefitConvertLayoutOptimizedPattern);
+    mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMPatterns(
+        typeConverter, targetInfo, patterns, benefit);
     populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
     populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
                                         axisInfoAnalysis, computeCapability,
