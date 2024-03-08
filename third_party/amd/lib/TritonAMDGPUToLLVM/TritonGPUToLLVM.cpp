@@ -40,13 +40,6 @@ namespace triton {
 } // namespace triton
 } // namespace mlir
 
-namespace mlir {
-FailureOr<LLVM::LLVMFuncOp>
-convertFuncOpToLLVMFuncOp(FunctionOpInterface funcOp,
-                          ConversionPatternRewriter &rewriter,
-                          const LLVMTypeConverter &converter);
-}
-
 using namespace mlir;
 using namespace mlir::triton;
 
