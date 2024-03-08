@@ -462,18 +462,18 @@ def _patch_lang_core(lang, builder):
         def _min_max(input, val_reduce_op, idx_reduce_op=None, axis=None, return_indices_tie_break_left=True,
                      keepdims=False):
             assert return_indices_tie_break_left is True, "return_indices_tie_break_fast not supported"
-            min_val = None
-            min_idx = None
+            val = None
+            idx = None
             if val_reduce_op:
-                min_val = _to_tensor(val_reduce_op(input.handle.data, axis=axis, keepdims=keepdims), input.dtype)
+                val = _to_tensor(val_reduce_op(input.handle.data, axis=axis, keepdims=keepdims), input.dtype)
             if idx_reduce_op:
-                min_idx = _to_tensor(idx_reduce_op(input.handle.data, axis=axis, keepdims=keepdims), input.dtype)
-            if min_val and min_idx:
-                return min_val, min_idx
-            elif min_val:
-                return min_val
-            elif min_idx:
-                return min_idx
+                idx = _to_tensor(idx_reduce_op(input.handle.data, axis=axis, keepdims=keepdims), input.dtype)
+            if val and idx:
+                return val, idx
+            elif val:
+                return val
+            elif idx:
+                return idx
             else:
                 assert False, "val_reduce_op and idx_reduce_op can't be both None"
 
