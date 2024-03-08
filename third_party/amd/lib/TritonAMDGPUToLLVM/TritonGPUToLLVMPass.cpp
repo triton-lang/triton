@@ -133,10 +133,12 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
 /// information.
 struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
-                   ModuleAllocation &allocation, PatternBenefit benefit)
-      : ConvertOpToLLVMPattern(converter, benefit), numWarps(numWarps),
-        allocation(allocation) {}
+                   PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), numWarps(numWarps) {}
 
+  /// Only retain those attributes that are not constructed by
+  /// `LLVMFuncOp::build`. If `filterArgAttrs` is set, also filter out argument
+  /// attributes.
   static void filterFuncAttributes(triton::FuncOp op, bool filterArgAttrs,
                                    SmallVectorImpl<NamedAttribute> &result) {
 
@@ -149,6 +151,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       result.push_back(attr);
     }
   }
+
   triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
                              ConversionPatternRewriter &rewriter) const {
     // Push back a variable that indicates the current stack pointer of shared
@@ -187,8 +190,8 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     if (!LLVM::isKernel(funcOp))
       amendedFuncOp = amendFuncOp(funcOp, rewriter);
 
-    auto newFuncOp = *mlir::convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter,
-                                                      *getTypeConverter());
+    LLVM::LLVMFuncOp newFuncOp = *mlir::convertFuncOpToLLVMFuncOp(
+        amendedFuncOp, rewriter, *getTypeConverter());
     if (!newFuncOp) {
       return failure();
     }
@@ -211,21 +214,14 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     // for `nvvm.annotation` metadata.
     newFuncOp->setAttr("nvvm.maxntid",
                        rewriter.getDenseI32ArrayAttr(32 * numWarps));
-    // The call graph is updated by mapping the old function to the new one.
-    // allocation.mapFuncOp(funcOp, newFuncOp);
 
-    auto funcTy = newFuncOp.getFunctionType().cast<LLVM::LLVMFunctionType>();
-    SmallVector<Type> newInputsTy(funcTy.getParams().begin(),
-                                  funcTy.getParams().end());
-    newFuncOp.setType(
-        LLVM::LLVMFunctionType::get(funcTy.getReturnType(), newInputsTy));
+    // required by AxisInfoAnalysis
     rewriter.eraseOp(funcOp);
     return success();
   }
 
 private:
   int numWarps{0};
-  ModuleAllocation &allocation;
 };
 
 // CallOpInterfaceLowering is adapted from
@@ -370,7 +366,7 @@ struct ConvertTritonAMDGPUToLLVM
       TritonGPUToLLVMTypeConverter typeConverter(context, option);
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
-      funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, allocation,
+      funcPatterns.add<FuncOpConversion>(typeConverter, numWarps,
                                          patternBenefitDefault);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
