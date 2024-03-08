@@ -16,6 +16,7 @@ struct GetProgramIdOpConversion
     Value programId =
         LLVM::AMD::llGetPid(op->getLoc(), rewriter,
                             op->getParentOfType<ModuleOp>(), op.getAxisAsInt());
+    rewriter.replaceOp(op, programId);
     return success();
   }
 };
