@@ -11,6 +11,8 @@
 #include <set>
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -332,6 +334,25 @@ Value linearize(ConversionPatternRewriter &rewriter, Location loc,
 
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content);
+
+// Given an elemId which represents the index of an element from the list of
+// elements that are in the thread's registers (i.e. total of
+// numel(sizePerThread)), it calculates the multi dim offset of the element in
+// the smem buffer. Recall that the smem buffer will only store a single replica
+// when converting distributed to distributed layout. Also, a replica is the
+// smallest CTA tile that is common between input and output layouts.
+SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
+                                     ConversionPatternRewriter &rewriter,
+                                     unsigned elemId, RankedTensorType type,
+                                     ArrayRef<unsigned> multiDimCTAInRepId,
+                                     ArrayRef<unsigned> shapePerCTATile);
+
+// Given a multiDimOffset, this function wraps around each dimension to be
+// within shape.
+SmallVector<Value> getWrappedMultiDimOffset(
+    ConversionPatternRewriter &rewriter, Location loc,
+    ArrayRef<Value> multiDimOffset, ArrayRef<unsigned> shape,
+    SmallVector<unsigned> shapePerCTATile, SmallVector<int64_t> shapePerCTA);
 
 static bool isKernel(FunctionOpInterface funcOp) {
   return funcOp.getVisibility() == SymbolTable::Visibility::Public;
@@ -1058,20 +1079,23 @@ DenseMap<unsigned, Value> static getSwizzledSharedPtrs(
   // cache for non-immediate offsets
   DenseMap<unsigned, Value> cacheCol, cacheRow;
   unsigned minVec = std::min(outVec, inVec);
+  Value strideRow = outOrder.size() >= 2 ? srcStrides[outOrder[1]] : i32_val(0);
+  Value strideCol = srcStrides[outOrder[0]];
+  LDBG("getSwizzledSharedPtrs: perPhase = "
+       << perPhase << " maxPhase = " << maxPhase << " minVec = " << minVec
+       << " inVec = " << inVec << " outVec = " << outVec << " strideRow "
+       << strideRow << " strideCol " << strideCol);
   for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
     Value offset = i32_val(0);
     // Extract multi dimensional index for current element
     auto idx = srcIndices[elemIdx];
     Value idxCol = idx[outOrder[0]]; // contiguous dimension
-    Value idxRow, strideRow;
+    Value idxRow;
     if (outOrder.size() >= 2) {
       idxRow = idx[outOrder[1]]; // discontiguous dimension
-      strideRow = srcStrides[outOrder[1]];
     } else {
       idxRow = i32_val(0);
-      strideRow = i32_val(0);
     }
-    Value strideCol = srcStrides[outOrder[0]];
     // compute phase = (row // perPhase) % maxPhase
     Value phase = urem(udiv(idxRow, i32_val(perPhase)), i32_val(maxPhase));
     // extract dynamic/static offset for immediate offsetting
@@ -1174,6 +1198,8 @@ loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
   unsigned numVecs = outElems / minVec;
   auto wordTy = vec_ty(elemTy, minVec);
   SmallVector<Value> outVals(outElems);
+  LDBG("loadSharedToDistributed: numVecs = " << numVecs << " minVec = "
+                                             << minVec << " " << wordTy);
   for (unsigned i = 0; i < numVecs; ++i) {
     Value smemAddr = sharedPtrs[i * minVec];
     smemAddr = bitcast(smemAddr, ptr_ty(rewriter.getContext(), 3));
@@ -1226,7 +1252,8 @@ static void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
   DenseMap<unsigned, Value> sharedPtrs =
       getSwizzledSharedPtrs(loc, inVec, srcTy, dstSharedLayout, elemTy, smemObj,
                             rewriter, offsetVals, srcStrides);
-
+  LDBG("storeDistributedToShared: numElems = " << numElems << " minVec = "
+                                               << minVec << " " << wordTy);
   for (unsigned i = 0; i < numElems; ++i) {
     if (i % minVec == 0)
       word = undef(wordTy);
@@ -1305,6 +1332,18 @@ static Value packLLElements(Location loc,
     llvmStruct = insert_val(structType, llvmStruct, v.value(), v.index());
   }
   return llvmStruct;
+}
+
+static bool isLayoutMmaV1(Attribute layout) {
+  bool isMmaV1 = false;
+  if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+    isMmaV1 = mmaLayout.isVolta();
+  }
+  if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+    isMmaV1 = sliceLayout.getParent().isa<NvidiaMmaEncodingAttr>() &&
+              sliceLayout.getParent().cast<NvidiaMmaEncodingAttr>().isVolta();
+  }
+  return isMmaV1;
 }
 
 } // namespace mlir
