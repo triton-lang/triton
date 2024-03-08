@@ -85,6 +85,10 @@ void populateControlFlowOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,
                                         PatternBenefit benefit);
 
+void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                 RewritePatternSet &patterns,
+                                 PatternBenefit benefit);
+
 } // namespace triton
 } // namespace mlir
 

@@ -258,6 +258,8 @@ struct ConvertTritonGPUToLLVM
     mlir::triton::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
                                                      benefit);
     populateSPMDOpToLLVMPattern(typeConverter, patterns, benefit);
+    mlir::triton::populateSPMDOpToLLVMPattern(typeConverter, patterns,
+                                              targetInfo, benefit);
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
     // to help convert scalar expression to LLVM.
