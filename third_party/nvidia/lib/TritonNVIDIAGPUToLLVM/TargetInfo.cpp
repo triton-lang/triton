@@ -7,7 +7,111 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 using namespace mlir;
+
+using mlir::LLVM::getWrappedMultiDimOffset;
+using ::mlir::LLVM::linearize;
+using ::mlir::triton::gpu::getShapePerCTA;
+using ::mlir::triton::gpu::getShapePerCTATile;
+namespace {
+Value computeStMatrixAddr(Value laneId, int matStride, Location loc,
+                          ConversionPatternRewriter &rewriter) {
+  Value rowInMat = urem(laneId, i32_val(8)); // row in the 8x8 matrix
+  // linear index of the matrix in the 2x2 matrices
+  // Decompose matIndex => s_0, s_1, that is the coordinate in 2x2 matrices in
+  // a warp.
+  Value matIndex = udiv(laneId, i32_val(8));
+  Value s0 = urem(matIndex, i32_val(2));
+  Value s1 = udiv(matIndex, i32_val(2));
+  Value mIndex = add(rowInMat, mul(s0, i32_val(8)));
+  int m8n8Stride = 8;
+  Value offset =
+      add(mul(mIndex, i32_val(matStride)), mul(s1, i32_val(m8n8Stride)));
+  return offset;
+}
+
+void stMatrixm8n8x4(Value offset, ArrayRef<Value> vals, int indexOffset,
+                    Value smemBase, Type elemTy, Location loc,
+                    ConversionPatternRewriter &rewriter) {
+  SmallVector<Value> inputs;
+  auto prTy = ptr_ty(rewriter.getContext(), 3);
+  // Pack the input into 2xf16
+  Type packedTy = vec_ty(vals[0].getType(), 2);
+  for (int i = 0; i < 4; i++) {
+    Value input = undef(packedTy);
+    for (int j = 0; j < 2; j++) {
+      input = insert_element(packedTy, input, vals[indexOffset + i * 2 + j],
+                             i32_val(j));
+    }
+    inputs.push_back(bitcast(input, i32_ty));
+  }
+  Value addr = gep(smemBase.getType(), elemTy, smemBase, offset);
+  rewriter.create<triton::nvgpu::StoreMatrixOp>(loc, addr, inputs);
+}
+void storeDistributedToSharedWithStMatrix(
+    RankedTensorType tensorTy, Type elemTy, SmallVector<Value> &inVals,
+    Value smemBase, ArrayRef<unsigned> paddedRepShape,
+    ArrayRef<unsigned> origRepShape, Location loc,
+    ConversionPatternRewriter &rewriter) {
+  auto shapePerCTA = getShapePerCTA(tensorTy);
+  auto mmaLayout = tensorTy.getEncoding().cast<NvidiaMmaEncodingAttr>();
+  auto order = triton::gpu::getOrder(mmaLayout);
+  auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
+  auto shapePerCTATile = getShapePerCTATile(mmaLayout);
+  ArrayRef<unsigned> mmaShape = mmaLayout.getInstrShape();
+  // 4xm8n8 matches exactly the size of 1 warp of wgmma layout for 16bit type
+  // and has a shape of 16x16.
+  int instrN = mmaShape[1] * warpsPerCTA[1];
+  int instrM = mmaShape[0] * warpsPerCTA[0];
+  std::array<int, 2> numRep = {ceil((int)origRepShape[0], instrM),
+                               ceil((int)origRepShape[1], instrN)};
+
+  Value thread = getThreadId(rewriter, loc);
+  Value warp = udiv(thread, i32_val(32));
+  Value lane = urem(thread, i32_val(32));
+
+  SmallVector<Value> multiDimWarpId =
+      delinearize(rewriter, loc, warp, warpsPerCTA);
+
+  // Compute the relative offset for each lane.
+  Value stMatrixLaneOffset =
+      computeStMatrixAddr(lane, paddedRepShape[1], loc, rewriter);
+  multiDimWarpId[0] = mul(multiDimWarpId[0], i32_val(mmaShape[0]));
+  multiDimWarpId[1] = mul(multiDimWarpId[1], i32_val(mmaShape[1]));
+  SmallVector<Value> multiDimOffsetWrapped =
+      getWrappedMultiDimOffset(rewriter, loc, multiDimWarpId, origRepShape,
+                               shapePerCTATile, shapePerCTA);
+  Value relativeOffset =
+      linearize(rewriter, loc, multiDimOffsetWrapped, paddedRepShape, order);
+  relativeOffset = add(relativeOffset, stMatrixLaneOffset);
+  int indexOffset = 0;
+  int m8n8x4Stride = 16;
+  int numNChunk = mmaShape[1] / m8n8x4Stride;
+  for (int m = 0; m < numRep[0]; m++) {
+    for (int n = 0; n < numRep[1]; n++) {
+      for (int k = 0; k < numNChunk; k++) {
+        Value addr =
+            add(relativeOffset, i32_val(k * m8n8x4Stride + n * instrN +
+                                        m * instrM * paddedRepShape[1]));
+        stMatrixm8n8x4(addr, inVals, indexOffset, smemBase, elemTy, loc,
+                       rewriter);
+        indexOffset += 8;
+      }
+    }
+  }
+}
+
+bool isStMatrixCompatible(RankedTensorType tensorTy) {
+  auto mmaLayout = tensorTy.getEncoding().dyn_cast<NvidiaMmaEncodingAttr>();
+  if (!mmaLayout || !mmaLayout.isHopper())
+    return false;
+  if (tensorTy.getElementType().getIntOrFloatBitWidth() != 16)
+    return false;
+  return true;
+}
+} // namespace
+
 namespace mlir::triton::NVIDIA {
+
 // Check if the reduction can use a redux op and return the kind.
 static std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op,
                                                      int computeCapability) {
@@ -141,6 +245,20 @@ bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
       }
       return true;
     }
+  }
+  return false;
+}
+bool TargetInfo::processReplicaUsingStMatrix(
+    ConversionPatternRewriter &rewriter, Location loc, Value smemBase,
+    SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
+    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
+    ArrayRef<unsigned> outOrd, unsigned accumNumReplicates) const {
+  if (isStMatrixCompatible(srcTy) && accumNumReplicates == 1 &&
+      outOrd[0] == 1 && paddedRepShape[1] % 8 == 0) {
+    storeDistributedToSharedWithStMatrix(srcTy, elemTy, vals, smemBase,
+                                         paddedRepShape, origRepShape, loc,
+                                         rewriter);
+    return true;
   }
   return false;
 }
