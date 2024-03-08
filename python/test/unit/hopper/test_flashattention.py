@@ -32,6 +32,7 @@ import torch
 import triton
 import triton.language as tl
 
+from triton.ops.flash_attention import attention as causual_attention
 
 @triton.jit
 def _fwd_kernel(Q, K, V, sm_scale,  #
@@ -55,8 +56,21 @@ def _fwd_kernel(Q, K, V, sm_scale,  #
     l_prev = tl.zeros([BLOCK_M], dtype=tl.float32)
     acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
 
-    stride_qh_2d = stride_qh // stride_qm // stride_qk
-
+    stride_qh_2d = stride_qh // stride_qm // stride_qk # q_k * q_m / q_k / 1 = q_m
+    
+    # TODO(yiakwy) : refactor D0 to N_CTX in this flash attention test
+    # 
+    # This basically loads (D0, emb_d) elements which is of shape ((batch * heads) * N_CTX), 
+    # that means all the (batch * heads) cuda blocks with full length of N_CTX (full benckmarked 
+    # token lenghts) for 2-D attention (a reshape operation inserted) chunks of Q loaded.
+    #
+    # That means (batch * heads) chunks data computation duplicated in each cuda block.
+    # Hence strides_qh_2d is just q_m (emb_d), which is inefficient.
+    #
+    # Note in the following analysis to balance Causual attention computation (main purpose of this PR), I will assume heads == 1, since
+    # in TP parallel shceme, attention is actually distributed among heads in TP group.
+    #
+    # This assumption reflect best performance when tuning parameters in LLM application.
     q_tile_ptr = tl.make_block_ptr(
         base=Q,
         shape=(D0, BLOCK_DMODEL),
@@ -295,13 +309,20 @@ class _attention(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, q, k, v, sm_scale):
-        BLOCK = 128
+        # TODO (yiakyw) : tuning BLOCK_M and BLOCK_N
+        #
+        # Aligned with python/triton/ops/flash_attention.py flash_attention v2 implementation
+        # according to flash attention v1, BLOCK_M = min(SRAM_capacity / 4, emb_d) though I have
+        # batter partition analysis.
+        BLOCK_M = 128
+        BLOCK_N = 64
         # shape constraints
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
         assert Lq == Lk and Lk == Lv
         assert Lk in {16, 32, 64, 128}
+        # TODO (yiakwy) : inplace output if necessary
         o = torch.empty_like(q)
-        grid = (triton.cdiv(q.shape[2], BLOCK), q.shape[0] * q.shape[1], 1)
+        grid = (triton.cdiv(q.shape[2], BLOCK_M), q.shape[0] * q.shape[1], 1)
         L = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         m = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         num_warps = 4 if Lk <= 64 else 8
@@ -315,7 +336,7 @@ class _attention(torch.autograd.Function):
             v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
             o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
             q.shape[0], q.shape[1], q.shape[2], D0,  #
-            BLOCK_M=BLOCK, BLOCK_N=BLOCK, BLOCK_DMODEL=Lk,  #
+            BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_DMODEL=Lk,  #
             num_warps=num_warps, num_stages=2)
 
         ctx.save_for_backward(q, k, v, o, L, m)
@@ -358,29 +379,37 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 
+@pytest.mark.parametrize('is_causal', [
+    True, False
+])
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [
     (4, 48, 128, 64),
     (4, 48, 256, 64),
-    (4, 48, 512, 64),
-    (4, 48, 1024, 64),
-    (4, 48, 2048, 64),
-    (4, 48, 4096, 64),
+    # TODO (yiakwy)
+    # (4, 48, 512, 64),
+    # (4, 48, 1024, 64),
+    # (4, 48, 2048, 64),
+    # (4, 48, 4096, 64),
     #  (4, 48, 8192, 64), out of memory
 ])
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="requires arch 9+")
-def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 8, reason="requires arch 8+") # aligned with python/triton/ops/flash_attention.py flash_attention v2 implementation
+def test_op(Z, H, N_CTX, D_HEAD, is_causal, dtype=torch.float16):
     torch.manual_seed(20)
     q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.1, std=0.2).requires_grad_()
     k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.4, std=0.2).requires_grad_()
     v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.3, std=0.2).requires_grad_()
+    kNInf = torch.tensor(float("-inf"), device="cuda", dtype=torch.float16)
     sm_scale = 0.2
     dout = torch.randn_like(q)
     # reference implementation
-    M = torch.tril(torch.ones((N_CTX, N_CTX), device="cuda"))
+    
+    if is_causal:
+        causualMask = torch.triu(torch.ones((N_CTX, N_CTX), device="cuda", dtype=torch.bool), diagonal=1)
     p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
-    for z in range(Z):
-        for h in range(H):
-            p[:, :, M == 0] = float("-inf")
+
+    if is_causal:
+        p[:,:, causualMask] = kNInf
+    
     p = torch.softmax(p.float(), dim=-1).half()
     # p = torch.exp(p)
     ref_out = torch.matmul(p, v)
@@ -389,7 +418,16 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     ref_dk, k.grad = k.grad.clone(), None
     ref_dq, q.grad = q.grad.clone(), None
     # triton implementation
-    tri_out = attention(q, k, v, sm_scale)
+    # tri_out = attention(q, k, v, sm_scale)
+    
+    # TODO (yiakwy) : add test to faster load balanced attention fused with/without causual mask
+    #
+    # Sequence parallel partition requires gather of full length of tokens and scatter in bwd phase.
+    # However, distributed attention allow (ring attention, dist attention...) much longer up to 1 million
+    # of tokens of sequence length. Hence we assume sequence parallel false here.
+    faster_tri_out = causual_attention(q, k, v, is_causal, sm_scale)
+    tri_out = faster_tri_out
+    
     # print(ref_out)
     # print(tri_out)
     tri_out.backward(dout)
@@ -414,7 +452,9 @@ BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
 configs = [
     triton.testing.Benchmark(
         x_names=['N_CTX'],
-        x_vals=[2**i for i in range(10, 14)],
+        # TODO (yiakwy)
+        # x_vals=[2**i for i in range(10, 14)],
+        x_vals=[1024,],
         line_arg='provider',
         line_vals=['triton'] + (['flash'] if HAS_FLASH else []),
         line_names=['Triton'] + (['Flash'] if HAS_FLASH else []),

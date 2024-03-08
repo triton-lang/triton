@@ -29,10 +29,11 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par, device):
     sm_scale = 0.5
     dout = torch.randn_like(q)
     # reference implementation
-    M = torch.tril(torch.ones((N_CTX, N_CTX), device=device))
+    # M = torch.tril(torch.ones((N_CTX, N_CTX), device=device))
+    causualMask = torch.triu(torch.ones((N_CTX, N_CTX), device="cuda", dtype=torch.bool), diagonal=1)
     p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
     if causal:
-        p[:, :, M == 0] = float("-inf")
+        p[:, :, causualMask] = float("-inf")
     p = torch.softmax(p.float(), dim=-1).to(dtype)
     # p = torch.exp(p)
     ref_out = torch.matmul(p, v)

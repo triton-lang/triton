@@ -13,6 +13,251 @@ import torch
 from .. import cdiv, jit
 from .. import language as tl
 
+from enum import Enum
+
+@jit
+def _fwd_kernel_without_tma(
+    Q, K, V, sm_scale,
+    L,
+    Out,
+    stride_qz, stride_qh, stride_qm, stride_qk,
+    stride_kz, stride_kh, stride_kn, stride_kk,
+    stride_vz, stride_vh, stride_vk, stride_vn,
+    stride_oz, stride_oh, stride_om, stride_on,
+    Z, H, N_CTX,
+    BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    IS_CAUSAL: tl.constexpr,
+    BLOCK_DIM_0: tl.constexpr,
+    LOAD_BALANCE_STRATEGY : tl.constexpr
+):
+    start_m = tl.program_id(0) # will be updated for causual attention
+    off_hz = tl.program_id(1)
+    qvk_offset = off_hz * stride_qh
+    
+    # credits to: Adam P. Goucher (https://github.com/apgoucher):
+    # scale sm_scale by 1/log_2(e) and use
+    # 2^x instead of exp in the loop because CSE and LICM
+    # don't work as expected with `exp` in the loop
+    qk_scale = sm_scale * 1.44269504
+    # will be updated for causual attention
+    Q_block_ptr = tl.make_block_ptr(
+        base=Q + qvk_offset,
+        shape=(N_CTX, BLOCK_DMODEL),
+        strides=(stride_qm, stride_qk),
+        offsets=(start_m * BLOCK_M, 0),
+        block_shape=(BLOCK_M, BLOCK_DMODEL),
+        order=(1, 0)
+    )
+    # load q: it will stay in SRAM throughout
+    q = tl.load(Q_block_ptr)
+    q = (q * qk_scale).to(K.dtype.element_ty)
+    
+    K_block_ptr = tl.make_block_ptr(
+        base=K + qvk_offset,
+        shape=(BLOCK_DMODEL, N_CTX),
+        strides=(stride_kk, stride_kn),
+        offsets=(0, 0),
+        block_shape=(BLOCK_DMODEL, BLOCK_N),
+        order=(0, 1)
+    )
+    V_block_ptr = tl.make_block_ptr(
+        base=V + qvk_offset,
+        shape=(N_CTX, BLOCK_DMODEL),
+        strides=(stride_vk, stride_vn),
+        offsets=(0, 0),
+        block_shape=(BLOCK_N, BLOCK_DMODEL),
+        order=(1, 0)
+    )
+    
+    # initialize offsets
+    offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M) # will be updated for causual attention
+    offs_n = tl.arange(0, BLOCK_N)
+    # initialize pointer to m and l
+    m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
+    l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
+    acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
+
+    # # TODO (yiakwy) : support scope binding in LLVM backend
+    # def compute(q, K_block_ptr, V_block_ptr, start_m, offs_m, offs_n, BLOCK_M, BLOCK_N, 
+    #             IS_CAUSAL, N_CTX, m_i, l_i, acc):
+    #     lo = 0
+    #     hi = (start_m + 1) * BLOCK_M if IS_CAUSAL else N_CTX
+    #     for start_n in range(lo, hi, BLOCK_N):
+    #         # -- load k, v --
+    #         k = tl.load(K_block_ptr)
+    #         v = tl.load(V_block_ptr)
+    #         # -- compute qk ---
+    #         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
+    #         if IS_CAUSAL:
+    #             qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk, float("-inf"))
+    #         qk += tl.dot(q, k, allow_tf32=True)
+    #         # -- compute scaling constant ---
+    #         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
+    #         alpha = tl.math.exp2(m_i - m_i_new)
+    #         p = tl.math.exp2(qk - m_i_new[:, None])
+    #         # -- scale and update acc --
+    #         acc_scale = l_i * 0 + alpha  # workaround some compiler bug
+    #         acc *= acc_scale[:, None]
+    #         acc += tl.dot(p.to(V.dtype.element_ty), v, allow_tf32=True)
+    #         # -- update m_i and l_i --
+    #         l_i = l_i * alpha + tl.sum(p, 1)
+    #         m_i = m_i_new
+    #         # update pointers
+    #         K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
+    #         V_block_ptr = tl.advance(V_block_ptr, (BLOCK_N, 0))
+    #     # write back l and m
+    #     acc = acc / l_i[:, None]
+        
+    # # compute online softmax and memory efficient attentin algorithms with
+    # # tl.program_id(0) blocks along K, V dimensions iterately
+    # compute(q, K_block_ptr, V_block_ptr, start_m, offs_m, offs_n, BLOCK_M, BLOCK_N,
+    #         IS_CAUSAL, N_CTX, m_i, l_i, acc)
+    
+    lo = 0
+    hi = (start_m + 1) * BLOCK_M if IS_CAUSAL else N_CTX
+    for start_n in range(lo, hi, BLOCK_N):
+        # -- load k, v --
+        k = tl.load(K_block_ptr)
+        v = tl.load(V_block_ptr)
+        # -- compute qk ---
+        qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
+        if IS_CAUSAL:
+            qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk, float("-inf"))
+        qk += tl.dot(q, k, allow_tf32=True)
+        # -- compute scaling constant ---
+        m_i_new = tl.maximum(m_i, tl.max(qk, 1))
+        alpha = tl.math.exp2(m_i - m_i_new)
+        p = tl.math.exp2(qk - m_i_new[:, None])
+        # -- scale and update acc --
+        acc_scale = l_i * 0 + alpha  # workaround some compiler bug
+        acc *= acc_scale[:, None]
+        acc += tl.dot(p.to(V.dtype.element_ty), v, allow_tf32=True)
+        # -- update m_i and l_i --
+        l_i = l_i * alpha + tl.sum(p, 1)
+        m_i = m_i_new
+        # update pointers
+        K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
+        V_block_ptr = tl.advance(V_block_ptr, (BLOCK_N, 0))
+    # write back l and m
+    acc = acc / l_i[:, None]
+        
+    l_ptrs = L + off_hz * N_CTX + offs_m
+    tl.store(l_ptrs, m_i + tl.math.log2(l_i))
+    
+    # TODO (yiakwy) : inplace
+    # write back O # write tl.program_id(0) * BLOCK_M
+    O_block_ptr = tl.make_block_ptr(
+        base=Out + qvk_offset,
+        shape=(N_CTX, BLOCK_DMODEL),
+        strides=(stride_om, stride_on),
+        offsets=(start_m * BLOCK_M, 0),
+        block_shape=(BLOCK_M, BLOCK_DMODEL),
+        order=(1, 0)
+    )
+    tl.store(O_block_ptr, acc.to(K.dtype.element_ty))
+    
+    if not IS_CAUSAL or LOAD_BALANCE_STRATEGY < 0:
+        return
+
+    if BLOCK_DIM_0 - start_m == start_m:
+        return
+
+    # Do load balance
+    if LOAD_BALANCE_STRATEGY == 0:
+        # gaussian loading
+        start_m = BLOCK_DIM_0 - start_m
+    
+    # Load new Q, K, V for computation balancing and resuse SRAM allocated
+    # TODO (yiakwy) : optimize and reuse the codes
+    
+    Q_block_ptr = tl.make_block_ptr(
+        base=Q + qvk_offset,
+        shape=(N_CTX, BLOCK_DMODEL),
+        strides=(stride_qm, stride_qk),
+        offsets=(start_m * BLOCK_M, 0),
+        block_shape=(BLOCK_M, BLOCK_DMODEL),
+        order=(1, 0)
+    )
+    q = tl.load(Q_block_ptr)
+    q = (q * qk_scale).to(K.dtype.element_ty)
+    
+    K_block_ptr = tl.make_block_ptr(
+        base=K + qvk_offset,
+        shape=(BLOCK_DMODEL, N_CTX),
+        strides=(stride_kk, stride_kn),
+        offsets=(0, 0),
+        block_shape=(BLOCK_DMODEL, BLOCK_N),
+        order=(0, 1)
+    )
+    V_block_ptr = tl.make_block_ptr(
+        base=V + qvk_offset,
+        shape=(N_CTX, BLOCK_DMODEL),
+        strides=(stride_vk, stride_vn),
+        offsets=(0, 0),
+        block_shape=(BLOCK_N, BLOCK_DMODEL),
+        order=(1, 0)
+    )
+    
+    offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    
+    # Reinitalize SRAM buffer for online softmax and memory efficient attentin algorithms
+    # TODO (yiakwy) : clear SRAM buffer
+    # m_i[:] = -float("inf")
+    # l_i[:] = 0
+    # acc[:,:] = 0
+    m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
+    l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
+    acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
+    
+    lo = 0
+    hi = (start_m + 1) * BLOCK_M
+    
+    # # compute online softmax and memory efficient attentin algorithms with 
+    # # sequence_len - tl.program_id(0) blocks along K, V dimensions iterately
+    # compute(q, K_block_ptr, V_block_ptr, start_m, offs_m, offs_n, BLOCK_M, BLOCK_N,
+    #         IS_CAUSAL, N_CTX, m_i, l_i, acc)
+    
+    for start_n in range(lo, hi, BLOCK_N):
+        # -- load k, v --
+        k = tl.load(K_block_ptr)
+        v = tl.load(V_block_ptr)
+        # -- compute qk ---
+        qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
+        if IS_CAUSAL:
+            qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk, float("-inf"))
+        qk += tl.dot(q, k, allow_tf32=True)
+        # -- compute scaling constant ---
+        m_i_new = tl.maximum(m_i, tl.max(qk, 1))
+        alpha = tl.math.exp2(m_i - m_i_new)
+        p = tl.math.exp2(qk - m_i_new[:, None])
+        # -- scale and update acc --
+        acc_scale = l_i * 0 + alpha  # workaround some compiler bug
+        acc *= acc_scale[:, None]
+        acc += tl.dot(p.to(V.dtype.element_ty), v, allow_tf32=True)
+        # -- update m_i and l_i --
+        l_i = l_i * alpha + tl.sum(p, 1)
+        m_i = m_i_new
+        # update pointers
+        K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
+        V_block_ptr = tl.advance(V_block_ptr, (BLOCK_N, 0))
+    # write back l and m
+    acc = acc / l_i[:, None]
+    
+    l_ptrs = L + off_hz * N_CTX + offs_m
+    tl.store(l_ptrs, m_i + tl.math.log2(l_i))
+    
+    # TODO (yiakwy) : inpalce
+    # write back O with (offset BLOCK_DIM_0: - tl.program_id(0)) * BLOCK_M
+    O_block_ptr = tl.make_block_ptr(
+        base=Out + qvk_offset,
+        shape=(N_CTX, BLOCK_DMODEL),
+        strides=(stride_om, stride_on),
+        offsets=(start_m * BLOCK_M, 0),
+        block_shape=(BLOCK_M, BLOCK_DMODEL),
+        order=(1, 0)
+    )
+    tl.store(O_block_ptr, acc.to(K.dtype.element_ty))
 
 @jit
 def _fwd_kernel(Q, K, V, sm_scale,  #
@@ -26,10 +271,13 @@ def _fwd_kernel(Q, K, V, sm_scale,  #
                 Z_H_N_CTX,  #
                 BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,  #
                 BLOCK_N: tl.constexpr,  #
-                IS_CAUSAL: tl.constexpr  #
+                IS_CAUSAL: tl.constexpr,  #
+                BLOCK_DIM_0: tl.constexpr, #
+                LOAD_BALANCE_STRATEGY : tl.constexpr #
                 ):
     start_m = tl.program_id(0)
     off_hz = tl.program_id(1)
+        
     qvk_offset = off_hz * stride_qh
     vk_offset = qvk_offset // stride_qm
 
@@ -362,37 +610,88 @@ def _bwd_kernel(Q, K, V, sm_scale,  #
 
 class _attention(torch.autograd.Function):
 
+    class LoadBalanceStrategy(Enum):
+        UNDEFINE = -1
+        GAUSSIAN_FOLDING = 0
+        pass
+
     @staticmethod
-    def forward(ctx, q, k, v, causal, sm_scale, sequence_parallel=False):
+    def forward(ctx, q, k, v, causal, sm_scale, sequence_parallel=False, load_balance_strategy=0):
         # only support for Ampere now
         capability = torch.cuda.get_device_capability()
         if capability[0] < 8:
             raise RuntimeError("Flash attention currently only supported for compute capability >= 80")
-        BLOCK_M = 128
+        BLOCK_M = 64 # 128
         BLOCK_N = 64
         # shape constraints
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
         assert Lq == Lk and Lk == Lv
         assert Lk in {16, 32, 64, 128}
         o = torch.empty_like(q)
-        grid = (cdiv(q.shape[2], BLOCK_M), q.shape[0] * q.shape[1], 1)
+        
+        block_dim_0 = cdiv(q.shape[2], BLOCK_M)
+        if causal:
+            if load_balance_strategy == _attention.LoadBalanceStrategy.GAUSSIAN_FOLDING.value:
+                # make sure 
+                if Lq % 2 != 0:
+                    raise Exception("Odd Lq is not handled in guassian folding algo.")
+                
+                # treat the data of shape (Z(B), H, sequence / 2, emb_d)
+                if q.shape[2] < 2*BLOCK_M:
+                    BLOCK_M = cdiv(q.shape[2], 2)
+                    
+                block_dim_0 = cdiv(cdiv(q.shape[2], 2), BLOCK_M)
+            else:
+                raise Exception(f"Unexpected load balance strategy; valid choices : {list(_attention.LoadBalanceStrategy)}")
+        else:
+            if load_balance_strategy > 0:
+                print("load balance ignore for non-causal attention")
+            
+        
+        grid = (block_dim_0, q.shape[0] * q.shape[1], 1)
         L = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         num_warps = 4 if Lk <= 64 else 8
-        _fwd_kernel[grid](
-            q, k, v, sm_scale,  #
-            L,  #
-            o,  #
-            q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
-            k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
-            v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
-            o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
-            q.shape[0], q.shape[1], q.shape[2],  #
-            q.shape[0] * q.shape[1] * q.shape[2],  #
-            BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_DMODEL=Lk,  #
-            IS_CAUSAL=causal,  #
-            num_warps=num_warps,  #
-            num_stages=4  #
-        )
+        if capability[0] >= 9:
+            _fwd_kernel[grid](
+                q, k, v, sm_scale,  #
+                L,  #
+                o,  #
+                q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
+                k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
+                v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
+                o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
+                q.shape[0], q.shape[1], q.shape[2],  #
+                q.shape[0] * q.shape[1] * q.shape[2],  #
+                BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_DMODEL=Lk,  #
+                IS_CAUSAL=causal,  #
+                LOAD_BALANCE_STRATEGY=load_balance_strategy,  #
+                BLOCK_DIM_0=2*block_dim_0 - 1 if causal else block_dim_0,
+                # TODO (yiakwy) : finetune
+                num_warps=num_warps,  #
+                # TODO (yiakwy) : finetune
+                num_stages=4  #
+            )
+        else:
+            # card with capability of 8.0 (A100, A800, A6000 ...) does not have TMA to acclerate memory loading
+            # see PR#2336 https://github.com/openai/triton/pull/2336
+            _fwd_kernel_without_tma[grid](
+                q, k, v, sm_scale,
+                L,
+                o,
+                q.stride(0), q.stride(1), q.stride(2), q.stride(3),
+                k.stride(0), k.stride(1), k.stride(2), k.stride(3),
+                v.stride(0), v.stride(1), v.stride(2), v.stride(3),
+                o.stride(0), o.stride(1), o.stride(2), o.stride(3),
+                q.shape[0], q.shape[1], q.shape[2],
+                BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_DMODEL=Lk,
+                IS_CAUSAL=causal,
+                LOAD_BALANCE_STRATEGY=load_balance_strategy,
+                BLOCK_DIM_0=2*block_dim_0 - 1 if causal else block_dim_0,
+                # TODO (yiakwy) : finetune
+                num_warps=num_warps,
+                # TODO (yiakwy) : finetune
+                num_stages=4
+            )
 
         ctx.save_for_backward(q, k, v, o, L)
         ctx.grid = grid
