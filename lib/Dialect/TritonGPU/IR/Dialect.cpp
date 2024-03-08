@@ -210,6 +210,15 @@ SmallVector<unsigned> getShapePerCTATile(Attribute layout,
 }
 
 bool isExpensiveView(Type srcType, Type dstType) {
+  auto isNonDistributedTensor = [](Type type) {
+    if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
+      return !isaDistributedLayout(tensorType.getEncoding());
+    }
+    return false;
+  };
+  if (isNonDistributedTensor(srcType) || isNonDistributedTensor(dstType)) {
+    return true;
+  }
   return getTotalElemsPerThread(srcType) != getTotalElemsPerThread(dstType);
 }
 
@@ -384,6 +393,8 @@ unsigned getNumCTAs(Attribute layout) {
 }
 
 bool isaDistributedLayout(Attribute layout) {
+  // FIXME: shouldn't this include dot-operand encoding?
+  // Or, shold this just be `layout.isa<DistributedEncodingTrait>()`?
   return layout.isa<BlockedEncodingAttr>() || layout.isa<MmaEncodingTrait>() ||
          layout.isa<SliceEncodingAttr>();
 }
