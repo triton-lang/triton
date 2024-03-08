@@ -1,13 +1,10 @@
-#include "ConvertLayoutOpToLLVM.h"
-#include "TritonGPUToLLVMBase.h"
+#include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
-using ::AMD::ConvertTritonGPUOpToLLVMPattern;
-using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
@@ -105,10 +102,10 @@ private:
 };
 
 struct ConvertLayoutOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
+    : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
 public:
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::ConvertLayoutOp>::ConvertTritonGPUOpToLLVMPattern;
+  using ConvertOpToLLVMPattern<
+      triton::gpu::ConvertLayoutOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
@@ -176,13 +173,10 @@ private:
 
 namespace AMD {
 void populateConvertLayoutOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
+    LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, int numWarps,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
-    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-    PatternBenefit benefit) {
-  patterns.add<ConvertLayoutOpConversion>(typeConverter, allocation,
-                                          indexCacheInfo, benefit);
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
+  patterns.add<ConvertLayoutOpConversion>(typeConverter, benefit);
   patterns.add<LocalLoadOpConversion>(typeConverter, benefit);
   mlir::triton::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
                                                       patterns, benefit);

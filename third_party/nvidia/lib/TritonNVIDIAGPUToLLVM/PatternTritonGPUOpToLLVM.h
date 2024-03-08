@@ -5,9 +5,6 @@
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "triton/Analysis/AxisInfo.h"
 
-typedef llvm::DenseMap<mlir::Operation *, mlir::triton::MakeTensorPtrOp>
-    TensorPtrMapT;
-
 namespace mlir {
 namespace triton {
 
