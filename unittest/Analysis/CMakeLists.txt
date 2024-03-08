@@ -5,5 +5,4 @@ add_triton_ut(
     TritonAnalysis
     TritonIR
     TritonGPUIR
-    ${triton_libs}
 )
