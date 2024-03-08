@@ -11,7 +11,6 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     BarrierOpToLLVM.cpp
     TritonGPUToLLVM.cpp
     DecomposeUnsupportedConversions.cpp
-    ControlFlowOpToLLVM.cpp
     SPMDOpToLLVM.cpp
     TensorPtrOpsToLLVM.cpp
     ClusterOpsToLLVM.cpp
