@@ -18,7 +18,6 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
   LogicalResult
   matchAndRewrite(triton::PrintOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto typeConverter = getTypeConverter();
     auto loc = op->getLoc();
     Value prefixStr =
         LLVM::addStringToModule(loc, rewriter, "printfPrefix_", op.getPrefix());
