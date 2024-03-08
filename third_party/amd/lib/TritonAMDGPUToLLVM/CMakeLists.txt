@@ -7,7 +7,7 @@ add_triton_library(TritonAMDGPUToLLVM
     ElementwiseOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
     GCNAsmFormat.cpp
-    TritonGPUToLLVMPass.cpp
+    TritonGPUToLLVM.cpp
     Utility.cpp
     TargetInfo.cpp
     DecomposeUnsupportedConversions.cpp
