@@ -5,9 +5,6 @@
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "triton/Analysis/AxisInfo.h"
 
-typedef llvm::DenseMap<mlir::Operation *, mlir::triton::MakeTensorPtrOp>
-    TensorPtrMapT;
-
 namespace mlir {
 namespace triton {
 
@@ -22,8 +19,13 @@ void populateClusterOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                       PatternBenefit benefit);
 
 void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                           const TargetInfo &targetInfo,
                                            RewritePatternSet &patterns,
                                            PatternBenefit benefit);
+
+void populateConvertLayoutOpToLLVMOptimizedPatterns(
+    LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
+    RewritePatternSet &patterns, PatternBenefit benefit);
 
 void populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,

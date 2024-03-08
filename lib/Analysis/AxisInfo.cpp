@@ -1,10 +1,15 @@
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+
+#define DEBUG_TYPE "axis-info"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir::triton {
 namespace {
@@ -82,9 +87,8 @@ public:
   bool match(Operation *op) final { return isa<OpTy>(op); }
 
   virtual AxisInfo
-  getAxisInfo(OpTy op, ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) {
-    llvm_unreachable("Unimplemented getAxisInfo");
-  }
+  getAxisInfo(OpTy op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) = 0;
 };
 
 // Binary operations
@@ -1008,7 +1012,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   CastOpAxisInfoVisitor<mlir::UnrealizedConversionCastOp>,
                   CastOpAxisInfoVisitor<triton::BitcastOp>>();
   // TODO: Remove rules for LLVM::ConstantOp, LLVM::AddOp
-  // when scf.for supports integers induction variable
+  // when scf.for supports integer induction variables
   visitors.append<MakeRangeOpAxisInfoVisitor>();
   visitors.append<ConstantOpAxisInfoVisitor<arith::ConstantOp>,
                   ConstantOpAxisInfoVisitor<LLVM::ConstantOp>>();
@@ -1192,6 +1196,7 @@ unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
   assert(order[0] < uniqueContigPerThread.size() &&
          "Unexpected uniqueContigPerThread size");
   unsigned contiguity = uniqueContigPerThread[order[0]];
+  LDBG("getPtrContiguity uniqueContigPerThread = " << contiguity);
   contiguity = std::min(align, contiguity);
 
   return contiguity;
@@ -1212,6 +1217,16 @@ unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
   auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
   auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
   unsigned alignment = std::min(maxMultiple, maxContig);
+  LDBG("getPtrAlignment order[0] "
+       << order[0] << " maxMultipleBytes = " << maxMultipleBytes
+       << " maxContig = " << maxContig << " elemNumBits = " << elemNumBits
+       << " maxMultiple = " << maxMultiple << " alignment " << alignment);
+  LLVM_DEBUG({
+    std::string axisStr;
+    llvm::raw_string_ostream os(axisStr);
+    axisInfo->print(os);
+    LDBG("-- " << axisStr);
+  });
   return alignment;
 }
 
@@ -1224,6 +1239,14 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
     return 1;
   auto maskOrder = triton::gpu::getOrder(tensorTy.getEncoding());
   auto alignment = std::max<unsigned>(axisInfo->getConstancy(maskOrder[0]), 1);
+  LDBG("getMaskAlignment maskOrder[0] " << maskOrder[0] << " alignment "
+                                        << alignment);
+  LLVM_DEBUG({
+    std::string axisStr;
+    llvm::raw_string_ostream os(axisStr);
+    axisInfo->print(os);
+    LDBG("-- " << axisStr);
+  });
   return alignment;
 }
 

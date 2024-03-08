@@ -22,8 +22,9 @@
  */
 #ifdef USE_ROCM
 
-#include "../DotOpToLLVM.h"
+#include "../PatternTritonGPUOpToLLVM.h"
 #include "TritonAMDGPUTransforms/MfmaGroup.h"
+#include "Utility.h"
 
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 
@@ -43,13 +44,14 @@ struct DotOpMFMAConversionHelper {
   AMDMfmaEncodingAttr mfmaLayout;
 
   ConversionPatternRewriter &rewriter;
-  TritonGPUToLLVMTypeConverter *typeConverter;
+  const LLVMTypeConverter *typeConverter;
   Location loc;
   MLIRContext *ctx{};
 
-  explicit DotOpMFMAConversionHelper(
-      AMDMfmaEncodingAttr mfmaLayout, ConversionPatternRewriter &rewriter,
-      TritonGPUToLLVMTypeConverter *typeConverter, Location loc)
+  explicit DotOpMFMAConversionHelper(AMDMfmaEncodingAttr mfmaLayout,
+                                     ConversionPatternRewriter &rewriter,
+                                     const LLVMTypeConverter *typeConverter,
+                                     Location loc)
       : mfmaLayout(mfmaLayout), rewriter(rewriter),
         typeConverter(typeConverter), loc(loc), ctx(mfmaLayout.getContext()) {}
 
@@ -253,32 +255,33 @@ struct DotOpMFMAConversionHelper {
     return success();
   }
 
-/**
- * @brief Converts dot operand structure to value table and converts types appropriate for mfma instructions
- */
-  ValueTable getValuesFromDotOperandLayoutStruct(Value value, int n0, int n1, int kWidth,
-                                                 Type type) const {
-      auto elems = unpackLLElements(loc, value, rewriter);
-      ValueTable vals;
-      for (int i = 0; i < n0; i++) {
-          for (int j = 0; j < n1; j++) {
-              auto rawElems = elems[n1 * i + j];
-              Value convertedElems;
-              if (type.isF32()) {
-                  convertedElems = extract_element(type, rawElems, i32_val(0));
-              } else if (type.getIntOrFloatBitWidth() == 8) {
-                  if (kWidth == 4)
-                      convertedElems = bitcast(rawElems, i32_ty);
-                  if (kWidth == 8)
-                      convertedElems = bitcast(rawElems, i64_ty);
-              } else {
-                  assert(type.isBF16() || type.isF16());
-                  convertedElems = rawElems;
-              }
-              vals[{i, j}] = convertedElems;
-          }
+  /**
+   * @brief Converts dot operand structure to value table and converts types
+   * appropriate for mfma instructions
+   */
+  ValueTable getValuesFromDotOperandLayoutStruct(Value value, int n0, int n1,
+                                                 int kWidth, Type type) const {
+    auto elems = unpackLLElements(loc, value, rewriter);
+    ValueTable vals;
+    for (int i = 0; i < n0; i++) {
+      for (int j = 0; j < n1; j++) {
+        auto rawElems = elems[n1 * i + j];
+        Value convertedElems;
+        if (type.isF32()) {
+          convertedElems = extract_element(type, rawElems, i32_val(0));
+        } else if (type.getIntOrFloatBitWidth() == 8) {
+          if (kWidth == 4)
+            convertedElems = bitcast(rawElems, i32_ty);
+          if (kWidth == 8)
+            convertedElems = bitcast(rawElems, i64_ty);
+        } else {
+          assert(type.isBF16() || type.isF16());
+          convertedElems = rawElems;
+        }
+        vals[{i, j}] = convertedElems;
       }
-      return vals;
+    }
+    return vals;
   }
 };
 
@@ -286,7 +289,7 @@ struct DotOpMFMAConversionHelper {
 
 namespace AMD {
 LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                          TritonGPUToLLVMTypeConverter *typeConverter,
+                          const LLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) {
   auto rankedTType = [](Value tensor) {
     return tensor.getType().cast<RankedTensorType>();

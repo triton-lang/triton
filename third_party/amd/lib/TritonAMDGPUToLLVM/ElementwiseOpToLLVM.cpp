@@ -1,13 +1,12 @@
-#include "ElementwiseOpToLLVM.h"
 #include "TargetInfo.h"
+#include "Utility.h"
+#include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
-
-using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
 
 typedef std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
                                          const SmallVector<Value> &)>
@@ -1080,7 +1079,7 @@ struct FpToFpOpConversion
   using ElementwiseOpConversionBase<
       triton::FpToFpOp, FpToFpOpConversion>::ElementwiseOpConversionBase;
 
-  explicit FpToFpOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+  explicit FpToFpOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
                               int computeCapability,
                               PatternBenefit benefit = patternBenefitDefault)
@@ -1230,7 +1229,6 @@ struct FpToFpOpConversion
     bool isDstFP32 = dstElementType.isF32();
     Type srcType = useFP16IntermediateSrc ? f16_ty : srcElementType;
     Type dstType = isDstFP32 ? f16_ty : dstElementType;
-    auto cvtFunc = getConversionFunc(srcType, dstType);
     SmallVector<Value> inVals;
     for (unsigned i = 0; i < std::min(numElements, operands.size()); i++) {
       inVals.push_back(operands[i][0]);
@@ -1239,7 +1237,14 @@ struct FpToFpOpConversion
       for (Value &v : inVals)
         v = convertFp32ToFp16NZ(loc, rewriter, v);
     inVals.resize(numElements, undef(typeConverter->convertType(srcType)));
-    SmallVector<Value> outVals = cvtFunc(loc, rewriter, inVals);
+    SmallVector<Value> outVals;
+    if (srcType != dstType) {
+      auto cvtFunc = getConversionFunc(srcType, dstType);
+      outVals = cvtFunc(loc, rewriter, inVals);
+    } else {
+      outVals = inVals;
+    }
+
     assert(outVals.size() == inVals.size());
     outVals.resize(std::min(numElements, operands.size()));
     if (isDstFP32)
@@ -1499,10 +1504,8 @@ struct ExpOpConversionApprox
 
 namespace AMD {
 void populateElementwiseOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation,
-    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
     int computeCapability, const TargetInfo &targetInfo,
     PatternBenefit benefit) {
 #define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
