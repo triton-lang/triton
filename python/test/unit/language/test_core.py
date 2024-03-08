@@ -2952,8 +2952,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
 @pytest.mark.parametrize("in_dtype_str, out_dtype_str", [('int8', 'int8'), ('float16', 'float16'),
                                                          ('float16', 'float32'), ('float32', 'float32')])
 def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
-    if is_hip():
-        pytest.skip('TODO test_dot3d not supported on HIP.')
 
     @triton.jit
     def kernel(

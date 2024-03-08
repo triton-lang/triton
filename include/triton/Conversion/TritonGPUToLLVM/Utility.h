@@ -801,16 +801,17 @@ emitBaseIndexForMfmaLayout(Location loc, RewriterBase &rewriter,
         add(mul(i32_val(4), udiv(laneId, i32_val(nDim))), offWarp0);
     multiDimBase[rank - 1] = add(urem(laneId, i32_val(nDim)), offWarp1);
   }
-  // Note: This is because when rank == 3, warpsPerCTA is always
-  // {numWarps, 1, 1}
+  // TODO(Lixun): It is assumed when rank = 3, warpsPerCTA is set to
+  // {numWarps, 1, 1}. We need to generalize the offset computation.
   if (rank == 3)
-    multiDimBase[0] = warpId;
+    multiDimBase[0] = urem(warpId, i32_val(shape[0]));
   return multiDimBase;
 }
 
 static void emitMfmaOffsetForCTA(const AMDMfmaEncodingAttr &mfmaLayout,
                                  SmallVector<SmallVector<unsigned>> &offsets,
-                                 unsigned ctaOffsetX, unsigned ctaOffsetY) {
+                                 unsigned bOff, unsigned ctaOffsetX,
+                                 unsigned ctaOffsetY) {
   auto mDim = mfmaLayout.getMDim();
   auto nDim = mfmaLayout.getNDim();
   assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
@@ -838,6 +839,8 @@ static void emitMfmaOffsetForCTA(const AMDMfmaEncodingAttr &mfmaLayout,
             ctaOffsetX * shapePerCta[rank - 2] + elem + rowOrColOffset;
         elemOff[rank - 1] = ctaOffsetY * shapePerCta[rank - 1];
       }
+      if (rank == 3)
+        elemOff[0] = bOff;
       offsets.push_back(elemOff);
     }
   }
@@ -867,9 +870,14 @@ emitOffsetForMfmaLayout(const AMDMfmaEncodingAttr &mfmaLayout,
     numWarpsPerDim[d] = ceil<unsigned>(inPerWarp, tileShape[d]);
   }
 
-  for (unsigned i = 0; i < numWarpsPerDim[rank - 2]; ++i) {
-    for (unsigned j = 0; j < numWarpsPerDim[rank - 1]; ++j) {
-      emitMfmaOffsetForCTA(mfmaLayout, offsets, i, j);
+  unsigned repBatch = rank == 3 ? numWarpsPerDim[0] : 1;
+  auto warpsPerBatch =
+      rank == 3 ? std::min<unsigned>(tensorShape[0], warpsPerCTA[0]) : 1;
+  for (unsigned b = 0; b < repBatch; ++b) {
+    for (unsigned i = 0; i < numWarpsPerDim[rank - 2]; ++i) {
+      for (unsigned j = 0; j < numWarpsPerDim[rank - 1]; ++j) {
+        emitMfmaOffsetForCTA(mfmaLayout, offsets, b * warpsPerBatch, i, j);
+      }
     }
   }
   return offsets;

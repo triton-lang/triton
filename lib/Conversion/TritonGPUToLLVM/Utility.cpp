@@ -524,12 +524,13 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
     return multiDimOffset;
   }
   if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
+    // TODO: extend to support dot3d
     auto multiDimBase =
         emitBaseIndexForLayout(loc, rewriter, layout, type, false);
     SmallVector<SmallVector<unsigned>> offsets;
     assert(rank == 2);
     SmallVector<Value> multiDimOffset(rank);
-    emitMfmaOffsetForCTA(mfmaLayout, offsets, multiDimCTAInRepId[0],
+    emitMfmaOffsetForCTA(mfmaLayout, offsets, 0, multiDimCTAInRepId[0],
                          multiDimCTAInRepId[1]);
     multiDimOffset[0] = add(multiDimBase[0], i32_val(offsets[elemId][0]));
     multiDimOffset[1] = add(multiDimBase[1], i32_val(offsets[elemId][1]));
