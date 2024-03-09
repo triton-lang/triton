@@ -100,7 +100,13 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def path_to_rocm_lld():
-        return "/opt/rocm/llvm/bin/ld.lld"
+        lld = Path("/opt/rocm/llvm/bin/ld.lld")
+        if lld.is_file():
+            return lld
+        lld = Path("/usr/bin/ld.lld")
+        if lld.is_file():
+            return lld
+        raise Exception("ROCm linker /opt/rocm/llvm/bin/ld.lld not found")
 
     @staticmethod
     def make_ttir(mod, metadata, opt):
