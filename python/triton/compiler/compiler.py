@@ -101,7 +101,9 @@ class ASTSource:
             self.attrs = AttrsDescriptor()
 
     def hash(self):
-        key = f"{self.fn.cache_key}-{self.attrs.hash()}-{self.signature.values()}-{self.constants}"
+        sorted_sig = [v for k, v in sorted(self.signature.items())]
+        sorted_constants = [(k, v) for k, v in sorted(self.constants.items())]
+        key = f"{self.fn.cache_key}-{self.attrs.hash()}-{sorted_sig}-{sorted_constants}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
     def make_ir(self, options, context):
