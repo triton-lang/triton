@@ -28,7 +28,7 @@ class DependenciesFinder(ast.NodeVisitor):
 
     def __init__(self, globals, src) -> None:
         super().__init__()
-        self.hasher = hashlib.sha1(src.encode("utf-8"))
+        self.hasher = hashlib.sha256(src.encode("utf-8"))
         self.globals = globals
 
     @property
@@ -339,6 +339,14 @@ class JITFunction(KernelInterface[T]):
             already_compiled=False,
         )
 
+    def add_pre_run_hook(self, hook):
+        '''
+        Add a hook that will be executed prior to the execution of run
+        function with args and kwargs passed into the kernel
+        '''
+        assert callable(hook)
+        self.pre_run_hooks.append(hook)
+
     def run(self, *args, grid, warmup, **kwargs):
         from ..compiler import CompiledKernel, compile, ASTSource, make_backend
         # deprecated arguments
@@ -352,6 +360,11 @@ class JITFunction(KernelInterface[T]):
         backend = make_backend(target)
         kwargs["debug"] = self.debug
         options = backend.parse_options(kwargs)
+
+        # Execute pre run hooks with args and kwargs
+        for hook in self.pre_run_hooks:
+            hook(*args, **kwargs)
+
         # bind non-reserved keyword args and set defaults
         kwargs = {k: v for k, v in kwargs.items() if not k in options.__dict__}
         bound_args = self.signature.bind(*args, **kwargs)
@@ -447,6 +460,9 @@ class JITFunction(KernelInterface[T]):
         # remove the fields here.
         self.arg_names = [p.name for p in self.params]
         self.constexprs = [p.num for p in self.params if p.is_constexpr]
+
+        # Hooks that will be called prior to executing "run"
+        self.pre_run_hooks = []
 
         # reuse docs of wrapped function
         self.__doc__ = fn.__doc__

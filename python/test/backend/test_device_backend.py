@@ -43,7 +43,7 @@ def build_for_backend(name, src, srcdir):
         scheme = 'posix_prefix'
     py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
 
-    ret = subprocess.run([cc, src, f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-o", so])
+    ret = subprocess.check_call([cc, src, f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-o", so])
     if ret == 0:
         return so
     # fallback on setuptools
@@ -89,7 +89,7 @@ class ExtensionUtils:
     def __init__(self):
         dirname = os.path.dirname(os.path.realpath(__file__))
         src = Path(os.path.join(dirname, "extension_backend.c")).read_text()
-        key = hashlib.md5(src.encode("utf-8")).hexdigest()
+        key = hashlib.sha256(src.encode("utf-8")).hexdigest()
         cache = get_cache_manager(key)
         fname = "ext_utils.so"
         cache_path = cache.get_file(fname)

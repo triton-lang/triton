@@ -8,8 +8,13 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/Support/Debug.h"
 
 #include <fstream>
+#define DEBUG_TYPE "ttg-utility"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir {
 
@@ -17,7 +22,7 @@ using namespace triton;
 
 SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 const ArrayRef<int64_t> &shape,
-                                                RankedTensorType type) {
+                                                TensorOrMemDesc type) {
   if (version == 1)
     return {16, 16};
   else if (version == 2) {
@@ -81,8 +86,8 @@ Value getMemAccessPtr(Operation *op) {
     return atomic.getPtr();
   if (auto atomic = dyn_cast<triton::AtomicCASOp>(op))
     return atomic.getPtr();
-  if (auto insert = dyn_cast<triton::gpu::InsertSliceAsyncOp>(op))
-    return insert.getSrc();
+  if (auto copy = dyn_cast<triton::gpu::AsyncCopyGlobalToLocalOp>(op))
+    return copy.getSrc();
   if (auto store = dyn_cast<triton::StoreOp>(op))
     return store.getPtr();
   return nullptr;
@@ -99,7 +104,6 @@ unsigned getElementBitWidth(RankedTensorType type) {
 unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   Value val = getMemAccessPtr(op);
-  assert(val.getType().isa<RankedTensorType>());
   auto ty = val.getType().cast<RankedTensorType>();
   auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
   AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
@@ -111,6 +115,10 @@ unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
       std::min(valInfo.getContiguity(order[0]), shapePerCTA[order[0]]);
   unsigned alignment = std::min(maxMultiple, maxContig);
   unsigned currPerThread = std::min(alignment, 128 / elemNumBits);
+  LDBG("elemNumBytes: " << elemNumBytes
+                        << ", divisibility: " << maxMultipleBytes
+                        << ", contig: " << valInfo.getContiguity(order[0])
+                        << ", alignment: " << alignment);
   return currPerThread;
 }
 
@@ -426,7 +434,8 @@ std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
-      isa<scf::WhileOp, scf::YieldOp, scf::ConditionOp>(op)) {
+      isa<scf::WhileOp, scf::YieldOp, scf::ConditionOp, nvidia_gpu::DotWaitOp>(
+          op)) {
     return encoding;
   }
 
@@ -454,7 +463,8 @@ std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
-      isa<scf::WhileOp, scf::ForOp, scf::YieldOp, scf::ConditionOp>(op))
+      isa<scf::WhileOp, scf::ForOp, scf::YieldOp, scf::ConditionOp,
+          nvidia_gpu::DotWaitOp>(op))
     return encoding;
   if (auto reduceOp = dyn_cast<triton::ReduceOp>(op))
     return inferDstEncoding(reduceOp, encoding);
@@ -512,8 +522,7 @@ bool isExpensiveToRemat(Operation *op, Attribute &targetEncoding) {
     return isExpensiveLoadOrStore(op);
   if (isa<triton::CatOp>(op))
     return triton::gpu::isExpensiveCat(cast<triton::CatOp>(op), targetEncoding);
-  if (isa<tensor::ExtractSliceOp, triton::gpu::AllocTensorOp,
-          triton::gpu::InsertSliceAsyncOp, triton::AtomicRMWOp,
+  if (isa<triton::gpu::AsyncCopyGlobalToLocalOp, triton::AtomicRMWOp,
           triton::AtomicCASOp, triton::DotOp>(op))
     return true;
   if (isa<scf::YieldOp, scf::ForOp, scf::IfOp, scf::WhileOp, scf::ConditionOp>(
@@ -546,7 +555,8 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
                                          newDstType);
   }
   return isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
-             triton::MakeRangeOp, triton::SplatOp, triton::HistogramOp>(op);
+             triton::MakeRangeOp, triton::SplatOp, triton::HistogramOp,
+             triton::gpu::LocalAllocOp>(op);
 }
 
 scf::ForOp replaceForOpWithNewSignature(

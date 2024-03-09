@@ -41,34 +41,24 @@ public:
           dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
       if (!dstDotOp)
         return;
-      if (auto srcMmaEncoding =
-              srcEncoding.dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>()) {
-
-        if (srcMmaEncoding.getVersionMajor() == 1 ||
-            (srcMmaEncoding.getWarpsPerCTA()[1] == 1 &&
-             dstDotOp.getParent() == srcMmaEncoding))
-          return;
-      }
-#ifdef USE_ROCM
       if (auto srcMfmaEncoding =
-              srcEncoding.dyn_cast<triton::gpu::MfmaEncodingAttr>()) {
+              srcEncoding.dyn_cast<triton::gpu::AMDMfmaEncodingAttr>()) {
 
         if (srcMfmaEncoding.getWarpsPerCTA()[1] == 1 &&
             srcMfmaEncoding.getIsTransposed() &&
             dstDotOp.getParent() == srcMfmaEncoding)
           return;
       }
-#endif
-      auto tmpType = RankedTensorType::get(
+      auto tmpType = triton::MemDescType::get(
           dstType.getShape(), dstType.getElementType(),
           triton::gpu::SharedEncodingAttr::get(
               mod.getContext(), dstDotOp, srcType.getShape(),
               triton::gpu::getOrder(srcEncoding),
               triton::gpu::getCTALayout(srcEncoding),
               srcType.getElementType()));
-      auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
+      auto tmp = builder.create<triton::gpu::LocalAllocOp>(
           cvtOp.getLoc(), tmpType, cvtOp.getSrc());
-      auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
+      auto newConvert = builder.create<triton::gpu::LocalLoadOp>(
           cvtOp.getLoc(), dstType, tmp);
       cvtOp.replaceAllUsesWith(newConvert.getResult());
       cvtOp.erase();

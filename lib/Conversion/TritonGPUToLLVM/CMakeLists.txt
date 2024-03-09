@@ -8,6 +8,14 @@ add_triton_library(TritonGPUToLLVM
     AssertOpToLLVM.cpp
     ViewOpToLLVM.cpp
     MakeRangeOpToLLVM.cpp
+    HistogramOpToLLVM.cpp
+    AllocateSharedMemory.cpp
+    ReduceOpToLLVM.cpp
+    ScanOpToLLVM.cpp
+    ConvertLayoutOpToLLVM.cpp
+
+    DEPENDS
+    TritonGPUConversionPassIncGen
 
     LINK_LIBS PUBLIC
     MLIRIR

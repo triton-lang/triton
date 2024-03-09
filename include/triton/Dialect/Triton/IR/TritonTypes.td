@@ -2,13 +2,14 @@
 #define TRITON_TYPES
 
 include "mlir/IR/AttrTypeBase.td"
+include "mlir/IR/BuiltinTypeInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonDialect.td"
 
 //
 // Types
 //
-class TritonTypeDef<string name, string _mnemonic>
-    : TypeDef<Triton_Dialect, name> {
+class TritonTypeDef<string name, string _mnemonic, list<Trait> traits = []>
+    : TypeDef<Triton_Dialect, name, traits> {
     // Used by printer/parser
     let mnemonic = _mnemonic;
 }
@@ -89,5 +90,51 @@ def TT_TensorPtr : TT_PtrOf<[TT_Tensor]>;
 
 // Any Type in Triton IR
 def TT_Type : AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike, TT_TensorPtr]>;
+
+// Memory descriptor type.
+def TT_MemDescType : TritonTypeDef<"MemDesc", "memdesc", [ShapedTypeInterface]> {
+    let summary = "memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system";
+
+    let description = [{
+        Memory descriptor contains a base pointer (scalar) and a descriptor of the memory.
+        If mutable memory is false that means the memory is constant and can only be allocated and stored once.
+        A constant memory allocation is different than a tensor as it can have multiple views and the descriptor
+        can be changed without changing the underlying memory.
+    }];
+
+  let parameters = (ins
+    ArrayRefParameter<"int64_t">:$shape,
+    "Type":$elementType,
+    "Attribute":$encoding,
+    "bool":$mutable_memory
+  );
+  let extraClassDeclaration = [{
+    MemDescType cloneWith(std::optional<ArrayRef<int64_t>> shape,
+                          Type elementType) const {
+        return MemDescType::get(shape.value_or(getShape()), elementType, getEncoding());
+    }
+
+    bool hasRank() const { return true; }
+  }];
+  let builders = [
+        TypeBuilderWithInferredContext<(ins
+            "llvm::ArrayRef<int64_t>":$shape,
+            "Type":$elementType,
+            "Attribute":$encoding
+        ), [{
+            return $_get(elementType.getContext(), shape, elementType, encoding, /*mutableMemory=*/false);
+        }]>,
+        TypeBuilderWithInferredContext<(ins
+            "llvm::ArrayRef<int64_t>":$shape,
+            "Type":$elementType,
+            "Attribute":$encoding,
+            "bool":$mutableMemory
+        ), [{
+            return $_get(elementType.getContext(), shape, elementType, encoding, mutableMemory);
+        }]>
+    ];
+  let hasCustomAssemblyFormat = 1;
+}
+
 
 #endif

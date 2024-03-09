@@ -25,9 +25,6 @@ void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
   m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm) {
     pm.addPass(createDecomposeUnsupportedConversionsPass());
   });
-  m.def("add_allocate_shared_memory", [](mlir::PassManager &pm) {
-    pm.addPass(createAllocateSharedMemoryPass());
-  });
 }
 
 void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {

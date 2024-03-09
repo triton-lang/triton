@@ -12,7 +12,7 @@ library_dir = [os.path.join(dirname, "lib")]
 libraries = ['amdhip64']
 
 def compile_module_from_src(src, name):
-    key = hashlib.md5(src.encode("utf-8")).hexdigest()
+    key = hashlib.sha256(src.encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
     cache_path = cache.get_file(f"{name}.so")
     if cache_path is None:
@@ -241,7 +241,7 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
 
 
 class HIPLauncher(object):
-    
+
     def __init__(self, src, metadata):
         ids = {
             "ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()
@@ -250,7 +250,7 @@ class HIPLauncher(object):
         src = make_launcher(constants, src.signature, ids, metadata.warp_size)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
-    
+
     def __call__(self, *args, **kwargs):
         self.launch(*args, **kwargs)
 
@@ -270,5 +270,7 @@ class HIPDriver(GPUDriver):
 
     def get_current_target(self):
         device = self.get_current_device()
-        arch = self.utils.get_device_properties(device)['arch']
-        return ("hip", arch.split(':')[0])
+        device_properties = self.utils.get_device_properties(device)
+        arch = device_properties['arch']
+        warpSize = device_properties['warpSize']
+        return ("hip", arch.split(':')[0], warpSize)

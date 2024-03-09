@@ -34,30 +34,18 @@ namespace LLVM {
 
 namespace NVIDIA {
 
-Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                  Value val, Value pred);
-
-Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                 Type elemTy, Value pred);
-
 Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr);
+Value shuffleXor(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                 int i);
+Value shuffleUp(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                int i);
+Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                 int i);
+Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                 Value i);
 
-static Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
-                      ConversionPatternRewriter &rewriter) {
-  assert(axis >= 0);
-  assert(axis < 3);
-  assert(moduleOp);
-
-  // It is not easy to get the compute capability here, so we use numCTAs to
-  // decide the semantic of GetProgramIdOp. If numCTAs = 1, then
-  // GetProgramIdOp is converted to "%ctaid", otherwise it is converted to
-  // "%clusterid".
-  int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
-
-  std::string sreg = numCTAs == 1 ? "%ctaid." : "%clusterid.";
-  sreg.append(1, 'x' + axis); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
-  return getSRegValue(rewriter, loc, sreg);
-}
+Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
+               ConversionPatternRewriter &rewriter);
 } // namespace NVIDIA
 } // namespace LLVM
 

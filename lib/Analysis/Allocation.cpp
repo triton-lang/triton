@@ -12,6 +12,7 @@
 #include <limits>
 #include <numeric>
 
+using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getContigPerThread;
@@ -20,7 +21,6 @@ using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getUniqueContigPerThread;
-using ::mlir::triton::gpu::MfmaEncodingAttr;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
@@ -109,8 +109,8 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
 
-  if (srcLayout.isa<MfmaEncodingAttr>() &&
-      srcLayout.dyn_cast<MfmaEncodingAttr>().getIsTransposed() &&
+  if (srcLayout.isa<AMDMfmaEncodingAttr>() &&
+      srcLayout.dyn_cast<AMDMfmaEncodingAttr>().getIsTransposed() &&
       dstLayout.isa<DotOperandEncodingAttr>())
     if (isMfmaToDotShortcut(srcTy, dstTy))
       return {};
@@ -130,9 +130,16 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
 
   // For conversions to MmaV1 (Nvidia V100), this inVec is hardcoded in the
   // codegen.
-  if (auto mma = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>())
-    if (mma.getVersionMajor() == 1)
+  if (auto mma = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+    if (mma.getVersionMajor() == 1) {
       inVec = srcContigPerThread;
+    } else if (dstLayout.isa<BlockedEncodingAttr>()) {
+      // when storing from mma layout and loading in blocked layout vectorizing
+      // the load back gives better performance even if there is a
+      // transposition.
+      outVec = dstContigPerThread;
+    }
+  }
 
   if (rank <= 1)
     return repShape;
@@ -196,19 +203,19 @@ private:
     // For example: %a = scf.if -> yield
     // %a must be allocated elsewhere by other operations.
     // FIXME(Keren): extract and insert are always alias for now
-    if (!maybeSharedAllocationOp(op) || maybeAliasOp(op))
+    if (!maybeSharedAllocationOp(op))
       return;
 
     // XXX(Keren): Why this hard-coded alignment?
     size_t kAlignment = 8;
     for (Value result : op->getResults()) {
-      if (triton::gpu::hasSharedEncoding(result)) {
+      if (auto alloc = result.getDefiningOp<triton::gpu::LocalAllocOp>()) {
         // Bytes could be a different value once we support padding or other
         // allocation policies.
-        auto tensorType = result.getType().dyn_cast<RankedTensorType>();
-        auto shapePerCTA = triton::gpu::getShapePerCTA(tensorType);
+        auto allocType = alloc.getType();
+        auto shapePerCTA = triton::gpu::getShapePerCTA(allocType);
         auto bytes = product<int64_t>(shapePerCTA) *
-                     tensorType.getElementTypeBitWidth() / 8;
+                     allocType.getElementTypeBitWidth() / 8;
 
         // XXX(Keren): magic numbers 256 and 1024
         // benzh@maybe alignment should be passed in.
