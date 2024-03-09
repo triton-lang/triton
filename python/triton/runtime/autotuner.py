@@ -117,7 +117,6 @@ class Autotuner(KernelInterface):
                 num_warps=config.num_warps,
                 num_stages=config.num_stages,
                 num_ctas=config.num_ctas,
-                autotune=autotune,
                 **current,
             )
             self.post_hook(args)
@@ -248,7 +247,8 @@ class Config:
         return ", ".join(res)
 
 
-def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_value=None, warmup=25, rep=100, use_cuda_graph=False):
+def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_value=None, warmup=25, rep=100,
+             use_cuda_graph=False):
     """
     Decorator for auto-tuning a :code:`triton.jit`'d function.
 
@@ -288,7 +288,8 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     """
 
     def decorator(fn):
-        return Autotuner(fn, fn.arg_names, configs, key, reset_to_zero, restore_value, prune_configs_by, warmup, rep, use_cuda_graph=use_cuda_graph)
+        return Autotuner(fn, fn.arg_names, configs, key, reset_to_zero, restore_value, prune_configs_by, warmup, rep,
+                         use_cuda_graph=use_cuda_graph)
 
     return decorator
 
