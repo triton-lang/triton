@@ -280,7 +280,14 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
       continue;
     bool hasChanged = false;
     for (auto encoding : info.encodings) {
-      auto dstEncoding = inferDstEncoding(op, encoding);
+      std::optional<Attribute> dstEncoding;
+      if (isa<ConvertLayoutOp>(op)) {
+        // Try to remove the convert by making the dst encoding match the source
+        // encoding.
+        dstEncoding = encoding;
+      } else {
+        dstEncoding = inferDstEncoding(op, encoding);
+      }
       if (dstEncoding)
         hasChanged |= layouts[value].encodings.insert(*dstEncoding);
     }

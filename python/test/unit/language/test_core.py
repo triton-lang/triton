@@ -2170,8 +2170,6 @@ def test_histogram(M, N, device):
 @pytest.mark.parametrize("N", [512, 1024, 2048])
 @pytest.mark.parametrize("num_pid_n", [2, 4])
 def test_locality(op, BLOCK_N, N, num_pid_n, device):
-    if is_hip():
-        pytest.skip('TODO test_locality is WIP on HIP')
 
     @triton.jit
     def kernel(X, Y, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
