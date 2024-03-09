@@ -91,7 +91,7 @@ void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                  PatternBenefit benefit);
 
 void populateFuncOpConversionPattern(LLVMTypeConverter &typeConverter,
-                                     RewritePatternSet &patterns,
+                                     RewritePatternSet &patterns, int numWarps,
                                      PatternBenefit benefit);
 
 } // namespace triton

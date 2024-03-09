@@ -110,7 +110,7 @@ private:
 } // namespace
 
 void mlir::triton::populateFuncOpConversionPattern(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
     PatternBenefit benefit) {
-  patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
+  patterns.add<FuncOpConversion>(typeConverter, numWarps, benefit);
 }
