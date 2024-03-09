@@ -236,7 +236,7 @@ def make_get_num_algos_decl(meta: KernelLinkerMeta) -> str:
 
 def make_get_num_algos_def(meta: KernelLinkerMeta) -> str:
     src = f"int {meta.orig_kernel_name}_get_num_algos(void){{\n"
-    src += f"  return (int)sizeof({meta.orig_kernel_name}_kernels);\n"
+    src += f"  return (int)(sizeof({meta.orig_kernel_name}_kernels) / sizeof({meta.orig_kernel_name}_kernels[0]));\n"
     src += "}\n"
     return src
 
