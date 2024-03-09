@@ -87,6 +87,7 @@ void populateControlFlowOpToLLVMPattern(LLVMTypeConverter &typeConverter,
 
 void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
+                                 const TargetInfoBase &targetInfo,
                                  PatternBenefit benefit);
 
 void populateFuncOpConversionPattern(LLVMTypeConverter &typeConverter,
