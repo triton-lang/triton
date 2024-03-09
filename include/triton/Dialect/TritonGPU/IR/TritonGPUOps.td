@@ -19,14 +19,26 @@ include "mlir/Interfaces/ViewLikeInterface.td"
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
 
-def ResultsAreSharedEncoding: NativeOpTrait<"ResultsAreSharedEncoding">;
-
-def OperandsAreSharedEncoding: NativeOpTrait<"OperandsAreSharedEncoding">;
-
 class TTG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonGPU_Dialect, mnemonic,
        !listconcat(traits, [VerifyTensorLayoutsTrait])> {
 }
+
+class TTG_Type<string name, string typeMnemonic,
+        list<Trait> traits = []> : TypeDef<TritonGPU_Dialect, name, traits> {
+  let mnemonic = typeMnemonic;
+}
+
+def TTG_AsyncToken : TTG_Type<"AsyncToken",
+                                    "async.token", []> {
+  let summary = "async token type";
+  let description = [{
+    `ttg.async.token` is a type returned by an asynchronous operation.
+    It is used to establish an SSA-based link between async operations
+    and operations that group or synchronize the async operations.
+  }];
+}
+
 
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
                                  [SameOperandsAndResultShape,
@@ -46,9 +58,9 @@ def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
 def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
   let summary = "async wait";
 
-  let arguments = (ins I32Attr:$num);
+  let arguments = (ins Variadic<TTG_AsyncToken>:$asyncToken, I32Attr:$num);
 
-  let assemblyFormat = "attr-dict";
+  let assemblyFormat = "$asyncToken attr-dict";
 
   let extraClassDeclaration = [{
     static bool isSupported(int computeCapability) {
@@ -74,7 +86,12 @@ def TTG_AsyncBulkWaitOp : TTG_Op<"async_bulk_wait"> {
 def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
   let summary = "async commit group";
 
-  let assemblyFormat = "attr-dict";
+  let results = (outs TTG_AsyncToken:$asyncToken);
+  let arguments = (ins Variadic<TTG_AsyncToken>:$inputTokens);
+
+  let assemblyFormat = [{
+    $inputTokens attr-dict
+  }];
 
   let extraClassDeclaration = [{
     static bool isSupported(int computeCapability) {
@@ -95,68 +112,8 @@ def TTG_AsyncBulkCommitGroupOp : TTG_Op<"async_bulk_commit_group"> {
   }];
 }
 
-
-def TTG_ExtractSliceOp : TTG_Op<"extract_slice",
-                                [AttrSizedOperandSegments,
-                                 ResultsAreSharedEncoding,
-                                 Pure,
-                                 OffsetSizeAndStrideOpInterface
-                                 ]> {
-  let summary = "extract slice operation";
-  let description = [{
-    same as tensor.extract_slice, but with int32 index. The motivations for re-implementing it are:
-    We reimplement ExtractSliceOp with int32 index, because:
-    - we want to enforce int32 indexing on GPUs since Triton tensors fit in SRAM
-    - we still want to use indexWidth = 64 when lowering to LLVM because our loops can have
-      64-bit induction variables and scf.for uses indexType for bounds/ivs
-  }];
-
-  let arguments = (ins
-    AnyRankedTensor:$src,
-    Variadic<I32>:$offsets,
-    Variadic<I32>:$sizes,
-    Variadic<I32>:$strides,
-    DenseI64ArrayAttr:$static_offsets,
-    DenseI64ArrayAttr:$static_sizes,
-    DenseI64ArrayAttr:$static_strides
-  );
-  let results = (outs AnyRankedTensor:$result);
-
-  let builders = [
-    // Build an ExtractSliceOp with mixed static and dynamic entries and custom
-    // result type. If the type passed is nullptr, it is inferred.
-    OpBuilder<(ins "RankedTensorType":$resultType, "Value":$src,
-      "ArrayRef<OpFoldResult>":$offsets, "ArrayRef<OpFoldResult>":$sizes,
-      "ArrayRef<OpFoldResult>":$strides,
-      CArg<"ArrayRef<NamedAttribute>", "{}">:$attrs)>,
-  ];
-
-  let extraClassDeclaration = [{
-    /// Return the number of leading operands before the `offsets`, `sizes` and
-    /// and `strides` operands.
-    static unsigned getOffsetSizeAndStrideStartOperandIndex() { return 1; }
-
-    std::array<unsigned, 3> getArrayAttrMaxRanks() {
-      unsigned rank = getSrc().getType().getRank();
-      return {rank, rank, rank};
-    }
-  }];
-
-  let assemblyFormat = [{
-    $src ``
-    custom<DynamicIndexList>($offsets, $static_offsets)
-    custom<DynamicIndexList>($sizes, $static_sizes)
-    custom<DynamicIndexList>($strides, $static_strides)
-    attr-dict `:` type($src) `to` type($result)
-  }];
-}
-
-//
-
-def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
+def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local",
                                     [AttrSizedOperandSegments,
-                                     ResultsAreSharedEncoding,
-                                     // TODO: Check if MemWrite will degrade performance of non-warp-specialized kernel
                                      MemoryEffects<[MemRead<GlobalMemory>, MemWrite<SharedMemory>]>,
                                      TypesMatchWith<"infer mask type from src type",
                                                     "src", "mask", "getI1SameShape($_self)",
@@ -164,64 +121,27 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
                                      TypesMatchWith<"infer other type from src type",
                                                     "src", "other", "getPointeeType($_self)",
                                                     "($_op.getOperands().size() <= 4) || std::equal_to<>()">]> {
-  let summary = "insert slice async";
+  let summary = "copy data from global memory to local memory asynchronously";
 
   let description = [{
-      This operation inserts a tensor `$src` into another tensor `$dst` as specified by the operation’s
-      `$index` argument and `$axis` attributes.
-
-      It returns a copy of `$dst` with the proper slice updated asynchronously with the value of `$src`.
-      This operation is non-blocking, and `$results` will have the updated value after the corresponding async_wait.
-
-      When converting from `tt.load` to `triton_gpu.insert_slice_async`, the `$evict`, `$cache`, and `$isVolatile` fields
-      might be ignored on certain hardware. For example, on NVIDIA GPUs, the cache policy is determined by the backend,
-      and `$evict` and `$isVolatile` are ignored because they apply to L1 cache only.
-
-      The insert_slice_async operation supports the following arguments:
-
-      * src: the tensor that is inserted.
-      * dst: the tensor into which the `$src` tensor is inserted.
-      * index: the index of the `$src` tensor at the given `$axis` from which the `$dst` tensor is inserted into
-      * mask: optional tensor-rank number of boolean masks which specify which
-              elements of the `$src` tensor are inserted into the `$dst` tensor.
-      * other: optional tensor-rank number of other tensors which specify what
-              values are inserted into the `$dst` tensor if the corresponding
-              element of the `$mask` tensor is false.
-
-      In the future, we may decompose this operation into a sequence of:
-
-      * `async` operation to specify a sequence of asynchronous operations
-      * `load` operation to load a tensor from global memory
-      * `insert_slice` operations to insert the `$src` tensor into the `$dst` tensor
-
-      Example:
-
-      ```
-      %1 = triton_gpu.alloc_tensor : tensor<2x32xf32>
-      %2 = triton_gpu.insert_slice_async %0, %1, %index { axis = 0 } : tensor<32x!tt.ptr<f32>, #AL> -> tensor<2x32xf32, #A>
-      triiton_gpu.async_wait { num = 0 : i32 }
-      ```
+    This operation copies data from global memory to local memory asynchronously.
+    This is analogue to tt.load except the data are copied to local memory pointed
+    by by the memory descriptor instread of a distributed tensor. The rest of the
+    operands are the same as tt.load.
   }];
 
-  let arguments = (ins TT_PtrTensor:$src, TT_Tensor:$dst, I32:$index,
+  let arguments = (ins TT_PtrTensor:$src, TT_MemDescType:$dst,
                        Optional<I1Tensor>:$mask, Optional<TT_Type>:$other,
                        TT_CacheModifierAttr:$cache, TT_EvictionPolicyAttr:$evict,
-                       BoolAttr:$isVolatile, I32Attr:$axis);
+                       BoolAttr:$isVolatile);
 
   let builders = [
-      OpBuilder<(ins "Value":$src, "Value":$dst, "Value":$index,
+      OpBuilder<(ins "Value":$src, "Value":$dst,
                      "triton::CacheModifier":$cache,
-                     "triton::EvictionPolicy":$evict, "bool":$isVolatile, "int":$axis)>,
-      OpBuilder<(ins "Value":$src, "Value":$dst, "Value":$index, "Value":$mask,
-                     "triton::CacheModifier":$cache,
-                     "triton::EvictionPolicy":$evict, "bool":$isVolatile, "int":$axis)>,
-      OpBuilder<(ins "Value":$src, "Value":$dst, "Value":$index,
-                     "Value":$mask, "Value":$other,
-                     "triton::CacheModifier":$cache,
-                     "triton::EvictionPolicy":$evict, "bool":$isVolatile, "int":$axis)>,
+                     "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
   ];
 
-  let results = (outs TT_Tensor:$result);
+  let results = (outs TTG_AsyncToken:$token);
 
   //let assemblyFormat = [{
   //  $src `,` $dst ``
@@ -239,35 +159,63 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
     }
   }];
 
-  let hasCustomAssemblyFormat = 1;
+  let assemblyFormat = [{
+    $src `,` $dst (`mask` $mask^)? (`other` $other^)? attr-dict `:` type($src) `->` type($dst)
+  }];
 }
 
-def TTG_AllocTensorOp : TTG_Op<"alloc_tensor", [MemoryEffects<[MemAlloc<SharedMemory>]>,  // Allocate shared memory
-                                                ResultsAreSharedEncoding]> {
+
+// Allocate shared memory
+def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "allocate tensor";
-
   let description = [{
-    This operation defines a tensor of a particular shape.
-    The contents of the tensor are supposed to be in shared memory.
+    This operation allocates buffer in shared memory and return a descriptor
+    containing the address and a view of the buffer.
   }];
+  let arguments = (ins Optional<TT_Tensor>:$init);
 
-  let assemblyFormat = [{attr-dict `:` type($result)}];
+  let assemblyFormat = [{$init attr-dict `:` functional-type(operands, results)}];
 
-  let results = (outs TT_Tensor:$result);
+  let results = (outs TT_MemDescType:$result);
 }
 
-def TTG_DeallocTensorOp : TTG_Op<"dealloc_tensor", [MemoryEffects<[MemFree<SharedMemory>]>,  // Deallocate shared memory
-                                                    OperandsAreSharedEncoding]> {
-  let summary = "dealloc tensor";
+// Deallocate shared memory
+def TTG_LocalDeallocOp : TTG_Op<"local_dealloc", [MemoryEffects<[MemFree<SharedMemory>]>]> {
+  let summary = "dealloc buffer";
 
   let description = [{
-    This operation deallocate a tensor explicitly.
-    The contents of the tensor are supposed to be in shared memory.
+    This operation deallocate a buffer explicitly. Using the buffer after this operation is undefined.
   }];
 
-  let arguments = (ins TT_Tensor:$ptr);
+  let arguments = (ins TT_MemDescType:$ptr);
 
-  let assemblyFormat = [{$ptr attr-dict `:` type($ptr)}];
+  let assemblyFormat = [{$ptr attr-dict `:` qualified(type($ptr))}];
+}
+
+def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
+  let summary = "take a subview of the descriptor.";
+
+  let description = [{
+    This operation returns a new descriptor representing a subview of the buffer.
+    It doesn't affect the underlying memory. The subview can be rank-reduced.
+  }];
+  let arguments = (
+    ins TT_MemDescType:$desc, Variadic<I32>:$offsets);
+
+  let assemblyFormat = [{$desc `[` $offsets `]` attr-dict `:` qualified(type($desc)) `->` qualified(type($result))}];
+
+  let results = (outs TT_MemDescType:$result);
+}
+
+def TTG_LocalLoadOp : TTG_Op<"local_load", [MemoryEffects<[MemRead<SharedMemory>]>]> {
+  let summary = "Load a buffer from local memory into a distributed tensor";
+
+  let description = [{
+    Load a tensor from the local memory descriptor into a distributed tensor.
+  }];
+  let arguments = (ins TT_MemDescType:$src);
+  let assemblyFormat = [{$src attr-dict `:` qualified(type($src)) `->` type($result)}];
+  let results = (outs TT_Tensor:$result);
 }
 
 #endif

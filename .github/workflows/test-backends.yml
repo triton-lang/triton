@@ -5,6 +5,8 @@ on:
   push:
     branches: [main]
 
+permissions: read-all
+
 jobs:
   Runner-Preparation:
     runs-on: ubuntu-latest
@@ -75,7 +77,7 @@ jobs:
       - name: Run python tests on ROCM
         run: |
           cd python
-          pytest --capture=tee-sys -rfs -v ./test/unit/language/test_core.py
+          pytest --capture=tee-sys -rfs -v -n 32 ./test/unit/language/test_core.py
 
   Integration-Tests-Intel:
     needs: Runner-Preparation

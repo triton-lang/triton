@@ -16,31 +16,30 @@ using namespace triton;
 using namespace triton::gpu;
 
 // Given
-//   convert(trans(convert(src) #shared)) #dot_operand,
+//   convert(trans(src)) #dot_operand ->
+//   convert(local_load(trans(alloc(src))))
 // change the encoding of the inner convert to a special, swizzled shared
 // encoding.
 class SwizzleShmemConvert : public OpRewritePattern<ConvertLayoutOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(ConvertLayoutOp outerCvt,
+  LogicalResult matchAndRewrite(ConvertLayoutOp cvtOp,
                                 PatternRewriter &rewriter) const override {
     // Match outerCvt(trans(innerCvt(x))).
-    auto trans = outerCvt.getSrc().getDefiningOp<TransOp>();
+    auto trans = cvtOp.getSrc().getDefiningOp<TransOp>();
     if (!trans || trans.getOrder() != ArrayRef<int32_t>{1, 0})
       return failure();
-    auto innerCvt = trans.getSrc().getDefiningOp<ConvertLayoutOp>();
-    if (!innerCvt)
-      return failure();
 
-    auto srcTy = innerCvt.getSrc().getType().cast<RankedTensorType>();
-    auto innerCvtTy = innerCvt.getType().cast<RankedTensorType>();
-    auto outerCvtTy = outerCvt.getType().cast<RankedTensorType>();
+    auto srcTy = trans.getSrc().getType().dyn_cast<RankedTensorType>();
 
-    auto innerCvtEnc = innerCvtTy.getEncoding().dyn_cast<SharedEncodingAttr>();
-    auto outerCvtEnc =
-        outerCvtTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
-    if (!innerCvtEnc || !outerCvtEnc)
+    if (auto srcCvt = trans.getSrc().getDefiningOp<ConvertLayoutOp>()) {
+      srcTy = srcCvt.getSrc().getType();
+    }
+    auto sharedLoadTy = cvtOp.getType().cast<RankedTensorType>();
+    auto cvtEncoding =
+        sharedLoadTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
+    if (!cvtEncoding)
       return failure();
 
     // TODO(Qingyi): need to check whether the CTALayout of innerCvtEnc should
@@ -53,22 +52,23 @@ public:
     // type inference of TransOp simply swap the order but doesn't fix the vec
     // and maxPhase for the YType, hence it would causing incorrect swizzling
     // code.
-    auto newInnerCvtEnc = SharedEncodingAttr::get(
-        getContext(), outerCvtEnc, innerCvtTy.getShape(),
-        /*order=*/getOrder(srcTy.getEncoding()), innerCvtEnc.getCTALayout(),
-        innerCvtTy.getElementType(), /*needTrans=*/true);
-    if (newInnerCvtEnc == innerCvtEnc)
+    auto newInnerCvtEnc =
+        SharedEncodingAttr::get(getContext(), cvtEncoding, srcTy.getShape(),
+                                /*order=*/getOrder(srcTy.getEncoding()),
+                                triton::gpu::getCTALayout(srcTy.getEncoding()),
+                                srcTy.getElementType(), /*needTrans=*/true);
+    if (newInnerCvtEnc == cvtEncoding)
       return failure();
 
-    auto newInnerCvt = rewriter.create<ConvertLayoutOp>(
-        innerCvt.getLoc(),
-        RankedTensorType::get(innerCvtTy.getShape(),
-                              innerCvtTy.getElementType(), newInnerCvtEnc),
-        innerCvt.getSrc());
-    auto newTrans = rewriter.create<TransOp>(trans.getLoc(), newInnerCvt,
+    rewriter.setInsertionPoint(trans);
+    auto alloc = rewriter.create<LocalAllocOp>(
+        trans.getLoc(),
+        MemDescType::get(srcTy.getShape(), srcTy.getElementType(),
+                         newInnerCvtEnc),
+        trans.getSrc());
+    auto newTrans = rewriter.create<TransOp>(trans.getLoc(), alloc,
                                              ArrayRef<int32_t>({1, 0}));
-    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(outerCvt, outerCvtTy,
-                                                 newTrans);
+    rewriter.replaceOpWithNewOp<LocalLoadOp>(trans, sharedLoadTy, newTrans);
     return success();
   }
 };
@@ -198,21 +198,21 @@ public:
 
 // Rewrite
 //
-//   dot(convert(trans(convert(src) #shared)) #shared1) ->
-//   dot(trans(convert(src) #shared2))
+//   dot(alloc(trans() #shared1) ->
+//   dot(trans(alloc() #shared2))
 //
 // if dot is an MMAv3 (because MMAv3 allows us to fold transposes).
-class FuseTransHopper : public OpRewritePattern<ConvertLayoutOp> {
+class FuseTransHopper : public OpRewritePattern<LocalAllocOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(ConvertLayoutOp outerCvt,
+  LogicalResult matchAndRewrite(LocalAllocOp allocOp,
                                 PatternRewriter &rewriter) const override {
-    if (!outerCvt->hasOneUse() ||
-        !isa<DotOp, nvidia_gpu::DotAsyncOp>(*outerCvt->getUsers().begin()))
+    if (!allocOp->hasOneUse() ||
+        !isa<DotOp, nvidia_gpu::DotAsyncOp>(*allocOp->getUsers().begin()))
       return failure();
 
-    auto dot = *outerCvt->getUsers().begin();
+    auto dot = *allocOp->getUsers().begin();
     auto dotEnc = dot->getResult(0)
                       .getType()
                       .cast<RankedTensorType>()
@@ -221,31 +221,29 @@ public:
     if (!dotEnc || dotEnc.getVersionMajor() != 3)
       return failure();
 
+    if (!allocOp.getInit())
+      return failure();
+
     // Match outerCvt(trans(innerCvt(x))).
-    auto trans = outerCvt.getSrc().getDefiningOp<TransOp>();
+    auto trans = allocOp.getInit().getDefiningOp<TransOp>();
     if (!trans || trans.getOrder() != ArrayRef<int32_t>({1, 0}))
       return failure();
-    auto innerCvt = trans.getSrc().getDefiningOp<ConvertLayoutOp>();
-    if (!innerCvt)
-      return failure();
 
-    RankedTensorType srcTy = innerCvt.getSrc().getType();
-    RankedTensorType innerCvtTy = innerCvt.getType();
-    RankedTensorType outerCvtTy = outerCvt.getType();
-
-    auto innerCvtEnc = innerCvtTy.getEncoding().dyn_cast<SharedEncodingAttr>();
-    auto outerCvtEnc = outerCvtTy.getEncoding().dyn_cast<SharedEncodingAttr>();
-    if (!innerCvtEnc || !outerCvtEnc)
-      return failure();
+    MemDescType allocType = allocOp.getType();
+    auto allocEncoding = allocType.getEncoding().cast<SharedEncodingAttr>();
+    TensorOrMemDesc srcTy = trans.getSrc().getType();
 
     // MMAv3 with transpose only supports f16 and bf16.  Fall back to MMAv3
-    // without transpose for other data types.
+    // without transpose for other data types.)
     auto newInnerCvtOrder = getOrder(srcTy.getEncoding());
-    auto srcElemTy = innerCvtTy.getElementType();
+    if (auto cvt = trans.getSrc().getDefiningOp<ConvertLayoutOp>()) {
+      newInnerCvtOrder = getOrder(cvt.getSrc().getType().getEncoding());
+    }
+    auto srcElemTy = allocType.getElementType();
     if (!srcElemTy.isF16() && !srcElemTy.isBF16()) {
-      if (outerCvt.getResult() == dot->getOperand(0)) {
+      if (allocOp.getResult() == dot->getOperand(0)) {
         newInnerCvtOrder = {0, 1};
-      } else if (outerCvt.getResult() == dot->getOperand(1)) {
+      } else if (allocOp.getResult() == dot->getOperand(1)) {
         newInnerCvtOrder = {1, 0};
       }
     }
@@ -253,15 +251,15 @@ public:
     // TODO(Qingyi): need to check whether the CTALayout of innerCvtEnc should
     // be used here. For tests where numCTAs = 1, this is not a problem since
     // all CTALayouts are the same.
-    auto newInnerCvtEnc = SharedEncodingAttr::get(
-        getContext(), innerCvtTy.getShape(), newInnerCvtOrder,
-        innerCvtEnc.getCTALayout(), innerCvtTy.getElementType());
-    auto newInnerCvtTy = RankedTensorType::get(
-        innerCvtTy.getShape(), innerCvtTy.getElementType(), newInnerCvtEnc);
+    auto newInnerEnc = SharedEncodingAttr::get(
+        getContext(), srcTy.getShape(), newInnerCvtOrder,
+        allocEncoding.getCTALayout(), srcTy.getElementType());
 
-    auto newInnerCvt = rewriter.create<ConvertLayoutOp>(
-        innerCvt.getLoc(), newInnerCvtTy, innerCvt.getSrc());
-    rewriter.replaceOpWithNewOp<TransOp>(outerCvt, newInnerCvt,
+    MemDescType innerTy =
+        MemDescType::get(srcTy.getShape(), srcTy.getElementType(), newInnerEnc);
+    auto newAlloc = rewriter.create<LocalAllocOp>(allocOp.getLoc(), innerTy,
+                                                  trans.getSrc());
+    rewriter.replaceOpWithNewOp<TransOp>(allocOp, newAlloc,
                                          ArrayRef<int32_t>({1, 0}));
     return success();
   }
@@ -276,18 +274,18 @@ struct MMAV3UseRegOperand : public OpRewritePattern<DotOp> {
 
   LogicalResult matchAndRewrite(DotOp dotOp,
                                 PatternRewriter &rewriter) const override {
-    auto convertLhs = dotOp.getOperand(0).getDefiningOp<ConvertLayoutOp>();
-    if (!convertLhs)
+    auto alloc = dotOp.getOperand(0).getDefiningOp<LocalAllocOp>();
+    if (!alloc || !alloc.getInit())
       return failure();
 
     auto getEncoding = [](Value v) {
-      return v.getType().cast<RankedTensorType>().getEncoding();
+      return v.getType().cast<TensorOrMemDesc>().getEncoding();
     };
 
     if (!getEncoding(dotOp.getOperand(0)).isa<SharedEncodingAttr>())
       return failure();
     auto srcEnc =
-        getEncoding(convertLhs.getSrc()).dyn_cast<NvidiaMmaEncodingAttr>();
+        getEncoding(alloc.getInit()).dyn_cast<NvidiaMmaEncodingAttr>();
     auto dstEnc =
         getEncoding(dotOp.getResult()).dyn_cast<NvidiaMmaEncodingAttr>();
     if (!srcEnc || srcEnc.getVersionMajor() != 3 || !dstEnc ||
@@ -297,7 +295,7 @@ struct MMAV3UseRegOperand : public OpRewritePattern<DotOp> {
     // We currently only support convert from f16 and bf16 mma to f16 and bf16
     // dot operand, as the other types require shuffling data across threads.
     // TODO: extend it to more types.
-    auto srcTy = convertLhs.getSrc().getType().cast<RankedTensorType>();
+    auto srcTy = alloc.getInit().getType().cast<RankedTensorType>();
     if (!(srcTy.getElementType().isF16() || srcTy.getElementType().isBF16()))
       return failure();
 
@@ -306,7 +304,7 @@ struct MMAV3UseRegOperand : public OpRewritePattern<DotOp> {
     auto newTy = RankedTensorType::get(srcTy.getShape(), srcTy.getElementType(),
                                        dotOperandEnc);
     Value newOperand = rewriter.create<ConvertLayoutOp>(dotOp.getLoc(), newTy,
-                                                        convertLhs.getSrc());
+                                                        alloc.getInit());
     rewriter.modifyOpInPlace(dotOp, [&]() { dotOp.setOperand(0, newOperand); });
     return success();
   }
@@ -339,6 +337,7 @@ public:
       patterns.add<HoistLayoutConversion>(context);
     patterns.add<FuseTransHopper>(context);
     patterns.add<MMAV3UseRegOperand>(context);
+    ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
   }

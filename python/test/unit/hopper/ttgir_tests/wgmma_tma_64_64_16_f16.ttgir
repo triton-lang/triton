@@ -32,14 +32,14 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     %14 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #triton_gpu.slice<{dim = 0, parent = #blocked1}>>
 
     // Load A
-    %a_smem = triton_gpu.alloc_tensor : tensor<1x64x16xf16, #shared0>
+    %a_smem = triton_gpu.alloc : tensor<1x64x16xf16, #shared0>
     %a_smem_loaded = triton_gpu.load_tile_async %aBasePtr[%sizeM, %sizeK][%aStride0, %aStride1][%aCoord0, %aCoord1], %mbar_a, %a_smem[%ci0] {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, order = dense<[1, 0]> : tensor<2xi32>} : !tt.ptr<i64, 3> -> tensor<1x64x16xf16, #shared0>
     triton_nvidia_gpu.mbarrier_arrive %mbar_a {trackAsyncOp = false} : !tt.ptr<i64, 3>
     triton_nvidia_gpu.mbarrier_wait %mbar_a, %i1_true : !tt.ptr<i64, 3>
     %21 = triton_gpu.extract_slice %a_smem_loaded[%ci0, 0, 0][1, 64, 16][1, 1, 1] : tensor<1x64x16xf16, #shared0> to tensor<64x16xf16, #shared0>
 
     // Load B
-    %b_smem = triton_gpu.alloc_tensor : tensor<1x16x64xf16, #shared1>
+    %b_smem = triton_gpu.alloc : tensor<1x16x64xf16, #shared1>
     %b_smem_loaded= triton_gpu.load_tile_async %bBasePtr[%sizeK, %sizeN][%bStride0, %bStride1][%bCoord0, %bCoord1], %mbar_b, %b_smem[%ci0] {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, order = dense<[0, 1]> : tensor<2xi32>} : !tt.ptr<i64, 3> -> tensor<1x16x64xf16, #shared1>
     triton_nvidia_gpu.mbarrier_arrive %mbar_b {trackAsyncOp = false} : !tt.ptr<i64, 3>
     triton_nvidia_gpu.mbarrier_wait %mbar_b, %i1_true : !tt.ptr<i64, 3>

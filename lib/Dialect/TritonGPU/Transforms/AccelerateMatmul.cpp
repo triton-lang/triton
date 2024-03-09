@@ -20,8 +20,7 @@ using ttg::DotOperandEncodingAttr;
 using ttg::NvidiaMmaEncodingAttr;
 using ttg::SliceEncodingAttr;
 
-// higher mma version is preferred, will fallback to lower version if not
-// supported
+// Get the highest version supported for the hardware and the dot.
 static int getMMAVersionSafe(int computeCapability, tt::DotOp op) {
   int baseVersion = 0;
   if (computeCapability < 75) {
@@ -190,6 +189,7 @@ public:
 
   static Value getMMAv3Operand(Value v, mlir::PatternRewriter &rewriter,
                                int opIdx) {
+    OpBuilder::InsertionGuard g(rewriter);
     Value arg = v;
     if (auto cvtOp = v.getDefiningOp<ttg::ConvertLayoutOp>())
       arg = cvtOp.getSrc();
@@ -212,10 +212,10 @@ public:
     auto newLayout = ttg::SharedEncodingAttr::get(
         argType.getContext(), argType.getShape(), newOrder, CTALayout,
         argType.getElementType());
-    auto newType = RankedTensorType::get(argType.getShape(),
-                                         argType.getElementType(), newLayout);
-
-    return rewriter.create<ttg::ConvertLayoutOp>(arg.getLoc(), newType, arg);
+    auto newType = tt::MemDescType::get(argType.getShape(),
+                                        argType.getElementType(), newLayout);
+    rewriter.setInsertionPointAfterValue(arg);
+    return rewriter.create<ttg::LocalAllocOp>(arg.getLoc(), newType, arg);
   }
 
   mlir::LogicalResult
@@ -396,7 +396,7 @@ public:
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }
-    // now that we pick the mma type decompose dot that are not natively
+    // Now that we have picked the mma type, decompose dot that are not natively
     // supported.
     decomposeMixedModeDotOp(m);
   }

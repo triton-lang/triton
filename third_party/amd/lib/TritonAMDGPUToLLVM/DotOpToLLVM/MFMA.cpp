@@ -22,8 +22,9 @@
  */
 #ifdef USE_ROCM
 
-#include "../DotOpToLLVM.h"
+#include "../PatternTritonGPUOpToLLVM.h"
 #include "TritonAMDGPUTransforms/MfmaGroup.h"
+#include "Utility.h"
 
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 
@@ -32,10 +33,9 @@ using namespace mlir::triton;
 
 namespace {
 
-using ::AMD::TritonGPUToLLVMTypeConverter;
-using ::mlir::LLVM::shflSync;
-using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::LLVM::AMD::shuffleXor;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
+using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
@@ -44,13 +44,14 @@ struct DotOpMFMAConversionHelper {
   AMDMfmaEncodingAttr mfmaLayout;
 
   ConversionPatternRewriter &rewriter;
-  TritonGPUToLLVMTypeConverter *typeConverter;
+  const LLVMTypeConverter *typeConverter;
   Location loc;
   MLIRContext *ctx{};
 
-  explicit DotOpMFMAConversionHelper(
-      AMDMfmaEncodingAttr mfmaLayout, ConversionPatternRewriter &rewriter,
-      TritonGPUToLLVMTypeConverter *typeConverter, Location loc)
+  explicit DotOpMFMAConversionHelper(AMDMfmaEncodingAttr mfmaLayout,
+                                     ConversionPatternRewriter &rewriter,
+                                     const LLVMTypeConverter *typeConverter,
+                                     Location loc)
       : mfmaLayout(mfmaLayout), rewriter(rewriter),
         typeConverter(typeConverter), loc(loc), ctx(mfmaLayout.getContext()) {}
 
@@ -114,7 +115,8 @@ struct DotOpMFMAConversionHelper {
     if (reduceSubBlocks) {
       while (subBlockSize < waveSize) {
         for (int i = 0; i < numScalars; ++i) {
-          Value other_acc = shflSync(loc, rewriter, accScalar[i], subBlockSize);
+          Value other_acc =
+              shuffleXor(loc, rewriter, accScalar[i], subBlockSize);
           if (elemType.isInteger(32))
             accScalar[i] = add(accScalar[i], other_acc);
           else
@@ -192,10 +194,10 @@ struct DotOpMFMAConversionHelper {
     auto bEncoding = bTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
     int kWidth = aEncoding.getKWidth();
 
-    auto repA = mfmaLayout.getMFMARepForOperands(aTensorTy.getShape(), elemTyA,
-                                                 kWidth, 0);
-    auto repB = mfmaLayout.getMFMARepForOperands(bTensorTy.getShape(), elemTyB,
-                                                 kWidth, 1);
+    auto repA =
+        mfmaLayout.getMFMARepForOperands(aTensorTy.getShape(), kWidth, 0);
+    auto repB =
+        mfmaLayout.getMFMARepForOperands(bTensorTy.getShape(), kWidth, 1);
 
     assert(repA[1] == repB[0]);
 
@@ -208,11 +210,11 @@ struct DotOpMFMAConversionHelper {
     auto numRepK = repA[1];
 
     ValueTable ha = getValuesFromDotOperandLayoutStruct(
-        loadedA, numRepM, numRepK, aTensorTy.getElementType());
+        loadedA, numRepM, numRepK, kWidth, aTensorTy.getElementType());
     ValueTable hb = getValuesFromDotOperandLayoutStruct(
-        loadedB, numRepN, numRepK, aTensorTy.getElementType());
+        loadedB, numRepN, numRepK, kWidth, aTensorTy.getElementType());
     auto dstElemTy = dTensorTy.getElementType();
-    auto fc = typeConverter->unpackLLElements(loc, loadedC, rewriter);
+    auto fc = unpackLLElements(loc, loadedC, rewriter);
 
     unsigned warpSize = triton::gpu::getWarpSize(mfmaLayout);
     // compute number of output elements that each thread holds for one MFMA
@@ -247,19 +249,36 @@ struct DotOpMFMAConversionHelper {
     // replace with new packed result
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(fc.size(), dstElemTy));
-    Value res = typeConverter->packLLElements(loc, fc, rewriter, structTy);
+    Value res = packLLElements(loc, typeConverter, fc, rewriter, structTy);
     rewriter.replaceOp(op, res);
 
     return success();
   }
 
+  /**
+   * @brief Converts dot operand structure to value table and converts types
+   * appropriate for mfma instructions
+   */
   ValueTable getValuesFromDotOperandLayoutStruct(Value value, int n0, int n1,
-                                                 Type type) const {
-    auto elems = typeConverter->unpackLLElements(loc, value, rewriter);
+                                                 int kWidth, Type type) const {
+    auto elems = unpackLLElements(loc, value, rewriter);
     ValueTable vals;
     for (int i = 0; i < n0; i++) {
       for (int j = 0; j < n1; j++) {
-        vals[{i, j}] = elems[n1 * i + j];
+        auto rawElems = elems[n1 * i + j];
+        Value convertedElems;
+        if (type.isF32()) {
+          convertedElems = extract_element(type, rawElems, i32_val(0));
+        } else if (type.getIntOrFloatBitWidth() == 8) {
+          if (kWidth == 4)
+            convertedElems = bitcast(rawElems, i32_ty);
+          if (kWidth == 8)
+            convertedElems = bitcast(rawElems, i64_ty);
+        } else {
+          assert(type.isBF16() || type.isF16());
+          convertedElems = rawElems;
+        }
+        vals[{i, j}] = convertedElems;
       }
     }
     return vals;
@@ -270,7 +289,7 @@ struct DotOpMFMAConversionHelper {
 
 namespace AMD {
 LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                          TritonGPUToLLVMTypeConverter *typeConverter,
+                          const LLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) {
   auto rankedTType = [](Value tensor) {
     return tensor.getType().cast<RankedTensorType>();

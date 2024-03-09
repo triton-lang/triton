@@ -258,7 +258,7 @@ struct TransOpConversion : public ConvertOpToLLVMPattern<TransOp> {
   matchAndRewrite(TransOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto resultTy = op.getType().cast<RankedTensorType>();
+    auto resultTy = op.getType().cast<TensorOrMemDesc>();
     if (auto enc = resultTy.getEncoding().dyn_cast<SharedEncodingAttr>()) {
       auto llvmElemTy =
           getTypeConverter()->convertType(resultTy.getElementType());
@@ -342,6 +342,43 @@ struct BroadcastOpConversion
   }
 };
 
+struct MemDescSubviewOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::MemDescSubviewOp> {
+  using ConvertOpToLLVMPattern<
+      triton::gpu::MemDescSubviewOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::MemDescSubviewOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // %dst = extract_slice %src[%offsets]
+    Location loc = op->getLoc();
+    auto srcTy = op.getDesc().getType();
+    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+
+    // newBase = base + offset
+    auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getDesc(),
+                                                   llvmElemTy, rewriter);
+    SmallVector<Value> opOffsetVals = op.getOffsets();
+    size_t destRank = op.getResult().getType().getRank();
+    SmallVector<Value> offsetVals;
+    SmallVector<Value> strides;
+    int rankReduced = srcTy.getRank() - destRank;
+    for (int i = rankReduced; i < opOffsetVals.size(); i++) {
+      strides.push_back(smemObj.strides[i]);
+      offsetVals.push_back(opOffsetVals[i]);
+    }
+    // Compute the offset based on the original strides of the shared memory
+    // object
+    auto offset = dot(rewriter, loc, opOffsetVals, smemObj.strides);
+    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+    smemObj =
+        SharedMemoryObject(gep(elemPtrTy, llvmElemTy, smemObj.base, offset),
+                           llvmElemTy, strides, offsetVals);
+    auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
+    rewriter.replaceOp(op, retVal);
+    return success();
+  }
+};
 } // namespace
 
 void mlir::triton::populateViewOpToLLVMPatterns(
@@ -356,4 +393,5 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<SplitOpConversion>(typeConverter, benefit);
   patterns.add<TransOpConversion>(typeConverter, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
+  patterns.add<MemDescSubviewOpConversion>(typeConverter, benefit);
 }

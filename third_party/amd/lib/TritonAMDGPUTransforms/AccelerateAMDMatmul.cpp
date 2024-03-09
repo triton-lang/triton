@@ -1,3 +1,5 @@
+#include "TritonAMDGPUTransforms/MfmaGroup.h"
+#include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -5,8 +7,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "TritonAMDGPUTransforms/Passes.h"
-#include "TritonAMDGPUTransforms/MfmaGroup.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/Debug.h"
 #include <memory>
@@ -16,10 +16,10 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace {
 using tt::DotOp;
+using ttg::AMDMfmaEncodingAttr;
 using ttg::BlockedEncodingAttr;
 using ttg::ConvertLayoutOp;
 using ttg::DotOperandEncodingAttr;
-using ttg::AMDMfmaEncodingAttr;
 using ttg::SliceEncodingAttr;
 
 SmallVector<unsigned, 2>
@@ -94,8 +94,8 @@ public:
   /// @brief Choose MFMA instruction parameters
   /// @param dot target dot operation
   /// @return pair {mDim, nDim, kDim} sizes of one MFMA instruction arguments
-    std::tuple<unsigned, unsigned, unsigned>
-    chooseMfmaDimensions(tt::DotOp dot) const {
+  std::tuple<unsigned, unsigned, unsigned>
+  chooseMfmaDimensions(tt::DotOp dot) const {
     // number of matrix elements along k dim per one MFMA intruction
     unsigned kDim = 0;
     auto opType = dot.getA().getType().cast<RankedTensorType>();
@@ -114,26 +114,26 @@ public:
     } else {
       int minSize = std::min(resShape[0], resShape[1]);
       if (minSize >= 32) {
-          mDim = 32;
-          nDim = 32;
+        mDim = 32;
+        nDim = 32;
       }
       if (minSize >= 16 && minSize < 32) {
-          mDim = 16;
-          nDim = 16;
+        mDim = 16;
+        nDim = 16;
       }
       if (minSize < 16) {
-          if (resShape[0] < 16 && resShape[1] >= 64) {
-              mDim = 4;
-              nDim = 64;
-          } else if (resShape[0] >= 64 && resShape[1] < 16) {
-              mDim = 64;
-              nDim = 4;
-          } else {
-              assert(opType.getShape()[1] >= 64 &&
-                     "k should be at least 64 to use this layout");
-              mDim = 4;
-              nDim = 4;
-          }
+        if (resShape[0] < 16 && resShape[1] >= 64) {
+          mDim = 4;
+          nDim = 64;
+        } else if (resShape[0] >= 64 && resShape[1] < 16) {
+          mDim = 64;
+          nDim = 4;
+        } else {
+          assert(opType.getShape()[1] >= 64 &&
+                 "k should be at least 64 to use this layout");
+          mDim = 4;
+          nDim = 4;
+        }
       }
     }
     assert(mDim != 0 && nDim != 0);
@@ -141,9 +141,9 @@ public:
     auto maybeMfmaInsn =
         MfmaInsn::selectMfma(mDim, nDim, dataTypeA, dataTypeB, mfmaVersion);
     if (failed(maybeMfmaInsn))
-        llvm::report_fatal_error("No match found in MFMA database\n");
+      llvm::report_fatal_error("No match found in MFMA database\n");
     else
-        kDim = (*maybeMfmaInsn).getKDim();
+      kDim = (*maybeMfmaInsn).getKDim();
     assert(kDim != 0);
 
     assert(resShape[0] % mDim == 0 && resShape[1] % nDim == 0);
@@ -253,7 +253,8 @@ public:
 
     auto [mDim, nDim, kDim] = chooseMfmaDimensions(dotOp);
 
-    auto warpsPerTile = warpsPerTileMFMA(dotOp, retShape, numWarps, {mDim, nDim});
+    auto warpsPerTile =
+        warpsPerTileMFMA(dotOp, retShape, numWarps, {mDim, nDim});
 
     bool isTransposed = isChainDot(dotOp);
     mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
@@ -278,13 +279,13 @@ public:
     // in mfma 16x16 case argument matrix groups elements in 4 groups
     // in mfma 4x4 case argument matrix groups in 16 groups
     if (mDim == 32 && nDim == 32)
-        kWidth = kDim / 2;
+      kWidth = kDim / 2;
     if (mDim == 16 && nDim == 16)
-        kWidth = kDim / 4;
+      kWidth = kDim / 4;
     if (mDim == 4 && nDim == 4)
-        kWidth = kDim / 16;
+      kWidth = kDim / 16;
     if (mDim == 4 && nDim == 64 || mDim == 64 && nDim == 4)
-        kWidth = kDim;
+      kWidth = kDim;
     assert(kWidth != -1);
     auto newAType = RankedTensorType::get(
         oldAType.getShape(), oldAType.getElementType(),
@@ -307,7 +308,55 @@ public:
     return success();
   }
 };
+static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
+                            Type promotedType) {
+  Type tensorPromotedType =
+      operand.getType().cast<RankedTensorType>().cloneWith(std::nullopt,
+                                                           promotedType);
+  return builder.create<triton::FpToFpOp>(loc, tensorPromotedType, operand);
+}
 
+// promote operands of dot op if the existing combination is not natively
+// supported.
+static void decomposeMixedModeDotOp(ModuleOp mod) {
+  mod.walk([](triton::DotOp dotOp) -> void {
+    auto D = dotOp.getD();
+    OpBuilder builder(dotOp);
+    Type AElType = dotOp.getA().getType().getElementType();
+    Type promoteType;
+    if (AMDMfmaEncodingAttr mfmaLayout =
+            D.getType().getEncoding().dyn_cast<AMDMfmaEncodingAttr>()) {
+      Type BElType = dotOp.getB().getType().getElementType();
+
+      auto maxBitWidth = std::max(AElType.getIntOrFloatBitWidth(),
+                                  BElType.getIntOrFloatBitWidth());
+
+      // TODO check mfma tensor core version compatibility
+      if (maxBitWidth == 8)
+        return;
+
+      if (AElType == BElType)
+        return;
+
+      if (maxBitWidth < 16)
+        promoteType = builder.getF16Type();
+      else if (maxBitWidth <= 32)
+        promoteType = builder.getF32Type();
+    } else {
+      // FMA case.
+      Type AElType = dotOp.getA().getType().getElementType();
+      Type DElType = D.getType().getElementType();
+      if (AElType == DElType)
+        return;
+      promoteType = DElType;
+    }
+    Location loc = dotOp.getLoc();
+    Value promotedA = promoteOperand(builder, loc, dotOp.getA(), promoteType);
+    Value promotedB = promoteOperand(builder, loc, dotOp.getB(), promoteType);
+    dotOp.setOperand(0, promotedA);
+    dotOp.setOperand(1, promotedB);
+  });
+}
 } // namespace
 
 #define GEN_PASS_CLASSES
@@ -335,6 +384,7 @@ public:
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }
+    decomposeMixedModeDotOp(m);
   }
 };
 

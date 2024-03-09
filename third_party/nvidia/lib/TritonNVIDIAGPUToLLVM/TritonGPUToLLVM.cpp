@@ -230,7 +230,11 @@ struct ConvertTritonGPUToLLVM
     RewritePatternSet patterns(context);
     TargetInfo targetInfo(computeCapability);
     int benefit = patternBenefitPrioritizeOverLLVMConversions;
-    populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, benefit);
+    mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMOptimizedPatterns(
+        typeConverter, targetInfo, patterns,
+        patternBenefitConvertLayoutOptimizedPattern);
+    mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMPatterns(
+        typeConverter, targetInfo, patterns, benefit);
     populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
     populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
                                         axisInfoAnalysis, computeCapability,
@@ -240,9 +244,10 @@ struct ConvertTritonGPUToLLVM
                                   patternBenefitClampOptimizedPattern);
     populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,
                                       benefit);
-    populateReduceOpToLLVMPatterns(typeConverter, patterns, computeCapability,
-                                   benefit);
-    populateScanOpToLLVMPatterns(typeConverter, patterns, benefit);
+    mlir::triton::populateReduceOpToLLVMPatterns(typeConverter, patterns,
+                                                 targetInfo, benefit);
+    mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
+                                               targetInfo, benefit);
     populateBarrierOpToLLVMPatterns(typeConverter, patterns, benefit);
     populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns, benefit);
     populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit);

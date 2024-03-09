@@ -17,6 +17,13 @@ namespace triton {
 
 #define GEN_PASS_DECL
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
+
+namespace gpu {
+std::unique_ptr<OperationPass<ModuleOp>>
+createDecomposeUnsupportedAMDConversionsPass();
+
+} // namespace gpu
+
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonAMDGPUToLLVMPass();
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonAMDGPUToLLVMPass(int32_t computeCapability);

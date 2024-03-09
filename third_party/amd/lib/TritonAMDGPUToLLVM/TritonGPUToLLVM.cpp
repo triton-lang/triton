@@ -1,4 +1,4 @@
-#include "TritonGPUToLLVM.h"
+#include "PatternTritonGPUOpToLLVM.h"
 
 #include "Utility.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -8,9 +8,6 @@ namespace {
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::AMD::ConvertTritonGPUOpToLLVMPattern;
-using ::AMD::ConvertTritonGPUOpToLLVMPatternBase;
-using ::AMD::TritonGPUToLLVMTypeConverter;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
@@ -54,10 +51,8 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
 //
 // For each operand, we print all of the values contained in this GPU thread,
 // one per line, along with the index of the value in its tensor.
-struct PrintOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::PrintOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::PrintOp>::ConvertTritonGPUOpToLLVMPattern;
+struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
+  using ConvertOpToLLVMPattern<triton::PrintOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::PrintOp op, OpAdaptor adaptor,
@@ -81,8 +76,7 @@ struct PrintOpConversion
     } else {
       for (size_t i = 0; i < op.getNumOperands(); i++) {
         // Elements of the tensor that are resident in this GPU thread.
-        auto elems = getTypeConverter()->unpackLLElements(
-            loc, adaptor.getOperands()[i], rewriter);
+        auto elems = unpackLLElements(loc, adaptor.getOperands()[i], rewriter);
 
         // Get the indices of `elems` within the tensor.  Note that if `elems`
         // has an "interesting" layout, then these will not be in any
@@ -339,9 +333,8 @@ struct PrintOpConversion
 };
 
 struct GetProgramIdOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::GetProgramIdOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::GetProgramIdOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::GetProgramIdOp> {
+  using ConvertOpToLLVMPattern<triton::GetProgramIdOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
@@ -368,9 +361,9 @@ struct GetProgramIdOpConversion
 };
 
 struct GetNumProgramsOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::GetNumProgramsOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::GetNumProgramsOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::GetNumProgramsOp> {
+  using ConvertOpToLLVMPattern<
+      triton::GetNumProgramsOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::GetNumProgramsOp op, OpAdaptor adaptor,
@@ -386,77 +379,14 @@ struct GetNumProgramsOpConversion
     return success();
   }
 };
-
-struct ExtractSliceOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::ExtractSliceOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::ExtractSliceOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::ExtractSliceOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    // %dst = extract_slice %src[%offsets]
-    Location loc = op->getLoc();
-    auto srcTy = op.getSrc().getType().dyn_cast<RankedTensorType>();
-    auto srcLayout = srcTy.getEncoding().dyn_cast<SharedEncodingAttr>();
-    assert(srcLayout && "Unexpected resultLayout in ExtractSliceOpConversion");
-    assert(op.hasUnitStride() &&
-           "Only unit stride supported by ExtractSliceOpConversion");
-
-    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
-
-    // newBase = base + offset
-    // Triton supports either static and dynamic offsets
-    auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
-                                                   llvmElemTy, rewriter);
-    SmallVector<Value, 4> opOffsetVals;
-    SmallVector<Value, 4> offsetVals;
-    auto mixedOffsets = op.getMixedOffsets();
-    for (auto i = 0, j = 0; i < mixedOffsets.size(); ++i) {
-      if (op.isDynamicOffset(i)) {
-        // adaptor.getOffsets() returns list of variable offsets. the size of
-        // the list may not be the same as mixedOffsets
-        opOffsetVals.emplace_back(adaptor.getOffsets()[j]);
-        ++j;
-      } else
-        opOffsetVals.emplace_back(i32_val(op.getStaticOffset(i)));
-      offsetVals.emplace_back(add(smemObj.offsets[i], opOffsetVals[i]));
-    }
-    // Compute the offset based on the original strides of the shared memory
-    // object
-    auto offset = dot(rewriter, loc, opOffsetVals, smemObj.strides);
-    // newShape = rank_reduce(shape)
-    // Triton only supports static tensor sizes
-    SmallVector<Value, 4> strideVals;
-    for (auto i = 0; i < op.getStaticSizes().size(); ++i) {
-      if (op.getStaticSize(i) == 1) {
-        offsetVals.erase(offsetVals.begin() + i);
-      } else {
-        strideVals.emplace_back(smemObj.strides[i]);
-      }
-    }
-
-    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-    smemObj =
-        SharedMemoryObject(gep(elemPtrTy, llvmElemTy, smemObj.base, offset),
-                           llvmElemTy, strideVals, offsetVals);
-    auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
-    rewriter.replaceOp(op, retVal);
-    return success();
-  }
-};
-
 } // namespace
 
 namespace AMD {
-void populateTritonGPUToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &moduleAllocation,
-    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-    PatternBenefit benefit) {
-  patterns.add<ExtractSliceOpConversion>(typeConverter, moduleAllocation,
-                                         benefit);
+void populateTritonGPUToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                     RewritePatternSet &patterns, int numWarps,
+                                     ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                     ModuleAllocation &moduleAllocation,
+                                     PatternBenefit benefit) {
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
   patterns.add<GetNumProgramsOpConversion>(typeConverter, benefit);
   patterns.add<ReturnOpConversion>(typeConverter, benefit);

@@ -87,7 +87,7 @@ class HIPBackend(BaseBackend):
 
     def __init__(self, target: tuple) -> None:
         super().__init__(target)
-        assert isinstance(target, tuple) and len(target) == 2
+        assert isinstance(target, tuple) and len(target) == 3
         assert isinstance(target[1], str)
 
     def parse_options(self, opts) -> Any:
@@ -128,6 +128,7 @@ class HIPBackend(BaseBackend):
         pm.enable_debug()
         passes.ttgpuir.add_coalesce(pm)
         amd.passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.ttgpuir.add_optimize_thread_locality(pm)
         amd.passes.ttgpuir.add_accelerate_matmul(pm, opt.matrix_core_version, opt.matrix_inst_shape)
         amd.passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
@@ -135,7 +136,6 @@ class HIPBackend(BaseBackend):
         if opt.num_stages == 0 and opt.matrix_core_version != 0:
             amd.passes.ttgpuir.add_stream_pipeline(pm)
             passes.common.add_canonicalizer(pm)
-        passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.num_warps, opt.num_ctas, 0)
         passes.ttgpuir.add_optimize_dot_operands(pm)
         amd.passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_decompose_conversions(pm)
@@ -152,6 +152,7 @@ class HIPBackend(BaseBackend):
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        amd.passes.ttgpuir.add_decompose_unsupported_conversions(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         pm.run(mod)
