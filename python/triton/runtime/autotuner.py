@@ -125,7 +125,7 @@ class Autotuner(KernelInterface):
             if self.use_cuda_graph:
                 with torch.cuda.stream(self.benchmarkig_stream):
                     bench_res = do_bench_cudagraph(kernel_call, rep=self.num_reps, return_mode="median")
-                return [bench_res]
+                return bench_res
             return do_bench(kernel_call, warmup=self.num_warmups, rep=self.num_reps, quantiles=(0.5, 0.2, 0.8))
         except OutOfResources:
             return [float("inf"), float("inf"), float("inf")]
