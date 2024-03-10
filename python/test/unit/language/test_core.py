@@ -159,7 +159,8 @@ def check_type_supported(dtype, device):
     if is_interpreter():
         if dtype in [
                 tl.float8e4nv, "float8e4nv", tl.bfloat16, "bfloat16", tl.float8e5, "float8e5", tl.float8e4b15,
-                "float8e4b15", tl.float8e4b15x4, "float8e4b15x4", torch.bfloat16, torch.float8_e4m3fn, torch.float8_e5m2
+                "float8e4b15", tl.float8e4b15x4, "float8e4b15x4", torch.bfloat16, torch.float8_e4m3fn,
+                "float8_e4m3fn", torch.float8_e5m2, "float8_e5m2"
         ]:
             pytest.skip("bfloat16 and float8 are not supported in the interpreter")
 
@@ -915,7 +916,7 @@ def test_abs_fp8(in_dtype, device):
 # test passing shapes as individual params rather than tuples
 # ----------------
 
-
+@pytest.mark.interpreter
 def test_shapes_as_params(device):
 
     @triton.jit
@@ -942,9 +943,10 @@ def test_shapes_as_params(device):
 # test transpose
 # ----------------
 
-
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x", [(dtype_x) for dtype_x in dtypes_with_bfloat16])
 def test_transpose(dtype_x, device):
+    check_type_supported(dtype_x, device)
     SIZE = 128
 
     @triton.jit
@@ -1140,6 +1142,7 @@ def noinline_multi_values_fn(x, y, Z):
     tl.store(Z, z)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("mode", ["simple", "call_graph", "shared", "dynamic", "multi_values"])
 def test_noinline(mode, device):
 
@@ -1374,7 +1377,7 @@ def test_tensor_atomic_cas(sem, num_ctas, device):
 # test cast
 # ---------------
 
-
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, dtype_z, bitcast, size",
                          [(dtype_x, dtype_z, False, 1024) for dtype_x in dtypes for dtype_z in dtypes] + [
                              ('float32', 'bfloat16', False, 1024),
@@ -1475,6 +1478,7 @@ def test_cat(dtype_str, num_warps, device):
     assert z.unique().size(0) == z.size(0)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", list(torch_dtypes))
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_store_constant(dtype_str, num_ctas, device):
@@ -1685,6 +1689,7 @@ def convert_float_to_float32(fp: torch.tensor, dtype=None):
     return output
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("in_dtype", [torch.float16, torch.bfloat16])
 def test_convert_float16_to_float32(in_dtype, device):
     """Tests that check convert_float_to_float32 function"""

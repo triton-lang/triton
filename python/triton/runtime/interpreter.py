@@ -426,16 +426,18 @@ def _patch_lang_tensor(tensor, builder):
     tensor.__index__ = lambda self: int(self.handle.data)
 
     def _get_bool(self):
-        if self is None:
-            return False
         data = self.handle.data
         # in triton, only scalars can be converted to booleans
         # here we need this hack because all scalars are tensors
         return bool(data) if data.size == 1 else True
 
+    def _get_transpose(self):
+        return tl.core.tensor(TensorHandle(np.transpose(self.handle.data), self.handle.dtype), self.dtype)
+
     tensor.__bool__ = lambda self: _get_bool(self)
     tensor.__repr__ = lambda self: repr(self.handle.data)
     tensor.__str__ = lambda self: str(self.handle.data)
+    tensor.T = property(_get_transpose)
 
 
 def _patch_lang_core(lang, builder):

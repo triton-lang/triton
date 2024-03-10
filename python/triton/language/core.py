@@ -64,6 +64,7 @@ def _tensor_member_fn(fn: T) -> T:
     :code:`{fn.__name__}(x{", ..." if has_args else ""})`.
     """
 
+    @wraps(fn)
     def wrapper(*args, **kwargs):
         return fn(*args, **kwargs)
 
