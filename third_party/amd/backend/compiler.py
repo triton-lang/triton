@@ -100,7 +100,13 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def path_to_rocm_lld():
-        return "/opt/rocm/llvm/bin/ld.lld"
+        lld = Path("/opt/rocm/llvm/bin/ld.lld")
+        if lld.is_file():
+            return lld
+        lld = Path("/usr/bin/ld.lld")
+        if lld.is_file():
+            return lld
+        raise Exception("ROCm linker /opt/rocm/llvm/bin/ld.lld not found")
 
     @staticmethod
     def make_ttir(mod, metadata, opt):
@@ -128,6 +134,7 @@ class HIPBackend(BaseBackend):
         pm.enable_debug()
         passes.ttgpuir.add_coalesce(pm)
         amd.passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.ttgpuir.add_optimize_thread_locality(pm)
         amd.passes.ttgpuir.add_accelerate_matmul(pm, opt.matrix_core_version, opt.matrix_inst_shape)
         amd.passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
@@ -135,7 +142,6 @@ class HIPBackend(BaseBackend):
         if opt.num_stages == 0 and opt.matrix_core_version != 0:
             amd.passes.ttgpuir.add_stream_pipeline(pm)
             passes.common.add_canonicalizer(pm)
-        passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.num_warps, opt.num_ctas, 0)
         passes.ttgpuir.add_optimize_dot_operands(pm)
         amd.passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_decompose_conversions(pm)

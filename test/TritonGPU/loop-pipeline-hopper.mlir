@@ -334,7 +334,7 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 //
 //      %sa = triton_gpu.local_alloc %a : (tensor<128x32xf16, #BA>) -> !tt.memdesc<128x32xf16, #SA>
 //      %sb = triton_gpu.local_alloc %b : (tensor<32x128xf16, #BB>) -> !tt.memdesc<32x128xf16, #SB>
-//      %c = tt.dot %sa, %sb, %prev_c {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : !tt.memdesc<128x32xf16, #SA> * !tt.memdesc<32x128xf16, #SB> -> tensor<128x128xf32, #C>
+//      %c = triton_gpu_nvidia.dot_async %sa, %sb, %prev_c {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x32xf16, #SA> * tensor<32x128xf16, #SB> -> tensor<128x128xf32, #C>
 //
 //      %a_tileptr_next = tt.advance %a_tileptr, [%c0, %c32_i32] : !tt.ptr<tensor<128x32xf16>, 1>
 //      %b_tileptr_next = tt.advance %b_tileptr, [%c32_i32, %c0] : !tt.ptr<tensor<32x128xf16>, 1>
@@ -384,7 +384,8 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %16 = tt.addptr %14, %15 : tensor<64x16x!tt.ptr<f16, 1>, #blocked>, tensor<64x16xi32, #blocked>
     // CHECK: scf.for
     // CHECK:   triton_gpu.async_wait {{.*}} {num = 1 : i32}
-    // CHECK:   tt.dot
+    // CHECK:   triton_nvidia_gpu.dot_async
+    // CHECK-NEXT: triton_nvidia_gpu.dot_wait {{.*}} {pendings = 0 : i32}
     // CHECK:   triton_nvidia_gpu.dot_async
     // CHECK:   triton_gpu.async_copy_global_to_local
     // CHECK:   triton_gpu.async_commit_group
