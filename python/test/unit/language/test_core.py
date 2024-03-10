@@ -1863,8 +1863,8 @@ keep_dims_3d_configs = [(op, 'float32', (32, 2, 16), axis, True)
     negative_config + keep_dims_2d_configs + keep_dims_3d_configs)
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
-    if is_hip() and (op == 'argmin' or op == 'argmax'):
-        pytest.skip("TODO some tests for argmin and argmax do not work on HIP")
+    # if is_hip() and (op == 'argmin' or op == 'argmax'):
+    #     pytest.skip("TODO some tests for argmin and argmax do not work on HIP")
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
 
     @triton.jit
