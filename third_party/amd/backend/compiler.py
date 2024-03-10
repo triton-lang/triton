@@ -25,7 +25,8 @@ class HIPOptions:
     capability: int = None
     # TODO:
     matrix_core_version: int = -1
-    matrix_inst_shape: int = 0
+    matrix_instr_nonkdim: int = 0
+    kpack: int = 1
     max_num_imprecise_acc_default: int = 0
 
     @staticmethod
@@ -135,7 +136,7 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_coalesce(pm)
         amd.passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
-        amd.passes.ttgpuir.add_accelerate_matmul(pm, opt.matrix_core_version, opt.matrix_inst_shape)
+        amd.passes.ttgpuir.add_accelerate_matmul(pm, opt.matrix_core_version, opt.matrix_instr_nonkdim)
         amd.passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm)
