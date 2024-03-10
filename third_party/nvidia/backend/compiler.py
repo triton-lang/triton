@@ -53,6 +53,12 @@ def ptx_get_version(cuda_version) -> int:
     raise RuntimeError("Triton only support CUDA 10.0 or higher")
 
 
+@functools.lru_cache(None)
+def file_hash(path):
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
 @dataclass(frozen=True)
 class CUDAOptions:
     num_warps: int = 4
@@ -76,8 +82,10 @@ class CUDAOptions:
                "num_warps must be a power of 2"
 
     def hash(self):
-        key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
-        return hashlib.md5(key.encode("utf-8")).hexdigest()
+        hash_dict = dict(self.__dict__)
+        hash_dict["extern_libs"] = tuple((k, file_hash(v)) for k, v in sorted(hash_dict["extern_libs"]))
+        key = "_".join([f"{name}-{val}" for name, val in sorted(hash_dict.items())])
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
 class CUDABackend(BaseBackend):
