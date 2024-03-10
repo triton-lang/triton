@@ -160,11 +160,26 @@ class Builder:
     def get_int1(self, value):
         return TensorHandle(np.array([value], dtype=bool), tl.int1)
 
+    def get_uint8(self, value):
+        return TensorHandle(np.array([value], dtype=np.uint8), tl.uint8)
+
+    def get_int8(self, value):
+        return TensorHandle(np.array([value], dtype=np.int8), tl.int8)
+
+    def get_uint16(self, value):
+        return TensorHandle(np.array([value], dtype=np.uint16), tl.uint16)
+
+    def get_int16(self, value):
+        return TensorHandle(np.array([value], dtype=np.int16), tl.int16)
+
     def get_uint32(self, value):
         return TensorHandle(np.array([value], dtype=np.uint32), tl.uint32)
 
     def get_int32(self, value):
         return TensorHandle(np.array([value], dtype=np.int32), tl.int32)
+
+    def get_uint64(self, value):
+        return TensorHandle(np.array([value], dtype=np.uint64), tl.uint64)
 
     def get_int64(self, value):
         return TensorHandle(np.array([value], dtype=np.int64), tl.int64)
@@ -174,6 +189,9 @@ class Builder:
 
     def get_fp32(self, value):
         return TensorHandle(np.array([value], dtype=np.float32), tl.float32)
+
+    def get_fp64(self, value):
+        return TensorHandle(np.array([value], dtype=np.float64), tl.float64)
 
     def get_null_value(self, type):
         return TensorHandle(np.array([0], dtype=_get_np_dtype(type)), type)
@@ -577,7 +595,7 @@ def _patch_lang_core(lang, builder):
 
     # can't just map lang.static_range to `range`, because `tl.static_range`
     # can get `step` passed by keyword
-    def _static_range(arg1, arg2=None, step=None):
+    def _range(arg1, arg2=None, step=None, **kwargs):
         if step is None:
             step = 1
         if arg2 is None:
@@ -589,21 +607,32 @@ def _patch_lang_core(lang, builder):
     def _static_assert(cond, msg=""):
         assert cond, msg
 
-    lang.static_range = _static_range
+    lang.range = _range
+    lang.static_range = _range
     lang.static_assert = _static_assert
     lang.dtype.to_ir = _new_to_ir
 
 
 def _patch_lang_math(lang, builder):
     math = lang.math
+
+    def _div_rn(lhs, rhs):
+        return np.round(np.divide(lhs, rhs))
+
+    def _sqrt_rn(lhs):
+        return np.round(np.sqrt(lhs))
+
     mapping = {
-        "abs": "abs",
-        "acos": "arccos",
-        "asin": "arcsin",
-        "exp2": "exp2",
-        "log2": "log2",
-        "max": "maximum",
-        "floor": "floor",
+        "abs": np.abs,
+        "acos": np.arccos,
+        "asin": np.arcsin,
+        "exp2": np.exp2,
+        "log2": np.log2,
+        "max": np.maximum,
+        "floor": np.floor,
+        "div_rn": np.divide,
+        "sqrt_rn": np.sqrt,
+        "sqrt": np.sqrt,
     }
 
     def make_numpy(name):
@@ -614,7 +643,7 @@ def _patch_lang_math(lang, builder):
             args = [arg.handle.data for arg in args if isinstance(arg, tl.core.tensor)]
             # remove the _builder kwarg
             kwargs = {k: v.handle.data for k, v in kwargs.items() if k != "_builder"}
-            ret = getattr(np, mapping[name])(*args, **kwargs)
+            ret = mapping[name](*args, **kwargs)
             ret = tl.core.tensor(TensorHandle(ret, ret_dtype), ret_type)
             return ret
 
