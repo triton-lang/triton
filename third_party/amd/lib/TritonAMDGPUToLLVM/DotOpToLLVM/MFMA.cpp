@@ -191,7 +191,6 @@ struct DotOpMFMAConversionHelper {
       mfmaInsnName = (*maybeMfmaInsn).getInsnName();
 
     auto aEncoding = aTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-    auto bEncoding = bTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
     int kWidth = aEncoding.getKWidth();
 
     auto repA =

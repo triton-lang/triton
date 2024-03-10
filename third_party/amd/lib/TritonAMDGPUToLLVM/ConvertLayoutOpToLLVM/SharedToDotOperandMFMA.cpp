@@ -500,6 +500,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   }
 
   Type resElemTy = typeConverter->convertType(elemTy);
+  llvm::outs() << "resElemTy = " << resElemTy << "\n";
   Type smemPtrTy = ptr_ty(rewriter.getContext(), 3);
 
   int loadsPerThread = offsets.size() / numRepK / (isFastPath ? numRepNonK : 1);
@@ -525,25 +526,30 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
           loadOffset = add(offAdjust, offsets[k * loadsPerThread + loadId]);
         Value loadAddress = gep(smemPtrTy, elemTy, smemBase, loadOffset);
         Value loadedValue = load(loadVecTy, loadAddress);
-        if (loadsPerThread > 1) {
-          for (int elemId = 0; elemId < elemsPerLoad; ++elemId) {
-            Value elemVal =
-                extract_element(elemTy, loadedValue, i32_val(elemId));
-            elemVal = bitcast(elemVal, resElemTy);
-            valVec = insert_element(vecTy, valVec, elemVal,
-                                    i32_val(loadId * elemsPerLoad + elemId));
-          }
-        } else {
-          valVec = loadedValue;
+        // if (loadsPerThread > 1) {
+        //   for (int elemId = 0; elemId < elemsPerLoad; ++elemId) {
+        //     Value elemVal =
+        //         extract_element(elemTy, loadedValue, i32_val(elemId));
+        //     elemVal = bitcast(elemVal, resElemTy);
+        //     valVec = insert_element(vecTy, valVec, elemVal,
+        //                             i32_val(loadId * elemsPerLoad + elemId));
+        //   }
+        // } else {
+        //   valVec = loadedValue;
+        // }
+        for (int elemId = 0; elemId < elemsPerLoad; ++elemId) {
+          Value elemVal = extract_element(elemTy, loadedValue, i32_val(elemId));
+          loadedValues.push_back(elemVal);
         }
       }
-      loadedValues.push_back(valVec);
+      // loadedValues.push_back(valVec);
     }
   }
 
   MLIRContext *ctx = mfmaLayout.getContext();
   Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(loadedValues.size(), loadedValues[0].getType()));
+  llvm::outs() << "structTy = " << structTy << "\n";
   auto result =
       packLLElements(loc, typeConverter, loadedValues, rewriter, structTy);
   return result;
