@@ -143,7 +143,7 @@ def _to_tensor(x, builder):
 class dtype:
     SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
     UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
-    FP_TYPES = ['fp8e4b15', 'fp8e4b15x4', 'fp8e4nv', 'fp8e5', 'fp16', 'bf16', 'fp32', 'fp64']
+    FP_TYPES = ['fp8e4b15', 'fp8e4b15x4', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp16', 'bf16', 'fp32', 'fp64']
     STANDARD_FP_TYPES = ['fp16', 'bf16', 'fp32', 'fp64']
     OTHER_TYPES = ['void']
 
@@ -177,10 +177,18 @@ class dtype:
                 self.fp_mantissa_width = 3
                 self.primitive_bitwidth = 8
                 self.exponent_bias = 7
+            elif name == 'fp8e4b8':
+                self.fp_mantissa_width = 3
+                self.primitive_bitwidth = 8
+                self.exponent_bias = 8
             elif name == 'fp8e5':
                 self.fp_mantissa_width = 2
                 self.primitive_bitwidth = 8
                 self.exponent_bias = 15
+            elif name == 'fp8e5b16':
+                self.fp_mantissa_width = 2
+                self.primitive_bitwidth = 8
+                self.exponent_bias = 16
             elif name == 'fp16':
                 self.fp_mantissa_width = 10
                 self.primitive_bitwidth = 16
@@ -214,8 +222,14 @@ class dtype:
     def is_fp8e4b15x4(self):
         return self.name == 'fp8e4b15x4'
 
+    def is_fp8e4b8(self):
+        return self.name == 'fp8e4b8'
+
     def is_fp8e5(self):
         return self.name == 'fp8e5'
+
+    def is_fp8e5b16(self):
+        return self.name == 'fp8e5b16'
 
     def is_fp16(self):
         return self.name == 'fp16'
@@ -320,8 +334,12 @@ class dtype:
             return builder.get_int64_ty()
         elif self.name == 'fp8e5':
             return builder.get_fp8e5_ty()
+        elif self.name == 'fp8e5b16':
+            return builder.get_fp8e5b16_ty()
         elif self.name == 'fp8e4nv':
             return builder.get_fp8e4nv_ty()
+        elif self.name == 'fp8e4b8':
+            return builder.get_fp8e4b8_ty()
         elif self.name == 'fp8e4b15':
             return builder.get_fp8e4b15_ty()
         elif self.name == 'fp8e4b15x4':
@@ -467,7 +485,9 @@ uint16 = dtype('uint16')
 uint32 = dtype('uint32')
 uint64 = dtype('uint64')
 float8e5 = dtype('fp8e5')
+float8e5b16 = dtype('fp8e5b16')
 float8e4nv = dtype('fp8e4nv')
+float8e4b8 = dtype('fp8e4b8')
 float8e4b15 = dtype('fp8e4b15')
 float8e4b15x4 = dtype('fp8e4b15x4')
 float16 = dtype('fp16')
