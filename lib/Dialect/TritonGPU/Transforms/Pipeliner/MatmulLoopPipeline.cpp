@@ -1,6 +1,7 @@
 #include "PipelineExpander.h"
 #include "PipeliningUtility.h"
 #include "Schedule.h"
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -874,9 +875,9 @@ void mlir::triton::updateWaits(ModuleOp module) {
 }
 
 // Add the given values as operands of the given wait, and replace all uses of
-// the values with the wait.
+// the values with the wait.  Also adds related MemDesc's to the wait.
 //
-// That is, threading %a through the wait transforms
+// Threading %a through the wait transforms
 //
 //   %a = <...>
 //   (%x', %y') = ttng.async_wait %x, %y
@@ -889,24 +890,73 @@ void mlir::triton::updateWaits(ModuleOp module) {
 //   %b = fn(%a')
 //
 // The wait must dominate all uses of the elements of `values`.
+//
+// In addition to adding each value from `values` to the wait, this function
+// also adds some MemDesc's to the wait.  The idea is that if you have
+//
+//   %alloc = ttg.local_alloc ...
+//   %a = ttng.dot_async %alloc
+//   %a1 = ttng.dot_wait %a
+//
+// then we want the wait to depend on %alloc as well as %a.  This extends the
+// live range of %alloc, so that it won't be destroyed until after the dot is
+// waited on.
+//
+// Specifically, this function finds all dot_async ops that elements of `values`
+// depend on.  Then it adds the MemDesc operands of those dots to the wait.
 static void threadValuesThroughWait(ttng::DotWaitOp wait,
                                     MutableArrayRef<Value> values) {
   IRRewriter builder(wait.getContext());
   builder.setInsertionPoint(wait);
 
-  SmallVector<Value> newOperands(wait->getOperands());
-  newOperands.insert(newOperands.end(), values.begin(), values.end());
+  // Operands are only added to the wait through this function, so we can have
+  // the invariant that the wait has no duplicates.  This makes things a bit
+  // easier below.
+  size_t origNumOperands = wait.getNumOperands();
+  SetVector<Value> newOperands(wait.getOperands().begin(),
+                               wait.getOperands().end());
+  assert(newOperands.size() == origNumOperands &&
+         "Wait op has duplicate operands.");
+
+  newOperands.insert(values.begin(), values.end());
+
+  // Find memdefs depended on by `values` through async dot ops.
+  SmallVector<ttng::DotAsyncOp> asyncDots;
+  for (Value v : values) {
+    BackwardSliceOptions options;
+    options.omitBlockArguments = false;
+    options.filter = [&](Operation *op) {
+      if (auto dot = dyn_cast<ttng::DotAsyncOp>(op)) {
+        asyncDots.push_back(dot);
+        return false;
+      }
+      return true;
+    };
+    SetVector<Operation *> slice;
+    getBackwardSlice(v, &slice, options);
+  }
+
+  for (ttng::DotAsyncOp dot : asyncDots) {
+    for (Value operand : dot.getOperands()) {
+      if (operand.getType().isa<tt::MemDescType>()) {
+        newOperands.insert(operand);
+      }
+    }
+  }
 
   // We can't use replaceWithNewOp because we're changing the number of return
   // values in the operation.
-  auto newWait = builder.create<ttng::DotWaitOp>(wait.getLoc(), newOperands,
-                                                 wait.getPendings());
-  for (int i = 0; i < wait->getNumResults(); i++) {
-    wait.getResult(i).replaceAllUsesWith(newWait.getResult(i));
+  auto newWait = builder.create<ttng::DotWaitOp>(
+      wait.getLoc(), llvm::to_vector(newOperands), wait.getPendings());
+  for (int i = 0; i < origNumOperands; i++) {
+    Value operand = wait.getResult(i);
+    if (!operand.getType().isa<tt::MemDescType>())
+      operand.replaceAllUsesWith(newWait.getResult(i));
   }
-  for (int i = 0; i < values.size(); i++) {
-    values[i].replaceAllUsesExcept(newWait.getResult(wait->getNumResults() + i),
-                                   newWait);
+  for (int i = origNumOperands; i < newOperands.size(); i++) {
+    Value operand = newWait.getOperand(i);
+    if (!operand.getType().isa<tt::MemDescType>())
+      operand.replaceAllUsesExcept(newWait.getResult(i), newWait);
   }
   wait->erase();
 }
@@ -1097,18 +1147,13 @@ static void insertAsyncDotWaitInLoop(
                                            properlyAsyncDots.size());
   }
 
-  // Thread the results of the async dots through the wait, noting that some
-  // might already be in there.
-  DenseSet<Value> curWaitOperands(wait.getOperands().begin(),
-                                  wait.getOperands().end());
+  // Thread the results of the async dots through the wait.
   SmallVector<Value> addlWaitOperands;
   for (auto [asyncDot, iterArgIdx] : properlyAsyncDots) {
     Value waitOperand = syncAtBeginning
                             ? cast<Value>(forOp.getRegionIterArg(iterArgIdx))
                             : cast<Value>(asyncDot->getResult(0));
-    if (!curWaitOperands.contains(waitOperand)) {
-      addlWaitOperands.push_back(waitOperand);
-    }
+    addlWaitOperands.push_back(waitOperand);
   }
   threadValuesThroughWait(wait, addlWaitOperands);
 }
@@ -1154,8 +1199,11 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
       properlyAsyncDots[dotOp] = *iterArgIdx;
     } else {
       builder.setInsertionPointAfter(dotOp);
-      builder.create<ttng::DotWaitOp>(dotOp.getLoc(), dotOp.getResult(),
-                                      /*pendings=*/0);
+      auto wait =
+          builder.create<ttng::DotWaitOp>(dotOp.getLoc(), ArrayRef<Value>{},
+                                          /*pendings=*/0);
+      SmallVector<Value> waitOperands = {dotOp.getResult()};
+      threadValuesThroughWait(wait, waitOperands);
     }
   }
 

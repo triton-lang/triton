@@ -447,11 +447,14 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %18 = tt.load %16 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64x16xf16, #blocked>
     %19 = triton_gpu.local_alloc %9 : (tensor<128x64xf16, #blocked1>) -> !tt.memdesc<128x64xf16, #shared>
     %20 = triton_gpu.local_alloc %18 : (tensor<64x16xf16, #blocked>) -> !tt.memdesc<64x16xf16, #shared1>
+    // CHECK: %[[ALLOC1:.+]] = triton_gpu.local_alloc
+    // CHECK: %[[ALLOC2:.+]] = triton_gpu.local_alloc
     // CHECK: %[[R:.+]]:{{.+}} = scf.for
-    // CHECK:   %[[DOT1:.+]] = triton_nvidia_gpu.dot_async
+    // CHECK:   %[[DOT1:.+]] = triton_nvidia_gpu.dot_async{{.*}}
     // CHECK:   triton_gpu.async_wait {{.*}} {num = 1 : i32}
-    // CHECK:   %[[DOT2:.+]] = triton_nvidia_gpu.dot_async
-    // CHECK:   triton_nvidia_gpu.dot_wait %[[DOT1]], %[[DOT2]] {pendings = 2 : i32}
+    // CHECK:   %[[TRANS:.+]] = tt.trans{{.*}} : !tt.memdesc
+    // CHECK:   %[[DOT2:.+]] = triton_nvidia_gpu.dot_async{{.*}} %[[TRANS]]
+    // CHECK:   triton_nvidia_gpu.dot_wait %[[DOT1]], %[[DOT2]], %[[ALLOC1]], %[[ALLOC2]], %[[TRANS]] {pendings = 2 : i32}
     // CHECK:   scf.yield
     // CHECK: %{{.*}}:2 = triton_nvidia_gpu.dot_wait %[[R]]#{{.+}}, %[[R]]#{{.+}} {pendings = 0 : i32} : tensor<128x16xf32, #{{.*}}>, tensor<128x64xf32, #{{.*}}>
     %17:3 = scf.for %arg3 = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%arg4 = %cst_3, %arg5 = %16, %arg6 = %cst_2) -> (tensor<128x64xf32, #mma>, tensor<64x16x!tt.ptr<f16, 1>, #blocked>, tensor<128x16xf32, #mma1>)  : i32 {
@@ -596,7 +599,10 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     // CHECK-DAG-SAME:     %[[PREV_DOT2]]
     // CHECK-SAME:         {pendings = 0 : i32}
     // CHECK:            %[[DOT2:.+]] = triton_nvidia_gpu.dot_async
-    // CHECK:            %[[WAIT:[^ :]+]]:2 = triton_nvidia_gpu.dot_wait %[[DOT0]], %[[DOT2]] {pendings = 2 : i32}
+    // CHECK:            %[[WAIT:[^ :]+]]:{{[0-9]+}} = triton_nvidia_gpu.dot_wait
+    // CHECK-DAG-SAME:     %[[DOT0]]
+    // CHECK-DAG-SAME:     %[[DOT2]]
+    // CHECK-SAME:         {pendings = 2 : i32}
     // CHECK:          scf.yield %[[WAIT]]#1
     // CHECK:          triton_nvidia_gpu.dot_wait %[[LOOP]]#3, %[[LOOP]]#0 {pendings = 0 : i32}
     %17:4 = scf.for %arg3 = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%prev_dot2 = %cst_3, %arg5 = %16, %prev_dot1 = %cst_2, %prev_dot0 = %cst_2) -> (tensor<128x64xf32, #mma>, tensor<64x16x!tt.ptr<f16, 1>, #blocked>, tensor<128x16xf32, #mma1>, tensor<128x16xf32, #mma1>)  : i32 {
