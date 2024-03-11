@@ -1,4 +1,5 @@
-﻿#include "TritonAMDGPUToLLVM/Passes.h"
+﻿#include "Tools/Sys/GetPlatform.hpp"
+#include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
@@ -36,6 +37,8 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
 void init_triton_amd(py::module &&m) {
   m.doc() = "Python bindings to the AMD Triton backend";
 
+  using ret = py::return_value_policy;
+
   auto passes = m.def_submodule("passes");
   init_triton_amd_passes_ttgpuir(passes.def_submodule("ttgpuir"));
 
@@ -47,6 +50,17 @@ void init_triton_amd(py::module &&m) {
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
   });
+
+  m.def(
+      "get_arch_info",
+      []() {
+          return std::get<0>(getArchInfo());
+      },
+      ret::take_ownership);
+
+  m.def(
+      "get_warp_size", []() { return std::get<1>(getArchInfo()); },
+      ret::take_ownership);
 
   // calling convention
   m.attr("CALLING_CONV_AMDGPU_KERNEL") =
