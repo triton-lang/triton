@@ -10,7 +10,7 @@ get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
 function(add_triton_ut)
   set(options)
   set(oneValueArgs NAME)
-  set(multiValueArgs SRCS LIBS)
+  set(multiValueArgs SRCS LIBS DEFS)
   cmake_parse_arguments(_ "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
   add_test(NAME ${__NAME}
           COMMAND ${__NAME})
@@ -28,6 +28,8 @@ function(add_triton_ut)
           ${__LIBS})
 
   target_compile_options(${__NAME} PRIVATE -fno-rtti)
+
+  target_compile_definitions(${__NAME} PRIVATE ${__DEFS})
 
   # Without the TEST_DISCOVERY_TIMEOUT, the tests randomly time out on my mac
   # laptop.  I think the issue may be that the very first time you run a program
