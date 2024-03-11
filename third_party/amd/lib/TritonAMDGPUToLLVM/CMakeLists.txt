@@ -6,12 +6,12 @@ add_triton_library(TritonAMDGPUToLLVM
     DotOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
-    TritonGPUToLLVM.cpp
     GCNAsmFormat.cpp
-    TritonGPUToLLVMPass.cpp
+    TritonGPUToLLVM.cpp
     Utility.cpp
     TargetInfo.cpp
     DecomposeUnsupportedConversions.cpp
+    SPMDOpToLLVM.cpp
 
     DEPENDS
     TritonAMDGPUConversionPassIncGen

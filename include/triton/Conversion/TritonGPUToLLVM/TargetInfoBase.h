@@ -22,6 +22,8 @@ public:
                            Value val, int i) const = 0;
   virtual Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
                            Value val, Value i) const = 0;
+  virtual Value programId(Location loc, ConversionPatternRewriter &rewriter,
+                          ModuleOp moduleOp, int axis) const = 0;
   virtual bool warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                           SmallVector<Value> &acc, triton::ReduceOp op,
                           unsigned numLaneToReduce) const = 0;

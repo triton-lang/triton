@@ -11,14 +11,13 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     BarrierOpToLLVM.cpp
     TritonGPUToLLVM.cpp
     DecomposeUnsupportedConversions.cpp
-    PrintOpToLLVM.cpp
-    ControlFlowOpToLLVM.cpp
     SPMDOpToLLVM.cpp
     TensorPtrOpsToLLVM.cpp
     ClusterOpsToLLVM.cpp
     PTXAsmFormat.cpp
     Utility.cpp
     TargetInfo.cpp
+    PrintOpToLLVM.cpp
 
     DEPENDS
     TritonNVIDIAGPUConversionPassIncGen

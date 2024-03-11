@@ -18,14 +18,13 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
   LogicalResult
   matchAndRewrite(triton::PrintOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto typeConverter = getTypeConverter();
     auto loc = op->getLoc();
     Value prefixStr =
         LLVM::addStringToModule(loc, rewriter, "printfPrefix_", op.getPrefix());
 
     auto getPid = [&](int axis) {
-      return LLVM::NVIDIA::llGetPid(axis, loc, op->getParentOfType<ModuleOp>(),
-                                    rewriter);
+      return LLVM::NVIDIA::llGetPid(loc, rewriter,
+                                    op->getParentOfType<ModuleOp>(), axis);
     };
     std::array<Value, 3> pid = {getPid(0), getPid(1), getPid(2)};
 
