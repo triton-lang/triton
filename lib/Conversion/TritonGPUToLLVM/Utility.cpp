@@ -523,14 +523,19 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
     }
     return multiDimOffset;
   }
-  if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
+  if (layout.isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>()) {
     auto multiDimBase =
         emitBaseIndexForLayout(loc, rewriter, layout, type, false);
     SmallVector<SmallVector<unsigned>> offsets;
     assert(rank == 2);
     SmallVector<Value> multiDimOffset(rank);
-    emitMfmaOffsetForCTA(mfmaLayout, offsets, multiDimCTAInRepId[0],
-                         multiDimCTAInRepId[1]);
+    if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
+      emitMfmaOffsetForCTA(mfmaLayout, offsets, multiDimCTAInRepId[0],
+                           multiDimCTAInRepId[1]);
+    } else if (auto wmmaLayout = layout.dyn_cast<AMDWmmaEncodingAttr>()) {
+      emitWmmaOffsetForCTA(wmmaLayout, offsets, multiDimCTAInRepId[0],
+                           multiDimCTAInRepId[1]);
+    }
     multiDimOffset[0] = add(multiDimBase[0], i32_val(offsets[elemId][0]));
     multiDimOffset[1] = add(multiDimBase[1], i32_val(offsets[elemId][1]));
     return multiDimOffset;
