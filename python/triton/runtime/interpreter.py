@@ -664,7 +664,7 @@ to the mapping in python/triton/interpreter/new_interpreter.py:_patch_lang_math.
 def _patch_lang(fn):
     lang = [value for _, value in fn.__globals__.items() if value in [tl, tl.core]]
     assert len(lang) == 1, "triton.language must be visible from within jit'd function"
-    _patch_lang_tensor(getattr(lang[0], "tensor"), builder)
+    _patch_lang_tensor(lang[0].tensor, builder)
     _patch_lang_core(lang[0], builder)
     if lang[0] == tl:
         _patch_lang_math(lang[0], builder)
