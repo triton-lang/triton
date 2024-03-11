@@ -13,6 +13,9 @@ add_triton_library(TritonGPUToLLVM
     ReduceOpToLLVM.cpp
     ScanOpToLLVM.cpp
     ConvertLayoutOpToLLVM.cpp
+    ControlFlowOpToLLVM.cpp
+    FuncOpToLLVM.cpp
+    SPMDOpToLLVM.cpp
 
     DEPENDS
     TritonGPUConversionPassIncGen

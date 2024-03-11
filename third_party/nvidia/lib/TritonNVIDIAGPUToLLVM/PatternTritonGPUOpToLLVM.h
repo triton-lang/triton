@@ -45,14 +45,6 @@ void populateTensorPtrOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,
                                         PatternBenefit benefit);
 
-void populatePrintOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                  RewritePatternSet &patterns,
-                                  PatternBenefit benefit);
-
-void populateControlFlowOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                        RewritePatternSet &patterns,
-                                        PatternBenefit benefit);
-
 void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
                                  PatternBenefit benefit);
@@ -62,6 +54,10 @@ void populateClampFOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                    int computeCapability,
                                    PatternBenefit benefit);
+
+void populatePrintOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                  RewritePatternSet &patterns,
+                                  PatternBenefit benefit);
 } // namespace NVIDIA
 } // namespace triton
 } // namespace mlir

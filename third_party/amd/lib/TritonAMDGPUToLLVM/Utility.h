@@ -21,6 +21,9 @@ Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i);
 Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  Value i);
+
+Value llGetPid(Location loc, ConversionPatternRewriter &rewriter, 
+               ModuleOp moduleOp, int axis);
 } // namespace AMD
 
 } // namespace LLVM

@@ -6,21 +6,6 @@ namespace {
 using namespace mlir;
 using namespace mlir::triton;
 
-struct GetProgramIdOpConversion
-    : public ConvertOpToLLVMPattern<triton::GetProgramIdOp> {
-  using ConvertOpToLLVMPattern<triton::GetProgramIdOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Value programId =
-        LLVM::NVIDIA::llGetPid(op.getAxisAsInt(), op->getLoc(),
-                               op->getParentOfType<ModuleOp>(), rewriter);
-    rewriter.replaceOp(op, programId);
-    return success();
-  }
-};
-
 struct GetNumProgramsOpConversion
     : public ConvertOpToLLVMPattern<triton::GetNumProgramsOp> {
   using ConvertOpToLLVMPattern<
@@ -66,7 +51,6 @@ struct GetClusterCTAIdOpConversion
 void mlir::triton::NVIDIA::populateSPMDOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
-  patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
   patterns.add<GetNumProgramsOpConversion>(typeConverter, benefit);
   patterns.add<GetClusterCTAIdOpConversion>(typeConverter, benefit);
 }
