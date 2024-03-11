@@ -43,7 +43,15 @@ namespace gpu {
 unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape,
                                 Type eltTy) {
   if (auto tritonGPUAttr = layout.dyn_cast<TritonGPU_AttrTrait>()) {
-    return tritonGPUAttr.getTotalElemsPerThread(shape, eltTy);
+    unsigned elemNum = tritonGPUAttr.getTotalElemsPerThread(shape, eltTy);
+    unsigned vecSize = 1;
+    auto dotOpLayout = layout.dyn_cast<DotOperandEncodingAttr>();
+    if (dotOpLayout) {
+      if (auto mfmaParent = dotOpLayout.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
+        vecSize = dotOpLayout.getKWidth();
+      }
+    }
+    return elemNum * vecSize;
   } else {
     llvm::report_fatal_error("getTotalElemsPerThread not implemented");
     return 0;

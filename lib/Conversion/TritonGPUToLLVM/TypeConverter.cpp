@@ -87,9 +87,7 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
     return elemTy;
   if (auto mfmaParent =
           dotOpLayout.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
-    llvm::outs() << "mfmaLayouts================\n";
     return elemTy;
-    // return vec_ty(elemTy, dotOpLayout.getKWidth());
   }
   auto mmaParent = dotOpLayout.getParent().dyn_cast<NvidiaMmaEncodingAttr>();
   if (!mmaParent || mmaParent.isHopper())
@@ -121,17 +119,7 @@ Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
   }
 
   unsigned numElementsPerThread = getTotalElemsPerThread(type);
-  llvm::outs() << "layout = " << type.getEncoding();
-  llvm::outs() << ", numElementsPerThread = " << numElementsPerThread << ", eltType = " << eltType << "\n";
-  unsigned num = 1;
-  auto dotOpLayout = type.getEncoding().dyn_cast<DotOperandEncodingAttr>();
-  if (dotOpLayout) {
-    if (auto mfmaParent = dotOpLayout.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
-      num = dotOpLayout.getKWidth();
-    }
-  }
-  // SmallVector<Type, 4> types(numElementsPerThread, eltType);
-  SmallVector<Type> types(numElementsPerThread * num, eltType);
+  SmallVector<Type> types(numElementsPerThread, eltType);
   return LLVM::LLVMStructType::getLiteral(ctx, types);
 }
 
