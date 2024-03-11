@@ -171,6 +171,8 @@ def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEf
   let description = [{
     This operation allocates buffer in shared memory and return a descriptor
     containing the address and a view of the buffer.
+
+    Explicitly deallocating a buffer is optional; see local_dealloc.
   }];
   let arguments = (ins Optional<TT_Tensor>:$init);
 
@@ -184,7 +186,12 @@ def TTG_LocalDeallocOp : TTG_Op<"local_dealloc", [MemoryEffects<[MemFree<SharedM
   let summary = "dealloc buffer";
 
   let description = [{
-    This operation deallocate a buffer explicitly. Using the buffer after this operation is undefined.
+    This operation deallocates a buffer explicitly. Using the buffer after this
+    operation is undefined.
+
+    This operation is optional.  If you don't explicitly dealloc a buffer, the
+    compiler assumes it's deallocated at the first point that post-dominates all
+    uses of the alloc.
   }];
 
   let arguments = (ins TT_MemDescType:$ptr);
