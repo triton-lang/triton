@@ -616,12 +616,6 @@ def _patch_lang_core(lang, builder):
 def _patch_lang_math(lang, builder):
     math = lang.math
 
-    def _div_rn(lhs, rhs):
-        return np.round(np.divide(lhs, rhs))
-
-    def _sqrt_rn(lhs):
-        return np.round(np.sqrt(lhs))
-
     mapping = {
         "abs": np.abs,
         "acos": np.arccos,
