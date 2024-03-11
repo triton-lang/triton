@@ -13,7 +13,6 @@ add_triton_library(TritonGPUToLLVM
     ReduceOpToLLVM.cpp
     ScanOpToLLVM.cpp
     ConvertLayoutOpToLLVM.cpp
-    PrintOpToLLVM.cpp
     ControlFlowOpToLLVM.cpp
     FuncOpToLLVM.cpp
     SPMDOpToLLVM.cpp

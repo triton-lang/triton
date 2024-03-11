@@ -17,6 +17,7 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     PTXAsmFormat.cpp
     Utility.cpp
     TargetInfo.cpp
+    PrintOpToLLVM.cpp
 
     DEPENDS
     TritonNVIDIAGPUConversionPassIncGen

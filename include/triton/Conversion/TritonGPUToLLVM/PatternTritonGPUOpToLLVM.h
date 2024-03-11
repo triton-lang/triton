@@ -47,11 +47,6 @@ void populateViewOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns,
                                   PatternBenefit benefit);
 
-void populatePrintOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                  RewritePatternSet &patterns,
-                                  const TargetInfoBase &targetInfo,
-                                  PatternBenefit benefit);
-
 void populateMinMaxFOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                     RewritePatternSet &patterns,
                                     ModuleAxisInfoAnalysis &axisInfoAnalysis,
