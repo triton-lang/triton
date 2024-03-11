@@ -47,7 +47,8 @@ unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape,
     unsigned vecSize = 1;
     auto dotOpLayout = layout.dyn_cast<DotOperandEncodingAttr>();
     if (dotOpLayout) {
-      if (auto mfmaParent = dotOpLayout.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
+      if (auto mfmaParent =
+              dotOpLayout.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
         vecSize = dotOpLayout.getKWidth();
       }
     }
