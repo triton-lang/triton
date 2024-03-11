@@ -85,10 +85,6 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
   auto dotOpLayout = layout.dyn_cast<DotOperandEncodingAttr>();
   if (!dotOpLayout)
     return elemTy;
-  if (auto mfmaParent =
-          dotOpLayout.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
-    return elemTy;
-  }
   auto mmaParent = dotOpLayout.getParent().dyn_cast<NvidiaMmaEncodingAttr>();
   if (!mmaParent || mmaParent.isHopper())
     return elemTy;

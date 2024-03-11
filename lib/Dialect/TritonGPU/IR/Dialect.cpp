@@ -43,16 +43,7 @@ namespace gpu {
 unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape,
                                 Type eltTy) {
   if (auto tritonGPUAttr = layout.dyn_cast<TritonGPU_AttrTrait>()) {
-    unsigned elemNum = tritonGPUAttr.getTotalElemsPerThread(shape, eltTy);
-    unsigned vecSize = 1;
-    auto dotOpLayout = layout.dyn_cast<DotOperandEncodingAttr>();
-    if (dotOpLayout) {
-      if (auto mfmaParent =
-              dotOpLayout.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
-        vecSize = dotOpLayout.getKWidth();
-      }
-    }
-    return elemNum * vecSize;
+    return tritonGPUAttr.getTotalElemsPerThread(shape, eltTy);
   } else {
     llvm::report_fatal_error("getTotalElemsPerThread not implemented");
     return 0;
@@ -1514,7 +1505,7 @@ unsigned AMDMfmaEncodingAttr::getTotalElemsPerThreadForOperands(
   constexpr int waveSize = 64;
   auto tileSize = getMFMAInstrShapeForOperands(kWidth, opIdx);
   auto rep = getMFMARepForOperands(shape, kWidth, opIdx);
-  return rep[0] * rep[1];
+  return rep[0] * rep[1] * kWidth;
 }
 
 SmallVector<unsigned>
