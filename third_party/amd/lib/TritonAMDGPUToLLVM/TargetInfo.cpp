@@ -67,7 +67,7 @@ Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
   return LLVM::AMD::shuffleIdx(loc, rewriter, val, i);
 }
 
-Value TargetInfo::llGetPid(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::programId(Location loc, ConversionPatternRewriter &rewriter,
                            ModuleOp moduleOp, int axis) const {
   return LLVM::AMD::llGetPid(loc, rewriter, moduleOp, axis);
 }

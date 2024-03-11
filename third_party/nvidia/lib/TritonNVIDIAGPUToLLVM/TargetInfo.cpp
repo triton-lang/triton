@@ -209,8 +209,8 @@ Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
   return LLVM::NVIDIA::shuffleIdx(loc, rewriter, val, i);
 }
 
-Value TargetInfo::llGetPid(Location loc, ConversionPatternRewriter &rewriter,
-                           ModuleOp moduleOp, int axis) const {
+Value TargetInfo::programId(Location loc, ConversionPatternRewriter &rewriter,
+                            ModuleOp moduleOp, int axis) const {
   return LLVM::NVIDIA::llGetPid(loc, rewriter, moduleOp, axis);
 }
 bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
