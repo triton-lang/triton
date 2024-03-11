@@ -418,6 +418,7 @@ using LLVM::SharedMemoryObject;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::SharedMemoryObject;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
+using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
@@ -848,6 +849,71 @@ emitOffsetForMfmaLayout(const AMDMfmaEncodingAttr &mfmaLayout,
   return offsets;
 }
 
+static void emitWmmaOffsetForCTA(const AMDWmmaEncodingAttr &wmmaLayout,
+                                 SmallVector<SmallVector<unsigned>> &offsets,
+                                 unsigned ctaOffsetX, unsigned ctaOffsetY) {
+  const unsigned elemsPerThreadPerGroup = 8;
+  auto warpSize = getWarpSize(wmmaLayout);
+  assert(warpSize == 32);
+  auto shapePerCta = getShapePerCTATile(wmmaLayout);
+  for (unsigned elem = 0; elem < elemsPerThreadPerGroup; elem++) {
+    offsets.push_back(
+        {ctaOffsetX * shapePerCta[0] + 2 * elem, ctaOffsetY * shapePerCta[1]});
+  }
+}
+
+static SmallVector<Value>
+emitBaseIndexForWmmaLayout(Location loc, RewriterBase &rewriter,
+                           const AMDWmmaEncodingAttr &wmmaLayout,
+                           RankedTensorType type) {
+  auto shape = type.getShape();
+  auto _warpsPerCTA = wmmaLayout.getWarpsPerCTA();
+  assert(_warpsPerCTA.size() == 2);
+  SmallVector<Value> warpsPerCTA = {i32_val(_warpsPerCTA[0]),
+                                    i32_val(_warpsPerCTA[1])};
+  auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr();
+
+  Value threadId = getThreadId(rewriter, loc);
+  Value warpSize = i32_val(triton::gpu::getWarpSize(wmmaLayout));
+  Value laneId =
+      urem(threadId, i32_val(triton::gpu::getWarpSize(wmmaLayout) / 2));
+  Value threadIdPerWarp = urem(threadId, warpSize);
+
+  Value warpId = udiv(threadId, warpSize);
+  Value warpId0 = urem(warpId, warpsPerCTA[0]);
+  Value warpId1 = urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]);
+
+  Value offWarp0 = mul(warpId0, i32_val(mnkDim[0]));
+  Value offWarp1 = mul(warpId1, i32_val(mnkDim[1]));
+
+  return {add(udiv(threadIdPerWarp, i32_val(mnkDim[2])), offWarp0),
+          add(laneId, offWarp1)};
+}
+
+static SmallVector<SmallVector<unsigned>>
+emitOffsetForWmmaLayout(const AMDWmmaEncodingAttr &wmmaLayout,
+                        RankedTensorType type) {
+  auto tensorShape = type.getShape();
+  SmallVector<SmallVector<unsigned>> offsets;
+  auto shapePerCTA = getShapePerCTA(wmmaLayout, tensorShape);
+  auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
+
+  SmallVector<unsigned> numWarpsPerDim(2);
+  auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr();
+  for (unsigned d = 0; d < 2; ++d) {
+    unsigned inPerCTA = std::min<unsigned>(tensorShape[d], shapePerCTA[d]);
+    unsigned inPerWarp = ceil<unsigned>(inPerCTA, warpsPerCTA[d]);
+    numWarpsPerDim[d] = ceil<unsigned>(inPerWarp, mnkDim[d]);
+  }
+
+  for (unsigned i = 0; i < numWarpsPerDim[0]; ++i) {
+    for (unsigned j = 0; j < numWarpsPerDim[1]; ++j) {
+      emitWmmaOffsetForCTA(wmmaLayout, offsets, i, j);
+    }
+  }
+  return offsets;
+}
+
 static SmallVector<SmallVector<unsigned>>
 emitOffsetForLayout(Attribute layout, RankedTensorType type);
 
@@ -932,6 +998,8 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter, Attribute layout,
                                                       type);
   } else if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
     result = emitBaseIndexForMfmaLayout(loc, rewriter, mfmaLayout, type);
+  } else if (auto wmmaLayout = layout.dyn_cast<AMDWmmaEncodingAttr>()) {
+    result = emitBaseIndexForWmmaLayout(loc, rewriter, wmmaLayout, type);
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parentLayout = sliceLayout.getParent();
     auto parentShape = sliceLayout.paddedShape(type.getShape());
@@ -968,6 +1036,9 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
   }
   if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
     return emitOffsetForMfmaLayout(mfmaLayout, type);
+  }
+  if (auto wmmaLayout = layout.dyn_cast<AMDWmmaEncodingAttr>()) {
+    return emitOffsetForWmmaLayout(wmmaLayout, type);
   }
   if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>())
     return emitOffsetForSliceLayout(sliceLayout, type);
