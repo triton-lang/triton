@@ -71,6 +71,7 @@ jobs:
 
       - name: Install Triton on ROCM
         run: |
+          pip install --force-reinstall numpy==1.22.4
           pip uninstall -y triton
           cd python
           pip install -e .
