@@ -201,6 +201,7 @@ struct DotOpMFMAConversionHelper {
     assert(repA[1] == repB[0]);
 
     Value loadedA = adaptor.getA();
+    llvm::outs() << "loadedA = " << loadedA << "\n";
     Value loadedB = adaptor.getB();
     Value loadedC = adaptor.getC();
 
@@ -262,8 +263,11 @@ struct DotOpMFMAConversionHelper {
                                                  int kWidth, Type type) const {
     auto elems = unpackLLElements(loc, value, rewriter);
     ValueTable vals;
+    llvm::outs() << "n0 = " << n0 << ", n1 = " << n1 << ", elems_size = " << elems.size() << ", kWidth = " << kWidth << "\n";
     for (int i = 0; i < n0; i++) {
       for (int j = 0; j < n1; j++) {
+        for (int k = 0; k < kWidth; ++k) {
+        }
         auto rawElems = elems[n1 * i + j];
         Value convertedElems;
         if (type.isF32()) {
@@ -277,6 +281,7 @@ struct DotOpMFMAConversionHelper {
           assert(type.isBF16() || type.isF16());
           convertedElems = rawElems;
         }
+        llvm::outs() << "convertedElems_type = " << convertedElems.getType() << "\n";
         vals[{i, j}] = convertedElems;
       }
     }

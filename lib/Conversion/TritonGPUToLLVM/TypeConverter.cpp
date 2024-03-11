@@ -87,6 +87,7 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
     return elemTy;
   if (auto mfmaParent =
           dotOpLayout.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
+    llvm::outs() << "mfmaLayouts================\n";
     return elemTy;
     // return vec_ty(elemTy, dotOpLayout.getKWidth());
   }
@@ -120,15 +121,24 @@ Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
   }
 
   unsigned numElementsPerThread = getTotalElemsPerThread(type);
+  llvm::outs() << "layout = " << type.getEncoding();
+  llvm::outs() << ", numElementsPerThread = " << numElementsPerThread << ", eltType = " << eltType << "\n";
+  unsigned num = 1;
+  auto dotOpLayout = type.getEncoding().dyn_cast<DotOperandEncodingAttr>();
+  if (dotOpLayout) {
+    if (auto mfmaParent = dotOpLayout.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
+      num = dotOpLayout.getKWidth();
+    }
+  }
   // SmallVector<Type, 4> types(numElementsPerThread, eltType);
-  SmallVector<Type> types(numElementsPerThread, eltType);
+  SmallVector<Type> types(numElementsPerThread * num, eltType);
   return LLVM::LLVMStructType::getLiteral(ctx, types);
 }
 
 Type TritonGPUToLLVMTypeConverter::convertMemDescType(MemDescType type) {
   auto ctx = type.getContext();
   Attribute layout = type.getEncoding();
-  SmallVector<int64_t> shape(type.getShape().begin(), type.getShape().end());
+  // SmallVector<int64_t> shape(type.getShape().begin(), type.getShape().end());
   // Type eltType = getElementTypeForStruct(cast<TensorOrMemDesc>(type));
   auto shared_layout = layout.cast<SharedEncodingAttr>();
   SmallVector<Type, 4> types;

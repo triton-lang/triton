@@ -552,6 +552,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   llvm::outs() << "structTy = " << structTy << "\n";
   auto result =
       packLLElements(loc, typeConverter, loadedValues, rewriter, structTy);
+  llvm::outs() << "converted_result = " << result << "\n";
   return result;
 }
 
