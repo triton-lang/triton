@@ -126,8 +126,6 @@ Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
 Type TritonGPUToLLVMTypeConverter::convertMemDescType(MemDescType type) {
   auto ctx = type.getContext();
   Attribute layout = type.getEncoding();
-  // SmallVector<int64_t> shape(type.getShape().begin(), type.getShape().end());
-  // Type eltType = getElementTypeForStruct(cast<TensorOrMemDesc>(type));
   auto shared_layout = layout.cast<SharedEncodingAttr>();
   SmallVector<Type, 4> types;
   // base ptr
