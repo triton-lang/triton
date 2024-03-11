@@ -1,3 +1,4 @@
+import re
 import os
 import hashlib
 import tempfile
@@ -5,6 +6,7 @@ from pathlib import Path
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.backends.driver import GPUDriver
+from triton._C.libtriton import amd
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir = [os.path.join(dirname, "include")]
@@ -269,8 +271,58 @@ class HIPDriver(GPUDriver):
         return torch.version.hip is not None
 
     def get_current_target(self):
-        device = self.get_current_device()
-        device_properties = self.utils.get_device_properties(device)
-        arch = device_properties['arch']
-        warpSize = device_properties['warpSize']
-        return ("hip", arch.split(':')[0], warpSize)
+        full_details = self.get_amdgpu_arch_fulldetails()
+        arch = full_details["gfx_arch"]
+        warpSize = full_details["warp_size"]
+        return ("hip", arch, warpSize)
+
+    def gpu_matrix_core_version(self) -> int:
+        """ Determine matrix core type available on current GPU.
+
+            0 means no tensor cores are available
+            1 corresponds to MFMA in CDNA 1 architecture
+            2 corresponds to MFMA in CDNA 2 architecture
+            3 corresponds to MFMA in CDNA 3 architecture
+        """
+
+        arch_info = amd.get_arch_info()
+        gfx_arch = re.search('amd.*', arch_info)
+        if gfx_arch is None:
+            return 0
+        gfx_arch = gfx_arch.group(0).strip().split('--')
+        gpu_name = gfx_arch[1].split(':')[0]
+        if gpu_name in ['gfx908']:
+            return 1
+        if gpu_name in ['gfx90a']:
+            return 2
+        if gpu_name in ['gfx940', 'gfx941', 'gfx942']:
+            return 3
+        return 0
+
+    def get_amdgpu_arch_fulldetails(self):
+        """
+        get the amdgpu full ISA details by HSA API:
+        i.e., arch_triple: amdgcn-amd-amdhsa;
+              arch_name: gfx906; arch_features: sramecc+:xnack-
+        """
+        try:
+            arch_info = amd.get_arch_info()
+            gfx_arch_details = re.search('amd.*', arch_info).group(0).strip().split('--')
+            arch_triple = gfx_arch_details[0]
+            arch_name_features = gfx_arch_details[1].split(':')
+            arch_name = arch_name_features[0]
+            arch_features = ""
+
+            # overwrite if provided by user
+            gfx_arch = os.environ.get('MI_GPU_ARCH', arch_name)
+            if gfx_arch is None:
+                raise RuntimeError('gfx_arch is None (not specified)')
+            mat_core_ver = self.gpu_matrix_core_version()
+            capability = mat_core_ver * 100
+            warp_size = amd.get_warp_size()
+
+            return {"gfx_triple": arch_triple, "gfx_arch": gfx_arch, "gfx_features": arch_features,\
+                    "capability": capability, "matrix_core_version": mat_core_ver, "warp_size": warp_size}
+        except BaseException as e:
+            print("Error: Attempting to get amdgcn arch details {}".format(e))
+            return None
