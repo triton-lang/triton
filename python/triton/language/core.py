@@ -64,7 +64,6 @@ def _tensor_member_fn(fn: T) -> T:
     :code:`{fn.__name__}(x{", ..." if has_args else ""})`.
     """
 
-    @wraps(fn)
     def wrapper(*args, **kwargs):
         return fn(*args, **kwargs)
 
@@ -75,6 +74,9 @@ def _tensor_member_fn(fn: T) -> T:
     new_sig = orig_sig.replace(parameters=new_params)
     wrapper.__signature__ = new_sig
     wrapper.__doc__ = f"Forwards to :py:func:`{fn.__name__}` free function"
+    # If fn is a builtin, mark the wrapper as a builtin too.
+    if is_builtin(fn):
+        setattr(wrapper, TRITON_BUILTIN, True)
 
     setattr(tensor, fn.__name__, wrapper)
     return fn
