@@ -266,9 +266,18 @@ struct DotOpMFMAConversionHelper {
     llvm::outs() << "n0 = " << n0 << ", n1 = " << n1 << ", elems_size = " << elems.size() << ", kWidth = " << kWidth << "\n";
     for (int i = 0; i < n0; i++) {
       for (int j = 0; j < n1; j++) {
-        for (int k = 0; k < kWidth; ++k) {
+        Value rawElems;
+        if (kWidth == 1) {
+          rawElems = elems[n1 * i + j];
         }
-        auto rawElems = elems[n1 * i + j];
+        else {
+          Type ty = vec_ty(type, kWidth);
+          rawElems = undef(ty);
+          for (int k = 0; k < kWidth; ++k) {
+            rawElems = insert_element(ty, rawElems, elems[kWidth * (n1 * i + j) + k], i32_val(k));
+          }
+        }
+
         Value convertedElems;
         if (type.isF32()) {
           convertedElems = extract_element(type, rawElems, i32_val(0));
