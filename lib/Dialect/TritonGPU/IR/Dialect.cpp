@@ -1505,7 +1505,7 @@ unsigned AMDMfmaEncodingAttr::getTotalElemsPerThreadForOperands(
   constexpr int waveSize = 64;
   auto tileSize = getMFMAInstrShapeForOperands(kWidth, opIdx);
   auto rep = getMFMARepForOperands(shape, kWidth, opIdx);
-  return rep[0] * rep[1] * kWidth;
+  return rep[0] * rep[1];
 }
 
 SmallVector<unsigned>
