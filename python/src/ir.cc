@@ -1362,9 +1362,12 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_get_num_programs",
            [](TritonOpBuilder &self, int axis) -> Value {
+             if (axis < 0 || axis > 3)
+               throw pybind11::index_error("program_id must be in [0,3]");
              return self.create<GetNumProgramsOp>(
                  self.getBuilder().getI32Type(),
-                 self.getBuilder().getI32IntegerAttr(axis));
+                 ProgramIDDimAttr::get(self.getBuilder().getContext(),
+                                       ProgramIDDim(axis)));
            })
       .def("create_dot",
            [](TritonOpBuilder &self, Value &a, Value &b, Value &c,

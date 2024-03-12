@@ -28,11 +28,11 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        int numWarps,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                        PatternBenefit benefit);
-void populateTritonGPUToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                     RewritePatternSet &patterns, int numWarps,
-                                     ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                     ModuleAllocation &allocation,
-                                     PatternBenefit benefit);
+
+void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                 RewritePatternSet &patterns,
+                                 PatternBenefit benefit);
+
 } // namespace AMD
 
 #endif

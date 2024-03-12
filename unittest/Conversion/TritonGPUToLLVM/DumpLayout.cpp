@@ -22,15 +22,32 @@
  */
 
 #include "DumpLayout.h"
-
+#ifdef AMD_TARGET
+#include "amd/lib/TritonAMDGPUToLLVM/Utility.h"
+#else
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
-#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
-
+#endif
 namespace mlir {
 namespace triton {
 namespace gpu {
 
 namespace {
+
+#ifdef AMD_TARGET
+Value getMockSmemBaseImpl([[maybe_unused]] IRRewriter &rewriter,
+                          [[maybe_unused]] Location loc) {
+  return i32_val(0);
+}
+#else
+Value getMockSmemBaseImpl(IRRewriter &rewriter, Location loc) {
+  Value mockSmemBase =
+      LLVM::NVIDIA::getSRegValue(rewriter, loc, "%mock_smem_base");
+  auto llPtrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
+  auto cast = rewriter.create<UnrealizedConversionCastOp>(
+      loc, TypeRange{llPtrTy}, ValueRange{mockSmemBase});
+  return cast.getResult(0);
+}
+#endif
 
 //===----------------------------------------------------------------------===//
 // IndexEmitter
@@ -39,9 +56,17 @@ namespace {
 class IndexEmitter {
 public:
   IndexEmitter(MLIRContext *context_)
-      : context(context_), option(context), typeConverter(context, option),
-        rewriter(context), loc(UnknownLoc::get(context)) {
-    rewriter.setInsertionPointToStart(&block);
+      : context(context_), option(context), rewriter(context),
+        loc(UnknownLoc::get(context)) {
+    mlir::OpBuilder builder(context);
+    std::vector<mlir::Type> inTypes{};
+    std::vector<mlir::Type> outTypes{};
+    auto funcTy = builder.getFunctionType(inTypes, outTypes);
+    auto func = builder.create<mlir::triton::FuncOp>(loc, "test_func", funcTy);
+    auto mlirModule = mlir::ModuleOp::create(loc);
+    mlirModule.push_back(func);
+    auto *block = func.addEntryBlock();
+    rewriter.setInsertionPointToStart(block);
   }
 
   llvm::SmallVector<llvm::SmallVector<Value>>
@@ -56,28 +81,17 @@ public:
                           Type elemTy, llvm::ArrayRef<int64_t> shape,
                           bool withCTAOffset) {
     auto srcTy = RankedTensorType::get(shape, elemTy, srcLayout);
-    SharedMemoryObject smemObj(getMockSmemBase(), elemTy, shape,
-                               sharedLayout.getOrder(), loc, rewriter);
+    SharedMemoryObject smemObj(getMockSmemBaseImpl(rewriter, loc), elemTy,
+                               shape, sharedLayout.getOrder(), loc, rewriter);
     return getSwizzledSharedPtrs(loc, /*inVec=*/1, srcTy, sharedLayout, elemTy,
                                  smemObj, rewriter, smemObj.offsets,
                                  smemObj.strides);
   }
 
 private:
-  Value getMockSmemBase() {
-    Value mockSmemBase =
-        mlir::LLVM::NVIDIA::getSRegValue(rewriter, loc, "%mock_smem_base");
-    auto llPtrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
-    auto cast = rewriter.create<UnrealizedConversionCastOp>(
-        loc, TypeRange{llPtrTy}, ValueRange{mockSmemBase});
-    return cast.getResult(0);
-  }
-
   // Non-static members are initialized in declaration order
   MLIRContext *context;
   LowerToLLVMOptions option;
-  TritonGPUToLLVMTypeConverter typeConverter;
-  Block block;
   IRRewriter rewriter;
   Location loc;
 };
@@ -151,6 +165,8 @@ int eval(Value value, int ctaid, int tid) {
     return eval(xorOp.getLhs(), ctaid, tid) ^ eval(xorOp.getRhs(), ctaid, tid);
   } else if (auto trunciOp = llvm::dyn_cast<arith::TruncIOp>(op)) {
     return eval(trunciOp.getIn(), ctaid, tid);
+  } else if (auto idxCastOp = llvm::dyn_cast<arith::IndexCastOp>(op)) {
+    return eval(idxCastOp.getIn(), ctaid, tid);
   } else if (auto castOp = llvm::dyn_cast<UnrealizedConversionCastOp>(op)) {
     return eval(castOp.getOperand(0), ctaid, tid);
   } else if (auto threadOp = llvm::dyn_cast<mlir::gpu::ThreadIdOp>(op)) {
@@ -181,7 +197,7 @@ std::string dumpDistributedLayout(Attribute layout,
   assert(shape.size() <= 2 &&
          "High order tensor is not supported in dumpLayout");
 
-  int numThreads = 32 * getNumWarpsPerCTA(layout);
+  int numThreads = getWarpSize(layout) * getNumWarpsPerCTA(layout);
   int numCTAs = getNumCTAs(layout);
   auto f16Ty = FloatType::getF16(layout.getContext());
   int numElems = getTotalElemsPerThread(layout, shape, f16Ty);

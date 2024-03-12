@@ -1,6 +1,7 @@
 #include "PipelineExpander.h"
 #include "PipeliningUtility.h"
 #include "Schedule.h"
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -873,26 +874,103 @@ void mlir::triton::updateWaits(ModuleOp module) {
   combineRedundantWaitOps(waitOps);
 }
 
-// Tries to cast op to a tt::DotOp, if it's an MMAv3 (i.e. wgmma / hopper) dot.
+// Add the given values as operands of the given wait, and replace all uses of
+// the values with the wait.  Also adds related MemDesc's to the wait.
 //
-// Note that this returns nullptr for ttng::DotAsyncOps, but we can't call this
-// "dynCastMMAv3SyncDot", because this is sometimes used before we've converted
-// eligible tt::DotOps to ttng::DotAsyncOp.
-tt::DotOp dynCastMMAv3Dot(Operation *op) {
-  if (auto dotOp = dyn_cast<tt::DotOp>(op)) {
-    auto resEnc =
-        dotOp.getType().getEncoding().dyn_cast<ttg::NvidiaMmaEncodingAttr>();
-    if (resEnc && resEnc.isHopper()) {
-      return dotOp;
+// Threading %a through the wait transforms
+//
+//   %a = <...>
+//   (%x', %y') = ttng.async_wait %x, %y
+//   %b = fn(%a)
+//
+// into
+//
+//   %a = <...>
+//   (%x', %y', %a') = ttng.async_wait %x, %y, %a
+//   %b = fn(%a')
+//
+// The wait must dominate all uses of the elements of `values`.
+//
+// In addition to adding each value from `values` to the wait, this function
+// also adds some MemDesc's to the wait.  The idea is that if you have
+//
+//   %alloc = ttg.local_alloc ...
+//   %a = ttng.dot_async %alloc
+//   %a1 = ttng.dot_wait %a
+//
+// then we want the wait to depend on %alloc as well as %a.  This extends the
+// live range of %alloc, so that it won't be destroyed until after the dot is
+// waited on.
+//
+// Specifically, this function finds all dot_async ops that elements of `values`
+// depend on.  Then it adds the MemDesc operands of those dots to the wait.
+static void threadValuesThroughWait(ttng::DotWaitOp wait,
+                                    MutableArrayRef<Value> values) {
+  IRRewriter builder(wait.getContext());
+  builder.setInsertionPoint(wait);
+
+  // Operands are only added to the wait through this function, so we can have
+  // the invariant that the wait has no duplicates.  This makes things a bit
+  // easier below.
+  size_t origNumOperands = wait.getNumOperands();
+  SetVector<Value> newOperands(wait.getOperands().begin(),
+                               wait.getOperands().end());
+  assert(newOperands.size() == origNumOperands &&
+         "Wait op has duplicate operands.");
+
+  newOperands.insert(values.begin(), values.end());
+
+  // Find memdefs depended on by `values` through async dot ops.
+  SmallVector<ttng::DotAsyncOp> asyncDots;
+  for (Value v : values) {
+    BackwardSliceOptions options;
+    options.omitBlockArguments = false;
+    options.filter = [&](Operation *op) {
+      if (auto dot = dyn_cast<ttng::DotAsyncOp>(op)) {
+        asyncDots.push_back(dot);
+        return false;
+      }
+      return true;
+    };
+    SetVector<Operation *> slice;
+    getBackwardSlice(v, &slice, options);
+  }
+
+  for (ttng::DotAsyncOp dot : asyncDots) {
+    for (Value operand : dot.getOperands()) {
+      if (operand.getType().isa<tt::MemDescType>()) {
+        newOperands.insert(operand);
+      }
     }
   }
-  return nullptr;
+
+  // We can't use replaceWithNewOp because we're changing the number of return
+  // values in the operation.
+  auto newWait = builder.create<ttng::DotWaitOp>(
+      wait.getLoc(), llvm::to_vector(newOperands), wait.getPendings());
+  for (int i = 0; i < origNumOperands; i++) {
+    Value operand = wait.getResult(i);
+    if (!operand.getType().isa<tt::MemDescType>())
+      operand.replaceAllUsesWith(newWait.getResult(i));
+  }
+  for (int i = origNumOperands; i < newOperands.size(); i++) {
+    Value operand = newWait.getOperand(i);
+    if (!operand.getType().isa<tt::MemDescType>())
+      operand.replaceAllUsesExcept(newWait.getResult(i), newWait);
+  }
+  wait->erase();
 }
 
-// Determines whether a tt.dot op can be transformed into ttng.dot.async.  The
-// dot can be made async if all of the following are true.
+// Determines whether a given MMAv3 dot op, represented as ttng.dot_async, needs
+// a wait immediately after it.
 //
-//  0. The operation is an MMAv3 dot.
+// In PTX, MMAv3 exists only as an asynchronous op.  In Triton, we can represent
+// MMAv3 ops as either tt.dot (synchronous) or ttng.dot_async.  But even if we
+// use ttng.dot_async, the conservative thing is to make a dot "effectively
+// synchronous" by inserting a `ttng.dot_wait {pendings=0}` right after it.
+//
+// We can omit the wait and create a "properly async" dot if all of the
+// following are true.
 //
 //  1. All operands that touch shared memory are multi-buffered, i.e. can't read
 //     an incomplete value while it's being written asynchronously by a load.
@@ -900,8 +978,9 @@ tt::DotOp dynCastMMAv3Dot(Operation *op) {
 //  2. During iteration i, nothing other than the loop's `yield` reads the
 //     result of the dot.
 //
-//  3. During iteration i, the result of the dot from iteration i-1 is consumed
-//     only by other MMAv3 dots (either sync or async) as the `c` operand.
+//  3. During iteration i, between the start of the loop up until the first
+//     `ttng.dot_wait {pendings=0}` op, the result of the dot from iteration i-1
+//     is consumed only by other MMAv3 dots as the `c` operand.
 //
 //     This is safe because the following pseudo-PTX is valid:
 //
@@ -910,24 +989,20 @@ tt::DotOp dynCastMMAv3Dot(Operation *op) {
 //
 //     That is, the second async dot can use the result of the first one without
 //     an intervening wait.  However, the only operation that can legally read
-//     %accum before the wait is another dot.async, and this only works for the
+//     %accum before the wait is another dot_async, and this only works for the
 //     `c` operand, not `a` or `b`.  See
 //     https://docs.nvidia.com/cuda/parallel-thread-execution/#asynchronous-warpgroup-level-matrix-instructions-wgmma-fence
 //     (ttng::DotAsyncOp corresponds to wgmma.fence followed by one or more
-//     wgmma.async ops, so our reading is that the two ttng::DotAsyncOps don't
-//     have to correspond to wgmma.async ops with the same shapes as specified
-//     in the docs, because there's an intervening fence.)
+//     wgmma.async ops, so our understanding is that the two ttng::DotAsyncOps
+//     don't have to correspond to wgmma.async ops with the same shapes as
+//     specified in the docs, because there's an intervening fence.)
 //
-//     A synchronous MMAv3 dot will be codegen'ed as `dot.async; wait 0`, so it
-//     works just as well as an async dot for these purposes.
+// If the op can be properly async, this function returns the index of the dot
+// in the loop's iter_args.  (Rule (2) above ensures this is well-defined.)
 //
-// On success, this function returns the index of the dot in the loop's
-// iter_args.  (Rule (2) above ensures this is well-defined.)
-static std::optional<int> dotCanBeMadeAsync(Operation *op, scf::ForOp forOp) {
-  // Rule 0: The operation is an MMAv3 dot.
-  tt::DotOp dotOp = dynCastMMAv3Dot(op);
-  if (!dotOp)
-    return std::nullopt;
+static std::optional<int> dotCanBeProperlyAsync(ttng::DotAsyncOp dotOp,
+                                                scf::ForOp forOp) {
+  LDBG("Considering whether to make MMAv3 dot properly async: " << dotOp);
 
   // Rule 1: All shmem operands are multi-buffered.
   auto checkOperand = [&](Value operand) {
@@ -951,162 +1026,181 @@ static std::optional<int> dotCanBeMadeAsync(Operation *op, scf::ForOp forOp) {
   // We don't have to call checkOperand on getC() because it's always in
   // registers, never in shmem.
   assert(isa<ttg::NvidiaMmaEncodingAttr>(dotOp.getC().getType().getEncoding()));
-  if (!checkOperand(dotOp.getA()) || !checkOperand(dotOp.getB()))
+  if (!checkOperand(dotOp.getA()) || !checkOperand(dotOp.getB())) {
+    LDBG("Can't make dot async because shmem operands aren't multi-buffered");
     return std::nullopt;
+  }
 
   // Rule 2: The dot should only be used by the for loop's `yield`.
   if (!dotOp->hasOneUse() ||
-      *dotOp->getUsers().begin() != forOp.getBody()->getTerminator())
+      *dotOp->getUsers().begin() != forOp.getBody()->getTerminator()) {
+    LDBG("Can't make dot async because it is not used only by the loop's "
+         "`yield`.");
     return std::nullopt;
+  }
 
   // The result of the dot becomes this loop carry value.
   auto iterArgIdx = dotOp->getUses().begin()->getOperandNumber();
+  auto iterArg = forOp.getRegionIterArg(iterArgIdx);
 
-  // Rule 3: The only users of the dot's result from iteration i-1 are other
-  // MMAv3 dots (synchronous or async) as the `c` operand.
-  if (!llvm::all_of(forOp.getRegionIterArg(iterArgIdx).getUses(),
-                    [&](OpOperand &use) {
-                      return dynCastMMAv3Dot(use.getOwner()) &&
-                             use.getOperandNumber() == 2;
-                    })) {
-    return std::nullopt;
+  // Rule 3a: Are the only users of the dot's result from iteration i-1 other
+  // MMAv3 dots?  If so, we're done, this dot can be properly async.
+  if (llvm::all_of(iterArg.getUses(), [&](OpOperand &use) {
+        return isa<ttng::DotAsyncOp>(use.getOwner()) &&
+               use.getOperandNumber() == 2;
+      })) {
+    return iterArgIdx;
   }
 
-  return iterArgIdx;
+  // Rule 3b: Are all users of the dot's result from iteration i-1 after the
+  // first `dot_wait {pendings=0}` op?  If so, the dot can be properly async,
+  // but we have to thread its result from iteration i-1 through the wait.
+  auto waitOps = forOp.getBody()->getOps<ttng::DotWaitOp>();
+  auto firstWaitOpIter = llvm::find_if(
+      waitOps, [&](auto waitOp) { return waitOp.getPendings() == 0; });
+  if (firstWaitOpIter != waitOps.end() &&
+      llvm::all_of(iterArg.getUsers(), [&](Operation *user) {
+        assert(forOp->isAncestor(user));
+        while (user->getParentOp() != forOp) {
+          user = user->getParentOp();
+        }
+        return (*firstWaitOpIter)->isBeforeInBlock(user);
+      })) {
+    LDBG("MMAv3 dot can be properly async because it follows a dot_wait "
+         "{pendings=0}.\n"
+         << "  wait: " << *firstWaitOpIter << "\n"
+         << "  dot: " << dotOp);
+    threadValuesThroughWait(*firstWaitOpIter, {iterArg});
+    return iterArgIdx;
+  }
+
+  LDBG("Can't make dot async because its result from i-1 is used by "
+       "something other than another MMAv3 dot as the `c` operand.");
+  return std::nullopt;
 }
 
 // If necessary, insert a dot-wait inside the loop, waiting for the results of
-// the async dots from iteration i-1 to complete.  (We pipeline to depth 2, so
-// there are at most 2 dots in flight at any point in time.)
+// the properly-async dots from iteration i-1 to complete.  (We pipeline to
+// depth 2, so there are at most 2 copies of each dot_async in flight at a
+// time.)
 //
-// We can skip inserting the wait if we have a synchronous MMAv3 dot that
-// appears either (a) before any uses of async dots' values from iteration i-1,
-// or (b) after all uses of the async dots in iteration this iteration.
+// We can skip inserting the wait if we have a `dot_wait {pendings=0}` somewhere
+// in the loop.  To see why, consider:
 //
-// By contract, the only users of the async dots' results from iteration i-1 are
-// other MMAv3 dots, and the only user of the async dots in the current
-// iteration is the loop's `yield` op.  So it's sufficient to check whether a
-// sync dot appears first or last in the list of all sync+async dots.
+//   dot_async
+//   dot_async; wait 0  // synchronous dot
+//   dot_async
+//   dot_async
 //
-// If such a sync dot exists, we convert it to async+wait so that we can thread
-// the dependencies through the wait op.  This keeps other passes from
-// reordering the dots.
-//
-// TODO(jlebar): It's possible that the sync dot might appear in the wrong place
-// but could be hoisted/sunk to the right place.  Right now we don't handle
-// this.
+// In this example, there are three properly-async dots, so we'd normally put
+// `wait 3` at the end of the loop, meaning "wait until there are 3 or fewer
+// pending async dots".  But note that when this iteration of the loop
+// completes, there are only *two* pending async dots from this iteration, so
+// this wait would do nothing.  This is true in general, no matter where the
+// `wait 0` appears.
 static void insertAsyncDotWaitInLoop(
     scf::ForOp forOp,
-    MutableArrayRef<std::pair<Operation *, int /*iterArgIdx*/>> asyncDots) {
-  // If a synchronous dot appears before an async dot in this range, return it.
-  auto findSynchronizingDot = [](auto &&range) -> tt::DotOp {
-    for (Operation &op : range) {
-      if (isa<ttng::DotAsyncOp>(op)) {
-        break;
-      }
-      if (tt::DotOp dot = dynCastMMAv3Dot(&op)) {
-        return dot;
-      }
-    }
-    return nullptr;
-  };
+    const llvm::MapVector<Operation *, int /*iterArgIdx*/> &properlyAsyncDots) {
+  if (properlyAsyncDots.empty())
+    return;
 
-  tt::DotOp synchronizingDot;
-  bool syncAtBeginning = false;
-  if (auto dot = findSynchronizingDot(*forOp.getBody())) {
-    synchronizingDot = dot;
-    syncAtBeginning = true;
-  } else if (auto dot = findSynchronizingDot(llvm::reverse(*forOp.getBody()))) {
-    synchronizingDot = dot;
-  }
-
-  // If we have a synchyronizing dot, convert it to async and insert a wait
-  // right after it.  Otherwise, we'll insert the wait right after the last
-  // async dot.  (You might want to put the wait at the end of the loop, but
-  // there might be a load into shmem between the last async dot and the end of
-  // the loop, and that could clobber memory being used by a dot.)
-  IRRewriter builder(forOp.getContext());
-  if (synchronizingDot) {
-    builder.setInsertionPointAfter(synchronizingDot);
-    builder.replaceOpWithNewOp<ttng::DotAsyncOp>(
-        synchronizingDot.getOperation(), synchronizingDot.getA(),
-        synchronizingDot.getB(), synchronizingDot.getC(),
-        synchronizingDot.getAllowTF32(),
-        synchronizingDot.getMaxNumImpreciseAcc());
-  } else {
-    builder.setInsertionPointAfter(asyncDots.back().first);
-  }
-
-  SmallVector<Value> waitOperands;
-  for (auto [asyncDot, iterArgIdx] : asyncDots) {
-    waitOperands.push_back(syncAtBeginning
-                               ? cast<Value>(forOp.getRegionIterArg(iterArgIdx))
-                               : cast<Value>(asyncDot->getResult(0)));
-  }
-
-  // If this wait belongs to a synchronous dot, we need to wait for *all* async
-  // dots to complete, so we pass 0 for `pendings`.  OTOH if there are no sync
-  // dots, we wait for all async dots from the i-1'th iteration to complete, IOW
-  // we wait until there are at most `asyncDots.size()` dots in flight.
-  auto dotWait = builder.create<ttng::DotWaitOp>(
-      asyncDots.back().first->getLoc(), waitOperands,
-      /*pendings=*/synchronizingDot ? 0 : asyncDots.size());
-  for (int i = 0; i < waitOperands.size(); ++i) {
-    waitOperands[i].replaceAllUsesExcept(dotWait.getResult(i), dotWait);
-  }
-}
-
-// Convert tt::DotOps into ttng::DotAsyncOps and insert waits as necessary.
-//
-// We assume we have space for each dot to be pipelined to depth 2, i.e. each
-// dot op in the loop can have at most 2 wgmma ops in flight at once.
-void triton::asyncLaunchDots(scf::ForOp forOp) {
-  LDBG("Original loop:\n" << *forOp);
-
-  // Dots that can be made async.  Each dot's only use is in the loop's `yield`
-  // statement; the `int` is its index in that op.
-  SmallVector<std::pair<Operation *, int /*iterArgIdx*/>> asyncDots;
-  for (Operation &op : *forOp.getBody()) {
-    if (auto iterArgsIdx = dotCanBeMadeAsync(&op, forOp)) {
-      LDBG("Will convert into an async dot: " << op);
-      asyncDots.push_back({&op, iterArgsIdx.value()});
-    }
-  }
-
-  if (asyncDots.empty()) {
-    LDBG("No dots to make async.");
+  if (llvm::any_of(forOp.getBody()->getOps<ttng::DotWaitOp>(),
+                   [](auto wait) { return wait.getPendings() == 0; })) {
     return;
   }
 
+  // Add the wait right after the last properly-async dot.  This only needs to
+  // wait for all properly-async dots from the i-1'th iteration to complete, IOW
+  // we wait until there are most `asyncDots.size()` dots in flight.
+  //
+  // (You might want to put the wait at the end of the loop instead of right
+  // after the last dot, but there could be a load into shmem between the last
+  // async dot and the end of the loop, and that could clobber memory being used
+  // by a dot.)
   IRRewriter builder(forOp.getContext());
+  auto lastAsyncDot = properlyAsyncDots.back().first;
+  builder.setInsertionPointAfter(lastAsyncDot);
+  auto wait = builder.create<ttng::DotWaitOp>(lastAsyncDot->getLoc(),
+                                              /*inputs=*/ArrayRef<Value>{},
+                                              properlyAsyncDots.size());
 
-  // First, make each eligible dot asynchronous.
-  for (auto &[op, iterArgIdx] : asyncDots) {
-    auto dotOp = cast<tt::DotOp>(op);
-    builder.setInsertionPoint(op);
-    op = builder.replaceOpWithNewOp<ttng::DotAsyncOp>(
-        dotOp, dotOp.getA(), dotOp.getB(), dotOp.getC(), dotOp.getAllowTF32(),
-        dotOp.getMaxNumImpreciseAcc());
+  // Thread the results of the async dots through the wait.
+  SmallVector<Value> addlWaitOperands;
+  for (auto [asyncDot, iterArgIdx] : properlyAsyncDots) {
+    addlWaitOperands.push_back(asyncDot->getResult(0));
+  }
+  threadValuesThroughWait(wait, addlWaitOperands);
+}
+
+// Convert MMAv3 tt::DotOps (i.e. Hopper wgmma) into ttng::DotAsyncOps and
+// insert ttng::DotWaitOps as necessary.
+//
+// We assume we have space for each dot to be pipelined to depth 2, i.e. each
+// dot op in the loop can have at most 2 dot_async ops in flight at once.  (Each
+// dot_async op usually corresponds to a series of wgmma.async ops.)
+void triton::asyncLaunchDots(scf::ForOp forOp) {
+  LDBG("Original loop:\n" << *forOp);
+
+  // First, change every MMAv3 tt.dot into ttng.dot_async.  The rest of this
+  // function is concerned with inserting ttng.dot_wait ops in the appropriate
+  // places.
+  //
+  // It's not strictly necessary to convert every dot into dot_async:
+  // Synchronous MMAv3 dots can be represented equally well as `tt.dot` or
+  // `ttng.dot_async; wait 0`.  But this makes things easier elsewhere.
+  //
+  // We call those dots that don't need to be followed immediately by a `wait 0`
+  // "properly async", or sometimes just "async".
+  IRRewriter builder(forOp.getContext());
+  for (auto dotOp : llvm::to_vector(forOp.getBody()->getOps<tt::DotOp>())) {
+    auto resEnc =
+        dotOp.getType().getEncoding().dyn_cast<ttg::NvidiaMmaEncodingAttr>();
+    if (resEnc && resEnc.isHopper()) {
+      builder.setInsertionPoint(dotOp);
+      builder.replaceOpWithNewOp<ttng::DotAsyncOp>(
+          dotOp, dotOp.getA(), dotOp.getB(), dotOp.getC(), dotOp.getAllowTF32(),
+          dotOp.getMaxNumImpreciseAcc());
+    }
+  }
+
+  // For each dot, determine whether it can be properly async, or if it needs a
+  // sync immediately after.  If it can be properly async, we know its only use
+  // is in the loop's `yield` statement; asyncDots maps the op to its index in
+  // the yield op.
+  llvm::MapVector<Operation *, int /*iterArgIdx*/> properlyAsyncDots;
+  for (auto dotOp : forOp.getBody()->getOps<ttng::DotAsyncOp>()) {
+    if (auto iterArgIdx = dotCanBeProperlyAsync(dotOp, forOp)) {
+      properlyAsyncDots[dotOp] = *iterArgIdx;
+    } else {
+      builder.setInsertionPointAfter(dotOp);
+      auto wait =
+          builder.create<ttng::DotWaitOp>(dotOp.getLoc(), ArrayRef<Value>{},
+                                          /*pendings=*/0);
+      SmallVector<Value> waitOperands = {dotOp.getResult()};
+      threadValuesThroughWait(wait, waitOperands);
+    }
+  }
+
+  if (properlyAsyncDots.empty()) {
+    LDBG("No properly async dots.");
+    return;
   }
 
   // Next, insert a wait inside the loop.  We pipeline to depth 2, so the third
   // iteration's set of asynchronous dots (and their corresponding async copies
   // from global to shmem) can't start until the first iteration's set has
   // completed.
-  insertAsyncDotWaitInLoop(forOp, asyncDots);
+  insertAsyncDotWaitInLoop(forOp, properlyAsyncDots);
 
   // Finally, insert a wait after the loop, waiting for dots from the final
   // iteration of the loop.
   SmallVector<Value> waitOperands;
-  for (auto [asyncDot, iterArgIdx] : asyncDots) {
+  for (auto [asyncDot, iterArgIdx] : properlyAsyncDots) {
     waitOperands.push_back(forOp.getResult(iterArgIdx));
   }
   // Wait until there are 0 outstanding async dot ops.
   builder.setInsertionPointAfter(forOp);
   auto dotWaitAfterLoop =
-      builder.create<ttng::DotWaitOp>(forOp.getLoc(), waitOperands, 0);
-  for (int i = 0; i < waitOperands.size(); ++i) {
-    waitOperands[i].replaceAllUsesExcept(dotWaitAfterLoop.getResult(i),
-                                         dotWaitAfterLoop);
-  }
+      builder.create<ttng::DotWaitOp>(forOp.getLoc(), ArrayRef<Value>{}, 0);
+  threadValuesThroughWait(dotWaitAfterLoop, waitOperands);
 }

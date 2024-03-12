@@ -543,11 +543,17 @@ def TT_GetProgramIdOp : TT_Op<"get_program_id", [Pure]> {
 }
 
 def TT_GetNumProgramsOp : TT_Op<"get_num_programs", [Pure]> {
-    let arguments = (ins I32Attr:$axis);
+    let arguments = (ins TT_ProgramDim:$axis);
 
     let results = (outs I32:$result);
 
-    let assemblyFormat = "attr-dict `:` type($result)";
+    let assemblyFormat = "$axis attr-dict `:` type($result)";
+
+    let extraClassDeclaration = [{
+      int32_t getAxisAsInt() {
+        return static_cast<int32_t>(getAxis());
+      }
+    }];
 }
 
 //
