@@ -18,9 +18,9 @@ struct GetNumProgramsOpConversion
                                                     mlir::gpu::Dimension::y,
                                                     mlir::gpu::Dimension::z};
     Location loc = op->getLoc();
-    assert(op.getAxis() < 3);
+    assert(op.getAxisAsInt() < 3);
     Value blockId =
-        rewriter.create<::mlir::gpu::GridDimOp>(loc, dims[op.getAxis()]);
+        rewriter.create<::mlir::gpu::GridDimOp>(loc, dims[op.getAxisAsInt()]);
     rewriter.replaceOpWithNewOp<arith::TruncIOp>(op, i32_ty, blockId);
     return success();
   }
