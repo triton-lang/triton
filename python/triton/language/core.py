@@ -360,13 +360,22 @@ class dtype:
     def __str__(self):
         return self.name
 
+    def codegen_name(self):
+        if self.name.startswith("fp"):
+            return "float" + self.name[2:]
+        elif self.name.startswith("bf"):
+            return "bfloat" + self.name[2:]
+        else:
+            return self.name
+
     @property
     def cache_key_part(self) -> str:
         """See cache_key_part() in triton.cc."""
         return self.name
 
     def __repr__(self):
-        return f'triton.language.{str(self)}'
+        """Output of repr needs to be an evaluatable expression"""
+        return f'triton.language.{self.codegen_name()}'
 
 
 # Some functions have a param named `dtype`, which shadows the `dtype` class.
