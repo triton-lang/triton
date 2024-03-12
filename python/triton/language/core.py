@@ -440,6 +440,14 @@ class const_pointer_type(pointer_type):
     def is_const(self):
         return True
 
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, const_pointer_type):
+            return False
+        return self.element_ty == other.element_ty and self.address_space == other.address_space
+
+    def __ne__(self, other) -> bool:
+        return not self.__eq__(other)
+
     @property
     def scalar(self):
         return self

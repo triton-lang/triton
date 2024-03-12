@@ -1021,6 +1021,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.function_ret_types[fn_name] = callee_ret_type
         else:
             callee_ret_type = self.function_ret_types[fn_name]
+        print(f'ret type: {callee_ret_type}')
         symbol = self.module.get_function(fn_name)
         call_op = self.builder.call(symbol, arg_vals)
         if call_op.get_num_results() == 0 or callee_ret_type is None:

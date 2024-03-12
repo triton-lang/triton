@@ -99,15 +99,12 @@ def computation_type_impl(a_ty: tl.dtype, b_ty: tl.dtype, div_or_mod: bool) -> t
 def check_ptr_type_impl(type_a: tl.dtype, type_b: tl.dtype, allow_ptr_a: bool) -> None:
     if type_a.is_ptr():
         if not allow_ptr_a:
-            print("1")
             raise IncompatibleTypeErrorImpl(type_a, type_b)
         # T* + U* with T != U
         if type_b.is_ptr() and (type_a != type_b):
-            print("2")
             raise IncompatibleTypeErrorImpl(type_a, type_b)
         # T* + float
         if type_b.is_floating():
-            print("3")
             raise IncompatibleTypeErrorImpl(type_a, type_b)
 
 
