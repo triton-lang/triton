@@ -307,6 +307,11 @@ class dtype:
     def is_ptr():
         return False
 
+    @staticmethod
+    def is_const():
+        print("dtype.is_const")
+        return False
+
     def __eq__(self, other: dtype):
         if not isinstance(other, dtype):
             return False
@@ -410,6 +415,29 @@ class pointer_type(dtype):
         return self
 
 
+class const_pointer_type(pointer_type):
+
+    def __init__(self, element_ty: dtype, address_space: int = 1):
+        super().__init__(element_ty, address_space)
+
+    def to_ir(self, builder: ir.builder) -> ir.pointer_type:
+        return builder.get_ptr_ty(self.element_ty.to_ir(builder), 1)
+
+    def __str__(self):
+        return f'const_pointer<{self.element_ty}>'
+
+    def __repr__(self):
+        return self.__str__()
+
+    def is_const(self):
+        print("const_pointer_type.is_const")
+        return True
+
+    @property
+    def scalar(self):
+        return self
+
+
 class block_type(dtype):
 
     def __init__(self, element_ty: dtype, shape: List):
@@ -499,10 +527,15 @@ float32 = dtype('fp32')
 float64 = dtype('fp64')
 # pointer types
 pi32_t = pointer_type(int32)
+pf32_t = pointer_type(float32)
 
 # -----------------------
 # constexpr
 # -----------------------
+
+
+class const:
+    pass
 
 
 class constexpr:
