@@ -428,14 +428,8 @@ class const_pointer_type(pointer_type):
     def __init__(self, element_ty: dtype, address_space: int = 1):
         super().__init__(element_ty, address_space)
 
-    def to_ir(self, builder: ir.builder) -> ir.pointer_type:
-        return builder.get_ptr_ty(self.element_ty.to_ir(builder), 1)
-
     def __str__(self):
         return f'const_pointer<{self.element_ty}>'
-
-    def __repr__(self):
-        return self.__str__()
 
     def is_const(self):
         return True
@@ -444,13 +438,6 @@ class const_pointer_type(pointer_type):
         if not isinstance(other, const_pointer_type):
             return False
         return self.element_ty == other.element_ty and self.address_space == other.address_space
-
-    def __ne__(self, other) -> bool:
-        return not self.__eq__(other)
-
-    @property
-    def scalar(self):
-        return self
 
 
 class block_type(dtype):
@@ -549,6 +536,13 @@ pi32_t = pointer_type(int32)
 
 
 class const:
+    """
+    This class is used as a type annotation to mark pointers to tensors
+    cannot be modified. Store cannot be called with a const pointer.
+    Const pointers are represented by `const_pointer_type`, and usual
+    Triton type consistency rules apply - you cannot return a const pointer
+    from a function that returns also a non-const pointer, etc.
+    """
     pass
 
 
