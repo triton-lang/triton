@@ -309,7 +309,6 @@ class dtype:
 
     @staticmethod
     def is_const():
-        print("dtype.is_const")
         return False
 
     def __eq__(self, other: dtype):
@@ -430,7 +429,6 @@ class const_pointer_type(pointer_type):
         return self.__str__()
 
     def is_const(self):
-        print("const_pointer_type.is_const")
         return True
 
     @property
@@ -527,7 +525,6 @@ float32 = dtype('fp32')
 float64 = dtype('fp64')
 # pointer types
 pi32_t = pointer_type(int32)
-pf32_t = pointer_type(float32)
 
 # -----------------------
 # constexpr

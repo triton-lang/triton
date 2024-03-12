@@ -144,62 +144,27 @@ class KernelArg:
     def name(self):
         return self.param.name
 
-    # @staticmethod
-    # def _type_of(key):
-    #     print(f"_type_of({key=})")
-    #     # `None` is nullptr.  Implicitly convert to *i8.
-    #     if key is None:
-    #         return "*i8"
-    #     dtype_str = str(key).split(".")[-1]
-    #     is_const = dtype_str.startswith("const ")
-    #     if is_const:
-    #         dtype_str = dtype_str[len("const "):]
-    #     tys = {
-    #         "bool": "i1",
-    #         "float8e4nv": "fp8e4nv",
-    #         "float8e5": "fp8e5",
-    #         "float8e4b15": "fp8e4b15",
-    #         "float8e4b15x4": "fp8e4b15x4",
-    #         "float8_e4m3fn": "fp8e4nv",
-    #         "float8e4b8": "fp8e4b8",
-    #         "float8_e4m3fnuz": "fp8e4b8",
-    #         "float8_e5m2": "fp8e5",
-    #         "float8e5b16": "fp8e5b16",
-    #         "float8_e5m2fnuz": "fp8e5b16",
-    #         "float16": "fp16",
-    #         "bfloat16": "bf16",
-    #         "float32": "fp32",
-    #         "float64": "fp64",
-    #         "int8": "i8",
-    #         "int16": "i16",
-    #         "int32": "i32",
-    #         "int64": "i64",
-    #         "uint8": "u8",
-    #         "uint16": "u16",
-    #         "uint32": "u32",
-    #         "uint64": "u64",
-    #     }
-    #     # reinterpret can create triton type
-    #     for v in list(tys.values()):
-    #         tys[v] = v
-    #     const_str = "k" if is_const else ""
-    #     return key if isinstance(key, str) else f"*{const_str}{tys[dtype_str]}"
-
-    def signature_key(self):
+    def mangled_type(self):
         annotation = self.param.annotation
-        print(f"{annotation=}")
+        const_str = "const " if self.param.is_const else ""
+        is_pointer = False
         for ty1, ty2 in [("uint", 'u'), ("int", 'i')]:
             width = annotation[annotation.find(ty1) + len(ty1):]
             if width and ty1 in annotation:
                 return f"{ty2}{width}"
         if annotation == "bool":
             return "u1"
+
         if "Tensor" in annotation:
-            key = str(self.value.dtype)
+            key = self.value.dtype
+            is_pointer = True
         else:
-            key = str(JITFunction._key_of(self.value))
-        is_pointer = key.find(".") != -1
-        key = key.split(".")[-1]
+            key = JITFunction._key_of(self.value)
+            is_pointer = not isinstance(key, str)
+        # key == None is nullptr.  Implicitly convert to *i8.
+        if key is None:
+            return "*i8"
+        key = str(key).split(".")[-1]
         tys = {
             "bool": "i1",
             "float8e4nv": "fp8e4nv",
@@ -334,47 +299,6 @@ class JITFunction(KernelInterface[T]):
         # return _triton.code_gen.instance_descriptor(divisible_by_16,
         # equal_to_1)
 
-    @staticmethod
-    def _type_of(key):
-        print(f"_type_of({key=})")
-        # `None` is nullptr.  Implicitly convert to *i8.
-        if key is None:
-            return "*i8"
-        dtype_str = str(key).split(".")[-1]
-        is_const = dtype_str.startswith("const ")
-        if is_const:
-            dtype_str = dtype_str[len("const "):]
-        tys = {
-            "bool": "i1",
-            "float8e4nv": "fp8e4nv",
-            "float8e5": "fp8e5",
-            "float8e4b15": "fp8e4b15",
-            "float8e4b15x4": "fp8e4b15x4",
-            "float8_e4m3fn": "fp8e4nv",
-            "float8e4b8": "fp8e4b8",
-            "float8_e4m3fnuz": "fp8e4b8",
-            "float8_e5m2": "fp8e5",
-            "float8e5b16": "fp8e5b16",
-            "float8_e5m2fnuz": "fp8e5b16",
-            "float16": "fp16",
-            "bfloat16": "bf16",
-            "float32": "fp32",
-            "float64": "fp64",
-            "int8": "i8",
-            "int16": "i16",
-            "int32": "i32",
-            "int64": "i64",
-            "uint8": "u8",
-            "uint16": "u16",
-            "uint32": "u32",
-            "uint64": "u64",
-        }
-        # reinterpret can create triton type
-        for v in list(tys.values()):
-            tys[v] = v
-        const_str = "k" if is_const else ""
-        return key if isinstance(key, str) else f"*{const_str}{tys[dtype_str]}"
-
     def _make_constants(self, constexpr_key):
         constants = dict(zip(self.constexprs, constexpr_key))
         return constants
@@ -472,8 +396,7 @@ class JITFunction(KernelInterface[T]):
         grid_2 = grid[2] if grid_size > 2 else 1
         # compute cache key
         args = [KernelArg(arg_value, param) for (_, arg_value), param in zip(bound_args.arguments.items(), self.params)]
-        sig_key = tuple(arg.signature_key() for arg in args if not arg.param.is_constexpr)
-        print(f"{sig_key=}")
+        sig_key = tuple(arg.mangled_type() for arg in args if not arg.param.is_constexpr)
         spec_key = tuple(arg.specialization_key() for arg in args if not arg.param.do_not_specialize)
         constexpr_key = tuple(arg.value for arg in args if arg.param.is_constexpr)
         key = (sig_key, constexpr_key, spec_key, options)
@@ -491,9 +414,7 @@ class JITFunction(KernelInterface[T]):
                     raise TypeError(f"Callable constexpr at index {i} is not supported")
 
             # Build kernel signature -- doesn't include constexpr arguments.
-            signature = {arg.param.num: arg.signature_key() for arg in args if not arg.param.is_constexpr}
-
-            print(f"{signature=}")
+            signature = {arg.param.num: arg.mangled_type() for arg in args if not arg.param.is_constexpr}
 
             if self._call_hook(key, signature, device, constants, options, configs):
                 return None

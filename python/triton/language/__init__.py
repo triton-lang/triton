@@ -82,7 +82,6 @@ from .core import (
     multiple_of,
     num_programs,
     permute,
-    pf32_t,
     pi32_t,
     pointer_type,
     program_id,
@@ -204,7 +203,6 @@ __all__ = [
     "permute",
     "philox",
     "philox_impl",
-    "pf32_t",
     "pi32_t",
     "pointer_type",
     "program_id",
@@ -250,7 +248,6 @@ __all__ = [
 
 
 def str_to_ty(name):
-    print("str_to_ty", name)
     if name[0] == "*":
         name = name[1:]
         if name[0] == "k":

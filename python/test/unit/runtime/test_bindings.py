@@ -60,7 +60,7 @@ def test_module_walk():
     ]
     src = triton.compiler.compiler.ASTSource(
         fn=kernel,
-        signature={i: kernel._type_of(kernel._key_of(arg))
+        signature={i: arg.mangled_type()
                    for i, arg in enumerate(args)
                    if i not in kernel.constexprs},
         constants={i: arg
