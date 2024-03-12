@@ -10,8 +10,7 @@ class InterpreterError(TritonError):
 class OutOfResources(TritonError):
 
     def _format_message(self) -> str:
-        message = f"out of resource: {self.name}, " f"Required: {self.required}, " f"Hardware limit: {self.limit}"
-        message += ". Reducing block sizes or `num_stages` may help."
+        return f"out of resource: {self.name}, Required: {self.required}, Hardware limit: {self.limit}. Reducing block sizes or `num_stages` may help."
 
     def __init__(self, required, limit, name):
         self.required = required
