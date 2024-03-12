@@ -6,6 +6,7 @@ import triton
 import triton.language as tl
 import functools
 from dataclasses import dataclass
+from .errors import InterpreterError
 from .._C.libtriton import interpreter as _interpreter
 
 
@@ -108,9 +109,12 @@ class Builder:
         # pass
 
     def set_grid_idx(self, x, y, z):
-        assert x < self.grid_dim[0]
-        assert y < self.grid_dim[1]
-        assert z < self.grid_dim[2]
+        if not x < self.grid_dim[0]:
+            raise ValueError("x >= grid_dim[0]")
+        if not y < self.grid_dim[1]:
+            raise ValueError("y >= grid_dim[1]")
+        if not z < self.grid_dim[2]:
+            raise ValueError("z >= grid_dim[2]")
         self.grid_idx = (x, y, z)
 
     def set_grid_dim(self, nx, ny, nz):
@@ -198,7 +202,8 @@ class Builder:
 
     # programming model
     def create_get_program_id(self, axis):
-        assert self.grid_idx is not None
+        if self.grid_idx is None:
+            raise ValueError("grid_idx is None")
         return TensorHandle(np.array([self.grid_idx[axis]], dtype=np.int32), tl.int32)
 
     def create_get_num_programs(self, axis):
@@ -238,7 +243,7 @@ class Builder:
     create_int_cast = lambda self, src, dst_type, is_signed: self.cast_impl(src, dst_type)
 
     def create_fp_to_fp(self, src, dst_type):
-        assert "float8 not NotImplemented yet"
+        raise NotImplementedError("fp_to_fp not supported in interpreter mode")
 
     def create_bitcast(self, src, dst_type):
         return TensorHandle(src.data.view(_get_np_dtype(dst_type)), dst_type)
@@ -352,7 +357,8 @@ class Builder:
     def create_tensor_pointer_load(self, ptr, boundary_check, padding_option, cache_modifier, eviction_policy,
                                    is_volatile):
         ptrs, masks = ptr.materialize_pointers(boundary_check)
-        assert padding_option is None
+        if padding_option is not None:
+            raise NotImplementedError("padding_option not supported in interpreter mode")
         other = None
         return self.create_masked_load(ptrs, masks, other, cache_modifier, eviction_policy, is_volatile)
 
@@ -415,7 +421,8 @@ class Builder:
         return BlockPointerHandle(base, shape, strides, new_offsets, tensor_shape, order)
 
     def create_advance(self, ptr, offsets):
-        assert len(ptr.offsets) == len(offsets)
+        if len(ptr.offsets) != len(offsets):
+            raise ValueError("len(ptr.offsets) != len(offsets)")
         # Create new offsets to avoid modifying the original
         new_offsets = [offset.clone() for offset in ptr.offsets]
         ret = BlockPointerHandle(ptr.base, ptr.shape, ptr.strides, new_offsets, ptr.tensor_shape, ptr.order)
@@ -481,7 +488,8 @@ def _patch_lang_core(lang, builder):
 
         def _min_max(input, val_reduce_op, idx_reduce_op=None, axis=None, return_indices_tie_break_left=True,
                      keepdims=False):
-            assert return_indices_tie_break_left is True, "return_indices_tie_break_fast not supported"
+            if return_indices_tie_break_left is False:
+                raise NotImplementedError("return_indices_tie_break_left=False not supported in interpreter mode")
             val = None
             idx = None
             if val_reduce_op:
@@ -495,7 +503,7 @@ def _patch_lang_core(lang, builder):
             elif idx:
                 return idx
             else:
-                assert False, "val_reduce_op and idx_reduce_op can't be both None"
+                raise ValueError("val_reduce_op and idx_reduce_op are both None")
 
         def _sum(input, axis=None, keepdims=False):
             return _to_tensor(np.sum(input.handle.data, axis=axis, keepdims=keepdims), input.dtype)
@@ -519,7 +527,8 @@ def _patch_lang_core(lang, builder):
                               return_indices_tie_break_left=return_indices_tile_break_left),  #
             "_sum_combine": _sum
         }
-        assert fn in mapping, f"fn {fn} not supported"
+        if fn not in mapping:
+            raise ValueError(f"fn {fn} not supported")
         return mapping[fn](input, axis=axis, keepdims=keep_dims)
 
     def _new_scan(input, axis, combine_fn, **kwargs):
@@ -729,14 +738,17 @@ class GridExecutor:
         args = {name: arg if name in self.constexprs else _implicit_cvt(arg) for name, arg in args.items()}
         # iterate through grid
         grid = self.grid(args) if callable(self.grid) else self.grid
-        assert len(grid) <= 3
+        assert len(grid) <= 3, "grid must have at most 3 dimensions"
         grid = grid + (1, ) * (3 - len(grid))
         builder.set_grid_dim(*grid)
-        for x in range(grid[0]):
-            for y in range(grid[1]):
-                for z in range(grid[2]):
-                    builder.set_grid_idx(x, y, z)
-                    self.fn(**args)
+        try:
+            for x in range(grid[0]):
+                for y in range(grid[1]):
+                    for z in range(grid[2]):
+                        builder.set_grid_idx(x, y, z)
+                        self.fn(**args)
+        except Exception as e:
+            raise InterpreterError(repr(e)) from e
         # copy arguments back to propagate side-effects
         self._restore_args_dev(args_dev, args_hst)
 
@@ -764,4 +776,7 @@ class InterpretedFunction:
     def __call__(self, *args, **kwargs):
         # This is a device function call
         _patch_lang(self.fn)
-        return self.fn(*args, **kwargs)
+        try:
+            return self.fn(*args, **kwargs)
+        except Exception as e:
+            raise InterpreterError(repr(e)) from e
