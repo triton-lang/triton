@@ -49,7 +49,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           submodules: "true"
       - name: Set CUDA ENV
@@ -135,7 +135,7 @@ jobs:
 
       - name: Upload artifacts archive
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: artifacts ${{ matrix.runner[1] }}
           path: ~/.triton/artifacts.tar.gz
@@ -156,7 +156,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Install gh CLI
         run: |
@@ -171,7 +171,7 @@ jobs:
         run: |
           echo $PR_NUMBER > pr_number
       - name: Upload PR number to artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: pr_number
           path: pr_number
@@ -243,7 +243,7 @@ jobs:
             exit 1
           fi
       - name: Download current job artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v4
         with:
           name: artifacts A100
       - name: Unzip current job artifacts
@@ -279,12 +279,12 @@ jobs:
             echo "FAILED" > comparison_result
           fi
       - name: Upload comparison result to artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: comparison_result
           path: comparison_result
       - name: Upload results as artifact
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: kernels-reference-check
           path: kernels_reference_check.txt
