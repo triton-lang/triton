@@ -1080,80 +1080,54 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::DotAsyncOp dotOp,
 }
 
 // If necessary, insert a dot-wait inside the loop, waiting for the results of
-// the async dots from iteration i-1 to complete.  (We pipeline to depth 2, so
-// there are at most 2 copies of each dot_async in flight at a time.)
+// the properly-async dots from iteration i-1 to complete.  (We pipeline to
+// depth 2, so there are at most 2 copies of each dot_async in flight at a
+// time.)
 //
-// We can skip inserting the wait if we have a `dot_wait {pendings=0}` that
-// appears either (a) before any uses of async dots' values from iteration i-1,
-// or (b) after all uses of the async dots in iteration this iteration.
+// We can skip inserting the wait if we have a `dot_wait {pendings=0}` somewhere
+// in the loop.  To see why, consider:
 //
-// By contract, the only users of the properly-async dots' results from
-// iteration i-1 are other MMAv3 dots, and the only user of the properly-async
-// dots in the current iteration is the loop's `yield` op.  So it's sufficient
-// to check whether a wait appears before or after all properly-async dots.
+//   dot_async
+//   dot_async; wait 0  // synchronous dot
+//   dot_async
+//   dot_async
 //
-// If such a wait exists, we thread the results of the dots through it.  This
-// keeps other passes from reordering the dots.
-//
-// TODO(jlebar): It's possible that the wait might appear in the wrong place but
-// could be hoisted/sunk to the right place.  Right now we don't handle this.
+// In this example, there are three properly-async dots, so we'd normally put
+// `wait 3` at the end of the loop, meaning "wait until there are 3 or fewer
+// pending async dots".  But note that when this iteration of the loop
+// completes, there are only *two* pending async dots from this iteration, so
+// this wait would do nothing.  This is true in general, no matter where the
+// `wait 0` appears.
 static void insertAsyncDotWaitInLoop(
     scf::ForOp forOp,
     const llvm::MapVector<Operation *, int /*iterArgIdx*/> &properlyAsyncDots) {
-  if (properlyAsyncDots.empty()) {
+  if (properlyAsyncDots.empty())
+    return;
+
+  if (llvm::any_of(forOp.getBody()->getOps<ttng::DotWaitOp>(),
+                   [](auto wait) { return wait.getPendings() == 0; })) {
     return;
   }
 
-  // If a dot_wait {pendings=0} appears before a properly-async dot in this
-  // range, return it.
-  auto findSynchronizingWait = [&](auto &&range) -> ttng::DotWaitOp {
-    for (Operation &op : range) {
-      if (properlyAsyncDots.contains(&op)) {
-        break;
-      }
-      if (auto wait = dyn_cast<ttng::DotWaitOp>(op)) {
-        if (wait.getPendings() == 0) {
-          return wait;
-        }
-      }
-    }
-    return nullptr;
-  };
-
-  ttng::DotWaitOp wait;
-  bool syncAtBeginning = false;
-  if (auto w = findSynchronizingWait(*forOp.getBody())) {
-    wait = w;
-    syncAtBeginning = true;
-  } else if (auto w = findSynchronizingWait(llvm::reverse(*forOp.getBody()))) {
-    wait = w;
-  }
-
-  // If we don't have a synchronizing wait, add one right after the last
-  // properly-async dot.  This one only needs to wait for all properly-async
-  // dots from the i-1'th iteration to complete, IOW we wait until there are
-  // most `asyncDots.size()` dots in flight.
+  // Add the wait right after the last properly-async dot.  This only needs to
+  // wait for all properly-async dots from the i-1'th iteration to complete, IOW
+  // we wait until there are most `asyncDots.size()` dots in flight.
   //
   // (You might want to put the wait at the end of the loop instead of right
   // after the last dot, but there could be a load into shmem between the last
   // async dot and the end of the loop, and that could clobber memory being used
   // by a dot.)
   IRRewriter builder(forOp.getContext());
-  if (!wait) {
-    auto lastAsyncDot = properlyAsyncDots.back().first;
-    builder.setInsertionPointAfter(lastAsyncDot);
-    wait = builder.create<ttng::DotWaitOp>(lastAsyncDot->getLoc(),
-                                           /*inputs=*/ArrayRef<Value>{},
-                                           properlyAsyncDots.size());
-  }
+  auto lastAsyncDot = properlyAsyncDots.back().first;
+  builder.setInsertionPointAfter(lastAsyncDot);
+  auto wait = builder.create<ttng::DotWaitOp>(lastAsyncDot->getLoc(),
+                                              /*inputs=*/ArrayRef<Value>{},
+                                              properlyAsyncDots.size());
 
   // Thread the results of the async dots through the wait.
   SmallVector<Value> addlWaitOperands;
   for (auto [asyncDot, iterArgIdx] : properlyAsyncDots) {
-    Value waitOperand = syncAtBeginning
-                            ? cast<Value>(forOp.getRegionIterArg(iterArgIdx))
-                            : cast<Value>(asyncDot->getResult(0));
-    addlWaitOperands.push_back(waitOperand);
+    addlWaitOperands.push_back(asyncDot->getResult(0));
   }
   threadValuesThroughWait(wait, addlWaitOperands);
 }
