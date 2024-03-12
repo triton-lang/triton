@@ -191,6 +191,7 @@ struct DotOpMFMAConversionHelper {
       mfmaInsnName = (*maybeMfmaInsn).getInsnName();
 
     auto aEncoding = aTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+    auto bEncoding = bTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
     int kWidth = aEncoding.getKWidth();
 
     auto repA =
@@ -264,12 +265,7 @@ struct DotOpMFMAConversionHelper {
     ValueTable vals;
     for (int i = 0; i < n0; i++) {
       for (int j = 0; j < n1; j++) {
-        Type ty = vec_ty(type, kWidth);
-        Value rawElems = undef(ty);
-        for (int k = 0; k < kWidth; ++k) {
-          rawElems = insert_element(ty, rawElems, elems[kWidth * (n1 * i + j) + k], i32_val(k));
-        }
-
+        auto rawElems = elems[n1 * i + j];
         Value convertedElems;
         if (type.isF32()) {
           convertedElems = extract_element(type, rawElems, i32_val(0));
