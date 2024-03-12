@@ -157,45 +157,9 @@ class KernelArg:
 
         if "Tensor" in annotation:
             key = self.value.dtype
-            is_pointer = True
         else:
             key = JITFunction._key_of(self.value)
-            is_pointer = not isinstance(key, str)
-        # key == None is nullptr.  Implicitly convert to *i8.
-        if key is None:
-            return "*i8"
-        key = str(key).split(".")[-1]
-        tys = {
-            "bool": "i1",
-            "float8e4nv": "fp8e4nv",
-            "float8e5": "fp8e5",
-            "float8e4b15": "fp8e4b15",
-            "float8e4b15x4": "fp8e4b15x4",
-            "float8_e4m3fn": "fp8e4nv",
-            "float8e4b8": "fp8e4b8",
-            "float8_e4m3fnuz": "fp8e4b8",
-            "float8_e5m2": "fp8e5",
-            "float8e5b16": "fp8e5b16",
-            "float8_e5m2fnuz": "fp8e5b16",
-            "float16": "fp16",
-            "bfloat16": "bf16",
-            "float32": "fp32",
-            "float64": "fp64",
-            "int8": "i8",
-            "int16": "i16",
-            "int32": "i32",
-            "int64": "i64",
-            "uint8": "u8",
-            "uint16": "u16",
-            "uint32": "u32",
-            "uint64": "u64",
-        }
-        # reinterpret can create triton type
-        for v in list(tys.values()):
-            tys[v] = v
-        ptr_str = "*" if is_pointer else ""
-        const_str = "k" if self.param.is_const else ""
-        return f"{ptr_str}{const_str}{tys[key]}"
+        return JITFunction._type_of(key, self.param.is_const)
 
     def specialization_key(self):
         assert not self.param.do_not_specialize
@@ -298,6 +262,43 @@ class JITFunction(KernelInterface[T]):
         return AttrsDescriptor(tuple(divisible_by_16), tuple(equal_to_1))
         # return _triton.code_gen.instance_descriptor(divisible_by_16,
         # equal_to_1)
+
+    @staticmethod
+    def _type_of(key, is_const=False):
+        # `None` is nullptr.  Implicitly convert to *i8.
+        if key is None:
+            return "*i8"
+        dtype_str = str(key).split(".")[-1]
+        tys = {
+            "bool": "i1",
+            "float8e4nv": "fp8e4nv",
+            "float8e5": "fp8e5",
+            "float8e4b15": "fp8e4b15",
+            "float8e4b15x4": "fp8e4b15x4",
+            "float8_e4m3fn": "fp8e4nv",
+            "float8e4b8": "fp8e4b8",
+            "float8_e4m3fnuz": "fp8e4b8",
+            "float8_e5m2": "fp8e5",
+            "float8e5b16": "fp8e5b16",
+            "float8_e5m2fnuz": "fp8e5b16",
+            "float16": "fp16",
+            "bfloat16": "bf16",
+            "float32": "fp32",
+            "float64": "fp64",
+            "int8": "i8",
+            "int16": "i16",
+            "int32": "i32",
+            "int64": "i64",
+            "uint8": "u8",
+            "uint16": "u16",
+            "uint32": "u32",
+            "uint64": "u64",
+        }
+        # reinterpret can create triton type
+        for v in list(tys.values()):
+            tys[v] = v
+        const_str = "k" if is_const else ""
+        return key if isinstance(key, str) else f"*{const_str}{tys[dtype_str]}"
 
     def _make_constants(self, constexpr_key):
         constants = dict(zip(self.constexprs, constexpr_key))
