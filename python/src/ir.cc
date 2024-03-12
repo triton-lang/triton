@@ -206,7 +206,8 @@ void init_triton_ir(py::module &&m) {
   });
 
   py::class_<Type>(m, "type", py::module_local())
-      .def("is_integer", &Type::isInteger)
+      .def("is_integer",
+           [](Type &self, unsigned width) { return self.isInteger(width); })
       .def("is_fp16", &Type::isF16)
       .def("__str__", [](Type &self) {
         std::string str;
