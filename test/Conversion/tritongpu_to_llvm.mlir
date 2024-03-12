@@ -1186,9 +1186,9 @@ tt.func @test_get_program_id(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: test_get_num_program
   tt.func @test_get_num_program(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
-    %blockdimx = tt.get_num_programs {axis=0:i32} : i32
-    %blockdimy = tt.get_num_programs {axis=1:i32} : i32
-    %blockdimz = tt.get_num_programs {axis=2:i32} : i32
+    %blockdimx = tt.get_num_programs x : i32
+    %blockdimy = tt.get_num_programs y : i32
+    %blockdimz = tt.get_num_programs z : i32
     // CHECK: nctaid.x
     // CHECK: nctaid.y
     // CHECK: nctaid.z
@@ -1206,9 +1206,9 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [4], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"triton_gpu.num-ctas" = 4 : i32, "triton_gpu.num-warps" = 4 : i32} {
   tt.func @test_get_num_program(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
-    %blockdimx = tt.get_num_programs {axis=0:i32} : i32
-    %blockdimy = tt.get_num_programs {axis=1:i32} : i32
-    %blockdimz = tt.get_num_programs {axis=2:i32} : i32
+    %blockdimx = tt.get_num_programs x : i32
+    %blockdimy = tt.get_num_programs y : i32
+    %blockdimz = tt.get_num_programs z : i32
     // CHECK: nclusterid.x
     // CHECK: nclusterid.y
     // CHECK: nclusterid.z
