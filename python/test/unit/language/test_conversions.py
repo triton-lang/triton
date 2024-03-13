@@ -112,18 +112,15 @@ def arbitrary_fp32_downcast(x, rounding : tl.constexpr, exponent_bits : tl.const
     exponent = tl.where(exponent > -1, exponent, exponent + 1)
 
     if rounding == 'rtne':
-        #         mantissa = tl.inline_asm_elementwise("""{
-        #         cvt.rni.s32.f32 $0, $1;
-        # }""", "=r,r", [mantissa,], dtype=tl.int32, is_pure=True, pack=1).to(tl.uint32)
+        # Bring the value to the range [2 ** 23, 2 ** 24]
+        # where the representable floats map exactly to integers.
+        # Addition has RTNE semantics.
         mantissa += 0x800000
+        # Bring the value back to the original range.
         mantissa -= 0x800000
         mantissa = mantissa.to(tl.int32)
     elif rounding == 'rtz':
         mantissa = mantissa.to(tl.int32)
-
-#         mantissa = tl.inline_asm_elementwise("""{
-#         cvt.rzi.s32.f32 $0, $1;
-# }""", "=r,r", [mantissa,], dtype=tl.int32, is_pure=True, pack=1).to(tl.uint32)
     else:
         raise ValueError('unrecognized rounding mode')
 
