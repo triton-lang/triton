@@ -4,7 +4,7 @@ from warnings import warn
 from contextlib import contextmanager
 from enum import Enum
 from functools import partial, wraps
-from typing import Union, Callable, List, Sequence, TypeVar, cast
+from typing import Union, Callable, List, Sequence, TypeVar, cast, Optional
 import builtins
 from ..runtime.jit import jit
 import inspect
@@ -926,7 +926,7 @@ class tensor:
         assert False, "Transposition must be created by the AST Visitor"
 
     @builtin
-    def to(self, dtype: dtype, fp_downcast_rounding: str | None = None, bitcast: bool = False, _builder=None):
+    def to(self, dtype: dtype, fp_downcast_rounding: Optional[str] = None, bitcast: bool = False, _builder=None):
         """
         Casts the tensor to the given :code:`dtype`.
 
