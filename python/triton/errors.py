@@ -6,5 +6,5 @@ class TritonError(Exception):
     def __str__(self) -> str:
         return self.error_message or ""
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "{}({!r})".format(type(self).__name__, self.error_message)
