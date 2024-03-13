@@ -314,6 +314,9 @@ class Builder:
     def ternary_op(self, lhs, rhs, other, op):
         return TensorHandle(op(lhs.data, rhs.data, other.data), other.dtype)
 
+    def create_clampf(self, arg, lo, hi, propagate_nans):
+        return self.ternary_op(arg, lo, hi, np.clip)
+
     create_select = lambda self, cond, lhs, rhs: self.ternary_op(cond, lhs, rhs, np.where)
 
     # unary functions
@@ -335,7 +338,7 @@ class Builder:
         return TensorHandle(np.transpose(arg.data, perm), arg.dtype)
 
     def create_dot(self, a, b, d, allow_tf32, max_num_imprecise_acc):
-        return TensorHandle(np.dot(a.data, b.data) + d.data, d.dtype)
+        return TensorHandle(np.matmul(a.data, b.data) + d.data, d.dtype)
 
     def create_make_range(self, start, stop):
         return TensorHandle(np.arange(start, stop, dtype=np.int32), tl.int32)
@@ -372,8 +375,16 @@ class Builder:
     def create_ptr_to_int(self, val, dst_ty):
         return TensorHandle(val.data.astype(np.uint64), dst_ty)
 
-    # def create_cat(self, lhs, rhs):
-    #     pass
+    def create_cat(self, lhs, rhs):
+        return TensorHandle(np.concatenate([lhs.data, rhs.data]), lhs.dtype)
+
+    def create_join(self, lhs, rhs):
+        # Triton only supports joining the original tensor into a new one along the last axis
+        return TensorHandle(np.stack([lhs.data, rhs.data], axis=-1), lhs.dtype)
+
+    def create_split(self, val):
+        # Triton only supports splitting the original tensor into two along the last axis
+        return (TensorHandle(val.data[..., 0], val.dtype), TensorHandle(val.data[..., 1], val.dtype))
 
     def create_splat(self, arg, shape):
         if isinstance(arg.dtype, tl.block_type):
