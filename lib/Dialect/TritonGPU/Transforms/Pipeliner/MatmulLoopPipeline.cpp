@@ -115,11 +115,15 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
     alloc.replaceAllUsesWith(viewLoad.getResult());
     alloc.erase();
   } else {
+    SmallVector<ttg::LocalAllocOp> allocsToErase;
     for (Operation *user : loadOp->getUsers()) {
       if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
         alloc.replaceAllUsesWith(viewLoad.getResult());
-        alloc.erase();
+        allocsToErase.push_back(alloc);
       }
+    }
+    for (auto alloc : allocsToErase) {
+      alloc.erase();
     }
     auto sharedLoad =
         builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewLoad);
