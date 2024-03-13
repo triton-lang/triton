@@ -528,7 +528,8 @@ def TT_TransOp : TT_Op<"trans", [Pure,
 //
 // SPMD Ops
 //
-def TT_GetProgramIdOp : TT_Op<"get_program_id", [Pure]> {
+
+class program_id_inst <string name> : TT_Op<name, [Pure]> {
     let arguments = (ins TT_ProgramDim:$axis);
 
     let results = (outs I32:$result);
@@ -536,25 +537,14 @@ def TT_GetProgramIdOp : TT_Op<"get_program_id", [Pure]> {
     let assemblyFormat = "$axis attr-dict `:` type($result)";
 
     let extraClassDeclaration = [{
-      int32_t getAxisAsInt() {
-        return static_cast<int32_t>(getAxis());
-      }
+        int32_t getAxisAsInt() {
+            return static_cast<int32_t>(getAxis());
+        }
     }];
 }
 
-def TT_GetNumProgramsOp : TT_Op<"get_num_programs", [Pure]> {
-    let arguments = (ins TT_ProgramDim:$axis);
-
-    let results = (outs I32:$result);
-
-    let assemblyFormat = "$axis attr-dict `:` type($result)";
-
-    let extraClassDeclaration = [{
-      int32_t getAxisAsInt() {
-        return static_cast<int32_t>(getAxis());
-      }
-    }];
-}
+def TT_GetProgramIdOp   : program_id_inst<"get_program_id">;
+def TT_GetNumProgramsOp : program_id_inst<"get_num_programs">;
 
 //
 // Dot Op
