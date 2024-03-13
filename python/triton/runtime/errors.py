@@ -4,7 +4,10 @@ from ..errors import TritonError
 class InterpreterError(TritonError):
 
     def __init__(self, error_message: str | None = None):
-        super().__init__(error_message)
+        self.error_message = error_message
+
+    def __str__(self) -> str:
+        return self.error_message or ""
 
 
 class OutOfResources(TritonError):
