@@ -383,13 +383,11 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
     else:
         numpy_expr = None
     if op == '%' and _mod_operation_ill_conditioned(dtype_x, dtype_y):
-        error_msg = '' if is_interpreter() else 'Not equal to tolerance'
-        with pytest.raises(AssertionError, match=error_msg):
+        with pytest.raises(AssertionError, match="Not equal to tolerance"):
             _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
     elif (op in ('%', '/') and ((dtype_x in int_dtypes and dtype_y in uint_dtypes) or
                                 (dtype_x in uint_dtypes and dtype_y in int_dtypes))):
-        error_class = ValueError if is_interpreter() else triton.CompilationError
-        with pytest.raises(error_class, match='Cannot use .* because they have different signedness'):
+        with pytest.raises(triton.TritonError, match='Cannot use .* because they have different signedness'):
             _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
     else:
         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
@@ -489,8 +487,7 @@ def test_bitwise_op(dtype_x, dtype_y, op, num_ctas, device):
         numpy_expr = None
     if 'float' in dtype_x + dtype_y:
         # The CompilationError must have been caused by a C++ exception with this text.
-        error_class = tl.semantic.IncompatibleTypeErrorImpl if is_interpreter() else triton.CompilationError
-        with pytest.raises(error_class, match='invalid operands of type'):
+        with pytest.raises(triton.TritonError, match='invalid operands of type'):
             _test_binary(dtype_x, dtype_y, expr, numpy_expr='np.array([])', device=device, num_ctas=num_ctas)
     else:
         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
@@ -618,8 +615,7 @@ def test_invalid_slice(device):
     def _kernel(dst):
         dst[10:]
 
-    error_class = ValueError if is_interpreter() else triton.CompilationError
-    with pytest.raises(error_class, match='unsupported tensor index'):
+    with pytest.raises(triton.TritonError, match='unsupported tensor index'):
         _kernel[(1, )](dst=dst)
 
 
@@ -712,33 +708,26 @@ def test_expand_dims_error_cases(device):
 
     N = 32
     dummy_tensor = torch.empty((), device=device)
-    error_class = ValueError if is_interpreter() else triton.CompilationError
 
-    def get_error_message(e):
-        if is_interpreter():
-            return str(e.value)
-        else:
-            return str(e.value.__cause__)
-
-    with pytest.raises(error_class) as exc_info:
+    with pytest.raises(triton.TritonError) as exc_info:
         dim_out_of_range1[(1, )](dummy_tensor, N)
-    assert "invalid axis -3" in get_error_message(exc_info)
+    assert "invalid axis -3" in str(exc_info.value.__cause__)
 
-    with pytest.raises(error_class) as exc_info:
+    with pytest.raises(triton.TritonError) as exc_info:
         dim_out_of_range2[(1, )](dummy_tensor, N)
-    assert "invalid axis 2" in get_error_message(exc_info)
+    assert "invalid axis 2" in str(exc_info.value.__cause__)
 
-    with pytest.raises(error_class) as exc_info:
+    with pytest.raises(triton.TritonError) as exc_info:
         dim_out_of_range3[(1, )](dummy_tensor, N)
-    assert "invalid axis 1" in get_error_message(exc_info)
+    assert "invalid axis 1" in str(exc_info.value.__cause__)
 
-    with pytest.raises(error_class) as exc_info:
+    with pytest.raises(triton.TritonError) as exc_info:
         duplicate_dim1[(1, )](dummy_tensor, N)
-    assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", get_error_message(exc_info))
+    assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", str(exc_info.value.__cause__))
 
-    with pytest.raises(error_class) as exc_info:
+    with pytest.raises(triton.TritonError) as exc_info:
         duplicate_dim2[(1, )](dummy_tensor, N)
-    assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", get_error_message(exc_info))
+    assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", str(exc_info.value.__cause__))
 
 
 # ----------------------------
@@ -752,11 +741,9 @@ def test_invalid_pid_axis(device):
     def _kernel(dst):
         pid = tl.program_id(20)
 
-    error_class = ValueError if is_interpreter() else triton.CompilationError
-    with pytest.raises(error_class) as exc_info:
+    with pytest.raises(triton.TritonError) as exc_info:
         _kernel[(1, )](dst)
-    error_msg = str(exc_info.value) if is_interpreter() else str(exc_info.value.__cause__)
-    assert re.search(r"program_id axis must be 0, 1, or 2 but got 20", error_msg)
+    assert re.search(r"program_id axis must be 0, 1, or 2 but got 20", str(exc_info.value.__cause__))
 
 
 # ---------------
@@ -1943,8 +1930,7 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     BLOCK_K = 1 if len(shape) == 2 else shape[2]
     IS_3D = bool(len(shape) == 3)
     if axis is not None and axis >= len(shape):
-        error_class = ValueError if is_interpreter() else triton.CompilationError
-        with pytest.raises(error_class):
+        with pytest.raises(triton.TritonError):
             kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
                           KEEP_DIMS=keep_dims, num_ctas=num_ctas)
         return
@@ -4210,6 +4196,7 @@ def add_fn_static_cond(x, cond: tl.constexpr):
         return x + 1
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize(
     "call_type",
     ["attribute", "attribute_jit", "jit", "jit_if", "jit_expr", "jit_static_cond", "jit_noinline", "jit_extern"])
