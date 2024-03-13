@@ -8,8 +8,9 @@ namespace LLVM {
 namespace NVIDIA {
 using namespace mlir::triton;
 
-Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
-                    Value val, Value i, NVVM::ShflKind mode, Value clamp) {
+static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
+                           Value val, Value i, NVVM::ShflKind mode,
+                           Value clamp) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   if (bits == 64) {
@@ -90,6 +91,19 @@ Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr) {
   Value val = builder.launch(b, loc, b.getIntegerType(32), false);
   return val;
 }
+
+Value permute(Location loc, ConversionPatternRewriter &rewriter, Value a,
+              Value b, Value mask) {
+  PTXBuilder builder;
+  auto &prmt = builder.create("prmt")->o("b32");
+  auto *destOpr = builder.newOperand("=r");
+  auto *aOperand = builder.newOperand(a, "r");
+  auto *bOperand = builder.newOperand(b, "r");
+  auto *maskOperand = builder.newOperand(mask, "r");
+  prmt(destOpr, aOperand, bOperand, maskOperand);
+  return builder.launch(rewriter, loc, rewriter.getIntegerType(32), false);
+}
+
 } // namespace NVIDIA
 } // namespace LLVM
 } // namespace mlir

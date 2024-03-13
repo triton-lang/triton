@@ -2742,6 +2742,14 @@ def test_trans_4d(dtype_str, shape, perm, device):
 # ---------------
 
 
+def convert_fp8_to_fp32(x, device, dtype_str):
+    if dtype_str == 'float8e4nv':
+        return torch.tensor(x, device=device).view(torch.float8_e4m3fn).to(torch.float32)
+    elif dtype_str == 'float8e5':
+        return torch.tensor(x, device=device).view(torch.float8_e5m2).to(torch.float32)
+    assert "Unsupported float8 dtype"
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
     "M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, out_dtype",
@@ -2761,7 +2769,9 @@ def test_trans_4d(dtype_str, shape, perm, device):
                                                                                                     'float32')]] +
     [(64, 64, 64, 4, col_a, col_b, 'none', False, 'float32', 'float32')
      for col_a in [True, False]
-     for col_b in [True, False]] + [(64, 64, 64, 4, False, False, 'chain-dot', False, 'bfloat16', 'float32')])
+     for col_b in [True, False]] + [(64, 64, 64, 4, False, False, 'chain-dot', False, 'bfloat16', 'float32')] +
+    [(128, 128, 64, 4, False, False, 'chain-dot', False, float8_type, 'float32')
+     for float8_type in ["float8e5", "float8e4nv"]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, out_dtype, num_ctas, device):
     check_cuda_only(device)
@@ -2839,16 +2849,16 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
     else:
         y = numpy_random((K, N), dtype_str=in_dtype, rs=rs)
     w = numpy_random((N, N), dtype_str=in_dtype, rs=rs)
-    if 'int' not in in_dtype:
+    if 'int' not in in_dtype and 'float8' not in in_dtype:
         x *= .1
         y *= .1
     if in_dtype == 'float32' and allow_tf32:
         x = (x.view('uint32') & np.uint32(0xffffe000)).view('float32')
         y = (y.view('uint32') & np.uint32(0xffffe000)).view('float32')
         w = (w.view('uint32') & np.uint32(0xffffe000)).view('float32')
-    x_tri = to_triton(x, device=device)
-    y_tri = to_triton(y, device=device)
-    w_tri = to_triton(w, device=device)
+    x_tri = to_triton(x, device=device, dst_type=in_dtype)
+    y_tri = to_triton(y, device=device, dst_type=in_dtype)
+    w_tri = to_triton(w, device=device, dst_type=in_dtype)
     # triton result
     if out_dtype == 'int8':
         z = 1 + numpy_random((M, N), dtype_str='int32', rs=rs)
@@ -2894,6 +2904,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
     # torch result
     if in_dtype == 'int8':
         z_ref = np.matmul(x.astype(np.float32), y.astype(np.float32())).astype(np.int32)
+    elif 'float8' in in_dtype:
+        x = convert_fp8_to_fp32(x, device, in_dtype)
+        y = convert_fp8_to_fp32(y, device, in_dtype)
+        z_ref = to_numpy(torch.matmul(x, y))
     else:
         z_ref = np.matmul(x, y)
 
@@ -2908,6 +2922,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         denom = np.sum(num, axis=-1, keepdims=True)
         z_ref = num / denom
     if epilogue == 'chain-dot':
+        if 'float8' in in_dtype:
+            w = to_numpy(convert_fp8_to_fp32(w, device, in_dtype))
         z_ref = np.matmul(z_ref, w)
     # compare
     if in_dtype == 'float32':
@@ -2925,7 +2941,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
     if (K > 16 or N > 16 or M > 16) and (M * N // (num_warps * 32) >= 4):
         # XXX: skip small sizes because they are not vectorized
         assert 'ld.global.v4' in ptx
-        assert 'st.global.v4' in ptx
+        if 'float8' in in_dtype:
+            assert 'st.global.v2' in ptx
+        else:
+            assert 'st.global.v4' in ptx
     if in_dtype == 'float32' and allow_tf32:
         assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k8(?:.row.col)?.f32.tf32.tf32', ptx)
     elif in_dtype == 'float16' and out_dtype == tl.float32:
@@ -2944,6 +2963,12 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         else:
             assert 'wgmma.mma_async.sync.aligned' in ptx or\
                 'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
+    elif in_dtype == "float8e5" and out_dtype == tl.float32:
+        if capability[0] == 9:
+            assert 'wgmma.mma_async.sync.aligned.m64n128k32.f32.e5m2.e5m2' in ptx
+    elif in_dtype == "float8e4nv" and out_dtype == tl.float32:
+        if capability[0] == 9:
+            assert 'wgmma.mma_async.sync.aligned.m64n128k32.f32.e4m3.e4m3' in ptx
 
 
 @pytest.mark.parametrize("B", [1, 2, 4, 8])
