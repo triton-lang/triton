@@ -29,9 +29,12 @@ class CompilationError(TritonError):
         return message
 
     def __init__(self, src: Optional[str], node: ast.AST, error_message: Optional[str] = None):
+        super().__init__(error_message)
         self.src = src
         self.node = node
-        super().__init__(error_message)
+
+    def __str__(self):
+        return self._format_message()
 
     def __reduce__(self):
         # this is necessary to make CompilationError picklable
