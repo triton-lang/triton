@@ -102,8 +102,8 @@ def TTNG_DotAsyncOp : TTNG_Op<"dot_async", [Pure,
 def TTNG_DotWaitOp : TTNG_Op<"dot_wait", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                           AllTypesMatch<["inputs", "outputs"]>]> {
   let summary = "dot wait";
-  let arguments = (ins Variadic<TT_FpIntTensor>:$inputs, I32Attr:$pendings);
-  let results = (outs Variadic<TT_FpIntTensor>:$outputs);
+  let arguments = (ins Variadic<TT_TensorOrMemDesc>:$inputs, I32Attr:$pendings);
+  let results = (outs Variadic<TT_TensorOrMemDesc>:$outputs);
   let description = [{
     Waits until there are $pendings or fewer outstanding async dot operations.
 

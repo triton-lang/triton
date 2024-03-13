@@ -345,6 +345,13 @@ def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
     ]
 
 
+def test_dtype_codegen():
+    for dtype in dtypes_with_bfloat16:
+        full_name = f"triton.language.{dtype}"
+        assert repr(eval(full_name)) == full_name
+    assert repr(triton.language.float8e4b15x4) == "triton.language.float8e4b15x4"
+
+
 # ---------------
 # test binary ops
 # ---------------
