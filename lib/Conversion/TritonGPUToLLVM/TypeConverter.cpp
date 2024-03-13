@@ -85,10 +85,6 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
   auto dotOpLayout = layout.dyn_cast<DotOperandEncodingAttr>();
   if (!dotOpLayout)
     return elemTy;
-  if (auto mfmaParent =
-          dotOpLayout.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
-    return vec_ty(elemTy, dotOpLayout.getKWidth());
-  }
   auto mmaParent = dotOpLayout.getParent().dyn_cast<NvidiaMmaEncodingAttr>();
   if (!mmaParent || mmaParent.isHopper())
     return elemTy;
@@ -127,8 +123,6 @@ Type TritonGPUToLLVMTypeConverter::convertMemDescType(MemDescType type) {
   auto ctx = type.getContext();
   Attribute layout = type.getEncoding();
   SmallVector<int64_t> shape(type.getShape().begin(), type.getShape().end());
-  Type eltType = getElementTypeForStruct(cast<TensorOrMemDesc>(type));
-  auto shared_layout = layout.cast<SharedEncodingAttr>();
   SmallVector<Type, 4> types;
   // base ptr
   auto ptrType = LLVM::LLVMPointerType::get(ctx, 3);

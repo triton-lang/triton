@@ -525,19 +525,11 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                              k * loadsPerThread + loadId];
         Value loadAddress = gep(smemPtrTy, elemTy, smemBase, loadOffset);
         Value loadedValue = load(loadVecTy, loadAddress);
-        if (loadsPerThread > 1) {
-          for (int elemId = 0; elemId < elemsPerLoad; ++elemId) {
-            Value elemVal =
-                extract_element(elemTy, loadedValue, i32_val(elemId));
-            elemVal = bitcast(elemVal, resElemTy);
-            valVec = insert_element(vecTy, valVec, elemVal,
-                                    i32_val(loadId * elemsPerLoad + elemId));
-          }
-        } else {
-          valVec = loadedValue;
+        for (int elemId = 0; elemId < elemsPerLoad; ++elemId) {
+          Value elemVal = extract_element(elemTy, loadedValue, i32_val(elemId));
+          loadedValues.push_back(elemVal);      
         }
       }
-      loadedValues.push_back(valVec);
     }
   }
 
