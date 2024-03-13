@@ -108,6 +108,9 @@ jobs:
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -vvv language/test_line_info.py
           # Run hopper/test_flashattention.py separately to avoid out of gpu memory
           python3 -m pytest -vs hopper/test_flashattention.py
+          # Test example
+          cd ../../examples
+          find . -type f -name '*.py' -exec echo {} \; -exec python3 {} \;
 
       - name: Clear cache
         run: |
