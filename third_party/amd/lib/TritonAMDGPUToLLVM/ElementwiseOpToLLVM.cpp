@@ -1539,6 +1539,7 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_BINARY_OP(arith::MaxSIOp, LLVM::SMaxOp) // smax
   POPULATE_BINARY_OP(arith::MinUIOp, LLVM::UMinOp) // umin
   POPULATE_BINARY_OP(arith::MaxUIOp, LLVM::UMaxOp) // umax
+  POPULATE_BINARY_OP(triton::PreciseDivFOp, LLVM::FDivOp)
 #undef POPULATE_BINARY_OP
 
 #define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
@@ -1561,6 +1562,7 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(triton::BitcastOp, LLVM::BitcastOp)
   POPULATE_UNARY_OP(triton::IntToPtrOp, LLVM::IntToPtrOp)
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
+  POPULATE_UNARY_OP(triton::PreciseSqrtOp, LLVM::SqrtOp)
 #undef POPULATE_UNARY_OP
 
   patterns.add<ElementwiseOpConversion<math::FmaOp, LLVM::FMAOp>>(
