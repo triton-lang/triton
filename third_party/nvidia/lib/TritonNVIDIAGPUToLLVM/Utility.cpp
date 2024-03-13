@@ -1,4 +1,4 @@
-#include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
+#include "Utility.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
