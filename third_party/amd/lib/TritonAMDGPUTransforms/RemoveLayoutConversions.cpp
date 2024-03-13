@@ -191,10 +191,11 @@ static bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
 }
 
 #ifdef USE_ROCM
-// Look ahead to at the transitive uses and see if there is a convert to mfma
-// operations.
+// Look ahead to at the transitive uses and see if there is a convert to mfma or
+// wmma operations.
 // TODO: unify with hasConvertToMMATransisitiveUse?
-static bool hasConvertToMFMATransisitiveUse(Operation *op, Attribute encoding) {
+static bool hasConvertToAmdMmaTransisitiveUse(Operation *op,
+                                              Attribute encoding) {
   SmallVector<Value> queue = {op->getResult(0)};
   SetVector<Operation *> forwardSlice;
   llvm::SmallDenseSet<Value> seen;
@@ -261,8 +262,12 @@ void LayoutPropagation::initAnchorLayout() {
           //
           // TODO: rework this heuristic if we can store MFMA layout directly
           // into global memory.
-          if (tensorType.getEncoding().isa<triton::gpu::AMDMfmaEncodingAttr>() &&
-              !hasConvertToMFMATransisitiveUse(op, tensorType.getEncoding()))
+          //
+          // Also relevant for WMMA layout.
+          if (tensorType.getEncoding()
+                  .isa<triton::gpu::AMDMfmaEncodingAttr,
+                       triton::gpu::AMDWmmaEncodingAttr>() &&
+              !hasConvertToAmdMmaTransisitiveUse(op, tensorType.getEncoding()))
             continue;
 #endif
           layouts.insert({result, LayoutInfo(tensorType.getEncoding())});
