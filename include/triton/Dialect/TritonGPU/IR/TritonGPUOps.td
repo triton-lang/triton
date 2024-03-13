@@ -192,6 +192,11 @@ def TTG_LocalDeallocOp : TTG_Op<"local_dealloc", [MemoryEffects<[MemFree<SharedM
     This operation is optional.  If you don't explicitly dealloc a buffer, the
     compiler assumes it's deallocated at the first point that post-dominates all
     uses of the alloc.
+
+    Because we assume a memdesc is dead at the first point that post-dominates
+    its uses, ops that wait for an async operation on a memdesc to complete
+    (such as triton_nvidia_gpu.dot_wait) should also take the memdesc as an
+    operand.
   }];
 
   let arguments = (ins TT_MemDescType:$ptr);

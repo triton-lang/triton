@@ -23,9 +23,9 @@ struct GetNumProgramsOpConversion
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
 
     Location loc = op->getLoc();
-    assert(op.getAxis() < 3);
+    assert(op.getAxisAsInt() < 3);
     std::string sreg = numCTAs == 1 ? "%nctaid." : "%nclusterid.";
-    sreg.append(1, 'x' + op.getAxis()); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
+    sreg.append(1, 'x' + op.getAxisAsInt()); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
 
     Value numPrograms = LLVM::NVIDIA::getSRegValue(rewriter, loc, sreg);
     rewriter.replaceOp(op, numPrograms);

@@ -725,8 +725,13 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
           ConvertLayoutOp, nvidia_gpu::DotWaitOp>(op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
-         llvm::zip(op->getResults(), newOp->getResults()))
+         llvm::zip(op->getResults(), newOp->getResults())) {
+      if (oldResult.getType() == newResult.getType()) {
+        oldResult.replaceAllUsesWith(newResult);
+        continue;
+      }
       map(oldResult, newResult);
+    }
     return newOp;
   }
   llvm::report_fatal_error("unexpected op in rewrite");
