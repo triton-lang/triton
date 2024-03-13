@@ -2,7 +2,7 @@
 #include "mlir/IR/TypeUtilities.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
-#include "nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
+#include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 
 #include "Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
