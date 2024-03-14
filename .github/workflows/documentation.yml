@@ -39,7 +39,7 @@ jobs:
 
       - name: Update docs
         run: |
-          export TMP_DOCS_PATH=/tmp/triton-docs
+          export TMP_DOCS_PATH=/tmp/triton-docs/
           sudo mkdir $TMP_DOCS_PATH
           sudo mv docs/_build/html/* $TMP_DOCS_PATH
           sudo git checkout gh-pages
@@ -47,7 +47,7 @@ jobs:
           sudo cp -r index.html $TMP_DOCS_PATH
           sudo cp -r .nojekyll $TMP_DOCS_PATH
           sudo rm -r *
-          sudo cp -r $TMP_DOCS_PATH* .
+          sudo cp -r $TMP_DOCS_PATH/* .
           sudo rm -r $TMP_DOCS_PATH
           sudo git add .
           sudo git config --global user.email "N/A"
