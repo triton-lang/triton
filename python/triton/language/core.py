@@ -628,6 +628,9 @@ class constexpr:
     def __pow__(self, other):
         return constexpr(self.value**_constexpr_to_value(other))
 
+    def __rpow__(self, other):
+        return constexpr(_constexpr_to_value(other)**self.value)
+
     def __rshift__(self, other):
         return constexpr(self.value >> _constexpr_to_value(other))
 
