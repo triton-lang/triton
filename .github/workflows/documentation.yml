@@ -39,16 +39,14 @@ jobs:
 
       - name: Update docs
         run: |
-          export TMP_DOCS_PATH=/tmp/triton-docs
-          sudo mkdir $TMP_DOCS_PATH
-          sudo mv docs/_build/html/* $TMP_DOCS_PATH
+          sudo mkdir /tmp/triton-docs/
+          sudo mv docs/_build/html/* /tmp/triton-docs/
           sudo git checkout gh-pages
-          sudo cp -r CNAME $TMP_DOCS_PATH
-          sudo cp -r index.html $TMP_DOCS_PATH
-          sudo cp -r .nojekyll $TMP_DOCS_PATH
+          sudo cp -r CNAME /tmp/triton-docs/
+          sudo cp -r index.html /tmp/triton-docs/
+          sudo cp -r .nojekyll /tmp/triton-docs/
           sudo rm -r *
-          sudo cp -r $TMP_DOCS_PATH* .
-          sudo rm -r $TMP_DOCS_PATH
+          sudo cp -r /tmp/triton-docs/* .
           sudo git add .
           sudo git config --global user.email "N/A"
           sudo git config --global user.name "gh-actions-bot"
