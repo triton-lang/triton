@@ -297,8 +297,6 @@ def clamp(x: tl.tensor, min: tl.tensor, max: tl.tensor, propagate_nan: tl.Propag
 
     dtype = x.dtype
     if dtype.is_floating():
-        if propagate_nan == tl.PropagateNan.ALL:
-            return tl.tensor(builder.create_clampf(x.handle, min.handle, max.handle, propagate_nan), x.type)
         return tl.tensor(builder.create_clampf(x.handle, min.handle, max.handle, propagate_nan), x.type)
     else:
         assert False, f"Unexpected dtype {dtype}. Only floating point clamp is supported"

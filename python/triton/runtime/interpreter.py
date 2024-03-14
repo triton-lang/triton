@@ -319,6 +319,9 @@ class Builder:
     def ternary_op(self, lhs, rhs, other, op):
         return TensorHandle(op(lhs.data, rhs.data, other.data), other.dtype)
 
+    def create_clampf(self, arg, lo, hi, propagate_nans):
+        return self.ternary_op(arg, lo, hi, np.clip)
+
     create_select = lambda self, cond, lhs, rhs: self.ternary_op(cond, lhs, rhs, np.where)
 
     # unary functions
@@ -340,7 +343,7 @@ class Builder:
         return TensorHandle(np.transpose(arg.data, perm), arg.dtype)
 
     def create_dot(self, a, b, d, allow_tf32, max_num_imprecise_acc):
-        return TensorHandle(np.dot(a.data, b.data) + d.data, d.dtype)
+        return TensorHandle(np.matmul(a.data, b.data) + d.data, d.dtype)
 
     def create_make_range(self, start, stop):
         return TensorHandle(np.arange(start, stop, dtype=np.int32), tl.int32)
@@ -378,8 +381,16 @@ class Builder:
     def create_ptr_to_int(self, val, dst_ty):
         return TensorHandle(val.data.astype(np.uint64), dst_ty)
 
-    # def create_cat(self, lhs, rhs):
-    #     pass
+    def create_cat(self, lhs, rhs):
+        return TensorHandle(np.concatenate([lhs.data, rhs.data]), lhs.dtype)
+
+    def create_join(self, lhs, rhs):
+        # Triton only supports joining two original tensors into a new one along the last axis
+        return TensorHandle(np.stack([lhs.data, rhs.data], axis=-1), lhs.dtype)
+
+    def create_split(self, val):
+        # Triton only supports splitting the original tensor into two along the last axis
+        return (TensorHandle(val.data[..., 0], val.dtype), TensorHandle(val.data[..., 1], val.dtype))
 
     def create_splat(self, arg, shape):
         if isinstance(arg.dtype, tl.block_type):
@@ -604,7 +615,7 @@ def _patch_lang_core(lang, builder):
 
     # can't just map lang.static_range to `range`, because `tl.static_range`
     # can get `step` passed by keyword
-    def _range(arg1, arg2=None, step=None, **kwargs):
+    def _new_range(arg1, arg2=None, step=None, **kwargs):
         if step is None:
             step = 1
         if arg2 is None:
@@ -613,18 +624,16 @@ def _patch_lang_core(lang, builder):
             start, end = arg1, arg2
         return range(start, end, step)
 
-    def _static_assert(cond, msg=""):
+    def _new_static_assert(cond, msg=""):
         assert cond, msg
 
-    lang.range = _range
-    lang.static_range = _range
-    lang.static_assert = _static_assert
+    lang.range = _new_range
+    lang.static_range = _new_range
+    lang.static_assert = _new_static_assert
     lang.dtype.to_ir = _new_to_ir
 
 
-def _patch_lang_math(lang, builder):
-    math = lang.math
-
+def _patch_lang_math(lang):
     mapping = {
         "abs": np.abs,
         "acos": np.arccos,
@@ -642,7 +651,7 @@ def _patch_lang_math(lang, builder):
 
         def impl(*args, **kwargs):
             ret_type = args[0].type  # TODO: incorrect
-            ret_dtype = args[0].dtype  # TODO: incorrect
+            ret_dtype = args[0].handle.dtype  # TODO: incorrect
             args = [arg.handle.data for arg in args if isinstance(arg, tl.core.tensor)]
             # remove the _builder kwarg
             kwargs = {k: v.handle.data for k, v in kwargs.items() if k != "_builder"}
@@ -658,11 +667,12 @@ def _patch_lang_math(lang, builder):
             raise NotImplementedError(f"""
 {name} not supported in interpreter mode: no known numpy implementation.
 If you think that {name} in fact does have a numpy implementation, please add it
-to the mapping in python/triton/interpreter/new_interpreter.py:_patch_lang_math.
+to the mapping in python/triton/runtime/interpreter.py:_patch_lang_math.
 """)
 
         return fallback
 
+    math = lang.math
     for name, member in inspect.getmembers(math):
         if name in mapping:
             setattr(math, name, make_numpy(name))
@@ -676,7 +686,7 @@ def _patch_lang(fn):
     _patch_lang_tensor(lang[0].tensor, builder)
     _patch_lang_core(lang[0], builder)
     if lang[0] == tl:
-        _patch_lang_math(lang[0], builder)
+        _patch_lang_math(lang[0])
 
 
 # TODO: wrap everything in triton tensors
