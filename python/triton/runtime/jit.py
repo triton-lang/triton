@@ -117,6 +117,10 @@ class KernelParam:
     def is_constexpr(self):
         return "constexpr" in self.annotation
 
+    @cached_property
+    def is_const(self):
+        return "const" in self.annotation and not self.is_constexpr
+
     @property
     def default(self):
         return self._param.default
@@ -140,17 +144,22 @@ class KernelArg:
     def name(self):
         return self.param.name
 
-    def signature_key(self):
+    def mangled_type(self):
         annotation = self.param.annotation
-        if "Tensor" in annotation:
-            return self.value.dtype
+        const_str = "const " if self.param.is_const else ""
+        is_pointer = False
         for ty1, ty2 in [("uint", 'u'), ("int", 'i')]:
             width = annotation[annotation.find(ty1) + len(ty1):]
             if width and ty1 in annotation:
                 return f"{ty2}{width}"
         if annotation == "bool":
             return "u1"
-        return JITFunction._key_of(self.value)
+
+        if "Tensor" in annotation:
+            key = self.value.dtype
+        else:
+            key = JITFunction._key_of(self.value)
+        return JITFunction._type_of(key, self.param.is_const)
 
     def specialization_key(self):
         assert not self.param.do_not_specialize
@@ -255,7 +264,7 @@ class JITFunction(KernelInterface[T]):
         # equal_to_1)
 
     @staticmethod
-    def _type_of(key):
+    def _type_of(key, is_const=False):
         # `None` is nullptr.  Implicitly convert to *i8.
         if key is None:
             return "*i8"
@@ -284,7 +293,8 @@ class JITFunction(KernelInterface[T]):
         # reinterpret can create triton type
         for v in list(tys.values()):
             tys[v] = v
-        return key if isinstance(key, str) else f"*{tys[dtype_str]}"
+        const_str = "k" if is_const else ""
+        return key if isinstance(key, str) else f"*{const_str}{tys[dtype_str]}"
 
     def _make_constants(self, constexpr_key):
         constants = dict(zip(self.constexprs, constexpr_key))
@@ -370,7 +380,7 @@ class JITFunction(KernelInterface[T]):
         grid_2 = grid[2] if grid_size > 2 else 1
         # compute cache key
         args = [KernelArg(arg_value, param) for (_, arg_value), param in zip(bound_args.arguments.items(), self.params)]
-        sig_key = tuple(arg.signature_key() for arg in args if not arg.param.is_constexpr)
+        sig_key = tuple(arg.mangled_type() for arg in args if not arg.param.is_constexpr)
         spec_key = tuple(arg.specialization_key() for arg in args if not arg.param.do_not_specialize)
         constexpr_key = tuple(arg.value for arg in args if arg.param.is_constexpr)
         key = (sig_key, constexpr_key, spec_key, options)
@@ -388,11 +398,7 @@ class JITFunction(KernelInterface[T]):
                     raise TypeError(f"Callable constexpr at index {i} is not supported")
 
             # Build kernel signature -- doesn't include constexpr arguments.
-            signature = {
-                arg.param.num: self._type_of(arg.signature_key())
-                for arg in args
-                if not arg.param.is_constexpr
-            }
+            signature = {arg.param.num: arg.mangled_type() for arg in args if not arg.param.is_constexpr}
 
             if self._call_hook(key, signature, device, constants, options, configs):
                 return None

@@ -290,6 +290,10 @@ class dtype:
     def is_ptr():
         return False
 
+    @staticmethod
+    def is_const():
+        return False
+
     def __eq__(self, other: dtype):
         if not isinstance(other, dtype):
             return False
@@ -389,6 +393,23 @@ class pointer_type(dtype):
         return self
 
 
+class const_pointer_type(pointer_type):
+
+    def __init__(self, element_ty: dtype, address_space: int = 1):
+        super().__init__(element_ty, address_space)
+
+    def __str__(self):
+        return f'const_pointer<{self.element_ty}>'
+
+    def is_const(self):
+        return True
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, const_pointer_type):
+            return False
+        return self.element_ty == other.element_ty and self.address_space == other.address_space
+
+
 class block_type(dtype):
 
     def __init__(self, element_ty: dtype, shape: List):
@@ -480,6 +501,17 @@ pi32_t = pointer_type(int32)
 # -----------------------
 # constexpr
 # -----------------------
+
+
+class const:
+    """
+    This class is used as a type annotation to mark pointers to constant data.
+    The `store` function cannot be called with a pointer to const. Constness
+    is part of the pointer type and the usual Triton type consistency rules
+    apply. For example you cannot have a function that returns constant pointer
+    in one return statement and non-constant pointer in another.
+    """
+    pass
 
 
 class constexpr:
