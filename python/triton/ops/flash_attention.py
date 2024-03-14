@@ -26,7 +26,7 @@ def _fwd_kernel_compute(acc, m_i, l_i, q, vDtype, K_block_ptr, V_block_ptr, star
         k = tl.load(K_block_ptr)
         v = tl.load(V_block_ptr)
         # -- compute qk ---
-        qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
+        qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=q.dtype)
         if IS_CAUSAL:
             qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk, float("-inf"))
         qk += tl.dot(q, k, allow_tf32=True)
@@ -35,9 +35,6 @@ def _fwd_kernel_compute(acc, m_i, l_i, q, vDtype, K_block_ptr, V_block_ptr, star
         alpha = tl.math.exp2(m_i - m_i_new)
         p = tl.math.exp2(qk - m_i_new[:, None])
         # -- scale and update acc --
-        # This sentence has bug
-        # acc_scale = l_i * 0 + alpha # workaround some compiler bug
-        # acc *= acc_scale[:, None]
         acc *= alpha[:, None]
         acc += tl.dot(p.to(vDtype), v, allow_tf32=True)
         
@@ -114,7 +111,7 @@ def _fwd_kernel_without_tma(
     offs_m = start_m * BLOCK_M + rows_q # will be updated for causual attention
     offs_n = tl.arange(0, BLOCK_N)
     # initialize pointer to m and l
-    m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
+    m_i = tl.zeros([BLOCK_M], dtype=q.dtype) - float("inf")
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
     acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
 

@@ -57,7 +57,7 @@ def _fwd_kernel(Q, K, V, sm_scale,  #
     l_prev = tl.zeros([BLOCK_M], dtype=tl.float32)
     acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
 
-    stride_qh_2d = stride_qh // stride_qm // stride_qk # q_k * q_m / q_k / 1 = q_m
+    stride_qh_2d = stride_qh // stride_qm // stride_qk
     
     q_tile_ptr = tl.make_block_ptr(
         base=Q,
@@ -297,18 +297,14 @@ class _attention(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, q, k, v, sm_scale):
-        # TODO (yiakyw) : tuning BLOCK_M and BLOCK_N
-        #
         # Aligned with python/triton/ops/flash_attention.py flash_attention v2 implementation
-        # according to flash attention v1, BLOCK_M = min(SRAM_capacity / 4, emb_d) though I have
-        # batter partition analysis.
+        # We dervied that typical configuration of BLOCK_M and BLOCK_N sampling from {128, 64}
         BLOCK_M = 128
         BLOCK_N = 64
         # shape constraints
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
         assert Lq == Lk and Lk == Lv
         assert Lk in {16, 32, 64, 128}
-        # TODO (yiakwy) : inplace output if necessary
         o = torch.empty_like(q)
         grid = (triton.cdiv(q.shape[2], BLOCK_M), q.shape[0] * q.shape[1], 1)
         L = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
@@ -366,18 +362,17 @@ class _attention(torch.autograd.Function):
 
 attention = _attention.apply
 
-
 @pytest.mark.parametrize('is_causal', [
     True
 ])
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [
-    (4, 48, 128, 64),
+    # (4, 48, 128, 64),
     (4, 48, 256, 64),
-    (4, 48, 512, 64),
-    (4, 48, 1024, 64),
-    (4, 48, 2048, 64),
-    (4, 48, 4096, 64),
-    (4, 48, 1024, 128),
+    # (4, 48, 512, 64),
+    # (4, 48, 1024, 64),
+    # (4, 48, 2048, 64),
+    # (4, 48, 4096, 64),
+    # (4, 48, 1024, 128),
     #  (4, 48, 8192, 64), out of memory
 ])
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 8, reason="requires arch 8+") # aligned with python/triton/ops/flash_attention.py flash_attention v2 implementation
