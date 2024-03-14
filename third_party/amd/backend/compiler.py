@@ -82,13 +82,14 @@ class HIPOptions:
 class HIPBackend(BaseBackend):
 
     @staticmethod
-    def supports_target(target: tuple):
+    def supports_target(target: list):
         return target[0] == 'hip'
 
-    def __init__(self, target: tuple) -> None:
+    def __init__(self, target: list) -> None:
         super().__init__(target)
-        assert isinstance(target, tuple) and len(target) == 3
+        assert isinstance(target, list) and len(target) == 3
         assert isinstance(target[1], str)
+        self.binary_ext = "hsaco"
 
     def parse_options(self, opts) -> Any:
         args = {'arch': self.target[1]}

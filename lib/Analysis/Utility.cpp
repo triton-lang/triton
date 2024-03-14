@@ -562,10 +562,11 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
   auto dstLayout = dstTy.getEncoding();
   auto mmaLayout = srcLayout.cast<NvidiaMmaEncodingAttr>();
   auto dotOperandLayout = dstLayout.cast<DotOperandEncodingAttr>();
-  auto ans =
-      mmaLayout.getVersionMajor() == 3 && dotOperandLayout.getOpIdx() == 0 &&
-      isMmaToMmaShortcut(dotOperandLayout.getParent(), srcLayout) &&
-      (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16());
+  int elementTypeSize = srcTy.getElementType().getIntOrFloatBitWidth();
+  auto ans = mmaLayout.getVersionMajor() == 3 &&
+             dotOperandLayout.getOpIdx() == 0 &&
+             isMmaToMmaShortcut(dotOperandLayout.getParent(), srcLayout) &&
+             (elementTypeSize == 16 || elementTypeSize == 8);
   return ans;
 }
 

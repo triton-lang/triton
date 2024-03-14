@@ -306,18 +306,18 @@ class CompiledKernel:
         self.metadata = json.loads(metadata_path.read_text())
         KernelMetadata = namedtuple('KernelMetadata', sorted(list(self.metadata.keys())))
         self.metadata = KernelMetadata(**self.metadata)
+        self.src = src
         self.hash = hash
 
         self.name = self.metadata.name
-        # create launcher
-        self.run = driver.active.launcher_cls(src, self.metadata)
         # stores the text of each level of IR that was generated during compilation
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
+        binary_ext = make_backend(self.metadata.target).binary_ext
         self.asm = {
-            file.suffix[1:]: file.read_bytes() if file.suffix[1:] == driver.active.binary_ext else file.read_text()
+            file.suffix[1:]: file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
             for file in asm_files
         }
-        self.kernel = self.asm[driver.active.binary_ext]
+        self.kernel = self.asm[binary_ext]
         # binaries are lazily initialized
         # because it involves doing runtime things
         # (e.g., checking amount of shared memory on current device)
@@ -328,6 +328,8 @@ class CompiledKernel:
         if self.module is not None:
             return
         device = driver.active.get_current_device()
+        # create launcher
+        self.run = driver.active.launcher_cls(self.src, self.metadata)
         # not enough shared memory to run the kernel
         max_shared = driver.active.utils.get_device_properties(device)["max_shared_mem"]
         if self.metadata.shared > max_shared:
