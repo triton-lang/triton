@@ -14,6 +14,7 @@ import subprocess
 from pathlib import Path
 
 
+@functools.lru_cache()
 def _path_to_binary(binary: str):
     paths = [
         os.environ.get(f"TRITON_{binary.upper()}_PATH", ""),
