@@ -2791,6 +2791,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         if out_dtype == 'float16':
             # TODO: support out_dtype=float16 for tl.dot on V100
             pytest.skip("Only test out_dtype=float16 on devices with sm >=80")
+    if capability[0] < 9 and in_dtype == 'float8e4nv':
+        pytest.skip("float8e4nv not supported on sm <= 80")
     if is_interpreter() and in_dtype == 'int8':
         pytest.skip(
             "numpy.dot with int8 inputs will overflow while tl.dot doesn't because MMA instruction's accumulator is 32-bit"
