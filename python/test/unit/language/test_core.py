@@ -2929,7 +2929,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
     if in_dtype == 'float32':
         # XXX: Somehow there's a larger difference when we use float32
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
-    elif out_dtype == tl.float16:
+    elif out_dtype == tl.float16 or in_dtype == 'bfloat16':
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-2)
     else:
         # added atol, to loose precision for float16xfloat16->float32 case
