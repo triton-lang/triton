@@ -98,6 +98,7 @@ class CUDABackend(BaseBackend):
         super().__init__(target)
         self.capability = target[1]
         assert isinstance(self.capability, int)
+        self.binary_ext = "cubin"
 
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts}
