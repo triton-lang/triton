@@ -59,19 +59,6 @@ def _fwd_kernel(Q, K, V, sm_scale,  #
 
     stride_qh_2d = stride_qh // stride_qm // stride_qk # q_k * q_m / q_k / 1 = q_m
     
-    # TODO(yiakwy) : refactor D0 to N_CTX in this flash attention test
-    # 
-    # This basically loads (D0, emb_d) elements which is of shape ((batch * heads) * N_CTX), 
-    # that means all the (batch * heads) cuda blocks with full length of N_CTX (full benckmarked 
-    # token lenghts) for 2-D attention (a reshape operation inserted) chunks of Q loaded.
-    #
-    # That means (batch * heads) chunks data computation duplicated in each cuda block.
-    # Hence strides_qh_2d is just q_m (emb_d), which is inefficient.
-    #
-    # Note in the following analysis to balance causal attention computation (main purpose of this PR), I will assume heads == 1, since
-    # in TP parallel shceme, attention is actually distributed among heads in TP group.
-    #
-    # This assumption reflect best performance when tuning parameters in LLM application.
     q_tile_ptr = tl.make_block_ptr(
         base=Q,
         shape=(D0, BLOCK_DMODEL),
