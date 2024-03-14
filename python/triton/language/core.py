@@ -537,11 +537,11 @@ pi32_t = pointer_type(int32)
 
 class const:
     """
-    This class is used as a type annotation to mark pointers to tensors
-    that cannot be modified. Store cannot be called with a const pointer.
-    Const pointers are represented by `const_pointer_type`, and usual
-    Triton type consistency rules apply - you cannot return a const pointer
-    from a function that returns also a non-const pointer, etc.
+    This class is used as a type annotation to mark pointers to constant data.
+    The `store` function cannot be called with a pointer to const. Constness
+    is part of the pointer type and the usual Triton type consistency rules
+    apply. For example you cannot have a function that returns constant pointer
+    in one return statement and non-constant pointer in another.
     """
     pass
 
