@@ -26,13 +26,14 @@ This is a Triton implementation of the Flash Attention algorithm
 """
 
 # import numpy as np
+import os
 import pytest
 import torch
 
 import triton
 import triton.language as tl
 
-from triton.ops.flash_attention import attention as causual_attention
+from triton.ops.flash_attention import attention as causal_attention
 
 @triton.jit
 def _fwd_kernel(Q, K, V, sm_scale,  #
@@ -67,7 +68,7 @@ def _fwd_kernel(Q, K, V, sm_scale,  #
     # That means (batch * heads) chunks data computation duplicated in each cuda block.
     # Hence strides_qh_2d is just q_m (emb_d), which is inefficient.
     #
-    # Note in the following analysis to balance Causual attention computation (main purpose of this PR), I will assume heads == 1, since
+    # Note in the following analysis to balance causal attention computation (main purpose of this PR), I will assume heads == 1, since
     # in TP parallel shceme, attention is actually distributed among heads in TP group.
     #
     # This assumption reflect best performance when tuning parameters in LLM application.
@@ -380,16 +381,16 @@ attention = _attention.apply
 
 
 @pytest.mark.parametrize('is_causal', [
-    True, False
+    True
 ])
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [
-    (4, 48, 128, 64),
-    (4, 48, 256, 64),
-    # TODO (yiakwy)
+    # (4, 48, 128, 64),
+    # (4, 48, 256, 64),
     # (4, 48, 512, 64),
     # (4, 48, 1024, 64),
     # (4, 48, 2048, 64),
     # (4, 48, 4096, 64),
+    (4, 48, 1024, 128),
     #  (4, 48, 8192, 64), out of memory
 ])
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 8, reason="requires arch 8+") # aligned with python/triton/ops/flash_attention.py flash_attention v2 implementation
@@ -404,11 +405,11 @@ def test_op(Z, H, N_CTX, D_HEAD, is_causal, dtype=torch.float16):
     # reference implementation
     
     if is_causal:
-        causualMask = torch.triu(torch.ones((N_CTX, N_CTX), device="cuda", dtype=torch.bool), diagonal=1)
+        causalMask = torch.triu(torch.ones((N_CTX, N_CTX), device="cuda", dtype=torch.bool), diagonal=1)
     p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
 
     if is_causal:
-        p[:,:, causualMask] = kNInf
+        p[:,:, causalMask] = kNInf
     
     p = torch.softmax(p.float(), dim=-1).half()
     # p = torch.exp(p)
@@ -418,18 +419,57 @@ def test_op(Z, H, N_CTX, D_HEAD, is_causal, dtype=torch.float16):
     ref_dk, k.grad = k.grad.clone(), None
     ref_dq, q.grad = q.grad.clone(), None
     # triton implementation
-    # tri_out = attention(q, k, v, sm_scale)
     
-    # TODO (yiakwy) : add test to faster load balanced attention fused with/without causual mask
-    #
+    torch.cuda.synchronize()
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+    
+    do_warmup = True
+    if os.environ.get("TRITON_INTERPRET", None) is not None:
+        if os.environ["TRITON_INTERPRET"] == "1":
+            print("disable warmup when debugging tiles/block mapping...")
+            do_warmup = False
+    
+    # warup up
+    if do_warmup:
+        for i in range(10):
+            attention(q, k, v, sm_scale)
+            
+    torch.cuda.synchronize()
+    start.record()
+    tri_out = attention(q, k, v, sm_scale)
+    end.record()
+    
+    torch.cuda.synchronize()
+    print("\n")
+    print(f"triton attention v2                   ({Z}x{H}x{N_CTX}x{D_HEAD}) : {start.elapsed_time(end)} ms")
+        
+    tri_out.backward(dout)
+    tri_dv, v.grad = v.grad.clone(), None
+    tri_dk, k.grad = k.grad.clone(), None
+    tri_dq, q.grad = q.grad.clone(), None
+    # compare
+    torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
+    torch.testing.assert_close(ref_dq, tri_dq, atol=1e-2, rtol=0)
+    torch.testing.assert_close(ref_dv, tri_dv, atol=1e-2, rtol=0)
+    torch.testing.assert_close(ref_dk, tri_dk, atol=1e-2, rtol=0)
+    
     # Sequence parallel partition requires gather of full length of tokens and scatter in bwd phase.
     # However, distributed attention allow (ring attention, dist attention...) much longer up to 1 million
-    # of tokens of sequence length. Hence we assume sequence parallel false here.
-    faster_tri_out = causual_attention(q, k, v, is_causal, sm_scale)
-    tri_out = faster_tri_out
+    # of tokens of sequence length. Hence we assume sequence parallel false here.        
+    if do_warmup:
+        # warup up
+        for i in range(10):
+            causal_attention(q, k, v, is_causal, sm_scale)
     
-    # print(ref_out)
-    # print(tri_out)
+    torch.cuda.synchronize()
+    start.record()
+    tri_out = causal_attention(q, k, v, is_causal, sm_scale)
+    end.record()
+    
+    torch.cuda.synchronize()
+    print(f"triton attention v3 with load balance ({Z}x{H}x{N_CTX}x{D_HEAD}) : {start.elapsed_time(end)} ms")
+    
     tri_out.backward(dout)
     tri_dv, v.grad = v.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
@@ -456,8 +496,8 @@ configs = [
         # x_vals=[2**i for i in range(10, 14)],
         x_vals=[1024,],
         line_arg='provider',
-        line_vals=['triton'] + (['flash'] if HAS_FLASH else []),
-        line_names=['Triton'] + (['Flash'] if HAS_FLASH else []),
+        line_vals=['triton', 'triton_causal_attention'] + (['flash'] if HAS_FLASH else []),
+        line_names=['Triton', 'Triton_Causal_Attention'] + (['Flash'] if HAS_FLASH else []),
         styles=[('red', '-'), ('blue', '-')],
         ylabel='ms',
         plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}',
@@ -489,6 +529,18 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.f
             fn = lambda: o.backward(do, retain_graph=True)
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         return ms
+    if provider == "triton_causal_attention":
+        q = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
+        k = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
+        v = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
+        sm_scale = 1.3
+        fn = lambda: causal_attention(q, k, v, True, sm_scale)
+        if mode == 'bwd':
+            o = fn()
+            do = torch.randn_like(o)
+            fn = lambda: o.backward(do, retain_graph=True)
+        ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
+        return ms
     if provider == "flash":
         lengths = torch.full((BATCH, ), fill_value=N_CTX, device=device)
         cu_seqlens = torch.zeros((BATCH + 1, ), device=device, dtype=torch.int32)
@@ -501,7 +553,8 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.f
             fn = lambda: o.backward(do, retain_graph=True)
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         return ms
+    
 
-
-# only works on post-Ampere GPUs right now
-# bench_flash_attention.run(save_path='.', print_data=True)
+if __name__ == "__main__":
+    # only works on post-Ampere GPUs right now
+    bench_flash_attention.run(save_path='.', print_data=True)

@@ -16,6 +16,44 @@ from .. import language as tl
 from enum import Enum
 
 @jit
+def _fwd_kernel_compute(acc, m_i, l_i, q, vDtype, K_block_ptr, V_block_ptr, start_m,
+                        offs_m, offs_n, BLOCK_M, BLOCK_N,
+                        IS_CAUSAL, N_CTX):
+    lo = 0
+    hi = (start_m + 1) * BLOCK_M if IS_CAUSAL else N_CTX
+    for start_n in range(lo, hi, BLOCK_N):
+        # -- load k, v --
+        k = tl.load(K_block_ptr)
+        v = tl.load(V_block_ptr)
+        # -- compute qk ---
+        qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
+        if IS_CAUSAL:
+            qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk, float("-inf"))
+        qk += tl.dot(q, k, allow_tf32=True)
+        # -- compute scaling constant ---
+        m_i_new = tl.maximum(m_i, tl.max(qk, 1))
+        alpha = tl.math.exp2(m_i - m_i_new)
+        p = tl.math.exp2(qk - m_i_new[:, None])
+        # -- scale and update acc --
+        # This sentence has bug
+        # acc_scale = l_i * 0 + alpha # workaround some compiler bug
+        # acc *= acc_scale[:, None]
+        acc *= alpha[:, None]
+        acc += tl.dot(p.to(vDtype), v, allow_tf32=True)
+        
+        # -- update m_i and l_i --        
+        l_i *= alpha
+        l_i += tl.sum(p, 1)
+        m_i = m_i_new
+        
+        # update pointers
+        K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
+        V_block_ptr = tl.advance(V_block_ptr, (BLOCK_N, 0))
+    # write back l and m
+    acc = acc / l_i[:, None]
+    return acc, l_i, m_i
+
+@jit
 def _fwd_kernel_without_tma(
     Q, K, V, sm_scale,
     L,
@@ -71,76 +109,21 @@ def _fwd_kernel_without_tma(
     )
     
     # initialize offsets
-    offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M) # will be updated for causual attention
+    rows_q = tl.arange(0, BLOCK_M)
+    cols_q = tl.arange(0, BLOCK_DMODEL)
+    offs_m = start_m * BLOCK_M + rows_q # will be updated for causual attention
     offs_n = tl.arange(0, BLOCK_N)
     # initialize pointer to m and l
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
     acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
 
-    # # TODO (yiakwy) : support scope binding in LLVM backend
-    # def compute(q, K_block_ptr, V_block_ptr, start_m, offs_m, offs_n, BLOCK_M, BLOCK_N, 
-    #             IS_CAUSAL, N_CTX, m_i, l_i, acc):
-    #     lo = 0
-    #     hi = (start_m + 1) * BLOCK_M if IS_CAUSAL else N_CTX
-    #     for start_n in range(lo, hi, BLOCK_N):
-    #         # -- load k, v --
-    #         k = tl.load(K_block_ptr)
-    #         v = tl.load(V_block_ptr)
-    #         # -- compute qk ---
-    #         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
-    #         if IS_CAUSAL:
-    #             qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk, float("-inf"))
-    #         qk += tl.dot(q, k, allow_tf32=True)
-    #         # -- compute scaling constant ---
-    #         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
-    #         alpha = tl.math.exp2(m_i - m_i_new)
-    #         p = tl.math.exp2(qk - m_i_new[:, None])
-    #         # -- scale and update acc --
-    #         acc_scale = l_i * 0 + alpha  # workaround some compiler bug
-    #         acc *= acc_scale[:, None]
-    #         acc += tl.dot(p.to(V.dtype.element_ty), v, allow_tf32=True)
-    #         # -- update m_i and l_i --
-    #         l_i = l_i * alpha + tl.sum(p, 1)
-    #         m_i = m_i_new
-    #         # update pointers
-    #         K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
-    #         V_block_ptr = tl.advance(V_block_ptr, (BLOCK_N, 0))
-    #     # write back l and m
-    #     acc = acc / l_i[:, None]
-        
-    # # compute online softmax and memory efficient attentin algorithms with
-    # # tl.program_id(0) blocks along K, V dimensions iterately
-    # compute(q, K_block_ptr, V_block_ptr, start_m, offs_m, offs_n, BLOCK_M, BLOCK_N,
-    #         IS_CAUSAL, N_CTX, m_i, l_i, acc)
-    
-    lo = 0
-    hi = (start_m + 1) * BLOCK_M if IS_CAUSAL else N_CTX
-    for start_n in range(lo, hi, BLOCK_N):
-        # -- load k, v --
-        k = tl.load(K_block_ptr)
-        v = tl.load(V_block_ptr)
-        # -- compute qk ---
-        qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
-        if IS_CAUSAL:
-            qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk, float("-inf"))
-        qk += tl.dot(q, k, allow_tf32=True)
-        # -- compute scaling constant ---
-        m_i_new = tl.maximum(m_i, tl.max(qk, 1))
-        alpha = tl.math.exp2(m_i - m_i_new)
-        p = tl.math.exp2(qk - m_i_new[:, None])
-        # -- scale and update acc --
-        acc_scale = l_i * 0 + alpha  # workaround some compiler bug
-        acc *= acc_scale[:, None]
-        acc += tl.dot(p.to(V.dtype.element_ty), v, allow_tf32=True)
-        # -- update m_i and l_i --
-        l_i = l_i * alpha + tl.sum(p, 1)
-        m_i = m_i_new
-        # update pointers
-        K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
-        V_block_ptr = tl.advance(V_block_ptr, (BLOCK_N, 0))
-    # write back l and m
-    acc = acc / l_i[:, None]
+    # Compute online softmax and memory efficient attentin algorithms with
+    # tl.program_id(0) blocks along K, V dimensions iterately
+    acc, l_i, m_i = _fwd_kernel_compute(acc, m_i, l_i,
+                                        q, V.dtype.element_ty, K_block_ptr, V_block_ptr, start_m,
+                                        offs_m, offs_n, BLOCK_M, BLOCK_N,
+                                        IS_CAUSAL, N_CTX)
         
     l_ptrs = L + off_hz * N_CTX + offs_m
     tl.store(l_ptrs, m_i + tl.math.log2(l_i))
@@ -168,9 +151,7 @@ def _fwd_kernel_without_tma(
         # gaussian loading
         start_m = BLOCK_DIM_0 - start_m
     
-    # Load new Q, K, V for computation balancing and resuse SRAM allocated
-    # TODO (yiakwy) : optimize and reuse the codes
-    
+    # Load new Q, K, V for computation balancing and resuse SRAM allocated    
     Q_block_ptr = tl.make_block_ptr(
         base=Q + qvk_offset,
         shape=(N_CTX, BLOCK_DMODEL),
@@ -199,55 +180,24 @@ def _fwd_kernel_without_tma(
         order=(1, 0)
     )
     
-    offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_m = start_m * BLOCK_M + rows_q
     
     # Reinitalize SRAM buffer for online softmax and memory efficient attentin algorithms
-    # TODO (yiakwy) : clear SRAM buffer
-    # m_i[:] = -float("inf")
-    # l_i[:] = 0
-    # acc[:,:] = 0
-    m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
-    l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
-    acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
-    
-    lo = 0
-    hi = (start_m + 1) * BLOCK_M
-    
-    # # compute online softmax and memory efficient attentin algorithms with 
-    # # sequence_len - tl.program_id(0) blocks along K, V dimensions iterately
-    # compute(q, K_block_ptr, V_block_ptr, start_m, offs_m, offs_n, BLOCK_M, BLOCK_N,
-    #         IS_CAUSAL, N_CTX, m_i, l_i, acc)
-    
-    for start_n in range(lo, hi, BLOCK_N):
-        # -- load k, v --
-        k = tl.load(K_block_ptr)
-        v = tl.load(V_block_ptr)
-        # -- compute qk ---
-        qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
-        if IS_CAUSAL:
-            qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk, float("-inf"))
-        qk += tl.dot(q, k, allow_tf32=True)
-        # -- compute scaling constant ---
-        m_i_new = tl.maximum(m_i, tl.max(qk, 1))
-        alpha = tl.math.exp2(m_i - m_i_new)
-        p = tl.math.exp2(qk - m_i_new[:, None])
-        # -- scale and update acc --
-        acc_scale = l_i * 0 + alpha  # workaround some compiler bug
-        acc *= acc_scale[:, None]
-        acc += tl.dot(p.to(V.dtype.element_ty), v, allow_tf32=True)
-        # -- update m_i and l_i --
-        l_i = l_i * alpha + tl.sum(p, 1)
-        m_i = m_i_new
-        # update pointers
-        K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
-        V_block_ptr = tl.advance(V_block_ptr, (BLOCK_N, 0))
-    # write back l and m
-    acc = acc / l_i[:, None]
-    
+    m_i = tl.where(rows_q, m_i, -float("inf"))
+    # this can saves half of acc memroy when BLOCK_DMODEL increases to 128 or 256
+    l_i -= l_i
+    acc -= acc 
+
+    # Compute online softmax and memory efficient attentin algorithms with 
+    # (sequence_len - tl.program_id(0)) blocks along K, V dimensions iterately
+    acc, l_i, m_i = _fwd_kernel_compute(acc, m_i, l_i,
+                                        q, V.dtype.element_ty, K_block_ptr, V_block_ptr, start_m,
+                                        offs_m, offs_n, BLOCK_M, BLOCK_N,
+                                        IS_CAUSAL, N_CTX)
+        
     l_ptrs = L + off_hz * N_CTX + offs_m
     tl.store(l_ptrs, m_i + tl.math.log2(l_i))
     
-    # TODO (yiakwy) : inpalce
     # write back O with (offset BLOCK_DIM_0: - tl.program_id(0)) * BLOCK_M
     O_block_ptr = tl.make_block_ptr(
         base=Out + qvk_offset,
@@ -621,12 +571,13 @@ class _attention(torch.autograd.Function):
         capability = torch.cuda.get_device_capability()
         if capability[0] < 8:
             raise RuntimeError("Flash attention currently only supported for compute capability >= 80")
-        BLOCK_M = 64 # 128
+        BLOCK_M = 128
         BLOCK_N = 64
         # shape constraints
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
         assert Lq == Lk and Lk == Lv
         assert Lk in {16, 32, 64, 128}
+        
         o = torch.empty_like(q)
         
         block_dim_0 = cdiv(q.shape[2], BLOCK_M)
