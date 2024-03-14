@@ -110,12 +110,11 @@ jobs:
           python3 -m pytest -vs hopper/test_flashattention.py
 
       - name: Run python examples on CUDA
-        # Execute on H100 due to its ~30s speed advantage over A100;
-        # example duration matches this gain and is device-agnostic.
+        # Use H100 as it's ~2min faster than A100;
+        # additional example takes 30s and doesn't depend on the device.
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'H100')}}
         run: |
           cd python/examples
-          # Test example
           find . -type f -name '*.py' -exec echo {} \; -exec python3 {} \;
 
       - name: Clear cache
