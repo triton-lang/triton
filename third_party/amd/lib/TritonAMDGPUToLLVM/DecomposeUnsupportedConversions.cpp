@@ -97,17 +97,26 @@ createNewConvertOps(ModuleOp &mod, OpBuilder &builder,
   auto srcType = cvtOp.getSrc().getType();
   auto dstType = cvtOp.getType();
 
-  auto srcMfma =
-      srcType.getEncoding().dyn_cast<triton::gpu::AMDMfmaEncodingAttr>();
-  auto newMfmaEnc = triton::gpu::AMDMfmaEncodingAttr::get(
-      mod.getContext(), srcMfma.getVersionMajor(), srcMfma.getVersionMinor(),
-      {warpsPerCtaX, warpsPerCtaY}, srcMfma.getMDim(), srcMfma.getNDim(),
-      srcMfma.getIsTransposed(), srcMfma.getCTALayout());
-
   auto newDstType = RankedTensorType::get(
       dstType.getShape(), dstType.getElementType(), dstType.getEncoding());
-  auto newSrcType = RankedTensorType::get(srcType.getShape(),
-                                          srcType.getElementType(), newMfmaEnc);
+  RankedTensorType newSrcType;
+  if (auto srcMfma =
+          srcType.getEncoding().dyn_cast<triton::gpu::AMDMfmaEncodingAttr>()) {
+    auto newMfmaEnc = triton::gpu::AMDMfmaEncodingAttr::get(
+        mod.getContext(), srcMfma.getVersionMajor(), srcMfma.getVersionMinor(),
+        {warpsPerCtaX, warpsPerCtaY}, srcMfma.getMDim(), srcMfma.getNDim(),
+        srcMfma.getIsTransposed(), srcMfma.getCTALayout());
+
+    newSrcType = RankedTensorType::get(srcType.getShape(),
+                                       srcType.getElementType(), newMfmaEnc);
+  } else if (auto srcWmma = srcType.getEncoding()
+                                .dyn_cast<triton::gpu::AMDWmmaEncodingAttr>()) {
+    auto newWmmaEnc = triton::gpu::AMDWmmaEncodingAttr::get(
+        mod.getContext(), {warpsPerCtaX, warpsPerCtaY}, srcWmma.getCTALayout());
+
+    newSrcType = RankedTensorType::get(srcType.getShape(),
+                                       srcType.getElementType(), newWmmaEnc);
+  }
 
   auto tmpCvt = builder.create<triton::gpu::ConvertLayoutOp>(
       cvtOp.getLoc(), newSrcType, cvtOp.getSrc());
@@ -208,6 +217,31 @@ struct DecomposeUnsupportedAMDConversions
         cvtOp.erase();
       }
     });
+    /* -------------------------------- */
+    // Replace `wmma -> dot_op` with `wmma -> blocked -> dot_op`
+    /* -------------------------------- */
+    mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
+      OpBuilder builder(cvtOp);
+      auto srcType = cvtOp.getSrc().getType();
+      auto dstType = cvtOp.getType();
+      auto srcWmma =
+          srcType.getEncoding().dyn_cast<triton::gpu::AMDWmmaEncodingAttr>();
+      auto dstDotOp =
+          dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+      if (srcWmma && dstDotOp) {
+        auto tmpType = RankedTensorType::get(
+            dstType.getShape(), dstType.getElementType(),
+            triton::gpu::BlockedEncodingAttr::get(
+                mod.getContext(), srcType.getShape(), getSizePerThread(srcWmma),
+                getOrder(srcWmma), numWarps, threadsPerWarp, numCTAs));
+        auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
+            cvtOp.getLoc(), tmpType, cvtOp.getOperand());
+        auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
+            cvtOp.getLoc(), dstType, tmp);
+        cvtOp.replaceAllUsesWith(newConvert.getResult());
+        cvtOp.erase();
+      }
+    });
     // Try to reduce LDS usage of cvt(mfma->blocked) op by changing the shape of
     // WarpsPerCta attribute in mfma layout. The implicit LDS usage of
     // cvt(mfma->blocked) op depends on the number of warps per CTA that mfma
@@ -232,12 +266,12 @@ struct DecomposeUnsupportedAMDConversions
       auto srcType = cvtOp.getSrc().getType();
       auto dstType = cvtOp.getType();
 
-      auto srcMfma =
-          srcType.getEncoding().dyn_cast<triton::gpu::AMDMfmaEncodingAttr>();
+      auto srcEnc = srcType.getEncoding();
       auto dstBlocked =
           dstType.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
 
-      if (!srcMfma || !dstBlocked) {
+      // TODO: Reduce LDS usage for WMMA dots
+      if (!srcEnc.isa<triton::gpu::AMDMfmaEncodingAttr>() || !dstBlocked) {
         return;
       }
 
@@ -246,8 +280,7 @@ struct DecomposeUnsupportedAMDConversions
         return;
       }
 
-      unsigned numWarps =
-          srcMfma.getWarpsPerCTA()[0] * srcMfma.getWarpsPerCTA()[1];
+      unsigned numWarps = triton::gpu::getNumWarpsPerCTA(srcEnc);
 
       triton::gpu::ConvertLayoutOp tmpCvt;
       triton::gpu::ConvertLayoutOp newEpilogueCvt;

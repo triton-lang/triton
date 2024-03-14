@@ -151,6 +151,7 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
   SmallVector<Value> queue = {op->getResult(0)};
   SetVector<Operation *> forwardSlice;
   llvm::SmallDenseSet<Value> seen;
+  bool isMMAV3 = encoding.cast<NvidiaMmaEncodingAttr>().getVersionMajor() == 3;
   while (!queue.empty()) {
     Value currentValue = queue.back();
     queue.pop_back();
@@ -164,6 +165,8 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
         if (dstEncoding.isa<DotOperandEncodingAttr>())
           return encoding.cast<NvidiaMmaEncodingAttr>().getVersionMajor() > 1;
       }
+      if (isMMAV3 && isa<LocalAllocOp>(op))
+        return true;
       auto yield = dyn_cast<scf::YieldOp>(op);
       if (!yield)
         continue;

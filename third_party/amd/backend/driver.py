@@ -260,7 +260,6 @@ class HIPDriver(GPUDriver):
     def __init__(self):
         super().__init__()
         self.utils = HIPUtils()
-        self.binary_ext = "hsaco"
         self.launcher_cls = HIPLauncher
 
     @staticmethod
@@ -273,4 +272,4 @@ class HIPDriver(GPUDriver):
         device_properties = self.utils.get_device_properties(device)
         arch = device_properties['arch']
         warpSize = device_properties['warpSize']
-        return ("hip", arch.split(':')[0], warpSize)
+        return ["hip", arch.split(':')[0], warpSize]

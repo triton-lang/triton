@@ -25,7 +25,7 @@ jobs:
 
       - name: Install dependent packages
         run: |
-          pip3 install tabulate cmake sphinx myst_parser sphinx-rtd-theme sphinx-gallery sphinx-multiversion
+          sudo pip3 install tabulate cmake sphinx matplotlib myst_parser sphinx-rtd-theme pandas pytest sphinx-gallery sphinx-multiversion
 
       #- name: Fetch dependent branches
       #  run: |
@@ -35,21 +35,23 @@ jobs:
         run: |
           cd docs
           export PATH=$(python3 -c "import cmake; print(cmake.CMAKE_BIN_DIR)"):$PATH
-          python3 -m sphinx . _build/html/main
+          sudo python3 -m sphinx . _build/html/main
 
       - name: Update docs
         run: |
-          mkdir /tmp/triton-docs
-          mv docs/_build/html/* /tmp/triton-docs/
-          git checkout gh-pages
-          cp -r CNAME /tmp/triton-docs/
-          cp -r index.html /tmp/triton-docs/
-          cp -r .nojekyll /tmp/triton-docs/
-          rm -r *
-          cp -r /tmp/triton-docs/* .
-          git add .
-          git commit -am "[GH-PAGES] Updated website"
+          sudo mkdir /tmp/triton-docs/
+          sudo mv docs/_build/html/* /tmp/triton-docs/
+          sudo git checkout gh-pages
+          sudo cp -r CNAME /tmp/triton-docs/
+          sudo cp -r index.html /tmp/triton-docs/
+          sudo cp -r .nojekyll /tmp/triton-docs/
+          sudo rm -r *
+          sudo cp -r /tmp/triton-docs/* .
+          sudo git add .
+          sudo git config --global user.email "N/A"
+          sudo git config --global user.name "gh-actions-bot"
+          sudo git commit -am "[GH-PAGES] Updated website"
 
       - name: Publish docs
         run: |
-          git push origin gh-pages
+          sudo git push origin gh-pages
