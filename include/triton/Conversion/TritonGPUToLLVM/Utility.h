@@ -1256,7 +1256,13 @@ loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
                         ? triton::gpu::getUniqueContigPerThread(
                               dstDistributedLayout, dstShape)[outOrd[0]]
                         : 1;
-  unsigned inVec = srcSharedLayout.getVec();
+
+  // If the shmem layout is not swizzled, we can trivially vectorize loads
+  // across the whole width of the most-minor dimension of the shape, because
+  // Triton requires all the dims are powers of 2.
+  unsigned inVec = srcSharedLayout.getMaxPhase() == 1
+                       ? srcTy.getShape()[inOrd[0]]
+                       : srcSharedLayout.getVec();
   unsigned minVec = std::min(outVec, inVec);
   unsigned outElems = triton::gpu::getTotalElemsPerThread(dstTy);
   SmallVector<Value> offsetVals = {smemObj.strides.size(), i32_val(0)};
@@ -1269,12 +1275,11 @@ loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
   unsigned numVecs = outElems / minVec;
   auto wordTy = vec_ty(elemTy, minVec);
   SmallVector<Value> outVals(outElems);
-  LDBG("loadSharedToDistributed: numVecs = " << numVecs << " minVec = "
-                                             << minVec << " " << wordTy);
   for (unsigned i = 0; i < numVecs; ++i) {
     Value smemAddr = sharedPtrs[i * minVec];
     smemAddr = bitcast(smemAddr, ptr_ty(rewriter.getContext(), 3));
-    Value valVec = load(wordTy, smemAddr);
+    auto valVec = load(wordTy, smemAddr);
+    valVec.setAlignment(minVec * elemTy.getIntOrFloatBitWidth() / 8);
     for (unsigned v = 0; v < minVec; ++v) {
       Value currVal = extract_element(dstElemTy, valVec, i32_val(v));
       outVals[i * minVec + v] = currVal;
@@ -1309,7 +1314,12 @@ static void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
                        ? triton::gpu::getUniqueContigPerThread(
                              srcDistributedLayout, srcShape)[inOrd[0]]
                        : 1;
-  unsigned outVec = dstSharedLayout.getVec();
+  // If the shmem layout is not swizzled, we can trivially vectorize stores
+  // across the whole width of the most-minor dimension of the shape, because
+  // Triton requires all the dims are powers of 2.
+  unsigned outVec = dstSharedLayout.getMaxPhase() == 1
+                        ? dstTy.getShape()[inOrd[0]]
+                        : dstSharedLayout.getVec();
   unsigned minVec = std::min(outVec, inVec);
   unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
   assert(numElems == srcIndices.size());
@@ -1332,7 +1342,8 @@ static void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
     if (i % minVec == minVec - 1) {
       Value smemAddr = sharedPtrs[i / minVec * minVec];
       smemAddr = bitcast(smemAddr, ptr_ty(rewriter.getContext(), 3));
-      store(word, smemAddr);
+      store(word, smemAddr)
+          .setAlignment(minVec * elemTy.getIntOrFloatBitWidth() / 8);
     }
   }
 }
