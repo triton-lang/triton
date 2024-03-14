@@ -52,15 +52,28 @@ enum class WMMAInstrType : uint8_t {
 
 using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
 
-ValueTable
-getValuesFromDotOperandLayoutStruct(ConversionPatternRewriter &rewriter,
-                                    Value value, int n0, int n1, Type type,
-                                    Location loc) {
+ValueTable getValuesFromDotOperandLayoutStruct(
+    ConversionPatternRewriter &rewriter, const LLVMTypeConverter *typeConverter,
+    Value value, int n0, int n1, int kWidth, Type type, Location loc) {
   auto elems = unpackLLElements(loc, value, rewriter);
   ValueTable vals;
   for (int i = 0; i < n0; i++) {
     for (int j = 0; j < n1; j++) {
-      vals[{i, j}] = elems[n1 * i + j];
+      Type elemTy = typeConverter->convertType(type);
+      Type ty = vec_ty(elemTy, kWidth);
+      Value rawElems = undef(ty);
+      for (int k = 0; k < kWidth; ++k) {
+        rawElems = insert_element(ty, rawElems,
+                                  elems[kWidth * (n1 * i + j) + k], i32_val(k));
+      }
+      Value convertedElems;
+      if (type.isBF16() || type.isF16()) {
+        convertedElems = rawElems;
+      } else {
+        convertedElems =
+            bitcast(rawElems, int_ty(type.getIntOrFloatBitWidth()));
+      }
+      vals[{i, j}] = convertedElems;
     }
   }
   return vals;
@@ -169,9 +182,11 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto numRepK = repA[1];
 
   ValueTable ha = getValuesFromDotOperandLayoutStruct(
-      rewriter, loadedA, numRepM, numRepK, aTensorTy.getElementType(), loc);
+      rewriter, typeConverter, loadedA, numRepM, numRepK, kWidth,
+      aTensorTy.getElementType(), loc);
   ValueTable hb = getValuesFromDotOperandLayoutStruct(
-      rewriter, loadedB, numRepN, numRepK, aTensorTy.getElementType(), loc);
+      rewriter, typeConverter, loadedB, numRepN, numRepK, kWidth,
+      aTensorTy.getElementType(), loc);
   auto dstElemTy = dTensorTy.getElementType();
   auto fc = unpackLLElements(loc, loadedC, rewriter);
 
