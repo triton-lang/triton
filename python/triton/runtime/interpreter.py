@@ -615,7 +615,7 @@ def _patch_lang_core(lang, builder):
 
     # can't just map lang.static_range to `range`, because `tl.static_range`
     # can get `step` passed by keyword
-    def _range(arg1, arg2=None, step=None, **kwargs):
+    def _new_range(arg1, arg2=None, step=None, **kwargs):
         if step is None:
             step = 1
         if arg2 is None:
@@ -624,18 +624,16 @@ def _patch_lang_core(lang, builder):
             start, end = arg1, arg2
         return range(start, end, step)
 
-    def _static_assert(cond, msg=""):
+    def _new_static_assert(cond, msg=""):
         assert cond, msg
 
-    lang.range = _range
-    lang.static_range = _range
-    lang.static_assert = _static_assert
+    lang.range = _new_range
+    lang.static_range = _new_range
+    lang.static_assert = _new_static_assert
     lang.dtype.to_ir = _new_to_ir
 
 
-def _patch_lang_math(lang, builder):
-    math = lang.math
-
+def _patch_lang_math(lang):
     mapping = {
         "abs": np.abs,
         "acos": np.arccos,
@@ -653,7 +651,7 @@ def _patch_lang_math(lang, builder):
 
         def impl(*args, **kwargs):
             ret_type = args[0].type  # TODO: incorrect
-            ret_dtype = args[0].dtype  # TODO: incorrect
+            ret_dtype = args[0].handle.dtype  # TODO: incorrect
             args = [arg.handle.data for arg in args if isinstance(arg, tl.core.tensor)]
             # remove the _builder kwarg
             kwargs = {k: v.handle.data for k, v in kwargs.items() if k != "_builder"}
@@ -669,11 +667,12 @@ def _patch_lang_math(lang, builder):
             raise NotImplementedError(f"""
 {name} not supported in interpreter mode: no known numpy implementation.
 If you think that {name} in fact does have a numpy implementation, please add it
-to the mapping in python/triton/interpreter/new_interpreter.py:_patch_lang_math.
+to the mapping in python/triton/runtime/interpreter.py:_patch_lang_math.
 """)
 
         return fallback
 
+    math = lang.math
     for name, member in inspect.getmembers(math):
         if name in mapping:
             setattr(math, name, make_numpy(name))
@@ -687,7 +686,7 @@ def _patch_lang(fn):
     _patch_lang_tensor(lang[0].tensor, builder)
     _patch_lang_core(lang[0], builder)
     if lang[0] == tl:
-        _patch_lang_math(lang[0], builder)
+        _patch_lang_math(lang[0])
 
 
 # TODO: wrap everything in triton tensors
