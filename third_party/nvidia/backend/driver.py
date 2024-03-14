@@ -348,7 +348,6 @@ class CudaDriver(GPUDriver):
 
     def __init__(self):
         self.utils = CudaUtils()  # TODO: make static
-        self.binary_ext = "cubin"
         self.launcher_cls = CudaLauncher
         super().__init__()
 

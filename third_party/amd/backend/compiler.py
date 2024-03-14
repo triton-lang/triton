@@ -89,6 +89,7 @@ class HIPBackend(BaseBackend):
         super().__init__(target)
         assert isinstance(target, tuple) and len(target) == 3
         assert isinstance(target[1], str)
+        self.binary_ext = "hsaco"
 
     def parse_options(self, opts) -> Any:
         args = {'arch': self.target[1]}
