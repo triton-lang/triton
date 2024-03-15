@@ -1,8 +1,8 @@
 #include "Utility.h"
-#include "TritonGPUToLLVMBase.h"
-#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
+#include "PatternTritonGPUOpToLLVM.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 
 namespace {
@@ -128,6 +128,18 @@ Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
 Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  Value i) {
   return shuffleCommon(loc, rewriter, val, i, 0, ShflKind::idx, i32_val(0x1f));
+}
+
+Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
+               ModuleOp moduleOp, int axis) {
+  assert(axis >= 0);
+  assert(axis < 3);
+  assert(moduleOp);
+  static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
+                                                  mlir::gpu::Dimension::y,
+                                                  mlir::gpu::Dimension::z};
+  Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[axis]);
+  return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
 }
 
 } // namespace AMD

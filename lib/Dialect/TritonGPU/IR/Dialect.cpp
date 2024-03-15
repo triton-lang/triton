@@ -165,7 +165,7 @@ SmallVector<unsigned> getContigPerThread(Attribute layout) {
     SmallVector<unsigned> contigPerThread(rank, 1);
     contigPerThread[rank - 1] = 2;
     return contigPerThread;
-  } else if (layout.isa<AMDMfmaEncodingAttr>()) {
+  } else if (layout.isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>()) {
     return {1, 1};
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parentLayout = sliceLayout.getParent();
@@ -286,7 +286,7 @@ SmallVector<unsigned> getCTAsPerCGA(Attribute layout) {
   ArrayRef<unsigned> ref;
   if (auto distributedLayout = layout.dyn_cast<DistributedEncodingTrait>())
     return distributedLayout.getCTAsPerCGA();
-  else if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>())
+  else if (layout.isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>())
     return {1, 1};
   else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>())
     ref = sharedLayout.getCTALayout().getCTAsPerCGA();
@@ -299,7 +299,7 @@ SmallVector<unsigned> getCTASplitNum(Attribute layout) {
   SmallVector<unsigned> res;
   if (auto distributedLayout = layout.dyn_cast<DistributedEncodingTrait>()) {
     return distributedLayout.getCTASplitNum();
-  } else if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
+  } else if (layout.isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>()) {
     res.resize(2);
     res[0] = res[1] = 1;
   } else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
@@ -315,7 +315,7 @@ SmallVector<unsigned> getCTAOrder(Attribute layout) {
   SmallVector<unsigned> res;
   if (auto distributedLayout = layout.dyn_cast<DistributedEncodingTrait>()) {
     res = distributedLayout.getCTAOrder();
-  } else if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
+  } else if (layout.isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>()) {
     return {0, 1};
   } else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
     res = SmallVector<unsigned>(sharedLayout.getCTALayout().getCTAOrder());
@@ -370,6 +370,8 @@ unsigned getNumWarpsPerCTA(Attribute layout) {
     warpsPerCTA = distributedLayout.getWarpsPerCTA();
   } else if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>())
     warpsPerCTA = mfmaLayout.getWarpsPerCTA();
+  else if (auto wmmaLayout = layout.dyn_cast<AMDWmmaEncodingAttr>())
+    warpsPerCTA = wmmaLayout.getWarpsPerCTA();
   else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>())
     return getNumWarpsPerCTA(dotLayout.getParent());
   else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>())
@@ -780,14 +782,15 @@ SmallVector<unsigned>
 AMDWmmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
                                        Type eltTy) const {
   size_t rank = shape.size();
-  assert(rank == 2 && "Unexpected rank of mfma layout");
+  assert(rank == 2 && "Unexpected rank of wmma layout");
 
   SmallVector<unsigned> elemsPerThread(rank);
-  auto nonKDim = getMNKDimPerWMMAInstr()[0];
+  auto mnkDim = getMNKDimPerWMMAInstr();
   auto elemsPerThreadPerTile = getSizePerThread();
-  return {ceil<unsigned>(shape[0], nonKDim * getWarpsPerCTA()[0]) *
+  auto warpsPerCTA = getWarpsPerCTA();
+  return {ceil<unsigned>(shape[0], mnkDim[0] * warpsPerCTA[0]) *
               elemsPerThreadPerTile[0],
-          ceil<unsigned>(shape[1], nonKDim * getWarpsPerCTA()[1]) *
+          ceil<unsigned>(shape[1], mnkDim[1] * warpsPerCTA[1]) *
               elemsPerThreadPerTile[1]};
 }
 
@@ -1505,7 +1508,7 @@ unsigned AMDMfmaEncodingAttr::getTotalElemsPerThreadForOperands(
   constexpr int waveSize = 64;
   auto tileSize = getMFMAInstrShapeForOperands(kWidth, opIdx);
   auto rep = getMFMARepForOperands(shape, kWidth, opIdx);
-  return rep[0] * rep[1];
+  return rep[0] * rep[1] * kWidth;
 }
 
 SmallVector<unsigned>
@@ -1528,15 +1531,14 @@ AMDMfmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
     return {parentShapePerCTA[0], 32};
   } else if (opIdx == 1) {
     return {32, parentShapePerCTA[1]};
-  } else {
-    assert(0 && "DotOperandEncodingAttr opIdx must be 0 or 1");
   }
+  llvm_unreachable("DotOperandEncodingAttr opIdx must be 0 or 1");
 }
 
 SmallVector<unsigned>
 AMDWmmaEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
-  auto nonKDim = getMNKDimPerWMMAInstr()[0];
-  return {nonKDim * getWarpsPerCTA()[0], nonKDim * getWarpsPerCTA()[1]};
+  auto mnkDim = getMNKDimPerWMMAInstr();
+  return {mnkDim[0] * getWarpsPerCTA()[0], mnkDim[1] * getWarpsPerCTA()[1]};
 }
 SmallVector<unsigned> AMDWmmaEncodingAttr::getCTAsPerCGA() const {
   return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
@@ -1590,11 +1592,8 @@ AMDWmmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
 
 unsigned AMDWmmaEncodingAttr::getTotalElemsPerThreadForOperands(
     ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const {
-  int warpsPerCTAM = getWarpsPerCTA()[0];
-  int warpsPerCTAN = getWarpsPerCTA()[1];
-  auto tileSize = getWMMAElemsPerInstrForOperands();
   auto rep = getWMMARepForOperands(shape, eltTy, kWidth, opIdx);
-  return product(tileSize) * product(rep) * warpsPerCTAN * warpsPerCTAM;
+  return rep[0] * rep[1] * kWidth;
 }
 
 SmallVector<int64_t>
@@ -1961,6 +1960,9 @@ Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
       return Attribute();
     }
     kWidth = _kWidth.cast<IntegerAttr>().getInt();
+  }
+  if (parent.isa<AMDWmmaEncodingAttr>()) {
+    kWidth = AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr()[2];
   }
   return parser.getChecked<DotOperandEncodingAttr>(parser.getContext(), opIdx,
                                                    parent, kWidth);

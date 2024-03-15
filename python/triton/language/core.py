@@ -4,10 +4,11 @@ from warnings import warn
 from contextlib import contextmanager
 from enum import Enum
 from functools import partial, wraps
-from typing import Union, Callable, List, Sequence, TypeVar, cast
+from typing import Union, Callable, List, Sequence, TypeVar, cast, Optional
 import builtins
 from ..runtime.jit import jit
 import inspect
+import os
 
 from .._C.libtriton import ir
 from . import semantic
@@ -73,6 +74,9 @@ def _tensor_member_fn(fn: T) -> T:
     new_sig = orig_sig.replace(parameters=new_params)
     wrapper.__signature__ = new_sig
     wrapper.__doc__ = f"Forwards to :py:func:`{fn.__name__}` free function"
+    # If fn is a builtin, mark the wrapper as a builtin too.
+    if is_builtin(fn):
+        setattr(wrapper, TRITON_BUILTIN, True)
 
     setattr(tensor, fn.__name__, wrapper)
     return fn
@@ -142,7 +146,7 @@ def _to_tensor(x, builder):
 class dtype:
     SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
     UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
-    FP_TYPES = ['fp8e4b15', 'fp8e4b15x4', 'fp8e4nv', 'fp8e5', 'fp16', 'bf16', 'fp32', 'fp64']
+    FP_TYPES = ['fp8e4b15', 'fp8e4b15x4', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp16', 'bf16', 'fp32', 'fp64']
     STANDARD_FP_TYPES = ['fp16', 'bf16', 'fp32', 'fp64']
     OTHER_TYPES = ['void']
 
@@ -176,10 +180,18 @@ class dtype:
                 self.fp_mantissa_width = 3
                 self.primitive_bitwidth = 8
                 self.exponent_bias = 7
+            elif name == 'fp8e4b8':
+                self.fp_mantissa_width = 3
+                self.primitive_bitwidth = 8
+                self.exponent_bias = 8
             elif name == 'fp8e5':
                 self.fp_mantissa_width = 2
                 self.primitive_bitwidth = 8
                 self.exponent_bias = 15
+            elif name == 'fp8e5b16':
+                self.fp_mantissa_width = 2
+                self.primitive_bitwidth = 8
+                self.exponent_bias = 16
             elif name == 'fp16':
                 self.fp_mantissa_width = 10
                 self.primitive_bitwidth = 16
@@ -213,8 +225,14 @@ class dtype:
     def is_fp8e4b15x4(self):
         return self.name == 'fp8e4b15x4'
 
+    def is_fp8e4b8(self):
+        return self.name == 'fp8e4b8'
+
     def is_fp8e5(self):
         return self.name == 'fp8e5'
+
+    def is_fp8e5b16(self):
+        return self.name == 'fp8e5b16'
 
     def is_fp16(self):
         return self.name == 'fp16'
@@ -289,6 +307,10 @@ class dtype:
     def is_ptr():
         return False
 
+    @staticmethod
+    def is_const():
+        return False
+
     def __eq__(self, other: dtype):
         if not isinstance(other, dtype):
             return False
@@ -319,8 +341,12 @@ class dtype:
             return builder.get_int64_ty()
         elif self.name == 'fp8e5':
             return builder.get_fp8e5_ty()
+        elif self.name == 'fp8e5b16':
+            return builder.get_fp8e5b16_ty()
         elif self.name == 'fp8e4nv':
             return builder.get_fp8e4nv_ty()
+        elif self.name == 'fp8e4b8':
+            return builder.get_fp8e4b8_ty()
         elif self.name == 'fp8e4b15':
             return builder.get_fp8e4b15_ty()
         elif self.name == 'fp8e4b15x4':
@@ -338,13 +364,22 @@ class dtype:
     def __str__(self):
         return self.name
 
+    def codegen_name(self):
+        if self.name.startswith("fp"):
+            return "float" + self.name[2:]
+        elif self.name.startswith("bf"):
+            return "bfloat" + self.name[2:]
+        else:
+            return self.name
+
     @property
     def cache_key_part(self) -> str:
         """See cache_key_part() in triton.cc."""
         return self.name
 
     def __repr__(self):
-        return f'triton.language.{str(self)}'
+        """Output of repr needs to be an evaluatable expression"""
+        return f'triton.language.{self.codegen_name()}'
 
 
 # Some functions have a param named `dtype`, which shadows the `dtype` class.
@@ -386,6 +421,23 @@ class pointer_type(dtype):
     @property
     def scalar(self):
         return self
+
+
+class const_pointer_type(pointer_type):
+
+    def __init__(self, element_ty: dtype, address_space: int = 1):
+        super().__init__(element_ty, address_space)
+
+    def __str__(self):
+        return f'const_pointer<{self.element_ty}>'
+
+    def is_const(self):
+        return True
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, const_pointer_type):
+            return False
+        return self.element_ty == other.element_ty and self.address_space == other.address_space
 
 
 class block_type(dtype):
@@ -466,7 +518,9 @@ uint16 = dtype('uint16')
 uint32 = dtype('uint32')
 uint64 = dtype('uint64')
 float8e5 = dtype('fp8e5')
+float8e5b16 = dtype('fp8e5b16')
 float8e4nv = dtype('fp8e4nv')
+float8e4b8 = dtype('fp8e4b8')
 float8e4b15 = dtype('fp8e4b15')
 float8e4b15x4 = dtype('fp8e4b15x4')
 float16 = dtype('fp16')
@@ -479,6 +533,17 @@ pi32_t = pointer_type(int32)
 # -----------------------
 # constexpr
 # -----------------------
+
+
+class const:
+    """
+    This class is used as a type annotation to mark pointers to constant data.
+    The `store` function cannot be called with a pointer to const. Constness
+    is part of the pointer type and the usual Triton type consistency rules
+    apply. For example you cannot have a function that returns constant pointer
+    in one return statement and non-constant pointer in another.
+    """
+    pass
 
 
 class constexpr:
@@ -893,7 +958,7 @@ class tensor:
         assert False, "Transposition must be created by the AST Visitor"
 
     @builtin
-    def to(self, dtype: dtype, fp_downcast_rounding: str | None = None, bitcast: bool = False, _builder=None):
+    def to(self, dtype: dtype, fp_downcast_rounding: Optional[str] = None, bitcast: bool = False, _builder=None):
         """
         Casts the tensor to the given :code:`dtype`.
 
@@ -1036,6 +1101,11 @@ class tensor:
 
     def flip(self, dim=None) -> tensor:
         ...
+
+
+def get_bool_env_var(var_name):
+    v = os.getenv(var_name, "0")
+    return v == "1" or v == "true" or v == "on"
 
 
 # -----------------------
@@ -1393,7 +1463,7 @@ def expand_dims(input, axis, _builder=None):
 
 
 @builtin
-def dot(input, other, acc=None, allow_tf32=True, max_num_imprecise_acc=None, out_dtype=float32, _builder=None):
+def dot(input, other, acc=None, allow_tf32=None, max_num_imprecise_acc=None, out_dtype=float32, _builder=None):
     """
     Returns the matrix product of two blocks.
 
@@ -1404,6 +1474,11 @@ def dot(input, other, acc=None, allow_tf32=True, max_num_imprecise_acc=None, out
     :param other: The second tensor to be multiplied.
     :type other: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
     """
+    if allow_tf32 is None:
+        if get_bool_env_var("TRITON_F32_DEFAULT"):
+            allow_tf32 = False
+        else:
+            allow_tf32 = True
     allow_tf32 = _constexpr_to_value(allow_tf32)
     out_dtype = _constexpr_to_value(out_dtype)
     max_num_imprecise_acc = _constexpr_to_value(max_num_imprecise_acc)
@@ -1460,9 +1535,11 @@ def load(pointer, mask=None, other=None, boundary_check=tuple(), padding_option=
     :type volatile: bool, optional
     """
     # `mask` and `other` can be constexpr
-    if _constexpr_to_value(mask) is not None:
+    mask = _constexpr_to_value(mask)
+    other = _constexpr_to_value(other)
+    if mask is not None:
         mask = _to_tensor(mask, _builder)
-    if _constexpr_to_value(other) is not None:
+    if other is not None:
         other = _to_tensor(other, _builder)
     padding_option = _constexpr_to_value(padding_option)
     cache_modifier = _constexpr_to_value(cache_modifier)
@@ -1513,7 +1590,8 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
     """
     # `value` can be constexpr
     value = _to_tensor(value, _builder)
-    if _constexpr_to_value(mask) is not None:
+    mask = _constexpr_to_value(mask)
+    if mask is not None:
         mask = _to_tensor(mask, _builder)
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)

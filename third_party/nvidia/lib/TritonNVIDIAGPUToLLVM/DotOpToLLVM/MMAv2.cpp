@@ -1,4 +1,4 @@
-#include "nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
+#include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 
 #include "Utility.h"
 

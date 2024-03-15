@@ -25,6 +25,7 @@ namespace triton {
 constexpr int patternBenefitDefault = 1;
 constexpr int patternBenefitPrioritizeOverLLVMConversions = 10;
 constexpr int patternBenefitClampOptimizedPattern = 20;
+constexpr int patternBenefitConvertLayoutOptimizedPattern = 20;
 
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
@@ -69,6 +70,24 @@ void populateScanOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns,
                                   const TargetInfoBase &targetInfo,
                                   PatternBenefit benefit);
+
+void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                           const TargetInfoBase &targetInfo,
+                                           RewritePatternSet &patterns,
+                                           PatternBenefit benefit);
+
+void populateControlFlowOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                        RewritePatternSet &patterns,
+                                        PatternBenefit benefit);
+
+void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                 RewritePatternSet &patterns,
+                                 const TargetInfoBase &targetInfo,
+                                 PatternBenefit benefit);
+
+void populateFuncOpConversionPattern(LLVMTypeConverter &typeConverter,
+                                     RewritePatternSet &patterns, int numWarps,
+                                     PatternBenefit benefit);
 
 } // namespace triton
 } // namespace mlir

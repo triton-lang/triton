@@ -15,8 +15,13 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   m.def("add_to_llvmir", [](mlir::PassManager &pm) {
     pm.addPass(createConvertTritonAMDGPUToLLVMPass());
   });
+  m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm) {
+    pm.addPass(
+        mlir::triton::gpu::createDecomposeUnsupportedAMDConversionsPass());
+  });
   ADD_PASS_WRAPPER_2("add_accelerate_matmul",
-                     mlir::createTritonAMDGPUAccelerateMatmulPass, int, int);
+                     mlir::createTritonAMDGPUAccelerateMatmulPass,
+                     const std::string, int);
   ADD_PASS_WRAPPER_0("add_decompose_conversions",
                      mlir::createTritonAMDGPUDecomposeConversionsPass);
   ADD_PASS_WRAPPER_0("add_optimize_epilogue",
@@ -29,10 +34,9 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
                      mlir::createTritonAMDGPUStreamPipelinePass);
 }
 
-
 void init_triton_amd(py::module &&m) {
   m.doc() = "Python bindings to the AMD Triton backend";
-  
+
   auto passes = m.def_submodule("passes");
   init_triton_amd_passes_ttgpuir(passes.def_submodule("ttgpuir"));
 

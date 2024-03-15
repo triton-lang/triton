@@ -22,9 +22,9 @@
  */
 
 #include "PatternTritonGPUOpToLLVM.h"
+#include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 
 #include "Utility.h"
 

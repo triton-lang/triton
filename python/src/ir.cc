@@ -712,6 +712,10 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getType<Float8E4M3FNUZType>();
            })
+      .def("get_fp8e4b8_ty",
+           [](TritonOpBuilder &self) -> mlir::Type {
+             return self.getBuilder().getType<mlir::Float8E4M3FNUZType>();
+           })
       .def("get_fp8e4b15_ty",
            [](TritonOpBuilder &self) -> Type {
              // TODO: upstream FP8E4B15 into MLIR, or find a way to externally
@@ -727,6 +731,10 @@ void init_triton_ir(py::module &&m) {
       .def("get_fp8e5_ty",
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getType<Float8E5M2Type>();
+           })
+      .def("get_fp8e5b16_ty",
+           [](TritonOpBuilder &self) -> mlir::Type {
+             return self.getBuilder().getType<mlir::Float8E5M2FNUZType>();
            })
       .def("get_half_ty",
            [](TritonOpBuilder &self) -> Type {
@@ -1354,9 +1362,12 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_get_num_programs",
            [](TritonOpBuilder &self, int axis) -> Value {
+             if (axis < 0 || axis > 3)
+               throw pybind11::index_error("program_id must be in [0,3]");
              return self.create<GetNumProgramsOp>(
                  self.getBuilder().getI32Type(),
-                 self.getBuilder().getI32IntegerAttr(axis));
+                 ProgramIDDimAttr::get(self.getBuilder().getContext(),
+                                       ProgramIDDim(axis)));
            })
       .def("create_dot",
            [](TritonOpBuilder &self, Value &a, Value &b, Value &c,

@@ -1,6 +1,6 @@
 // RUN: triton-opt %s | FileCheck %s
 
-// CHECK: #[[WMMA:.*]] = #triton_gpu.amd_wmma
+// CHECK: #[[$WMMA:.*]] = #triton_gpu.amd_wmma
 
 tt.func @cast_ops(%scalar_ptr: !tt.ptr<f32>, %scalar_f32: f32, %scalar_i64: i64) {
   // scalar -> scalar
@@ -241,14 +241,14 @@ module attributes {"triton_gpu.compute-capability" = 0 : i32, "triton_gpu.num-ct
   // CHECK-LABEL: wmma_layout
   tt.func @wmma_layout(%0: tensor<16x16xf16, #blocked>) {
     %1 = triton_gpu.convert_layout %0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #triton_gpu.amd_wmma<{warpsPerCTA = [1, 1]}>>
-    // CHECK:  %{{.+}} = triton_gpu.convert_layout %{{.+}} : tensor<16x16xf16, #{{.+}}> -> tensor<16x16xf16, #[[WMMA]]>
+    // CHECK:  %{{.+}} = triton_gpu.convert_layout %{{.+}} : tensor<16x16xf16, #{{.+}}> -> tensor<16x16xf16, #[[$WMMA]]>
     tt.return
   }
 
   // CHECK-LABEL: wmma_dot_op_layout
   tt.func @wmma_dot_op_layout(%0: tensor<16x16xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>>) {
     %1 = triton_gpu.convert_layout %0 : tensor<16x16xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<16x16xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #triton_gpu.amd_wmma<{warpsPerCTA = [1, 1]}>}>>
-    // CHECK:  %{{.+}} = triton_gpu.convert_layout %{{.+}} : tensor<16x16xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #{{.+}}}>> -> tensor<16x16xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #[[WMMA]]}>>
+    // CHECK:  %{{.+}} = triton_gpu.convert_layout %{{.+}} : tensor<16x16xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #{{.+}}}>> -> tensor<16x16xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #[[$WMMA]]}>>
     tt.return
   }
 }
