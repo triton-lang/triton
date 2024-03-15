@@ -405,6 +405,16 @@ class JITFunction(KernelInterface[T]):
             )
 
         kernel = self.cache[device][key]
+
+        # Verify key signature from the cache
+        signature = {arg.param.num: arg.mangled_type() for arg in args if not arg.param.is_constexpr}
+        if kernel.src.signature != signature:
+            raise RuntimeError(
+                f"Signature mismatch for cached kernel {self.fn.__name__}:\n"\
+                f"  Cached signature: {kernel.src.signature}\n"\
+                f"  Call signature:   {signature}"
+            )
+
         if not warmup:
             args = [arg.value for arg in args if not arg.param.is_constexpr]
             metadata = kernel.metadata
