@@ -2447,6 +2447,8 @@ layouts = [
 def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce_op, device):
     if is_hip() and isinstance(src_layout, MmaLayout):
         pytest.skip("MmaLayout is not supported on HIP")
+    if not is_hip() and isinstance(src_layout, MfmaLayout):
+        pytest.skip("MfmaLayout is not supported on CUDA")
     if is_hip() and isinstance(src_layout, MfmaLayout) and (M < src_layout.instr_shape[0]
                                                             or N < src_layout.instr_shape[1]):
         pytest.skip("MfmaLayout does not support < 32 shape")
