@@ -1579,8 +1579,6 @@ def test_join_with_mma(device):
 
 @pytest.mark.interpreter
 def test_interleave(device):
-    if is_hip():
-        pytest.skip("test_interleaves not supported on HIP")
 
     @triton.jit
     def kernel(Z, N: tl.constexpr):
@@ -1598,8 +1596,6 @@ def test_interleave(device):
 
 @pytest.mark.interpreter
 def test_interleave_scalars(device):
-    if is_hip():
-        pytest.skip("test_interleaves not supported on HIP")
 
     @triton.jit
     def kernel(X, Y, Z):
@@ -3090,11 +3086,6 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
 
 def test_max_num_imprecise_acc(device):
 
-    if is_hip():
-        pytest.skip(
-            'test_max_num_imprecise_acc for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
-
     if is_cuda():
         capability = torch.cuda.get_device_capability()
         if capability != (9, 0):
@@ -4235,8 +4226,6 @@ def add_fn_static_cond(x, cond: tl.constexpr):
     "call_type",
     ["attribute", "attribute_jit", "jit", "jit_if", "jit_expr", "jit_static_cond", "jit_noinline", "jit_extern"])
 def test_if_call(call_type, device):
-    if is_hip():
-        pytest.skip('test_if_call for HIP currently broken in upstream.')
 
     @triton.jit
     def kernel(Out, call_type: tl.constexpr):

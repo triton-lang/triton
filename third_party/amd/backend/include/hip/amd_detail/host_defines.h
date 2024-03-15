@@ -28,10 +28,6 @@ THE SOFTWARE.
 #ifndef HIP_INCLUDE_HIP_AMD_DETAIL_HOST_DEFINES_H
 #define HIP_INCLUDE_HIP_AMD_DETAIL_HOST_DEFINES_H
 
-// The follow macro should be removed after upstream updation.
-// It's defined here for workarround of rocThrust building failure.
-#define HIP_INCLUDE_HIP_HCC_DETAIL_HOST_DEFINES_H
-
 // Add guard to Generic Grid Launch method
 #ifndef GENERIC_GRID_LAUNCH
 #define GENERIC_GRID_LAUNCH 1
