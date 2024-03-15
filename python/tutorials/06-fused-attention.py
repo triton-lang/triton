@@ -587,31 +587,37 @@ BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
 configs = []
 for mode in ["fwd", "bwd"]:
     for causal in [True, False]:
-        if mode == "bwd" and not causal:
-            continue
-        configs.append(
-            triton.testing.Benchmark(
-                x_names=["N_CTX"],
-                x_vals=[2**i for i in range(10, 15)],
-                line_arg="provider",
-                line_vals=["triton"] + (["flash"] if HAS_FLASH else []),
-                line_names=["Triton"] + (["Flash-2"] if HAS_FLASH else []),
-                styles=[("red", "-"), ("blue", "-")],
-                ylabel="ms",
-                plot_name=f"fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}-causal={causal}",
-                args={
-                    "H": N_HEADS,
-                    "BATCH": BATCH,
-                    "D_HEAD": D_HEAD,
-                    "dtype": torch.float16,
-                    "mode": mode,
-                    "causal": causal,
-                },
-            ))
+        for fp8_inputs in [False, True]:
+            if fp8_inputs and ((not TORCH_HAS_FP8) or mode == "bwd"):
+                continue
+            if mode == "bwd" and not causal:
+                continue
+            configs.append(
+                triton.testing.Benchmark(
+                    x_names=["N_CTX"],
+                    x_vals=[2**i for i in range(10, 15)],
+                    line_arg="provider",
+                    line_vals=["triton"] + (["flash"] if HAS_FLASH else []),
+                    line_names=["Triton"] + (["Flash-2"] if HAS_FLASH else []),
+                    styles=[("red", "-"), ("blue", "-")],
+                    ylabel="ms",
+                    plot_name=
+                    f"fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}-causal={causal}-fp8={fp8_inputs}",
+                    args={
+                        "H": N_HEADS,
+                        "BATCH": BATCH,
+                        "D_HEAD": D_HEAD,
+                        "dtype": torch.float16,
+                        "mode": mode,
+                        "causal": causal,
+                        "fp8_inputs": fp8_inputs,
+                    },
+                ))
 
 
 @triton.testing.perf_report(configs)
-def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, causal, mode, provider, dtype=torch.float16, device="cuda"):
+def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, causal, mode, provider, fp8_inputs, dtype=torch.float16,
+                          device="cuda"):
     assert mode in ["fwd", "bwd"]
     warmup = 25
     rep = 100
@@ -619,7 +625,7 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, causal, mode, provider, dtype
         q = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
         k = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
         v = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
-        if mode == "fwd" and TORCH_HAS_FP8:
+        if mode == "fwd" and TORCH_HAS_FP8 and fp8_inputs:
             q = q.to(torch.float8_e5m2)
             k = k.to(torch.float8_e5m2)
             v = v.permute(0, 1, 3, 2)
