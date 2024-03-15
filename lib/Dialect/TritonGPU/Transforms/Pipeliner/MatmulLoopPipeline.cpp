@@ -928,13 +928,13 @@ static void threadValuesThroughWait(ttng::DotWaitOp wait,
   SmallVector<ttng::DotAsyncOp> asyncDots;
   for (Value v : values) {
     BackwardSliceOptions options;
-    options.omitBlockArguments = false;
+    options.omitBlockArguments = true;
     options.filter = [&](Operation *op) {
       if (auto dot = dyn_cast<ttng::DotAsyncOp>(op)) {
         asyncDots.push_back(dot);
         return false;
       }
-      return true;
+      return op->getBlock() == wait->getBlock();
     };
     SetVector<Operation *> slice;
     getBackwardSlice(v, &slice, options);

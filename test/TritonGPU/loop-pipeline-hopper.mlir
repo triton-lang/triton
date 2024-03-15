@@ -570,6 +570,18 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %cst_4 = arith.constant dense<1.000000e+00> : tensor<128x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma1}>>
     %c1_i32 = arith.constant 1 : i32
     %c8_i32 = arith.constant 8 : i32
+
+    // Add a "dummy" early return here to test that we don't crash in the
+    // presence of unstructured control flow.
+    %cond = arith.constant 0 : i1
+    cf.cond_br %cond, ^bb1, ^bb2
+  ^bb1:  // pred: ^bb0
+    %zero = arith.constant 0.0 : f32
+    %t1 = tt.splat %zero : f32 -> tensor<128x64xf32, #mma>
+    %t2 = tt.splat %zero : f32 -> tensor<128x16xf32, #mma1>
+    tt.return %t1, %t2 : tensor<128x64xf32, #mma>, tensor<128x16xf32, #mma1>
+  ^bb2:  // pred: ^bb0
+
     %0 = tt.addptr %arg0, %c0_i64 : !tt.ptr<f16, 1>, i64
     %1 = tt.addptr %arg1, %c0_i64 : !tt.ptr<f16, 1>, i64
     %2 = tt.splat %1 : !tt.ptr<f16, 1> -> tensor<128x1x!tt.ptr<f16, 1>, #blocked1>
