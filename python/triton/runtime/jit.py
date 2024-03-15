@@ -190,12 +190,12 @@ class KernelInterface(Generic[T]):
         # return cast(T, functools.partial(cast(Callable, self.run), grid=grid))
 
 
-def serialize_specialization_data(signature, constants, attrs, options, key):
+def serialize_specialization_data(name, signature, constants, attrs, options, key):
     constants = {key: str(value) if value.__class__.__name__ == "dtype" else value for key, value in constants.items()}
     import json
     obj = {
-        'signature': signature, 'constants': constants, 'attrs': attrs.to_dict(), 'options': options.__dict__, 'key':
-        key
+        'name': name, 'signature': signature, 'constants': constants, 'attrs': attrs.to_dict(), 'options':
+        options.__dict__, 'key': key
     }
     serialized_obj = json.dumps(obj)
     return serialized_obj
@@ -329,7 +329,7 @@ class JITFunction(KernelInterface[T]):
                 self.jit_function = jit_function
                 pass
 
-        specialization_data = serialize_specialization_data(signature, constants, configs[0], options, key)
+        specialization_data = serialize_specialization_data(name, signature, constants, configs[0], options, key)
 
         kwargs = dict(
             signature=signature,
@@ -498,6 +498,9 @@ class JITFunction(KernelInterface[T]):
         import triton.language as tl
         device = driver.active.get_current_device()
         deserialized_obj = json.loads(specialization_data)
+        if deserialized_obj['name'] != self.fn.__name__:
+            raise RuntimeError(
+                f"Specialization data is for {deserialized_obj['name']} but trying to preload for {self.fn.__name__}")
         constants = {
             int(key): tl.dtype(value) if tl.dtype.is_dtype(value) else value
             for key, value in deserialized_obj['constants'].items()
