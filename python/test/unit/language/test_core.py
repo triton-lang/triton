@@ -873,7 +873,8 @@ def test_minus_zero(dtype, num_ctas, device):
 
     # inputs
     mask = numpy_random(SIZE, dtype_str="bool")
-    np_zero = np.zeros(SIZE, dtype)
+    np_dtype = np.float64 if "float" in dtype else np.int64
+    np_zero = np.zeros(SIZE, np_dtype)
     x = np.where(mask, np_zero, -np_zero)
     # reference result
     z_ref = -x
