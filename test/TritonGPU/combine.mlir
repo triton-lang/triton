@@ -2299,7 +2299,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
   // Verify that we don't hoist the convert on top of the broadcast. In general we should hoist the convert to reduce its cost
-  // but because this would make use combine the 1st and second convert and the 1st convert is known to be a no-op this would
+  // but because this would combine the 1st and 2nd convert and since the 1st convert is known to be a no-op this would
   // generate more expensive code.
   // CHECK-LABEL: @hoist_with_free_convert
   tt.func public @hoist_with_free_convert(%arg0: tensor<128x256xf32, #mma1>, %arg1: tensor<128x1xf32, #mma>) -> tensor<128x256xf32, #blocked> {
