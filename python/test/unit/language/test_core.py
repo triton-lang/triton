@@ -858,6 +858,39 @@ def test_unary_op(dtype_x, expr, num_ctas, device):
     _test_unary(dtype_x, expr, device=device, num_ctas=num_ctas)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", dtypes_with_bfloat16)
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+def test_minus_zero(dtype, num_ctas, device):
+    # Test that -0 is handled correctly for all dtypes
+
+    check_type_supported(dtype, device)  # early return if dtype_x is not supported
+    SIZE = 128
+    # define the kernel / launch-grid
+
+    @triton.jit
+    def kernel(Z, X, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        x = tl.load(X + off)
+        z = -x
+        tl.store(Z + off, z)
+
+    # inputs
+    mask = numpy_random(SIZE, dtype_str="bool")
+    np_zero = np.zeros(SIZE, dtype)
+    x = np.where(mask, np_zero, -np_zero)
+    # reference result
+    z_ref = -x
+    # triton result
+    x_tri = to_triton(x, device=device, dst_type=dtype)
+    z_tri = to_triton(np.empty_like(x), device=device, dst_type=dtype)
+    kernel[(1, )](z_tri, x_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
+    # compare
+    z_np = to_numpy(z_tri)
+    np.testing.assert_array_equal(z_np, 0.0)
+    np.testing.assert_array_equal(np.signbit(z_np), np.signbit(z_ref))
+
+
 # ----------------
 # test math ops
 # ----------------

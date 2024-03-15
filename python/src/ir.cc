@@ -1408,6 +1408,10 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::AbsIOp>(val);
            })
+      .def("create_fneg",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<arith::NegFOp>(val);
+           })
       .def("create_reduce",
            [](TritonOpBuilder &self, std::vector<Value> operands, int axis)
                -> OpState { return self.create<ReduceOp>(operands, axis); })

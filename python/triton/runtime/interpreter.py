@@ -307,6 +307,7 @@ class Builder:
     create_sqrt = lambda self, arg: self.unary_op(arg, np.sqrt)
     create_fabs = lambda self, arg: self.unary_op(arg, np.abs)
     create_iabs = lambda self, arg: self.unary_op(arg, np.abs)
+    create_fneg = lambda self, arg: self.unary_op(arg, np.negative)
 
     # tensor operators
     create_reshape = lambda self, arg, shape, allow_reorder: TensorHandle(arg.data.reshape(shape), arg.dtype)

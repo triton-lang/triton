@@ -1097,6 +1097,7 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(arith::ExtSIOp, LLVM::SExtOp)
   POPULATE_UNARY_OP(arith::ExtUIOp, LLVM::ZExtOp)
   POPULATE_UNARY_OP(arith::FPToUIOp, LLVM::FPToUIOp)
+  POPULATE_UNARY_OP(arith::NegFOp, LLVM::FNegOp)
   POPULATE_UNARY_OP(arith::UIToFPOp, LLVM::UIToFPOp)
   POPULATE_UNARY_OP(math::FloorOp, math::FloorOp)
   POPULATE_UNARY_OP(math::LogOp, math::LogOp)
