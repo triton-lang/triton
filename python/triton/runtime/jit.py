@@ -36,6 +36,9 @@ class DependenciesFinder(ast.NodeVisitor):
         return self.hasher.hexdigest()
 
     def visit_Name(self, node):
+        if node.id in self.local_name:
+            # The global name is hidedden by the local name.
+            return None
         return self.globals.get(node.id, None)
 
     def visit_Attribute(self, node):
@@ -77,6 +80,10 @@ class DependenciesFinder(ast.NodeVisitor):
             key = func_cache_key + noinline
             self.hasher.update(key.encode("utf-8"))
 
+    def visit_FunctionDef(self, node):
+        # Save the local name which may hide the global name.
+        self.local_name = [arg.arg for arg in node.args.args]
+        self.generic_visit(node)
 
 # -----------------------------------------------------------------------------
 # JITFunction
