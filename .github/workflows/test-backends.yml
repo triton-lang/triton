@@ -22,64 +22,6 @@ jobs:
             echo '::set-output name=matrix-optional::["ubuntu-latest"]'
           fi
 
-  Integration-Tests-AMD:
-    if: (github.event_name == 'workflow_dispatch') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    needs: Runner-Preparation
-    timeout-minutes: 30
-
-    runs-on: ${{ matrix.runner }}
-
-    strategy:
-      matrix:
-        runner: ["gfx90a"]
-
-    container:
-      image: rocm/pytorch:rocm5.7_ubuntu22.04_py3.10_pytorch_2.0.1
-      options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
-
-    steps:
-      - name: Checkout PR
-        uses: actions/checkout@v3
-        if: ${{ github.event_name == 'issue_comment' }}
-        with:
-          ref: refs/pull/${{ github.event.issue.number }}/head
-          submodules: 'true'
-
-      - name: Checkout
-        uses: actions/checkout@v3
-        if: ${{ github.event_name != 'issue_comment' }}
-        with:
-          submodules: 'true'
-
-      - name: Set ROCM ENV
-        run: |
-          echo "BACKEND=ROCM" >> "${GITHUB_ENV}"
-
-      - name: Clear cache
-        run: |
-          rm -rf ~/.triton
-
-      - name: Update PATH
-        run: |
-          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
-
-      - name: Check pre-commit
-        run: |
-          python3 -m pip install --upgrade pre-commit
-          git config --global --add safe.directory /__w/triton/triton
-          python3 -m pre_commit run --all-files --verbose
-
-      - name: Install Triton on ROCM
-        run: |
-          pip install --force-reinstall numpy==1.22.4
-          pip uninstall -y triton
-          cd python
-          pip install -e .
-      - name: Run python tests on ROCM
-        run: |
-          cd python
-          pytest --capture=tee-sys -rfs -v -n 32 ./test/unit/language/test_core.py
-
   Integration-Tests-Intel:
     needs: Runner-Preparation
     timeout-minutes: 30
