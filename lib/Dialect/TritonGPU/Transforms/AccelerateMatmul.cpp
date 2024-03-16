@@ -58,10 +58,12 @@ warpsPerTileV2(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
   for (Operation *op : slices) {
     if (isa<tt::DotOp>(op) && (op != dotOp)) {
       auto chainedDot = cast<tt::DotOp>(op);
-      if (auto mmaEncoding = chainedDot.getResult()
-                                 .getType()
-                                 .getEncoding()
-                                 .dyn_cast<NvidiaMmaEncodingAttr>()) {
+      auto resTy = chainedDot.getResult().getType();
+      if (resTy.getRank() != rank) {
+        continue;
+      }
+      if (auto mmaEncoding =
+              resTy.getEncoding().dyn_cast<NvidiaMmaEncodingAttr>()) {
         return ttg::getWarpsPerCTA(mmaEncoding);
       }
       hasChainedDot = true;
