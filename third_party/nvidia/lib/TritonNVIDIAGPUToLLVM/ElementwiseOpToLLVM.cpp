@@ -765,6 +765,30 @@ struct FSubOpConversion
   }
 };
 
+struct FNegOpConversion
+    : ElementwiseOpConversionBase<arith::NegFOp, FNegOpConversion> {
+  using Base = ElementwiseOpConversionBase<arith::NegFOp, FNegOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(arith::NegFOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    auto operandTy = getElementType(op.getOperand());
+    if (operandTy.isBF16()) {
+      PTXBuilder builder;
+      auto &neg = builder.create<PTXInstr>("neg")->o("bf16");
+      auto res = builder.newOperand("=h");
+      auto val = builder.newOperand(operands[0][0], "h");
+      neg(res, val);
+      return {builder.launch(rewriter, loc, i16_ty, false)};
+    } else {
+      return {rewriter.create<LLVM::FNegOp>(loc, elemTy, operands[0][0])};
+    }
+  }
+};
+
 // Uses inline ptx to convert s8/u8 to bf16, since the
 struct SIToFPOpConversion
     : ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion> {
@@ -1127,6 +1151,7 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   patterns.add<FSubOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FAddOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FMulOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<FNegOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
   patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
