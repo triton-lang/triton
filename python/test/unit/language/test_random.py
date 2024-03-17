@@ -114,11 +114,12 @@ BLOCK = 1024
 # test generation of random uint32
 
 
-@pytest.mark.parametrize('size, seed, dtype', [(size, seed, dtype)
-                                               for size in ['10', '4,53', '400']
-                                               for seed in [0, 42, 124, 54, 0xffffffff, 0x0000000fcafeb0ba]
-                                               for dtype in ['int32', 'int64']])
-def test_randint(size, seed, device, dtype):
+@pytest.mark.parametrize('size, seed, dtype, const_seed', [(size, seed, dtype, const_seed)
+                                                           for size in ['10', '4,53', '400']
+                                                           for seed in [0, 42, 124, 54, 0xffffffff, 0x0000000fcafeb0ba]
+                                                           for dtype in ['int32', 'int64']
+                                                           for const_seed in [True, False]])
+def test_randint(size, seed, device, dtype, const_seed):
     size = list(map(int, size.split(',')))
     torch_dtype = getattr(torch, dtype)
     numpy_dtype = getattr(np, f"u{dtype}")
@@ -131,11 +132,21 @@ def test_randint(size, seed, device, dtype):
         rand = tl.randint(seed, offset)
         tl.store(X + offset, rand, mask=offset < N)
 
+    @triton.jit
+    def const_kernel(X, N, seed: tl.constexpr):
+        pid = tl.program_id(0).to(X.dtype.element_ty)
+        offset = pid * BLOCK + tl.arange(0, BLOCK)
+        rand = tl.randint(seed, offset)
+        tl.store(X + offset, rand, mask=offset < N)
+
     # triton result
     x = torch.empty(size, dtype=torch_dtype, device=device)
     N = x.numel()
     grid = (triton.cdiv(N, BLOCK), )
-    kernel[grid](x, N, seed)
+    if const_seed:
+        const_kernel[grid](x, N, seed=seed)
+    else:
+        kernel[grid](x, N, seed)
     out_tri = x.cpu().numpy().astype(numpy_dtype).flatten().tolist()
     # reference result
     gen = CustomPhilox4x(seed, config=config)
@@ -146,14 +157,22 @@ def test_randint(size, seed, device, dtype):
 # test uniform PRNG
 
 
-@pytest.mark.parametrize('size, seed, dtype', [(size, seed, dtype)
-                                               for size in [100000]
-                                               for seed in [0, 42, 124, 54]
-                                               for dtype in ['int32', 'int64']])
-def test_rand(size, seed, dtype, device):
+@pytest.mark.parametrize('size, seed, dtype, const_seed', [(size, seed, dtype, const_seed)
+                                                           for size in [100000]
+                                                           for seed in [0, 42, 124, 54]
+                                                           for dtype in ['int32', 'int64']
+                                                           for const_seed in [True, False]])
+def test_rand(size, seed, dtype, device, const_seed):
 
     @triton.jit
     def kernel(X, N, seed, dtype: tl.constexpr):
+        pid = tl.program_id(0).to(dtype)
+        offset = pid * BLOCK + tl.arange(0, BLOCK)
+        rand = tl.rand(seed, offset)
+        tl.store(X + offset, rand, mask=offset < N)
+
+    @triton.jit
+    def const_kernel(X, N, seed: tl.constexpr, dtype: tl.constexpr):
         pid = tl.program_id(0).to(dtype)
         offset = pid * BLOCK + tl.arange(0, BLOCK)
         rand = tl.rand(seed, offset)
@@ -163,7 +182,10 @@ def test_rand(size, seed, dtype, device):
     x = torch.empty(size, dtype=torch.float32, device=device)
     N = x.numel()
     grid = (triton.cdiv(N, BLOCK), )
-    kernel[grid](x, N, seed, dtype=getattr(tl, dtype))
+    if const_seed:
+        const_kernel[grid](x, N, seed=seed, dtype=getattr(tl, dtype))
+    else:
+        kernel[grid](x, N, seed, dtype=getattr(tl, dtype))
     assert all((x >= 0) & (x <= 1))
     assert scipy.stats.kstest(x.tolist(), 'uniform', args=(0, 1)).statistic < 0.01
 
@@ -171,14 +193,22 @@ def test_rand(size, seed, dtype, device):
 # test normal PRNG
 
 
-@pytest.mark.parametrize('size, seed, dtype', [(size, seed, dtype)
-                                               for size in [100000]
-                                               for seed in [0, 42, 124, 54]
-                                               for dtype in ['int32', 'int64']])
-def test_randn(size, seed, dtype, device):
+@pytest.mark.parametrize('size, seed, dtype, const_seed', [(size, seed, dtype, const_seed)
+                                                           for size in [100000]
+                                                           for seed in [0, 42, 124, 54]
+                                                           for dtype in ['int32', 'int64']
+                                                           for const_seed in [True, False]])
+def test_randn(size, seed, dtype, device, const_seed):
 
     @triton.jit
     def kernel(X, N, seed, dtype: tl.constexpr):
+        pid = tl.program_id(0).to(dtype)
+        offset = pid * BLOCK + tl.arange(0, BLOCK)
+        rand = tl.randn(seed, offset)
+        tl.store(X + offset, rand, mask=offset < N)
+
+    @triton.jit
+    def const_kernel(X, N, seed: tl.constexpr, dtype: tl.constexpr):
         pid = tl.program_id(0).to(dtype)
         offset = pid * BLOCK + tl.arange(0, BLOCK)
         rand = tl.randn(seed, offset)
@@ -188,7 +218,10 @@ def test_randn(size, seed, dtype, device):
     x = torch.empty(size, dtype=torch.float32, device=device)
     N = x.numel()
     grid = (triton.cdiv(N, BLOCK), )
-    kernel[grid](x, N, seed, dtype=getattr(tl, dtype))
+    if const_seed:
+        const_kernel[grid](x, N, seed=seed, dtype=getattr(tl, dtype))
+    else:
+        kernel[grid](x, N, seed, dtype=getattr(tl, dtype))
     assert abs(x.mean()) < 1e-2
     assert abs(x.std() - 1) < 1e-2
 
