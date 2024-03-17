@@ -6,7 +6,6 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
@@ -41,6 +40,9 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
     return IntegerType::get(type.getContext(), 8);
   });
   addConversion([&](mlir::Float8E5M2Type type) -> std::optional<Type> {
+    return IntegerType::get(type.getContext(), 8);
+  });
+  addConversion([&](mlir::Float8E5M2FNUZType type) -> std::optional<Type> {
     return IntegerType::get(type.getContext(), 8);
   });
   // Internally store bfloat16 as int16
@@ -82,10 +84,6 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
   auto dotOpLayout = layout.dyn_cast<DotOperandEncodingAttr>();
   if (!dotOpLayout)
     return elemTy;
-  if (auto mfmaParent =
-          dotOpLayout.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
-    return vec_ty(elemTy, dotOpLayout.getKWidth());
-  }
   auto mmaParent = dotOpLayout.getParent().dyn_cast<NvidiaMmaEncodingAttr>();
   if (!mmaParent || mmaParent.isHopper())
     return elemTy;
@@ -124,8 +122,6 @@ Type TritonGPUToLLVMTypeConverter::convertMemDescType(MemDescType type) {
   auto ctx = type.getContext();
   Attribute layout = type.getEncoding();
   SmallVector<int64_t> shape(type.getShape().begin(), type.getShape().end());
-  Type eltType = getElementTypeForStruct(cast<TensorOrMemDesc>(type));
-  auto shared_layout = layout.cast<SharedEncodingAttr>();
   SmallVector<Type, 4> types;
   // base ptr
   auto ptrType = LLVM::LLVMPointerType::get(ctx, 3);

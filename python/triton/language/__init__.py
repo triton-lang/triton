@@ -45,6 +45,8 @@ from .core import (
     broadcast_to,
     cat,
     clamp,
+    const,
+    const_pointer_type,
     constexpr,
     debug_barrier,
     device_assert,
@@ -58,7 +60,9 @@ from .core import (
     float8e4b15,
     float8e4b15x4,
     float8e4nv,
+    float8e4b8,
     float8e5,
+    float8e5b16,
     full,
     function_type,
     histogram,
@@ -140,6 +144,8 @@ __all__ = [
     "cat",
     "cdiv",
     "clamp",
+    "const",
+    "const_pointer_type",
     "constexpr",
     "cos",
     "cumprod",
@@ -163,7 +169,9 @@ __all__ = [
     "float8e4b15",
     "float8e4b15x4",
     "float8e4nv",
+    "float8e4b8",
     "float8e5",
+    "float8e5b16",
     "floor",
     "fma",
     "full",
@@ -241,13 +249,20 @@ __all__ = [
 
 def str_to_ty(name):
     if name[0] == "*":
-        ty = str_to_ty(name[1:])
+        name = name[1:]
+        if name[0] == "k":
+            name = name[1:]
+            ty = str_to_ty(name)
+            return const_pointer_type(ty)
+        ty = str_to_ty(name)
         return pointer_type(ty)
     tys = {
         "fp8e4nv": float8e4nv,
         "fp8e5": float8e5,
         "fp8e4b15": float8e4b15,
         "fp8e4b15x4": float8e4b15x4,
+        "fp8e4b8": float8e4b8,
+        "fp8e5b16": float8e5b16,
         "fp16": float16,
         "bf16": bfloat16,
         "fp32": float32,

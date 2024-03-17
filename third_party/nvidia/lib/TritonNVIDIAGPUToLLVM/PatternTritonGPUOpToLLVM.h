@@ -5,9 +5,6 @@
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "triton/Analysis/AxisInfo.h"
 
-typedef llvm::DenseMap<mlir::Operation *, mlir::triton::MakeTensorPtrOp>
-    TensorPtrMapT;
-
 namespace mlir {
 namespace triton {
 
@@ -22,8 +19,13 @@ void populateClusterOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                       PatternBenefit benefit);
 
 void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                           const TargetInfo &targetInfo,
                                            RewritePatternSet &patterns,
                                            PatternBenefit benefit);
+
+void populateConvertLayoutOpToLLVMOptimizedPatterns(
+    LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
+    RewritePatternSet &patterns, PatternBenefit benefit);
 
 void populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
@@ -43,14 +45,6 @@ void populateTensorPtrOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,
                                         PatternBenefit benefit);
 
-void populatePrintOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                  RewritePatternSet &patterns,
-                                  PatternBenefit benefit);
-
-void populateControlFlowOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                        RewritePatternSet &patterns,
-                                        PatternBenefit benefit);
-
 void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
                                  PatternBenefit benefit);
@@ -60,6 +54,10 @@ void populateClampFOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                    int computeCapability,
                                    PatternBenefit benefit);
+
+void populatePrintOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                  RewritePatternSet &patterns,
+                                  PatternBenefit benefit);
 } // namespace NVIDIA
 } // namespace triton
 } // namespace mlir

@@ -4,7 +4,7 @@ from warnings import warn
 from contextlib import contextmanager
 from enum import Enum
 from functools import partial, wraps
-from typing import Union, Callable, List, Sequence, TypeVar, cast
+from typing import Union, Callable, List, Sequence, TypeVar, cast, Optional
 import builtins
 from ..runtime.jit import jit
 import inspect
@@ -74,6 +74,9 @@ def _tensor_member_fn(fn: T) -> T:
     new_sig = orig_sig.replace(parameters=new_params)
     wrapper.__signature__ = new_sig
     wrapper.__doc__ = f"Forwards to :py:func:`{fn.__name__}` free function"
+    # If fn is a builtin, mark the wrapper as a builtin too.
+    if is_builtin(fn):
+        setattr(wrapper, TRITON_BUILTIN, True)
 
     setattr(tensor, fn.__name__, wrapper)
     return fn
@@ -104,6 +107,11 @@ def _unwrap_iterable(x):
 def is_builtin(fn) -> bool:
     """Is this a registered triton builtin function?"""
     return getattr(fn, TRITON_BUILTIN, False)
+
+
+@builtin
+def to_tensor(x, _builder=None):
+    return _to_tensor(x, _builder)
 
 
 def _to_tensor(x, builder):
@@ -143,7 +151,7 @@ def _to_tensor(x, builder):
 class dtype:
     SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
     UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
-    FP_TYPES = ['fp8e4b15', 'fp8e4b15x4', 'fp8e4nv', 'fp8e5', 'fp16', 'bf16', 'fp32', 'fp64']
+    FP_TYPES = ['fp8e4b15', 'fp8e4b15x4', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp16', 'bf16', 'fp32', 'fp64']
     STANDARD_FP_TYPES = ['fp16', 'bf16', 'fp32', 'fp64']
     OTHER_TYPES = ['void']
 
@@ -177,10 +185,18 @@ class dtype:
                 self.fp_mantissa_width = 3
                 self.primitive_bitwidth = 8
                 self.exponent_bias = 7
+            elif name == 'fp8e4b8':
+                self.fp_mantissa_width = 3
+                self.primitive_bitwidth = 8
+                self.exponent_bias = 8
             elif name == 'fp8e5':
                 self.fp_mantissa_width = 2
                 self.primitive_bitwidth = 8
                 self.exponent_bias = 15
+            elif name == 'fp8e5b16':
+                self.fp_mantissa_width = 2
+                self.primitive_bitwidth = 8
+                self.exponent_bias = 16
             elif name == 'fp16':
                 self.fp_mantissa_width = 10
                 self.primitive_bitwidth = 16
@@ -214,8 +230,14 @@ class dtype:
     def is_fp8e4b15x4(self):
         return self.name == 'fp8e4b15x4'
 
+    def is_fp8e4b8(self):
+        return self.name == 'fp8e4b8'
+
     def is_fp8e5(self):
         return self.name == 'fp8e5'
+
+    def is_fp8e5b16(self):
+        return self.name == 'fp8e5b16'
 
     def is_fp16(self):
         return self.name == 'fp16'
@@ -290,6 +312,10 @@ class dtype:
     def is_ptr():
         return False
 
+    @staticmethod
+    def is_const():
+        return False
+
     def __eq__(self, other: dtype):
         if not isinstance(other, dtype):
             return False
@@ -320,8 +346,12 @@ class dtype:
             return builder.get_int64_ty()
         elif self.name == 'fp8e5':
             return builder.get_fp8e5_ty()
+        elif self.name == 'fp8e5b16':
+            return builder.get_fp8e5b16_ty()
         elif self.name == 'fp8e4nv':
             return builder.get_fp8e4nv_ty()
+        elif self.name == 'fp8e4b8':
+            return builder.get_fp8e4b8_ty()
         elif self.name == 'fp8e4b15':
             return builder.get_fp8e4b15_ty()
         elif self.name == 'fp8e4b15x4':
@@ -339,13 +369,22 @@ class dtype:
     def __str__(self):
         return self.name
 
+    def codegen_name(self):
+        if self.name.startswith("fp"):
+            return "float" + self.name[2:]
+        elif self.name.startswith("bf"):
+            return "bfloat" + self.name[2:]
+        else:
+            return self.name
+
     @property
     def cache_key_part(self) -> str:
         """See cache_key_part() in triton.cc."""
         return self.name
 
     def __repr__(self):
-        return f'triton.language.{str(self)}'
+        """Output of repr needs to be an evaluatable expression"""
+        return f'triton.language.{self.codegen_name()}'
 
 
 # Some functions have a param named `dtype`, which shadows the `dtype` class.
@@ -387,6 +426,23 @@ class pointer_type(dtype):
     @property
     def scalar(self):
         return self
+
+
+class const_pointer_type(pointer_type):
+
+    def __init__(self, element_ty: dtype, address_space: int = 1):
+        super().__init__(element_ty, address_space)
+
+    def __str__(self):
+        return f'const_pointer<{self.element_ty}>'
+
+    def is_const(self):
+        return True
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, const_pointer_type):
+            return False
+        return self.element_ty == other.element_ty and self.address_space == other.address_space
 
 
 class block_type(dtype):
@@ -467,7 +523,9 @@ uint16 = dtype('uint16')
 uint32 = dtype('uint32')
 uint64 = dtype('uint64')
 float8e5 = dtype('fp8e5')
+float8e5b16 = dtype('fp8e5b16')
 float8e4nv = dtype('fp8e4nv')
+float8e4b8 = dtype('fp8e4b8')
 float8e4b15 = dtype('fp8e4b15')
 float8e4b15x4 = dtype('fp8e4b15x4')
 float16 = dtype('fp16')
@@ -480,6 +538,17 @@ pi32_t = pointer_type(int32)
 # -----------------------
 # constexpr
 # -----------------------
+
+
+class const:
+    """
+    This class is used as a type annotation to mark pointers to constant data.
+    The `store` function cannot be called with a pointer to const. Constness
+    is part of the pointer type and the usual Triton type consistency rules
+    apply. For example you cannot have a function that returns constant pointer
+    in one return statement and non-constant pointer in another.
+    """
+    pass
 
 
 class constexpr:
@@ -894,7 +963,7 @@ class tensor:
         assert False, "Transposition must be created by the AST Visitor"
 
     @builtin
-    def to(self, dtype: dtype, fp_downcast_rounding: str | None = None, bitcast: bool = False, _builder=None):
+    def to(self, dtype: dtype, fp_downcast_rounding: Optional[str] = None, bitcast: bool = False, _builder=None):
         """
         Casts the tensor to the given :code:`dtype`.
 

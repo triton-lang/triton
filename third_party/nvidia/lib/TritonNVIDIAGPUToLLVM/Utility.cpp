@@ -1,16 +1,16 @@
-#include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
+#include "Utility.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
+
 namespace mlir {
-
 namespace LLVM {
-
 namespace NVIDIA {
 using namespace mlir::triton;
 
-Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
-                    Value val, Value i, NVVM::ShflKind mode, Value clamp) {
+static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
+                           Value val, Value i, NVVM::ShflKind mode,
+                           Value clamp) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   if (bits == 64) {
@@ -65,6 +65,23 @@ Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
                        i32_val(0x1f));
 }
 
+Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
+               ModuleOp moduleOp, int axis) {
+  assert(axis >= 0);
+  assert(axis < 3);
+  assert(moduleOp);
+
+  // It is not easy to get the compute capability here, so we use numCTAs to
+  // decide the semantic of GetProgramIdOp. If numCTAs = 1, then
+  // GetProgramIdOp is converted to "%ctaid", otherwise it is converted to
+  // "%clusterid".
+  int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
+
+  std::string sreg = numCTAs == 1 ? "%ctaid." : "%clusterid.";
+  sreg.append(1, 'x' + axis); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
+  return getSRegValue(rewriter, loc, sreg);
+}
+
 Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr) {
   PTXBuilder builder;
   auto &mov = builder.create("mov")->o("u32");
@@ -74,6 +91,19 @@ Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr) {
   Value val = builder.launch(b, loc, b.getIntegerType(32), false);
   return val;
 }
+
+Value permute(Location loc, ConversionPatternRewriter &rewriter, Value a,
+              Value b, Value mask) {
+  PTXBuilder builder;
+  auto &prmt = builder.create("prmt")->o("b32");
+  auto *destOpr = builder.newOperand("=r");
+  auto *aOperand = builder.newOperand(a, "r");
+  auto *bOperand = builder.newOperand(b, "r");
+  auto *maskOperand = builder.newOperand(mask, "r");
+  prmt(destOpr, aOperand, bOperand, maskOperand);
+  return builder.launch(rewriter, loc, rewriter.getIntegerType(32), false);
+}
+
 } // namespace NVIDIA
 } // namespace LLVM
 } // namespace mlir

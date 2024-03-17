@@ -6,6 +6,8 @@ on:
     types:
       - completed
 
+permissions: read-all
+
 jobs:
   Compare-artifacts:
     runs-on: ubuntu-latest

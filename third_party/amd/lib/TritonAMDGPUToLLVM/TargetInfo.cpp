@@ -67,9 +67,22 @@ Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
   return LLVM::AMD::shuffleIdx(loc, rewriter, val, i);
 }
 
+Value TargetInfo::programId(Location loc, ConversionPatternRewriter &rewriter,
+                           ModuleOp moduleOp, int axis) const {
+  return LLVM::AMD::llGetPid(loc, rewriter, moduleOp, axis);
+}
+
 bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce) const {
+  return false;
+}
+
+bool TargetInfo::processReplicaUsingStMatrix(
+    ConversionPatternRewriter &rewriter, Location loc, Value smemBase,
+    SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
+    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
+    ArrayRef<unsigned> outOrd, unsigned accumNumReplicates) const {
   return false;
 }
 
