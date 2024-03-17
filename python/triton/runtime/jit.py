@@ -37,7 +37,7 @@ class DependenciesFinder(ast.NodeVisitor):
 
     def visit_Name(self, node):
         if node.id in self.local_name:
-            # The global name is hidedden by the local name.
+            # The global name is hidden by the local name.
             return None
         return self.globals.get(node.id, None)
 
@@ -82,7 +82,7 @@ class DependenciesFinder(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node):
         # Save the local name which may hide the global name.
-        self.local_name = [arg.arg for arg in node.args.args]
+        self.local_names = [arg.arg for arg in node.args.args]
         self.generic_visit(node)
 
 # -----------------------------------------------------------------------------
