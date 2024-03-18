@@ -96,17 +96,24 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
                     (void *)(uintptr_t)logbufsize, (void *)_log, (void *)1};
 
   // launch HIP Binary
+  int32_t n_regs = 0;
+  int32_t n_spills = 0;
   hipModule_t mod;
   hipFunction_t fun;
   Py_BEGIN_ALLOW_THREADS;
   HIP_CHECK_AND_RETURN_NULL_ALLOW_THREADS(hipModuleLoadDataEx(&mod, hsaco, 5, opt, optval));
   HIP_CHECK_AND_RETURN_NULL_ALLOW_THREADS(hipModuleGetFunction(&fun, mod, name));
+  HIP_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
+      hipFuncGetAttribute(&n_regs, HIP_FUNC_ATTRIBUTE_NUM_REGS, fun));
+  HIP_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
+      hipFuncGetAttribute(&n_spills, HIP_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, fun));
+  // somehow ISA dumping seems vgpr_spill_count always need minus 1
+  if(n_spills != 0) n_spills = n_spills / 4 - 1;
+
   Py_END_ALLOW_THREADS;
   free(hsaco);
 
   // get allocated registers and spilled registers from the function
-  int n_regs = 0;
-  int n_spills = 0;
   if (PyErr_Occurred()) {
     return NULL;
   }
