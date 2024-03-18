@@ -164,6 +164,15 @@ def check_type_supported(dtype, device):
         ]:
             pytest.skip("bfloat16 and float8 are not supported in the interpreter")
 
+class MfmaLayout:
+    def __init__(self, version, warps_per_cta, instr_shape, is_transposed):
+        self.version = version
+        self.warps_per_cta = warps_per_cta
+        self.instr_shape = instr_shape
+        self.is_transposed = is_transposed
+ 
+    def __str__(self):
+        return f"#{GPU_DIALECT}.amd_mfma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA = {self.warps_per_cta}, instrShape={self.instr_shape}, isTransposed = {str(self.is_transposed).lower()}}}>"
 
 class MmaLayout:
 
@@ -2308,20 +2317,47 @@ def test_scan_layouts(M, N, src_layout, axis, device):
 
     np.testing.assert_equal(z_ref, z_tri.cpu().numpy())
 
-
+def get_amd_matrix_core_version(arch: str) -> int:
+    """ Determine matrix core type available on current GPU.
+        0 means no tensor cores are available
+        1 corresponds to MFMA in CDNA 1 architecture
+        2 corresponds to MFMA in CDNA 2 architecture
+        3 corresponds to MFMA in CDNA 3 architecture
+    """
+    if arch in ['gfx908']:
+        return 1
+    if arch in ['gfx90a']:
+        return 2
+    if arch in ['gfx940', 'gfx941', 'gfx942']:
+        return 3
+    return 0
+ 
 layouts = [
-    BlockedLayout([1, 4], [8, 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [8, 4], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([4, 4], [2, 16], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    MmaLayout(version=(2, 0), warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1],
-              instr_shape=[16, 8]),
-    MmaLayout(version=(2, 0), warps_per_cta=[2, 2], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1],
-              instr_shape=[16, 8]),
-    MmaLayout(version=(3, 0), warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0],
-              instr_shape=[16, 16, 16]),
+    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([4, 4], [THREADS_PER_WARP // 16, 16], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 2], [THREADS_PER_WARP // 8, 8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1])
 ]
 
+if is_hip():
+    matrix_core_version = get_amd_matrix_core_version(triton.runtime.driver.active.get_current_target()[1])
+    tensor_core_layouts = [
+        MfmaLayout(version=(matrix_core_version, 0), warps_per_cta=[2, 2], instr_shape=[32, 32], is_transposed=False),
+        MfmaLayout(version=(matrix_core_version, 0), warps_per_cta=[4, 1], instr_shape=[32, 32], is_transposed=True),
+        MfmaLayout(version=(matrix_core_version, 0), warps_per_cta=[4, 1], instr_shape=[32, 32], is_transposed=False),
+        MfmaLayout(version=(matrix_core_version, 0), warps_per_cta=[4, 1], instr_shape=[16, 16], is_transposed=False),
+    ]
+    layouts.extend(tensor_core_layouts)
+else:
+    tensor_core_layouts = [
+        MmaLayout(version=(2, 0), warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1],
+                  instr_shape=[16, 8]),
+        MmaLayout(version=(2, 0), warps_per_cta=[2, 2], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1],
+                  instr_shape=[16, 8]),
+        MmaLayout(version=(3, 0), warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0],
+                  instr_shape=[16, 16, 16]),
+    ]
+    layouts.extend(tensor_core_layouts)
 
 @pytest.mark.parametrize("M, N", [[128, 16], [128, 128], [32, 128], [32, 32], [16, 16]])
 @pytest.mark.parametrize("src_layout", layouts)
@@ -2331,7 +2367,13 @@ layouts = [
 @pytest.mark.parametrize("reduce_op", ["sum", "max"])
 def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce_op, device):
     if is_hip():
-        pytest.skip("TODO test_reduce_layouts is not supported in HIP")
+        if isinstance(src_layout, MfmaLayout) and ((N == 16 and src_layout.instr_shape[1] > 16) or
+                                                   (M == 16 and src_layout.instr_shape[0] > 16)):
+            pytest.skip("Tensor dimensions are incompatible with MFMA layout")
+        if epilogue_kind == 'expand_reduce2d' and isinstance(src_layout, MfmaLayout):
+            pytest.skip(
+                "Currently MfmaLayout combined with slice encoding and reduce op trigger fails with tensor mismatches")
+
     if reduce_op == "sum" and dtype_str == "float16" and M * N > 1024:
         pytest.skip("Skipping sum reduction on float16 due to accuracy issues")
     if epilogue_kind == 'expand_reduce2d' and isinstance(src_layout, MmaLayout):
@@ -2347,8 +2389,8 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
     rdims_1d = f"{N}" if axis == 0 else f"{M}"
     rdims_2d = f"1x{N}" if axis == 0 else f"{M}x1"
     store_range = "%7" if axis == 0 else "%1"
-    blocked = BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1])
-    one_d_layout = BlockedLayout([1], [32], [4], [0], [1], [1], [0])
+    blocked = BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1])
+    one_d_layout = BlockedLayout([1], [THREADS_PER_WARP], [4], [0], [1], [1], [0])
     expanded_shape = f"1x{N}" if axis == 0 else f"{M}x1"
     other_axis = 1 - axis
     epilogue = {
@@ -2394,7 +2436,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
     #blocked = {blocked}
     #src = {src_layout}
     #one_d_layout = {one_d_layout}
-    module attributes {{"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32}} {{
+    module attributes {{"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
     tt.func public @kernel_0d1d2c3d4c(%arg0: !tt.ptr<{ty}, 1> {{tt.divisibility = 16 : i32}}, %arg1: i32 {{tt.divisibility = 16 : i32}}, %arg2: !tt.ptr<{ty}, 1> {{tt.divisibility = 16 : i32}}) {{
         %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = 1, parent = #blocked}}>>
         %1 = tt.expand_dims %0 {{axis = 1 : i32}} : tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = 1, parent = #blocked}}>> -> tensor<{M}x1xi32, #blocked>

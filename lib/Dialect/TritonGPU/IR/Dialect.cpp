@@ -165,8 +165,12 @@ SmallVector<unsigned> getContigPerThread(Attribute layout) {
     SmallVector<unsigned> contigPerThread(rank, 1);
     contigPerThread[rank - 1] = 2;
     return contigPerThread;
-  } else if (layout.isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>()) {
-    return {1, 1};
+  } else if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
+    if(mfmaLayout.getIsTransposed()){
+      return {1, 4};
+    }else{
+      return {4, 1};
+    }
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parentLayout = sliceLayout.getParent();
     return getContigPerThread(parentLayout);
@@ -235,6 +239,12 @@ SmallVector<unsigned> getOrder(Attribute layout) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     return SmallVector<unsigned>(blockedLayout.getOrder().begin(),
                                  blockedLayout.getOrder().end());
+  } else if(auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()){
+    if (mfmaLayout.getIsTransposed()) {
+      return {0, 1};
+    } else {
+      return {1, 0};
+    }
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingTrait>()) {
     auto distributedLayout = layout.cast<DistributedEncodingTrait>();
     auto rank = distributedLayout.getWarpsPerCTA().size();

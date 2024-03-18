@@ -778,10 +778,19 @@ emitBaseIndexForMfmaLayout(Location loc, RewriterBase &rewriter,
   Value laneId = urem(threadId, effectiveWarpSize);
 
   Value warpId = udiv(threadId, warpSize);
-  Value warpId0 =
-      urem(urem(warpId, warpsPerCTA[0]), i32_val(shape[0] / nonKDim));
-  Value warpId1 = urem(urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]),
-                       i32_val(shape[1] / nonKDim));
+
+  Value warpId1;
+  Value warpId0;
+
+  if (mfmaLayout.getIsTransposed()) {
+    warpId0 = urem(urem(warpId, warpsPerCTA[0]), i32_val(shape[0] / nonKDim));
+    warpId1 = urem(urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]),
+                   i32_val(shape[1] / nonKDim));
+  } else {
+    warpId0 = urem(urem(udiv(warpId, warpsPerCTA[1]), warpsPerCTA[0]),
+                   i32_val(shape[0] / nonKDim));
+    warpId1 = urem(urem(warpId, warpsPerCTA[1]), i32_val(shape[1] / nonKDim));
+  }
 
   Value offWarp0 = mul(warpId0, i32_val(nonKDim));
   Value offWarp1 = mul(warpId1, i32_val(nonKDim));
