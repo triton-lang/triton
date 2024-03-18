@@ -362,21 +362,43 @@ static SmallVector<Value> Fp8E5M2_to_Bf16(Location loc,
   b0 = lshr(i32_ty, b0, i32_val(3));
   b1 = lshr(i32_ty, b1, i32_val(3));
 
-  b0 = add(i32_ty, b0, i32_val(0x38003800));
-  b1 = add(i32_ty, b1, i32_val(0x38003800));
+  Value c0 = shl(i32_ty, b0, i32_val(16));
+  Value c1 = and_(i32_ty, b0, i32_val(0xFFFF0000));
+  Value c2 = shl(i32_ty, b1, i32_val(16));
+  Value c3 = and_(i32_ty, b1, i32_val(0xFFFF0000));
+
+  c0 = bitcast(c0, f32_ty);
+  c1 = bitcast(c1, f32_ty);
+  c2 = bitcast(c2, f32_ty);
+  c3 = bitcast(c3, f32_ty);
+
+  Value d0 = fmul(f32_ty, c0, f32_val(0x1p+112));
+  Value d1 = fmul(f32_ty, c1, f32_val(0x1p+112));
+  Value d2 = fmul(f32_ty, c2, f32_val(0x1p+112));
+  Value d3 = fmul(f32_ty, c3, f32_val(0x1p+112));
+
+  d0 = bitcast(d0, i32_ty);
+  d1 = bitcast(d1, i32_ty);
+  d2 = bitcast(d2, i32_ty);
+  d3 = bitcast(d3, i32_ty);
+
+  Value out0 = or_(i32_ty, lshr(i32_ty, d0, i32_val(16)), d1);
+  Value out1 = or_(i32_ty, lshr(i32_ty, d2, i32_val(16)), d3);
+
   Value sign0 = and_(i32_ty, a0, i32_val(0x80008000));
   Value sign1 = and_(i32_ty, a1, i32_val(0x80008000));
 
-  auto bf16x2VecTy = vec_ty(i16_ty, 2);
-  Value bf16x2Vec0 = or_(i32_ty, sign0, b0);
-  Value bf16x2Vec1 = or_(i32_ty, sign1, b1);
-  bf16x2Vec0 = bitcast(bf16x2Vec0, bf16x2VecTy);
-  bf16x2Vec1 = bitcast(bf16x2Vec1, bf16x2VecTy);
+  out0 = or_(i32_ty, out0, sign0);
+  out1 = or_(i32_ty, out1, sign1);
 
-  return {extract_element(i16_ty, bf16x2Vec0, i32_val(0)),
-          extract_element(i16_ty, bf16x2Vec0, i32_val(1)),
-          extract_element(i16_ty, bf16x2Vec1, i32_val(0)),
-          extract_element(i16_ty, bf16x2Vec1, i32_val(1))};
+  auto bf16x2VecTy = vec_ty(i16_ty, 2);
+  out0 = bitcast(out0, bf16x2VecTy);
+  out1 = bitcast(out1, bf16x2VecTy);
+
+  return {extract_element(i16_ty, out0, i32_val(0)),
+          extract_element(i16_ty, out0, i32_val(1)),
+          extract_element(i16_ty, out1, i32_val(0)),
+          extract_element(i16_ty, out1, i32_val(1))};
 }
 
 static SmallVector<Value> Bf16_to_Fp8E5M2(Location loc,
