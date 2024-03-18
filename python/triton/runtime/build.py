@@ -40,7 +40,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     if scheme == 'posix_local':
         scheme = 'posix_prefix'
     py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
-    cflags = os.environ.get("CFLAGS, "")
+    cflags = os.environ.get("CFLAGS", "")
     include_dirs = include_dirs + [srcdir, py_include_dir]
     cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-o", so, cflags]
     cc_cmd += [f'-l{lib}' for lib in libraries]
@@ -49,7 +49,8 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     ret = subprocess.check_call(cc_cmd)
     if ret == 0:
         return so
-    # fallback on setuptools (dead path due to https://github.com/openai/triton/pull/3311)
+    # fallback on setuptools
+    # Currently, this should never happen, since check_call raises an exception when the called process returns a non-zero exit status.
     extra_compile_args = []
     # extra arguments
     extra_link_args = []
