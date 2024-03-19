@@ -17,14 +17,47 @@ namespace ttg = mlir::triton::gpu;
 namespace {
 using tt::DotOp;
 using ttg::AMDMfmaEncodingAttr;
+using ttg::AMDWmmaEncodingAttr;
 using ttg::BlockedEncodingAttr;
 using ttg::ConvertLayoutOp;
 using ttg::DotOperandEncodingAttr;
 using ttg::SliceEncodingAttr;
 
-SmallVector<unsigned, 2>
-warpsPerTileMFMA(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps,
-                 SmallVector<int64_t, 2> shapePerWarp) {
+enum class MatrixCoreVersion {
+  CDNA_MFMA1,
+  CDNA_MFMA2,
+  CDNA_MFMA3,
+  RDNA_WMMA,
+  UNKNOWN
+};
+
+MatrixCoreVersion getMatrixCoreVersion(StringRef archGen) {
+  if (archGen.contains("gfx11"))
+    return MatrixCoreVersion::RDNA_WMMA;
+  if (archGen.contains("gfx908"))
+    return MatrixCoreVersion::CDNA_MFMA1;
+  if (archGen.contains("gfx90a"))
+    return MatrixCoreVersion::CDNA_MFMA2;
+  if (archGen.contains("gfx940") || archGen.contains("gfx941") ||
+      archGen.contains("gfx942"))
+    return MatrixCoreVersion::CDNA_MFMA3;
+  return MatrixCoreVersion::UNKNOWN;
+}
+
+int getMfmaVersion(MatrixCoreVersion matrixCoreVer) {
+  if (MatrixCoreVersion::CDNA_MFMA1 == matrixCoreVer)
+    return 1;
+  if (MatrixCoreVersion::CDNA_MFMA2 == matrixCoreVer)
+    return 2;
+  if (MatrixCoreVersion::CDNA_MFMA3 == matrixCoreVer)
+    return 3;
+  return 0;
+}
+
+SmallVector<unsigned, 2> warpsPerTile(tt::DotOp dotOp,
+                                      const ArrayRef<int64_t> shape,
+                                      int numWarps,
+                                      SmallVector<int64_t, 2> shapePerWarp) {
   // TODO: needs to be updated with appropriate shapePerWarp etc.
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
@@ -41,10 +74,8 @@ warpsPerTileMFMA(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps,
 
   SmallVector<int64_t, 2> tensorShape = {shape[0], shape[1]};
   SmallVector<unsigned, 2> ret = {1, 1};
-  bool changed = false;
 
   do {
-    changed = false;
     if (ret[0] * ret[1] >= numWarps)
       break;
     if (tensorShape[0] / (shapePerWarp[0] * 2) / ret[0] >=
@@ -63,6 +94,88 @@ warpsPerTileMFMA(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps,
   }
 
   return ret;
+}
+
+SmallVector<unsigned, 2>
+warpsPerTileMFMA(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
+  return warpsPerTile(dotOp, shape, numWarps, {32, 32});
+}
+
+SmallVector<unsigned, 2>
+warpsPerTileWMMA(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
+  return warpsPerTile(dotOp, shape, numWarps,
+                      {AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr()[0],
+                       AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr()[1]});
+}
+
+/**
+ * @brief Convert layout and cast element type of a given tensor
+ *
+ * If old element type is different from new element type, this function
+ * creates two new operations:
+ * 1. %converted_value = layout_convert %value, newEncoding
+ * 2. %casted_value = cast(fext, ftrunc, etc.) %value, newElemType
+ *
+ * If old element type is same as new element type, this function creates only
+ * one operation: %converted_value = layout_convert %value, newEncoding
+ *
+ * @param rewriter
+ * @param value original tensor value, which we need to convert and cast
+ * @param newEncoding new encoding for the tenosr
+ * @param newElemType new element type for the tensor
+ * @return converted and optionaly casted tensor value
+ */
+Value convertAndCastTensor(mlir::PatternRewriter &rewriter, Value value,
+                           ::mlir::Attribute newEncoding, Type newElemType) {
+  assert(newElemType.isIntOrFloat());
+
+  auto loc = value.getLoc();
+  auto oldType = value.getType().cast<RankedTensorType>();
+  auto oldElemType = oldType.getElementType();
+
+  assert(oldElemType.isIntOrFloat());
+  assert(oldElemType.isIntOrIndex() == newElemType.isIntOrIndex());
+
+  auto convertedType =
+      RankedTensorType::get(oldType.getShape(), oldElemType, newEncoding);
+
+  Value convertedTensor =
+      rewriter.create<ttg::ConvertLayoutOp>(loc, convertedType, value);
+
+  if (newElemType == oldElemType)
+    return convertedTensor;
+
+  Type castedType = convertedType.cloneWith(std::nullopt, newElemType);
+
+  Value castedTensor;
+
+  if (newElemType.isIntOrIndex()) {
+    unsigned oldWidth = oldElemType.getIntOrFloatBitWidth();
+    unsigned newWidth = newElemType.getIntOrFloatBitWidth();
+    if (oldWidth == newWidth)
+      castedTensor = rewriter.create<mlir::arith::BitcastOp>(loc, convertedType,
+                                                             convertedTensor);
+    else if (oldWidth > newWidth)
+      castedTensor = rewriter.create<mlir::arith::TruncIOp>(loc, castedType,
+                                                            convertedTensor);
+    else if (oldElemType.isSignedInteger())
+      castedTensor = rewriter.create<mlir::arith::ExtSIOp>(loc, castedType,
+                                                           convertedTensor);
+    else
+      castedTensor = rewriter.create<mlir::arith::ExtUIOp>(loc, castedType,
+                                                           convertedTensor);
+  } else {
+    if (oldElemType.isF16() && newElemType.isF32())
+      castedTensor = rewriter.create<mlir::arith::ExtFOp>(loc, castedType,
+                                                          convertedTensor);
+    else if (oldElemType.isF32() && newElemType.isF16())
+      castedTensor = rewriter.create<mlir::arith::TruncFOp>(loc, castedType,
+                                                            convertedTensor);
+    else
+      castedTensor =
+          rewriter.create<tt::FpToFpOp>(loc, castedType, convertedTensor);
+  }
+  return castedTensor;
 }
 
 class BlockedToMFMA : public mlir::RewritePattern {
@@ -151,77 +264,6 @@ public:
     return {mDim, nDim, kDim};
   }
 
-  /**
-   * @brief Convert layout and cast element type of a given tensor
-   *
-   * If old element type is different from new element type, this function
-   * creates two new operations:
-   * 1. %converted_value = layout_convert %value, newEncoding
-   * 2. %casted_value = cast(fext, ftrunc, etc.) %value, newElemType
-   *
-   * If old element type is same as new element type, this function creates only
-   * one operation: %converted_value = layout_convert %value, newEncoding
-   *
-   * @param rewriter
-   * @param value original tensor value, which we need to convert and cast
-   * @param newEncoding new encoding for the tenosr
-   * @param newElemType new element type for the tensor
-   * @return converted and optionaly casted tensor value
-   */
-  Value convertAndCastTensor(mlir::PatternRewriter &rewriter, Value value,
-                             ::mlir::Attribute newEncoding,
-                             Type newElemType) const {
-    assert(newElemType.isIntOrFloat());
-
-    auto loc = value.getLoc();
-    auto oldType = value.getType().cast<RankedTensorType>();
-    auto oldElemType = oldType.getElementType();
-
-    assert(oldElemType.isIntOrFloat());
-    assert(oldElemType.isIntOrIndex() == newElemType.isIntOrIndex());
-
-    auto convertedType =
-        RankedTensorType::get(oldType.getShape(), oldElemType, newEncoding);
-
-    Value convertedTensor =
-        rewriter.create<ttg::ConvertLayoutOp>(loc, convertedType, value);
-
-    if (newElemType == oldElemType)
-      return convertedTensor;
-
-    Type castedType = convertedType.cloneWith(std::nullopt, newElemType);
-
-    Value castedTensor;
-
-    if (newElemType.isIntOrIndex()) {
-      unsigned oldWidth = oldElemType.getIntOrFloatBitWidth();
-      unsigned newWidth = newElemType.getIntOrFloatBitWidth();
-      if (oldWidth == newWidth)
-        castedTensor = rewriter.create<mlir::arith::BitcastOp>(
-            loc, convertedType, convertedTensor);
-      else if (oldWidth > newWidth)
-        castedTensor = rewriter.create<mlir::arith::TruncIOp>(loc, castedType,
-                                                              convertedTensor);
-      else if (oldElemType.isSignedInteger())
-        castedTensor = rewriter.create<mlir::arith::ExtSIOp>(loc, castedType,
-                                                             convertedTensor);
-      else
-        castedTensor = rewriter.create<mlir::arith::ExtUIOp>(loc, castedType,
-                                                             convertedTensor);
-    } else {
-      if (oldElemType.isF16() && newElemType.isF32())
-        castedTensor = rewriter.create<mlir::arith::ExtFOp>(loc, castedType,
-                                                            convertedTensor);
-      else if (oldElemType.isF32() && newElemType.isF16())
-        castedTensor = rewriter.create<mlir::arith::TruncFOp>(loc, castedType,
-                                                              convertedTensor);
-      else
-        castedTensor =
-            rewriter.create<tt::FpToFpOp>(loc, castedType, convertedTensor);
-    }
-    return castedTensor;
-  }
-
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
@@ -253,8 +295,7 @@ public:
 
     auto [mDim, nDim, kDim] = chooseMfmaDimensions(dotOp);
 
-    auto warpsPerTile =
-        warpsPerTileMFMA(dotOp, retShape, numWarps, {mDim, nDim});
+    auto warpsPerTile = warpsPerTileMFMA(dotOp, retShape, numWarps);
 
     bool isTransposed = isChainDot(dotOp);
     mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
@@ -324,8 +365,7 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
     OpBuilder builder(dotOp);
     Type AElType = dotOp.getA().getType().getElementType();
     Type promoteType;
-    if (AMDMfmaEncodingAttr mfmaLayout =
-            D.getType().getEncoding().dyn_cast<AMDMfmaEncodingAttr>()) {
+    if (D.getType().getEncoding().isa<AMDMfmaEncodingAttr>()) {
       Type BElType = dotOp.getB().getType().getElementType();
 
       auto maxBitWidth = std::max(AElType.getIntOrFloatBitWidth(),
@@ -342,6 +382,17 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
         promoteType = builder.getF16Type();
       else if (maxBitWidth <= 32)
         promoteType = builder.getF32Type();
+    } else if (D.getType().getEncoding().isa<AMDWmmaEncodingAttr>()) {
+      Type BElType = dotOp.getB().getType().getElementType();
+
+      if (AElType == BElType)
+        return;
+
+      // Other cases must be filtered earlier
+      promoteType =
+          AElType.getIntOrFloatBitWidth() > BElType.getIntOrFloatBitWidth()
+              ? AElType
+              : BElType;
     } else {
       // FMA case.
       Type AElType = dotOp.getA().getType().getElementType();
@@ -357,6 +408,85 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
     dotOp.setOperand(1, promotedB);
   });
 }
+
+class BlockedToWMMA : public mlir::RewritePattern {
+public:
+  BlockedToWMMA(mlir::MLIRContext *context)
+      : mlir::RewritePattern(tt::DotOp::getOperationName(), 2, context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto dotOp = cast<tt::DotOp>(op);
+
+    auto oldRetType = dotOp.getResult().getType().cast<RankedTensorType>();
+    if (!oldRetType.getEncoding() ||
+        !oldRetType.getEncoding().isa<ttg::BlockedEncodingAttr>())
+      return failure();
+
+    // TODO: Support different operand types
+    if (!supportWMMA(dotOp))
+      return failure();
+
+    // get WMMA encoding for the given number of warps
+    auto retShape = oldRetType.getShape();
+    auto mod = op->getParentOfType<mlir::ModuleOp>();
+    int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
+
+    // operands
+    Value a = dotOp.getA();
+    Value b = dotOp.getB();
+    auto oldAType = a.getType().cast<RankedTensorType>();
+    auto oldBType = b.getType().cast<RankedTensorType>();
+    auto ctx = oldAType.getContext();
+
+    AMDWmmaEncodingAttr wmmaEnc;
+
+    auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr();
+    auto warpsPerTile = warpsPerTileWMMA(dotOp, retShape, numWarps);
+    // Not supported yet
+    // if (retShape[0] < warpsPerTile[0] * mnkDim[0] || retShape[1] <
+    // warpsPerTile[1] * mnkDim[1])
+    //  return failure();
+    auto CTALayout = ttg::getCTALayout(oldRetType.getEncoding());
+    wmmaEnc = AMDWmmaEncodingAttr::get(oldRetType.getContext(), warpsPerTile,
+                                       CTALayout);
+
+    Type wmmaAccType;
+    auto oldRetElemType = oldRetType.getElementType();
+    auto aElemType = oldAType.getElementType();
+    if (oldRetElemType.isIntOrIndex())
+      wmmaAccType = rewriter.getIntegerType(32);
+    else if (oldRetElemType.isa<mlir::Float16Type, mlir::BFloat16Type>() &&
+             aElemType == oldRetElemType)
+      wmmaAccType = oldRetElemType;
+    else
+      wmmaAccType = rewriter.getF32Type();
+
+    auto newRetType = RankedTensorType::get(retShape, oldRetElemType, wmmaEnc);
+
+    // convert accumulator
+    auto oldAcc = dotOp.getOperand(2);
+    auto newAcc = convertAndCastTensor(rewriter, oldAcc, wmmaEnc, wmmaAccType);
+
+    auto newAType = RankedTensorType::get(
+        oldAType.getShape(), aElemType,
+        ttg::DotOperandEncodingAttr::get(ctx, 0, wmmaEnc, mnkDim[2]));
+    auto newBType = RankedTensorType::get(
+        oldBType.getShape(), oldBType.getElementType(),
+        ttg::DotOperandEncodingAttr::get(ctx, 1, wmmaEnc, mnkDim[2]));
+    a = rewriter.create<ttg::ConvertLayoutOp>(a.getLoc(), newAType, a);
+    b = rewriter.create<ttg::ConvertLayoutOp>(b.getLoc(), newBType, b);
+    auto newDot = rewriter.create<tt::DotOp>(dotOp.getLoc(), newRetType, a, b,
+                                             newAcc, dotOp.getAllowTF32(),
+                                             dotOp.getMaxNumImpreciseAcc());
+
+    Value dotOutput = convertAndCastTensor(
+        rewriter, newDot, oldRetType.getEncoding(), oldRetElemType);
+    rewriter.replaceOp(op, dotOutput);
+    return success();
+  }
+};
 } // namespace
 
 #define GEN_PASS_CLASSES
@@ -367,9 +497,9 @@ class TritonAMDGPUAccelerateMatmulPass
           TritonAMDGPUAccelerateMatmulPass> {
 public:
   TritonAMDGPUAccelerateMatmulPass() = default;
-  TritonAMDGPUAccelerateMatmulPass(int matrixCoreVersion,
+  TritonAMDGPUAccelerateMatmulPass(StringRef archGen,
                                    int matrixInstructionSize) {
-    this->matrixCoreVersion = matrixCoreVersion;
+    this->archGenerationName = archGen.data();
     this->matrixInstructionSize = matrixInstructionSize;
   }
   void runOnOperation() override {
@@ -377,10 +507,15 @@ public:
     ModuleOp m = getOperation();
 
     mlir::RewritePatternSet patterns(context);
-    if (matrixCoreVersion == 1 || matrixCoreVersion == 2 ||
-        matrixCoreVersion == 3)
-      patterns.add<::BlockedToMFMA>(context, matrixCoreVersion,
+    auto matrixCoreVer = getMatrixCoreVersion(archGenerationName);
+    if (MatrixCoreVersion::CDNA_MFMA1 == matrixCoreVer ||
+        MatrixCoreVersion::CDNA_MFMA2 == matrixCoreVer ||
+        MatrixCoreVersion::CDNA_MFMA3 == matrixCoreVer) {
+      patterns.add<::BlockedToMFMA>(context, getMfmaVersion(matrixCoreVer),
                                     matrixInstructionSize);
+    } else if (matrixCoreVer == MatrixCoreVersion::RDNA_WMMA) {
+      patterns.add<::BlockedToWMMA>(context);
+    }
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }
@@ -389,8 +524,8 @@ public:
 };
 
 std::unique_ptr<Pass>
-mlir::createTritonAMDGPUAccelerateMatmulPass(int matrixCoreVersion,
+mlir::createTritonAMDGPUAccelerateMatmulPass(std::string archGen,
                                              int matrixInstructionSize) {
   return std::make_unique<TritonAMDGPUAccelerateMatmulPass>(
-      matrixCoreVersion, matrixInstructionSize);
+      archGen, matrixInstructionSize);
 }

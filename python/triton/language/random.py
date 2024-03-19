@@ -44,6 +44,11 @@ def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds: tl.constexpr = N_ROUNDS_DEFAUL
 
 @jit
 def philox(seed, c0, c1, c2, c3, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
+    seed = tl.to_tensor(seed)
+    c0 = tl.to_tensor(c0)
+    c1 = tl.to_tensor(c1)
+    c2 = tl.to_tensor(c2)
+    c3 = tl.to_tensor(c3)
     seed = seed.to(tl.uint64)
     if tl.constexpr(c0.dtype.primitive_bitwidth) == 32:
         int_dtype = tl.uint32

@@ -5,6 +5,8 @@ on:
     workflows: ["Wheels"]
     types: [completed]
 
+permissions: read-all
+
 jobs:
   Runner-Preparation:
     runs-on: ubuntu-latest

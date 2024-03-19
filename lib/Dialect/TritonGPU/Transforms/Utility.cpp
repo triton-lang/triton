@@ -655,6 +655,14 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
   return newOp;
 }
 
+// Check if the convert will be a no-op in codegen.
+static bool isFreeConvert(Operation *op) {
+  auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
+  if (!convertOp)
+    return false;
+  return isMmaToMmaShortcut(convertOp.getSrc().getType(), convertOp.getType());
+}
+
 LogicalResult
 getConvertBackwardSlice(Value root, SetVector<Value> &slice,
                         Attribute rootEncoding,
@@ -701,7 +709,8 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
         }
         layout[result] = encoding;
       }
-      if (canFoldIntoConversion(definingOp, encoding))
+      if (!isFreeConvert(definingOp) &&
+          canFoldIntoConversion(definingOp, encoding))
         continue;
       if (stopPropagation && stopPropagation(definingOp))
         continue;

@@ -23,6 +23,7 @@
 #ifdef USE_ROCM
 
 #include "../PatternTritonGPUOpToLLVM.h"
+#include "SharedToDotOperandHelper.h"
 #include "Utility.h"
 
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
@@ -31,64 +32,7 @@ using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
-namespace {
-
-// Get waveId inside block of waves.
-Value getWaveIdInBlock(ConversionPatternRewriter &rewriter, Location loc,
-                       Value waveId, const ArrayRef<unsigned int> &wpt,
-                       int elemPerInstrNonK, int tensorSizeNonK, int nonKIdx) {
-  if (nonKIdx == 1)
-    waveId = udiv(waveId, i32_val(wpt[0]));
-  return urem(urem(waveId, i32_val(wpt[nonKIdx])),
-              i32_val(tensorSizeNonK / elemPerInstrNonK));
-}
-
-} // namespace
-
 namespace SharedToDotOperandMFMA {
-
-/**
- * @brief swizzling tensor element indexes according pattern encoded in
- * SharedEncodingAttr
- *
- * @param rewriter
- * @param loc
- * @param row row of target tensor element related to the start of smemObj
- * @param col col of target tensor element related to the start of smemObj
- * @param smemObj shared memory object, contains info about tensor in LDS
- * @param attr layout attribute, contains swizzling info
- * @return swizzled row, col indexes in tensor notation
- */
-std::pair<mlir::Value, mlir::Value>
-swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
-               Value col, SharedMemoryObject smemObj, SharedEncodingAttr attr) {
-  (void)smemObj; // unused in current pattern
-  bool transposed = (attr.getOrder()[0] != 1);
-  if (transposed) {
-    // tensor is column-wise, so swapping col and row in computations
-    std::swap(row, col);
-  }
-  auto vec = i32_val(attr.getVec());
-  auto perPhase = i32_val(attr.getPerPhase());
-  auto maxPhase = i32_val(attr.getMaxPhase());
-
-  // Original algorithm taken from getSwizzledSharedPtrs function
-  // (TritonGPUToLLVMBase.h): Basic algorithm for row-major tensor is following:
-  //
-  // phase = (row // perPhase) % maxPhase
-  // colOffSwizzled = ((col // vec) ^ phase) * vec
-  // colOffOrdered = col % vec
-  // colOff = colOffSwizzled + colOffOrdered
-  auto phase = urem(udiv(row, perPhase), maxPhase);
-  auto colOffSwizzled = mul(xor_(udiv(col, vec), phase), vec);
-  auto colOffOrdered = urem(col, vec);
-  auto colOff = add(colOffSwizzled, colOffOrdered);
-
-  if (transposed)
-    return {colOff, row};
-  else
-    return {row, colOff};
-}
 
 /**
  * @brief This function maps particular load of mfma dot operand to element
@@ -118,7 +62,6 @@ swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
  * @param elemsPerInstr operand tile shape consumed by one MFMA instruction
  * @param waveId id component of 2d wave grid along nono-K axis
  * @param laneId lane id in warp [0..63]
- * @param warpsPerGroup number of warps in one block
  * @param numOfElems number of elements accessed by thread per repetition
  * @param reps number of instructions repretition to fully cover dot operand
  * @param smemStrides strides in LDS tensor
@@ -128,13 +71,11 @@ swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
  * @return vector (i-th element corresponds to i-th load instruction) of
  * 2-element vectors(tensor row and col).
  */
-llvm::SmallVector<llvm::SmallVector<Value>>
-computeTensorElemMapping(ConversionPatternRewriter &rewriter, Location loc,
-                         const ArrayRef<int64_t> &elemsPerInstr, Value waveId,
-                         Value laneId, int warpsPerGroup, int numOfElems,
-                         ArrayRef<int64_t> reps, ArrayRef<Value> smemOffsets,
-                         int loadVecSize, unsigned iNonKDim, unsigned iKDim) {
-  auto numM = reps[0];
+llvm::SmallVector<llvm::SmallVector<Value>> computeTensorElemMappingInBlock(
+    ConversionPatternRewriter &rewriter, Location loc,
+    const ArrayRef<int64_t> &elemsPerInstr, Value waveId, Value laneId,
+    int numOfElems, ArrayRef<int64_t> reps, ArrayRef<Value> smemOffsets,
+    int loadVecSize, unsigned iNonKDim, unsigned iKDim) {
   auto numK = reps[1];
   const int loadsPerThread = numOfElems / loadVecSize;
   llvm::SmallVector<llvm::SmallVector<Value>> mapping(numK * loadsPerThread);
@@ -180,141 +121,6 @@ computeTensorElemMapping(ConversionPatternRewriter &rewriter, Location loc,
   return mapping;
 }
 
-bool isSwizzled(SharedEncodingAttr layout) { return layout.getMaxPhase() != 1; }
-
-Value computeOffset(ConversionPatternRewriter &rewriter, Location loc,
-                    Value row, Value col, SharedMemoryObject smemObj,
-                    SharedEncodingAttr srcLayout) {
-  auto [swizzledRow, swizzledCol] =
-      swizzleIndexes(rewriter, loc, row, col, smemObj, srcLayout);
-  auto &strides = smemObj.strides;
-  Value rowOffset = mul(swizzledRow, strides[0]);
-  Value colOffset = mul(swizzledCol, strides[1]);
-  return add(rowOffset, colOffset);
-}
-
-llvm::SmallVector<Value>
-computeOffsetsAType(ConversionPatternRewriter &rewriter, Location loc,
-                    const ArrayRef<int64_t> &elemsPerInstr, Value waveId,
-                    Value laneId, int warpsPerGroup, int numOfElems,
-                    ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
-                    SharedEncodingAttr srcLayout, unsigned nonKDim,
-                    unsigned kDim) {
-  SmallVector<Value> strides{smemObj.strides[0], smemObj.strides[1]};
-  SmallVector<Value> offsets{smemObj.offsets[0], smemObj.offsets[1]};
-
-  int vectorSize = 1;
-  if (srcLayout.getOrder()[0] == 1) {
-    if (isSwizzled(srcLayout))
-      vectorSize = std::min(static_cast<int>(srcLayout.getVec()), numOfElems);
-    else
-      vectorSize = numOfElems;
-  }
-
-  auto mapping = computeTensorElemMapping(
-      rewriter, loc, elemsPerInstr, waveId, laneId, warpsPerGroup, numOfElems,
-      reps, offsets, vectorSize, nonKDim, kDim);
-  llvm::SmallVector<Value> aOffsets(mapping.size());
-  for (int i = 0; i < mapping.size(); ++i) {
-    Value row = mapping[i][0];
-    Value col = mapping[i][1];
-    aOffsets[i] = computeOffset(rewriter, loc, row, col, smemObj, srcLayout);
-  }
-  return aOffsets;
-}
-
-llvm::SmallVector<Value>
-computeOffsetsBType(ConversionPatternRewriter &rewriter, Location loc,
-                    const ArrayRef<int64_t> &elemsPerInstr, Value waveId,
-                    Value laneId, int warpsPerGroup, int numOfElems,
-                    ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
-                    SharedEncodingAttr srcLayout, unsigned nonKDim,
-                    unsigned kDim) {
-  // transpose reps and offsets, because operand B has layout equal to
-  // transposed operand A layout
-  SmallVector<int64_t> tElemsPerInstr{elemsPerInstr[1], elemsPerInstr[0]};
-  SmallVector<int64_t> tReps{reps[1], reps[0]};
-  SmallVector<Value> toffsets{smemObj.offsets[1], smemObj.offsets[0]};
-
-  int vectorSize = 1;
-  if (srcLayout.getOrder()[0] == 0) {
-    if (isSwizzled(srcLayout))
-      vectorSize = std::min(static_cast<int>(srcLayout.getVec()), numOfElems);
-    else
-      vectorSize = numOfElems;
-  }
-
-  auto mapping = computeTensorElemMapping(
-      rewriter, loc, tElemsPerInstr, waveId, laneId, warpsPerGroup, numOfElems,
-      tReps, toffsets, vectorSize, nonKDim, kDim);
-  llvm::SmallVector<Value> bOffsets(mapping.size());
-  for (int i = 0; i < mapping.size(); ++i) {
-    // swap row and col, because operand B layout is a transposed operand A
-    // layout
-    Value row = mapping[i][1];
-    Value col = mapping[i][0];
-    bOffsets[i] = computeOffset(rewriter, loc, row, col, smemObj, srcLayout);
-  }
-  return bOffsets;
-}
-
-Value computeBasePtr(ConversionPatternRewriter &rewriter, Location loc,
-                     const SharedMemoryObject &smemObj) {
-  Value base = smemObj.base;
-  Type type = base.getType();
-  for (int i = 0; i < smemObj.strides.size(); ++i) {
-    Value offset = sub(i32_val(0), mul(smemObj.offsets[i], smemObj.strides[i]));
-    base = gep(ptr_ty(rewriter.getContext(), 3), type, base, offset);
-  }
-  return base;
-}
-
-/**
- * @brief try find if value is an integer constant
- *
- * Trace def-use chain and return integer in case we can proof it is constant.
- * Current implementation can trace chains of insertValue->extractValue
- * operations.
- *
- * @param val Value for that we want to get constant
- * @return std::optional on found integer value or empty std::optional
- */
-std::optional<int> findConstValue(Value val) {
-  while (val && !val.getDefiningOp<LLVM::ConstantOp>()) {
-    LLVM::ExtractValueOp extractValOp =
-        val.getDefiningOp<LLVM::ExtractValueOp>();
-    if (!extractValOp)
-      return std::optional<int>();
-    auto extractPosArr = extractValOp.getPosition();
-    if (extractPosArr.size() > 1)
-      return std::optional<int>();
-    int extractPos = extractPosArr[0];
-
-    int insertPos = -1;
-    LLVM::InsertValueOp insertValOp;
-    Value container = extractValOp.getOperand();
-    do {
-      insertValOp = container.getDefiningOp<LLVM::InsertValueOp>();
-      if (!insertValOp)
-        return std::optional<int>();
-      auto insertPosArr = insertValOp.getPosition();
-      if (insertPosArr.size() > 1)
-        return std::optional<int>();
-      insertPos = insertPosArr[0];
-      container = insertValOp.getContainer();
-    } while (insertPos != extractPos);
-    val = insertValOp.getValue();
-  }
-  if (!val)
-    return std::optional<int>();
-  auto cOp = val.getDefiningOp<LLVM::ConstantOp>();
-  assert(cOp);
-  auto valAttr = cOp.getValueAttr();
-  auto intAttr = dyn_cast<mlir::IntegerAttr>(valAttr);
-  assert(intAttr);
-  return intAttr.getInt();
-}
-
 bool hasSwizzleEnabled(const SharedEncodingAttr &srcEncoding) {
   return srcEncoding.getMaxPhase() > 1;
 }
@@ -326,14 +132,14 @@ bool hasSwizzleEnabled(const SharedEncodingAttr &srcEncoding) {
 // instruction
 // @param waveId wave id for the "non K" axis
 // @param laneId lane id in warp [0..63]
-// @param warpsPerGroup number of warps per horizontal axis
+// @param warpsPerBlock number of warps per horizontal axis
 // @param numOfElems number of elements accessed by threads per repetition
 // @param reps number of instructions repretition to fully cover dot operand
 // @param cSwizzleOffset
 llvm::SmallVector<Value>
 fastPathComputeOffsets(ConversionPatternRewriter &rewriter, Location loc,
                        const ArrayRef<int64_t> &elemsPerInstr, Value waveId,
-                       Value laneId, int warpsPerGroup, int numOfElems,
+                       Value laneId, int warpsPerBlock, int numOfElems,
                        ArrayRef<int64_t> reps, Value cSwizzleOffset) {
   auto numK = reps[0];
   auto numN = reps[1];
@@ -341,13 +147,13 @@ fastPathComputeOffsets(ConversionPatternRewriter &rewriter, Location loc,
 
   auto iKDim = elemsPerInstr[0];
   auto iNonKDim = elemsPerInstr[1];
-  int lineSize = warpsPerGroup * iNonKDim * numN;
+  int lineSize = warpsPerBlock * iNonKDim * numN;
   Value _nonKDim = i32_val(iNonKDim);
   Value waveOffset = mul(waveId, i32_val(iNonKDim));
   Value colOffset = urem(laneId, _nonKDim);
 
   for (int block = 0; block < numN; ++block) {
-    Value blockOffset = i32_val(block * iNonKDim * warpsPerGroup);
+    Value blockOffset = i32_val(block * iNonKDim * warpsPerBlock);
     for (int tile = 0; tile < numK; ++tile) {
       Value tileOffset = i32_val(tile * iKDim * lineSize);
       for (int elem = 0; elem < numOfElems; ++elem) {
@@ -393,6 +199,41 @@ bool isKMajor(::llvm::ArrayRef<unsigned> order, int opIdx) {
     return false;
 }
 
+/**
+ * @brief test if swizzle pattern is compatible with "normal" path of offset
+ * computation
+ *
+ * This function checks that swizzle pattern fits into one warp block
+ * and block size is a multiple of swizzle size along non-K dimension
+ *
+ * @param sharedLayout
+ * @param opIdx operand id 0 or 1
+ * @param shape tensor shape
+ * @param mfmaInstrNonK size of one instruction along non-k Dim (tile size)
+ * @param warpsPerBlockNonK number of warps along non-k Dim
+ * @return bool
+ */
+bool isSwizzlePatternNormalPathCompatible(const SharedEncodingAttr sharedLayout,
+                                          int opIdx, ArrayRef<int64_t> shape,
+                                          unsigned mfmaInstrNonK,
+                                          unsigned warpsPerBlockNonK) {
+  auto order = sharedLayout.getOrder();
+  auto rank = shape.size();
+  const auto swizzleFastDimSize =
+      sharedLayout.getMaxPhase() * sharedLayout.getVec();
+  const auto swizzleSlowDimSize =
+      sharedLayout.getMaxPhase() * sharedLayout.getPerPhase();
+  const auto swizzlePatternSizeK =
+      isKMajor(order, opIdx) ? swizzleFastDimSize : swizzleSlowDimSize;
+  const auto swizzlePatternSizeNonK =
+      !isKMajor(order, opIdx) ? swizzleFastDimSize : swizzleSlowDimSize;
+
+  const auto blockSizeK = opIdx == 0 ? shape[rank - 1] : shape[rank - 2];
+  const auto blockSizeNonK = mfmaInstrNonK * warpsPerBlockNonK;
+  return blockSizeK % swizzlePatternSizeK == 0 &&
+         blockSizeNonK % swizzlePatternSizeNonK == 0;
+}
+
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor, DotOperandEncodingAttr encoding,
                     const SharedMemoryObject &smemObj,
@@ -431,8 +272,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   Value lane = urem(thread, waveSize);
 
   Value spatialWaveId =
-      getWaveIdInBlock(rewriter, loc, linearWaveId, warpsPerCTA, mfmaInstrNonK,
-                       shape[nonKDimIdx], nonKDimIdx);
+      AMD::getWarpIdInBlock(rewriter, loc, linearWaveId, warpsPerCTA,
+                            mfmaInstrNonK, shape[nonKDimIdx], nonKDimIdx);
   // number of duplicates of elements in wave
   // In case of 64x4 x 4x4 multiplication, 4x4 B operand is duplicated 16 times
   int numSubBlocks = 1;
@@ -442,7 +283,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   assert(numOfElems >= 1);
 
   unsigned int maxNumWarps = shape[nonKDimIdx] / mfmaInstrNonK;
-  int warpsPerGroupNonK = std::min(warpsPerCTA[nonKDimIdx], maxNumWarps);
+  int warpsPerBlockNonK = std::min(warpsPerCTA[nonKDimIdx], maxNumWarps);
   elemTy = typeConverter->convertType(elemTy);
 
   SmallVector<Value> loadedValues;
@@ -460,7 +301,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
         SmallVector<int64_t> elemsPerInstr{mfmaInstrK, mfmaInstrNonK};
         SmallVector<int64_t> reps{numReps[1], numReps[0]};
         offsets = fastPathComputeOffsets(rewriter, loc, elemsPerInstr,
-                                         spatialWaveId, lane, warpsPerGroupNonK,
+                                         spatialWaveId, lane, warpsPerBlockNonK,
                                          numOfElems, reps, cSwizzleOffset);
       } else {
         llvm_unreachable(
@@ -472,7 +313,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
             "col major operand B should be handled in the normal path");
       } else {
         offsets = fastPathComputeOffsets(rewriter, loc, elemsPerInstr,
-                                         spatialWaveId, lane, warpsPerGroupNonK,
+                                         spatialWaveId, lane, warpsPerBlockNonK,
                                          numOfElems, numReps, cSwizzleOffset);
       }
     }
@@ -484,60 +325,46 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     //   performant case
     //   2. k-major + swizzling is disabled <-- for testing purpose only
     //   3. non k-major + swizzling is enabled <-- for testing purpose only
-    //
-    // In this path, it requires a 2-step method to compute the offsets.
+    assert(isSwizzlePatternNormalPathCompatible(
+        sharedLayout, opIdx, shape, mfmaInstrNonK, warpsPerBlockNonK));
     if (opIdx == 0) {
-      offsets = computeOffsetsAType(
-          rewriter, loc, elemsPerInstr, spatialWaveId, lane, warpsPerGroupNonK,
-          numOfElems, numReps, smemObj, sharedLayout, mDim, mfmaInstrK);
+      offsets = AMD::computeOffsetsAType(
+          rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,
+          spatialWaveId, lane, warpsPerBlockNonK, numOfElems, numReps, smemObj,
+          sharedLayout, mDim, mfmaInstrK);
     } else {
       assert(opIdx == 1);
-      offsets = computeOffsetsBType(
-          rewriter, loc, elemsPerInstr, spatialWaveId, lane, warpsPerGroupNonK,
-          numOfElems, numReps, smemObj, sharedLayout, nDim, mfmaInstrK);
+      offsets = AMD::computeOffsetsBType(
+          rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,
+          spatialWaveId, lane, warpsPerBlockNonK, numOfElems, numReps, smemObj,
+          sharedLayout, nDim, mfmaInstrK);
     }
-    smemBase = computeBasePtr(rewriter, loc, smemObj);
+    smemBase = AMD::computeBasePtr(rewriter, loc, smemObj);
   }
 
   Type resElemTy = typeConverter->convertType(elemTy);
   Type smemPtrTy = ptr_ty(rewriter.getContext(), 3);
 
-  int loadsPerThread = offsets.size() / numRepK / (isFastPath ? numRepNonK : 1);
+  int loadsPerThread = offsets.size() / numRepK / numRepNonK;
   int elemsPerLoad = numOfElems / loadsPerThread;
   assert(numOfElems % loadsPerThread == 0);
 
   for (int nonK = 0; nonK < numRepNonK; ++nonK) {
-    int blockNonKOffset = nonK * mfmaInstrNonK * warpsPerGroupNonK;
-    Value offAdjust = i32_val(blockNonKOffset * shape[order[0]]);
     for (int k = 0; k < numRepK; ++k) {
       auto vecTy = vec_ty(resElemTy, numOfElems);
       Value valVec = undef(vecTy);
       for (unsigned loadId = 0; loadId < loadsPerThread; ++loadId) {
         auto loadVecTy = vec_ty(elemTy, elemsPerLoad);
         Value loadOffset;
-        if (isFastPath)
-          loadOffset = offsets[nonK * loadsPerThread * numRepK +
-                               k * loadsPerThread + loadId];
-        else
-          // In the normal path, we only computed the offsets of elements
-          // in the first wave-block. Therefore, we update the offsets
-          // of elements in later wave-blocks by adding a constant stride
-          loadOffset = add(offAdjust, offsets[k * loadsPerThread + loadId]);
+        loadOffset = offsets[nonK * loadsPerThread * numRepK +
+                             k * loadsPerThread + loadId];
         Value loadAddress = gep(smemPtrTy, elemTy, smemBase, loadOffset);
         Value loadedValue = load(loadVecTy, loadAddress);
-        if (loadsPerThread > 1) {
-          for (int elemId = 0; elemId < elemsPerLoad; ++elemId) {
-            Value elemVal =
-                extract_element(elemTy, loadedValue, i32_val(elemId));
-            elemVal = bitcast(elemVal, resElemTy);
-            valVec = insert_element(vecTy, valVec, elemVal,
-                                    i32_val(loadId * elemsPerLoad + elemId));
-          }
-        } else {
-          valVec = loadedValue;
+        for (int elemId = 0; elemId < elemsPerLoad; ++elemId) {
+          Value elemVal = extract_element(elemTy, loadedValue, i32_val(elemId));
+          loadedValues.push_back(elemVal);      
         }
       }
-      loadedValues.push_back(valVec);
     }
   }
 

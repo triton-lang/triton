@@ -1,17 +1,19 @@
 add_triton_library(TritonAMDGPUToLLVM
+    ConvertLayoutOpToLLVM/SharedToDotOperandHelper.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandMFMA.cpp
+    ConvertLayoutOpToLLVM/SharedToDotOperandWMMA.cpp
     ConvertLayoutOpToLLVM.cpp
     DotOpToLLVM/MFMA.cpp
     DotOpToLLVM/WMMA.cpp
     DotOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
-    TritonGPUToLLVM.cpp
     GCNAsmFormat.cpp
-    TritonGPUToLLVMPass.cpp
+    TritonGPUToLLVM.cpp
     Utility.cpp
     TargetInfo.cpp
     DecomposeUnsupportedConversions.cpp
+    SPMDOpToLLVM.cpp
 
     DEPENDS
     TritonAMDGPUConversionPassIncGen
@@ -21,4 +23,3 @@ add_triton_library(TritonAMDGPUToLLVM
 )
 
 target_compile_definitions(TritonAMDGPUToLLVM PUBLIC USE_ROCM)
-

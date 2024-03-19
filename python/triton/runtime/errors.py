@@ -1,12 +1,25 @@
-class OutOfResources(Exception):
+from ..errors import TritonError
+from typing import Optional
+
+
+class InterpreterError(TritonError):
+
+    def __init__(self, error_message: Optional[str] = None):
+        self.error_message = error_message
+
+    def __str__(self) -> str:
+        return self.error_message or ""
+
+
+class OutOfResources(TritonError):
 
     def __init__(self, required, limit, name):
-        self.message = f"out of resource: {name}, " f"Required: {required}, " f"Hardware limit: {limit}"
-        self.message += ". Reducing block sizes or `num_stages` may help."
         self.required = required
         self.limit = limit
         self.name = name
-        super().__init__(self.message)
+
+    def __str__(self) -> str:
+        return f"out of resource: {self.name}, Required: {self.required}, Hardware limit: {self.limit}. Reducing block sizes or `num_stages` may help."
 
     def __reduce__(self):
         # this is necessary to make CompilationError picklable

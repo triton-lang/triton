@@ -35,14 +35,14 @@ def CombineDotAddFRevPattern : Pat<
          (Constraint<CPred<"::llvm::cast<::mlir::IntegerAttr>($0).getInt() == 0">> $maxNumImpreciseAcc),
          (Constraint<CPred<"res->hasOneUse()">, "dot result has a single use">)]>;
 
-// TODO: this fails for addptr(addptr(ptr, i32), i64)
-// Commented out until fixed
 // addptr(addptr(%ptr, %idx0), %idx1) => addptr(%ptr, AddI(%idx0, %idx1))
 //   Note: leave (sub %c0, %c0) canceling to ArithDialect
 //         (ref: ArithCanonicalization.td)
-// def CombineAddPtrPattern : Pat<
-//         (TT_AddPtrOp (TT_AddPtrOp $ptr, $idx0), $idx1),
-//         (TT_AddPtrOp $ptr, (Arith_AddIOp $idx0, $idx1))>;
+defvar DefOverflow = ConstantEnumCase<Arith_IntegerOverflowAttr, "none">;
+def CombineAddPtrPattern : Pat<
+        (TT_AddPtrOp (TT_AddPtrOp $ptr, $idx0), $idx1),
+        (TT_AddPtrOp $ptr, (Arith_AddIOp $idx0, $idx1, DefOverflow)),
+        [(Constraint<CPred<"isAddPtrOffsetCombinable($0, $1)">> $idx0, $idx1)]>;
 
 // broadcast(cst) => cst
 def getConstantValue : NativeCodeCall<"getConstantValue($_builder, $0, $1)">;

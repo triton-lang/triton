@@ -1,9 +1,9 @@
 #include "TargetInfo.h"
+#include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
-#include "nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 using namespace mlir;
@@ -209,6 +209,10 @@ Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
   return LLVM::NVIDIA::shuffleIdx(loc, rewriter, val, i);
 }
 
+Value TargetInfo::programId(Location loc, ConversionPatternRewriter &rewriter,
+                            ModuleOp moduleOp, int axis) const {
+  return LLVM::NVIDIA::llGetPid(loc, rewriter, moduleOp, axis);
+}
 bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce) const {

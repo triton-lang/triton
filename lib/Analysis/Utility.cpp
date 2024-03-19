@@ -472,6 +472,54 @@ bool supportMFMA(triton::DotOp op) {
   return true;
 }
 
+static bool supportWMMAGranularity(int m, int n, int k) {
+  return m % 16 == 0 && n % 16 == 0 && k % 16 == 0;
+}
+
+static bool supportWMMATypes(Type a, Type b, Type c, Type d) {
+  if (a != b || c != d)
+    return false;
+  if (a.isIntOrIndex()) {
+    if (!c.isIntOrIndex())
+      return false;
+    auto aWidth = a.getIntOrFloatBitWidth();
+    auto cWidth = c.getIntOrFloatBitWidth();
+    bool aValid = a.isUnsignedInteger() && (aWidth == 4 || aWidth == 8);
+    bool cValid = c.isSignedInteger() && cWidth == 32;
+    return aValid && cValid;
+  } else if (a.isa<FloatType>()) {
+    if (a.isBF16())
+      return c.isBF16() || c.isF32();
+    if (a.isF16())
+      return c.isF16() || c.isF32();
+  }
+  return false;
+}
+
+bool supportWMMA(triton::DotOp op) {
+  auto aTy = op.getA().getType().cast<RankedTensorType>();
+  auto bTy = op.getB().getType().cast<RankedTensorType>();
+  auto cTy = op.getC().getType().cast<RankedTensorType>();
+  auto dTy = op.getResult().getType().cast<RankedTensorType>();
+
+  auto aElemTy = aTy.getElementType();
+  auto bElemTy = bTy.getElementType();
+  auto cElemTy = cTy.getElementType();
+  auto dElemTy = dTy.getElementType();
+
+  if (!supportWMMATypes(aElemTy, bElemTy, cElemTy, dElemTy))
+    return false;
+
+  auto aShape = aTy.getShape();
+  auto bShape = bTy.getShape();
+
+  assert(aShape[1] == bShape[0]);
+  if (!supportWMMAGranularity(aShape[0], bShape[1], aShape[1]))
+    return false;
+
+  return true;
+}
+
 bool supportMMA(triton::DotOp op, int version) {
   // Refer to mma section for the data type supported by Volta and Hopper
   // Tensor Core in
@@ -562,10 +610,11 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
   auto dstLayout = dstTy.getEncoding();
   auto mmaLayout = srcLayout.cast<NvidiaMmaEncodingAttr>();
   auto dotOperandLayout = dstLayout.cast<DotOperandEncodingAttr>();
-  auto ans =
-      mmaLayout.getVersionMajor() == 3 && dotOperandLayout.getOpIdx() == 0 &&
-      isMmaToMmaShortcut(dotOperandLayout.getParent(), srcLayout) &&
-      (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16());
+  int elementTypeSize = srcTy.getElementType().getIntOrFloatBitWidth();
+  auto ans = mmaLayout.getVersionMajor() == 3 &&
+             dotOperandLayout.getOpIdx() == 0 &&
+             isMmaToMmaShortcut(dotOperandLayout.getParent(), srcLayout) &&
+             (elementTypeSize == 16 || elementTypeSize == 8);
   return ans;
 }
 

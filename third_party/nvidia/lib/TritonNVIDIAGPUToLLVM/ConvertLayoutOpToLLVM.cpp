@@ -1,10 +1,9 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
-
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Analysis/Allocation.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using mlir::isLayoutMmaV1;
 using ::mlir::LLVM::getMultiDimOffset;
@@ -168,21 +167,29 @@ private:
       rewriter.replaceOp(op, adaptor.getSrc());
       return success();
     }
-    // get source values
-    auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    auto dstMmaLayout = dstTy.getEncoding().cast<NvidiaMmaEncodingAttr>();
+    auto srcMmaLayout = srcTy.getEncoding().cast<NvidiaMmaEncodingAttr>();
+    assert(dstMmaLayout.isHopper() && srcMmaLayout.isHopper() &&
+           "only MMAV3 layout is supported");
+    auto dstShape = dstTy.getShape();
+    auto shapePerCTA = getShapePerCTA(dstMmaLayout, dstShape);
+    ArrayRef<unsigned int> dstInstrShape = dstMmaLayout.getInstrShape();
+    ArrayRef<unsigned int> srcInstrShape = srcMmaLayout.getInstrShape();
     SmallVector<Value> retVals;
-    SmallVector<unsigned> dstElementPerThread =
-        triton::gpu::getElemsPerThread(dstTy);
-    SmallVector<unsigned> srcElementPerThread =
-        triton::gpu::getElemsPerThread(srcTy);
-    for (unsigned j = 0; j < dstElementPerThread[0]; j++) {
-      for (unsigned i = 0; i < dstElementPerThread[1]; i++) {
-        if (i >= srcElementPerThread[1] || j >= srcElementPerThread[0]) {
-          retVals.push_back(undef(vals[0].getType()));
-          continue;
+    unsigned numBlockM =
+        ceil<unsigned>(shapePerCTA[0], getShapePerCTATile(dstMmaLayout)[0]);
+    unsigned numBlockN =
+        ceil<unsigned>(shapePerCTA[1], getShapePerCTATile(dstMmaLayout)[1]);
+    // Remap the values based on MMAV3 layout, there may be duplicated values in
+    // either the source or destination.
+    auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    for (unsigned i = 0; i < numBlockM; i++) {
+      for (unsigned j = 0; j < numBlockN; j++) {
+        for (unsigned k = 0; k < dstInstrShape[1] / 2; k++) {
+          int index = i * numBlockN * (srcInstrShape[1] / 2) + j +
+                      (k % (srcInstrShape[1] / 2));
+          retVals.push_back(vals[index]);
         }
-        unsigned index = i + j * srcElementPerThread[1];
-        retVals.push_back(vals[index]);
       }
     }
     assert(retVals.size() == triton::gpu::getTotalElemsPerThread(dstTy));
@@ -584,6 +591,83 @@ private:
     return success();
   }
 
+  // Convert from accumulator MMA layout to 8bit dot operand layout.
+  // The conversion logic is taken from:
+  // https://github.com/ColfaxResearch/cutlass-kernels/blob/a9de6446c1c0415c926025cea284210c799b11f8/src/fmha-pipeline/reg2reg.h#L45
+  void
+  convertMMAV3To8BitsDotOperand(triton::gpu::ConvertLayoutOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    auto dstTy = op.getType();
+    auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    SmallVector<Value> retVals;
+    for (int i = 0; i < vals.size(); i += 8) {
+      Value upper = undef(vec_ty(i8_ty, 4));
+      for (int j = 0; j < 4; j++) {
+        upper =
+            insert_element(vec_ty(i8_ty, 4), upper, vals[i + j], i32_val(j));
+      }
+      upper = bitcast(upper, i32_ty);
+      Value lower = undef(vec_ty(i8_ty, 4));
+      for (int j = 0; j < 4; j++) {
+        lower = insert_element(vec_ty(i8_ty, 4), lower, vals[i + 4 + j],
+                               i32_val(j));
+      }
+      lower = bitcast(lower, i32_ty);
+
+      Value threadIdMod4 = urem(getThreadId(rewriter, loc), i32_val(4));
+      Value cnd = or_(icmp_eq(threadIdMod4, i32_val(0)),
+                      icmp_eq(threadIdMod4, i32_val(3)));
+      Value selectorEx0 = select(cnd, i32_val(0x3210), i32_val(0x7654));
+      Value selectorEx1 = select(cnd, i32_val(0x7654), i32_val(0x3210));
+      Value selectorEx4 = select(cnd, i32_val(0x5410), i32_val(0x1054));
+      Value selectorEx5 = select(cnd, i32_val(0x7632), i32_val(0x3276));
+
+      Value isOne = icmp_eq(threadIdMod4, i32_val(1));
+      Value isTwo = icmp_eq(threadIdMod4, i32_val(2));
+      Value isThree = icmp_eq(threadIdMod4, i32_val(3));
+      Value upperIdx = i32_val(0);
+      upperIdx = select(isOne, i32_val(3), upperIdx);
+      upperIdx = select(isTwo, i32_val(1), upperIdx);
+      upperIdx = select(isThree, i32_val(2), upperIdx);
+
+      Value lowerIdx = i32_val(1);
+      lowerIdx = select(isOne, i32_val(2), lowerIdx);
+      lowerIdx = select(isTwo, i32_val(0), lowerIdx);
+      lowerIdx = select(isThree, i32_val(3), lowerIdx);
+
+      Value upper0 =
+          LLVM::NVIDIA::permute(loc, rewriter, upper, lower, selectorEx0);
+      Value lower0 =
+          LLVM::NVIDIA::permute(loc, rewriter, upper, lower, selectorEx1);
+      Value mask = i32_val(0xFFFFFFFF);
+      // Set clamp tp shuffle only within 4 lanes.
+      Value clamp = i32_val(0x1C1F);
+      upper0 =
+          rewriter.create<NVVM::ShflOp>(loc, i32_ty, mask, upper0, upperIdx,
+                                        clamp, NVVM::ShflKind::idx, UnitAttr());
+      lower0 =
+          rewriter.create<NVVM::ShflOp>(loc, i32_ty, mask, lower0, lowerIdx,
+                                        clamp, NVVM::ShflKind::idx, UnitAttr());
+      Value upper1 =
+          LLVM::NVIDIA::permute(loc, rewriter, upper0, lower0, selectorEx4);
+      Value vecVal = bitcast(upper1, vec_ty(i8_ty, 4));
+      for (int i = 0; i < 4; i++) {
+        retVals.push_back(extract_element(i8_ty, vecVal, i32_val(i)));
+      }
+      Value lower1 =
+          LLVM::NVIDIA::permute(loc, rewriter, upper0, lower0, selectorEx5);
+      vecVal = bitcast(lower1, vec_ty(i8_ty, 4));
+      for (int i = 0; i < 4; i++) {
+        retVals.push_back(extract_element(i8_ty, vecVal, i32_val(i)));
+      }
+    }
+    Value result =
+        packLLElements(loc, getTypeConverter(), retVals, rewriter, dstTy);
+    rewriter.replaceOp(op, result);
+  }
+
   // mma -> dot_operand
   LogicalResult
   lowerMmaToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
@@ -592,7 +676,13 @@ private:
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
     if (matchMmaV3AndDotOperandLayout(srcTy, dstTy)) {
-      rewriter.replaceOp(op, adaptor.getSrc());
+      if (srcTy.getElementType().getIntOrFloatBitWidth() == 16) {
+        rewriter.replaceOp(op, adaptor.getSrc());
+        return success();
+      }
+      assert(srcTy.getElementType().getIntOrFloatBitWidth() == 8 &&
+             "Unsupported type size.");
+      convertMMAV3To8BitsDotOperand(op, adaptor, rewriter);
       return success();
     }
 

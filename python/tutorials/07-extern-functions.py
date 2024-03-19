@@ -62,8 +62,7 @@ print(f'The maximum difference between torch and triton is '
 # We can also customize the libdevice library path by passing the path to the `libdevice` library to the `asin` kernel.
 
 output_triton = torch.empty_like(x)
-asin_kernel[grid](x, output_triton, n_elements, BLOCK_SIZE=1024,
-                  extern_libs={'libdevice': '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'})
+asin_kernel[grid](x, output_triton, n_elements, BLOCK_SIZE=1024)
 print(output_torch)
 print(output_triton)
 print(f'The maximum difference between torch and triton is '

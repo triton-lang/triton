@@ -51,6 +51,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
 
 #ifdef USE_ROCM
   mlir::triton::registerConvertTritonAMDGPUToLLVM();
+  mlir::triton::registerDecomposeUnsupportedAMDConversionsPass();
 
   // TODO: Uncomment when fixed undefined symbols and
   // remove section below

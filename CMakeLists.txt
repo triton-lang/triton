@@ -255,6 +255,12 @@ if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
   target_link_libraries(triton PRIVATE ${PYTHON_LDFLAGS})
 endif()
 
+if(NOT TRITON_BUILD_PYTHON_MODULE)
+  foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
+    add_subdirectory(third_party/${CODEGEN_BACKEND})
+  endforeach()
+endif()
+
 add_subdirectory(bin)
 add_subdirectory(test)
 add_subdirectory(unittest)

@@ -297,8 +297,6 @@ def clamp(x: tl.tensor, min: tl.tensor, max: tl.tensor, propagate_nan: tl.Propag
 
     dtype = x.dtype
     if dtype.is_floating():
-        if propagate_nan == tl.PropagateNan.ALL:
-            return tl.tensor(builder.create_clampf(x.handle, min.handle, max.handle, propagate_nan), x.type)
         return tl.tensor(builder.create_clampf(x.handle, min.handle, max.handle, propagate_nan), x.type)
     else:
         assert False, f"Unexpected dtype {dtype}. Only floating point clamp is supported"
@@ -389,8 +387,10 @@ def minus(input: tl.tensor, builder: ir.builder) -> tl.tensor:
     input_sca_ty = input.type.scalar
     if input_sca_ty.is_ptr():
         raise ValueError("wrong type argument to unary minus (" + input_sca_ty.__repr__() + ")")
-    _0 = tl.tensor(builder.get_null_value(input_sca_ty.to_ir(builder)), input_sca_ty)
-    return sub(_0, input, builder)
+    if input_sca_ty.is_int():
+        _0 = tl.tensor(builder.get_null_value(input_sca_ty.to_ir(builder)), input_sca_ty)
+        return sub(_0, input, builder)
+    return tl.tensor(builder.create_fneg(input.handle), input.type)
 
 
 def invert(input: tl.tensor, builder: tl.tensor) -> tl.tensor:
@@ -1123,6 +1123,9 @@ def store(ptr: tl.tensor, val: tl.tensor, mask: Optional[tl.tensor], boundary_ch
     cache = _str_to_store_cache_modifier(cache_modifier)
     eviction = _str_to_eviction_policy(eviction_policy)
 
+    if ptr.type.is_const() or ptr.type.scalar.is_const():
+        raise ValueError("Cannot store to a constant pointer")
+
     if ptr.type.is_ptr() and ptr.type.element_ty.is_block():
         # Store by a block pointer: `pointer_type<block_type<>>`
         return _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builder)
@@ -1149,6 +1152,8 @@ def atom_red_typechecking_impl(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, 
                                builder: ir.builder) -> Tuple[tl.tensor, tl.tensor, tl.tensor]:
     if not ptr.type.scalar.is_ptr():
         raise ValueError("Pointer argument of store instruction is " + ptr.type.__repr__())
+    if ptr.type.is_const() or ptr.type.element_ty.is_const():
+        raise ValueError("Cannot store to a constant pointer")
     element_ty = ptr.type.scalar.element_ty
     if element_ty is tl.float16 and op != 'add':
         raise ValueError("atomic_" + op + " does not support fp16")

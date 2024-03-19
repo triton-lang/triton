@@ -7,6 +7,7 @@
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
+using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
@@ -18,6 +19,14 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread);
 } // namespace SharedToDotOperandMFMA
+
+namespace SharedToDotOperandWMMA {
+Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
+                    Location loc, Value tensor,
+                    DotOperandEncodingAttr bEncoding,
+                    const SharedMemoryObject &smemObj,
+                    const LLVMTypeConverter *typeConverter, Value thread);
+} // namespace SharedToDotOperandWMMA
 
 namespace {
 struct LocalLoadOpConversion
@@ -36,7 +45,7 @@ public:
     if (dstLayout.isa<DotOperandEncodingAttr>() &&
         dstLayout.cast<DotOperandEncodingAttr>()
             .getParent()
-            .isa<AMDMfmaEncodingAttr>()) {
+            .isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>()) {
       return lowerSharedToDotOperand(op, adaptor, getTypeConverter(), rewriter);
     }
     return failure();
@@ -44,11 +53,10 @@ public:
 
 private:
   // shared -> dot_operand if the result layout is mfma
-  Value lowerSharedToDotOperandMFMA(
+  Value lowerSharedToDotOperandMMA(
       triton::gpu::LocalLoadOp op, triton::gpu::LocalLoadOpAdaptor adaptor,
       const LLVMTypeConverter *typeConverter,
       ConversionPatternRewriter &rewriter,
-      const AMDMfmaEncodingAttr &mfmaLayout,
       const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) const {
     auto loc = op.getLoc();
     Value src = op.getSrc();
@@ -59,18 +67,22 @@ private:
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
     Value res;
-
-    if (!isOuter) {
-      res = SharedToDotOperandMFMA::convertLayout(
-          dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
-          smemObj, typeConverter, tid_val());
+    auto dopOpParent = dotOperandLayout.getParent();
+    if (!isOuter &&
+        dopOpParent.isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>()) {
+      auto sharedToDotConvert = dopOpParent.isa<AMDMfmaEncodingAttr>()
+                                    ? SharedToDotOperandMFMA::convertLayout
+                                    : SharedToDotOperandWMMA::convertLayout;
+      res = sharedToDotConvert(dotOperandLayout.getOpIdx(), rewriter, loc, src,
+                               dotOperandLayout, smemObj, typeConverter,
+                               tid_val());
     } else {
       assert(false && "unsupported layout found");
     }
     return res;
   }
 
-  // shared -> mfma_operand
+  // shared -> matrix_core_dot_operand
   LogicalResult
   lowerSharedToDotOperand(triton::gpu::LocalLoadOp op,
                           triton::gpu::LocalLoadOpAdaptor adaptor,
@@ -92,10 +104,8 @@ private:
     else // $b
       K = dstTensorTy.getShape()[sharedLayout.getOrder()[1]];
     isOuter = K == 1;
-    auto mfmaLayout = dotOperandLayout.getParent().cast<AMDMfmaEncodingAttr>();
-    Value res =
-        lowerSharedToDotOperandMFMA(op, adaptor, typeConverter, rewriter,
-                                    mfmaLayout, dotOperandLayout, isOuter);
+    Value res = lowerSharedToDotOperandMMA(op, adaptor, typeConverter, rewriter,
+                                           dotOperandLayout, isOuter);
     rewriter.replaceOp(op, res);
     return success();
   }

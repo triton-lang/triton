@@ -68,20 +68,20 @@ class FileCacheManager(CacheManager):
     def _make_path(self, filename) -> str:
         return os.path.join(self.cache_dir, filename)
 
-    def _has_file(self, filename) -> bool:
+    def has_file(self, filename) -> bool:
         if not self.cache_dir:
             raise RuntimeError("Could not create or locate cache dir")
         return os.path.exists(self._make_path(filename))
 
     def get_file(self, filename) -> Optional[str]:
-        if self._has_file(filename):
+        if self.has_file(filename):
             return self._make_path(filename)
         else:
             return None
 
     def get_group(self, filename: str) -> Optional[Dict[str, str]]:
         grp_filename = f"__grp__{filename}"
-        if not self._has_file(grp_filename):
+        if not self.has_file(grp_filename):
             return None
         grp_filepath = self._make_path(grp_filename)
         with open(grp_filepath) as f:

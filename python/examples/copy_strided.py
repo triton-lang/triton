@@ -1,5 +1,6 @@
 import triton
 import triton.language as tl
+import triton.compiler as tc
 
 
 # triton kernel
@@ -14,5 +15,11 @@ def kernel(X, stride_xm,  #
     tl.store(Zs, tl.load(Xs))
 
 
-ret = triton.compile(kernel, signature="*fp32,i32,*fp32,i32", constants={"BLOCK_M": 64, "BLOCK_N": 64})
+src = tc.ASTSource(
+    fn=kernel,
+    constants={"BLOCK_M": 64, "BLOCK_N": 64},
+    signature="*fp32,i32,*fp32,i32",
+)
+
+ret = triton.compile(src)
 print(ret.asm["ttgir"])

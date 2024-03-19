@@ -1355,6 +1355,29 @@ struct FSubOpConversion
   }
 };
 
+struct FNegOpConversion
+  : ElementwiseOpConversionBase<mlir::arith::NegFOp, FNegOpConversion> {
+  using Base =
+      ElementwiseOpConversionBase<mlir::arith::NegFOp, FNegOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(mlir::arith::NegFOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    auto operandTy = getElementType(op.getOperand());
+    if (operandTy.isBF16()) {
+      auto v0 =
+          FpToFpOpConversion::convertBf16ToFp32(loc, rewriter, operands[0][0]);
+      auto result = rewriter.create<LLVM::FNegOp>(loc, f32_ty, v0);
+      return {FpToFpOpConversion::convertFp32ToBf16(loc, rewriter, result)};
+    } else {
+      return {rewriter.create<LLVM::FNegOp>(loc, elemTy, operands[0][0])};
+    }
+  }
+};
+
 #ifdef USE_ROCM
 static SmallVector<Value> S8_to_Bf16(Location loc,
                                      ConversionPatternRewriter &rewriter,
@@ -1539,6 +1562,7 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_BINARY_OP(arith::MaxSIOp, LLVM::SMaxOp) // smax
   POPULATE_BINARY_OP(arith::MinUIOp, LLVM::UMinOp) // umin
   POPULATE_BINARY_OP(arith::MaxUIOp, LLVM::UMaxOp) // umax
+  POPULATE_BINARY_OP(triton::PreciseDivFOp, LLVM::FDivOp)
 #undef POPULATE_BINARY_OP
 
 #define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
@@ -1561,6 +1585,7 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(triton::BitcastOp, LLVM::BitcastOp)
   POPULATE_UNARY_OP(triton::IntToPtrOp, LLVM::IntToPtrOp)
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
+  POPULATE_UNARY_OP(triton::PreciseSqrtOp, LLVM::SqrtOp)
 #undef POPULATE_UNARY_OP
 
   patterns.add<ElementwiseOpConversion<math::FmaOp, LLVM::FMAOp>>(
@@ -1570,6 +1595,7 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<FSubOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FAddOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FMulOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<FNegOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
   patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis, benefit);

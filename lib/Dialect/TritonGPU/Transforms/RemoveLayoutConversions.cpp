@@ -151,6 +151,7 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
   SmallVector<Value> queue = {op->getResult(0)};
   SetVector<Operation *> forwardSlice;
   llvm::SmallDenseSet<Value> seen;
+  bool isMMAV3 = encoding.cast<NvidiaMmaEncodingAttr>().getVersionMajor() == 3;
   while (!queue.empty()) {
     Value currentValue = queue.back();
     queue.pop_back();
@@ -164,6 +165,8 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
         if (dstEncoding.isa<DotOperandEncodingAttr>())
           return encoding.cast<NvidiaMmaEncodingAttr>().getVersionMajor() > 1;
       }
+      if (isMMAV3 && isa<LocalAllocOp>(op))
+        return true;
       auto yield = dyn_cast<scf::YieldOp>(op);
       if (!yield)
         continue;
@@ -302,8 +305,8 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     }
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
-        isa<ReduceOp, ExpandDimsOp, ReshapeOp, JoinOp, SplitOp, ConvertLayoutOp,
-            nvidia_gpu::DotWaitOp>(user)) {
+        isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
+            ConvertLayoutOp, nvidia_gpu::DotWaitOp>(user)) {
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
@@ -721,12 +724,17 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   }
   if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<OpTrait::Elementwise>() ||
-      isa<ReduceOp, ExpandDimsOp, ReshapeOp, JoinOp, SplitOp, ConvertLayoutOp,
-          nvidia_gpu::DotWaitOp>(op)) {
+      isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
+          ConvertLayoutOp, nvidia_gpu::DotWaitOp>(op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
-         llvm::zip(op->getResults(), newOp->getResults()))
+         llvm::zip(op->getResults(), newOp->getResults())) {
+      if (oldResult.getType() == newResult.getType()) {
+        oldResult.replaceAllUsesWith(newResult);
+        continue;
+      }
       map(oldResult, newResult);
+    }
     return newOp;
   }
   llvm::report_fatal_error("unexpected op in rewrite");

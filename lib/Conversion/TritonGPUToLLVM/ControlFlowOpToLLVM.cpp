@@ -1,5 +1,5 @@
-#include "PatternTritonGPUOpToLLVM.h"
-#include "Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace {
 
@@ -133,7 +133,7 @@ private:
 
 } // namespace
 
-void mlir::triton::NVIDIA::populateControlFlowOpToLLVMPattern(
+void mlir::triton::populateControlFlowOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<ReturnOpConversion>(typeConverter, benefit);

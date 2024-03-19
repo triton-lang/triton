@@ -26,7 +26,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     %cst = arith.constant dense<-0.000000e+00> : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
     %c128_i32 = arith.constant 128 : i32
     %1 = tt.get_program_id y : i32
-    %2 = tt.get_num_programs {axis = 1 : i32} : i32
+    %2 = tt.get_num_programs y : i32
     %12 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
     %19 = scf.for %arg3 = %1 to %11 step %2 iter_args(%arg4 = %cst) -> (tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>)  : i32 {
       %27 = arith.muli %arg3, %c128_i32 : i32
@@ -79,7 +79,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     %cst = arith.constant dense<0.000000e+00> : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
     %c128_i32 = arith.constant 128 : i32
     %1 = tt.get_program_id y : i32
-    %2 = tt.get_num_programs {axis = 1 : i32} : i32
+    %2 = tt.get_num_programs y : i32
     %12 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
     %19 = scf.for %arg3 = %1 to %11 step %2 iter_args(%arg4 = %cst) -> (tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>)  : i32 {
       %27 = arith.muli %arg3, %c128_i32 : i32
@@ -128,7 +128,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     %cst = arith.constant dense<0.000000e+00> : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #slice2d}>>
     %c128_i32 = arith.constant 128 : i32
     %1 = tt.get_program_id y : i32
-    %2 = tt.get_num_programs {axis = 1 : i32} : i32
+    %2 = tt.get_num_programs y : i32
     %12 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #slice2d}>>
     %19 = scf.for %arg3 = %1 to %11 step %2 iter_args(%arg4 = %cst) -> (tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #slice2d}>>)  : i32 {
       %27 = arith.muli %arg3, %c128_i32 : i32
@@ -177,7 +177,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     %cst = arith.constant dense<0.000000e+00> : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>
     %c128_i32 = arith.constant 128 : i32
     %1 = tt.get_program_id y : i32
-    %2 = tt.get_num_programs {axis = 1 : i32} : i32
+    %2 = tt.get_num_programs y : i32
     %12 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #mma}>>
     %19 = scf.for %arg3 = %1 to %11 step %2 iter_args(%arg4 = %cst) -> (tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>)  : i32 {
       %27 = arith.muli %arg3, %c128_i32 : i32
@@ -230,7 +230,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     %cst = arith.constant dense<0xFF800000> : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
     %c128_i32 = arith.constant 128 : i32
     %1 = tt.get_program_id y : i32
-    %2 = tt.get_num_programs {axis = 1 : i32} : i32
+    %2 = tt.get_num_programs y : i32
     %12 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
     %19 = scf.for %arg3 = %1 to %11 step %2 iter_args(%arg4 = %cst) -> (tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>)  : i32 {
       %27 = arith.muli %arg3, %c128_i32 : i32
@@ -284,7 +284,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     %cst = arith.constant dense<0.000000e+00> : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
     %c128_i32 = arith.constant 128 : i32
     %1 = tt.get_program_id y : i32
-    %2 = tt.get_num_programs {axis = 1 : i32} : i32
+    %2 = tt.get_num_programs y : i32
     %12 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
     %19 = scf.for %arg3 = %1 to %11 step %2 iter_args(%arg4 = %cst) -> (tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>)  : i32 {
       %27 = arith.muli %arg3, %c128_i32 : i32
@@ -337,7 +337,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     %cst = arith.constant dense<0x7F800000> : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
     %c128_i32 = arith.constant 128 : i32
     %1 = tt.get_program_id y : i32
-    %2 = tt.get_num_programs {axis = 1 : i32} : i32
+    %2 = tt.get_num_programs y : i32
     %12 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
     %19 = scf.for %arg3 = %1 to %11 step %2 iter_args(%arg4 = %cst) -> (tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>)  : i32 {
       %27 = arith.muli %arg3, %c128_i32 : i32
@@ -391,7 +391,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     %cst = arith.constant dense<0.000000e+00> : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
     %c128_i32 = arith.constant 128 : i32
     %1 = tt.get_program_id y : i32
-    %2 = tt.get_num_programs {axis = 1 : i32} : i32
+    %2 = tt.get_num_programs y : i32
     %12 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
     %19 = scf.for %arg3 = %1 to %11 step %2 iter_args(%arg4 = %cst) -> (tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>)  : i32 {
       %27 = arith.muli %arg3, %c128_i32 : i32
@@ -444,7 +444,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     %cst = arith.constant dense<1.000000e+00> : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
     %c128_i32 = arith.constant 128 : i32
     %1 = tt.get_program_id y : i32
-    %2 = tt.get_num_programs {axis = 1 : i32} : i32
+    %2 = tt.get_num_programs y : i32
     %12 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
     %19 = scf.for %arg3 = %1 to %11 step %2 iter_args(%arg4 = %cst) -> (tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>)  : i32 {
       %27 = arith.muli %arg3, %c128_i32 : i32
@@ -498,7 +498,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     %cst = arith.constant dense<0.000000e+00> : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
     %c128_i32 = arith.constant 128 : i32
     %1 = tt.get_program_id y : i32
-    %2 = tt.get_num_programs {axis = 1 : i32} : i32
+    %2 = tt.get_num_programs y : i32
     %12 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
     %19 = scf.for %arg3 = %1 to %11 step %2 iter_args(%arg4 = %cst) -> (tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>)  : i32 {
       %27 = arith.muli %arg3, %c128_i32 : i32
@@ -548,7 +548,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     %cst = arith.constant dense<0.000000e+00> : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
     %c128_i32 = arith.constant 128 : i32
     %1 = tt.get_program_id y : i32
-    %2 = tt.get_num_programs {axis = 1 : i32} : i32
+    %2 = tt.get_num_programs y : i32
     %12 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
     %19 = scf.for %arg3 = %1 to %11 step %2 iter_args(%arg4 = %cst) -> (tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>)  : i32 {
       %27 = arith.muli %arg3, %c128_i32 : i32
