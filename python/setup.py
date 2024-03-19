@@ -160,7 +160,8 @@ def open_url(url):
         'User-Agent': user_agent,
     }
     request = urllib.request.Request(url, None, headers)
-    return urllib.request.urlopen(request)
+    # Set timeout to 300 seconds to prevent the request from hanging forver
+    return urllib.request.urlopen(request, timeout=300)
 
 
 # ---- package data ---
