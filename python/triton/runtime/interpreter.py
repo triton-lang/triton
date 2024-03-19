@@ -478,27 +478,89 @@ def _patch_lang_tensor(tensor, builder):
     tensor.T = property(_get_transpose)
 
 
-def _patch_lang_core(lang, builder):
-    for name, member in inspect.getmembers(lang):
-        if tl.core.is_builtin(member):
-            _patch_attr(lang, name, member, builder)
-    # reduce is better off with a separate patch due to how
-    # the builder currently interfaces with custom functions
+def _patch_reduce_scan(lang):
+
+    def _check_axis(tensor, axis):
+        if axis is not None and axis >= len(tensor.shape):
+            raise ValueError(f"axis {axis} out of bounds for shape {tensor.shape}")
+
+    def _to_tensor(ret, dtype):
+        if hasattr(ret, "shape") and ret.shape:
+            ret_type = tl.block_type(dtype, ret.shape)
+        else:
+            ret = np.array([ret], dtype=_get_np_dtype(dtype))
+            ret_type = dtype
+        return tl.core.tensor(TensorHandle(ret, dtype), ret_type)
+
+    def _generic_reduce(input, axis, combine_fn, keep_dims):
+
+        def _check_axis_and_unravel(input, axis):
+            ret = []
+            if not isinstance(input, tuple):
+                input = (input, )
+            for data in input:
+                if isinstance(data, tl.core.tensor):
+                    if axis is not None:
+                        _check_axis(data, axis)
+                        ret.append(data)
+                    else:
+                        axis = 0
+                        ret.append(_to_tensor(data.handle.data.flatten(), data.dtype))
+            return tuple(ret), axis
+
+        original_input = input
+        original_axis = axis
+        input, axis = _check_axis_and_unravel(input, axis)
+        input_data = []
+        output_data = []
+        input_shape = None
+        output_shape = None
+        for arg in input:
+            if isinstance(arg, tl.core.tensor):
+                _check_axis(arg, axis)
+                input_shape = arg.handle.data.shape
+                input_data.append(arg.handle.data)
+                output_shape = input_shape[0:axis] + input_shape[axis + 1:]
+                output_data.append(np.zeros(output_shape, dtype=arg.handle.data.dtype))
+        if not input_shape:
+            raise ValueError("no tensors found in input")
+        # Reduce on axis
+        for i in range(len(input_data[0])):
+            # Recover input_index from i using input_shape
+            input_index = np.unravel_index(i, input_shape)
+            output_index = input_index[0:axis] + input_index[axis + 1:]
+            input_tuple = tuple(d[input_index] for d in input_data)
+            if input_index[axis] == 0:
+                # First element
+                for j in range(len(output_data)):
+                    output_data[j][output_index] = input_tuple[j]
+            else:
+                acc_tuple = tuple(o[output_index] for o in output_data)
+                acc_tuple = combine_fn.fn(*acc_tuple, *input_tuple)
+                for j in range(len(output_data)):
+                    output_data[j][output_index] = acc_tuple[j]
+        # Pack output
+        ret = []
+        for data in output_data:
+            if keep_dims:
+                if original_axis is not None:
+                    data = np.expand_dims(data, axis)
+                else:
+                    input_shape = original_input[0].handle.data.shape
+                    for _ in range(len(input_shape)):
+                        data = np.expand_dims(data, 0)
+
+            elif original_axis is None:
+                # Take a scalar
+                data = data.item()
+            ret.append(_to_tensor(data, input[0].dtype))
+        return ret[0] if len(ret) == 1 else tuple(ret)
 
     def _new_reduce(input, axis, combine_fn, **kwargs):
-        if axis is not None and axis >= len(input.shape):
-            raise ValueError(f"axis {axis} out of bounds for shape {input.shape}")
-
-        def _to_tensor(ret, dtype):
-            if ret.shape:
-                ret_type = tl.block_type(dtype, ret.shape)
-            else:
-                ret = np.array([ret], dtype=_get_np_dtype(dtype))
-                ret_type = dtype
-            return tl.core.tensor(TensorHandle(ret, dtype), ret_type)
 
         def _min_max(input, val_reduce_op, idx_reduce_op=None, axis=None, return_indices_tie_break_left=True,
                      keepdims=False):
+            _check_axis(input, axis)
             if return_indices_tie_break_left is False:
                 raise NotImplementedError("return_indices_tie_break_left=False not supported in interpreter mode")
             val = None
@@ -517,6 +579,7 @@ def _patch_lang_core(lang, builder):
                 raise ValueError("val_reduce_op and idx_reduce_op are both None")
 
         def _sum(input, axis=None, keepdims=False):
+            _check_axis(input, axis)
             return _to_tensor(np.sum(input.handle.data, axis=axis, keepdims=keepdims), input.dtype)
 
         keep_dims = kwargs.get("keep_dims", False)
@@ -539,7 +602,8 @@ def _patch_lang_core(lang, builder):
             "_sum_combine": _sum
         }
         if fn not in mapping:
-            raise ValueError(f"fn {fn} not supported")
+            # Fall back to the slow mode
+            return _generic_reduce(input, axis, combine_fn, keep_dims)
         return mapping[fn](input, axis=axis, keepdims=keep_dims)
 
     def _new_scan(input, axis, combine_fn, **kwargs):
@@ -564,6 +628,22 @@ def _patch_lang_core(lang, builder):
         if mode not in combine_fn:
             raise ValueError(f"mode {mode} not supported")
         return impl_fn(input, axis, combine_fn[mode], **kwargs)
+
+    tl.reduce = _new_reduce
+    # FIXME(Keren): This is a workaround because some core functions use core.reduce but not tl.reduce
+    tl.core.reduce = _new_reduce
+    lang.min = functools.partial(_new_reduce_scan_wrapper, "min")
+    lang.max = functools.partial(_new_reduce_scan_wrapper, "max")
+    lang.sum = functools.partial(_new_reduce_scan_wrapper, "sum")
+    lang.argmin = functools.partial(_new_reduce_scan_wrapper, "argmin")
+    lang.argmax = functools.partial(_new_reduce_scan_wrapper, "argmax")
+    lang.cumsum = functools.partial(_new_reduce_scan_wrapper, "cumsum")
+
+
+def _patch_lang_core(lang, builder):
+    for name, member in inspect.getmembers(lang):
+        if tl.core.is_builtin(member):
+            _patch_attr(lang, name, member, builder)
 
     def _new_to_ir(self, builder):
         # We need to specify signedness for integer types in the numpy mode
@@ -605,14 +685,6 @@ def _patch_lang_core(lang, builder):
             return builder.get_double_ty()
         raise ValueError(f'fail to convert {self} to ir type')
 
-    lang.reduce = _new_reduce
-    lang.min = functools.partial(_new_reduce_scan_wrapper, "min")
-    lang.max = functools.partial(_new_reduce_scan_wrapper, "max")
-    lang.sum = functools.partial(_new_reduce_scan_wrapper, "sum")
-    lang.argmin = functools.partial(_new_reduce_scan_wrapper, "argmin")
-    lang.argmax = functools.partial(_new_reduce_scan_wrapper, "argmax")
-    lang.cumsum = functools.partial(_new_reduce_scan_wrapper, "cumsum")
-
     # can't just map lang.static_range to `range`, because `tl.static_range`
     # can get `step` passed by keyword
     def _new_range(arg1, arg2=None, step=None, **kwargs):
@@ -631,6 +703,8 @@ def _patch_lang_core(lang, builder):
     lang.static_range = _new_range
     lang.static_assert = _new_static_assert
     lang.dtype.to_ir = _new_to_ir
+
+    _patch_reduce_scan(lang)
 
 
 def _patch_lang_math(lang):
