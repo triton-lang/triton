@@ -207,7 +207,6 @@ def downcast_test(src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, 
     dst2 = launch_upcast_emulated(dst2, exponent_bits, mantissa_bits, exponent_bias, device=device)
 
     if not (torch.equal(dst, dst2)):
-
         print('Error!!!')
 
         dst = dst.cpu().detach().numpy()
@@ -259,6 +258,9 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
     if src_dtype == 'float8e4nv' and torch.cuda.get_device_capability(0) < (9, 0):
         pytest.skip("float8e4nv upcast tests only supported on compute capability 9.0+")
 
+    if src_dtype == 'float8e4nv' and torch.version.hip is not None:
+        pytest.skip("float8e4nv upcast tests not supported on ROCm")
+
     # dtype : (exponent_bits, mantissa_bits, exponent_bias, max_repr)
     stuff = {
         'float8e4b15': (4, 3, 15, 0x7e),
@@ -293,6 +295,9 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
 
     if dst_dtype.startswith('float8') and rounding == 'rtne' and torch.cuda.get_device_capability(0) < (9, 0):
         pytest.skip("float8 downcast with RTNE rounding tests only supported on compute capability 9.0+")
+
+    if dst_dtype.startswith('float8') and rounding == 'rtne' and torch.version.hip is not None:
+        pytest.skip("float8 downcast with RTNE rounding tests not supported on ROCm")
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias)
     stuff = {
