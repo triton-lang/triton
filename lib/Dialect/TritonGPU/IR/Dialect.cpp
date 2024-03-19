@@ -103,6 +103,8 @@ SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
       return {8, 4};
   }
   if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
+    // cols counts how many threads along axis 0 (i.e. along one column)
+    // rows counts how many threads along axis 1 (i.e. along one row)
     unsigned rows = -1, cols = -1;
     unsigned mDim = mfmaLayout.getMDim();
     unsigned nDim = mfmaLayout.getNDim();
@@ -117,21 +119,28 @@ SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
         cols = 4;
         rows = 16;
       }
+      if (mfmaLayout.getIsTransposed())
+        std::swap(cols, rows);
     } else {
       if (mDim == 64 && nDim == 4) {
-        cols = 16;
-        rows = 4;
+        if (!mfmaLayout.getIsTransposed()) {
+          cols = 16;
+          rows = 4;
+        } else {
+          cols = 64;
+          rows = 1;
+        }
       } else if (mDim == 4 && nDim == 64) {
-        cols = 4;
-        rows = 16;
+        if (mfmaLayout.getIsTransposed()) {
+          cols = 4;
+          rows = 16;
+        } else {
+          cols = 1;
+          rows = 64;
+        }
       }
     }
-
-    if (mfmaLayout.getIsTransposed()) {
-      return {rows, cols};
-    } else {
-      return {cols, rows};
-    }
+    return {cols, rows};
   }
   if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parent = sliceLayout.getParent();
@@ -321,8 +330,11 @@ SmallVector<unsigned> getContigPerThread(Attribute layout) {
   if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     assert(mmaLayout.isVolta() || mmaLayout.isAmpere() || mmaLayout.isHopper());
     return {1, 2};
-  } else if (layout.isa<MfmaEncodingAttr>()) {
-    return {1, 1};
+  } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
+    if (mfmaLayout.getIsTransposed())
+      return {1, 4};
+    else
+      return {4, 1};
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parentLayout = sliceLayout.getParent();
     return getContigPerThread(parentLayout);

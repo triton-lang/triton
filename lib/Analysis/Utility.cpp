@@ -54,6 +54,25 @@ SmallVector<unsigned> ReduceOpHelper::getOrderWithAxisAtBeginning() {
 unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
   auto srcLayout = getSrcLayout();
 
+// TODO fix mfma order
+#ifdef USE_ROCM
+  if (auto mfmaLayout =
+          srcLayout.dyn_cast<mlir::triton::gpu::MfmaEncodingAttr>()) {
+    auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcLayout);
+    std::vector<int> order = {1, 0};
+    if (mfmaLayout.getIsTransposed())
+      std::swap(order[0], order[1]);
+
+    unsigned threadOffset = 1;
+    for (unsigned i = 0; i < order.size(); i++) {
+      if (order[i] == axis)
+        break;
+      threadOffset *= threadsPerWarp[order[i]];
+    }
+    return threadOffset;
+  }
+#endif
+
   // If the reduction axis is the fast axis of the parent layout
   if (isReductionOnLayoutFastAxis()) {
     return 1;
@@ -543,6 +562,8 @@ bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
   auto dstLayout = dstTy.getEncoding();
   auto mfmaLayout = srcLayout.cast<triton::gpu::MfmaEncodingAttr>();
   auto dotOperandLayout = dstLayout.cast<triton::gpu::DotOperandEncodingAttr>();
+  auto dstParentLayout =
+      dotOperandLayout.getParent().cast<triton::gpu::MfmaEncodingAttr>();
   // TODO: Remove the restriction on the warpsPerCTA once chain dot testing is
   // improved. In addition, we can enable this shortcut for regular MFMA
   // layout when opIdx == 1.

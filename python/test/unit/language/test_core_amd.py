@@ -3040,6 +3040,14 @@ if torch.version.hip is not None and _get_warp_size() == 64:
     layouts = [
         MfmaLayout(version=(2,0), warps_per_cta=[4, 1], instr_shape=[32,32], is_transposed=True),
         MfmaLayout(version=(2,0), warps_per_cta=[2, 2], instr_shape=[32,32], is_transposed=False),
+        MfmaLayout(version=(2,0), warps_per_cta=[4, 1], instr_shape=[16,16], is_transposed=True),
+        MfmaLayout(version=(2,0), warps_per_cta=[4, 1], instr_shape=[16,16], is_transposed=False),
+        MfmaLayout(version=(2,0), warps_per_cta=[4, 1], instr_shape=[4,4], is_transposed=True),
+        MfmaLayout(version=(2,0), warps_per_cta=[4, 1], instr_shape=[4,4], is_transposed=False),
+        MfmaLayout(version=(2,0), warps_per_cta=[4, 1], instr_shape=[4,64], is_transposed=True),
+        MfmaLayout(version=(2,0), warps_per_cta=[4, 1], instr_shape=[4,64], is_transposed=False),
+        MfmaLayout(version=(2,0), warps_per_cta=[4, 1], instr_shape=[64,4], is_transposed=True),
+        MfmaLayout(version=(2,0), warps_per_cta=[4, 1], instr_shape=[64,4], is_transposed=False),
     ]
     shapes = [[128, 32], [128, 128], [32, 128], [64, 64]]
 else:
@@ -3058,16 +3066,15 @@ else:
 @pytest.mark.parametrize("src_layout", layouts)
 @pytest.mark.parametrize("axis", [0, 1])
 def test_reduce_layouts(M, N, src_layout, axis, device='cuda'):
-    if is_hip():
-        pytest.skip("Skiping test_reduce_layouts for now.")
-
-    if torch.version.hip is not None and _get_warp_size() == 64:
-        if src_layout.is_transposed and axis == 0:
-            pytest.skip("Reduce along axis 0 is not supported in transposed mfma layout")
+    if torch.version.hip is not None:
+        if src_layout.warps_per_cta != "[1, 4]" and axis == 0:
+            pytest.skip("Reduce between warps is not supported")
+        if src_layout.warps_per_cta != "[4, 1]" and axis == 1:
+            pytest.skip("Reduce between warps is not supported")
     rdims_2d = f"1x{N}" if axis == 0 else f"{M}x1"
     rdims_1d = f"{N}" if axis == 0 else f"{M}"
     store_range = "%7" if axis == 0 else "%1"
-    blocked = BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1])
+    blocked = BlockedLayout([1, 1], [32, THREADS_PER_WARP//32], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1])
     ir = f"""
     #blocked = {blocked}
     #src = {src_layout}
@@ -3109,7 +3116,7 @@ def test_reduce_layouts(M, N, src_layout, axis, device='cuda'):
         kernel = triton.compile(f.name)
 
     rs = RandomState(17)
-    x = rs.randint(0, 4, (M, N)).astype('float32')
+    x = rs.randint(0, 1024, (M, N)).astype('float32')
     x = (x.view('uint32') & np.uint32(0xffffe000)).view('float32')
 
     if axis == 0:

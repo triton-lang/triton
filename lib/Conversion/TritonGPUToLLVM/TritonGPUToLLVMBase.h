@@ -1209,10 +1209,13 @@ private:
     Value laneId = urem(threadId, effectiveWarpSize);
 
     Value warpId = udiv(threadId, warpSize);
-    Value warpId0 =
-        urem(urem(warpId, warpsPerCTA[0]), i32_val(shape[0] / mDim));
-    Value warpId1 = urem(urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]),
-                         i32_val(shape[1] / nDim));
+    Value limitWarpId0 =
+        i32_val(std::max(static_cast<int64_t>(1), shape[0] / mDim));
+    Value warpId0 = urem(urem(warpId, warpsPerCTA[0]), limitWarpId0);
+    Value limitWarpId1 =
+        i32_val(std::max(static_cast<int64_t>(1), shape[1] / nDim));
+    Value warpId1 =
+        urem(urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]), limitWarpId1);
 
     Value offWarp0 = mul(warpId0, i32_val(mDim));
     Value offWarp1 = mul(warpId1, i32_val(nDim));
@@ -1221,7 +1224,7 @@ private:
     if (mfmaLayout.getIsTransposed()) {
       multiDimBase[1] =
           add(mul(i32_val(4), udiv(laneId, i32_val(mDim))), offWarp1);
-      multiDimBase[0] = add(urem(laneId, i32_val(nDim)), offWarp0);
+      multiDimBase[0] = add(urem(laneId, i32_val(mDim)), offWarp0);
     } else {
       multiDimBase[0] =
           add(mul(i32_val(4), udiv(laneId, i32_val(nDim))), offWarp0);

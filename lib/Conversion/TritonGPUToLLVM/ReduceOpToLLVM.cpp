@@ -286,24 +286,8 @@ private:
     for (unsigned N = numLaneToReduce / 2; N > 0; N >>= 1) {
       SmallVector<Value> shfl(acc.size());
       unsigned shuffleIdx = N;
-#ifdef USE_ROCM
-      auto srcTys = op.getInputTypes();
-      auto inputTy = srcTys[0].cast<RankedTensorType>();
-      auto inMfma =
-        inputTy.getEncoding().dyn_cast<triton::gpu::MfmaEncodingAttr>();
-      if (inMfma && inMfma.getIsTransposed()) {
-        assert(numLaneToReduce == 2 || numLaneToReduce == 4);
-        // for mfma 32x32 adjacent threads in y dimension in transposed MFMA
-        // layout are 32 apart: [[0 0 0 0 32 32 32 32 ...] [1 1 1 1 33 33 33 33
-        // ...] ...]. for mfma 16x16 adjacent threads in y dimension in
-        // transposed MFMA layout are 16 apart: [[0 0 0 0 16 16 16 16 32 32 32
-        // 32 ...] [1 1 1 1 33 33 33 33 ...] ...].
-        const int warpSize = 64;
-        shuffleIdx = warpSize / N / 2;
-      }
-#endif
       for (unsigned i = 0; i < acc.size(); ++i) {
-	shfl[i] = shflSync(loc, rewriter, acc[i], shuffleIdx * interleave);
+        shfl[i] = shflSync(loc, rewriter, acc[i], shuffleIdx * interleave);
       }
       accumulate(rewriter, op.getCombineOp(), acc, shfl, false);
     }
