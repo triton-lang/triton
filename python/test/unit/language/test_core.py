@@ -854,6 +854,40 @@ def test_unary_op(dtype_x, expr, num_ctas, device):
     _test_unary(dtype_x, expr, device=device, num_ctas=num_ctas)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", dtypes_with_bfloat16)
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+def test_minus_zero(dtype, num_ctas, device):
+    # Test that -0 is handled correctly for all dtypes
+
+    check_type_supported(dtype, device)  # early return if dtype_x is not supported
+    SIZE = 128
+    # define the kernel / launch-grid
+
+    @triton.jit
+    def kernel(Z, X, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        x = tl.load(X + off)
+        z = -x
+        tl.store(Z + off, z)
+
+    # inputs
+    mask = numpy_random(SIZE, dtype_str="bool")
+    np_dtype = np.float64 if "float" in dtype else np.int64
+    np_zero = np.zeros(SIZE, np_dtype)
+    x = np.where(mask, np_zero, -np_zero)
+    # reference result
+    z_ref = -x
+    # triton result
+    x_tri = to_triton(x, device=device, dst_type=dtype)
+    z_tri = to_triton(np.empty_like(x), device=device, dst_type=dtype)
+    kernel[(1, )](z_tri, x_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
+    # compare
+    z_np = to_numpy(z_tri)
+    np.testing.assert_array_equal(z_np, 0.0)
+    np.testing.assert_array_equal(np.signbit(z_np), np.signbit(z_ref))
+
+
 # ----------------
 # test math ops
 # ----------------
@@ -3221,6 +3255,67 @@ def test_constexpr(literal, dtype_str, device):
     out = torch.zeros((1, ), dtype=torch.float32, device=device)
     h = kernel_patched[(1, )](out)
     assert re.search(r"arith.constant .* : " + dtype_str, h.asm["ttir"]) is not None
+
+
+@triton.jit
+def pass_const(a, b, choose_b):
+    if choose_b:
+        return b
+    else:
+        return a
+
+
+@pytest.mark.parametrize("choose_const", [True, False])
+@pytest.mark.parametrize("constexpr", [True, False])
+@pytest.mark.parametrize("mode", ["direct", "call", "ternary", "if"])
+def test_const(device, choose_const, constexpr, mode):
+
+    @triton.jit(do_not_specialize=["choose_const"])
+    def kernel(in_ptr: tl.const, out, c_out: tl.const, choose_const, n_elems: tl.int32, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elems
+        val = tl.load(in_ptr + offsets, mask=mask)
+        LOSE_TAIL
+        tl.store(final_out + offsets, val, mask=mask)
+
+    @triton.jit
+    def kernel_constexpr(in_ptr: tl.const, out, c_out: tl.const, choose_const: tl.constexpr, n_elems: tl.int32,
+                         BLOCK_SIZE: tl.constexpr):
+        offsets = tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elems
+        val = tl.load(in_ptr + offsets, mask=mask)
+        LOSE_TAIL
+        tl.store(final_out + offsets, val, mask=mask)
+
+    if mode == "direct":
+        if choose_const:
+            LOSE_TAIL = "final_out = c_out"
+        else:
+            LOSE_TAIL = "final_out = out"
+    elif mode == "call":
+        LOSE_TAIL = "final_out = pass_const(out, c_out, choose_const)"
+    elif mode == "ternary":
+        LOSE_TAIL = "final_out = c_out if choose_const else out"
+    elif mode == "if":
+        LOSE_TAIL = """
+    if choose_const:
+        final_out = c_out
+    else:
+        final_out = out
+"""
+
+    SIZE = 128
+    input = torch.randn((SIZE, ), dtype=torch.float32, device=device)
+    output = torch.zeros((SIZE, ), dtype=torch.float32, device=device)
+    patched_kernel = patch_kernel(kernel_constexpr if constexpr else kernel, {'LOSE_TAIL': LOSE_TAIL, 'CONSTEXPR': ''})
+
+    expect_fail = (not constexpr and mode != "direct") or choose_const
+    if expect_fail:
+        with pytest.raises(triton.CompilationError) as exc_info:
+            patched_kernel[(1, )](input, output, output, choose_const, SIZE, SIZE)
+    else:
+        patched_kernel[(1, )](input, output, output, choose_const, SIZE, SIZE)
+        assert torch.all(input == output)
 
 
 @pytest.mark.interpreter

@@ -70,9 +70,9 @@ def TritonAMDGPUAccelerateMatmul : Pass<"tritonamdgpu-accelerate-matmul", "mlir:
   let dependentDialects = [];
 
   let options = [
-    Option<"matrixCoreVersion", "matrix-core-version",
-           "int32_t", /*default*/"0",
-           "device matrix core version">,
+    Option<"archGenerationName", "arch-generation-name",
+           "std::string", /*default=*/"std::string{}",
+           "GFX generation name of target device.">,
     Option<"matrixInstructionSize", "matrix-instruction-size",
            "int32_t", /*default*/"0",
            "enforce matrix instruction MN size">
