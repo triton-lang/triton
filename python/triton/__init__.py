@@ -1,5 +1,5 @@
 """isort:skip_file"""
-__version__ = '2.2.0'
+__version__ = '2.3.0'
 
 # ---------------------------------------
 # Note: import order is significant here.
@@ -21,6 +21,7 @@ from .compiler import compile, CompilationError
 
 from . import language
 from . import testing
+from . import tools
 
 __all__ = [
     "autotune",

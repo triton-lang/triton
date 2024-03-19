@@ -208,8 +208,8 @@ class ContainsReturnChecker(ast.NodeVisitor):
 
 class CodeGenerator(ast.NodeVisitor):
 
-    def __init__(self, context, prototype, gscope, attributes, constants, function_name, target, module=None,
-                 is_kernel=False, function_types: Optional[Dict] = None, debug=False, noinline=False,
+    def __init__(self, context, prototype, gscope, attributes, constants, function_name, options, debug=None,
+                 module=None, is_kernel=False, function_types: Optional[Dict] = None, noinline=False,
                  file_name: Optional[str] = None, begin_line=0):
         self.context = context
         self.builder = ir.builder(context)
@@ -217,7 +217,7 @@ class CodeGenerator(ast.NodeVisitor):
         # node.lineno starts from 1, so we need to subtract 1
         self.begin_line = begin_line - 1
         self.builder.set_loc(file_name, begin_line, 0)
-        self.builder.target = target
+        self.builder.options = options
         self.module = self.builder.create_module() if module is None else module
         self.function_ret_types = {} if function_types is None else function_types
         self.prototype = prototype
@@ -228,7 +228,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.function_name = function_name
         self.is_kernel = is_kernel
         self.last_node = None
-        self.debug = debug
+        self.debug = options.debug if debug is None else debug
         self.noinline = noinline
         self.scf_stack = []
         self.last_ret_type = None
@@ -980,12 +980,12 @@ class CodeGenerator(ast.NodeVisitor):
             prototype = language.function_type([], arg_types)
             gscope = sys.modules[fn.fn.__module__].__dict__
             # If the callee is not set, we use the same debug setting as the caller
-            debug = self.debug if fn.debug is None else fn.debug
             file_name, begin_line = _get_fn_file_line(fn)
+            debug = self.debug if fn.debug is None else fn.debug
             generator = CodeGenerator(self.context, prototype, gscope, attributes, constants, module=self.module,
-                                      function_name=fn_name, function_types=self.function_ret_types, debug=debug,
+                                      function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
-                                      target=self.builder.target)
+                                      options=self.builder.options, debug=debug)
             generator.visit(fn.parse())
             callee_ret_type = generator.last_ret_type
             self.function_ret_types[fn_name] = callee_ret_type
@@ -1188,28 +1188,22 @@ def kernel_suffix(signature, specialization):
     return suffix
 
 
-def ast_to_ttir(fn, signature, specialization, constants, debug, target):
-    # canonicalize signature
-    if isinstance(signature, str):
-        signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
+def ast_to_ttir(fn, specialization, options):
+    attrs = specialization.attrs
     context = ir.context()
     context.load_triton()
     # create kernel prototype
     cst_key = lambda i: fn.arg_names.index(i) if isinstance(i, str) else i
-    constants = {cst_key(key): value for key, value in constants.items()}
+    constants = {cst_key(key): value for key, value in specialization.constants.items()}
     # visit kernel AST
     gscope = fn.__globals__.copy()
-    function_name = '_'.join([fn.__name__, kernel_suffix(signature.values(), specialization)])
-    tys = list(signature.values())
-    new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for k in specialization.equal_to_1}
-    new_attrs = {k: [("tt.divisibility", 16)] for k in specialization.divisible_by_16}
-
-    # Note: Here we defines 'max_divisibility' for later TMA usage.
-    # fp16 requires 'max_divisibility >= 8' and fp8 requires 'max_divisibility >= 16'.
-    # Since we only need to support TMA for fp16 and fp8 now, 'max_divisibility' is either 8 or 16.
-    for k in specialization.divisible_by_8:
+    function_name = '_'.join([fn.__name__, kernel_suffix(specialization.signature.values(), attrs)])
+    tys = list(specialization.signature.values())
+    new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for k in attrs.equal_to_1}
+    new_attrs = {k: [("tt.divisibility", 16)] for k in attrs.divisible_by_16}
+    for k in attrs.divisible_by_8:
         attr = new_attrs[k] if k in new_attrs else []
-        if k in specialization.divisible_by_16:
+        if k in attrs.divisible_by_16:
             attr.append(("tt.max_divisibility", 16))
         else:
             attr.append(("tt.max_divisibility", 8))
@@ -1217,13 +1211,13 @@ def ast_to_ttir(fn, signature, specialization, constants, debug, target):
 
     all_constants = constants.copy()
     all_constants.update(new_constants)
-    arg_types = [str_to_ty(v) for k, v in signature.items() if k not in constants]
+    arg_types = [str_to_ty(v) for k, v in specialization.signature.items() if k not in constants]
     file_name, begin_line = _get_fn_file_line(fn)
 
     prototype = language.function_type([], arg_types)
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name,
-                              attributes=new_attrs, is_kernel=True, debug=debug, file_name=file_name,
-                              begin_line=begin_line, target=target)
+                              attributes=new_attrs, is_kernel=True, file_name=file_name, begin_line=begin_line,
+                              options=options)
     try:
         generator.visit(fn.parse())
     except CompilationError as e:

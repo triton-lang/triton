@@ -343,7 +343,7 @@ download_and_copy(
 
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
-    version="2.2.0" + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
+    version="2.3.0" + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
     author="Philippe Tillet",
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
@@ -353,6 +353,7 @@ setup(
         "triton/_C",
         "triton/common",
         "triton/compiler",
+        "triton/compiler/backends",
         "triton/language",
         "triton/language/extra",
         "triton/ops",

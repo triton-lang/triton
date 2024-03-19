@@ -3,9 +3,11 @@ import hashlib
 import os
 import tempfile
 from pathlib import Path
+import functools
 
 from ..common.build import _build
 from .cache import get_cache_manager
+from ..runtime import driver
 
 
 class DriverBase(metaclass=abc.ABCMeta):
@@ -66,7 +68,30 @@ class CudaUtils(object):
         self.cuOccupancyMaxActiveClusters = mod.cuOccupancyMaxActiveClusters
 
 
+class TensorMapManager:
+
+    def __init__(self):
+        self.tensormaps_device = {}
+
+    def __getitem__(self, key: tuple):
+        if key in self.tensormaps_device:
+            return int(self.tensormaps_device[key])
+        else:
+            (e, args) = key
+            t_tensormap = e.tensormap(args)
+            TENSORMAP_SIZE_IN_BYTES = 128
+            t_tensormap_device = driver.utils.cuMemAlloc(TENSORMAP_SIZE_IN_BYTES)
+            driver.utils.cuMemcpyHtoD(t_tensormap_device, t_tensormap, TENSORMAP_SIZE_IN_BYTES)
+            self.tensormaps_device[key] = t_tensormap_device
+            return int(self.tensormaps_device[key])
+
+    def __del__(self):
+        for _, v in self.tensormaps_device.items():
+            driver.utils.cuMemFree(v)
+
+
 class CudaDriver(DriverBase):
+    tensormap_manager = TensorMapManager()
 
     def __new__(cls):
         if not hasattr(cls, "instance"):
@@ -76,6 +101,33 @@ class CudaDriver(DriverBase):
     def __init__(self):
         self.utils = CudaUtils()
         self.backend = self.CUDA
+        self.binary_ext = "cubin"
+        # TODO: support other frameworks than torch
+        import torch
+        self.get_device_capability = torch.cuda.get_device_capability
+        try:
+            from torch._C import _cuda_getCurrentRawStream
+            self.get_current_stream = _cuda_getCurrentRawStream
+        except ImportError:
+            self.get_current_stream = lambda idx: torch.cuda.current_stream(idx).cuda_stream
+        self.get_current_device = torch.cuda.current_device
+        self.set_current_device = torch.cuda.set_device
+
+    @functools.lru_cache()
+    def get_current_target(self):
+        device = self.get_current_device()
+        capability = self.get_device_capability(device)
+        capability = capability[0] * 10 + capability[1]
+        return ("cuda", capability)
+
+    def assemble_tensormap_to_arg(self, tensormaps_info, args):
+        args_with_tma = list(args)
+        if tensormaps_info is not None:
+            # tuple for hashable
+            args_ptr = tuple([arg.data_ptr() if hasattr(arg, 'data_ptr') else arg for arg in args])
+            for i, e in enumerate(tensormaps_info):
+                args_with_tma.append(CudaDriver.tensormap_manager[(e, args_ptr)])
+        return args_with_tma
 
 
 # -----------------------------

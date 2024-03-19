@@ -66,6 +66,7 @@
 
 #include <pybind11/numpy.h>
 namespace py = pybind11;
+using namespace mlir;
 
 PYBIND11_MAKE_OPAQUE(mlir::triton::gpu::TMAMetadataTy);
 
@@ -170,7 +171,7 @@ public:
 private:
   std::unique_ptr<mlir::OpBuilder> builder;
   std::unique_ptr<mlir::Location> lastLoc;
-  bool lineInfoEnabled = !triton::tools::getBoolEnv("TRITON_DISABLE_LINE_INFO");
+  bool lineInfoEnabled = !::triton::tools::getBoolEnv("TRITON_DISABLE_LINE_INFO");
 };
 
 static std::string locationToString(mlir::Location loc) {
@@ -347,7 +348,14 @@ void init_triton_ir(py::module &&m) {
            [](mlir::Value &self, mlir::Value &newValue) {
              self.replaceAllUsesWith(newValue);
            })
-      .def("get_type", &mlir::Value::getType);
+      .def("get_type", &mlir::Value::getType)
+      .def("id", [](Value &self) {
+        // The Value is identified by and compared with
+        // other Values via the underlying ValueImpl
+        return (uint64_t)self.getImpl();
+      });
+
+  py::class_<OpResult, Value>(m, "op_result", py::module_local());
 
   py::class_<mlir::BlockArgument, mlir::Value>(m, "block_argument",
                                                py::module_local());
@@ -355,7 +363,8 @@ void init_triton_ir(py::module &&m) {
   py::class_<mlir::Region>(m, "region", py::module_local())
       .def("get_parent_region", &mlir::Region::getParentRegion, ret::reference)
       .def("size", [](mlir::Region &self) { return self.getBlocks().size(); })
-      .def("empty", &mlir::Region::empty);
+      .def("empty", &mlir::Region::empty)
+      .def("id", [](Region &self) { return (uint64_t)&self; });
 
   py::class_<mlir::Block>(m, "block", py::module_local())
       .def("arg",
@@ -368,6 +377,7 @@ void init_triton_ir(py::module &&m) {
              self.addArgument(ty, loc);
            })
       .def("get_num_arguments", &mlir::Block::getNumArguments)
+      .def("get_argument", &Block::getArgument)
       .def("dump", &mlir::Block::dump)
       .def("move_before", &mlir::Block::moveBefore)
       .def("insert_before", &mlir::Block::insertBefore)
@@ -414,7 +424,8 @@ void init_triton_ir(py::module &&m) {
              return !self.empty() &&
                     self.back().hasTrait<mlir::OpTrait::ReturnLike>();
            })
-      .def("erase", [](mlir::Block &self) { self.erase(); });
+      .def("erase", [](mlir::Block &self) { self.erase(); })
+      .def("id", [](Block &self) { return (uint64_t)&self; });
 
   // using eattr = ir::attribute_kind_t;
   // py::enum_<eattr>(m, "attribute_kind")
@@ -461,7 +472,9 @@ void init_triton_ir(py::module &&m) {
            [](mlir::OpState &self) -> std::string {
              std::string str;
              llvm::raw_string_ostream os(str);
-             self->print(os);
+             auto printingFlags = mlir::OpPrintingFlags();
+             printingFlags.enableDebugInfo();
+             self->print(os, printingFlags);
              return str;
            })
       .def("append_operand",
@@ -489,6 +502,35 @@ void init_triton_ir(py::module &&m) {
   py::class_<mlir::scf::ConditionOp, mlir::OpState>(m, "ConditionOp",
                                                     py::module_local());
 
+  py::class_<Operation, std::unique_ptr<Operation, py::nodelete>>(
+      m, "operation", py::module_local())
+      .def("get_name",
+           [](Operation &self) {
+             llvm::StringRef opName = self.getName().getStringRef();
+             return opName.str();
+           })
+      .def("get_num_operands", &Operation::getNumOperands)
+      .def("get_operand", &Operation::getOperand)
+      .def("get_num_results", &Operation::getNumResults)
+      .def("get_result", &Operation::getResult)
+      .def("get_num_regions", &Operation::getNumRegions)
+      .def("get_region", &Operation::getRegion, ret::reference)
+      .def("get_block", &Operation::getBlock, ret::reference)
+      .def("get_str_attr",
+           [](Operation &self, const std::string &name) -> py::object {
+             auto ret = self.getAttrOfType<StringAttr>(name);
+             if (!ret)
+               return py::none();
+             return py::str(ret.getValue().str());
+           })
+      .def("get_flat_symbol_ref_attr",
+           [](Operation &self, const std::string &name) -> py::object {
+             auto ret = self.getAttrOfType<FlatSymbolRefAttr>(name);
+             if (!ret)
+               return py::none();
+             return py::str(ret.getValue().str());
+           });
+
   // dynamic_attr is used to transfer ownership of the MLIR context to the
   // module
   py::class_<mlir::ModuleOp, mlir::OpState>(m, "module", py::module_local(),
@@ -498,7 +540,9 @@ void init_triton_ir(py::module &&m) {
            [](mlir::ModuleOp &self) -> std::string {
              std::string str;
              llvm::raw_string_ostream os(str);
-             self.print(os);
+             auto printingFlags = mlir::OpPrintingFlags();
+             printingFlags.enableDebugInfo();
+             self.print(os, printingFlags);
              return str;
            })
       .def("bytecode",
@@ -532,6 +576,17 @@ void init_triton_ir(py::module &&m) {
              if (funcs.size() != 1)
                throw std::runtime_error("Expected a single function");
              return funcs[0];
+           })
+      .def("get_int_attr",
+           [](ModuleOp &self, std::string name) -> py::object {
+             auto ret = self->getAttrOfType<IntegerAttr>(name);
+             if (!ret)
+               return py::none();
+             return py::int_(ret.getInt());
+           })
+      .def("walk",
+           [](ModuleOp &self, const std::function<void(Operation *)> &fn) {
+             self.walk(fn);
            });
 
   m.def("make_attr",
@@ -1685,9 +1740,9 @@ void init_triton_ir(py::module &&m) {
              self.addPass(mlir::triton::createReorderBroadcastPass());
            })
       .def("add_rewrite_tensor_pointer_pass",
-           [](mlir::PassManager &self, int computeCapability) {
-             self.addPass(mlir::triton::createRewriteTensorPointerPass(
-                 computeCapability));
+           [](mlir::PassManager &self, int capability) {
+             self.addPass(
+                 mlir::triton::createRewriteTensorPointerPass(capability));
            })
       .def("add_tritongpu_ws_feasibility_checking_pass",
            [](mlir::PassManager &self, int computeCapability) {
@@ -1761,9 +1816,9 @@ void init_triton_ir(py::module &&m) {
              self.addPass(mlir::createTritonGPUReorderInstructionsPass());
            })
       .def("add_tritongpu_rewrite_tensor_pointer_pass",
-           [](mlir::PassManager &self, int computeCapability) {
-             self.addPass(mlir::createTritonGPURewriteTensorPointerPass(
-                 computeCapability));
+           [](mlir::PassManager &self, int capability) {
+             self.addPass(
+                 mlir::createTritonGPURewriteTensorPointerPass(capability));
            })
       .def("add_tritongpu_decompose_conversions_pass",
            [](mlir::PassManager &self) {
@@ -1794,8 +1849,8 @@ void init_triton_ir(py::module &&m) {
 void init_triton_env_vars(py::module &m) {
   m.def("get_env_vars", []() -> std::map<std::string, bool> {
     std::map<std::string, bool> envVars;
-    for (const auto &envVar : triton::ENV_VARS) {
-      envVars[envVar] = triton::tools::getBoolEnv(envVar);
+    for (const auto &envVar : ::triton::ENV_VARS) {
+      envVars[envVar] = ::triton::tools::getBoolEnv(envVar);
     }
     return envVars;
   });
@@ -1896,7 +1951,7 @@ void init_triton_translation(py::module &m) {
               "lineno: " + std::to_string(error.getLineNo()));
         }
         // translate module to PTX
-        auto ptxCode = triton::translateLLVMIRToPTX(*module, capability,
+        auto ptxCode = ::triton::translateLLVMIRToPTX(*module, capability,
                                                     version, enable_fp_fusion);
         return ptxCode;
       },
@@ -1925,7 +1980,7 @@ void init_triton_translation(py::module &m) {
             ofs.close();
 
             auto lineInfoOption =
-                triton::tools::getBoolEnv("TRITON_DISABLE_LINE_INFO")
+                ::triton::tools::getBoolEnv("TRITON_DISABLE_LINE_INFO")
                     ? ""
                     : " -lineinfo";
             auto fmadOption = enable_fp_fusion ? "" : " --fmad=false";

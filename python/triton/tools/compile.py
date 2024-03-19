@@ -92,11 +92,11 @@ if __name__ == "__main__":
 
     hints = {i: constexpr(s.split(":")[1]) for i, s in enumerate(signature) if ":" in s}
     hints = {k: v for k, v in hints.items() if v is not None}
-    constexprs = {i: constexpr(s) for i, s in enumerate(signature)}
-    constexprs = {k: v for k, v in constexprs.items() if v is not None}
-    signature = {i: s.split(":")[0] for i, s in enumerate(signature) if i not in constexprs}
-    const_sig = 'x'.join([str(v) for v in constexprs.values()])
-    doc_string = [f"{kernel.arg_names[i]}={constexprs[i]}" for i in constexprs.keys()]
+    constants = {i: constexpr(s) for i, s in enumerate(signature)}
+    constants = {k: v for k, v in constants.items() if v is not None}
+    signature = {i: s.split(":")[0] for i, s in enumerate(signature) if i not in constants}
+    const_sig = 'x'.join([str(v) for v in constants.values()])
+    doc_string = [f"{kernel.arg_names[i]}={constants[i]}" for i in constants.keys()]
     doc_string += [f"num_warps={args.num_warps}", f"num_stages={args.num_stages}"]
 
     # compile ast into cubin
@@ -104,11 +104,12 @@ if __name__ == "__main__":
         assert h in [1, 16], f"Only 1 and 16 are valid hints, got {h}"
     divisible_by_16 = [i for i, h in hints.items() if h == 16]
     equal_to_1 = [i for i, h in hints.items() if h == 1]
-    config = triton.compiler.instance_descriptor(divisible_by_16=divisible_by_16, equal_to_1=equal_to_1)
+    attrs = triton.compiler.AttrsDescriptor(divisible_by_16=divisible_by_16, equal_to_1=equal_to_1)
     for i in equal_to_1:
-        constexprs.update({i: 1})
-    ccinfo = triton.compile(kernel, signature=signature, constants=constexprs, configs=[config],
-                            num_warps=args.num_warps, num_stages=args.num_stages)
+        constants.update({i: 1})
+    src = triton.compiler.ASTSource(fn=kernel, constants=constants, signature=signature, attrs=attrs)
+    opts = {"num_warps": args.num_warps, "num_stages": args.num_stages}
+    ccinfo = triton.compile(src, options=opts)
     arg_names = []
     arg_types = []
     for i in signature.keys():
@@ -117,7 +118,7 @@ if __name__ == "__main__":
             arg_types += [signature[i]]
 
     # dump C stub code
-    suffix = kernel_suffix(signature.values(), config)
+    suffix = kernel_suffix(signature.values(), attrs)
     func_name = '_'.join([out_name, sig_hash, suffix])
     triton_kernel_name = '_'.join([args.kernel_name, suffix])
     hex_ = str(binascii.hexlify(ccinfo.asm["cubin"]))[2:-1]
