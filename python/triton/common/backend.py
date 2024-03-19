@@ -11,7 +11,7 @@ from typing import Dict
 from ..runtime.driver import DriverBase
 
 TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TRITON_VERSION = "2.2.0"
+TRITON_VERSION = "2.3.0"
 
 
 class BaseBackend:
