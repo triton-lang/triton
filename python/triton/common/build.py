@@ -94,7 +94,7 @@ def _build(name, src, srcdir):
     if is_hip():
         ret = subprocess.check_call([
             cc, src, f"-I{hip_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC",
-            f"-L{hip_lib_dir}", "-lamdhip64", "-o", so
+            f"-L{hip_lib_dir}", "-lamdhip64", f"-Wl,-rpath,{hip_lib_dir}", "-o", so
         ])
     else:
         cc_cmd = [
