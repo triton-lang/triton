@@ -517,7 +517,6 @@ def _patch_reduce_scan(lang):
         output_shape = None
         for arg in input:
             if isinstance(arg, tl.core.tensor):
-                _check_axis(arg, axis)
                 input_shape = arg.handle.data.shape
                 input_data.append(arg.handle.data)
                 output_shape = input_shape[0:axis] + input_shape[axis + 1:]
