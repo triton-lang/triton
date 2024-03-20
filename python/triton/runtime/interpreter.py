@@ -555,13 +555,12 @@ def _patch_reduce_scan(lang):
             ret.append(_to_tensor(data, input[0].dtype))
         return ret[0] if len(ret) == 1 else tuple(ret)
 
-    def _new_reduce(input, axis, combine_fn, **kwargs):
+    def _new_reduce(input, axis, combine_fn, keep_dims=False, **kwargs):
 
-        def _min_max(input, val_reduce_op, idx_reduce_op=None, axis=None, return_indices_tie_break_left=True,
-                     keepdims=False):
+        def _min_max(input, val_reduce_op, idx_reduce_op=None, axis=None, keepdims=False):
+            # If input is a tuple, it must be (val, index), and we only take val
+            input = input[0] if isinstance(input, tuple) else input
             _check_axis(input, axis)
-            if return_indices_tie_break_left is False:
-                raise NotImplementedError("return_indices_tie_break_left=False not supported in interpreter mode")
             val = None
             idx = None
             if val_reduce_op:
@@ -581,62 +580,33 @@ def _patch_reduce_scan(lang):
             _check_axis(input, axis)
             return _to_tensor(np.sum(input.handle.data, axis=axis, keepdims=keepdims), input.dtype)
 
-        keep_dims = kwargs.get("keep_dims", False)
-        return_indices = kwargs.get("return_indices", False)
-        return_indices_tile_break_left = kwargs.get("return_indices_tile_break_left", True)
-        fn = combine_fn.fn.__name__
         mapping = {
-            "_elementwise_min":  #
-            functools.partial(_min_max, val_reduce_op=np.min, idx_reduce_op=np.argmin if return_indices else None,
-                              return_indices_tie_break_left=return_indices_tile_break_left),  #
-            "_elementwise_max":  #
-            functools.partial(_min_max, val_reduce_op=np.max, idx_reduce_op=np.argmax if return_indices else None,
-                              return_indices_tie_break_left=return_indices_tile_break_left),  #
-            "_argmin_combine":  #
-            functools.partial(_min_max, val_reduce_op=None, idx_reduce_op=np.argmin,
-                              return_indices_tie_break_left=return_indices_tile_break_left),  #
-            "_argmax_combine":  #
-            functools.partial(_min_max, val_reduce_op=None, idx_reduce_op=np.argmax,
-                              return_indices_tie_break_left=return_indices_tile_break_left),  #
-            "_sum_combine": _sum
+            tl.standard._argmin_combine_tie_break_left:  #
+            functools.partial(_min_max, val_reduce_op=np.min, idx_reduce_op=np.argmin),  #
+            tl.standard._argmax_combine_tie_break_left:  #
+            functools.partial(_min_max, val_reduce_op=np.max, idx_reduce_op=np.argmax),  #
+            tl.standard._elementwise_max: functools.partial(_min_max, val_reduce_op=np.max, idx_reduce_op=None),  #
+            tl.standard._elementwise_min: functools.partial(_min_max, val_reduce_op=np.min, idx_reduce_op=None),  #
+            tl.standard._sum_combine: _sum,  #
         }
-        if fn not in mapping:
+        if combine_fn not in mapping:
             # Fall back to the slow mode
             return _generic_reduce(input, axis, combine_fn, keep_dims)
-        return mapping[fn](input, axis=axis, keepdims=keep_dims)
+        return mapping[combine_fn](input, axis=axis, keepdims=keep_dims)
 
     def _new_scan(input, axis, combine_fn, **kwargs):
-        fn = combine_fn.fn.__name__
         mapping = {
-            "_sum_combine": np.cumsum,
+            tl.standard._sum_combine: np.cumsum,
         }
-        ret = mapping[fn](input.handle.data, axis=axis)
+        ret = mapping[combine_fn](input.handle.data, axis=axis)
         ret_type = tl.block_type(input.dtype, ret.shape)
         return tl.core.tensor(TensorHandle(ret, input.dtype), ret_type)
 
-    def _new_reduce_scan_wrapper(mode, input, axis=None, **kwargs):
-        impl_fn = _new_scan if mode.startswith("cum") else _new_reduce
-        mode = mode[3:] if mode.startswith("cum") else mode
-        combine_fn = {
-            "min": tl.standard._elementwise_min,
-            "max": tl.standard._elementwise_max,
-            "sum": tl.standard._sum_combine,
-            "argmin": tl.standard._argmin_combine,
-            "argmax": tl.standard._argmax_combine,
-        }
-        if mode not in combine_fn:
-            raise ValueError(f"mode {mode} not supported")
-        return impl_fn(input, axis, combine_fn[mode], **kwargs)
-
     tl.reduce = _new_reduce
+    tl.associative_scan = _new_scan
     # FIXME(Keren): This is a workaround because some core functions use core.reduce but not tl.reduce
     tl.core.reduce = _new_reduce
-    lang.min = functools.partial(_new_reduce_scan_wrapper, "min")
-    lang.max = functools.partial(_new_reduce_scan_wrapper, "max")
-    lang.sum = functools.partial(_new_reduce_scan_wrapper, "sum")
-    lang.argmin = functools.partial(_new_reduce_scan_wrapper, "argmin")
-    lang.argmax = functools.partial(_new_reduce_scan_wrapper, "argmax")
-    lang.cumsum = functools.partial(_new_reduce_scan_wrapper, "cumsum")
+    tl.core.associative_scan = _new_scan
 
 
 def _patch_lang_core(lang, builder):
