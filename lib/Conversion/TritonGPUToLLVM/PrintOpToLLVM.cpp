@@ -25,8 +25,6 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
   matchAndRewrite(triton::PrintOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
-    Value prefixStr =
-        LLVM::addStringToModule(loc, rewriter, "printfPrefix_", op.getPrefix());
 
     auto getPid = [&](int axis) {
       return targetInfo.programId(loc, rewriter,
@@ -39,8 +37,9 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
       std::string formatStr;
       llvm::raw_string_ostream os(formatStr);
       os << "pid (" << getFormatSubstr(pid[0]) << ", "
-         << getFormatSubstr(pid[1]) << ", " << getFormatSubstr(pid[2]) << ")%s";
-      llPrintf(formatStr, {pid[0], pid[1], pid[2], prefixStr}, rewriter);
+         << getFormatSubstr(pid[1]) << ", " << getFormatSubstr(pid[2]) << ")"
+         << op.getPrefix();
+      llPrintf(formatStr, {pid[0], pid[1], pid[2]}, rewriter);
       rewriter.eraseOp(op);
       return success();
     }
@@ -75,7 +74,7 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
       }
 
       if (!elems.empty()) {
-        printTensor(prefixStr, /*operand=*/i,
+        printTensor(op.getPrefix(), /*operand=*/i,
                     /*numOperands=*/op.getNumOperands(), elems, pid, indices,
                     dimWidths, op.getHex(), rewriter);
       }
@@ -84,7 +83,7 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
     return success();
   }
 
-  void printTensor(Value prefixStr, size_t operand, size_t numOperands,
+  void printTensor(StringRef prefixStr, size_t operand, size_t numOperands,
                    ArrayRef<Value> elems, std::array<Value, 3> pid,
                    ArrayRef<SmallVector<Value>> indices,
                    ArrayRef<int> dimWidths, bool hex,
@@ -103,6 +102,7 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
     // with " " and ends with ": ").
 
     Value formatStrValue;
+    int formatStrByteCount = 0;
     for (int i = 0; i < elems.size(); i++) {
       std::string formatStr;
       llvm::raw_string_ostream os(formatStr);
@@ -144,10 +144,7 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
                               /*width=*/dimWidths[dim]);
         printfOperands.push_back(index[dim]);
       }
-      os << ")";
-
-      os << "%s";
-      printfOperands.push_back(prefixStr);
+      os << ")" << prefixStr;
 
       if (numOperands > 1) {
         os << "(operand " << operand << ") ";
@@ -162,9 +159,11 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
       // printfOperands.  But we don't want to create BLOCK_SIZE duplicate
       // strings, so we cache the Value.
       if (i == 0) {
-        formatStrValue = llPrintf(formatStr, printfOperands, rewriter);
+        formatStrValue =
+            llPrintf(formatStr, printfOperands, rewriter, &formatStrByteCount);
       } else {
-        targetInfo.printf(formatStrValue, printfOperands, rewriter);
+        targetInfo.printf(formatStrValue, formatStrByteCount, printfOperands,
+                          rewriter);
       }
     }
   }
@@ -217,9 +216,11 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
     return "";
   }
 
-  // Returns a Value for the format string, which you can reuse.
+  // Returns a Value for the format string, which you can reuse. Writes the byte
+  // count for the string to |formatStrByteCount| if not null.
   Value llPrintf(StringRef msg, ValueRange args,
-                 ConversionPatternRewriter &rewriter) const {
+                 ConversionPatternRewriter &rewriter,
+                 int *formatStrByteCount = nullptr) const {
     assert(!msg.empty() && "printf with empty string not supported");
     llvm::SmallString<64> msgNewline(msg);
     msgNewline.push_back('\n');
@@ -227,7 +228,10 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
     Value msgValue =
         LLVM::addStringToModule(UnknownLoc::get(rewriter.getContext()),
                                 rewriter, "printfFormat_", msgNewline);
-    targetInfo.printf(msgValue, args, rewriter);
+    int byteCount = msgNewline.size_in_bytes();
+    targetInfo.printf(msgValue, byteCount, args, rewriter);
+    if (formatStrByteCount)
+      *formatStrByteCount = byteCount;
     return msgValue;
   }
 
