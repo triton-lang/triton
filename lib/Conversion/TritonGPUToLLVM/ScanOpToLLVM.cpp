@@ -4,6 +4,10 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
+#include "llvm/ADT/STLExtras.h"
+
+#include <iterator>
+
 using namespace mlir;
 using namespace mlir::triton;
 
@@ -37,7 +41,9 @@ static SmallVector<Value> accumulate(ConversionPatternRewriter &rewriter,
 
   rewriter.inlineBlockBefore(&newScan, &*rewriter.getInsertionPoint(),
                              combineArgs);
-  auto results = returnOp.getResult();
+  SmallVector<Value> results;
+  llvm::transform(returnOp.getResult(), std::back_inserter(results),
+                  [&](Value res) { return rewriter.getRemappedValue(res); });
   // Delete the terminator, which is no longer used
   rewriter.eraseOp(returnOp);
   return results;

@@ -152,6 +152,9 @@ class Builder:
     def get_int64_ty(self):
         return tl.int64
 
+    def get_int32_ty(self):
+        return tl.int32
+
     def get_uint64_ty(self):
         return tl.uint64
 
@@ -178,6 +181,9 @@ class Builder:
 
     def get_uint32(self, value):
         return TensorHandle(np.array([value], dtype=np.uint32), tl.uint32)
+
+    def get_int1(self, value):
+        return TensorHandle(np.array([value], dtype=np.bool_), tl.int1)
 
     def get_int32(self, value):
         return TensorHandle(np.array([value], dtype=np.int32), tl.int32)

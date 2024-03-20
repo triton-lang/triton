@@ -109,6 +109,11 @@ def is_builtin(fn) -> bool:
     return getattr(fn, TRITON_BUILTIN, False)
 
 
+@builtin
+def to_tensor(x, _builder=None):
+    return _to_tensor(x, _builder)
+
+
 def _to_tensor(x, builder):
     if isinstance(x, bool):
         return tensor(builder.get_int1(x), int1)
