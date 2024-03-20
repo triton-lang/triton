@@ -690,6 +690,7 @@ def _patch_lang_math(lang):
         "exp2": np.exp2,
         "log2": np.log2,
         "max": np.maximum,
+        "fdiv": np.divide,
         "floor": np.floor,
         "div_rn": np.divide,
         "sqrt_rn": np.sqrt,

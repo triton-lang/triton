@@ -283,7 +283,7 @@ def _binary_op_dtype_override(a: str, b: str) -> Optional[np.dtype]:
 
 
 def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y='real', device='cuda', num_ctas=1,
-                 y_low=None, y_high=None):
+                 y_low=None, y_high=None, test_broadcast=True):
     check_type_supported(dtype_x, device)  # early return if dtype_x is not supported
     check_type_supported(dtype_y, device)
     SIZE = 128
@@ -297,7 +297,27 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
         z = GENERATE_TEST_HERE
         tl.store(Z + off, z)
 
-    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': expr})
+    @triton.jit
+    def kernel_broadcast_lhs(Z, X, Y, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        x = tl.load(X)
+        y = tl.load(Y + off)
+        z = GENERATE_TEST_HERE
+        tl.store(Z + off, z)
+
+    @triton.jit
+    def kernel_broadcast_rhs(Z, X, Y, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        x = tl.load(X + off)
+        y = tl.load(Y)
+        z = GENERATE_TEST_HERE
+        tl.store(Z + off, z)
+
+    replacements = {'GENERATE_TEST_HERE': expr}
+    kernel = patch_kernel(kernel, replacements)
+    kernel_broadcast_lhs = patch_kernel(kernel_broadcast_lhs, replacements)
+    kernel_broadcast_rhs = patch_kernel(kernel_broadcast_rhs, replacements)
+
     # inputs
     rs = RandomState(17)
     x = numpy_random(SIZE, dtype_str=dtype_x, rs=rs)
@@ -306,17 +326,25 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
         x[:] = float('nan')
     if mode_y == 'nan':
         y[:] = float('nan')
-    # reference result
-    z_ref = eval(expr if numpy_expr is None else numpy_expr)
-    dtype_z = _binary_op_dtype_override(dtype_x, dtype_y)
-    if dtype_z is not None:
-        z_ref = z_ref.astype(dtype_z)
-    # triton result
-    x_tri = to_triton(x, device=device, dst_type=dtype_x)
-    y_tri = to_triton(y, device=device, dst_type=dtype_y)
-    z_tri = to_triton(np.empty(SIZE, dtype=z_ref.dtype), device=device)
-    kernel[(1, )](z_tri, x_tri, y_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
-    np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=expr, atol=1e-3, rtol=0.01)
+
+    def do_test(x, y, kernel_fn):
+        # reference result
+        z_ref = eval(expr if numpy_expr is None else numpy_expr)
+        dtype_z = _binary_op_dtype_override(dtype_x, dtype_y)
+        if dtype_z is not None:
+            z_ref = z_ref.astype(dtype_z)
+        # triton result
+        x_tri = to_triton(x, device=device, dst_type=dtype_x)
+        y_tri = to_triton(y, device=device, dst_type=dtype_y)
+        z_tri = to_triton(np.empty(SIZE, dtype=z_ref.dtype), device=device)
+        kernel_fn[(1, )](z_tri, x_tri, y_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
+        err_msg = f"{expr}, {kernel_fn.__name__}"
+        np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=err_msg, atol=1e-3, rtol=0.01)
+
+    do_test(x, y, kernel)
+    if test_broadcast:
+        do_test(x[:1].reshape(()), y, kernel_broadcast_lhs)
+        do_test(x, y[:1].reshape(()), kernel_broadcast_rhs)
 
 
 def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
@@ -390,7 +418,11 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
         with pytest.raises(triton.TritonError, match='Cannot use .* because they have different signedness'):
             _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
     else:
-        _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
+        _test_binary(
+            dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas,
+            # fails with values where fmod(x, y) is roughly zero, but happens to
+            # pass with the random values chosen for non-broadcast tests
+            test_broadcast=(op != "%"))
 
 
 @pytest.mark.interpreter
@@ -431,6 +463,15 @@ def test_floordiv(dtype_x, dtype_y, num_ctas, device):
     expr = 'x // y'
     numpy_expr = '((x - np.fmod(x, y)) / y)'
     _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("expr", ["tl.math.fdiv(x, y)", "tl.math.div_rn(x, y)"])
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+def test_math_divide_op(expr, device, num_ctas):
+    numpy_expr = "x / y"
+    dtype = "float32"
+    _test_binary(dtype, dtype, expr, numpy_expr, device=device, num_ctas=num_ctas)
 
 
 def test_unsigned_name_mangling(device):
