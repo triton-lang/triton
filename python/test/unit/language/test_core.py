@@ -1635,6 +1635,7 @@ def test_split(device):
     np.testing.assert_equal(to_numpy(z2_ref), to_numpy(z2))
 
 
+@pytest.mark.interpreter
 def test_split_to_scalar(device):
 
     @triton.jit
@@ -2602,6 +2603,7 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis):
     np.testing.assert_allclose(z_ref, z_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
 
+@pytest.mark.interpreter
 def test_generic_reduction(device):
 
     @triton.jit
