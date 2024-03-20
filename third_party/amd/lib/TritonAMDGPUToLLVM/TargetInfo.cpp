@@ -85,4 +85,6 @@ bool TargetInfo::processReplicaUsingStMatrix(
   return false;
 }
 
+void TargetInfo::printf(Value msg, ValueRange args,
+                        ConversionPatternRewriter &rewriter) const {}
 } // namespace mlir::triton::AMD
