@@ -1968,7 +1968,7 @@ def _reduce_with_indices(input, axis, combine_fn, keep_dims=False, _builder=None
 # -----------------------
 
 
-def _add_scan_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None) -> Callable[[T], T]:
+def _add_scan_docstr(name: str) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
         docstr = """
