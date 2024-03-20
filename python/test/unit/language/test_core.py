@@ -418,10 +418,11 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
         with pytest.raises(triton.TritonError, match='Cannot use .* because they have different signedness'):
             _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
     else:
-        _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas,
-                     # fails with values where fmod(x, y) is roughly zero, but happens to
-                     # pass with the random values chosen for non-broadcast tests
-                     test_broadcast=(op != "%"))
+        _test_binary(
+            dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas,
+            # fails with values where fmod(x, y) is roughly zero, but happens to
+            # pass with the random values chosen for non-broadcast tests
+            test_broadcast=(op != "%"))
 
 
 @pytest.mark.interpreter
