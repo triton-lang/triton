@@ -465,6 +465,7 @@ def test_floordiv(dtype_x, dtype_y, num_ctas, device):
     _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("expr", ["tl.math.fdiv(x, y)", "tl.math.div_rn(x, y)"])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_math_divide_op(expr, device, num_ctas):
