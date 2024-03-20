@@ -36,7 +36,7 @@ class DependenciesFinder(ast.NodeVisitor):
         return self.hasher.hexdigest()
 
     def visit_Name(self, node):
-        if node.id in self.local_name:
+        if node.id in self.local_names:
             # The global name is hidden by the local name.
             return None
         return self.globals.get(node.id, None)
@@ -84,6 +84,15 @@ class DependenciesFinder(ast.NodeVisitor):
         # Save the local name which may hide the global name.
         self.local_names = [arg.arg for arg in node.args.args]
         self.generic_visit(node)
+
+    def visit_Assign(self, node):
+        _names = []
+        for target in node.targets:
+          _names += [target.id]
+        if len(_names) == 1:
+          self.local_names += _names
+        else:
+          raise TypeError(f"Simultaneous multiple assignment is not supported.")
 
 # -----------------------------------------------------------------------------
 # JITFunction
