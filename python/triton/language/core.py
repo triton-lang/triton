@@ -2398,7 +2398,13 @@ class range:
     :param arg1: the start value.
     :param arg2: the end value.
     :param step: the step value.
-    :param num_warps: the num_warps used by pipeliner value.
+    :param num_stages: pipeline the loop into this many stages (so there are
+        :code:`num_stages` iterations of the loop in flight at once).
+
+        Note this is subtly different than passing :code:`num_stages` as a
+        kernel argument.  The kernel argument only pipelines loads that feed
+        into :code:`dot` operations, while this attribute tries to pipeline most
+        (though not all) loads in this loop.
     """
 
     def __init__(self, arg1, arg2=None, step=None, num_stages=None):
