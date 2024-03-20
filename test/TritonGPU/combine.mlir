@@ -2290,3 +2290,27 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
     tt.return %b : tensor<2x16xf32, #blocked2>
   }
 }
+
+
+// -----
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 16], threadsPerWarp = [2, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+#mma = #triton_gpu.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 128, 32]}>
+#mma1 = #triton_gpu.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 256, 32]}>
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  // Verify that we don't hoist the convert on top of the broadcast. In general we should hoist the convert to reduce its cost
+  // but because this would combine the 1st and 2nd convert and since the 1st convert is known to be a no-op this would
+  // generate more expensive code.
+  // CHECK-LABEL: @hoist_with_free_convert
+  tt.func public @hoist_with_free_convert(%arg0: tensor<128x256xf32, #mma1>, %arg1: tensor<128x1xf32, #mma>) -> tensor<128x256xf32, #blocked> {
+    // CHECK: triton_gpu.convert_layout
+    // CHECK: tt.broadcast
+    // CHECK: triton_gpu.convert_layout
+    // CHECK: tt.return
+    %0 = triton_gpu.convert_layout %arg0 : tensor<128x256xf32, #mma1> -> tensor<128x256xf32, #mma>
+    %1 = tt.broadcast %arg1 : tensor<128x1xf32, #mma> -> tensor<128x256xf32, #mma>
+    %2 = arith.addf %0, %1 : tensor<128x256xf32, #mma>
+    %3 = triton_gpu.convert_layout %2 : tensor<128x256xf32, #mma> -> tensor<128x256xf32, #blocked>
+    tt.return %3 : tensor<128x256xf32, #blocked>
+  }
+}

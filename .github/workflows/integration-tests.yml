@@ -23,18 +23,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
-      matrix-required: ${{ steps.set-matrix.outputs.matrix-required }}
-      matrix-optional: ${{ steps.set-matrix.outputs.matrix-optional }}
+      matrix-CUDA: ${{ steps.set-matrix.outputs.matrix-CUDA }}
+      matrix-HIP: ${{ steps.set-matrix.outputs.matrix-HIP }}
     steps:
       - name: Prepare runner matrix
         id: set-matrix
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
-            echo '::set-output name=matrix-required::[["self-hosted", "A100"], ["self-hosted", "H100"]]'
-            echo '::set-output name=matrix-optional::[["self-hosted", "gfx908"], ["self-hosted", "arc770"]]'
+            echo '::set-output name=matrix-CUDA::[["self-hosted", "A100"], ["self-hosted", "H100"]]'
+            echo '::set-output name=matrix-HIP::[["self-hosted", "gfx90a"]]'
           else
-            echo '::set-output name=matrix-required::["ubuntu-latest"]'
-            echo '::set-output name=matrix-optional::["ubuntu-latest"]'
+            echo '::set-output name=matrix-CUDA::["ubuntu-latest"]'
+            echo '::set-output name=matrix-HIP::["ubuntu-latest"]'
           fi
 
   Integration-Tests:
@@ -45,7 +45,7 @@ jobs:
 
     strategy:
       matrix:
-        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-required)}}
+        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-CUDA)}}
 
     steps:
       - name: Checkout
@@ -118,7 +118,7 @@ jobs:
           TRITON_INTERPRET: "1"
         run: |
           cd python/test/unit
-          python3 -m pytest -vvv -n 4 -m interpreter language/test_core.py --device cpu
+          python3 -m pytest -vvv -n 8 -m interpreter language/test_core.py language/test_standard.py --device cpu
           python3 -m pytest -n 8 -m interpreter -vvv -s operators/test_flash_attention.py::test_op --device cpu
 
       - name: Run partial tests on CUDA
@@ -288,3 +288,61 @@ jobs:
         with:
           name: kernels-reference-check
           path: kernels_reference_check.txt
+
+
+  Integration-Tests-AMD:
+    needs: Runner-Preparation
+
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+
+    strategy:
+      matrix:
+        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-HIP)}}
+
+    container:
+      image: rocm/pytorch:rocm5.7_ubuntu22.04_py3.10_pytorch_2.0.1
+      options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v3
+        if: ${{ github.event_name == 'issue_comment' }}
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
+          submodules: 'true'
+
+      - name: Checkout
+        uses: actions/checkout@v3
+        if: ${{ github.event_name != 'issue_comment' }}
+        with:
+          submodules: 'true'
+
+      - name: Set ROCM ENV
+        run: |
+          echo "BACKEND=ROCM" >> "${GITHUB_ENV}"
+
+      - name: Clear cache
+        run: |
+          rm -rf ~/.triton
+
+      - name: Update PATH
+        run: |
+          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
+
+      - name: Check pre-commit
+        run: |
+          python3 -m pip install --upgrade pre-commit
+          git config --global --add safe.directory /__w/triton/triton
+          python3 -m pre_commit run --all-files --verbose
+
+      - name: Install Triton on ROCM
+        run: |
+          pip install --force-reinstall numpy==1.22.4
+          pip uninstall -y triton
+          cd python
+          pip install -e .
+      - name: Run python tests on ROCM
+        run: |
+          cd python
+          pytest --capture=tee-sys -rfs -v -n 32 ./test/unit/language/test_core.py

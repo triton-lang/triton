@@ -45,6 +45,8 @@ from .core import (
     broadcast_to,
     cat,
     clamp,
+    const,
+    const_pointer_type,
     constexpr,
     debug_barrier,
     device_assert,
@@ -142,6 +144,8 @@ __all__ = [
     "cat",
     "cdiv",
     "clamp",
+    "const",
+    "const_pointer_type",
     "constexpr",
     "cos",
     "cumprod",
@@ -245,7 +249,12 @@ __all__ = [
 
 def str_to_ty(name):
     if name[0] == "*":
-        ty = str_to_ty(name[1:])
+        name = name[1:]
+        if name[0] == "k":
+            name = name[1:]
+            ty = str_to_ty(name)
+            return const_pointer_type(ty)
+        ty = str_to_ty(name)
         return pointer_type(ty)
     tys = {
         "fp8e4nv": float8e4nv,
