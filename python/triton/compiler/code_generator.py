@@ -1098,8 +1098,9 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Attribute(self, node):
         lhs = self.visit(node.value)
-        if _is_triton_tensor(lhs) and node.attr == "T":
-            return language.semantic.permute(lhs, (1, 0), builder=self.builder)
+        if _is_triton_tensor(lhs):
+            if node.attr == "T":
+                return language.semantic.permute(lhs, (1, 0), builder=self.builder)
         return getattr(lhs, node.attr)
 
     def visit_Expr(self, node):
@@ -1116,14 +1117,12 @@ class CodeGenerator(ast.NodeVisitor):
             elif isinstance(value, ast.FormattedValue):
                 conversion_code = value.conversion
                 evaluated = self.visit(value.value)
-                # Check if evaluated is an ast Node
-                if isinstance(evaluated, ast.AST):
+                if not _is_constexpr(evaluated):
                     raise self._unsupported(
                         node,
                         "Cannot evaluate f-string containing non-constexpr conversion values, found conversion of type "
-                    )
-                values[i] = ("{}" if conversion_code < 0 else "{!" + chr(conversion_code) + "}").format(
-                    _unwrap_if_constexpr(evaluated))
+                        + str(type(evaluated)))
+                values[i] = ("{}" if conversion_code < 0 else "{!" + chr(conversion_code) + "}").format(evaluated.value)
             else:
                 raise AssertionError("encountered unexpected node of type {} in a JoinedStr node".format(type(value)))
         return ''.join(values)
