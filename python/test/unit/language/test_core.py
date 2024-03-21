@@ -283,7 +283,7 @@ def _binary_op_dtype_override(a: str, b: str) -> Optional[np.dtype]:
 
 
 def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y='real', device='cuda', num_ctas=1,
-                 y_low=None, y_high=None):
+                 y_low=None, y_high=None, test_broadcast=True):
     check_type_supported(dtype_x, device)  # early return if dtype_x is not supported
     check_type_supported(dtype_y, device)
     SIZE = 128
@@ -297,7 +297,27 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
         z = GENERATE_TEST_HERE
         tl.store(Z + off, z)
 
-    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': expr})
+    @triton.jit
+    def kernel_broadcast_lhs(Z, X, Y, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        x = tl.load(X)
+        y = tl.load(Y + off)
+        z = GENERATE_TEST_HERE
+        tl.store(Z + off, z)
+
+    @triton.jit
+    def kernel_broadcast_rhs(Z, X, Y, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        x = tl.load(X + off)
+        y = tl.load(Y)
+        z = GENERATE_TEST_HERE
+        tl.store(Z + off, z)
+
+    replacements = {'GENERATE_TEST_HERE': expr}
+    kernel = patch_kernel(kernel, replacements)
+    kernel_broadcast_lhs = patch_kernel(kernel_broadcast_lhs, replacements)
+    kernel_broadcast_rhs = patch_kernel(kernel_broadcast_rhs, replacements)
+
     # inputs
     rs = RandomState(17)
     x = numpy_random(SIZE, dtype_str=dtype_x, rs=rs)
@@ -306,17 +326,25 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
         x[:] = float('nan')
     if mode_y == 'nan':
         y[:] = float('nan')
-    # reference result
-    z_ref = eval(expr if numpy_expr is None else numpy_expr)
-    dtype_z = _binary_op_dtype_override(dtype_x, dtype_y)
-    if dtype_z is not None:
-        z_ref = z_ref.astype(dtype_z)
-    # triton result
-    x_tri = to_triton(x, device=device, dst_type=dtype_x)
-    y_tri = to_triton(y, device=device, dst_type=dtype_y)
-    z_tri = to_triton(np.empty(SIZE, dtype=z_ref.dtype), device=device)
-    kernel[(1, )](z_tri, x_tri, y_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
-    np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=expr, atol=1e-3, rtol=0.01)
+
+    def do_test(x, y, kernel_fn):
+        # reference result
+        z_ref = eval(expr if numpy_expr is None else numpy_expr)
+        dtype_z = _binary_op_dtype_override(dtype_x, dtype_y)
+        if dtype_z is not None:
+            z_ref = z_ref.astype(dtype_z)
+        # triton result
+        x_tri = to_triton(x, device=device, dst_type=dtype_x)
+        y_tri = to_triton(y, device=device, dst_type=dtype_y)
+        z_tri = to_triton(np.empty(SIZE, dtype=z_ref.dtype), device=device)
+        kernel_fn[(1, )](z_tri, x_tri, y_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
+        err_msg = f"{expr}, {kernel_fn.__name__}"
+        np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=err_msg, atol=1e-3, rtol=0.01)
+
+    do_test(x, y, kernel)
+    if test_broadcast:
+        do_test(x[:1].reshape(()), y, kernel_broadcast_lhs)
+        do_test(x, y[:1].reshape(()), kernel_broadcast_rhs)
 
 
 def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
@@ -390,7 +418,11 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
         with pytest.raises(triton.TritonError, match='Cannot use .* because they have different signedness'):
             _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
     else:
-        _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
+        _test_binary(
+            dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas,
+            # fails with values where fmod(x, y) is roughly zero, but happens to
+            # pass with the random values chosen for non-broadcast tests
+            test_broadcast=(op != "%"))
 
 
 @pytest.mark.interpreter
@@ -431,6 +463,15 @@ def test_floordiv(dtype_x, dtype_y, num_ctas, device):
     expr = 'x // y'
     numpy_expr = '((x - np.fmod(x, y)) / y)'
     _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("expr", ["tl.math.fdiv(x, y)", "tl.math.div_rn(x, y)"])
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+def test_math_divide_op(expr, device, num_ctas):
+    numpy_expr = "x / y"
+    dtype = "float32"
+    _test_binary(dtype, dtype, expr, numpy_expr, device=device, num_ctas=num_ctas)
 
 
 def test_unsigned_name_mangling(device):
@@ -1635,6 +1676,7 @@ def test_split(device):
     np.testing.assert_equal(to_numpy(z2_ref), to_numpy(z2))
 
 
+@pytest.mark.interpreter
 def test_split_to_scalar(device):
 
     @triton.jit
@@ -1970,7 +2012,7 @@ scan2d_shapes = [(8, 32), (16, 32), (32, 16), (2, 1024), (1024, 2), (32, 32), (1
 
 scan_configs = [(op, type, shape, axis, reverse, num_warps)
                 for num_warps in [4, 16]
-                for type in ['int32', 'float32']
+                for type in ['int32', 'float32', 'bfloat16']
                 for axis in [1, 0]
                 for reverse in [True, False]
                 for shape in scan2d_shapes
@@ -2004,6 +2046,12 @@ def roll(a1, b1_last, b1_cur, a2, b2_last, b2_cur):
 @pytest.mark.parametrize("op, dtype_str, shape, axis, reverse, num_warps", scan_configs + negative_config)
 def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, device):
     check_type_supported(dtype_str, device)
+    if dtype_str == 'bfloat16':
+        if op == 'cummax':
+            pytest.skip("bfloat16 compare not suppoted before sm90")
+        if op == 'linear_recurrence':
+            pytest.skip("Skipping linear_recurrence scan on bfloat16 due to accuracy issues")
+    numpy_dtype_str = 'float32' if dtype_str == 'bfloat16' else dtype_str
 
     # triton kernel
     @triton.jit
@@ -2056,12 +2104,11 @@ def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, device):
     if reverse:
         x_in = np.flip(x, axis)
     z = np.empty_like(x)
-    x_tri = to_triton(x, device=device)
-    y_tri = to_triton(y, device=device)
+    x_tri = to_triton(x, device=device, dst_type=dtype_str)
+    y_tri = to_triton(y, device=device, dst_type=dtype_str)
     if op == 'cumsum' or op == 'cumprod':
         numpy_op = {'cumsum': np.cumsum, 'cumprod': np.cumprod}[op]
-        z_dtype_str = dtype_str
-        z_ref = numpy_op(x_in, axis=axis).astype(getattr(np, z_dtype_str))
+        z_ref = numpy_op(x_in, axis=axis).astype(getattr(np, numpy_dtype_str))
         if reverse:
             z_ref = np.flip(z_ref, axis)
 
@@ -2118,12 +2165,13 @@ def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, device):
                 z_ref[:, 1:] = x[:, 0:1]
 
     # triton result
+    # we don't cast the `fp32 = bf16 op bf16` result to bfloat16 to alleviate accuracy issues
     z_tri = to_triton(z, device=device)
     kernel[(1, )](x_tri, y_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis, num_warps=num_warps)
 
     z_tri = to_numpy(z_tri)
     # compare
-    if dtype_str == 'float32':
+    if dtype_str not in int_dtypes:
         if op == 'cumprod':
             np.testing.assert_allclose(z_ref, z_tri, rtol=0.01, atol=1e-3)
         else:
@@ -2596,6 +2644,7 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis):
     np.testing.assert_allclose(z_ref, z_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
 
+@pytest.mark.interpreter
 def test_generic_reduction(device):
 
     @triton.jit
@@ -3230,6 +3279,67 @@ def test_constexpr(literal, dtype_str, device):
     out = torch.zeros((1, ), dtype=torch.float32, device=device)
     h = kernel_patched[(1, )](out)
     assert re.search(r"arith.constant .* : " + dtype_str, h.asm["ttir"]) is not None
+
+
+@triton.jit
+def pass_const(a, b, choose_b):
+    if choose_b:
+        return b
+    else:
+        return a
+
+
+@pytest.mark.parametrize("choose_const", [True, False])
+@pytest.mark.parametrize("constexpr", [True, False])
+@pytest.mark.parametrize("mode", ["direct", "call", "ternary", "if"])
+def test_const(device, choose_const, constexpr, mode):
+
+    @triton.jit(do_not_specialize=["choose_const"])
+    def kernel(in_ptr: tl.const, out, c_out: tl.const, choose_const, n_elems: tl.int32, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elems
+        val = tl.load(in_ptr + offsets, mask=mask)
+        LOSE_TAIL
+        tl.store(final_out + offsets, val, mask=mask)
+
+    @triton.jit
+    def kernel_constexpr(in_ptr: tl.const, out, c_out: tl.const, choose_const: tl.constexpr, n_elems: tl.int32,
+                         BLOCK_SIZE: tl.constexpr):
+        offsets = tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elems
+        val = tl.load(in_ptr + offsets, mask=mask)
+        LOSE_TAIL
+        tl.store(final_out + offsets, val, mask=mask)
+
+    if mode == "direct":
+        if choose_const:
+            LOSE_TAIL = "final_out = c_out"
+        else:
+            LOSE_TAIL = "final_out = out"
+    elif mode == "call":
+        LOSE_TAIL = "final_out = pass_const(out, c_out, choose_const)"
+    elif mode == "ternary":
+        LOSE_TAIL = "final_out = c_out if choose_const else out"
+    elif mode == "if":
+        LOSE_TAIL = """
+    if choose_const:
+        final_out = c_out
+    else:
+        final_out = out
+"""
+
+    SIZE = 128
+    input = torch.randn((SIZE, ), dtype=torch.float32, device=device)
+    output = torch.zeros((SIZE, ), dtype=torch.float32, device=device)
+    patched_kernel = patch_kernel(kernel_constexpr if constexpr else kernel, {'LOSE_TAIL': LOSE_TAIL, 'CONSTEXPR': ''})
+
+    expect_fail = (not constexpr and mode != "direct") or choose_const
+    if expect_fail:
+        with pytest.raises(triton.CompilationError) as exc_info:
+            patched_kernel[(1, )](input, output, output, choose_const, SIZE, SIZE)
+    else:
+        patched_kernel[(1, )](input, output, output, choose_const, SIZE, SIZE)
+        assert torch.all(input == output)
 
 
 @pytest.mark.interpreter

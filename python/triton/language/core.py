@@ -109,6 +109,11 @@ def is_builtin(fn) -> bool:
     return getattr(fn, TRITON_BUILTIN, False)
 
 
+@builtin
+def to_tensor(x, _builder=None):
+    return _to_tensor(x, _builder)
+
+
 def _to_tensor(x, builder):
     if isinstance(x, bool):
         return tensor(builder.get_int1(x), int1)
@@ -307,6 +312,10 @@ class dtype:
     def is_ptr():
         return False
 
+    @staticmethod
+    def is_const():
+        return False
+
     def __eq__(self, other: dtype):
         if not isinstance(other, dtype):
             return False
@@ -419,6 +428,23 @@ class pointer_type(dtype):
         return self
 
 
+class const_pointer_type(pointer_type):
+
+    def __init__(self, element_ty: dtype, address_space: int = 1):
+        super().__init__(element_ty, address_space)
+
+    def __str__(self):
+        return f'const_pointer<{self.element_ty}>'
+
+    def is_const(self):
+        return True
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, const_pointer_type):
+            return False
+        return self.element_ty == other.element_ty and self.address_space == other.address_space
+
+
 class block_type(dtype):
 
     def __init__(self, element_ty: dtype, shape: List):
@@ -512,6 +538,17 @@ pi32_t = pointer_type(int32)
 # -----------------------
 # constexpr
 # -----------------------
+
+
+class const:
+    """
+    This class is used as a type annotation to mark pointers to constant data.
+    The `store` function cannot be called with a pointer to const. Constness
+    is part of the pointer type and the usual Triton type consistency rules
+    apply. For example you cannot have a function that returns constant pointer
+    in one return statement and non-constant pointer in another.
+    """
+    pass
 
 
 class constexpr:
@@ -1934,7 +1971,7 @@ def _reduce_with_indices(input, axis, combine_fn, keep_dims=False, _builder=None
 # -----------------------
 
 
-def _add_scan_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None) -> Callable[[T], T]:
+def _add_scan_docstr(name: str) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
         docstr = """
@@ -2364,7 +2401,13 @@ class range:
     :param arg1: the start value.
     :param arg2: the end value.
     :param step: the step value.
-    :param num_warps: the num_warps used by pipeliner value.
+    :param num_stages: pipeline the loop into this many stages (so there are
+        :code:`num_stages` iterations of the loop in flight at once).
+
+        Note this is subtly different than passing :code:`num_stages` as a
+        kernel argument.  The kernel argument only pipelines loads that feed
+        into :code:`dot` operations, while this attribute tries to pipeline most
+        (though not all) loads in this loop.
     """
 
     def __init__(self, arg1, arg2=None, step=None, num_stages=None):

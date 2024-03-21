@@ -787,8 +787,11 @@ AMDWmmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
   SmallVector<unsigned> elemsPerThread(rank);
   auto mnkDim = getMNKDimPerWMMAInstr();
   auto elemsPerThreadPerTile = getSizePerThread();
-  return {ceil<unsigned>(shape[0], mnkDim[0]) * elemsPerThreadPerTile[0],
-          ceil<unsigned>(shape[1], mnkDim[1]) * elemsPerThreadPerTile[1]};
+  auto warpsPerCTA = getWarpsPerCTA();
+  return {ceil<unsigned>(shape[0], mnkDim[0] * warpsPerCTA[0]) *
+              elemsPerThreadPerTile[0],
+          ceil<unsigned>(shape[1], mnkDim[1] * warpsPerCTA[1]) *
+              elemsPerThreadPerTile[1]};
 }
 
 unsigned AMDWmmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
@@ -1534,8 +1537,8 @@ AMDMfmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
 
 SmallVector<unsigned>
 AMDWmmaEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
-  auto nonKDim = getMNKDimPerWMMAInstr()[0];
-  return {nonKDim * getWarpsPerCTA()[0], nonKDim * getWarpsPerCTA()[1]};
+  auto mnkDim = getMNKDimPerWMMAInstr();
+  return {mnkDim[0] * getWarpsPerCTA()[0], mnkDim[1] * getWarpsPerCTA()[1]};
 }
 SmallVector<unsigned> AMDWmmaEncodingAttr::getCTAsPerCGA() const {
   return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
