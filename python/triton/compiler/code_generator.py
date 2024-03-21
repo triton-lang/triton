@@ -1120,8 +1120,10 @@ class CodeGenerator(ast.NodeVisitor):
                 if isinstance(evaluated, ast.AST):
                     raise self._unsupported(
                         node,
-                        "Cannot evaluate f-string containing non-constexpr conversion values, found conversion of type ")
-                values[i] = ("{}" if conversion_code < 0 else "{!" + chr(conversion_code) + "}").format(_unwrap_if_constexpr(evaluated))
+                        "Cannot evaluate f-string containing non-constexpr conversion values, found conversion of type "
+                    )
+                values[i] = ("{}" if conversion_code < 0 else "{!" + chr(conversion_code) + "}").format(
+                    _unwrap_if_constexpr(evaluated))
             else:
                 raise AssertionError("encountered unexpected node of type {} in a JoinedStr node".format(type(value)))
         return ''.join(values)
