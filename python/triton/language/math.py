@@ -176,7 +176,7 @@ def fdiv(x, y, ieee_rounding=False, _builder=None):
 def div_rn(x, y, _builder=None):
     x = core._to_tensor(x, _builder)
     y = core._to_tensor(y, _builder)
-    core.binary_op_type_legalization(x, y, _builder)
+    x, y = core.binary_op_type_legalization(x, y, _builder)
     return core.tensor(_builder.create_precise_divf(x.handle, y.handle), x.type)
 
 
