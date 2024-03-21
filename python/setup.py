@@ -65,9 +65,9 @@ class BackendInstaller:
 
     # Copy all in-tree backends under triton/third_party.
     @staticmethod
-    def copy(active):
+    def copy(actives):
         ret = []
-        for backend, download_dependencies in active:
+        for backend, download_dependencies in actives:
             if download_dependencies:
                 download_dependencies()
             ret.append(BackendInstaller.prepare(backend))
@@ -165,7 +165,7 @@ def open_url(url):
         'User-Agent': user_agent,
     }
     request = urllib.request.Request(url, None, headers)
-    # Set timeout to 300 seconds to prevent the request from hanging forver
+    # Set timeout to 300 seconds to prevent the request from hanging forever
     return urllib.request.urlopen(request, timeout=300)
 
 
@@ -399,14 +399,14 @@ def download_nvidia_dependencies():
     )
 
 
-def get_codegen_backends():
-    intree_backends = [("nvidia", download_nvidia_dependencies), ("amd", None)]
-    backends = os.environ.get("TRITON_CODEGEN_BACKENDS", "nvidia;amd").split(";")
-    active_backends = [backend.strip() for backend in backends if len(backend.strip())]
-    return [(backend, download_deps) for backend, download_deps in intree_backends if backend in active_backends]
+def get_codegen_backends_to_build():
+    available_backends = [("nvidia", download_nvidia_dependencies), ("amd", None)]
+    # Default to building both nvidia and amd backends if the environment variable isn't set
+    backends_to_build = os.environ.get("TRITON_CODEGEN_BACKENDS", "nvidia;amd").split(";")
+    return [(backend, download_deps) for backend, download_deps in available_backends if backend in backends_to_build]
 
 
-backends = [*BackendInstaller.copy(get_codegen_backends()), *BackendInstaller.copy_externals()]
+backends = [*BackendInstaller.copy(get_codegen_backends_to_build()), *BackendInstaller.copy_externals()]
 
 
 def add_link_to_backends():

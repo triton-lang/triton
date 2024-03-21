@@ -26,3 +26,5 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     LINK_LIBS PUBLIC
     TritonGPUToLLVM
 )
+
+target_compile_definitions(TritonNVIDIAGPUToLLVM PUBLIC USE_CUDA)

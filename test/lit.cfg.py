@@ -52,6 +52,11 @@ config.filecheck_dir = os.path.join(config.triton_obj_root, 'bin', 'FileCheck')
 # it can be explicitly opted-in by prefixing the variable name with $
 config.environment["FILECHECK_OPTS"] = "--enable-var-scope"
 
+# Add the available backends to the list of available features, this lets
+# us skip running lit tests whose backends aren't built.
+for backend in config.backends.split(';'):
+    config.available_features.add(backend.lower())
+
 tool_dirs = [config.triton_tools_dir, config.llvm_tools_dir, config.filecheck_dir]
 
 # Tweak the PATH to include the tools dir.

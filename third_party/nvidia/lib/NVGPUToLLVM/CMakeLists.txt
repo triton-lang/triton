@@ -4,3 +4,5 @@ add_triton_library(NVGPUToLLVM
     DEPENDS
     NVGPUConversionPassIncGen
 )
+
+target_compile_definitions(NVGPUToLLVM PUBLIC USE_CUDA)
