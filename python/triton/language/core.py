@@ -535,6 +535,30 @@ float64 = dtype('fp64')
 # pointer types
 pi32_t = pointer_type(int32)
 
+
+def get_int_dtype(bitwidth: int, signed: bool) -> dtype:
+    if bitwidth == 1:
+        return int1
+    elif bitwidth == 8 and signed:
+        return int8
+    elif bitwidth == 8 and not signed:
+        return uint8
+    elif bitwidth == 16 and signed:
+        return int16
+    elif bitwidth == 16 and not signed:
+        return uint16
+    elif bitwidth == 32 and signed:
+        return int32
+    elif bitwidth == 32 and not signed:
+        return uint32
+    elif bitwidth == 64 and signed:
+        return int64
+    elif bitwidth == 64 and not signed:
+        return uint64
+    else:
+        raise ValueError(f'Unsupported bitwidth {bitwidth} and signedness {signed}')
+
+
 # -----------------------
 # constexpr
 # -----------------------
@@ -664,6 +688,9 @@ class constexpr:
 
     def __pow__(self, other):
         return constexpr(self.value**_constexpr_to_value(other))
+
+    def __rpow__(self, other):
+        return constexpr(_constexpr_to_value(other)**self.value)
 
     def __rshift__(self, other):
         return constexpr(self.value >> _constexpr_to_value(other))
