@@ -1,3 +1,4 @@
+// This file is generated: $ python3 generate_accelerate_matmul_tests.py 1 ../../../test/TritonGPU/accelerate-matmul-cdna1.mlir
 // RUN: (! triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul=arch-generation-name=gfx908 --mlir-pass-pipeline-crash-reproducer=%t 2>/dev/null) | FileCheck --check-prefixes=CHECK %s
 
 !a_ty = f16
