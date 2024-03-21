@@ -510,10 +510,8 @@ struct AbsIOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    auto boolFalse = rewriter.getBoolAttr(false);
-    auto constFalse = rewriter.create<LLVM::ConstantOp>(loc, boolFalse);
     return {rewriter.create<LLVM::AbsOp>(loc, elemTy, operands[0][0],
-                                         /*is_int_min_poison=*/constFalse)};
+                                         /*is_int_min_poison=*/false)};
   }
 };
 
