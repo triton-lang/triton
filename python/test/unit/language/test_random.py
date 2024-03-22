@@ -114,6 +114,7 @@ BLOCK = 1024
 # test generation of random uint32
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize('size, seed, dtype, const_seed', [(size, seed, dtype, const_seed)
                                                            for size in ['10', '4,53', '400']
                                                            for seed in [0, 42, 124, 54, 0xffffffff, 0x0000000fcafeb0ba]
@@ -156,7 +157,7 @@ def test_randint(size, seed, device, dtype, const_seed):
 
 # test uniform PRNG
 
-
+@pytest.mark.interpreter
 @pytest.mark.parametrize('size, seed, dtype, const_seed', [(size, seed, dtype, const_seed)
                                                            for size in [100000]
                                                            for seed in [0, 42, 124, 54]

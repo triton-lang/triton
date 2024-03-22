@@ -743,7 +743,18 @@ def _patch_lang(fn):
 def _implicit_cvt(arg):
     if isinstance(arg, int):
         ty = tl.str_to_ty(triton.runtime.jit.JITFunction._type_of(triton.runtime.jit.JITFunction._key_of(arg)))
-        handle = TensorHandle(np.array([arg], dtype=np.int32), ty)
+        dtype = np.int32
+        if -2**31 <= arg < 2**31:
+            dtype = np.int32
+        elif 2**31 <= arg < 2**32:
+            dtype = np.uint32
+        elif -2**63 <= arg < 2**63:
+            dtype = np.int64
+        elif 2**63 <= arg < 2**64:
+            dtype = np.uint64
+        else:
+            raise ValueError(f"Unsupported integer value {arg}")
+        handle = TensorHandle(np.array([arg], dtype=dtype), ty)
         return tl.tensor(handle, ty)
     if hasattr(arg, "data_ptr"):
         ty = tl.str_to_ty(triton.runtime.jit.JITFunction._type_of(triton.runtime.jit.JITFunction._key_of(arg)))
