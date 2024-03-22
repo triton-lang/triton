@@ -687,6 +687,8 @@ def _patch_lang_math(lang):
         "abs": np.abs,
         "acos": np.arccos,
         "asin": np.arcsin,
+        "exp": np.exp,
+        "log": np.log,
         "exp2": np.exp2,
         "log2": np.log2,
         "max": np.maximum,
