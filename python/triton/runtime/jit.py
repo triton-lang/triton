@@ -88,7 +88,7 @@ class DependenciesFinder(ast.NodeVisitor):
     def visit_Assign(self, node):
         _names = []
         for target in node.targets:
-            _names += [target.id]
+            _names += [self.visit(target)]
         if len(_names) == 1:
             self.local_names += _names
         else:
