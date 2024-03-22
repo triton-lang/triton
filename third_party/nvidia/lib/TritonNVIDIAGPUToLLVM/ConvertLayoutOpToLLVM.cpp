@@ -167,21 +167,29 @@ private:
       rewriter.replaceOp(op, adaptor.getSrc());
       return success();
     }
-    // get source values
-    auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    auto dstMmaLayout = dstTy.getEncoding().cast<NvidiaMmaEncodingAttr>();
+    auto srcMmaLayout = srcTy.getEncoding().cast<NvidiaMmaEncodingAttr>();
+    assert(dstMmaLayout.isHopper() && srcMmaLayout.isHopper() &&
+           "only MMAV3 layout is supported");
+    auto dstShape = dstTy.getShape();
+    auto shapePerCTA = getShapePerCTA(dstMmaLayout, dstShape);
+    ArrayRef<unsigned int> dstInstrShape = dstMmaLayout.getInstrShape();
+    ArrayRef<unsigned int> srcInstrShape = srcMmaLayout.getInstrShape();
     SmallVector<Value> retVals;
-    SmallVector<unsigned> dstElementPerThread =
-        triton::gpu::getElemsPerThread(dstTy);
-    SmallVector<unsigned> srcElementPerThread =
-        triton::gpu::getElemsPerThread(srcTy);
-    for (unsigned j = 0; j < dstElementPerThread[0]; j++) {
-      for (unsigned i = 0; i < dstElementPerThread[1]; i++) {
-        if (i >= srcElementPerThread[1] || j >= srcElementPerThread[0]) {
-          retVals.push_back(undef(vals[0].getType()));
-          continue;
+    unsigned numBlockM =
+        ceil<unsigned>(shapePerCTA[0], getShapePerCTATile(dstMmaLayout)[0]);
+    unsigned numBlockN =
+        ceil<unsigned>(shapePerCTA[1], getShapePerCTATile(dstMmaLayout)[1]);
+    // Remap the values based on MMAV3 layout, there may be duplicated values in
+    // either the source or destination.
+    auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    for (unsigned i = 0; i < numBlockM; i++) {
+      for (unsigned j = 0; j < numBlockN; j++) {
+        for (unsigned k = 0; k < dstInstrShape[1] / 2; k++) {
+          int index = i * numBlockN * (srcInstrShape[1] / 2) + j +
+                      (k % (srcInstrShape[1] / 2));
+          retVals.push_back(vals[index]);
         }
-        unsigned index = i + j * srcElementPerThread[1];
-        retVals.push_back(vals[index]);
       }
     }
     assert(retVals.size() == triton::gpu::getTotalElemsPerThread(dstTy));

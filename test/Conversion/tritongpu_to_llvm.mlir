@@ -1549,3 +1549,15 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     tt.return
   }
 }
+
+// -----
+
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
+  // CHECK-LABEL: abs_is_int_min_poison
+  // CHECK: %{{.*}} = "llvm.intr.abs"(%{{.*}}) <{is_int_min_poison = false}> : (i32) -> i32
+  tt.func @abs_is_int_min_poison(%arg0 : tensor<256xi32, #blocked0>) {
+    %abs = math.absi %arg0 : tensor<256xi32, #blocked0>
+    tt.return
+  }
+}
