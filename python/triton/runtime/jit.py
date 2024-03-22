@@ -93,6 +93,7 @@ class DependenciesFinder(ast.NodeVisitor):
             self.local_names += _names
         else:
             raise TypeError("Simultaneous multiple assignment is not supported.")
+        self.generic_visit(node)
 
 
 # -----------------------------------------------------------------------------
