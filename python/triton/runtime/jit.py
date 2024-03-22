@@ -88,11 +88,12 @@ class DependenciesFinder(ast.NodeVisitor):
     def visit_Assign(self, node):
         _names = []
         for target in node.targets:
-          _names += [target.id]
+            _names += [target.id]
         if len(_names) == 1:
-          self.local_names += _names
+            self.local_names += _names
         else:
-          raise TypeError("Simultaneous multiple assignment is not supported.")
+            raise TypeError("Simultaneous multiple assignment is not supported.")
+
 
 # -----------------------------------------------------------------------------
 # JITFunction
