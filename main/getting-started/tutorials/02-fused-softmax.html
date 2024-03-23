@@ -282,17 +282,17 @@ We will then compare its performance against (1) <code class="code docutils lite
 </div>
 <img src="../../_images/sphx_glr_02-fused-softmax_001.png" srcset="../../_images/sphx_glr_02-fused-softmax_001.png" alt="02 fused softmax" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>softmax-performance:
           N       Triton  Torch (native)  Torch (jit)
-0     256.0   356.173905      682.666643   256.000001
-1     384.0   534.260858      877.714274   311.088617
-2     512.0   712.347810      910.222190   334.367358
-3     640.0   819.200021      975.238103   372.363633
-4     768.0  1023.999964     1023.999964   384.000001
+0     256.0   143.719295      744.727267   252.061538
+1     384.0   211.862064      819.200021   311.088617
+2     512.0   277.694907      910.222190   341.333321
+3     640.0   353.103439      930.909084   372.363633
+4     768.0   431.157886     1023.999964   384.000001
 ..      ...          ...             ...          ...
-93  12160.0  1601.316858     1066.082150   461.589552
-94  12288.0  1604.963246     1016.061996   463.698115
-95  12416.0  1602.064538     1026.645975   461.454135
-96  12544.0  1599.235121     1013.656595   461.919458
-97  12672.0  1602.782573     1003.722794   462.376291
+93  12160.0  1601.316858     1069.010969   461.589552
+94  12288.0  1604.963246     1018.694301   464.245579
+95  12416.0  1595.630495     1029.305700   460.918801
+96  12544.0  1599.235121     1013.656595   462.451627
+97  12672.0  1596.472358     1006.213368   462.376291
 
 [98 rows x 4 columns]
 </pre></div>
@@ -305,7 +305,7 @@ Note however that the PyTorch <cite>softmax</cite> operation is more general and
 </ul>
 </dd>
 </dl>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 48.500 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 41.284 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-02-fused-softmax-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/034d953b6214fedce6ea03803c712b89/02-fused-softmax.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">02-fused-softmax.ipynb</span></code></a></p>
