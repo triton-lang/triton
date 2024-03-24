@@ -13,14 +13,14 @@ jobs:
 
     steps:
       - name: Checkout branch
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           token: ${{ secrets.CI_PAT }}
           fetch-depth: 0
 
       - name: Clear docs
         run: |
-          rm -r /tmp/triton-docs
+          rm -rf /tmp/triton-docs
         continue-on-error: true
 
       - name: Install dependent packages
@@ -45,7 +45,7 @@ jobs:
           sudo cp -r CNAME /tmp/triton-docs/
           sudo cp -r index.html /tmp/triton-docs/
           sudo cp -r .nojekyll /tmp/triton-docs/
-          sudo rm -r *
+          sudo rm -rf *
           sudo cp -r /tmp/triton-docs/* .
           sudo git add .
           sudo git config --global user.email "N/A"
