@@ -102,8 +102,6 @@ struct TritonAMDGPUDotSlicingPass
                             int operandIdx, int loopIter, int sliceSizeK,
                             OpBuilder builder,
                             SmallVector<Operation *> &eraseOps) {
-    auto ptrTensor = firstOpToSlice->getOperand(0);
-    auto ptrTensorType = ptrTensor.getType().cast<RankedTensorType>();
     auto dotOperand = dotOp.getOperand(operandIdx);
     auto dotOperandTy = dotOp.getType().cast<RankedTensorType>();
 
@@ -123,17 +121,24 @@ struct TritonAMDGPUDotSlicingPass
       sliceOffsets.push_back(0);
     }
 
-    auto viewPtr = builder.create<ttg::ViewSliceOp>(
-        dotOp.getLoc(),
-        RankedTensorType::get(sliceSizes, ptrTensorType.getElementType(),
-                              ptrTensorType.getEncoding()),
-        ptrTensor, ValueRange({}), ValueRange({}), ValueRange({}), sliceOffsets,
-        sliceSizes, sliceStrides);
-
     // Begin with the load instruction and proceed to slice the operations
     // along the execution path of the dotOperand.
     IRMapping mapping;
-    mapping.map(ptrTensor, viewPtr);
+    ttg::ViewSliceOp viewPtr;
+    for (auto i = 0; i < firstOpToSlice->getOperands().size(); i++) {
+      auto arg = firstOpToSlice->getOperand(i);
+      if (auto tensorType = arg.getType().dyn_cast<RankedTensorType>()) {
+        auto slice = builder.create<ttg::ViewSliceOp>(
+            dotOp.getLoc(),
+            RankedTensorType::get(sliceSizes, tensorType.getElementType(),
+                                  tensorType.getEncoding()),
+            arg, ValueRange({}), ValueRange({}), ValueRange({}), sliceOffsets,
+            sliceSizes, sliceStrides);
+        mapping.map(arg, slice);
+        if (i == 0)
+          viewPtr = slice;
+      }
+    }
 
     Operation *currOp = firstOpToSlice;
     Operation *slicedOp = nullptr;
