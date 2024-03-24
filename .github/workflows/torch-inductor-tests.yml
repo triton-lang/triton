@@ -27,7 +27,7 @@ jobs:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix)}}
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Packages
         run: |
           ./.github/workflows/torch-inductor/scripts/install_torchinductor.sh torchbench
