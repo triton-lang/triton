@@ -161,6 +161,9 @@ class Builder:
     def get_block_ty(self, dtype, shape):
         return tl.block_type(dtype, shape)
 
+    def get_int1(self, value):
+        return TensorHandle(np.array([value], dtype=np.bool_), tl.int1)
+
     def get_uint8(self, value):
         return TensorHandle(np.array([value], dtype=np.uint8), tl.uint8)
 
@@ -175,9 +178,6 @@ class Builder:
 
     def get_uint32(self, value):
         return TensorHandle(np.array([value], dtype=np.uint32), tl.uint32)
-
-    def get_int1(self, value):
-        return TensorHandle(np.array([value], dtype=np.bool_), tl.int1)
 
     def get_int32(self, value):
         return TensorHandle(np.array([value], dtype=np.int32), tl.int32)
