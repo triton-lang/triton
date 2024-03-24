@@ -248,6 +248,7 @@ def _attn_fwd_inner(
        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1, num_warps=4),
    ],
    key=['hq', 'hk', 'IS_CAUSAL', 'dropout_p', 'BLOCK_DMODEL'],
+   use_cuda_graph=True,
 )
 @triton.jit
 def attn_fwd(
