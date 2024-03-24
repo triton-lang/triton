@@ -305,9 +305,10 @@ compared to 1*64 when the hasLeadingOffset is false.
           int perPhase = 128 / (shapePerCTA[order[0]] * 4 / dotOpEnc.getKWidth());
           perPhase = std::max<int>(perPhase, 1);
           std::vector<size_t> matShape = {8, 8, 4 * dotOpEnc.getKWidth()};
-          // for now, disable swizzle when using transposed int8 tensor cores
-          if ((32 / typeWidthInBit != dotOpEnc.getKWidth()) && order[0] == inner)
-            return get(context, 1, 1, 1, order, CTALayout);
+          int vecWidth = 32 / typeWidthInBit;
+          if (vecWidth != dotOpEnc.getKWidth() && order[0] == inner) {
+              perPhase = std::max<int>(perPhase, 2 * vecWidth);
+          }
           int rank = order.size();
           // --- handle A operand ---
           if (opIdx == 0) { // compute swizzling for A operand
