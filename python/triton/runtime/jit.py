@@ -459,15 +459,11 @@ class JITFunction(KernelInterface[T]):
         if not warmup:
             args = [arg.value for arg in args if not arg.param.is_constexpr]
             metadata = kernel.metadata
-
-            kernel.run(grid_0, grid_1, grid_2, metadata.num_warps,
-                       metadata.num_ctas,  # number of warps/ctas per instance
-                       metadata.cluster_dims[0], metadata.cluster_dims[1], metadata.cluster_dims[2],  # cluster
-                       metadata.shared, stream, kernel.function, CompiledKernel.launch_enter_hook,
-                       CompiledKernel.launch_exit_hook, metadata, *args)
+            kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.metadata,
+                       CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, *args)
         return kernel
 
-    def __init__(self, fn, version=None, do_not_specialize=None, debug=None, noinline=None):
+    def __init__(self, fn, version=None, do_not_specialize=None, debug=None, noinline=None, repr=None):
         do_not_specialize = do_not_specialize if do_not_specialize else []
 
         self.fn = fn
@@ -476,6 +472,7 @@ class JITFunction(KernelInterface[T]):
         self.signature = inspect.signature(fn)
         self.do_not_specialize = do_not_specialize
         self.starting_line_number = inspect.getsourcelines(fn)[1]
+        self.repr = lambda _: fn.__name__ if repr is None else repr(_)
 
         self.params = []
         for i, param in enumerate(self.signature.parameters.values()):
@@ -593,6 +590,7 @@ def jit(
     fn: Optional[T] = None,
     *,
     version=None,
+    repr: Optional[Callable] = None,
     do_not_specialize: Optional[Iterable[int]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
@@ -627,6 +625,7 @@ def jit(
                 do_not_specialize=do_not_specialize,
                 debug=debug,
                 noinline=noinline,
+                repr=repr,
             )
 
     if fn is not None:

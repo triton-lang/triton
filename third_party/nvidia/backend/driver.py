@@ -135,7 +135,7 @@ def make_launcher(constants, signature, ids):
             "uint64_t": "K",
         }[ty]
 
-    format = "iiiiiiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
+    format = "iiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
 
     # generate glue code
     params = [i for i in signature.keys() if i not in constants]
@@ -269,24 +269,32 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   int gridX, gridY, gridZ;
   uint64_t _stream;
   uint64_t _function;
-  int num_warps;
-  int num_ctas;
-  int clusterDimX;
-  int clusterDimY;
-  int clusterDimZ;
-  int shared_memory;
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
   PyObject *metadata = NULL;
   {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &num_ctas, &clusterDimX, &clusterDimY, &clusterDimZ, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &metadata{', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''})) {{
+  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &_stream, &_function, &metadata, &launch_enter_hook, &launch_exit_hook {', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''})) {{
     return NULL;
   }}
+
+  // extract compilation metadata
+  int num_warps     = PyLong_AsLong(PyObject_GetAttrString(metadata, "num_warps"));
+  int num_ctas      = PyLong_AsLong(PyObject_GetAttrString(metadata, "num_ctas"));
+  int shared_memory = PyLong_AsLong(PyObject_GetAttrString(metadata, "shared"));
+
+  // extract cluster dims
+  PyObject *clusterDim =  PyObject_GetAttrString(metadata, "cluster_dims");
+  if (!PyTuple_Check(metadata)) {{
+    PyErr_SetString(PyExc_TypeError, "metadata.clusTER_DIMS must be a tuple");
+    return NULL;
+  }}
+  int clusterDimX   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 0));
+  int clusterDimY   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 1));
+  int clusterDimZ   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 2));
 
   if (launch_enter_hook != Py_None && !PyObject_CallObject(launch_enter_hook, args)) {{
     return NULL;
   }}
-
 
   // raise exception asap
   {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};

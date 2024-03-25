@@ -304,6 +304,7 @@ class CompiledKernel:
         from collections import namedtuple
         metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
         self.metadata = json.loads(metadata_path.read_text())
+        self.metadata['cluster_dims'] = tuple(self.metadata['cluster_dims'])
         KernelMetadata = namedtuple('KernelMetadata', sorted(list(self.metadata.keys())))
         self.metadata = KernelMetadata(**self.metadata)
         self.src = src
@@ -350,9 +351,7 @@ class CompiledKernel:
             if stream is None:
                 device = driver.active.get_current_device()
                 stream = driver.active.get_current_stream(device)
-            md = self.metadata
-            self.run(grid[0], grid[1], grid[2], md.num_warps, md.num_ctas, md.cluster_dims[0], md.cluster_dims[1],
-                     md.cluster_dims[2], md.shared, stream, self.function, CompiledKernel.launch_enter_hook,
-                     CompiledKernel.launch_exit_hook, md, *args)
+            self.run(grid[0], grid[1], grid[2], stream, self.function, self.metadata, CompiledKernel.launch_enter_hook,
+                     CompiledKernel.launch_exit_hook, *args)
 
         return runner
