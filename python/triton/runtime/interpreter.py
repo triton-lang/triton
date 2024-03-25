@@ -115,7 +115,7 @@ def _umulhi_64(a, b):
 
 np_erf_fp32 = np.vectorize(_erf, otypes=[np.float32])
 np_erf_fp64 = np.vectorize(_erf, otypes=[np.float64])
-np_umulhi_64 = np.vectorize(_umulhi_64, otypes=[np.uint64])
+np_umulhi_u64 = np.vectorize(_umulhi_64, otypes=[np.uint64])
 
 
 class InterpreterBuilder:
@@ -336,7 +336,7 @@ class InterpreterBuilder:
     def create_umulhi(self, lhs, rhs):
         dtype = lhs.data.dtype
         if dtype == np.int64 or dtype == np.uint64:
-            return TensorHandle(np_umulhi_64(lhs.data, rhs.data), lhs.dtype)
+            return TensorHandle(np_umulhi_u64(lhs.data, rhs.data), lhs.dtype)
         else:
             compute_dtype = getattr(np, f"uint{dtype.itemsize * 8 * 2}")
             lhs_data = lhs.data.astype(compute_dtype)
