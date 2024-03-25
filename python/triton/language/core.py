@@ -401,13 +401,13 @@ class pointer_type(dtype):
         self.element_ty = element_ty
         self.address_space = address_space
 
-        self.name = self.__str__()
+        self.name = f'pointer<{element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.pointer_type:
         return builder.get_ptr_ty(self.element_ty.to_ir(builder), 1)
 
     def __str__(self):
-        return f'pointer<{self.element_ty}>'
+        return self.name
 
     def __repr__(self):
         return self.__str__()
