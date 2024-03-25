@@ -379,9 +379,15 @@ collectOpsToPipeline(scf::ForOp forOp,
   }
   assert(maxDistance >= 0);
 
+  // Hold the mapping from a loadOp to its parent loadOp, which
+  // is used for removing invalid loadOps later.
+  DenseMap<Operation *, tt::LoadOp> loadOpToParent;
   // Start by initializing PipelinedOpInfo for users of the loads.
-  for (auto &[loadOp, distAndUse] : loadOpToDistAndUse)
+  for (auto &[loadOp, distAndUse] : loadOpToDistAndUse) {
     opInfo[distAndUse.second] = PipelinedOpInfo();
+    if (isa<tt::LoadOp>(distAndUse.second))
+      loadOpToParent[distAndUse.second] = loadOp;
+  }
 
   unsigned stagesBetweenLoads = ceil<unsigned>(numStages - 2, maxDistance + 1);
 
@@ -409,6 +415,29 @@ collectOpsToPipeline(scf::ForOp forOp,
     loadInfo.stage = stage;
     loadInfo.use = distAndUse.second;
     opInfo[loadOp] = loadInfo;
+  }
+
+  // A loadOp may not have valid stage info, e.g. for cases where the loaded
+  // value is not directly consumed by any dot op. In such cases, we should
+  // remove the loadOp and all the recursive parents from the candidates to
+  // be pipelined.
+  DenseSet<Operation *> invalidLoadOps;
+  for (auto &[op, info] : opInfo) {
+    if (!isa<tt::LoadOp>(op) || info.stage != -1)
+      continue;
+
+    invalidLoadOps.insert(op);
+    Operation *currOp = op;
+    while (true) {
+      auto iter = loadOpToParent.find(currOp);
+      if (iter == loadOpToParent.end())
+        break;
+      invalidLoadOps.insert(iter->second.getOperation());
+      currOp = iter->second;
+    }
+  }
+  for (auto invalidOp : invalidLoadOps) {
+    opInfo.erase(invalidOp);
   }
 
   // Last, find root load users (i.e. users that aren't used by another stage of
