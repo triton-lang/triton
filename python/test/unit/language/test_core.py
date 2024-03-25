@@ -918,7 +918,6 @@ def test_math_erf_op(dtype, device):
     z_ref = torch.erf(x)
     z_tri = torch.zeros_like(x)
     kernel[(1, )](z_tri, x, SIZE=SIZE, num_warps=4)
-    print(z_tri, z_ref)
     torch.testing.assert_close(z_tri, z_ref)
 
 
@@ -3516,7 +3515,6 @@ def test_masked_load(dtype_str, size, size_diff, other, num_ctas, device):
     kernel[(1, )](input, output, input_size, output_size, num_ctas=num_ctas)
 
     reference_out = torch.cat((input, torch.full((size_diff, ), other, dtype=dtype, device=device)))
-    # print((output - reference_out).nonzero())
     torch.testing.assert_close(output, reference_out)
 
 

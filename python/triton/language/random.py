@@ -57,7 +57,7 @@ def philox(seed, c0, c1, c2, c3, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     else:
         tl.static_assert(tl.constexpr(c0.dtype.primitive_bitwidth) == 64, "bitwidth not supported in philox")
         int_dtype = tl.uint64
-        seed_hi = 0
+        seed_hi = tl.full((1, ), 0, dtype=int_dtype)
         seed_lo = seed
     c0 = c0.to(int_dtype, bitcast=True)
     c1 = c1.to(int_dtype, bitcast=True)
