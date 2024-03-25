@@ -1545,7 +1545,7 @@ void populateElementwiseOpToLLVMPatterns(
                                                     axisInfoAnalysis, benefit);
   mlir::triton::populateMinMaxFOpToLLVMPattern(
       typeConverter, patterns, axisInfoAnalysis,
-      false /*hwNanPropagationSupported*/, benefit);
+      /*hwNanPropagationSupported=*/false, benefit);
   mlir::triton::populateClampFOpToLLVMPattern(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
 }
