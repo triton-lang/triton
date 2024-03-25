@@ -221,6 +221,15 @@ class SharedLayout:
         return f"#{GPU_DIALECT}.shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
 
 
+def filter_layouts(layouts):
+    if is_cuda():
+        return [l for l in layouts if not isinstance(l, MfmaLayout)]
+    elif is_hip():
+        return [l for l in layouts if not isinstance(l, MmaLayout)]
+    else:
+        return layouts
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x", list(dtypes) + ["bfloat16"])
 def test_empty_kernel(dtype_x, device):
@@ -2442,16 +2451,12 @@ layouts = [
 
 
 @pytest.mark.parametrize("M, N", [[128, 16], [128, 128], [64, 64], [32, 128], [32, 32], [16, 16]])
-@pytest.mark.parametrize("src_layout", layouts)
+@pytest.mark.parametrize("src_layout", filter_layouts(layouts))
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("epilogue_kind", ['reduce1d', 'reduce2d', 'expand_reduce2d'])
 @pytest.mark.parametrize("dtype_str", ["int32", "float32", "float16"])
 @pytest.mark.parametrize("reduce_op", ["sum", "max"])
 def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce_op, device):
-    if is_hip() and isinstance(src_layout, MmaLayout):
-        pytest.skip("MmaLayout is not supported on HIP")
-    if not is_hip() and isinstance(src_layout, MfmaLayout):
-        pytest.skip("MfmaLayout is not supported on CUDA")
     if is_hip() and isinstance(src_layout, MfmaLayout) and (M < src_layout.instr_shape[0]
                                                             or N < src_layout.instr_shape[1]):
         pytest.skip("Skipping because tensor shape is smaller than MfmaLayout isntr_shape")
@@ -2624,13 +2629,12 @@ layouts = [
 
 
 @pytest.mark.parametrize("M", [64, 128, 256])
-@pytest.mark.parametrize("src_layout", layouts)
-@pytest.mark.parametrize("dst_layout", layouts)
+@pytest.mark.parametrize("src_layout", filter_layouts(layouts))
+@pytest.mark.parametrize("dst_layout", filter_layouts(layouts))
 @pytest.mark.parametrize("src_dim", [0, 1])
 @pytest.mark.parametrize("dst_dim", [0, 1])
 def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device):
-    if is_hip() and isinstance(src_layout, MmaLayout):
-        pytest.skip("MmaLayout is not supported on HIP")
+
     ir = f"""
     #dst = {dst_layout}
     #src = {src_layout}
