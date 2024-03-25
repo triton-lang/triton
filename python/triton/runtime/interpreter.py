@@ -103,6 +103,7 @@ def _get_np_dtype(tt_dtype):
 
 
 def _erf(x):
+    # Numpy does not support erf
     return math.erf(x)
 
 
@@ -337,7 +338,6 @@ class InterpreterBuilder:
         if dtype == np.int64 or dtype == np.uint64:
             return TensorHandle(np_umulhi_64(lhs.data, rhs.data), lhs.dtype)
         else:
-            # Fast path, using numpy's uint64 multiplication
             compute_dtype = getattr(np, f"uint{dtype.itemsize * 8 * 2}")
             lhs_data = lhs.data.astype(compute_dtype)
             rhs_data = rhs.data.astype(compute_dtype)
