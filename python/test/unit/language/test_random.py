@@ -157,6 +157,7 @@ def test_randint(size, seed, device, dtype, const_seed):
 
 # test uniform PRNG
 
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize('size, seed, dtype, const_seed', [(size, seed, dtype, const_seed)
                                                            for size in [100000]
@@ -194,6 +195,7 @@ def test_rand(size, seed, dtype, device, const_seed):
 # test normal PRNG
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize('size, seed, dtype, const_seed', [(size, seed, dtype, const_seed)
                                                            for size in [100000]
                                                            for seed in [0, 42, 124, 54]
@@ -230,6 +232,7 @@ def test_randn(size, seed, dtype, device, const_seed):
 # tl.rand() should never produce >=1.0
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize('dtype', ['int32', 'int64'])
 def test_rand_limits(dtype, device):
 
