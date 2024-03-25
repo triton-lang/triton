@@ -2587,14 +2587,11 @@ def test_store_op(M, src_layout, device):
 
 
 layouts = [
-    BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [1, 32], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+    # TODO (lixun): Add MfmaLayout
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
     MmaLayout(version=(2, 0), warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1],
               instr_shape=[16, 8])
-] if not is_hip() else [
-    # TODO (lixun): Add MfmaLayout
-    BlockedLayout([1, 4], [1, 64], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [1, 64], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1])
 ]
 
 
