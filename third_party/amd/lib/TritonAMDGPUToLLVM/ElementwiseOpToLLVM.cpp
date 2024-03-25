@@ -1511,11 +1511,11 @@ void populateElementwiseOpToLLVMPatterns(
     ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
     int computeCapability, const TargetInfo &targetInfo,
     PatternBenefit benefit) {
-  // fmin (return non-NaN if either op is non-NaN)
-  patterns.add<ElementwiseOpConversion<arith::MinNumFOp, LLVM::MinNumOp>>(
+  // fmin (return NaN if either op is NaN)
+  patterns.add<ElementwiseOpConversion<arith::MinimumFOp, LLVM::MinimumOp>>(
       typeConverter, axisInfoAnalysis, benefit);
-  // fmax (return non-NaN if either op is non-NaN)
-  patterns.add<ElementwiseOpConversion<arith::MaxNumFOp, LLVM::MaxNumOp>>(
+  // fmax (return NaN if either op is NaN)
+  patterns.add<ElementwiseOpConversion<arith::MaximumFOp, LLVM::MaximumOp>>(
       typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ElementwiseOpConversion<triton::PreciseDivFOp, LLVM::FDivOp>>(
       typeConverter, axisInfoAnalysis, benefit);
