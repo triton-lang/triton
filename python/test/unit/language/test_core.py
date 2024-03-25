@@ -3253,7 +3253,7 @@ def test_max_num_imprecise_acc(device):
 
 
 @pytest.mark.parametrize('in_dtype', ['float32'])
-def test_dot_mulbroadcastred(in_dtype, device):
+def test_dot_mulbroadcasted(in_dtype, device):
     if is_cuda():
         capability = torch.cuda.get_device_capability()
         if capability[0] < 8:
@@ -3297,10 +3297,9 @@ def test_dot_mulbroadcastred(in_dtype, device):
     if not is_cuda():
         return
     assert "tt.dot" in h.asm['ttir']
-    # when using MMAv3, we will not pipeline the load op for Y
-    # as the loaded value is in rowmajor. But MMAv3 requires it's second
-    # operand is in colmajor because transpose is not supported for MMAv3
-    # with float32 input.
+    # When using MMAv3, we will not pipeline the load op for Y, as the loaded
+    # value is in rowmajor. But MMAv3 requires its second operand is in colmajor
+    # because transpose is not supported for MMAv3 with float32 input.
     if capability[0] >= 9:
         assert re.search(r"triton_gpu.async_wait %.* {num = 1 : i32}", h.asm["ttgir"]) is not None
     else:
