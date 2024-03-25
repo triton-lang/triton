@@ -102,7 +102,9 @@ class ASTSource:
 
     def hash(self):
         sorted_sig = [v for k, v in sorted(self.signature.items())]
-        sorted_constants = [(k, v) for k, v in sorted(self.constants.items())]
+        # Note - we stringify the keys here to allow sorting to work for cases
+        # where constants have mixed int/str keys.
+        sorted_constants = sorted((str(k), v) for k, v in self.constants.items())
         key = f"{self.fn.cache_key}-{self.attrs.hash()}-{sorted_sig}-{sorted_constants}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
