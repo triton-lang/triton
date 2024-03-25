@@ -1561,3 +1561,25 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     tt.return
   }
 }
+
+// -----
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [1, 8], order = [1, 0]}>
+#shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], hasLeadingOffset = false}>
+module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  tt.func public @test(%arg0: !tt.ptr<i64, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i8, 1> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<bf16, 1> {tt.divisibility = 16 : i32}) {
+    %cst = arith.constant dense<true> : tensor<1x2048xi1, #blocked>
+    %c0_i32 = arith.constant 0 : i32
+    %2 = tt.make_range {end = 2048 : i32, start = 0 : i32} : tensor<2048xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
+    %3 = tt.expand_dims %2 {axis = 0 : i32} : tensor<2048xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>> -> tensor<1x2048xi32, #blocked>
+    %4 = arith.extsi %3 : tensor<1x2048xi32, #blocked> to tensor<1x2048xi64, #blocked>
+    %12 = tt.splat %arg2 : !tt.ptr<bf16, 1> -> tensor<1x2048x!tt.ptr<bf16, 1>, #blocked>
+    %19 = triton_gpu.local_alloc  : () -> !tt.memdesc<1x1x2048xbf16, #shared, mutable>
+    %21 = tt.addptr %12, %4 : tensor<1x2048x!tt.ptr<bf16, 1>, #blocked>, tensor<1x2048xi64, #blocked>
+    %22 = triton_gpu.memdesc_subview %19[%c0_i32, %c0_i32, %c0_i32] : !tt.memdesc<1x1x2048xbf16, #shared, mutable> -> !tt.memdesc<1x2048xbf16, #shared, mutable>
+    %23 = triton_gpu.async_copy_global_to_local %21, %22 mask %cst {cache = 1 : i32, evict = 3 : i32, isVolatile = false} : tensor<1x2048x!tt.ptr<bf16, 1>, #blocked> -> <1x2048xbf16, #shared, mutable>
+    %24 = triton_gpu.async_commit_group %23
+    %39 = triton_gpu.local_load %22 : !tt.memdesc<1x2048xbf16, #shared, mutable> -> tensor<1x2048xbf16, #blocked>
+    %40 = arith.extf %39 : tensor<1x2048xbf16, #blocked> to tensor<1x2048xf32, #blocked>
+    tt.return
+  }
+}
