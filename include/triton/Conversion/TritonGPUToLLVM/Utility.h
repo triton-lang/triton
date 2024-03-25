@@ -1250,7 +1250,8 @@ loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
       srcTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
   auto srcElemTy = srcTy.getElementType();
   auto dstElemTy = dstTy.getElementType();
-  LDBG("loadSharedToDistributed elemTy " << elemTy << " srcElemTy " << srcElemTy << " dstElemTy " << dstElemTy);
+  LDBG("loadSharedToDistributed elemTy " << elemTy << " srcElemTy " << srcElemTy
+                                         << " dstElemTy " << dstElemTy);
   auto inOrd = triton::gpu::getOrder(srcSharedLayout);
   auto outOrd = triton::gpu::getOrder(dstDistributedLayout);
   unsigned outVec = inOrd == outOrd
