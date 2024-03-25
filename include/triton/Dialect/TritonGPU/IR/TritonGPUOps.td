@@ -24,22 +24,6 @@ class TTG_Op<string mnemonic, list<Trait> traits = []> :
        !listconcat(traits, [VerifyTensorLayoutsTrait])> {
 }
 
-class TTG_Type<string name, string typeMnemonic,
-        list<Trait> traits = []> : TypeDef<TritonGPU_Dialect, name, traits> {
-  let mnemonic = typeMnemonic;
-}
-
-def TTG_AsyncToken : TTG_Type<"AsyncToken",
-                                    "async.token", []> {
-  let summary = "async token type";
-  let description = [{
-    `ttg.async.token` is a type returned by an asynchronous operation.
-    It is used to establish an SSA-based link between async operations
-    and operations that group or synchronize the async operations.
-  }];
-}
-
-
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
                                  [SameOperandsAndResultShape,
                                   SameOperandsAndResultElementType,
