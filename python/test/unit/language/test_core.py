@@ -2454,7 +2454,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
         pytest.skip("MfmaLayout is not supported on CUDA")
     if is_hip() and isinstance(src_layout, MfmaLayout) and (M < src_layout.instr_shape[0]
                                                             or N < src_layout.instr_shape[1]):
-        pytest.skip("MfmaLayout does not support < 32 shape")
+        pytest.skip("Skipping because tensor shape is smaller than MfmaLayout isntr_shape")
     if is_hip() and isinstance(src_layout, MfmaLayout) and ((M, N) == (128, 128)):
         pytest.skip("Skipping test because it runs out of shared memory")
     if reduce_op == "sum" and dtype_str == "float16" and M * N > 1024:
