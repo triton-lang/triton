@@ -397,7 +397,7 @@ class pointer_type(dtype):
 
     def __init__(self, element_ty: dtype, address_space: int = 1):
         if not isinstance(element_ty, dtype):
-            raise TypeError('element_ty is a {type(element_ty).__name__}.')
+            raise TypeError(f'element_ty is a {type(element_ty).__name__}.')
         self.element_ty = element_ty
         self.address_space = address_space
 
