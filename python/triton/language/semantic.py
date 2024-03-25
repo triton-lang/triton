@@ -1406,19 +1406,14 @@ def wrap_tensor(x, scalar_ty, ret_shape):
 
 def reduction(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, builder: ir.builder) -> Tuple[tl.tensor, ...]:
     if axis is None:
-        new_inputs = []
-        for i in range(len(inputs)):
-            new_shape = [inputs[i].numel.value]
-            new_inputs.append(view(inputs[i], new_shape, builder))
-        inputs = tuple(new_inputs)
+        inputs = tuple(view(t, [t.numel.value], builder) for t in inputs)
         axis = 0
     # get result shape
     shape = inputs[0].type.shape
     rank = len(shape)
     assert axis < rank, f"reduction axis must be < inputs rank ({rank})"
     ret_shape = [s for i, s in enumerate(shape) if i != axis]
-    for t in inputs:
-        assert t.type.shape == shape, "all reduction inputs must have the same shape"
+    assert all(t.type.shape == shape for t in inputs), "all reduction inputs must have the same shape"
 
     reduce_op = builder.create_reduce([t.handle for t in inputs], axis)
     region_builder_fn(reduce_op)
