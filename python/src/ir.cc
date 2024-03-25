@@ -379,7 +379,8 @@ void init_triton_ir(py::module &&m) {
              llvm::raw_string_ostream os(str);
              auto printingFlags = OpPrintingFlags();
              bool dumpLoc = !::triton::tools::getBoolEnv("DISABLE_LOC_DUMP");
-             if (dumpLoc) printingFlags.enableDebugInfo();
+             if (dumpLoc)
+               printingFlags.enableDebugInfo();
              self->print(os, printingFlags);
              return str;
            })
@@ -445,7 +446,8 @@ void init_triton_ir(py::module &&m) {
              llvm::raw_string_ostream os(str);
              auto printingFlags = OpPrintingFlags();
              bool dumpLoc = !::triton::tools::getBoolEnv("DISABLE_LOC_DUMP");
-             if (dumpLoc) printingFlags.enableDebugInfo();
+             if (dumpLoc)
+               printingFlags.enableDebugInfo();
              self.print(os, printingFlags);
              return str;
            })
