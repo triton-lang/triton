@@ -1502,9 +1502,7 @@ def device_print(prefix: str, args: List[tl.tensor], hex: bool, builder: ir.buil
     if len(prefix) > 2 and not prefix.startswith(" "):
         prefix = " " + prefix
 
-    new_args = []
-    for arg in args:
-        new_args.append(arg.handle)
+    new_args = [arg.handle for arg in args]
     return tl.tensor(builder.create_print(prefix, hex, new_args), tl.void)
 
 
