@@ -397,17 +397,17 @@ class pointer_type(dtype):
 
     def __init__(self, element_ty: dtype, address_space: int = 1):
         if not isinstance(element_ty, dtype):
-            raise TypeError('element_ty is a {type(element_ty).__name__}.')
+            raise TypeError(f'element_ty is a {type(element_ty).__name__}.')
         self.element_ty = element_ty
         self.address_space = address_space
 
-        self.name = self.__str__()
+        self.name = f'pointer<{element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.pointer_type:
         return builder.get_ptr_ty(self.element_ty.to_ir(builder), 1)
 
     def __str__(self):
-        return f'pointer<{self.element_ty}>'
+        return self.name
 
     def __repr__(self):
         return self.__str__()
@@ -466,13 +466,13 @@ class block_type(dtype):
         if self.numel > TRITON_MAX_TENSOR_NUMEL:
             raise ValueError(f"numel ({self.numel}) exceeds triton maximum tensor numel ({TRITON_MAX_TENSOR_NUMEL})")
 
-        self.name = self.__str__()
+        self.name = f'<{self.shape}, {self.element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.block_type:
         return builder.get_block_ty(self.element_ty.to_ir(builder), self.shape)
 
     def __str__(self):
-        return f'<{self.shape}, {self.element_ty}>'
+        return self.name
 
     def __repr__(self):
         return self.__str__()
