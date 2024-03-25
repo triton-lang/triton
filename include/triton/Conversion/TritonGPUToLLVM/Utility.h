@@ -1250,6 +1250,8 @@ loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
       srcTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
   auto srcElemTy = srcTy.getElementType();
   auto dstElemTy = dstTy.getElementType();
+  LDBG("loadSharedToDistributed elemTy " << elemTy << " srcElemTy " << srcElemTy
+                                         << " dstElemTy " << dstElemTy);
   auto inOrd = triton::gpu::getOrder(srcSharedLayout);
   auto outOrd = triton::gpu::getOrder(dstDistributedLayout);
   unsigned outVec = inOrd == outOrd
@@ -1281,7 +1283,7 @@ loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
     auto valVec = load(wordTy, smemAddr);
     valVec.setAlignment(minVec * elemTy.getIntOrFloatBitWidth() / 8);
     for (unsigned v = 0; v < minVec; ++v) {
-      Value currVal = extract_element(dstElemTy, valVec, i32_val(v));
+      Value currVal = extract_element(elemTy, valVec, i32_val(v));
       outVals[i * minVec + v] = currVal;
     }
   }
@@ -1407,6 +1409,8 @@ static Value packLLElements(Location loc,
           << v.value();
     }
     if (v.value().getType() != elementTypes[v.index()]) {
+      LDBG("type " << type << " structType " << structType);
+      LDBG("value " << v.value());
       emitError(loc) << "invalid element type in packLLEElements. Expected "
                      << elementTypes[v.index()] << " but got "
                      << v.value().getType();
