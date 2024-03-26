@@ -303,17 +303,16 @@ class CompiledKernel:
     def __init__(self, src, metadata_group, hash):
         from collections import namedtuple
         metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
-        self.metadata = json.loads(metadata_path.read_text())
-        self.metadata['cluster_dims'] = tuple(self.metadata['cluster_dims'])
-        KernelMetadata = namedtuple('KernelMetadata', sorted(list(self.metadata.keys())))
-        self.metadata = KernelMetadata(**self.metadata)
+        metadata = json.loads(metadata_path.read_text())
+        metadata['cluster_dims'] = tuple(metadata['cluster_dims'])
+        KernelMetadata = namedtuple('KernelMetadata', sorted(list(metadata.keys())))
+        self.kernel_metadata = KernelMetadata(**metadata)
         self.src = src
         self.hash = hash
-
-        self.name = self.metadata.name
+        self.name = self.kernel_metadata.name
         # stores the text of each level of IR that was generated during compilation
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
-        binary_ext = make_backend(self.metadata.target).binary_ext
+        binary_ext = make_backend(self.kernel_metadata.target).binary_ext
         self.asm = {
             file.suffix[1:]: file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
             for file in asm_files
@@ -330,19 +329,30 @@ class CompiledKernel:
             return
         device = driver.active.get_current_device()
         # create launcher
-        self.run = driver.active.launcher_cls(self.src, self.metadata)
+        self.run = driver.active.launcher_cls(self.src, self.kernel_metadata)
         # not enough shared memory to run the kernel
         max_shared = driver.active.utils.get_device_properties(device)["max_shared_mem"]
-        if self.metadata.shared > max_shared:
-            raise OutOfResources(self.metadata.shared, max_shared, "shared memory")
+        if self.kernel_metadata.shared > max_shared:
+            raise OutOfResources(self.kernel_metadata.shared, max_shared, "shared memory")
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
-            self.name, self.kernel, self.metadata.shared, device)
+            self.name, self.kernel, self.kernel_metadata.shared, device)
 
     def __getattribute__(self, name):
         if name == 'run':
             self._init_handles()
         return super().__getattribute__(name)
+
+    def launch_metadata(self, grid_0, grid_1, grid_2, stream, *args):
+        if CompiledKernel.launch_enter_hook is None:
+            return dict()
+        ret = {"name": self.name}
+        if not isinstance(self.src, ASTSource) or \
+           self.src.fn.launch_metadata is None:
+            return ret
+        args_dict = {k: v for k, v in zip(self.src.fn.arg_names, args)}
+        md = self.src.fn.launch_metadata(grid_0, grid_1, grid_2, stream, self.function, self.kernel_metadata, args_dict)
+        return ret | md
 
     def __getitem__(self, grid):
         self._init_handles()
@@ -351,7 +361,8 @@ class CompiledKernel:
             if stream is None:
                 device = driver.active.get_current_device()
                 stream = driver.active.get_current_stream(device)
-            self.run(grid[0], grid[1], grid[2], stream, self.function, self.metadata, CompiledKernel.launch_enter_hook,
-                     CompiledKernel.launch_exit_hook, *args)
+            launch_metadata = self.launch_metadata(grid[0], grid[1], grid[2], stream, *args)
+            self.run(grid[0], grid[1], grid[2], stream, self.function, self.kernel_metadata, launch_metadata,
+                     CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, *args)
 
         return runner

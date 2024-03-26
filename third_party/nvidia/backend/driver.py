@@ -135,7 +135,9 @@ def make_launcher(constants, signature, ids):
             "uint64_t": "K",
         }[ty]
 
-    format = "iiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
+    args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
+    format = "iiiKKOOOO" + args_format
+    args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
 
     # generate glue code
     params = [i for i in signature.keys() if i not in constants]
@@ -271,29 +273,37 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   uint64_t _function;
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
-  PyObject *metadata = NULL;
+  PyObject *kernel_metadata = NULL;
+  PyObject *launch_metadata = NULL;
   {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &_stream, &_function, &metadata, &launch_enter_hook, &launch_exit_hook {', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''})) {{
+  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &_stream, &_function,
+                                           &kernel_metadata, &launch_metadata,
+                                           &launch_enter_hook, &launch_exit_hook {args_list})) {{
     return NULL;
   }}
 
-  // extract compilation metadata
-  int num_warps     = PyLong_AsLong(PyObject_GetAttrString(metadata, "num_warps"));
-  int num_ctas      = PyLong_AsLong(PyObject_GetAttrString(metadata, "num_ctas"));
-  int shared_memory = PyLong_AsLong(PyObject_GetAttrString(metadata, "shared"));
+  // extract kernel metadata
+  int num_warps     = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "num_warps"));
+  int num_ctas      = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "num_ctas"));
+  int shared_memory = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "shared"));
 
   // extract cluster dims
-  PyObject *clusterDim =  PyObject_GetAttrString(metadata, "cluster_dims");
-  if (!PyTuple_Check(metadata)) {{
-    PyErr_SetString(PyExc_TypeError, "metadata.clusTER_DIMS must be a tuple");
+  PyObject *clusterDim =  PyObject_GetAttrString(kernel_metadata, "cluster_dims");
+  if (!PyTuple_Check(kernel_metadata)) {{
+    PyErr_SetString(PyExc_TypeError, "kernel_metadata.cluster_dims must be a tuple");
     return NULL;
   }}
   int clusterDimX   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 0));
   int clusterDimY   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 1));
   int clusterDimZ   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 2));
 
-  if (launch_enter_hook != Py_None && !PyObject_CallObject(launch_enter_hook, args)) {{
-    return NULL;
+  // extract launch metadata
+  if (launch_enter_hook != Py_None){{
+    PyObject* args = Py_BuildValue("(O)", launch_metadata);
+    PyObject* ret = PyObject_CallObject(launch_enter_hook, args);
+    Py_DECREF(args);
+    if (!ret)
+      return NULL;
   }}
 
   // raise exception asap
@@ -305,8 +315,13 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
     return NULL;
   }}
 
-  if (launch_exit_hook != Py_None && !PyObject_CallObject(launch_exit_hook, args)) {{
-    return NULL;
+  if(launch_exit_hook != Py_None){{
+    PyObject* args = Py_BuildValue("(O)", launch_metadata);
+    PyObject* ret = PyObject_CallObject(launch_exit_hook, args);
+    Py_DECREF(args);
+    if (!ret)
+      return NULL;
+
   }}
 
   // return None

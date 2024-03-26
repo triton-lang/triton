@@ -458,12 +458,13 @@ class JITFunction(KernelInterface[T]):
 
         if not warmup:
             args = [arg.value for arg in args if not arg.param.is_constexpr]
-            metadata = kernel.metadata
-            kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.metadata,
+            launch_metadata = kernel.launch_metadata(grid_0, grid_1, grid_2, stream, *args)
+            kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.kernel_metadata, launch_metadata,
                        CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, *args)
         return kernel
 
-    def __init__(self, fn, version=None, do_not_specialize=None, debug=None, noinline=None, repr=None):
+    def __init__(self, fn, version=None, do_not_specialize=None, debug=None, noinline=None, repr=None,
+                 launch_metadata=None):
         do_not_specialize = do_not_specialize if do_not_specialize else []
 
         self.fn = fn
@@ -473,6 +474,7 @@ class JITFunction(KernelInterface[T]):
         self.do_not_specialize = do_not_specialize
         self.starting_line_number = inspect.getsourcelines(fn)[1]
         self.repr = lambda _: fn.__name__ if repr is None else repr(_)
+        self.launch_metadata = launch_metadata
 
         self.params = []
         for i, param in enumerate(self.signature.parameters.values()):
@@ -579,6 +581,8 @@ def jit(fn: T) -> JITFunction[T]:
 def jit(
     *,
     version=None,
+    repr: Optional[Callable] = None,
+    launch_metadata: Optional[Callable] = None,
     do_not_specialize: Optional[Iterable[int]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
@@ -591,6 +595,7 @@ def jit(
     *,
     version=None,
     repr: Optional[Callable] = None,
+    launch_metadata: Optional[Callable] = None,
     do_not_specialize: Optional[Iterable[int]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
@@ -626,6 +631,7 @@ def jit(
                 debug=debug,
                 noinline=noinline,
                 repr=repr,
+                launch_metadata=launch_metadata,
             )
 
     if fn is not None:
