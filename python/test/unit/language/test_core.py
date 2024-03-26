@@ -2945,6 +2945,8 @@ def convert_fp8_to_fp32(x, device, dtype_str):
      for float8_type in ["float8e5", "float8e4nv"]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, out_dtype, num_ctas, device):
+    if is_hip():
+        pytest.skip("Skipping test until we fix bug in amd backend (to use layout order)")
     check_cuda_only(device)
 
     capability = torch.cuda.get_device_capability()
