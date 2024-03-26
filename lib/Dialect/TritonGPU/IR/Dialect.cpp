@@ -165,8 +165,18 @@ SmallVector<unsigned> getContigPerThread(Attribute layout) {
     SmallVector<unsigned> contigPerThread(rank, 1);
     contigPerThread[rank - 1] = 2;
     return contigPerThread;
-  } else if (layout.isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>()) {
-    return {1, 1};
+  } else if (auto wmmaLayout = layout.dyn_cast<AMDWmmaEncodingAttr>()) {
+    auto rank = triton::gpu::getOrder(wmmaLayout).size();
+    SmallVector<unsigned> contigPerThread(rank, 1);
+    return contigPerThread;
+  } else if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
+    auto rank = triton::gpu::getOrder(mfmaLayout).size();
+    SmallVector<unsigned> contigPerThread(rank, 1);
+    contigPerThread[0] = 4;
+    if (mfmaLayout.getIsTransposed()) {
+      std::reverse(contigPerThread.begin(), contigPerThread.end());
+    }
+    return contigPerThread;
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parentLayout = sliceLayout.getParent();
     return getContigPerThread(parentLayout);
@@ -241,6 +251,11 @@ SmallVector<unsigned> getOrder(Attribute layout) {
     SmallVector<unsigned> order(rank);
     for (auto i = 0; i < rank; ++i)
       order[i] = rank - 1 - i;
+    if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
+      if (mfmaLayout.getIsTransposed()) {
+        std::reverse(order.begin(), order.end());
+      }
+    }
     return order;
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
     auto rank = getWarpsPerCTA(dotLayout.getParent()).size();
