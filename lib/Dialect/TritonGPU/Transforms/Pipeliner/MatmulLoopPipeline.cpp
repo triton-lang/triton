@@ -395,6 +395,11 @@ collectOpsToPipeline(scf::ForOp forOp,
             getSharedEncIfAllUsersAreDotEnc(loadOp.getResult())
                 .value_or(nullptr);
       }
+      // TODO(jlebar): Remove this if statement, which effectively rolls back
+      // back https://github.com/openai/triton/pull/3415, once internal bugs are
+      // fixed.
+      if (!loadInfo.sharedEncoding)
+        continue;
     }
 
     // If we still don't have a shared encoding, try a "generic" shared
