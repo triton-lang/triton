@@ -561,12 +561,11 @@ class ReduceOps(ReduceScanOpIneterface):
     def unravel(self, input, axis):
         ret = []
         for data in input:
-            if isinstance(data, tl.core.tensor):
-                if axis is not None:
-                    ret.append(data)
-                else:
-                    axis = 0
-                    ret.append(self.to_tensor(data.handle.data.flatten(), data.dtype))
+            if axis is not None:
+                ret.append(data)
+            else:
+                axis = 0
+                ret.append(self.to_tensor(data.handle.data.flatten(), data.dtype))
         return tuple(ret), axis
 
     def generic_reduce(self, input):
