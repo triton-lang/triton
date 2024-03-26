@@ -986,13 +986,13 @@ module attributes {"triton_gpu.compute-capability" = 86 : i32, "triton_gpu.num-c
 // CHECK-DAG: %[[CONSTANT_1:.*]] = arith.constant 1 : i32
 // CHECK:   %[[ABUFFER:.*]] = triton_gpu.local_alloc
 // CHECK:   %[[BBUFFER:.*]] = triton_gpu.local_alloc
-// CHECK:   %[[A0BUFFER:.*]] = triton_gpu.memdesc_subview %[[ABUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   %[[A0BUFFER:.*]] = triton_gpu.memdesc_subview %[[ABUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]]]
 // CHECK:   triton_gpu.async_copy_global_to_local {{.*}}, %[[A0BUFFER]]
-// CHECK:   %[[B0BUFFER:.*]] = triton_gpu.memdesc_subview %[[BBUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   %[[B0BUFFER:.*]] = triton_gpu.memdesc_subview %[[BBUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]]]
 // CHECK:   triton_gpu.async_copy_global_to_local {{.*}}, %[[B0BUFFER]]
-// CHECK:   %[[A1BUFFER:.*]] = triton_gpu.memdesc_subview %[[ABUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   %[[A1BUFFER:.*]] = triton_gpu.memdesc_subview %[[ABUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]]]
 // CHECK:   triton_gpu.async_copy_global_to_local {{.*}}, %[[A1BUFFER]]
-// CHECK:   %[[B1BUFFER:.*]] = triton_gpu.memdesc_subview %[[BBUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   %[[B1BUFFER:.*]] = triton_gpu.memdesc_subview %[[BBUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]]]
 // CHECK:   triton_gpu.async_copy_global_to_local {{.*}}, %[[B1BUFFER]]
 // CHECK:   scf.for
 #blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
