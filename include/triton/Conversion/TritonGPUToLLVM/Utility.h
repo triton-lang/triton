@@ -778,13 +778,20 @@ emitBaseIndexForMfmaLayout(Location loc, RewriterBase &rewriter,
   Value laneId = urem(threadId, effectiveWarpSize);
 
   Value warpId = udiv(threadId, warpSize);
-  Value warpId0 =
-      urem(urem(warpId, warpsPerCTA[0]), i32_val(shape[0] / nonKDim));
-  Value warpId1 = urem(urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]),
-                       i32_val(shape[1] / nonKDim));
-
-  Value offWarp0 = mul(warpId0, i32_val(nonKDim));
-  Value offWarp1 = mul(warpId1, i32_val(nonKDim));
+  SmallVector<Value> multiDimWarpId = delinearize(
+      rewriter, loc, warpId, _warpsPerCTA, triton::gpu::getOrder(mfmaLayout));
+  if (shape[0] >= nonKDim) {
+    assert(shape[0] % nonKDim == 0);
+    multiDimWarpId[0] =
+        urem(multiDimWarpId[0], i32_val(ceil<unsigned>(shape[0], nonKDim)));
+  }
+  if (shape[1] >= nonKDim) {
+    assert(shape[1] % nonKDim == 0);
+    multiDimWarpId[1] =
+        urem(multiDimWarpId[1], i32_val(ceil<unsigned>(shape[1], nonKDim)));
+  }
+  Value offWarp0 = mul(multiDimWarpId[0], i32_val(nonKDim));
+  Value offWarp1 = mul(multiDimWarpId[1], i32_val(nonKDim));
 
   SmallVector<Value> multiDimBase(2);
   if (mfmaLayout.getIsTransposed()) {
@@ -833,9 +840,9 @@ emitOffsetForMfmaLayout(const AMDMfmaEncodingAttr &mfmaLayout,
   SmallVector<SmallVector<unsigned>> offsets;
   auto shapePerCTA = getShapePerCTA(mfmaLayout, tensorShape);
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
-
-  SmallVector<unsigned> numWarpsPerDim(2);
-  for (unsigned d = 0; d < 2; ++d) {
+  auto rank = type.getRank();
+  SmallVector<unsigned> numWarpsPerDim(rank);
+  for (unsigned d = 0; d < rank; ++d) {
     unsigned inPerCTA = std::min<unsigned>(tensorShape[d], shapePerCTA[d]);
     unsigned inPerWarp = ceil<unsigned>(inPerCTA, warpsPerCTA[d]);
     numWarpsPerDim[d] = ceil<unsigned>(inPerWarp, mfmaLayout.getMDim());
