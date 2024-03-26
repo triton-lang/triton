@@ -5,7 +5,6 @@ import numpy as np
 
 import triton
 import triton.language as tl
-import functools
 from dataclasses import dataclass
 from .errors import InterpreterError
 from .._C.libtriton import interpreter as _interpreter
@@ -519,13 +518,23 @@ def _patch_lang_tensor(tensor):
     tensor.T = property(_get_transpose)
 
 
-def _patch_reduce_scan(lang):
+class ReduceScanOpIneterface:
 
-    def _check_axis(tensor, axis):
-        if axis is not None and axis >= len(tensor.shape):
-            raise ValueError(f"axis {axis} out of bounds for shape {tensor.shape}")
+    def __init__(self, axis, combine_fn):
+        self.axis = axis
+        self.combine_fn = combine_fn
 
-    def _to_tensor(ret, dtype):
+    def check_axis(self, shape, axis):
+        if axis is not None and axis >= len(shape):
+            raise ValueError(f"axis {axis} out of bounds for shape {shape}")
+
+    def check_tensor(self, input):
+        for arg in input:
+            if not isinstance(arg, tl.core.tensor):
+                raise ValueError(f"input must be a tensor, got {type(arg)}")
+            self.check_axis(arg.shape, self.axis)
+
+    def to_tensor(self, ret, dtype):
         if hasattr(ret, "shape") and ret.shape:
             ret_type = tl.block_type(dtype, ret.shape)
         else:
@@ -533,119 +542,186 @@ def _patch_reduce_scan(lang):
             ret_type = dtype
         return tl.core.tensor(TensorHandle(ret, dtype), ret_type)
 
-    def _generic_reduce(input, axis, combine_fn, keep_dims):
+    def apply(self, input):
+        if not isinstance(input, tuple):
+            input = (input, )
+        self.check_tensor(input)
+        return self.apply_impl(input)
 
-        def _check_axis_and_unravel(input, axis):
-            ret = []
-            if not isinstance(input, tuple):
-                input = (input, )
-            for data in input:
-                if isinstance(data, tl.core.tensor):
-                    if axis is not None:
-                        _check_axis(data, axis)
-                        ret.append(data)
-                    else:
-                        axis = 0
-                        ret.append(_to_tensor(data.handle.data.flatten(), data.dtype))
-            return tuple(ret), axis
+    def apply_impl(self, input):
+        raise NotImplementedError("apply_impl not implemented")
 
-        original_input = input
-        original_axis = axis
-        input, axis = _check_axis_and_unravel(input, axis)
+
+class ReduceOps(ReduceScanOpIneterface):
+
+    def __init__(self, axis, combine_fn, keep_dims):
+        super().__init__(axis, combine_fn)
+        self.keep_dims = keep_dims
+
+    def unravel(self, input, axis):
+        ret = []
+        for data in input:
+            if axis is not None:
+                ret.append(data)
+            else:
+                axis = 0
+                ret.append(self.to_tensor(data.handle.data.flatten(), data.dtype))
+        return tuple(ret), axis
+
+    def generic_reduce(self, input):
+        original_axis = self.axis
+        input, axis = self.unravel(input, self.axis)
         input_data = []
         output_data = []
-        input_shape = None
-        output_shape = None
+        input_shape = input[0].handle.data.shape
+        output_shape = input_shape[0:axis] + input_shape[axis + 1:]
         for arg in input:
-            if isinstance(arg, tl.core.tensor):
-                input_shape = arg.handle.data.shape
-                input_data.append(arg.handle.data)
-                output_shape = input_shape[0:axis] + input_shape[axis + 1:]
-                output_data.append(np.zeros(output_shape, dtype=arg.handle.data.dtype))
-        if not input_shape:
-            raise ValueError("no tensors found in input")
+            input_data.append(arg.handle.data)
+            output_data.append(np.zeros(output_shape, dtype=arg.handle.data.dtype))
         # Reduce on axis
         for i in range(input_data[0].size):
             # Recover input_index from i using input_shape
             input_index = np.unravel_index(i, input_shape)
             output_index = input_index[0:axis] + input_index[axis + 1:]
-            input_tuple = tuple(d[input_index] for d in input_data)
+            input_tuple = tuple(self.to_tensor(d[input_index], input[ii].dtype) for ii, d in enumerate(input_data))
             if input_index[axis] == 0:
                 # First element
                 for j in range(len(output_data)):
-                    output_data[j][output_index] = input_tuple[j]
+                    output_data[j][output_index] = input_tuple[j].handle.data.item()
             else:
-                acc_tuple = tuple(o[output_index] for o in output_data)
-                acc_tuple = combine_fn.fn(*acc_tuple, *input_tuple)
+                acc_tuple = tuple(self.to_tensor(o[output_index], input[oi].dtype) for oi, o in enumerate(output_data))
+                combine_fn_ret = self.combine_fn.fn(*acc_tuple, *input_tuple)
+                acc_tuple = (combine_fn_ret, ) if not isinstance(combine_fn_ret, tuple) else combine_fn_ret
                 for j in range(len(output_data)):
-                    output_data[j][output_index] = acc_tuple[j]
+                    output_data[j][output_index] = acc_tuple[j].handle.data.item() if isinstance(
+                        acc_tuple[j], tl.core.tensor) else acc_tuple[j]
         # Pack output
         ret = []
-        for data in output_data:
-            if keep_dims:
+        for i, data in enumerate(output_data):
+            if self.keep_dims:
                 if original_axis is not None:
                     data = np.expand_dims(data, axis)
                 else:
-                    input_shape = original_input[0].handle.data.shape
                     for _ in range(len(input_shape)):
                         data = np.expand_dims(data, 0)
 
             elif original_axis is None:
                 # Take a scalar
                 data = data.item()
-            ret.append(_to_tensor(data, input[0].dtype))
+            ret.append(self.to_tensor(data, input[i].dtype))
         return ret[0] if len(ret) == 1 else tuple(ret)
 
-    def _new_reduce(input, axis, combine_fn, keep_dims=False, **kwargs):
+    def min_max(self, input, val_reduce_op, idx_reduce_op=None):
+        # If input is a tuple, it must be (val, index), and we only take val
+        input = input[0] if isinstance(input, tuple) else input
+        val = None
+        idx = None
+        if val_reduce_op:
+            val = self.to_tensor(val_reduce_op(input.handle.data, axis=self.axis, keepdims=self.keep_dims), input.dtype)
+        if idx_reduce_op:
+            idx = self.to_tensor(idx_reduce_op(input.handle.data, axis=self.axis, keepdims=self.keep_dims), input.dtype)
+        if val and idx:
+            return val, idx
+        elif val:
+            return val
+        elif idx:
+            return idx
+        else:
+            raise ValueError("val_reduce_op and idx_reduce_op are both None")
 
-        def _min_max(input, val_reduce_op, idx_reduce_op=None, axis=None, keepdims=False):
-            # If input is a tuple, it must be (val, index), and we only take val
-            input = input[0] if isinstance(input, tuple) else input
-            _check_axis(input, axis)
-            val = None
-            idx = None
-            if val_reduce_op:
-                val = _to_tensor(val_reduce_op(input.handle.data, axis=axis, keepdims=keepdims), input.dtype)
-            if idx_reduce_op:
-                idx = _to_tensor(idx_reduce_op(input.handle.data, axis=axis, keepdims=keepdims), input.dtype)
-            if val and idx:
-                return val, idx
-            elif val:
-                return val
-            elif idx:
-                return idx
-            else:
-                raise ValueError("val_reduce_op and idx_reduce_op are both None")
+    def sum(self, input):
+        return self.to_tensor(np.sum(input.handle.data, axis=self.axis, keepdims=self.keep_dims), input.dtype)
 
-        def _sum(input, axis=None, keepdims=False):
-            _check_axis(input, axis)
-            return _to_tensor(np.sum(input.handle.data, axis=axis, keepdims=keepdims), input.dtype)
-
-        mapping = {
-            tl.standard._argmin_combine_tie_break_left:  #
-            functools.partial(_min_max, val_reduce_op=np.min, idx_reduce_op=np.argmin),  #
-            tl.standard._argmax_combine_tie_break_left:  #
-            functools.partial(_min_max, val_reduce_op=np.max, idx_reduce_op=np.argmax),  #
-            tl.standard._elementwise_max: functools.partial(_min_max, val_reduce_op=np.max, idx_reduce_op=None),  #
-            tl.standard._elementwise_min: functools.partial(_min_max, val_reduce_op=np.min, idx_reduce_op=None),  #
-            tl.standard._sum_combine: _sum,  #
-        }
-        if combine_fn not in mapping:
+    def apply_impl(self, input):
+        if self.combine_fn == tl.standard._argmin_combine_tie_break_left:
+            return self.min_max(input[0], val_reduce_op=np.min, idx_reduce_op=np.argmin)
+        elif self.combine_fn == tl.standard._argmax_combine_tie_break_left:
+            return self.min_max(input[0], val_reduce_op=np.max, idx_reduce_op=np.argmax)
+        elif self.combine_fn == tl.standard._elementwise_max:
+            return self.min_max(input[0], val_reduce_op=np.max, idx_reduce_op=None)
+        elif self.combine_fn == tl.standard._elementwise_min:
+            return self.min_max(input[0], val_reduce_op=np.min, idx_reduce_op=None)
+        elif self.combine_fn == tl.standard._sum_combine:
+            return self.sum(input[0])
+        else:
             # Fall back to the slow mode
-            return _generic_reduce(input, axis, combine_fn, keep_dims)
-        return mapping[combine_fn](input, axis=axis, keepdims=keep_dims)
+            return self.generic_reduce(input)
 
-    def _new_scan(input, axis, combine_fn, **kwargs):
-        mapping = {
-            tl.standard._sum_combine: np.cumsum,
-        }
-        ret = mapping[combine_fn](input.handle.data, axis=axis)
-        ret_type = tl.block_type(input.dtype, ret.shape)
-        return tl.core.tensor(TensorHandle(ret, input.dtype), ret_type)
+
+class ScanOps(ReduceScanOpIneterface):
+
+    def __init__(self, axis, combine_fn, reverse):
+        super().__init__(axis, combine_fn)
+        self.reverse = reverse
+
+    def cumsum(self, input):
+        return [self.to_tensor(np.cumsum(input.handle.data, axis=self.axis), dtype=input.dtype)]
+
+    def cumprod(self, input):
+        return [self.to_tensor(np.cumprod(input.handle.data, axis=self.axis), dtype=input.dtype)]
+
+    def generic_scan(self, input):
+        input_data = []
+        output_data = []
+        shape = input[0].handle.data.shape
+        for arg in input:
+            input_data.append(arg.handle.data)
+            output_data.append(np.zeros(shape, dtype=arg.handle.data.dtype))
+        # Scan on axis
+        for i in range(input_data[0].size):
+            # Recover index from i using shape
+            index = np.unravel_index(i, shape)
+            data = tuple(self.to_tensor(d[index], input[ii].dtype) for ii, d in enumerate(input_data))
+            if index[self.axis] == 0:
+                # First element
+                for j in range(len(output_data)):
+                    output_data[j][index] = data[j].handle.data.item()
+            else:
+                prev_index = tuple(index[i] - 1 if i == self.axis else index[i] for i in range(len(index)))
+                acc_tuple = tuple(self.to_tensor(o[prev_index], input[oi].dtype) for oi, o in enumerate(output_data))
+                combine_fn_ret = self.combine_fn.fn(*acc_tuple, *data)
+                acc_tuple = (combine_fn_ret, ) if not isinstance(combine_fn_ret, tuple) else combine_fn_ret
+                for j in range(len(output_data)):
+                    output_data[j][index] = acc_tuple[j].handle.data.item() if isinstance(
+                        acc_tuple[j], tl.core.tensor) else acc_tuple[j]
+        # Pack output
+        ret = []
+        for i, data in enumerate(output_data):
+            ret.append(self.to_tensor(data, input[i].dtype))
+        return ret
+
+    def apply_impl(self, input):
+        new_input = []
+        if self.reverse:
+            for arg in input:
+                new_input.append(self.to_tensor(np.flip(arg.handle.data, axis=self.axis), arg.dtype))
+        else:
+            new_input = input
+        if self.combine_fn == tl.standard._sum_combine:
+            ret = self.cumsum(new_input[0])
+        elif self.combine_fn == tl.standard._prod_combine:
+            ret = self.cumprod(new_input[0])
+        else:
+            # Fall back to the slow mode
+            ret = self.generic_scan(new_input)
+        if self.reverse:
+            for arg in ret:
+                arg.handle.data = np.flip(arg.handle.data, axis=self.axis)
+        return len(ret) == 1 and ret[0] or tuple(ret)
+
+
+def _patch_reduce_scan():
+    # Because interpreter doesn't support region_builder_fn, we cannot patch the builder
+    # to use the new reduce and scan functions.
+    # Instead, we need to patch reduce and reduce functions in tl and tl.core
+    def _new_reduce(input, axis, combine_fn, keep_dims=False, **kwargs):
+        return ReduceOps(axis, combine_fn, keep_dims).apply(input)
+
+    def _new_scan(input, axis, combine_fn, reverse=False, **kwargs):
+        return ScanOps(axis, combine_fn, reverse).apply(input)
 
     tl.reduce = _new_reduce
     tl.associative_scan = _new_scan
-    # FIXME(Keren): This is a workaround because some core functions use core.reduce but not tl.reduce
     tl.core.reduce = _new_reduce
     tl.core.associative_scan = _new_scan
 
@@ -711,7 +787,7 @@ def _patch_lang_core(lang):
     lang.static_assert = _new_static_assert
     lang.dtype.to_ir = _new_to_ir
 
-    _patch_reduce_scan(lang)
+    _patch_reduce_scan()
 
 
 def _patch_lang(fn):
