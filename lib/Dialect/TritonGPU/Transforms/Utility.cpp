@@ -668,7 +668,15 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
                         Attribute rootEncoding,
                         DenseMap<Value, Attribute> &layout,
                         std::function<bool(Operation *)> stopPropagation) {
+  DenseSet<Value> visited;
   SmallVector<std::pair<Value, Attribute>> queue = {{root, rootEncoding}};
+  auto enqueueIfNew = [&](Value v, Attribute attr) {
+    if (visited.contains(v)) {
+      return;
+    }
+    visited.insert(v);
+    queue.push_back({v, attr});
+  };
   while (!queue.empty()) {
     auto [currentValue, encoding] = queue.back();
     queue.pop_back();
@@ -692,9 +700,8 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
       auto thenValue = ifOp.thenYield().getOperand(argIdx);
       auto elseValue = ifOp.elseYield().getOperand(argIdx);
 
-      queue.push_back({thenValue, encoding});
-      queue.push_back({elseValue, encoding});
-
+      enqueueIfNew(thenValue, encoding);
+      enqueueIfNew(elseValue, encoding);
       continue;
     }
     if (auto *definingOp = currentValue.getDefiningOp()) {
@@ -721,7 +728,7 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
         if (!srcEncoding)
           return failure();
         if (slice.count(operand) == 0)
-          queue.push_back({operand, *srcEncoding});
+          enqueueIfNew(operand, *srcEncoding);
       }
       continue;
     }
@@ -732,8 +739,8 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
       OpOperand *initOperand = forOp.getTiedLoopInit(blockArg);
       Value yieldOperand = forOp.getBody()->getTerminator()->getOperand(
           blockArg.getArgNumber() - forOp.getNumInductionVars());
-      queue.push_back({initOperand->get(), encoding});
-      queue.push_back({yieldOperand, encoding});
+      enqueueIfNew(initOperand->get(), encoding);
+      enqueueIfNew(yieldOperand, encoding);
       continue;
     }
     // TODO: add support for WhileOp and other region types.
