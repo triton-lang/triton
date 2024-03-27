@@ -602,7 +602,7 @@ def join(a: tl.tensor, b: tl.tensor, builder: ir.builder) -> tl.tensor:
     ret = tl.tensor(builder.create_join(a.handle, b.handle), ret_type)
 
     if was_rank_1:
-        ret = reshape(ret, [2], builder)
+        ret = reshape(ret, [2], reorder=False, builder=builder)
 
     return ret
 
