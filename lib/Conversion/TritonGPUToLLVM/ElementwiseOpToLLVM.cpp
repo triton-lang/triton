@@ -415,10 +415,13 @@ struct ElementwiseInlineAsmOpConversion
     for (int i = 0; i < op->getNumResults(); i++) {
       int structIdx = 0;
       for (int j = 0; j < op.getPackedElement(); j++) {
-        auto val = asmRetTypes.size() > 1
-                       ? extract_val(asmResults,
-                                     i * op.getPackedElement() + structIdx++)
-                       : asmResults;
+        Value val;
+        if (asmRetTypes.size() > 1) {
+          val =
+              extract_val(asmResults, i * op.getPackedElement() + structIdx++);
+        } else {
+          val = asmResults;
+        }
         if (auto vectorTy = val.getType().dyn_cast<VectorType>()) {
           for (int k = 0; k < vectorTy.getNumElements(); k++) {
             ret[i].push_back(extract_element(val, i32_val(k)));
