@@ -206,7 +206,8 @@ void init_triton_ir(py::module &&m) {
   });
 
   py::class_<Type>(m, "type", py::module_local())
-      .def("is_integer", &Type::isInteger)
+      .def("is_integer",
+           [](Type &self, unsigned width) { return self.isInteger(width); })
       .def("is_fp16", &Type::isF16)
       .def("__str__", [](Type &self) {
         std::string str;
@@ -1418,10 +1419,6 @@ void init_triton_ir(py::module &&m) {
       .def("create_iabs",
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::AbsIOp>(val);
-           })
-      .def("create_fneg",
-           [](TritonOpBuilder &self, Value &val) -> Value {
-             return self.create<arith::NegFOp>(val);
            })
       .def("create_reduce",
            [](TritonOpBuilder &self, std::vector<Value> operands, int axis)

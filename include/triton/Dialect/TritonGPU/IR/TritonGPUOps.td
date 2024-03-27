@@ -24,22 +24,6 @@ class TTG_Op<string mnemonic, list<Trait> traits = []> :
        !listconcat(traits, [VerifyTensorLayoutsTrait])> {
 }
 
-class TTG_Type<string name, string typeMnemonic,
-        list<Trait> traits = []> : TypeDef<TritonGPU_Dialect, name, traits> {
-  let mnemonic = typeMnemonic;
-}
-
-def TTG_AsyncToken : TTG_Type<"AsyncToken",
-                                    "async.token", []> {
-  let summary = "async token type";
-  let description = [{
-    `ttg.async.token` is a type returned by an asynchronous operation.
-    It is used to establish an SSA-based link between async operations
-    and operations that group or synchronize the async operations.
-  }];
-}
-
-
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
                                  [SameOperandsAndResultShape,
                                   SameOperandsAndResultElementType,
@@ -210,6 +194,13 @@ def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
   let description = [{
     This operation returns a new descriptor representing a subview of the buffer.
     It doesn't affect the underlying memory. The subview can be rank-reduced.
+
+    For example, suppose that
+     - the input shape is 2x4x16xf16,
+     - the output shape is 4x4xf16, and
+     - offsets = [1, 0, 4].
+
+    Then in Python syntax, the subview covers input[1][0:4][4:8].
   }];
   let arguments = (
     ins TT_MemDescType:$desc, Variadic<I32>:$offsets);
@@ -217,6 +208,8 @@ def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
   let assemblyFormat = [{$desc `[` $offsets `]` attr-dict `:` qualified(type($desc)) `->` qualified(type($result))}];
 
   let results = (outs TT_MemDescType:$result);
+
+  let hasVerifier = 1;
 }
 
 def TTG_LocalLoadOp : TTG_Op<"local_load", [MemoryEffects<[MemRead<SharedMemory>]>]> {

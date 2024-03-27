@@ -6,6 +6,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -15,6 +16,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Debug.h"
 
@@ -46,6 +48,14 @@ struct PipelinedOpInfo {
 };
 
 } // namespace
+
+static bool isMMAv3Dot(Operation *op) {
+  auto dot = dyn_cast<tt::DotOp>(op);
+  if (!dot)
+    return false;
+  auto enc = dot.getType().getEncoding().dyn_cast<ttg::NvidiaMmaEncodingAttr>();
+  return enc && enc.isHopper();
+}
 
 // Replace the ForOp's yield with a new one with the given operands appended.
 static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
@@ -86,8 +96,9 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
     mask = convertBlockLayout(src);
   }
 
-  SmallVector<Value> copyOffsets = {insertIdx, zero, zero};
   tt::MemDescType allocTy = alloc.getType().cast<tt::MemDescType>();
+  SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
+  copyOffsets[0] = insertIdx;
   tt::MemDescType subviewTy = tt::MemDescType::get(
       allocTy.getShape().drop_front(), allocTy.getElementType(),
       allocTy.getEncoding(), /*mutableMemory=*/true);
@@ -107,7 +118,8 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   opToInfo.erase(loadOp);
 
   // Extract part.
-  SmallVector<Value> loadOffsets = {extractIdx, zero, zero};
+  SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
+  loadOffsets[0] = extractIdx;
   auto viewLoad =
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
   if (isMMV3Load) {
@@ -132,23 +144,11 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   loadOp.erase();
 }
 
-/// Create an async load equivalent to the given load.
-static void
-createAsyncLoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
-                Value insertIdx, Value extractIdx, Value phase,
-                llvm::MapVector<Operation *, PipelinedOpInfo> &opToInfo) {
-  createAsyncCopy(forOp, loadOp, alloc, insertIdx, extractIdx, opToInfo);
-}
-
 // If all the transitive uses of the given value have are used by a convert to
 // the same dot operand encoding, return true and set the shared encoding that
 // needs to be used to be compatible with users' layouts.
-//
-// TODO: Rename, because the name only tells us half the story: We check for all
-// users having a dot encoding, but then we return a shared encoding, which is
-// surprising given the name.
 static std::optional<ttg::SharedEncodingAttr>
-allTransitiveUsesHaveDotEncoding(Value val) {
+getSharedEncIfAllUsersAreDotEnc(Value val) {
   ttg::SharedEncodingAttr attr;
   for (Operation *user : val.getUsers()) {
     ttg::SharedEncodingAttr tempAttr;
@@ -160,7 +160,7 @@ allTransitiveUsesHaveDotEncoding(Value val) {
       // use it if it is compatible with the other users.
       if (!tempAttr)
         tempAttr = memDesc.getEncoding().cast<ttg::SharedEncodingAttr>();
-      if (!allTransitiveUsesHaveDotEncoding(user->getResult(0)).has_value())
+      if (!getSharedEncIfAllUsersAreDotEnc(user->getResult(0)).has_value())
         return std::nullopt;
     } else {
       if (!isa<ttg::LocalLoadOp, ttg::ConvertLayoutOp>(user))
@@ -190,42 +190,6 @@ allTransitiveUsesHaveDotEncoding(Value val) {
   return attr;
 }
 
-// TODO: This returns true and *sometimes* sets enc?
-bool loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3,
-                    ttg::SharedEncodingAttr &enc) {
-  if (loadOp.getResult().hasOneUse()) {
-    Operation *use = *loadOp.getResult().getUsers().begin();
-    if (auto alloc = llvm::dyn_cast<ttg::LocalAllocOp>(use)) {
-      auto sharedEnc =
-          alloc.getType().getEncoding().cast<ttg::SharedEncodingAttr>();
-      if (sharedEnc.getHasLeadingOffset()) {
-        // MMA V3 case.
-        auto newOrder = sharedEnc.getOrder();
-        auto ty = loadOp.getType().cast<RankedTensorType>();
-        auto oldOrder = ttg::getOrder(ty.getEncoding());
-        if (newOrder[0] == oldOrder[0] || newOrder[1] == oldOrder[1]) {
-          // The operand of MMAv3 is in SharedEncoding and it's order should
-          // not be changed after FuseTranspositions Pass. So we only pipeline
-          // the load if the order of the loaded BlockedEncoding is the same
-          // as the order of the SharedEncoding it is converted to.
-          // TODO: remove this constraint once the LoadOp supports transpose
-          // fusion
-          hasMMAV3 = true;
-          return true;
-        }
-      }
-    }
-  }
-
-  std::optional<ttg::SharedEncodingAttr> sharedEnc =
-      allTransitiveUsesHaveDotEncoding(loadOp.getResult());
-  if (!sharedEnc.has_value()) {
-    return false;
-  }
-  enc = *sharedEnc;
-  return true;
-}
-
 static ttg::BlockedEncodingAttr
 getBlockedEncoding(tt::LoadOp loadOp, tt::ModuleAxisInfoAnalysis &axisInfo) {
   Value src = loadOp.getPtr();
@@ -245,9 +209,8 @@ getBlockedEncoding(tt::LoadOp loadOp, tt::ModuleAxisInfoAnalysis &axisInfo) {
                                        threadsPerWarp, ctaLayout);
 }
 
-static ttg::SharedEncodingAttr getSharedEncoding(tt::LoadOp loadOp,
-                                                 Operation *use, bool isMMAV3) {
-
+static std::optional<ttg::SharedEncodingAttr>
+getSharedEncoding(tt::LoadOp loadOp, bool isMMAV3) {
   auto ty = loadOp.getType().cast<RankedTensorType>();
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
   auto blockedOrder = ttg::getOrder(ty.getEncoding());
@@ -262,19 +225,36 @@ static ttg::SharedEncodingAttr getSharedEncoding(tt::LoadOp loadOp,
   } else {
     order = blockedOrder;
   }
-  if (isa<tt::DotOp>(use)) {
-    assert(isMMAV3 &&
-           "Load used by dot op should be either MMAv3 or have a "
-           "shared encoding already picked based on users' layouts.");
+  if (isMMAV3) {
     return ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(), order,
                                         ctaLayout, ty.getElementType());
-  } else {
-    assert(!isMMAV3 && "Load used by non-dot op should not be MMAv3.");
-    // Use non-swizzled layout for loads that do not feed into dot ops.
-    // TODO: This won't be optimal for 2D tensors.
-    return ttg::SharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
-                                        ctaLayout);
   }
+
+  // If the load is used by a LocalAllocOp, use the same encoding as the allocs.
+  // If the allocs don't all have the same encoding, bail.
+  if (llvm::any_of(loadOp->getUsers(), [&](Operation *user) {
+        return isa<ttg::LocalAllocOp>(user);
+      })) {
+    ttg::SharedEncodingAttr localAllocEnc;
+    for (auto user : loadOp->getUsers()) {
+      auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user);
+      if (!localAlloc)
+        continue;
+      auto enc =
+          localAlloc.getType().getEncoding().cast<ttg::SharedEncodingAttr>();
+      if (!localAllocEnc) {
+        localAllocEnc = enc;
+      }
+      if (enc != localAllocEnc)
+        return std::nullopt;
+    }
+    return localAllocEnc;
+  }
+
+  // Use non-swizzled layout for loads that do not feed into dot ops.
+  // TODO: This won't be optimal for 2D tensors.
+  return ttg::SharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
+                                      ctaLayout);
 }
 
 // Create a map from load ops to their distance to the nearest dot op and the
@@ -350,11 +330,34 @@ loadOpsToDistanceAndUse(scf::ForOp forOp) {
   return loadOpToDistAndUse;
 }
 
-/// Collect loads to pipeline. Returns true if loads are found to pipeline.
+static bool loadIsMMAv3(tt::LoadOp loadOp) {
+  if (!loadOp->hasOneUse())
+    return false;
+  auto alloc = dyn_cast<ttg::LocalAllocOp>(*loadOp->getUsers().begin());
+  if (!alloc)
+    return false;
+  auto sharedEnc =
+      alloc.getType().getEncoding().cast<ttg::SharedEncodingAttr>();
+  if (!sharedEnc.getHasLeadingOffset())
+    return false;
+
+  // MMA V3 case.
+  auto newOrder = sharedEnc.getOrder();
+  auto ty = loadOp.getType().cast<RankedTensorType>();
+  auto oldOrder = ttg::getOrder(ty.getEncoding());
+
+  // The operand of MMAv3 is in SharedEncoding and its order should not
+  // be changed after FuseTranspositions Pass. So we only pipeline the
+  // load if the order of the loaded BlockedEncoding is the same as the
+  // order of the SharedEncoding it is converted to.
+  return oldOrder == newOrder;
+}
+
+/// Collect ops to pipeline. Returns true if any ops are found to pipeline.
 static bool
 collectOpsToPipeline(scf::ForOp forOp,
                      llvm::MapVector<Operation *, PipelinedOpInfo> &opInfo,
-                     int numStages, bool &hasMMAV3) {
+                     int numStages) {
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
   tt::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
@@ -362,51 +365,60 @@ collectOpsToPipeline(scf::ForOp forOp,
   llvm::MapVector<tt::LoadOp, std::pair<int, Operation *>> loadOpToDistAndUse =
       loadOpsToDistanceAndUse(forOp);
   LLVM_DEBUG({
-    DBGS() << "Found " << loadOpToDistAndUse.size() << " loads to pipeline:\n";
+    LDBG("Found " << loadOpToDistAndUse.size() << " loads to pipeline:");
     for (const auto &[k, v] : loadOpToDistAndUse) {
-      DBGS() << "  " << *k << " distance=" << v.first << " use=" << *v.second
-             << "\n";
+      LDBG("  - distance: " << v.first);
+      LDBG("    op to pipeline: " << *k);
+      LDBG("    use: " << *v.second);
     }
   });
   if (loadOpToDistAndUse.empty())
     return false;
 
-  int maxDistance = -1;
-  for (auto &[op, distAndUse] : loadOpToDistAndUse) {
-    if (distAndUse.first > maxDistance) {
-      maxDistance = distAndUse.first;
-    }
-  }
-  assert(maxDistance >= 0);
-
   // Start by initializing PipelinedOpInfo for users of the loads.
   for (auto &[loadOp, distAndUse] : loadOpToDistAndUse)
     opInfo[distAndUse.second] = PipelinedOpInfo();
 
+  int maxDistance = *triton::max_element(
+      llvm::make_first_range(llvm::make_second_range(loadOpToDistAndUse)));
   unsigned stagesBetweenLoads = ceil<unsigned>(numStages - 2, maxDistance + 1);
 
   // Then consider the load ops that feed into the dot ops or are used by other
   // loads.
   for (auto &[loadOp, distAndUse] : loadOpToDistAndUse) {
     PipelinedOpInfo loadInfo;
-    bool loadIsMMAV3 = false;
     if (isa<tt::DotOp>(distAndUse.second)) {
-      ttg::SharedEncodingAttr sharedEnc;
-      bool isLoadDotOperand = loadDotOperand(loadOp, loadIsMMAV3, sharedEnc);
-      hasMMAV3 |= loadIsMMAV3;
-      if (!isLoadDotOperand)
+      if (loadIsMMAv3(loadOp)) {
+        loadInfo.loadIsMMAV3 = true;
+        loadInfo.sharedEncoding =
+            getSharedEncoding(loadOp, /*loadIsMMAv3=*/true).value_or(nullptr);
+      } else {
+        loadInfo.sharedEncoding =
+            getSharedEncIfAllUsersAreDotEnc(loadOp.getResult())
+                .value_or(nullptr);
+      }
+      // TODO(jlebar): Remove this if statement, which effectively rolls back
+      // back https://github.com/openai/triton/pull/3415, once internal bugs are
+      // fixed.
+      if (!loadInfo.sharedEncoding)
         continue;
-      loadInfo.sharedEncoding = sharedEnc;
-    } else {
+    }
+
+    // If we still don't have a shared encoding, try a "generic" shared
+    // encoding.
+    if (!loadInfo.sharedEncoding && !isMMAv3Dot(distAndUse.second)) {
+      loadInfo.sharedEncoding =
+          getSharedEncoding(loadOp, /*isMMAV3=*/loadInfo.loadIsMMAV3)
+              .value_or(nullptr);
       loadInfo.blockedEncoding = getBlockedEncoding(loadOp, axisInfoAnalysis);
     }
-    // If we haven't already assigned a layout do it now.
-    if (!loadInfo.sharedEncoding)
-      loadInfo.sharedEncoding =
-          getSharedEncoding(loadOp, distAndUse.second, loadIsMMAV3);
-    loadInfo.loadIsMMAV3 = loadIsMMAV3;
-    int stage = (maxDistance - distAndUse.first) * stagesBetweenLoads;
-    loadInfo.stage = stage;
+
+    // If that still didn't work, bail on pipelining this load.
+    if (!loadInfo.sharedEncoding) {
+      continue;
+    }
+
+    loadInfo.stage = (maxDistance - distAndUse.first) * stagesBetweenLoads;
     loadInfo.use = distAndUse.second;
     opInfo[loadOp] = loadInfo;
   }
@@ -444,9 +456,9 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
 // Convert load ops into their asyn version and apply multi-buffering based on
 // the required number of buffers.
 static SmallVector<Value>
-createAsynOps(scf::ForOp &forOp,
-              llvm::MapVector<Operation *, PipelinedOpInfo> &opToInfo,
-              int numBuffers, bool hasMMAV3) {
+createAsyncOps(scf::ForOp &forOp,
+               llvm::MapVector<Operation *, PipelinedOpInfo> &opToInfo,
+               int numBuffers, bool hasMMAV3) {
   struct AsyncLoad {
     AsyncLoad(tt::LoadOp loadOp, Value alloc) : loadOp(loadOp), alloc(alloc) {}
     tt::LoadOp loadOp;
@@ -503,8 +515,8 @@ createAsynOps(scf::ForOp &forOp,
   extractIdx = builder.create<arith::SelectOp>(loc, cndExt, extractIdx, zero);
 
   for (AsyncLoad &asyncLoad : asyncLoads) {
-    createAsyncLoad(forOp, asyncLoad.loadOp, asyncLoad.alloc, insertIdx,
-                    extractIdx, phase, opToInfo);
+    createAsyncCopy(forOp, asyncLoad.loadOp, asyncLoad.alloc, insertIdx,
+                    extractIdx, opToInfo);
   }
   SmallVector<Value> newYieldOperands = {insertIdx, extractIdx};
   // Patch the yield with the updated counters.
@@ -711,9 +723,11 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   // 1. First collect "interesting" operations with a stage where to schedule
   // them. This gives a coarse scheduling for the loop.
   llvm::MapVector<Operation *, PipelinedOpInfo> opToInfo;
-  bool hasMMAV3 = false;
-  if (!collectOpsToPipeline(forOp, opToInfo, numStages, hasMMAV3))
+  if (!collectOpsToPipeline(forOp, opToInfo, numStages))
     return false;
+
+  bool hasMMAV3 =
+      llvm::any_of(opToInfo, [](auto &kv) { return kv.second.loadIsMMAV3; });
 
   // Calculate the number of buffers needed for each load.
   // TODO pawel: we could do more fine-grained allocation here and
@@ -742,7 +756,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
 
   // 2. Convert the loads into async loads and create the allocs.
   SmallVector<Value> allocs =
-      createAsynOps(forOp, opToInfo, maxNumBuffers, hasMMAV3);
+      createAsyncOps(forOp, opToInfo, maxNumBuffers, hasMMAV3);
 
   // 3. Create the final schedule for the kernel loop. This will dictate the
   // stages and order of operations to the pipeline expander.
@@ -1157,9 +1171,7 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
   // "properly async", or sometimes just "async".
   IRRewriter builder(forOp.getContext());
   for (auto dotOp : llvm::to_vector(forOp.getBody()->getOps<tt::DotOp>())) {
-    auto resEnc =
-        dotOp.getType().getEncoding().dyn_cast<ttg::NvidiaMmaEncodingAttr>();
-    if (resEnc && resEnc.isHopper()) {
+    if (isMMAv3Dot(dotOp)) {
       builder.setInsertionPoint(dotOp);
       builder.replaceOpWithNewOp<ttng::DotAsyncOp>(
           dotOp, dotOp.getA(), dotOp.getB(), dotOp.getC(), dotOp.getAllowTF32(),
