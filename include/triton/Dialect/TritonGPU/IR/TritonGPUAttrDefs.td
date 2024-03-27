@@ -228,9 +228,7 @@ compared to 1*64 when the hasLeadingOffset is false.
                      "bool":$needTrans), [{
 
         // ---- begin GFX908/GFX90A ----
-        auto mfmaEnc = dotOpEnc.getParent().dyn_cast<AMDMfmaEncodingAttr>();
-
-        if (mfmaEnc) {
+        if (auto mfmaEnc = dotOpEnc.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
           int kDimNum = dotOpEnc.getOpIdx() == 0 ? 1 : 0;
           bool isKDimInner = (order[0] == kDimNum);
           if (isKDimInner) {
@@ -251,7 +249,7 @@ compared to 1*64 when the hasLeadingOffset is false.
             // For now, the k_base rules are as follows
             // 1. All selected mfma instructions produce a single block
             // 2. For f16 data type, 2 VGPRs are used for operand A --> k_base = 4
-            // 3. For non-f16 data types, 1 VGPR are used for operand A
+            // 3. For non-f16 data types, 1 VGPR is used for operand A
             //    k_base = 32 / elemTypeInBits
             // 4. TODO: what about f64?
             //
@@ -260,8 +258,30 @@ compared to 1*64 when the hasLeadingOffset is false.
             int maxPhase = SIMDWidth / perPhase;
 
             // TODO (zhanglx): figure out better parameters for mfma4
-            if (mfmaEnc.getMDim() == 4 )
+            if (mfmaEnc.getMDim() == 4)
               maxPhase = 4;
+
+            return get(context, vecSize, perPhase, maxPhase, order, CTALayout);
+          } else {
+            // Do not swizzle in case k dimension is not innermost.
+            // In this case accesses will go in different banks even without swizzling.
+            return get(context, 1, 1, 1, order, CTALayout);
+          }
+        }
+
+        // ---- begin GFX11 ----
+        if (dotOpEnc.getParent().isa<AMDWmmaEncodingAttr>()) {
+          if (dotOpEnc.getOpIdx() == 0) {
+            const int numBanks = 32;
+            const int bankBitWidth = 32;
+
+            // number of inner dimension rows per one pattern repeat
+            int innerDimLength = shape[order[0]];
+            int elemsPerOneBanksRow = (numBanks * bankBitWidth) / typeWidthInBit;
+
+            int perPhase = std::max(1, elemsPerOneBanksRow / innerDimLength);
+            int vecSize = ((typeWidthInBit == 16) ? 64 : 32 ) / typeWidthInBit;
+            int maxPhase = 16 / perPhase;
 
             return get(context, vecSize, perPhase, maxPhase, order, CTALayout);
           } else {
@@ -305,9 +325,10 @@ compared to 1*64 when the hasLeadingOffset is false.
           int perPhase = 128 / (shapePerCTA[order[0]] * 4 / dotOpEnc.getKWidth());
           perPhase = std::max<int>(perPhase, 1);
           std::vector<size_t> matShape = {8, 8, 4 * dotOpEnc.getKWidth()};
-          // for now, disable swizzle when using transposed int8 tensor cores
-          if ((32 / typeWidthInBit != dotOpEnc.getKWidth()) && order[0] == inner)
-            return get(context, 1, 1, 1, order, CTALayout);
+          int vecWidth = 32 / typeWidthInBit;
+          if (vecWidth != dotOpEnc.getKWidth() && order[0] == inner) {
+              perPhase = std::max<int>(perPhase, 2 * vecWidth);
+          }
           int rank = order.size();
           // --- handle A operand ---
           if (opIdx == 0) { // compute swizzling for A operand
