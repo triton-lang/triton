@@ -3120,6 +3120,9 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
 
 def test_max_num_imprecise_acc(device):
 
+    if not hasattr(torch, 'float8_e5m2'):
+        pytest.skip(f"torch {torch.__version__} does not support float8_e5m2")
+
     if is_cuda():
         capability = torch.cuda.get_device_capability()
         if capability != (9, 0):
