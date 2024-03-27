@@ -757,6 +757,11 @@ def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder, fp_downcast_ro
     if (src_sca_ty.is_fp8e4nv() or dst_sca_ty.is_fp8e4nv()):
         assert builder.options.allow_fp8e4nv, "fp8e4nv data type is not supported on CUDA arch < 89"
 
+    if (src_sca_ty.is_fp8e4b15() or dst_sca_ty.is_fp8e4b15() or src_sca_ty.is_fp8e4b15x4()
+            or dst_sca_ty.is_fp8e4b15x4()):
+        assert builder.codegen_fn[
+            "convert_custom_types"] is not None, "target doesn't provide conversion for this type."
+        return builder.codegen_fn["convert_custom_types"](input, dst_ty, fp_downcast_rounding, _builder=builder)
     # Casting with customized floating types involved: fp8 <=> bf16, fp16, fp32, fp64
     # and non-default rounding modes for downcasting
     if (src_sca_ty.is_fp8() and dst_sca_ty.is_floating()) or \
@@ -1316,6 +1321,9 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
     assert lhs.type.is_block() and rhs.type.is_block()
 
     assert_dtypes_valid(lhs.dtype, rhs.dtype, builder.options)
+    if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():
+        lhs = lhs.to(tl.fp16)
+        rhs = rhs.to(tl.fp16)
 
     lhs_rank = len(lhs.shape)
     rhs_rank = len(rhs.shape)

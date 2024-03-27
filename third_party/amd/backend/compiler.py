@@ -83,6 +83,10 @@ class HIPBackend(BaseBackend):
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts})
         return HIPOptions(**args)
 
+    def get_codegen_implementation(self):
+        codegen_fn = dict()
+        return codegen_fn
+
     def load_dialects(self, ctx):
         amd.load_dialects(ctx)
 

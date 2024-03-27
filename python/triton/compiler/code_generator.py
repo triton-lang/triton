@@ -208,8 +208,8 @@ class ContainsReturnChecker(ast.NodeVisitor):
 class CodeGenerator(ast.NodeVisitor):
 
     def __init__(self, context, prototype, gscope, attributes, constants, function_name, jit_fn: JITFunction, options,
-                 debug=None, module=None, is_kernel=False, function_types: Optional[Dict] = None, noinline=False,
-                 file_name: Optional[str] = None, begin_line=0):
+                 codegen_fn, debug=None, module=None, is_kernel=False, function_types: Optional[Dict] = None,
+                 noinline=False, file_name: Optional[str] = None, begin_line=0):
         self.context = context
         self.builder = ir.builder(context)
         self.file_name = file_name
@@ -217,6 +217,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.begin_line = begin_line - 1
         self.builder.set_loc(file_name, begin_line, 0)
         self.builder.options = options
+        self.builder.codegen_fn = codegen_fn
         self.module = self.builder.create_module() if module is None else module
         self.function_ret_types = {} if function_types is None else function_types
         self.prototype = prototype
@@ -1010,7 +1011,7 @@ class CodeGenerator(ast.NodeVisitor):
             generator = CodeGenerator(self.context, prototype, gscope, attributes, constants, module=self.module,
                                       jit_fn=fn, function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
-                                      options=self.builder.options, debug=debug)
+                                      options=self.builder.options, codegen_fn=self.builder.codegen_fn, debug=debug)
             try:
                 generator.visit(fn.parse())
             except Exception as e:
@@ -1214,7 +1215,7 @@ def kernel_suffix(signature, specialization):
     return suffix
 
 
-def ast_to_ttir(fn, specialization, context, options):
+def ast_to_ttir(fn, specialization, context, options, codegen_fn):
     attrs = specialization.attrs
     # create kernel prototype
     cst_key = lambda i: fn.arg_names.index(i) if isinstance(i, str) else i
@@ -1234,7 +1235,7 @@ def ast_to_ttir(fn, specialization, context, options):
     prototype = language.function_type([], arg_types)
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name,
                               jit_fn=fn, attributes=new_attrs, is_kernel=True, file_name=file_name,
-                              begin_line=begin_line, options=options)
+                              begin_line=begin_line, options=options, codegen_fn=codegen_fn)
     generator.visit(fn.parse())
 
     ret = generator.module

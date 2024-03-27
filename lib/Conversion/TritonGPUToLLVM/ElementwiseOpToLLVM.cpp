@@ -413,9 +413,11 @@ struct ElementwiseInlineAsmOpConversion
     // [return_value][op.getPackedElement()].
     SmallVector<SmallVector<Value>> ret(op->getNumResults());
     for (int i = 0; i < op->getNumResults(); i++) {
+      int structIdx = 0;
       for (int j = 0; j < op.getPackedElement(); j++) {
         auto val = asmRetTypes.size() > 1
-                       ? extract_val(asmResults, i * op.getPackedElement() + j)
+                       ? extract_val(asmResults,
+                                     i * op.getPackedElement() + structIdx++)
                        : asmResults;
         if (auto vectorTy = val.getType().dyn_cast<VectorType>()) {
           for (int k = 0; k < vectorTy.getNumElements(); k++) {

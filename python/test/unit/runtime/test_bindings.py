@@ -73,8 +73,9 @@ def test_module_walk():
     target = triton.runtime.driver.active.get_current_target()
     backend = triton.compiler.compiler.make_backend(target)
     options = backend.parse_options(dict())
+    codegen_fn = dict()
     triton._C.libtriton.ir.load_dialects(context)
     backend.load_dialects(context)
 
-    ttir_module = src.make_ir(options, context)
+    ttir_module = src.make_ir(options, codegen_fn, context)
     ttir_module.walk(walk_fn)
