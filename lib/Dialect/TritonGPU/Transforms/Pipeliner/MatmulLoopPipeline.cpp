@@ -96,8 +96,9 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
     mask = convertBlockLayout(src);
   }
 
-  SmallVector<Value> copyOffsets = {insertIdx, zero, zero};
   tt::MemDescType allocTy = alloc.getType().cast<tt::MemDescType>();
+  SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
+  copyOffsets[0] = insertIdx;
   tt::MemDescType subviewTy = tt::MemDescType::get(
       allocTy.getShape().drop_front(), allocTy.getElementType(),
       allocTy.getEncoding(), /*mutableMemory=*/true);
@@ -117,7 +118,8 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   opToInfo.erase(loadOp);
 
   // Extract part.
-  SmallVector<Value> loadOffsets = {extractIdx, zero, zero};
+  SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
+  loadOffsets[0] = extractIdx;
   auto viewLoad =
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
   if (isMMV3Load) {
