@@ -84,8 +84,8 @@ class HIPBackend(BaseBackend):
         return HIPOptions(**args)
 
     def get_codegen_implementation(self):
-        codegen_fn = dict()
-        return codegen_fn
+        codegen_fns = dict()
+        return codegen_fns
 
     def load_dialects(self, ctx):
         amd.load_dialects(ctx)
