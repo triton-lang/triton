@@ -55,8 +55,14 @@ createSchedule(scf::ForOp forOp, int numStages) {
 static void hoistAllocAndConst(scf::ForOp forOp) {
   SmallVector<Operation *> toHoist;
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (isa<ttg::LocalAllocOp, arith::ConstantOp>(op))
+    if (auto allocOp = dyn_cast<ttg::LocalAllocOp>(op)) {
+      // We hoist the allocOp only if it is created by the inner loop
+      // pipelining.
+      if (!allocOp.getInit())
+        toHoist.push_back(&op);
+    } else if (isa<arith::ConstantOp>(op)) {
       toHoist.push_back(&op);
+    }
   }
   for (Operation *op : toHoist) {
     op->moveBefore(forOp);

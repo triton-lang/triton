@@ -243,8 +243,10 @@ private:
           delinearize(rewriter, loc, warpId, parentWarpsPerCTA, parentOrder);
       multiDimWarpId.erase(multiDimWarpId.begin() + sliceLayout.getDim());
     } else {
-      auto warpsPerCTA =
-          triton::gpu::getWarpsPerCTAWithUniqueData(srcLayout, srcShape);
+      SmallVector<unsigned> warpsPerCTA =
+          triton::gpu::getWarpsPerCTA(srcLayout);
+      warpsPerCTA[helper.getAxis()] = triton::gpu::getWarpsPerCTAWithUniqueData(
+          srcLayout, srcShape)[helper.getAxis()];
       multiDimWarpId = delinearize(rewriter, loc, warpId, warpsPerCTA, order);
     }
     return multiDimWarpId;
