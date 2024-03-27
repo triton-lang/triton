@@ -1427,14 +1427,14 @@ def view(input, *shape, _builder=None):
         view(x, (32, 32))
         view(x, 32, 32)
     """
-    warn("view is deprecated, please use reshape with reorder being true.")
+    warn("view is deprecated, please use reshape with can_reorder being true.")
     shape = _shape_check_impl(_unwrap_iterable(shape))
     return semantic.view(input, shape, _builder)
 
 
 @_tensor_member_fn
 @builtin
-def reshape(input, *shape, reorder=False, _builder=None):
+def reshape(input, *shape, can_reorder=False, _builder=None):
     """
     Returns a tensor with the same number of elements as input but with the
     provided shape.
@@ -1450,7 +1450,7 @@ def reshape(input, *shape, reorder=False, _builder=None):
         reshape(x, 32, 32)
     """
     shape = _shape_check_impl(_unwrap_iterable(shape))
-    return semantic.reshape(input, shape, reorder, _builder)
+    return semantic.reshape(input, shape, can_reorder, _builder)
 
 
 def _wrap_axis(axis, ndim):
