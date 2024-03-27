@@ -1462,6 +1462,8 @@ def test_tensor_atomic_rmw_block(num_ctas, device):
 @pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_atomic_cas(sem, num_ctas, device):
+    if is_hip():
+        pytest.skip('test_atomic_cas fails with accuracy checks on HIP: https://github.com/openai/triton/issues/3474')
     # 1. make sure that atomic_cas changes the original value (Lock)
     @triton.jit
     def change_value(Lock):
