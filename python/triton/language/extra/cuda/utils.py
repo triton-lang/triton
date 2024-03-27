@@ -100,10 +100,10 @@ def convert_custom_float8(arg, dst_ty, fp_downcast_rounding, has_minx2, _builder
 
 
 @core.builtin
-def convert_custom_float8_sm90(arg, dst_ty, fp_downcast_rounding, _builder=None):
+def convert_custom_float8_sm90(arg, dst_ty, fp_downcast_rounding=None, _builder=None):
     return convert_custom_float8(arg, dst_ty, fp_downcast_rounding, has_minx2=True, _builder=_builder)
 
 
 @core.builtin
-def convert_custom_float8_sm80(arg, dst_ty, fp_downcast_rounding, _builder=None):
+def convert_custom_float8_sm80(arg, dst_ty, fp_downcast_rounding=None, _builder=None):
     return convert_custom_float8(arg, dst_ty, fp_downcast_rounding, has_minx2=False, _builder=_builder)

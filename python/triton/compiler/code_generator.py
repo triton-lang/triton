@@ -217,7 +217,9 @@ class CodeGenerator(ast.NodeVisitor):
         self.begin_line = begin_line - 1
         self.builder.set_loc(file_name, begin_line, 0)
         self.builder.options = options
-        # dict of functions provided by the backend.
+        # dict of functions provided by the backend. Below are the list of possible functions:
+        # Convert custom types not natively supported on HW.
+        # convert_custom_types(intput_tensor, dtype, fp_downcast_rounding=None, _builder=None)
         self.builder.codegen_fns = codegen_fns
         self.module = self.builder.create_module() if module is None else module
         self.function_ret_types = {} if function_types is None else function_types
