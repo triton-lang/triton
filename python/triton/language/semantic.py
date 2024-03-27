@@ -554,14 +554,14 @@ def view(input: tl.tensor, dst_shape: List[int], builder: ir.builder) -> tl.tens
     return tl.tensor(builder.create_reshape(input.handle, dst_shape, True), ret_ty)
 
 
-def reshape(input: tl.tensor, dst_shape: List[int], builder: ir.builder) -> tl.tensor:
+def reshape(input: tl.tensor, dst_shape: List[int], reorder: bool, builder: ir.builder) -> tl.tensor:
     numel = 1
     for s in dst_shape:
         numel *= s
     if input.type.numel != numel:
         raise ValueError("reshape() cannot change total number of elements in tensor")
     ret_ty = tl.block_type(input.type.scalar, dst_shape)
-    return tl.tensor(builder.create_reshape(input.handle, dst_shape, False), ret_ty)
+    return tl.tensor(builder.create_reshape(input.handle, dst_shape, reorder), ret_ty)
 
 
 def expand_dims(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
