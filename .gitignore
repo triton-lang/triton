@@ -1,5 +1,6 @@
 # Triton builds
 build/
+build-*/
 
 # Triton Python module builds
 python/build/

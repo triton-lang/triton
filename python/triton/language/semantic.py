@@ -387,10 +387,8 @@ def minus(input: tl.tensor, builder: ir.builder) -> tl.tensor:
     input_sca_ty = input.type.scalar
     if input_sca_ty.is_ptr():
         raise ValueError("wrong type argument to unary minus (" + input_sca_ty.__repr__() + ")")
-    if input_sca_ty.is_int():
-        _0 = tl.tensor(builder.get_null_value(input_sca_ty.to_ir(builder)), input_sca_ty)
-        return sub(_0, input, builder)
-    return tl.tensor(builder.create_fneg(input.handle), input.type)
+    _0 = tl.tensor(builder.get_null_value(input_sca_ty.to_ir(builder)), input_sca_ty)
+    return sub(_0, input, builder)
 
 
 def invert(input: tl.tensor, builder: tl.tensor) -> tl.tensor:
@@ -1408,19 +1406,14 @@ def wrap_tensor(x, scalar_ty, ret_shape):
 
 def reduction(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, builder: ir.builder) -> Tuple[tl.tensor, ...]:
     if axis is None:
-        new_inputs = []
-        for i in range(len(inputs)):
-            new_shape = [inputs[i].numel.value]
-            new_inputs.append(view(inputs[i], new_shape, builder))
-        inputs = tuple(new_inputs)
+        inputs = tuple(view(t, [t.numel.value], builder) for t in inputs)
         axis = 0
     # get result shape
     shape = inputs[0].type.shape
     rank = len(shape)
     assert axis < rank, f"reduction axis must be < inputs rank ({rank})"
     ret_shape = [s for i, s in enumerate(shape) if i != axis]
-    for t in inputs:
-        assert t.type.shape == shape, "all reduction inputs must have the same shape"
+    assert all(t.type.shape == shape for t in inputs), "all reduction inputs must have the same shape"
 
     reduce_op = builder.create_reduce([t.handle for t in inputs], axis)
     region_builder_fn(reduce_op)
@@ -1504,9 +1497,7 @@ def device_print(prefix: str, args: List[tl.tensor], hex: bool, builder: ir.buil
     if len(prefix) > 2 and not prefix.startswith(" "):
         prefix = " " + prefix
 
-    new_args = []
-    for arg in args:
-        new_args.append(arg.handle)
+    new_args = [arg.handle for arg in args]
     return tl.tensor(builder.create_print(prefix, hex, new_args), tl.void)
 
 
