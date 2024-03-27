@@ -1140,12 +1140,14 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     %51 = tt.addptr %50, %47 : tensor<64x256x!tt.ptr<i8, 1>, #blocked>, tensor<64x256xi32, #blocked>
 
     // Check that both loads in the loop are pipelined.
+    // TODO(jlebar): https://github.com/openai/triton/pull/3472 disables the
+    // relevant optimization.  Once we've reenabled it, we can uncomment this test.
     // CHECK: scf.for
-    // CHECK-NOT: tt.load
+    // COM: CHECK-NOT: tt.load
     // CHECK: triton_gpu.async_copy_global_to_local
-    // CHECK-NOT: tt.load
-    // CHECK: triton_gpu.async_copy_global_to_local
-    // CHECK-NOT: tt.load
+    // COM: CHECK-NOT: tt.load
+    // COM: CHECK: triton_gpu.async_copy_global_to_local
+    // COM: CHECK-NOT: tt.load
     // CHECK: scf.yield
     %54:3 = scf.for %arg9 = %c0_i32 to %c16_i32 step %c1_i32 iter_args(%arg10 = %cst_3, %arg11 = %41, %arg12 = %51) -> (tensor<16x256xf32, #mma>, tensor<16x128x!tt.ptr<f16, 1>, #blocked1>, tensor<64x256x!tt.ptr<i8, 1>, #blocked>)  : i32 {
       %78 = tt.load %arg11 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x128xf16, #blocked1>
