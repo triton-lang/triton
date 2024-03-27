@@ -347,8 +347,8 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
 
 // promote operands of dot op if the existing combination is not natively
 // supported.
-static void decomposeMixedModeDotOp(ModuleOp mod) {
-  mod.walk([](tt::DotOp dotOp) -> void {
+static void decomposeMixedModeDotOp(ModuleOp mod, int computeCapability) {
+  mod.walk([=](tt::DotOp dotOp) -> void {
     auto D = dotOp.getD();
     OpBuilder builder(dotOp);
     Type AElType = dotOp.getA().getType().getElementType();
@@ -356,11 +356,13 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
     NvidiaMmaEncodingAttr mmaLayout =
         D.getType().getEncoding().dyn_cast<NvidiaMmaEncodingAttr>();
     if (mmaLayout) {
-      bool isNativeHopperFP8 =
+      // TODO(hjchen2): Take the cuda version into consideration since float8
+      // mma is supported by cuda 12.4 or newer version.
+      bool isNativeFP8 =
           AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
-      bool isFP8 = isNativeHopperFP8 || AElType.isFloat8E5M2FNUZ() ||
+      bool isFP8 = isNativeFP8 || AElType.isFloat8E5M2FNUZ() ||
                    AElType.isFloat8E4M3FN() || AElType.isFloat8E4M3B11FNUZ();
-      if (!isFP8 || (isNativeHopperFP8 && mmaLayout.isHopper()))
+      if (!isFP8 || (isNativeFP8 && computeCapability >= 89))
         return;
       promoteType = builder.getF16Type();
     } else {
@@ -400,7 +402,7 @@ public:
     }
     // Now that we have picked the mma type, decompose dot that are not natively
     // supported.
-    decomposeMixedModeDotOp(m);
+    decomposeMixedModeDotOp(m, computeCapability);
   }
 };
 
