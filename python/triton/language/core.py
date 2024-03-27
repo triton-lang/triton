@@ -1427,9 +1427,7 @@ def view(input, *shape, _builder=None):
         view(x, (32, 32))
         view(x, 32, 32)
     """
-    warn(
-        f"view is deprecated, please use reshape with reorder being true."
-    )
+    warn("view is deprecated, please use reshape with reorder being true.")
     shape = _shape_check_impl(_unwrap_iterable(shape))
     return semantic.view(input, shape, _builder)
 

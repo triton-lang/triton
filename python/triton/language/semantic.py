@@ -554,14 +554,14 @@ def view(input: tl.tensor, dst_shape: List[int], builder: ir.builder) -> tl.tens
     return tl.tensor(builder.create_reshape(input.handle, dst_shape, True), ret_ty)
 
 
-def reshape(input: tl.tensor, dst_shape: List[int], reorder: bool, builder: ir.builder) -> tl.tensor:
+def reshape(input: tl.tensor, dst_shape: List[int], can_reorder: bool, builder: ir.builder) -> tl.tensor:
     numel = 1
     for s in dst_shape:
         numel *= s
     if input.type.numel != numel:
         raise ValueError("reshape() cannot change total number of elements in tensor")
     ret_ty = tl.block_type(input.type.scalar, dst_shape)
-    return tl.tensor(builder.create_reshape(input.handle, dst_shape, reorder), ret_ty)
+    return tl.tensor(builder.create_reshape(input.handle, dst_shape, can_reorder), ret_ty)
 
 
 def expand_dims(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
@@ -602,7 +602,7 @@ def join(a: tl.tensor, b: tl.tensor, builder: ir.builder) -> tl.tensor:
     ret = tl.tensor(builder.create_join(a.handle, b.handle), ret_type)
 
     if was_rank_1:
-        ret = reshape(ret, [2], reorder=False, builder=builder)
+        ret = reshape(ret, [2], can_reorder=False, builder=builder)
 
     return ret
 
@@ -1406,7 +1406,7 @@ def wrap_tensor(x, scalar_ty, ret_shape):
 
 def reduction(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, builder: ir.builder) -> Tuple[tl.tensor, ...]:
     if axis is None:
-        inputs = tuple(view(t, [t.numel.value], builder) for t in inputs)
+        inputs = tuple(reshape(t, [t.numel.value], can_reorder=True, builder=builder) for t in inputs)
         axis = 0
     # get result shape
     shape = inputs[0].type.shape
