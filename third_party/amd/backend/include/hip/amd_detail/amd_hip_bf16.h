@@ -85,6 +85,10 @@
 #ifndef _HIP_INCLUDE_HIP_AMD_DETAIL_HIP_BF16_H_
 #define _HIP_INCLUDE_HIP_AMD_DETAIL_HIP_BF16_H_
 
+#if !defined(__HIPCC_RTC__)
+#include <hip/amd_detail/amd_hip_common.h>
+#endif // !defined(__HIPCC_RTC__)
+
 #include "amd_hip_vector_types.h"  // float2 etc
 #include "device_library_decls.h"  // ocml conversion functions
 #include "math_fwd.h"              // ocml device functions
