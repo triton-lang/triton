@@ -544,16 +544,6 @@ def splat(value: tl.tensor, shape: List[int], builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_splat(value.handle, shape), ret_ty)
 
 
-def view(input: tl.tensor, dst_shape: List[int], builder: ir.builder) -> tl.tensor:
-    numel = 1
-    for s in dst_shape:
-        numel *= s
-    if input.type.numel != numel:
-        raise ValueError("view() cannot change total number of elements in tensor")
-    ret_ty = tl.block_type(input.type.scalar, dst_shape)
-    return tl.tensor(builder.create_reshape(input.handle, dst_shape, True), ret_ty)
-
-
 def reshape(input: tl.tensor, dst_shape: List[int], can_reorder: bool, builder: ir.builder) -> tl.tensor:
     numel = 1
     for s in dst_shape:
