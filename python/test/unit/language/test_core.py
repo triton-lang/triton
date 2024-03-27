@@ -1462,8 +1462,6 @@ def test_tensor_atomic_rmw_block(num_ctas, device):
 @pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_atomic_cas(sem, num_ctas, device):
-    if is_hip():
-        pytest.skip('test_atomic_cas fails with accuracy checks on HIP: https://github.com/openai/triton/issues/3474')
     # 1. make sure that atomic_cas changes the original value (Lock)
     @triton.jit
     def change_value(Lock):
@@ -1727,8 +1725,6 @@ def test_join_with_mma(device):
 
 @pytest.mark.interpreter
 def test_interleave(device):
-    if is_hip():
-        pytest.skip("test_interleaves not supported on HIP")
 
     @triton.jit
     def kernel(Z, N: tl.constexpr):
@@ -1746,8 +1742,6 @@ def test_interleave(device):
 
 @pytest.mark.interpreter
 def test_interleave_scalars(device):
-    if is_hip():
-        pytest.skip("test_interleaves not supported on HIP")
 
     @triton.jit
     def kernel(X, Y, Z):
@@ -3259,10 +3253,8 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
 
 def test_max_num_imprecise_acc(device):
 
-    if is_hip():
-        pytest.skip(
-            'test_max_num_imprecise_acc for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
+    if not hasattr(torch, 'float8_e5m2'):
+        pytest.skip(f"torch {torch.__version__} does not support float8_e5m2")
 
     if is_cuda():
         capability = torch.cuda.get_device_capability()
@@ -4425,8 +4417,6 @@ def add_fn_static_cond(x, cond: tl.constexpr):
     "call_type",
     ["attribute", "attribute_jit", "jit", "jit_if", "jit_expr", "jit_static_cond", "jit_noinline", "jit_extern"])
 def test_if_call(call_type, device):
-    if is_hip():
-        pytest.skip('test_if_call for HIP currently broken in upstream.')
 
     @triton.jit
     def kernel(Out, call_type: tl.constexpr):

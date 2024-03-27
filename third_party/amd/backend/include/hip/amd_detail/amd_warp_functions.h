@@ -23,16 +23,6 @@ THE SOFTWARE.
 #ifndef HIP_INCLUDE_HIP_AMD_DETAIL_WARP_FUNCTIONS_H
 #define HIP_INCLUDE_HIP_AMD_DETAIL_WARP_FUNCTIONS_H
 
-#if defined(__clang__)
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wreserved-identifier"
-#pragma clang diagnostic ignored "-Wreserved-macro-identifier"
-#pragma clang diagnostic ignored "-Wsign-conversion"
-#pragma clang diagnostic ignored "-Wold-style-cast"
-#pragma clang diagnostic ignored "-Wc++98-compat"
-#pragma clang diagnostic ignored "-Wc++98-compat-pedantic"
-#endif
-
 __device__ static inline unsigned __hip_ds_bpermute(int index, unsigned src) {
     union { int i; unsigned u; float f; } tmp; tmp.u = src;
     tmp.i = __builtin_amdgcn_ds_bpermute(index, tmp.i);
@@ -500,9 +490,5 @@ unsigned long long __shfl_xor(unsigned long long var, int lane_mask, int width =
     unsigned long long tmp1;  __builtin_memcpy(&tmp1, &tmp0, sizeof(tmp0));
     return tmp1;
 }
-
-#if defined(__clang__)
-#pragma clang diagnostic pop
-#endif
 
 #endif
