@@ -356,10 +356,7 @@ static void decomposeMixedModeDotOp(ModuleOp mod, int computeCapability) {
     NvidiaMmaEncodingAttr mmaLayout =
         D.getType().getEncoding().dyn_cast<NvidiaMmaEncodingAttr>();
     if (mmaLayout) {
-      // TODO(hjchen2): Take the cuda version into consideration since float8
-      // mma is supported by cuda 12.4 or newer version.
-      bool isNativeFP8 =
-          AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
+      bool isNativeFP8 = AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
       bool isFP8 = isNativeFP8 || AElType.isFloat8E5M2FNUZ() ||
                    AElType.isFloat8E4M3FN() || AElType.isFloat8E4M3B11FNUZ();
       if (!isFP8 || (isNativeFP8 && computeCapability >= 89))
