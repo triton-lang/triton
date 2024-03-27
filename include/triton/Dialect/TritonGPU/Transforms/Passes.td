@@ -214,6 +214,18 @@ def TritonGPUReorderInstructions: Pass<"tritongpu-reorder-instructions", "mlir::
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonAMDGPUReorderInstructions: Pass<"tritonamdgpu-reorder-instructions", "mlir::ModuleOp"> {
+  let summary = "Reorder instructions";
+
+  let description = "This pass reorder instructions so as to be more suitable for good code generation from "
+                    "LLVM backend.";
+
+  let constructor = "mlir::createTritonAMDGPUReorderInstructionsPass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
 def TritonGPUDecomposeConversions: Pass<"tritongpu-decompose-conversions", "mlir::ModuleOp"> {
   let summary = "Decompose convert[distributed -> dotOperand] into convert[distributed -> shared -> dotOperand]";
 

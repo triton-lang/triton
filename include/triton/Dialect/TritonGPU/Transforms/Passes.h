@@ -29,6 +29,8 @@ std::unique_ptr<Pass> createTritonGPUCoalescePass();
 
 std::unique_ptr<Pass> createTritonGPUReorderInstructionsPass();
 
+std::unique_ptr<Pass> createTritonAMDGPUReorderInstructionsPass();
+
 std::unique_ptr<Pass> createTritonGPUDecomposeConversionsPass();
 
 std::unique_ptr<Pass> createTritonGPURemoveLayoutConversionsPass();
