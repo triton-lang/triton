@@ -424,7 +424,7 @@ class JITFunction(KernelInterface[T]):
         if key not in self.cache[device]:
             configs = (self._get_config(*[arg.value for arg in args]), )
             constants = {
-                arg.param.num: arg.value
+                arg.param.name: arg.value
                 for arg in args
                 if arg.param.is_constexpr or arg.param.num in configs[0].equal_to_1 or arg.value is None
             }
