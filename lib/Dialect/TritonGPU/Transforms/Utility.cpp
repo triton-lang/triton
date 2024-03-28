@@ -114,6 +114,13 @@ unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
   unsigned maxContig =
       std::min(valInfo.getContiguity(order[0]), shapePerCTA[order[0]]);
   unsigned alignment = std::min(maxMultiple, maxContig);
+  Value mask;
+  if (auto loadOp = dyn_cast<triton::LoadOp>(op))
+    mask = loadOp.getMask();
+  else if (auto storeOp = dyn_cast<triton::StoreOp>(op))
+    mask = storeOp.getMask();
+  if (mask)
+    alignment = std::min(alignment, axisInfoAnalysis.getMaskAlignment(mask));
   unsigned currPerThread = std::min(alignment, 128 / elemNumBits);
   LDBG("elemNumBytes: " << elemNumBytes
                         << ", divisibility: " << maxMultipleBytes
