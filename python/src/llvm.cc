@@ -261,20 +261,27 @@ void init_triton_llvm(py::module &&m) {
     });
   });
 
-  m.def("link_extern_lib", [](llvm::Module *mod, std::string path) {
-    llvm::SMDiagnostic err;
-    auto &ctx = mod->getContext();
-    auto extMod = llvm::parseIRFile(path, err, ctx);
-    if (!extMod) {
-      llvm::errs() << "Failed to load " << path;
+  m.def("link_extern_libs", [](llvm::Module *dstMod,
+                               const std::vector<std::string> &paths) {
+    if (paths.empty())
       return;
-    }
-    extMod->setTargetTriple(mod->getTargetTriple());
-    extMod->setDataLayout(mod->getDataLayout());
-    if (llvm::Linker::linkModules(*mod, std::move(extMod),
-                                  llvm::Linker::Flags::LinkOnlyNeeded)) {
-      llvm::errs() << "Failed to link " << path;
-      return;
+
+    LLVMContext &ctx = dstMod->getContext();
+    llvm::Linker linker(*dstMod);
+    for (const std::string &path : paths) {
+      llvm::SMDiagnostic err;
+      std::unique_ptr<llvm::Module> libMod = llvm::parseIRFile(path, err, ctx);
+      if (!libMod) {
+        llvm::errs() << "Failed to load " << path;
+        return;
+      }
+      libMod->setTargetTriple(dstMod->getTargetTriple());
+      libMod->setDataLayout(dstMod->getDataLayout());
+      if (linker.linkInModule(std::move(libMod),
+                              llvm::Linker::Flags::LinkOnlyNeeded)) {
+        llvm::errs() << "Failed to link " << path;
+        return;
+      }
     }
   });
 }
