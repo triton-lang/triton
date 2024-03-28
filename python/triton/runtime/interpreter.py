@@ -239,7 +239,7 @@ class InterpreterBuilder:
         dtype_tt = ptrs.get_element_ty()
         dtype_np = _get_np_dtype(dtype_tt)
         if other is None:
-            other = TensorHandle(np.ones_like(ptrs.data, dtype=dtype_np), dtype_tt)
+            other = TensorHandle(np.zeros_like(ptrs.data, dtype=dtype_np), dtype_tt)
         ret = _interpreter.load(ptrs.data, mask.data, other.data, dtype_np)
         return TensorHandle(ret, dtype_tt)
 
@@ -444,24 +444,28 @@ class InterpreterBuilder:
 
     # def create_extern_elementwise(self, libName, libPath, symbol, argList, retType, isPure):
     #     pass
+    
+    def create_inline_asm(self, inlineAsm, constraints, values, type, isPure, pack):
+        pass
 
-    # def create_int_to_ptr(self, val, type):
-    #     pass
+    def create_print(self, prefix, values):
+        msg = f"({self.grid_idx[0]}, {self.grid_idx[1]}, {self.grid_idx[2]})"
+        if prefix:
+            msg += f" {prefix}"
+        if not isinstance(values, tl.tensor) or not values.shape:
+            msg += f" idx (): {values.data}"
+        else:
+            for i in range(values.data.size):
+                idx = np.unravel_index(i, values.data.shape)
+                idx_msg = msg + f" idx {idx}: {values.data[idx]}"
+                print(idx_msg)
 
-    # def create_inline_asm(self, inlineAsm, constraints, values, type, isPure, pack):
-    #     pass
+    def create_assert(self, condition, message, fileName, funcName, lineNo):
+        assert condition, f"{message} in {fileName}:{funcName}:{lineNo}"
 
-    # def create_print(self, prefix, values):
-    #     pass
-
-    # def create_assert(self, condition, message, fileName, funcName, lineNo):
-    #     pass
-
-    # def create_undef(self, type):
-    #     pass
-
-    # def create_barrier(self):
-    #     pass
+    def create_barrier(self):
+        # Triton's barrier applies to each program in a grid, so it's a no-op in the interpreter
+        pass
 
     def create_make_block_ptr(self, base, shape, strides, offsets, tensor_shape, order):
         # Create new offsets to avoid modifying the original
