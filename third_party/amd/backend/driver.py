@@ -9,8 +9,6 @@ from triton.backends.driver import GPUDriver
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir = [os.path.join(dirname, "include")]
 library_dir = [os.path.join(dirname, "lib")]
-include_dir.insert(0, "/opt/rocm/include")
-library_dir.insert(0, "/opt/rocm/lib")
 libraries = ['amdhip64']
 
 def compile_module_from_src(src, name):
@@ -274,7 +272,7 @@ class HIPLauncher(object):
         cst_key = lambda i: src.fn.arg_names.index(i) if isinstance(i, str) else i
         constants = {cst_key(key): value for key, value in constants.items()}
         signature = {cst_key(key): value for key, value in src.signature.items()}
-        src = make_launcher(constants, signature, ids)
+        src = make_launcher(constants, signature, ids, metadata.warp_size)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
 
