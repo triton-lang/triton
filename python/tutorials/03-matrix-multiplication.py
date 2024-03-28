@@ -305,8 +305,8 @@ a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
 b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
 triton_output = matmul(a, b)
 torch_output = torch.matmul(a, b)
-print(f"triton_output={triton_output}")
-print(f"torch_output={torch_output}")
+print(f"triton_output_with_fp16_inputs={triton_output}")
+print(f"torch_output_with_fp16_inputs={torch_output}")
 if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0):
     print("✅ Triton and Torch match")
 else:
@@ -322,8 +322,8 @@ if TORCH_HAS_FP8:
     b = b.to(torch.float8_e5m2)
     triton_output = matmul(a, b)
     torch_output = torch.matmul(a.to(torch.float16), b.to(torch.float16))
-    print(f"triton_output={triton_output}")
-    print(f"torch_output={torch_output}")
+    print(f"triton_output_with_fp8_inputs={triton_output}")
+    print(f"torch_output_with_fp8_inputs={torch_output}")
     if torch.allclose(triton_output, torch_output, atol=0.125, rtol=0):
         print("✅ Triton and Torch match")
     else:
