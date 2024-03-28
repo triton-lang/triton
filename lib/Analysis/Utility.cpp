@@ -564,8 +564,7 @@ bool supportMMA(Value value, int version) {
   // FP8 is not natively supported on all mma versions but it can always be
   // promoted to fp16 therefore we can always support it.
   bool isFP8 = elemTy.isFloat8E5M2() || elemTy.isFloat8E4M3FN() ||
-               elemTy.isFloat8E5M2FNUZ() || elemTy.isFloat8E4M3FNUZ() ||
-               elemTy.isFloat8E4M3B11FNUZ();
+               elemTy.isFloat8E5M2FNUZ() || elemTy.isFloat8E4M3FNUZ();
   return isFP8 || elemTy.isF16() || elemTy.isBF16() ||
          (elemTy.isF32() && version >= 2) ||
          (elemTy.isInteger(8) && version >= 2);

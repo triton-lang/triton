@@ -206,7 +206,8 @@ void init_triton_ir(py::module &&m) {
   });
 
   py::class_<Type>(m, "type", py::module_local())
-      .def("is_integer", &Type::isInteger)
+      .def("is_integer",
+           [](Type &self, unsigned width) { return self.isInteger(width); })
       .def("is_fp16", &Type::isF16)
       .def("__str__", [](Type &self) {
         std::string str;
@@ -718,15 +719,7 @@ void init_triton_ir(py::module &&m) {
            })
       .def("get_fp8e4b15_ty",
            [](TritonOpBuilder &self) -> Type {
-             // TODO: upstream FP8E4B15 into MLIR, or find a way to externally
-             // have a float-like type compatible with float only native ops
-             return self.getBuilder().getType<Float8E4M3B11FNUZType>();
-           })
-      .def("get_fp8e4b15x4_ty",
-           [](TritonOpBuilder &self) -> Type {
-             // TODO: upstream FP8E4B15 into MLIR, or find a way to externally
-             // have a float-like type compatible with float only native ops
-             return self.getBuilder().getType<Float8E4M3FNType>();
+             return self.getBuilder().getI8Type();
            })
       .def("get_fp8e5_ty",
            [](TritonOpBuilder &self) -> Type {
