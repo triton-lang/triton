@@ -236,7 +236,10 @@ def get_cuda_version():
     try:
         output = subprocess.check_output(["nvcc", "--version"], text=True)
         version_line = next(line for line in output.split("\n") if "release" in line)
-        return version_line.split("release")[-1].strip().split(",")[0]
+        cuda_version = version_line.split("release")[-1].strip().split(",")[0]
+        if cuda_version.count(".") < 2:
+            cuda_version+=".0"
+        return cuda_version
     except Exception as e:
         raise RuntimeError("Failed to determine CUDA version") from e
 
@@ -427,14 +430,14 @@ download_and_copy(
 download_and_copy(
     src_path="bin/cuobjdump",
     variable="TRITON_CUOBJDUMP_PATH",
-    version=ptxas_version,
+    version=cuobjdump_version,
     url_func=lambda arch, version:
     f"https://anaconda.org/nvidia/cuda-cuobjdump/{version}/download/linux-{arch}/cuda-cuobjdump-{version}-0.tar.bz2",
 )
 download_and_copy(
     src_path="bin/nvdisasm",
     variable="TRITON_NVDISASM_PATH",
-    version=ptxas_version,
+    version=nvdisasm_version,
     url_func=lambda arch, version:
     f"https://anaconda.org/nvidia/cuda-nvdisasm/{version}/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
