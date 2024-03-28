@@ -151,7 +151,10 @@ def sqrt_rn(x, _builder=None):
 def abs(x, _builder=None):
     x = core._to_tensor(x, _builder)
     dtype = x.dtype
-    if dtype.is_floating():
+    if dtype.is_fp8e4b15():
+        mask = core.full(x.shape, 0x7F, core.int8, _builder=_builder)
+        return core.tensor(_builder.create_and(x.handle, mask.handle), x.type)
+    elif dtype.is_floating():
         return core.tensor(_builder.create_fabs(x.handle), x.type)
     elif dtype.is_int_signed():
         return core.tensor(_builder.create_iabs(x.handle), x.type)
