@@ -4932,7 +4932,7 @@ def matmul_kernel(  #
     tl.store(c_ptrs, accumulator)
 
 
-@pytest.mark.parametrize("in_type_str", ['float8e5', 'float8e4nv'])
+@pytest.mark.parametrize("in_type_str", ['float8e5', 'float8e4nv', 'float8e4b15'])
 @pytest.mark.parametrize("low_precision_acc", [0, 32, 64, 128])
 def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
     if is_hip():

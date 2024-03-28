@@ -1319,8 +1319,8 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
 
     assert_dtypes_valid(lhs.dtype, rhs.dtype, builder.options)
     if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():
-        lhs = lhs.to(tl.fp16)
-        rhs = rhs.to(tl.fp16)
+        lhs = cast(lhs, tl.float16, builder)
+        rhs = cast(rhs, tl.float16, builder)
 
     lhs_rank = len(lhs.shape)
     rhs_rank = len(rhs.shape)
