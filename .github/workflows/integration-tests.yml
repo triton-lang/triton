@@ -339,8 +339,10 @@ jobs:
       - name: Install Triton on ROCM
         run: |
           pip uninstall -y triton
+          export PATH="/opt/rocm/llvm/bin:$PATH"
+          export TRITON_BUILD_WITH_CLANG_LLD=true
           cd python
-          pip install -e .
+          pip install -v -e .
       - name: Run python tests on ROCM
         run: |
           cd python
