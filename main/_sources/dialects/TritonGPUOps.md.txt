@@ -286,6 +286,13 @@ operation ::= `triton_gpu.memdesc_subview` $desc `[` $offsets `]` attr-dict `:` 
 This operation returns a new descriptor representing a subview of the buffer.
 It doesn't affect the underlying memory. The subview can be rank-reduced.
 
+For example, suppose that
+ - the input shape is 2x4x16xf16,
+ - the output shape is 4x4xf16, and
+ - offsets = [1, 0, 4].
+
+Then in Python syntax, the subview covers input[1][0:4][4:8].
+
 Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`

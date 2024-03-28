@@ -490,6 +490,13 @@ operand.</p>
 </div>
 <p>This operation returns a new descriptor representing a subview of the buffer.
 It doesn’t affect the underlying memory. The subview can be rank-reduced.</p>
+<p>For example, suppose that</p>
+<ul class="simple">
+<li><p>the input shape is 2x4x16xf16,</p></li>
+<li><p>the output shape is 4x4xf16, and</p></li>
+<li><p>offsets = [1, 0, 4].</p></li>
+</ul>
+<p>Then in Python syntax, the subview covers input[1][0:4][4:8].</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
