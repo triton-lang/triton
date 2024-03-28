@@ -1494,7 +1494,7 @@ void init_triton_ir(py::module &&m) {
              return self.create<LLVM::UndefOp>(type);
            })
       .def("create_histogram",
-           [](TritonOpBuilder &self, Value operand, int numBins) -> OpState {
+           [](TritonOpBuilder &self, Value operand, int numBins) -> Value {
              return self.create<HistogramOp>(
                  RankedTensorType::get(
                      {static_cast<int64_t>(numBins)},
