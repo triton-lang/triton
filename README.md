@@ -38,7 +38,7 @@ pip install -U --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/
 git clone https://github.com/openai/triton.git;
 cd triton;
 
-pip install ninja cmake wheel; # build-time dependencies
+pip install ninja cmake wheel bs4; # build-time dependencies
 pip install -e python
 ```
 
