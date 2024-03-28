@@ -507,8 +507,10 @@ def arange(start: int, end: int, builder: ir.builder) -> tl.tensor:
         raise ValueError("arange must fit in int32")
     if end <= start:
         raise ValueError("arange's end argument must be greater than the start argument")
-
-    shape = [end - start]
+    range = end - start
+    if (range & (range - 1)) != 0:
+        raise ValueError("arange's range must be a power of 2")
+    shape = [range]
     ret_ty = tl.block_type(tl.int32, shape)
     return tl.tensor(builder.create_make_range(start, end), ret_ty)
 
