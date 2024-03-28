@@ -136,13 +136,17 @@ TensorCoreType getMmaType(triton::DotOp op) {
       return TensorCoreType::FP32_FP16_FP16_FP32;
     if (aTy.getElementType().isBF16() && bTy.getElementType().isBF16())
       return TensorCoreType::FP32_BF16_BF16_FP32;
-    if (aTy.getElementType().isFloat8E5M2() && bTy.getElementType().isFloat8E5M2())
+    if (aTy.getElementType().isFloat8E5M2() &&
+        bTy.getElementType().isFloat8E5M2())
       return TensorCoreType::FP32_FP8E5M2_FP8E5M2_FP32;
-    if (aTy.getElementType().isFloat8E5M2() && bTy.getElementType().isFloat8E4M3FNUZ())
+    if (aTy.getElementType().isFloat8E5M2() &&
+        bTy.getElementType().isFloat8E4M3FNUZ())
       return TensorCoreType::FP32_FP8E5M2_FP8E4M3FNUZ_FP32;
-    if (aTy.getElementType().isFloat8E4M3FNUZ() && bTy.getElementType().isFloat8E5M2())
+    if (aTy.getElementType().isFloat8E4M3FNUZ() &&
+        bTy.getElementType().isFloat8E5M2())
       return TensorCoreType::FP32_FP8E4M3FNUZ_FP8E5M2_FP32;
-    if (aTy.getElementType().isFloat8E4M3FNUZ() && bTy.getElementType().isFloat8E4M3FNUZ())
+    if (aTy.getElementType().isFloat8E4M3FNUZ() &&
+        bTy.getElementType().isFloat8E4M3FNUZ())
       return TensorCoreType::FP32_FP8E4M3FNUZ_FP8E4M3FNUZ_FP32;
     if (aTy.getElementType().isF32() && bTy.getElementType().isF32() &&
         op.getAllowTF32())

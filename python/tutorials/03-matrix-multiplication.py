@@ -312,7 +312,6 @@ if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0):
 else:
     print("❌ Triton and Torch differ")
 
-
 TORCH_HAS_FP8 = hasattr(torch, "float8_e5m2")
 if TORCH_HAS_FP8:
     torch.manual_seed(0)
@@ -328,7 +327,6 @@ if TORCH_HAS_FP8:
         print("✅ Triton and Torch match")
     else:
         print("❌ Triton and Torch differ")
-
 
 # %%
 # Benchmark
@@ -350,17 +348,14 @@ for fp8_inputs in [False, True]:
             x_vals=[128 * i for i in range(2, 33)],  # Different possible values for `x_name`
             line_arg="provider",  # Argument name whose value corresponds to a different line in the plot
             # Possible values for `line_arg`
-            line_vals=["cublas", "triton"], # Label name for the lines
-            line_names=["cuBLAS", "Triton"], # Line styles
+            line_vals=["cublas", "triton"],  # Label name for the lines
+            line_names=["cuBLAS", "Triton"],  # Line styles
             styles=[("green", "-"), ("blue", "-")],
             ylabel="TFLOPS",  # Label name for the y-axis
-            plot_name="matmul-performance-"
-            + (
-                "fp16" if not fp8_inputs else "fp8"
-            ),  # Name for the plot, used also as a file name for saving the plot.
+            plot_name="matmul-performance-" +
+            ("fp16" if not fp8_inputs else "fp8"),  # Name for the plot, used also as a file name for saving the plot.
             args={"fp8_inputs": fp8_inputs},
-        )
-    )
+        ))
 
 
 @triton.testing.perf_report(configs)
