@@ -529,10 +529,10 @@ class JITFunction(KernelInterface[T]):
             raise RuntimeError(
                 f"Specialization data is for {deserialized_obj['name']} but trying to preload for {self.fn.__name__}")
         constants = {
-            int(key): tl.dtype(value) if tl.dtype.is_dtype(value) else value
+            key: tl.dtype(value) if tl.dtype.is_dtype(value) else value
             for key, value in deserialized_obj['constants'].items()
         }
-        signature = {int(key): value for key, value in deserialized_obj['signature'].items()}
+        signature = {key: value for key, value in deserialized_obj['signature'].items()}
         src = ASTSource(self, signature, constants, AttrsDescriptor.from_dict(deserialized_obj['attrs']))
         options = {
             key: tuple(value) if isinstance(value, list) else value

@@ -14,7 +14,7 @@ from numpy.random import RandomState
 
 import triton
 import triton.language as tl
-from triton.runtime.jit import JITFunction, TensorWrapper, reinterpret
+from triton.runtime.jit import TensorWrapper, reinterpret
 
 
 def is_interpreter():
@@ -3763,23 +3763,18 @@ def test_pointer_arguments(device):
                                                (2**31, 'i64'), (2**32 - 1, 'i64'), (2**32, 'i64'), (2**63 - 1, 'i64'),
                                                (-2**63, 'i64'), (2**63, 'u64'), (2**64 - 1, 'u64')])
 def test_value_specialization(value: int, value_type: str, device) -> None:
-    spec_type = None
 
-    def cache_hook(*args, **kwargs):
-        nonlocal spec_type
-        spec_type = kwargs["compile"]["signature"][0]
+    def repr(specialization):
+        spec_type = specialization.signature["VALUE"]
+        return f"kernel_{spec_type}"
 
-    JITFunction.cache_hook = cache_hook
-
-    @triton.jit
+    @triton.jit(repr=repr)
     def kernel(VALUE, X):
         pass
 
     x = torch.tensor([3.14159], device=device)
-    pgm = kernel[(1, )](value, x)
-
-    JITFunction.cache_hook = None
-    assert spec_type == value_type
+    h = kernel[(1, )](value, x)
+    assert value_type in h.name
 
 
 # --------------------
