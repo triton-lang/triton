@@ -2948,6 +2948,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         pytest.skip(
             "numpy.dot with int8 inputs will overflow while tl.dot doesn't because MMA instruction's accumulator is 32-bit"
         )
+    if is_hip() and (input_precision != "ieee"):
+        pytest.skip(f"{input_precision} not supported on HIP")
 
     torch.backends.cuda.matmul.allow_tf32 = input_precision == "tf32"
 
