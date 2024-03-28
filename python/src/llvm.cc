@@ -22,6 +22,7 @@
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <stdexcept>
 
 namespace py = pybind11;
 
@@ -272,15 +273,15 @@ void init_triton_llvm(py::module &&m) {
       llvm::SMDiagnostic err;
       std::unique_ptr<llvm::Module> libMod = llvm::parseIRFile(path, err, ctx);
       if (!libMod) {
-        llvm::errs() << "Failed to load " << path;
-        return;
+        std::string message = "Failed to parse library at " + path;
+        throw std::invalid_argument(message);
       }
       libMod->setTargetTriple(dstMod->getTargetTriple());
       libMod->setDataLayout(dstMod->getDataLayout());
       if (linker.linkInModule(std::move(libMod),
                               llvm::Linker::Flags::LinkOnlyNeeded)) {
-        llvm::errs() << "Failed to link " << path;
-        return;
+        std::string message = "Failed to link library at " + path;
+        throw std::invalid_argument(message);
       }
     }
   });
