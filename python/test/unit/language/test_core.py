@@ -159,8 +159,7 @@ def check_type_supported(dtype, device):
     if is_interpreter():
         if dtype in [
                 tl.float8e4nv, "float8e4nv", tl.bfloat16, "bfloat16", tl.float8e5, "float8e5", tl.float8e4b15,
-                "float8e4b15", tl.float8e4b15x4, "float8e4b15x4", torch.bfloat16, torch.float8_e4m3fn, "float8_e4m3fn",
-                torch.float8_e5m2, "float8_e5m2"
+                "float8e4b15", torch.bfloat16, torch.float8_e4m3fn, "float8_e4m3fn", torch.float8_e5m2, "float8_e5m2"
         ]:
             pytest.skip("bfloat16 and float8 are not supported in the interpreter")
 
@@ -398,7 +397,6 @@ def test_dtype_codegen():
     for dtype in dtypes_with_bfloat16:
         full_name = f"triton.language.{dtype}"
         assert repr(eval(full_name)) == full_name
-    assert repr(triton.language.float8e4b15x4) == "triton.language.float8e4b15x4"
 
 
 # ---------------
@@ -1854,37 +1852,14 @@ def test_convert_float16_to_float32(in_dtype, device):
 
 
 def serialize_fp8(np_data, in_dtype):
-    if in_dtype == tl.float8e4b15x4:
-        # triton's f8e4b15 format is optimized for software emulation
-        # as a result, each pack of 4xfp8 values:
-        # s0b0s1b1s2b2s3b3 (for s, b sign and bits respectively)
-        # is actually internally stored as
-        # s0s2b0b2s1s3b1b3
-        # we apply the conversion here
-        f8x4 = np_data.view(np.uint32)
-        s = [(f8x4 & (0x80000000 >> i)) << i for i in range(0, 32, 8)]
-        b = [(f8x4 & (0x7f000000 >> i)) << i for i in range(0, 32, 8)]
-        signs = (s[0] >> 0) | (s[1] >> 16) | (s[2] >> 1) | (s[3] >> 17)
-        bits = (b[0] >> 1) | (b[1] >> 17) | (b[2] >> 8) | (b[3] >> 24)
-        # tensor of triton fp8 data
-        return (signs | bits).view(np.int8)
-    else:
-        return np_data
+    return np_data
 
 
 # inverse of `serialize_fp8`
 
 
 def deserialize_fp8(np_data, in_dtype):
-    if in_dtype == tl.float8e4b15x4:
-        f8x4 = np_data.view(np.uint32)
-        s = [(f8x4 & (0x80000000 >> i)) << i for i in [0, 16, 1, 17]]
-        b = [(f8x4 & (0x7f000000 >> i)) << i for i in [1, 17, 8, 24]]
-        signs = (s[0] >> 0) | (s[1] >> 8) | (s[2] >> 16) | (s[3] >> 24)
-        bits = (b[0] >> 0) | (b[1] >> 8) | (b[2] >> 16) | (b[3] >> 24)
-        return (signs | bits).view(np.int8)
-    else:
-        return np_data
+    return np_data
 
 
 # ---------------

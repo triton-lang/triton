@@ -151,7 +151,7 @@ def _to_tensor(x, builder):
 class dtype:
     SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
     UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
-    FP_TYPES = ['fp8e4b15', 'fp8e4b15x4', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp16', 'bf16', 'fp32', 'fp64']
+    FP_TYPES = ['fp8e4b15', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp16', 'bf16', 'fp32', 'fp64']
     STANDARD_FP_TYPES = ['fp16', 'bf16', 'fp32', 'fp64']
     OTHER_TYPES = ['void']
 
@@ -174,10 +174,6 @@ class dtype:
             self.primitive_bitwidth = self.int_bitwidth
         elif name in dtype.FP_TYPES:
             if name == 'fp8e4b15':
-                self.fp_mantissa_width = 3
-                self.primitive_bitwidth = 8
-                self.exponent_bias = 15
-            elif name == 'fp8e4b15x4':
                 self.fp_mantissa_width = 3
                 self.primitive_bitwidth = 8
                 self.exponent_bias = 15
@@ -226,9 +222,6 @@ class dtype:
 
     def is_fp8e4b15(self):
         return self.name == 'fp8e4b15'
-
-    def is_fp8e4b15x4(self):
-        return self.name == 'fp8e4b15x4'
 
     def is_fp8e4b8(self):
         return self.name == 'fp8e4b8'
@@ -354,8 +347,6 @@ class dtype:
             return builder.get_fp8e4b8_ty()
         elif self.name == 'fp8e4b15':
             return builder.get_fp8e4b15_ty()
-        elif self.name == 'fp8e4b15x4':
-            return builder.get_fp8e4b15x4_ty()
         elif self.name == 'fp16':
             return builder.get_half_ty()
         elif self.name == 'bf16':
@@ -527,7 +518,6 @@ float8e5b16 = dtype('fp8e5b16')
 float8e4nv = dtype('fp8e4nv')
 float8e4b8 = dtype('fp8e4b8')
 float8e4b15 = dtype('fp8e4b15')
-float8e4b15x4 = dtype('fp8e4b15x4')
 float16 = dtype('fp16')
 bfloat16 = dtype('bf16')
 float32 = dtype('fp32')
