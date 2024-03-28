@@ -1228,7 +1228,7 @@ def ast_to_ttir(fn, specialization, context, options):
 
     all_constants = constants.copy()
     all_constants.update(new_constants)
-    arg_types = [str_to_ty(v) for k, v in specialization.signature.items() if k not in constants]
+    arg_types = [str_to_ty(v) for k, v in specialization.signature.items() if k not in specialization.constants]
     file_name, begin_line = _get_fn_file_line(fn)
 
     prototype = language.function_type([], arg_types)

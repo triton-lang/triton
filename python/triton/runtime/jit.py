@@ -433,7 +433,7 @@ class JITFunction(KernelInterface[T]):
                     raise TypeError(f"Callable constexpr at index {i} is not supported")
 
             # Build kernel signature -- doesn't include constexpr arguments.
-            signature = {arg.param.num: arg.mangled_type() for arg in args if not arg.param.is_constexpr}
+            signature = {arg.param.name: arg.mangled_type() for arg in args if not arg.param.is_constexpr}
 
             if self._call_hook(key, signature, device, constants, options, configs):
                 return None
@@ -448,7 +448,7 @@ class JITFunction(KernelInterface[T]):
         kernel = self.cache[device][key]
 
         # Verify key signature from the cache
-        signature = {arg.param.num: arg.mangled_type() for arg in args if not arg.param.is_constexpr}
+        signature = {arg.param.name: arg.mangled_type() for arg in args if not arg.param.is_constexpr}
         if kernel.src.signature != signature:
             raise RuntimeError(
                 f"Signature mismatch for cached kernel {self.fn.__name__}:\n"\
@@ -458,7 +458,7 @@ class JITFunction(KernelInterface[T]):
 
         if not warmup:
             args = [arg.value for arg in args if not arg.param.is_constexpr]
-            launch_metadata = kernel.launch_metadata(grid_0, grid_1, grid_2, stream, *args)
+            launch_metadata = kernel.launch_metadata(grid, stream, *args)
             kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.kernel_metadata, launch_metadata,
                        CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, *args)
         return kernel
