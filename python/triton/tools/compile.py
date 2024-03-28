@@ -120,11 +120,10 @@ if __name__ == "__main__":
     # dump C stub code
     suffix = kernel_suffix(signature.values(), attrs)
     func_name = '_'.join([out_name, sig_hash, suffix])
-    triton_kernel_name = '_'.join([args.kernel_name, suffix])
     hex_ = str(binascii.hexlify(ccinfo.asm["cubin"]))[2:-1]
     params = {
         "kernel_name": func_name,
-        "triton_kernel_name": triton_kernel_name,
+        "triton_kernel_name": args.kernel_name,
         "bin_size": len(hex_),
         "bin_data": ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])]),
         "signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),
