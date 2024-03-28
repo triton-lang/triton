@@ -134,39 +134,6 @@ struct DecomposeUnsupportedAMDConversions
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    /* ---------------- */
-    // Convert Fp8E4B15
-    /* ---------------- */
-    mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
-      OpBuilder builder(cvtOp);
-      if (!getElementTypeOrSelf(cvtOp)
-               .isa<mlir::Float8E4M3B11FNUZType, mlir::Float8E4M3FNType>())
-        return;
-      auto shape = cvtOp.getType().cast<RankedTensorType>().getShape();
-      auto argEncoding =
-          cvtOp.getSrc().getType().cast<RankedTensorType>().getEncoding();
-      auto cvtEncoding = cvtOp.getType().cast<RankedTensorType>().getEncoding();
-      if (argEncoding.isa<triton::gpu::DotOperandEncodingAttr>() ||
-          cvtEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
-        return;
-      auto F16Ty = builder.getF16Type();
-
-      auto newArgType = RankedTensorType::get(shape, F16Ty, argEncoding);
-      auto newCvtType = RankedTensorType::get(shape, F16Ty, cvtEncoding);
-      auto newArg = builder.create<mlir::triton::FpToFpOp>(
-          cvtOp.getLoc(), newArgType, cvtOp.getSrc());
-      addAttrs(newArg, cvtOp->getAttrs());
-      auto newCvt = builder.create<mlir::triton::gpu::ConvertLayoutOp>(
-          cvtOp.getLoc(), newCvtType, newArg);
-      addAttrs(newCvt, cvtOp->getAttrs());
-      auto newRet = builder.create<mlir::triton::FpToFpOp>(
-          cvtOp.getLoc(), cvtOp.getType(), newCvt.getResult());
-      newRet.setRounding(
-          triton::RoundingMode::RTNE); // Downcast requires rounding mode
-      addAttrs(newRet, cvtOp->getAttrs());
-      cvtOp.replaceAllUsesWith(newRet.getResult());
-      cvtOp.erase();
-    });
     /* -------------------------------- */
     // Replace `splat -> shared
     // with `splat -> blocked -> shared

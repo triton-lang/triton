@@ -413,10 +413,15 @@ struct ElementwiseInlineAsmOpConversion
     // [return_value][op.getPackedElement()].
     SmallVector<SmallVector<Value>> ret(op->getNumResults());
     for (int i = 0; i < op->getNumResults(); i++) {
+      int structIdx = 0;
       for (int j = 0; j < op.getPackedElement(); j++) {
-        auto val = asmRetTypes.size() > 1
-                       ? extract_val(asmResults, i * op.getPackedElement() + j)
-                       : asmResults;
+        Value val;
+        if (asmRetTypes.size() > 1) {
+          val =
+              extract_val(asmResults, i * op.getPackedElement() + structIdx++);
+        } else {
+          val = asmResults;
+        }
         if (auto vectorTy = val.getType().dyn_cast<VectorType>()) {
           for (int k = 0; k < vectorTy.getNumElements(); k++) {
             ret[i].push_back(extract_element(val, i32_val(k)));
@@ -443,8 +448,6 @@ struct ElementwiseInlineAsmOpConversion
       unpackedOperands.push_back(
           unpackI32(subOperands, argTy, rewriter, loc, getTypeConverter()));
     }
-    if (unpackedOperands.empty())
-      unpackedOperands.push_back({});
 
     // Although we ensure that all operands and results to this op have the same
     // encoding, MMA layouts have a different physical ordering depending on the
@@ -453,23 +456,35 @@ struct ElementwiseInlineAsmOpConversion
     // Thus if the inputs to the inline asm op are MMA with different widths, we
     // need to reorder them so we iterate over the operands' elements in the
     // same logical order.
-    for (unsigned i = 1; i < unpackedOperands.size(); ++i) {
+    for (unsigned i = 0; i < unpackedOperands.size(); ++i) {
       unpackedOperands[i] = reorderValues(
           unpackedOperands[i], /*inType=*/op->getOperand(i).getType(),
           /*ouType=*/op->getResult(0).getType());
     }
 
-    // Number of (unpacked) elements to process per operand.  Normally this
-    // equals the number of output elements per return value, except when the
-    // asm has no inputs, in which case there's 1 output element.
-    size_t numInputElems = unpackedOperands[0].size();
+    size_t numElemsPerThread = 1;
+    auto structType = typeConverter->convertType(op->getResult(0).getType())
+                          .dyn_cast<LLVM::LLVMStructType>();
+    if (structType) {
+      numElemsPerThread = structType.getBody().size();
+    }
 
     // These are checked by the verifier, so we don't need to raise a nice
     // error.
     assert(all_of(unpackedOperands, [&](auto &operands) {
-      return operands.size() == numInputElems;
+      return operands.size() == numElemsPerThread;
     }));
-    assert(numInputElems % op.getPackedElement() == 0);
+    if (numElemsPerThread % op.getPackedElement() != 0) {
+      // Pad with the first value of the operand for each operand to have a
+      // multiple of op.getPackedElement() elements.
+      int numPaddedValue =
+          op.getPackedElement() - numElemsPerThread % op.getPackedElement();
+      for (auto &operands : unpackedOperands) {
+        for (int i = 0; i < numPaddedValue; i++) {
+          operands.push_back(operands[0]);
+        }
+      }
+    }
 
     // Run the inline asm op on each block of elements.
     //
@@ -478,17 +493,14 @@ struct ElementwiseInlineAsmOpConversion
     // This loop always runs at least once, even when the asm has no input
     // elements.
     SmallVector<SmallVector<Value>> unpackedResults(op->getNumResults());
-    for (unsigned i = 0; i < std::max(numInputElems, size_t{1});
-         i += op.getPackedElement()) {
+    for (unsigned i = 0; i < numElemsPerThread; i += op.getPackedElement()) {
       // Block of elements to process with one call to the inline asm.  This is
       // ordered opposite `unpackedResults`: The outer dim is
       // op.getPackedElement(), and the inner dim is the operand.
       SmallVector<SmallVector<Value>> block(op.getPackedElement());
-      if (numInputElems > 0) {
-        for (auto &os : unpackedOperands) {
-          for (int j = 0; j < op.getPackedElement(); j++) {
-            block[j].push_back(os[i + j]);
-          }
+      for (auto &os : unpackedOperands) {
+        for (int j = 0; j < op.getPackedElement(); j++) {
+          block[j].push_back(os[i + j]);
         }
       }
       auto cur = createDestOps(op, adaptor, rewriter, block, loc);
@@ -498,7 +510,9 @@ struct ElementwiseInlineAsmOpConversion
                                   cur[j].end());
       }
     }
-
+    for (auto &results : unpackedResults) {
+      results.resize(numElemsPerThread);
+    }
     // Reorder and pack the results.
     SmallVector<Value> outs;
     for (int i = 0; i < unpackedResults.size(); i++) {
