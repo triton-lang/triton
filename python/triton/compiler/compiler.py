@@ -102,12 +102,14 @@ class ASTSource:
 
     def hash(self):
         sorted_sig = [v for k, v in sorted(self.signature.items())]
-        sorted_constants = [(k, v) for k, v in sorted(self.constants.items())]
+        # Note - we stringify the keys here to allow sorting to work for cases
+        # where constants have mixed int/str keys.
+        sorted_constants = sorted((str(k), v) for k, v in self.constants.items())
         key = f"{self.fn.cache_key}-{self.attrs.hash()}-{sorted_sig}-{sorted_constants}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
-    def make_ir(self, options, context):
-        return ast_to_ttir(self.fn, self, context=context, options=options)
+    def make_ir(self, options, codegen_fns, context):
+        return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns)
 
     def parse_options(self):
         return dict()
@@ -129,7 +131,7 @@ class IRSource:
     def hash(self):
         return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
-    def make_ir(self, options, context):
+    def make_ir(self, options, codegen_fns, context):
         module = ir.parse_mlir_module(self.path, context)
         module.context = context
         return module
@@ -261,8 +263,9 @@ def compile(src, target=None, options=None):
     context = ir.context()
     ir.load_dialects(context)
     backend.load_dialects(context)
+    codegen_fns = backend.get_codegen_implementation()
     try:
-        module = src.make_ir(options, context)
+        module = src.make_ir(options, codegen_fns, context)
     except Exception as e:
         filter_traceback(e)
         raise

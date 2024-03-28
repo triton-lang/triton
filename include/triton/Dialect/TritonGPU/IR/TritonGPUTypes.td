@@ -23,4 +23,14 @@ def TTG_TokenType : TTG_TypeDef<"Token", "token"> {
   let skipDefaultBuilders = 1;
 }
 
+def TTG_AsyncToken : TTG_TypeDef<"AsyncToken",
+                                    "async.token", []> {
+  let summary = "async token type";
+  let description = [{
+    `ttg.async.token` is a type returned by an asynchronous operation.
+    It is used to establish an SSA-based link between async operations
+    and operations that group or synchronize the async operations.
+  }];
+}
+
 #endif

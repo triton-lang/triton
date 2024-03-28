@@ -175,100 +175,6 @@ static const Fp8ConversionDesc Bf16_to_Fp8E5M2(bool hasNativeFP) {
   }
   return ret;
 }
-/* ----- FP8E4M3B15 ------ */
-// This data-type is a variant of the standard FP8E4M3 format.
-// It was designed for fast software conversion to FP16 on
-// nvidia GPUs that do not support it natively.
-// This is the same format as FP8E4M3Nv, but:
-//   - the exponent bias is 15 instead of 7
-//   - 0xff and 0x7f are mapped to +-1.750 instead of +-nan
-const Fp8ConversionDesc Fp8E4M3B15_to_Fp16 = {
-    "{                                      \n"
-    ".reg .b32 a<2>, b<2>;                  \n"
-    "prmt.b32 a0, 0, $2, 0x5746;            \n"
-    "and.b32 b0, a0, 0x7f007f00;            \n"
-    "and.b32 b1, a0, 0x00ff00ff;            \n"
-    "and.b32 a1, a0, 0x00800080;            \n"
-    "shr.b32  b0, b0, 1;                    \n"
-    "add.u32 b1, b1, a1;                    \n"
-    "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n"
-    "shl.b32 $1, b1, 7;                     \n"
-    "}                                      \n",
-    32, 32, 4};
-
-static const Fp8ConversionDesc Fp16_to_Fp8E4M3B15(bool has_minx2) {
-  std::string ret;
-  ret += "{                                      \n"
-         ".reg .pred p<4>;                       \n"
-         ".reg .b32 a<2>, b<2>;                  \n"
-         ".reg .b16 c<4>;                        \n"
-         ".reg .b16 max_val_f16;                 \n"
-         ".reg .b32 max_val_f16x2;               \n"
-         "mov.b16 max_val_f16,   0x3F00;         \n"
-         "mov.b32 max_val_f16x2, 0x3F003F00;     \n"
-         "and.b32 a0, $1, 0x7fff7fff;            \n"
-         "and.b32 a1, $2, 0x7fff7fff;            \n";
-  if (has_minx2)
-    ret += "min.f16x2 a0, a0, max_val_f16x2;      \n"
-           "min.f16x2 a1, a1, max_val_f16x2;      \n";
-  else
-    ret += "setp.lt.f16x2  p0|p1, a0, max_val_f16x2;   \n"
-           "setp.lt.f16x2  p2|p3, a1, max_val_f16x2;   \n"
-           "mov.b32 {c0, c1}, a0;                \n"
-           "mov.b32 {c2, c3}, a1;                \n"
-           "selp.b16  c0, c0, max_val_f16, p0;   \n"
-           "selp.b16  c1, c1, max_val_f16, p1;   \n"
-           "selp.b16  c2, c2, max_val_f16, p2;   \n"
-           "selp.b16  c3, c3, max_val_f16, p3;   \n"
-           "mov.b32 a0, {c0, c1};                \n"
-           "mov.b32 a1, {c2, c3};                \n";
-  ret += "mad.lo.u32 a0, a0, 2, 0x00800080;      \n"
-         "mad.lo.u32 a1, a1, 2, 0x00800080;      \n"
-         "lop3.b32 b0, $1, 0x80008000, a0, 0xea; \n"
-         "lop3.b32 b1, $2, 0x80008000, a1, 0xea; \n"
-         "prmt.b32 $0, b0, b1, 0x7531;           \n"
-         "}";
-  return {ret, 32, 32, 4};
-}
-
-/* ----- FP8E4M3B15X4 ------ */
-// NOTE: NOT USED RIGHT NOW
-// Packed variant of FP8E4M3B15
-// A little bit more efficient but elements need are not
-// serialized as you expect when 4 are packed into int32.
-
-// fast conversion code provided by Scott Gray @ OpenAI
-// $0 = (($2 << 1) & 0x80008000u) | (($2 << 7) & 0x3f803f80u);
-// $1 = (($2 << 0) & 0x80008000u) | (($2 << 0) & 0x3f803f80u);
-// WARN: subnormal (0bs0000xxx) are not handled
-static const Fp8ConversionDesc Fp8E4M3B15x4_to_Fp16 = {
-    "{                                      \n"
-    ".reg .b32 a<2>;                        \n"
-    "add.u32 a0, $2, $2;                    \n"
-    "shl.b32 a1, $2, 7;                     \n"
-    "and.b32  $0, a0, 0x80008000;           \n"
-    "lop3.b32 $0, $0, a1, 0x3f803f80, 0xf8; \n"
-    "and.b32  $1, $2, 0xbf80bf80;           \n"
-    "}",
-    32, 32, 4};
-
-// Fp16 -> Fp8E4M3B15 (packed)
-// fast conversion code provided by Scott Gray @ OpenAI
-// ret = ((e4.x >> 1) & (0x80008000u >> 1)) |
-//       ((e4.x >> 7) & (0x3f803f80u >> 7)) |
-//       ((e4.y >> 0) & (0x80008000u >> 0)) |
-//       ((e4.y >> 0) & (0x3f803f80u >> 0)) ;
-// WARN: subnormal (0bs0000xxx) are not handled
-static const Fp8ConversionDesc Fp16_to_Fp8E4M3B15x4 = {
-    "{                                       \n"
-    ".reg .b32 a<2>;                         \n"
-    "shr.b32  a0, $1, 1;                     \n"
-    "shr.b32  a1, $1, 7;                     \n"
-    "and.b32  $0,     a0, 0x40004000;        \n"
-    "lop3.b32 $0, $0, a1, 0x007f007f, 0xf8;  \n"
-    "lop3.b32 $0, $0, $2, 0xbf80bf80, 0xf8;  \n"
-    "}",
-    32, 32, 4};
 
 // Fp8E4M3 (x2) -> Fp16 (x2) (packed)
 static const Fp8ConversionDesc Fp8E4M3Nv_to_Fp16 = {
@@ -396,26 +302,6 @@ static ConverterT makeConverterFromPtx(const std::string &ptxAsm, Type inType,
   return converter;
 }
 
-template <typename SourceOp, typename DestOp>
-struct ElementwiseOpConversion
-    : public ElementwiseOpConversionBase<
-          SourceOp, ElementwiseOpConversion<SourceOp, DestOp>> {
-  using Base =
-      ElementwiseOpConversionBase<SourceOp,
-                                  ElementwiseOpConversion<SourceOp, DestOp>>;
-  using Base::Base;
-  using OpAdaptor = typename Base::OpAdaptor;
-
-  // An interface to support variant DestOp builder.
-  SmallVector<DestOp> createDestOps(SourceOp op, OpAdaptor adaptor,
-                                    ConversionPatternRewriter &rewriter,
-                                    Type elemTy, MultipleOperandsRange operands,
-                                    Location loc) const {
-    return {rewriter.create<DestOp>(loc, elemTy, operands[0],
-                                    adaptor.getAttributes().getValue())};
-  }
-};
-
 // Attempts to use vectorized conversions via inline PTX when possible.
 struct FpToFpOpConversion
     : public ElementwiseOpConversionBase<FpToFpOp, FpToFpOpConversion> {
@@ -501,10 +387,8 @@ struct FpToFpOpConversion
   std::pair<ConverterT, size_t>
   getConversionFunc(Type srcTy, Type dstTy,
                     std::optional<RoundingMode> roundingMode) const {
-    auto F8E4M3B15TyID = TypeID::get<Float8E4M3B11FNUZType>();
     auto F8E4M3TyID = TypeID::get<Float8E4M3FNUZType>();
     auto F8E5M2TyID = TypeID::get<Float8E5M2Type>();
-    auto F8E4M3FNTyID = TypeID::get<Float8E4M3FNType>();
     auto F16TyID = TypeID::get<Float16Type>();
     auto BF16TyID = TypeID::get<BFloat16Type>();
     auto F32TyID = TypeID::get<Float32Type>();
@@ -515,15 +399,9 @@ struct FpToFpOpConversion
     static DenseMap<std::tuple<TypeID, TypeID, RoundingMode>, Fp8ConversionDesc>
         srcMap = {
             // F8 -> F16
-            {{F8E4M3B15TyID, F16TyID, undefRounding}, Fp8E4M3B15_to_Fp16},
-            {{F8E4M3FNTyID, F16TyID, undefRounding}, Fp8E4M3B15x4_to_Fp16},
             {{F8E4M3TyID, F16TyID, undefRounding}, Fp8E4M3Nv_to_Fp16},
             {{F8E5M2TyID, F16TyID, undefRounding},
              Fp8E5M2_to_Fp16(computeCapability >= 90)},
-            // F16 -> F8
-            {{F16TyID, F8E4M3B15TyID, RoundingMode::RTNE},
-             Fp16_to_Fp8E4M3B15(computeCapability >= 80)},
-            {{F16TyID, F8E4M3FNTyID, RoundingMode::RTNE}, Fp16_to_Fp8E4M3B15x4},
             {{F16TyID, F8E4M3TyID, RoundingMode::RTNE}, Fp16_to_Fp8E4M3Nv},
             {{F16TyID, F8E5M2TyID, RoundingMode::RTNE},
              Fp16_to_Fp8E5M2_RTNE(computeCapability >= 90)},
@@ -1060,60 +938,6 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
     ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
     const TargetInfo &targetInfo, PatternBenefit benefit) {
   using namespace mlir::triton::gpu;
-
-#define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
-      typeConverter, axisInfoAnalysis, benefit);
-  POPULATE_BINARY_OP(arith::SubIOp, LLVM::SubOp) // -
-  POPULATE_BINARY_OP(arith::AddIOp, LLVM::AddOp) // +
-  POPULATE_BINARY_OP(arith::MulIOp, LLVM::MulOp) // *
-  POPULATE_BINARY_OP(arith::DivSIOp, LLVM::SDivOp)
-  POPULATE_BINARY_OP(arith::DivUIOp, LLVM::UDivOp)
-  POPULATE_BINARY_OP(arith::RemFOp, LLVM::FRemOp) // %
-  POPULATE_BINARY_OP(arith::RemSIOp, LLVM::SRemOp)
-  POPULATE_BINARY_OP(arith::RemUIOp, LLVM::URemOp)
-  POPULATE_BINARY_OP(arith::AndIOp, LLVM::AndOp)   // &
-  POPULATE_BINARY_OP(arith::OrIOp, LLVM::OrOp)     // |
-  POPULATE_BINARY_OP(arith::XOrIOp, LLVM::XOrOp)   // ^
-  POPULATE_BINARY_OP(arith::ShLIOp, LLVM::ShlOp)   // <<
-  POPULATE_BINARY_OP(arith::ShRSIOp, LLVM::AShrOp) // >>
-  POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp) // >>
-  POPULATE_BINARY_OP(
-      arith::MinNumFOp,
-      LLVM::MinNumOp) // fmin (return non-NaN if either op is non-NaN)
-  POPULATE_BINARY_OP(
-      arith::MaxNumFOp,
-      LLVM::MaxNumOp) // fmax (return non-NaN if either op is non-NaN)
-  POPULATE_BINARY_OP(arith::MinSIOp, LLVM::SMinOp) // smin
-  POPULATE_BINARY_OP(arith::MaxSIOp, LLVM::SMaxOp) // smax
-  POPULATE_BINARY_OP(arith::MinUIOp, LLVM::UMinOp) // umin
-  POPULATE_BINARY_OP(arith::MaxUIOp, LLVM::UMaxOp) // umax
-#undef POPULATE_BINARY_OP
-
-#define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
-      typeConverter, axisInfoAnalysis, benefit);
-  POPULATE_UNARY_OP(arith::TruncIOp, LLVM::TruncOp)
-  POPULATE_UNARY_OP(arith::ExtSIOp, LLVM::SExtOp)
-  POPULATE_UNARY_OP(arith::ExtUIOp, LLVM::ZExtOp)
-  POPULATE_UNARY_OP(arith::FPToUIOp, LLVM::FPToUIOp)
-  POPULATE_UNARY_OP(arith::UIToFPOp, LLVM::UIToFPOp)
-  POPULATE_UNARY_OP(math::FloorOp, math::FloorOp)
-  POPULATE_UNARY_OP(math::LogOp, math::LogOp)
-  POPULATE_UNARY_OP(math::Log2Op, math::Log2Op)
-  POPULATE_UNARY_OP(math::CosOp, math::CosOp)
-  POPULATE_UNARY_OP(math::SinOp, math::SinOp)
-  POPULATE_UNARY_OP(math::SqrtOp, math::SqrtOp)
-  POPULATE_UNARY_OP(math::ExpOp, math::ExpOp)
-  POPULATE_UNARY_OP(math::Exp2Op, math::Exp2Op)
-  POPULATE_UNARY_OP(math::ErfOp, math::ErfOp)
-  POPULATE_UNARY_OP(triton::BitcastOp, LLVM::BitcastOp)
-  POPULATE_UNARY_OP(triton::IntToPtrOp, LLVM::IntToPtrOp)
-  POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
-#undef POPULATE_UNARY_OP
-
-  patterns.add<ElementwiseOpConversion<math::FmaOp, LLVM::FMAOp>>(
-      typeConverter, axisInfoAnalysis, benefit);
 
   patterns.add<OpToExternCallConversion<triton::PreciseSqrtOp>>(
       typeConverter, axisInfoAnalysis, "__nv_fsqrt_rn", benefit);

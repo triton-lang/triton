@@ -118,7 +118,7 @@ jobs:
           TRITON_INTERPRET: "1"
         run: |
           cd python/test/unit
-          python3 -m pytest -vvv -n 8 -m interpreter language/test_core.py language/test_standard.py --device cpu
+          python3 -m pytest -vvv -n 8 -m interpreter language/test_core.py language/test_standard.py language/test_random.py --device cpu
           python3 -m pytest -n 8 -m interpreter -vvv -s operators/test_flash_attention.py::test_op --device cpu
 
       - name: Run partial tests on CUDA
@@ -301,7 +301,7 @@ jobs:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-HIP)}}
 
     container:
-      image: rocm/pytorch:rocm5.7_ubuntu22.04_py3.10_pytorch_2.0.1
+      image: rocm/pytorch:rocm6.0.2_ubuntu22.04_py3.10_pytorch_2.1.2
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
 
     steps:
@@ -338,10 +338,11 @@ jobs:
 
       - name: Install Triton on ROCM
         run: |
-          pip install --force-reinstall numpy==1.22.4
           pip uninstall -y triton
+          export PATH="/opt/rocm/llvm/bin:$PATH"
+          export TRITON_BUILD_WITH_CLANG_LLD=true
           cd python
-          pip install -e .
+          pip install -v -e .
       - name: Run python tests on ROCM
         run: |
           cd python

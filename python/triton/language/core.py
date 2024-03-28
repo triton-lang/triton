@@ -151,7 +151,7 @@ def _to_tensor(x, builder):
 class dtype:
     SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
     UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
-    FP_TYPES = ['fp8e4b15', 'fp8e4b15x4', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp16', 'bf16', 'fp32', 'fp64']
+    FP_TYPES = ['fp8e4b15', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp16', 'bf16', 'fp32', 'fp64']
     STANDARD_FP_TYPES = ['fp16', 'bf16', 'fp32', 'fp64']
     OTHER_TYPES = ['void']
 
@@ -174,10 +174,6 @@ class dtype:
             self.primitive_bitwidth = self.int_bitwidth
         elif name in dtype.FP_TYPES:
             if name == 'fp8e4b15':
-                self.fp_mantissa_width = 3
-                self.primitive_bitwidth = 8
-                self.exponent_bias = 15
-            elif name == 'fp8e4b15x4':
                 self.fp_mantissa_width = 3
                 self.primitive_bitwidth = 8
                 self.exponent_bias = 15
@@ -226,9 +222,6 @@ class dtype:
 
     def is_fp8e4b15(self):
         return self.name == 'fp8e4b15'
-
-    def is_fp8e4b15x4(self):
-        return self.name == 'fp8e4b15x4'
 
     def is_fp8e4b8(self):
         return self.name == 'fp8e4b8'
@@ -354,8 +347,6 @@ class dtype:
             return builder.get_fp8e4b8_ty()
         elif self.name == 'fp8e4b15':
             return builder.get_fp8e4b15_ty()
-        elif self.name == 'fp8e4b15x4':
-            return builder.get_fp8e4b15x4_ty()
         elif self.name == 'fp16':
             return builder.get_half_ty()
         elif self.name == 'bf16':
@@ -397,17 +388,17 @@ class pointer_type(dtype):
 
     def __init__(self, element_ty: dtype, address_space: int = 1):
         if not isinstance(element_ty, dtype):
-            raise TypeError('element_ty is a {type(element_ty).__name__}.')
+            raise TypeError(f'element_ty is a {type(element_ty).__name__}.')
         self.element_ty = element_ty
         self.address_space = address_space
 
-        self.name = self.__str__()
+        self.name = f'pointer<{element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.pointer_type:
         return builder.get_ptr_ty(self.element_ty.to_ir(builder), 1)
 
     def __str__(self):
-        return f'pointer<{self.element_ty}>'
+        return self.name
 
     def __repr__(self):
         return self.__str__()
@@ -466,13 +457,13 @@ class block_type(dtype):
         if self.numel > TRITON_MAX_TENSOR_NUMEL:
             raise ValueError(f"numel ({self.numel}) exceeds triton maximum tensor numel ({TRITON_MAX_TENSOR_NUMEL})")
 
-        self.name = self.__str__()
+        self.name = f'<{self.shape}, {self.element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.block_type:
         return builder.get_block_ty(self.element_ty.to_ir(builder), self.shape)
 
     def __str__(self):
-        return f'<{self.shape}, {self.element_ty}>'
+        return self.name
 
     def __repr__(self):
         return self.__str__()
@@ -527,7 +518,6 @@ float8e5b16 = dtype('fp8e5b16')
 float8e4nv = dtype('fp8e4nv')
 float8e4b8 = dtype('fp8e4b8')
 float8e4b15 = dtype('fp8e4b15')
-float8e4b15x4 = dtype('fp8e4b15x4')
 float16 = dtype('fp16')
 bfloat16 = dtype('bf16')
 float32 = dtype('fp32')
@@ -1427,13 +1417,14 @@ def view(input, *shape, _builder=None):
         view(x, (32, 32))
         view(x, 32, 32)
     """
+    warn("view is deprecated, please use reshape with can_reorder being true.")
     shape = _shape_check_impl(_unwrap_iterable(shape))
-    return semantic.view(input, shape, _builder)
+    return semantic.reshape(input, shape, can_reorder=True, builder=_builder)
 
 
 @_tensor_member_fn
 @builtin
-def reshape(input, *shape, _builder=None):
+def reshape(input, *shape, can_reorder=False, _builder=None):
     """
     Returns a tensor with the same number of elements as input but with the
     provided shape.
@@ -1449,7 +1440,7 @@ def reshape(input, *shape, _builder=None):
         reshape(x, 32, 32)
     """
     shape = _shape_check_impl(_unwrap_iterable(shape))
-    return semantic.reshape(input, shape, _builder)
+    return semantic.reshape(input, shape, can_reorder, _builder)
 
 
 def _wrap_axis(axis, ndim):
@@ -1495,7 +1486,7 @@ def expand_dims(input, axis, _builder=None):
 
 
 @builtin
-def dot(input, other, acc=None, allow_tf32=None, max_num_imprecise_acc=None, out_dtype=float32, _builder=None):
+def dot(input, other, acc=None, input_precision=None, max_num_imprecise_acc=None, out_dtype=float32, _builder=None):
     """
     Returns the matrix product of two blocks.
 
@@ -1505,16 +1496,16 @@ def dot(input, other, acc=None, allow_tf32=None, max_num_imprecise_acc=None, out
     :type input: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
     :param other: The second tensor to be multiplied.
     :type other: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
+    :param input_precision: How to exercise the Tenors cores for f32 x f32. If the device does not have Tensor Cores
+        or the inputs are not of dtype f32, this option is ignored.
+    :type other: string. Available options for nvidia: :code:`"tf32"`, :code:`"tf32x3"`, :code:`"ieee"`. Default: :code:`"tf32"`. Avaliable options for amd: :code:`"ieee"`.
     """
-    if allow_tf32 is None:
-        if get_bool_env_var("TRITON_F32_DEFAULT"):
-            allow_tf32 = False
-        else:
-            allow_tf32 = True
-    allow_tf32 = _constexpr_to_value(allow_tf32)
+    if input_precision is None:
+        input_precision = os.getenv("TRITON_F32_DEFAULT", None)
+    input_precision = _constexpr_to_value(input_precision)
     out_dtype = _constexpr_to_value(out_dtype)
     max_num_imprecise_acc = _constexpr_to_value(max_num_imprecise_acc)
-    return semantic.dot(input, other, acc, allow_tf32, max_num_imprecise_acc, out_dtype, _builder)
+    return semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype, _builder)
 
 
 # -----------------------
@@ -2048,7 +2039,7 @@ def associative_scan(input, axis, combine_fn, reverse=False, _builder=None, _gen
 @_tensor_member_fn
 @builtin
 def histogram(input, num_bins, _builder=None, _generator=None):
-    """computes an histogram based on input tensor with num_bins bins the bins have a width of 1 and start at 0.
+    """computes an histogram based on input tensor with num_bins bins, the bins have a width of 1 and start at 0.
 
     :param input: the input tensor
     :param num_bins: number of histogram bins
