@@ -106,6 +106,13 @@ class CUDABackend(BaseBackend):
         args["max_num_imprecise_acc_default"] = 2**30 if self.capability == 90 else 0
         return CUDAOptions(**args)
 
+    def get_codegen_implementation(self):
+        import triton.language.extra.cuda as cuda
+        codegen_fns = dict()
+        codegen_fns[
+            "convert_custom_types"] = cuda.convert_custom_float8_sm90 if self.capability >= 90 else cuda.convert_custom_float8_sm80
+        return codegen_fns
+
     def load_dialects(self, ctx):
         nvidia.load_dialects(ctx)
 
