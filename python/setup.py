@@ -533,10 +533,7 @@ setup(
     ],
     test_suite="tests",
     extras_require={
-        "build": [
-            "cmake>=3.20",
-            "lit",
-        ],
+        "build": ["cmake>=3.20", "lit", "bs4"],
         "tests": [
             "autopep8",
             "flake8",
