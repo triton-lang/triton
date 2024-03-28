@@ -1202,6 +1202,8 @@ def _shape_check_impl(shape):
             raise TypeError(f"Shape element {i} must have type `constexpr`")
         if not isinstance(d.value, int):
             raise TypeError(f"Shape element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
+        if d.value & (d.value - 1) != 0:
+            raise ValueError(f"Shape element {i} must be a power of 2")
     return [_constexpr_to_value(x) for x in shape]
 
 
