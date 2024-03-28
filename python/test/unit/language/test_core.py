@@ -4937,7 +4937,10 @@ def matmul_kernel(  #
 def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
     if is_hip():
         pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
-
+    if device in ['cuda']:
+        cc = torch.cuda.get_device_capability()
+        if cc[0] >= 9 and in_type_str == "float8e4b15":
+            pytest.skip("Dot op does not support fp8e4b15 on CUDA arch >= 90")
     check_type_supported(in_type_str, device)
     M, N, K = 128, 256, 256
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 128
