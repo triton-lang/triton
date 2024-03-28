@@ -357,9 +357,7 @@ static void decomposeMixedModeDotOp(ModuleOp mod, int computeCapability) {
         D.getType().getEncoding().dyn_cast<NvidiaMmaEncodingAttr>();
     if (mmaLayout) {
       bool isNativeFP8 = AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
-      bool isFP8 = isNativeFP8 || AElType.isFloat8E5M2FNUZ() ||
-                   AElType.isFloat8E4M3FN() || AElType.isFloat8E4M3B11FNUZ();
-      if (!isFP8 || (isNativeFP8 && computeCapability >= 89))
+      if (!isNativeFP8 || (isNativeFP8 && computeCapability >= 89))
         return;
       promoteType = builder.getF16Type();
     } else {

@@ -32,11 +32,11 @@ THE SOFTWARE.
 typedef int hipLaunchParm;
 
 #define hipLaunchKernelGGLInternal(kernelName, numBlocks, numThreads, memPerBlock, streamId, ...)  \
-    do {                                                                                           \
-        kernelName<<<numBlocks, numThreads, memPerBlock, streamId>>>(__VA_ARGS__);                 \
-    } while (0)
+  do {                                                                                             \
+    kernelName<<<numBlocks, numThreads, memPerBlock, streamId>>>(__VA_ARGS__);                     \
+  } while (0)
 
-#define hipLaunchKernelGGL(kernelName, ...)  hipLaunchKernelGGLInternal((kernelName), __VA_ARGS__)
+#define hipLaunchKernelGGL(kernelName, ...) hipLaunchKernelGGLInternal((kernelName), __VA_ARGS__)
 
 #define hipReadModeElementType cudaReadModeElementType
 
@@ -105,15 +105,15 @@ typedef int hipLaunchParm;
 #define HIP_DYNAMIC_SHARED_ATTRIBUTE
 
 #ifdef __HIP_DEVICE_COMPILE__
-#define abort_()                                                                                    \
-    { asm("trap;"); }
+#define abort_()                                                                                   \
+  { asm("trap;"); }
 #undef assert
 #define assert(COND)                                                                               \
-    {                                                                                              \
-        if (!COND) {                                                                               \
-            abort_();                                                                               \
-        }                                                                                          \
-    }
+  {                                                                                                \
+    if (!COND) {                                                                                   \
+      abort_();                                                                                    \
+    }                                                                                              \
+  }
 #endif
 
 #define __clock() clock()

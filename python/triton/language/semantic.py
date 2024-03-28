@@ -544,24 +544,14 @@ def splat(value: tl.tensor, shape: List[int], builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_splat(value.handle, shape), ret_ty)
 
 
-def view(input: tl.tensor, dst_shape: List[int], builder: ir.builder) -> tl.tensor:
-    numel = 1
-    for s in dst_shape:
-        numel *= s
-    if input.type.numel != numel:
-        raise ValueError("view() cannot change total number of elements in tensor")
-    ret_ty = tl.block_type(input.type.scalar, dst_shape)
-    return tl.tensor(builder.create_reshape(input.handle, dst_shape, True), ret_ty)
-
-
-def reshape(input: tl.tensor, dst_shape: List[int], builder: ir.builder) -> tl.tensor:
+def reshape(input: tl.tensor, dst_shape: List[int], can_reorder: bool, builder: ir.builder) -> tl.tensor:
     numel = 1
     for s in dst_shape:
         numel *= s
     if input.type.numel != numel:
         raise ValueError("reshape() cannot change total number of elements in tensor")
     ret_ty = tl.block_type(input.type.scalar, dst_shape)
-    return tl.tensor(builder.create_reshape(input.handle, dst_shape, False), ret_ty)
+    return tl.tensor(builder.create_reshape(input.handle, dst_shape, can_reorder), ret_ty)
 
 
 def expand_dims(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
@@ -602,7 +592,7 @@ def join(a: tl.tensor, b: tl.tensor, builder: ir.builder) -> tl.tensor:
     ret = tl.tensor(builder.create_join(a.handle, b.handle), ret_type)
 
     if was_rank_1:
-        ret = reshape(ret, [2], builder)
+        ret = reshape(ret, [2], can_reorder=False, builder=builder)
 
     return ret
 
@@ -767,6 +757,10 @@ def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder, fp_downcast_ro
     if (src_sca_ty.is_fp8e4nv() or dst_sca_ty.is_fp8e4nv()):
         assert builder.options.allow_fp8e4nv, "fp8e4nv data type is not supported on CUDA arch < 89"
 
+    if (src_sca_ty.is_fp8e4b15() or dst_sca_ty.is_fp8e4b15()):
+        assert builder.codegen_fns[
+            "convert_custom_types"] is not None, "target doesn't provide conversion for this type."
+        return builder.codegen_fns["convert_custom_types"](input, dst_ty, fp_downcast_rounding, _builder=builder)
     # Casting with customized floating types involved: fp8 <=> bf16, fp16, fp32, fp64
     # and non-default rounding modes for downcasting
     if (src_sca_ty.is_fp8() and dst_sca_ty.is_floating()) or \
@@ -1305,8 +1299,6 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
         else:
             assert not lhs_dtype.is_fp8e4b15() and not rhs_dtype.is_fp8e4b15(
             ), "Dot op does not support fp8e4b15 on CUDA arch >= 90"
-            assert not lhs_dtype.is_fp8e4b15x4() and not rhs_dtype.is_fp8e4b15x4(
-            ), "Dot op does not support fp8e4b15x4 on CUDA arch >= 90"
             if lhs_dtype.is_int() or rhs_dtype.is_int():
                 assert lhs_dtype == rhs_dtype, f"Both operands must be same type. First operand ({lhs_dtype}) and second operand ({rhs_dtype})"
                 assert lhs_dtype.is_int8() or lhs_dtype.is_uint8(
@@ -1326,6 +1318,9 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
     assert lhs.type.is_block() and rhs.type.is_block()
 
     assert_dtypes_valid(lhs.dtype, rhs.dtype, builder.options)
+    if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():
+        lhs = lhs.to(tl.fp16)
+        rhs = rhs.to(tl.fp16)
 
     lhs_rank = len(lhs.shape)
     rhs_rank = len(rhs.shape)
@@ -1406,7 +1401,7 @@ def wrap_tensor(x, scalar_ty, ret_shape):
 
 def reduction(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, builder: ir.builder) -> Tuple[tl.tensor, ...]:
     if axis is None:
-        inputs = tuple(view(t, [t.numel.value], builder) for t in inputs)
+        inputs = tuple(reshape(t, [t.numel.value], can_reorder=True, builder=builder) for t in inputs)
         axis = 0
     # get result shape
     shape = inputs[0].type.shape

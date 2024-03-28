@@ -27,13 +27,10 @@ THE SOFTWARE.
 #include <hip/hip_common.h>
 #endif
 
-#if !(defined(__HIP_PLATFORM_HCC__) || defined(__HIP_PLATFORM_AMD__)) && (defined(__HIP_PLATFORM_NVCC__) || defined(__HIP_PLATFORM_NVIDIA__))
+#if !defined(__HIP_PLATFORM_AMD__) && defined(__HIP_PLATFORM_NVIDIA__)
 #include "driver_types.h"
-#elif (defined(__HIP_PLATFORM_HCC__) || defined(__HIP_PLATFORM_AMD__)) && !(defined(__HIP_PLATFORM_NVCC__) || defined(__HIP_PLATFORM_NVIDIA__))
+#elif defined(__HIP_PLATFORM_AMD__) && !defined(__HIP_PLATFORM_NVIDIA__)
 
-// The follow macro should be removed after upstream updation.
-// It's defined here for workarround of rocThrust building failure.
-#define HIP_INCLUDE_HIP_HCC_DETAIL_DRIVER_TYPES_H
 #if !defined(__HIPCC_RTC__)
 #ifndef __cplusplus
 #include <stdbool.h>
@@ -57,6 +54,9 @@ typedef struct hipChannelFormatDesc {
 #define HIP_TRSF_READ_AS_INTEGER 0x01
 #define HIP_TRSF_NORMALIZED_COORDINATES 0x02
 #define HIP_TRSF_SRGB 0x10
+
+typedef struct hipArray* hipArray_t;
+typedef const struct hipArray* hipArray_const_t;
 typedef enum hipArray_Format {
     HIP_AD_FORMAT_UNSIGNED_INT8 = 0x01,
     HIP_AD_FORMAT_UNSIGNED_INT16 = 0x02,
@@ -81,19 +81,6 @@ typedef struct HIP_ARRAY3D_DESCRIPTOR {
   unsigned int NumChannels;
   unsigned int Flags;
 }HIP_ARRAY3D_DESCRIPTOR;
-typedef struct hipArray {
-    void* data;  // FIXME: generalize this
-    struct hipChannelFormatDesc desc;
-    unsigned int type;
-    unsigned int width;
-    unsigned int height;
-    unsigned int depth;
-    enum hipArray_Format Format;
-    unsigned int NumChannels;
-    bool isDrv;
-    unsigned int textureType;
-    unsigned int flags;
-}hipArray;
 #if !defined(__HIPCC_RTC__)
 typedef struct hip_Memcpy2D {
     size_t srcXInBytes;
@@ -101,22 +88,19 @@ typedef struct hip_Memcpy2D {
     hipMemoryType srcMemoryType;
     const void* srcHost;
     hipDeviceptr_t srcDevice;
-    hipArray* srcArray;
+    hipArray_t srcArray;
     size_t srcPitch;
     size_t dstXInBytes;
     size_t dstY;
     hipMemoryType dstMemoryType;
     void* dstHost;
     hipDeviceptr_t dstDevice;
-    hipArray* dstArray;
+    hipArray_t dstArray;
     size_t dstPitch;
     size_t WidthInBytes;
     size_t Height;
 } hip_Memcpy2D;
 #endif // !defined(__HIPCC_RTC__)
-typedef struct hipArray* hipArray_t;
-typedef hipArray_t hiparray;
-typedef const struct hipArray* hipArray_const_t;
 typedef struct hipMipmappedArray {
   void* data;
   struct hipChannelFormatDesc desc;
@@ -382,29 +366,29 @@ typedef struct hipMemcpy3DParms {
     enum hipMemcpyKind kind;
 } hipMemcpy3DParms;
 typedef struct HIP_MEMCPY3D {
-  unsigned int srcXInBytes;
-  unsigned int srcY;
-  unsigned int srcZ;
-  unsigned int srcLOD;
+  size_t srcXInBytes;
+  size_t srcY;
+  size_t srcZ;
+  size_t srcLOD;
   hipMemoryType srcMemoryType;
   const void* srcHost;
   hipDeviceptr_t srcDevice;
   hipArray_t srcArray;
-  unsigned int srcPitch;
-  unsigned int srcHeight;
-  unsigned int dstXInBytes;
-  unsigned int dstY;
-  unsigned int dstZ;
-  unsigned int dstLOD;
+  size_t srcPitch;
+  size_t srcHeight;
+  size_t dstXInBytes;
+  size_t dstY;
+  size_t dstZ;
+  size_t dstLOD;
   hipMemoryType dstMemoryType;
   void* dstHost;
   hipDeviceptr_t dstDevice;
   hipArray_t dstArray;
-  unsigned int dstPitch;
-  unsigned int dstHeight;
-  unsigned int WidthInBytes;
-  unsigned int Height;
-  unsigned int Depth;
+  size_t dstPitch;
+  size_t dstHeight;
+  size_t WidthInBytes;
+  size_t Height;
+  size_t Depth;
 } HIP_MEMCPY3D;
 static inline struct hipPitchedPtr make_hipPitchedPtr(void* d, size_t p, size_t xsz,
                                                           size_t ysz) {
