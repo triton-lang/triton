@@ -1,16 +1,12 @@
 #include "Utility.h"
-
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+
 using namespace mlir;
-using namespace mlir::triton;
 
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
-using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
-namespace AMD {
+namespace mlir::triton::AMD {
 LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           const LLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter);
@@ -18,7 +14,7 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 LogicalResult convertWMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           const LLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter);
-} // namespace AMD
+} // namespace mlir::triton::AMD
 
 namespace {
 struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
@@ -60,11 +56,11 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
 };
 } // namespace
 
-namespace AMD {
+namespace mlir::triton::AMD {
 void populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns, int numWarps,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                  PatternBenefit benefit) {
   patterns.add<DotOpConversion>(typeConverter, benefit);
 }
-} // namespace AMD
+} // namespace mlir::triton::AMD

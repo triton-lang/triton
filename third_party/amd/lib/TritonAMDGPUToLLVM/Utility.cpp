@@ -14,12 +14,7 @@ enum class ShflKind : uint32_t {
 };
 }
 
-namespace mlir {
-
-namespace LLVM {
-using namespace mlir::triton;
-
-namespace AMD {
+namespace mlir::LLVM::AMD {
 static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
                            Value val, Value i, int strideInt, ShflKind mode,
                            Value clamp) {
@@ -142,7 +137,4 @@ Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
 }
 
-} // namespace AMD
-
-} // namespace LLVM
-} // namespace mlir
+} // namespace mlir::LLVM::AMD
