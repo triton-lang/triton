@@ -17,6 +17,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include <memory>
 
 #define GEN_PASS_CLASSES
@@ -817,7 +818,8 @@ void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
             auto targetEnc = convertOp.getType().getEncoding();
             auto thisEnc =
                 newRes.getType().cast<RankedTensorType>().getEncoding();
-            if (targetEnc == thisEnc) {
+            if (mlir::triton::tools::getBoolEnv("TRITON_ENABLE_ARG_REMAT") &&
+                targetEnc == thisEnc) {
               LDBG("  should replace " << convertOp);
               // There may be uses of the convertOp outside of this function.
               convertOp.replaceAllUsesWith(newRes);
