@@ -1070,6 +1070,9 @@ class tensor:
     def sqrt(self) -> tensor:
         ...
 
+    def rsqrt(self) -> tensor:
+        ...
+
     def abs(self) -> tensor:
         ...
 

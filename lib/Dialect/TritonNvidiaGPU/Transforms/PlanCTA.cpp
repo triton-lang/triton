@@ -653,7 +653,8 @@ bool CTAPlanner::isElementwiseOp(Operation *op) const {
                 math::CtPopOp, math::ErfOp, math::ExpOp, math::Exp2Op,
                 math::FloorOp, math::ExpM1Op, math::FloorOp, math::FmaOp,
                 math::LogOp, math::Log10Op, math::Log1pOp, math::Log2Op,
-                math::PowFOp, math::RsqrtOp, math::SqrtOp, math::TanhOp>(op))
+                math::PowFOp, math::RsqrtOp, math::SqrtOp, math::RsqrtOp,
+                math::TanhOp>(op))
     return true;
   if (llvm::isa<triton::IntToPtrOp, triton::PtrToIntOp, triton::BitcastOp,
                 triton::FpToFpOp, triton::AddPtrOp, triton::PreciseSqrtOp,
