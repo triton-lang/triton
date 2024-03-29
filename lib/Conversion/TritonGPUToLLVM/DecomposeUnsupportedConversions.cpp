@@ -1,6 +1,6 @@
-#include "TritonNVIDIAGPUToLLVM/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -10,7 +10,7 @@ using namespace mlir::triton;
 namespace mlir {
 namespace triton {
 #define GEN_PASS_DEF_DECOMPOSEUNSUPPORTEDCONVERSIONS
-#include "TritonNVIDIAGPUToLLVM/Passes.h.inc"
+#include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
 } // namespace triton
 } // namespace mlir
 
