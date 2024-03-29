@@ -13,6 +13,7 @@ include_dir.insert(0, "/opt/rocm/include")
 library_dir.insert(0, "/opt/rocm/lib")
 libraries = ['amdhip64']
 
+
 def compile_module_from_src(src, name):
     key = hashlib.sha256(src.encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
@@ -31,6 +32,7 @@ def compile_module_from_src(src, name):
     spec.loader.exec_module(mod)
     return mod
 
+
 class HIPUtils(object):
 
     def __new__(cls):
@@ -42,6 +44,7 @@ class HIPUtils(object):
         mod = compile_module_from_src(Path(os.path.join(dirname, "driver.c")).read_text(), "hip_utils")
         self.load_binary = mod.load_binary
         self.get_device_properties = mod.get_device_properties
+
 
 # -------------------- Launcher ----------------------------
 def ty_to_cpp(ty):
@@ -99,9 +102,7 @@ def make_launcher(constants, signature, ids, warp_size):
     format = "iiiiiiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
 
     # generate glue code
-    params = [
-        i for i in signature.keys() if i not in constants
-    ]
+    params = [i for i in signature.keys() if i not in constants]
     src = f"""
 #define __HIP_PLATFORM_AMD__
 #include <hip/hip_runtime.h>
@@ -245,9 +246,7 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
 class HIPLauncher(object):
 
     def __init__(self, src, metadata):
-        ids = {
-            "ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()
-        }
+        ids = {"ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()}
         constants = src.constants if hasattr(src, "constants") else dict()
         src = make_launcher(constants, src.signature, ids, metadata.warp_size)
         mod = compile_module_from_src(src, "__triton_launcher")
