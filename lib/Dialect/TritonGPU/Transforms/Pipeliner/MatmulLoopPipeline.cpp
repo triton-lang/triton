@@ -588,10 +588,14 @@ createSchedule(scf::ForOp forOp, int numStages,
 
   // Inserts and dependencies grouped by stage.
   SmallVector<DenseSet<Operation *>> insertAndDeps(numStages);
+  SmallVector<DenseSet<Operation *>> prologIfs(numStages);
   DenseSet<Operation *> seen;
   for (int stage = 0; stage < numStages; stage++) {
     for (Operation *op : insertOps[stage]) {
-      tt::addDep(op, insertAndDeps[stage], false, &seen);
+      if (isa<scf::IfOp>(op))
+        tt::addDep(op, prologIfs[stage], false, &seen);
+      else
+        tt::addDep(op, insertAndDeps[stage], false, &seen);
       seen.insert(insertAndDeps[stage].begin(), insertAndDeps[stage].end());
     }
   }
@@ -600,6 +604,13 @@ createSchedule(scf::ForOp forOp, int numStages,
     for (int stage = 0; stage < numStages; stage++) {
       LDBG("- insertAndDeps " << stage);
       printDenseSet(insertAndDeps[stage]);
+    }
+  });
+
+  LLVM_DEBUG({
+    for (int stage = 0; stage < numStages; stage++) {
+      LDBG("- prologIfs " << stage);
+      printDenseSet(prologIfs[stage]);
     }
   });
 
@@ -628,16 +639,24 @@ createSchedule(scf::ForOp forOp, int numStages,
     });
   }
 
+  DenseSet<Operation *> epilogIfs;
+
   // Schedule loads with a distance of 1 together with the insert ops.
   for (unsigned i = 0; i < distanceOneUsers.size(); i++) {
     for (auto op : distanceOneUsers[i]) {
       if (isa<tt::LoadOp>(op))
         tt::addDep(op, insertAndDeps[i], true);
+      if (isa<scf::IfOp>(op))
+        epilogIfs.insert(op);
     }
   }
 
   DenseSet<Operation *> allInsertAndDeps;
   for (auto &set : insertAndDeps) {
+    allInsertAndDeps.insert(set.begin(), set.end());
+  }
+
+  for (auto &set : prologIfs) {
     allInsertAndDeps.insert(set.begin(), set.end());
   }
 
@@ -647,7 +666,7 @@ createSchedule(scf::ForOp forOp, int numStages,
   for (unsigned i = 0; i < distanceOneUsers.size() - 1; i++) {
     auto &group = distanceOneUsers[i];
     for (auto op : group) {
-      if (!isa<tt::LoadOp>(op))
+      if (!isa<tt::LoadOp>(op) && !isa<scf::IfOp>(op))
         tt::addDep(op, stage1deps[i + 1], true, &allInsertAndDeps);
     }
     LLVM_DEBUG({
@@ -670,11 +689,23 @@ createSchedule(scf::ForOp forOp, int numStages,
     printDenseSet(extractAndDeps);
   });
 
+  for (Operation &op : forOp.getBody()->without_terminator()) {
+    if (isa<scf::IfOp>(op))
+      tt::addDep(&op, epilogIfs, true, &allInsertAndDeps);
+  }
+
   std::vector<std::pair<Operation *, unsigned>> schedule;
+  // Schedule the prolog ifs first.
+  for (int i = 0; i < numStages; i++) {
+    auto &group = prologIfs[i];
+    tt::addOps(forOp, i, schedule,
+               [&](Operation *op) { return group.count(op); });
+  }
+
   // Schedule stage `numStage - 1` first.
   tt::addOps(forOp, numStages - 1, schedule, [&](Operation *op) {
     return allInsertAndDeps.count(op) == 0 && allStage1Deps.count(op) == 0 &&
-           extractAndDeps.count(op) == 0;
+           extractAndDeps.count(op) == 0 && epilogIfs.count(op) == 0;
   });
 
   // Schedule some dependencies with distance of 1 into stage 1 to reduce
@@ -697,6 +728,9 @@ createSchedule(scf::ForOp forOp, int numStages,
   // pre-fetched and play well with pretech pass.
   tt::addOps(forOp, numStages - 2, schedule,
              [&](Operation *op) { return extractAndDeps.count(op); });
+
+  tt::addOps(forOp, numStages - 1, schedule,
+             [&](Operation *op) { return epilogIfs.count(op); });
 
   LLVM_DEBUG(printSchedule(schedule, numStages));
   assert(isScheduleValid(forOp, schedule) && "Invalid schedule.");
