@@ -165,6 +165,15 @@ def sqrt_rn(x, _builder=None):
 
 
 @core.builtin
+@_check_dtype(dtypes=["fp32", "fp64"])
+@_add_math_1arg_docstr("inverse square root")
+@core._tensor_member_fn
+def rsqrt(x, _builder=None):
+    x = core._to_tensor(x, _builder)
+    return core.tensor(_builder.create_rsqrt(x.handle), x.type)
+
+
+@core.builtin
 @_add_math_1arg_docstr("absolute value")
 @core._tensor_member_fn
 def abs(x, _builder=None):

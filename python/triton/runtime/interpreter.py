@@ -376,6 +376,9 @@ class InterpreterBuilder:
         ret = np_erf_fp32(arg.data) if arg.data.dtype == np.float32 else np_erf_fp64(arg.data)
         return TensorHandle(ret, arg.dtype)
 
+    def create_rsqrt(self, arg):
+        return TensorHandle(1 / np.sqrt(arg.data), arg.dtype)
+
     # tensor operators
     create_reshape = lambda self, arg, shape, allow_reorder: TensorHandle(arg.data.reshape(shape), arg.dtype)
 

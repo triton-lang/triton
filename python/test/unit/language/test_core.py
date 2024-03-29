@@ -4066,6 +4066,30 @@ def test_num_warps_pow2(device):
     _kernel[(1, )](dst=dst, num_warps=4)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("func_str", ['sqrt', 'rsqrt', 'exp', 'exp2', 'log', 'log2', 'sin', 'cos'])
+def test_unary_math(func_str, device):
+
+    @triton.jit
+    def kernel(X, Y, BLOCK: tl.constexpr):
+        x = tl.load(X + tl.arange(0, BLOCK))
+        y = tl.FUNC_STR(x)
+        tl.store(Y + tl.arange(0, BLOCK), y)
+
+    kernel = patch_kernel(kernel, {'FUNC_STR': func_str})
+
+    shape = (128, )
+    x = torch.randn(shape, dtype=torch.float32, device=device)
+    if func_str in ['sqrt', 'rsqrt']:
+        x = torch.abs(x)
+    if func_str in ['log', 'log2']:
+        x = torch.max(x, torch.tensor(1e-6, dtype=torch.float32, device=device))
+    y = torch.zeros(shape, dtype=torch.float32, device=device)
+
+    kernel[(1, )](x, y, BLOCK=shape[0])
+    torch.allclose(getattr(torch, func_str)(x), y, rtol=1e-3)
+
+
 # -----------------------
 # test inline asm
 # -----------------------
