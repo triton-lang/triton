@@ -329,12 +329,17 @@ class Builder:
         return TensorHandle(op(arg.data), arg.dtype)
 
     create_exp = lambda self, arg: self.unary_op(arg, np.exp)
+    create_exp2 = lambda self, arg: self.unary_op(arg, np.exp2)
     create_cos = lambda self, arg: self.unary_op(arg, np.cos)
     create_sin = lambda self, arg: self.unary_op(arg, np.sin)
     create_log = lambda self, arg: self.unary_op(arg, np.log)
+    create_log2 = lambda self, arg: self.unary_op(arg, np.log2)
     create_sqrt = lambda self, arg: self.unary_op(arg, np.sqrt)
     create_fabs = lambda self, arg: self.unary_op(arg, np.abs)
     create_iabs = lambda self, arg: self.unary_op(arg, np.abs)
+
+    def create_rsqrt(self, arg):
+        return TensorHandle(1 / np.sqrt(arg.data), arg.dtype)
 
     # tensor operators
     create_reshape = lambda self, arg, shape, allow_reorder: TensorHandle(arg.data.reshape(shape), arg.dtype)
@@ -645,6 +650,7 @@ def _patch_lang_math(lang):
         "div_rn": np.divide,
         "sqrt_rn": np.sqrt,
         "sqrt": np.sqrt,
+        "rsqrt": lambda x: 1 / np.sqrt(x),
     }
 
     def make_numpy(name):
