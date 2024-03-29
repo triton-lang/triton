@@ -303,13 +303,13 @@ class LazyDict:
         self.extras = []
 
     def get(self) -> None:
-        for extra in self.extras:
-            self.data = self.data | extra()
+        for func, args in self.extras:
+            self.data = self.data | func(*args)
         self.extras.clear()
         return self.data
 
-    def add(self, value):
-        self.extras.append(value)
+    def add(self, func, args):
+        self.extras.append((func, args))
 
 
 class CompiledKernel:
@@ -369,7 +369,7 @@ class CompiledKernel:
         if not isinstance(self.src, ASTSource) or self.src.fn.launch_metadata is None:
             return ret
         args = {k: v for k, v in zip(self.src.fn.arg_names, args)}
-        ret.add(lambda: self.src.fn.launch_metadata(grid, self.metadata, args))
+        ret.add(self.src.fn.launch_metadata, (grid, self.metadata, args))
         return ret
 
     def __getitem__(self, grid):
