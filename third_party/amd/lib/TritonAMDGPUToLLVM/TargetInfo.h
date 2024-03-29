@@ -22,7 +22,7 @@ public:
   Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
                    Value i) const override;
   Value programId(Location loc, ConversionPatternRewriter &rewriter,
-                 ModuleOp moduleOp, int axis) const override;
+                  ModuleOp moduleOp, int axis) const override;
   bool warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                   SmallVector<Value> &acc, triton::ReduceOp op,
                   unsigned numLaneToReduce) const override;

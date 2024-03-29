@@ -1064,7 +1064,7 @@ struct FpToFpOpConversion
         {{F8E4M3TyID, F16TyID}, Fp8E4M3Nv_to_Fp16},
         {{F8E5M2TyID, F16TyID}, Fp8E5M2_to_Fp16(computeCapability >= 90)},
 #endif
-      // F16 -> F8
+    // F16 -> F8
 #ifdef USE_ROCM
       {{F16TyID, F8E4M3B15TyID}, Fp16_to_Fp8E4M3B15},
       {{F16TyID, F8E5M2FNUZTyID}, Fp16_to_Fp8E5M2FNUZ(computeCapability)},

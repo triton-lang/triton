@@ -336,9 +336,9 @@ public:
         ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth));
     a = rewriter.create<ttg::ConvertLayoutOp>(a.getLoc(), newAType, a);
     b = rewriter.create<ttg::ConvertLayoutOp>(b.getLoc(), newBType, b);
-    auto newDot = rewriter.create<tt::DotOp>(dotOp.getLoc(), newAcc.getType(),
-                                             a, b, newAcc, dotOp.getInputPrecision(),
-                                             dotOp.getMaxNumImpreciseAcc());
+    auto newDot = rewriter.create<tt::DotOp>(
+        dotOp.getLoc(), newAcc.getType(), a, b, newAcc,
+        dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
 
     Value dotOutput =
         convertAndCastTensor(rewriter, newDot, oldRetType.getEncoding(),
