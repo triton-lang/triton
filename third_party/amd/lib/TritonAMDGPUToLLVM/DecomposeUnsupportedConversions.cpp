@@ -20,7 +20,6 @@ namespace {
 constexpr int LDSSize = 65536;
 constexpr int kPtrBitWidth = 64;
 
-// pass ws related named attrs.
 static void addAttrs(Operation *op, ArrayRef<mlir::NamedAttribute> attrs) {
   for (const NamedAttribute attr : attrs)
     op->setAttr(attr.getName(), attr.getValue());

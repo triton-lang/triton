@@ -8,7 +8,6 @@ using namespace mlir::triton;
 
 namespace {
 
-// pass ws related named attrs.
 static void addAttrs(Operation *op, ArrayRef<mlir::NamedAttribute> attrs) {
   for (const NamedAttribute attr : attrs)
     op->setAttr(attr.getName(), attr.getValue());
