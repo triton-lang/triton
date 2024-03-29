@@ -307,6 +307,12 @@ def test_preload() -> None:
         tl.device_assert(idx < 32, "idx < 32")
         tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
 
+    @triton.jit
+    def kernel_sub(a, b, o, N: tl.constexpr, type: tl.constexpr):
+        idx = tl.arange(0, N)
+        tl.device_assert(idx < 32, "idx < 32")
+        tl.store(o + idx, tl.load(a + idx) - tl.load(b + idx))
+
     device = torch.cuda.current_device()
 
     # get the serialized specialization data
@@ -343,3 +349,7 @@ def test_preload() -> None:
     assert counter == 0
     assert len(kernel_add.cache[device]) == 1
     assert final_kernel.hash == hash
+
+    # test that we can't preload a mismatched kernel
+    with pytest.raises(RuntimeError, match="Specialization data is for"):
+        kernel_sub.preload(specialization_data)

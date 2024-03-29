@@ -1,7 +1,7 @@
 from triton.backends.compiler import BaseBackend
 from triton._C.libtriton import ir, passes, llvm, amd
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Tuple
 import hashlib
 import tempfile
 import os
@@ -9,6 +9,7 @@ import re
 import subprocess
 import functools
 from pathlib import Path
+
 
 @dataclass(frozen=True)
 class HIPOptions:
@@ -21,6 +22,8 @@ class HIPOptions:
     debug: bool = False
     arch: str = None
     allow_fp8e4nv: bool = False
+    default_dot_input_precision: str = "ieee"
+    allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     enable_fp_fusion: bool = True
     capability: int = None
     matrix_inst_shape: int = 0
@@ -34,7 +37,7 @@ class HIPOptions:
         if 'gfx9' in arch:
             return 64
         print("Warning: Unexpected device. Wave Size is set to 64.")
-        return 64 # Default value
+        return 64  # Default value
 
     def has_amd_mma_instr(self) -> bool:
         is_RDNA3 = 'gfx11' in self.arch
@@ -52,7 +55,7 @@ class HIPOptions:
         oclc_wavefrontsize_lib = "oclc_wavefrontsize64_on" if self.warp_size == 64 else "oclc_wavefrontsize64_off"
         libs = [
             "cuda2gcn", "opencl", "ocml", "ockl", "oclc_finite_only_off", "oclc_daz_opt_off",
-            "oclc_correctly_rounded_sqrt_on", "oclc_unsafe_math_off", oclc_wavefrontsize_lib, "oclc_abi_version_400"
+            "oclc_correctly_rounded_sqrt_on", "oclc_unsafe_math_off", oclc_wavefrontsize_lib, "oclc_abi_version_500"
         ]
         libs += ['oclc_isa_version_' + self.arch.replace('gfx', '')]
         for lib in libs:
@@ -82,6 +85,10 @@ class HIPBackend(BaseBackend):
         args = {'arch': self.target[1]}
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts})
         return HIPOptions(**args)
+
+    def get_codegen_implementation(self):
+        codegen_fns = dict()
+        return codegen_fns
 
     def load_dialects(self, ctx):
         amd.load_dialects(ctx)
@@ -171,8 +178,8 @@ class HIPBackend(BaseBackend):
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
         if options.extern_libs:
-            for name, path in options.extern_libs:
-                llvm.link_extern_lib(llvm_mod, path)
+            paths = [path for (name, path) in options.extern_libs]
+            llvm.link_extern_libs(llvm_mod, paths)
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
         # Set kernel attributes
         kernels = [fn for fn in llvm_mod.get_functions() if not fn.is_declaration()]
@@ -197,7 +204,8 @@ class HIPBackend(BaseBackend):
         # llvm -> hsaco
         hsaco = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion, True)
         if os.environ.get("AMDGCN_ENABLE_DUMP", "0") == "1":
-            hsaco_str = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion, False)
+            hsaco_str = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion,
+                                              False)
             print("// -----// AMDGCN Dump //----- //")
             print(hsaco_str)
         import subprocess
@@ -221,5 +229,5 @@ class HIPBackend(BaseBackend):
 
     @functools.lru_cache()
     def hash(self):
-        version = subprocess.check_output([HIPBackend.path_to_rocm_lld(), "--version"])
+        version = subprocess.check_output([HIPBackend.path_to_rocm_lld(), "--version"], encoding='utf-8')
         return f'{version}-{self.target}'

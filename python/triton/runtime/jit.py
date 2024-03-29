@@ -36,6 +36,9 @@ class DependenciesFinder(ast.NodeVisitor):
         return self.hasher.hexdigest()
 
     def visit_Name(self, node):
+        if node.id in self.local_names:
+            # The global name is hidden by the local name.
+            return None
         return self.globals.get(node.id, None)
 
     def visit_Attribute(self, node):
@@ -76,6 +79,21 @@ class DependenciesFinder(ast.NodeVisitor):
 
             key = func_cache_key + noinline
             self.hasher.update(key.encode("utf-8"))
+
+    def visit_FunctionDef(self, node):
+        # Save the local name which may hide the global name.
+        self.local_names = [arg.arg for arg in node.args.args]
+        self.generic_visit(node)
+
+    def visit_Assign(self, node):
+        _names = []
+        for target in node.targets:
+            _names += [self.visit(target)]
+        if len(_names) == 1:
+            self.local_names += _names
+        else:
+            raise TypeError("Simultaneous multiple assignment is not supported.")
+        self.generic_visit(node)
 
 
 # -----------------------------------------------------------------------------
@@ -190,12 +208,12 @@ class KernelInterface(Generic[T]):
         # return cast(T, functools.partial(cast(Callable, self.run), grid=grid))
 
 
-def serialize_specialization_data(signature, constants, attrs, options, key):
+def serialize_specialization_data(name, signature, constants, attrs, options, key):
     constants = {key: str(value) if value.__class__.__name__ == "dtype" else value for key, value in constants.items()}
     import json
     obj = {
-        'signature': signature, 'constants': constants, 'attrs': attrs.to_dict(), 'options': options.__dict__, 'key':
-        key
+        'name': name, 'signature': signature, 'constants': constants, 'attrs': attrs.to_dict(), 'options':
+        options.__dict__, 'key': key
     }
     serialized_obj = json.dumps(obj)
     return serialized_obj
@@ -274,7 +292,6 @@ class JITFunction(KernelInterface[T]):
             "float8e4nv": "fp8e4nv",
             "float8e5": "fp8e5",
             "float8e4b15": "fp8e4b15",
-            "float8e4b15x4": "fp8e4b15x4",
             "float8_e4m3fn": "fp8e4nv",
             "float8e4b8": "fp8e4b8",
             "float8_e4m3fnuz": "fp8e4b8",
@@ -329,7 +346,7 @@ class JITFunction(KernelInterface[T]):
                 self.jit_function = jit_function
                 pass
 
-        specialization_data = serialize_specialization_data(signature, constants, configs[0], options, key)
+        specialization_data = serialize_specialization_data(name, signature, constants, configs[0], options, key)
 
         kwargs = dict(
             signature=signature,
@@ -406,7 +423,7 @@ class JITFunction(KernelInterface[T]):
         if key not in self.cache[device]:
             configs = (self._get_config(*[arg.value for arg in args]), )
             constants = {
-                arg.param.num: arg.value
+                arg.param.name: arg.value
                 for arg in args
                 if arg.param.is_constexpr or arg.param.num in configs[0].equal_to_1 or arg.value is None
             }
@@ -415,7 +432,7 @@ class JITFunction(KernelInterface[T]):
                     raise TypeError(f"Callable constexpr at index {i} is not supported")
 
             # Build kernel signature -- doesn't include constexpr arguments.
-            signature = {arg.param.num: arg.mangled_type() for arg in args if not arg.param.is_constexpr}
+            signature = {arg.param.name: arg.mangled_type() for arg in args if not arg.param.is_constexpr}
 
             if self._call_hook(key, signature, device, constants, options, configs):
                 return None
@@ -430,7 +447,7 @@ class JITFunction(KernelInterface[T]):
         kernel = self.cache[device][key]
 
         # Verify key signature from the cache
-        signature = {arg.param.num: arg.mangled_type() for arg in args if not arg.param.is_constexpr}
+        signature = {arg.param.name: arg.mangled_type() for arg in args if not arg.param.is_constexpr}
         if kernel.src.signature != signature:
             raise RuntimeError(
                 f"Signature mismatch for cached kernel {self.fn.__name__}:\n"\
@@ -440,16 +457,13 @@ class JITFunction(KernelInterface[T]):
 
         if not warmup:
             args = [arg.value for arg in args if not arg.param.is_constexpr]
-            metadata = kernel.metadata
-
-            kernel.run(grid_0, grid_1, grid_2, metadata.num_warps,
-                       metadata.num_ctas,  # number of warps/ctas per instance
-                       metadata.cluster_dims[0], metadata.cluster_dims[1], metadata.cluster_dims[2],  # cluster
-                       metadata.shared, stream, kernel.function, CompiledKernel.launch_enter_hook,
-                       CompiledKernel.launch_exit_hook, metadata, *args)
+            launch_metadata = kernel.launch_metadata(grid, stream, *args)
+            kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.metadata, launch_metadata,
+                       CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, *args)
         return kernel
 
-    def __init__(self, fn, version=None, do_not_specialize=None, debug=None, noinline=None):
+    def __init__(self, fn, version=None, do_not_specialize=None, debug=None, noinline=None, repr=None,
+                 launch_metadata=None):
         do_not_specialize = do_not_specialize if do_not_specialize else []
 
         self.fn = fn
@@ -458,6 +472,8 @@ class JITFunction(KernelInterface[T]):
         self.signature = inspect.signature(fn)
         self.do_not_specialize = do_not_specialize
         self.starting_line_number = inspect.getsourcelines(fn)[1]
+        self.repr = lambda _: fn.__name__ if repr is None else repr(_)
+        self.launch_metadata = launch_metadata
 
         self.params = []
         for i, param in enumerate(self.signature.parameters.values()):
@@ -508,11 +524,14 @@ class JITFunction(KernelInterface[T]):
         import triton.language as tl
         device = driver.active.get_current_device()
         deserialized_obj = json.loads(specialization_data)
+        if deserialized_obj['name'] != self.fn.__name__:
+            raise RuntimeError(
+                f"Specialization data is for {deserialized_obj['name']} but trying to preload for {self.fn.__name__}")
         constants = {
-            int(key): tl.dtype(value) if tl.dtype.is_dtype(value) else value
+            key: tl.dtype(value) if tl.dtype.is_dtype(value) else value
             for key, value in deserialized_obj['constants'].items()
         }
-        signature = {int(key): value for key, value in deserialized_obj['signature'].items()}
+        signature = {key: value for key, value in deserialized_obj['signature'].items()}
         src = ASTSource(self, signature, constants, AttrsDescriptor.from_dict(deserialized_obj['attrs']))
         options = {
             key: tuple(value) if isinstance(value, list) else value
@@ -561,6 +580,8 @@ def jit(fn: T) -> JITFunction[T]:
 def jit(
     *,
     version=None,
+    repr: Optional[Callable] = None,
+    launch_metadata: Optional[Callable] = None,
     do_not_specialize: Optional[Iterable[int]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
@@ -572,6 +593,8 @@ def jit(
     fn: Optional[T] = None,
     *,
     version=None,
+    repr: Optional[Callable] = None,
+    launch_metadata: Optional[Callable] = None,
     do_not_specialize: Optional[Iterable[int]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
@@ -606,6 +629,8 @@ def jit(
                 do_not_specialize=do_not_specialize,
                 debug=debug,
                 noinline=noinline,
+                repr=repr,
+                launch_metadata=launch_metadata,
             )
 
     if fn is not None:

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2015 - 2021 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2015 - 2023 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -22,13 +22,17 @@ THE SOFTWARE.
 
 #pragma once
 
+#if !defined(__HIPCC_RTC__)
 #include "host_defines.h"
+#include "amd_hip_vector_types.h"  // For Native_vec_
+#endif
+
 #if defined(__cplusplus)
     extern "C" {
 #endif
 
 // DOT FUNCTIONS
-#if __HIP_CLANG_ONLY__
+#if defined(__clang__) && defined(__HIP__)
 __device__
 __attribute__((const))
 int __ockl_sdot2(

@@ -668,10 +668,13 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
                         Attribute rootEncoding,
                         DenseMap<Value, Attribute> &layout,
                         std::function<bool(Operation *)> stopPropagation) {
+  DenseSet<Value> visited;
   SmallVector<std::pair<Value, Attribute>> queue = {{root, rootEncoding}};
   while (!queue.empty()) {
     auto [currentValue, encoding] = queue.back();
     queue.pop_back();
+    if (!visited.insert(currentValue).second)
+      continue;
     if (!currentValue.getType().isa<RankedTensorType>())
       continue;
     // Skip propagating through for op results for now.
