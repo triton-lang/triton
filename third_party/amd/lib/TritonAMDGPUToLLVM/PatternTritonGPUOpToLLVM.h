@@ -6,9 +6,7 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 
-using namespace mlir;
-using namespace mlir::triton;
-namespace AMD {
+namespace mlir::triton::AMD {
 void populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, int numWarps,
@@ -33,6 +31,6 @@ void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
                                  PatternBenefit benefit);
 
-} // namespace AMD
+} // namespace mlir::triton::AMD
 
 #endif
