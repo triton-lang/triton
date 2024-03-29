@@ -28,7 +28,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None):
     :type grad_to_none: torch.tensor, optional
     """
     import torch
-    
+
     if torch.cuda.current_stream() == torch.cuda.default_stream():
         raise RuntimeError("Cannot capture graph in default stream. Please use side stream in benchmark code.")
     # warmup

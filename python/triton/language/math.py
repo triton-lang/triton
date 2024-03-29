@@ -62,6 +62,7 @@ def _add_math_2arg_docstr(name: str) -> core.Callable[[T], T]:
 
     return _decorator
 
+
 def _add_math_3arg_docstr(name: str) -> core.Callable[[T], T]:
 
     def _decorator(func: T) -> T:
@@ -79,6 +80,7 @@ def _add_math_3arg_docstr(name: str) -> core.Callable[[T], T]:
         return func
 
     return _decorator
+
 
 @core.builtin
 @_check_dtype(dtypes=["int32", "int64", "uint32", "uint64"])
