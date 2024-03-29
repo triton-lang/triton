@@ -8,10 +8,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-namespace mlir {
-namespace LLVM {
-using namespace mlir::triton;
-namespace AMD {
+namespace mlir::LLVM::AMD {
 
 Value shuffleXor(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i);
@@ -22,11 +19,8 @@ Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
 Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  Value i);
 
-Value llGetPid(Location loc, ConversionPatternRewriter &rewriter, 
+Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
                ModuleOp moduleOp, int axis);
-} // namespace AMD
-
-} // namespace LLVM
-} // namespace mlir
+} // namespace mlir::LLVM::AMD
 
 #endif

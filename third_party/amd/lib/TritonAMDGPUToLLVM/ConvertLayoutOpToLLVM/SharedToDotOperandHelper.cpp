@@ -1,6 +1,8 @@
 #include "SharedToDotOperandHelper.h"
 
-namespace AMD {
+using ::mlir::triton::gpu::SharedEncodingAttr;
+
+namespace mlir::triton::AMD {
 
 // Get warpId inside block of warps.
 Value getWarpIdInBlock(ConversionPatternRewriter &rewriter, Location loc,
@@ -149,4 +151,4 @@ llvm::SmallVector<Value> computeOffsetsBType(
   return bOffsets;
 }
 
-} // namespace AMD
+} // namespace mlir::triton::AMD

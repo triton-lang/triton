@@ -2,10 +2,10 @@
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOAMD_H
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include <string>
-namespace AMD {
+namespace mlir::triton::AMD {
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
-  TargetInfo(std::string arch) : arch(arch) {}
+  TargetInfo(std::string arch) : arch(std::move(arch)) {}
   bool supportMaximumMinimum() const override;
   Value ballot(ConversionPatternRewriter &rewriter, Location loc, Type type,
                Value cmp) const override;
@@ -35,5 +35,5 @@ public:
 private:
   std::string arch;
 };
-} // namespace AMD
+} // namespace mlir::triton::AMD
 #endif // TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOAMD_H

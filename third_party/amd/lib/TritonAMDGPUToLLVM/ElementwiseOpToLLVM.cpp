@@ -1401,7 +1401,7 @@ struct ExpOpConversionApprox
 
 } // namespace
 
-namespace AMD {
+namespace mlir::triton::AMD {
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
@@ -1445,4 +1445,4 @@ void populateElementwiseOpToLLVMPatterns(
   mlir::triton::populateClampFOpToLLVMPattern(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
 }
-} // namespace AMD
+} // namespace mlir::triton::AMD
