@@ -9,6 +9,8 @@ from triton.backends.driver import GPUDriver
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir = [os.path.join(dirname, "include")]
 library_dir = [os.path.join(dirname, "lib")]
+include_dir.insert(0, "/opt/rocm/include")
+library_dir.insert(0, "/opt/rocm/lib")
 libraries = ['amdhip64']
 
 def compile_module_from_src(src, name):
