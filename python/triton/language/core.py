@@ -1713,6 +1713,7 @@ def atomic_xchg(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = _to_tensor(val, _builder)
     sem = _constexpr_to_value(sem)
     scope = _constexpr_to_value(scope)
+    mask = _constexpr_to_value(mask)
     return semantic.atomic_xchg(pointer, val, mask, sem, scope, _builder)
 
 
@@ -1723,6 +1724,7 @@ def atomic_add(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = _to_tensor(val, _builder)
     sem = _constexpr_to_value(sem)
     scope = _constexpr_to_value(scope)
+    mask = _constexpr_to_value(mask)
     return semantic.atomic_add(pointer, val, mask, sem, scope, _builder)
 
 
@@ -1733,6 +1735,7 @@ def atomic_max(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = _to_tensor(val, _builder)
     sem = _constexpr_to_value(sem)
     scope = _constexpr_to_value(scope)
+    mask = _constexpr_to_value(mask)
     return semantic.atomic_max(pointer, val, mask, sem, scope, _builder)
 
 
@@ -1743,6 +1746,7 @@ def atomic_min(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = _to_tensor(val, _builder)
     sem = _constexpr_to_value(sem)
     scope = _constexpr_to_value(scope)
+    mask = _constexpr_to_value(mask)
     return semantic.atomic_min(pointer, val, mask, sem, scope, _builder)
 
 
@@ -1753,6 +1757,7 @@ def atomic_and(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = _to_tensor(val, _builder)
     sem = _constexpr_to_value(sem)
     scope = _constexpr_to_value(scope)
+    mask = _constexpr_to_value(mask)
     return semantic.atomic_and(pointer, val, mask, sem, scope, _builder)
 
 
@@ -1763,6 +1768,7 @@ def atomic_or(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = _to_tensor(val, _builder)
     sem = _constexpr_to_value(sem)
     scope = _constexpr_to_value(scope)
+    mask = _constexpr_to_value(mask)
     return semantic.atomic_or(pointer, val, mask, sem, scope, _builder)
 
 
@@ -1773,6 +1779,7 @@ def atomic_xor(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = _to_tensor(val, _builder)
     sem = _constexpr_to_value(sem)
     scope = _constexpr_to_value(scope)
+    mask = _constexpr_to_value(mask)
     return semantic.atomic_xor(pointer, val, mask, sem, scope, _builder)
 
 
