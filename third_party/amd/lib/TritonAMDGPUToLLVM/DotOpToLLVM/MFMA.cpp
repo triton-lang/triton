@@ -293,7 +293,7 @@ struct DotOpMFMAConversionHelper {
 
 } // namespace
 
-namespace AMD {
+namespace mlir::triton::AMD {
 LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           const LLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) {
@@ -325,6 +325,6 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   return helper.convertDot(op, adaptor);
 }
-} // namespace AMD
+} // namespace mlir::triton::AMD
 
 #endif // ifdef USE_ROCM

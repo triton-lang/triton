@@ -3,18 +3,14 @@
 
 #include "Utility.h"
 
-using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::getOrder;
-using ::mlir::triton::gpu::SharedEncodingAttr;
-
-namespace AMD {
+namespace mlir::triton::AMD {
 
 // Get warpId inside block of warps.
 Value getWarpIdInBlock(ConversionPatternRewriter &rewriter, Location loc,
                        Value warpId, const ArrayRef<unsigned int> &wpt,
                        int elemPerInstrNonK, int tensorSizeNonK, int nonKIdx);
 
-bool isSwizzled(SharedEncodingAttr layout);
+bool isSwizzled(gpu::SharedEncodingAttr layout);
 
 /**
  * @brief swizzling tensor element indexes according pattern encoded in
@@ -30,11 +26,12 @@ bool isSwizzled(SharedEncodingAttr layout);
  */
 std::pair<mlir::Value, mlir::Value>
 swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
-               Value col, SharedMemoryObject smemObj, SharedEncodingAttr attr);
+               Value col, SharedMemoryObject smemObj,
+               gpu::SharedEncodingAttr attr);
 
 Value computeOffset(ConversionPatternRewriter &rewriter, Location loc,
                     Value row, Value col, SharedMemoryObject smemObj,
-                    SharedEncodingAttr srcLayout);
+                    gpu::SharedEncodingAttr srcLayout);
 
 Value computeBasePtr(ConversionPatternRewriter &rewriter, Location loc,
                      const SharedMemoryObject &smemObj);
@@ -50,15 +47,15 @@ llvm::SmallVector<Value> computeOffsetsAType(
     computeTensorElemMappingInBlockT fn, const ArrayRef<int64_t> &elemsPerInstr,
     Value warpId, Value laneId, int warpsPerBlock, int numOfElems,
     ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
-    SharedEncodingAttr srcLayout, unsigned nonKDim, unsigned kDim);
+    gpu::SharedEncodingAttr srcLayout, unsigned nonKDim, unsigned kDim);
 
 llvm::SmallVector<Value> computeOffsetsBType(
     ConversionPatternRewriter &rewriter, Location loc,
     computeTensorElemMappingInBlockT fn, const ArrayRef<int64_t> &elemsPerInstr,
     Value warpId, Value laneId, int warpsPerBlock, int numOfElems,
     ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
-    SharedEncodingAttr srcLayout, unsigned nonKDim, unsigned kDim);
+    gpu::SharedEncodingAttr srcLayout, unsigned nonKDim, unsigned kDim);
 
-} // namespace AMD
+} // namespace mlir::triton::AMD
 
 #endif

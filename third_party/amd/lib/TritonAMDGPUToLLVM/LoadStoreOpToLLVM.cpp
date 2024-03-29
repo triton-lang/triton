@@ -9,10 +9,9 @@
 #include <numeric>
 
 using namespace mlir;
-using namespace mlir::triton;
 
 using ::mlir::LLVM::delinearize;
-using mlir::LLVM::getSharedMemoryBase;
+using ::mlir::LLVM::getSharedMemoryBase;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 namespace {
@@ -652,7 +651,7 @@ struct AtomicRMWOpConversion
 };
 } // namespace
 
-namespace AMD {
+namespace mlir::triton::AMD {
 void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        RewritePatternSet &patterns,
                                        int numWarps,
@@ -663,4 +662,4 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
   patterns.add<AtomicCASOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AtomicRMWOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 }
-} // namespace AMD
+} // namespace mlir::triton::AMD

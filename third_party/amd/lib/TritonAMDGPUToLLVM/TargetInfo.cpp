@@ -4,8 +4,7 @@
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-using namespace mlir;
-namespace AMD {
+namespace mlir::triton::AMD {
 
 bool TargetInfo::supportMaximumMinimum() const { return false; }
 Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
@@ -68,7 +67,7 @@ Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
 }
 
 Value TargetInfo::programId(Location loc, ConversionPatternRewriter &rewriter,
-                           ModuleOp moduleOp, int axis) const {
+                            ModuleOp moduleOp, int axis) const {
   return LLVM::AMD::llGetPid(loc, rewriter, moduleOp, axis);
 }
 
@@ -86,4 +85,4 @@ bool TargetInfo::processReplicaUsingStMatrix(
   return false;
 }
 
-} // namespace AMD
+} // namespace mlir::triton::AMD
