@@ -5,7 +5,7 @@ include "mlir/Pass/PassBase.td"
 
 def DecomposeUnsupportedAMDConversions : Pass<"decompose-unsupported-amd-conversions", "mlir::ModuleOp"> {
     let summary = "Decompose conversions that are not supported by TritonGPU -> LLVM";
-    let constructor = "mlir::triton::gpu::createDecomposeUnsupportedAMDConversionsPass()";
+    let constructor = "mlir::triton::AMD::createDecomposeUnsupportedConversionsPass()";
 }
 
 def ConvertTritonAMDGPUToLLVM : Pass<"convert-triton-amdgpu-to-llvm", "mlir::ModuleOp"> {

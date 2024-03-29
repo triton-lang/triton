@@ -2,12 +2,12 @@
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/Patterns.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <numeric>
 
 using namespace mlir;
-using namespace mlir::triton;
 namespace mlir {
 namespace triton {
 #define GEN_PASS_DEF_DECOMPOSEUNSUPPORTEDAMDCONVERSIONS
@@ -60,7 +60,7 @@ static void promoteReduceOpResult(OpBuilder &builder, triton::ReduceOp op,
 static int getCvtOpLDSUsage(triton::gpu::ConvertLayoutOp &cvtOp) {
   unsigned inVec = 0;
   unsigned outVec = 0;
-  auto smemShape = getScratchConfigForCvtLayout(cvtOp, inVec, outVec);
+  auto smemShape = triton::getScratchConfigForCvtLayout(cvtOp, inVec, outVec);
   unsigned elems =
       std::accumulate(smemShape.begin(), smemShape.end(), 1, std::multiplies{});
   auto srcType = cvtOp.getSrc().getType();
@@ -131,33 +131,12 @@ struct DecomposeUnsupportedAMDConversions
           DecomposeUnsupportedAMDConversions> {
   void runOnOperation() override {
     ModuleOp mod = getOperation();
+
+    triton::gpu::decomposeSplatOpToSharedLayoutConversion(mod);
+
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    /* -------------------------------- */
-    // Replace `splat -> shared
-    // with `splat -> blocked -> shared
-    /* -------------------------------- */
-    mod.walk([&](triton::SplatOp splatOp) -> void {
-      auto dstType = splatOp.getType();
-      auto shared =
-          dstType.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
-      if (shared) {
-        OpBuilder builder(splatOp);
-        SmallVector<unsigned, 4> sizePerThread(dstType.getRank(), 1);
-        auto newType = RankedTensorType::get(
-            dstType.getShape(), dstType.getElementType(),
-            triton::gpu::BlockedEncodingAttr::get(
-                mod.getContext(), dstType.getShape(), sizePerThread,
-                getOrder(shared), numWarps, threadsPerWarp, numCTAs));
-        auto newSplat = builder.create<triton::SplatOp>(
-            splatOp.getLoc(), newType, splatOp.getSrc());
-        auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
-            splatOp.getLoc(), dstType, newSplat.getResult());
-        splatOp.replaceAllUsesWith(newConvert.getResult());
-        splatOp.erase();
-      }
-    });
     /* -------------------------------- */
     // Replace `mfma -> dot_op` with `mfma -> blocked -> dot_op`
     // unless certain conditions are met
@@ -290,6 +269,9 @@ struct DecomposeUnsupportedAMDConversions
       cvtOp.replaceAllUsesWith(newEpilogueCvt.getResult());
       cvtOp.erase();
     });
+
+    triton::gpu::decomposeBlockedToDotLayoutConversion(mod);
+
     /* -------------------------------- */
     // Replace `blocked -> dot_op` with `blocked -> shared -> dot_op`
     // because the codegen doesn't handle `blocked -> dot_op` directly
@@ -303,7 +285,7 @@ struct DecomposeUnsupportedAMDConversions
       auto dstDotOp =
           dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
       if (srcBlocked && dstDotOp) {
-        auto tmpType = MemDescType::get(
+        auto tmpType = triton::MemDescType::get(
             dstType.getShape(), dstType.getElementType(),
             triton::gpu::SharedEncodingAttr::get(
                 mod.getContext(), dstDotOp, srcType.getShape(),
@@ -415,14 +397,14 @@ namespace mlir {
 
 namespace triton {
 
-namespace gpu {
+namespace AMD {
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createDecomposeUnsupportedAMDConversionsPass() {
+createDecomposeUnsupportedConversionsPass() {
   return std::make_unique<DecomposeUnsupportedAMDConversions>();
 }
 
-} // namespace gpu
+} // namespace AMD
 
 } // namespace triton
 

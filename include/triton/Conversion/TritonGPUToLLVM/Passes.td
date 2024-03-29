@@ -8,9 +8,4 @@ def AllocateSharedMemory : Pass<"allocate-shared-memory", "mlir::ModuleOp"> {
     let constructor = "mlir::triton::gpu::createAllocateSharedMemoryPass()";
 }
 
-def DecomposeUnsupportedConversions : Pass<"decompose-unsupported-conversions", "mlir::ModuleOp"> {
-    let summary = "Decompose conversions that are not supported by TritonGPU -> LLVM";
-    let constructor = "mlir::triton::gpu::createDecomposeUnsupportedConversionsPass()";
-}
-
 #endif
