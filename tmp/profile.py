@@ -224,7 +224,8 @@ def benchmark():
         do_bench(
             lambda: f3.apply(x).backward(dy), rep=5000, warmup=500, grad_to_none=x
         ),
-        do_bench(lambda: f4.apply(x).backward(dy), rep=5000, warmup=1000),
+        do_bench(lambda: f4.apply(x).backward(dy), rep=5000, warmup=1000, grad_to_none=x
+        ),
     )
 
 
