@@ -1,7 +1,7 @@
 from triton.backends.compiler import BaseBackend
 from triton._C.libtriton import ir, passes, llvm, amd
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Tuple
 import hashlib
 import tempfile
 import os
@@ -21,6 +21,8 @@ class HIPOptions:
     debug: bool = False
     arch: str = None
     allow_fp8e4nv: bool = False
+    default_dot_input_precision: str = "ieee"
+    allowed_dot_input_precisions: Tuple[str] = ("ieee",)
     enable_fp_fusion: bool = True
     capability: int = None
     matrix_inst_shape: int = 0
@@ -52,7 +54,7 @@ class HIPOptions:
         oclc_wavefrontsize_lib = "oclc_wavefrontsize64_on" if self.warp_size == 64 else "oclc_wavefrontsize64_off"
         libs = [
             "cuda2gcn", "opencl", "ocml", "ockl", "oclc_finite_only_off", "oclc_daz_opt_off",
-            "oclc_correctly_rounded_sqrt_on", "oclc_unsafe_math_off", oclc_wavefrontsize_lib, "oclc_abi_version_400"
+            "oclc_correctly_rounded_sqrt_on", "oclc_unsafe_math_off", oclc_wavefrontsize_lib, "oclc_abi_version_500"
         ]
         libs += ['oclc_isa_version_' + self.arch.replace('gfx', '')]
         for lib in libs:
@@ -175,8 +177,8 @@ class HIPBackend(BaseBackend):
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
         if options.extern_libs:
-            for name, path in options.extern_libs:
-                llvm.link_extern_lib(llvm_mod, path)
+            paths = [path for (name, path) in options.extern_libs]
+            llvm.link_extern_libs(llvm_mod, paths)
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
         # Set kernel attributes
         kernels = [fn for fn in llvm_mod.get_functions() if not fn.is_declaration()]

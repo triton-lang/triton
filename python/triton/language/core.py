@@ -1202,6 +1202,8 @@ def _shape_check_impl(shape):
             raise TypeError(f"Shape element {i} must have type `constexpr`")
         if not isinstance(d.value, int):
             raise TypeError(f"Shape element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
+        if d.value & (d.value - 1) != 0:
+            raise ValueError(f"Shape element {i} must be a power of 2")
     return [_constexpr_to_value(x) for x in shape]
 
 
@@ -1486,7 +1488,8 @@ def expand_dims(input, axis, _builder=None):
 
 
 @builtin
-def dot(input, other, acc=None, allow_tf32=None, max_num_imprecise_acc=None, out_dtype=float32, _builder=None):
+def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_imprecise_acc=None, out_dtype=float32,
+        _builder=None):
     """
     Returns the matrix product of two blocks.
 
@@ -1496,16 +1499,25 @@ def dot(input, other, acc=None, allow_tf32=None, max_num_imprecise_acc=None, out
     :type input: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
     :param other: The second tensor to be multiplied.
     :type other: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
+    :param input_precision: How to exercise the Tenors cores for f32 x f32. If
+      the device does not have Tensor Cores or the inputs are not of dtype f32,
+      this option is ignored.  For devices that do have tensor cores, the
+      default precision is tf32.
+    :param allow_tf32: *Deprecated.*  If true, input_precision is set to "tf32".
+      Only one of :code:`input_precision` and :code:`allow_tf32` can be
+      specified (i.e. at least one must be :code:`None`).
+    :type other: string. Available options for nvidia: :code:`"tf32"`, :code:`"tf32x3"`, :code:`"ieee"`. Default: :code:`"tf32"`. Avaliable options for amd: :code:`"ieee"`.
     """
-    if allow_tf32 is None:
-        if get_bool_env_var("TRITON_F32_DEFAULT"):
-            allow_tf32 = False
-        else:
-            allow_tf32 = True
-    allow_tf32 = _constexpr_to_value(allow_tf32)
+    assert input_precision is None or allow_tf32 is None, "Only one of input_precision and allow_tf32 can be specified"
+    if input_precision is None:
+        supports_tf32 = _builder and "tf32" in _builder.options.allowed_dot_input_precisions
+        default_precision = "tf32" if (supports_tf32 and (allow_tf32 or allow_tf32 is None)) else "ieee"
+        input_precision = os.getenv("TRITON_F32_DEFAULT", default_precision)
+
+    input_precision = _constexpr_to_value(input_precision)
     out_dtype = _constexpr_to_value(out_dtype)
     max_num_imprecise_acc = _constexpr_to_value(max_num_imprecise_acc)
-    return semantic.dot(input, other, acc, allow_tf32, max_num_imprecise_acc, out_dtype, _builder)
+    return semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype, _builder)
 
 
 # -----------------------
@@ -2039,7 +2051,7 @@ def associative_scan(input, axis, combine_fn, reverse=False, _builder=None, _gen
 @_tensor_member_fn
 @builtin
 def histogram(input, num_bins, _builder=None, _generator=None):
-    """computes an histogram based on input tensor with num_bins bins the bins have a width of 1 and start at 0.
+    """computes an histogram based on input tensor with num_bins bins, the bins have a width of 1 and start at 0.
 
     :param input: the input tensor
     :param num_bins: number of histogram bins
