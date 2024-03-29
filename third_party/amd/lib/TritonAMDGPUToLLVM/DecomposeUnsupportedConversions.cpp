@@ -4,6 +4,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Patterns.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <numeric>
 
@@ -130,38 +131,15 @@ struct DecomposeUnsupportedAMDConversions
           DecomposeUnsupportedAMDConversions> {
   void runOnOperation() override {
     ModuleOp mod = getOperation();
-
-    triton::gpu::decomposeSplatOpToSharedLayoutConversion(mod);
-
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    /* -------------------------------- */
-    // Replace `mfma -> dot_op` with `mfma -> blocked -> dot_op`
-    // unless certain conditions are met
-    /* -------------------------------- */
-    mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
-      OpBuilder builder(cvtOp);
-      auto srcType = cvtOp.getSrc().getType();
-      auto dstType = cvtOp.getType();
-      auto srcMfma =
-          srcType.getEncoding().dyn_cast<triton::gpu::AMDMfmaEncodingAttr>();
-      auto dstDotOp =
-          dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
-      if (srcMfma && dstDotOp && !isMfmaToDotShortcut(srcType, dstType)) {
-        auto tmpType = RankedTensorType::get(
-            dstType.getShape(), dstType.getElementType(),
-            triton::gpu::BlockedEncodingAttr::get(
-                mod.getContext(), srcType.getShape(), getSizePerThread(srcMfma),
-                getOrder(srcMfma), numWarps, threadsPerWarp, numCTAs));
-        auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
-            cvtOp.getLoc(), tmpType, cvtOp.getSrc());
-        auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
-            cvtOp.getLoc(), dstType, tmp);
-        cvtOp.replaceAllUsesWith(newConvert.getResult());
-        cvtOp.erase();
-      }
-    });
+
+    triton::gpu::decomposeSplatOpToSharedLayoutConversion(mod);
+
+    triton::gpu::decomposeTensorCoreToDotLayoutConversion<
+        triton::gpu::AMDMfmaEncodingAttr>(mod, isMfmaToDotShortcut);
+
     /* -------------------------------- */
     // Replace `wmma -> dot_op` with `wmma -> blocked -> dot_op`
     /* -------------------------------- */
@@ -270,36 +248,6 @@ struct DecomposeUnsupportedAMDConversions
     });
 
     triton::gpu::decomposeBlockedToDotLayoutConversion(mod);
-
-    /* -------------------------------- */
-    // Replace `blocked -> dot_op` with `blocked -> shared -> dot_op`
-    // because the codegen doesn't handle `blocked -> dot_op` directly
-    /* -------------------------------- */
-    mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
-      OpBuilder builder(cvtOp);
-      auto srcType = cvtOp.getSrc().getType().cast<RankedTensorType>();
-      auto dstType = cvtOp.getType().cast<RankedTensorType>();
-      auto srcBlocked =
-          srcType.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
-      auto dstDotOp =
-          dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
-      if (srcBlocked && dstDotOp) {
-        auto tmpType = triton::MemDescType::get(
-            dstType.getShape(), dstType.getElementType(),
-            triton::gpu::SharedEncodingAttr::get(
-                mod.getContext(), dstDotOp, srcType.getShape(),
-                srcBlocked.getOrder(), srcBlocked.getCTALayout(),
-                srcType.getElementType()));
-        auto tmp = builder.create<triton::gpu::LocalAllocOp>(
-            cvtOp.getLoc(), tmpType, cvtOp.getSrc());
-        addAttrs(tmp, cvtOp->getAttrs());
-        auto newConvert = builder.create<triton::gpu::LocalLoadOp>(
-            cvtOp.getLoc(), dstType, tmp);
-        addAttrs(newConvert, cvtOp->getAttrs());
-        cvtOp.replaceAllUsesWith(newConvert.getResult());
-        cvtOp.erase();
-      }
-    });
 
     // promote reduce ops
     mod.walk([&](triton::ReduceOp op) -> void {

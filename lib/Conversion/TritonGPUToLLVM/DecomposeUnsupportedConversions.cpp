@@ -1,6 +1,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Patterns.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 using namespace mlir;
@@ -42,6 +43,44 @@ void decomposeSplatOpToSharedLayoutConversion(ModuleOp module) {
     }
   });
 }
+
+template <typename TensorCoreEncodingAttr>
+void decomposeTensorCoreToDotLayoutConversion(ModuleOp module,
+                                              ShortcutFn shortcutFn) {
+  int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(module);
+  int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(module);
+  int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(module);
+
+  module.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
+    OpBuilder builder(cvtOp);
+    auto srcType = cvtOp.getSrc().getType().cast<RankedTensorType>();
+    auto dstType = cvtOp.getType().cast<RankedTensorType>();
+    auto srcMma = srcType.getEncoding().dyn_cast<TensorCoreEncodingAttr>();
+    auto dstDotOp =
+        dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+    if (srcMma && dstDotOp && !shortcutFn(srcType, dstType)) {
+      auto tmpType = RankedTensorType::get(
+          dstType.getShape(), dstType.getElementType(),
+          triton::gpu::BlockedEncodingAttr::get(
+              module.getContext(), srcType.getShape(), getSizePerThread(srcMma),
+              getOrder(srcMma), numWarps, threadsPerWarp, numCTAs));
+      auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
+          cvtOp.getLoc(), tmpType, cvtOp.getSrc());
+      addAttrs(tmp, cvtOp->getAttrs());
+      auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
+          cvtOp.getLoc(), dstType, tmp);
+      addAttrs(newConvert, cvtOp->getAttrs());
+      cvtOp.replaceAllUsesWith(newConvert.getResult());
+      cvtOp.erase();
+    }
+  });
+}
+
+template void decomposeTensorCoreToDotLayoutConversion<
+    triton::gpu::NvidiaMmaEncodingAttr>(ModuleOp, ShortcutFn);
+template void
+    decomposeTensorCoreToDotLayoutConversion<triton::gpu::AMDMfmaEncodingAttr>(
+        ModuleOp, ShortcutFn);
 
 void decomposeBlockedToDotLayoutConversion(ModuleOp module) {
   int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(module);
