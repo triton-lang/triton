@@ -17,11 +17,11 @@ namespace triton {
 #define GEN_PASS_DECL
 #include "nvidia/include/TritonNVIDIAGPUToLLVM/Passes.h.inc"
 
-namespace gpu {
+namespace NVIDIA {
 std::unique_ptr<OperationPass<ModuleOp>>
 createDecomposeUnsupportedConversionsPass();
 
-} // namespace gpu
+} // namespace NVIDIA
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass();
 std::unique_ptr<OperationPass<ModuleOp>>
