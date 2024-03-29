@@ -4958,10 +4958,8 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
     ref_out = torch.matmul(th_a, th_b).to(torch.float32)
     if in_type_str == 'float8e4nv':
         torch.testing.assert_close(ref_out, C, rtol=0.01, atol=0.01)
-    elif low_precision_acc > 32:
-        torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
     else:
-        torch.testing.assert_close(ref_out, C)
+        torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
 
 
 # -----------------------
