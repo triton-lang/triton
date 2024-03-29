@@ -177,8 +177,8 @@ class HIPBackend(BaseBackend):
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
         if options.extern_libs:
-            for name, path in options.extern_libs:
-                llvm.link_extern_lib(llvm_mod, path)
+            paths = [path for (name, path) in options.extern_libs]
+            llvm.link_extern_libs(llvm_mod, paths)
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
         # Set kernel attributes
         kernels = [fn for fn in llvm_mod.get_functions() if not fn.is_declaration()]
