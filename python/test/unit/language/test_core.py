@@ -14,7 +14,7 @@ from numpy.random import RandomState
 
 import triton
 import triton.language as tl
-from triton.runtime.jit import JITFunction, TensorWrapper, reinterpret
+from triton.runtime.jit import TensorWrapper, reinterpret
 
 
 def is_interpreter():
@@ -2304,21 +2304,24 @@ def test_histogram(M, N, device):
 @pytest.mark.parametrize("BLOCK_N", [32, 64, 128])
 @pytest.mark.parametrize("N", [512, 1024, 2048])
 @pytest.mark.parametrize("num_pid_n", [2, 4])
-def test_locality(op, BLOCK_N, N, num_pid_n, device):
+def test_optimize_thread_locality(op, BLOCK_N, N, num_pid_n, device):
 
     @triton.jit
-    def kernel(X, Y, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+    def kernel(X, Y, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, NUM_PID_N: tl.constexpr):
         start_m = tl.program_id(0)
         pid_n = tl.program_id(1)
-        num_pid_n = tl.num_programs(1)
         local = INITIALIZE_PATCH
         off_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
-        for start_n in range(pid_n, tl.cdiv(N, BLOCK_N), num_pid_n):
+        for start_n in range(pid_n, tl.cdiv(N, BLOCK_N), NUM_PID_N):
             off_n = start_n * BLOCK_N + tl.arange(0, BLOCK_N)
             Xs = X + off_m[:, None] * N + off_n[None, :]
             x = tl.load(Xs)
             local = ACCUMULATE_PATCH
-        tl.store(Y + off_m * num_pid_n + pid_n, local)
+        tl.store(Y + off_m * NUM_PID_N + pid_n, local)
+        # the following segfaults AMD backend following #3492
+        # really unclear why; the llvm-ir and kernel arguments are
+        # identical !
+        # tl.store(Y + off_m * tl.num_programs(1) + pid_n, local)
 
     initialize_patch = {
         'sum': 'tl.zeros([BLOCK_M], dtype=tl.float32)',
@@ -2340,7 +2343,7 @@ def test_locality(op, BLOCK_N, N, num_pid_n, device):
     BLOCK_M = 32
     x = torch.randn((BLOCK_M, N), dtype=torch.float32, device=device)
     y = torch.randn((BLOCK_M, num_pid_n), dtype=torch.float32, device=device)
-    h = kernel[(1, num_pid_n, 1)](x, y, N, BLOCK_M, BLOCK_N)
+    h = kernel[(1, num_pid_n, 1)](x, y, N, BLOCK_M, BLOCK_N, NUM_PID_N=num_pid_n)
     if not is_interpreter():
         assert h.asm['ttgir'].count(
             '"tt.reduce"') == 2, "tt.reduce should be called twice, otherwise the optimization didn't work"
@@ -3764,23 +3767,18 @@ def test_pointer_arguments(device):
                                                (2**31, 'i64'), (2**32 - 1, 'i64'), (2**32, 'i64'), (2**63 - 1, 'i64'),
                                                (-2**63, 'i64'), (2**63, 'u64'), (2**64 - 1, 'u64')])
 def test_value_specialization(value: int, value_type: str, device) -> None:
-    spec_type = None
 
-    def cache_hook(*args, **kwargs):
-        nonlocal spec_type
-        spec_type = kwargs["compile"]["signature"][0]
+    def repr(specialization):
+        spec_type = specialization.signature["VALUE"]
+        return f"kernel_{spec_type}"
 
-    JITFunction.cache_hook = cache_hook
-
-    @triton.jit
+    @triton.jit(repr=repr)
     def kernel(VALUE, X):
         pass
 
     x = torch.tensor([3.14159], device=device)
-    pgm = kernel[(1, )](value, x)
-
-    JITFunction.cache_hook = None
-    assert spec_type == value_type
+    h = kernel[(1, )](value, x)
+    assert value_type in h.name
 
 
 # --------------------
