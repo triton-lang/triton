@@ -202,8 +202,8 @@ class CUDABackend(BaseBackend):
         llvm_mod = llvm.to_module(mod, context)
         nvidia.set_nvvm_reflect_ftz(llvm_mod)
         if options.extern_libs:
-            for name, path in options.extern_libs:
-                llvm.link_extern_lib(llvm_mod, path)
+            paths = [path for (name, path) in options.extern_libs]
+            llvm.link_extern_libs(llvm_mod, paths)
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
         # Set kernel attributes
         # kernels = [fn for fn in llvm_mod.get_functions() if fn.has_public_visibility() and not fn.is_declaration()]
