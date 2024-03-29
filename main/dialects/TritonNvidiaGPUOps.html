@@ -162,7 +162,7 @@
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.dot_async` $a`,` $b`,` $c attr-dict `:` type($a) `*` type($b) `-&gt;` type($d)
 </pre></div>
 </div>
-<p>$d = matrix_multiply($a, $b) + $c</p>
+<p>$d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
@@ -170,7 +170,10 @@
 <h3>Attributes:<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>allowTF32</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+<tr><td><code>inputPrecision</code></td><td>::mlir::triton::InputPrecisionAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2</summary>{{% markdown %}}Enum cases:
+* tf32 (`TF32`)
+* tf32x3 (`TF32x3`)
+* ieee (`IEEE`){{% /markdown %}}</details></td></tr>
 <tr><td><code>maxNumImpreciseAcc</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 </section>

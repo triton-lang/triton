@@ -481,7 +481,12 @@ Syntax:
 operation ::= `tt.dot` $a`,` $b`,` $c attr-dict `:` type($a) `*` type($b) `->` type($d)
 ```
 
-$d = matrix_multiply($a, $b) + $c
+$d = matrix_multiply($a, $b) + $c. $inputPrecision describes how to exercise the TC
+when the inputs are f32. It can be one of: tf32, tf32x3, ieee.
+tf32: use TC with tf32 ops.
+tf32x3: implement the 3xTF32 trick. For more info see the pass in F32DotTC.cpp
+ieee: don't use TC, implement dot in software.
+If the GPU does not have Tensor cores or the inputs are not f32, this flag is ignored.
 
 Traits: `AlwaysSpeculatableImplTrait`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
@@ -493,7 +498,10 @@ Effects: `MemoryEffects::Effect{}`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>allowTF32</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+<tr><td><code>inputPrecision</code></td><td>::mlir::triton::InputPrecisionAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2</summary>{{% markdown %}}Enum cases:
+* tf32 (`TF32`)
+* tf32x3 (`TF32x3`)
+* ieee (`IEEE`){{% /markdown %}}</details></td></tr>
 <tr><td><code>maxNumImpreciseAcc</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 

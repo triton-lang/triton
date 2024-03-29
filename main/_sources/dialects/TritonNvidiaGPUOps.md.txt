@@ -39,7 +39,7 @@ Syntax:
 operation ::= `triton_nvidia_gpu.dot_async` $a`,` $b`,` $c attr-dict `:` type($a) `*` type($b) `->` type($d)
 ```
 
-$d = matrix_multiply($a, $b) + $c
+$d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp
 
 Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
 
@@ -51,7 +51,10 @@ Effects: `MemoryEffects::Effect{}`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>allowTF32</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+<tr><td><code>inputPrecision</code></td><td>::mlir::triton::InputPrecisionAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2</summary>{{% markdown %}}Enum cases:
+* tf32 (`TF32`)
+* tf32x3 (`TF32x3`)
+* ieee (`IEEE`){{% /markdown %}}</details></td></tr>
 <tr><td><code>maxNumImpreciseAcc</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 
