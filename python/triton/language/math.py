@@ -62,6 +62,23 @@ def _add_math_2arg_docstr(name: str) -> core.Callable[[T], T]:
 
     return _decorator
 
+def _add_math_3arg_docstr(name: str) -> core.Callable[[T], T]:
+
+    def _decorator(func: T) -> T:
+        docstr = """
+    Computes the element-wise {name} of :code:`x`, :code:`y`, and :code:`z`.
+
+    :param x: the input values
+    :type x: Block
+    :param y: the input values
+    :type y: Block
+    :param z: the input values
+    :type z: Block
+    """
+        func.__doc__ = docstr.format(name=name)
+        return func
+
+    return _decorator
 
 @core.builtin
 @_check_dtype(dtypes=["int32", "int64", "uint32", "uint64"])
@@ -202,6 +219,7 @@ def floor(x, _builder=None):
 
 
 @core.builtin
+@_add_math_3arg_docstr("fused multiply-add")
 def fma(x, y, z, _builder=None):
     x = core._to_tensor(x, _builder)
     y = core._to_tensor(y, _builder)

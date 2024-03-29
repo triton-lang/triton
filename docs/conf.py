@@ -136,6 +136,7 @@ extensions = [
     'sphinx.ext.coverage',
     'sphinx.ext.napoleon',
     'sphinx_multiversion',
+    'sphinx.ext.autosectionlabel',
     'myst_parser',
 ]
 autosummary_generate = True
