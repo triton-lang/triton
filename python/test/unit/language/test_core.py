@@ -1474,23 +1474,24 @@ def test_atomic_cas(sem, num_ctas, device):
     assert f"atom.global.{sem_str}" in h.asm["ptx"]
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_tensor_atomic_cas(sem, num_ctas, device):
 
     @triton.jit
-    def change_value(X, BLOCK_SIZE: tl.constexpr):
+    def change_value(X, BLOCK_SIZE: tl.constexpr, sem: tl.constexpr):
         pid = tl.program_id(axis=0)
         block_start = pid * BLOCK_SIZE
         offsets = block_start + tl.arange(0, BLOCK_SIZE)
         t1 = tl.full((BLOCK_SIZE, ), 0, dtype=tl.int64)
         t2 = tl.full((BLOCK_SIZE, ), 2, dtype=tl.int64)
-        tl.atomic_cas(X + offsets, t1, t2)
+        tl.atomic_cas(X + offsets, t1, t2, sem=sem)
 
     X = torch.tensor([0, 1, 0, 1, 0, 1, 0, 1], device=device, dtype=torch.int64)
     Y = torch.tensor([2, 1, 2, 1, 2, 1, 2, 1], device=device, dtype=torch.int64)
 
-    change_value[(2, )](X, 4)
+    change_value[(2, )](X, 4, sem)
     assert (torch.equal(X, Y))
 
 

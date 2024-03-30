@@ -1121,7 +1121,7 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
   if (triton::PointerType ty = value.getType().dyn_cast<triton::PointerType>())
     if (TensorType elemTy = ty.getPointeeType().dyn_cast<TensorType>())
       rank = elemTy.getRank();
-
+    
   DimVectorT knownContiguity(rank, 1);
   DimVectorT knownDivisibility(rank, 1);
   DimVectorT knownConstancy(rank, 1);
@@ -1141,6 +1141,16 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
                                    &knownContiguity, &knownDivisibility,
                                    &knownConstancy);
   } else if (Operation *op = value.getDefiningOp()) {
+    if (isa<RegionBranchOpInterface>(op)) {
+      // scf::ForOp, scf::IfOp, scf::WhileOp
+      // Control flow operations are initialized with "unknown" state:
+      // the maximum possible divisibility, contiguity, and constancy.
+      knownDivisibility = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
+      knownConstancy = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
+      knownContiguity = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
+    }
+    // Other operations are conservatively initialized with the lowest possible
+    // divisibility, contiguity, and constancy.
     if (Attribute attr = op->getDiscardableAttr("tt.divisibility")) {
       auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
       knownDivisibility = DimVectorT(vals.begin(), vals.end());

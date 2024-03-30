@@ -8,6 +8,7 @@ import triton.language as tl
 from dataclasses import dataclass
 from .errors import InterpreterError
 from .._C.libtriton import interpreter as _interpreter
+from .._C.libtriton import ir as _ir
 
 
 class TensorHandle:
@@ -436,31 +437,36 @@ class InterpreterBuilder:
             block_type = tl.block_type(arg.dtype, shape)
             return TensorHandle(np.full(shape, arg.data, dtype=_get_np_dtype(arg.dtype)), block_type)
 
-    # def create_atomic_cas(self, ptr, cmp, val, sem):
-    #     pass
+    def create_atomic_cas(self, ptr, cmp, val, sem, scope):
+        ir_sem_to_interpreter_sem = {
+            _ir.MEM_SEMANTIC.ACQUIRE: _interpreter.MEM_SEMANTIC.ACQUIRE,
+            _ir.MEM_SEMANTIC.RELEASE: _interpreter.MEM_SEMANTIC.RELEASE,
+            _ir.MEM_SEMANTIC.RELAXED: _interpreter.MEM_SEMANTIC.RELAXED,
+            _ir.MEM_SEMANTIC.ACQUIRE_RELEASE: _interpreter.MEM_SEMANTIC.ACQUIRE_RELEASE,
+        }
+        if sem not in ir_sem_to_interpreter_sem:
+            raise ValueError(f"unsupported semantic {sem}")
+        return TensorHandle(_interpreter.atomic_cas(ptr.data, cmp.data, val.data, ir_sem_to_interpreter_sem[sem]), cmp.dtype)
 
-    # def create_atomic_rmw(self, rmwOp, ptr, val, mask, sem):
-    #     pass
-
-    # def create_extern_elementwise(self, libName, libPath, symbol, argList, retType, isPure):
-    #     pass
-    
-    def create_inline_asm(self, inlineAsm, constraints, values, type, isPure, pack):
+    def create_atomic_rmw(self, rmwOp, ptr, val, mask, sem):
         pass
 
+    def create_extern_elementwise(self, libName, libPath, symbol, argList, retType, isPure):
+        raise NotImplementedError("extern_elementwise not supported in interpreter mode")
+
+    def create_inline_asm(self, inlineAsm, constraints, values, type, isPure, pack):
+        raise NotImplementedError("inline_asm not supported in interpreter mode")
+
     def create_print(self, prefix, values):
+        # Interpreter's device_print function has a different format than Triton's device_print
         msg = f"({self.grid_idx[0]}, {self.grid_idx[1]}, {self.grid_idx[2]})"
         if prefix:
             msg += f" {prefix}"
-        if not isinstance(values, tl.tensor) or not values.shape:
-            msg += f" idx (): {values.data}"
-        else:
-            for i in range(values.data.size):
-                idx = np.unravel_index(i, values.data.shape)
-                idx_msg = msg + f" idx {idx}: {values.data[idx]}"
-                print(idx_msg)
+        for value in values:
+            print(msg + f" {value.data}")
 
     def create_assert(self, condition, message, fileName, funcName, lineNo):
+        # Interpreter's device_assert function has a different format than Triton's device_assert
         assert condition, f"{message} in {fileName}:{funcName}:{lineNo}"
 
     def create_barrier(self):
@@ -491,10 +497,10 @@ class InterpreterBuilder:
 
 
 def _patch_attr(obj, name, member, builder):
-    new_member = lambda *args, member=member, **kwargs: (member(*args, **
-                                                                {k: v
-                                                                 for k, v in kwargs.items()
-                                                                 if k != "_builder"}, _builder=builder))
+    new_member = lambda *args, member=member, **kwargs: (member(*args,
+                                                                ** {k: v
+                                                                    for k, v in kwargs.items()
+                                                                    if k != "_builder"}, _builder=builder))
     setattr(obj, name, new_member)
 
 
@@ -789,6 +795,7 @@ def _patch_lang_core(lang):
     lang.range = _new_range
     lang.static_range = _new_range
     lang.static_assert = _new_static_assert
+    lang.static_print = print
     lang.dtype.to_ir = _new_to_ir
 
     _patch_reduce_scan()
