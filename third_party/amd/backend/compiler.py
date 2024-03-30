@@ -53,9 +53,13 @@ class HIPOptions:
         warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch else 64
         object.__setattr__(self, 'warp_size', warp_size)
         oclc_wavefrontsize_lib = "oclc_wavefrontsize64_on" if self.warp_size == 64 else "oclc_wavefrontsize64_off"
+        # Note that the oclc_abi_version_*.bc linked in should be consistent with
+        # the amdhsa_code_object_version attribute attached to the LLVM module.
+        # TODO(antiagainst): directly inject the control constants into the LLVM
+        # module to have one place for this and less device bc file dependency.
         libs = [
             "cuda2gcn", "opencl", "ocml", "ockl", "oclc_finite_only_off", "oclc_daz_opt_off",
-            "oclc_correctly_rounded_sqrt_on", "oclc_unsafe_math_off", oclc_wavefrontsize_lib, "oclc_abi_version_500"
+            "oclc_correctly_rounded_sqrt_on", "oclc_unsafe_math_off", oclc_wavefrontsize_lib, "oclc_abi_version_400"
         ]
         libs += ['oclc_isa_version_' + self.arch.replace('gfx', '')]
         for lib in libs:
@@ -177,6 +181,9 @@ class HIPBackend(BaseBackend):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
+        # Note that the code object version here should be consistent with the
+        # linked oclc_abi_version_*.bc file.
+        llvm_mod.add_flag(llvm.MODULE_FLAG_BEHAVIOR_ERROR, "amdhsa_code_object_version", 400)
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
