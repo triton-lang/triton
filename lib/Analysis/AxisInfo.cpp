@@ -1150,7 +1150,7 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
       knownContiguity = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
     }
     // Other operations are conservatively initialized with the lowest possible
-    // divisibility, contiguity, and constancy.
+    // divisibility, contiguity, and constancy unless they have specified.
     if (Attribute attr = op->getDiscardableAttr("tt.divisibility")) {
       auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
       knownDivisibility = DimVectorT(vals.begin(), vals.end());
