@@ -161,11 +161,15 @@ class HIPBackend(BaseBackend):
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         pm.run(mod)
+
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttgpuir.add_allocate_shared_memory(pm)
         amd.passes.ttgpuir.add_to_llvmir(pm)
+        passes.common.add_canonicalizer(pm)
+        passes.common.add_cse(pm)
         pm.run(mod)
+
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.convert.add_scf_to_cf(pm)
@@ -177,6 +181,7 @@ class HIPBackend(BaseBackend):
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
         pm.run(mod)
+
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
         context = llvm.context()
@@ -184,19 +189,24 @@ class HIPBackend(BaseBackend):
         # Note that the code object version here should be consistent with the
         # linked oclc_abi_version_*.bc file.
         llvm_mod.add_flag(llvm.MODULE_FLAG_BEHAVIOR_ERROR, "amdhsa_code_object_version", 400)
+
+        # Set kernel attributes first given this may affect later optimizations.
+        kernels = [fn for fn in llvm_mod.get_functions() if not fn.is_declaration()]
+        # The public kernel should be kernel 0.
+        kernels[0].set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
+        kernels[0].add_fn_attr("amdgpu-flat-work-group-size", f"1,{options.num_warps*options.warp_size}")
+        kernels[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
+        kernels[0].add_fn_attr("denormal-fp-math-f32", "preserve-sign")
+
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
+
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
-        # Set kernel attributes
-        kernels = [fn for fn in llvm_mod.get_functions() if not fn.is_declaration()]
-        # The public kernel should be kernel 0
-        kernels[0].set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
-        kernels[0].add_fn_attr("amdgpu-flat-work-group-size", f"1, {options.num_warps*options.warp_size}")
-        kernels[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
-        kernels[0].add_fn_attr("denormal-fp-math-f32", "preserve-sign")
+
         # Get some metadata
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")
+
         ret = str(llvm_mod)
         return ret
 
