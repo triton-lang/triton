@@ -49,6 +49,7 @@
       ~tensor.ravel
       ~tensor.reduce
       ~tensor.reshape
+      ~tensor.rsqrt
       ~tensor.sigmoid
       ~tensor.sin
       ~tensor.softmax

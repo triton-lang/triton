@@ -96,15 +96,22 @@ Math Ops
     cdiv
     clamp
     cos
+    div_rn
+    erf
     exp
+    exp2
+    fma
     fdiv
+    floor
     log
+    log2
     maximum
     minimum
     sigmoid
     sin
     softmax
     sqrt
+    sqrt_rn
     umulhi
 
 
@@ -172,6 +179,7 @@ Iterators
     :toctree: generated
     :nosignatures:
 
+    range
     static_range
 
 
