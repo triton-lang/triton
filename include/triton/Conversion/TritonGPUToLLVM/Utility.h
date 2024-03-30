@@ -45,8 +45,8 @@ using namespace mlir::triton;
 #define or_(...) rewriter.create<LLVM::OrOp>(loc, __VA_ARGS__)
 #define bitcast(val__, type__)                                                 \
   rewriter.create<LLVM::BitcastOp>(loc, type__, val__)
-#define addrspacecast(val__, type__)                                           \
-  rewriter.create<LLVM::AddrSpaceCastOp>(loc, type__, val__)
+#define addrspacecast(...)                                                     \
+  rewriter.create<LLVM::AddrSpaceCastOp>(loc, __VA_ARGS__)
 #define gep(...) rewriter.create<LLVM::GEPOp>(loc, __VA_ARGS__)
 #define ptr_ty(...) LLVM::LLVMPointerType::get(__VA_ARGS__)
 #define insert_val(...) rewriter.create<LLVM::InsertValueOp>(loc, __VA_ARGS__)
@@ -56,7 +56,7 @@ using namespace mlir::triton;
 #define extract_element(...)                                                   \
   rewriter.create<LLVM::ExtractElementOp>(loc, __VA_ARGS__)
 #define load(...) rewriter.create<LLVM::LoadOp>(loc, __VA_ARGS__)
-#define store(val, ptr) rewriter.create<LLVM::StoreOp>(loc, val, ptr)
+#define store(...) rewriter.create<LLVM::StoreOp>(loc, __VA_ARGS__)
 #define load_dsmem(...) LLVM::createLoadDSmem(loc, rewriter, __VA_ARGS__)
 #define store_dsmem(...) LLVM::createStoreDSmem(loc, rewriter, __VA_ARGS__)
 #define fcmp_ogt(lhs, rhs)                                                     \
@@ -115,9 +115,11 @@ using namespace mlir::triton;
 #define array_ty(elemTy, count) LLVM::LLVMArrayType::get(elemTy, count)
 
 // Constants
+#define f16_val(...) LLVM::createConstantF16(loc, rewriter, __VA_ARGS__)
 #define f32_val(...) LLVM::createConstantF32(loc, rewriter, __VA_ARGS__)
 #define f64_val(...) LLVM::createConstantF64(loc, rewriter, __VA_ARGS__)
 #define i32_val(...) LLVM::createConstantI32(loc, rewriter, __VA_ARGS__)
+#define i64_val(...) LLVM::createConstantI64(loc, rewriter, __VA_ARGS__)
 #define int_val(width, val)                                                    \
   LLVM::createLLVMIntegerConstant(rewriter, loc, width, val)
 #define tid_val() getThreadId(rewriter, loc)
