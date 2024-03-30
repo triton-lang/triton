@@ -117,6 +117,20 @@ void init_triton_llvm(py::module &&m) {
           },
           py::keep_alive<0, 1>());
 
+  // Module Flag behavior. See
+  // https://llvm.org/doxygen/classllvm_1_1Module.html#a0a5c55e12c97b80021330fe82b642293
+  // for details.
+  py::class_<llvm::Module::ModFlagBehavior>(m, "module_flag_behavior",
+                                            py::module_local());
+  m.attr("MODULE_FLAG_BEHAVIOR_ERROR") = (llvm::Module::Error);
+  m.attr("MODULE_FLAG_BEHAVIOR_WARNING") = (llvm::Module::Warning);
+  m.attr("MODULE_FLAG_BEHAVIOR_REQUIRE") = (llvm::Module::Require);
+  m.attr("MODULE_FLAG_BEHAVIOR_OVERRIDE") = (llvm::Module::Override);
+  m.attr("MODULE_FLAG_BEHAVIOR_APPEND") = (llvm::Module::Append);
+  m.attr("MODULE_FLAG_BEHAVIOR_APPEND_UNIQUE") = (llvm::Module::AppendUnique);
+  m.attr("MODULE_FLAG_BEHAVIOR_MAX") = (llvm::Module::Max);
+  m.attr("MODULE_FLAG_BEHAVIOR_MIN") = (llvm::Module::Min);
+
   py::class_<llvm::Module>(m, "module", py::module_local())
       .def(
           "__str__",
@@ -132,7 +146,12 @@ void init_triton_llvm(py::module &&m) {
           [](llvm::Module *mod) -> llvm::Module::FunctionListType & {
             return mod->getFunctionList();
           },
-          ret::reference_internal);
+          ret::reference_internal)
+      .def("add_flag",
+           [](llvm::Module *mod, llvm::Module::ModFlagBehavior behavior,
+              std::string &key, uint32_t value) {
+             return mod->addModuleFlag(behavior, key, value);
+           });
 
   py::class_<llvm::Function>(m, "function", py::module_local())
       .def("set_calling_conv", &llvm::Function::setCallingConv)
