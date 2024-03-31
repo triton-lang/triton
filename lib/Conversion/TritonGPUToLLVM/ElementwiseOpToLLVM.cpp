@@ -769,6 +769,7 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(math::CosOp, math::CosOp)
   POPULATE_UNARY_OP(math::SinOp, math::SinOp)
   POPULATE_UNARY_OP(math::SqrtOp, math::SqrtOp)
+  POPULATE_UNARY_OP(math::RsqrtOp, math::RsqrtOp)
   POPULATE_UNARY_OP(math::ExpOp, math::ExpOp)
   POPULATE_UNARY_OP(math::Exp2Op, math::Exp2Op)
   POPULATE_UNARY_OP(math::ErfOp, math::ErfOp)

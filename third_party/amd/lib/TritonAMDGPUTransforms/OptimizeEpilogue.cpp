@@ -48,7 +48,7 @@ bool isOneOperandElementwiseOp(Operation *op) {
                 math::CtPopOp, math::ErfOp, math::ExpOp, math::Exp2Op,
                 math::ExpM1Op, math::FloorOp, math::LogOp, math::Log10Op,
                 math::Log1pOp, math::Log2Op, math::RsqrtOp, math::SqrtOp,
-                math::TanhOp>(op))
+                math::RsqrtOp, math::TanhOp>(op))
     return true;
   if (llvm::isa<triton::IntToPtrOp, triton::PtrToIntOp, triton::BitcastOp,
                 triton::FpToFpOp>(op))

@@ -1170,3 +1170,54 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     tt.return %54#0 : tensor<16x256xf32, #mma>
   }
 }
+
+
+// -----
+
+// This test triggered some failure in the verifier, so we only
+// included a simple check for the kernel name.
+// CHECK-LABEL: @load_convert_layout
+#AL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#BL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#ALs0 = #triton_gpu.slice<{parent=#AL, dim=0}>
+#BLs0 = #triton_gpu.slice<{parent=#BL, dim=0}>
+#BLs1 = #triton_gpu.slice<{parent=#BL, dim=1}>
+#C = #triton_gpu.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
+#A = #triton_gpu.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
+#B = #triton_gpu.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
+
+module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+tt.func @load_convert_layout(%77: tensor<16x16xi64, #BL> {tt.divisibility=16: i32, tt.constancy=16: i32},
+                   %76: index,
+                   %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
+                   %75: tensor<16x!tt.ptr<i64>, #BLs1>,
+                   %78: tensor<16x16xi32, #AL> {tt.constancy=16: i32, tt.divisibility=16: i32},
+                   %60: tensor<16x16x!tt.ptr<f16>, #BL> {tt.divisibility=16: i32, tt.contiguity=16 : i32}) -> tensor<16x16xf32, #C>{
+  %1 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #BLs1>
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #C>
+  %cst_0 = arith.constant dense<2> : tensor<16xi32, #BLs1>
+  %c4_i32 = arith.constant 4 : i32
+  %c1 = arith.constant 1 : index
+  %c0 = arith.constant 0 : index
+  %c0_i64 = arith.constant 0 : i64
+  %c1_i32 = arith.constant 1 : i32
+  %c1_i32_splat = tt.splat %c1_i32 : i32 -> tensor<16xi32, #BLs1>
+  %15 = arith.cmpi slt, %1, %cst_0 : tensor<16xi32, #BLs1>
+  %79:3 = scf.for %arg18 = %c0 to %76 step %c1 iter_args(%arg19 = %cst, %arg20 = %49, %arg21 = %75) -> (tensor<16x16xf32, #C>, tensor<16x16x!tt.ptr<f16>, #AL>, tensor<16x!tt.ptr<i64>, #BLs1>) {
+    %82 = tt.load %arg20 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x16xf16, #AL>
+    %83 = tt.load %arg21, %15 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16xi64, #BLs1>
+    %84 = tt.expand_dims %83 {axis=1: i32}: tensor<16xi64, #BLs1> -> tensor<16x1xi64, #BL>
+    %850 = tt.broadcast %84 : tensor<16x1xi64, #BL> -> tensor<16x16xi64, #BL>
+    %85 = arith.muli %77, %850 : tensor<16x16xi64, #BL>
+    %86 = tt.addptr %60, %85 : tensor<16x16x!tt.ptr<f16>, #BL>, tensor<16x16xi64, #BL>
+    %87 = tt.load %86 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x16xf16, #BL>
+    %88 = triton_gpu.convert_layout %82 : tensor<16x16xf16, #AL> -> tensor<16x16xf16, #A>
+    %89 = triton_gpu.convert_layout %87 : tensor<16x16xf16, #BL> -> tensor<16x16xf16, #B>
+    %90 = tt.dot %88, %89, %arg19 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} : tensor<16x16xf16, #A> * tensor<16x16xf16, #B> -> tensor<16x16xf32, #C>
+    %91 = tt.addptr %arg20, %78 : tensor<16x16x!tt.ptr<f16>, #AL>, tensor<16x16xi32, #AL>
+    %92 = tt.addptr %arg21, %c1_i32_splat : tensor<16x!tt.ptr<i64>, #BLs1>, tensor<16xi32, #BLs1>
+    scf.yield %90, %91, %92 : tensor<16x16xf32, #C>, tensor<16x16x!tt.ptr<f16>, #AL>, tensor<16x!tt.ptr<i64>, #BLs1>
+  }
+  tt.return %79#0 : tensor<16x16xf32, #C>
+}
+}
