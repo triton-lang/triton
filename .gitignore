@@ -42,6 +42,7 @@ docs/_build/
 docs/python-api/generated/
 docs/dialects/
 docs/getting-started/tutorials
+docs/sg_execution_times.rst
 !python/tutorials/*.py
 !python/tutorials/*.rst
 

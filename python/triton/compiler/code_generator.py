@@ -1225,14 +1225,14 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns):
     constants = {cst_key(key): value for key, value in specialization.constants.items()}
     # visit kernel AST
     gscope = fn.__globals__.copy()
-    function_name = '_'.join([fn.__name__, kernel_suffix(specialization.signature.values(), attrs)])
+    function_name = fn.repr(specialization)
     tys = list(specialization.signature.values())
     new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for k in attrs.equal_to_1}
     new_attrs = {k: [("tt.divisibility", 16)] for k in attrs.divisible_by_16}
 
     all_constants = constants.copy()
     all_constants.update(new_constants)
-    arg_types = [str_to_ty(v) for k, v in specialization.signature.items() if k not in constants]
+    arg_types = [str_to_ty(v) for k, v in specialization.signature.items() if k not in specialization.constants]
     file_name, begin_line = _get_fn_file_line(fn)
 
     prototype = language.function_type([], arg_types)

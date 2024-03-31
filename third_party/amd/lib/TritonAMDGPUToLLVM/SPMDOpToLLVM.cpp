@@ -1,10 +1,9 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 
-namespace {
-
 using namespace mlir;
-using namespace mlir::triton;
+
+namespace {
 
 struct GetNumProgramsOpConversion
     : public ConvertOpToLLVMPattern<triton::GetNumProgramsOp> {
@@ -28,8 +27,8 @@ struct GetNumProgramsOpConversion
 
 } // namespace
 
-void AMD::populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                      RewritePatternSet &patterns,
-                                      PatternBenefit benefit) {
+void mlir::triton::AMD::populateSPMDOpToLLVMPattern(
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    PatternBenefit benefit) {
   patterns.add<GetNumProgramsOpConversion>(typeConverter, benefit);
 }

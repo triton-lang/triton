@@ -362,7 +362,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
         Value loadedValue = load(loadVecTy, loadAddress);
         for (int elemId = 0; elemId < elemsPerLoad; ++elemId) {
           Value elemVal = extract_element(elemTy, loadedValue, i32_val(elemId));
-          loadedValues.push_back(elemVal);      
+          loadedValues.push_back(elemVal);
         }
       }
     }

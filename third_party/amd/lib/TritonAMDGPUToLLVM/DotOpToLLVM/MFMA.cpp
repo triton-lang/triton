@@ -269,7 +269,8 @@ struct DotOpMFMAConversionHelper {
         Type ty = vec_ty(elemTy, kWidth);
         Value rawElems = undef(ty);
         for (int k = 0; k < kWidth; ++k) {
-          rawElems = insert_element(ty, rawElems, elems[kWidth * (n1 * i + j) + k], i32_val(k));
+          rawElems = insert_element(
+              ty, rawElems, elems[kWidth * (n1 * i + j) + k], i32_val(k));
         }
 
         Value convertedElems;
@@ -293,7 +294,7 @@ struct DotOpMFMAConversionHelper {
 
 } // namespace
 
-namespace AMD {
+namespace mlir::triton::AMD {
 LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           const LLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) {
@@ -325,6 +326,6 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   return helper.convertDot(op, adaptor);
 }
-} // namespace AMD
+} // namespace mlir::triton::AMD
 
 #endif // ifdef USE_ROCM

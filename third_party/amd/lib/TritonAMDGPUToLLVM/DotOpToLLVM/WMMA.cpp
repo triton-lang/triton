@@ -23,18 +23,13 @@
 
 #include "../PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
-
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 
-using namespace mlir;
-using namespace mlir::triton;
-
-namespace AMD {
+namespace mlir::triton::AMD {
 namespace {
 
 using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::SharedEncodingAttr;
 
 enum class WMMAInstrType : uint8_t {
   // D = AB + C;
@@ -253,4 +248,4 @@ LogicalResult convertWMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   return convertDot(op, adaptor, rewriter, typeConverter);
 }
-} // namespace AMD
+} // namespace mlir::triton::AMD
