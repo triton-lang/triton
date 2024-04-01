@@ -102,12 +102,14 @@ class ASTSource:
 
     def hash(self):
         sorted_sig = [v for k, v in sorted(self.signature.items())]
-        sorted_constants = [(k, v) for k, v in sorted(self.constants.items())]
+        # Note - we stringify the keys here to allow sorting to work for cases
+        # where constants have mixed int/str keys.
+        sorted_constants = sorted((str(k), v) for k, v in self.constants.items())
         key = f"{self.fn.cache_key}-{self.attrs.hash()}-{sorted_sig}-{sorted_constants}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
-    def make_ir(self, options, context):
-        return ast_to_ttir(self.fn, self, context=context, options=options)
+    def make_ir(self, options, codegen_fns, context):
+        return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns)
 
     def parse_options(self):
         return dict()
@@ -129,7 +131,7 @@ class IRSource:
     def hash(self):
         return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
-    def make_ir(self, options, context):
+    def make_ir(self, options, codegen_fns, context):
         module = ir.parse_mlir_module(self.path, context)
         module.context = context
         return module
@@ -261,8 +263,9 @@ def compile(src, target=None, options=None):
     context = ir.context()
     ir.load_dialects(context)
     backend.load_dialects(context)
+    codegen_fns = backend.get_codegen_implementation()
     try:
-        module = src.make_ir(options, context)
+        module = src.make_ir(options, codegen_fns, context)
     except Exception as e:
         filter_traceback(e)
         raise
@@ -293,6 +296,22 @@ def make_backend(target):
     return actives[0](target)
 
 
+class LazyDict:
+
+    def __init__(self, data):
+        self.data = data
+        self.extras = []
+
+    def get(self) -> None:
+        for func, args in self.extras:
+            self.data = self.data | func(*args)
+        self.extras.clear()
+        return self.data
+
+    def add(self, func, args):
+        self.extras.append((func, args))
+
+
 class CompiledKernel:
 
     # Hooks for external tools to monitor the execution of triton kernels
@@ -303,12 +322,12 @@ class CompiledKernel:
     def __init__(self, src, metadata_group, hash):
         from collections import namedtuple
         metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
-        self.metadata = json.loads(metadata_path.read_text())
-        KernelMetadata = namedtuple('KernelMetadata', sorted(list(self.metadata.keys())))
-        self.metadata = KernelMetadata(**self.metadata)
+        metadata = json.loads(metadata_path.read_text())
+        metadata['cluster_dims'] = tuple(metadata['cluster_dims'])
+        KernelMetadata = namedtuple('KernelMetadata', sorted(list(metadata.keys())))
+        self.metadata = KernelMetadata(**metadata)
         self.src = src
         self.hash = hash
-
         self.name = self.metadata.name
         # stores the text of each level of IR that was generated during compilation
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
@@ -343,6 +362,16 @@ class CompiledKernel:
             self._init_handles()
         return super().__getattribute__(name)
 
+    def launch_metadata(self, grid, stream, *args):
+        if CompiledKernel.launch_enter_hook is None:
+            return None
+        ret = LazyDict({"name": self.name, "function": self.function, "stream": stream})
+        if not isinstance(self.src, ASTSource) or self.src.fn.launch_metadata is None:
+            return ret
+        args = {k: v for k, v in zip(self.src.fn.arg_names, args)}
+        ret.add(self.src.fn.launch_metadata, (grid, self.metadata, args))
+        return ret
+
     def __getitem__(self, grid):
         self._init_handles()
 
@@ -350,9 +379,8 @@ class CompiledKernel:
             if stream is None:
                 device = driver.active.get_current_device()
                 stream = driver.active.get_current_stream(device)
-            md = self.metadata
-            self.run(grid[0], grid[1], grid[2], md.num_warps, md.num_ctas, md.cluster_dims[0], md.cluster_dims[1],
-                     md.cluster_dims[2], md.shared, stream, self.function, CompiledKernel.launch_enter_hook,
-                     CompiledKernel.launch_exit_hook, md, *args)
+            launch_metadata = self.launch_metadata(grid, stream, *args)
+            self.run(grid[0], grid[1], grid[2], stream, self.function, self.metadata, launch_metadata,
+                     CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, *args)
 
         return runner

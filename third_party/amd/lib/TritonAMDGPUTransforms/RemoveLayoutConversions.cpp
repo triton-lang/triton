@@ -1,3 +1,4 @@
+#include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -14,7 +15,6 @@
 #include "mlir/Transforms/RegionUtils.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "TritonAMDGPUTransforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <memory>
@@ -62,12 +62,11 @@ public:
     auto _0f = rewriter.create<arith::ConstantOp>(
         op->getLoc(), dstTy.getElementType(),
         rewriter.getZeroAttr(dstTy.getElementType()));
-    auto _0 = rewriter.create<triton::SplatOp>(
-        op->getLoc(), dotOp.getType(), _0f);
+    auto _0 =
+        rewriter.create<triton::SplatOp>(op->getLoc(), dotOp.getType(), _0f);
     auto newDot = rewriter.create<triton::DotOp>(
-        op->getLoc(), dotOp.getType(), dotOp.getOperand(0),
-        dotOp.getOperand(1), _0, dotOp.getAllowTF32(),
-        dotOp.getMaxNumImpreciseAcc());
+        op->getLoc(), dotOp.getType(), dotOp.getOperand(0), dotOp.getOperand(1),
+        _0, dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
     auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
         op->getLoc(), dstTy, newDot.getResult());
     rewriter.replaceOpWithNewOp<arith::AddFOp>(op, newCvt, cvtOp.getSrc());
@@ -229,7 +228,6 @@ static bool hasConvertToAmdMmaTransisitiveUse(Operation *op,
 }
 #endif
 
-
 // Return true if the op is an op with a layout we don't want to change. We will
 // propagate the layout starting from anchor ops.
 static bool isLayoutAnchor(Operation *op) {
@@ -344,13 +342,13 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       setEncoding({afterArg, result}, info, changed, user);
       continue;
     }
-      if (user->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
-          user->hasTrait<mlir::OpTrait::Elementwise>() ||
-          isa<triton::ReduceOp, triton::ExpandDimsOp,
-              triton::gpu::ConvertLayoutOp>(user)) {
-        setEncoding(user->getResults(), info, changed, user);
-        continue;
-      }
+    if (user->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
+        user->hasTrait<mlir::OpTrait::Elementwise>() ||
+        isa<triton::ReduceOp, triton::ExpandDimsOp,
+            triton::gpu::ConvertLayoutOp>(user)) {
+      setEncoding(user->getResults(), info, changed, user);
+      continue;
+    }
   }
   return changed;
 }
@@ -740,8 +738,8 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   }
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
-      isa<triton::ReduceOp, triton::ExpandDimsOp,
-          triton::gpu::ConvertLayoutOp>(op)) {
+      isa<triton::ReduceOp, triton::ExpandDimsOp, triton::gpu::ConvertLayoutOp>(
+          op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
          llvm::zip(op->getResults(), newOp->getResults()))
@@ -755,8 +753,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
 static bool canBeRemat(Operation *op) {
   if (isa<triton::LoadOp, triton::StoreOp>(op))
     return !isExpensiveLoadOrStore(op);
-  if (isa<triton::AtomicRMWOp,
-          triton::AtomicCASOp, triton::DotOp>(op))
+  if (isa<triton::AtomicRMWOp, triton::AtomicCASOp, triton::DotOp>(op))
     return false;
   if (isa<scf::IfOp, scf::WhileOp, scf::ConditionOp>(op))
     return false;

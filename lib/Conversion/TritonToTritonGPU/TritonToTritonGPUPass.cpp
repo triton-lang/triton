@@ -129,8 +129,8 @@ void populateMathPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
                GenericOpPattern<math::SinOp>, GenericOpPattern<math::LogOp>,
                GenericOpPattern<math::Log2Op>, GenericOpPattern<math::ErfOp>,
                GenericOpPattern<math::AbsFOp>, GenericOpPattern<math::AbsIOp>,
-               GenericOpPattern<math::SqrtOp>, GenericOpPattern<math::FmaOp>>(
-      typeConverter, context);
+               GenericOpPattern<math::SqrtOp>, GenericOpPattern<math::RsqrtOp>,
+               GenericOpPattern<math::FmaOp>>(typeConverter, context);
 }
 
 //
@@ -270,7 +270,7 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
     c = rewriter.create<triton::gpu::ConvertLayoutOp>(c.getLoc(), retType, c);
 
     addNamedAttrs(rewriter.replaceOpWithNewOp<triton::DotOp>(
-                      op, retType, a, b, c, adaptor.getAllowTF32(),
+                      op, retType, a, b, c, adaptor.getInputPrecision(),
                       adaptor.getMaxNumImpreciseAcc()),
                   adaptor.getAttributes());
     return success();

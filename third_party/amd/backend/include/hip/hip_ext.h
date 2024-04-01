@@ -133,9 +133,6 @@ extern "C" hipError_t hipExtLaunchKernel(const void* function_address, dim3 numB
  * launched in any order.
  * @param [in] args  templated kernel arguments.
  *
- *
- * Please refer to the application for sample usage at,
- * (https://github.com/ROCm-Developer-Tools/HIP/blob/rocm-4.5.x/tests/src/kernel/hipExtLaunchKernelGGL.cpp).
  */
 template <typename... Args, typename F = void (*)(Args...)>
 inline void hipExtLaunchKernelGGL(F kernel, const dim3& numBlocks, const dim3& dimBlocks,

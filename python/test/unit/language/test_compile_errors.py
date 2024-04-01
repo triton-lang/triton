@@ -204,3 +204,25 @@ def test_returns_branched_on_non_constexpr():
         assert "at 5:8:" in str(e.value.__cause__), "error should point to the second `return`"
     except AssertionError as assertion_err:
         raise assertion_err from e.value
+
+
+def test_power_of_two_shapes():
+
+    @triton.jit
+    def kernel():
+        tl.arange(2, 7)
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constants={}))
+    assert str(e.value.__cause__) == "arange's range must be a power of 2"
+
+
+def test_power_of_two_shapes_2():
+
+    @triton.jit
+    def kernel():
+        tl.full((33, ), 0, dtype=tl.int64)
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constants={}))
+    assert str(e.value.__cause__) == "Shape element 0 must be a power of 2"

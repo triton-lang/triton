@@ -15,6 +15,34 @@ import triton.language as tl
 # from typing import Tuple
 
 
+def test_metadata() -> None:
+
+    used_hook = False
+
+    def _launch_metadata(grid, kernel, args):
+        ret = dict()
+        ret["grid"] = grid
+        ret["value"] = args["x"]
+        return ret
+
+    def hook(launch_metadata):
+        nonlocal used_hook
+        metadata = launch_metadata.get()
+        assert metadata["grid"] == (1, 3, 2)
+        assert metadata["value"] == 6
+        used_hook = True
+
+    @triton.jit(launch_metadata=_launch_metadata)
+    def kernel(x):
+        pass
+
+    # launch kernel
+    triton.compiler.CompiledKernel.launch_enter_hook = hook
+    kernel[(1, 3, 2)](6)
+    triton.compiler.CompiledKernel.launch_enter_hook = None
+    assert used_hook
+
+
 def test_memory_leak() -> None:
 
     @triton.jit

@@ -127,22 +127,22 @@ def batched_gemm_fusion(Q, K, V, Out,  #
     )
 
     q = tl.load(q_tile_ptr, boundary_check=(0, 1, 2, 3))
-    q = tl.view(q, (BLOCK_M, BLOCK_DMODEL))
+    q = tl.reshape(q, (BLOCK_M, BLOCK_DMODEL), can_reorder=True)
     for i in range(0, N_CTX, BLOCK_N):
         k = tl.load(k_tile_ptr, boundary_check=(0, 1, 2, 3))
-        k = tl.view(k, (BLOCK_N, BLOCK_DMODEL))
+        k = tl.reshape(k, (BLOCK_N, BLOCK_DMODEL), can_reorder=True)
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, tl.trans(k))
 
         p = qk.to(tl.float16)
         v = tl.load(v_tile_ptr, boundary_check=(0, 1, 2, 3))
-        v = tl.view(v, (BLOCK_N, BLOCK_DMODEL))
+        v = tl.reshape(v, (BLOCK_N, BLOCK_DMODEL), can_reorder=True)
         acc += tl.dot(p, v)
 
         k_tile_ptr = tl.advance(k_tile_ptr, [0, 0, BLOCK_N, 0])
         v_tile_ptr = tl.advance(v_tile_ptr, [0, 0, BLOCK_N, 0])
 
-    acc = tl.view(acc, (1, 1, BLOCK_M, BLOCK_DMODEL))
+    acc = tl.reshape(acc, (1, 1, BLOCK_M, BLOCK_DMODEL), can_reorder=True)
     acc = acc.to(tl.float16)
     tl.store(o_tile_ptr, acc)
 

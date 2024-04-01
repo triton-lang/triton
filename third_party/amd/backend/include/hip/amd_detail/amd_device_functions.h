@@ -23,18 +23,17 @@ THE SOFTWARE.
 #ifndef HIP_INCLUDE_HIP_AMD_DETAIL_DEVICE_FUNCTIONS_H
 #define HIP_INCLUDE_HIP_AMD_DETAIL_DEVICE_FUNCTIONS_H
 
+#if !defined(__HIPCC_RTC__)
+#include <hip/amd_detail/amd_hip_common.h>
 #include "host_defines.h"
 #include "math_fwd.h"
-
-#if !defined(__HIPCC_RTC__)
 #include <hip/hip_runtime_api.h>
 #include <stddef.h>
-#endif // !defined(__HIPCC_RTC__)
-
 #include <hip/hip_vector_types.h>
 #include <hip/amd_detail/device_library_decls.h>
+#endif // !defined(__HIPCC_RTC__)
 
-#if __HIP_CLANG_ONLY__
+#if defined(__clang__) && defined(__HIP__)
 extern "C" __device__ int printf(const char *fmt, ...);
 #else
 template <typename... All>
@@ -444,10 +443,6 @@ __device__ static inline unsigned long long int __double2ull_ru(double x) {
 __device__ static inline unsigned long long int __double2ull_rz(double x) {
   return (unsigned long long int)x;
 }
-#if defined(__clang__)
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wc++98-compat-pedantic"
-#endif
 __device__ static inline long long int __double_as_longlong(double x) {
     static_assert(sizeof(long long) == sizeof(double), "");
 
@@ -456,9 +451,6 @@ __device__ static inline long long int __double_as_longlong(double x) {
 
     return tmp;
 }
-#if defined(__clang__)
-#pragma clang diagnostic pop
-#endif
 
 /*
 __device__ unsigned short __float2half_rn(float x);
@@ -639,7 +631,7 @@ __device__ static inline float __ull2float_rz(unsigned long long int x) {
     return __ocml_cvtrtz_f32_u64(x);
 }
 
-#if __HIP_CLANG_ONLY__
+#if defined(__clang__) && defined(__HIP__)
 
 // Clock functions
 __device__ long long int __clock64();
@@ -934,7 +926,7 @@ int __syncthreads_or(int predicate)
   PIPE_ID     7:6     Pipeline from which the wave was dispatched.
   CU_ID       11:8    Compute Unit the wave is assigned to.
   SH_ID       12      Shader Array (within an SE) the wave is assigned to.
-  SE_ID       15:13   Shader Engine the wave is assigned to for gfx908, gfx90a, gfx940
+  SE_ID       15:13   Shader Engine the wave is assigned to for gfx908, gfx90a, gfx940-942
               14:13   Shader Engine the wave is assigned to for Vega.
   TG_ID       19:16   Thread-group ID
   VM_ID       23:20   Virtual Memory ID
@@ -963,7 +955,7 @@ int __syncthreads_or(int predicate)
 #if (defined(__gfx908__) || defined(__gfx90a__) || \
      defined(__GFX11__))
   #define HW_ID_SE_ID_SIZE    3
-#else //4 SEs/XCC for gfx940
+#else //4 SEs/XCC for gfx940-942
   #define HW_ID_SE_ID_SIZE    2
 #endif
 #if (defined(__GFX10__) || defined(__GFX11__))
@@ -974,7 +966,7 @@ int __syncthreads_or(int predicate)
   #define HW_ID_SE_ID_OFFSET  13
 #endif
 
-#if (defined(__gfx940__))
+#if (defined(__gfx940__) || defined(__gfx941__) || defined(__gfx942__))
   #define XCC_ID                   20
   #define XCC_ID_XCC_ID_SIZE       4
   #define XCC_ID_XCC_ID_OFFSET     0
@@ -1012,7 +1004,7 @@ unsigned __smid(void)
       unsigned sa_id = __builtin_amdgcn_s_getreg(
             GETREG_IMMED(HW_ID_SA_ID_SIZE - 1, HW_ID_SA_ID_OFFSET, HW_ID));
     #else
-      #if defined(__gfx940__)
+      #if (defined(__gfx940__) || defined(__gfx941__) || defined(__gfx942__))
       unsigned xcc_id = __builtin_amdgcn_s_getreg(
             GETREG_IMMED(XCC_ID_XCC_ID_SIZE - 1, XCC_ID_XCC_ID_OFFSET, XCC_ID));
       #endif
@@ -1025,7 +1017,7 @@ unsigned __smid(void)
       temp = (temp << HW_ID_WGP_ID_SIZE) | wgp_id;
       return temp;
       //TODO : CU Mode impl
-    #elif defined(__gfx940__)
+    #elif (defined(__gfx940__) || defined(__gfx941__) || defined(__gfx942__))
       unsigned temp = xcc_id;
       temp = (temp << HW_ID_SE_ID_SIZE) | se_id;
       temp = (temp << HW_ID_CU_ID_SIZE) | cu_id;
@@ -1105,4 +1097,5 @@ static inline __device__ void* memset(void* ptr, int val, size_t size) {
     return __hip_hc_memset(ptr, val8, size);
 }
 #endif // !__OPENMP_AMDGCN__
+
 #endif

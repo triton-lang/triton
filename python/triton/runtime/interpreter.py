@@ -1,4 +1,5 @@
 import inspect
+from typing import Tuple
 
 import math
 import numpy as np
@@ -63,6 +64,8 @@ class InterpreterOptions:
     debug: bool = False
     arch: str = None
     allow_fp8e4nv: bool = False
+    default_dot_input_precision: str = "tf32"
+    allowed_dot_input_precisions: Tuple[str] = ("tf32", "3xtf32", "ieee")
     max_num_imprecise_acc_default: int = 0
 
 
@@ -393,17 +396,23 @@ class InterpreterBuilder:
         ret = np_erf_fp32(arg.data) if arg.data.dtype == np.float32 else np_erf_fp64(arg.data)
         return TensorHandle(ret, arg.dtype)
 
+    def create_rsqrt(self, arg):
+        return TensorHandle(1 / np.sqrt(arg.data), arg.dtype)
+
     # tensor operators
     create_reshape = lambda self, arg, shape, allow_reorder: TensorHandle(arg.data.reshape(shape), arg.dtype)
 
     def create_trans(self, arg, perm):
         return TensorHandle(np.transpose(arg.data, perm), arg.dtype)
 
-    def create_dot(self, a, b, d, allow_tf32, max_num_imprecise_acc):
+    def create_dot(self, a, b, d, input_precision, max_num_imprecise_acc):
         return TensorHandle(np.matmul(a.data, b.data) + d.data, d.dtype)
 
     def create_make_range(self, start, stop):
         return TensorHandle(np.arange(start, stop, dtype=np.int32), tl.int32)
+
+    def create_histogram(self, data, bins):
+        return TensorHandle(np.histogram(data.data, bins=bins, range=(0, bins))[0], tl.int32)
 
     # pointer arithmetic
 
@@ -786,8 +795,6 @@ def _patch_lang_core(lang):
             return builder.get_fp8e4nv_ty()
         elif self.name == 'fp8e4b15':
             return builder.get_fp8e4b15_ty()
-        elif self.name == 'fp8e4b15x4':
-            return builder.get_fp8e4b15x4_ty()
         elif self.name == 'fp16':
             return builder.get_half_ty()
         elif self.name == 'bf16':
