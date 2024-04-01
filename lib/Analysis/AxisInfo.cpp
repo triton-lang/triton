@@ -1047,9 +1047,14 @@ void AxisInfoAnalysis::visitOperation(
     ArrayRef<dataflow::Lattice<AxisInfo> *> results) {
   // TODO: For sure not the right way to do this
   // but why is scf.if not initialized otherwise?
+  llvm::outs() << "Visiting: ";
+  op->dump();
   for (auto op : operands)
-    if (op->getValue().getRank() == 0)
+    if (op->getValue().getRank() == 0) {
+      op->getPoint().dump();
+      // return;
       setToEntryState((dataflow::Lattice<AxisInfo> *)op);
+    }
   AxisInfo curr = visitors.apply(op, operands);
   if (curr.getRank() == 0)
     return setAllToEntryStates(results);
@@ -1069,8 +1074,26 @@ void AxisInfoAnalysis::visitOperation(
     auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
     newConstancy = AxisInfo::DimVectorT(vals.begin(), vals.end());
   }
+  if (isa<AddPtrOp>(op)) {
+    newContiguity = AxisInfo::DimVectorT{1, 64};
+    newDivisibility = AxisInfo::DimVectorT{2, 16};
+  }
   curr = AxisInfo(newContiguity, newDivisibility, newConstancy,
                   curr.getConstantValue());
+  auto arrToStr = [](auto arr) -> std::string {
+    std::string r = "[ ";
+    for (auto val : arr) {
+      r += std::to_string(val);
+      r += " ";
+    }
+    r += "]";
+    return r;
+  };
+  llvm::outs() << "Leaving: ";
+  op->dump();
+  llvm::outs() << " cont: " << arrToStr(curr.getContiguity())
+               << " div: " << arrToStr(curr.getDivisibility())
+               << " const: " << arrToStr(curr.getConstancy()) << "\n\n";
   // join all lattice elements
   for (auto *result : results)
     propagateIfChanged(result, result->join(curr));
@@ -1141,6 +1164,16 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
                                    &knownContiguity, &knownDivisibility,
                                    &knownConstancy);
   } else if (Operation *op = value.getDefiningOp()) {
+    if (isa<RegionBranchOpInterface>(op)) {
+      // scf::ForOp, scf::IfOp, scf::WhileOp
+      // Control flow operations are initialized with "unknown" state:
+      // the maximum possible divisibility, contiguity, and constancy.
+      knownDivisibility = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
+      knownConstancy = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
+      knownContiguity = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
+    }
+    // Other operations are conservatively initialized with the lowest possible
+    // divisibility, contiguity, and constancy unless they have specified.
     if (Attribute attr = op->getDiscardableAttr("tt.divisibility")) {
       auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
       knownDivisibility = DimVectorT(vals.begin(), vals.end());

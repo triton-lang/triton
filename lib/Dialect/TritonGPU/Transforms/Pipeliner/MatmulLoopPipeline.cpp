@@ -285,7 +285,9 @@ loadOpsToDistanceAndUse(scf::ForOp forOp) {
   DenseSet<Operation *> seen;
 
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
+  llvm::outs() << "Before axis info analysis\n";
   tt::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
+  llvm::outs() << "After axis info analysis\n";
 
   auto isCandidate = [&](tt::LoadOp loadOp) -> bool {
     assert(!isLoadFromTensorPtr(loadOp) &&
@@ -592,10 +594,10 @@ createSchedule(scf::ForOp forOp, int numStages,
   DenseSet<Operation *> seen;
   for (int stage = 0; stage < numStages; stage++) {
     for (Operation *op : insertOps[stage]) {
-      if (isa<scf::IfOp>(op))
-        tt::addDep(op, prologIfs[stage], false, &seen);
-      else
-        tt::addDep(op, insertAndDeps[stage], false, &seen);
+      /*  if (isa<scf::IfOp>(op))
+          tt::addDep(op, prologIfs[stage], false, &seen);
+        else*/
+      tt::addDep(op, insertAndDeps[stage], false, &seen);
       seen.insert(insertAndDeps[stage].begin(), insertAndDeps[stage].end());
     }
   }
@@ -656,9 +658,9 @@ createSchedule(scf::ForOp forOp, int numStages,
     allInsertAndDeps.insert(set.begin(), set.end());
   }
 
-  for (auto &set : prologIfs) {
+  /*for (auto &set : prologIfs) {
     allInsertAndDeps.insert(set.begin(), set.end());
-  }
+  }*/
 
   // Rest of the distance 1 dependencies will be scheduled one
   // stage after the insert ops.
@@ -705,7 +707,7 @@ createSchedule(scf::ForOp forOp, int numStages,
   // Schedule stage `numStage - 1` first.
   tt::addOps(forOp, numStages - 1, schedule, [&](Operation *op) {
     return allInsertAndDeps.count(op) == 0 && allStage1Deps.count(op) == 0 &&
-           extractAndDeps.count(op) == 0 && epilogIfs.count(op) == 0;
+           extractAndDeps.count(op) == 0 /*&& epilogIfs.count(op) == 0*/;
   });
 
   // Schedule some dependencies with distance of 1 into stage 1 to reduce
@@ -729,8 +731,8 @@ createSchedule(scf::ForOp forOp, int numStages,
   tt::addOps(forOp, numStages - 2, schedule,
              [&](Operation *op) { return extractAndDeps.count(op); });
 
-  tt::addOps(forOp, numStages - 1, schedule,
-             [&](Operation *op) { return epilogIfs.count(op); });
+  /*tt::addOps(forOp, numStages - 1, schedule,
+             [&](Operation *op) { return epilogIfs.count(op); });*/
 
   LLVM_DEBUG(printSchedule(schedule, numStages));
   assert(isScheduleValid(forOp, schedule) && "Invalid schedule.");
