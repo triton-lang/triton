@@ -58,7 +58,6 @@ from .core import (
     float32,
     float64,
     float8e4b15,
-    float8e4b15x4,
     float8e4nv,
     float8e4b8,
     float8e5,
@@ -103,7 +102,7 @@ from .core import (
     void,
     where,
 )
-from .math import (umulhi, exp, exp2, fma, log, log2, cos, sin, sqrt, sqrt_rn, abs, fdiv, div_rn, erf, floor)
+from .math import (umulhi, exp, exp2, fma, log, log2, cos, rsqrt, sin, sqrt, sqrt_rn, abs, fdiv, div_rn, erf, floor)
 from .random import (
     pair_uniform_to_normal,
     philox,
@@ -167,7 +166,6 @@ __all__ = [
     "float32",
     "float64",
     "float8e4b15",
-    "float8e4b15x4",
     "float8e4nv",
     "float8e4b8",
     "float8e5",
@@ -216,6 +214,7 @@ __all__ = [
     "ravel",
     "reduce",
     "reshape",
+    "rsqrt",
     "sigmoid",
     "sin",
     "softmax",
@@ -260,7 +259,6 @@ def str_to_ty(name):
         "fp8e4nv": float8e4nv,
         "fp8e5": float8e5,
         "fp8e4b15": float8e4b15,
-        "fp8e4b15x4": float8e4b15x4,
         "fp8e4b8": float8e4b8,
         "fp8e5b16": float8e5b16,
         "fp16": float16,

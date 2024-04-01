@@ -63,6 +63,25 @@ def _add_math_2arg_docstr(name: str) -> core.Callable[[T], T]:
     return _decorator
 
 
+def _add_math_3arg_docstr(name: str) -> core.Callable[[T], T]:
+
+    def _decorator(func: T) -> T:
+        docstr = """
+    Computes the element-wise {name} of :code:`x`, :code:`y`, and :code:`z`.
+
+    :param x: the input values
+    :type x: Block
+    :param y: the input values
+    :type y: Block
+    :param z: the input values
+    :type z: Block
+    """
+        func.__doc__ = docstr.format(name=name)
+        return func
+
+    return _decorator
+
+
 @core.builtin
 @_check_dtype(dtypes=["int32", "int64", "uint32", "uint64"])
 @_add_math_2arg_docstr("most significant N bits of the 2N-bit product")
@@ -146,12 +165,24 @@ def sqrt_rn(x, _builder=None):
 
 
 @core.builtin
+@_check_dtype(dtypes=["fp32", "fp64"])
+@_add_math_1arg_docstr("inverse square root")
+@core._tensor_member_fn
+def rsqrt(x, _builder=None):
+    x = core._to_tensor(x, _builder)
+    return core.tensor(_builder.create_rsqrt(x.handle), x.type)
+
+
+@core.builtin
 @_add_math_1arg_docstr("absolute value")
 @core._tensor_member_fn
 def abs(x, _builder=None):
     x = core._to_tensor(x, _builder)
     dtype = x.dtype
-    if dtype.is_floating():
+    if dtype.is_fp8e4b15():
+        mask = core.full(x.shape, 0x7F, core.int8, _builder=_builder)
+        return core.tensor(_builder.create_and(x.handle, mask.handle), x.type)
+    elif dtype.is_floating():
         return core.tensor(_builder.create_fabs(x.handle), x.type)
     elif dtype.is_int_signed():
         return core.tensor(_builder.create_iabs(x.handle), x.type)
@@ -199,6 +230,7 @@ def floor(x, _builder=None):
 
 
 @core.builtin
+@_add_math_3arg_docstr("fused multiply-add")
 def fma(x, y, z, _builder=None):
     x = core._to_tensor(x, _builder)
     y = core._to_tensor(y, _builder)

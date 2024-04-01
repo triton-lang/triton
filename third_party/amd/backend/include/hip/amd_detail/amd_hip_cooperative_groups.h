@@ -32,22 +32,13 @@ THE SOFTWARE.
 #ifndef HIP_INCLUDE_HIP_AMD_DETAIL_HIP_COOPERATIVE_GROUPS_H
 #define HIP_INCLUDE_HIP_AMD_DETAIL_HIP_COOPERATIVE_GROUPS_H
 
-#if defined(__clang__)
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wc++98-compat"
-#pragma clang diagnostic ignored "-Wsign-conversion"
-#pragma clang diagnostic ignored "-Wunused-parameter"
-#pragma clang diagnostic ignored "-Wreserved-macro-identifier"
-#pragma clang diagnostic ignored "-Wpadded"
-#endif
-
 #if __cplusplus
 #if !defined(__HIPCC_RTC__)
 #include <hip/amd_detail/hip_cooperative_groups_helper.h>
 #endif
 
 #define __hip_abort()                                                                              \
-  { asm("trap;"); }
+  { abort(); }
 #if defined(NDEBUG)
 #define __hip_assert(COND)
 #else
@@ -236,7 +227,7 @@ class thread_block : public thread_group {
     const bool pow2 = ((tile_size & (tile_size - 1)) == 0);
     // Invalid tile size, assert
     if (!tile_size || (tile_size > __AMDGCN_WAVEFRONT_SIZE) || !pow2) {
-      __hip_assert(false && "invalid tile size");
+      __hip_assert(false && "invalid tile size")
     }
 
     thread_group tiledGroup = thread_group(internal::cg_tiled_group, tile_size);
@@ -291,7 +282,7 @@ class tiled_group : public thread_group {
     const bool pow2 = ((tile_size & (tile_size - 1)) == 0);
 
     if (!tile_size || (tile_size > __AMDGCN_WAVEFRONT_SIZE) || !pow2) {
-      __hip_assert(false && "invalid tile size");
+      __hip_assert(false && "invalid tile size")
     }
 
     if (size() <= tile_size) {
@@ -390,6 +381,8 @@ class coalesced_group : public thread_group {
     coalesced_info.member_mask = member_mask; // Which threads are active
     coalesced_info.size = __popcll(coalesced_info.member_mask); // How many threads are active
     coalesced_info.tiled_info.is_tiled = false; // Not a partitioned group
+    coalesced_info.tiled_info.meta_group_rank = 0;
+    coalesced_info.tiled_info.meta_group_size = 1;
   }
 
  public:
@@ -515,7 +508,7 @@ __CG_QUALIFIER__ uint32_t thread_group::thread_rank() const {
       return (static_cast<const coalesced_group*>(this)->thread_rank());
     }
     default: {
-      __hip_assert(false && "invalid cooperative group type");
+      __hip_assert(false && "invalid cooperative group type")
       return -1;
     }
   }
@@ -543,7 +536,7 @@ __CG_QUALIFIER__ bool thread_group::is_valid() const {
       return (static_cast<const coalesced_group*>(this)->is_valid());
     }
     default: {
-      __hip_assert(false && "invalid cooperative group type");
+      __hip_assert(false && "invalid cooperative group type")
       return false;
     }
   }
@@ -576,7 +569,7 @@ __CG_QUALIFIER__ void thread_group::sync() const {
       break;
     }
     default: {
-      __hip_assert(false && "invalid cooperative group type");
+      __hip_assert(false && "invalid cooperative group type")
     }
   }
 }
@@ -839,10 +832,6 @@ __CG_QUALIFIER__ thread_block_tile<size, ParentCGTy> tiled_partition(const Paren
   return impl::tiled_partition_internal<size, ParentCGTy>(g);
 }
 }  // namespace cooperative_groups
-
-#if defined(__clang__)
-#pragma clang diagnostic pop
-#endif
 
 #endif  // __cplusplus
 #endif  // HIP_INCLUDE_HIP_AMD_DETAIL_HIP_COOPERATIVE_GROUPS_H
