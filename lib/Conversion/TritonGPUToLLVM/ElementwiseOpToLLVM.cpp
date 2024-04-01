@@ -165,6 +165,11 @@ int getNumElementsPerThreads(Type type,
   if (!(encoding && encoding.getParent().isa<NvidiaMmaEncodingAttr>()))
     return numElemsPerThread;
   auto eltType = tensorTy.getElementType();
+  assert(eltType.getIntOrFloatBitWidth() <= 32 &&
+         "Only support element type with bit width <= 32 in dot operand mma "
+         "layout");
+  // dot operand data are packed into i32 elements so use the following formula
+  // to get the number of elements per thread.
   return (32 / eltType.getIntOrFloatBitWidth()) * numElemsPerThread;
 }
 

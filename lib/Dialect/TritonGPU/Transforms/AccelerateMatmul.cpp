@@ -133,7 +133,7 @@ class BlockedToMMA : public mlir::RewritePattern {
   static bool bwdFilter(Operation *op) {
     return op->getNumOperands() == 1 &&
            (isa<tt::FpToFpOp, tt::BitcastOp, ttg::ConvertLayoutOp>(op) ||
-            isUnaryLikeInlineAsm(op) ||
+            isPureUnaryInlineAsm(op) ||
             op->getDialect()->getTypeID() ==
                 mlir::TypeID::get<arith::ArithDialect>());
   }
