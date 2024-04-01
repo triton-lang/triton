@@ -139,9 +139,9 @@ std::pair<Type, Value> printfPromoteValue(ConversionPatternRewriter &rewriter,
   Type newType = type;
   auto loc = UnknownLoc::get(context);
 
-  bool bUnsigned = type.isUnsignedInteger();
+  bool isUnsigned = type.isUnsignedInteger();
   if (type.isIntOrIndex() && type.getIntOrFloatBitWidth() < 32) {
-    if (bUnsigned) {
+    if (isUnsigned) {
       newType = ui32_ty;
       newOp = zext(newType, value);
     } else {

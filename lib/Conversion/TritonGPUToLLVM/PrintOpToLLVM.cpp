@@ -228,10 +228,9 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
     Value msgValue =
         LLVM::addStringToModule(UnknownLoc::get(rewriter.getContext()),
                                 rewriter, "printfFormat_", msgNewline);
-    int byteCount = msgNewline.size_in_bytes();
-    targetInfo.printf(msgValue, byteCount, args, rewriter);
+    targetInfo.printf(msgValue, msgNewline.size_in_bytes(), args, rewriter);
     if (formatStrByteCount)
-      *formatStrByteCount = byteCount;
+      *formatStrByteCount = msgNewline.size_in_bytes();
     return msgValue;
   }
 
