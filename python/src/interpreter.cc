@@ -1,64 +1,9 @@
-#include <iostream>
-#include <map>
-#include <pybind11/numpy.h>
-#include <pybind11/pybind11.h>
+#include "interpreter.h"
 
 namespace py = pybind11;
 
-namespace {
-
-template <int BYTES>
-bool atomic_compare_exchange(void *ptr, void *expected, void *desired,
-                             int order) {
-  if constexpr (BYTES == 1) {
-    return __atomic_compare_exchange(
-        static_cast<uint8_t *>(ptr), static_cast<uint8_t *>(expected),
-        static_cast<uint8_t *>(desired), false, order, order);
-  } else if constexpr (BYTES == 2) {
-    return __atomic_compare_exchange(
-        static_cast<uint16_t *>(ptr), static_cast<uint16_t *>(expected),
-        static_cast<uint16_t *>(desired), false, order, order);
-  } else if constexpr (BYTES == 4) {
-    return __atomic_compare_exchange(
-        static_cast<uint32_t *>(ptr), static_cast<uint32_t *>(expected),
-        static_cast<uint32_t *>(desired), false, order, order);
-  } else if constexpr (BYTES == 8) {
-    return __atomic_compare_exchange(
-        static_cast<uint64_t *>(ptr), static_cast<uint64_t *>(expected),
-        static_cast<uint64_t *>(desired), false, order, order);
-  } else {
-    // The ‘__atomic’ builtins can be used with any integral scalar or pointer
-    // type that is 1, 2, 4, or 8 bytes in length. 16-byte integral types are
-    // also allowed if ‘__int128’ (see 128-bit Integers) is supported by the
-    // architecture.
-    // https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html
-    throw std::invalid_argument("Invalid byte size");
-  }
-}
-
-// Instantiate functions
-template bool atomic_compare_exchange<1>(void *, void *, void *, int);
-template bool atomic_compare_exchange<2>(void *, void *, void *, int);
-template bool atomic_compare_exchange<4>(void *, void *, void *, int);
-template bool atomic_compare_exchange<8>(void *, void *, void *, int);
-
-typedef bool (*atomic_cas_func)(void *, void *, void *, int);
-
-// Store function pointer in a map
-std::map<int, atomic_cas_func> atomic_cas_func_map = {
-    {1, atomic_compare_exchange<1>},
-    {2, atomic_compare_exchange<2>},
-    {4, atomic_compare_exchange<4>},
-    {8, atomic_compare_exchange<8>},
-};
-
-} // namespace
-
-enum class MemSemantic { ACQUIRE_RELEASE, ACQUIRE, RELEASE, RELAXED };
-
-enum class RMWOp { ADD, FADD, AND, OR, XOR, XCHG, MAX, MIN, UMIN, UMAX };
-
 void init_triton_interpreter(py::module &&m) {
+  using namespace triton::interpreter;
   using ret = py::return_value_policy;
 
   py::enum_<MemSemantic>(m, "MEM_SEMANTIC", py::module_local())
@@ -68,20 +13,33 @@ void init_triton_interpreter(py::module &&m) {
       .value("RELAXED", MemSemantic::RELAXED)
       .export_values();
 
+  py::enum_<RMWOp>(m, "RMW_OP", py::module_local())
+      .value("ADD", RMWOp::ADD)
+      .value("FADD", RMWOp::FADD)
+      .value("AND", RMWOp::AND)
+      .value("OR", RMWOp::OR)
+      .value("XOR", RMWOp::XOR)
+      .value("XCHG", RMWOp::XCHG)
+      .value("MAX", RMWOp::MAX)
+      .value("MIN", RMWOp::MIN)
+      .value("UMIN", RMWOp::UMIN)
+      .value("UMAX", RMWOp::UMAX)
+      .export_values();
+
   m.def("load",
-        [](py::array_t<uint64_t> ptrs, py::array_t<bool> masks, py::array other,
+        [](py::array_t<uint64_t> ptr, py::array_t<bool> mask, py::array other,
            py::dtype ret_dtype) -> py::array {
-          int numel = ptrs.size();
+          int numel = ptr.size();
           auto shape =
-              std::vector<ptrdiff_t>(ptrs.shape(), ptrs.shape() + ptrs.ndim());
+              std::vector<ptrdiff_t>(ptr.shape(), ptr.shape() + ptr.ndim());
           py::array ret(ret_dtype, py::array::ShapeContainer{numel});
-          py::array_t<uint64_t> reshaped_ptrs = ptrs.reshape({numel});
-          py::array_t<bool> reshaped_masks = masks.reshape({numel});
+          py::array_t<uint64_t> reshaped_ptr = ptr.reshape({numel});
+          py::array_t<bool> reshaped_mask = mask.reshape({numel});
           py::array reshaped_others = other.reshape({numel});
-          for (size_t i = 0; i < ptrs.size(); ++i) {
-            if (reshaped_masks.at(i))
+          for (size_t i = 0; i < ptr.size(); ++i) {
+            if (reshaped_mask.at(i))
               memcpy(ret.mutable_data(i),
-                     reinterpret_cast<void *>(reshaped_ptrs.at(i)),
+                     reinterpret_cast<void *>(reshaped_ptr.at(i)),
                      ret_dtype.itemsize());
             else
               memcpy(ret.mutable_data(i), reshaped_others.data(i),
@@ -90,63 +48,88 @@ void init_triton_interpreter(py::module &&m) {
           return ret.reshape(shape);
         });
 
-  m.def("store", [](py::array_t<uint64_t> ptrs, py::array values,
-                    py::array_t<bool> mask) {
-    int numel = ptrs.size();
-    py::array_t<uint64_t> reshaped_ptrs = ptrs.reshape({numel});
-    py::array_t<int8_t> reshaped_masks = mask.reshape({numel});
-    py::array reshaped_values = values.reshape({numel});
-    for (size_t i = 0; i < ptrs.size(); ++i) {
-      if (reshaped_masks.at(i)) {
-        memcpy(reinterpret_cast<void *>(reshaped_ptrs.mutable_at(i)),
-               reshaped_values.data(i), values.dtype().itemsize());
-      }
-    }
-  });
+  m.def("store",
+        [](py::array_t<uint64_t> ptr, py::array value, py::array_t<bool> mask) {
+          int numel = ptr.size();
+          py::array_t<uint64_t> reshaped_ptr = ptr.reshape({numel});
+          py::array_t<int8_t> reshaped_mask = mask.reshape({numel});
+          py::array reshaped_value = value.reshape({numel});
+          for (size_t i = 0; i < ptr.size(); ++i) {
+            if (reshaped_mask.at(i)) {
+              memcpy(reinterpret_cast<void *>(reshaped_ptr.mutable_at(i)),
+                     reshaped_value.data(i), value.dtype().itemsize());
+            }
+          }
+        });
 
-  //m.def("atomic_rmw", [](RMWOp rmw_op, py::array_t<uint64_t> ptr, py::array val, py::array mask, MemSemantic sem) -> py:array {
+  m.def("atomic_rmw",
+        [](RMWOp rmw_op, py::array_t<uint64_t> ptr, py::array val,
+           py::array_t<bool> mask, MemSemantic sem) -> py::array {
+          int order = mem_semantic_map[sem];
+          int numel = ptr.size();
+          auto shape =
+              std::vector<ptrdiff_t>(ptr.shape(), ptr.shape() + ptr.ndim());
+          auto ret_dtype = val.dtype();
+          py::array ret(ret_dtype, py::array::ShapeContainer{numel});
+          py::array_t<uint64_t> reshaped_ptr = ptr.reshape({numel});
+          py::array_t<bool> reshaped_mask = mask.reshape({numel});
+          py::array reshaped_val = val.reshape({numel});
+          auto *ptr_data = reshaped_ptr.data();
+          auto *mask_data = reshaped_mask.data();
+          auto *val_data = static_cast<const void *>(reshaped_val.data());
+          auto *ret_data = static_cast<void *>(ret.mutable_data());
 
-  //});
+          std::unique_ptr<AtomicOp> atomic_op;
+
+// clang-format off
+    #define MAKE_ATOMIC_RMW_OP(OP_NAME, ...) \
+      case OP_NAME: \
+        atomic_op = makeAtomicRMWOp<OP_NAME, __VA_ARGS__>( \
+            ret_dtype, ptr_data, val_data, ret_data, mask_data, numel, order); \
+        break;
+
+          switch (rmw_op) {
+            MAKE_ATOMIC_RMW_OP(RMWOp::ADD, int32_t, uint32_t, int64_t, uint64_t)
+            MAKE_ATOMIC_RMW_OP(RMWOp::FADD, float, double)
+            MAKE_ATOMIC_RMW_OP(RMWOp::AND, int32_t, uint32_t, int64_t, uint64_t)
+            MAKE_ATOMIC_RMW_OP(RMWOp::OR, int32_t, uint32_t, int64_t, uint64_t)
+            MAKE_ATOMIC_RMW_OP(RMWOp::XOR, int32_t, uint32_t, int64_t, uint64_t)
+            MAKE_ATOMIC_RMW_OP(RMWOp::MAX, int32_t, int64_t)
+            MAKE_ATOMIC_RMW_OP(RMWOp::UMAX, uint32_t, uint64_t)
+            MAKE_ATOMIC_RMW_OP(RMWOp::MIN, int32_t, int64_t)
+            MAKE_ATOMIC_RMW_OP(RMWOp::UMIN, uint32_t, uint64_t)
+            MAKE_ATOMIC_RMW_OP(RMWOp::XCHG, int32_t, uint32_t, int64_t, uint64_t)
+            default:
+              throw std::invalid_argument("Unsupported RMW operation");
+          }
+
+    #undef MAKE_ATOMIC_RMW_OP
+          // clang-format on
+
+          atomic_op->apply();
+          return ret.reshape(shape);
+        });
 
   m.def("atomic_cas",
-        [](py::array_t<uint64_t> ptrs, py::array &cmp, py::array &val,
-          MemSemantic sem) -> py::array {
-          // Use compiler builtin atomics instead of std::atomic which requires
-          // each variable to be declared as atomic.
-          // Currently work for clang and gcc.
-          int order = 0;
-          if (sem == MemSemantic::ACQUIRE_RELEASE) {
-            order = __ATOMIC_ACQ_REL;
-          } else if (sem == MemSemantic::ACQUIRE) {
-            order = __ATOMIC_ACQUIRE;
-          } else if (sem == MemSemantic::RELEASE) {
-            order = __ATOMIC_RELEASE;
-          } else if (sem == MemSemantic::RELAXED) {
-            order = __ATOMIC_RELAXED;
-          } else {
-            throw std::invalid_argument("Invalid memory order");
-          }
-          int numel = ptrs.size();
+        [](py::array_t<uint64_t> ptr, py::array &cmp, py::array &val,
+           MemSemantic sem) -> py::array {
+          int order = mem_semantic_map[sem];
+          int numel = ptr.size();
           auto shape =
-              std::vector<ptrdiff_t>(ptrs.shape(), ptrs.shape() + ptrs.ndim());
+              std::vector<ptrdiff_t>(ptr.shape(), ptr.shape() + ptr.ndim());
           auto ret_dtype = cmp.dtype();
           py::array ret(ret_dtype, py::array::ShapeContainer{numel});
-          py::array_t<uint64_t> reshaped_ptrs = ptrs.reshape({numel});
+          py::array_t<uint64_t> reshaped_ptr = ptr.reshape({numel});
           py::array reshaped_cmp = cmp.reshape({numel});
           py::array reshaped_val = val.reshape({numel});
-          // Atomic operations perform bitwise comparison, so it's safe to
-          // use number of bytes (itemsize) to determine the type of pointers
           auto itemsize = cmp.itemsize();
           memcpy(static_cast<void *>(ret.mutable_data()),
-                 reinterpret_cast<void *>(reshaped_cmp.mutable_data()),
+                 static_cast<const void *>(reshaped_cmp.data()),
                  itemsize * numel);
-
-          for (size_t i = 0; i < numel; ++i) {
-            atomic_cas_func_map[itemsize](
-                reinterpret_cast<void *>(reshaped_ptrs.mutable_at(i)),
-                static_cast<void *>(reshaped_cmp.mutable_data(i)),
-                static_cast<void *>(reshaped_val.mutable_data(i)), order);
-          }
+          AtomicCASOp(reshaped_ptr.data(), ret.mutable_data(),
+                      static_cast<const void *>(reshaped_val.data()), itemsize,
+                      numel, order)
+              .apply();
           return ret.reshape(shape);
         });
 }

@@ -1294,6 +1294,7 @@ def test_noinline(mode, device):
 # ---------------
 # test atomics
 # ---------------
+@pytest.mark.interpreter
 @pytest.mark.parametrize(
     "op, dtype_x_str, mode, sem",
     itertools.chain.from_iterable([[
@@ -1320,7 +1321,11 @@ def test_noinline(mode, device):
                                    for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']
                                    for sem in [None, 'acquire', 'release', 'acq_rel', 'relaxed']]))
 def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
-    check_cuda_only(device)
+    if is_interpreter():
+        if dtype_x_str == 'float16':
+            pytest.skip("Only test atomic float16 ops on GPU")
+    else:
+        check_cuda_only(device)
 
     capability = torch.cuda.get_device_capability()
     if capability[0] < 7:
@@ -1375,6 +1380,7 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     assert f"atom.global.gpu.{sem_str}" in h.asm["ptx"]
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_atomic_rmw_predicate(num_ctas, device):
 
@@ -1389,6 +1395,7 @@ def test_atomic_rmw_predicate(num_ctas, device):
     assert x.item() == 63
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("shape, axis, num_ctas", [(shape, axis, num_ctas)
                                                    for shape in [(2, 2), (2, 8), (8, 2), (8, 8), (32, 32), (64, 64)]
                                                    for axis in [0, 1]
@@ -1420,6 +1427,7 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, device):
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=1e-4)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_tensor_atomic_rmw_block(num_ctas, device):
     shape = (8, 8)
@@ -1438,6 +1446,7 @@ def test_tensor_atomic_rmw_block(num_ctas, device):
     assert torch.min(x).item() == 0.0
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_atomic_cas(sem, num_ctas, device):

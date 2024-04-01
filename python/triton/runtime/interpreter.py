@@ -119,6 +119,25 @@ np_umulhi_u64 = np.vectorize(_umulhi_64, otypes=[np.uint64])
 
 
 class InterpreterBuilder:
+    ir_sem_to_interpreter_sem = {
+        _ir.MEM_SEMANTIC.ACQUIRE: _interpreter.MEM_SEMANTIC.ACQUIRE,
+        _ir.MEM_SEMANTIC.RELEASE: _interpreter.MEM_SEMANTIC.RELEASE,
+        _ir.MEM_SEMANTIC.RELAXED: _interpreter.MEM_SEMANTIC.RELAXED,
+        _ir.MEM_SEMANTIC.ACQUIRE_RELEASE: _interpreter.MEM_SEMANTIC.ACQUIRE_RELEASE,
+    }
+
+    ir_rmw_op_to_interpreter_rmw_op = {
+        _ir.ATOMIC_OP.ADD: _interpreter.RMW_OP.ADD,
+        _ir.ATOMIC_OP.FADD: _interpreter.RMW_OP.FADD,
+        _ir.ATOMIC_OP.MIN: _interpreter.RMW_OP.MIN,
+        _ir.ATOMIC_OP.UMIN: _interpreter.RMW_OP.UMIN,
+        _ir.ATOMIC_OP.MAX: _interpreter.RMW_OP.MAX,
+        _ir.ATOMIC_OP.UMAX: _interpreter.RMW_OP.UMAX,
+        _ir.ATOMIC_OP.AND: _interpreter.RMW_OP.AND,
+        _ir.ATOMIC_OP.OR: _interpreter.RMW_OP.OR,
+        _ir.ATOMIC_OP.XOR: _interpreter.RMW_OP.XOR,
+        _ir.ATOMIC_OP.XCHG: _interpreter.RMW_OP.XCHG,
+    }
 
     def __init__(self) -> None:
         self.arch = None
@@ -438,18 +457,19 @@ class InterpreterBuilder:
             return TensorHandle(np.full(shape, arg.data, dtype=_get_np_dtype(arg.dtype)), block_type)
 
     def create_atomic_cas(self, ptr, cmp, val, sem, scope):
-        ir_sem_to_interpreter_sem = {
-            _ir.MEM_SEMANTIC.ACQUIRE: _interpreter.MEM_SEMANTIC.ACQUIRE,
-            _ir.MEM_SEMANTIC.RELEASE: _interpreter.MEM_SEMANTIC.RELEASE,
-            _ir.MEM_SEMANTIC.RELAXED: _interpreter.MEM_SEMANTIC.RELAXED,
-            _ir.MEM_SEMANTIC.ACQUIRE_RELEASE: _interpreter.MEM_SEMANTIC.ACQUIRE_RELEASE,
-        }
-        if sem not in ir_sem_to_interpreter_sem:
+        if sem not in self.ir_sem_to_interpreter_sem:
             raise ValueError(f"unsupported semantic {sem}")
-        return TensorHandle(_interpreter.atomic_cas(ptr.data, cmp.data, val.data, ir_sem_to_interpreter_sem[sem]), cmp.dtype)
+        sem = self.ir_sem_to_interpreter_sem[sem]
+        return TensorHandle(_interpreter.atomic_cas(ptr.data, cmp.data, val.data, sem), cmp.dtype)
 
-    def create_atomic_rmw(self, rmwOp, ptr, val, mask, sem):
-        pass
+    def create_atomic_rmw(self, rmwOp, ptr, val, mask, sem, scope):
+        if rmwOp not in self.ir_rmw_op_to_interpreter_rmw_op:
+            raise ValueError(f"unsupported rmwOp {rmwOp}")
+        if sem not in self.ir_sem_to_interpreter_sem:
+            raise ValueError(f"unsupported semantic {sem}")
+        rmwOp = self.ir_rmw_op_to_interpreter_rmw_op[rmwOp]
+        sem = self.ir_sem_to_interpreter_sem[sem]
+        return TensorHandle(_interpreter.atomic_rmw(rmwOp, ptr.data, val.data, mask.data, sem), val.dtype)
 
     def create_extern_elementwise(self, libName, libPath, symbol, argList, retType, isPure):
         raise NotImplementedError("extern_elementwise not supported in interpreter mode")
@@ -497,10 +517,10 @@ class InterpreterBuilder:
 
 
 def _patch_attr(obj, name, member, builder):
-    new_member = lambda *args, member=member, **kwargs: (member(*args,
-                                                                ** {k: v
-                                                                    for k, v in kwargs.items()
-                                                                    if k != "_builder"}, _builder=builder))
+    new_member = lambda *args, member=member, **kwargs: (member(*args, **
+                                                                {k: v
+                                                                 for k, v in kwargs.items()
+                                                                 if k != "_builder"}, _builder=builder))
     setattr(obj, name, new_member)
 
 
