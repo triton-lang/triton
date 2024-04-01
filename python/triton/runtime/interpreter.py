@@ -9,6 +9,7 @@ import triton.language as tl
 from dataclasses import dataclass
 from .errors import InterpreterError
 from .._C.libtriton import interpreter as _interpreter
+from .._C.libtriton import ir as _ir
 
 
 class TensorHandle:
@@ -121,6 +122,25 @@ np_umulhi_u64 = np.vectorize(_umulhi_64, otypes=[np.uint64])
 
 
 class InterpreterBuilder:
+    ir_sem_to_interpreter_sem = {
+        _ir.MEM_SEMANTIC.ACQUIRE: _interpreter.MEM_SEMANTIC.ACQUIRE,
+        _ir.MEM_SEMANTIC.RELEASE: _interpreter.MEM_SEMANTIC.RELEASE,
+        _ir.MEM_SEMANTIC.RELAXED: _interpreter.MEM_SEMANTIC.RELAXED,
+        _ir.MEM_SEMANTIC.ACQUIRE_RELEASE: _interpreter.MEM_SEMANTIC.ACQUIRE_RELEASE,
+    }
+
+    ir_rmw_op_to_interpreter_rmw_op = {
+        _ir.ATOMIC_OP.ADD: _interpreter.RMW_OP.ADD,
+        _ir.ATOMIC_OP.FADD: _interpreter.RMW_OP.FADD,
+        _ir.ATOMIC_OP.MIN: _interpreter.RMW_OP.MIN,
+        _ir.ATOMIC_OP.UMIN: _interpreter.RMW_OP.UMIN,
+        _ir.ATOMIC_OP.MAX: _interpreter.RMW_OP.MAX,
+        _ir.ATOMIC_OP.UMAX: _interpreter.RMW_OP.UMAX,
+        _ir.ATOMIC_OP.AND: _interpreter.RMW_OP.AND,
+        _ir.ATOMIC_OP.OR: _interpreter.RMW_OP.OR,
+        _ir.ATOMIC_OP.XOR: _interpreter.RMW_OP.XOR,
+        _ir.ATOMIC_OP.XCHG: _interpreter.RMW_OP.XCHG,
+    }
 
     def __init__(self) -> None:
         self.arch = None
@@ -242,7 +262,7 @@ class InterpreterBuilder:
         dtype_tt = ptrs.get_element_ty()
         dtype_np = _get_np_dtype(dtype_tt)
         if other is None:
-            other = TensorHandle(np.ones_like(ptrs.data, dtype=dtype_np), dtype_tt)
+            other = TensorHandle(np.zeros_like(ptrs.data, dtype=dtype_np), dtype_tt)
         ret = _interpreter.load(ptrs.data, mask.data, other.data, dtype_np)
         return TensorHandle(ret, dtype_tt)
 
@@ -445,32 +465,42 @@ class InterpreterBuilder:
             block_type = tl.block_type(arg.dtype, shape)
             return TensorHandle(np.full(shape, arg.data, dtype=_get_np_dtype(arg.dtype)), block_type)
 
-    # def create_atomic_cas(self, ptr, cmp, val, sem):
-    #     pass
+    def create_atomic_cas(self, ptr, cmp, val, sem, scope):
+        if sem not in self.ir_sem_to_interpreter_sem:
+            raise ValueError(f"unsupported semantic {sem}")
+        sem = self.ir_sem_to_interpreter_sem[sem]
+        return TensorHandle(_interpreter.atomic_cas(ptr.data, cmp.data, val.data, sem), cmp.dtype)
 
-    # def create_atomic_rmw(self, rmwOp, ptr, val, mask, sem):
-    #     pass
+    def create_atomic_rmw(self, rmwOp, ptr, val, mask, sem, scope):
+        if rmwOp not in self.ir_rmw_op_to_interpreter_rmw_op:
+            raise ValueError(f"unsupported rmwOp {rmwOp}")
+        if sem not in self.ir_sem_to_interpreter_sem:
+            raise ValueError(f"unsupported semantic {sem}")
+        rmwOp = self.ir_rmw_op_to_interpreter_rmw_op[rmwOp]
+        sem = self.ir_sem_to_interpreter_sem[sem]
+        return TensorHandle(_interpreter.atomic_rmw(rmwOp, ptr.data, val.data, mask.data, sem), val.dtype)
 
-    # def create_extern_elementwise(self, libName, libPath, symbol, argList, retType, isPure):
-    #     pass
+    def create_extern_elementwise(self, libName, libPath, symbol, argList, retType, isPure):
+        raise NotImplementedError("extern_elementwise not supported in interpreter mode")
 
-    # def create_int_to_ptr(self, val, type):
-    #     pass
+    def create_inline_asm(self, inlineAsm, constraints, values, type, isPure, pack):
+        raise NotImplementedError("inline_asm not supported in interpreter mode")
 
-    # def create_inline_asm(self, inlineAsm, constraints, values, type, isPure, pack):
-    #     pass
+    def create_print(self, prefix, values):
+        # Interpreter's device_print function has a different format than Triton's device_print
+        msg = f"({self.grid_idx[0]}, {self.grid_idx[1]}, {self.grid_idx[2]})"
+        if prefix:
+            msg += f" {prefix}"
+        for value in values:
+            print(msg + f" {value.data}")
 
-    # def create_print(self, prefix, values):
-    #     pass
+    def create_assert(self, condition, message, fileName, funcName, lineNo):
+        # Interpreter's device_assert function has a different format than Triton's device_assert
+        assert condition, f"{message} in {fileName}:{funcName}:{lineNo}"
 
-    # def create_assert(self, condition, message, fileName, funcName, lineNo):
-    #     pass
-
-    # def create_undef(self, type):
-    #     pass
-
-    # def create_barrier(self):
-    #     pass
+    def create_barrier(self):
+        # Triton's barrier applies to each program in a grid, so it's a no-op in the interpreter
+        pass
 
     def create_make_block_ptr(self, base, shape, strides, offsets, tensor_shape, order):
         # Create new offsets to avoid modifying the original
@@ -792,6 +822,7 @@ def _patch_lang_core(lang):
     lang.range = _new_range
     lang.static_range = _new_range
     lang.static_assert = _new_static_assert
+    lang.static_print = print
     lang.dtype.to_ir = _new_to_ir
 
     _patch_reduce_scan()
