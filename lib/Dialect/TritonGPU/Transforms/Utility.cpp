@@ -803,6 +803,14 @@ Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
   return linear;
 }
 
+bool isUnaryLikeInlineAsm(Operation *op) {
+  auto inlineAsmOp = dyn_cast<ElementwiseInlineAsmOp>(op);
+  if (!inlineAsmOp)
+    return false;
+  return op->getNumOperands() == 1 && op->getNumResults() == 1 &&
+         inlineAsmOp.getPure();
+}
+
 namespace {
 
 /// Detect dead arguments in scf.for op by assuming all the values are dead and

@@ -62,6 +62,25 @@ tt.func @succeeds_if_arg_is_not_convert_layout(
   tt.return %newc : tensor<16x16xf32, #Cv2>
 }
 
+// CHECK: tt.func @push_inline_asm_op
+// CHECK: %[[ALOAD:.*]] = tt.load %arg0
+// CHECK: %[[ACVT:.*]] = triton_gpu.convert_layout %[[ALOAD]]
+// CHECK: %[[AF8E5:.*]] = tt.bitcast %[[ACVT]]
+// CHECK: %[[AF16:.*]] = tt.elementwise_inline_asm {{.*}} %[[AF8E5]]
+// CHECK: %[[C:.*]] = tt.dot %[[AF16]]
+// CHECK: tt.return %[[C]] : tensor<16x16xf32, #mma>
+tt.func @push_inline_asm_op(
+                   %pa: tensor<16x16x!tt.ptr<i8>, #ALR> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
+                   %dotb: tensor<16x16xf16, #Bv2k4>,
+                   %c: tensor<16x16xf32, #Cv2>) -> tensor<16x16xf32, #Cv2>{
+  %ai8 = tt.load %pa {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x16xi8, #ALR>
+  %dotaf8 = tt.bitcast %ai8 : tensor<16x16xi8, #ALR> -> tensor<16x16xf8E5M2, #ALR>
+  %dota = tt.elementwise_inline_asm "{ cvt.rn.satfinite.e4m3x2.f16x2 $0, $1; }" {constraints = "=r,r", packed_element = 2 : i32, pure = true} %dotaf8 : tensor<16x16xf8E5M2, #ALR> -> tensor<16x16xf16, #ALR>
+  %dota_cvt = triton_gpu.convert_layout %dota : tensor<16x16xf16, #ALR> -> tensor<16x16xf16, #Av2k4>
+  %newc = tt.dot %dota_cvt, %dotb, %c {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<16x16xf16, #Av2k4> * tensor<16x16xf16, #Bv2k4> -> tensor<16x16xf32, #Cv2>
+  tt.return %newc : tensor<16x16xf32, #Cv2>
+}
+
 }
 
 // -----
