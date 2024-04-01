@@ -8,6 +8,10 @@ import triton
 import triton.language as tl
 
 
+def get_current_target_warp_size():
+    return triton.runtime.driver.active.get_current_target()[2]
+
+
 @triton.jit
 def kernel_device_print(X, Y, BLOCK: tl.constexpr):
     x = tl.load(X + tl.arange(0, BLOCK))
@@ -75,27 +79,33 @@ def kernel_print_no_arg():
 
 
 def test_print(func: str, data_type: str):
-    shape = (128, )
-    x = torch.arange(0, shape[0], dtype=torch.int32, device='cuda').to(getattr(torch, data_type))
-    y = torch.zeros(shape, dtype=x.dtype, device="cuda")
+    # This value should match with test_print in test_subprocess.py.
+    N = 128
+    # TODO(antiagainst): Currently the warp count is chosen to make sure wedon't have multiple
+    # threads printing duplicated messages due to broadcasting. Improve print op lowering logic
+    # to filter out duplicated data range.
+    num_warps = N // get_current_target_warp_size()
+
+    x = torch.arange(0, N, dtype=torch.int32, device='cuda').to(getattr(torch, data_type))
+    y = torch.zeros((N, ), dtype=x.dtype, device="cuda")
     if func == "device_print":
-        kernel_device_print[(1, )](x, y, BLOCK=shape[0])
+        kernel_device_print[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     elif func == "print":
-        kernel_print[(1, )](x, y, BLOCK=shape[0])
+        kernel_print[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     elif func == "device_print_large":
-        kernel_device_print_large[(1, 2)](BLOCK_M=64, BLOCK_N=128)
+        kernel_device_print_large[(1, 2)](BLOCK_M=64, num_warps=num_warps, BLOCK_N=N)
     elif func == "print_multiple_args":
-        kernel_print_multiple_args[(1, )](x, y, BLOCK=shape[0])
+        kernel_print_multiple_args[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     elif func == "device_print_multiple_args":
-        kernel_device_print_multiple_args[(1, )](x, y, BLOCK=shape[0])
+        kernel_device_print_multiple_args[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     elif func == "static_print":
-        kernel_static_print[(1, )](x, y, BLOCK=shape[0], PLACEHOLDER=uuid.uuid4())
+        kernel_static_print[(1, )](x, y, num_warps=num_warps, BLOCK=N, PLACEHOLDER=uuid.uuid4())
     elif func == "no_arg_print":
-        kernel_no_arg_print[(1, )](num_warps=4)
+        kernel_no_arg_print[(1, )](num_warps=num_warps)
     elif func == "print_no_arg":
-        kernel_print_no_arg[(1, )](num_warps=4)
+        kernel_print_no_arg[(1, )](num_warps=num_warps)
     elif func == "device_print_hex":
-        kernel_device_print_hex[(1, )](x, y, BLOCK=shape[0])
+        kernel_device_print_hex[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     else:
         assert f"Unknown kernel: {func}"
 

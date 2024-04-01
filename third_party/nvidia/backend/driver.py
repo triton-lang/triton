@@ -381,7 +381,8 @@ class CudaDriver(GPUDriver):
         device = self.get_current_device()
         capability = self.get_device_capability(device)
         capability = capability[0] * 10 + capability[1]
-        return ("cuda", capability)
+        warp_size = 32
+        return ("cuda", capability, warp_size)
 
     @staticmethod
     def is_active():
