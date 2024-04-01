@@ -150,7 +150,8 @@ SmallVector<Value> packI32(const SmallVector<Value> &inValues, Type srcTy,
   return outValues;
 }
 
-int getNumElmenetPerThreads(Type type, const LLVMTypeConverter *typeConverter) {
+int getNumElementsPerThreads(Type type,
+                             const LLVMTypeConverter *typeConverter) {
   int numElemsPerThread = 1;
   auto tensorTy = type.dyn_cast<RankedTensorType>();
   if (!tensorTy)
@@ -467,8 +468,8 @@ struct ElementwiseInlineAsmOpConversion
           unpackI32(subOperands, argTy, rewriter, loc, getTypeConverter()));
     }
 
-    int numElemsPerThread =
-        getNumElmenetPerThreads(op->getResult(0).getType(), getTypeConverter());
+    int numElemsPerThread = getNumElementsPerThreads(op->getResult(0).getType(),
+                                                     getTypeConverter());
 
     // These are checked by the verifier, so we don't need to raise a nice
     // error.
@@ -476,8 +477,8 @@ struct ElementwiseInlineAsmOpConversion
       return operands.size() == numElemsPerThread;
     }));
     if (numElemsPerThread % op.getPackedElement() != 0) {
-      // Pad with the first value of the operand for each operand to have a
-      // multiple of op.getPackedElement() elements.
+      // Pad with the undef for each operand to have a multiple of
+      // op.getPackedElement() elements.
       int numPaddedValue =
           op.getPackedElement() - numElemsPerThread % op.getPackedElement();
       for (auto &operands : unpackedOperands) {
