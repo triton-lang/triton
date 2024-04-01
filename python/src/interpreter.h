@@ -76,6 +76,8 @@ public:
     }
   }
 
+  virtual ~AtomicOp() = default;
+
 protected:
   virtual void applyAt(void *, size_t i) = 0;
 
@@ -84,7 +86,7 @@ protected:
   int order;
 };
 
-class AtomicRMWOpBase : public AtomicOp {
+template <typename DType> class AtomicRMWOpBase : public AtomicOp {
 public:
   AtomicRMWOpBase(const uint64_t *ptr, const void *val, void *ret,
                   const bool *mask, size_t numel, int order)
@@ -93,11 +95,13 @@ public:
 protected:
   void applyAt(void *loc, size_t i) override final {
     if (mask[i]) {
-      applyAtMasked(loc, i);
+      *(static_cast<DType *>(ret) + i) =
+          applyAtMasked(static_cast<DType *>(loc),
+                        *(static_cast<const DType *>(val) + i), order);
     }
   }
 
-  virtual void applyAtMasked(void *loc, size_t i) = 0;
+  virtual DType applyAtMasked(DType *loc, const DType value, int order) = 0;
 
   const void *val;
   void *ret;
@@ -105,122 +109,106 @@ protected:
 };
 
 template <typename DType, RMWOp Op, typename = void>
-class AtomicRMWOp : public AtomicRMWOpBase {
+class AtomicRMWOp : public AtomicRMWOpBase<DType> {
 public:
-  using AtomicRMWOpBase::AtomicRMWOpBase;
+  using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 };
 
 template <typename DType, RMWOp Op>
 class AtomicRMWOp<DType, Op, std::enable_if_t<Op == RMWOp::ADD>>
-    : public AtomicRMWOpBase {
+    : public AtomicRMWOpBase<DType> {
 public:
-  using AtomicRMWOpBase::AtomicRMWOpBase;
+  using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  void applyAtMasked(void *loc, size_t i) override {
-    *(static_cast<DType *>(ret) + i) =
-        __atomic_fetch_add(static_cast<DType *>(loc),
-                           *(static_cast<const DType *>(val) + i), order);
+  DType applyAtMasked(DType *loc, const DType value, int order) override {
+    return __atomic_fetch_add(loc, value, order);
   }
 };
 
 template <typename DType, RMWOp Op>
 class AtomicRMWOp<DType, Op, std::enable_if_t<Op == RMWOp::FADD>>
-    : public AtomicRMWOpBase {
+    : public AtomicRMWOpBase<DType> {
 public:
-  using AtomicRMWOpBase::AtomicRMWOpBase;
+  using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  void applyAtMasked(void *loc, size_t i) override {
-    *(static_cast<DType *>(ret) + i) =
-        atomic_fadd(static_cast<DType *>(loc),
-                    *(static_cast<const DType *>(val) + i), order);
+  DType applyAtMasked(DType *loc, const DType value, int order) override {
+    return atomic_fadd(loc, value, order);
   }
 };
 
 template <typename DType, RMWOp Op>
 class AtomicRMWOp<DType, Op, std::enable_if_t<Op == RMWOp::AND>>
-    : public AtomicRMWOpBase {
+    : public AtomicRMWOpBase<DType> {
 public:
-  using AtomicRMWOpBase::AtomicRMWOpBase;
+  using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  void applyAtMasked(void *loc, size_t i) override {
-    *(static_cast<DType *>(ret) + i) =
-        __atomic_fetch_and(static_cast<DType *>(loc),
-                           *(static_cast<const DType *>(val) + i), order);
+  DType applyAtMasked(DType *loc, const DType value, int order) override {
+    return __atomic_fetch_and(loc, value, order);
   }
 };
 
 template <typename DType, RMWOp Op>
 class AtomicRMWOp<DType, Op, std::enable_if_t<Op == RMWOp::OR>>
-    : public AtomicRMWOpBase {
+    : public AtomicRMWOpBase<DType> {
 public:
-  using AtomicRMWOpBase::AtomicRMWOpBase;
+  using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  void applyAtMasked(void *loc, size_t i) override {
-    *(static_cast<DType *>(ret) + i) =
-        __atomic_fetch_or(static_cast<DType *>(loc),
-                          *(static_cast<const DType *>(val) + i), order);
+  DType applyAtMasked(DType *loc, const DType value, int order) override {
+    return __atomic_fetch_or(loc, value, order);
   }
 };
 
 template <typename DType, RMWOp Op>
 class AtomicRMWOp<DType, Op, std::enable_if_t<Op == RMWOp::XOR>>
-    : public AtomicRMWOpBase {
+    : public AtomicRMWOpBase<DType> {
 public:
-  using AtomicRMWOpBase::AtomicRMWOpBase;
+  using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  void applyAtMasked(void *loc, size_t i) override {
-    *(static_cast<DType *>(ret) + i) =
-        __atomic_fetch_xor(static_cast<DType *>(loc),
-                           *(static_cast<const DType *>(val) + i), order);
+  DType applyAtMasked(DType *loc, const DType value, int order) override {
+    return __atomic_fetch_xor(loc, value, order);
   }
 };
 
 template <typename DType, RMWOp Op>
 class AtomicRMWOp<DType, Op,
                   std::enable_if_t<Op == RMWOp::MAX || Op == RMWOp::UMAX>>
-    : public AtomicRMWOpBase {
+    : public AtomicRMWOpBase<DType> {
 public:
-  using AtomicRMWOpBase::AtomicRMWOpBase;
+  using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  void applyAtMasked(void *loc, size_t i) override {
-    *(static_cast<DType *>(ret) + i) = atomic_cmp</*is_min=*/false>(
-        static_cast<DType *>(loc), *(static_cast<const DType *>(val) + i),
-        order);
+  DType applyAtMasked(DType *loc, const DType value, int order) override {
+    return atomic_cmp</*is_min=*/false>(loc, value, order);
   }
 };
 
 template <typename DType, RMWOp Op>
 class AtomicRMWOp<DType, Op,
                   std::enable_if_t<Op == RMWOp::MIN || Op == RMWOp::UMIN>>
-    : public AtomicRMWOpBase {
+    : public AtomicRMWOpBase<DType> {
 public:
-  using AtomicRMWOpBase::AtomicRMWOpBase;
+  using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  void applyAtMasked(void *loc, size_t i) override {
-    *(static_cast<DType *>(ret) + i) = atomic_cmp</*is_min=*/true>(
-        static_cast<DType *>(loc), *(static_cast<const DType *>(val) + i),
-        order);
+  DType applyAtMasked(DType *loc, const DType value, int order) override {
+    return atomic_cmp</*is_min=*/true>(loc, value, order);
   }
 };
 
 template <typename DType, RMWOp Op>
 class AtomicRMWOp<DType, Op, std::enable_if_t<Op == RMWOp::XCHG>>
-    : public AtomicRMWOpBase {
+    : public AtomicRMWOpBase<DType> {
 public:
-  using AtomicRMWOpBase::AtomicRMWOpBase;
+  using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  void applyAtMasked(void *loc, size_t i) override {
-    *(static_cast<DType *>(ret) + i) =
-        __atomic_exchange_n(static_cast<DType *>(loc),
-                            *(static_cast<const DType *>(val) + i), order);
+  DType applyAtMasked(DType *loc, const DType value, int order) override {
+    return __atomic_exchange_n(loc, value, order);
   }
 };
 
@@ -236,21 +224,25 @@ protected:
     // Atomic operations perform bitwise comparison, so it's safe to
     // use number of bytes (itemsize) to determine the type of pointers
     if (itemsize == 1) {
-      __atomic_compare_exchange(
-          static_cast<uint8_t *>(loc), static_cast<uint8_t *>(expected) + i,
-          static_cast<const uint8_t *>(desired) + i, false, order, order);
+      uint8_t desired_val = *(static_cast<const uint8_t *>(desired) + i);
+      __atomic_compare_exchange_n(static_cast<uint8_t *>(loc),
+                                  static_cast<uint8_t *>(expected) + i,
+                                  desired_val, false, order, order);
     } else if (itemsize == 2) {
-      __atomic_compare_exchange(
-          static_cast<uint16_t *>(loc), static_cast<uint16_t *>(expected) + i,
-          static_cast<const uint16_t *>(desired) + i, false, order, order);
+      uint16_t desired_val = *(static_cast<const uint16_t *>(desired) + i);
+      __atomic_compare_exchange_n(static_cast<uint16_t *>(loc),
+                                  static_cast<uint16_t *>(expected) + i,
+                                  desired_val, false, order, order);
     } else if (itemsize == 4) {
-      __atomic_compare_exchange(
-          static_cast<uint32_t *>(loc), static_cast<uint32_t *>(expected) + i,
-          static_cast<const uint32_t *>(desired) + i, false, order, order);
+      uint32_t desired_val = *(static_cast<const uint32_t *>(desired) + i);
+      __atomic_compare_exchange_n(static_cast<uint32_t *>(loc),
+                                  static_cast<uint32_t *>(expected) + i,
+                                  desired_val, false, order, order);
     } else if (itemsize == 8) {
-      __atomic_compare_exchange(
-          static_cast<uint64_t *>(loc), static_cast<uint64_t *>(expected) + i,
-          static_cast<const uint64_t *>(desired) + i, false, order, order);
+      uint64_t desired_val = *(static_cast<const uint64_t *>(desired) + i);
+      __atomic_compare_exchange_n(static_cast<uint64_t *>(loc),
+                                  static_cast<uint64_t *>(expected) + i,
+                                  desired_val, false, order, order);
     } else {
       // The ‘__atomic’ builtins can be used with any integral scalar or pointer
       // type that is 1, 2, 4, or 8 bytes in length. 16-byte integral types are
