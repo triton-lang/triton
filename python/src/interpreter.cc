@@ -81,12 +81,11 @@ void init_triton_interpreter(py::module &&m) {
 
           std::unique_ptr<AtomicOp> atomic_op;
 
-// clang-format off
-    #define MAKE_ATOMIC_RMW_OP(OP_NAME, ...) \
-      case OP_NAME: \
-        atomic_op = makeAtomicRMWOp<OP_NAME, __VA_ARGS__>( \
-            ret_dtype, ptr_data, val_data, ret_data, mask_data, numel, order); \
-        break;
+#define MAKE_ATOMIC_RMW_OP(OP_NAME, ...)                                       \
+  case OP_NAME:                                                                \
+    atomic_op = makeAtomicRMWOp<OP_NAME, __VA_ARGS__>(                         \
+        ret_dtype, ptr_data, val_data, ret_data, mask_data, numel, order);     \
+    break;
 
           switch (rmw_op) {
             MAKE_ATOMIC_RMW_OP(RMWOp::ADD, int32_t, uint32_t, int64_t, uint64_t)
@@ -98,13 +97,13 @@ void init_triton_interpreter(py::module &&m) {
             MAKE_ATOMIC_RMW_OP(RMWOp::UMAX, uint32_t, uint64_t)
             MAKE_ATOMIC_RMW_OP(RMWOp::MIN, int32_t, int64_t)
             MAKE_ATOMIC_RMW_OP(RMWOp::UMIN, uint32_t, uint64_t)
-            MAKE_ATOMIC_RMW_OP(RMWOp::XCHG, int32_t, uint32_t, int64_t, uint64_t)
-            default:
-              throw std::invalid_argument("Unsupported RMW operation");
+            MAKE_ATOMIC_RMW_OP(RMWOp::XCHG, int32_t, uint32_t, int64_t,
+                               uint64_t)
+          default:
+            throw std::invalid_argument("Unsupported RMW operation");
           }
 
-    #undef MAKE_ATOMIC_RMW_OP
-          // clang-format on
+#undef MAKE_ATOMIC_RMW_OP
 
           atomic_op->apply();
           return ret.reshape(shape);
