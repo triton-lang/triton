@@ -20,6 +20,9 @@ std::map<MemSemantic, int> mem_semantic_map = {
     {MemSemantic::RELAXED, __ATOMIC_RELAXED},
 };
 
+// Use compiler builtin atomics instead of std::atomic which requires
+// each variable to be declared as atomic.
+// Currently work for clang and gcc.
 template <bool is_min, typename T> T atomic_cmp(T *ptr, T val, int order) {
   auto cmp = [](T old, T val) {
     if constexpr (is_min) {
@@ -62,9 +65,6 @@ template <typename T> T atomic_fadd(T *ptr, T val, int order) {
   return old_val;
 }
 
-// Use compiler builtin atomics instead of std::atomic which requires
-// each variable to be declared as atomic.
-// Currently work for clang and gcc.
 class AtomicOp {
 public:
   AtomicOp(const uint64_t *ptr, size_t numel, int order)
@@ -86,8 +86,8 @@ protected:
 
 class AtomicRMWOpBase : public AtomicOp {
 public:
-  AtomicRMWOpBase(const uint64_t *ptr, const void *val, void *ret, const bool *mask, size_t numel,
-                  int order)
+  AtomicRMWOpBase(const uint64_t *ptr, const void *val, void *ret,
+                  const bool *mask, size_t numel, int order)
       : AtomicOp(ptr, numel, order), val(val), ret(ret), mask(mask) {}
 
 protected:
@@ -118,8 +118,9 @@ public:
 
 protected:
   void applyAtMasked(void *loc, size_t i) override {
-    *(static_cast<DType *>(ret) + i) = __atomic_fetch_add(
-        static_cast<DType *>(loc), *(static_cast<const DType *>(val) + i), order);
+    *(static_cast<DType *>(ret) + i) =
+        __atomic_fetch_add(static_cast<DType *>(loc),
+                           *(static_cast<const DType *>(val) + i), order);
   }
 };
 
@@ -131,8 +132,9 @@ public:
 
 protected:
   void applyAtMasked(void *loc, size_t i) override {
-    *(static_cast<DType *>(ret) + i) = atomic_fadd(
-        static_cast<DType *>(loc), *(static_cast<const DType *>(val) + i), order);
+    *(static_cast<DType *>(ret) + i) =
+        atomic_fadd(static_cast<DType *>(loc),
+                    *(static_cast<const DType *>(val) + i), order);
   }
 };
 
@@ -144,8 +146,9 @@ public:
 
 protected:
   void applyAtMasked(void *loc, size_t i) override {
-    *(static_cast<DType *>(ret) + i) = __atomic_fetch_and(
-        static_cast<DType *>(loc), *(static_cast<const DType *>(val) + i), order);
+    *(static_cast<DType *>(ret) + i) =
+        __atomic_fetch_and(static_cast<DType *>(loc),
+                           *(static_cast<const DType *>(val) + i), order);
   }
 };
 
@@ -157,8 +160,9 @@ public:
 
 protected:
   void applyAtMasked(void *loc, size_t i) override {
-    *(static_cast<DType *>(ret) + i) = __atomic_fetch_or(
-        static_cast<DType *>(loc), *(static_cast<const DType *>(val) + i), order);
+    *(static_cast<DType *>(ret) + i) =
+        __atomic_fetch_or(static_cast<DType *>(loc),
+                          *(static_cast<const DType *>(val) + i), order);
   }
 };
 
@@ -170,8 +174,9 @@ public:
 
 protected:
   void applyAtMasked(void *loc, size_t i) override {
-    *(static_cast<DType *>(ret) + i) = __atomic_fetch_xor(
-        static_cast<DType *>(loc), *(static_cast<const DType *>(val) + i), order);
+    *(static_cast<DType *>(ret) + i) =
+        __atomic_fetch_xor(static_cast<DType *>(loc),
+                           *(static_cast<const DType *>(val) + i), order);
   }
 };
 
@@ -185,7 +190,8 @@ public:
 protected:
   void applyAtMasked(void *loc, size_t i) override {
     *(static_cast<DType *>(ret) + i) = atomic_cmp</*is_min=*/false>(
-        static_cast<DType *>(loc), *(static_cast<const DType *>(val) + i), order);
+        static_cast<DType *>(loc), *(static_cast<const DType *>(val) + i),
+        order);
   }
 };
 
@@ -199,7 +205,8 @@ public:
 protected:
   void applyAtMasked(void *loc, size_t i) override {
     *(static_cast<DType *>(ret) + i) = atomic_cmp</*is_min=*/true>(
-        static_cast<DType *>(loc), *(static_cast<const DType *>(val) + i), order);
+        static_cast<DType *>(loc), *(static_cast<const DType *>(val) + i),
+        order);
   }
 };
 
@@ -211,15 +218,16 @@ public:
 
 protected:
   void applyAtMasked(void *loc, size_t i) override {
-    *(static_cast<DType *>(ret) + i) = __atomic_exchange_n(
-        static_cast<DType *>(loc), *(static_cast<const DType *>(val) + i), order);
+    *(static_cast<DType *>(ret) + i) =
+        __atomic_exchange_n(static_cast<DType *>(loc),
+                            *(static_cast<const DType *>(val) + i), order);
   }
 };
 
 class AtomicCASOp : public AtomicOp {
 public:
-  AtomicCASOp(const uint64_t *ptr, void *expected, const void *desired, size_t itemsize,
-              size_t numel, int order)
+  AtomicCASOp(const uint64_t *ptr, void *expected, const void *desired,
+              size_t itemsize, size_t numel, int order)
       : AtomicOp(ptr, numel, order), expected(expected), desired(desired),
         itemsize(itemsize) {}
 
@@ -260,15 +268,15 @@ private:
 };
 
 template <RMWOp Op, typename... SupportedDTypes>
-std::unique_ptr<AtomicOp> makeAtomicRMWOp(pybind11::dtype dtype, const uint64_t *ptr,
-                                          const void *val, void *ret, const bool *mask,
-                                          size_t numel, int order) {
+std::unique_ptr<AtomicOp>
+makeAtomicRMWOp(pybind11::dtype dtype, const uint64_t *ptr, const void *val,
+                void *ret, const bool *mask, size_t numel, int order) {
   // Iterate over all supported data types, make one that matches, and return
   std::unique_ptr<AtomicOp> atomic_op;
   auto try_make_op = [&]<typename T>() {
     if (dtype.is(pybind11::dtype::of<T>())) {
-      atomic_op = std::make_unique<AtomicRMWOp<T, Op>>(
-          ptr, val, ret, mask, numel, order);
+      atomic_op = std::make_unique<AtomicRMWOp<T, Op>>(ptr, val, ret, mask,
+                                                       numel, order);
     }
   };
 
