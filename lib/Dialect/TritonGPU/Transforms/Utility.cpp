@@ -803,7 +803,7 @@ Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
   return linear;
 }
 
-bool isUnaryLikeInlineAsm(Operation *op) {
+bool isPureUnaryInlineAsm(Operation *op) {
   auto inlineAsmOp = dyn_cast<ElementwiseInlineAsmOp>(op);
   if (!inlineAsmOp)
     return false;

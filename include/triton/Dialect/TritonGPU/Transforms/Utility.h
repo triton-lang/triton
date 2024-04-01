@@ -166,7 +166,7 @@ Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
 
 // Return true if the op is a pure elementwise_inline_asm op with a single
 // operand and single result.
-bool isUnaryLikeInlineAsm(Operation *op);
+bool isPureUnaryInlineAsm(Operation *op);
 
 } // namespace mlir
 
