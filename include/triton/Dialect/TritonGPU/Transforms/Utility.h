@@ -163,6 +163,11 @@ Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
 
 Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape);
+
+// Return true if the op is a pure elementwise_inline_asm op with a single
+// operand and single result.
+bool isUnaryLikeInlineAsm(Operation *op);
+
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_

@@ -128,7 +128,7 @@ public:
 
     // Only consider custom conversions or arith ops.
     // TODO(jlebar): Is this too restrictive?
-    if (!isa<FpToFpOp, BitcastOp>(src) &&
+    if (!isa<FpToFpOp, BitcastOp>(src) && !isUnaryLikeInlineAsm(src) &&
         src->getDialect()->getTypeID() != TypeID::get<arith::ArithDialect>())
       return failure();
 
@@ -168,6 +168,7 @@ public:
         // Bail out if there exists an op after Load that is not FpToFp,
         // Bitcast, or Arith.
         if (!isa<FpToFpOp, BitcastOp>(currOp) &&
+            !isUnaryLikeInlineAsm(currOp) &&
             currOp->getDialect()->getTypeID() !=
                 TypeID::get<arith::ArithDialect>())
           return failure();
