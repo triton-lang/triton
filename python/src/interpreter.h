@@ -259,20 +259,42 @@ private:
   size_t itemsize;
 };
 
+// This is a workaround because explicit template parameter list for lambdas is
+// a C++20 extension:
+// auto try_make_op = [&]<typename T>() {
+//   if (dtype.is(pybind11::dtype::of<T>())) {
+//     atomic_op = std::make_unique<AtomicRMWOp<T, Op>>(ptr, val, ret, mask,
+//                                                      numel, order);
+//   }
+// };
+template <RMWOp Op> struct OpCreator {
+  pybind11::dtype dtype;
+  const uint64_t *ptr;
+  const void *val;
+  void *ret;
+  const bool *mask;
+  size_t numel;
+  int order;
+  std::unique_ptr<AtomicOp> &atomic_op;
+
+  template <typename T> void create() {
+    if (!atomic_op && dtype.is(pybind11::dtype::of<T>())) {
+      atomic_op = std::make_unique<AtomicRMWOp<T, Op>>(ptr, val, ret, mask,
+                                                       numel, order);
+    }
+  }
+};
+
 template <RMWOp Op, typename... SupportedDTypes>
 std::unique_ptr<AtomicOp>
 makeAtomicRMWOp(pybind11::dtype dtype, const uint64_t *ptr, const void *val,
                 void *ret, const bool *mask, size_t numel, int order) {
   // Iterate over all supported data types, make one that matches, and return
   std::unique_ptr<AtomicOp> atomic_op;
-  auto try_make_op = [&]<typename T>() {
-    if (dtype.is(pybind11::dtype::of<T>())) {
-      atomic_op = std::make_unique<AtomicRMWOp<T, Op>>(ptr, val, ret, mask,
-                                                       numel, order);
-    }
-  };
+  OpCreator<Op> try_make_op{dtype, ptr,   val,   ret,
+                            mask,  numel, order, atomic_op};
 
-  (try_make_op.template operator()<SupportedDTypes>(), ...);
+  (try_make_op.template create<SupportedDTypes>(), ...);
   if (!atomic_op) {
     throw std::invalid_argument("Unsupported data type");
   }
