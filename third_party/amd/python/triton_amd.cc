@@ -5,6 +5,7 @@
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "passes.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Module.h"
 #include <mutex>
 #include <pybind11/pybind11.h>
 
@@ -51,4 +52,24 @@ void init_triton_amd(py::module &&m) {
   // calling convention
   m.attr("CALLING_CONV_AMDGPU_KERNEL") =
       py::int_((unsigned)llvm::CallingConv::AMDGPU_KERNEL);
+
+  m.def("set_code_object_version", [](llvm::Module *module, int version) {
+    // Inject the control constant into the LLVM module so that device libraries
+    // linked against module can resolve their references to it.
+    llvm::Type *i32Ty = llvm::Type::getInt32Ty(module->getContext());
+    llvm::GlobalVariable *abi = new llvm::GlobalVariable(
+        *module, i32Ty, /*isConstant=*/true,
+        llvm::GlobalValue::LinkageTypes::LinkOnceODRLinkage,
+        llvm::ConstantInt::get(i32Ty, version), "__oclc_ABI_version", nullptr,
+        llvm::GlobalValue::ThreadLocalMode::NotThreadLocal, 4);
+    abi->setVisibility(llvm::GlobalValue::VisibilityTypes::ProtectedVisibility);
+    abi->setAlignment(llvm::MaybeAlign(4));
+    abi->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Local);
+
+    // Also attach the control attribute on the LLVM module. This is also needed
+    // in addition to the above for various transformations to know what code
+    // object version we are targeting at.
+    module->addModuleFlag(llvm::Module::Error, "amdhsa_code_object_version",
+                          version);
+  });
 }
