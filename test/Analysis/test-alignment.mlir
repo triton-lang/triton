@@ -437,6 +437,25 @@ tt.func @max_min() {
 
 // -----
 
+// CHECK-LABEL: @if
+tt.func @if(%i1 : i1) {
+  // CHECK: contiguity = [1, 1], divisibility = [64, 64], constancy = [128, 32], constant_value = 64
+  %cst_64 = arith.constant dense<64> : tensor<128x32xi32>
+  // CHECK-NEXT: contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 32], constant_value = 1
+  %cst_1 = arith.constant dense<1> : tensor<128x32xi32>
+  // CHECK-NEXT: contiguity = [1, 1], divisibility = [64, 64], constancy = [128, 32], constant_value = 64
+  %a = arith.muli %cst_64, %cst_1 : tensor<128x32xi32>
+  // CHECK: contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 32], constant_value = <none>
+  %ret = scf.if %i1 -> tensor<128x32xi32> {
+    scf.yield %a : tensor<128x32xi32>
+  } else {
+    scf.yield %cst_1 : tensor<128x32xi32>
+  }
+  tt.return
+}
+
+// -----
+
 // CHECK-LABEL: @for
 tt.func @for() {
   // CHECK: contiguity = [1, 1], divisibility = [4611686018427387904, 4611686018427387904], constancy = [128, 32], constant_value = 0
@@ -469,6 +488,77 @@ tt.func @for_dynamic(%lb: index {tt.divisibility = 16 : i32}, %step: index {tt.d
   scf.for %iv = %lb to %ub step %step {
     // CHECK-NEXT: contiguity = [1], divisibility = [8], constancy = [1], constant_value = <none>
     %t = arith.index_cast %iv : index to i32
+  }
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @for_if
+tt.func @for_if(%i1: i1, %arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}) {
+  // CHECK: contiguity = [1], divisibility = [4611686018427387904], constancy = [1], constant_value = 0
+  %c0_i32 = arith.constant 0 : i32
+  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [1], constant_value = 1
+  %c1_i32 = arith.constant 1 : i32
+  // CHECK-NEXT: contiguity = [1], divisibility = [2], constancy = [1], constant_value = 10
+  %c10_i32 = arith.constant 10 : i32
+  // CHECK-NEXT: contiguity = [1, 1], divisibility = [64, 64], constancy = [128, 64], constant_value = 64
+  %cst = arith.constant dense<64> : tensor<128x64xi32>
+  // CHECK-NEXT: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>
+  %1 = tt.splat %arg0 : !tt.ptr<f16, 1> -> tensor<128x64x!tt.ptr<f16, 1>>
+  %2 = scf.for %arg9 = %c0_i32 to %c10_i32 step %c1_i32 iter_args(%arg1 = %1) -> (tensor<128x64x!tt.ptr<f16, 1>>): i32 {
+    // CHECK: scf.if
+    // CHECK: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>
+    %3 = scf.if %i1 -> (tensor<128x64x!tt.ptr<f16, 1>>) {
+      scf.yield %arg1 : tensor<128x64x!tt.ptr<f16, 1>>
+    } else {
+      scf.yield %arg1 : tensor<128x64x!tt.ptr<f16, 1>>
+    }
+    // CHECK: tt.addptr
+    // CHECK-SAME: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>
+    %4 = tt.addptr %3, %cst : tensor<128x64x!tt.ptr<f16, 1>>, tensor<128x64xi32>
+    // CHECK: scf.for
+    // CHECK: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>
+    scf.yield %1 : tensor<128x64x!tt.ptr<f16, 1>>
+  }
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @for_if_for
+tt.func @for_if_for(%i1: i1, %arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 8 : i32}) {
+  // CHECK: contiguity = [1], divisibility = [4611686018427387904], constancy = [1], constant_value = 0
+  %c0_i32 = arith.constant 0 : i32
+  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [1], constant_value = 1
+  %c1_i32 = arith.constant 1 : i32
+  // CHECK-NEXT: contiguity = [1], divisibility = [2], constancy = [1], constant_value = 10
+  %c10_i32 = arith.constant 10 : i32
+  // CHECK-NEXT: contiguity = [1, 1], divisibility = [64, 64], constancy = [128, 64], constant_value = 64
+  %cst = arith.constant dense<64> : tensor<128x64xi32>
+  // CHECK-NEXT: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>
+  %1 = tt.splat %arg0 : !tt.ptr<f16, 1> -> tensor<128x64x!tt.ptr<f16, 1>>
+  // CHECK-NEXT: contiguity = [1, 1], divisibility = [8, 8], constancy = [128, 64], constant_value = <none>
+  %2 = tt.splat %arg1 : !tt.ptr<f16, 1> -> tensor<128x64x!tt.ptr<f16, 1>>
+  // CHECK: scf.for
+  // CHECK: contiguity = [1, 1], divisibility = [8, 8], constancy = [128, 64], constant_value = <none>
+  // CHECK: scf.if
+  // CHECK: contiguity = [1, 1], divisibility = [8, 8], constancy = [128, 64], constant_value = <none>
+  // CHECK: tt.addptr
+  // CHECK-SAME: contiguity = [1, 1], divisibility = [8, 8], constancy = [128, 64], constant_value = <none>
+  // CHECK: scf.for
+  // CHECK: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>
+  %3 = scf.for %arg9 = %c0_i32 to %c10_i32 step %c1_i32 iter_args(%arg2 = %1) -> (tensor<128x64x!tt.ptr<f16, 1>>) : i32 {
+    %4 = scf.if %i1 -> (tensor<128x64x!tt.ptr<f16, 1>>) {
+      %5 = scf.for %arg10 = %c0_i32 to %c10_i32 step %c1_i32 iter_args(%arg3 = %2) -> (tensor<128x64x!tt.ptr<f16, 1>>) : i32 {
+        scf.yield %arg3 : tensor<128x64x!tt.ptr<f16, 1>>
+      }
+      scf.yield %5 : tensor<128x64x!tt.ptr<f16, 1>>
+    } else {
+      scf.yield %arg2 : tensor<128x64x!tt.ptr<f16, 1>>
+    }
+    %6 = tt.addptr %4, %cst : tensor<128x64x!tt.ptr<f16, 1>>, tensor<128x64xi32>
+    scf.yield %1 : tensor<128x64x!tt.ptr<f16, 1>>
   }
   tt.return
 }

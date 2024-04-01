@@ -1141,6 +1141,16 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
                                    &knownContiguity, &knownDivisibility,
                                    &knownConstancy);
   } else if (Operation *op = value.getDefiningOp()) {
+    if (isa<RegionBranchOpInterface>(op)) {
+      // scf::ForOp, scf::IfOp, scf::WhileOp
+      // Control flow operations are initialized with "unknown" state:
+      // the maximum possible divisibility, contiguity, and constancy.
+      knownDivisibility = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
+      knownConstancy = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
+      knownContiguity = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
+    }
+    // Other operations are conservatively initialized with the lowest possible
+    // divisibility, contiguity, and constancy unless they have specified.
     if (Attribute attr = op->getDiscardableAttr("tt.divisibility")) {
       auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
       knownDivisibility = DimVectorT(vals.begin(), vals.end());
