@@ -37,6 +37,15 @@ jobs:
             echo '::set-output name=matrix-HIP::["ubuntu-latest"]'
           fi
 
+      - name: Enable cache for llvm dependency
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.triton/llvm
+          key: llvm-6f44bb77-ubuntu-x64
+          restore-keys: |
+            llvm-6f44bb77-ubuntu-x64
+      
   Integration-Tests:
     needs: Runner-Preparation
 
@@ -302,7 +311,7 @@ jobs:
 
     container:
       image: rocm/pytorch:rocm6.0.2_ubuntu22.04_py3.10_pytorch_2.1.2
-      options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+      options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined -v ~/.triton/llvm:~/.triton/llvm --group-add video --user root
 
     steps:
       - name: Checkout PR
@@ -324,7 +333,7 @@ jobs:
 
       - name: Clear cache
         run: |
-          rm -rf ~/.triton
+          rm -rf ~/.triton/cache
 
       - name: Update PATH
         run: |
