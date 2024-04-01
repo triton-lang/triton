@@ -81,7 +81,7 @@ void init_triton_interpreter(py::module &&m) {
 
           std::unique_ptr<AtomicOp> atomic_op;
 
-// clang-format off
+    // clang-format off
     #define MAKE_ATOMIC_RMW_OP(OP_NAME, ...) \
       case OP_NAME: \
         atomic_op = makeAtomicRMWOp<OP_NAME, __VA_ARGS__>( \
