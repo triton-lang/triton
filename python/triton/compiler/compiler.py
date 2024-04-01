@@ -156,7 +156,12 @@ def triton_key():
     for lib in pkgutil.iter_modules([compiler_path, backends_path]):
         with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
             contents += [hashlib.sha256(f.read()).hexdigest()]
-    # backend
+    # Python backend
+    tp_backends_path = os.path.join(TRITON_PATH, 'backends')
+    for lib in pkgutil.iter_modules([tp_backends_path]):
+        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+            contents += [hashlib.sha256(f.read()).hexdigest()]
+    # C++ backend
     libtriton_hash = hashlib.sha256()
     with open(os.path.join(TRITON_PATH, "_C/libtriton.so"), "rb") as f:
         while True:
