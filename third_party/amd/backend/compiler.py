@@ -57,7 +57,6 @@ class HIPOptions:
             "cuda2gcn", "opencl", "ocml", "ockl", "oclc_finite_only_off", "oclc_daz_opt_off",
             "oclc_correctly_rounded_sqrt_on", "oclc_unsafe_math_off", oclc_wavefrontsize_lib
         ]
-        libs += ['oclc_isa_version_' + self.arch.replace('gfx', '')]
         for lib in libs:
             extern_libs[lib] = str(default_libdir / f'{lib}.bc')
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
@@ -182,7 +181,8 @@ class HIPBackend(BaseBackend):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
-        amd.set_code_object_version(llvm_mod, 400)
+        amd.set_isa_version(llvm_mod, options.arch)
+        amd.set_abi_version(llvm_mod, 400)
 
         # Set kernel attributes first given this may affect later optimizations.
         kernels = [fn for fn in llvm_mod.get_functions() if not fn.is_declaration()]
