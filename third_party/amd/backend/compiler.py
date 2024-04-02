@@ -205,8 +205,8 @@ class HIPBackend(BaseBackend):
         # Get some metadata
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")
 
-        ret = str(llvm_mod)
-        return ret
+        amd.cleanup_bitcode_metadata(llvm_mod)
+        return str(llvm_mod)
 
     @staticmethod
     def make_hsaco(src, metadata, options):
