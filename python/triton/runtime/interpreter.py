@@ -8,6 +8,7 @@ import triton
 import triton.language as tl
 from dataclasses import dataclass
 from .errors import InterpreterError
+from functools import partial
 from .._C.libtriton import interpreter as _interpreter
 
 
@@ -16,6 +17,7 @@ class TensorHandle:
     def __init__(self, data, dtype):
         self.data = data
         self.dtype = dtype
+        self.attr = {}
 
     def __bool__(self):
         return bool(self.data.all())
@@ -28,6 +30,9 @@ class TensorHandle:
 
     def clone(self):
         return TensorHandle(self.data.copy(), self.dtype)
+
+    def set_attr(self, key, value):
+        self.attr[key] = value
 
 
 class BlockPointerHandle:
@@ -789,10 +794,20 @@ def _patch_lang_core(lang):
     def _new_static_assert(cond, msg=""):
         assert cond, msg
 
+    def _set_attr(input, values, name):
+        # Unwrap constexpr
+        values = [values] if not isinstance(values, (list, tuple)) else values
+        values = [v.value if isinstance(v, tl.constexpr) else v for v in values]
+        input.handle.set_attr(name, values)
+        return input
+
     lang.range = _new_range
     lang.static_range = _new_range
     lang.static_assert = _new_static_assert
     lang.dtype.to_ir = _new_to_ir
+    lang.multiple_of = partial(_set_attr, name="tt.divisiblity")
+    lang.max_contiguous = partial(_set_attr, name="tt.contiguity")
+    lang.max_constancy = partial(_set_attr, name="tt.constancy")
 
     _patch_reduce_scan()
 
