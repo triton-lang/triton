@@ -890,12 +890,20 @@ emitBaseIndexForWmmaLayout(Location loc, RewriterBase &rewriter,
   Value threadIdPerWarp = urem(threadId, warpSize);
 
   Value warpId = udiv(threadId, warpSize);
-  Value warpId0 = urem(warpId, warpsPerCTA[0]);
-  Value warpId1 = urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]);
-
-  Value offWarp0 = mul(warpId0, i32_val(mnkDim[0]));
-  Value offWarp1 = mul(warpId1, i32_val(mnkDim[1]));
-
+  SmallVector<Value> multiDimWarpId = delinearize(
+      rewriter, loc, warpId, _warpsPerCTA, triton::gpu::getOrder(wmmaLayout));
+  if (shape[0] >= mnkDim[0]) {
+    assert(shape[0] % mnkDim[0] == 0);
+    multiDimWarpId[0] =
+        urem(multiDimWarpId[0], i32_val(ceil<unsigned>(shape[0], mnkDim[0])));
+  }
+  if (shape[1] >= mnkDim[1]) {
+    assert(shape[1] % mnkDim[1] == 0);
+    multiDimWarpId[1] =
+        urem(multiDimWarpId[1], i32_val(ceil<unsigned>(shape[1], mnkDim[1])));
+  }
+  Value offWarp0 = mul(multiDimWarpId[0], i32_val(mnkDim[0]));
+  Value offWarp1 = mul(multiDimWarpId[1], i32_val(mnkDim[1]));
   return {add(udiv(threadIdPerWarp, i32_val(mnkDim[2])), offWarp0),
           add(laneId, offWarp1)};
 }
