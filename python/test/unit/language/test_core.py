@@ -3634,6 +3634,7 @@ def test_vectorization(N, num_ctas, device):
     # np.testing.assert_allclose(dst, src[:N])
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("has_hints", [False, True])
 def test_vectorization_hints(has_hints, device):
     src = torch.empty(1024, device=device)
