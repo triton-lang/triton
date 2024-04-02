@@ -92,11 +92,9 @@ private:
 
     auto srcStrides =
         getStridesFromShapeAndOrder(srcTy.getShape(), inOrd, loc, rewriter);
-    auto dstIndices = emitIndices(loc, rewriter, dstLayout, dstTy, true);
 
-    SmallVector<Value> outVals =
-        loadSharedToDistributed(op.getResult(), dstIndices, op.getSrc(),
-                                smemObj, elemTy, loc, rewriter);
+    SmallVector<Value> outVals = loadSharedToDistributed(
+        op.getResult(), op.getSrc(), smemObj, elemTy, loc, rewriter);
 
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);

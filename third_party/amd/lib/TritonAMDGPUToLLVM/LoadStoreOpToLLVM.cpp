@@ -205,7 +205,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
         size_t elemOffset = vecStart + wordIdx * wordNElems;
         Type int_ty = IntegerType::get(getContext(), width);
-        Value ptr = addrspacecast(ptrElems[elemOffset], ptr_ty(getContext()));
+        Value ptr = addrspacecast(ptr_ty(getContext()), ptrElems[elemOffset]);
         auto loaded = rewriter.create<scf::IfOp>(
             loc, pred,
             [&](OpBuilder &builder, Location loc) {

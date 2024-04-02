@@ -23,7 +23,8 @@ class SharedEncodingAttr;
 
 SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 const ArrayRef<int64_t> &shape,
-                                                TensorOrMemDesc type);
+                                                TensorOrMemDesc type,
+                                                int numWarps);
 
 /// Returns true if the Load uses block pointer.
 bool isLoadFromTensorPtr(triton::LoadOp op);
@@ -163,6 +164,11 @@ Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
 
 Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape);
+
+// Return true if the op is a pure elementwise_inline_asm op with a single
+// operand and single result.
+bool isPureUnaryInlineAsm(Operation *op);
+
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_

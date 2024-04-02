@@ -60,10 +60,10 @@ namespace SharedToDotOperandMFMA {
  * @param rewriter
  * @param loc
  * @param elemsPerInstr operand tile shape consumed by one MFMA instruction
- * @param waveId id component of 2d wave grid along nono-K axis
+ * @param waveId id component of 2d wave grid along non-K axis
  * @param laneId lane id in warp [0..63]
  * @param numOfElems number of elements accessed by thread per repetition
- * @param reps number of instructions repretition to fully cover dot operand
+ * @param reps number of instructions repetition to fully cover dot operand
  * @param smemStrides strides in LDS tensor
  * @param loadVecSize number of elements loaded by one operation
  * @param iNonKDim non-K dimension size of one MFMA instruction
@@ -271,9 +271,9 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   Value linearWaveId = udiv(thread, waveSize);
   Value lane = urem(thread, waveSize);
 
-  Value spatialWaveId =
-      AMD::getWarpIdInBlock(rewriter, loc, linearWaveId, warpsPerCTA,
-                            mfmaInstrNonK, shape[nonKDimIdx], nonKDimIdx);
+  Value spatialWaveId = AMD::getWarpIdInBlock(
+      rewriter, loc, linearWaveId, warpsPerCTA, mfmaInstrNonK,
+      shape[nonKDimIdx], nonKDimIdx, triton::gpu::getOrder(mfmaLayout));
   // number of duplicates of elements in wave
   // In case of 64x4 x 4x4 multiplication, 4x4 B operand is duplicated 16 times
   int numSubBlocks = 1;

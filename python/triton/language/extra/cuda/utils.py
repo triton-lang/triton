@@ -94,16 +94,16 @@ def convert_custom_float8(arg, dst_ty, fp_downcast_rounding, has_minx2, _builder
     assert arg.type.scalar.is_fp16() or arg.type.scalar.is_fp32()
     downcast_val = arg
     if arg.type.scalar.is_fp32():
-        downcast_val = downcast_val.to(core.float16, _builder=_builder)
+        downcast_val = downcast_val.to(core.float16, fp_downcast_rounding="rtz", _builder=_builder)
     downcast_val = convert_float16_to_fp8e4b15(downcast_val, has_minx2=has_minx2, _builder=_builder)
     return downcast_val
 
 
 @core.builtin
-def convert_custom_float8_sm90(arg, dst_ty, fp_downcast_rounding=None, _builder=None):
+def convert_custom_float8_sm80(arg, dst_ty, fp_downcast_rounding=None, _builder=None):
     return convert_custom_float8(arg, dst_ty, fp_downcast_rounding, has_minx2=True, _builder=_builder)
 
 
 @core.builtin
-def convert_custom_float8_sm80(arg, dst_ty, fp_downcast_rounding=None, _builder=None):
+def convert_custom_float8_sm70(arg, dst_ty, fp_downcast_rounding=None, _builder=None):
     return convert_custom_float8(arg, dst_ty, fp_downcast_rounding, has_minx2=False, _builder=_builder)

@@ -1313,6 +1313,7 @@ def test_noinline(mode, device):
 # ---------------
 # test atomics
 # ---------------
+@pytest.mark.interpreter
 @pytest.mark.parametrize(
     "op, dtype_x_str, mode, sem",
     itertools.chain.from_iterable([[
@@ -1339,7 +1340,11 @@ def test_noinline(mode, device):
                                    for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']
                                    for sem in [None, 'acquire', 'release', 'acq_rel', 'relaxed']]))
 def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
-    check_cuda_only(device)
+    if is_interpreter():
+        if dtype_x_str == 'float16':
+            pytest.skip("Only test atomic float16 ops on GPU")
+    else:
+        check_cuda_only(device)
 
     capability = torch.cuda.get_device_capability()
     if capability[0] < 7:
@@ -1394,6 +1399,7 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     assert f"atom.global.gpu.{sem_str}" in h.asm["ptx"]
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_atomic_rmw_predicate(num_ctas, device):
 
@@ -1408,6 +1414,7 @@ def test_atomic_rmw_predicate(num_ctas, device):
     assert x.item() == 63
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("shape, axis, num_ctas", [(shape, axis, num_ctas)
                                                    for shape in [(2, 2), (2, 8), (8, 2), (8, 8), (32, 32), (64, 64)]
                                                    for axis in [0, 1]
@@ -1439,6 +1446,7 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, device):
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=1e-4)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_tensor_atomic_rmw_block(num_ctas, device):
     shape = (8, 8)
@@ -1457,6 +1465,7 @@ def test_tensor_atomic_rmw_block(num_ctas, device):
     assert torch.min(x).item() == 0.0
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_atomic_cas(sem, num_ctas, device):
@@ -1493,23 +1502,24 @@ def test_atomic_cas(sem, num_ctas, device):
     assert f"atom.global.{sem_str}" in h.asm["ptx"]
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_tensor_atomic_cas(sem, num_ctas, device):
 
     @triton.jit
-    def change_value(X, BLOCK_SIZE: tl.constexpr):
+    def change_value(X, BLOCK_SIZE: tl.constexpr, sem: tl.constexpr):
         pid = tl.program_id(axis=0)
         block_start = pid * BLOCK_SIZE
         offsets = block_start + tl.arange(0, BLOCK_SIZE)
         t1 = tl.full((BLOCK_SIZE, ), 0, dtype=tl.int64)
         t2 = tl.full((BLOCK_SIZE, ), 2, dtype=tl.int64)
-        tl.atomic_cas(X + offsets, t1, t2)
+        tl.atomic_cas(X + offsets, t1, t2, sem=sem)
 
     X = torch.tensor([0, 1, 0, 1, 0, 1, 0, 1], device=device, dtype=torch.int64)
     Y = torch.tensor([2, 1, 2, 1, 2, 1, 2, 1], device=device, dtype=torch.int64)
 
-    change_value[(2, )](X, 4)
+    change_value[(2, )](X, 4, sem)
     assert (torch.equal(X, Y))
 
 
@@ -2924,8 +2934,6 @@ def convert_fp8_to_fp32(x, device, dtype_str):
      for float8_type in ["float8e5", "float8e4nv"]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, num_ctas, device):
-    if is_hip():
-        pytest.skip("Skipping test until we fix bug in amd backend (to use layout order)")
     check_cuda_only(device)
 
     capability = torch.cuda.get_device_capability()

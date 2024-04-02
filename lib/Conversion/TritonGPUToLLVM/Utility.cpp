@@ -120,6 +120,18 @@ Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v) {
                                            IntegerAttr::get(i32ty, v));
 }
 
+Value createConstantI64(Location loc, OpBuilder &rewriter, int64_t v) {
+  auto i64ty = rewriter.getIntegerType(64);
+  return rewriter.create<LLVM::ConstantOp>(loc, i64ty,
+                                           IntegerAttr::get(i64ty, v));
+}
+
+Value createConstantF16(Location loc, OpBuilder &rewriter, float v) {
+  auto type = type::f16Ty(rewriter.getContext());
+  return rewriter.create<LLVM::ConstantOp>(loc, type,
+                                           rewriter.getF16FloatAttr(v));
+}
+
 Value createConstantF32(Location loc, OpBuilder &rewriter, float v) {
   auto type = type::f32Ty(rewriter.getContext());
   return rewriter.create<LLVM::ConstantOp>(loc, type,

@@ -1,10 +1,55 @@
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "amd/include/TritonAMDGPUToLLVM/GCNAsmFormat.h"
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+
 namespace mlir::triton::AMD {
+
+namespace {
+template <typename T>
+LLVM::LLVMFuncOp getOrInsertFunction(T &moduleOp, const Location loc,
+                                     ConversionPatternRewriter &rewriter,
+                                     StringRef name,
+                                     LLVM::LLVMFunctionType type) {
+  LLVM::LLVMFuncOp ret;
+  if (!(ret = moduleOp.template lookupSymbol<LLVM::LLVMFuncOp>(name))) {
+    ConversionPatternRewriter::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(moduleOp.getBody());
+    ret = rewriter.create<LLVM::LLVMFuncOp>(loc, name, type,
+                                            LLVM::Linkage::External);
+  }
+  return ret;
+}
+
+// Extend all values to 64-bit per printf call requirements.
+Value printfPromoteValue(ConversionPatternRewriter &rewriter, Value value) {
+  auto *context = rewriter.getContext();
+  auto loc = UnknownLoc::get(context);
+  auto type = value.getType();
+  assert(type.getIntOrFloatBitWidth() <= 64);
+
+  if (auto floatType = dyn_cast<FloatType>(type)) {
+    Value newValue = value;
+    if (!floatType.isF64())
+      newValue = fpext(f64_ty, newValue);
+    return bitcast(newValue, i64_ty);
+  }
+
+  assert(type.isIntOrIndex());
+  if (type.getIntOrFloatBitWidth() < 64) {
+    if (type.isUnsignedInteger())
+      return zext(ui64_ty, value);
+    if (type.isSignedInteger())
+      return sext(i64_ty, value);
+    // Signless integers are printed using unsigned integer formats.
+    return zext(i64_ty, value);
+  }
+
+  return value;
+}
+} // namespace
 
 bool TargetInfo::supportMaximumMinimum() const { return false; }
 Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
@@ -83,6 +128,69 @@ bool TargetInfo::processReplicaUsingStMatrix(
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
     ArrayRef<unsigned> outOrd, unsigned accumNumReplicates) const {
   return false;
+}
+
+void TargetInfo::printf(Value formatStrStart, int formatStrByteCount,
+                        ValueRange args,
+                        ConversionPatternRewriter &rewriter) const {
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  auto *ctx = rewriter.getContext();
+  mlir::Location loc = UnknownLoc::get(ctx);
+
+  // See
+  // https://github.com/ROCm/ROCm-Device-Libs/blob/rocm-6.0.x/ockl/src/services.cl#L263-L361
+  // for details about the following HIP device print functions.
+  LLVM::LLVMFuncOp printBeginFn =
+      getOrInsertFunction(moduleOp, loc, rewriter, "__ockl_printf_begin",
+                          LLVM::LLVMFunctionType::get(i64_ty, {i64_ty}));
+  LLVM::LLVMFuncOp printStrFn = getOrInsertFunction(
+      moduleOp, loc, rewriter, "__ockl_printf_append_string_n",
+      LLVM::LLVMFunctionType::get(
+          i64_ty, {i64_ty, ptr_ty(ctx), /*length=*/i64_ty, /*isLast=*/i32_ty}));
+  LLVM::LLVMFuncOp printArgsFn;
+  if (!args.empty()) {
+    printArgsFn = getOrInsertFunction(
+        moduleOp, loc, rewriter, "__ockl_printf_append_args",
+        LLVM::LLVMFunctionType::get(
+            i64_ty, {i64_ty, /*numArgs=*/i32_ty, i64_ty, i64_ty, i64_ty, i64_ty,
+                     i64_ty, i64_ty, i64_ty, /*isLast=*/i32_ty}));
+  }
+
+  // Emit the intrinsic function call to begin the printf.
+  Value zeroI64 = rewriter.create<LLVM::ConstantOp>(loc, i64_ty, 0);
+  Value message = call(printBeginFn, zeroI64).getResult();
+
+  // Emit the intrinsic function call to handle the printf format string.
+  Value oneI32 = i32_val(1);
+  Value zeroI32 = i32_val(0);
+  Value formatStrLen =
+      rewriter.create<LLVM::ConstantOp>(loc, i64_ty, formatStrByteCount);
+  SmallVector<Value, 4> arguments = {message, formatStrStart, formatStrLen,
+                                     args.empty() ? oneI32 : zeroI32};
+  message = call(printStrFn, arguments).getResult();
+
+  // Emit the intrinsic function call to handle arguments iteratively.
+  // We can only handle at most 7 values each time.
+  constexpr size_t kArgsPerGroup = 7;
+  for (size_t group = 0; group < args.size(); group += kArgsPerGroup) {
+    size_t bound = std::min(group + kArgsPerGroup, args.size());
+    size_t numArgs = bound - group;
+
+    SmallVector<Value, 2 + kArgsPerGroup + 1> arguments;
+    arguments.push_back(message);
+    arguments.push_back(i32_val(numArgs));
+    for (size_t i = group; i < bound; ++i) {
+      arguments.push_back(printfPromoteValue(rewriter, args[i]));
+    }
+    // Pad out to 7 arguments since the function always needs 7 args.
+    for (size_t extra = numArgs; extra < kArgsPerGroup; ++extra) {
+      arguments.push_back(zeroI64);
+    }
+
+    Value isLast = (bound == args.size()) ? oneI32 : zeroI32;
+    arguments.push_back(isLast);
+    message = call(printArgsFn, arguments).getResult();
+  }
 }
 
 } // namespace mlir::triton::AMD

@@ -149,6 +149,30 @@ SmallVector<Value> packI32(const SmallVector<Value> &inValues, Type srcTy,
   }
   return outValues;
 }
+
+int getNumElementsPerThreads(Type type,
+                             const LLVMTypeConverter *typeConverter) {
+  int numElemsPerThread = 1;
+  auto tensorTy = type.dyn_cast<RankedTensorType>();
+  if (!tensorTy)
+    return numElemsPerThread;
+  auto structType =
+      typeConverter->convertType(type).dyn_cast<LLVM::LLVMStructType>();
+  if (structType) {
+    numElemsPerThread = structType.getBody().size();
+  }
+  auto encoding = tensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
+  if (!(encoding && encoding.getParent().isa<NvidiaMmaEncodingAttr>()))
+    return numElemsPerThread;
+  auto eltType = tensorTy.getElementType();
+  assert(eltType.getIntOrFloatBitWidth() <= 32 &&
+         "Only support element type with bit width <= 32 in dot operand mma "
+         "layout");
+  // dot operand data are packed into i32 elements so use the following formula
+  // to get the number of elements per thread.
+  return (32 / eltType.getIntOrFloatBitWidth()) * numElemsPerThread;
+}
+
 } // namespace mlir::triton::gpu
 
 namespace {
@@ -449,25 +473,8 @@ struct ElementwiseInlineAsmOpConversion
           unpackI32(subOperands, argTy, rewriter, loc, getTypeConverter()));
     }
 
-    // Although we ensure that all operands and results to this op have the same
-    // encoding, MMA layouts have a different physical ordering depending on the
-    // bit width of the underlying element.
-    //
-    // Thus if the inputs to the inline asm op are MMA with different widths, we
-    // need to reorder them so we iterate over the operands' elements in the
-    // same logical order.
-    for (unsigned i = 0; i < unpackedOperands.size(); ++i) {
-      unpackedOperands[i] = reorderValues(
-          unpackedOperands[i], /*inType=*/op->getOperand(i).getType(),
-          /*ouType=*/op->getResult(0).getType());
-    }
-
-    size_t numElemsPerThread = 1;
-    auto structType = typeConverter->convertType(op->getResult(0).getType())
-                          .dyn_cast<LLVM::LLVMStructType>();
-    if (structType) {
-      numElemsPerThread = structType.getBody().size();
-    }
+    int numElemsPerThread = getNumElementsPerThreads(op->getResult(0).getType(),
+                                                     getTypeConverter());
 
     // These are checked by the verifier, so we don't need to raise a nice
     // error.
@@ -475,13 +482,13 @@ struct ElementwiseInlineAsmOpConversion
       return operands.size() == numElemsPerThread;
     }));
     if (numElemsPerThread % op.getPackedElement() != 0) {
-      // Pad with the first value of the operand for each operand to have a
-      // multiple of op.getPackedElement() elements.
+      // Pad with the undef for each operand to have a multiple of
+      // op.getPackedElement() elements.
       int numPaddedValue =
           op.getPackedElement() - numElemsPerThread % op.getPackedElement();
       for (auto &operands : unpackedOperands) {
         for (int i = 0; i < numPaddedValue; i++) {
-          operands.push_back(operands[0]);
+          operands.push_back(undef(operands[0].getType()));
         }
       }
     }
@@ -525,8 +532,8 @@ struct ElementwiseInlineAsmOpConversion
       }
       auto packed = packI32(unpackedResults[i], op->getResult(i).getType(),
                             rewriter, loc, getTypeConverter());
-      outs.push_back(packLLElements(loc, getTypeConverter(), unpackedResults[i],
-                                    rewriter, op->getResult(i).getType()));
+      outs.push_back(packLLElements(loc, getTypeConverter(), packed, rewriter,
+                                    op->getResult(i).getType()));
     }
 
     rewriter.replaceOp(op, outs);

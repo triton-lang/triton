@@ -112,7 +112,7 @@ class CUDABackend(BaseBackend):
         import triton.language.extra.cuda as cuda
         codegen_fns = dict()
         codegen_fns[
-            "convert_custom_types"] = cuda.convert_custom_float8_sm90 if self.capability >= 90 else cuda.convert_custom_float8_sm80
+            "convert_custom_types"] = cuda.convert_custom_float8_sm80 if self.capability >= 80 else cuda.convert_custom_float8_sm70
         return codegen_fns
 
     def load_dialects(self, ctx):

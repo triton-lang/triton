@@ -135,7 +135,7 @@ jobs:
 
       - name: Upload artifacts archive
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: artifacts ${{ matrix.runner[1] }}
           path: ~/.triton/artifacts.tar.gz
@@ -243,7 +243,7 @@ jobs:
             exit 1
           fi
       - name: Download current job artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: artifacts A100
       - name: Unzip current job artifacts
@@ -284,7 +284,7 @@ jobs:
           name: comparison_result
           path: comparison_result
       - name: Upload results as artifact
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: kernels-reference-check
           path: kernels_reference_check.txt
@@ -306,14 +306,14 @@ jobs:
 
     steps:
       - name: Checkout PR
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         if: ${{ github.event_name == 'issue_comment' }}
         with:
           ref: refs/pull/${{ github.event.issue.number }}/head
           submodules: 'true'
 
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         if: ${{ github.event_name != 'issue_comment' }}
         with:
           submodules: 'true'
@@ -346,4 +346,4 @@ jobs:
       - name: Run python tests on ROCM
         run: |
           cd python
-          pytest --capture=tee-sys -rfs -vvv -n 32 ./test/unit/language/test_core.py
+          pytest --capture=tee-sys -rfs -vvv -n 32 ./test/unit/language/test_core.py ./test/unit/language/test_subprocess.py -k "not test_assert"
