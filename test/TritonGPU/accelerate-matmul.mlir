@@ -142,7 +142,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %a = arith.constant dense<0.000000e+00> : tensor<128x128xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}>>
     %b = arith.constant dense<0.000000e+00> : tensor<128x128xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>>
 
-    %result = tt.dot %a, %b, %zero_f32 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x128xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x128xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x128xf32, #blocked>
+    %result = tt.dot %a, %b, %zero_f32 {inputPrecision = 0: i32, allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x128xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x128xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x128xf32, #blocked>
     %result_ptr = tt.splat %arg0 : !tt.ptr<f32, 1> -> tensor<128x128x!tt.ptr<f32, 1>, #blocked>
     tt.store %result_ptr, %result, %mask {cache = 1 : i32, evict = 1 : i32} : tensor<128x128xf32, #blocked>
     tt.return
