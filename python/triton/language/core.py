@@ -698,6 +698,9 @@ class constexpr:
         return self.value(*args, **kwds)
 
 
+CONSTEXPR_0 = constexpr(0)
+
+
 def check_bit_width(value, shift_value):
     if isinstance(value, tensor) and isinstance(shift_value, constexpr):
         bitwidth = value.type.scalar.primitive_bitwidth
@@ -1121,7 +1124,7 @@ class tensor:
     def cumprod(self, axis=0, reverse=False) -> tensor:
         ...
 
-    def sort(self, dim: constexpr = None, descending: constexpr = constexpr(0)) -> tensor:
+    def sort(self, dim: constexpr = None, descending: constexpr = CONSTEXPR_0) -> tensor:
         ...
 
     def flip(self, dim=None) -> tensor:
@@ -1529,8 +1532,8 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
 
 
 @builtin
-def load(pointer, mask=None, other=None, boundary_check=tuple(), padding_option="", cache_modifier="",
-         eviction_policy="", volatile=False, _builder=None):
+def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", cache_modifier="", eviction_policy="",
+         volatile=False, _builder=None):
     """
     Return a tensor of data whose values are loaded from memory at location defined by `pointer`:
 
@@ -2545,7 +2548,7 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
             arithmetic_check = False
         broadcast_arg = dispatch_args[0]
         # Get the broadcast shape over all the arguments
-        for i, item in enumerate(dispatch_args):
+        for item in dispatch_args:
             _, broadcast_arg = semantic.binary_op_type_checking_impl(item, broadcast_arg, _builder,
                                                                      arithmetic_check=arithmetic_check)
         # Change the shape of each argument based on the broadcast shape
@@ -2554,7 +2557,7 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
                                                                         arithmetic_check=arithmetic_check)
         if not all_scalar:
             ret_shape = broadcast_arg.shape
-    func = getattr(_builder, "create_extern_elementwise")
+    func = _builder.create_extern_elementwise
     return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_shape, is_pure, _builder)
 
 
