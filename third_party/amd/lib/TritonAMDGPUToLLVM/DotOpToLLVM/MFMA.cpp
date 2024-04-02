@@ -142,7 +142,7 @@ struct DotOpMFMAConversionHelper {
     return reducedAcc;
   }
 
-  /// @brief MFMA 4x4 is computes 16 matrix mupliplications, this functions adds
+  /// @brief MFMA 4x4 is computes 16 matrix multiplications, this functions adds
   /// these 16 matrices to get final 4x4 matrix
   /// @param numSubBlocks
   /// @param acc

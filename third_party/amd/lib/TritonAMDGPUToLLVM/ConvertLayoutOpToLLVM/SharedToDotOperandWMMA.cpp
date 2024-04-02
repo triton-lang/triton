@@ -51,15 +51,15 @@ namespace SharedToDotOperandWMMA {
  * 4. Offset of one lane data in a tile
  * 5. Offset of particular element of tensor processed by one lane
  *
- * This function computes these offsets for axies independently
+ * This function computes these offsets for axes independently
  *
  * @param rewriter
  * @param loc
  * @param elemsPerInstr operand tile shape consumed by one WMMA instruction
- * @param warpId id component of 2d warp grid along nono-K axis
+ * @param warpId id component of 2d warp grid along non-K axis
  * @param laneId lane id in warp [0..63]
  * @param numOfElems number of elements accessed by thread per repetition
- * @param reps number of instructions repretition to fully cover dot operand
+ * @param reps number of instructions repetition to fully cover dot operand
  * @param smemStrides strides in LDS tensor
  * @param loadVecSize number of elements loaded by one operation
  * @param iNonKDim non-K dimension of dot operand
@@ -150,9 +150,9 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   SmallVector<Value> loadedValues;
   SmallVector<Value> offsets;
   Value smemBase;
-  Value spatialWarpId =
-      AMD::getWarpIdInBlock(rewriter, loc, linearWarpId, warpsPerCTA,
-                            elemsPerInstr[0], shape[nonKDimIdx], nonKDimIdx);
+  Value spatialWarpId = AMD::getWarpIdInBlock(
+      rewriter, loc, linearWarpId, warpsPerCTA, elemsPerInstr[0],
+      shape[nonKDimIdx], nonKDimIdx, triton::gpu::getOrder(wmmaLayout));
   if (opIdx == 0) {
     offsets = AMD::computeOffsetsAType(
         rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,

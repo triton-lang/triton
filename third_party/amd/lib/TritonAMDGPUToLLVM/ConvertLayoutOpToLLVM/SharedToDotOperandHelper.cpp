@@ -7,10 +7,12 @@ namespace mlir::triton::AMD {
 // Get warpId inside block of warps.
 Value getWarpIdInBlock(ConversionPatternRewriter &rewriter, Location loc,
                        Value warpId, const ArrayRef<unsigned int> &wpt,
-                       int elemPerInstrNonK, int tensorSizeNonK, int nonKIdx) {
-  if (nonKIdx == 1)
-    warpId = udiv(warpId, i32_val(wpt[0]));
-  return urem(urem(warpId, i32_val(wpt[nonKIdx])),
+                       int elemPerInstrNonK, int tensorSizeNonK, int nonKIdx,
+                       const ArrayRef<unsigned int> &order) {
+  SmallVector<Value> multiDimWarpId =
+      delinearize(rewriter, loc, warpId, wpt, order);
+
+  return urem(multiDimWarpId[nonKIdx],
               i32_val(tensorSizeNonK / elemPerInstrNonK));
 }
 
