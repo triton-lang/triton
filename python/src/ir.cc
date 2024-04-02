@@ -191,6 +191,12 @@ void init_triton_ir(py::module &&m) {
       .value("NONE", PropagateNan::NONE)
       .value("ALL", PropagateNan::ALL);
 
+  py::enum_<InputPrecision>(m, "INPUT_PRECISION", py::module_local())
+      .value("TF32", InputPrecision::TF32)
+      .value("TF32x3", InputPrecision::TF32x3)
+      .value("IEEE", InputPrecision::IEEE)
+      .export_values();
+
   py::class_<MLIRContext>(m, "context", py::module_local()).def(py::init<>());
 
   m.def("load_dialects", [](MLIRContext &context) {
@@ -719,15 +725,7 @@ void init_triton_ir(py::module &&m) {
            })
       .def("get_fp8e4b15_ty",
            [](TritonOpBuilder &self) -> Type {
-             // TODO: upstream FP8E4B15 into MLIR, or find a way to externally
-             // have a float-like type compatible with float only native ops
-             return self.getBuilder().getType<Float8E4M3B11FNUZType>();
-           })
-      .def("get_fp8e4b15x4_ty",
-           [](TritonOpBuilder &self) -> Type {
-             // TODO: upstream FP8E4B15 into MLIR, or find a way to externally
-             // have a float-like type compatible with float only native ops
-             return self.getBuilder().getType<Float8E4M3FNType>();
+             return self.getBuilder().getI8Type();
            })
       .def("get_fp8e5_ty",
            [](TritonOpBuilder &self) -> Type {
@@ -1371,9 +1369,10 @@ void init_triton_ir(py::module &&m) {
                                        ProgramIDDim(axis)));
            })
       .def("create_dot",
-           [](TritonOpBuilder &self, Value &a, Value &b, Value &c,
-              bool allowTF32, int maxNumImpreciseAcc) -> Value {
-             return self.create<DotOp>(c.getType(), a, b, c, allowTF32,
+           [](TritonOpBuilder &self, mlir::Value &a, mlir::Value &b,
+              mlir::Value &c, InputPrecision inputPrecision,
+              int maxNumImpreciseAcc) -> mlir::Value {
+             return self.create<DotOp>(c.getType(), a, b, c, inputPrecision,
                                        maxNumImpreciseAcc);
            })
       .def("create_floor",
@@ -1411,6 +1410,10 @@ void init_triton_ir(py::module &&m) {
       .def("create_sqrt",
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::SqrtOp>(val);
+           })
+      .def("create_rsqrt",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::RsqrtOp>(val);
            })
       .def("create_fabs",
            [](TritonOpBuilder &self, Value &val) -> Value {
@@ -1494,7 +1497,7 @@ void init_triton_ir(py::module &&m) {
              return self.create<LLVM::UndefOp>(type);
            })
       .def("create_histogram",
-           [](TritonOpBuilder &self, Value operand, int numBins) -> OpState {
+           [](TritonOpBuilder &self, Value operand, int numBins) -> Value {
              return self.create<HistogramOp>(
                  RankedTensorType::get(
                      {static_cast<int64_t>(numBins)},

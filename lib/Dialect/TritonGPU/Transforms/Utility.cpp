@@ -22,7 +22,8 @@ using namespace triton;
 
 SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 const ArrayRef<int64_t> &shape,
-                                                TensorOrMemDesc type) {
+                                                TensorOrMemDesc type,
+                                                int numWarps) {
   if (version == 1)
     return {16, 16};
   else if (version == 2) {
@@ -53,9 +54,13 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                      24, 16, 8});
     }
 
+    unsigned m = 16;
+    unsigned mWarps = std::max<unsigned>(shape[0] / m, 1);
+    unsigned nWarps = std::max<unsigned>(numWarps / mWarps, 1);
+    unsigned maxN = std::max<unsigned>(shape[1] / nWarps, 8);
     for (auto n : validN) {
-      if (shape[1] % n == 0) {
-        return {16, n, k};
+      if (shape[1] % n == 0 && n <= maxN) {
+        return {m, n, k};
       }
     }
 
@@ -801,6 +806,14 @@ Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
     }
   }
   return linear;
+}
+
+bool isPureUnaryInlineAsm(Operation *op) {
+  auto inlineAsmOp = dyn_cast<ElementwiseInlineAsmOp>(op);
+  if (!inlineAsmOp)
+    return false;
+  return op->getNumOperands() == 1 && op->getNumResults() == 1 &&
+         inlineAsmOp.getPure();
 }
 
 namespace {

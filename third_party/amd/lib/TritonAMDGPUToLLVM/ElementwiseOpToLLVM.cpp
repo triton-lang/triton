@@ -664,107 +664,6 @@ static const std::string Fp16_to_Fp8E4M3B15(bool has_minx2) {
 }
 #endif
 
-/* ----- FP8E4M3B15X4 ------ */
-// NOTE: NOT USED RIGHT NOW
-// Packed variant of FP8E4M3B15
-// A little bit more efficient but elements need are not
-// serialized as you expect when 4 are packed into int32.
-
-// fast conversion code provided by Scott Gray @ OpenAI
-// $0 = (($2 << 1) & 0x80008000u) | (($2 << 7) & 0x3f803f80u);
-// $1 = (($2 << 0) & 0x80008000u) | (($2 << 0) & 0x3f803f80u);
-// WARN: subnormal (0bs0000xxx) are not handled
-#ifdef USE_ROCM
-static SmallVector<Value>
-Fp8E4M3B15x4_to_Fp16(Location loc, ConversionPatternRewriter &rewriter,
-                     const SmallVector<Value> &v) {
-  auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  Value fp8x4Vec = undef(fp8x4VecTy);
-  fp8x4Vec = insert_element(fp8x4VecTy, fp8x4Vec, v[0], i32_val(0));
-  fp8x4Vec = insert_element(fp8x4VecTy, fp8x4Vec, v[1], i32_val(1));
-  fp8x4Vec = insert_element(fp8x4VecTy, fp8x4Vec, v[2], i32_val(2));
-  fp8x4Vec = insert_element(fp8x4VecTy, fp8x4Vec, v[3], i32_val(3));
-  fp8x4Vec = bitcast(fp8x4Vec, i32_ty);
-
-  Value a0 = add(i32_ty, fp8x4Vec, fp8x4Vec);
-  Value a1 = shl(i32_ty, fp8x4Vec, i32_val(7));
-
-  Value fp16x2Vec0 = and_(i32_ty, a0, i32_val(0x80008000));
-  fp16x2Vec0 = or_(i32_ty, fp16x2Vec0, and_(i32_ty, a1, i32_val(0x3f803f80)));
-  Value fp16x2Vec1 = and_(i32_ty, fp8x4Vec, i32_val(0xbf80bf80));
-
-  auto fp16x2VecTy = vec_ty(f16_ty, 2);
-  fp16x2Vec0 = bitcast(fp16x2Vec0, fp16x2VecTy);
-  fp16x2Vec1 = bitcast(fp16x2Vec1, fp16x2VecTy);
-
-  return {extract_element(f16_ty, fp16x2Vec0, i32_val(0)),
-          extract_element(f16_ty, fp16x2Vec0, i32_val(1)),
-          extract_element(f16_ty, fp16x2Vec1, i32_val(0)),
-          extract_element(f16_ty, fp16x2Vec1, i32_val(1))};
-}
-#else
-static const std::string Fp8E4M3B15x4_to_Fp16 =
-    "{                                      \n"
-    ".reg .b32 a<2>;                        \n"
-    "add.u32 a0, $2, $2;                    \n"
-    "shl.b32 a1, $2, 7;                     \n"
-    "and.b32  $0, a0, 0x80008000;           \n"
-    "lop3.b32 $0, $0, a1, 0x3f803f80, 0xf8; \n"
-    "and.b32  $1, $2, 0xbf80bf80;           \n"
-    "}";
-#endif
-
-// Fp16 -> Fp8E4M3B15 (packed)
-// fast conversion code provided by Scott Gray @ OpenAI
-// ret = ((e4.x >> 1) & (0x80008000u >> 1)) |
-//       ((e4.x >> 7) & (0x3f803f80u >> 7)) |
-//       ((e4.y >> 0) & (0x80008000u >> 0)) |
-//       ((e4.y >> 0) & (0x3f803f80u >> 0)) ;
-// WARN: subnormal (0bs0000xxx) are not handled
-#ifdef USE_ROCM
-static SmallVector<Value>
-Fp16_to_Fp8E4M3B15x4(Location loc, ConversionPatternRewriter &rewriter,
-                     const SmallVector<Value> &v) {
-  auto fp16x2VecTy = vec_ty(f16_ty, 2);
-  Value fp16x2Vec0 = undef(fp16x2VecTy);
-  Value fp16x2Vec1 = undef(fp16x2VecTy);
-
-  fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v[0], i32_val(0));
-  fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v[1], i32_val(1));
-  fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v[2], i32_val(0));
-  fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v[3], i32_val(1));
-
-  fp16x2Vec0 = bitcast(fp16x2Vec0, i32_ty);
-  fp16x2Vec1 = bitcast(fp16x2Vec1, i32_ty);
-
-  Value a0 = lshr(i32_ty, fp16x2Vec0, i32_val(1));
-  Value a1 = lshr(i32_ty, fp16x2Vec0, i32_val(7));
-
-  Value fp8x4Vec = and_(i32_ty, a0, i32_val(0x40004000));
-  fp8x4Vec = or_(i32_ty, fp8x4Vec, and_(i32_ty, a1, i32_val(0x007f007f)));
-  fp8x4Vec =
-      or_(i32_ty, fp8x4Vec, and_(i32_ty, fp16x2Vec1, i32_val(0xbf80bf80)));
-
-  auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  fp8x4Vec = bitcast(fp8x4Vec, fp8x4VecTy);
-
-  return {extract_element(i8_ty, fp8x4Vec, i32_val(0)),
-          extract_element(i8_ty, fp8x4Vec, i32_val(1)),
-          extract_element(i8_ty, fp8x4Vec, i32_val(2)),
-          extract_element(i8_ty, fp8x4Vec, i32_val(3))};
-}
-#else
-static const std::string Fp16_to_Fp8E4M3B15x4 =
-    "{                                       \n"
-    ".reg .b32 a<2>;                         \n"
-    "shr.b32  a0, $1, 1;                     \n"
-    "shr.b32  a1, $1, 7;                     \n"
-    "and.b32  $0,     a0, 0x40004000;        \n"
-    "lop3.b32 $0, $0, a1, 0x007f007f, 0xf8;  \n"
-    "lop3.b32 $0, $0, $2, 0xbf80bf80, 0xf8;  \n"
-    "}";
-#endif
-
 #ifdef USE_ROCM
 static Value Fp8E4M3FNUZ_to_Fp16_oneValue(Location loc,
                                           ConversionPatternRewriter &rewriter,
@@ -1146,7 +1045,6 @@ struct FpToFpOpConversion
     auto F8E4M3TyID = TypeID::get<mlir::Float8E4M3FNUZType>();
 #endif
     auto F8E5M2TyID = TypeID::get<mlir::Float8E5M2Type>();
-    auto F8E4M3FNTyID = TypeID::get<mlir::Float8E4M3FNType>();
     auto F16TyID = TypeID::get<mlir::Float16Type>();
     auto BF16TyID = TypeID::get<mlir::BFloat16Type>();
     auto F32TyID = TypeID::get<mlir::Float32Type>();
@@ -1158,7 +1056,6 @@ struct FpToFpOpConversion
 #endif
       // F8 -> F16
       {{F8E4M3B15TyID, F16TyID}, Fp8E4M3B15_to_Fp16},
-      {{F8E4M3FNTyID, F16TyID}, Fp8E4M3B15x4_to_Fp16},
 #ifdef USE_ROCM
       {{F8E4M3FNUZTyID, F16TyID}, Fp8E4M3FNUZ_to_Fp16(computeCapability)},
       {{F8E5M2FNUZTyID, F16TyID}, Fp8E5M2FNUZ_to_Fp16(computeCapability)},
@@ -1167,8 +1064,7 @@ struct FpToFpOpConversion
         {{F8E4M3TyID, F16TyID}, Fp8E4M3Nv_to_Fp16},
         {{F8E5M2TyID, F16TyID}, Fp8E5M2_to_Fp16(computeCapability >= 90)},
 #endif
-      // F16 -> F8
-      {{F16TyID, F8E4M3FNTyID}, Fp16_to_Fp8E4M3B15x4},
+    // F16 -> F8
 #ifdef USE_ROCM
       {{F16TyID, F8E4M3B15TyID}, Fp16_to_Fp8E4M3B15},
       {{F16TyID, F8E5M2FNUZTyID}, Fp16_to_Fp8E5M2FNUZ(computeCapability)},
@@ -1505,7 +1401,7 @@ struct ExpOpConversionApprox
 
 } // namespace
 
-namespace AMD {
+namespace mlir::triton::AMD {
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
@@ -1549,4 +1445,4 @@ void populateElementwiseOpToLLVMPatterns(
   mlir::triton::populateClampFOpToLLVMPattern(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
 }
-} // namespace AMD
+} // namespace mlir::triton::AMD

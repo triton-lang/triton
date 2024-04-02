@@ -97,7 +97,7 @@ print(tabulate.tabulate([
 # Pseudo-random number generation in Triton is simple! In this tutorial we will use the
 # :code:`triton.language.rand` function which generates a block of uniformly distributed :code:`float32`
 # values in [0, 1), given a seed and a block of :code:`int32` offsets. But if you need it, Triton also provides
-# other :ref:`random number generation strategies <Random Number Generation>`.
+# other :ref:`random number generation strategies<Random Number Generation>`.
 #
 # .. note::
 #    Triton's implementation of PRNG is based on the Philox algorithm (described on [SALMON2011]_).

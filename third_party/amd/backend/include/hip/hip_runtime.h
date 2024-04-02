@@ -37,7 +37,7 @@ THE SOFTWARE.
 #ifndef HIP_INCLUDE_HIP_HIP_RUNTIME_H
 #define HIP_INCLUDE_HIP_HIP_RUNTIME_H
 
-#if __HIP_DEVICE_COMPILE__ && !__GFX8__ && !__GFX9__ && __AMDGCN_WAVEFRONT_SIZE == 64
+#if __HIP_DEVICE_COMPILE__ && !__GFX7__ && !__GFX8__ && !__GFX9__ && __AMDGCN_WAVEFRONT_SIZE == 64
 #error HIP is not supported on the specified GPU ARCH with wavefront size 64
 #endif
 
@@ -58,55 +58,12 @@ THE SOFTWARE.
 #include <hip/hip_version.h>
 #include <hip/hip_common.h>
 
-#if (defined(__HIP_PLATFORM_HCC__) || defined(__HIP_PLATFORM_AMD__)) && !(defined(__HIP_PLATFORM_NVCC__) || defined(__HIP_PLATFORM_NVIDIA__))
+#if defined(__HIP_PLATFORM_AMD__) && !defined(__HIP_PLATFORM_NVIDIA__)
 #include <hip/amd_detail/amd_hip_runtime.h>
-#elif !(defined(__HIP_PLATFORM_HCC__) || defined(__HIP_PLATFORM_AMD__)) && (defined(__HIP_PLATFORM_NVCC__) || defined(__HIP_PLATFORM_NVIDIA__))
+#elif !defined(__HIP_PLATFORM_AMD__) && defined(__HIP_PLATFORM_NVIDIA__)
 #include <hip/nvidia_detail/nvidia_hip_runtime.h>
 #else
 #error("Must define exactly one of __HIP_PLATFORM_AMD__ or __HIP_PLATFORM_NVIDIA__");
-#endif
-
-// The following are deprecation notices.
-// They will be removed after upstream updation
-#if 0 // Temporarily disable deprecation warning as it will fail rocgdb test
-#if defined(__clang__)
-//The following work for clang rather than for gnu gcc/g++/c++
-#pragma GCC diagnostic push
-#pragma GCC diagnostic warning "-Wcpp"
-#ifdef __HCC__
-#warning("__HCC__ is deprecated, please don't use it")
-#endif
-
-#ifdef __HIP_ROCclr__
-#warning("__HIP_ROCclr__ is deprecated, please don't use it")
-#endif
-
-#ifdef __HIP_PLATFORM_HCC__
-#warning("__HIP_PLATFORM_HCC__ is deprecated, please use __HIP_PLATFORM_AMD__ instead")
-#endif
-
-#ifdef __HIP_PLATFORM_NVCC_
-#warning("__HIP_PLATFORM_NVCC_ is deprecated, please use __HIP_PLATFORM_NVIDIA__ instead")
-#endif
-#pragma GCC diagnostic pop
-#elif defined(__GNUC__)
-//The following work for gnu gcc/g++/c++ rather than for clang
-#ifdef __HCC__
-#pragma message ("__HCC__ is deprecated, please don't use it")
-#endif
-
-#ifdef __HIP_ROCclr__
-#pragma message ("__HIP_ROCclr__ is deprecated, please don't use it")
-#endif
-
-#ifdef __HIP_PLATFORM_HCC__
-#pragma message ("__HIP_PLATFORM_HCC__ is deprecated, please use __HIP_PLATFORM_AMD__ instead")
-#endif
-
-#ifdef __HIP_PLATFORM_NVCC_
-#pragma message ("__HIP_PLATFORM_NVCC_ is deprecated, please use __HIP_PLATFORM_NVIDIA__ instead")
-#endif
-#endif // defined(__clang__)
 #endif
 
 #if !defined(__HIPCC_RTC__)

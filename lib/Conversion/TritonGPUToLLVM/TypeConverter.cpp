@@ -29,13 +29,6 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
   addConversion([&](triton::gpu::AsyncTokenType type) -> std::optional<Type> {
     return convertAsyncToken(type);
   });
-  // Internally store float8 as int8
-  addConversion([&](mlir::Float8E4M3B11FNUZType type) -> std::optional<Type> {
-    return IntegerType::get(type.getContext(), 8);
-  });
-  addConversion([&](mlir::Float8E4M3FNType type) -> std::optional<Type> {
-    return IntegerType::get(type.getContext(), 8);
-  });
   addConversion([&](mlir::Float8E4M3FNUZType type) -> std::optional<Type> {
     return IntegerType::get(type.getContext(), 8);
   });

@@ -507,8 +507,10 @@ def arange(start: int, end: int, builder: ir.builder) -> tl.tensor:
         raise ValueError("arange must fit in int32")
     if end <= start:
         raise ValueError("arange's end argument must be greater than the start argument")
-
-    shape = [end - start]
+    range = end - start
+    if (range & (range - 1)) != 0:
+        raise ValueError("arange's range must be a power of 2")
+    shape = [range]
     ret_ty = tl.block_type(tl.int32, shape)
     return tl.tensor(builder.create_make_range(start, end), ret_ty)
 
@@ -544,24 +546,14 @@ def splat(value: tl.tensor, shape: List[int], builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_splat(value.handle, shape), ret_ty)
 
 
-def view(input: tl.tensor, dst_shape: List[int], builder: ir.builder) -> tl.tensor:
-    numel = 1
-    for s in dst_shape:
-        numel *= s
-    if input.type.numel != numel:
-        raise ValueError("view() cannot change total number of elements in tensor")
-    ret_ty = tl.block_type(input.type.scalar, dst_shape)
-    return tl.tensor(builder.create_reshape(input.handle, dst_shape, True), ret_ty)
-
-
-def reshape(input: tl.tensor, dst_shape: List[int], builder: ir.builder) -> tl.tensor:
+def reshape(input: tl.tensor, dst_shape: List[int], can_reorder: bool, builder: ir.builder) -> tl.tensor:
     numel = 1
     for s in dst_shape:
         numel *= s
     if input.type.numel != numel:
         raise ValueError("reshape() cannot change total number of elements in tensor")
     ret_ty = tl.block_type(input.type.scalar, dst_shape)
-    return tl.tensor(builder.create_reshape(input.handle, dst_shape, False), ret_ty)
+    return tl.tensor(builder.create_reshape(input.handle, dst_shape, can_reorder), ret_ty)
 
 
 def expand_dims(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
@@ -602,7 +594,7 @@ def join(a: tl.tensor, b: tl.tensor, builder: ir.builder) -> tl.tensor:
     ret = tl.tensor(builder.create_join(a.handle, b.handle), ret_type)
 
     if was_rank_1:
-        ret = reshape(ret, [2], builder)
+        ret = reshape(ret, [2], can_reorder=False, builder=builder)
 
     return ret
 
@@ -767,6 +759,10 @@ def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder, fp_downcast_ro
     if (src_sca_ty.is_fp8e4nv() or dst_sca_ty.is_fp8e4nv()):
         assert builder.options.allow_fp8e4nv, "fp8e4nv data type is not supported on CUDA arch < 89"
 
+    if (src_sca_ty.is_fp8e4b15() or dst_sca_ty.is_fp8e4b15()):
+        assert builder.codegen_fns[
+            "convert_custom_types"] is not None, "target doesn't provide conversion for this type."
+        return builder.codegen_fns["convert_custom_types"](input, dst_ty, fp_downcast_rounding, _builder=builder)
     # Casting with customized floating types involved: fp8 <=> bf16, fp16, fp32, fp64
     # and non-default rounding modes for downcasting
     if (src_sca_ty.is_fp8() and dst_sca_ty.is_floating()) or \
@@ -1192,19 +1188,22 @@ def atomic_max(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope:
     if sca_ty not in {tl.float32, tl.float64}:
         raise TypeError(f"atomic_max not supported for dtype {sca_ty}")
 
-    itype = tl.int32 if sca_ty == tl.float32 else tl.int64
     zero = full([], 0.0, sca_ty, builder)
 
-    i_val = bitcast(val, itype, builder)
-    i_ptr = bitcast(ptr, tl.pointer_type(itype, 1), builder)
+    i_type = tl.int32 if sca_ty == tl.float32 else tl.int64
+    i_val = bitcast(val, i_type, builder)
+    i_ptr = bitcast(ptr, tl.pointer_type(i_type, 1), builder)
+    ui_type = tl.uint32 if sca_ty == tl.float32 else tl.uint64
+    ui_val = bitcast(val, ui_type, builder)
+    ui_ptr = bitcast(ptr, tl.pointer_type(ui_type, 1), builder)
     pos = greater_equal(val, zero, builder)
     neg = less_than(val, zero, builder)
     pos_ret = tl.tensor(
         builder.create_atomic_rmw(ir.ATOMIC_OP.MAX, i_ptr.handle, i_val.handle,
                                   and_(mask, pos, builder).handle, sem, scope), i_val.type)
     neg_ret = tl.tensor(
-        builder.create_atomic_rmw(ir.ATOMIC_OP.UMIN, i_ptr.handle, i_val.handle,
-                                  and_(mask, neg, builder).handle, sem, scope), i_val.type)
+        builder.create_atomic_rmw(ir.ATOMIC_OP.UMIN, ui_ptr.handle, ui_val.handle,
+                                  and_(mask, neg, builder).handle, sem, scope), ui_val.type)
     ret = where(pos, pos_ret, neg_ret, builder)
     return bitcast(ret, sca_ty, builder)
 
@@ -1228,19 +1227,22 @@ def atomic_min(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope:
     if sca_ty not in {tl.float32, tl.float64}:
         raise TypeError(f"atomic_min not supported for dtype {sca_ty}")
 
-    itype = tl.int32 if sca_ty == tl.float32 else tl.int64
     zero = full([], 0.0, sca_ty, builder)
 
-    i_val = bitcast(val, itype, builder)
-    i_ptr = bitcast(ptr, tl.pointer_type(itype, 1), builder)
+    i_type = tl.int32 if sca_ty == tl.float32 else tl.int64
+    i_val = bitcast(val, i_type, builder)
+    i_ptr = bitcast(ptr, tl.pointer_type(i_type, 1), builder)
+    ui_type = tl.uint32 if sca_ty == tl.float32 else tl.uint64
+    ui_val = bitcast(val, ui_type, builder)
+    ui_ptr = bitcast(ptr, tl.pointer_type(ui_type, 1), builder)
     pos = greater_equal(val, zero, builder)
     neg = less_than(val, zero, builder)
     pos_ret = tl.tensor(
         builder.create_atomic_rmw(ir.ATOMIC_OP.MIN, i_ptr.handle, i_val.handle,
                                   and_(mask, pos, builder).handle, sem, scope), i_val.type)
     neg_ret = tl.tensor(
-        builder.create_atomic_rmw(ir.ATOMIC_OP.UMAX, i_ptr.handle, i_val.handle,
-                                  and_(mask, neg, builder).handle, sem, scope), i_val.type)
+        builder.create_atomic_rmw(ir.ATOMIC_OP.UMAX, ui_ptr.handle, ui_val.handle,
+                                  and_(mask, neg, builder).handle, sem, scope), ui_ptr.type)
     ret = where(pos, pos_ret, neg_ret, builder)
     return bitcast(ret, sca_ty, builder)
 
@@ -1292,7 +1294,16 @@ def atomic_xchg(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope
 # ===----------------------------------------------------------------------===//
 
 
-def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_num_imprecise_acc: int,
+def _str_to_dot_input_precision(input_precision, builder):
+    assert input_precision.lower() in builder.options.allowed_dot_input_precisions, \
+        f"input_precision must be one of {builder.options.allowed_dot_input_precisions}. Got {input_precision}"
+    input_precision = input_precision.upper()
+    if input_precision == "TF32X3":
+        input_precision = "TF32x3"
+    return getattr(ir.INPUT_PRECISION, input_precision)
+
+
+def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optional[str], max_num_imprecise_acc: int,
         out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
 
     def assert_dtypes_valid(lhs_dtype, rhs_dtype, options):
@@ -1305,8 +1316,6 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
         else:
             assert not lhs_dtype.is_fp8e4b15() and not rhs_dtype.is_fp8e4b15(
             ), "Dot op does not support fp8e4b15 on CUDA arch >= 90"
-            assert not lhs_dtype.is_fp8e4b15x4() and not rhs_dtype.is_fp8e4b15x4(
-            ), "Dot op does not support fp8e4b15x4 on CUDA arch >= 90"
             if lhs_dtype.is_int() or rhs_dtype.is_int():
                 assert lhs_dtype == rhs_dtype, f"Both operands must be same type. First operand ({lhs_dtype}) and second operand ({rhs_dtype})"
                 assert lhs_dtype.is_int8() or lhs_dtype.is_uint8(
@@ -1326,6 +1335,14 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
     assert lhs.type.is_block() and rhs.type.is_block()
 
     assert_dtypes_valid(lhs.dtype, rhs.dtype, builder.options)
+    if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():
+        lhs = cast(lhs, tl.float16, builder)
+        rhs = cast(rhs, tl.float16, builder)
+
+    if input_precision is None:
+        input_precision = builder.options.default_dot_input_precision
+
+    input_precision = _str_to_dot_input_precision(input_precision, builder)
 
     lhs_rank = len(lhs.shape)
     rhs_rank = len(rhs.shape)
@@ -1368,7 +1385,8 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
         else:
             max_num_imprecise_acc = 0
 
-    return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, acc_handle, allow_tf32, max_num_imprecise_acc), ret_ty)
+    return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, acc_handle, input_precision, max_num_imprecise_acc),
+                     ret_ty)
 
 
 # ===----------------------------------------------------------------------===//
@@ -1406,7 +1424,7 @@ def wrap_tensor(x, scalar_ty, ret_shape):
 
 def reduction(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, builder: ir.builder) -> Tuple[tl.tensor, ...]:
     if axis is None:
-        inputs = tuple(view(t, [t.numel.value], builder) for t in inputs)
+        inputs = tuple(reshape(t, [t.numel.value], can_reorder=True, builder=builder) for t in inputs)
         axis = 0
     # get result shape
     shape = inputs[0].type.shape
@@ -1455,8 +1473,7 @@ def associative_scan(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, 
 def histogram(input: tl.tensor, num_bins: int, builder: ir.builder) -> tl.tensor:
     assert len(input.shape) == 1, "histogram only supports 1D input"
     assert input.dtype.is_int(), "histogram only supports integer input"
-    histogram_op = builder.create_histogram(input.handle, num_bins)
-    return tl.tensor(histogram_op.get_result(0), tl.block_type(tl.int32, (num_bins, )))
+    return tl.tensor(builder.create_histogram(input.handle, num_bins), tl.block_type(tl.int32, (num_bins, )))
 
 
 ##

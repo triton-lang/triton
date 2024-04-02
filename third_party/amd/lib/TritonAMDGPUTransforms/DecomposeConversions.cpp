@@ -19,7 +19,6 @@
 #define GEN_PASS_CLASSES
 #include "TritonAMDGPUTransforms/Passes.h"
 
-
 using namespace mlir;
 
 class TritonAMDGPUDecomposeConversionsPass
@@ -58,8 +57,8 @@ public:
               srcType.getElementType()));
       auto tmp = builder.create<triton::gpu::LocalAllocOp>(
           cvtOp.getLoc(), tmpType, cvtOp.getSrc());
-      auto newConvert = builder.create<triton::gpu::LocalLoadOp>(
-          cvtOp.getLoc(), dstType, tmp);
+      auto newConvert = builder.create<triton::gpu::LocalLoadOp>(cvtOp.getLoc(),
+                                                                 dstType, tmp);
       cvtOp.replaceAllUsesWith(newConvert.getResult());
       cvtOp.erase();
     });

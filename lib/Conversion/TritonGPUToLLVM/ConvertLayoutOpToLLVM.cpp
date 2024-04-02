@@ -92,11 +92,9 @@ private:
 
     auto srcStrides =
         getStridesFromShapeAndOrder(srcTy.getShape(), inOrd, loc, rewriter);
-    auto dstIndices = emitIndices(loc, rewriter, dstLayout, dstTy, true);
 
-    SmallVector<Value> outVals =
-        loadSharedToDistributed(op.getResult(), dstIndices, op.getSrc(),
-                                smemObj, elemTy, loc, rewriter);
+    SmallVector<Value> outVals = loadSharedToDistributed(
+        op.getResult(), op.getSrc(), smemObj, elemTy, loc, rewriter);
 
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
@@ -276,11 +274,6 @@ private:
     unsigned outVec = 0;
     auto origRepShape = getRepShapeForCvtLayout(op);
     auto paddedRepShape = getScratchConfigForCvtLayout(op, inVec, outVec);
-    if (getElementTypeOrSelf(op.getType())
-            .isa<mlir::Float8E4M3B11FNUZType, mlir::Float8E4M3FNType>()) {
-      assert(inVec % 4 == 0 && "conversion not supported for FP8E4M3B15");
-      assert(outVec % 4 == 0 && "conversion not supported for FP8E4M3B15");
-    }
 
     unsigned outElems = getTotalElemsPerThread(dstTy);
     auto outOrd = getOrder(dstLayout);

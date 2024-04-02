@@ -133,6 +133,7 @@ class BlockedToMMA : public mlir::RewritePattern {
   static bool bwdFilter(Operation *op) {
     return op->getNumOperands() == 1 &&
            (isa<tt::FpToFpOp, tt::BitcastOp, ttg::ConvertLayoutOp>(op) ||
+            isPureUnaryInlineAsm(op) ||
             op->getDialect()->getTypeID() ==
                 mlir::TypeID::get<arith::ArithDialect>());
   }
@@ -244,7 +245,7 @@ public:
       return failure();
 
     auto instrShape = mmaVersionToInstrShape(versionMajor, retShapePerCTA,
-                                             dotOp.getA().getType());
+                                             dotOp.getA().getType(), numWarps);
     // operands
     Value a = dotOp.getA();
     Value b = dotOp.getB();
@@ -327,7 +328,7 @@ public:
     }
     // convert dot instruction
     auto newDot = rewriter.create<tt::DotOp>(dotOp.getLoc(), newRetType, a, b,
-                                             newAcc, dotOp.getAllowTF32(),
+                                             newAcc, dotOp.getInputPrecision(),
                                              dotOp.getMaxNumImpreciseAcc());
 
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(op, oldRetType,
@@ -347,8 +348,8 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
 
 // promote operands of dot op if the existing combination is not natively
 // supported.
-static void decomposeMixedModeDotOp(ModuleOp mod) {
-  mod.walk([](tt::DotOp dotOp) -> void {
+static void decomposeMixedModeDotOp(ModuleOp mod, int computeCapability) {
+  mod.walk([=](tt::DotOp dotOp) -> void {
     auto D = dotOp.getD();
     OpBuilder builder(dotOp);
     Type AElType = dotOp.getA().getType().getElementType();
@@ -356,11 +357,11 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
     NvidiaMmaEncodingAttr mmaLayout =
         D.getType().getEncoding().dyn_cast<NvidiaMmaEncodingAttr>();
     if (mmaLayout) {
-      bool isNativeHopperFP8 =
-          AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
-      bool isFP8 = isNativeHopperFP8 || AElType.isFloat8E5M2FNUZ() ||
-                   AElType.isFloat8E4M3FN() || AElType.isFloat8E4M3B11FNUZ();
-      if (!isFP8 || (isNativeHopperFP8 && mmaLayout.isHopper()))
+      bool isNativeFP8 = AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
+      // promote operands for sm < 89 since fp8 mma is not natively supported
+      // promote operands for sm >= 90 when mma is not v3
+      if (!isNativeFP8 ||
+          (isNativeFP8 && (computeCapability == 89 || mmaLayout.isHopper())))
         return;
       promoteType = builder.getF16Type();
     } else {
@@ -400,7 +401,7 @@ public:
     }
     // Now that we have picked the mma type, decompose dot that are not natively
     // supported.
-    decomposeMixedModeDotOp(m);
+    decomposeMixedModeDotOp(m, computeCapability);
   }
 };
 
