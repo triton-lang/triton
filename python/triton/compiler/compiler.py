@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import functools
 import os
+import pkgutil
 
 
 @dataclass
@@ -142,9 +143,18 @@ class IRSource:
         return dict()
 
 
+def iter_modules_recursively(paths):
+    for path in paths:
+        for lib in pkgutil.iter_modules([path]):
+            if lib.ispkg:
+                lib_path = os.path.join(lib.module_finder.path, lib.name)
+                yield from iter_modules_recursively([lib_path])
+            else:
+                yield lib.module_finder.find_spec(lib.name).origin
+
+
 @functools.lru_cache()
 def triton_key():
-    import pkgutil
     TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     contents = []
     # frontend
@@ -153,15 +163,11 @@ def triton_key():
     # compiler
     compiler_path = os.path.join(TRITON_PATH, 'compiler')
     backends_path = os.path.join(TRITON_PATH, 'compiler', 'backends')
-    for lib in pkgutil.iter_modules([compiler_path, backends_path]):
-        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
-            contents += [hashlib.sha256(f.read()).hexdigest()]
-    # Python backend
     tp_backends_path = os.path.join(TRITON_PATH, 'backends')
-    for lib in pkgutil.iter_modules([tp_backends_path]):
-        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+    for module_name in iter_modules_recursively([compiler_path, backends_path, tp_backends_path]):
+        with open(module_name, "rb") as f:
             contents += [hashlib.sha256(f.read()).hexdigest()]
-    # C++ backend
+    # backend
     libtriton_hash = hashlib.sha256()
     with open(os.path.join(TRITON_PATH, "_C/libtriton.so"), "rb") as f:
         while True:
@@ -172,8 +178,8 @@ def triton_key():
     contents.append(libtriton_hash.hexdigest())
     # language
     language_path = os.path.join(TRITON_PATH, 'language')
-    for lib in pkgutil.iter_modules([language_path]):
-        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+    for module_name in iter_modules_recursively([language_path]):
+        with open(module_name, "rb") as f:
             contents += [hashlib.sha256(f.read()).hexdigest()]
     return f'{__version__}' + '-'.join(contents)
 
