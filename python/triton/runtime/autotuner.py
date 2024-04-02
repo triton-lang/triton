@@ -12,8 +12,18 @@ from .errors import OutOfResources
 
 class Autotuner(KernelInterface):
 
-    def __init__(self, fn, arg_names, configs, key, reset_to_zero, restore_value, prune_configs_by: Dict = None,
-                 warmup=25, rep=100):
+    def __init__(
+        self,
+        fn,
+        arg_names,
+        configs,
+        key,
+        reset_to_zero,
+        restore_value,
+        prune_configs_by: Dict = None,
+        warmup=25,
+        rep=100,
+    ):
         """
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
             'perf_model': performance model used to predicate running time with different configs, returns running time
@@ -68,9 +78,6 @@ class Autotuner(KernelInterface):
         self.fn = fn
         self.num_warmups = warmup
         self.num_reps = rep
-        self.print_autotune_stats = False
-        if os.getenv("TRITON_PRINT_AUTOTUNING", "0") == "1":
-            self.print_autotune_stats = True
 
     def _bench(self, *args, config, **meta):
         # check for conflicts, i.e. meta-parameters both provided
@@ -130,10 +137,9 @@ class Autotuner(KernelInterface):
         else:
             config = self.configs[0]
         self.best_config = config
-        if self.print_autotune_stats and not used_cached_result:
-            print(
-                f"Autotuner for function {self.fn} finished after {self.bench_time:.2f}s; best config selected: {self.best_config};"
-            )
+        if os.getenv("TRITON_PRINT_AUTOTUNING", None) == "1" and not used_cached_result:
+            print(f"Triton autotuning for function {self.fn} finished after "
+                  f"{self.bench_time:.2f}s; best config selected: {self.best_config};")
         full_nargs = {**self.nargs, **kwargs, **self.best_config.kwargs}
         if config.pre_hook is not None:
             config.pre_hook(full_nargs)
