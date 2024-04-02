@@ -501,10 +501,10 @@ class InterpreterBuilder:
 
 
 def _patch_attr(obj, name, member, builder):
-    new_member = lambda *args, member=member, **kwargs: (member(*args, **
-                                                                {k: v
-                                                                 for k, v in kwargs.items()
-                                                                 if k != "_builder"}, _builder=builder))
+    new_member = lambda *args, member=member, **kwargs: (member(*args,
+                                                                ** {k: v
+                                                                    for k, v in kwargs.items()
+                                                                    if k != "_builder"}, _builder=builder))
     setattr(obj, name, new_member)
 
 
@@ -798,6 +798,8 @@ def _patch_lang_core(lang):
         # Unwrap constexpr
         values = [values] if not isinstance(values, (list, tuple)) else values
         values = [v.value if isinstance(v, tl.constexpr) else v for v in values]
+        if len(values) != max(1, len(input.shape)):
+            raise ValueError(f"len(values) != len(input.shape) for {name}")
         input.handle.set_attr(name, values)
         return input
 
