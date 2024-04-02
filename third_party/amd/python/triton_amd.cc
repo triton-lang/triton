@@ -80,6 +80,12 @@ void init_triton_amd(py::module &&m) {
                            version.Stepping);
   });
 
+  // Set boolean control constant
+  m.def("set_bool_control_constant",
+        [](llvm::Module *module, const std::string &name, bool enable) {
+          addControlConstant(module, name.c_str(), /*bitwidth=*/8, enable);
+        });
+
   // Set code object ABI version
   m.def("set_abi_version", [](llvm::Module *module, int version) {
     // Inject the control constant into the LLVM module so that device libraries
