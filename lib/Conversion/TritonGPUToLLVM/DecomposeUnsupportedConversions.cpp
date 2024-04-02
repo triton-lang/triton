@@ -81,6 +81,9 @@ template void decomposeTensorCoreToDotLayoutConversion<
 template void
     decomposeTensorCoreToDotLayoutConversion<triton::gpu::AMDMfmaEncodingAttr>(
         ModuleOp, ShortcutFn);
+template void
+    decomposeTensorCoreToDotLayoutConversion<triton::gpu::AMDWmmaEncodingAttr>(
+        ModuleOp, ShortcutFn);
 
 void decomposeBlockedToDotLayoutConversion(ModuleOp module) {
   int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(module);

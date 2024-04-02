@@ -1,3 +1,4 @@
+#include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Allocation.h"
@@ -17,9 +18,6 @@ namespace triton {
 } // namespace mlir
 
 namespace {
-
-constexpr int LDSSize = 65536;
-constexpr int kPtrBitWidth = 64;
 
 static void addAttrs(Operation *op, ArrayRef<mlir::NamedAttribute> attrs) {
   for (const NamedAttribute attr : attrs)
@@ -55,21 +53,6 @@ static void promoteReduceOpResult(OpBuilder &builder, triton::ReduceOp op,
     result.replaceAllUsesWith(truncResult->getResult(0));
     truncResult->setOperand(0, result);
   }
-}
-
-static int getCvtOpLDSUsage(triton::gpu::ConvertLayoutOp &cvtOp) {
-  unsigned inVec = 0;
-  unsigned outVec = 0;
-  auto smemShape = triton::getScratchConfigForCvtLayout(cvtOp, inVec, outVec);
-  unsigned elems =
-      std::accumulate(smemShape.begin(), smemShape.end(), 1, std::multiplies{});
-  auto srcType = cvtOp.getSrc().getType();
-  auto bytes =
-      srcType.getElementType().isa<triton::PointerType>()
-          ? elems * kPtrBitWidth / 8
-          : elems * std::max<int>(8, srcType.getElementTypeBitWidth()) / 8;
-
-  return bytes;
 }
 
 bool isPowerOfTwo(unsigned x) { return x && (x & (x - 1)) == 0; }
@@ -134,37 +117,18 @@ struct DecomposeUnsupportedAMDConversions
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    const int LDSSize = triton::AMD::TargetInfo::getLDSSize();
 
     triton::gpu::decomposeSplatOpToSharedLayoutConversion(mod);
 
     triton::gpu::decomposeTensorCoreToDotLayoutConversion<
         triton::gpu::AMDMfmaEncodingAttr>(mod, isMfmaToDotShortcut);
 
-    /* -------------------------------- */
-    // Replace `wmma -> dot_op` with `wmma -> blocked -> dot_op`
-    /* -------------------------------- */
-    mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
-      OpBuilder builder(cvtOp);
-      auto srcType = cvtOp.getSrc().getType();
-      auto dstType = cvtOp.getType();
-      auto srcWmma =
-          srcType.getEncoding().dyn_cast<triton::gpu::AMDWmmaEncodingAttr>();
-      auto dstDotOp =
-          dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
-      if (srcWmma && dstDotOp) {
-        auto tmpType = RankedTensorType::get(
-            dstType.getShape(), dstType.getElementType(),
-            triton::gpu::BlockedEncodingAttr::get(
-                mod.getContext(), srcType.getShape(), getSizePerThread(srcWmma),
-                getOrder(srcWmma), numWarps, threadsPerWarp, numCTAs));
-        auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
-            cvtOp.getLoc(), tmpType, cvtOp.getOperand());
-        auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
-            cvtOp.getLoc(), dstType, tmp);
-        cvtOp.replaceAllUsesWith(newConvert.getResult());
-        cvtOp.erase();
-      }
-    });
+    triton::gpu::decomposeTensorCoreToDotLayoutConversion<
+        triton::gpu::AMDWmmaEncodingAttr>(
+        mod,
+        [](RankedTensorType &srcTy, RankedTensorType &dstTy) { return false; });
+
     // Try to reduce LDS usage of cvt(mfma->blocked) op by changing the shape of
     // WarpsPerCta attribute in mfma layout. The implicit LDS usage of
     // cvt(mfma->blocked) op depends on the number of warps per CTA that mfma
@@ -193,16 +157,18 @@ struct DecomposeUnsupportedAMDConversions
       auto dstBlocked =
           dstType.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
 
-      // TODO: Reduce LDS usage for WMMA dots
-      if (!srcEnc.isa<triton::gpu::AMDMfmaEncodingAttr>() || !dstBlocked) {
+      if (!(srcEnc.isa<triton::gpu::AMDMfmaEncodingAttr,
+                       triton::gpu::AMDWmmaEncodingAttr>() &&
+            dstBlocked) ||
+          !(dstType.getEncoding().isa<triton::gpu::AMDWmmaEncodingAttr>() &&
+            srcEnc.dyn_cast<triton::gpu::BlockedEncodingAttr>())) {
         return;
       }
 
-      auto currLDSUsage = getCvtOpLDSUsage(cvtOp);
+      auto currLDSUsage = mlir::triton::getCvtOpLDSUsage(cvtOp);
       if (currLDSUsage <= LDSSize) {
         return;
       }
-
       unsigned numWarps = triton::gpu::getNumWarpsPerCTA(srcEnc);
 
       triton::gpu::ConvertLayoutOp tmpCvt;
@@ -221,8 +187,8 @@ struct DecomposeUnsupportedAMDConversions
         std::tie(tmpCvt, newEpilogueCvt) =
             createNewConvertOps(mod, builder, cvtOp, warpsPerCTAPair);
 
-        int tmpCvtLDS = getCvtOpLDSUsage(tmpCvt);
-        int newCvtLDS = getCvtOpLDSUsage(newEpilogueCvt);
+        int tmpCvtLDS = mlir::triton::getCvtOpLDSUsage(tmpCvt);
+        int newCvtLDS = mlir::triton::getCvtOpLDSUsage(newEpilogueCvt);
         if (tmpCvtLDS <= LDSSize && newCvtLDS <= LDSSize) {
           int LDSUsage = tmpCvtLDS + newCvtLDS;
           if (LDSUsage < minLDSUsage) {

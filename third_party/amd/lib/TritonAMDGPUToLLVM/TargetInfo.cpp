@@ -227,4 +227,6 @@ void TargetInfo::assertFail(ConversionPatternRewriter &rewriter, Location loc,
   rewriter.create<LLVM::Trap>(loc);
 }
 
+int TargetInfo::getLDSSize() { return ldsSize; }
+
 } // namespace mlir::triton::AMD

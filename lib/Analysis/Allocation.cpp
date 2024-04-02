@@ -97,6 +97,21 @@ SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
   return repShape;
 }
 
+unsigned getCvtOpLDSUsage(triton::gpu::ConvertLayoutOp &cvtOp) {
+  unsigned inVec = 0;
+  unsigned outVec = 0;
+  auto smemShape = triton::getScratchConfigForCvtLayout(cvtOp, inVec, outVec);
+  unsigned elems =
+      std::accumulate(smemShape.begin(), smemShape.end(), 1, std::multiplies{});
+  auto srcType = cvtOp.getSrc().getType();
+  auto bytes =
+      srcType.getElementType().isa<triton::PointerType>()
+          ? elems * kPtrBitWidth / 8
+          : elems * std::max<int>(8, srcType.getElementTypeBitWidth()) / 8;
+
+  return bytes;
+}
+
 SmallVector<unsigned>
 getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
                              unsigned &outVec) {

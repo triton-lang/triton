@@ -47,11 +47,15 @@ public:
                   StringRef message, StringRef file, StringRef func,
                   int line) const override;
 
+  static int getLDSSize();
+
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,
                   ConversionPatternRewriter &rewriter, bool useStdErr) const;
 
   std::string arch;
+
+  static const int ldsSize = 65536;
 };
 } // namespace mlir::triton::AMD
 #endif // TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOAMD_H
