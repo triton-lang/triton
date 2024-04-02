@@ -2164,6 +2164,19 @@ def device_print(prefix, *args, hex=False, _builder=None):
         tl.device_print("pid", pid)
         print("pid", pid)
 
+    On CUDA, printfs are streamed through a buffer of limited size (on one host,
+    we measured the default as 6912 KiB, but this may not be consistent across
+    GPUs and CUDA versions).  If you notice some printfs are being dropped, you
+    can increase the buffer size by calling
+
+        .. highlight:: python
+        .. code-block:: python
+        triton.runtime.driver.active.utils.set_printf_fifo_size(size_bytes)
+
+    CUDA may raise an error if you try to change this value after running a
+    kernel that uses printfs.  The value set here may only affect the current
+    device (so if you have multiple GPUs, you'd need to call it multiple times).
+
     :param prefix: a prefix to print before the values. This is required to be a string literal.
     :param args: the values to print. They can be any tensor or scalar.
     :param hex: print all values as hex instead of decimal
