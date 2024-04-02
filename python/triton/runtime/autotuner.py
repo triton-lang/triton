@@ -251,6 +251,11 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
            This means that whatever value the kernel updates will be updated multiple times.
            To avoid this undesired behavior, you can use the `reset_to_zero` argument, which
            resets the value of the provided tensor to `zero` before running any configuration.
+
+    If the environment variable :code:`TRITON_PRINT_AUTOTUNING` is set to
+    :code:`"1"`, Triton will print a message to stdout after autotuning each
+    kernel, including the time spent autotuning and the best configuration.
+
     :param configs: a list of :code:`triton.Config` objects
     :type configs: list[triton.Config]
     :param key: a list of argument names whose change in value will trigger the evaluation of all provided configs.
