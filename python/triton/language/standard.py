@@ -366,7 +366,7 @@ def _bitonic_merge(x, stage: core.constexpr, order: core.constexpr, n_dims: core
 
 @core._tensor_member_fn
 @jit
-def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.constexpr(0)):
+def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
     # handle default dimension or check that it is the most minor dim
     _dim: core.constexpr = len(x.shape) - 1 if dim is None else dim
     core.static_assert(_dim == len(x.shape) - 1, "only minor dimension is currently supported")
