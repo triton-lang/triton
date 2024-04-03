@@ -5,9 +5,9 @@ import inspect
 import itertools
 import os
 import textwrap
-from collections import defaultdict, namedtuple
+from collections import defaultdict
 from functools import cached_property
-from typing import Callable, Generic, Iterable, List, Optional, TypeVar, Union, cast, overload
+from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload
 from ..runtime.driver import driver
 
 TRITON_MODULE = __name__[:-len(".runtime.jit")]
@@ -164,8 +164,6 @@ class KernelArg:
 
     def mangled_type(self):
         annotation = self.param.annotation
-        const_str = "const " if self.param.is_const else ""
-        is_pointer = False
         for ty1, ty2 in [("uint", 'u'), ("int", 'i')]:
             width = annotation[annotation.find(ty1) + len(ty1):]
             if width and ty1 in annotation:
@@ -348,18 +346,18 @@ class JITFunction(KernelInterface[T]):
 
         specialization_data = serialize_specialization_data(name, signature, constants, configs[0], options, key)
 
-        kwargs = dict(
-            signature=signature,
-            device=device,
-            constants=constants,
-            num_warps=options.num_warps,
-            num_ctas=options.num_ctas,
-            num_stages=options.num_stages,
-            enable_fp_fusion=options.enable_fp_fusion,
-            extern_libs=options.extern_libs,
-            configs=configs,
-            specialization_data=specialization_data,
-        )
+        kwargs = {
+            'signature': signature,
+            'device': device,
+            'constants': constants,
+            'num_warps': options.num_warps,
+            'num_ctas': options.num_ctas,
+            'num_stages': options.num_stages,
+            'enable_fp_fusion': options.enable_fp_fusion,
+            'extern_libs': options.extern_libs,
+            'configs': configs,
+            'specialization_data': specialization_data,
+        }
 
         return JITFunction.cache_hook(
             key=key,
@@ -397,7 +395,7 @@ class JITFunction(KernelInterface[T]):
             hook(*args, **kwargs)
 
         # bind non-reserved keyword args and set defaults
-        kwargs = {k: v for k, v in kwargs.items() if not k in options.__dict__}
+        kwargs = {k: v for k, v in kwargs.items() if k not in options.__dict__}
         bound_args = self.signature.bind(*args, **kwargs)
         bound_args.apply_defaults()
         assert len(bound_args.arguments) == len(self.params)
@@ -449,11 +447,9 @@ class JITFunction(KernelInterface[T]):
         # Verify key signature from the cache
         signature = {arg.param.name: arg.mangled_type() for arg in args if not arg.param.is_constexpr}
         if kernel.src.signature != signature:
-            raise RuntimeError(
-                f"Signature mismatch for cached kernel {self.fn.__name__}:\n"\
-                f"  Cached signature: {kernel.src.signature}\n"\
-                f"  Call signature:   {signature}"
-            )
+            raise RuntimeError(f"Signature mismatch for cached kernel {self.fn.__name__}:\n"
+                               f"  Cached signature: {kernel.src.signature}\n"
+                               f"  Call signature:   {signature}")
 
         if not warmup:
             args = [arg.value for arg in args if not arg.param.is_constexpr]
@@ -531,7 +527,7 @@ class JITFunction(KernelInterface[T]):
             key: tl.dtype(value) if tl.dtype.is_dtype(value) else value
             for key, value in deserialized_obj['constants'].items()
         }
-        signature = {key: value for key, value in deserialized_obj['signature'].items()}
+        signature = dict(deserialized_obj['signature'].items())
         src = ASTSource(self, signature, constants, AttrsDescriptor.from_dict(deserialized_obj['attrs']))
         options = {
             key: tuple(value) if isinstance(value, list) else value
