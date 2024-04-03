@@ -80,8 +80,6 @@ def matmul_no_scf_with_advance_kernel(  #
     ] for num_warps in [4, 8]
 ])
 def test_block_ptr_matmul_no_scf(shape, num_warps):
-    capability = torch.cuda.get_device_capability()
-
     m, n, k = shape
     a = torch.randn((m, k), device="cuda", dtype=torch.float16)
     b = torch.randn((k, n), device="cuda", dtype=torch.float16)
