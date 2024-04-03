@@ -385,6 +385,7 @@ def benchmark(M, N, K, provider, fp8_inputs):
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
     if provider == 'triton':
         if TORCH_HAS_FP8 and fp8_inputs:
+            # TODO: run torch with fp8 when possible.
             a = a.to(torch.float8_e5m2)
             b = b.T
             b = b.to(torch.float8_e5m2)
