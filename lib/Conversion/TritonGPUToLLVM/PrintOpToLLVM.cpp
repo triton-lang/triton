@@ -27,7 +27,7 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
     auto loc = op->getLoc();
 
     auto getPid = [&](int axis) {
-      return targetInfo.programId(loc, rewriter,
+      return targetInfo.programId(rewriter, loc,
                                   op->getParentOfType<ModuleOp>(), axis);
     };
     std::array<Value, 3> pid = {getPid(0), getPid(1), getPid(2)};
@@ -162,8 +162,8 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
         formatStrValue =
             llPrintf(formatStr, printfOperands, rewriter, &formatStrByteCount);
       } else {
-        targetInfo.printf(formatStrValue, formatStrByteCount, printfOperands,
-                          rewriter);
+        targetInfo.printf(rewriter, formatStrValue, formatStrByteCount,
+                          printfOperands);
       }
     }
   }
@@ -228,7 +228,7 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
     Value msgValue =
         LLVM::addStringToModule(UnknownLoc::get(rewriter.getContext()),
                                 rewriter, "printfFormat_", msgNewline);
-    targetInfo.printf(msgValue, msgNewline.size_in_bytes(), args, rewriter);
+    targetInfo.printf(rewriter, msgValue, msgNewline.size_in_bytes(), args);
     if (formatStrByteCount)
       *formatStrByteCount = msgNewline.size_in_bytes();
     return msgValue;
