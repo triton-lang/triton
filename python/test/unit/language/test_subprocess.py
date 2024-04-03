@@ -84,6 +84,9 @@ def test_print(func_type: str, data_type: str):
 
 @pytest.mark.parametrize("func_type", assert_types)
 def test_assert(func_type: str):
+    # The total number of elements in the 1-D tensor to assert on.
+    N = 128
+
     os.environ["TRITON_DEBUG"] = "1"
     proc = subprocess.Popen([sys.executable, assert_path, func_type], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             shell=False)
@@ -91,41 +94,44 @@ def test_assert(func_type: str):
     errs = errs.splitlines()
     num_errs = 0
     for err in errs:
-        if "x != 0" in err.decode("utf-8"):
+        if "x != 0" in err.decode("utf-8", errors="ignore"):
             num_errs += 1
 
     # Check for segfaults.
-    assert all("segmentation fault" not in line.decode("utf-8").lower() for line in errs)
+    assert all("segmentation fault" not in line.decode("utf-8", errors="ignore").lower() for line in errs)
 
     os.environ["TRITON_DEBUG"] = "0"
     if func_type == "static_assert" or func_type == "device_assert_passes":
         assert num_errs == 0
     else:
-        assert num_errs == 127
+        assert num_errs == N - 1
 
 
 @pytest.mark.parametrize("caller_type, callee_type", nested_types)
 def test_assert_nested(caller_type, callee_type):
+    # The total number of elements in the 1-D tensor to assert on.
+    N = 128
+
     proc = subprocess.Popen([sys.executable, assert_path, caller_type, callee_type], stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, shell=False)
     _, errs = proc.communicate()
     errs = errs.splitlines()
     num_errs = 0
     for err in errs:
-        if "x != 0" in err.decode("utf-8"):
+        if "x != 0" in err.decode("utf-8", errors="ignore"):
             num_errs += 1
     if caller_type == "none":
         if callee_type == "true":
-            assert num_errs == 127
+            assert num_errs == N - 1
         else:
             assert num_errs == 0
     elif caller_type == "true":
         if callee_type == "false":
             assert num_errs == 0
         else:
-            assert num_errs == 127
+            assert num_errs == N - 1
     elif caller_type == "false":
         if callee_type == "true":
-            assert num_errs == 127
+            assert num_errs == N - 1
         else:
             assert num_errs == 0
