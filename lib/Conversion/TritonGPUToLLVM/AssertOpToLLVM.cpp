@@ -1,11 +1,18 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+
 namespace {
+
 using namespace mlir;
-using namespace mlir::triton;
+
 struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
-  using ConvertOpToLLVMPattern<triton::AssertOp>::ConvertOpToLLVMPattern;
+  explicit AssertOpConversion(LLVMTypeConverter &typeConverter,
+                              const TargetInfoBase &targetInfo,
+                              PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::AssertOp>(typeConverter, benefit),
+        targetInfo(targetInfo) {}
+
   LogicalResult
   matchAndRewrite(triton::AssertOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -33,9 +40,9 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
   }
   // op: the op at which the assert is inserted. Unlike printf, we need to
   // know about the op to split the block.
-  static void llAssert(Operation *op, Value condition, StringRef message,
-                       StringRef file, StringRef func, int line,
-                       ConversionPatternRewriter &rewriter) {
+  void llAssert(Operation *op, Value condition, StringRef message,
+                StringRef file, StringRef func, int line,
+                ConversionPatternRewriter &rewriter) const {
     ConversionPatternRewriter::InsertionGuard guard(rewriter);
     auto ctx = rewriter.getContext();
     auto loc = op->getLoc();
@@ -46,22 +53,11 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
     // }
     // #block3
     Block *prevBlock = op->getBlock();
+
     Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
     rewriter.setInsertionPointToStart(ifBlock);
-    auto funcOp = getAssertfailDeclaration(rewriter);
-    auto moduleOp =
-        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    Value messageString =
-        LLVM::addStringToModule(loc, rewriter, "assertMessage_", message);
-    Value fileString =
-        LLVM::addStringToModule(loc, rewriter, "assertFile_", file);
-    Value funcString =
-        LLVM::addStringToModule(loc, rewriter, "assertFunc_", func);
-    Value lineNumber = i32_val(line);
-    Value charSize = int_val(sizeof(size_t) * 8, sizeof(char));
-    SmallVector<Value> operands = {messageString, fileString, lineNumber,
-                                   funcString, charSize};
-    auto ret = call(funcOp, operands);
+    targetInfo.assertFail(rewriter, loc, message, file, func, line);
+
     // Split a block after the call.
     Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
     rewriter.setInsertionPointToEnd(ifBlock);
@@ -69,31 +65,15 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
     rewriter.setInsertionPointToEnd(prevBlock);
     rewriter.create<cf::CondBranchOp>(loc, condition, ifBlock, thenBlock);
   }
-  static LLVM::LLVMFuncOp
-  getAssertfailDeclaration(ConversionPatternRewriter &rewriter) {
-    auto moduleOp =
-        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    StringRef funcName("__assertfail");
-    Operation *funcOp = moduleOp.lookupSymbol(funcName);
-    if (funcOp)
-      return cast<LLVM::LLVMFuncOp>(*funcOp);
-    // void __assert_fail(const char * assertion, const char * file, unsigned
-    // int line, const char * function);
-    auto *ctx = rewriter.getContext();
-    SmallVector<Type> argsType{ptr_ty(ctx), ptr_ty(ctx), i32_ty, ptr_ty(ctx),
-                               rewriter.getIntegerType(sizeof(size_t) * 8)};
-    auto funcType = LLVM::LLVMFunctionType::get(void_ty(ctx), argsType);
-    ConversionPatternRewriter::InsertionGuard guard(rewriter);
-    rewriter.setInsertionPointToStart(moduleOp.getBody());
-    return rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(ctx), funcName,
-                                             funcType);
-  }
+
+protected:
+  const TargetInfoBase &targetInfo;
 };
 
 } // namespace
 
 void mlir::triton::populateAssertOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
-  patterns.add<AssertOpConversion>(typeConverter, benefit);
+    const TargetInfoBase &targetInfo, PatternBenefit benefit) {
+  patterns.add<AssertOpConversion>(typeConverter, targetInfo, benefit);
 }

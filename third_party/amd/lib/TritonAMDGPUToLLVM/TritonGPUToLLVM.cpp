@@ -211,7 +211,7 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, patterns,
                                                    benefit);
     mlir::triton::populateAssertOpToLLVMPattern(typeConverter, patterns,
-                                                benefit);
+                                                targetInfo, benefit);
     mlir::triton::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
                                                      benefit);
     mlir::triton::populateSPMDOpToLLVMPattern(typeConverter, patterns,
