@@ -1,7 +1,7 @@
 import importlib
 import json
 import os
-import random
+import uuid
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -113,7 +113,7 @@ class FileCacheManager(CacheManager):
         assert self.lock_path is not None
         filepath = self._make_path(filename)
         # Random ID to avoid any collisions
-        rnd_id = random.randint(0, 1000000)
+        rnd_id = str(uuid.uuid4())
         # we use the PID in case a bunch of these around so we can see what PID made it
         pid = os.getpid()
         # use tempfile to be robust against program interruptions
