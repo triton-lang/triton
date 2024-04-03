@@ -3,6 +3,7 @@ import torch
 
 import triton
 import triton.language as tl
+from test_core import is_hip
 
 
 @triton.jit
@@ -25,7 +26,7 @@ def block_copy_kernel(a_ptr, b_ptr, N, BLOCK_SIZE: tl.constexpr, padding_option:
 ])
 def test_block_copy(dtypes_str, n, padding_option):
     capability = torch.cuda.get_device_capability()
-    if capability[0] >= 9:
+    if not is_hip() and capability[0] >= 9:
         pytest.skip("Hopper support is working in progress")
 
     src_dtype_str = dtypes_str[0]
@@ -85,7 +86,7 @@ def matmul_no_scf_with_advance_kernel(  #
 ])
 def test_block_ptr_matmul_no_scf(shape, num_warps):
     capability = torch.cuda.get_device_capability()
-    if capability[0] >= 9:
+    if not is_hip() and capability[0] >= 9:
         pytest.skip("Hopper support is working in progress")
 
     m, n, k = shape
