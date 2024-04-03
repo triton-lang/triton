@@ -299,7 +299,8 @@ jobs:
               ./test/unit/language/test_subprocess.py \
               ./test/unit/language/test_standard.py \
               ./test/unit/language/test_compile_errors.py \
-              ./test/unit/language/test_block_pointer.py
+              ./test/unit/language/test_block_pointer.py \
+              ./test/unit/operators/test_flash_attention.py
 
       - name: Run C++ unittests
         run: |
