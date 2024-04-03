@@ -1376,6 +1376,30 @@ struct TruncFOpConversion
   }
 };
 
+struct MulhiUIOpConversion
+    : public ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion> {
+  using Base = ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(MulhiUIOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+
+    Type resultElementTy = getElementTypeOrSelf(op.getResult().getType());
+    assert(resultElementTy.isInteger(32) || resultElementTy.isInteger(64));
+
+    StringRef funcName = resultElementTy.isInteger(32) ? "__ockl_mul_hi_u32"
+                                                       : "__ockl_mul_hi_u64";
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+    return {
+        rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
+  }
+};
+
 struct ExpOpConversionApprox
     : ElementwiseOpConversionBase<mlir::math::ExpOp, ExpOpConversionApprox> {
   using Base =
@@ -1429,6 +1453,7 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
+  patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
 
