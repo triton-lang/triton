@@ -193,4 +193,8 @@ void TargetInfo::printf(Value formatStrStart, int formatStrByteCount,
   }
 }
 
+void TargetInfo::assertFail(ConversionPatternRewriter &rewriter, Location loc,
+                            StringRef message, StringRef file, StringRef func,
+                            int line) const {}
+
 } // namespace mlir::triton::AMD

@@ -33,6 +33,9 @@ public:
       ArrayRef<unsigned> outOrd, unsigned accumNumReplicates) const override;
   void printf(Value formatStrStart, int formatStrByteCount, ValueRange args,
               ConversionPatternRewriter &rewriter) const override;
+  void assertFail(ConversionPatternRewriter &rewriter, Location loc,
+                  StringRef message, StringRef file, StringRef func,
+                  int line) const override;
 
 private:
   std::string arch;
