@@ -127,8 +127,13 @@ This means that whatever value the kernel updates will be updated multiple times
 To avoid this undesired behavior, you can use the <cite>reset_to_zero</cite> argument, which
 resets the value of the provided tensor to <cite>zero</cite> before running any configuration.</p>
 </dd>
-<dt class="field-even">Parameters<span class="colon">:</span></dt>
-<dd class="field-even"><ul class="simple">
+</dl>
+<p>If the environment variable <code class="code docutils literal notranslate"><span class="pre">TRITON_PRINT_AUTOTUNING</span></code> is set to
+<code class="code docutils literal notranslate"><span class="pre">&quot;1&quot;</span></code>, Triton will print a message to stdout after autotuning each
+kernel, including the time spent autotuning and the best configuration.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
 <li><p><strong>configs</strong> (<em>list</em><em>[</em><a class="reference internal" href="triton.Config.html#triton.Config" title="triton.Config"><em>triton.Config</em></a><em>]</em>) – a list of <code class="code docutils literal notranslate"><span class="pre">triton.Config</span></code> objects</p></li>
 <li><p><strong>key</strong> (<em>list</em><em>[</em><em>str</em><em>]</em>) – a list of argument names whose change in value will trigger the evaluation of all provided configs.</p></li>
 <li><p><strong>prune_configs_by</strong> – a dict of functions that are used to prune configs, fields:
