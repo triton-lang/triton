@@ -269,6 +269,7 @@ def compile(src, target=None, options=None):
     except Exception as e:
         filter_traceback(e)
         raise
+    use_ttgir_loc = os.environ.get("USE_TTGIR_LOC", "0") == "1"
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         ir_filename = f"{src.name}.{ext}"
@@ -280,7 +281,6 @@ def compile(src, target=None, options=None):
             full_name = fn_override_manager.get_file(ir_filename)
             next_module = parse(full_name, ext, context)
         # use an env variable to parse ttgir from file
-        use_ttgir_loc = os.environ.get("USE_TTGIR_LOC", "0") == "1"
         if use_ttgir_loc and ext == "ttgir":
             ttgir_full_name = fn_cache_manager.get_file(ir_filename)
             next_module = parse(ttgir_full_name, ext, context)

@@ -378,7 +378,7 @@ void init_triton_ir(py::module &&m) {
              std::string str;
              llvm::raw_string_ostream os(str);
              auto printingFlags = OpPrintingFlags();
-             bool dumpLoc = !::triton::tools::getBoolEnv("DISABLE_LOC_DUMP");
+             bool dumpLoc = !::triton::tools::getBoolEnv("USE_TTGIR_LOC");
              if (dumpLoc)
                printingFlags.enableDebugInfo();
              self->print(os, printingFlags);
@@ -445,7 +445,7 @@ void init_triton_ir(py::module &&m) {
              std::string str;
              llvm::raw_string_ostream os(str);
              auto printingFlags = OpPrintingFlags();
-             bool dumpLoc = !::triton::tools::getBoolEnv("DISABLE_LOC_DUMP");
+             bool dumpLoc = !::triton::tools::getBoolEnv("USE_TTGIR_LOC");
              if (dumpLoc)
                printingFlags.enableDebugInfo();
              self.print(os, printingFlags);
