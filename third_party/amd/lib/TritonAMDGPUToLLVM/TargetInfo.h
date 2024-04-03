@@ -38,6 +38,9 @@ public:
                   int line) const override;
 
 private:
+  void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,
+                  ConversionPatternRewriter &rewriter, bool useStdErr) const;
+
   std::string arch;
 };
 } // namespace mlir::triton::AMD
