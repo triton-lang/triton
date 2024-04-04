@@ -42,7 +42,6 @@ inline const std::set<std::string> ENV_VARS = {
     "TRITON_DISABLE_RESHAPE_ENCODING_INFERENCE",
     "MLIR_ENABLE_DIAGNOSTICS",
     "TRITON_ENABLE_LLVM_DEBUG",
-    "TRITON_ENABLE_ARG_REMAT",
 };
 
 namespace tools {

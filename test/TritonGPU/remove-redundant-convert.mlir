@@ -1,4 +1,4 @@
-// RUN: TRITON_ENABLE_ARG_REMAT=1 triton-opt %s -split-input-file -tritongpu-remove-layout-conversions 2>&1 | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritongpu-remove-layout-conversions 2>&1 | FileCheck %s
 // CHECK-LABEL: remove_convert
 // CHECK-NOT: triton_gpu.convert_layout [[REGISTER:%[0-9]+]]#[[IDX:[0-9]+]] : tensor<1x512xf32
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 8], order = [1, 0]}>
