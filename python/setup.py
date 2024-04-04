@@ -311,8 +311,6 @@ class CMakeBuild(build_ext):
         cmake_args += get_thirdparty_packages([get_json_package_info(), get_pybind11_package_info()])
         if cuda_root := get_cuda_root():
             cmake_args += ["-DCUDAToolkit_ROOT=" + cuda_root]
-        else:
-            raise RuntimeError("CUDA_HOME or CUDA_ROOT not set")
         return cmake_args
 
     def build_extension(self, ext):
