@@ -117,8 +117,10 @@ class Package(NamedTuple):
 
 
 def get_pybind11_package_info():
-    name = "pybind11-2.11.1"
-    url = "https://github.com/pybind/pybind11/archive/refs/tags/v2.11.1.tar.gz"
+    with open("../cmake/pybind11-version.txt", "r") as pybind11_version_file:
+        version = pybind11_version_file.read().strip()
+    name = f"pybind11-{version}"
+    url = f"https://github.com/pybind/pybind11/archive/refs/tags/v{version}.tar.gz"
     return Package("pybind11", name, url, "PYBIND11_INCLUDE_DIR", "", "PYBIND11_SYSPATH")
 
 
@@ -147,8 +149,8 @@ def get_llvm_package_info():
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     # use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
     # release_suffix = "assert" if use_assert_enabled_llvm else "release"
-    llvm_hash_file = open("../cmake/llvm-hash.txt", "r")
-    rev = llvm_hash_file.read(8)
+    with open("../cmake/llvm-hash.txt", "r") as llvm_hash_file:
+        rev = llvm_hash_file.read(8)
     name = f"llvm-{rev}-{system_suffix}"
     url = f"https://tritonlang.blob.core.windows.net/llvm-builds/{name}.tar.gz"
     return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
@@ -370,24 +372,27 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
 
 
+with open("../cmake/nvidia-toolchain-version.txt", "r") as nvidia_version_file:
+    NVIDIA_TOOLCHAIN_VERSION = nvidia_version_file.read().strip()
+
 download_and_copy(
     src_path="bin/ptxas",
     variable="TRITON_PTXAS_PATH",
-    version="12.4.99",
+    version=NVIDIA_TOOLCHAIN_VERSION,
     url_func=lambda arch, version:
     f"https://anaconda.org/nvidia/cuda-nvcc/{version}/download/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2",
 )
 download_and_copy(
     src_path="bin/cuobjdump",
     variable="TRITON_CUOBJDUMP_PATH",
-    version="12.4.99",
+    version=NVIDIA_TOOLCHAIN_VERSION,
     url_func=lambda arch, version:
     f"https://anaconda.org/nvidia/cuda-cuobjdump/{version}/download/linux-{arch}/cuda-cuobjdump-{version}-0.tar.bz2",
 )
 download_and_copy(
     src_path="bin/nvdisasm",
     variable="TRITON_NVDISASM_PATH",
-    version="12.4.99",
+    version=NVIDIA_TOOLCHAIN_VERSION,
     url_func=lambda arch, version:
     f"https://anaconda.org/nvidia/cuda-nvdisasm/{version}/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
