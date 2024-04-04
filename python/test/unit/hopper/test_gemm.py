@@ -27,8 +27,8 @@ import pytest
 import torch
 from torch.testing import assert_close
 
-import triton
 import triton.language as tl
+import triton
 
 
 @triton.jit
