@@ -128,10 +128,6 @@ jobs:
           # Run hopper/test_flashattention.py separately to avoid out of gpu memory
           python3 -m pytest -vs hopper/test_flashattention.py
 
-      - name: Clear cache
-        run: |
-          rm -rf ~/.triton
-
       - name: Run interpreter tests
         env:
           TRITON_INTERPRET: "1"
@@ -165,6 +161,12 @@ jobs:
           cd python
           cd "build/$(ls build | grep -i cmake)"
           ctest
+
+      - name: Inspect cache directory
+        run: |
+          mkdir -p ~/.triton
+          ls -alh ~/.triton
+          du -sh ~/.triton/**
 
 
   Compare-artifacts:
@@ -322,7 +324,7 @@ jobs:
     container:
       image: rocm/pytorch:rocm6.0.2_ubuntu22.04_py3.10_pytorch_2.1.2
       volumes:
-        - $HOME/.triton:/root/triton
+        - ${{ runner.temp }}/.triton:/root/.triton
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
 
     steps:
@@ -343,9 +345,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.triton/llvm
-            ~/.triton/nvidia
-            ~/.triton/pybind11
+            ${{ runner.temp }}/.triton/llvm
+            ${{ runner.temp }}/.triton/nvidia
+            ${{ runner.temp }}/.triton/pybind11
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}
 
       - name: Inspect cache directory
@@ -382,3 +384,9 @@ jobs:
               ./test/unit/language/test_standard.py \
               ./test/unit/language/test_compile_errors.py \
               ./test/unit/language/test_block_pointer.py
+
+      - name: Inspect cache directory
+        run: |
+          mkdir -p /root/.triton
+          ls -alh /root/.triton
+          du -sh /root/.triton/**
