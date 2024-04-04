@@ -64,6 +64,8 @@ jobs:
       - name: Cache build dependency
         uses: actions/cache@v4
         with:
+          # Note that we cannot use environment variables here given there is
+          # no shell to interpret them in the paths.
           path: |
             ~/.triton/llvm
             ~/.triton/nvidia
@@ -325,14 +327,6 @@ jobs:
       image: rocm/pytorch:rocm6.0.2_ubuntu22.04_py3.10_pytorch_2.1.2
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
 
-    # All the following steps run within the above Docker images by default,
-    # unless the step itself uses container actions. If that's the case, then
-    # the container actions will run as sibling containers on the same network
-    # with the same volume mounts.
-    env:
-      DOCKER_HOME: /github/home
-      RNNER_HOME: /home/runner/actions-runner/_work/_temp/_github_home
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -347,24 +341,17 @@ jobs:
           echo "nvidia=$(cat cmake/nvidia-toolchain-version.txt)" >> $GITHUB_OUTPUT
         shell: bash
 
-      - name: Inspect cache directory
+      - name: Clear triton cache directory
         run: |
-          whoami
-          echo "HOME is ${HOME}"
-          echo ~
-          echo "USERPROFILE is ${USERPROFILE}"
-          echo "HOMEPATH is ${HOMEPATH}"
-          echo "DOCKER_HOME is ${DOCKER_HOME}"
-          mkdir -p ${DOCKER_HOME}/.triton
-          ls -alh ${DOCKER_HOME}/.triton
-          rm -rf ${DOCKER_HOME}/.triton
-          mkdir -p ${HOME}/.triton
-          ls -alh ${HOME}/.triton
-          rm -rf ${HOME}/.triton
+          mkdir -p ~/.triton
+          ls -alh ~/.triton
+          rm -rf ~/.triton
 
       - name: Cache build dependency
         uses: actions/cache@v4
         with:
+          # Note that we cannot use environment variables here given there is
+          # no shell to interpret them in the paths.
           path: |
             ~/.triton/llvm
             ~/.triton/nvidia
@@ -373,8 +360,8 @@ jobs:
 
       - name: Inspect cache directory
         run: |
-          mkdir -p ${DOCKER_HOME}/.triton
-          ls -alh ${DOCKER_HOME}/.triton
+          mkdir -p ~/.triton
+          ls -alh ~/.triton
 
       - name: Set ROCM ENV
         run: |
@@ -408,6 +395,6 @@ jobs:
 
       - name: Inspect cache directory
         run: |
-          mkdir -p ${DOCKER_HOME}/.triton
-          ls -alh ${DOCKER_HOME}/.triton
-          du -sh ${DOCKER_HOME}/.triton/**
+          mkdir -p ~/.triton
+          ls -alh ~/.triton
+          du -sh ~/.triton/**
