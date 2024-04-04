@@ -2955,10 +2955,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         pytest.skip("float8e4nv not supported on sm <= 80")
     if is_hip() and (in_dtype == 'float8e4nv' or in_dtype == 'float8e5'):
         pytest.skip("float8e4nv and float8e5 not supported on HIP")
-    if is_interpreter() and in_dtype == 'int8':
-        pytest.skip(
-            "numpy.dot with int8 inputs will overflow while tl.dot doesn't because MMA instruction's accumulator is 32-bit"
-        )
     if is_hip() and (input_precision != "ieee"):
         pytest.skip(f"{input_precision} not supported on HIP")
 
@@ -3146,8 +3142,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
 def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
     if is_hip():
         pytest.skip('TODO test_dot3d not supported on HIP.')
-    if in_dtype_str == 'int8' and is_interpreter():
-        pytest.skip('numpy.dot with int8 inputs will overflow')
 
     @triton.jit
     def kernel(

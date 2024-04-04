@@ -52,7 +52,7 @@ class HIPOptions:
         # Ignore user-defined warp size for gfx9
         warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch else 64
         object.__setattr__(self, 'warp_size', warp_size)
-        libs = ["cuda2gcn", "opencl", "ocml", "ockl"]
+        libs = ["ocml", "ockl"]
         for lib in libs:
             extern_libs[lib] = str(default_libdir / f'{lib}.bc')
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
@@ -205,8 +205,8 @@ class HIPBackend(BaseBackend):
         # Get some metadata
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")
 
-        ret = str(llvm_mod)
-        return ret
+        amd.cleanup_bitcode_metadata(llvm_mod)
+        return str(llvm_mod)
 
     @staticmethod
     def make_hsaco(src, metadata, options):

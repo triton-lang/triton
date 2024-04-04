@@ -53,7 +53,7 @@ def integer_promote_impl(a_ty: tl.dtype, b_ty: tl.dtype) -> tl.dtype:
         return a_ty if a_rank >= b_rank else b_ty
     elif b_sn == tl.dtype.SIGNEDNESS.UNSIGNED:
         return b_ty if b_rank >= a_rank else a_ty
-    assert False
+    raise TypeError(f"unexpected signedness {a_sn} and {b_sn}")
 
 
 def computation_type_impl(a_ty: tl.dtype, b_ty: tl.dtype, div_or_mod: bool) -> tl.dtype:
@@ -81,13 +81,13 @@ def computation_type_impl(a_ty: tl.dtype, b_ty: tl.dtype, div_or_mod: bool) -> t
             return tl.bfloat16
         return tl.float32
     if not a_ty.is_int() or not b_ty.is_int():
-        assert False
+        raise TypeError(f"unexpected type {a_ty} and {b_ty}")
     # 5 ) both operands are integer and undergo
     #    integer promotion
     if div_or_mod and a_ty.int_signedness != b_ty.int_signedness:
-        raise ValueError("Cannot use /, #, or % with " + a_ty.__repr__() + " and " + b_ty.__repr__() +
-                         " because they have different signedness;"
-                         "this is unlikely to result in a useful answer. Cast them to the same signedness.")
+        raise TypeError("Cannot use /, #, or % with " + a_ty.__repr__() + " and " + b_ty.__repr__() +
+                        " because they have different signedness;"
+                        "this is unlikely to result in a useful answer. Cast them to the same signedness.")
     return integer_promote_impl(a_ty, b_ty)
 
 
@@ -130,7 +130,7 @@ def add(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
     input_scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
     if input_scalar_ty.is_ptr() and other_scalar_ty.is_ptr():
-        raise ValueError("cannot add pointers together")
+        raise TypeError("cannot add pointers together")
 
     # offset + ptr
     # ptr + offset
@@ -146,7 +146,7 @@ def add(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
     # int + int
     elif input_scalar_ty.is_int():
         return tl.tensor(builder.create_add(input.handle, other.handle), input.type)
-    assert False
+    raise TypeError(f"unexpected type {input_scalar_ty}")
 
 
 def sub(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
@@ -161,7 +161,7 @@ def sub(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
     # int - int
     elif scalar_ty.is_int():
         return tl.tensor(builder.create_sub(input.handle, other.handle), input.type)
-    assert False
+    raise TypeError(f"unexpected type {scalar_ty}")
 
 
 def mul(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
@@ -173,7 +173,7 @@ def mul(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
     # * int
     elif scalar_ty.is_int():
         return tl.tensor(builder.create_mul(input.handle, other.handle), input.type)
-    assert False
+    raise TypeError(f"unexpected type {scalar_ty}")
 
 
 def truediv(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
@@ -198,7 +198,7 @@ def truediv(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tenso
             input = cast(input, other_scalar_ty, builder)
     # unreachable
     else:
-        assert False
+        raise TypeError(f"unexpected type {input_scalar_ty}")
     return tl.tensor(builder.create_fdiv(input.handle, other.handle), input.type)
 
 
@@ -214,14 +214,14 @@ def floordiv(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tens
             return tl.tensor(builder.create_sdiv(input.handle, other.handle), input.type)
         else:
             return tl.tensor(builder.create_udiv(input.handle, other.handle), input.type)
-    assert False
+    raise TypeError(f"unexpected type {input_scalar_ty}")
 
 
 def fdiv(input: tl.tensor, other: tl.tensor, ieee_rounding: bool, builder: ir.builder) -> tl.tensor:
     input_scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
     if not input_scalar_ty.is_floating() or not other_scalar_ty.is_floating():
-        raise ValueError("both operands of fdiv must have floating scalar type")
+        raise TypeError("both operands of fdiv must have floating scalar type")
     input, other = binary_op_type_checking_impl(input, other, builder, False, False, False, True)
     ret = builder.create_fdiv(input.handle, other.handle)
     return tl.tensor(ret, input.type)
@@ -239,14 +239,14 @@ def mod(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
     # % int
     elif scalar_ty.is_int():
         if scalar_ty.int_signedness != other_scalar_ty.int_signedness:
-            raise ValueError("Cannot mod " + scalar_ty.__repr__() + " by " + other_scalar_ty.__repr__() + " "
-                             "because they have different signedness;"
-                             "this is unlikely to result in a useful answer. Cast them to the same signedness.")
+            raise TypeError("Cannot mod " + scalar_ty.__repr__() + " by " + other_scalar_ty.__repr__() + " "
+                            "because they have different signedness;"
+                            "this is unlikely to result in a useful answer. Cast them to the same signedness.")
         if scalar_ty.is_int_signed():
             return tl.tensor(builder.create_srem(input.handle, other.handle), input.type)
         else:
             return tl.tensor(builder.create_urem(input.handle, other.handle), input.type)
-    assert False
+    raise TypeError(f"unexpected type {scalar_ty}")
 
 
 ##############
@@ -263,13 +263,13 @@ def minimum(x: tl.tensor, y: tl.tensor, propagate_nan: tl.PropagateNan, builder:
         elif propagate_nan == tl.PropagateNan.NONE:
             return tl.tensor(builder.create_minnumf(x.handle, y.handle), x.type)
         else:
-            assert False, f"Unexpected propagate_nan {propagate_nan}"
+            raise ValueError(f"Unexpected propagate_nan {propagate_nan}")
     elif dtype.is_int_signed():
         return tl.tensor(builder.create_minsi(x.handle, y.handle), x.type)
     elif dtype.is_int_unsigned():
         return tl.tensor(builder.create_minui(x.handle, y.handle), x.type)
     else:
-        assert False, f"Unexpected dtype {dtype}"
+        raise TypeError(f"Unexpected dtype {dtype}")
 
 
 def maximum(x: tl.tensor, y: tl.tensor, propagate_nan: tl.PropagateNan, builder: ir.builder):
@@ -281,13 +281,13 @@ def maximum(x: tl.tensor, y: tl.tensor, propagate_nan: tl.PropagateNan, builder:
         elif propagate_nan == tl.PropagateNan.NONE:
             return tl.tensor(builder.create_maxnumf(x.handle, y.handle), x.type)
         else:
-            assert False, f"Unexpected propagate_nan {propagate_nan}"
+            raise ValueError(f"Unexpected propagate_nan {propagate_nan}")
     elif dtype.is_int_signed():
         return tl.tensor(builder.create_maxsi(x.handle, y.handle), x.type)
     elif dtype.is_int_unsigned():
         return tl.tensor(builder.create_maxui(x.handle, y.handle), x.type)
     else:
-        assert False, f"Unexpected dtype {dtype}"
+        raise TypeError(f"Unexpected dtype {dtype}")
 
 
 def clamp(x: tl.tensor, min: tl.tensor, max: tl.tensor, propagate_nan: tl.PropagateNan, builder: ir.builder):
@@ -299,7 +299,7 @@ def clamp(x: tl.tensor, min: tl.tensor, max: tl.tensor, propagate_nan: tl.Propag
     if dtype.is_floating():
         return tl.tensor(builder.create_clampf(x.handle, min.handle, max.handle, propagate_nan), x.type)
     else:
-        assert False, f"Unexpected dtype {dtype}. Only floating point clamp is supported"
+        raise TypeError(f"Unexpected dtype {dtype}. Only floating point clamp is supported")
 
 
 ##############
@@ -421,7 +421,7 @@ def greater_than(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.
             return tl.tensor(builder.create_icmpSGT(input.handle, other.handle), _bool_like(input))
         else:
             return tl.tensor(builder.create_icmpUGT(input.handle, other.handle), _bool_like(input))
-    assert False
+    raise TypeError(f"unexpected type {scalar_ty}")
 
 
 def greater_equal(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
@@ -436,7 +436,7 @@ def greater_equal(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl
             return tl.tensor(builder.create_icmpSGE(input.handle, other.handle), _bool_like(input))
         else:
             return tl.tensor(builder.create_icmpUGE(input.handle, other.handle), _bool_like(input))
-    assert False
+    raise TypeError(f"unexpected type {scalar_ty}")
 
 
 def less_than(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
@@ -451,7 +451,7 @@ def less_than(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.ten
             return tl.tensor(builder.create_icmpSLT(input.handle, other.handle), _bool_like(input))
         else:
             return tl.tensor(builder.create_icmpULT(input.handle, other.handle), _bool_like(input))
-    assert False
+    raise TypeError(f"unexpected type {scalar_ty}")
 
 
 def less_equal(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
@@ -466,7 +466,7 @@ def less_equal(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.te
             return tl.tensor(builder.create_icmpSLE(input.handle, other.handle), _bool_like(input))
         else:
             return tl.tensor(builder.create_icmpULE(input.handle, other.handle), _bool_like(input))
-    assert False
+    raise TypeError(f"unexpected type {scalar_ty}")
 
 
 def equal(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
@@ -478,7 +478,7 @@ def equal(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
     # == int
     elif scalar_ty.is_int():
         return tl.tensor(builder.create_icmpEQ(input.handle, other.handle), _bool_like(input))
-    assert False
+    raise TypeError(f"unexpected type {scalar_ty}")
 
 
 def not_equal(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
@@ -490,7 +490,7 @@ def not_equal(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.ten
     # == int
     elif scalar_ty.is_int():
         return tl.tensor(builder.create_icmpNE(input.handle, other.handle), _bool_like(input))
-    assert False
+    raise TypeError(f"unexpected type {scalar_ty}")
 
 
 # ===----------------------------------------------------------------------===//
@@ -659,14 +659,14 @@ def broadcast_impl_value(lhs: tl.tensor, rhs: tl.tensor, builder: ir.builder) ->
 
         if len(lhs_shape) < len(rhs_shape):
             # Add new axes to lhs
-            for dim in range(len(lhs_shape), len(rhs_shape)):
+            for _ in range(len(lhs_shape), len(rhs_shape)):
                 lhs = tl.tensor(builder.create_expand_dims(lhs.handle, 0),
                                 tl.block_type(lhs_ty.scalar, [1] + lhs_shape))
                 lhs_ty = lhs.type
                 lhs_shape = lhs_ty.get_block_shapes()
         elif len(rhs_shape) < len(lhs_shape):
             # Add new axes to rhs
-            for dim in range(len(rhs_shape), len(lhs_shape)):
+            for _ in range(len(rhs_shape), len(lhs_shape)):
                 rhs = tl.tensor(builder.create_expand_dims(rhs.handle, 0),
                                 tl.block_type(rhs_ty.scalar, [1] + rhs_shape))
                 rhs_ty = rhs.type
@@ -678,9 +678,7 @@ def broadcast_impl_value(lhs: tl.tensor, rhs: tl.tensor, builder: ir.builder) ->
             right = rhs_shape[i]
             if left == 1:
                 ret_shape.append(right)
-            elif right == 1:
-                ret_shape.append(left)
-            elif left == right:
+            elif (right == 1) or (right == left):
                 ret_shape.append(left)
             else:
                 raise ValueError("Cannot make_shape_compatible: incompatible dimensions "
@@ -939,7 +937,7 @@ def _canonicalize_boundary_check(boundary_check, block_shape):
         assert len(boundary_check) > 0
         assert len(boundary_check) == len(set(boundary_check)), "Duplicate dimension in `boundary_check`"
         return sorted(boundary_check)
-    return tuple()
+    return ()
 
 
 def _load_block_pointer(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder):
@@ -1575,7 +1573,7 @@ def make_block_ptr(base: tl.tensor, shape, strides, offsets, block_shape, order,
     if not hasattr(block_shape, "__iter__"):
         block_shape = [block_shape]
     block_shape = [elem.value if isinstance(elem, tl.constexpr) else elem for elem in block_shape]
-    assert all([isinstance(elem, int) and -2**31 <= elem < 2**31 for elem in block_shape]), \
+    assert all(isinstance(elem, int) and -2**31 <= elem < 2**31 for elem in block_shape), \
         "Expected a list of constant integers (`int32_t` range) in `block_shape`"
 
     # Check `order`
@@ -1585,7 +1583,7 @@ def make_block_ptr(base: tl.tensor, shape, strides, offsets, block_shape, order,
     assert sorted(order) == list(range(len(order))), "Expected a permutation of (0, 1, ..., len(order)-1) in order"
 
     # Must have same length
-    assert all([len(block_shape) == len(list_like) for list_like in [shape, strides, offsets, order]]), \
+    assert all(len(block_shape) == len(list_like) for list_like in [shape, strides, offsets, order]), \
         "Expected shape/strides/offsets/block_shape to have the same length"
 
     # Build value, the type is:

@@ -106,4 +106,14 @@ void init_triton_amd(py::module &&m) {
     module->addModuleFlag(llvm::Module::Error, "amdhsa_code_object_version",
                           version);
   });
+
+  m.def("cleanup_bitcode_metadata", [](llvm::Module *module) {
+    // We can have Clang version metadata from device libraries linked in. We
+    // don't care about them so drop them.
+    if (auto *ident = module->getNamedMetadata("llvm.ident"))
+      module->eraseNamedMetadata(ident);
+    // Also various OpenCL version details.
+    if (auto *openclVersion = module->getNamedMetadata("opencl.ocl.version"))
+      module->eraseNamedMetadata(openclVersion);
+  });
 }

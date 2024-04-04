@@ -91,27 +91,27 @@ Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
   return loaded.getResult(0);
 }
 
-Value TargetInfo::shuffleXor(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::shuffleXor(ConversionPatternRewriter &rewriter, Location loc,
                              Value val, int i) const {
   return LLVM::AMD::shuffleXor(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleUp(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::shuffleUp(ConversionPatternRewriter &rewriter, Location loc,
                             Value val, int i) const {
   return LLVM::AMD::shuffleUp(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
                              Value val, int i) const {
   return LLVM::AMD::shuffleIdx(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
                              Value val, Value i) const {
   return LLVM::AMD::shuffleIdx(loc, rewriter, val, i);
 }
 
-Value TargetInfo::programId(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::programId(ConversionPatternRewriter &rewriter, Location loc,
                             ModuleOp moduleOp, int axis) const {
   return LLVM::AMD::llGetPid(loc, rewriter, moduleOp, axis);
 }
@@ -130,9 +130,10 @@ bool TargetInfo::processReplicaUsingStMatrix(
   return false;
 }
 
-void TargetInfo::printf(Value formatStrStart, int formatStrByteCount,
-                        ValueRange args,
-                        ConversionPatternRewriter &rewriter) const {
+void TargetInfo::printfImpl(Value formatStrStart, int formatStrByteCount,
+                            ValueRange args,
+                            ConversionPatternRewriter &rewriter,
+                            bool useStdErr) const {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   auto *ctx = rewriter.getContext();
   mlir::Location loc = UnknownLoc::get(ctx);
@@ -140,9 +141,11 @@ void TargetInfo::printf(Value formatStrStart, int formatStrByteCount,
   // See
   // https://github.com/ROCm/ROCm-Device-Libs/blob/rocm-6.0.x/ockl/src/services.cl#L263-L361
   // for details about the following HIP device print functions.
-  LLVM::LLVMFuncOp printBeginFn =
-      getOrInsertFunction(moduleOp, loc, rewriter, "__ockl_printf_begin",
-                          LLVM::LLVMFunctionType::get(i64_ty, {i64_ty}));
+  LLVM::LLVMFuncOp printBeginFn = getOrInsertFunction(
+      moduleOp, loc, rewriter,
+      useStdErr ? "__ockl_fprintf_stderr_begin" : "__ockl_printf_begin",
+      LLVM::LLVMFunctionType::get(i64_ty,
+                                  useStdErr ? ArrayRef<Type>() : i64_ty));
   LLVM::LLVMFuncOp printStrFn = getOrInsertFunction(
       moduleOp, loc, rewriter, "__ockl_printf_append_string_n",
       LLVM::LLVMFunctionType::get(
@@ -158,7 +161,8 @@ void TargetInfo::printf(Value formatStrStart, int formatStrByteCount,
 
   // Emit the intrinsic function call to begin the printf.
   Value zeroI64 = rewriter.create<LLVM::ConstantOp>(loc, i64_ty, 0);
-  Value message = call(printBeginFn, zeroI64).getResult();
+  Value message =
+      call(printBeginFn, useStdErr ? ValueRange() : zeroI64).getResult();
 
   // Emit the intrinsic function call to handle the printf format string.
   Value oneI32 = i32_val(1);
@@ -191,6 +195,30 @@ void TargetInfo::printf(Value formatStrStart, int formatStrByteCount,
     arguments.push_back(isLast);
     message = call(printArgsFn, arguments).getResult();
   }
+}
+
+void TargetInfo::printf(ConversionPatternRewriter &rewriter,
+                        Value formatStrStart, int formatStrByteCount,
+                        ValueRange args) const {
+  return printfImpl(formatStrStart, formatStrByteCount, args, rewriter,
+                    /*useStdError=*/false);
+}
+
+void TargetInfo::assertFail(ConversionPatternRewriter &rewriter, Location loc,
+                            StringRef message, StringRef file, StringRef func,
+                            int line) const {
+  // Compose and print an assert message.
+  llvm::SmallString<256> msgBuffer;
+  llvm::Twine("device assertion failed: '" + message + "', in " + func +
+              " at " + file + ":" + llvm::Twine(line) + "\n\0")
+      .toStringRef(msgBuffer);
+  Value msgValue =
+      LLVM::addStringToModule(loc, rewriter, "printfFormat_", msgBuffer);
+  printfImpl(msgValue, msgBuffer.size_in_bytes(), /*args=*/ValueRange(),
+             rewriter, /*useStdError=*/true);
+
+  // Perform the trap to abort the kernel.
+  rewriter.create<LLVM::Trap>(loc);
 }
 
 } // namespace mlir::triton::AMD

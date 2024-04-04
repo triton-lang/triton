@@ -52,15 +52,36 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: "true"
+
+      - name: Compute build dependency cache keys
+        id: cache-key
+        run: |
+          echo "llvm=$(cat cmake/llvm-hash.txt | cut -c 1-8)" >> $GITHUB_OUTPUT
+          echo "pybind11=$(cat cmake/pybind11-version.txt)" >> $GITHUB_OUTPUT
+          echo "nvidia=$(cat cmake/nvidia-toolchain-version.txt)" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Cache build dependency
+        uses: actions/cache@v4
+        with:
+          # Note that we cannot use environment variables here given there is
+          # no shell to interpret them in the paths.
+          path: |
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/pybind11
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}
+
+      - name: Inspect cache directory
+        run: |
+          mkdir -p ~/.triton
+          ls -alh ~/.triton
+
       - name: Set CUDA ENV
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
         run: |
           echo "BACKEND=CUDA" >> "${GITHUB_ENV}"
           echo "TRITON_DISABLE_LINE_INFO=1" >> "${GITHUB_ENV}"
-
-      - name: Clear cache
-        run: |
-          rm -rf ~/.triton
 
       - name: Update PATH
         run: |
@@ -109,10 +130,6 @@ jobs:
           # Run hopper/test_flashattention.py separately to avoid out of gpu memory
           python3 -m pytest -vs hopper/test_flashattention.py
 
-      - name: Clear cache
-        run: |
-          rm -rf ~/.triton
-
       - name: Run interpreter tests
         env:
           TRITON_INTERPRET: "1"
@@ -153,6 +170,12 @@ jobs:
           python3 -m pytest -vvv test
           python3 tutorials/dynamic_net.py --profile
           python3 tutorials/matmul.py --profile
+
+      - name: Inspect cache directory
+        run: |
+          mkdir -p ~/.triton
+          ls -alh ~/.triton
+          du -sh ~/.triton/**
 
   Compare-artifacts:
     needs: Integration-Tests
@@ -311,26 +334,44 @@ jobs:
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
 
     steps:
-      - name: Checkout PR
-        uses: actions/checkout@v4
-        if: ${{ github.event_name == 'issue_comment' }}
-        with:
-          ref: refs/pull/${{ github.event.issue.number }}/head
-          submodules: 'true'
-
       - name: Checkout
         uses: actions/checkout@v4
-        if: ${{ github.event_name != 'issue_comment' }}
         with:
           submodules: 'true'
+
+      - name: Compute build dependency cache keys
+        id: cache-key
+        run: |
+          echo "llvm=$(cat cmake/llvm-hash.txt | cut -c 1-8)" >> $GITHUB_OUTPUT
+          echo "pybind11=$(cat cmake/pybind11-version.txt)" >> $GITHUB_OUTPUT
+          echo "nvidia=$(cat cmake/nvidia-toolchain-version.txt)" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Clear triton cache directory
+        run: |
+          mkdir -p ~/.triton
+          ls -alh ~/.triton
+          rm -rf ~/.triton
+
+      - name: Cache build dependency
+        uses: actions/cache@v4
+        with:
+          # Note that we cannot use environment variables here given there is
+          # no shell to interpret them in the paths.
+          path: |
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/pybind11
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}
+
+      - name: Inspect cache directory
+        run: |
+          mkdir -p ~/.triton
+          ls -alh ~/.triton
 
       - name: Set ROCM ENV
         run: |
           echo "BACKEND=ROCM" >> "${GITHUB_ENV}"
-
-      - name: Clear cache
-        run: |
-          rm -rf ~/.triton
 
       - name: Update PATH
         run: |
@@ -352,4 +393,14 @@ jobs:
       - name: Run python tests on ROCM
         run: |
           cd python
-          pytest --capture=tee-sys -rfs -vvv -n 32 ./test/unit/language/test_core.py ./test/unit/language/test_subprocess.py -k "not test_assert"
+          pytest --capture=tee-sys -rfs -vvv -n 32 ./test/unit/language/test_core.py \
+              ./test/unit/language/test_subprocess.py \
+              ./test/unit/language/test_standard.py \
+              ./test/unit/language/test_compile_errors.py \
+              ./test/unit/language/test_block_pointer.py
+
+      - name: Inspect cache directory
+        run: |
+          mkdir -p ~/.triton
+          ls -alh ~/.triton
+          du -sh ~/.triton/**

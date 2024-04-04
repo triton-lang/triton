@@ -127,8 +127,10 @@ class Package(NamedTuple):
 
 
 def get_pybind11_package_info():
-    name = "pybind11-2.11.1"
-    url = "https://github.com/pybind/pybind11/archive/refs/tags/v2.11.1.tar.gz"
+    with open("../cmake/pybind11-version.txt", "r") as pybind11_version_file:
+        version = pybind11_version_file.read().strip()
+    name = f"pybind11-{version}"
+    url = f"https://github.com/pybind/pybind11/archive/refs/tags/v{version}.tar.gz"
     return Package("pybind11", name, url, "PYBIND11_INCLUDE_DIR", "", "PYBIND11_SYSPATH")
 
 
@@ -391,24 +393,27 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
 
 
+with open("../cmake/nvidia-toolchain-version.txt", "r") as nvidia_version_file:
+    NVIDIA_TOOLCHAIN_VERSION = nvidia_version_file.read().strip()
+
 download_and_copy(
     src_path="bin/ptxas",
     variable="TRITON_PTXAS_PATH",
-    version="12.4.99",
+    version=NVIDIA_TOOLCHAIN_VERSION,
     url_func=lambda arch, version:
     f"https://anaconda.org/nvidia/cuda-nvcc/{version}/download/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2",
 )
 download_and_copy(
     src_path="bin/cuobjdump",
     variable="TRITON_CUOBJDUMP_PATH",
-    version="12.4.99",
+    version=NVIDIA_TOOLCHAIN_VERSION,
     url_func=lambda arch, version:
     f"https://anaconda.org/nvidia/cuda-cuobjdump/{version}/download/linux-{arch}/cuda-cuobjdump-{version}-0.tar.bz2",
 )
 download_and_copy(
     src_path="bin/nvdisasm",
     variable="TRITON_NVDISASM_PATH",
-    version="12.4.99",
+    version=NVIDIA_TOOLCHAIN_VERSION,
     url_func=lambda arch, version:
     f"https://anaconda.org/nvidia/cuda-nvdisasm/{version}/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
