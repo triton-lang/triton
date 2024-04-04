@@ -1,5 +1,5 @@
 from . import cuda
-from .hip.libdevice import mulhi
-# from .libdevice import libdevice
+from . import hip
+from .libdevice import libdevice
 
-__all__ = ['cuda', 'mulhi']
+__all__ = ['cuda', 'hip', 'libdevice']
