@@ -1,4 +1,4 @@
-import proton._C.libproton.proton as libproton
+import triton._C.libproton.proton as libproton
 import tempfile
 import pathlib
 

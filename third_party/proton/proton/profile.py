@@ -1,6 +1,6 @@
 import functools
 
-from ._C.libproton import proton as libproton
+from triton._C.libproton import proton as libproton
 from .hook import register_triton_hook, unregister_triton_hook
 from .flags import set_profiling_off, set_profiling_on
 from typing import Optional

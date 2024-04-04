@@ -11,7 +11,7 @@ The following command installs the latest version of Proton.
 ```bash
 git clone https://github.com/openai/triton
 cd triton/third_party/proton
-pip install .
+TRITON_BUILD_PROTON=1 pip install .
 ```
 
 ## Usage
@@ -23,7 +23,7 @@ More examples can be found in the [tutorials](tutorials) directory.
 Proton can be used to profile *functions*, *regions* in Python code. The following example demonstrates how to use Proton to profile a simple Python function.
 
 ```python
-import proton
+import triton.profiler as proton
 
 # Profile a single function
 # name: The path to the profile data
@@ -45,7 +45,7 @@ proton.finalize()
 Unlike the *python* context that provide users with files, functions, and lines where the GPU kernels are invoked, the *scope* context provides users with the annotated regions in the code. The following example demonstrates how to use the *scope* context.
 
 ```python
-import proton
+import triton.profiler as proton
 
 with proton.scope("test0"):
     with proton.scope("test1"):
@@ -69,7 +69,7 @@ with proton.scope("test2", {"bytes": 3000}):
 ### Hook
 
 ```python
-import proton
+import triton.profiler as proton
 
 proton.start("profile_name", hook="triton")
 

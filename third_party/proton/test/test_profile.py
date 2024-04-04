@@ -1,6 +1,6 @@
 import torch
 import triton
-import proton
+import triton.profiler as proton
 import tempfile
 import json
 import pytest

@@ -168,6 +168,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
     add_subdirectory(third_party/${CODEGEN_BACKEND})
   endforeach()
 
+  if (DEFINED TRITON_BUILD_PROTON)
+    add_subdirectory(third_party/proton)
+  endif()
 
   get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
   get_property(triton_plugins GLOBAL PROPERTY TRITON_PLUGINS)

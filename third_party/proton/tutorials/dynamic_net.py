@@ -2,7 +2,7 @@ import random
 import torch
 import math
 
-import proton
+import triton.profiler as proton
 import argparse
 
 mode = "torch"
@@ -60,7 +60,7 @@ def run():
         # vanilla stochastic gradient descent is tough, so we use momentum
         criterion = torch.nn.MSELoss(reduction="sum")
         optimizer = torch.optim.SGD(model.parameters(), lr=1e-8, momentum=0.9)
-    for t in range(10000):
+    for t in range(1000):
         # Forward pass: Compute predicted y by passing x to the model
         with proton.scope("forward"):
             y_pred = model(x)
@@ -68,7 +68,7 @@ def run():
         # Compute and print loss
         with proton.scope("loss"):
             loss = criterion(y_pred, y)
-            if t % 2000 == 1999:
+            if t % 200 == 199:
                 print(t, loss.item())
 
         # Zero gradients, perform a backward pass, and update the weights.

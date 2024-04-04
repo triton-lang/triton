@@ -2,7 +2,7 @@ import torch
 
 import triton
 import triton.language as tl
-import proton
+import triton.profiler as proton
 import argparse
 
 

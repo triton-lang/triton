@@ -3,7 +3,7 @@ from collections import namedtuple
 import json
 
 import hatchet as ht
-import proton._C.libproton.proton as libproton
+import triton._C.libproton.proton as libproton
 from proton.hook import COMPUTE_METADATA_SCOPE_NAME
 
 
@@ -51,6 +51,8 @@ def max_flops(width):
 
 
 def max_bandwidth():
+    # XXX(Keren): It assumes that GPUs are availble, need to get device info from the input
+    # profiled at runtime
     device_info = libproton.device_info(0)
     capability_major = device_info["CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR"]
     capability_minor = device_info["CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR"]

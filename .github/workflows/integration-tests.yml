@@ -57,6 +57,7 @@ jobs:
         run: |
           echo "BACKEND=CUDA" >> "${GITHUB_ENV}"
           echo "TRITON_DISABLE_LINE_INFO=1" >> "${GITHUB_ENV}"
+          echo "TRITON_BUILD_PROTON=1" >> "${GITHUB_ENV}"
 
       - name: Clear cache
         run: |
@@ -152,6 +153,8 @@ jobs:
           cd third_party/proton
           pip install .
           python3 -m pytest -vvv test
+          python3 tutorials/dynamic_net.py --profile
+          python3 tutorials/matmul.py --profile
 
   Compare-artifacts:
     needs: Integration-Tests

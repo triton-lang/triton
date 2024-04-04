@@ -1,7 +1,7 @@
 #include "Data/TreeData.h"
 #include "Context/Context.h"
 #include "Data/Metric.h"
-#include "json/single_include/nlohmann/json.hpp"
+#include "nlohmann/json.hpp"
 
 #include <limits>
 #include <map>
