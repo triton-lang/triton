@@ -351,6 +351,7 @@ jobs:
         run: |
           whoami
           echo "HOME is ${HOME}"
+          echo ~
           echo "USERPROFILE is ${USERPROFILE}"
           echo "HOMEPATH is ${HOMEPATH}"
           echo "DOCKER_HOME is ${DOCKER_HOME}"
@@ -365,9 +366,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ${RUNNER_HOME}/.triton/llvm
-            ${RUNNER_HOME}/.triton/nvidia
-            ${RUNNER_HOME}/.triton/pybind11
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/pybind11
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}
 
       - name: Inspect cache directory
