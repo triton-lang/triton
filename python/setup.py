@@ -166,9 +166,9 @@ def get_llvm_package_info():
     # release_suffix = "assert" if use_assert_enabled_llvm else "release"
     with open("../cmake/llvm-hash.txt", "r") as llvm_hash_file:
         rev = llvm_hash_file.read(8)
-        name = f"llvm-{rev}-{system_suffix}"
-        url = f"https://tritonlang.blob.core.windows.net/llvm-builds/{name}.tar.gz"
-        return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
+    name = f"llvm-{rev}-{system_suffix}"
+    url = f"https://tritonlang.blob.core.windows.net/llvm-builds/{name}.tar.gz"
+    return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
 
 def open_url(url):
