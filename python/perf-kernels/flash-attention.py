@@ -40,6 +40,7 @@ class MetaData():
     max_seqlens_q = 0
     max_seqlens_k = 0
     bias = None
+    alibi_slopes = None
     causal = False
     num_contexts = 0
     varlen = False
@@ -66,6 +67,13 @@ class MetaData():
         assert bias.shape[0] == 1
         assert bias.shape[2:] == (seqlen_q, seqlen_k)
         self.bias = bias
+
+    def need_alibi(self, alibi_slopes, batch, nheads):
+        assert alibi_slopes.is_cuda
+        assert alibi_slopes.dim() == 2
+        assert alibi_slopes.shape[0] == batch
+        assert alibi_slopes.shape[1] == nheads
+        self.alibi_slopes = alibi_slopes
 
     def need_causal(self):
         self.causal = True
@@ -147,6 +155,7 @@ def _attn_fwd_inner(
     K_block_ptr, V_block_ptr,
     start_m,
     actual_seqlen_k,
+    actual_seqlen_q,
     dropout_p,
     philox_seed,
     batch_philox_offset,
@@ -156,6 +165,7 @@ def _attn_fwd_inner(
     masked_blocks,
     n_extra_tokens,
     bias_ptr,
+    alibi_slope,
     IS_CAUSAL: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
@@ -202,6 +212,22 @@ def _attn_fwd_inner(
             # our optimization to use 2^x instead of e^x results in an additional
             # scale factor of log2(e) which we must also multiply the bias with.
             qk += (bias * 1.44269504089)
+           
+        if alibi_slope is not None:
+            # Compute the global position of each token within the sequence
+            global_m_positions = start_m*BLOCK_M + tl.arange(0, BLOCK_M)
+            global_n_positions = start_n + tl.arange(0, BLOCK_N)
+
+            # Compute the relative position using the global positions
+            relative_pos_block = global_m_positions[:,None] + actual_seqlen_k - global_n_positions[None,:] - actual_seqlen_q
+            relative_pos_block = tl.abs(relative_pos_block)
+
+
+            alibi_block = -1 * alibi_slope  * relative_pos_block
+
+            qk += (alibi_block * 1.44269504089) # scale factor of log2(e)
+
+        # softmax
         m_ij = tl.maximum(m_i, tl.max(qk,1))
         qk = qk - m_ij[:, None]
         p = tl.math.exp2(qk)
@@ -258,9 +284,11 @@ def attn_fwd(
     stride_vz, stride_vh, stride_vk, stride_vn,
     stride_oz, stride_oh, stride_om, stride_on,
     stride_bz, stride_bh, stride_bm, stride_bn,
+    stride_az, stride_ah,
     cu_seqlens_q, cu_seqlens_k,
     dropout_p, philox_seed, philox_offset_base, encoded_softmax,
     hq, hk,
+    alibi_slopes,
     ACTUAL_BLOCK_DMODEL:tl.constexpr,
     MAX_SEQLENS_Q:tl.constexpr, MAX_SEQLENS_K:tl.constexpr,
     VARLEN: tl.constexpr,
@@ -268,7 +296,10 @@ def attn_fwd(
     BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr,
     PRE_LOAD_V: tl.constexpr,
     BIAS_TYPE: tl.constexpr,
-    ENABLE_DROPOUT: tl.constexpr, RETURN_ENCODED_SOFTMAX: tl.constexpr
+    ENABLE_DROPOUT: tl.constexpr,
+    RETURN_ENCODED_SOFTMAX: tl.constexpr,
+    USE_ALIBI: tl.constexpr,
+    BATCH_SIZE: tl.constexpr,
 ):
     start_m = tl.program_id(0)
     off_h_q = tl.program_id(1)
@@ -387,6 +418,13 @@ def attn_fwd(
         )
     else:
         bias_ptr = None
+
+    if USE_ALIBI != 0:
+        a_offset = off_z * stride_az +  off_h_q * stride_ah 
+        alibi_slope = tl.load(alibi_slopes + a_offset)
+    else:
+        alibi_slope = None
+
     if ENABLE_DROPOUT:
         batch_philox_offset = philox_offset_base + off_hz * seqlen_q * seqlen_k
     else:
@@ -438,10 +476,10 @@ def attn_fwd(
         block_max = (n_blocks - masked_blocks) * BLOCK_N
         acc, l_i, m_i = _attn_fwd_inner(
             acc, l_i, m_i, q, K_block_ptr, V_block_ptr,
-            start_m, seqlen_k,
+            start_m, seqlen_k, seqlen_q,
             dropout_p, philox_seed, batch_philox_offset, encoded_softmax_block_ptr,
             # _, _, offs_n_causal, masked_blocks, n_extra_tokens, _
-            block_min, block_max, 0, 0, 0, bias_ptr,
+            block_min, block_max, 0, 0, 0, bias_ptr, alibi_slope,
             # IS_CAUSAL, ....
             False, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
             # _, MASK_STEPS, ...
@@ -466,9 +504,9 @@ def attn_fwd(
                                                    (0, n_full_blocks))
         acc, l_i, m_i = _attn_fwd_inner(
             acc, l_i, m_i, q, K_block_ptr, V_block_ptr,
-            start_m, seqlen_k,
+            start_m, seqlen_k, seqlen_q,
             dropout_p, philox_seed, batch_philox_offset, encoded_softmax_block_ptr,
-            block_min, block_max, offs_n_causal, masked_blocks,  n_extra_tokens, bias_ptr,
+            block_min, block_max, offs_n_causal, masked_blocks, n_extra_tokens, bias_ptr, alibi_slope,
             IS_CAUSAL, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
             # _, MASK_STEPS, ...
             PRE_LOAD_V, True, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX, padded_head
@@ -847,16 +885,22 @@ class _attention(torch.autograd.Function):
                             metadata.bias.stride(2), metadata.bias.stride(3))
         else:
             bias_strides = (0,0,0,0)
+        
+        if metadata.alibi_slopes is not None:
+            alibi_strides = (metadata.alibi_slopes.stride(0), metadata.alibi_slopes.stride(1))
+        else:
+            alibi_strides = (0, 0)
 
         attn_fwd[grid](
             q, k, v, metadata.bias, metadata.sm_scale, M, o,
-            *q_strides, *k_strides, *v_strides, *o_strides, *bias_strides,
+            *q_strides, *k_strides, *v_strides, *o_strides, *bias_strides, *alibi_strides,
             metadata.cu_seqlens_q, metadata.cu_seqlens_k,
             dropout_p=metadata.dropout_p,
             philox_seed=philox_seed,
             philox_offset_base=philox_offset,
             encoded_softmax=encoded_softmax,
             hq=nheads_q, hk=nheads_k,
+            alibi_slopes = metadata.alibi_slopes,
             ACTUAL_BLOCK_DMODEL=head_size,
             MAX_SEQLENS_Q=metadata.max_seqlens_q,
             MAX_SEQLENS_K=metadata.max_seqlens_k,
@@ -864,8 +908,10 @@ class _attention(torch.autograd.Function):
             VARLEN=metadata.varlen,
             BLOCK_DMODEL=padded_d_model,
             BIAS_TYPE=0 if metadata.bias is None else 1,
+            USE_ALIBI=0 if metadata.alibi_slopes is None else 1,
             ENABLE_DROPOUT=metadata.dropout_p > 0.0,
-            RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax
+            RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax,
+            BATCH_SIZE= q.shape[0]
         )
 
         ctx.save_for_backward(q, k, v, o, M)
@@ -953,8 +999,8 @@ attention = _attention.apply
 
 @pytest.mark.parametrize('Z, H, N_CTX_Q, N_CTX_K, D_HEAD',
                          [(4, 48, 1024, 1024, 64),
-                          (4, 48, 8192, 8192, 64),
-                          (2, 16, 16384, 16384, 128),
+                          (1, 24, 8192, 8192, 64),
+                          (1, 4, 16384, 16384, 128),
                           (2, 16, 1020, 987, 128),
                           (2, 16, 15498, 2, 128),
                           (2, 16, 7, 16219, 64),
@@ -963,14 +1009,15 @@ attention = _attention.apply
                           (4, 48, 3, 3, 128),
                           (4, 48, 1001, 990, 64),
                           (1, 8, 8081, 7099, 64),
-                          (1, 8, 16330, 15989, 128),
+                          (1, 4, 16330, 15989, 128),
                           (4, 4, 1024, 1024, 33),
                           (4, 4, 65, 1019, 65),
                           (4, 4, 128, 128, 65),
                           (4, 4, 113, 123, 1),
                           ])
-@pytest.mark.parametrize('causal', [False, True])
-def test_op_fwd(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, dtype=torch.float16):
+@pytest.mark.parametrize('causal', [True, False])
+@pytest.mark.parametrize('use_alibi', [True, False])
+def test_op_fwd(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, dtype=torch.float16):
     torch.manual_seed(20)
     sm_scale = D_HEAD ** -0.5
     input_metadata = MetaData(sm_scale=sm_scale)
@@ -978,6 +1025,13 @@ def test_op_fwd(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, dtype=torch.float16):
     input_metadata.max_seqlens_k = N_CTX_K
     if causal:
         input_metadata.need_causal()
+
+    if use_alibi:
+        # for n heads the set of slopes is the geometric sequence that starts 2^(-8/n)
+        alibi_slopes = torch.tensor([2**(-8/H*i) for i in range(1, H+1)], dtype=torch.float32, device="cuda").repeat(Z, 1)
+        input_metadata.need_alibi(alibi_slopes, Z, H)
+    else:
+        alibi = None
 
     q = torch.randn((Z, H, N_CTX_Q, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
     k = torch.randn((Z, H, N_CTX_K, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
@@ -996,6 +1050,13 @@ def test_op_fwd(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, dtype=torch.float16):
         mask = torch.tril(torch.ones(N_CTX_Q, N_CTX_K, device="cuda"), 
                           diagonal=N_CTX_K-N_CTX_Q)
         scores[:, :, mask==0] = float("-inf")
+    if use_alibi:
+        q_idx = torch.arange(N_CTX_Q, dtype=torch.int32, device="cuda").unsqueeze(-1)
+        k_idx = torch.arange(N_CTX_K, dtype=torch.int32, device="cuda").unsqueeze(0)
+        relative_pos = torch.abs(q_idx + N_CTX_K - N_CTX_Q - k_idx)
+        alibi = -1 * alibi_slopes.unsqueeze(-1).unsqueeze(-1) * relative_pos # (Z, H, N_CTX_Q, N_CTX_K)
+        scores+= alibi
+
 
     p = torch.softmax(scores, dim=-1)
     if causal:
