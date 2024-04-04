@@ -323,8 +323,6 @@ jobs:
 
     container:
       image: rocm/pytorch:rocm6.0.2_ubuntu22.04_py3.10_pytorch_2.1.2
-      volumes:
-        - ${{ runner.temp }}/.triton:/root/.triton
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
 
     steps:
@@ -345,9 +343,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ${{ runner.temp }}/.triton/llvm
-            ${{ runner.temp }}/.triton/nvidia
-            ${{ runner.temp }}/.triton/pybind11
+            /root/.triton/llvm
+            /root/.triton/nvidia
+            /root/.triton/pybind11
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}
 
       - name: Inspect cache directory
