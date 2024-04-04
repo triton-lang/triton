@@ -329,13 +329,9 @@ jobs:
     # unless the step itself uses container actions. If that's the case, then
     # the container actions will run as sibling containers on the same network
     # with the same volume mounts.
-    #
-    # When the main container starts, it sets $HOME to /github/home. But that's
-    # not necessarily the case for sibling containers. We need to be consistent
-    # here using the following job-scope environment variable instead of relying
-    # on $HOME.
     env:
-      GITHUB_HOME: /github/home
+      DOCKER_HOME: /github/home
+      RNNER_HOME: /home/runner/actions-runner/_work/_temp/_github_home
 
     steps:
       - name: Checkout
@@ -357,10 +353,10 @@ jobs:
           echo "HOME is ${HOME}"
           echo "USERPROFILE is ${USERPROFILE}"
           echo "HOMEPATH is ${HOMEPATH}"
-          echo "GITHUB_HOME is ${GITHUB_HOME}"
-          mkdir -p ${GITHUB_HOME}/.triton
-          ls -alh ${GITHUB_HOME}/.triton
-          rm -rf ${GITHUB_HOME}/.triton
+          echo "DOCKER_HOME is ${DOCKER_HOME}"
+          mkdir -p ${DOCKER_HOME}/.triton
+          ls -alh ${DOCKER_HOME}/.triton
+          rm -rf ${DOCKER_HOME}/.triton
           mkdir -p ${HOME}/.triton
           ls -alh ${HOME}/.triton
           rm -rf ${HOME}/.triton
@@ -369,15 +365,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ${GITHUB_HOME}/.triton/llvm
-            ${GITHUB_HOME}/.triton/nvidia
-            ${GITHUB_HOME}/.triton/pybind11
+            ${RUNNER_HOME}/.triton/llvm
+            ${RUNNER_HOME}/.triton/nvidia
+            ${RUNNER_HOME}/.triton/pybind11
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}
 
       - name: Inspect cache directory
         run: |
-          mkdir -p ${GITHUB_HOME}/.triton
-          ls -alh ${GITHUB_HOME}/.triton
+          mkdir -p ${DOCKER_HOME}/.triton
+          ls -alh ${DOCKER_HOME}/.triton
 
       - name: Set ROCM ENV
         run: |
@@ -411,6 +407,6 @@ jobs:
 
       - name: Inspect cache directory
         run: |
-          mkdir -p ${GITHUB_HOME}/.triton
-          ls -alh ${GITHUB_HOME}/.triton
-          du -sh ${GITHUB_HOME}/.triton/**
+          mkdir -p ${DOCKER_HOME}/.triton
+          ls -alh ${DOCKER_HOME}/.triton
+          du -sh ${DOCKER_HOME}/.triton/**
