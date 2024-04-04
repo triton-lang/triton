@@ -320,7 +320,8 @@ jobs:
 
     container:
       image: rocm/pytorch:rocm6.0.2_ubuntu22.04_py3.10_pytorch_2.1.2
-      volumes: ~/.triton:/root/triton
+      volumes:
+        - ~/.triton:/root/triton
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
 
     steps:
