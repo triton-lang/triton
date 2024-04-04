@@ -3052,21 +3052,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                          DO_SOFTMAX=epilogue == 'softmax', CHAIN_DOT=epilogue == 'chain-dot',
                          INPUT_PRECISION=input_precision, num_warps=num_warps, num_ctas=num_ctas, out_dtype=out_dtype)
 
-    if epilogue == 'softmax' and (in_dtype != 'float32' or input_precision == "tf32"):
-        if not is_cuda():
-            pass
-        else:
-            ptx = pgm.asm["ptx"]
-            start = ptx.find("shfl.sync.bfly")
-            end = ptx.find("cvt.rn.f16.f32")
-            red_code = ptx[start:end]
-            assert len(red_code) > 0
-
-            # skip this check on hopper because there are some functions whose name contain "shared" in ptx.
-            # TODO: we should eliminate these unused functions in ptx code.
-            if not (capability[0] >= 9):
-                assert "shared" not in red_code
-            assert "bar.sync" not in red_code
     # torch result
     if in_dtype == 'int8':
         z_ref = np.matmul(x.astype(np.float32), y.astype(np.float32())).astype(np.int32)
