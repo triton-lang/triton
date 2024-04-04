@@ -70,7 +70,7 @@ def ravel(x):
     :param x: the input tensor
     :type x: Block
     """
-    return core.view(x, [x.numel])
+    return core.reshape(x, [x.numel], can_reorder=True)
 
 
 @jit
@@ -331,7 +331,7 @@ def _compare_and_swap(x, flip, i: core.constexpr, n_dims: core.constexpr):
     left = core.reshape(left, x.shape)
     right = core.reshape(right, x.shape)
     # actual compare-and-swap
-    idtype = core.dtype(f'int{core.constexpr(x.dtype.primitive_bitwidth)}')
+    idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
     ileft = left.to(idtype, bitcast=True)
     iright = right.to(idtype, bitcast=True)
     ix = x.to(idtype, bitcast=True)
@@ -366,7 +366,7 @@ def _bitonic_merge(x, stage: core.constexpr, order: core.constexpr, n_dims: core
 
 @core._tensor_member_fn
 @jit
-def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.constexpr(0)):
+def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
     # handle default dimension or check that it is the most minor dim
     _dim: core.constexpr = len(x.shape) - 1 if dim is None else dim
     core.static_assert(_dim == len(x.shape) - 1, "only minor dimension is currently supported")

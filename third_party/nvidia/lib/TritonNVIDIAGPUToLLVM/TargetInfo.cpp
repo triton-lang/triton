@@ -108,6 +108,71 @@ bool isStMatrixCompatible(RankedTensorType tensorTy) {
     return false;
   return true;
 }
+
+// declare vprintf(i8*, i8*) as external function
+LLVM::LLVMFuncOp getVprintfDeclaration(ConversionPatternRewriter &rewriter) {
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  StringRef funcName("vprintf");
+  Operation *funcOp = moduleOp.lookupSymbol(funcName);
+  if (funcOp)
+    return cast<LLVM::LLVMFuncOp>(*funcOp);
+
+  auto *context = rewriter.getContext();
+
+  SmallVector<Type> argsType{ptr_ty(context), ptr_ty(context)};
+  auto funcType = LLVM::LLVMFunctionType::get(i32_ty, argsType);
+
+  ConversionPatternRewriter::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPointToStart(moduleOp.getBody());
+
+  return rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(context), funcName,
+                                           funcType);
+}
+
+// extend integer to int32, extend float to float64
+// this comes from vprintf alignment requirements.
+std::pair<Type, Value> printfPromoteValue(ConversionPatternRewriter &rewriter,
+                                          Value value) {
+  auto *context = rewriter.getContext();
+  auto type = value.getType();
+  Value newOp = value;
+  Type newType = type;
+  auto loc = UnknownLoc::get(context);
+
+  bool isUnsigned = type.isUnsignedInteger();
+  if (type.isIntOrIndex() && type.getIntOrFloatBitWidth() < 32) {
+    if (isUnsigned) {
+      newType = ui32_ty;
+      newOp = zext(newType, value);
+    } else {
+      newType = i32_ty;
+      newOp = sext(newType, value);
+    }
+  } else if (type.isBF16() || type.isF16() || type.isF32()) {
+    newType = f64_ty;
+    newOp = fpext(newType, value);
+  }
+
+  return {newType, newOp};
+}
+
+LLVM::LLVMFuncOp getAssertfailDeclaration(ConversionPatternRewriter &rewriter) {
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  StringRef funcName("__assertfail");
+  Operation *funcOp = moduleOp.lookupSymbol(funcName);
+  if (funcOp)
+    return cast<LLVM::LLVMFuncOp>(*funcOp);
+  // void __assert_fail(const char * assertion, const char * file, unsigned
+  // int line, const char * function);
+  auto *ctx = rewriter.getContext();
+  SmallVector<Type> argsType{ptr_ty(ctx), ptr_ty(ctx), i32_ty, ptr_ty(ctx),
+                             rewriter.getIntegerType(sizeof(size_t) * 8)};
+  auto funcType = LLVM::LLVMFunctionType::get(void_ty(ctx), argsType);
+  ConversionPatternRewriter::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPointToStart(moduleOp.getBody());
+  return rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(ctx), funcName,
+                                           funcType);
+}
 } // namespace
 
 namespace mlir::triton::NVIDIA {
@@ -189,27 +254,27 @@ Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
   return builder.launch(rewriter, loc, elemTy);
 }
 
-Value TargetInfo::shuffleXor(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::shuffleXor(ConversionPatternRewriter &rewriter, Location loc,
                              Value val, int i) const {
   return LLVM::NVIDIA::shuffleXor(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleUp(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::shuffleUp(ConversionPatternRewriter &rewriter, Location loc,
                             Value val, int i) const {
   return LLVM::NVIDIA::shuffleUp(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
                              Value val, int i) const {
   return LLVM::NVIDIA::shuffleIdx(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
                              Value val, Value i) const {
   return LLVM::NVIDIA::shuffleIdx(loc, rewriter, val, i);
 }
 
-Value TargetInfo::programId(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::programId(ConversionPatternRewriter &rewriter, Location loc,
                             ModuleOp moduleOp, int axis) const {
   return LLVM::NVIDIA::llGetPid(loc, rewriter, moduleOp, axis);
 }
@@ -266,4 +331,66 @@ bool TargetInfo::processReplicaUsingStMatrix(
   }
   return false;
 }
+
+void TargetInfo::printf(ConversionPatternRewriter &rewriter,
+                        Value formatStrStart, int /*formatStrByteCount*/,
+                        ValueRange args) const {
+  auto *ctx = rewriter.getContext();
+  Type ptr = ptr_ty(ctx);
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  auto funcOp = getVprintfDeclaration(rewriter);
+  auto loc = UnknownLoc::get(ctx);
+
+  Value one = i32_val(1);
+  Value zero = i32_val(0);
+
+  Value bufferPtr = null(ptr);
+
+  SmallVector<Value, 16> newArgs;
+  if (args.size() >= 1) {
+    SmallVector<Type> argTypes;
+    for (auto arg : args) {
+      Type newType;
+      Value newArg;
+      std::tie(newType, newArg) = printfPromoteValue(rewriter, arg);
+      argTypes.push_back(newType);
+      newArgs.push_back(newArg);
+    }
+
+    Type structTy = LLVM::LLVMStructType::getLiteral(ctx, argTypes);
+    auto allocated =
+        rewriter.create<LLVM::AllocaOp>(loc, ptr_ty(ctx), structTy, one,
+                                        /*alignment=*/0);
+
+    for (const auto &entry : llvm::enumerate(newArgs)) {
+      auto index = i32_val(entry.index());
+      auto fieldPtr =
+          gep(ptr_ty(ctx), structTy, allocated, ArrayRef<Value>{zero, index});
+      store(entry.value(), fieldPtr);
+    }
+    bufferPtr = bitcast(allocated, ptr);
+  }
+
+  SmallVector<Value> operands{formatStrStart, bufferPtr};
+  call(funcOp, operands);
+}
+
+void TargetInfo::assertFail(ConversionPatternRewriter &rewriter, Location loc,
+                            StringRef message, StringRef file, StringRef func,
+                            int line) const {
+  auto funcOp = getAssertfailDeclaration(rewriter);
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  Value messageString =
+      LLVM::addStringToModule(loc, rewriter, "assertMessage_", message);
+  Value fileString =
+      LLVM::addStringToModule(loc, rewriter, "assertFile_", file);
+  Value funcString =
+      LLVM::addStringToModule(loc, rewriter, "assertFunc_", func);
+  Value lineNumber = i32_val(line);
+  Value charSize = int_val(sizeof(size_t) * 8, sizeof(char));
+  SmallVector<Value> operands = {messageString, fileString, lineNumber,
+                                 funcString, charSize};
+  call(funcOp, operands);
+}
+
 } // namespace mlir::triton::NVIDIA

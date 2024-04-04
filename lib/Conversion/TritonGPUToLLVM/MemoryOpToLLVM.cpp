@@ -29,10 +29,9 @@ void lowerDistributedToShared(LocalAllocOp op, LocalAllocOpAdaptor adaptor,
   unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
   auto dstStrides =
       LLVM::getStridesFromShapeAndOrder(dstShapePerCTA, outOrd, loc, rewriter);
-  auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy, false);
   auto inVals = unpackLLElements(loc, adaptor.getInit(), rewriter);
-  storeDistributedToShared(op.getInit(), inVals, dstStrides, srcIndices,
-                           op.getResult(), smemBase, elemTy, loc, rewriter);
+  storeDistributedToShared(op.getInit(), inVals, dstStrides, op.getResult(),
+                           smemBase, elemTy, loc, rewriter);
 }
 
 struct LocalAllocOpConversion

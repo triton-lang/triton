@@ -4,6 +4,10 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
+#include "llvm/ADT/STLExtras.h"
+
+#include <iterator>
+
 using namespace mlir;
 using namespace mlir::triton;
 
@@ -37,7 +41,9 @@ static SmallVector<Value> accumulate(ConversionPatternRewriter &rewriter,
 
   rewriter.inlineBlockBefore(&newScan, &*rewriter.getInsertionPoint(),
                              combineArgs);
-  auto results = returnOp.getResult();
+  SmallVector<Value> results;
+  llvm::transform(returnOp.getResult(), std::back_inserter(results),
+                  [&](Value res) { return rewriter.getRemappedValue(res); });
   // Delete the terminator, which is no longer used
   rewriter.eraseOp(returnOp);
   return results;
@@ -87,7 +93,7 @@ static void warpScan(SmallVector<SmallVector<Value>> &srcValues,
     for (unsigned i = 1; i <= scanDim / 2; i <<= 1) {
       SmallVector<Value> shfl(acc.size());
       for (unsigned j = 0; j < acc.size(); ++j) {
-        shfl[j] = targetInfo.shuffleUp(loc, rewriter, acc[j], i * threadStride);
+        shfl[j] = targetInfo.shuffleUp(rewriter, loc, acc[j], i * threadStride);
       }
       SmallVector<Value> tempAcc =
           accumulate(rewriter, helper.getCombineOp(), shfl, acc);
@@ -228,7 +234,7 @@ static void AddPartialReduce(SmallVector<SmallVector<Value>> &srcValues,
     // Update the rest of the contiguous elements.
     SmallVector<Value> lastElement(helper.getNumOperands());
     for (unsigned i = 0; i < helper.getNumOperands(); ++i) {
-      auto elem = targetInfo.shuffleUp(loc, rewriter, temp[i], threadStride);
+      auto elem = targetInfo.shuffleUp(rewriter, loc, temp[i], threadStride);
       lastElement[i] = select(maskFirstLane, accumulator.maskedAcc[i], elem);
     }
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
@@ -301,12 +307,12 @@ static void AddPartialReduceOneWarp(SmallVector<SmallVector<Value>> &srcValues,
     if (scanDim > 1) {
       for (unsigned i = 0; i < helper.getNumOperands(); ++i) {
         lastElement[i] = targetInfo.shuffleUp(
-            loc, rewriter, srcValues[srcIndex][i], threadStride);
+            rewriter, loc, srcValues[srcIndex][i], threadStride);
         lastElement[i] = select(maskFirstLane, accumulator[i], lastElement[i]);
         if (numScanBlocks > 1)
           // Update accumulator with the value from the last lane.
           accumulator[i] = targetInfo.shuffleIdx(
-              loc, rewriter, srcValues[srcIndex][i], laneIdLast);
+              rewriter, loc, srcValues[srcIndex][i], laneIdLast);
       }
     } else if (numScanBlocks > 1) {
       accumulator = srcValues[srcIndex];
@@ -464,7 +470,7 @@ flipSrcValues(Location loc, triton::ScanOp op,
     for (unsigned j = 0; j < op.getNumOperands(); ++j) {
       for (unsigned k = iWarpSize / 2; k >= 1; k = k / 2) {
         srcValues[revIndex][j] =
-            targetInfo.shuffleXor(loc, rewriter, srcValues[revIndex][j], k);
+            targetInfo.shuffleXor(rewriter, loc, srcValues[revIndex][j], k);
       }
       values[i].push_back(srcValues[revIndex][j]);
     }

@@ -466,7 +466,6 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
           a = packLLElements(loc, typeConverter, regA, rewriter, regATy);
         }
         auto b = bLoader.smemLoad(n, k, rewriter, loc);
-        ValueRange operands{a, b, d};
         numLowPrecisionAcc += K;
         // If using native accumulation would cause use to do more low precion
         // accumulation than allowed do a separate allocation.
@@ -484,7 +483,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
         // If we need accumulate separately to have higher precision, insert
         // adds.
         if (requireAddAccumulator) {
-          d = faddAccumulate(rewriter, loc, d, partialAcc);
+          d = d ? faddAccumulate(rewriter, loc, d, partialAcc) : partialAcc;
           numLowPrecisionAcc = 0;
           partialAcc = Value();
         }
@@ -523,8 +522,8 @@ LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   return convertDot(typeConverter, rewriter, op.getLoc(), op.getOperation(), //
                     op.getA(), op.getB(), op.getC(), op.getD(),              //
                     adaptor.getA(), adaptor.getB(), adaptor.getC(),          //
-                    op.getAllowTF32(), op.getMaxNumImpreciseAcc(), true,
-                    thread);
+                    op.getInputPrecision() == InputPrecision::TF32,
+                    op.getMaxNumImpreciseAcc(), true, thread);
 }
 
 LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
@@ -540,6 +539,6 @@ LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
   return convertDot(typeConverter, rewriter, op.getLoc(), op.getOperation(), //
                     op.getA(), op.getB(), op.getC(), op.getD(),              //
                     adaptor.getA(), adaptor.getB(), adaptor.getC(),
-                    op.getAllowTF32(), op.getMaxNumImpreciseAcc(), false,
-                    thread);
+                    op.getInputPrecision() == InputPrecision::TF32,
+                    op.getMaxNumImpreciseAcc(), false, thread);
 }

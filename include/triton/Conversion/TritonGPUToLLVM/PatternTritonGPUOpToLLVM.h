@@ -37,6 +37,7 @@ void populateMemoryOpToLLVMPattern(LLVMTypeConverter &typeConverter,
 
 void populateAssertOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,
+                                   const TargetInfoBase &targetInfo,
                                    PatternBenefit benefit);
 
 void populateMakeRangeOpToLLVMPattern(LLVMTypeConverter &typeConverter,
@@ -88,6 +89,11 @@ void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
 void populateFuncOpConversionPattern(LLVMTypeConverter &typeConverter,
                                      RewritePatternSet &patterns, int numWarps,
                                      PatternBenefit benefit);
+
+void populatePrintOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                  RewritePatternSet &patterns,
+                                  const TargetInfoBase &targetInfo,
+                                  PatternBenefit benefit);
 
 } // namespace triton
 } // namespace mlir

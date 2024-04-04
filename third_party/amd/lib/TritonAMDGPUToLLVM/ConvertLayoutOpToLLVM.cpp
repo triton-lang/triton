@@ -1,9 +1,8 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
@@ -181,7 +180,7 @@ private:
 };
 } // namespace
 
-namespace AMD {
+namespace mlir::triton::AMD {
 void populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, int numWarps,
@@ -191,4 +190,4 @@ void populateConvertLayoutOpToLLVMPatterns(
   mlir::triton::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
                                                       patterns, benefit);
 }
-} // namespace AMD
+} // namespace mlir::triton::AMD

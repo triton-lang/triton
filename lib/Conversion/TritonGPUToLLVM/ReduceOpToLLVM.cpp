@@ -172,7 +172,7 @@ private:
     for (unsigned N = numLaneToReduce / 2; N > 0; N >>= 1) {
       SmallVector<Value> shfl(acc.size());
       for (unsigned i = 0; i < acc.size(); ++i) {
-        shfl[i] = targetInfo.shuffleXor(loc, rewriter, acc[i], N * interleave);
+        shfl[i] = targetInfo.shuffleXor(rewriter, loc, acc[i], N * interleave);
       }
       accumulate(rewriter, op.getCombineOp(), acc, shfl, false);
     }
@@ -243,8 +243,10 @@ private:
           delinearize(rewriter, loc, warpId, parentWarpsPerCTA, parentOrder);
       multiDimWarpId.erase(multiDimWarpId.begin() + sliceLayout.getDim());
     } else {
-      auto warpsPerCTA =
-          triton::gpu::getWarpsPerCTAWithUniqueData(srcLayout, srcShape);
+      SmallVector<unsigned> warpsPerCTA =
+          triton::gpu::getWarpsPerCTA(srcLayout);
+      warpsPerCTA[helper.getAxis()] = triton::gpu::getWarpsPerCTAWithUniqueData(
+          srcLayout, srcShape)[helper.getAxis()];
       multiDimWarpId = delinearize(rewriter, loc, warpId, warpsPerCTA, order);
     }
     return multiDimWarpId;

@@ -22,7 +22,9 @@ THE SOFTWARE.
 
 #pragma once
 
+#if !defined(__HIPCC_RTC__)
 #include "amd_device_functions.h"
+#endif
 
 #if __has_builtin(__hip_atomic_compare_exchange_strong)
 

@@ -16,8 +16,7 @@ def nvsmi(attrs):
     return ret
 
 
-def do_bench_cudagraph(fn, rep=20, grad_to_none=None):
-    import torch
+def do_bench_cudagraph(fn, rep=20, grad_to_none=None, return_mode="mean"):
     """
     Benchmark the runtime of the provided function.
 
@@ -28,6 +27,9 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None):
     :param grad_to_none: Reset the gradient of the provided tensor to None
     :type grad_to_none: torch.tensor, optional
     """
+    import torch
+    assert return_mode in ["min", "max", "mean", "median"]
+
     if torch.cuda.current_stream() == torch.cuda.default_stream():
         raise RuntimeError("Cannot capture graph in default stream. Please use side stream in benchmark code.")
     # warmup
@@ -73,12 +75,11 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None):
         end_event.record()
         torch.cuda.synchronize()
         ret += [start_event.elapsed_time(end_event) / n_repeat]
-    return torch.mean(torch.tensor(ret)).item()
+    times = torch.tensor(ret)
+    return getattr(torch, return_mode)(times).item()
 
 
 def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean"):
-    assert return_mode in ["min", "max", "mean", "median"]
-    import torch
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -96,6 +97,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     :param fast_flush: Use faster kernel to flush L2 between measurements
     :type fast_flush: bool
     """
+    assert return_mode in ["min", "max", "mean", "median"]
+    import torch
 
     fn()
     torch.cuda.synchronize()

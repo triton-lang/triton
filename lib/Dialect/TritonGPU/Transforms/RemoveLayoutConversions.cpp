@@ -64,7 +64,7 @@ public:
     auto _0 = rewriter.create<SplatOp>(op->getLoc(), dotOp.getType(), _0f);
     auto newDot = rewriter.create<DotOp>(
         op->getLoc(), dotOp.getType(), dotOp.getOperand(0), dotOp.getOperand(1),
-        _0, dotOp.getAllowTF32(), dotOp.getMaxNumImpreciseAcc());
+        _0, dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
     auto newCvt = rewriter.create<ConvertLayoutOp>(op->getLoc(), dstTy,
                                                    newDot.getResult());
     rewriter.replaceOpWithNewOp<arith::AddFOp>(op, newCvt, cvtOp.getSrc());
@@ -145,45 +145,6 @@ private:
   FuncOp funcOp;
 };
 
-// Look ahead to at the transitive uses and see if there is a convert to mma
-// operations.
-bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
-  SmallVector<Value> queue = {op->getResult(0)};
-  SetVector<Operation *> forwardSlice;
-  llvm::SmallDenseSet<Value> seen;
-  bool isMMAV3 = encoding.cast<NvidiaMmaEncodingAttr>().getVersionMajor() == 3;
-  while (!queue.empty()) {
-    Value currentValue = queue.back();
-    queue.pop_back();
-    getForwardSlice(currentValue, &forwardSlice);
-    for (Operation *op : forwardSlice) {
-      if (auto convertOp = dyn_cast<ConvertLayoutOp>(op)) {
-        Attribute dstEncoding = convertOp.getType().getEncoding();
-        if (auto mmaLayout = dstEncoding.dyn_cast<NvidiaMmaEncodingAttr>())
-          return (mmaLayout.getVersionMajor() > 1) ? true
-                                                   : mmaLayout == encoding;
-        if (dstEncoding.isa<DotOperandEncodingAttr>())
-          return encoding.cast<NvidiaMmaEncodingAttr>().getVersionMajor() > 1;
-      }
-      if (isMMAV3 && isa<LocalAllocOp>(op))
-        return true;
-      auto yield = dyn_cast<scf::YieldOp>(op);
-      if (!yield)
-        continue;
-      auto forOp = dyn_cast<scf::ForOp>(yield.getOperation()->getParentOp());
-      if (!forOp)
-        continue;
-      for (OpOperand &operand : yield->getOpOperands()) {
-        Operation *def = operand.get().getDefiningOp();
-        if (def && forwardSlice.count(def) &&
-            (seen.insert(operand.get()).second == true))
-          queue.push_back(forOp.getRegionIterArg(operand.getOperandNumber()));
-      }
-    }
-  }
-  return false;
-}
-
 // Return true if the op is an op with a layout we don't want to change. We will
 // propagate the layout starting from anchor ops.
 bool isLayoutAnchor(Operation *op) {
@@ -206,16 +167,6 @@ bool isLayoutAnchor(Operation *op) {
 void LayoutPropagation::initAnchorLayout() {
   auto maybeAddAnchor = [&](Value v) {
     if (auto tensorType = v.getType().dyn_cast<RankedTensorType>()) {
-      // Workaround, don't popagate MMA layout unless there is a convert
-      // back to mma further down to avoid generating reduction with MMA
-      // layout that may have lower performance.
-      // This can be improved with more aggressive backward propagation.
-      if (tensorType.getEncoding().isa<NvidiaMmaEncodingAttr>() &&
-          v.getDefiningOp() &&
-          !hasConvertToMMATransisitiveUse(v.getDefiningOp(),
-                                          tensorType.getEncoding())) {
-        return;
-      }
       layouts.insert({v, LayoutInfo(tensorType.getEncoding())});
     }
   };

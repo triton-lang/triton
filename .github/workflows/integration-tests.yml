@@ -49,7 +49,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           submodules: "true"
       - name: Set CUDA ENV
@@ -118,7 +118,7 @@ jobs:
           TRITON_INTERPRET: "1"
         run: |
           cd python/test/unit
-          python3 -m pytest -vvv -n 8 -m interpreter language/test_core.py language/test_standard.py --device cpu
+          python3 -m pytest -vvv -n 8 -m interpreter language/test_core.py language/test_standard.py language/test_random.py --device cpu
           python3 -m pytest -n 8 -m interpreter -vvv -s operators/test_flash_attention.py::test_op --device cpu
 
       - name: Run partial tests on CUDA
@@ -135,7 +135,7 @@ jobs:
 
       - name: Upload artifacts archive
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: artifacts ${{ matrix.runner[1] }}
           path: ~/.triton/artifacts.tar.gz
@@ -156,7 +156,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Install gh CLI
         run: |
@@ -243,7 +243,7 @@ jobs:
             exit 1
           fi
       - name: Download current job artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: artifacts A100
       - name: Unzip current job artifacts
@@ -284,7 +284,7 @@ jobs:
           name: comparison_result
           path: comparison_result
       - name: Upload results as artifact
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: kernels-reference-check
           path: kernels_reference_check.txt
@@ -301,19 +301,19 @@ jobs:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-HIP)}}
 
     container:
-      image: rocm/pytorch:rocm5.7_ubuntu22.04_py3.10_pytorch_2.0.1
+      image: rocm/pytorch:rocm6.0.2_ubuntu22.04_py3.10_pytorch_2.1.2
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
 
     steps:
       - name: Checkout PR
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         if: ${{ github.event_name == 'issue_comment' }}
         with:
           ref: refs/pull/${{ github.event.issue.number }}/head
           submodules: 'true'
 
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         if: ${{ github.event_name != 'issue_comment' }}
         with:
           submodules: 'true'
@@ -338,11 +338,16 @@ jobs:
 
       - name: Install Triton on ROCM
         run: |
-          pip install --force-reinstall numpy==1.22.4
           pip uninstall -y triton
+          export PATH="/opt/rocm/llvm/bin:$PATH"
+          export TRITON_BUILD_WITH_CLANG_LLD=true
           cd python
-          pip install -e .
+          pip install -v -e .
       - name: Run python tests on ROCM
         run: |
           cd python
-          pytest --capture=tee-sys -rfs -v -n 32 ./test/unit/language/test_core.py
+          pytest --capture=tee-sys -rfs -vvv -n 32 ./test/unit/language/test_core.py \
+              ./test/unit/language/test_subprocess.py \
+              ./test/unit/language/test_standard.py \
+              ./test/unit/language/test_compile_errors.py \
+              ./test/unit/language/test_block_pointer.py

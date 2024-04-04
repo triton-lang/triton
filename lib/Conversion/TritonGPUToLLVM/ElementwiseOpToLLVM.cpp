@@ -149,6 +149,30 @@ SmallVector<Value> packI32(const SmallVector<Value> &inValues, Type srcTy,
   }
   return outValues;
 }
+
+int getNumElementsPerThreads(Type type,
+                             const LLVMTypeConverter *typeConverter) {
+  int numElemsPerThread = 1;
+  auto tensorTy = type.dyn_cast<RankedTensorType>();
+  if (!tensorTy)
+    return numElemsPerThread;
+  auto structType =
+      typeConverter->convertType(type).dyn_cast<LLVM::LLVMStructType>();
+  if (structType) {
+    numElemsPerThread = structType.getBody().size();
+  }
+  auto encoding = tensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
+  if (!(encoding && encoding.getParent().isa<NvidiaMmaEncodingAttr>()))
+    return numElemsPerThread;
+  auto eltType = tensorTy.getElementType();
+  assert(eltType.getIntOrFloatBitWidth() <= 32 &&
+         "Only support element type with bit width <= 32 in dot operand mma "
+         "layout");
+  // dot operand data are packed into i32 elements so use the following formula
+  // to get the number of elements per thread.
+  return (32 / eltType.getIntOrFloatBitWidth()) * numElemsPerThread;
+}
+
 } // namespace mlir::triton::gpu
 
 namespace {
@@ -301,6 +325,26 @@ struct ExternElementwiseOpConversion
   }
 };
 
+template <typename SourceOp, typename DestOp>
+struct ElementwiseOpConversion
+    : public ElementwiseOpConversionBase<
+          SourceOp, ElementwiseOpConversion<SourceOp, DestOp>> {
+  using Base =
+      ElementwiseOpConversionBase<SourceOp,
+                                  ElementwiseOpConversion<SourceOp, DestOp>>;
+  using Base::Base;
+  using OpAdaptor = typename Base::OpAdaptor;
+
+  // An interface to support variant DestOp builder.
+  SmallVector<DestOp> createDestOps(SourceOp op, OpAdaptor adaptor,
+                                    ConversionPatternRewriter &rewriter,
+                                    Type elemTy, MultipleOperandsRange operands,
+                                    Location loc) const {
+    return {rewriter.create<DestOp>(loc, elemTy, operands[0],
+                                    adaptor.getAttributes().getValue())};
+  }
+};
+
 struct ElementwiseInlineAsmOpConversion
     : public ConvertOpToLLVMPattern<ElementwiseInlineAsmOp> {
   using Base = ConvertOpToLLVMPattern<ElementwiseInlineAsmOp>;
@@ -393,10 +437,15 @@ struct ElementwiseInlineAsmOpConversion
     // [return_value][op.getPackedElement()].
     SmallVector<SmallVector<Value>> ret(op->getNumResults());
     for (int i = 0; i < op->getNumResults(); i++) {
+      int structIdx = 0;
       for (int j = 0; j < op.getPackedElement(); j++) {
-        auto val = asmRetTypes.size() > 1
-                       ? extract_val(asmResults, i * op.getPackedElement() + j)
-                       : asmResults;
+        Value val;
+        if (asmRetTypes.size() > 1) {
+          val =
+              extract_val(asmResults, i * op.getPackedElement() + structIdx++);
+        } else {
+          val = asmResults;
+        }
         if (auto vectorTy = val.getType().dyn_cast<VectorType>()) {
           for (int k = 0; k < vectorTy.getNumElements(); k++) {
             ret[i].push_back(extract_element(val, i32_val(k)));
@@ -423,33 +472,26 @@ struct ElementwiseInlineAsmOpConversion
       unpackedOperands.push_back(
           unpackI32(subOperands, argTy, rewriter, loc, getTypeConverter()));
     }
-    if (unpackedOperands.empty())
-      unpackedOperands.push_back({});
 
-    // Although we ensure that all operands and results to this op have the same
-    // encoding, MMA layouts have a different physical ordering depending on the
-    // bit width of the underlying element.
-    //
-    // Thus if the inputs to the inline asm op are MMA with different widths, we
-    // need to reorder them so we iterate over the operands' elements in the
-    // same logical order.
-    for (unsigned i = 1; i < unpackedOperands.size(); ++i) {
-      unpackedOperands[i] = reorderValues(
-          unpackedOperands[i], /*inType=*/op->getOperand(i).getType(),
-          /*ouType=*/op->getResult(0).getType());
-    }
-
-    // Number of (unpacked) elements to process per operand.  Normally this
-    // equals the number of output elements per return value, except when the
-    // asm has no inputs, in which case there's 1 output element.
-    size_t numInputElems = unpackedOperands[0].size();
+    int numElemsPerThread = getNumElementsPerThreads(op->getResult(0).getType(),
+                                                     getTypeConverter());
 
     // These are checked by the verifier, so we don't need to raise a nice
     // error.
     assert(all_of(unpackedOperands, [&](auto &operands) {
-      return operands.size() == numInputElems;
+      return operands.size() == numElemsPerThread;
     }));
-    assert(numInputElems % op.getPackedElement() == 0);
+    if (numElemsPerThread % op.getPackedElement() != 0) {
+      // Pad with the undef for each operand to have a multiple of
+      // op.getPackedElement() elements.
+      int numPaddedValue =
+          op.getPackedElement() - numElemsPerThread % op.getPackedElement();
+      for (auto &operands : unpackedOperands) {
+        for (int i = 0; i < numPaddedValue; i++) {
+          operands.push_back(undef(operands[0].getType()));
+        }
+      }
+    }
 
     // Run the inline asm op on each block of elements.
     //
@@ -458,17 +500,14 @@ struct ElementwiseInlineAsmOpConversion
     // This loop always runs at least once, even when the asm has no input
     // elements.
     SmallVector<SmallVector<Value>> unpackedResults(op->getNumResults());
-    for (unsigned i = 0; i < std::max(numInputElems, size_t{1});
-         i += op.getPackedElement()) {
+    for (unsigned i = 0; i < numElemsPerThread; i += op.getPackedElement()) {
       // Block of elements to process with one call to the inline asm.  This is
       // ordered opposite `unpackedResults`: The outer dim is
       // op.getPackedElement(), and the inner dim is the operand.
       SmallVector<SmallVector<Value>> block(op.getPackedElement());
-      if (numInputElems > 0) {
-        for (auto &os : unpackedOperands) {
-          for (int j = 0; j < op.getPackedElement(); j++) {
-            block[j].push_back(os[i + j]);
-          }
+      for (auto &os : unpackedOperands) {
+        for (int j = 0; j < op.getPackedElement(); j++) {
+          block[j].push_back(os[i + j]);
         }
       }
       auto cur = createDestOps(op, adaptor, rewriter, block, loc);
@@ -478,7 +517,9 @@ struct ElementwiseInlineAsmOpConversion
                                   cur[j].end());
       }
     }
-
+    for (auto &results : unpackedResults) {
+      results.resize(numElemsPerThread);
+    }
     // Reorder and pack the results.
     SmallVector<Value> outs;
     for (int i = 0; i < unpackedResults.size(); i++) {
@@ -491,8 +532,8 @@ struct ElementwiseInlineAsmOpConversion
       }
       auto packed = packI32(unpackedResults[i], op->getResult(i).getType(),
                             rewriter, loc, getTypeConverter());
-      outs.push_back(packLLElements(loc, getTypeConverter(), unpackedResults[i],
-                                    rewriter, op->getResult(i).getType()));
+      outs.push_back(packLLElements(loc, getTypeConverter(), packed, rewriter,
+                                    op->getResult(i).getType()));
     }
 
     rewriter.replaceOp(op, outs);
@@ -510,10 +551,8 @@ struct AbsIOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    auto boolFalse = rewriter.getBoolAttr(false);
-    auto constFalse = rewriter.create<LLVM::ConstantOp>(loc, boolFalse);
     return {rewriter.create<LLVM::AbsOp>(loc, elemTy, operands[0][0],
-                                         /*is_int_min_poison=*/constFalse)};
+                                         /*is_int_min_poison=*/false)};
   }
 };
 
@@ -722,6 +761,61 @@ void mlir::triton::populateClampFOpToLLVMPattern(
 void mlir::triton::populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
+#define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
+  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
+      typeConverter, axisInfoAnalysis, benefit);
+
+  POPULATE_UNARY_OP(arith::TruncIOp, LLVM::TruncOp)
+  POPULATE_UNARY_OP(arith::ExtSIOp, LLVM::SExtOp)
+  POPULATE_UNARY_OP(arith::ExtUIOp, LLVM::ZExtOp)
+  POPULATE_UNARY_OP(arith::FPToUIOp, LLVM::FPToUIOp)
+  POPULATE_UNARY_OP(arith::UIToFPOp, LLVM::UIToFPOp)
+  POPULATE_UNARY_OP(math::FloorOp, math::FloorOp)
+  POPULATE_UNARY_OP(math::LogOp, math::LogOp)
+  POPULATE_UNARY_OP(math::Log2Op, math::Log2Op)
+  POPULATE_UNARY_OP(math::CosOp, math::CosOp)
+  POPULATE_UNARY_OP(math::SinOp, math::SinOp)
+  POPULATE_UNARY_OP(math::SqrtOp, math::SqrtOp)
+  POPULATE_UNARY_OP(math::RsqrtOp, math::RsqrtOp)
+  POPULATE_UNARY_OP(math::ExpOp, math::ExpOp)
+  POPULATE_UNARY_OP(math::Exp2Op, math::Exp2Op)
+  POPULATE_UNARY_OP(math::ErfOp, math::ErfOp)
+  POPULATE_UNARY_OP(triton::BitcastOp, LLVM::BitcastOp)
+  POPULATE_UNARY_OP(triton::IntToPtrOp, LLVM::IntToPtrOp)
+  POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
+#undef POPULATE_UNARY_OP
+
+#define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
+  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
+      typeConverter, axisInfoAnalysis, benefit);
+
+  POPULATE_BINARY_OP(arith::SubIOp, LLVM::SubOp) // -
+  POPULATE_BINARY_OP(arith::AddIOp, LLVM::AddOp) // +
+  POPULATE_BINARY_OP(arith::MulIOp, LLVM::MulOp) // *
+  POPULATE_BINARY_OP(arith::DivSIOp, LLVM::SDivOp)
+  POPULATE_BINARY_OP(arith::DivUIOp, LLVM::UDivOp)
+  POPULATE_BINARY_OP(arith::RemFOp, LLVM::FRemOp) // %
+  POPULATE_BINARY_OP(arith::RemSIOp, LLVM::SRemOp)
+  POPULATE_BINARY_OP(arith::RemUIOp, LLVM::URemOp)
+  POPULATE_BINARY_OP(arith::AndIOp, LLVM::AndOp)   // &
+  POPULATE_BINARY_OP(arith::OrIOp, LLVM::OrOp)     // |
+  POPULATE_BINARY_OP(arith::XOrIOp, LLVM::XOrOp)   // ^
+  POPULATE_BINARY_OP(arith::ShLIOp, LLVM::ShlOp)   // <<
+  POPULATE_BINARY_OP(arith::ShRSIOp, LLVM::AShrOp) // >>
+  POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp) // >>
+  // fmin (return non-NaN if either op is non-NaN)
+  POPULATE_BINARY_OP(arith::MinNumFOp, LLVM::MinNumOp)
+  // fmax (return non-NaN if either op is non-NaN)
+  POPULATE_BINARY_OP(arith::MaxNumFOp, LLVM::MaxNumOp)
+  POPULATE_BINARY_OP(arith::MinSIOp, LLVM::SMinOp) // smin
+  POPULATE_BINARY_OP(arith::MaxSIOp, LLVM::SMaxOp) // smax
+  POPULATE_BINARY_OP(arith::MinUIOp, LLVM::UMinOp) // umin
+  POPULATE_BINARY_OP(arith::MaxUIOp, LLVM::UMaxOp) // umax
+#undef POPULATE_BINARY_OP
+
+  patterns.add<ElementwiseOpConversion<math::FmaOp, LLVM::FMAOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
+
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
   patterns.add<CmpIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<CmpFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
