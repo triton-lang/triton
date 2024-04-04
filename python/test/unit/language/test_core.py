@@ -2957,6 +2957,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         pytest.skip("float8e4nv and float8e5 not supported on HIP")
     if is_hip() and (input_precision != "ieee"):
         pytest.skip(f"{input_precision} not supported on HIP")
+    if is_interpreter() and (in_dtype == 'bfloat16' or in_dtype == 'float8e4nv' or in_dtype == 'float8e5'):
+        pytest.skip("bfloat16, float8e4nv and float8e5 not supported because numpy doesn't understand them")
 
     torch.backends.cuda.matmul.allow_tf32 = input_precision == "tf32"
 
