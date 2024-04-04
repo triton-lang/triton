@@ -360,6 +360,10 @@ jobs:
           echo "GITHUB_HOME is ${GITHUB_HOME}"
           mkdir -p ${GITHUB_HOME}/.triton
           ls -alh ${GITHUB_HOME}/.triton
+          rm -rf ${GITHUB_HOME}/.triton
+          mkdir -p ${HOME}/.triton
+          ls -alh ${HOME}/.triton
+          rm -rf ${HOME}/.triton
 
       - name: Cache build dependency
         uses: actions/cache@v4
