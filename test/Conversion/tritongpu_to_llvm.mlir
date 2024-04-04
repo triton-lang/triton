@@ -85,10 +85,11 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: store_with_cache_attr
   tt.func @store_with_cache_attr(%a_ptr_init : tensor<256x!tt.ptr<f32>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf32, #blocked0>) {
+    //      CHECK: createpolicy
     //      CHECK: llvm.inline_asm
-    // CHECK-SAME: st.global.L1::evict_last.b32
+    // CHECK-SAME: st.global.L1::evict_last.L2::cache_hint.b32
     //      CHECK: llvm.inline_asm
-    // CHECK-SAME: st.global.L1::evict_last.b32
+    // CHECK-SAME: st.global.L1::evict_last.L2::cache_hint.b32
     tt.store %a_ptr_init, %cst_0, %cst evictionPolicy = evict_last cacheModifier = ca : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return
   }
