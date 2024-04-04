@@ -1159,13 +1159,24 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::DotAsyncOp dotOp,
   int iterArgIdx = -1;
   Value iterArg = nullptr;
   for (auto &use : dotOp->getUses()) {
-    if (isa<scf::YieldOp>(use.getOwner())) {
-      iterArgIdx = use.getOperandNumber();
-      iterArg = forOp.getRegionIterArg(iterArgIdx);
+    if (auto yieldOp = dyn_cast<scf::YieldOp>(use.getOwner())) {
+      // is this yield of an if or for?
+      if (auto ifOp = dyn_cast<scf::IfOp>(yieldOp->getParentOp())) {
+        auto &ifUse = *ifOp.getResult(0).getUses().begin();
+        assert(isa<scf::YieldOp>(ifUse.getOwner()));
+        iterArgIdx = ifUse.getOperandNumber();
+        iterArg = forOp.getRegionIterArg(iterArgIdx);
+      } else {
+        assert(isa<scf::ForOp>(yieldOp->getParentOp()));
+        iterArgIdx = use.getOperandNumber();
+        iterArg = forOp.getRegionIterArg(iterArgIdx);
+      }
     }
   }
   assert(iterArg && "Dot result not used by loop's yield.");
   assert(iterArgIdx != -1 && "Dot result not used by loop's yield.");
+
+  return iterArgIdx;
 
   // Rule 3a: Are the only users of the dot's result from iteration i-1 other
   // MMAv3 dots?  If so, we're done, this dot can be properly async.
