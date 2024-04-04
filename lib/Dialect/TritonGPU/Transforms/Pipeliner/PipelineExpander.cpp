@@ -214,9 +214,13 @@ static Operation *
 cloneAndUpdateOperands(RewriterBase &rewriter, Operation *op,
                        function_ref<void(OpOperand *newOperand)> callback) {
   Operation *clone = rewriter.clone(*op);
-  for (OpOperand &operand : clone->getOpOperands())
+  for (OpOperand &operand :
+       clone->getOpOperands()) // TODO pawel: this should be most likely folded
+                               // into the walk below
     callback(&operand);
   clone->walk([&](Operation *nested) {
+    if (nested == clone)
+      return;
     for (OpOperand &operand : nested->getOpOperands()) {
       Operation *def = operand.get().getDefiningOp();
       if ((def && !clone->isAncestor(def)) || isa<BlockArgument>(operand.get()))

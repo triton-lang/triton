@@ -602,6 +602,23 @@ createSchedule(scf::ForOp forOp, int numStages,
     }
   }
 
+  SmallVector<DenseSet<Operation *>> addptrs(numStages);
+  for (int stage = 0; stage < numStages; stage++) {
+    for (Operation *op : insertAndDeps[stage]) {
+      if (isa<scf::IfOp>(op)) {
+        for (auto &use : op->getUses()) {
+          if (auto user = dyn_cast<tt::AddPtrOp>(use.getOwner())) {
+            addptrs[stage].insert(user);
+          }
+        }
+      }
+    }
+  }
+
+  for (int stage = 0; stage < numStages; stage++) {
+    insertAndDeps[stage].insert(addptrs[stage].begin(), addptrs[stage].end());
+  }
+
   LLVM_DEBUG({
     for (int stage = 0; stage < numStages; stage++) {
       LDBG("- insertAndDeps " << stage);
@@ -707,7 +724,7 @@ createSchedule(scf::ForOp forOp, int numStages,
   // Schedule stage `numStage - 1` first.
   tt::addOps(forOp, numStages - 1, schedule, [&](Operation *op) {
     return allInsertAndDeps.count(op) == 0 && allStage1Deps.count(op) == 0 &&
-           extractAndDeps.count(op) == 0 /*&& epilogIfs.count(op) == 0*/;
+           extractAndDeps.count(op) == 0 && epilogIfs.count(op) == 0;
   });
 
   // Schedule some dependencies with distance of 1 into stage 1 to reduce
@@ -731,8 +748,8 @@ createSchedule(scf::ForOp forOp, int numStages,
   tt::addOps(forOp, numStages - 2, schedule,
              [&](Operation *op) { return extractAndDeps.count(op); });
 
-  /*tt::addOps(forOp, numStages - 1, schedule,
-             [&](Operation *op) { return epilogIfs.count(op); });*/
+  tt::addOps(forOp, numStages - 1, schedule,
+             [&](Operation *op) { return epilogIfs.count(op); });
 
   LLVM_DEBUG(printSchedule(schedule, numStages));
   assert(isScheduleValid(forOp, schedule) && "Invalid schedule.");

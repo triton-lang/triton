@@ -1047,12 +1047,11 @@ void AxisInfoAnalysis::visitOperation(
     ArrayRef<dataflow::Lattice<AxisInfo> *> results) {
   // TODO: For sure not the right way to do this
   // but why is scf.if not initialized otherwise?
-  llvm::outs() << "Visiting: ";
-  op->dump();
+
   for (auto op : operands)
     if (op->getValue().getRank() == 0) {
-      op->getPoint().dump();
-      // return;
+      // op->getPoint().dump();
+      //  return;
       setToEntryState((dataflow::Lattice<AxisInfo> *)op);
     }
   AxisInfo curr = visitors.apply(op, operands);
@@ -1089,11 +1088,11 @@ void AxisInfoAnalysis::visitOperation(
     r += "]";
     return r;
   };
-  llvm::outs() << "Leaving: ";
-  op->dump();
-  llvm::outs() << " cont: " << arrToStr(curr.getContiguity())
-               << " div: " << arrToStr(curr.getDivisibility())
-               << " const: " << arrToStr(curr.getConstancy()) << "\n\n";
+  // llvm::outs() << "Leaving: ";
+  // op->dump();
+  // llvm::outs() << " cont: " << arrToStr(curr.getContiguity())
+  //              << " div: " << arrToStr(curr.getDivisibility())
+  //              << " const: " << arrToStr(curr.getConstancy()) << "\n\n";
   // join all lattice elements
   for (auto *result : results)
     propagateIfChanged(result, result->join(curr));
