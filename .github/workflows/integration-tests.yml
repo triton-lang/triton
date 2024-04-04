@@ -343,15 +343,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            /root/.triton/llvm
-            /root/.triton/nvidia
-            /root/.triton/pybind11
+            $HOME/.triton/llvm
+            $HOME/.triton/nvidia
+            $HOME/.triton/pybind11
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}
 
       - name: Inspect cache directory
         run: |
-          mkdir -p /root/.triton
-          ls -alh /root/.triton
+          mkdir -p $HOME/.triton
+          ls -alh $HOME/.triton
 
       - name: Set ROCM ENV
         run: |
@@ -385,6 +385,6 @@ jobs:
 
       - name: Inspect cache directory
         run: |
-          mkdir -p /root/.triton
-          ls -alh /root/.triton
-          du -sh /root/.triton/**
+          mkdir -p $HOME/.triton
+          ls -alh $HOME/.triton
+          du -sh $HOME/.triton/**
