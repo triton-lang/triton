@@ -1146,16 +1146,26 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::DotAsyncOp dotOp,
   }
 
   // Rule 2: The dot should only be used by the for loop's `yield`.
-  if (!dotOp->hasOneUse() ||
+  /*if (!dotOp->hasOneUse() ||
       *dotOp->getUsers().begin() != forOp.getBody()->getTerminator()) {
     LDBG("Can't make dot async because it is not used only by the loop's "
          "`yield`.");
     return std::nullopt;
-  }
+  }*/
+  // TODO pawel: hack! Let's consider dot properly async even if it is used
+  // in the loop, as long as it is under an if
 
   // The result of the dot becomes this loop carry value.
-  auto iterArgIdx = dotOp->getUses().begin()->getOperandNumber();
-  auto iterArg = forOp.getRegionIterArg(iterArgIdx);
+  int iterArgIdx = -1;
+  Value iterArg = nullptr;
+  for (auto &use : dotOp->getUses()) {
+    if (isa<scf::YieldOp>(use.getOwner())) {
+      iterArgIdx = use.getOperandNumber();
+      iterArg = forOp.getRegionIterArg(iterArgIdx);
+    }
+  }
+  assert(iterArg && "Dot result not used by loop's yield.");
+  assert(iterArgIdx != -1 && "Dot result not used by loop's yield.");
 
   // Rule 3a: Are the only users of the dot's result from iteration i-1 other
   // MMAv3 dots?  If so, we're done, this dot can be properly async.
