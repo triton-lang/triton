@@ -388,6 +388,7 @@ jobs:
         run: |
           cd python
           pytest --capture=tee-sys -rfs -vvv -n 32 ./test/unit/language/test_core.py \
+              ./test/unit/language/test_annotations.py \
               ./test/unit/language/test_subprocess.py \
               ./test/unit/language/test_standard.py \
               ./test/unit/language/test_compile_errors.py \
