@@ -411,7 +411,7 @@ class InterpreterBuilder:
         return TensorHandle(np.transpose(arg.data, perm), arg.dtype)
 
     def create_dot(self, a, b, d, input_precision, max_num_imprecise_acc):
-        return TensorHandle(np.matmul(a.data, b.data) + d.data, d.dtype)
+        return TensorHandle(np.matmul(a.data, b.data, dtype=d.data.dtype) + d.data, d.dtype)
 
     def create_make_range(self, start, stop):
         return TensorHandle(np.arange(start, stop, dtype=np.int32), tl.int32)
