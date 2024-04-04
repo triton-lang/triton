@@ -428,7 +428,7 @@ def add_link_to_backends():
 
 
 def add_link_to_proton():
-    proton_dir = os.path.join(os.path.dirname(__file__), os.pardir, "third_party", "proton", "proton")
+    proton_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, "third_party", "proton", "proton"))
     proton_install_dir = os.path.join(os.path.dirname(__file__), "triton", "profiler")
     if os.path.islink(proton_install_dir):
         os.unlink(proton_install_dir)

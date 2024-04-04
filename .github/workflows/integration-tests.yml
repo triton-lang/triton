@@ -57,7 +57,6 @@ jobs:
         run: |
           echo "BACKEND=CUDA" >> "${GITHUB_ENV}"
           echo "TRITON_DISABLE_LINE_INFO=1" >> "${GITHUB_ENV}"
-          echo "TRITON_BUILD_PROTON=1" >> "${GITHUB_ENV}"
 
       - name: Clear cache
         run: |
@@ -84,7 +83,7 @@ jobs:
           python3 -m pip install cmake==3.24 ninja pytest-xdist
           sudo apt-get update -y
           sudo apt-get install -y ccache clang lld
-          TRITON_BUILD_WITH_CLANG_LLD=true TRITON_BUILD_WITH_CCACHE=true python3 -m pip install --no-build-isolation -vvv '.[tests]'
+          TRITON_BUILD_PROTON=true TRITON_BUILD_WITH_CLANG_LLD=true TRITON_BUILD_WITH_CCACHE=true python3 -m pip install --no-build-isolation -vvv '.[tests]'
 
       - name: Run lit tests
         if: ${{ env.BACKEND == 'CUDA'}}
@@ -151,7 +150,6 @@ jobs:
       - name: Run Proton tests
         run: |
           cd third_party/proton
-          pip install .
           python3 -m pytest -vvv test
           python3 tutorials/dynamic_net.py --profile
           python3 tutorials/matmul.py --profile
