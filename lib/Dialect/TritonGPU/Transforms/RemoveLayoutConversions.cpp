@@ -17,7 +17,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 #include <memory>
 
 #define GEN_PASS_CLASSES
@@ -156,7 +155,9 @@ public:
   }
   // Return the remat'ed value in the given encoding.
   Value getRematValue(Value value, Attribute encoding) {
-    return rematMapping[{value, encoding}];
+    auto it = rematMapping.find({value, encoding});
+    assert(it != rematMapping.end());
+    return it.second;
   }
   void cleanup();
   void backwardRematerialization();
