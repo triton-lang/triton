@@ -148,51 +148,9 @@ private:
 
 } // namespace
 
-// Look ahead to at the transitive uses and see if there is a convert to mma
-// operations.
-static bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
-  SmallVector<Value> queue = {op->getResult(0)};
-  SetVector<Operation *> forwardSlice;
-  llvm::SmallDenseSet<Value> seen;
-  while (!queue.empty()) {
-    Value currentValue = queue.back();
-    queue.pop_back();
-    getForwardSlice(currentValue, &forwardSlice);
-    for (Operation *op : forwardSlice) {
-      if (auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-        Attribute dstEncoding = convertOp.getResult()
-                                    .getType()
-                                    .cast<RankedTensorType>()
-                                    .getEncoding();
-        if (auto mmaLayout =
-                dstEncoding.dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>())
-          return (mmaLayout.getVersionMajor() > 1) ? true
-                                                   : mmaLayout == encoding;
-        if (dstEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
-          return encoding.cast<triton::gpu::NvidiaMmaEncodingAttr>()
-                     .getVersionMajor() > 1;
-      }
-      auto yield = dyn_cast<scf::YieldOp>(op);
-      if (!yield)
-        continue;
-      auto forOp = dyn_cast<scf::ForOp>(yield.getOperation()->getParentOp());
-      if (!forOp)
-        continue;
-      for (OpOperand &operand : yield->getOpOperands()) {
-        Operation *def = operand.get().getDefiningOp();
-        if (def && forwardSlice.count(def) &&
-            (seen.insert(operand.get()).second == true))
-          queue.push_back(forOp.getRegionIterArg(operand.getOperandNumber()));
-      }
-    }
-  }
-  return false;
-}
-
 #ifdef USE_ROCM
 // Look ahead to at the transitive uses and see if there is a convert to mfma or
 // wmma operations.
-// TODO: unify with hasConvertToMMATransisitiveUse?
 static bool hasConvertToAmdMmaTransisitiveUse(Operation *op,
                                               Attribute encoding) {
   SmallVector<Value> queue = {op->getResult(0)};
@@ -244,14 +202,6 @@ void LayoutPropagation::initAnchorLayout() {
     if (isLayoutAnchor(op)) {
       for (auto result : op->getResults()) {
         if (auto tensorType = result.getType().dyn_cast<RankedTensorType>()) {
-          // Workaround, don't popagate MMA layout unless there is a convert
-          // back to mma further down to avoid generating reduction with MMA
-          // layout that may have lower performance.
-          // This can be improved with more aggressive backward propagation.
-          if (tensorType.getEncoding()
-                  .isa<triton::gpu::NvidiaMmaEncodingAttr>() &&
-              !hasConvertToMMATransisitiveUse(op, tensorType.getEncoding()))
-            continue;
 #ifdef USE_ROCM
           // Workaround to not propagate MFMA layout in case there are
           // no chained dots MFMA layout is expensive to convert, so we want
