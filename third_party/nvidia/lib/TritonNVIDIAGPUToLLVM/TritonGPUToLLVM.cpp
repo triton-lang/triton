@@ -168,7 +168,7 @@ struct ConvertTritonGPUToLLVM
     mlir::triton::populateViewOpToLLVMPatterns(typeConverter, patterns,
                                                benefit);
     mlir::triton::populateAssertOpToLLVMPattern(typeConverter, patterns,
-                                                benefit);
+                                                targetInfo, benefit);
     mlir::triton::populateMemoryOpToLLVMPattern(typeConverter, patterns,
                                                 benefit);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, patterns,

@@ -346,4 +346,8 @@ jobs:
       - name: Run python tests on ROCM
         run: |
           cd python
-          pytest --capture=tee-sys -rfs -vvv -n 32 ./test/unit/language/test_core.py ./test/unit/language/test_subprocess.py -k "not test_assert"
+          pytest --capture=tee-sys -rfs -vvv -n 32 ./test/unit/language/test_core.py \
+              ./test/unit/language/test_subprocess.py \
+              ./test/unit/language/test_standard.py \
+              ./test/unit/language/test_compile_errors.py \
+              ./test/unit/language/test_block_pointer.py
