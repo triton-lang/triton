@@ -95,7 +95,9 @@ class HIPBackend(BaseBackend):
         )
 
     def get_codegen_implementation(self):
-        codegen_fns = {}
+        import triton.language.extra.hip as hip
+        codegen_fns = dict()
+        codegen_fns["convert_custom_types"] = hip.convert_custom_float8
         return codegen_fns
 
     def load_dialects(self, ctx):
