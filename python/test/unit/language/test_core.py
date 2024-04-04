@@ -2934,8 +2934,6 @@ def convert_fp8_to_fp32(x, device, dtype_str):
      for float8_type in ["float8e5", "float8e4nv"]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, num_ctas, device):
-    if is_hip():
-        pytest.skip("Skipping test until we fix bug in amd backend (to use layout order)")
     check_cuda_only(device)
 
     capability = torch.cuda.get_device_capability()
@@ -3636,6 +3634,7 @@ def test_vectorization(N, num_ctas, device):
     # np.testing.assert_allclose(dst, src[:N])
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("has_hints", [False, True])
 def test_vectorization_hints(has_hints, device):
     src = torch.empty(1024, device=device)

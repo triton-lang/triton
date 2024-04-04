@@ -155,6 +155,24 @@ std::pair<Type, Value> printfPromoteValue(ConversionPatternRewriter &rewriter,
 
   return {newType, newOp};
 }
+
+LLVM::LLVMFuncOp getAssertfailDeclaration(ConversionPatternRewriter &rewriter) {
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  StringRef funcName("__assertfail");
+  Operation *funcOp = moduleOp.lookupSymbol(funcName);
+  if (funcOp)
+    return cast<LLVM::LLVMFuncOp>(*funcOp);
+  // void __assert_fail(const char * assertion, const char * file, unsigned
+  // int line, const char * function);
+  auto *ctx = rewriter.getContext();
+  SmallVector<Type> argsType{ptr_ty(ctx), ptr_ty(ctx), i32_ty, ptr_ty(ctx),
+                             rewriter.getIntegerType(sizeof(size_t) * 8)};
+  auto funcType = LLVM::LLVMFunctionType::get(void_ty(ctx), argsType);
+  ConversionPatternRewriter::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPointToStart(moduleOp.getBody());
+  return rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(ctx), funcName,
+                                           funcType);
+}
 } // namespace
 
 namespace mlir::triton::NVIDIA {
@@ -236,27 +254,27 @@ Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
   return builder.launch(rewriter, loc, elemTy);
 }
 
-Value TargetInfo::shuffleXor(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::shuffleXor(ConversionPatternRewriter &rewriter, Location loc,
                              Value val, int i) const {
   return LLVM::NVIDIA::shuffleXor(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleUp(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::shuffleUp(ConversionPatternRewriter &rewriter, Location loc,
                             Value val, int i) const {
   return LLVM::NVIDIA::shuffleUp(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
                              Value val, int i) const {
   return LLVM::NVIDIA::shuffleIdx(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
                              Value val, Value i) const {
   return LLVM::NVIDIA::shuffleIdx(loc, rewriter, val, i);
 }
 
-Value TargetInfo::programId(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::programId(ConversionPatternRewriter &rewriter, Location loc,
                             ModuleOp moduleOp, int axis) const {
   return LLVM::NVIDIA::llGetPid(loc, rewriter, moduleOp, axis);
 }
@@ -314,9 +332,9 @@ bool TargetInfo::processReplicaUsingStMatrix(
   return false;
 }
 
-void TargetInfo::printf(Value formatStrStart, int /*formatStrByteCount*/,
-                        ValueRange args,
-                        ConversionPatternRewriter &rewriter) const {
+void TargetInfo::printf(ConversionPatternRewriter &rewriter,
+                        Value formatStrStart, int /*formatStrByteCount*/,
+                        ValueRange args) const {
   auto *ctx = rewriter.getContext();
   Type ptr = ptr_ty(ctx);
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
@@ -354,6 +372,24 @@ void TargetInfo::printf(Value formatStrStart, int /*formatStrByteCount*/,
   }
 
   SmallVector<Value> operands{formatStrStart, bufferPtr};
+  call(funcOp, operands);
+}
+
+void TargetInfo::assertFail(ConversionPatternRewriter &rewriter, Location loc,
+                            StringRef message, StringRef file, StringRef func,
+                            int line) const {
+  auto funcOp = getAssertfailDeclaration(rewriter);
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  Value messageString =
+      LLVM::addStringToModule(loc, rewriter, "assertMessage_", message);
+  Value fileString =
+      LLVM::addStringToModule(loc, rewriter, "assertFile_", file);
+  Value funcString =
+      LLVM::addStringToModule(loc, rewriter, "assertFunc_", func);
+  Value lineNumber = i32_val(line);
+  Value charSize = int_val(sizeof(size_t) * 8, sizeof(char));
+  SmallVector<Value> operands = {messageString, fileString, lineNumber,
+                                 funcString, charSize};
   call(funcOp, operands);
 }
 

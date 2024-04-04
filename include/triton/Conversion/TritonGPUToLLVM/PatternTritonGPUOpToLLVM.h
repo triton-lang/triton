@@ -37,6 +37,7 @@ void populateMemoryOpToLLVMPattern(LLVMTypeConverter &typeConverter,
 
 void populateAssertOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,
+                                   const TargetInfoBase &targetInfo,
                                    PatternBenefit benefit);
 
 void populateMakeRangeOpToLLVMPattern(LLVMTypeConverter &typeConverter,

@@ -52,16 +52,7 @@ class HIPOptions:
         # Ignore user-defined warp size for gfx9
         warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch else 64
         object.__setattr__(self, 'warp_size', warp_size)
-        oclc_wavefrontsize_lib = "oclc_wavefrontsize64_on" if self.warp_size == 64 else "oclc_wavefrontsize64_off"
-        # Note that the oclc_abi_version_*.bc linked in should be consistent with
-        # the amdhsa_code_object_version attribute attached to the LLVM module.
-        # TODO(antiagainst): directly inject the control constants into the LLVM
-        # module to have one place for this and less device bc file dependency.
-        libs = [
-            "cuda2gcn", "opencl", "ocml", "ockl", "oclc_finite_only_off", "oclc_daz_opt_off",
-            "oclc_correctly_rounded_sqrt_on", "oclc_unsafe_math_off", oclc_wavefrontsize_lib, "oclc_abi_version_400"
-        ]
-        libs += ['oclc_isa_version_' + self.arch.replace('gfx', '')]
+        libs = ["cuda2gcn", "opencl", "ocml", "ockl"]
         for lib in libs:
             extern_libs[lib] = str(default_libdir / f'{lib}.bc')
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
@@ -186,9 +177,16 @@ class HIPBackend(BaseBackend):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
-        # Note that the code object version here should be consistent with the
-        # linked oclc_abi_version_*.bc file.
-        llvm_mod.add_flag(llvm.MODULE_FLAG_BEHAVIOR_ERROR, "amdhsa_code_object_version", 400)
+
+        # Set various control constants on the LLVM module so that device
+        # libraries can resolve references to them.
+        amd.set_isa_version(llvm_mod, options.arch)
+        amd.set_abi_version(llvm_mod, 400)
+        amd.set_bool_control_constant(llvm_mod, "__oclc_finite_only_opt", False)
+        amd.set_bool_control_constant(llvm_mod, "__oclc_daz_opt", False)
+        amd.set_bool_control_constant(llvm_mod, "__oclc_correctly_rounded_sqrt32", True)
+        amd.set_bool_control_constant(llvm_mod, "__oclc_unsafe_math_opt", False)
+        amd.set_bool_control_constant(llvm_mod, "__oclc_wavefrontsize64", options.warp_size == 64)
 
         # Set kernel attributes first given this may affect later optimizations.
         kernels = [fn for fn in llvm_mod.get_functions() if not fn.is_declaration()]
@@ -207,8 +205,8 @@ class HIPBackend(BaseBackend):
         # Get some metadata
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")
 
-        ret = str(llvm_mod)
-        return ret
+        amd.cleanup_bitcode_metadata(llvm_mod)
+        return str(llvm_mod)
 
     @staticmethod
     def make_hsaco(src, metadata, options):

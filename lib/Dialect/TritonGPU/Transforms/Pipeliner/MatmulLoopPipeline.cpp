@@ -377,8 +377,12 @@ collectOpsToPipeline(scf::ForOp forOp,
     return false;
 
   // Start by initializing PipelinedOpInfo for users of the loads.
-  for (auto &[loadOp, distAndUse] : loadOpToDistAndUse)
-    opInfo[distAndUse.second] = PipelinedOpInfo();
+  for (auto &[loadOp, distAndUse] : loadOpToDistAndUse) {
+    // Non-LoadOp(s) are the root uses of all LoadOp(s) and should be
+    // always present in the opInfo
+    if (!isa<tt::LoadOp>(distAndUse.second))
+      opInfo[distAndUse.second] = PipelinedOpInfo();
+  }
 
   int maxDistance = *triton::max_element(
       llvm::make_first_range(llvm::make_second_range(loadOpToDistAndUse)));
@@ -403,6 +407,17 @@ collectOpsToPipeline(scf::ForOp forOp,
       // fixed.
       if (!loadInfo.sharedEncoding)
         continue;
+    } else if (isa<tt::LoadOp>(distAndUse.second)) {
+      // The use of this loadOp is another loadOp. If the use is not in the
+      // loadInfo already, it means that the use is not valid for pipelining
+      // for some reason. We should skip this loadOp, too. Note that we have
+      // an assumption that distAndUse.second (i.e. the use of this loadOp)
+      // has already be processed in a previous loop iteration. This assumption
+      // is held by how loadOpsToDistanceAndUse recursively collects
+      // loadOpToDistAndUse using DFS.
+      if (opInfo.find(distAndUse.second) == opInfo.end()) {
+        continue;
+      }
     }
 
     // If we still don't have a shared encoding, try a "generic" shared

@@ -8,7 +8,8 @@ namespace mlir::triton::AMD {
 // Get warpId inside block of warps.
 Value getWarpIdInBlock(ConversionPatternRewriter &rewriter, Location loc,
                        Value warpId, const ArrayRef<unsigned int> &wpt,
-                       int elemPerInstrNonK, int tensorSizeNonK, int nonKIdx);
+                       int elemPerInstrNonK, int tensorSizeNonK, int nonKIdx,
+                       const ArrayRef<unsigned int> &order);
 
 bool isSwizzled(gpu::SharedEncodingAttr layout);
 

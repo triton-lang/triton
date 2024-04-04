@@ -38,20 +38,6 @@ lib/Dialect/TritonGPU/Transforms/Combine.cpp @ptillet
 # -----------
 # Conversions
 # -----------
-# TritonGPUToLLVM
-include/triton/Conversion/TritonGPUToLLVM/ @goostavz @Superjomn
-lib/Conversions/TritonGPUToLLVM @goostavz @Superjomn
 # TritonToTritonGPU
 include/triton/Conversion/TritonToTritonGPU/ @ptillet
 lib/Dialect/TritonGPU/Transforms/TritonGPUConversion.cpp @ptillet
-
-
-# -------
-# Targets
-# -------
-# LLVMIR
-include/triton/Target/LLVMIR/ @goostavz @Superjomn
-lib/Target/LLVMIR @goostavz @Superjomn
-# PTX
-include/triton/Target/PTX/ @goostavz @Superjomn
-lib/Target/PTX @goostavz @Superjomn
