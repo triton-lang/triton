@@ -264,9 +264,10 @@ struct DotOpMFMAConversionHelper {
     return success();
   }
 
-/**
- * @brief Converts dot operand structure to value table and converts types appropriate for mfma instructions
- */
+  /**
+   * @brief Converts dot operand structure to value table and converts types
+   * appropriate for mfma instructions
+   */
   ValueTable getValuesFromDotOperandLayoutStruct(Value value, int batch, int n0,
                                                  int n1, int kWidth,
                                                  Type type) const {
@@ -275,7 +276,16 @@ struct DotOpMFMAConversionHelper {
     for (int b = 0; b < batch; ++b) {
       for (int i = 0; i < n0; i++) {
         for (int j = 0; j < n1; j++) {
-          auto rawElems = elems[b * n0 * n1 + n1 * i + j];
+          Type elemTy = typeConverter->convertType(type);
+          Type ty = vec_ty(elemTy, kWidth);
+          Value rawElems = undef(ty);
+          for (int k = 0; k < kWidth; ++k) {
+            rawElems = insert_element(
+                ty, rawElems,
+                elems[kWidth * n1 * n0 * b + kWidth * n1 * i + kWidth * j + k],
+                i32_val(k));
+          }
+
           Value convertedElems;
           if (type.isF32()) {
             convertedElems = extract_element(type, rawElems, i32_val(0));

@@ -384,35 +384,20 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
       Value waveBlockOffAdjust = i32_val(blockNonKOffset * shape[order[0]]);
       for (int k = 0; k < numRepK; ++k) {
         auto vecTy = vec_ty(resElemTy, numOfElems);
-        Value valVec = undef(vecTy);
         for (unsigned loadId = 0; loadId < loadsPerThread; ++loadId) {
           auto loadVecTy = vec_ty(elemTy, elemsPerLoad);
           Value loadOffset;
-          if (isFastPath)
-            loadOffset = offsets[nonK * loadsPerThread * numRepK +
-                                 k * loadsPerThread + loadId];
-          else
-            // In the normal path, we only computed the offsets of elements
-            // in the first wave-block. Therefore, we update the offsets
-            // of elements in later wave-blocks by adding a constant stride
-            loadOffset =
-                add(waveBlockOffAdjust, offsets[k * loadsPerThread + loadId]);
+          loadOffset = offsets[nonK * loadsPerThread * numRepK +
+                               k * loadsPerThread + loadId];
           loadOffset = add(loadOffset, batchOffset);
           Value loadAddress = gep(smemPtrTy, elemTy, smemBase, loadOffset);
           Value loadedValue = load(loadVecTy, loadAddress);
-          if (loadsPerThread > 1) {
-            for (int elemId = 0; elemId < elemsPerLoad; ++elemId) {
-              Value elemVal =
-                  extract_element(elemTy, loadedValue, i32_val(elemId));
-              elemVal = bitcast(elemVal, resElemTy);
-              valVec = insert_element(vecTy, valVec, elemVal,
-                                      i32_val(loadId * elemsPerLoad + elemId));
-            }
-          } else {
-            valVec = loadedValue;
+          for (int elemId = 0; elemId < elemsPerLoad; ++elemId) {
+            Value elemVal =
+                extract_element(elemTy, loadedValue, i32_val(elemId));
+            loadedValues.push_back(elemVal);
           }
         }
-        loadedValues.push_back(valVec);
       }
     }
   }

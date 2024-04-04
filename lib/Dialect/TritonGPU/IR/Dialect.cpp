@@ -253,7 +253,7 @@ SmallVector<unsigned> getOrder(Attribute layout) {
       order[i] = rank - 1 - i;
     if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
       if (mfmaLayout.getIsTransposed()) {
-        std::reverse(order.begin(), order.end());
+        std::swap(order[rank - 2], order[rank - 1]);
       }
     }
     return order;

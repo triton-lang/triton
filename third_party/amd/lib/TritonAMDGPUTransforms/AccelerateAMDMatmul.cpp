@@ -55,9 +55,9 @@ int getMfmaVersion(MatrixCoreVersion matrixCoreVer) {
 }
 
 SmallVector<unsigned, 2> warpsPerTile(tt::DotOp dotOp,
-                                       const ArrayRef<int64_t> shape,
-                                       int numWarps,
-                                       SmallVector<int64_t, 2> shapePerWarp) {
+                                      const ArrayRef<int64_t> shape,
+                                      int numWarps,
+                                      SmallVector<int64_t, 2> shapePerWarp) {
   auto rank = shape.size();
   // Early exit for batched matmul
   if (rank == 3)

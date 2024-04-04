@@ -20,6 +20,7 @@ using namespace mlir::triton;
 
 // Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
 // Operators
+#define inttofloat(...) rewriter.create<LLVM::SIToFPOp>(loc, __VA_ARGS__)
 #define inttoptr(...) rewriter.create<LLVM::IntToPtrOp>(loc, __VA_ARGS__)
 #define ptrtoint(...) rewriter.create<LLVM::PtrToIntOp>(loc, __VA_ARGS__)
 #define zext(...) rewriter.create<LLVM::ZExtOp>(loc, __VA_ARGS__)
@@ -809,12 +810,14 @@ emitBaseIndexForMfmaLayout(Location loc, RewriterBase &rewriter,
   if (shape[rank - 2] >= mDim) {
     assert(shape[rank - 2] % mDim == 0);
     multiDimWarpId[rank - 2] =
-        urem(multiDimWarpId[rank - 2], i32_val(ceil<unsigned>(shape[rank - 2], mDim)));
+        urem(multiDimWarpId[rank - 2],
+             i32_val(ceil<unsigned>(shape[rank - 2], mDim)));
   }
   if (shape[rank - 1] >= nDim) {
     assert(shape[rank - 1] % nDim == 0);
     multiDimWarpId[rank - 1] =
-        urem(multiDimWarpId[rank - 1], i32_val(ceil<unsigned>(shape[rank - 1], nDim)));
+        urem(multiDimWarpId[rank - 1],
+             i32_val(ceil<unsigned>(shape[rank - 1], nDim)));
   }
   Value offWarp0 = mul(multiDimWarpId[rank - 2], i32_val(mDim));
   Value offWarp1 = mul(multiDimWarpId[rank - 1], i32_val(nDim));
