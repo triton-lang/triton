@@ -164,12 +164,13 @@ jobs:
           python3 -m pytest -vs hopper/test_flashattention.py
 
       - name: Run interpreter tests
+        if: ${{matrix.runner[0] == 'self-hosted' && matrix.runner[1] == 'H100'}}
         env:
           TRITON_INTERPRET: "1"
         run: |
           cd python/test/unit
-          python3 -m pytest -vvv -n 8 -m interpreter language/test_core.py language/test_standard.py language/test_random.py --device cpu
-          python3 -m pytest -n 8 -m interpreter -vvv -s operators/test_flash_attention.py::test_op --device cpu
+          python3 -m pytest -vvv -n 16 -m interpreter language/test_core.py language/test_standard.py \
+           language/test_random.py operators/test_flash_attention.py::test_op --device cpu
 
       - name: Run partial tests on CUDA
         if: ${{ env.BACKEND == 'CUDA' }}
