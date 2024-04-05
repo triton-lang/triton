@@ -8,6 +8,8 @@ on:
   merge_group:
     branches: [main, 'dev-**']
     types: [checks_requested]
+  push:
+    branches: [main]
 
 concurrency:
   group: ${{ github.ref }}
@@ -26,8 +28,37 @@ jobs:
       matrix-CUDA: ${{ steps.set-matrix.outputs.matrix-CUDA }}
       matrix-HIP: ${{ steps.set-matrix.outputs.matrix-HIP }}
     steps:
+      - name: Decide pre-submit integration test enablement
+        # Always enable integration tests for pre-submit pull requests.
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "enable_integration=true" >> $GITHUB_ENV
+
+      - name: Checkout post-submit commits
+        if: github.event_name == 'push'
+        uses: actions/checkout@v4
+        with:
+          # Only fetch two commits to check the latest changed files.
+          fetch-depth: 2
+
+      - name: Detect post-submit changed files
+        id: detect-change
+        if: github.event_name == 'push'
+        uses: tj-actions/changed-files@v44
+        with:
+          # Monitor hash or version files in the cmake/ directory for changes.
+          files: |
+            cmake/*.txt
+
+      - name: Decide post-submit integration test enablement
+        # Only enable integration tests for post-submit when build dependency changes.
+        if: github.event_name == 'push' && steps.detect-change.outputs.any_changed == 'true'
+        run: |
+          echo "enable_integration=true" >> $GITHUB_ENV
+
       - name: Prepare runner matrix
         id: set-matrix
+        if: env.enable_integration == 'true'
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
             echo '::set-output name=matrix-CUDA::[["self-hosted", "A100"], ["self-hosted", "H100"]]'
@@ -36,6 +67,45 @@ jobs:
             echo '::set-output name=matrix-CUDA::["ubuntu-latest"]'
             echo '::set-output name=matrix-HIP::["ubuntu-latest"]'
           fi
+
+  pre-commit:
+    name: pre-commit (code formatting)
+    if: github.event_name == 'pull_request'
+    needs: Runner-Preparation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Compute hash of pre-commit config
+        id: cache-key
+        run: |
+          echo "pre_commit_hash=$(sha256sum .pre-commit-config.yaml)" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Cache pre-commit's cache dir
+        uses: actions/cache@v4
+        with:
+          # Note that we cannot use environment variables here given there is
+          # no shell to interpret them in the paths.
+          path: |
+            ~/.cache/pre-commit
+          key: ${{ runner.os }}-${{ steps.cache-key.outputs.pre_commit_hash }}
+
+      - name: Check pre-commit
+        run: |
+          python3 -m pip install --upgrade pre-commit
+          # TODO: ignore the first yapf failure until https://github.com/google/yapf/issues/1164 is fixed
+          python3 -m pre_commit run --all-files --verbose yapf &> /dev/null || true
+          # If first run of yapf worked and made changes reset the tree to the original state
+          git reset --hard
+          python3 -m pre_commit run --all-files --verbose
 
   Integration-Tests:
     needs: Runner-Preparation
@@ -54,7 +124,6 @@ jobs:
           submodules: "true"
 
       - name: Compute build dependency cache keys
-        if: false
         id: cache-key
         run: |
           echo "llvm=$(cat cmake/llvm-hash.txt | cut -c 1-8)" >> $GITHUB_OUTPUT
@@ -63,8 +132,6 @@ jobs:
         shell: bash
 
       - name: Cache build dependency
-        # Caching disabled until we can automatically generate on the main branch
-        if: false
         uses: actions/cache@v4
         with:
           # Note that we cannot use environment variables here given there is
@@ -76,7 +143,6 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}
 
       - name: Inspect cache directory
-        if: false
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
@@ -90,15 +156,6 @@ jobs:
       - name: Update PATH
         run: |
           echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
-
-      - name: Check pre-commit
-        run: |
-          python3 -m pip install --upgrade pre-commit
-          # TODO: ignore the first yapf failure until https://github.com/google/yapf/issues/1164 is fixed
-          python3 -m pre_commit run --all-files --verbose yapf &> /dev/null || true
-          # If first run of yapf worked and made changes reset the tree to the original state
-          git reset --hard
-          python3 -m pre_commit run --all-files --verbose
 
       - name: Install Triton
         if: ${{ env.BACKEND == 'CUDA'}}
@@ -135,31 +192,19 @@ jobs:
           python3 -m pytest -vs hopper/test_flashattention.py
 
       - name: Run interpreter tests
+        if: ${{matrix.runner[0] == 'self-hosted' && matrix.runner[1] == 'H100'}}
         env:
           TRITON_INTERPRET: "1"
         run: |
           cd python/test/unit
-          python3 -m pytest -vvv -n 8 -m interpreter language/test_core.py language/test_standard.py language/test_random.py --device cpu
-          python3 -m pytest -n 8 -m interpreter -vvv -s operators/test_flash_attention.py::test_op --device cpu
+          python3 -m pytest -vvv -n 16 -m interpreter language/test_core.py language/test_standard.py \
+           language/test_random.py operators/test_flash_attention.py::test_op --device cpu
 
       - name: Run partial tests on CUDA
         if: ${{ env.BACKEND == 'CUDA' }}
         run: |
           cd python/test/unit
           python3 -m pytest -vvv -n 8 operators
-
-      - name: Create artifacts archive
-        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
-        run: |
-          cd ~/.triton
-          tar -czf artifacts.tar.gz cache
-
-      - name: Upload artifacts archive
-        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
-        uses: actions/upload-artifact@v3
-        with:
-          name: artifacts ${{ matrix.runner[1] }}
-          path: ~/.triton/artifacts.tar.gz
 
       - name: Run CXX unittests
         if: ${{ env.BACKEND == 'CUDA'}}
@@ -169,7 +214,6 @@ jobs:
           ctest
 
       - name: Inspect cache directory
-        if: false
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
@@ -197,7 +241,6 @@ jobs:
           submodules: 'true'
 
       - name: Compute build dependency cache keys
-        if: false
         id: cache-key
         run: |
           echo "llvm=$(cat cmake/llvm-hash.txt | cut -c 1-8)" >> $GITHUB_OUTPUT
@@ -212,8 +255,6 @@ jobs:
           rm -rf ~/.triton
 
       - name: Cache build dependency
-        if: false
-        # Caching disabled until we can automatically generate on the main branch
         uses: actions/cache@v4
         with:
           # Note that we cannot use environment variables here given there is
@@ -225,7 +266,6 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}
 
       - name: Inspect cache directory
-        if: false
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
@@ -237,12 +277,6 @@ jobs:
       - name: Update PATH
         run: |
           echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
-
-      - name: Check pre-commit
-        run: |
-          python3 -m pip install --upgrade pre-commit
-          git config --global --add safe.directory /__w/triton/triton
-          python3 -m pre_commit run --all-files --verbose
 
       - name: Install Triton on ROCM
         run: |
@@ -262,7 +296,6 @@ jobs:
               ./test/unit/language/test_block_pointer.py
 
       - name: Inspect cache directory
-        if: false
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton

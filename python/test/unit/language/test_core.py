@@ -2934,7 +2934,11 @@ def convert_fp8_to_fp32(x, device, dtype_str):
      for float8_type in ["float8e5", "float8e4nv"]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, num_ctas, device):
-    check_cuda_only(device)
+    if is_interpreter():
+        if in_dtype == 'bfloat16' or in_dtype == 'float8e4nv' or in_dtype == 'float8e5':
+            pytest.skip("bfloat16, float8e4nv and float8e5 not supported because numpy doesn't understand them")
+    else:
+        check_cuda_only(device)
 
     capability = torch.cuda.get_device_capability()
 
