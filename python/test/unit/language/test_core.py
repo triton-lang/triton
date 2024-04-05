@@ -1673,6 +1673,43 @@ def test_load_store_same_ptr(device):
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str", ['int32'])
+def test_umulhi(dtype_str, device):
+
+    @triton.jit
+    def kernel(X, Y, Z, N: tl.constexpr):
+        offs = tl.arange(0, N)
+        x = tl.load(X + offs)
+        y = tl.load(Y + offs)
+        z = tl.umulhi(x, y)
+        tl.store(Z + tl.arange(0, N), z)
+
+    def umulhi32(a, b):
+        # Convert to 64-bit unsigned integers to prevent overflow
+        a_64 = a.astype(np.int64)
+        b_64 = b.astype(np.int64)
+
+        # Perform the multiplication in 64-bit
+        product_64 = a_64 * b_64
+
+        # Shift right by 32 bits to get the high part of the product
+        result_high_32 = product_64 >> 32
+        return result_high_32
+
+    rs = RandomState(17)
+    N = 128
+    x = numpy_random((N, ), dtype_str=dtype_str, rs=rs, low=0)
+    x_tri = to_triton(x, device=device)
+    y = numpy_random((N, ), dtype_str=dtype_str, rs=rs, low=0)
+    y_tri = to_triton(y, device=device)
+    z_tri = torch.zeros_like(x_tri)
+    kernel[(1, )](x_tri, y_tri, z_tri, N=N)
+
+    z_ref = umulhi32(x, y)
+    np.testing.assert_equal(z_ref, to_numpy(z_tri))
+
+
+@pytest.mark.interpreter
 def test_join(device):
 
     @triton.jit
