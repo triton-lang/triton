@@ -455,7 +455,6 @@ setup(
         "triton/language",
         "triton/language/extra",
         "triton/language/extra/cuda",
-        "triton/language/extra/hip",
         "triton/ops",
         "triton/ops/blocksparse",
         "triton/runtime",
