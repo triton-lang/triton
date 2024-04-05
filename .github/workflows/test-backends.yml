@@ -68,7 +68,7 @@ jobs:
           git submodule update --init --recursive
           cd python
           python3 -m pip install --upgrade pip
-          python3 -m pip install cmake==3.24 ninja pytest-xdist distro
+          python3 -m pip install cmake==3.24 ninja pytest-xdist lit distro
           export TRITON_CODEGEN_INTEL_XPU_BACKEND=1
           python3 -m pip uninstall -y triton
           python3 setup.py build

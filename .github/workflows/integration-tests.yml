@@ -165,7 +165,7 @@ jobs:
       - name: Install pip dependencies
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install wheel cmake==3.24 ninja pytest-xdist lit
+          python3 -m pip install wheel cmake==3.24 ninja pytest-xdist lit distro
 
       - name: Install Triton
         if: ${{ env.BACKEND == 'CUDA'}}
