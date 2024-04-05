@@ -8,6 +8,8 @@ on:
   merge_group:
     branches: [main, 'dev-**']
     types: [checks_requested]
+  push:
+    branches: [main]
 
 concurrency:
   group: ${{ github.ref }}
@@ -26,8 +28,37 @@ jobs:
       matrix-CUDA: ${{ steps.set-matrix.outputs.matrix-CUDA }}
       matrix-HIP: ${{ steps.set-matrix.outputs.matrix-HIP }}
     steps:
+      - name: Decide pre-submit integration test enablement
+        # Always enable integration tests for pre-submit pull requests.
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "enable_integration=true" >> $GITHUB_ENV
+
+      - name: Checkout post-submit commits
+        if: github.event_name == 'push'
+        uses: actions/checkout@v4
+        with:
+          # Only fetch two commits to check the latest changed files.
+          fetch-depth: 2
+
+      - name: Detect post-submit changed files
+        id: detect-change
+        if: github.event_name == 'push'
+        uses: tj-actions/changed-files@v44
+        with:
+          # Monitor hash or version files in the cmake/ directory for changes.
+          files: |
+            cmake/*.txt
+
+      - name: Decide post-submit integration test enablement
+        # Only enable integration tests for post-submit when build dependency changes.
+        if: github.event_name == 'push' && steps.detect-change.outputs.any_changed == 'true'
+        run: |
+          echo "enable_integration=true" >> $GITHUB_ENV
+
       - name: Prepare runner matrix
         id: set-matrix
+        if: env.enable_integration == 'true'
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
             echo '::set-output name=matrix-CUDA::[["self-hosted", "A100"], ["self-hosted", "H100"]]'
@@ -39,6 +70,7 @@ jobs:
 
   pre-commit:
     name: pre-commit (code formatting)
+    if: github.event_name == 'pull_request'
     needs: Runner-Preparation
     runs-on: ubuntu-latest
 
@@ -92,7 +124,6 @@ jobs:
           submodules: "true"
 
       - name: Compute build dependency cache keys
-        if: false
         id: cache-key
         run: |
           echo "llvm=$(cat cmake/llvm-hash.txt | cut -c 1-8)" >> $GITHUB_OUTPUT
@@ -101,8 +132,6 @@ jobs:
         shell: bash
 
       - name: Cache build dependency
-        # Caching disabled until we can automatically generate on the main branch
-        if: false
         uses: actions/cache@v4
         with:
           # Note that we cannot use environment variables here given there is
@@ -114,7 +143,6 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}
 
       - name: Inspect cache directory
-        if: false
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
@@ -186,7 +214,6 @@ jobs:
           ctest
 
       - name: Inspect cache directory
-        if: false
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
@@ -214,7 +241,6 @@ jobs:
           submodules: 'true'
 
       - name: Compute build dependency cache keys
-        if: false
         id: cache-key
         run: |
           echo "llvm=$(cat cmake/llvm-hash.txt | cut -c 1-8)" >> $GITHUB_OUTPUT
@@ -229,8 +255,6 @@ jobs:
           rm -rf ~/.triton
 
       - name: Cache build dependency
-        if: false
-        # Caching disabled until we can automatically generate on the main branch
         uses: actions/cache@v4
         with:
           # Note that we cannot use environment variables here given there is
@@ -242,7 +266,6 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}
 
       - name: Inspect cache directory
-        if: false
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
@@ -273,7 +296,6 @@ jobs:
               ./test/unit/language/test_block_pointer.py
 
       - name: Inspect cache directory
-        if: false
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
