@@ -586,9 +586,89 @@ private:
     return success();
   }
 
+  Value pack4xB8ToI32(Location loc, const SmallVector<Value> &vals,
+                      unsigned start,
+                      ConversionPatternRewriter &rewriter) const {
+    auto anyext = [&](Value v) {
+      assert(v.getType().getIntOrFloatBitWidth() == 8);
+      Value i8x4 = undef(vec_ty(i8_ty, 4));
+      i8x4 =
+          insert_element(vec_ty(i8_ty, 4), i8x4, bitcast(v, i8_ty), i32_val(0));
+      Value i32 = bitcast(i8x4, i32_ty);
+      return i32;
+    };
+
+    Value v0 = anyext(vals[start + 0]);
+    Value v1 = anyext(vals[start + 1]);
+    Value v2 = anyext(vals[start + 2]);
+    Value v3 = anyext(vals[start + 3]);
+    Value v01 = LLVM::NVIDIA::permute(loc, rewriter, v0, v1, i32_val(0x0040));
+    Value v23 = LLVM::NVIDIA::permute(loc, rewriter, v2, v3, i32_val(0x0040));
+    Value pack =
+        LLVM::NVIDIA::permute(loc, rewriter, v01, v23, i32_val(0x5410));
+    return pack;
+  }
+
+  Value pack2xB16ToI32(Location loc, const SmallVector<Value> &vals,
+                       unsigned start,
+                       ConversionPatternRewriter &rewriter) const {
+    auto anyext = [&](Value v) {
+      assert(v.getType().getIntOrFloatBitWidth() == 16);
+      Value i16x2 = undef(vec_ty(i16_ty, 2));
+      i16x2 = insert_element(vec_ty(i16_ty, 2), i16x2, bitcast(v, i16_ty),
+                             i32_val(0));
+      Value i32 = bitcast(i16x2, i32_ty);
+      return i32;
+    };
+
+    Value v0 = anyext(vals[start + 0]);
+    Value v1 = anyext(vals[start + 1]);
+    Value pack = LLVM::NVIDIA::permute(loc, rewriter, v0, v1, i32_val(0x5410));
+    return pack;
+  }
+
   // Convert from accumulator MMA layout to 8bit dot operand layout.
   // The conversion logic is taken from:
   // https://github.com/ColfaxResearch/cutlass-kernels/blob/a9de6446c1c0415c926025cea284210c799b11f8/src/fmha-pipeline/reg2reg.h#L45
+  void shuffle8BitsMMAToDotOperand(Location loc, Value &upper, Value &lower,
+                                   unsigned srcBits,
+                                   ConversionPatternRewriter &rewriter) const {
+    assert((srcBits == 8 || srcBits == 16) && "Unsupported src element size");
+
+    Value threadIdx = getThreadId(rewriter, loc);
+    // (threadIdx + 1) & 2 == 0, select thread 0 3
+    Value cnd =
+        icmp_eq(and_(add(threadIdx, i32_val(1)), i32_val(0b10)), i32_val(0));
+
+    // high bits ignored by shfl, 0 2 0 2
+    Value shflIdx = shl(threadIdx, i32_val(1));
+    Value shflIdxAlt = add(shflIdx, i32_val(1)); // 1 3 1 3
+
+    Value upperIdx = select(cnd, shflIdx, shflIdxAlt); // 0 3 1 2
+    Value lowerIdx = select(cnd, shflIdxAlt, shflIdx); // 1 2 0 3
+
+    Value upper0 = select(cnd, upper, lower);
+    Value lower0 = select(cnd, lower, upper);
+    Value mask = i32_val(0xFFFFFFFF);
+    // Set clamp tp shuffle only within 4 lanes.
+    Value clamp = i32_val(0x1C1F);
+    upper0 =
+        rewriter.create<NVVM::ShflOp>(loc, i32_ty, mask, upper0, upperIdx,
+                                      clamp, NVVM::ShflKind::idx, UnitAttr());
+    lower0 =
+        rewriter.create<NVVM::ShflOp>(loc, i32_ty, mask, lower0, lowerIdx,
+                                      clamp, NVVM::ShflKind::idx, UnitAttr());
+    if (srcBits == 8) {
+      Value selectorEx4 = select(cnd, i32_val(0x5410), i32_val(0x1054));
+      Value selectorEx5 = select(cnd, i32_val(0x7632), i32_val(0x3276));
+      upper = LLVM::NVIDIA::permute(loc, rewriter, upper0, lower0, selectorEx4);
+      lower = LLVM::NVIDIA::permute(loc, rewriter, upper0, lower0, selectorEx5);
+    } else {
+      upper = select(cnd, upper0, lower0);
+      lower = select(cnd, lower0, upper0);
+    }
+  }
+
   void
   convertMMAV3To8BitsDotOperand(triton::gpu::ConvertLayoutOp op,
                                 OpAdaptor adaptor,
@@ -598,63 +678,17 @@ private:
     auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     SmallVector<Value> retVals;
     for (int i = 0; i < vals.size(); i += 8) {
-      Value upper = undef(vec_ty(i8_ty, 4));
+      Value upper = pack4xB8ToI32(loc, vals, i, rewriter);
+      Value lower = pack4xB8ToI32(loc, vals, i + 4, rewriter);
+
+      shuffle8BitsMMAToDotOperand(loc, upper, lower, 8, rewriter);
+
+      Value vecVal = bitcast(upper, vec_ty(i8_ty, 4));
       for (int j = 0; j < 4; j++) {
-        upper =
-            insert_element(vec_ty(i8_ty, 4), upper, vals[i + j], i32_val(j));
-      }
-      upper = bitcast(upper, i32_ty);
-      Value lower = undef(vec_ty(i8_ty, 4));
-      for (int j = 0; j < 4; j++) {
-        lower = insert_element(vec_ty(i8_ty, 4), lower, vals[i + 4 + j],
-                               i32_val(j));
-      }
-      lower = bitcast(lower, i32_ty);
-
-      Value threadIdMod4 = urem(getThreadId(rewriter, loc), i32_val(4));
-      Value cnd = or_(icmp_eq(threadIdMod4, i32_val(0)),
-                      icmp_eq(threadIdMod4, i32_val(3)));
-      Value selectorEx0 = select(cnd, i32_val(0x3210), i32_val(0x7654));
-      Value selectorEx1 = select(cnd, i32_val(0x7654), i32_val(0x3210));
-      Value selectorEx4 = select(cnd, i32_val(0x5410), i32_val(0x1054));
-      Value selectorEx5 = select(cnd, i32_val(0x7632), i32_val(0x3276));
-
-      Value isOne = icmp_eq(threadIdMod4, i32_val(1));
-      Value isTwo = icmp_eq(threadIdMod4, i32_val(2));
-      Value isThree = icmp_eq(threadIdMod4, i32_val(3));
-      Value upperIdx = i32_val(0);
-      upperIdx = select(isOne, i32_val(3), upperIdx);
-      upperIdx = select(isTwo, i32_val(1), upperIdx);
-      upperIdx = select(isThree, i32_val(2), upperIdx);
-
-      Value lowerIdx = i32_val(1);
-      lowerIdx = select(isOne, i32_val(2), lowerIdx);
-      lowerIdx = select(isTwo, i32_val(0), lowerIdx);
-      lowerIdx = select(isThree, i32_val(3), lowerIdx);
-
-      Value upper0 =
-          LLVM::NVIDIA::permute(loc, rewriter, upper, lower, selectorEx0);
-      Value lower0 =
-          LLVM::NVIDIA::permute(loc, rewriter, upper, lower, selectorEx1);
-      Value mask = i32_val(0xFFFFFFFF);
-      // Set clamp tp shuffle only within 4 lanes.
-      Value clamp = i32_val(0x1C1F);
-      upper0 =
-          rewriter.create<NVVM::ShflOp>(loc, i32_ty, mask, upper0, upperIdx,
-                                        clamp, NVVM::ShflKind::idx, UnitAttr());
-      lower0 =
-          rewriter.create<NVVM::ShflOp>(loc, i32_ty, mask, lower0, lowerIdx,
-                                        clamp, NVVM::ShflKind::idx, UnitAttr());
-      Value upper1 =
-          LLVM::NVIDIA::permute(loc, rewriter, upper0, lower0, selectorEx4);
-      Value vecVal = bitcast(upper1, vec_ty(i8_ty, 4));
-      for (int i = 0; i < 4; i++) {
         retVals.push_back(extract_element(i8_ty, vecVal, i32_val(i)));
       }
-      Value lower1 =
-          LLVM::NVIDIA::permute(loc, rewriter, upper0, lower0, selectorEx5);
-      vecVal = bitcast(lower1, vec_ty(i8_ty, 4));
-      for (int i = 0; i < 4; i++) {
+      vecVal = bitcast(lower, vec_ty(i8_ty, 4));
+      for (int j = 0; j < 4; j++) {
         retVals.push_back(extract_element(i8_ty, vecVal, i32_val(i)));
       }
     }
@@ -663,11 +697,132 @@ private:
     rewriter.replaceOp(op, result);
   }
 
+  void convert8BitsMMAV2To8BitsDotOperand(
+      triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    auto dstTy = op.getType();
+    auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    SmallVector<Value> retVals;
+    assert(vals.size() % 16 == 0 && "Unsupported MMA output size");
+    unsigned srcBits = vals[0].getType().getIntOrFloatBitWidth();
+    assert(srcBits == 8 && "Unsupported src element size");
+    for (int i = 0; i < vals.size(); i += 8) {
+      Value upper = pack4xB8ToI32(loc, vals, i, rewriter);
+      Value lower = pack4xB8ToI32(loc, vals, i + 4, rewriter);
+
+      shuffle8BitsMMAToDotOperand(loc, upper, lower, 8, rewriter);
+
+      if (i % 16 != 0) {
+        std::swap(retVals.back(), upper);
+      }
+
+      retVals.push_back(upper);
+      retVals.push_back(lower);
+    }
+    Value result =
+        packLLElements(loc, getTypeConverter(), retVals, rewriter, dstTy);
+    rewriter.replaceOp(op, result);
+  }
+
+  void convert8BitsMMAV2To16BitsDotOperand(
+      triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    auto dstTy = op.getType();
+    auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    SmallVector<Value> retVals;
+    assert(vals.size() % 16 == 0 && "Unsupported MMA output size");
+    unsigned srcBits = vals[0].getType().getIntOrFloatBitWidth();
+    assert(srcBits == 16 && "Unsupported src element size");
+    auto s = vals.size();
+    for (int i = 0; i < vals.size(); i += 4) {
+      Value upper;
+      Value lower;
+      if (i % 8 == 0) {
+        upper = pack2xB16ToI32(loc, vals, i, rewriter);
+        lower = pack2xB16ToI32(loc, vals, i + 4, rewriter);
+      } else {
+        upper = pack2xB16ToI32(loc, vals, i - 2, rewriter);
+        lower = pack2xB16ToI32(loc, vals, i + 2, rewriter);
+      }
+
+      shuffle8BitsMMAToDotOperand(loc, upper, lower, 16, rewriter);
+
+      retVals.push_back(upper);
+      retVals.push_back(lower);
+    }
+    Value result =
+        packLLElements(loc, getTypeConverter(), retVals, rewriter, dstTy);
+    rewriter.replaceOp(op, result);
+  }
+
+  void convert16BitsMMAV2To16BitsDotOperand(
+      triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getType();
+    // get source values
+    auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    unsigned elems = getTotalElemsPerThread(srcTy);
+    Type elemTy =
+        this->getTypeConverter()->convertType(srcTy.getElementType());
+    // for the destination type, we need to pack values together
+    // so they can be consumed by tensor core operations
+    SmallVector<Value> vecVals;
+    SmallVector<Type> types;
+    // For some reasons, LLVM's NVPTX backend inserts unnecessary (?) integer
+    // instructions to pack & unpack sub-word integers. A workaround is to
+    // store the results of ldmatrix in i32
+    auto elemSize = elemTy.getIntOrFloatBitWidth();
+    if (auto intTy = elemTy.dyn_cast<IntegerType>() && elemSize <= 16) {
+      auto fold = 32 / elemSize;
+      for (unsigned i = 0; i < elems; i += fold) {
+        Value val = i32_val(0);
+        for (unsigned j = 0; j < fold; j++) {
+          auto ext =
+              shl(i32_ty, zext(i32_ty, vals[i + j]), i32_val(elemSize * j));
+          val = or_(i32_ty, val, ext);
+        }
+        vecVals.push_back(val);
+      }
+      elems = elems / (32 / elemSize);
+      types = SmallVector<Type>(elems, i32_ty);
+    } else {
+      unsigned vecSize = std::max<unsigned>(32 / elemSize, 1);
+      Type vecTy = vec_ty(elemTy, vecSize);
+      types = SmallVector<Type>(elems / vecSize, vecTy);
+      for (unsigned i = 0; i < elems; i += vecSize) {
+        Value packed = rewriter.create<LLVM::UndefOp>(loc, vecTy);
+        for (unsigned j = 0; j < vecSize; j++)
+          packed = insert_element(vecTy, packed, vals[i + j], i32_val(j));
+        vecVals.push_back(packed);
+      }
+    }
+
+    // This needs to be ordered the same way that
+    // ldmatrix.x4 would order it
+    // TODO: this needs to be refactor so we don't
+    // implicitly depends on how emitOffsetsForMMAV2
+    // is implemented
+    SmallVector<Value> reorderedVals;
+    for (unsigned i = 0; i < vecVals.size(); i += 4) {
+      reorderedVals.push_back(bitcast(vecVals[i], i32_ty));
+      reorderedVals.push_back(bitcast(vecVals[i + 2], i32_ty));
+      reorderedVals.push_back(bitcast(vecVals[i + 1], i32_ty));
+      reorderedVals.push_back(bitcast(vecVals[i + 3], i32_ty));
+    }
+
+    Value view = packLLElements(loc, getTypeConverter(), reorderedVals,
+                                rewriter, dstTy);
+    rewriter.replaceOp(op, view);
+  }
+
   // mma -> dot_operand
   LogicalResult
   lowerMmaToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
-    auto loc = op.getLoc();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
     if (matchMmaV3AndDotOperandLayout(srcTy, dstTy)) {
@@ -682,60 +837,15 @@ private:
     }
 
     if (isMmaToDotShortcut(srcTy, dstTy)) {
-      // get source values
-      auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-      unsigned elems = getTotalElemsPerThread(srcTy);
-      Type elemTy =
-          this->getTypeConverter()->convertType(srcTy.getElementType());
-      // for the destination type, we need to pack values together
-      // so they can be consumed by tensor core operations
-      SmallVector<Value> vecVals;
-      SmallVector<Type> types;
-      // For some reasons, LLVM's NVPTX backend inserts unnecessary (?) integer
-      // instructions to pack & unpack sub-word integers. A workaround is to
-      // store the results of ldmatrix in i32
-      auto elemSize = elemTy.getIntOrFloatBitWidth();
-      if (auto intTy = elemTy.dyn_cast<IntegerType>() && elemSize <= 16) {
-        auto fold = 32 / elemSize;
-        for (unsigned i = 0; i < elems; i += fold) {
-          Value val = i32_val(0);
-          for (unsigned j = 0; j < fold; j++) {
-            auto ext =
-                shl(i32_ty, zext(i32_ty, vals[i + j]), i32_val(elemSize * j));
-            val = or_(i32_ty, val, ext);
-          }
-          vecVals.push_back(val);
-        }
-        elems = elems / (32 / elemSize);
-        types = SmallVector<Type>(elems, i32_ty);
-      } else {
-        unsigned vecSize = std::max<unsigned>(32 / elemSize, 1);
-        Type vecTy = vec_ty(elemTy, vecSize);
-        types = SmallVector<Type>(elems / vecSize, vecTy);
-        for (unsigned i = 0; i < elems; i += vecSize) {
-          Value packed = rewriter.create<LLVM::UndefOp>(loc, vecTy);
-          for (unsigned j = 0; j < vecSize; j++)
-            packed = insert_element(vecTy, packed, vals[i + j], i32_val(j));
-          vecVals.push_back(packed);
-        }
+      if (srcTy.getElementType().getIntOrFloatBitWidth() == 8) {
+        convert8BitsMMAV2To8BitsDotOperand(op, adaptor, rewriter);
+        return success();
       }
 
-      // This needs to be ordered the same way that
-      // ldmatrix.x4 would order it
-      // TODO: this needs to be refactor so we don't
-      // implicitly depends on how emitOffsetsForMMAV2
-      // is implemented
-      SmallVector<Value> reorderedVals;
-      for (unsigned i = 0; i < vecVals.size(); i += 4) {
-        reorderedVals.push_back(bitcast(vecVals[i], i32_ty));
-        reorderedVals.push_back(bitcast(vecVals[i + 2], i32_ty));
-        reorderedVals.push_back(bitcast(vecVals[i + 1], i32_ty));
-        reorderedVals.push_back(bitcast(vecVals[i + 3], i32_ty));
-      }
+      // TODO: detect and call convert8BitsMMAV2To16BitsDotOperand
+      //  if src is result of 8 bit MMA cast to 16 bit
 
-      Value view = packLLElements(loc, getTypeConverter(), reorderedVals,
-                                  rewriter, dstTy);
-      rewriter.replaceOp(op, view);
+      convert16BitsMMAV2To16BitsDotOperand(op, adaptor, rewriter);
       return success();
     }
     return failure();
