@@ -170,6 +170,11 @@ public:
                     ConvertLayoutOp convertOp);
 
 private:
+  void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
+  // Existing tuples of (value, layout) that needs to be updated when recreating
+  // scf ops. This prevents keeping track of Values that have been delete when
+  // rewriting slices.
+  DenseMap<Value, Attribute> mappedValues;
   // map of the values remat based on encoding.
   DenseMap<std::pair<Value, Attribute>, Value> rematMapping;
   // DenseMap<std::pair<Operation*, Attribute>, Operation*>
@@ -181,6 +186,7 @@ void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
                                             Value newV) {
   LDBG("addRematValue " << old << " encoding " << encoding << " " << newV);
   rematMapping[{old, encoding}] = newV;
+  mappedValues[old] = encoding;
 }
 
 // Remove unneeded values now that we are done with the rematMapping.
@@ -796,6 +802,31 @@ bool canBeRemat(Operation *op) {
   return true;
 }
 
+void LayoutRematerialization::updateRematMapping(
+    SmallVector<std::tuple<Value, Value>> &values) {
+  for (auto [old, newV] : values) {
+    auto it = mappedValues.find(old);
+    if (it != mappedValues.end()) {
+      Attribute encoding = it->second;
+      auto rematIt = rematMapping.find({old, it->second});
+      assert(rematIt != rematMapping.end());
+      Value replacedValue = rematIt->second;
+      rematMapping.erase(rematIt);
+      mappedValues.erase(it);
+      // Loop through the replacement value to find the new version of remat
+      // value. This should be okay as the number of values should be small.
+      for (auto [before, after] : values) {
+        if (before == replacedValue) {
+          replacedValue = after;
+          break;
+        }
+      }
+      rematMapping[{newV, encoding}] = replacedValue;
+      mappedValues[newV] = encoding;
+    }
+  }
+}
+
 void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
                                            DenseMap<Value, Attribute> &layout,
                                            ConvertLayoutOp convertOp,
@@ -886,7 +917,8 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
         if (slice.count(res)) {
           // Why can't we use res instead of ifOp.getResult(oldIdx)?
           mapping.map(ifOp.getResult(oldIdx), newIfOp.getResult(newIdx));
-          addRematValue(res, layout[res], newIfOp.getResult(newIdx));
+          addRematValue(ifOp.getResult(oldIdx), layout[res],
+                        newIfOp.getResult(newIdx));
           ++newIdx;
         }
         ++oldIdx;
@@ -935,6 +967,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
   convertOp.replaceAllUsesWith(mapping.lookup(convertOp.getSrc()));
   opToDelete.insert(convertOp);
 
+  updateRematMapping(replacements);
   for (auto &kv : replacements) {
     builder.replaceAllUsesWith(std::get<0>(kv), std::get<1>(kv));
   }
