@@ -135,6 +135,7 @@ jobs:
           python3 -m pytest -vs hopper/test_flashattention.py
 
       - name: Run interpreter tests
+        if: ${{matrix.runner[0] == 'self-hosted' && matrix.runner[1] == 'H100'}}
         env:
           TRITON_INTERPRET: "1"
         run: |
