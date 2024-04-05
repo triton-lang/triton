@@ -35,7 +35,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       %30 = tt.expand_dims %29 {axis = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
       %31 = tt.broadcast %30 : tensor<1x128xi32, #blocked> -> tensor<32x128xi32, #blocked>
       %32 = tt.addptr %18, %31 : tensor<32x128x!tt.ptr<f32, 1>, #blocked>, tensor<32x128xi32, #blocked>
-      %33 = tt.load %32 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128xf32, #blocked>
+      %33 = tt.load %32 : tensor<32x128x!tt.ptr<f32, 1>, #blocked>
       %34 = "tt.reduce"(%33) <{axis = 1 : i32}> ({
       ^bb0(%arg5: f32, %arg6: f32):
         %36 = arith.addf %arg5, %arg6 : f32
@@ -45,7 +45,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       scf.yield %35 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
     }
     %26 = triton_gpu.convert_layout %19 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>> -> tensor<32xf32, #blocked1>
-    tt.store %25, %26 {cache = 1 : i32, evict = 1 : i32} : tensor<32xf32, #blocked1>
+    tt.store %25, %26 : tensor<32x!tt.ptr<f32, 1>, #blocked1>
     tt.return
   }
 }
@@ -88,7 +88,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       %30 = tt.expand_dims %29 {axis = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
       %31 = tt.broadcast %30 : tensor<1x128xi32, #blocked> -> tensor<32x128xi32, #blocked>
       %32 = tt.addptr %18, %31 : tensor<32x128x!tt.ptr<f32, 1>, #blocked>, tensor<32x128xi32, #blocked>
-      %33 = tt.load %32 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128xf32, #blocked>
+      %33 = tt.load %32 : tensor<32x128x!tt.ptr<f32, 1>, #blocked>
       %34 = "tt.reduce"(%33) <{axis = 1 : i32}> ({
       ^bb0(%arg5: f32, %arg6: f32):
         %36 = arith.addf %arg5, %arg6 : f32
@@ -98,7 +98,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       scf.yield %35 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
     }
     %26 = triton_gpu.convert_layout %19 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>> -> tensor<32xf32, #blocked1>
-    tt.store %25, %26 {cache = 1 : i32, evict = 1 : i32} : tensor<32xf32, #blocked1>
+    tt.store %25, %26 : tensor<32x!tt.ptr<f32, 1>, #blocked1>
     tt.return
   }
 }
@@ -137,7 +137,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       %30 = tt.expand_dims %29 {axis = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #slice2d}>> -> tensor<1x128xi32, #slice2d>
       %31 = tt.broadcast %30 : tensor<1x128xi32, #slice2d> -> tensor<32x128xi32, #slice2d>
       %32 = tt.addptr %18, %31 : tensor<32x128x!tt.ptr<f32, 1>, #slice2d>, tensor<32x128xi32, #slice2d>
-      %33 = tt.load %32 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128xf32, #slice2d>
+      %33 = tt.load %32 : tensor<32x128x!tt.ptr<f32, 1>, #slice2d>
       %34 = "tt.reduce"(%33) <{axis = 1 : i32}> ({
       ^bb0(%arg5: f32, %arg6: f32):
         %36 = arith.addf %arg5, %arg6 : f32
@@ -147,7 +147,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       scf.yield %35 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #slice2d}>>
     }
     %26 = triton_gpu.convert_layout %19 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #slice2d}>> -> tensor<32xf32, #blocked1>
-    tt.store %25, %26 {cache = 1 : i32, evict = 1 : i32} : tensor<32xf32, #blocked1>
+    tt.store %25, %26 : tensor<32x!tt.ptr<f32, 1>, #blocked1>
     tt.return
   }
 }
@@ -186,7 +186,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       %30 = tt.expand_dims %29 {axis = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #mma}>> -> tensor<1x128xi32, #mma>
       %31 = tt.broadcast %30 : tensor<1x128xi32, #mma> -> tensor<32x128xi32, #mma>
       %32 = tt.addptr %18, %31 : tensor<32x128x!tt.ptr<f32, 1>, #mma>, tensor<32x128xi32, #mma>
-      %33 = tt.load %32 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128xf32, #mma>
+      %33 = tt.load %32 : tensor<32x128x!tt.ptr<f32, 1>, #mma>
       %34 = "tt.reduce"(%33) <{axis = 1 : i32}> ({
       ^bb0(%arg5: f32, %arg6: f32):
         %36 = arith.addf %arg5, %arg6 : f32
@@ -196,7 +196,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       scf.yield %35 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>
     }
     %26 = triton_gpu.convert_layout %19 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>> -> tensor<32xf32, #blocked1>
-    tt.store %25, %26 {cache = 1 : i32, evict = 1 : i32} : tensor<32xf32, #blocked1>
+    tt.store %25, %26 : tensor<32x!tt.ptr<f32, 1>, #blocked1>
     tt.return
   }
 }
@@ -239,7 +239,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       %30 = tt.expand_dims %29 {axis = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
       %31 = tt.broadcast %30 : tensor<1x128xi32, #blocked> -> tensor<32x128xi32, #blocked>
       %32 = tt.addptr %18, %31 : tensor<32x128x!tt.ptr<f32, 1>, #blocked>, tensor<32x128xi32, #blocked>
-      %33 = tt.load %32 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128xf32, #blocked>
+      %33 = tt.load %32 : tensor<32x128x!tt.ptr<f32, 1>, #blocked>
       %34 = "tt.reduce"(%33) <{axis = 1 : i32}> ({
       ^bb0(%arg5: f32, %arg6: f32):
         %36 = arith.maximumf %arg5, %arg6 : f32
@@ -249,7 +249,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       scf.yield %35 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
     }
     %26 = triton_gpu.convert_layout %19 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>> -> tensor<32xf32, #blocked1>
-    tt.store %25, %26 {cache = 1 : i32, evict = 1 : i32} : tensor<32xf32, #blocked1>
+    tt.store %25, %26 : tensor<32x!tt.ptr<f32, 1>, #blocked1>
     tt.return
   }
 }
@@ -293,7 +293,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       %30 = tt.expand_dims %29 {axis = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
       %31 = tt.broadcast %30 : tensor<1x128xi32, #blocked> -> tensor<32x128xi32, #blocked>
       %32 = tt.addptr %18, %31 : tensor<32x128x!tt.ptr<f32, 1>, #blocked>, tensor<32x128xi32, #blocked>
-      %33 = tt.load %32 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128xf32, #blocked>
+      %33 = tt.load %32 : tensor<32x128x!tt.ptr<f32, 1>, #blocked>
       %34 = "tt.reduce"(%33) <{axis = 1 : i32}> ({
       ^bb0(%arg5: f32, %arg6: f32):
         %36 = arith.maximumf %arg5, %arg6 : f32
@@ -303,7 +303,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       scf.yield %35 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
     }
     %26 = triton_gpu.convert_layout %19 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>> -> tensor<32xf32, #blocked1>
-    tt.store %25, %26 {cache = 1 : i32, evict = 1 : i32} : tensor<32xf32, #blocked1>
+    tt.store %25, %26 : tensor<32x!tt.ptr<f32, 1>, #blocked1>
     tt.return
   }
 }
@@ -346,7 +346,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       %30 = tt.expand_dims %29 {axis = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
       %31 = tt.broadcast %30 : tensor<1x128xi32, #blocked> -> tensor<32x128xi32, #blocked>
       %32 = tt.addptr %18, %31 : tensor<32x128x!tt.ptr<f32, 1>, #blocked>, tensor<32x128xi32, #blocked>
-      %33 = tt.load %32 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128xf32, #blocked>
+      %33 = tt.load %32 : tensor<32x128x!tt.ptr<f32, 1>, #blocked>
       %34 = "tt.reduce"(%33) <{axis = 1 : i32}> ({
       ^bb0(%arg5: f32, %arg6: f32):
         %36 = arith.minimumf %arg5, %arg6 : f32
@@ -356,7 +356,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       scf.yield %35 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
     }
     %26 = triton_gpu.convert_layout %19 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>> -> tensor<32xf32, #blocked1>
-    tt.store %25, %26 {cache = 1 : i32, evict = 1 : i32} : tensor<32xf32, #blocked1>
+    tt.store %25, %26 : tensor<32x!tt.ptr<f32, 1>, #blocked1>
     tt.return
   }
 }
@@ -400,7 +400,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       %30 = tt.expand_dims %29 {axis = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
       %31 = tt.broadcast %30 : tensor<1x128xi32, #blocked> -> tensor<32x128xi32, #blocked>
       %32 = tt.addptr %18, %31 : tensor<32x128x!tt.ptr<f32, 1>, #blocked>, tensor<32x128xi32, #blocked>
-      %33 = tt.load %32 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128xf32, #blocked>
+      %33 = tt.load %32 : tensor<32x128x!tt.ptr<f32, 1>, #blocked>
       %34 = "tt.reduce"(%33) <{axis = 1 : i32}> ({
       ^bb0(%arg5: f32, %arg6: f32):
         %36 = arith.minimumf %arg5, %arg6 : f32
@@ -410,7 +410,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       scf.yield %35 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
     }
     %26 = triton_gpu.convert_layout %19 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>> -> tensor<32xf32, #blocked1>
-    tt.store %25, %26 {cache = 1 : i32, evict = 1 : i32} : tensor<32xf32, #blocked1>
+    tt.store %25, %26 : tensor<32x!tt.ptr<f32, 1>, #blocked1>
     tt.return
   }
 }
@@ -453,7 +453,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       %30 = tt.expand_dims %29 {axis = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
       %31 = tt.broadcast %30 : tensor<1x128xi32, #blocked> -> tensor<32x128xi32, #blocked>
       %32 = tt.addptr %18, %31 : tensor<32x128x!tt.ptr<f32, 1>, #blocked>, tensor<32x128xi32, #blocked>
-      %33 = tt.load %32 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128xf32, #blocked>
+      %33 = tt.load %32 : tensor<32x128x!tt.ptr<f32, 1>, #blocked>
       %34 = "tt.reduce"(%33) <{axis = 1 : i32}> ({
       ^bb0(%arg5: f32, %arg6: f32):
         %36 = arith.mulf %arg5, %arg6 : f32
@@ -463,7 +463,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       scf.yield %35 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
     }
     %26 = triton_gpu.convert_layout %19 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>> -> tensor<32xf32, #blocked1>
-    tt.store %25, %26 {cache = 1 : i32, evict = 1 : i32} : tensor<32xf32, #blocked1>
+    tt.store %25, %26 : tensor<32x!tt.ptr<f32, 1>, #blocked1>
     tt.return
   }
 }
@@ -507,7 +507,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       %30 = tt.expand_dims %29 {axis = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
       %31 = tt.broadcast %30 : tensor<1x128xi32, #blocked> -> tensor<32x128xi32, #blocked>
       %32 = tt.addptr %18, %31 : tensor<32x128x!tt.ptr<f32, 1>, #blocked>, tensor<32x128xi32, #blocked>
-      %33 = tt.load %32 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128xf32, #blocked>
+      %33 = tt.load %32 : tensor<32x128x!tt.ptr<f32, 1>, #blocked>
       %34 = "tt.reduce"(%33) <{axis = 1 : i32}> ({
       ^bb0(%arg5: f32, %arg6: f32):
         %36 = arith.mulf %arg5, %arg6 : f32
@@ -517,7 +517,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       scf.yield %35 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
     }
     %26 = triton_gpu.convert_layout %19 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>> -> tensor<32xf32, #blocked1>
-    tt.store %25, %26 {cache = 1 : i32, evict = 1 : i32} : tensor<32xf32, #blocked1>
+    tt.store %25, %26 : tensor<32x!tt.ptr<f32, 1>, #blocked1>
     tt.return
   }
 }
@@ -557,7 +557,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       %30 = tt.expand_dims %29 {axis = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
       %31 = tt.broadcast %30 : tensor<1x128xi32, #blocked> -> tensor<32x128xi32, #blocked>
       %32 = tt.addptr %18, %31 : tensor<32x128x!tt.ptr<f32, 1>, #blocked>, tensor<32x128xi32, #blocked>
-      %33 = tt.load %32 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128xf32, #blocked>
+      %33 = tt.load %32 : tensor<32x128x!tt.ptr<f32, 1>, #blocked>
       %333 = arith.mulf %33, %33: tensor<32x128xf32, #blocked>
       %34 = "tt.reduce"(%333) <{axis = 1 : i32}> ({
       ^bb0(%arg5: f32, %arg6: f32):
@@ -568,7 +568,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
       scf.yield %35 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
     }
     %26 = triton_gpu.convert_layout %19 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>> -> tensor<32xf32, #blocked1>
-    tt.store %25, %26 {cache = 1 : i32, evict = 1 : i32} : tensor<32xf32, #blocked1>
+    tt.store %25, %26 : tensor<32x!tt.ptr<f32, 1>, #blocked1>
     tt.return
   }
 }

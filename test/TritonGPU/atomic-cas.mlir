@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu 2>&1 | FileCheck %s --check-prefix=GPU
 // RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu -convert-triton-gpu-to-llvm 2>&1 | FileCheck %s --check-prefix=LLVM
 
-// GPU: %9 = "tt.atomic_cas"(%8, %cst_0, %cst) <{scope = 2 : i32, sem = 4 : i32}> : (tensor<2x!tt.ptr<i64, 1>, #blocked>, tensor<2xi64, #blocked>, tensor<2xi64, #blocked>) -> tensor<2xi64, #blocked>
+// GPU: %9 = tt.atomic_cas acq_rel, cta, %8, %cst_0, %cst : (tensor<2x!tt.ptr<i64, 1>, #blocked>, tensor<2xi64, #blocked>, tensor<2xi64, #blocked>) -> tensor<2xi64, #blocked>
 // LLVM: llvm.inline_asm {{.*}} "mov.u64 $0, 0x0;\0A\09@$4 atom.global.acq_rel.cta.cas.b64 $0, [ $1 + 0 ], $2, $3;", "=l,l,l,l,b"
 
 module {
@@ -18,10 +18,10 @@ module {
     %6 = arith.cmpi slt, %4, %5 : tensor<2xi32>
     %7 = tt.splat %arg0 : !tt.ptr<i64, 1> -> tensor<2x!tt.ptr<i64, 1>>
     %8 = tt.addptr %7, %4 : tensor<2x!tt.ptr<i64, 1>>, tensor<2xi32>
-    %9 = "tt.atomic_cas"(%8, %cst_0, %cst) <{sem = 4 : i32, scope = 2 : i32}> : (tensor<2x!tt.ptr<i64, 1>>, tensor<2xi64>, tensor<2xi64>) -> tensor<2xi64>
+    %9 = tt.atomic_cas acq_rel, cta, %8, %cst_0, %cst : (tensor<2x!tt.ptr<i64, 1>>, tensor<2xi64>, tensor<2xi64>) -> tensor<2xi64>
     %10 = tt.splat %arg1 : !tt.ptr<i64, 1> -> tensor<2x!tt.ptr<i64, 1>>
     %11 = tt.addptr %10, %4 : tensor<2x!tt.ptr<i64, 1>>, tensor<2xi32>
-    tt.store %11, %9, %6 {cache = 1 : i32, evict = 1 : i32} : tensor<2xi64>
+    tt.store %11, %9, %6 : tensor<2x!tt.ptr<i64, 1>>
     tt.return
   }
 }

@@ -25,10 +25,10 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     %7 = arith.divsi %4, %cst : tensor<1024xi32, #blocked>
     %8 = tt.splat %arg0 : !tt.ptr<f16, 1> -> tensor<1024x!tt.ptr<f16, 1>, #blocked>
     %9 = tt.addptr %8, %7 : tensor<1024x!tt.ptr<f16, 1>, #blocked>, tensor<1024xi32, #blocked>
-    %10 = tt.load %9, %6 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<1024xf16, #blocked>
+    %10 = tt.load %9, %6 : tensor<1024x!tt.ptr<f16, 1>, #blocked>
     %11 = tt.splat %arg1 : !tt.ptr<f16, 1> -> tensor<1024x!tt.ptr<f16, 1>, #blocked>
     %12 = tt.addptr %11, %4 : tensor<1024x!tt.ptr<f16, 1>, #blocked>, tensor<1024xi32, #blocked>
-    tt.store %12, %10, %6 {cache = 1 : i32, evict = 1 : i32} : tensor<1024xf16, #blocked>
+    tt.store %12, %10, %6 : tensor<1024x!tt.ptr<f16, 1>, #blocked>
     tt.return
   }
 }
@@ -63,10 +63,10 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     %7 = arith.divsi %4, %cst : tensor<1024xi32, #blocked>
     %8 = tt.splat %arg0 : !tt.ptr<f16, 1> -> tensor<1024x!tt.ptr<f16, 1>, #blocked>
     %9 = tt.addptr %8, %7 : tensor<1024x!tt.ptr<f16, 1>, #blocked>, tensor<1024xi32, #blocked>
-    %10 = tt.load %9, %6 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<1024xf16, #blocked>
+    %10 = tt.load %9, %6 : tensor<1024x!tt.ptr<f16, 1>, #blocked>
     %11 = tt.splat %arg1 : !tt.ptr<f16, 1> -> tensor<1024x!tt.ptr<f16, 1>, #blocked>
     %12 = tt.addptr %11, %4 : tensor<1024x!tt.ptr<f16, 1>, #blocked>, tensor<1024xi32, #blocked>
-    tt.store %12, %10, %6 {cache = 1 : i32, evict = 1 : i32} : tensor<1024xf16, #blocked>
+    tt.store %12, %10, %6 : tensor<1024x!tt.ptr<f16, 1>, #blocked>
     tt.return
   }
 }

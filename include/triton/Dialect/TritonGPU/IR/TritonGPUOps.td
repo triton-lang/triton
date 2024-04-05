@@ -96,15 +96,16 @@ def TTG_AsyncBulkCommitGroupOp : TTG_Op<"async_bulk_commit_group"> {
   }];
 }
 
-def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local",
-                                    [AttrSizedOperandSegments,
-                                     MemoryEffects<[MemRead<GlobalMemory>, MemWrite<SharedMemory>]>,
-                                     TypesMatchWith<"infer mask type from src type",
-                                                    "src", "mask", "getI1SameShape($_self)",
-                                                    "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
-                                     TypesMatchWith<"infer other type from src type",
-                                                    "src", "other", "getPointeeType($_self)",
-                                                    "($_op.getOperands().size() <= 4) || std::equal_to<>()">]> {
+def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
+  AttrSizedOperandSegments,
+  MemoryEffects<[MemRead<GlobalMemory>, MemWrite<SharedMemory>]>,
+  TypesMatchWith<"infer mask type from src type",
+                 "src", "mask", "getI1SameShape($_self)",
+                 "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
+  TypesMatchWith<"infer other type from src type",
+                 "src", "other", "getPointeeType($_self)",
+                 "($_op.getOperands().size() <= 4) || std::equal_to<>()">
+]> {
   let summary = "copy data from global memory to local memory asynchronously";
 
   let description = [{
@@ -114,10 +115,15 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local",
     operands are the same as tt.load.
   }];
 
-  let arguments = (ins TT_PtrTensor:$src, TT_MemDescType:$dst,
-                       Optional<I1Tensor>:$mask, Optional<TT_Type>:$other,
-                       TT_CacheModifierAttr:$cache, TT_EvictionPolicyAttr:$evict,
-                       BoolAttr:$isVolatile);
+  let arguments = (
+    ins TT_PtrTensor:$src,
+    TT_MemDescType:$dst,
+    Optional<I1Tensor>:$mask,
+    Optional<TT_Type>:$other,
+    DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
+    DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
+    DefaultValuedAttr<BoolAttr, "false">:$isVolatile
+  );
 
   let builders = [
       OpBuilder<(ins "Value":$src, "Value":$dst,
@@ -126,12 +132,6 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local",
   ];
 
   let results = (outs TTG_AsyncToken:$token);
-
-  //let assemblyFormat = [{
-  //  $src `,` $dst ``
-  //  $index, $mask, $other
-  //  attr-dict `:` type($src) `->` type($dst)
-  //}];
 
   let extraClassDeclaration = [{
     static DenseSet<unsigned> getEligibleLoadByteWidth(int computeCapability) {
@@ -143,8 +143,16 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local",
     }
   }];
 
+  // Specify cacheModifier and evictionPolicy explicitly, instead of leaving
+  // them in attr-dict, because this way their values get printed as strings,
+  // rather than as opaque integers.
+  //
+  // Note there are no commas between other, cacheModifier, and evictionPolicy,
+  // due to limitations in MLIR's asm parser.
   let assemblyFormat = [{
-    $src `,` $dst (`mask` $mask^)? (`other` $other^)? attr-dict `:` type($src) `->` type($dst)
+    $src `,` $dst (`mask` $mask^)? (`other` $other^)?
+    oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
+    attr-dict `:` type($src) `->` type($dst)
   }];
 }
 

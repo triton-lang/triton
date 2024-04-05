@@ -56,7 +56,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %31 = tt.broadcast %28 : tensor<128x1x!tt.ptr<f16, 1>, #blocked> -> tensor<128x128x!tt.ptr<f16, 1>, #blocked>
     %32 = tt.broadcast %30 : tensor<1x128xi32, #blocked> -> tensor<128x128xi32, #blocked>
     %33 = tt.addptr %31, %32 : tensor<128x128x!tt.ptr<f16, 1>, #blocked>, tensor<128x128xi32, #blocked>
-    %34 = tt.load %33 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x128xf16, #blocked>
+    %34 = tt.load %33 : tensor<128x128x!tt.ptr<f16, 1>, #blocked>
     %35 = tt.splat %21 : f32 -> tensor<128x128xf32, #blocked>
     %36 = arith.extf %34 : tensor<128x128xf16, #blocked> to tensor<128x128xf32, #blocked>
     %37 = arith.mulf %36, %35 : tensor<128x128xf32, #blocked>
@@ -85,7 +85,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
       %87 = arith.muli %85, %86 : tensor<128x64xi64, #blocked2>
       %88 = tt.broadcast %87 : tensor<128x64xi64, #blocked2> -> tensor<128x64xi64, #blocked2>
       %89 = tt.addptr %79, %88 : tensor<128x64x!tt.ptr<f16, 1>, #blocked2>, tensor<128x64xi64, #blocked2>
-      %90 = tt.load %89 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x64xf16, #blocked2>
+      %90 = tt.load %89 : tensor<128x64x!tt.ptr<f16, 1>, #blocked2>
       %91 = tt.splat %arg2 : !tt.ptr<f16, 1> -> tensor<64x128x!tt.ptr<f16, 1>, #blocked>
       %92 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
       %93 = arith.extsi %92 : tensor<64xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>> to tensor<64xi64, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
@@ -107,10 +107,10 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
       %109 = arith.muli %107, %108 : tensor<64x128xi64, #blocked>
       %110 = tt.broadcast %109 : tensor<64x128xi64, #blocked> -> tensor<64x128xi64, #blocked>
       %111 = tt.addptr %101, %110 : tensor<64x128x!tt.ptr<f16, 1>, #blocked>, tensor<64x128xi64, #blocked>
-      %112 = tt.load %111 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64x128xf16, #blocked>
+      %112 = tt.load %111 : tensor<64x128x!tt.ptr<f16, 1>, #blocked>
       %113 = triton_gpu.local_alloc %38 : (tensor<128x128xf16, #blocked>) -> !tt.memdesc<128x128xf16, #shared>
       %114 = triton_gpu.local_alloc %90 : (tensor<128x64xf16, #blocked2>) -> !tt.memdesc<128x64xf16, #shared1>
-      %115 = tt.dot %113, %114, %cst {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} :!tt.memdesc<128x128xf16, #shared> * !tt.memdesc<128x64xf16, #shared1> -> tensor<128x64xf32, #mma>
+      %115 = tt.dot %113, %114, %cst :!tt.memdesc<128x128xf16, #shared> * !tt.memdesc<128x64xf16, #shared1> -> tensor<128x64xf32, #mma>
       %116 = arith.truncf %115 : tensor<128x64xf32, #mma> to tensor<128x64xf16, #mma>
       %117 = triton_gpu.local_alloc %112 : (tensor<64x128xf16, #blocked>) -> !tt.memdesc<64x128xf16, #shared>
       %118 = triton_gpu.convert_layout %116 : tensor<128x64xf16, #mma> -> tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>>
@@ -121,7 +121,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
       // CHECK: triton_nvidia_gpu.dot_async
       // CHECK-NOT: triton_nvidia_gpu.dot_wait
       // CHECK: scf.yield
-      %119 = tt.dot %118, %117, %arg23 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} : tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>> * !tt.memdesc<64x128xf16, #shared> -> tensor<128x128xf32, #mma1>
+      %119 = tt.dot %118, %117, %arg23 : tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>> * !tt.memdesc<64x128xf16, #shared> -> tensor<128x128xf32, #mma1>
       %120 = arith.mulf %arg24, %arg25 : tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>
       %121 = arith.addf %120, %arg25 : tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>
       %122 = arith.extsi %c0_i32 : i32 to i64
@@ -161,7 +161,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %66 = arith.muli %64, %65 : tensor<128x128xi64, #blocked>
     %67 = tt.broadcast %66 : tensor<128x128xi64, #blocked> -> tensor<128x128xi64, #blocked>
     %68 = tt.addptr %58, %67 : tensor<128x128x!tt.ptr<f16, 1>, #blocked>, tensor<128x128xi64, #blocked>
-    tt.store %68, %47 {cache = 1 : i32, evict = 1 : i32} : tensor<128x128xf16, #blocked>
+    tt.store %68, %47 : tensor<128x128x!tt.ptr<f16, 1>, #blocked>
     tt.return
   }
 }
