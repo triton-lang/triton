@@ -332,6 +332,12 @@ bool TargetInfo::processReplicaUsingStMatrix(
   return false;
 }
 
+std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
+  std::string funcName =
+      resultElementTy.isInteger(32) ? "__nv_umulhi" : "__nv_umul64hi";
+  return funcName;
+}
+
 void TargetInfo::printf(ConversionPatternRewriter &rewriter,
                         Value formatStrStart, int /*formatStrByteCount*/,
                         ValueRange args) const {
