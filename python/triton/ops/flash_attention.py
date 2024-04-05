@@ -375,11 +375,6 @@ class _attention(torch.autograd.Function):
             raise RuntimeError("Flash attention currently only supported for compute capability >= 80")
         BLOCK_M = 128
         BLOCK_N = 64
-
-        if is_hip():
-            # Some accuracy issues observed on hip with BLOCK_M = 128.
-            BLOCK_M = 64
-
         # shape constraints
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
         assert Lq == Lk and Lk == Lv

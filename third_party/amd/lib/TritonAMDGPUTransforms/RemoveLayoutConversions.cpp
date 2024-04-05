@@ -204,10 +204,12 @@ static bool hasConvertToAmdMmaTransisitiveUse(Operation *op,
     getForwardSlice(currentValue, &forwardSlice);
     for (Operation *op : forwardSlice) {
       if (auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-        if (convertOp.getResult()
-                .getType()
-                .cast<RankedTensorType>()
-                .getEncoding() == encoding)
+        Attribute dstEncoding = convertOp.getResult()
+                                    .getType()
+                                    .cast<RankedTensorType>()
+                                    .getEncoding();
+        if (dstEncoding.isa<triton::gpu::AMDMfmaEncodingAttr,
+                            triton::gpu::AMDWmmaEncodingAttr>())
           return true;
       }
       auto yield = dyn_cast<scf::YieldOp>(op);
