@@ -54,6 +54,7 @@ jobs:
           submodules: "true"
 
       - name: Compute build dependency cache keys
+        if: false
         id: cache-key
         run: |
           echo "llvm=$(cat cmake/llvm-hash.txt | cut -c 1-8)" >> $GITHUB_OUTPUT
@@ -62,6 +63,8 @@ jobs:
         shell: bash
 
       - name: Cache build dependency
+        # Caching disabled until we can automatically generate on the main branch
+        if: false
         uses: actions/cache@v4
         with:
           # Note that we cannot use environment variables here given there is
@@ -73,6 +76,7 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}
 
       - name: Inspect cache directory
+        if: false
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
@@ -165,6 +169,7 @@ jobs:
           ctest
 
       - name: Inspect cache directory
+        if: false
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
@@ -334,6 +339,7 @@ jobs:
           submodules: 'true'
 
       - name: Compute build dependency cache keys
+        if: false
         id: cache-key
         run: |
           echo "llvm=$(cat cmake/llvm-hash.txt | cut -c 1-8)" >> $GITHUB_OUTPUT
@@ -348,6 +354,8 @@ jobs:
           rm -rf ~/.triton
 
       - name: Cache build dependency
+        if: false
+        # Caching disabled until we can automatically generate on the main branch
         uses: actions/cache@v4
         with:
           # Note that we cannot use environment variables here given there is
@@ -359,6 +367,7 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}
 
       - name: Inspect cache directory
+        if: false
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
@@ -395,6 +404,7 @@ jobs:
               ./test/unit/language/test_block_pointer.py
 
       - name: Inspect cache directory
+        if: false
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
