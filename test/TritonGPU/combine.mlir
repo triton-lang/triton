@@ -2209,15 +2209,15 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
     // CHECK: arith.constant {{.*}} : tensor<32xf32, #blocked>
     // CHECK: arith.constant {{.*}} : tensor<32xf32, #blocked>
     // CHECK-NOT: triton_gpu.convert_layout
-    // CHECK: %[[for:[0-9]*]]:3 = scf.for {{.*}} -> (tensor<32xf32, #blocked1>, tensor<32xf32, #blocked>, tensor<32xf32, #blocked>)
+    // CHECK: %[[for:[0-9]*]]:2 = scf.for {{.*}} -> (tensor<32xf32, #blocked>, tensor<32xf32, #blocked>)
 
     // CHECK-NOT: triton_gpu.convert_layout
-    // CHECK: scf.if %{{.*}} -> (tensor<32xf32, #blocked1>, tensor<32xf32, #blocked>, tensor<32xf32, #blocked>)
+    // CHECK: scf.if %{{.*}} -> (tensor<32xf32, #blocked>, tensor<32xf32, #blocked>)
     // CHECK-NOT: triton_gpu.convert_layout
-    // CHECK: scf.yield {{.*}} : tensor<32xf32, #blocked1>, tensor<32xf32, #blocked>, tensor<32xf32, #blocked>
-    // CHECK: scf.yield {{.*}} : tensor<32xf32, #blocked1>, tensor<32xf32, #blocked>, tensor<32xf32, #blocked>
-    // TODO: This should be rematerialized as %1#2
-    // CHECK: triton_gpu.convert_layout %[[for]]#0
+    // CHECK: scf.yield {{.*}} : tensor<32xf32, #blocked>, tensor<32xf32, #blocked>
+    // CHECK: scf.yield {{.*}} : tensor<32xf32, #blocked>, tensor<32xf32, #blocked>
+    // CHECK-NOT: triton_gpu.convert_layout
+    // CHECK: tt.return %[[for]]#1, %[[for]]#0
     %cst = arith.constant dense<1.000000e+00> : tensor<32xf32, #blocked1>
     %cst_0 = arith.constant dense<2.000000e+00> : tensor<32xf32, #blocked>
     %c0_i32 = arith.constant 0 : i32

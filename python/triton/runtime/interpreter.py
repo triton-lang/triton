@@ -70,7 +70,7 @@ class InterpreterOptions:
     arch: str = None
     allow_fp8e4nv: bool = False
     default_dot_input_precision: str = "tf32"
-    allowed_dot_input_precisions: Tuple[str] = ("tf32", "3xtf32", "ieee")
+    allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: int = 0
 
 

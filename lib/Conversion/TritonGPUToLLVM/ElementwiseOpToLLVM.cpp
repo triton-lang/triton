@@ -300,6 +300,38 @@ struct CmpFOpConversion
   }
 };
 
+struct MulhiUIOpConversion
+    : public ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion> {
+  using Base = ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+  explicit MulhiUIOpConversion(LLVMTypeConverter &typeConverter,
+                               ModuleAxisInfoAnalysis &axisAnalysisPass,
+                               const TargetInfoBase &targetInfo,
+                               PatternBenefit benefit = 1)
+      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
+        targetInfo(targetInfo) {}
+
+  SmallVector<Value> createDestOps(MulhiUIOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+
+    Type resultElementTy = getElementTypeOrSelf(op.getResult().getType());
+    assert(resultElementTy.isInteger(32) || resultElementTy.isInteger(64));
+
+    auto funcName = targetInfo.getMulhiFuncName(resultElementTy);
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+    return {
+        rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
+  }
+
+protected:
+  const TargetInfoBase &targetInfo;
+};
+
 struct ExternElementwiseOpConversion
     : public ElementwiseOpConversionBase<ExternElementwiseOp,
                                          ExternElementwiseOpConversion> {
@@ -760,7 +792,8 @@ void mlir::triton::populateClampFOpToLLVMPattern(
 
 void mlir::triton::populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfoBase &targetInfo,
+    PatternBenefit benefit) {
 #define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
   patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
       typeConverter, axisInfoAnalysis, benefit);
@@ -819,6 +852,8 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
   patterns.add<CmpIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<CmpFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
+                                    benefit);
   patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
                                               benefit);
   patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter, benefit);
