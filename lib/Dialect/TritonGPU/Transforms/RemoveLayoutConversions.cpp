@@ -157,7 +157,7 @@ public:
   Value getRematValue(Value value, Attribute encoding) {
     auto it = rematMapping.find({value, encoding});
     assert(it != rematMapping.end());
-    return it.second;
+    return it->second;
   }
   void cleanup();
   void backwardRematerialization();
