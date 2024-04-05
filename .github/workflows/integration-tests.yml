@@ -162,7 +162,7 @@ jobs:
         run: |
           cd python
           python3 -m pip install --upgrade pip
-          python3 -m pip install cmake==3.24 ninja pytest-xdist
+          python3 -m pip install cmake==3.24 ninja pytest-xdist distro
           sudo apt-get update -y
           sudo apt-get install -y ccache clang lld
           TRITON_BUILD_WITH_CLANG_LLD=true TRITON_BUILD_WITH_CCACHE=true python3 -m pip install --no-build-isolation -vvv '.[tests]'
