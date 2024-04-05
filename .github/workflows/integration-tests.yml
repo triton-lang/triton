@@ -148,19 +148,6 @@ jobs:
           cd python/test/unit
           python3 -m pytest -vvv -n 8 operators
 
-      - name: Create artifacts archive
-        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
-        run: |
-          cd ~/.triton
-          tar -czf artifacts.tar.gz cache
-
-      - name: Upload artifacts archive
-        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
-        uses: actions/upload-artifact@v3
-        with:
-          name: artifacts ${{ matrix.runner[1] }}
-          path: ~/.triton/artifacts.tar.gz
-
       - name: Run CXX unittests
         if: ${{ env.BACKEND == 'CUDA'}}
         run: |
