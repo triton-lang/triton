@@ -1675,6 +1675,8 @@ def test_load_store_same_ptr(device):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", ['int32', 'int64'])
 def test_umulhi(dtype_str, device):
+    if is_hip() and dtype_str == 'int64':
+        pytest.skip("umulhi int64 not supported on HIP")
 
     @triton.jit
     def kernel(X, Y, Z, N: tl.constexpr):
