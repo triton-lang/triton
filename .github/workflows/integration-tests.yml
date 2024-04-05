@@ -21,8 +21,7 @@ env:
   TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
 
 jobs:
-  runner-preparation:
-    name: Runner Preparation
+  Runner-Preparation:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
@@ -70,9 +69,9 @@ jobs:
           fi
 
   pre-commit:
-    name: Pre-commit (code formatting)
+    name: pre-commit (code formatting)
     if: github.event_name == 'pull_request'
-    needs: runner-preparation
+    needs: Runner-Preparation
     runs-on: ubuntu-latest
 
     steps:
@@ -108,16 +107,15 @@ jobs:
           git reset --hard
           python3 -m pre_commit run --all-files --verbose
 
-  integration-tests-nvidia:
-    name: NVIDIA
-    needs: runner-preparation
+  Integration-Tests:
+    needs: Runner-Preparation
 
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
 
     strategy:
       matrix:
-        runner: ${{fromJson(needs.runner-preparation.outputs.matrix-CUDA)}}
+        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-CUDA)}}
 
     steps:
       - name: Checkout
@@ -222,16 +220,15 @@ jobs:
           du -sh ~/.triton/**
 
 
-  integration-tests-amd:
-    name: AMD
-    needs: runner-preparation
+  Integration-Tests-AMD:
+    needs: Runner-Preparation
 
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
 
     strategy:
       matrix:
-        runner: ${{fromJson(needs.runner-preparation.outputs.matrix-HIP)}}
+        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-HIP)}}
 
     container:
       image: rocm/pytorch:rocm6.0.2_ubuntu22.04_py3.10_pytorch_2.1.2
