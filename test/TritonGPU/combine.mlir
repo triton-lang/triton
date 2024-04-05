@@ -47,14 +47,11 @@ tt.func @remat(%arg0: i32) -> tensor<1024xi32, #layout1> {
   %5 = triton_gpu.convert_layout %2 : tensor<1024xi32, #layout0> -> tensor<1024xi32, #layout1>
   %6 = arith.addi %3, %5 : tensor<1024xi32, #layout1>
   tt.return %6: tensor<1024xi32, #layout1>
-  // CHECK: %0 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, [[$target_layout]]>
-  // CHECK: %1 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, [[$target_layout]]>
-  // CHECK: %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, [[$target_layout]]>
-  // CHECK: %3 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, [[$target_layout]]>
-  // CHECK: %4 = arith.muli %0, %2 : tensor<1024xi32, [[$target_layout]]>
-  // CHECK: %5 = arith.muli %1, %3 : tensor<1024xi32, [[$target_layout]]>
-  // CHECK: %6 = arith.addi %4, %5 : tensor<1024xi32, [[$target_layout]]>
-  // CHECK: tt.return %6 : tensor<1024xi32, [[$target_layout]]>
+  // CHECK: %[[A:.+]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, [[$target_layout]]>
+  // CHECK: %[[B:.+]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, [[$target_layout]]>
+  // CHECK: %[[C:.+]] = arith.muli %[[A]], %[[B]] : tensor<1024xi32, [[$target_layout]]>
+  // CHECK: %[[D:.+]] = arith.addi %[[C]], %[[C]] : tensor<1024xi32, [[$target_layout]]>
+  // CHECK: tt.return %[[D]] : tensor<1024xi32, [[$target_layout]]>
 }
 
 // Always rematerialize single value loads
