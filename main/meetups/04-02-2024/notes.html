@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>triton.testing.do_bench_cudagraph &mdash; Triton  documentation</title>
+  <title>Agenda: &mdash; Triton  documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=fa44fd50" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=19f00094" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=61a4c737" />
@@ -23,9 +23,7 @@
         <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
-    <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="triton.testing.perf_report" href="triton.testing.perf_report.html" />
-    <link rel="prev" title="triton.testing.do_bench" href="triton.testing.do_bench.html" /> 
+    <link rel="search" title="Search" href="../../search.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -53,19 +51,10 @@
 <li class="toctree-l1"><a class="reference internal" href="../../getting-started/tutorials/index.html">Tutorials</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Python API</span></p>
-<ul class="current">
-<li class="toctree-l1"><a class="reference internal" href="../triton.html">triton</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../triton.language.html">triton.language</a></li>
-<li class="toctree-l1 current"><a class="reference internal" href="../triton.testing.html">triton.testing</a><ul class="current">
-<li class="toctree-l2"><a class="reference internal" href="triton.testing.Benchmark.html">triton.testing.Benchmark</a></li>
-<li class="toctree-l2"><a class="reference internal" href="triton.testing.do_bench.html">triton.testing.do_bench</a></li>
-<li class="toctree-l2 current"><a class="current reference internal" href="#">triton.testing.do_bench_cudagraph</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="#triton.testing.do_bench_cudagraph"><code class="docutils literal notranslate"><span class="pre">do_bench_cudagraph()</span></code></a></li>
-</ul>
-</li>
-<li class="toctree-l2"><a class="reference internal" href="triton.testing.perf_report.html">triton.testing.perf_report</a></li>
-</ul>
-</li>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.html">triton</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.language.html">triton.language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
 <ul>
@@ -91,10 +80,9 @@
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../triton.testing.html">triton.testing</a></li>
-      <li class="breadcrumb-item active">triton.testing.do_bench_cudagraph</li>
+      <li class="breadcrumb-item active">Agenda:</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/python-api/generated/triton.testing.do_bench_cudagraph.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/meetups/04-02-2024/notes.md.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -102,32 +90,36 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="triton-testing-do-bench-cudagraph">
-<h1>triton.testing.do_bench_cudagraph<a class="headerlink" href="#triton-testing-do-bench-cudagraph" title="Link to this heading">¶</a></h1>
-<dl class="py function">
-<dt class="sig sig-object py" id="triton.testing.do_bench_cudagraph">
-<span class="sig-prename descclassname"><span class="pre">triton.testing.</span></span><span class="sig-name descname"><span class="pre">do_bench_cudagraph</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">fn</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rep</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">20</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">grad_to_none</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">return_mode</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'mean'</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.testing.do_bench_cudagraph" title="Link to this definition">¶</a></dt>
-<dd><p>Benchmark the runtime of the provided function.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>fn</strong> (<em>Callable</em>) – Function to benchmark</p></li>
-<li><p><strong>rep</strong> (<em>int</em>) – Repetition time (in ms)</p></li>
-<li><p><strong>grad_to_none</strong> (<em>torch.tensor</em><em>, </em><em>optional</em>) – Reset the gradient of the provided tensor to None</p></li>
-</ul>
-</dd>
-</dl>
-</dd></dl>
-
+  <section id="agenda">
+<h1>Agenda:<a class="headerlink" href="#agenda" title="Link to this heading">¶</a></h1>
+<section id="items">
+<h2>Items:<a class="headerlink" href="#items" title="Link to this heading">¶</a></h2>
+<ol class="arabic simple">
+<li><p>Interpreter update</p></li>
+<li><p>Experience with TMA support and future plans for it</p></li>
+<li><p>CGO trip report</p></li>
+<li><p>Triton upstream CI and unit test status from AMD</p></li>
+<li><p>Open discussion</p></li>
+</ol>
+</section>
+<section id="minutes">
+<h2>Minutes:<a class="headerlink" href="#minutes" title="Link to this heading">¶</a></h2>
+<p>Recording link <a class="reference external" href="https://youtu.be/VTcFe2XxZZc">here</a></p>
+<p>Presentations repo <a class="reference external" href="https://drive.google.com/drive/folders/1bKpvz1NiBL_fHrGhMoZPvQfXCeetV2iY?usp=sharing">here</a></p>
+<ol class="arabic simple">
+<li><p>Triton interpreter mode: The Open AI presented the interpreter mode for Triton code, which allows users to debug and inspect individual GPU programs using native Python print or PDB. It is currently being turned on using an environment variables, code decorators for individual functions being interpreted are still TBD. It can also run on CPU without GPU. For more details about the presentation please refer slides.</p></li>
+<li><p>Tensor Memory Access (TMA) discussion: The current implementation of TMA in Triton has some limitations, so has been removed for now. The plan is to rethink how to do it better in the future. The goal is to support TMA implicitly, but the challenge is to handle the different memory layouts for different backends. There is a pull request to improve the launch overhead of kernels, which is related to TMA, but it would require extensive review and testing.</p></li>
+<li><p>CGO trip report: Ian Bearman from Microsoft shared his experience of attending CGO and the Compilers for Machine Learning workshop. He and Javed Absar from Qualcomm gave talks about Triton shared and answered questions about Triton. There was a lot of interest in Triton as a cross-platform kernel language and questions were around the PyTorch integration, the performance portability, and the codegen bugs. It will be good to make the Triton-Pytorch connection more visible. There was also another project called Turbine that was similar to Triton. Please refer to the slides for more details.</p></li>
+<li><p>AMD upstream CI and unit tests status: The AMD team discussed CI and enabling tests for MI 210 and MI 300. Work is in progress for performance gaps, compilation errors and fixes for FP8IN and flash attention kernels. The plan is to upstream these changes soon. Please refer to the slides for more details.</p></li>
+<li><p>Third party CPU backend: The Intel team is driving discussions for community collaboration on a proof of concept for a CPU backend for Triton, using MLIR and OpenMP. There will be a follow-up meeting to discuss the logistics and design. Please refer to the third-party channel in slack for more details.</p></li>
+</ol>
+</section>
 </section>
 
 
            </div>
           </div>
-          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="triton.testing.do_bench.html" class="btn btn-neutral float-left" title="triton.testing.do_bench" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="triton.testing.perf_report.html" class="btn btn-neutral float-right" title="triton.testing.perf_report" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
-    </div>
+          <footer>
 
   <hr/>
 
