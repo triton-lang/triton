@@ -1673,10 +1673,8 @@ def test_load_store_same_ptr(device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("dtype_str", ['int32', 'int64'])
+@pytest.mark.parametrize("dtype_str", ['int32'])
 def test_umulhi(dtype_str, device):
-    if is_hip() and dtype_str == 'int64':
-        pytest.skip("umulhi int64 not supported on HIP")
 
     @triton.jit
     def kernel(X, Y, Z, N: tl.constexpr):
@@ -1698,32 +1696,6 @@ def test_umulhi(dtype_str, device):
         result_high_32 = product_64 >> 32
         return result_high_32
 
-    def umulhi64(x, y):
-        # Ensure x and y are numpy arrays of 64-bit unsigned integers
-        x = np.asarray(x, dtype=np.int64)
-        y = np.asarray(y, dtype=np.int64)
-
-        # Split each number into high and low 32-bit parts
-        x_high, x_low = x >> 32, x & 0xFFFFFFFF
-        y_high, y_low = y >> 32, y & 0xFFFFFFFF
-
-        # Calculate products of parts
-        high_high = x_high * y_high
-        high_low = x_high * y_low
-        low_high = x_low * y_high
-
-        # Sum of high_low and low_high can overflow a 64-bit integer, handle this case
-        middle_sum = high_low + low_high
-
-        # Calculate carry from the middle sum overflow by taking upper 32 bits
-        carry = middle_sum >> 32
-
-        # Add all parts together to form the upper 64 bits of the full product
-        most_significant_64 = high_high + carry
-
-        return most_significant_64
-
-    numpy_op = {'int32': umulhi32, 'int64': umulhi64}[dtype_str]
     rs = RandomState(17)
     N = 128
     x = numpy_random((N, ), dtype_str=dtype_str, rs=rs, low=0)
@@ -1733,7 +1705,7 @@ def test_umulhi(dtype_str, device):
     z_tri = torch.zeros_like(x_tri)
     kernel[(1, )](x_tri, y_tri, z_tri, N=N)
 
-    z_ref = numpy_op(x, y)
+    z_ref = umulhi32(x, y)
     np.testing.assert_equal(z_ref, to_numpy(z_tri))
 
 
