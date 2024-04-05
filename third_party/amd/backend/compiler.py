@@ -52,7 +52,7 @@ class HIPOptions:
         # Ignore user-defined warp size for gfx9
         warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch else 64
         object.__setattr__(self, 'warp_size', warp_size)
-        libs = ["cuda2gcn", "opencl", "ocml", "ockl"]
+        libs = ["ocml", "ockl"]
         for lib in libs:
             extern_libs[lib] = str(default_libdir / f'{lib}.bc')
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
