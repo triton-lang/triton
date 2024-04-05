@@ -37,6 +37,44 @@ jobs:
             echo '::set-output name=matrix-HIP::["ubuntu-latest"]'
           fi
 
+  pre-commit:
+    name: pre-commit (code formatting)
+    needs: Runner-Preparation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Compute hash of pre-commit config
+        id: cache-key
+        run: |
+          echo "pre_commit_hash=$(sha256sum .pre-commit-config.yaml)" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Cache pre-commit's cache dir
+        uses: actions/cache@v4
+        with:
+          # Note that we cannot use environment variables here given there is
+          # no shell to interpret them in the paths.
+          path: |
+            ~/.cache/pre-commit
+          key: ${{ runner.os }}-${{ steps.cache-key.outputs.pre_commit_hash }}
+
+      - name: Check pre-commit
+        run: |
+          python3 -m pip install --upgrade pre-commit
+          # TODO: ignore the first yapf failure until https://github.com/google/yapf/issues/1164 is fixed
+          python3 -m pre_commit run --all-files --verbose yapf &> /dev/null || true
+          # If first run of yapf worked and made changes reset the tree to the original state
+          git reset --hard
+          python3 -m pre_commit run --all-files --verbose
+
   Integration-Tests:
     needs: Runner-Preparation
 
@@ -90,15 +128,6 @@ jobs:
       - name: Update PATH
         run: |
           echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
-
-      - name: Check pre-commit
-        run: |
-          python3 -m pip install --upgrade pre-commit
-          # TODO: ignore the first yapf failure until https://github.com/google/yapf/issues/1164 is fixed
-          python3 -m pre_commit run --all-files --verbose yapf &> /dev/null || true
-          # If first run of yapf worked and made changes reset the tree to the original state
-          git reset --hard
-          python3 -m pre_commit run --all-files --verbose
 
       - name: Install Triton
         if: ${{ env.BACKEND == 'CUDA'}}
@@ -237,12 +266,6 @@ jobs:
       - name: Update PATH
         run: |
           echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
-
-      - name: Check pre-commit
-        run: |
-          python3 -m pip install --upgrade pre-commit
-          git config --global --add safe.directory /__w/triton/triton
-          python3 -m pre_commit run --all-files --verbose
 
       - name: Install Triton on ROCM
         run: |
