@@ -494,10 +494,10 @@ void init_triton_ir(py::module &&m) {
         if (!module)
           throw std::runtime_error("Parse MLIR file failed.");
         // locations are incompatible with ptx < 7.5 !
-        module->walk([](Operation *op) {
-          if (!::triton::tools::getBoolEnv("USE_TTGIR_LOC"))
+        if (!::triton::tools::getBoolEnv("USE_TTGIR_LOC"))
+          module->walk([](Operation *op) {
             op->setLoc(UnknownLoc::get(op->getContext()));
-        });
+          });
 
         return module->clone();
       },
