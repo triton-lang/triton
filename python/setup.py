@@ -1,3 +1,4 @@
+import distro
 import os
 import platform
 import re
@@ -128,23 +129,18 @@ def get_pybind11_package_info():
 
 
 def get_llvm_package_info():
-    # added statement for Apple Silicon
     system = platform.system()
-    arch = platform.machine()
-    if arch == 'aarch64':
-        arch = 'arm64'
+    arch = {"x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
     if system == "Darwin":
-        arch = platform.machine()
-        if arch == "x86_64":
-            arch = "x64"
         system_suffix = f"macos-{arch}"
     elif system == "Linux":
-        if arch == 'arm64':
-            system_suffix = 'ubuntu-arm64'
-        else:
-            vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
-            vglibc = vglibc[0] * 100 + vglibc[1]
-            system_suffix = 'ubuntu-x64' if vglibc > 217 else 'centos-x64'
+        linux_dist = distro.id()
+        # AlmaLinux is compatible with CentOS (both RHEL-based).
+        # Use CentOS LLVM pre-packaged binaries.
+        # AlmaLinux 8 is used for cibuildwheel manylinux_2_28 image.
+        if linux_dist == "almalinux":
+            linux_dist = "centos"
+        system_suffix = f"{linux_dist}-{arch}"
     else:
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     # use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
@@ -162,7 +158,7 @@ def open_url(url):
         'User-Agent': user_agent,
     }
     request = urllib.request.Request(url, None, headers)
-    # Set timeout to 300 seconds to prevent the request from hanging forver
+    # Set timeout to 300 seconds to prevent the request from hanging forever.
     return urllib.request.urlopen(request, timeout=300)
 
 

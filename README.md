@@ -51,7 +51,7 @@ cd triton;
 python -m venv .venv --prompt triton;
 source .venv/bin/activate;
 
-pip install ninja cmake wheel; # build-time dependencies
+pip install ninja cmake wheel distro; # build-time dependencies
 pip install -e python
 ```
 
