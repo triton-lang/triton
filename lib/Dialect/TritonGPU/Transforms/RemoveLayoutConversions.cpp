@@ -802,6 +802,13 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
                                            IRMapping &mapping) {
   SetVector<Operation *> opsToRewrite;
   for (Value v : slice) {
+    auto layoutIt = layout.find(v);
+    assert(layoutIt != layout.end());
+    // If we already have a remat value for this value, use it.
+    if (hasRematValue(v, layoutIt->second)) {
+      mapping.map(v, getRematValue(v, layoutIt->second));
+      continue;
+    }
     if (v.getDefiningOp()) {
       opsToRewrite.insert(v.getDefiningOp());
       if (auto ifOp = v.getDefiningOp<scf::IfOp>()) {
@@ -908,6 +915,8 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       auto cvt = builder.create<ConvertLayoutOp>(op->getLoc(), newType,
                                                  newOp->getResult(0));
       mapping.map(op->getResult(0), cvt.getResult());
+      addRematValue(op->getResult(0), layout[op->getResult(0)],
+                    cvt.getResult());
       continue;
     }
     Operation *newOp = builder.clone(*op, mapping);
@@ -919,6 +928,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
           old.getType().cast<RankedTensorType>().getShape(),
           old.getType().cast<RankedTensorType>().getElementType(), it->second);
       newV.setType(newType);
+      addRematValue(old, it->second, newV);
     }
   }
   // Check mapping and see if there are existing convertOps on the old Argument
