@@ -147,30 +147,35 @@ jobs:
           mkdir -p ~/.triton
           ls -alh ~/.triton
 
+      - name: Update PATH
+        run: |
+          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
+
+      - name: Install apt dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ccache clang lld
+
       - name: Set CUDA ENV
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
         run: |
           echo "BACKEND=CUDA" >> "${GITHUB_ENV}"
           echo "TRITON_DISABLE_LINE_INFO=1" >> "${GITHUB_ENV}"
 
-      - name: Update PATH
+      - name: Install pip dependencies
         run: |
-          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
+          python3 -m pip install --upgrade pip
+          python3 -m pip install wheel cmake==3.24 ninja pytest-xdist lit
 
       - name: Install Triton
         if: ${{ env.BACKEND == 'CUDA'}}
         run: |
           cd python
-          python3 -m pip install --upgrade pip
-          python3 -m pip install cmake==3.24 ninja pytest-xdist
-          sudo apt-get update -y
-          sudo apt-get install -y ccache clang lld
           TRITON_BUILD_WITH_CLANG_LLD=true TRITON_BUILD_WITH_CCACHE=true python3 -m pip install --no-build-isolation -vvv '.[tests]'
 
       - name: Run lit tests
         if: ${{ env.BACKEND == 'CUDA'}}
         run: |
-          python3 -m pip install lit
           cd python
           LIT_TEST_DIR="build/$(ls build | grep -i cmake)/test"
           if [ ! -d "${LIT_TEST_DIR}" ]; then
