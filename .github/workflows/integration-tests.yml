@@ -264,7 +264,7 @@ jobs:
 
       - name: Update PATH
         run: |
-          echo "/opt/rocm/llvm/bin:$PATH" >> $GITHUB_PATH
+          echo "/opt/rocm/llvm/bin" >> $GITHUB_PATH
 
       - name: Install Triton on ROCM
         run: |
