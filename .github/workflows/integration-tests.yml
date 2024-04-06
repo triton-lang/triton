@@ -271,7 +271,11 @@ jobs:
         run: |
           echo "/opt/rocm/llvm/bin" >> $GITHUB_PATH
 
-      - name: Install Triton on HIP
+      - name: Install pip dependencies
+        run: |
+          python3 -m pip install lit
+
+      - name: Install Triton
         run: |
           echo "PATH is '$PATH'"
           pip uninstall -y triton
