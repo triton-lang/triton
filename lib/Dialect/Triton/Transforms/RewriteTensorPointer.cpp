@@ -1,5 +1,6 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Pass/Pass.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 
@@ -323,6 +324,72 @@ public:
     return nullptr;
   }
 
+  Operation *rewriteIfOp(OpBuilder &builder, scf::IfOp op,
+                         std::stack<Operation *> &eraser) {
+    auto thenYieldOp = op.thenYield();
+    assert(op.getNumResults() == thenYieldOp.getNumOperands());
+    SmallVector<Value> results = thenYieldOp.getOperands();
+
+    // get new result types
+    SmallVector<Type> newRetTypes;
+    bool needRewrite = false;
+    for (unsigned i = 0; i < results.size(); ++i) {
+      if (!triton::isTensorPointerType(results[i].getType())) {
+        newRetTypes.push_back(results[i].getType());
+        continue;
+      }
+      needRewrite = true;
+      auto makeTensorPtrOp = getMakeTensorPtrOp(results[i]);
+      assert(rewritedInfo.count(makeTensorPtrOp.getResult()));
+      auto info = rewritedInfo[makeTensorPtrOp.getResult()];
+      for (unsigned j = 0; j < info.length(); ++j) {
+        newRetTypes.push_back(builder.getI64Type());
+      }
+    }
+    if (!needRewrite)
+      return op;
+    // create and clone new IfOp
+    bool hasElse = !op.getElseRegion().empty();
+    scf::IfOp newOp = builder.create<scf::IfOp>(op.getLoc(), newRetTypes,
+                                                op.getCondition(), hasElse);
+    IRMapping mapping;
+    for (unsigned i = 0; i < op->getNumOperands(); ++i) {
+      mapping.map(op->getOperand(i), newOp->getOperand(i));
+    }
+    auto rematerialize = [&](Block *block) {
+      for (Operation &opInIf : block->getOperations()) {
+        auto newOp = builder.clone(opInIf, mapping);
+      }
+    };
+    builder.setInsertionPointToStart(newOp.thenBlock());
+    rematerialize(op.thenBlock());
+    if (hasElse) {
+      builder.setInsertionPointToStart(newOp.elseBlock());
+      rematerialize(op.elseBlock());
+    }
+
+    // update rewritedInfo
+    unsigned oldResIdx = 0, newResIdx = 0;
+    while (oldResIdx < results.size()) {
+      if (!triton::isTensorPointerType(results[oldResIdx].getType())) {
+        oldResIdx++;
+        newResIdx++;
+      } else {
+        auto makeTensorPtrOp = getMakeTensorPtrOp(results[oldResIdx]);
+        assert(rewritedInfo.count(makeTensorPtrOp.getResult()));
+        auto info = rewritedInfo[makeTensorPtrOp.getResult()];
+        for (unsigned j = 0; j < info.length(); ++j) {
+          info.setOffset(j, newOp->getResult(newResIdx++));
+        }
+        rewritedInfo[op.getResult(oldResIdx)] = info;
+        oldResIdx++;
+      }
+    }
+
+    eraser.push(op);
+    return newOp;
+  }
+
   Operation *rewriteForOp(OpBuilder &builder, scf::ForOp op,
                           std::stack<Operation *> &eraser) {
     // Generate new iteration operands and set rewrited information
@@ -436,6 +503,9 @@ public:
       return rewriteLoadStoreOp(builder, op, eraser);
     } else if (op->getDialect()->getNamespace() == "scf" ||
                op->getDialect()->getNamespace() == "cf") {
+      if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+        return rewriteIfOp(builder, ifOp, eraser);
+      }
       if (!needRewrite(op))
         return op;
 
@@ -445,7 +515,7 @@ public:
         return rewriteYieldOp(builder, yieldOp, eraser);
       } else {
         llvm_unreachable("Currently we only support tensor pointer usages "
-                         "inside a `scf::ForOp`, others such as `scf::IfOp`,"
+                         "inside a `scf::ForOp` or `scf::IfOp`, others such as"
                          "`scf::WhileOp`, `cf::BranchOp` or `cf::CondBranchOp` "
                          "are not supported yet");
       }
