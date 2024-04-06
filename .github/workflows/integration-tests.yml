@@ -165,6 +165,7 @@ jobs:
 
       - name: Install Triton
         run: |
+          echo "PATH is '$PATH'"
           cd python
           TRITON_BUILD_WITH_CCACHE=true python3 -m pip install --no-build-isolation -vvv '.[tests]'
 
@@ -246,9 +247,9 @@ jobs:
 
       - name: Clear triton cache directory
         run: |
+          rm -rf ~/.triton
           mkdir -p ~/.triton
           ls -alh ~/.triton
-          rm -rf ~/.triton
 
       - name: Cache build dependency
         uses: actions/cache@v4
@@ -270,14 +271,14 @@ jobs:
         run: |
           echo "/opt/rocm/llvm/bin" >> $GITHUB_PATH
 
-      - name: Install Triton on ROCM
+      - name: Install Triton on HIP
         run: |
+          echo "PATH is '$PATH'"
           pip uninstall -y triton
-          export PATH="/opt/rocm/llvm/bin:$PATH"
           cd python
           pip install -v -e .
 
-      - name: Run python tests on ROCM
+      - name: Run python tests on HIP
         run: |
           cd python
           pytest --capture=tee-sys -rfs -vvv -n 32 ./test/unit/language/test_core.py \
