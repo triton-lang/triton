@@ -149,6 +149,10 @@ jobs:
           mkdir -p ~/.triton
           ls -alh ~/.triton
 
+      - name: Update PATH
+        run: |
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
       - name: Install apt dependencies
         run: |
           sudo apt-get update -y
