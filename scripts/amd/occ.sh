@@ -5,12 +5,37 @@
 rm -rf ~/.triton/cache/
 
 export MLIR_ENABLE_DUMP=1
-export LLVM_IR_ENABLE_DUMP=1
 export AMDGCN_ENABLE_DUMP=1
 ## Assume CDNA arch
 SIMD=4
 LDS_SIZE=65536
 TOTAL_VGPR=512
+
+get_occ_per_CU() {
+    ## $1: vgpr count
+    vgpr=$1
+    occPerEU=$((TOTAL_VGPR/vgpr))
+    if [[ $vgpr -gt 256 ]]; then
+        occPerEU=1
+    elif [[ $vgpr -gt 168 ]]; then
+        occPerEU=2
+    elif [[ $vgpr -gt 128 ]]; then
+        occPerEU=3
+    elif [[ $vgpr -gt 96 ]]; then
+        occPerEU=4
+    elif [[ $vgpr -gt 80 ]]; then
+        occPerEU=5
+    elif [[ $vgpr -gt 72 ]]; then
+        occPerEU=6
+    elif [[ $vgpr -gt 64 ]]; then
+        occPerEU=7
+    else
+        occPerEU=8
+    fi
+
+    occPerCU=$((occPerEU*SIMD/num_warps))
+    echo $occPerCU
+}
 
 $1 > output.mlir 2>&1
 
@@ -26,13 +51,14 @@ SPILLs=$(sed -n '/vgpr_spill/p' output.mlir | tail -n 1 | awk '{print $2}')
 
 echo "VGPRS: $VGPRs (spill: $SPILLs)"
 
-occ_LDS=$((LDS_SIZE/LDS*num_warps/SIMD))
-occ_vgpr=$((TOTAL_VGPR/VGPRs))
-occ=$occ_vgpr
-if [ $occ_LDS -lt $occ_vgpr ];then
-    occ=$occ_LDS
+occLDSPerCU=$((LDS_SIZE/LDS))
+occVgprPerCU=$(get_occ_per_CU $VGPRs)
+occPerCU=$occVgprPerCU
+if [ $occLDSPerCU -lt $occVgprPerCU ];then
+    occPerCU=$occLDSPerCU
 fi
-echo "occ: $occ waves/SIMD (occ_LDS: $occ_LDS, occ_vgpr: $occ_vgpr)"
+occPerEU=$((occPerCU*num_warps/SIMD))
+echo "occupancy: $occPerEU waves/SIMD or $occPerCU workgroups/CU (occLDSPerCU: $occLDSPerCU, occVgprPerCU: $occVgprPerCU)"
 
 perf=$(tail -n 2 output.mlir)
 echo "$perf"
