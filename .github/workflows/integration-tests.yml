@@ -211,7 +211,7 @@ jobs:
           cd python/test/unit
           python3 -m pytest -vvv -n 8 operators
 
-      - name: Run CXX unittests
+      - name: Run C++ unittests
         if: ${{ env.BACKEND == 'CUDA'}}
         run: |
           cd python
@@ -299,6 +299,12 @@ jobs:
               ./test/unit/language/test_standard.py \
               ./test/unit/language/test_compile_errors.py \
               ./test/unit/language/test_block_pointer.py
+
+      - name: Run C++ unittests
+        run: |
+          cd python
+          cd "build/$(ls build | grep -i cmake)"
+          ctest
 
       - name: Inspect cache directory
         run: |
