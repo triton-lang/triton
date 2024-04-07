@@ -240,7 +240,7 @@ bool CTAPlanner::processDot(triton::FuncOp &funcOp) {
   // TODO: This is a naive implementation and should be refactored
   auto getCTATiling = [](int64_t M, int64_t N, int64_t K,
                          unsigned numCTAs) -> std::pair<unsigned, unsigned> {
-    // perfer a larger chunk size, at most 128; first assign splitM.
+    // prefer a larger chunk size, at most 128; first assign splitM.
     unsigned chunk_m = 128;
     auto isLegal = [](unsigned chunk) { return chunk >= 64; };
     unsigned splitM, splitN;
@@ -641,21 +641,24 @@ bool CTAPlanner::isElementwiseOp(Operation *op) const {
                 arith::MaximumFOp, arith::MaxNumFOp, arith::MaxSIOp,
                 arith::MaxUIOp, arith::MinimumFOp, arith::MinNumFOp,
                 arith::MinSIOp, arith::MinUIOp, arith::MulFOp, arith::MulIOp,
-                arith::NegFOp, arith::OrIOp, arith::RemFOp, arith::RemSIOp,
-                arith::RemUIOp, arith::ShLIOp, arith::ShRSIOp, arith::ShRUIOp,
-                arith::SIToFPOp, arith::SubFOp, arith::SubIOp, arith::TruncFOp,
-                arith::TruncIOp, arith::UIToFPOp, arith::XOrIOp>(op))
+                arith::MulUIExtendedOp, arith::MulSIExtendedOp, arith::NegFOp,
+                arith::OrIOp, arith::RemFOp, arith::RemSIOp, arith::RemUIOp,
+                arith::ShLIOp, arith::ShRSIOp, arith::ShRUIOp, arith::SIToFPOp,
+                arith::SubFOp, arith::SubIOp, arith::TruncFOp, arith::TruncIOp,
+                arith::UIToFPOp, arith::XOrIOp>(op))
     return true;
   if (llvm::isa<math::AbsFOp, math::AbsIOp, math::AtanOp, math::Atan2Op,
                 math::CeilOp, math::CopySignOp, math::CosOp, math::SinOp,
                 math::CountLeadingZerosOp, math::CountTrailingZerosOp,
                 math::CtPopOp, math::ErfOp, math::ExpOp, math::Exp2Op,
-                math::ExpM1Op, math::FloorOp, math::FmaOp, math::LogOp,
-                math::Log10Op, math::Log1pOp, math::Log2Op, math::PowFOp,
-                math::RsqrtOp, math::SqrtOp, math::TanhOp>(op))
+                math::FloorOp, math::ExpM1Op, math::FloorOp, math::FmaOp,
+                math::LogOp, math::Log10Op, math::Log1pOp, math::Log2Op,
+                math::PowFOp, math::RsqrtOp, math::SqrtOp, math::RsqrtOp,
+                math::TanhOp>(op))
     return true;
   if (llvm::isa<triton::IntToPtrOp, triton::PtrToIntOp, triton::BitcastOp,
-                triton::FpToFpOp, triton::AddPtrOp>(op))
+                triton::FpToFpOp, triton::AddPtrOp, triton::PreciseSqrtOp,
+                triton::PreciseDivFOp>(op))
     return true;
   if (auto externElementwiseOp = dyn_cast<triton::ExternElementwiseOp>(op))
     return externElementwiseOp.getPure();
@@ -672,8 +675,7 @@ bool CTAPlanner::processElementwise(Operation *op, Attribute layout) {
 }
 
 bool CTAPlanner::processConstant(arith::ConstantOp constant, Attribute layout) {
-  if (auto tensorTy =
-          constant.getResult().getType().dyn_cast<RankedTensorType>()) {
+  if (auto tensorTy = constant.getType().dyn_cast<RankedTensorType>()) {
     if (auto attr = constant.getValue().dyn_cast<SplatElementsAttr>()) {
 
       auto newTensorTy = RankedTensorType::get(

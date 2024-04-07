@@ -3,6 +3,7 @@
 #include "triton/Analysis/Utility.h"
 
 using namespace mlir;
+using namespace mlir::triton;
 
 namespace {
 
@@ -20,7 +21,7 @@ struct TestAxisInfoPass
     Operation *operation = getOperation();
     ModuleOp moduleOp = cast<ModuleOp>(operation);
     ModuleAxisInfoAnalysis moduleAxisInfoAnalysis(moduleOp);
-    moduleOp.walk([&](triton::FuncOp funcOp) {
+    moduleOp.walk([&](FuncOp funcOp) {
       auto &os = llvm::errs();
       auto opName = SymbolTable::getSymbolName(funcOp).getValue().str();
       os << "@" << opName << "\n";

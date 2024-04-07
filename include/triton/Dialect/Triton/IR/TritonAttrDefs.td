@@ -97,5 +97,25 @@ def TT_RoundingModeAttr : I32EnumAttr<
     let cppNamespace = "::mlir::triton";
 }
 
+// PropagateNan.
+def TT_PropagateNanAttr : I32EnumAttr<
+    "PropagateNan", "",
+    [
+        I32EnumAttrCase<"NONE", 0, "none">,
+        I32EnumAttrCase<"ALL", 0xFFFF, "all">,
+    ]> {
+    let cppNamespace = "::mlir::triton";
+}
+
+// InputPrecision
+def TT_InputPrecisionAttr : I32EnumAttr<
+    "InputPrecision", "",
+    [
+      I32EnumAttrCase<"TF32", 0, "tf32">,
+      I32EnumAttrCase<"TF32x3", 1, "tf32x3">,
+      I32EnumAttrCase<"IEEE", 2, "ieee">
+    ]>{
+  let cppNamespace = "::mlir::triton";
+}
 
 #endif

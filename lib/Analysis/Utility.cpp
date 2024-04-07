@@ -7,17 +7,20 @@
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include <deque>
 
 namespace mlir {
-
 namespace {
 
+using namespace triton;
+using namespace triton::gpu;
+
 int getParentAxis(Attribute layout, int axis) {
-  if (auto sliceEncoding = layout.dyn_cast<triton::gpu::SliceEncodingAttr>()) {
+  if (auto sliceEncoding = layout.dyn_cast<SliceEncodingAttr>()) {
     axis = axis < sliceEncoding.getDim() ? axis : axis + 1;
     return getParentAxis(sliceEncoding.getParent(), axis);
   }
@@ -25,14 +28,15 @@ int getParentAxis(Attribute layout, int axis) {
 }
 
 SmallVector<unsigned> getParentOrder(Attribute layout) {
-  if (auto sliceEncoding = layout.dyn_cast<triton::gpu::SliceEncodingAttr>()) {
+  if (auto sliceEncoding = layout.dyn_cast<SliceEncodingAttr>()) {
     return getParentOrder(sliceEncoding.getParent());
   }
-  return triton::gpu::getOrder(layout);
+  return getOrder(layout);
 }
 
 } // namespace
 
+// TODO(jlebar): Move this class into namespace triton.
 bool ReduceOpHelper::isReductionOnLayoutFastAxis() {
   return getParentAxis(getSrcLayout(), axis) ==
          getParentOrder(getSrcLayout())[0];
@@ -40,7 +44,7 @@ bool ReduceOpHelper::isReductionOnLayoutFastAxis() {
 
 SmallVector<unsigned> ReduceOpHelper::getOrderWithAxisAtBeginning() {
   auto srcLayout = getSrcLayout();
-  auto order = triton::gpu::getOrder(srcLayout);
+  auto order = getOrder(srcLayout);
   auto it = std::find(order.begin(), order.end(), axis);
   // delete the axis from order
   order.erase(it);
@@ -60,14 +64,13 @@ unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
   }
 
   unsigned threadOffset = 1;
-  if (auto sliceLayout =
-          srcLayout.dyn_cast<mlir::triton::gpu::SliceEncodingAttr>()) {
+  if (auto sliceLayout = srcLayout.dyn_cast<SliceEncodingAttr>()) {
     auto parentLayout = sliceLayout.getParent();
-    auto threadsPerWarp = triton::gpu::getThreadsPerWarp(parentLayout);
+    auto threadsPerWarp = getThreadsPerWarp(parentLayout);
     threadOffset = threadsPerWarp[sliceLayout.getDim()];
   } else {
-    auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcLayout);
-    auto order = triton::gpu::getOrder(srcLayout);
+    auto threadsPerWarp = getThreadsPerWarp(srcLayout);
+    auto order = getOrder(srcLayout);
     for (unsigned i = 0; i < order.size(); i++) {
       if (order[i] == axis)
         break;
@@ -83,8 +86,8 @@ unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
 // TODO: Case with SliceLayout as srcLayout and numCTAs > 1 is to be implemented
 // in the future
 bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout) {
-  unsigned numCTAs = triton::gpu::getNumCTAs(srcLayout);
-  assert(numCTAs == triton::gpu::getNumCTAs(dstLayout) &&
+  unsigned numCTAs = getNumCTAs(srcLayout);
+  assert(numCTAs == getNumCTAs(dstLayout) &&
          "Invalid layout conversion: the numbers of CTAs of src and dst "
          "layouts are different");
 
@@ -94,17 +97,17 @@ bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout) {
 
   // Case where CTAsPerCGA of srcLayout in the sliced dim is not 1 is not
   // implemented yet
-  if (auto sliceLayout = srcLayout.dyn_cast<triton::gpu::SliceEncodingAttr>()) {
+  if (auto sliceLayout = srcLayout.dyn_cast<SliceEncodingAttr>()) {
     auto dim = sliceLayout.getDim();
-    auto CTAsPerCGA = triton::gpu::getCTAsPerCGA(sliceLayout.getParent());
+    auto CTAsPerCGA = getCTAsPerCGA(sliceLayout.getParent());
     if (CTAsPerCGA[dim] != 1)
       llvm::report_fatal_error("Layout conversion to be implemented");
   }
 
   // Case where CTAsPerCGA of dstLayout in the sliced dim is not 1 is supported
-  if (auto sliceLayout = dstLayout.dyn_cast<triton::gpu::SliceEncodingAttr>()) {
+  if (auto sliceLayout = dstLayout.dyn_cast<SliceEncodingAttr>()) {
     auto dim = sliceLayout.getDim();
-    auto CTAsPerCGA = triton::gpu::getCTAsPerCGA(sliceLayout.getParent());
+    auto CTAsPerCGA = getCTAsPerCGA(sliceLayout.getParent());
     if (CTAsPerCGA[dim] != 1)
       return true;
   }
@@ -113,8 +116,8 @@ bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout) {
   // srcLayout and dstLayout
 
   // Case (2): Do not use dsmem when srcCTALayout == dstCTALayout
-  auto srcCTALayout = triton::gpu::getCTALayout(srcLayout);
-  auto dstCTALayout = triton::gpu::getCTALayout(dstLayout);
+  auto srcCTALayout = getCTALayout(srcLayout);
+  auto dstCTALayout = getCTALayout(dstLayout);
   if (srcCTALayout == dstCTALayout)
     return false;
 
@@ -126,45 +129,42 @@ unsigned ReduceOpHelper::getInterWarpSize() {
   auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
   unsigned sizeIntraWarps = getIntraWarpSize();
   return std::min(srcReduceDimSize / sizeIntraWarps,
-                  triton::gpu::getWarpsPerCTA(getSrcLayout())[axis]);
+                  getWarpsPerCTA(getSrcLayout())[axis]);
 }
 
 unsigned ReduceOpHelper::getIntraWarpSize() {
   auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
-  return std::min(srcReduceDimSize,
-                  triton::gpu::getThreadsPerWarp(getSrcLayout())[axis]);
+  return std::min(srcReduceDimSize, getThreadsPerWarp(getSrcLayout())[axis]);
 }
 
 unsigned ReduceOpHelper::getInterWarpSizeWithUniqueData() {
   auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
   unsigned sizeIntraWarps = getIntraWarpSizeWithUniqueData();
-  return std::min(srcReduceDimSize / sizeIntraWarps,
-                  triton::gpu::getWarpsPerCTAWithUniqueData(
-                      getSrcLayout(), getSrcShape())[axis]);
+  return std::min(
+      srcReduceDimSize / sizeIntraWarps,
+      getWarpsPerCTAWithUniqueData(getSrcLayout(), getSrcShape())[axis]);
 }
 
 unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
   auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
-  unsigned elementPerThreads = triton::gpu::getUniqueContigPerThread(
-      getSrcLayout(), getSrcShape())[axis];
-  return std::min(srcReduceDimSize / elementPerThreads,
-                  triton::gpu::getThreadsPerWarpWithUniqueData(
-                      getSrcLayout(), getSrcShape())[axis]);
+  unsigned elementPerThreads =
+      getUniqueContigPerThread(getSrcLayout(), getSrcShape())[axis];
+  return std::min(
+      srcReduceDimSize / elementPerThreads,
+      getThreadsPerWarpWithUniqueData(getSrcLayout(), getSrcShape())[axis]);
 }
 
 unsigned ReduceOpHelper::getThreadsReductionAxis() {
   auto srcLayout = getSrcLayout();
   auto srcShape = getSrcShape();
-  return triton::gpu::getThreadsPerWarpWithUniqueData(srcLayout,
-                                                      srcShape)[axis] *
-         triton::gpu::getWarpsPerCTAWithUniqueData(srcLayout, srcShape)[axis];
+  return getThreadsPerWarpWithUniqueData(srcLayout, srcShape)[axis] *
+         getWarpsPerCTAWithUniqueData(srcLayout, srcShape)[axis];
 }
 
 bool ReduceOpHelper::isWarpSynchronous() {
   auto srcLayout = getSrcLayout();
   auto srcShape = getSrcShape();
-  return triton::gpu::getWarpsPerCTAWithUniqueData(srcLayout, srcShape)[axis] ==
-         1;
+  return getWarpsPerCTAWithUniqueData(srcLayout, srcShape)[axis] == 1;
 }
 
 SmallVector<unsigned> ReduceOpHelper::getScratchConfig() {
@@ -193,7 +193,7 @@ unsigned ReduceOpHelper::getScratchSizeInBytes() {
 bool ReduceOpHelper::isReduceWithinCTA() {
   auto axis = getAxis();
   auto srcLayout = getSrcLayout();
-  auto CTASplitNum = mlir::triton::gpu::getCTASplitNum(srcLayout);
+  auto CTASplitNum = getCTASplitNum(srcLayout);
   assert(axis < CTASplitNum.size());
   return CTASplitNum[axis] == 1;
 }
@@ -206,13 +206,13 @@ bool ReduceOpHelper::isSupportedLayout() {
   }
 
   auto srcLayout = getSrcLayout();
-  if (srcLayout.isa<triton::gpu::BlockedEncodingAttr>()) {
+  if (srcLayout.isa<BlockedEncodingAttr>()) {
     return true;
   }
-  if (auto mmaLayout = srcLayout.dyn_cast<triton::gpu::MmaEncodingTrait>()) {
+  if (auto mmaLayout = srcLayout.dyn_cast<MmaEncodingTrait>()) {
     return mmaLayout.supportReduction();
   }
-  if (auto sliceLayout = srcLayout.dyn_cast<triton::gpu::SliceEncodingAttr>()) {
+  if (auto sliceLayout = srcLayout.dyn_cast<SliceEncodingAttr>()) {
     return true;
   }
   return false;
@@ -223,8 +223,7 @@ unsigned ScanLoweringHelper::getAxisNumElementsPerThread() {
 }
 
 unsigned ScanLoweringHelper::getNonAxisNumElementsPerThread() {
-  SmallVector<unsigned> sizePerThreads =
-      triton::gpu::getContigPerThread(getEncoding());
+  SmallVector<unsigned> sizePerThreads = getContigPerThread(getEncoding());
   sizePerThreads[getAxis()] = 1;
   return product<unsigned>(sizePerThreads);
 }
@@ -232,16 +231,15 @@ unsigned ScanLoweringHelper::getNonAxisNumElementsPerThread() {
 Region &ScanLoweringHelper::getCombineOp() { return scanOp.getCombineOp(); }
 
 unsigned ScanLoweringHelper::getAxisNumThreadsPerWarp() {
-  return triton::gpu::getThreadsPerWarp(getEncoding())[getAxis()];
+  return getThreadsPerWarp(getEncoding())[getAxis()];
 }
 
 unsigned ScanLoweringHelper::getAxisNumThreadsPerWarpWithUniqueData() {
-  return triton::gpu::getThreadsPerWarpWithUniqueData(getEncoding(),
-                                                      getShape())[getAxis()];
+  return getThreadsPerWarpWithUniqueData(getEncoding(), getShape())[getAxis()];
 }
 
 unsigned ScanLoweringHelper::getNonAxisNumThreadsPerWarp() {
-  auto threadsPerWarp = triton::gpu::getThreadsPerWarp(getEncoding());
+  auto threadsPerWarp = getThreadsPerWarp(getEncoding());
   threadsPerWarp[getAxis()] = 1;
   return product<unsigned>(threadsPerWarp);
 }
@@ -249,25 +247,24 @@ unsigned ScanLoweringHelper::getNonAxisNumThreadsPerWarp() {
 // Return the flat numbers of threads computing independent scan results.
 unsigned ScanLoweringHelper::getNonAxisNumThreadsPerCTA() {
   unsigned numParallelThreadsPerWarp = getNonAxisNumThreadsPerWarp();
-  auto warpsPerCTA = triton::gpu::getWarpsPerCTA(getEncoding());
+  auto warpsPerCTA = getWarpsPerCTA(getEncoding());
   warpsPerCTA[getAxis()] = 1;
   unsigned numParallelWarpsPerCTA = product<unsigned>(warpsPerCTA);
   return numParallelThreadsPerWarp * numParallelWarpsPerCTA;
 }
 
 unsigned ScanLoweringHelper::getAxisNumWarps() {
-  return triton::gpu::getWarpsPerCTA(getEncoding())[getAxis()];
+  return getWarpsPerCTA(getEncoding())[getAxis()];
 }
 
 unsigned ScanLoweringHelper::getAxisNumWarpsWithUniqueData() {
-  return triton::gpu::getWarpsPerCTAWithUniqueData(getEncoding(),
-                                                   getShape())[getAxis()];
+  return getWarpsPerCTAWithUniqueData(getEncoding(), getShape())[getAxis()];
 }
 
 unsigned ScanLoweringHelper::getAxisNumBlocks() {
-  auto sizePerThreads = triton::gpu::getSizePerThread(getEncoding());
-  auto threadsPerWarp = triton::gpu::getThreadsPerWarp(getEncoding());
-  auto warpsPerCTA = triton::gpu::getWarpsPerCTA(getEncoding());
+  auto sizePerThreads = getSizePerThread(getEncoding());
+  auto threadsPerWarp = getThreadsPerWarp(getEncoding());
+  auto warpsPerCTA = getWarpsPerCTA(getEncoding());
   unsigned axis = getAxis();
   return ceil<unsigned>(
       getShape()[axis],
@@ -275,9 +272,9 @@ unsigned ScanLoweringHelper::getAxisNumBlocks() {
 }
 
 unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
-  auto sizePerThreads = triton::gpu::getSizePerThread(getEncoding());
-  auto threadsPerWarp = triton::gpu::getThreadsPerWarp(getEncoding());
-  auto warpsPerCTA = triton::gpu::getWarpsPerCTA(getEncoding());
+  auto sizePerThreads = getSizePerThread(getEncoding());
+  auto threadsPerWarp = getThreadsPerWarp(getEncoding());
+  auto warpsPerCTA = getWarpsPerCTA(getEncoding());
   unsigned axis = getAxis();
   unsigned numBlocks = 1;
   for (unsigned i = 0; i < sizePerThreads.size(); i++) {
@@ -293,39 +290,76 @@ unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
 bool ScanLoweringHelper::isSupported() {
   // TODO: Support the following cases:
   // 1. Scan on non-blocking encodings
-  // 2. Scan with multiple operands
-  if (!isa<triton::gpu::BlockedEncodingAttr>(getEncoding()))
-    return false;
-  if (scanOp.getNumOperands() != 1)
+  if (!isa<BlockedEncodingAttr>(getEncoding()))
     return false;
   return true;
+}
+
+unsigned ScanLoweringHelper::getScratchSizeInElems() {
+  auto mod = scanOp->getParentOfType<ModuleOp>();
+  unsigned numWarps = TritonGPUDialect::getNumWarps(mod);
+  unsigned numNonAxisElementsPerWarp =
+      getNonAxisNumThreadsPerWarp() * getNonAxisNumElementsPerThread();
+  unsigned numElements = numWarps * numNonAxisElementsPerWarp *
+                         getAxisNumBlocks() * getNonAxisNumBlocks();
+  return numElements;
 }
 
 unsigned ScanLoweringHelper::getScratchSizeInBytes() {
   unsigned axisNumWarps = getAxisNumWarpsWithUniqueData();
   if (axisNumWarps == 1)
     return 0;
-  auto type = scanOp.getOperand(0).getType().cast<RankedTensorType>();
-  unsigned elementSizeInBytes = type.getElementTypeBitWidth() / 8;
-  auto mod = scanOp->getParentOfType<ModuleOp>();
-  unsigned numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-  unsigned numNonAxisElementsPerWapr =
-      getNonAxisNumThreadsPerWarp() * getNonAxisNumElementsPerThread();
-  unsigned numElements = numWarps * numNonAxisElementsPerWapr *
-                         getAxisNumBlocks() * getNonAxisNumBlocks();
-  return elementSizeInBytes * numElements;
+  unsigned elementSizeInBytes = 0;
+  for (const auto &ty : srcElementTypes) {
+    elementSizeInBytes += ceil<unsigned>(ty.getIntOrFloatBitWidth(), 8);
+  }
+  return elementSizeInBytes * getScratchSizeInElems();
 }
 
-triton::gpu::BlockedEncodingAttr ScanLoweringHelper::getEncoding() {
-  return srcEncoding.cast<triton::gpu::BlockedEncodingAttr>();
+SmallVector<std::pair<SmallVector<int64_t>, SmallVector<int64_t>>>
+getReshapeDecomposition(ArrayRef<int64_t> srcShape,
+                        ArrayRef<int64_t> dstShape) {
+  SmallVector<std::pair<SmallVector<int64_t>, SmallVector<int64_t>>> ret;
+
+  if (srcShape.empty()) {
+    assert(dstShape.empty());
+    return ret;
+  }
+  ret.push_back({});
+
+  int srcIdx = 0;
+  int dstIdx = 0;
+  int srcNElems = 1;
+  int dstNElems = 1;
+  while (srcIdx < srcShape.size() || dstIdx < dstShape.size()) {
+    if (srcNElems < dstNElems || //
+        (srcIdx < srcShape.size() && srcNElems == 1) ||
+        (srcIdx < srcShape.size() && srcShape[srcIdx] == 1)) {
+      assert(srcIdx < srcShape.size());
+      srcNElems *= srcShape[srcIdx];
+      ret.back().first.push_back(srcIdx);
+      srcIdx++;
+    } else if (dstNElems < srcNElems ||
+               (dstIdx < dstShape.size() && dstShape[dstIdx] == 1)) {
+      assert(dstIdx < dstShape.size());
+      dstNElems *= dstShape[dstIdx];
+      ret.back().second.push_back(dstIdx);
+      dstIdx++;
+    } else {
+      ret.push_back({});
+      srcNElems = 1;
+      dstNElems = 1;
+    }
+  }
+  return ret;
 }
 
-llvm::ArrayRef<int64_t> ScanLoweringHelper::getShape() {
-  return scanOp.getOperand(0).getType().cast<RankedTensorType>().getShape();
+BlockedEncodingAttr ScanLoweringHelper::getEncoding() {
+  return srcEncoding.cast<BlockedEncodingAttr>();
 }
 
 unsigned ScanLoweringHelper::getAxisElementStride() {
-  auto order = triton::gpu::getOrder(getEncoding());
+  auto order = getOrder(getEncoding());
   unsigned stride = 1;
   for (unsigned dim : order) {
     if (dim == getAxis())
@@ -336,7 +370,7 @@ unsigned ScanLoweringHelper::getAxisElementStride() {
 }
 
 unsigned ScanLoweringHelper::getAxisThreadStride() {
-  auto order = triton::gpu::getOrder(getEncoding());
+  auto order = getOrder(getEncoding());
   unsigned stride = 1;
   for (unsigned dim : order) {
     if (dim == getAxis())
@@ -347,11 +381,11 @@ unsigned ScanLoweringHelper::getAxisThreadStride() {
 }
 
 unsigned ScanLoweringHelper::getAxisBlockStride() {
-  auto order = triton::gpu::getOrder(getEncoding());
+  auto order = getOrder(getEncoding());
   unsigned stride = 1;
-  auto sizePerThreads = triton::gpu::getSizePerThread(getEncoding());
-  auto threadsPerWarp = triton::gpu::getThreadsPerWarp(getEncoding());
-  auto warpsPerCTA = triton::gpu::getWarpsPerCTA(getEncoding());
+  auto sizePerThreads = getSizePerThread(getEncoding());
+  auto threadsPerWarp = getThreadsPerWarp(getEncoding());
+  auto warpsPerCTA = getWarpsPerCTA(getEncoding());
   for (unsigned dim : order) {
     if (dim == getAxis())
       return stride;
@@ -368,37 +402,140 @@ bool maybeSharedAllocationOp(Operation *op) {
   // query the memory effects of the op.
   auto *dialect = op->getDialect();
   return dialect &&
-         (dialect->getTypeID() ==
-              mlir::TypeID::get<triton::gpu::TritonGPUDialect>() ||
+         (dialect->getTypeID() == TypeID::get<TritonGPUDialect>() ||
           dialect->getTypeID() ==
-              mlir::TypeID::get<triton::nvidia_gpu::TritonNvidiaGPUDialect>() ||
-          dialect->getTypeID() == mlir::TypeID::get<triton::TritonDialect>() ||
-          dialect->getTypeID() == mlir::TypeID::get<arith::ArithDialect>() ||
-          dialect->getTypeID() == mlir::TypeID::get<tensor::TensorDialect>());
+              TypeID::get<triton::nvidia_gpu::TritonNvidiaGPUDialect>() ||
+          dialect->getTypeID() == TypeID::get<triton::TritonDialect>() ||
+          dialect->getTypeID() == TypeID::get<arith::ArithDialect>() ||
+          dialect->getTypeID() == TypeID::get<tensor::TensorDialect>());
 }
 
-bool maybeAliasOp(Operation *op) {
-  return isa<triton::gpu::ExtractSliceOp, triton::TransOp,
-             triton::gpu::InsertSliceAsyncOp,
-             triton::nvidia_gpu::InsertSliceTMAOp,
-             triton::nvidia_gpu::StoreAsyncOp, tensor::InsertSliceOp>(op);
+static bool supportMFMAGranularity(int m, int n, int k) {
+  // these limitations are dtype dependent, in future we may relax them
+  const static std::pair<int, int> mfmaTypes[2] = {{32, 8}, {16, 16}};
+  for (const auto &mfmaType : mfmaTypes) {
+    auto [granularityMN, granularityK] = mfmaType;
+    if (m % granularityMN != 0 || n % granularityMN != 0)
+      continue;
+    if (k % granularityK != 0)
+      continue;
+    return true;
+  }
+  return false;
+}
+
+bool supportMFMATypes(Type a, Type b) {
+  if (a.getIntOrFloatBitWidth() != b.getIntOrFloatBitWidth())
+    return false;
+
+  auto F8E4M3FNUZ = TypeID::get<Float8E4M3FNUZType>();
+  auto F8E5M2FNUZ = TypeID::get<Float8E5M2FNUZType>();
+  auto F16 = TypeID::get<Float16Type>();
+  auto BF16 = TypeID::get<BFloat16Type>();
+  auto F32 = TypeID::get<Float32Type>();
+  auto Int = TypeID::get<IntegerType>();
+  DenseSet<std::pair<TypeID, TypeID>> supportedTypes = {
+      {F32, F32},
+      {F16, F16},
+      {BF16, BF16},
+      {F8E4M3FNUZ, F8E4M3FNUZ},
+      {F8E4M3FNUZ, F8E5M2FNUZ},
+      {F8E5M2FNUZ, F8E4M3FNUZ},
+      {F8E5M2FNUZ, F8E5M2FNUZ},
+      {Int, Int}};
+
+  if (!supportedTypes.contains({a.getTypeID(), b.getTypeID()}))
+    return false;
+
+  if (a.isIntOrIndex() && a.getIntOrFloatBitWidth() != 8)
+    return false;
+  return true;
+}
+
+bool supportMFMA(triton::DotOp op) {
+  auto aTy = op.getA().getType().cast<RankedTensorType>();
+  auto bTy = op.getB().getType().cast<RankedTensorType>();
+
+  auto aElemTy = aTy.getElementType();
+  auto bElemTy = bTy.getElementType();
+
+  if (!supportMFMATypes(aElemTy, bElemTy))
+    return false;
+
+  auto aShape = aTy.getShape();
+  auto bShape = bTy.getShape();
+
+  assert(aShape[1] == bShape[0]);
+  if (!supportMFMAGranularity(aShape[0], bShape[1], aShape[1]))
+    return false;
+
+  return true;
+}
+
+static bool supportWMMAGranularity(int m, int n, int k) {
+  return m % 16 == 0 && n % 16 == 0 && k % 16 == 0;
+}
+
+static bool supportWMMATypes(Type a, Type b, Type c, Type d) {
+  if (a != b || c != d)
+    return false;
+  if (a.isIntOrIndex()) {
+    if (!c.isIntOrIndex())
+      return false;
+    auto aWidth = a.getIntOrFloatBitWidth();
+    auto cWidth = c.getIntOrFloatBitWidth();
+    bool aValid = a.isUnsignedInteger() && (aWidth == 4 || aWidth == 8);
+    bool cValid = c.isSignedInteger() && cWidth == 32;
+    return aValid && cValid;
+  } else if (a.isa<FloatType>()) {
+    if (a.isBF16())
+      return c.isBF16() || c.isF32();
+    if (a.isF16())
+      return c.isF16() || c.isF32();
+  }
+  return false;
+}
+
+bool supportWMMA(triton::DotOp op) {
+  auto aTy = op.getA().getType().cast<RankedTensorType>();
+  auto bTy = op.getB().getType().cast<RankedTensorType>();
+  auto cTy = op.getC().getType().cast<RankedTensorType>();
+  auto dTy = op.getResult().getType().cast<RankedTensorType>();
+
+  auto aElemTy = aTy.getElementType();
+  auto bElemTy = bTy.getElementType();
+  auto cElemTy = cTy.getElementType();
+  auto dElemTy = dTy.getElementType();
+
+  if (!supportWMMATypes(aElemTy, bElemTy, cElemTy, dElemTy))
+    return false;
+
+  auto aShape = aTy.getShape();
+  auto bShape = bTy.getShape();
+
+  assert(aShape[1] == bShape[0]);
+  if (!supportWMMAGranularity(aShape[0], bShape[1], aShape[1]))
+    return false;
+
+  return true;
 }
 
 bool supportMMA(triton::DotOp op, int version) {
   // Refer to mma section for the data type supported by Volta and Hopper
   // Tensor Core in
   // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-fragment-mma-884-f16
-  auto aElemTy = op.getA().getType().cast<RankedTensorType>().getElementType();
-  auto bElemTy = op.getB().getType().cast<RankedTensorType>().getElementType();
+  auto aElemTy = op.getA().getType().getElementType();
+  auto bElemTy = op.getB().getType().getElementType();
   if (version == 3) {
-    if (::triton::tools::getBoolEnv("DISABLE_MMA_V3"))
+    if (triton::tools::getBoolEnv("DISABLE_MMA_V3"))
       return false;
-    auto retType = op.getResult().getType().cast<RankedTensorType>();
-    auto retShapePerCTA = triton::gpu::getShapePerCTA(retType);
-    auto mod = op->getParentOfType<mlir::ModuleOp>();
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-    if (!(numWarps % 4 == 0 && retShapePerCTA[0] % 64 == 0 &&
-          retShapePerCTA[1] % 8 == 0 &&
+    auto retType = op.getType();
+    auto retShapePerCTA = getShapePerCTA(retType);
+    auto rank = retShapePerCTA.size();
+    auto mod = op->getParentOfType<ModuleOp>();
+    int numWarps = TritonGPUDialect::getNumWarps(mod);
+    if (!(numWarps % 4 == 0 && retShapePerCTA[rank - 2] % 64 == 0 &&
+          retShapePerCTA[rank - 1] % 8 == 0 &&
           (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FNUZ() ||
            aElemTy.isInteger(8) || aElemTy.isF16() || aElemTy.isBF16() ||
            aElemTy.isF32()))) {
@@ -412,7 +549,7 @@ bool supportMMA(triton::DotOp op, int version) {
     }
   }
   if (aElemTy.isF32() && bElemTy.isF32()) {
-    return op.getAllowTF32() && version >= 2;
+    return op.getInputPrecision() == InputPrecision::TF32 && version >= 2;
   }
   return supportMMA(op.getA(), version) && supportMMA(op.getB(), version);
 }
@@ -423,20 +560,36 @@ bool supportMMA(Value value, int version) {
   // types of both the operands are identical here.
   assert((version == 1 || version == 2 || version == 3) &&
          "Unexpected MMA layout version found");
-  auto elemTy = value.getType().cast<RankedTensorType>().getElementType();
+  auto elemTy = value.getType().cast<TensorOrMemDesc>().getElementType();
   // FP8 is not natively supported on all mma versions but it can always be
   // promoted to fp16 therefore we can always support it.
   bool isFP8 = elemTy.isFloat8E5M2() || elemTy.isFloat8E4M3FN() ||
-               elemTy.isFloat8E5M2FNUZ() || elemTy.isFloat8E4M3FNUZ() ||
-               elemTy.isFloat8E4M3B11FNUZ();
+               elemTy.isFloat8E5M2FNUZ() || elemTy.isFloat8E4M3FNUZ();
   return isFP8 || elemTy.isF16() || elemTy.isBF16() ||
          (elemTy.isF32() && version >= 2) ||
          (elemTy.isInteger(8) && version >= 2);
 }
 
+bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
+  auto srcLayout = srcTy.getEncoding();
+  auto dstLayout = dstTy.getEncoding();
+  auto mfmaLayout = srcLayout.cast<AMDMfmaEncodingAttr>();
+  auto dotOperandLayout = dstLayout.cast<DotOperandEncodingAttr>();
+  // TODO: Remove the restriction on the warpsPerCTA once chain dot testing is
+  // improved. In addition, we can enable this shortcut for regular MFMA
+  // layout when opIdx == 1.
+  return mfmaLayout.getWarpsPerCTA()[1] == 1 &&
+         dotOperandLayout.getOpIdx() == 0 &&
+         dotOperandLayout.getKWidth() == 4 &&
+         dotOperandLayout.getParent() == mfmaLayout &&
+         (mfmaLayout.getMDim() == 32 || mfmaLayout.getMDim() == 16) &&
+         mfmaLayout.getIsTransposed() &&
+         (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16());
+}
+
 static bool isMmaToMmaShortcut(Attribute srcEncoding, Attribute dstEncoding) {
-  auto src = srcEncoding.dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>();
-  auto dst = dstEncoding.dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>();
+  auto src = srcEncoding.dyn_cast<NvidiaMmaEncodingAttr>();
+  auto dst = dstEncoding.dyn_cast<NvidiaMmaEncodingAttr>();
   if (!src || !dst)
     return false;
   // when #mma = MmaEncoding<version=3, warpsPerCTA=[..., 1]>
@@ -454,12 +607,13 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
                                    RankedTensorType dstTy) {
   auto srcLayout = srcTy.getEncoding();
   auto dstLayout = dstTy.getEncoding();
-  auto mmaLayout = srcLayout.cast<triton::gpu::NvidiaMmaEncodingAttr>();
-  auto dotOperandLayout = dstLayout.cast<triton::gpu::DotOperandEncodingAttr>();
-  auto ans =
-      mmaLayout.getVersionMajor() == 3 && dotOperandLayout.getOpIdx() == 0 &&
-      isMmaToMmaShortcut(dotOperandLayout.getParent(), srcLayout) &&
-      (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16());
+  auto mmaLayout = srcLayout.cast<NvidiaMmaEncodingAttr>();
+  auto dotOperandLayout = dstLayout.cast<DotOperandEncodingAttr>();
+  int elementTypeSize = srcTy.getElementType().getIntOrFloatBitWidth();
+  auto ans = mmaLayout.getVersionMajor() == 3 &&
+             dotOperandLayout.getOpIdx() == 0 &&
+             isMmaToMmaShortcut(dotOperandLayout.getParent(), srcLayout) &&
+             (elementTypeSize == 16 || elementTypeSize == 8);
   return ans;
 }
 
@@ -470,26 +624,13 @@ bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
   // when #mma = MmaEncoding<version=2, warpsPerCTA=[..., 1]>
   auto srcLayout = srcTy.getEncoding();
   auto dstLayout = dstTy.getEncoding();
-  auto mmaLayout = srcLayout.cast<triton::gpu::NvidiaMmaEncodingAttr>();
-  auto dotOperandLayout = dstLayout.cast<triton::gpu::DotOperandEncodingAttr>();
+  auto mmaLayout = srcLayout.cast<NvidiaMmaEncodingAttr>();
+  auto dotOperandLayout = dstLayout.cast<DotOperandEncodingAttr>();
   return mmaLayout.getVersionMajor() == 2 &&
          mmaLayout.getWarpsPerCTA()[1] == 1 &&
          dotOperandLayout.getOpIdx() == 0 &&
          dotOperandLayout.getParent() == mmaLayout &&
          !srcTy.getElementType().isF32();
-}
-
-bool isSingleValue(Value value) {
-  // Don't consider load as expensive if it is loading a scalar.
-  if (auto tensorTy = value.getType().dyn_cast<RankedTensorType>())
-    return tensorTy.getNumElements() == 1;
-  // TODO: Handle other cases.
-  // For example, when ptr is a tensor of single value.
-  // It means that ptr is a resultant of broadcast or generated through
-  // a chain of broadcast and other operations.
-  // Rematerialize it without considering contiguous memory access pattern is
-  // fine.
-  return true;
 }
 
 namespace {
@@ -637,7 +778,7 @@ SetVector<Operation *> multiRootGetSlice(Operation *op,
     auto *currentOp = (slice)[currentIndex];
     // Compute and insert the backwardSlice starting from currentOp.
     backwardSlice.clear();
-    mlir::BackwardSliceOptions opt;
+    BackwardSliceOptions opt;
     opt.omitBlockArguments = true;
     opt.filter = backwardFilter;
     getBackwardSlice(currentOp, &backwardSlice, opt);
@@ -711,13 +852,13 @@ std::unique_ptr<DataFlowSolver> createDataFlowSolver() {
   return solver;
 }
 
-static triton::MakeTensorPtrOp getMakeTensorPtrOpImpl(Operation *op, Value v) {
+static MakeTensorPtrOp getMakeTensorPtrOpImpl(Operation *op, Value v) {
 
-  if (auto makeTensorPtrOp = dyn_cast<triton::MakeTensorPtrOp>(op)) {
+  if (auto makeTensorPtrOp = dyn_cast<MakeTensorPtrOp>(op)) {
     return makeTensorPtrOp;
   }
 
-  if (auto advanceOp = dyn_cast<triton::AdvanceOp>(op)) {
+  if (auto advanceOp = dyn_cast<AdvanceOp>(op)) {
     return getMakeTensorPtrOp(advanceOp.getPtr());
   }
 
@@ -737,7 +878,7 @@ static triton::MakeTensorPtrOp getMakeTensorPtrOpImpl(Operation *op, Value v) {
   llvm_unreachable("Unable to getMakeTensorPtr()");
 }
 
-triton::MakeTensorPtrOp getMakeTensorPtrOp(Value v) {
+MakeTensorPtrOp getMakeTensorPtrOp(Value v) {
   using BranchOps = llvm::SetVector<std::pair<Operation *, int>>;
   llvm::DenseMap<Block *, BranchOps> blockToCFOps;
   auto moduleOp =
@@ -767,7 +908,7 @@ triton::MakeTensorPtrOp getMakeTensorPtrOp(Value v) {
   if (auto forOp = dyn_cast<scf::ForOp>(argOwner))
     return getMakeTensorPtrOp(
         forOp.getOperand(argNum + forOp.getNumControlOperands() - 1));
-  if (auto funcOp = dyn_cast<mlir::triton::FuncOp>(argOwner)) {
+  if (auto funcOp = dyn_cast<FuncOp>(argOwner)) {
     Block *block = arg.getOwner();
     Operation *op;
     int tOrF;

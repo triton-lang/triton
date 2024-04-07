@@ -127,6 +127,13 @@ protected:
     runDistributed2d(row, col, layout, /*multiCTA=*/false, refStr);
   }
 
+  void runWmmaSingleCTA(int row, int col, llvm::ArrayRef<unsigned> warpsPerCTA,
+                        const std::string &refStr) {
+    auto layout =
+        AMDWmmaEncodingAttr::get(&context, warpsPerCTA, getSingleCTALayout2d());
+    runDistributed2d(row, col, layout, /*multiCTA=*/false, refStr);
+  }
+
   void runDotOpSingleCTA(int row, int col, unsigned versionMajor,
                          unsigned versionMinor,
                          llvm::ArrayRef<unsigned> warpsPerCTA,
@@ -312,6 +319,8 @@ TEST_F(EmitIndicesTest, BlockedLayout_SingleCTA_Vectorize) {
                         /*order=*/{1, 0}, /*refStr=*/refStr);
 }
 
+// FIXME: These tests are temporarily disabled due to ctaid.x|y|z are swapped
+#ifdef TEST_FAILED
 TEST_F(EmitIndicesTest, BlockedLayout_MultiCTA_CTAOrder_1_0) {
   // clang-format off
   std::string refStr =
@@ -476,6 +485,89 @@ TEST_F(EmitIndicesTest, BlockedLayout_MultiCTA_CTAWrapBeforeBroadcast_Dim0) {
                        /*refStr=*/refStr);
 }
 
+TEST_F(EmitIndicesTest, SliceLayout_MultiCTA) {
+  // clang-format off
+  std::string refStr =
+      "CTA0: T0:0|CTA0: T1:0|CTA0: T2:0|CTA0: T3:0  |  CTA1: T0:0|CTA1: T1:0|CTA1: T2:0|CTA1: T3:0,"
+      "CTA0: T4:0|CTA0: T5:0|CTA0: T6:0|CTA0: T7:0  |  CTA1: T4:0|CTA1: T5:0|CTA1: T6:0|CTA1: T7:0,"
+      "CTA0: T8:0|CTA0: T9:0|CTA0:T10:0|CTA0:T11:0  |  CTA1: T8:0|CTA1: T9:0|CTA1:T10:0|CTA1:T11:0,"
+      "CTA0:T12:0|CTA0:T13:0|CTA0:T14:0|CTA0:T15:0  |  CTA1:T12:0|CTA1:T13:0|CTA1:T14:0|CTA1:T15:0,"
+      "CTA0:T16:0|CTA0:T17:0|CTA0:T18:0|CTA0:T19:0  |  CTA1:T16:0|CTA1:T17:0|CTA1:T18:0|CTA1:T19:0,"
+      "CTA0:T20:0|CTA0:T21:0|CTA0:T22:0|CTA0:T23:0  |  CTA1:T20:0|CTA1:T21:0|CTA1:T22:0|CTA1:T23:0,"
+      "CTA0:T24:0|CTA0:T25:0|CTA0:T26:0|CTA0:T27:0  |  CTA1:T24:0|CTA1:T25:0|CTA1:T26:0|CTA1:T27:0,"
+      "CTA0:T28:0|CTA0:T29:0|CTA0:T30:0|CTA0:T31:0  |  CTA1:T28:0|CTA1:T29:0|CTA1:T30:0|CTA1:T31:0,"
+
+      "CTA2: T0:0|CTA2: T1:0|CTA2: T2:0|CTA2: T3:0  |  CTA3: T0:0|CTA3: T1:0|CTA3: T2:0|CTA3: T3:0,"
+      "CTA2: T4:0|CTA2: T5:0|CTA2: T6:0|CTA2: T7:0  |  CTA3: T4:0|CTA3: T5:0|CTA3: T6:0|CTA3: T7:0,"
+      "CTA2: T8:0|CTA2: T9:0|CTA2:T10:0|CTA2:T11:0  |  CTA3: T8:0|CTA3: T9:0|CTA3:T10:0|CTA3:T11:0,"
+      "CTA2:T12:0|CTA2:T13:0|CTA2:T14:0|CTA2:T15:0  |  CTA3:T12:0|CTA3:T13:0|CTA3:T14:0|CTA3:T15:0,"
+      "CTA2:T16:0|CTA2:T17:0|CTA2:T18:0|CTA2:T19:0  |  CTA3:T16:0|CTA3:T17:0|CTA3:T18:0|CTA3:T19:0,"
+      "CTA2:T20:0|CTA2:T21:0|CTA2:T22:0|CTA2:T23:0  |  CTA3:T20:0|CTA3:T21:0|CTA3:T22:0|CTA3:T23:0,"
+      "CTA2:T24:0|CTA2:T25:0|CTA2:T26:0|CTA2:T27:0  |  CTA3:T24:0|CTA3:T25:0|CTA3:T26:0|CTA3:T27:0,"
+      "CTA2:T28:0|CTA2:T29:0|CTA2:T30:0|CTA2:T31:0  |  CTA3:T28:0|CTA3:T29:0|CTA3:T30:0|CTA3:T31:0\n";
+  // clang-format on
+
+  runSliceBlockedMultiCTA(/*size=*/16, /*sizePerThread=*/{1, 1},
+                          /*threadsPerWarp=*/{8, 4}, /*warpsPerCTA=*/{1, 1},
+                          /*order=*/{1, 0}, /*CTAsPerCGA=*/{2, 2},
+                          /*CTASplitNum=*/{2, 2}, /*CTAOrder=*/{1, 0},
+                          /*sliceDim=*/1, /*refStr=*/refStr);
+}
+
+//===----------------------------------------------------------------------===//
+// Tests for SharedEncodingAttr
+//===----------------------------------------------------------------------===//
+
+TEST_F(EmitIndicesTest, SharedLayout) {
+  // clang-format off
+  std::string refStr =
+      "(0: 0),(0: 1),(0: 2),(0: 3),(0: 4),(0: 5),(0: 6),(0: 7),(0: 8),(0: 9),(0:10),(0:11),(0:12),(0:13),(0:14),(0:15),(0:16),(0:17),(0:18),(0:19),(0:20),(0:21),(0:22),(0:23),(0:24),(0:25),(0:26),(0:27),(0:28),(0:29),(0:30),(0:31)\n"
+      "(1: 0),(1: 1),(1: 2),(1: 3),(1: 4),(1: 5),(1: 6),(1: 7),(1: 8),(1: 9),(1:10),(1:11),(1:12),(1:13),(1:14),(1:15),(1:16),(1:17),(1:18),(1:19),(1:20),(1:21),(1:22),(1:23),(1:24),(1:25),(1:26),(1:27),(1:28),(1:29),(1:30),(1:31)\n"
+      "(2: 8),(2: 9),(2:10),(2:11),(2:12),(2:13),(2:14),(2:15),(2: 0),(2: 1),(2: 2),(2: 3),(2: 4),(2: 5),(2: 6),(2: 7),(2:24),(2:25),(2:26),(2:27),(2:28),(2:29),(2:30),(2:31),(2:16),(2:17),(2:18),(2:19),(2:20),(2:21),(2:22),(2:23)\n"
+      "(3: 8),(3: 9),(3:10),(3:11),(3:12),(3:13),(3:14),(3:15),(3: 0),(3: 1),(3: 2),(3: 3),(3: 4),(3: 5),(3: 6),(3: 7),(3:24),(3:25),(3:26),(3:27),(3:28),(3:29),(3:30),(3:31),(3:16),(3:17),(3:18),(3:19),(3:20),(3:21),(3:22),(3:23)\n"
+      "(4:16),(4:17),(4:18),(4:19),(4:20),(4:21),(4:22),(4:23),(4:24),(4:25),(4:26),(4:27),(4:28),(4:29),(4:30),(4:31),(4: 0),(4: 1),(4: 2),(4: 3),(4: 4),(4: 5),(4: 6),(4: 7),(4: 8),(4: 9),(4:10),(4:11),(4:12),(4:13),(4:14),(4:15)\n"
+      "(5:16),(5:17),(5:18),(5:19),(5:20),(5:21),(5:22),(5:23),(5:24),(5:25),(5:26),(5:27),(5:28),(5:29),(5:30),(5:31),(5: 0),(5: 1),(5: 2),(5: 3),(5: 4),(5: 5),(5: 6),(5: 7),(5: 8),(5: 9),(5:10),(5:11),(5:12),(5:13),(5:14),(5:15)\n"
+      "(6:24),(6:25),(6:26),(6:27),(6:28),(6:29),(6:30),(6:31),(6:16),(6:17),(6:18),(6:19),(6:20),(6:21),(6:22),(6:23),(6: 8),(6: 9),(6:10),(6:11),(6:12),(6:13),(6:14),(6:15),(6: 0),(6: 1),(6: 2),(6: 3),(6: 4),(6: 5),(6: 6),(6: 7)\n"
+      "(7:24),(7:25),(7:26),(7:27),(7:28),(7:29),(7:30),(7:31),(7:16),(7:17),(7:18),(7:19),(7:20),(7:21),(7:22),(7:23),(7: 8),(7: 9),(7:10),(7:11),(7:12),(7:13),(7:14),(7:15),(7: 0),(7: 1),(7: 2),(7: 3),(7: 4),(7: 5),(7: 6),(7: 7)\n";
+  // clang-format on
+
+  runSharedSingleCTA(/*row=*/8, /*col=*/32, /*rowMajor=*/true,
+                     /*elemTyStr=*/"F16", /*refStr=*/refStr);
+}
+
+TEST_F(EmitIndicesTest, LayoutVisualizer_Blocked) {
+  CTALayoutAttr CTALayout =
+      CTALayoutAttr::get(/*context=*/&context, /*CTAsPerCGA=*/{2, 2},
+                         /*CTASplitNum=*/{2, 2}, /*CTAOrder=*/{1, 0});
+
+  Attribute blockedLayout = BlockedEncodingAttr::get(
+      /*context=*/&context, /*sizePerThread=*/{1, 4},
+      /*threadsPerWarp=*/{2, 16},
+      /*warpsPerCTA=*/{4, 1}, /*order=*/{1, 0}, /*CTALayout=*/CTALayout);
+
+  llvm::SmallVector<int64_t> shape = {/*row=*/128, /*col=*/128};
+
+  std::ofstream ofs("blockedLayout.csv");
+  ofs << dumpDistributedLayout(blockedLayout, shape, /*multiCTA=*/true);
+}
+
+TEST_F(EmitIndicesTest, LayoutVisualizer_Shared) {
+  CTALayoutAttr CTALayout =
+      CTALayoutAttr::get(/*context=*/&context, /*CTAsPerCGA=*/{1, 1},
+                         /*CTASplitNum=*/{1, 1}, /*CTAOrder=*/{1, 0});
+
+  Attribute sharedLayout = SharedEncodingAttr::get(
+      /*context=*/&context, /*vec=*/1, /*perPhase=*/2, /*maxPhase=*/8,
+      /*order=*/{0, 1}, /*CTALayout=*/CTALayout);
+
+  llvm::SmallVector<int64_t> shape = {/*row=*/16, /*col=*/16};
+  Type elemTy = FloatType::getF16(&context);
+
+  std::ofstream ofs("sharedLayout.csv");
+  ofs << dumpSharedLayout(sharedLayout, shape, elemTy, /*multiCTA=*/false);
+}
+#endif
+
 //===----------------------------------------------------------------------===//
 // Tests for SliceEncodingAttr
 //===----------------------------------------------------------------------===//
@@ -512,35 +604,6 @@ TEST_F(EmitIndicesTest, SliceLayout_SingleCTA_SliceDim0) {
                            /*order=*/{1, 0}, /*sliceDim=*/0, /*refStr=*/refStr);
 }
 
-TEST_F(EmitIndicesTest, SliceLayout_MultiCTA) {
-  // clang-format off
-  std::string refStr =
-      "CTA0: T0:0|CTA0: T1:0|CTA0: T2:0|CTA0: T3:0  |  CTA1: T0:0|CTA1: T1:0|CTA1: T2:0|CTA1: T3:0,"
-      "CTA0: T4:0|CTA0: T5:0|CTA0: T6:0|CTA0: T7:0  |  CTA1: T4:0|CTA1: T5:0|CTA1: T6:0|CTA1: T7:0,"
-      "CTA0: T8:0|CTA0: T9:0|CTA0:T10:0|CTA0:T11:0  |  CTA1: T8:0|CTA1: T9:0|CTA1:T10:0|CTA1:T11:0,"
-      "CTA0:T12:0|CTA0:T13:0|CTA0:T14:0|CTA0:T15:0  |  CTA1:T12:0|CTA1:T13:0|CTA1:T14:0|CTA1:T15:0,"
-      "CTA0:T16:0|CTA0:T17:0|CTA0:T18:0|CTA0:T19:0  |  CTA1:T16:0|CTA1:T17:0|CTA1:T18:0|CTA1:T19:0,"
-      "CTA0:T20:0|CTA0:T21:0|CTA0:T22:0|CTA0:T23:0  |  CTA1:T20:0|CTA1:T21:0|CTA1:T22:0|CTA1:T23:0,"
-      "CTA0:T24:0|CTA0:T25:0|CTA0:T26:0|CTA0:T27:0  |  CTA1:T24:0|CTA1:T25:0|CTA1:T26:0|CTA1:T27:0,"
-      "CTA0:T28:0|CTA0:T29:0|CTA0:T30:0|CTA0:T31:0  |  CTA1:T28:0|CTA1:T29:0|CTA1:T30:0|CTA1:T31:0,"
-
-      "CTA2: T0:0|CTA2: T1:0|CTA2: T2:0|CTA2: T3:0  |  CTA3: T0:0|CTA3: T1:0|CTA3: T2:0|CTA3: T3:0,"
-      "CTA2: T4:0|CTA2: T5:0|CTA2: T6:0|CTA2: T7:0  |  CTA3: T4:0|CTA3: T5:0|CTA3: T6:0|CTA3: T7:0,"
-      "CTA2: T8:0|CTA2: T9:0|CTA2:T10:0|CTA2:T11:0  |  CTA3: T8:0|CTA3: T9:0|CTA3:T10:0|CTA3:T11:0,"
-      "CTA2:T12:0|CTA2:T13:0|CTA2:T14:0|CTA2:T15:0  |  CTA3:T12:0|CTA3:T13:0|CTA3:T14:0|CTA3:T15:0,"
-      "CTA2:T16:0|CTA2:T17:0|CTA2:T18:0|CTA2:T19:0  |  CTA3:T16:0|CTA3:T17:0|CTA3:T18:0|CTA3:T19:0,"
-      "CTA2:T20:0|CTA2:T21:0|CTA2:T22:0|CTA2:T23:0  |  CTA3:T20:0|CTA3:T21:0|CTA3:T22:0|CTA3:T23:0,"
-      "CTA2:T24:0|CTA2:T25:0|CTA2:T26:0|CTA2:T27:0  |  CTA3:T24:0|CTA3:T25:0|CTA3:T26:0|CTA3:T27:0,"
-      "CTA2:T28:0|CTA2:T29:0|CTA2:T30:0|CTA2:T31:0  |  CTA3:T28:0|CTA3:T29:0|CTA3:T30:0|CTA3:T31:0\n";
-  // clang-format on
-
-  runSliceBlockedMultiCTA(/*size=*/16, /*sizePerThread=*/{1, 1},
-                          /*threadsPerWarp=*/{8, 4}, /*warpsPerCTA=*/{1, 1},
-                          /*order=*/{1, 0}, /*CTAsPerCGA=*/{2, 2},
-                          /*CTASplitNum=*/{2, 2}, /*CTAOrder=*/{1, 0},
-                          /*sliceDim=*/1, /*refStr=*/refStr);
-}
-
 //===----------------------------------------------------------------------===//
 // Tests for NvidiaMmaEncodingAttr
 //===----------------------------------------------------------------------===//
@@ -572,24 +635,33 @@ TEST_F(EmitIndicesTest, MmaLayout) {
 }
 
 //===----------------------------------------------------------------------===//
-// Tests for SharedEncodingAttr
+// Tests for AMDWmmaEncodingAttr
 //===----------------------------------------------------------------------===//
 
-TEST_F(EmitIndicesTest, SharedLayout) {
+TEST_F(EmitIndicesTest, WmmaLayout) {
   // clang-format off
   std::string refStr =
-      "(0: 0),(0: 1),(0: 2),(0: 3),(0: 4),(0: 5),(0: 6),(0: 7),(0: 8),(0: 9),(0:10),(0:11),(0:12),(0:13),(0:14),(0:15),(0:16),(0:17),(0:18),(0:19),(0:20),(0:21),(0:22),(0:23),(0:24),(0:25),(0:26),(0:27),(0:28),(0:29),(0:30),(0:31)\n"
-      "(1: 0),(1: 1),(1: 2),(1: 3),(1: 4),(1: 5),(1: 6),(1: 7),(1: 8),(1: 9),(1:10),(1:11),(1:12),(1:13),(1:14),(1:15),(1:16),(1:17),(1:18),(1:19),(1:20),(1:21),(1:22),(1:23),(1:24),(1:25),(1:26),(1:27),(1:28),(1:29),(1:30),(1:31)\n"
-      "(2: 8),(2: 9),(2:10),(2:11),(2:12),(2:13),(2:14),(2:15),(2: 0),(2: 1),(2: 2),(2: 3),(2: 4),(2: 5),(2: 6),(2: 7),(2:24),(2:25),(2:26),(2:27),(2:28),(2:29),(2:30),(2:31),(2:16),(2:17),(2:18),(2:19),(2:20),(2:21),(2:22),(2:23)\n"
-      "(3: 8),(3: 9),(3:10),(3:11),(3:12),(3:13),(3:14),(3:15),(3: 0),(3: 1),(3: 2),(3: 3),(3: 4),(3: 5),(3: 6),(3: 7),(3:24),(3:25),(3:26),(3:27),(3:28),(3:29),(3:30),(3:31),(3:16),(3:17),(3:18),(3:19),(3:20),(3:21),(3:22),(3:23)\n"
-      "(4:16),(4:17),(4:18),(4:19),(4:20),(4:21),(4:22),(4:23),(4:24),(4:25),(4:26),(4:27),(4:28),(4:29),(4:30),(4:31),(4: 0),(4: 1),(4: 2),(4: 3),(4: 4),(4: 5),(4: 6),(4: 7),(4: 8),(4: 9),(4:10),(4:11),(4:12),(4:13),(4:14),(4:15)\n"
-      "(5:16),(5:17),(5:18),(5:19),(5:20),(5:21),(5:22),(5:23),(5:24),(5:25),(5:26),(5:27),(5:28),(5:29),(5:30),(5:31),(5: 0),(5: 1),(5: 2),(5: 3),(5: 4),(5: 5),(5: 6),(5: 7),(5: 8),(5: 9),(5:10),(5:11),(5:12),(5:13),(5:14),(5:15)\n"
-      "(6:24),(6:25),(6:26),(6:27),(6:28),(6:29),(6:30),(6:31),(6:16),(6:17),(6:18),(6:19),(6:20),(6:21),(6:22),(6:23),(6: 8),(6: 9),(6:10),(6:11),(6:12),(6:13),(6:14),(6:15),(6: 0),(6: 1),(6: 2),(6: 3),(6: 4),(6: 5),(6: 6),(6: 7)\n"
-      "(7:24),(7:25),(7:26),(7:27),(7:28),(7:29),(7:30),(7:31),(7:16),(7:17),(7:18),(7:19),(7:20),(7:21),(7:22),(7:23),(7: 8),(7: 9),(7:10),(7:11),(7:12),(7:13),(7:14),(7:15),(7: 0),(7: 1),(7: 2),(7: 3),(7: 4),(7: 5),(7: 6),(7: 7)\n";
+      "T0:0,T1:0,T2:0,T3:0,T4:0,T5:0,T6:0,T7:0,T8:0,T9:0,T10:0,T11:0,T12:0,T13:0,T14:0,T15:0\n"
+      "T16:0,T17:0,T18:0,T19:0,T20:0,T21:0,T22:0,T23:0,T24:0,T25:0,T26:0,T27:0,T28:0,T29:0,T30:0,T31:0\n"
+      "T0:1,T1:1,T2:1,T3:1,T4:1,T5:1,T6:1,T7:1,T8:1,T9:1,T10:1,T11:1,T12:1,T13:1,T14:1,T15:1\n"
+      "T16:1,T17:1,T18:1,T19:1,T20:1,T21:1,T22:1,T23:1,T24:1,T25:1,T26:1,T27:1,T28:1,T29:1,T30:1,T31:1\n"
+      "T0:2,T1:2,T2:2,T3:2,T4:2,T5:2,T6:2,T7:2,T8:2,T9:2,T10:2,T11:2,T12:2,T13:2,T14:2,T15:2\n"
+      "T16:2,T17:2,T18:2,T19:2,T20:2,T21:2,T22:2,T23:2,T24:2,T25:2,T26:2,T27:2,T28:2,T29:2,T30:2,T31:2\n"
+      "T0:3,T1:3,T2:3,T3:3,T4:3,T5:3,T6:3,T7:3,T8:3,T9:3,T10:3,T11:3,T12:3,T13:3,T14:3,T15:3\n"
+      "T16:3,T17:3,T18:3,T19:3,T20:3,T21:3,T22:3,T23:3,T24:3,T25:3,T26:3,T27:3,T28:3,T29:3,T30:3,T31:3\n"
+      "T0:4,T1:4,T2:4,T3:4,T4:4,T5:4,T6:4,T7:4,T8:4,T9:4,T10:4,T11:4,T12:4,T13:4,T14:4,T15:4\n"
+      "T16:4,T17:4,T18:4,T19:4,T20:4,T21:4,T22:4,T23:4,T24:4,T25:4,T26:4,T27:4,T28:4,T29:4,T30:4,T31:4\n"
+      "T0:5,T1:5,T2:5,T3:5,T4:5,T5:5,T6:5,T7:5,T8:5,T9:5,T10:5,T11:5,T12:5,T13:5,T14:5,T15:5\n"
+      "T16:5,T17:5,T18:5,T19:5,T20:5,T21:5,T22:5,T23:5,T24:5,T25:5,T26:5,T27:5,T28:5,T29:5,T30:5,T31:5\n"
+      "T0:6,T1:6,T2:6,T3:6,T4:6,T5:6,T6:6,T7:6,T8:6,T9:6,T10:6,T11:6,T12:6,T13:6,T14:6,T15:6\n"
+      "T16:6,T17:6,T18:6,T19:6,T20:6,T21:6,T22:6,T23:6,T24:6,T25:6,T26:6,T27:6,T28:6,T29:6,T30:6,T31:6\n"
+      "T0:7,T1:7,T2:7,T3:7,T4:7,T5:7,T6:7,T7:7,T8:7,T9:7,T10:7,T11:7,T12:7,T13:7,T14:7,T15:7\n"
+      "T16:7,T17:7,T18:7,T19:7,T20:7,T21:7,T22:7,T23:7,T24:7,T25:7,T26:7,T27:7,T28:7,T29:7,T30:7,T31:7\n";
   // clang-format on
 
-  runSharedSingleCTA(/*row=*/8, /*col=*/32, /*rowMajor=*/true,
-                     /*elemTyStr=*/"F16", /*refStr=*/refStr);
+  runWmmaSingleCTA(/*row=*/16, /*col=*/16,
+                   /*warpsPerCTA=*/{1, 1},
+                   /*refStr=*/refStr);
 }
 
 //===----------------------------------------------------------------------===//
@@ -598,22 +670,6 @@ TEST_F(EmitIndicesTest, SharedLayout) {
 // tensor. The output will be saved into a csv file which can be opened with
 // Microsoft Excel.
 //===----------------------------------------------------------------------===//
-
-TEST_F(EmitIndicesTest, LayoutVisualizer_Blocked) {
-  CTALayoutAttr CTALayout =
-      CTALayoutAttr::get(/*context=*/&context, /*CTAsPerCGA=*/{2, 2},
-                         /*CTASplitNum=*/{2, 2}, /*CTAOrder=*/{1, 0});
-
-  Attribute blockedLayout = BlockedEncodingAttr::get(
-      /*context=*/&context, /*sizePerThread=*/{1, 4},
-      /*threadsPerWarp=*/{2, 16},
-      /*warpsPerCTA=*/{4, 1}, /*order=*/{1, 0}, /*CTALayout=*/CTALayout);
-
-  llvm::SmallVector<int64_t> shape = {/*row=*/128, /*col=*/128};
-
-  std::ofstream ofs("blockedLayout.csv");
-  ofs << dumpDistributedLayout(blockedLayout, shape, /*multiCTA=*/true);
-}
 
 TEST_F(EmitIndicesTest, LayoutVisualizer_Slice) {
   CTALayoutAttr CTALayout =
@@ -648,20 +704,19 @@ TEST_F(EmitIndicesTest, LayoutVisualizer_Mma) {
   ofs << dumpDistributedLayout(mmaLayout, shape, /*multiCTA=*/false);
 }
 
-TEST_F(EmitIndicesTest, LayoutVisualizer_Shared) {
+TEST_F(EmitIndicesTest, LayoutVisualizer_Wmma) {
   CTALayoutAttr CTALayout =
       CTALayoutAttr::get(/*context=*/&context, /*CTAsPerCGA=*/{1, 1},
                          /*CTASplitNum=*/{1, 1}, /*CTAOrder=*/{1, 0});
 
-  Attribute sharedLayout = SharedEncodingAttr::get(
-      /*context=*/&context, /*vec=*/1, /*perPhase=*/2, /*maxPhase=*/8,
-      /*order=*/{0, 1}, /*CTALayout=*/CTALayout);
+  Attribute wmmaLayout = AMDWmmaEncodingAttr::get(
+      /*context=*/&context,
+      /*warpsPerCTA=*/{1, 1}, /*CTALayout=*/CTALayout);
 
   llvm::SmallVector<int64_t> shape = {/*row=*/16, /*col=*/16};
-  Type elemTy = FloatType::getF16(&context);
 
-  std::ofstream ofs("sharedLayout.csv");
-  ofs << dumpSharedLayout(sharedLayout, shape, elemTy, /*multiCTA=*/false);
+  std::ofstream ofs("WmmaLayout.csv");
+  ofs << dumpDistributedLayout(wmmaLayout, shape, /*multiCTA=*/false);
 }
 
 } // namespace gpu
@@ -674,6 +729,5 @@ TEST_F(EmitIndicesTest, LayoutVisualizer_Shared) {
 
 int main(int argc, char *argv[]) {
   testing::InitGoogleTest(&argc, argv);
-  // FIXME: These tests are temporarily disabled due to ctaid.x|y|z are swapped
-  // return RUN_ALL_TESTS();
+  return RUN_ALL_TESTS();
 }

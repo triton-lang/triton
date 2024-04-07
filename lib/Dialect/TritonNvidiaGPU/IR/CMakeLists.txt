@@ -1,7 +1,6 @@
-add_mlir_dialect_library(TritonNvidiaGPUIR
+add_triton_library(TritonNvidiaGPUIR
   Dialect.cpp
   Ops.cpp
-  Traits.cpp
   Types.cpp
 
   DEPENDS

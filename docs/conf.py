@@ -23,6 +23,7 @@
 # -- General configuration ------------------------------------------------
 
 import os
+import platform
 import shutil
 import sys
 import sysconfig
@@ -135,12 +136,13 @@ extensions = [
     'sphinx.ext.coverage',
     'sphinx.ext.napoleon',
     'sphinx_multiversion',
+    'sphinx.ext.autosectionlabel',
     'myst_parser',
 ]
 autosummary_generate = True
 
 # versioning config
-smv_tag_whitelist = r'^(v2.1.0)$'
+smv_tag_whitelist = r'^(v3.0.0)$'
 smv_branch_whitelist = r'^main$'
 smv_remote_whitelist = None
 smv_released_pattern = r'^tags/.*$'
@@ -154,13 +156,17 @@ sphinx_gallery_conf = {
     'examples_dirs': '../python/tutorials/',
     'gallery_dirs': 'getting-started/tutorials',
     'filename_pattern': '',
-    # XXX: Temporarily disable fused attention tutorial on V100
-    'ignore_pattern': r'(__init__\.py|09.*\.py|10.*\.py)',
+    # TODO: Re-enable the grouped-gemm tutorial.  It currently hits this
+    # assertion:
+    # https://github.com/openai/triton/blob/main/lib/Dialect/TritonNvidiaGPU/Transforms/FenceInsertion.cpp#L127
+    'ignore_pattern': r'(__init__\.py|11.*.py)',
     'within_subsection_order': FileNameSortKey,
     'reference_url': {
         'sphinx_gallery': None,
     },
-    'abort_on_example_error': True,
+    # Examples don't work on non-Linux platforms, because they actually run
+    # Triton.  But it's nice to be able to run the rest of the docs build.
+    'abort_on_example_error': platform.system() == 'Linux',
 }
 
 # Add any paths that contain templates here, relative to this directory.

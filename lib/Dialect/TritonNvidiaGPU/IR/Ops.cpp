@@ -41,8 +41,8 @@ mlir::LogicalResult DotAsyncOp::inferReturnTypes(
   inferredReturnTypes.push_back(accTy);
 
   // verify encodings
-  auto aEnc = operands[0].getType().cast<RankedTensorType>().getEncoding();
-  auto bEnc = operands[1].getType().cast<RankedTensorType>().getEncoding();
+  auto aEnc = operands[0].getType().cast<TensorOrMemDesc>().getEncoding();
+  auto bEnc = operands[1].getType().cast<TensorOrMemDesc>().getEncoding();
   auto retEnc = accTy.getEncoding();
   if (aEnc) {
     assert(bEnc);
@@ -54,29 +54,6 @@ mlir::LogicalResult DotAsyncOp::inferReturnTypes(
       return mlir::failure();
   }
   return mlir::success();
-}
-
-///--- Async related ops ---
-void GetAgentIdOp::build(::mlir::OpBuilder &builder,
-                         ::mlir::OperationState &state) {
-  build(builder, state, builder.getI32Type());
-}
-
-void CreateTokenOp::build(::mlir::OpBuilder &builder,
-                          ::mlir::OperationState &state, uint32_t num) {
-  auto tokenType = TokenType::get(builder.getContext());
-  auto resultType = RankedTensorType::get({num}, tokenType);
-  build(builder, state, resultType, num);
-}
-
-void GetMutexRoleIdOp::build(::mlir::OpBuilder &builder,
-                             ::mlir::OperationState &state, uint32_t num) {
-  build(builder, state, builder.getI32Type(), num);
-}
-
-void CreateMutexOp::build(::mlir::OpBuilder &builder,
-                          ::mlir::OperationState &state) {
-  build(builder, state, MutexType::get(builder.getContext()));
 }
 
 ///--- DotWaitOp ---

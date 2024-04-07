@@ -31,7 +31,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     %ci0 = arith.constant 0 : i32
     %i1_true = arith.constant 1 : i1
     %i1_false = arith.constant 0 : i1
-    %t = triton_gpu.alloc_tensor : tensor<1x64x16xf16, #shared0>
+    %t = triton_gpu.alloc : tensor<1x64x16xf16, #shared0>
     // TODO: even an empty init external call here will break the UT
     %mbar = triton_nvidia_gpu.alloc_mbarrier { count = 128 : i32 } : tensor<1xi64, #shared0>
     // %mbar0 = triton_nvidia_gpu.extract_mbarrier %mbar[%ci0] : tensor<1xi64, #shared0>, i32 -> !tt.ptr<i64, 3>
@@ -47,7 +47,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     %25 = tt.addptr %24, %16 : tensor<16x64x!tt.ptr<f16>, #blocked2>, tensor<16x64xi32, #blocked2>
     %26 = tt.load %25 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x64xf16, #blocked2>
     %28 = triton_gpu.convert_layout %26 : (tensor<16x64xf16, #blocked2>) -> tensor<16x64xf16, #shared1>
-    %29 = tt.dot %21, %28, %cst {allowTF32 = true, transA = false, transB = false} : tensor<64x16xf16, #shared0> * tensor<16x64xf16, #shared1> -> tensor<64x64xf32, #mma>
+    %29 = tt.dot %21, %28, %cst {inputPrecision = 0 : i32, transA = false, transB = false} : tensor<64x16xf16, #shared0> * tensor<16x64xf16, #shared1> -> tensor<64x64xf32, #mma>
     %30 = tt.splat %arg5 : (i32) -> tensor<64x1xi32, #blocked1>
     %31 = tt.splat %arg2 : (!tt.ptr<f32>) -> tensor<64x1x!tt.ptr<f32>, #blocked1>
     %32 = tt.expand_dims %14 {axis = 0 : i32} : (tensor<64xi32, #triton_gpu.slice<{dim = 0, parent = #blocked1}>>) -> tensor<1x64xi32, #blocked1>

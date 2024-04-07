@@ -1,11 +1,19 @@
 add_triton_ut(
 	NAME TestPtxAsmFormat
 	SRCS PTXAsmFormatTest.cpp
-	LIBS TritonGPUToLLVM
+	LIBS TritonGPUToLLVM TritonNVIDIAGPUToLLVM
 )
 
 add_triton_ut(
-	NAME TestEmitIndices
+	NAME TestEmitIndicesNvidia
 	SRCS EmitIndicesTest.cpp DumpLayout.cpp
-	LIBS TritonGPUIR TritonNvidiaGPUIR ${dialect_libs} ${conversion_libs}
+	LIBS TritonGPUIR TritonNvidiaGPUIR TritonNVIDIAGPUToLLVM
+	DEFS NVIDIA_TARGET=1
+)
+
+add_triton_ut(
+	NAME TestEmitIndicesAMD
+	SRCS EmitIndicesTest.cpp DumpLayout.cpp
+	LIBS TritonGPUIR TritonAMDGPUToLLVM
+	DEFS AMD_TARGET=1
 )

@@ -2,30 +2,31 @@
 #define TRITON_TYPES
 
 include "mlir/IR/AttrTypeBase.td"
+include "mlir/IR/BuiltinTypeInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonDialect.td"
 
 //
 // Types
 //
-class TritonTypeDef<string name, string _mnemonic>
-    : TypeDef<Triton_Dialect, name> {
+class TritonTypeDef<string name, string _mnemonic, list<Trait> traits = []>
+    : TypeDef<Triton_Dialect, name, traits> {
     // Used by printer/parser
     let mnemonic = _mnemonic;
 }
 
 // Floating-point Type
-def TT_Float : AnyTypeOf<[F8E4M3FNUZ, F8E4M3FN, F8E4M3B11FNUZ, F8E5M2, F16, BF16, F32, F64], "floating-point">;
-def TT_FloatTensor : TensorOf<[TT_Float]>;
+def TT_Float : AnyTypeOf<[F8E4M3FNUZ, F8E5M2, F8E5M2FNUZ, F16, BF16, F32, F64], "floating-point">;
+def TT_FloatTensor : RankedTensorOf<[TT_Float]>;
 def TT_FloatLike : AnyTypeOf<[TT_Float, TT_FloatTensor]>;
 
 // Boolean Type
 // TT_Bool -> I1
-def TT_BoolTensor : TensorOf<[I1]>;
+def TT_BoolTensor : RankedTensorOf<[I1]>;
 def TT_BoolLike : AnyTypeOf<[I1, TT_BoolTensor]>;
 
 // Integer Type
 def TT_Int : AnyTypeOf<[I1, I8, I16, I32, I64], "integer">;
-def TT_IntTensor : TensorOf<[TT_Int]>;
+def TT_IntTensor : RankedTensorOf<[TT_Int]>;
 def TT_IntLike : AnyTypeOf<[TT_Int, TT_IntTensor]>;
 
 // I32 Type
@@ -75,19 +76,65 @@ def TT_PtrType : TritonTypeDef<"Pointer", "ptr"> {
 def TT_Ptr : TT_PtrOf<[AnyType]>;
 
 // Tensor of Pointer Type: `tensor<ptr<>>`
-def TT_PtrTensor : TensorOf<[TT_Ptr]>;
+def TT_PtrTensor : RankedTensorOf<[TT_Ptr]>;
 
 // Tensor of Pointer Type or Pointer type: `tensor<ptr<>>` or `ptr<>`
 def TT_PtrLike : AnyTypeOf<[TT_Ptr, TT_PtrTensor]>;
 
 // Tensor Type
-def TT_FpIntTensor : AnyTypeOf<[TT_FloatTensor, TT_IntTensor]>;
-def TT_Tensor : AnyTypeOf<[TT_FpIntTensor, TT_PtrTensor]>;
+def TT_FpIntTensor : RankedTensorOf<[TT_Float, TT_Int]>;
+def TT_Tensor : RankedTensorOf<[TT_Float, TT_Int, TT_Ptr]>;
 
 // Pointer Type to Tensor Type: `ptr<tensor<>>`
 def TT_TensorPtr : TT_PtrOf<[TT_Tensor]>;
 
 // Any Type in Triton IR
 def TT_Type : AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike, TT_TensorPtr]>;
+
+// Memory descriptor type.
+def TT_MemDescType : TritonTypeDef<"MemDesc", "memdesc", [ShapedTypeInterface]> {
+    let summary = "memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system";
+
+    let description = [{
+        Memory descriptor contains a base pointer (scalar) and a descriptor of the memory.
+        If mutable memory is false that means the memory is constant and can only be allocated and stored once.
+        A constant memory allocation is different than a tensor as it can have multiple views and the descriptor
+        can be changed without changing the underlying memory.
+    }];
+
+  let parameters = (ins
+    ArrayRefParameter<"int64_t">:$shape,
+    "Type":$elementType,
+    "Attribute":$encoding,
+    "bool":$mutable_memory
+  );
+  let extraClassDeclaration = [{
+    MemDescType cloneWith(std::optional<ArrayRef<int64_t>> shape,
+                          Type elementType) const {
+        return MemDescType::get(shape.value_or(getShape()), elementType, getEncoding());
+    }
+
+    bool hasRank() const { return true; }
+  }];
+  let builders = [
+        TypeBuilderWithInferredContext<(ins
+            "llvm::ArrayRef<int64_t>":$shape,
+            "Type":$elementType,
+            "Attribute":$encoding
+        ), [{
+            return $_get(elementType.getContext(), shape, elementType, encoding, /*mutableMemory=*/false);
+        }]>,
+        TypeBuilderWithInferredContext<(ins
+            "llvm::ArrayRef<int64_t>":$shape,
+            "Type":$elementType,
+            "Attribute":$encoding,
+            "bool":$mutableMemory
+        ), [{
+            return $_get(elementType.getContext(), shape, elementType, encoding, mutableMemory);
+        }]>
+    ];
+  let hasCustomAssemblyFormat = 1;
+}
+
 
 #endif

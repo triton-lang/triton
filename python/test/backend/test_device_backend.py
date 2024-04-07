@@ -89,7 +89,7 @@ class ExtensionUtils:
     def __init__(self):
         dirname = os.path.dirname(os.path.realpath(__file__))
         src = Path(os.path.join(dirname, "extension_backend.c")).read_text()
-        key = hashlib.md5(src.encode("utf-8")).hexdigest()
+        key = hashlib.sha256(src.encode("utf-8")).hexdigest()
         cache = get_cache_manager(key)
         fname = "ext_utils.so"
         cache_path = cache.get_file(fname)

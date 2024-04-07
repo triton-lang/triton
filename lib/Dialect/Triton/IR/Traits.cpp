@@ -4,6 +4,7 @@
 
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 using namespace mlir;
@@ -96,11 +97,6 @@ LogicalResult OpTrait::impl::verifyTensorSize(Operation *op) {
   return success();
 }
 
-template <typename T> static int64_t accumProduct(T &&container) {
-  return std::accumulate(container.begin(), container.end(), 1,
-                         std::multiplies<int64_t>());
-}
-
 // Check that the Triton layouts on op's operands and return types are valid.
 // For example, we check that the number of warps per block in a Triton GPU
 // blocked layout matches that of its module.
@@ -121,6 +117,8 @@ LogicalResult OpTrait::impl::verifyTensorLayouts(Operation *op) {
     if (!layout)
       return success();
 
+    if (isa<ttg::SharedEncodingAttr>(layout))
+      return makeErr() << "Shared layout is not allowed on tensor type.";
     // TODO(jlebar): Currently this only checks blocked layouts, but other
     // layouts also have invariants!
 
@@ -138,7 +136,7 @@ LogicalResult OpTrait::impl::verifyTensorLayouts(Operation *op) {
 
       int moduleThreadsPerWarp =
           ttg::TritonGPUDialect::getThreadsPerWarp(module);
-      int64_t layoutThreadsPerWarp = accumProduct(blocked.getThreadsPerWarp());
+      int64_t layoutThreadsPerWarp = product(blocked.getThreadsPerWarp());
       if (layoutThreadsPerWarp != moduleThreadsPerWarp) {
         return makeErr() << layout << ".\nLayout has a total of "
                          << layoutThreadsPerWarp
@@ -147,7 +145,7 @@ LogicalResult OpTrait::impl::verifyTensorLayouts(Operation *op) {
       }
 
       int moduleWarpsPerCTA = ttg::TritonGPUDialect::getNumWarps(module);
-      int64_t layoutWarpsPerCTA = accumProduct(blocked.getWarpsPerCTA());
+      int64_t layoutWarpsPerCTA = product(blocked.getWarpsPerCTA());
       if (layoutWarpsPerCTA != moduleWarpsPerCTA) {
         return makeErr() << layout << ".\nLayout has a total of "
                          << layoutWarpsPerCTA
@@ -158,7 +156,7 @@ LogicalResult OpTrait::impl::verifyTensorLayouts(Operation *op) {
       if (blocked.getCTALayout().getCTAsPerCGA().size() > 0) {
         int moduleCTAsPerCGA = ttg::TritonGPUDialect::getNumCTAs(module);
         int64_t layoutCTAsPerCGA =
-            accumProduct(blocked.getCTALayout().getCTAsPerCGA());
+            product(blocked.getCTALayout().getCTAsPerCGA());
         if (layoutCTAsPerCGA != moduleCTAsPerCGA) {
           return makeErr() << layout << ".\nLayout has a total of "
                            << layoutCTAsPerCGA

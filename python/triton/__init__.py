@@ -1,5 +1,5 @@
 """isort:skip_file"""
-__version__ = '2.1.0'
+__version__ = '3.0.0'
 
 # ---------------------------------------
 # Note: import order is significant here.
@@ -14,10 +14,12 @@ from .runtime import (
     reinterpret,
     TensorWrapper,
     OutOfResources,
+    InterpreterError,
     MockTensor,
 )
 from .runtime.jit import jit
 from .compiler import compile, CompilationError
+from .errors import TritonError
 
 from . import language
 from . import testing
@@ -31,6 +33,7 @@ __all__ = [
     "Config",
     "heuristics",
     "impl",
+    "InterpreterError",
     "jit",
     "JITFunction",
     "KernelInterface",
@@ -42,6 +45,7 @@ __all__ = [
     "reinterpret",
     "runtime",
     "TensorWrapper",
+    "TritonError",
     "testing",
     "tools",
 ]

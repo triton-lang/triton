@@ -9,7 +9,7 @@
 //===----------------------------------------------------------------------===//
 //
 // This pass works after all other passes, inserting fences to ensure that
-// memory operations are properly ordered acorss genric and async proxy.
+// memory operations are properly ordered across generic and async proxy.
 //
 //===----------------------------------------------------------------------===//
 
@@ -44,22 +44,36 @@ public:
       return;
     ModuleOp mod = getOperation();
     mod.walk([&](Operation *op) {
-      if (isa<tt::DotOp, ttng::DotAsyncOp>(op)) {
-        OpBuilder builder(op);
-        auto a = op->getOperand(0);
-        auto b = op->getOperand(1);
-        auto mmaEncoding = op->getResult(0)
-                               .getType()
-                               .cast<RankedTensorType>()
-                               .getEncoding()
-                               .dyn_cast<ttg::NvidiaMmaEncodingAttr>();
-        auto isHopperEncoding = mmaEncoding && mmaEncoding.isHopper();
-        if (isHopperEncoding &&
-            (dependOnSharedEncOperand(a) || dependOnSharedEncOperand(b))) {
-          builder.create<ttng::FenceAsyncSharedOp>(op->getLoc(),
-                                                   false /*bCluster*/);
-        }
+      if (!isa<tt::DotOp, ttng::DotAsyncOp>(op))
+        return WalkResult::advance();
+      OpBuilder builder(op);
+      auto a = op->getOperand(0);
+      auto b = op->getOperand(1);
+      auto mmaEncoding = op->getResult(0)
+                             .getType()
+                             .cast<RankedTensorType>()
+                             .getEncoding()
+                             .dyn_cast<ttg::NvidiaMmaEncodingAttr>();
+      if (!mmaEncoding || !mmaEncoding.isHopper())
+        return WalkResult::advance();
+      bool aDependsOnShared = dependOnSharedEncOperand(a);
+      bool bDependsOnShared = dependOnSharedEncOperand(b);
+      if (!aDependsOnShared && !bDependsOnShared)
+        return WalkResult::advance();
+      Operation *fence = builder.create<ttng::FenceAsyncSharedOp>(
+          op->getLoc(), /*bCluster=*/false);
+      // If there is all the dependencies are outside of the loop try to hoist
+      // the fence.
+      while (auto loopOp = fence->getParentOfType<LoopLikeOpInterface>()) {
+        if (aDependsOnShared &&
+            loopOp->isAncestor(a.getParentBlock()->getParentOp()))
+          break;
+        if (bDependsOnShared &&
+            loopOp->isAncestor(b.getParentBlock()->getParentOp()))
+          break;
+        loopOp.moveOutOfLoop(fence);
       }
+      return WalkResult::advance();
     });
   }
 
@@ -71,7 +85,8 @@ private:
     if (op && isa<tt::DotOp, ttng::DotAsyncOp>(op))
       return false;
     // reach convertlayout
-    if (op && isa<ttg::ConvertLayoutOp>(op) && ttg::hasSharedEncoding(operand))
+    if (op && isa<ttg::LocalAllocOp>(op) &&
+        cast<ttg::LocalAllocOp>(op).getInit())
       return true;
     // root and not BlockArgument
     if (!op && !isa<BlockArgument>(operand))
@@ -88,7 +103,7 @@ private:
     if (BlockArgument arg = dyn_cast<BlockArgument>(operand)) {
       unsigned argNum = arg.getArgNumber();
       Operation *argOwner = arg.getOwner()->getParentOp();
-      // suport ForOp only
+      // support ForOp only
       if (auto forOp = dyn_cast<scf::ForOp>(argOwner)) {
         // prologue
         auto iterOperands = forOp.getInitArgs();

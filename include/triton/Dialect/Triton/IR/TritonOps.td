@@ -17,6 +17,13 @@ include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/CastInterfaces.td" // CastOpInterface
 include "mlir/Interfaces/CallInterfaces.td" // CallOpInterface
+include "triton/Dialect/Triton/IR/TritonTypeInterfaces.td"
+
+
+//
+// Interfaces
+//
+def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 
 //
 // Op Base
@@ -41,11 +48,11 @@ def TT_IntToPtrOp : TT_Op<"int_to_ptr", [Elementwise,
                                          /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
     let summary = "Cast int64 to pointer";
 
-    let arguments = (ins TT_I64Like:$from);
+    let arguments = (ins TT_I64Like:$src);
 
     let results = (outs TT_PtrLike:$result);
 
-    let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 }
 
 def TT_PtrToIntOp : TT_Op<"ptr_to_int", [Elementwise,
@@ -55,11 +62,11 @@ def TT_PtrToIntOp : TT_Op<"ptr_to_int", [Elementwise,
                                          /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
     let summary = "Cast pointer to int64";
 
-    let arguments = (ins TT_PtrLike:$from);
+    let arguments = (ins TT_PtrLike:$src);
 
     let results = (outs TT_I64Like:$result);
 
-    let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 }
 
 // arith.bitcast doesn't support pointers
@@ -70,11 +77,11 @@ def TT_BitcastOp : TT_Op<"bitcast", [Elementwise,
                                      /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
     let summary = "Cast between types of the same bitwidth";
 
-    let arguments = (ins TT_Type:$from);
+    let arguments = (ins TT_Type:$src);
 
     let results = (outs TT_Type:$result);
 
-    let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 
     // TODO: Add verifier
 }
@@ -91,13 +98,87 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
         F8 <-> FP16, BF16, FP32, FP64
     }];
 
-    let arguments = (ins TT_FloatTensor:$from, OptionalAttr<TT_RoundingModeAttr>:$rounding);
+    let arguments = (ins TT_FloatTensor:$src, OptionalAttr<TT_RoundingModeAttr>:$rounding);
 
     let results = (outs TT_FloatTensor:$result);
 
-    let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 
     let hasVerifier = 1;
+}
+
+//
+// Arithmetic Ops
+//
+
+def TT_ClampFOp : TT_Op<"clampf", [Elementwise,
+                                  SameOperandsAndResultType,
+                                  Pure]> {
+    let summary = "Clamp operation for floating point types";
+
+    let description = [{
+        Clamp operation for floating point types.
+
+        The operation takes three arguments: x, min, and max. It returns a tensor of the same shape as x with its values clamped to the range [min, max].
+    }];
+
+    let arguments = (ins TT_FloatLike:$x, TT_FloatLike:$min, TT_FloatLike:$max, TT_PropagateNanAttr:$propagateNan);
+
+    let results = (outs TT_FloatLike:$result);
+
+    let assemblyFormat = "$x `,` $min `,` $max attr-dict `:` type($result)";
+}
+
+//
+// Math Ops
+//
+
+def TT_PreciseSqrtOp : TT_Op<"precise_sqrt", [Elementwise,
+                                  SameOperandsAndResultType,
+                                  Pure]> {
+    let summary = "Precise sqrt for floating point types";
+
+    let description = [{
+        Precise sqrt for floating point types.
+    }];
+
+    let arguments = (ins TT_FloatLike:$x);
+
+    let results = (outs TT_FloatLike:$result);
+
+    let assemblyFormat = "$x attr-dict `:` type($x)";
+}
+
+def TT_PreciseDivFOp : TT_Op<"precise_divf", [Elementwise,
+                                  SameOperandsAndResultType,
+                                  Pure]> {
+    let summary = "Precise div for floating point types";
+
+    let description = [{
+        Precise div for floating point types.
+    }];
+
+    let arguments = (ins TT_FloatLike:$x, TT_FloatLike:$y);
+
+    let results = (outs TT_FloatLike:$result);
+
+    let assemblyFormat = "$x `,` $y attr-dict `:` type($x)";
+}
+
+def TT_MulhiUIOp : TT_Op<"mulhiui", [Elementwise,
+                                  SameOperandsAndResultType,
+                                  Pure]> {
+    let summary = "Most significant N bits of the 2N-bit product of two integers";
+
+    let description = [{
+        Most significant N bits of the 2N-bit product of two integers.
+    }];
+
+    let arguments = (ins TT_IntLike:$x, TT_IntLike:$y);
+
+    let results = (outs TT_IntLike:$result);
+
+    let assemblyFormat = "$x `,` $y attr-dict `:` type($x)";
 }
 
 //
@@ -187,7 +268,7 @@ def TT_LoadOp : TT_Op<"load",
 def TT_StoreOp : TT_Op<"store",
                        [SameLoadStoreOperandsShape,
                         SameLoadStoreOperandsEncoding,
-                        MemoryEffects<[MemWrite]>,
+                        MemoryEffects<[MemWrite<GlobalMemory>]>,
                         TypesMatchWith<"infer ptr type from value type",
                                        "value", "ptr", "$_self",
                                        "mlir::OpTrait::impl::verifyLoadStorePointerAndValueType">,
@@ -224,8 +305,8 @@ def TT_StoreOp : TT_Op<"store",
 //
 def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
                                           SameOperandsAndResultEncoding,
-                                          MemoryEffects<[MemRead]>,
-                                          MemoryEffects<[MemWrite]>,
+                                          MemoryEffects<[MemRead<GlobalMemory>]>,
+                                          MemoryEffects<[MemWrite<GlobalMemory>]>,
                                           TypesMatchWith<"infer ptr type from value type",
                                                          "val", "ptr",
                                                          "getPointerTypeSameShape($_self)">,
@@ -247,8 +328,8 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
     let results = (outs TT_Type:$result);
 }
 
-def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead]>,
-                                          MemoryEffects<[MemWrite]>,
+def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead<GlobalMemory>]>,
+                                          MemoryEffects<[MemWrite<GlobalMemory>]>,
                                           SameOperandsAndResultShape,
                                           SameOperandsAndResultEncoding]> {
     let summary = "atomic cas";
@@ -281,7 +362,7 @@ def TT_SplatOp : TT_Op<"splat", [Pure,
 
     let results = (outs TT_Tensor:$result);
 
-    let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 
     let hasFolder = 1;
 }
@@ -295,7 +376,7 @@ def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
 
     let results = (outs TT_Tensor:$result);
 
-    let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 
     let hasCanonicalizeMethod = 1;
     let hasFolder = 1;
@@ -329,13 +410,19 @@ def TT_ReshapeOp : TT_Op<"reshape", [Pure,
 def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
                                          SameOperandsAndResultElementType,
                                          SameOperandsAndResultEncoding]> {
-    let summary = "broadcast. No left-padding as of now.";
+    let summary = "broadcast a tensor";
 
-    let arguments = (ins TT_Type:$src);
+    let description = [{
+      For a given tensor, broadcast changes one or more dimensions with size 1
+      to a new size, e.g. tensor<1x32x1xf32> -> tensor<2x32x4xf32>.  You cannot
+      change the size of a non-1 dimension.
+    }];
 
-    let results = (outs TT_Type:$result);
+    let arguments = (ins TT_Tensor:$src);
 
-    let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
+    let results = (outs TT_Tensor:$result);
+
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 
     let hasCanonicalizeMethod = 1;
     let hasFolder = 1;
@@ -343,6 +430,7 @@ def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
 
 // cat is not `pure` because it may reorder elements
 def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
+                             SameTypeOperands,
                              SameOperandsAndResultElementType]> {
     let summary = "concatenate 2 tensors";
 
@@ -350,33 +438,91 @@ def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
 
     let results = (outs TT_Tensor:$result);
 
-    let assemblyFormat = "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
+    let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
 }
 
-def TT_ExperimentalInterleaveOp : TT_Op<"experimental_interleave", [NoMemoryEffect, SameTypeOperands, SameOperandsAndResultElementType]> {
-    let summary = "interleave two tensors in their minor dimension";
+def TT_JoinOp : TT_Op<"join", [
+    NoMemoryEffect, SameTypeOperands,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>,
+]> {
+    let summary = "join two tensors along a new, minor dimension";
     let description = [{
-        For example, if the two input tensors are [1,2,3] and [4,5,6],
-        interleaving them returns [1,4,2,5,3,6].
+        For example, if the two input tensors are 4x8xf32, returns a tensor of
+        shape 4x8x2xf32.
+
+        Because Triton tensors always have a power-of-two number of elements,
+        the two input tensors must have the same shape.
     }];
 
     let arguments = (ins TT_Tensor:$lhs, TT_Tensor:$rhs);
     let results = (outs TT_Tensor:$result);
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
-    let hasVerifier = 1;
+}
+
+def TT_SplitOp : TT_Op<"split", [
+  NoMemoryEffect,
+  DeclareOpInterfaceMethods<InferTypeOpInterface>,
+  TypesMatchWith<"outLHS and outRHS types match",
+                  "outLHS", "outRHS", "$_self">,
+]> {
+    let summary = "splits a tensor into two, along its last dimension";
+    let description = [{
+        The input must be a tensor whose last dimension has size 2.  Returns two
+        tensors, src[..., 0] and src[..., 1].
+
+        For example, if the input shape is 4x8x2xf32, returns two tensors of
+        shape 4x8xf32.
+    }];
+
+    let arguments = (ins TT_Tensor:$src);
+    let results = (outs TT_Tensor:$outLHS, TT_Tensor:$outRHS);
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($outLHS)";
 }
 
 def TT_TransOp : TT_Op<"trans", [Pure,
                                  DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                  SameOperandsAndResultElementType]> {
 
-    let summary = "transpose a tensor";
+    let summary = "rearrange the dimensions of a tensor";
+    let description = [{
+      For example, given a tensor x with shape [1,2,4], transpose(x) with
+      order=[2,0,1] rearranges the tensor to have shape [4,1,2].
 
-    let arguments = (ins TT_Tensor:$src);
+      Although this op is called "trans", it implements both tl.trans() and
+      tl.permute().  ("permute" might be a better name, but it's called "trans"
+      because originally it only supported 2D tensors.)
 
-    let results = (outs TT_Tensor:$result);
+      ## Implementation note on encodings:
 
-    let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
+      In the TritonGPU dialect (and probably others), an encoding is chosen for
+      this op's output so it's a nop from the perspective of code generation.
+
+      For example, suppose tensor x has an encoding such that GPU thread [i,j,k]
+      has a register containing element [i,j,k] of the tensor.  Now we transpose
+      x with order [2,1,0], i.e. we reverse the order of its dimensions.  In
+      TritonGPU, we will choose a layout for the output of the transpose so that
+      GPU thread [i,j,k] has element [k,j,i] of transpose(x).  But this is the
+      same element it had before!  All we've done is "rename" the element that
+      thread [i,j,k] has.
+
+      The "real" transpose -- i.e. moving data between GPU threads -- occurs in
+      convertLayout ops that appear before and/or after the operation.
+
+      We do this so that you can chain multiple data-movement ops (e.g.
+      transpose+reshape+concat) without going to shared memory after each one.
+    }];
+
+    let arguments = (
+      ins TT_TensorOrMemDesc:$src,
+      DenseI32ArrayAttr:$order
+    );
+
+    let results = (outs TT_TensorOrMemDesc:$result);
+
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
+
+    let hasFolder = 1;
+    let hasVerifier = 1;
 }
 
 //
@@ -397,11 +543,17 @@ def TT_GetProgramIdOp : TT_Op<"get_program_id", [Pure]> {
 }
 
 def TT_GetNumProgramsOp : TT_Op<"get_num_programs", [Pure]> {
-    let arguments = (ins I32Attr:$axis);
+    let arguments = (ins TT_ProgramDim:$axis);
 
     let results = (outs I32:$result);
 
-    let assemblyFormat = "attr-dict `:` type($result)";
+    let assemblyFormat = "$axis attr-dict `:` type($result)";
+
+    let extraClassDeclaration = [{
+      int32_t getAxisAsInt() {
+        return static_cast<int32_t>(getAxis());
+      }
+    }];
 }
 
 //
@@ -414,14 +566,19 @@ def TT_DotOp : TT_Op<"dot", [Pure,
     let summary = "dot";
 
     let description = [{
-        $d = matrix_multiply($a, $b) + $c
+        $d = matrix_multiply($a, $b) + $c. $inputPrecision describes how to exercise the TC
+        when the inputs are f32. It can be one of: tf32, tf32x3, ieee.
+        tf32: use TC with tf32 ops.
+        tf32x3: implement the 3xTF32 trick. For more info see the pass in F32DotTC.cpp
+        ieee: don't use TC, implement dot in software.
+        If the GPU does not have Tensor cores or the inputs are not f32, this flag is ignored.
     }];
 
     let arguments = (ins
-      TT_FpIntTensor:$a,
-      TT_FpIntTensor:$b,
+      TT_TensorOrMemDesc:$a,
+      TT_TensorOrMemDesc:$b,
       TT_FpIntTensor:$c,
-      BoolAttr:$allowTF32,
+      TT_InputPrecisionAttr:$inputPrecision,
       I32Attr:$maxNumImpreciseAcc);
 
     let results = (outs TT_FpIntTensor:$d);
@@ -439,11 +596,11 @@ def TT_ReduceOp: TT_Op<"reduce",
                         SingleBlock,
                         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
     let summary = "Reduction using generic combination algorithm";
-    let arguments = (ins Variadic<TT_Tensor>:$operands, I32Attr:$axis);
+    let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis);
     let results = (outs Variadic<TT_Type>:$result);
     let regions = (region SizedRegion<1>:$combineOp);
     let builders = [
-        OpBuilder<(ins "ValueRange":$operands, "int":$axis)>,
+        OpBuilder<(ins "ValueRange":$srcs, "int":$axis)>,
     ];
     let hasVerifier = 1;
     let hasRegionVerifier = 1;
@@ -467,17 +624,23 @@ def TT_ReduceReturnOp: TT_Op<"reduce.return",
 def TT_ScanOp: TT_Op<"scan",
                        [Pure,
                         SameOperandsAndResultEncoding,
-                        SameOperandsAndResultElementType,
+                        SameOperandsAndResultShape,
                         SingleBlock,
                         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
-    let summary = "Reduction using generic combination algorithm";
-    let arguments = (ins Variadic<TT_Tensor>:$operands, I32Attr:$axis);
+    let summary = "Associative scan using generic combination algorithm";
+    let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis, BoolAttr:$reverse);
     let results = (outs Variadic<TT_Tensor>:$result);
     let regions = (region SizedRegion<1>:$combineOp);
     let builders = [
-        OpBuilder<(ins "ValueRange":$operands, "int":$axis)>,
+        OpBuilder<(ins "ValueRange":$srcs, "int":$axis, "bool":$reverse)>,
     ];
     let hasVerifier = 1;
+    let hasRegionVerifier = 1;
+    let extraClassDeclaration = [{
+      llvm::SmallVector<RankedTensorType> getInputTypes();
+      llvm::SmallVector<Type> getElementTypes();
+      unsigned getNumOperands();
+    }];
 }
 
 def TT_ScanReturnOp: TT_Op<"scan.return",
@@ -501,7 +664,7 @@ def TT_ExternElementwiseOp : TT_Op<"extern_elementwise", [Elementwise,
         return $libpath/$libname:$symbol($args...)
     }];
 
-    let arguments = (ins Variadic<TT_Type>:$args, StrAttr:$libname, StrAttr:$libpath, StrAttr:$symbol, BoolAttr:$pure);
+    let arguments = (ins Variadic<TT_Type>:$srcs, StrAttr:$libname, StrAttr:$libpath, StrAttr:$symbol, BoolAttr:$pure);
 
     let results = (outs TT_Type:$result);
 
@@ -537,9 +700,11 @@ def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
 //
 // ElementwiseInlineAsm Op
 //
-def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [Elementwise,
-                                                                 SameOperandsAndResultEncoding,
-                                                                 DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [
+  Elementwise,
+  SameOperandsAndResultEncoding,
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+]> {
   let summary = "inline assembly applying an elementwise operation to a group of packed elements.";
   let description = [{
     Runs an inline asm block to generate one or more tensors.
@@ -554,13 +719,34 @@ def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [Elementwise,
   let assemblyFormat = [{
     $asm_string attr-dict ($args^ `:` type($args))? `->` type($result)
   }];
+
+  let hasVerifier = 1;
+}
+
+//
+// Histogram Op
+//
+def TT_HistogramOp : TT_Op<"histogram", [Pure]> {
+  let summary = "return a histgram of the inputs.";
+  let description = [{
+    Return the histogram of the input tensor. The number of bins is equal to
+    the dimension of the output tensor. Each bins has a width of 1 and bins
+    start at 0.
+  }];
+
+  let arguments = (ins TT_IntTensor:$src);
+  let results = (outs TT_IntTensor:$result);
+
+  let assemblyFormat = [{
+    $src attr-dict `:` type($src) `->` type($result)
+  }];
 }
 
 //
 // Print Op
 //
-def TT_PrintOp : TT_Op<"print", [MemoryEffects<[MemWrite]>]>,
-  Arguments<(ins StrAttr:$prefix, Variadic<AnyTypeOf<[TT_Type]>>:$args)> {
+def TT_PrintOp : TT_Op<"print", [MemoryEffects<[MemWrite<GlobalMemory>]>]>,
+  Arguments<(ins StrAttr:$prefix, BoolAttr:$hex, Variadic<AnyTypeOf<[TT_Type]>>:$args)> {
   let summary = "Device-side print, as in CUDA for debugging";
   let description = [{
     `tt.print` takes a literal string prefix and an arbitrary number of scalar or tensor arguments that should be printed.
@@ -574,7 +760,7 @@ def TT_PrintOp : TT_Op<"print", [MemoryEffects<[MemWrite]>]>,
 //
 // Assert Op
 //
-def TT_AssertOp : TT_Op<"assert", [MemoryEffects<[MemWrite]>]> {
+def TT_AssertOp : TT_Op<"assert", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Device-side assert, as in CUDA for correctness checking";
   let description = [{
     `tt.assert` takes a condition tensor, a message string, a file string, a function string, and a line number.
@@ -823,13 +1009,13 @@ def ReturnOp : TT_Op<"return", [Pure, HasParent<"FuncOp">, /*MemRefsNormalizable
     ```
   }];
 
-  let arguments = (ins Variadic<AnyType>:$operands);
+  let arguments = (ins Variadic<AnyType>:$srcs);
 
   let builders = [OpBuilder<(ins), [{
     build($_builder, $_state, std::nullopt);
   }]>];
 
-  let assemblyFormat = "attr-dict ($operands^ `:` type($operands))?";
+  let assemblyFormat = "attr-dict ($srcs^ `:` type($srcs))?";
   let hasVerifier = 1;
 }
 

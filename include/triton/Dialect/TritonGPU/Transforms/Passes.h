@@ -14,23 +14,21 @@ std::unique_ptr<Pass> createPipelinePass(int numStages = 3, int numWarps = 4,
 
 std::unique_ptr<Pass> createAccelerateMatmulPass(int computeCapability = 80);
 
-std::unique_ptr<Pass> createPrefetchPass();
+std::unique_ptr<Pass> createF32DotTCPass();
 
-std::unique_ptr<Pass> createCanonicalizeLoopsPass();
+std::unique_ptr<Pass> createPrefetchPass();
 
 std::unique_ptr<Pass> createCoalescePass();
 
 std::unique_ptr<Pass> createReorderInstructionsPass();
 
-std::unique_ptr<Pass> createDecomposeConversionsPass();
+std::unique_ptr<Pass> createReduceDataDuplicationPass();
 
 std::unique_ptr<Pass> createRemoveLayoutConversionsPass();
 
 std::unique_ptr<Pass> createVerifier();
 
 std::unique_ptr<Pass> createOptimizeDotOperandsPass();
-
-std::unique_ptr<Pass> createOptimizeEpiloguePass();
 
 std::unique_ptr<Pass> createOptimizeThreadLocalityPass();
 

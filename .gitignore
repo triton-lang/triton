@@ -1,11 +1,18 @@
 # Triton builds
 build/
+build-*/
 
 # Triton Python module builds
 python/build/
 python/triton.egg-info/
 python/triton/_C/libtriton.pyd
 python/triton/_C/libtriton.so
+
+# Backends copied from submodules
+python/triton/backends/
+!python/triton/backends/__init__.py
+!python/triton/backends/compiler.py
+!python/triton/backends/driver.py
 
 # Python caches
 __pycache__/
@@ -35,6 +42,7 @@ docs/_build/
 docs/python-api/generated/
 docs/dialects/
 docs/getting-started/tutorials
+docs/sg_execution_times.rst
 !python/tutorials/*.py
 !python/tutorials/*.rst
 
@@ -44,3 +52,6 @@ docs/getting-started/tutorials
 /compile_commands.json
 .vscode
 .vs
+
+# Vim
+*.swp

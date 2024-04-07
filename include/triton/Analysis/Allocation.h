@@ -138,7 +138,7 @@ public:
 private:
   /// A class that represents a shared memory buffer
   struct BufferT {
-    /// Explicit: triton_gpu.alloc_tensor
+    /// Explicit: triton_gpu.local_alloc
     /// Scratch: triton_gpu.convert_layout
     /// Virtual: triton.call
     enum class BufferKind { Explicit, Scratch, Virtual };

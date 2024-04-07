@@ -3,14 +3,16 @@
 
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
-#include "llvm/ADT/MapVector.h"
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include <algorithm>
+#include <numeric>
 
 namespace mlir {
 
 namespace triton {
+class ModuleAxisInfoAnalysis;
 class LoadOp;
 class StoreOp;
 class FuncOp;
@@ -21,19 +23,27 @@ class SharedEncodingAttr;
 
 SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 const ArrayRef<int64_t> &shape,
-                                                RankedTensorType type);
+                                                TensorOrMemDesc type,
+                                                int numWarps);
 
-/// Returns true if the Load is for TMA
+/// Returns true if the Load uses block pointer.
 bool isLoadFromTensorPtr(triton::LoadOp op);
 
-/// Returns true if the store is for TMA
-bool isStoreToTensorPtr(triton::StoreOp op);
+// Return an array of indices enumerating the elements of 'arr' in descending
+// order (so that result[i] is the index of the i-th largest element of 'arr')
+SmallVector<unsigned, 4> argSort(const SmallVector<int64_t> &arr);
 
-/// Return the first consumer of v
-Operation *getFirstUser(Value v);
+// Return the operand used to access the memory in the operation
+Value getMemAccessPtr(Operation *op);
 
-/// Return the proper SharedEncodingAttr according to shape/order
-triton::gpu::SharedEncodingAttr getSharedEncoding(RankedTensorType tensorTy);
+// Return bitwidth of tensor element
+unsigned getElementBitWidth(RankedTensorType type);
+
+// Calculate the optimal number of elements per thread for a given operation
+// along an axis with greatest continuity.
+unsigned
+getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
+                        triton::ModuleAxisInfoAnalysis &axisInfoAnalysis);
 
 /* Dump Triton IR in graphviz dot format.
  *
@@ -112,9 +122,18 @@ bool isExpensiveLoadOrStore(Operation *op);
 bool canFoldIntoConversion(Operation *op, Attribute targetEncoding);
 
 // Replace ForOp with a new ForOp with extra operands. The YieldOp is not
-// updated and needs to be updated separatly for the loop to be correct.
-scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
+// updated and needs to be updated separately for the loop to be correct.
+scf::ForOp replaceForOpWithNewSignature(
+    RewriterBase &rewriter, scf::ForOp loop, ValueRange newIterOperands,
+    SmallVectorImpl<std::tuple<Value, Value>> &replacements);
+scf::ForOp replaceForOpWithNewSignature(RewriterBase &rewriter, scf::ForOp loop,
                                         ValueRange newIterOperands);
+
+// Replace IfOp with a new IfOp with extra results operands. The YieldOp is not
+// updated and needs to be updated separately for the bodies to be correct.
+scf::IfOp replaceIfOpWithNewSignature(
+    RewriterBase &rewriter, scf::IfOp loop, TypeRange newResultTypes,
+    SmallVectorImpl<std::tuple<Value, Value>> &replacements);
 
 Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
                               IRMapping &mapping);
@@ -145,6 +164,11 @@ Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
 
 Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape);
+
+// Return true if the op is a pure elementwise_inline_asm op with a single
+// operand and single result.
+bool isPureUnaryInlineAsm(Operation *op);
+
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_

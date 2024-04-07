@@ -10,7 +10,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h.inc"
-#include "triton/Dialect/TritonGPU/IR/Traits.h"
+#include "triton/Dialect/TritonGPU/IR/Types.h"
 
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Ops.h.inc"
@@ -18,6 +18,10 @@
 namespace mlir {
 namespace triton {
 namespace gpu {
+
+struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
+  StringRef getName() final { return "<SharedMemory>"; }
+};
 
 unsigned getTotalElemsPerThread(Type type);
 
@@ -30,6 +34,8 @@ SmallVector<unsigned> getElemsPerThread(Type type);
 // elements. If you want non-replicated threads, use
 // getThreadsPerWarpWithUniqueData.
 SmallVector<unsigned> getThreadsPerWarp(Attribute layout);
+
+unsigned getWarpSize(Attribute layout);
 
 // Returns the number of warps per CTA that may have access to replicated
 // elements. If you want non-replicated warps, use getWarpsPerCTAWithUniqueData.
@@ -84,7 +90,7 @@ SmallVector<unsigned> getCTAOrder(Attribute layout);
  *     WarpsPerCTA in each dimension and is independent from the tensor shape.
  * (2) ShapePerCTA is defined by shape / CTASplitNum in each dimension.
  * (3) In the implementation of emitIndices, ShapePerCTATile will
- *     be replicated or wraped to fit ShapePerCTA.
+ *     be replicated or wrapped to fit ShapePerCTA.
  */
 SmallVector<unsigned>
 getShapePerCTATile(Attribute layout,
@@ -101,14 +107,12 @@ unsigned getNumCTAs(Attribute layout);
 
 bool isaDistributedLayout(Attribute layout);
 
-bool hasSharedEncoding(Value value);
-
 bool isExpensiveCat(CatOp cat, Attribute targetEncoding);
 
 // Return true if a view between the two types cannot be implemented as a no-op.
 bool isExpensiveView(Type srcType, Type dstType);
 
-// Return a blocked encoding where the shape is distributed contiguously amonsgt
+// Return a blocked encoding where the shape is distributed contiguously amongst
 // the threads, warps, CTAs with 1 element per threads.
 triton::gpu::BlockedEncodingAttr
 getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,

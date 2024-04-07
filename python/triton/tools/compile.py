@@ -8,7 +8,7 @@ from typing import List
 
 import triton
 from triton.compiler.code_generator import kernel_suffix
-from triton.compiler.make_launcher import ty_to_cpp
+from triton.backends.nvidia.driver import ty_to_cpp
 
 desc = """
 Triton ahead-of-time compiler:
@@ -120,11 +120,10 @@ if __name__ == "__main__":
     # dump C stub code
     suffix = kernel_suffix(signature.values(), attrs)
     func_name = '_'.join([out_name, sig_hash, suffix])
-    triton_kernel_name = '_'.join([args.kernel_name, suffix])
     hex_ = str(binascii.hexlify(ccinfo.asm["cubin"]))[2:-1]
     params = {
         "kernel_name": func_name,
-        "triton_kernel_name": triton_kernel_name,
+        "triton_kernel_name": args.kernel_name,
         "bin_size": len(hex_),
         "bin_data": ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])]),
         "signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),
@@ -132,7 +131,7 @@ if __name__ == "__main__":
         "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names]),
         "num_args": len(arg_names),
         "kernel_docstring": doc_string,
-        "shared": ccinfo.shared,
+        "shared": ccinfo.metadata.shared,
         "num_warps": args.num_warps,
         "algo_info": '_'.join([const_sig, meta_sig]),
         "gridX": grid[0],

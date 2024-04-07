@@ -5,9 +5,6 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include <algorithm>
-#include <numeric>
-#include <string>
 
 namespace mlir {
 
@@ -75,8 +72,19 @@ private:
 class ScanLoweringHelper {
 public:
   explicit ScanLoweringHelper(triton::ScanOp op) : scanOp(op) {
-    auto type = scanOp.getOperand(0).getType().cast<RankedTensorType>();
-    srcEncoding = type.getEncoding();
+    auto firstTy = op.getOperands()[0].getType().cast<RankedTensorType>();
+    srcShape = firstTy.getShape();
+    srcEncoding = firstTy.getEncoding();
+    srcElementTypes = op.getElementTypes();
+
+    for (const auto &t : op.getInputTypes()) {
+      if (t.getShape() != srcShape) {
+        op.emitError() << "shape mismatch";
+      }
+      if (t.getEncoding() != srcEncoding) {
+        op.emitError() << "encoding mismatch";
+      }
+    }
   }
   // Return true if the lowering of the scan op is supported.
   bool isSupported();
@@ -102,6 +110,9 @@ public:
   unsigned getNonAxisNumBlocks();
   // Return the size of the scratch space needed for scan lowering.
   unsigned getScratchSizeInBytes();
+  // Return the number of elements of the scratch space needed for scan
+  // lowering.
+  unsigned getScratchSizeInElems();
 
   // Stride between contiguous element along axis dim.
   unsigned getAxisElementStride();
@@ -112,24 +123,59 @@ public:
 
   Location getLoc() { return scanOp.getLoc(); }
   unsigned getAxis() { return scanOp.getAxis(); }
+  bool getReverse() { return scanOp.getReverse(); }
   triton::gpu::BlockedEncodingAttr getEncoding();
-  llvm::ArrayRef<int64_t> getShape();
+  llvm::ArrayRef<int64_t> getShape() { return srcShape; }
+  unsigned getNumOperands() { return scanOp.getNumOperands(); }
+  SmallVector<Type> getElementTypes() { return srcElementTypes; }
+  Attribute getSrcLayout() { return srcEncoding; }
   Region &getCombineOp();
 
 private:
   triton::ScanOp scanOp;
   Attribute srcEncoding;
+  llvm::ArrayRef<int64_t> srcShape;
+  SmallVector<Type> srcElementTypes;
 };
+
+// Decomposes a reshape into simpler pieces.
+//
+// As an example, suppose we have a reshape from [4,4,4] to [2,2,8,2].
+// You might explain what this does as follows.
+//
+//  - Split the first input dimension into [2,2].
+//  - Take the remaining two input dimensions, merge them into a single [16]
+//    dim, and then split that into [8,2].
+//
+// In general, a reshape can be described a sequence of smushing one or more
+// input dimensions together and then breaking them apart into one or more
+// output dimensions.  So we could represent the example above as follows.
+//
+//   [
+//     ([0], [0, 1]),  # input dim [0] -> output dims [0, 1]
+//     ([1, 2], [2, 3]),  # input dims [1, 2] -> output dims [2, 3]
+//   ]
+//
+// Notice that the input dims (first tuple elems) appear in sequential order if
+// you read left-to-right-top-to-bottom, and so do the output dims.
+//
+// This function returns the above decomposition.
+SmallVector<std::pair<SmallVector<int64_t>, SmallVector<int64_t>>>
+getReshapeDecomposition(ArrayRef<int64_t> srcShape, ArrayRef<int64_t> dstShape);
 
 bool maybeSharedAllocationOp(Operation *op);
 
-bool maybeAliasOp(Operation *op);
+bool supportMFMA(triton::DotOp op);
+
+bool supportWMMA(triton::DotOp op);
 
 bool supportMMA(triton::DotOp op, int version);
 
 bool supportMMA(Value value, int version);
 
 bool isSingleValue(Value value);
+
+bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy);
 
 bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
 
@@ -142,53 +188,6 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
 // TODO: Move utility functions that belong to ConvertLayoutOp to class
 // ConvertLayoutOpHelper in the future
 bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout);
-
-template <typename T_OUT, typename T_IN>
-inline SmallVector<T_OUT> convertType(ArrayRef<T_IN> in) {
-  SmallVector<T_OUT> out;
-  for (const T_IN &i : in)
-    out.push_back(T_OUT(i));
-  return out;
-}
-
-template <typename Int> Int product(llvm::ArrayRef<Int> arr) {
-  return std::accumulate(arr.begin(), arr.end(), 1, std::multiplies{});
-}
-
-template <typename Int> Int ceil(Int m, Int n) { return (m + n - 1) / n; }
-
-/// output[i] = input[order[i]]
-template <typename T, typename RES_T = T>
-SmallVector<RES_T> reorder(ArrayRef<T> input, ArrayRef<unsigned> order) {
-  size_t rank = order.size();
-  assert(input.size() == rank);
-  SmallVector<RES_T> result(rank);
-  for (auto it : llvm::enumerate(order)) {
-    result[it.index()] = input[it.value()];
-  }
-  return result;
-}
-
-/// Get the highest power of 2 divisor of an integer.
-template <typename T> T highestPowOf2Divisor(T n) {
-  if (n == 0) {
-    return (static_cast<T>(1) << (sizeof(T) * 8 - 2));
-  }
-  return (n & (~(n - 1)));
-}
-
-/// Get the next power of 2 for an integer (or the integer itself if it is a
-/// power of 2).
-template <typename T> T nextPowOf2(T n) {
-  if (n == 0) {
-    return 1;
-  }
-  n--;
-  for (unsigned i = 1; i < sizeof(T) * 8; i <<= 1) {
-    n |= n >> i;
-  }
-  return n + 1;
-}
 
 /// Multi-root DAG topological sort.
 /// Performs a topological sort of the Operation in the `toSort` SetVector.

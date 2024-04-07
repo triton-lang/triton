@@ -1,26 +1,13 @@
 from __future__ import annotations
 
 import builtins
+import os
 import time
 from typing import Dict
 
-from ..testing import do_bench
+from ..testing import do_bench, do_bench_cudagraph
 from .jit import KernelInterface
-
-
-class OutOfResources(Exception):
-
-    def __init__(self, required, limit, name):
-        self.message = (f"out of resource: {name}, Required: {required}, Hardware limit: {limit}. " +
-                        "Reducing block sizes or `num_stages` may help.")
-        self.required = required
-        self.limit = limit
-        self.name = name
-        super().__init__(self.message)
-
-    def __reduce__(self):
-        # this is necessary to make CompilationError picklable
-        return (type(self), (self.required, self.limit, self.name))
+from .errors import OutOfResources
 
 
 class Autotuner(KernelInterface):
@@ -36,6 +23,7 @@ class Autotuner(KernelInterface):
         prune_configs_by: Dict = None,
         warmup=25,
         rep=100,
+        use_cuda_graph=False,
     ):
         """
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
@@ -43,6 +31,7 @@ class Autotuner(KernelInterface):
             'top_k': number of configs to bench
             'prune_num_stages_by'(optional): a function used to prune num_stages. It takes configs:List[Config] as its input, and returns pruned configs.
         """
+        import torch
         if not configs:
             self.configs = [Config({}, num_warps=4, num_stages=2, num_ctas=1)]
         else:
@@ -91,6 +80,8 @@ class Autotuner(KernelInterface):
         self.fn = fn
         self.num_warmups = warmup
         self.num_reps = rep
+        self.use_cuda_graph = use_cuda_graph and torch.cuda.is_available()
+        self.benchmarkig_stream = torch.cuda.Stream() if self.use_cuda_graph else None
 
     def _bench(self, *args, config, **meta):
         # check for conflicts, i.e. meta-parameters both provided
@@ -112,20 +103,22 @@ class Autotuner(KernelInterface):
                 num_warps=config.num_warps,
                 num_stages=config.num_stages,
                 num_ctas=config.num_ctas,
-                enable_warp_specialization=config.enable_warp_specialization,
-                # TODO: Make it configurable
-                # enable_persistent=False,
                 **current,
             )
             self.post_hook(args)
 
         try:
+            if self.use_cuda_graph:
+                with torch.cuda.stream(self.benchmarkig_stream):
+                    bench_res = do_bench_cudagraph(kernel_call, rep=self.num_reps, return_mode="median")
+                return bench_res
             return do_bench(kernel_call, warmup=self.num_warmups, rep=self.num_reps, quantiles=(0.5, 0.2, 0.8))
         except OutOfResources:
             return [float("inf"), float("inf"), float("inf")]
 
     def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
+        used_cached_result = True
         if len(self.configs) > 1:
             all_args = {**self.nargs, **kwargs}
             _args = []
@@ -139,6 +132,7 @@ class Autotuner(KernelInterface):
             key = tuple(key)
             if key not in self.cache:
                 # prune configs
+                used_cached_result = False
                 pruned_configs = self.prune_configs(kwargs)
                 bench_start = time.time()
                 timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
@@ -151,6 +145,9 @@ class Autotuner(KernelInterface):
         else:
             config = self.configs[0]
         self.best_config = config
+        if os.getenv("TRITON_PRINT_AUTOTUNING", None) == "1" and not used_cached_result:
+            print(f"Triton autotuning for function {self.fn} finished after "
+                  f"{self.bench_time:.2f}s; best config selected: {self.best_config};")
         full_nargs = {**self.nargs, **kwargs, **self.best_config.kwargs}
         if config.pre_hook is not None:
             config.pre_hook(full_nargs)
@@ -159,7 +156,6 @@ class Autotuner(KernelInterface):
             num_warps=config.num_warps,
             num_stages=config.num_stages,
             num_ctas=config.num_ctas,
-            enable_warp_specialization=config.enable_warp_specialization,
             **kwargs,
             **config.kwargs,
         )
@@ -184,9 +180,6 @@ class Autotuner(KernelInterface):
                         num_stages=config.num_stages,
                         num_warps=config.num_warps,
                         num_ctas=config.num_ctas,
-                        enable_warp_specialization=config.enable_warp_specialization,
-                        # TODO: Make it configurable
-                        # enable_persistent=False,
                     )
                     for config in pruned_configs
                 }
@@ -203,9 +196,6 @@ class Autotuner(KernelInterface):
                     num_warps=config.num_warps,
                     num_ctas=config.num_ctas,
                     num_stages=config.num_stages,
-                    enable_warp_specialization=config.enable_warp_specialization,
-                    # TODO: Make it configurable
-                    # enable_persistent=False,
                     **kwargs,
                     **config.kwargs,
                 ))
@@ -225,20 +215,17 @@ class Config:
     :type num_warps: int
     :ivar num_stages: the number of stages that the compiler should use when software-pipelining loops.
                        Mostly useful for matrix multiplication workloads on SM80+ GPUs.
-    :type enable_warp_specialization: bool
-    :ivar enable_warp_specialization: enable specialization (spatial partitioning) or not. See https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#spatial-partitioning-also-known-as-warp-specialization
+    :type num_ctas: int
+    :ivar num_ctas: number of blocks in a block cluster. SM90+ only.
     :ivar pre_hook: a function that will be called before the kernel is called. Parameters of this
                     function are args.
     """
 
-    def __init__(self, kwargs, num_warps=4, num_stages=2, num_ctas=1, enable_warp_specialization=False, pre_hook=None):
+    def __init__(self, kwargs, num_warps=4, num_stages=2, num_ctas=1, pre_hook=None):
         self.kwargs = kwargs
         self.num_warps = num_warps
         self.num_ctas = num_ctas
         self.num_stages = num_stages
-        self.enable_warp_specialization = enable_warp_specialization
-        # TODO[shuhaoj]: May make enable_persistent configurable in future if necessary.
-        self.enable_persistent = False
         self.pre_hook = pre_hook
 
     def __str__(self):
@@ -248,12 +235,11 @@ class Config:
         res.append(f"num_warps: {self.num_warps}")
         res.append(f"num_ctas: {self.num_ctas}")
         res.append(f"num_stages: {self.num_stages}")
-        res.append(f"enable_warp_specialization: {self.enable_warp_specialization}")
-        res.append(f"enable_persistent: {self.enable_persistent}")
         return ", ".join(res)
 
 
-def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_value=None, warmup=25, rep=100):
+def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_value=None, warmup=25, rep=100,
+             use_cuda_graph=False):
     """
     Decorator for auto-tuning a :code:`triton.jit`'d function.
 
@@ -274,6 +260,11 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
            This means that whatever value the kernel updates will be updated multiple times.
            To avoid this undesired behavior, you can use the `reset_to_zero` argument, which
            resets the value of the provided tensor to `zero` before running any configuration.
+
+    If the environment variable :code:`TRITON_PRINT_AUTOTUNING` is set to
+    :code:`"1"`, Triton will print a message to stdout after autotuning each
+    kernel, including the time spent autotuning and the best configuration.
+
     :param configs: a list of :code:`triton.Config` objects
     :type configs: list[triton.Config]
     :param key: a list of argument names whose change in value will trigger the evaluation of all provided configs.
@@ -293,7 +284,8 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     """
 
     def decorator(fn):
-        return Autotuner(fn, fn.arg_names, configs, key, reset_to_zero, restore_value, prune_configs_by, warmup, rep)
+        return Autotuner(fn, fn.arg_names, configs, key, reset_to_zero, restore_value, prune_configs_by, warmup, rep,
+                         use_cuda_graph=use_cuda_graph)
 
     return decorator
 

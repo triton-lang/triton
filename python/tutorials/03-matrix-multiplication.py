@@ -2,13 +2,13 @@
 Matrix Multiplication
 =====================
 In this tutorial, you will write a very short high-performance FP16 matrix multiplication kernel that achieves
-performance on parallel with cuBLAS.
+performance on par with cuBLAS.
 
 You will specifically learn about:
 
 * Block-level matrix multiplications.
 
-* Multi-dimensional pointer arithmetics.
+* Multi-dimensional pointer arithmetic.
 
 * Program re-ordering for improved L2 cache hit rate.
 
@@ -53,13 +53,13 @@ You will specifically learn about:
 # The above algorithm is, actually, fairly straightforward to implement in Triton.
 # The main difficulty comes from the computation of the memory locations at which blocks
 # of :code:`A` and :code:`B` must be read in the inner loop. For that, we need
-# multi-dimensional pointer arithmetics.
+# multi-dimensional pointer arithmetic.
 #
-# Pointer Arithmetics
+# Pointer Arithmetic
 # ~~~~~~~~~~~~~~~~~~~
 #
-# For a row-major 2D tensor :code:`X`, the memory location of :code:`X[i, j]` is given b
-# y :code:`&X[i, j] = X + i*stride_xi + j*stride_xj`.
+# For a row-major 2D tensor :code:`X`, the memory location of :code:`X[i, j]` is given
+# by :code:`&X[i, j] = X + i*stride_xi + j*stride_xj`.
 # Therefore, blocks of pointers for :code:`A[m : m+BLOCK_SIZE_M, k:k+BLOCK_SIZE_K]` and
 # :code:`B[k : k+BLOCK_SIZE_K, n : n+BLOCK_SIZE_N]` can be defined in pseudo-code as:
 #
@@ -96,8 +96,8 @@ You will specifically learn about:
 # As mentioned above, each program instance computes a :code:`[BLOCK_SIZE_M, BLOCK_SIZE_N]`
 # block of :code:`C`.
 # It is important to remember that the order in which these blocks are computed does
-# matter, since it affects the L2 cache hit rate of our program. and unfortunately, a
-# a simple row-major ordering
+# matter, since it affects the L2 cache hit rate of our program, and unfortunately, a
+# simple row-major ordering
 #
 #  .. code-block:: Python
 #
@@ -222,7 +222,7 @@ def matmul_kernel(
     # and accumulate
     # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
     # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
-    # See above `Pointer Arithmetics` section for details
+    # See above `Pointer Arithmetic` section for details
     offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
     offs_k = tl.arange(0, BLOCK_SIZE_K)
@@ -280,7 +280,7 @@ def matmul(a, b, activation=""):
     M, K = a.shape
     K, N = b.shape
     # Allocates output.
-    c = torch.empty((M, N), device=a.device, dtype=a.dtype)
+    c = torch.empty((M, N), device=a.device, dtype=torch.float16)
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
     matmul_kernel[grid](
@@ -305,12 +305,28 @@ a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
 b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
 triton_output = matmul(a, b)
 torch_output = torch.matmul(a, b)
-print(f"triton_output={triton_output}")
-print(f"torch_output={torch_output}")
+print(f"triton_output_with_fp16_inputs={triton_output}")
+print(f"torch_output_with_fp16_inputs={torch_output}")
 if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0):
     print("✅ Triton and Torch match")
 else:
     print("❌ Triton and Torch differ")
+
+TORCH_HAS_FP8 = hasattr(torch, "float8_e5m2")
+if TORCH_HAS_FP8:
+    torch.manual_seed(0)
+    a = torch.randn((512, 512), device="cuda", dtype=torch.float16)
+    b = torch.randn((512, 512), device="cuda", dtype=torch.float16)
+    a = a.to(torch.float8_e5m2)
+    b = b.to(torch.float8_e5m2)
+    triton_output = matmul(a, b)
+    torch_output = torch.matmul(a.to(torch.float16), b.to(torch.float16))
+    print(f"triton_output_with_fp8_inputs={triton_output}")
+    print(f"torch_output_with_fp8_inputs={torch_output}")
+    if torch.allclose(triton_output, torch_output, atol=0.125, rtol=0):
+        print("✅ Triton and Torch match")
+    else:
+        print("❌ Triton and Torch differ")
 
 # %%
 # Benchmark
@@ -322,29 +338,37 @@ else:
 # We can now compare the performance of our kernel against that of cuBLAS. Here we focus on square matrices,
 # but feel free to arrange this script as you wish to benchmark any other matrix shape.
 
+configs = []
+for fp8_inputs in [False, True]:
+    if fp8_inputs and not TORCH_HAS_FP8:
+        continue
+    configs.append(
+        triton.testing.Benchmark(
+            x_names=["M", "N", "K"],  # Argument names to use as an x-axis for the plot
+            x_vals=[128 * i for i in range(2, 33)],  # Different possible values for `x_name`
+            line_arg="provider",  # Argument name whose value corresponds to a different line in the plot
+            # Possible values for `line_arg`
+            line_vals=["cublas", "triton"],  # Label name for the lines
+            line_names=["cuBLAS", "Triton"],  # Line styles
+            styles=[("green", "-"), ("blue", "-")],
+            ylabel="TFLOPS",  # Label name for the y-axis
+            plot_name="matmul-performance-" +
+            ("fp16" if not fp8_inputs else "fp8"),  # Name for the plot, used also as a file name for saving the plot.
+            args={"fp8_inputs": fp8_inputs},
+        ))
 
-@triton.testing.perf_report(
-    triton.testing.Benchmark(
-        x_names=['M', 'N', 'K'],  # Argument names to use as an x-axis for the plot
-        x_vals=[128 * i for i in range(2, 33)],  # Different possible values for `x_name`
-        line_arg='provider',  # Argument name whose value corresponds to a different line in the plot
-        # Possible values for `line_arg`
-        line_vals=['cublas', 'triton'],
-        # Label name for the lines
-        line_names=["cuBLAS", "Triton"],
-        # Line styles
-        styles=[('green', '-'), ('blue', '-')],
-        ylabel="TFLOPS",  # Label name for the y-axis
-        plot_name="matmul-performance",  # Name for the plot, used also as a file name for saving the plot.
-        args={},
-    ))
-def benchmark(M, N, K, provider):
+
+@triton.testing.perf_report(configs)
+def benchmark(M, N, K, provider, fp8_inputs):
     a = torch.randn((M, K), device='cuda', dtype=torch.float16)
     b = torch.randn((K, N), device='cuda', dtype=torch.float16)
     quantiles = [0.5, 0.2, 0.8]
     if provider == 'cublas':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
     if provider == 'triton':
+        if TORCH_HAS_FP8 and fp8_inputs:
+            a = a.to(torch.float8_e5m2)
+            b = b.to(torch.float8_e5m2)
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), quantiles=quantiles)
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)

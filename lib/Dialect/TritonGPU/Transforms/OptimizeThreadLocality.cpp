@@ -12,7 +12,7 @@
 
 using namespace mlir;
 namespace {
-// Change the destination layout of reshape ops allowing reoder when used by a
+// Change the destination layout of reshape ops allowing reorder when used by a
 // reduction in order to minimize the amount of cross thread communication for
 // the reduction.
 struct OptimizeReshapeLayoutPattern
@@ -38,7 +38,7 @@ struct OptimizeReshapeLayoutPattern
     }
     if (!reductionAxis)
       return failure();
-    auto tensorType = viewOp.getResult().getType().cast<RankedTensorType>();
+    RankedTensorType tensorType = viewOp.getType();
     if (auto blocked = tensorType.getEncoding()
                            .dyn_cast<triton::gpu::BlockedEncodingAttr>()) {
       // If the layout already has all the elements along the reduction
@@ -73,7 +73,7 @@ struct OptimizeReshapeLayoutPattern
     if (triton::gpu::isExpensiveView(viewOp.getSrc().getType(), newType))
       return failure();
     rewriter.setInsertionPointAfter(viewOp);
-    rewriter.updateRootInPlace(viewOp, [&]() {
+    rewriter.modifyOpInPlace(viewOp, [&]() {
       viewOp.getResult().setType(newType);
       viewOp.setEfficientLayout(true);
     });
@@ -148,8 +148,9 @@ class TritonGPUOptimizeThreadLocalityPass
       reduceOps.insert(reduce);
     });
 
+    IRRewriter builder(&getContext());
     for (auto reduce : reduceOps) {
-      OpBuilder builder(reduce);
+      builder.setInsertionPoint(reduce);
       auto srcType = reduce.getOperands()[0].getType().cast<RankedTensorType>();
       auto srcShape = srcType.getShape();
       auto srcEncoding = srcType.getEncoding();
