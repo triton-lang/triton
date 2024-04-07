@@ -5,12 +5,12 @@ set(PROTON_EXTERN_DIR ${CMAKE_CURRENT_SOURCE_DIR}/extern)
 file(GLOB_RECURSE PROTON_SRC ${PROTON_SRC_DIR}/lib/*.cpp)
 add_library(proton SHARED ${PROTON_SRC} ${PROTON_SRC_DIR}/${PROJECT_NAME}.cpp)
 
-if(${CUDAToolkit_VERSION_MAJOR} VERSION_LESS 11)
-  message(FATAL_ERROR "CUDA 11 or higher is required")
-endif()
-
 if(NOT CUPTI_INCLUDE_DIR)
   find_package(CUDAToolkit)
+
+  if(${CUDAToolkit_VERSION_MAJOR} VERSION_LESS 11)
+    message(FATAL_ERROR "CUDA 11 or higher is required")
+  endif()
 
   # Try to find CUPTI from the default include dir, if not found, search the
   # EXTRAS dir
