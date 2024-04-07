@@ -1673,6 +1673,43 @@ def test_load_store_same_ptr(device):
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str", ['int32'])
+def test_umulhi(dtype_str, device):
+
+    @triton.jit
+    def kernel(X, Y, Z, N: tl.constexpr):
+        offs = tl.arange(0, N)
+        x = tl.load(X + offs)
+        y = tl.load(Y + offs)
+        z = tl.umulhi(x, y)
+        tl.store(Z + tl.arange(0, N), z)
+
+    def umulhi32(a, b):
+        # Convert to 64-bit unsigned integers to prevent overflow
+        a_64 = a.astype(np.int64)
+        b_64 = b.astype(np.int64)
+
+        # Perform the multiplication in 64-bit
+        product_64 = a_64 * b_64
+
+        # Shift right by 32 bits to get the high part of the product
+        result_high_32 = product_64 >> 32
+        return result_high_32
+
+    rs = RandomState(17)
+    N = 128
+    x = numpy_random((N, ), dtype_str=dtype_str, rs=rs, low=0)
+    x_tri = to_triton(x, device=device)
+    y = numpy_random((N, ), dtype_str=dtype_str, rs=rs, low=0)
+    y_tri = to_triton(y, device=device)
+    z_tri = torch.zeros_like(x_tri)
+    kernel[(1, )](x_tri, y_tri, z_tri, N=N)
+
+    z_ref = umulhi32(x, y)
+    np.testing.assert_equal(z_ref, to_numpy(z_tri))
+
+
+@pytest.mark.interpreter
 def test_join(device):
 
     @triton.jit
@@ -2934,7 +2971,11 @@ def convert_fp8_to_fp32(x, device, dtype_str):
      for float8_type in ["float8e5", "float8e4nv"]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, num_ctas, device):
-    check_cuda_only(device)
+    if is_interpreter():
+        if in_dtype == 'bfloat16' or in_dtype == 'float8e4nv' or in_dtype == 'float8e5':
+            pytest.skip("bfloat16, float8e4nv and float8e5 not supported because numpy doesn't understand them")
+    else:
+        check_cuda_only(device)
 
     capability = torch.cuda.get_device_capability()
 

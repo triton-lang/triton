@@ -145,6 +145,56 @@ private:
   FuncOp funcOp;
 };
 
+class LayoutRematerialization {
+public:
+  LayoutRematerialization(FuncOp F) : funcOp(F) {}
+  // Map the original value to the remat'ed one.
+  void addRematValue(Value old, Attribute encoding, Value newV);
+  bool hasRematValue(Value value, Attribute encoding) {
+    return rematMapping.contains({value, encoding});
+  }
+  // Return the remat'ed value in the given encoding.
+  Value getRematValue(Value value, Attribute encoding) {
+    auto it = rematMapping.find({value, encoding});
+    assert(it != rematMapping.end());
+    return it->second;
+  }
+  void cleanup();
+  void backwardRematerialization();
+  void backwardRematerialization(ConvertLayoutOp convertOp);
+  void hoistConvertOnTopOfExtOrBroadcast();
+  void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp);
+  void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
+                    ConvertLayoutOp convertOp, IRMapping &mapping);
+  void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
+                    ConvertLayoutOp convertOp);
+
+private:
+  void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
+  // Existing tuples of (value, layout) that needs to be updated when recreating
+  // scf ops. This prevents keeping track of Values that have been delete when
+  // rewriting slices.
+  DenseMap<Value, Attribute> mappedValues;
+  // map of the values remat based on encoding.
+  DenseMap<std::pair<Value, Attribute>, Value> rematMapping;
+  // DenseMap<std::pair<Operation*, Attribute>, Operation*>
+  SetVector<Operation *> opToDelete;
+  FuncOp funcOp;
+};
+
+void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
+                                            Value newV) {
+  LDBG("addRematValue " << old << " encoding " << encoding << " " << newV);
+  rematMapping[{old, encoding}] = newV;
+  mappedValues[old] = encoding;
+}
+
+// Remove unneeded values now that we are done with the rematMapping.
+void LayoutRematerialization::cleanup() {
+  for (Operation *op : llvm::reverse(opToDelete))
+    op->erase();
+}
+
 // Look ahead to at the transitive uses and see if there is a convert to mma
 // operations.
 bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
@@ -752,10 +802,44 @@ bool canBeRemat(Operation *op) {
   return true;
 }
 
-void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
-                  ConvertLayoutOp convertOp, IRMapping &mapping) {
+void LayoutRematerialization::updateRematMapping(
+    SmallVector<std::tuple<Value, Value>> &values) {
+  for (auto [old, newV] : values) {
+    auto it = mappedValues.find(old);
+    if (it != mappedValues.end()) {
+      Attribute encoding = it->second;
+      auto rematIt = rematMapping.find({old, it->second});
+      assert(rematIt != rematMapping.end());
+      Value replacedValue = rematIt->second;
+      rematMapping.erase(rematIt);
+      mappedValues.erase(it);
+      // Loop through the replacement value to find the new version of remat
+      // value. This should be okay as the number of values should be small.
+      for (auto [before, after] : values) {
+        if (before == replacedValue) {
+          replacedValue = after;
+          break;
+        }
+      }
+      rematMapping[{newV, encoding}] = replacedValue;
+      mappedValues[newV] = encoding;
+    }
+  }
+}
+
+void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
+                                           DenseMap<Value, Attribute> &layout,
+                                           ConvertLayoutOp convertOp,
+                                           IRMapping &mapping) {
   SetVector<Operation *> opsToRewrite;
   for (Value v : slice) {
+    auto layoutIt = layout.find(v);
+    assert(layoutIt != layout.end());
+    // If we already have a remat value for this value, use it.
+    if (hasRematValue(v, layoutIt->second)) {
+      mapping.map(v, getRematValue(v, layoutIt->second));
+      continue;
+    }
     if (v.getDefiningOp()) {
       opsToRewrite.insert(v.getDefiningOp());
       if (auto ifOp = v.getDefiningOp<scf::IfOp>()) {
@@ -800,6 +884,15 @@ void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
         int numIndVars = newForOp.getNumInductionVars();
         mapping.map(loopBody.getArgument(m.first + numIndVars),
                     loopBody.getArgument(m.second + numIndVars));
+        LLVM_DEBUG({
+          DBGS() << "mapping forOp "
+                 << loopBody.getArgument(m.first + numIndVars) << " to "
+                 << loopBody.getArgument(m.second + numIndVars) << '\n';
+        });
+        // The result is not in the layout/slice, the argument is.
+        Value oldArg = loopBody.getArgument(m.first + numIndVars);
+        addRematValue(newForOp.getResult(m.first), layout[oldArg],
+                      newForOp.getResult(m.second));
       }
       continue;
     }
@@ -822,7 +915,10 @@ void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
       unsigned newIdx = ifOp.getNumResults();
       for (auto res : ifOp.getResults()) {
         if (slice.count(res)) {
+          // Why can't we use res instead of ifOp.getResult(oldIdx)?
           mapping.map(ifOp.getResult(oldIdx), newIfOp.getResult(newIdx));
+          addRematValue(ifOp.getResult(oldIdx), layout[res],
+                        newIfOp.getResult(newIdx));
           ++newIdx;
         }
         ++oldIdx;
@@ -851,6 +947,8 @@ void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
       auto cvt = builder.create<ConvertLayoutOp>(op->getLoc(), newType,
                                                  newOp->getResult(0));
       mapping.map(op->getResult(0), cvt.getResult());
+      addRematValue(op->getResult(0), layout[op->getResult(0)],
+                    cvt.getResult());
       continue;
     }
     Operation *newOp = builder.clone(*op, mapping);
@@ -862,21 +960,25 @@ void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
           old.getType().cast<RankedTensorType>().getShape(),
           old.getType().cast<RankedTensorType>().getElementType(), it->second);
       newV.setType(newType);
+      addRematValue(old, it->second, newV);
     }
   }
+  // Check mapping and see if there are existing convertOps on the old Argument
   convertOp.replaceAllUsesWith(mapping.lookup(convertOp.getSrc()));
-  convertOp.erase();
+  opToDelete.insert(convertOp);
 
+  updateRematMapping(replacements);
   for (auto &kv : replacements) {
     builder.replaceAllUsesWith(std::get<0>(kv), std::get<1>(kv));
   }
 
   for (Operation *op : deadOps)
-    op->erase();
+    opToDelete.insert(op);
 }
 
-void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
-                  ConvertLayoutOp convertOp) {
+void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
+                                           DenseMap<Value, Attribute> &layout,
+                                           ConvertLayoutOp convertOp) {
   IRMapping mapping;
   rewriteSlice(slice, layout, convertOp, mapping);
 }
@@ -900,12 +1002,46 @@ LogicalResult getRematerializableSlice(
   return success();
 }
 
-void backwardRematerialization(ConvertLayoutOp convertOp) {
+void LayoutRematerialization::backwardRematerialization() {
+  // Go through each ConvertLayoutOp.
+  SmallVector<ConvertLayoutOp> convertOps;
+  funcOp.walk(
+      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
+  for (ConvertLayoutOp convertOp : convertOps) {
+    backwardRematerialization(convertOp);
+  }
+}
+
+void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
+  // Go through each ConvertLayoutOp.
+  SmallVector<ConvertLayoutOp> convertOps;
+  funcOp.walk(
+      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
+  for (ConvertLayoutOp convertOp : convertOps) {
+    hoistConvertOnTopOfExtOrBroadcast(convertOp);
+  }
+}
+
+void LayoutRematerialization::backwardRematerialization(
+    ConvertLayoutOp convertOp) {
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristic to accommodate fused attention
   RankedTensorType targetType = convertOp.getType();
   if (targetType.getEncoding().isa<DotOperandEncodingAttr>())
     return;
+  Value oldV = convertOp->getOperand(0);
+  LDBG("check backward remat with source " << oldV << " encoding "
+                                           << targetType.getEncoding());
+  // Check to see if there are existing remat'ed values for the pair of oldValue
+  // and encoding.
+  if (hasRematValue(oldV, targetType.getEncoding())) {
+    // Replace it with the remat'ed value.
+    Value newV = getRematValue(oldV, targetType.getEncoding());
+    convertOp.replaceAllUsesWith(newV);
+    opToDelete.insert(convertOp);
+    LDBG("found remat'ed value" << newV);
+    return;
+  }
 
   // 1. Take a backward slice of all the tensor dependencies that can be
   // rematerialized.
@@ -913,16 +1049,24 @@ void backwardRematerialization(ConvertLayoutOp convertOp) {
   DenseMap<Value, Attribute> layout;
   LogicalResult result = getRematerializableSlice(
       convertOp.getSrc(), targetType.getEncoding(), slice, layout);
-  if (result.failed())
+  if (result.failed()) {
+    LDBG("  getRematerializableSlice failed");
     return;
+  }
 
+  LLVM_DEBUG({
+    DBGS() << "  remat convert op " << convertOp << '\n';
+    for (Value v : slice)
+      DBGS() << "    " << v << '\n';
+  });
   // 2. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp);
 }
 
 // For convert left we try to hoist them above type extension to reduce the cost
 // of the convert.
-void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp) {
+void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
+    ConvertLayoutOp convertOp) {
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristics to accommodate fused attention
   RankedTensorType targetType = convertOp.getType();
@@ -1003,21 +1147,20 @@ void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp) {
 }
 
 void backwardRematerialization(ModuleOp module) {
-  SmallVector<ConvertLayoutOp> convertOps;
-  module.walk(
-      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
-  for (ConvertLayoutOp convertOp : convertOps) {
-    backwardRematerialization(convertOp);
-  }
+  module.walk([](FuncOp funcOp) {
+    LayoutRematerialization layoutRemat(funcOp);
+    layoutRemat.backwardRematerialization();
+    layoutRemat.cleanup();
+  });
 }
 
 void hoistConvert(ModuleOp module) {
   SmallVector<ConvertLayoutOp> convertOps;
-  module.walk(
-      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
-  for (ConvertLayoutOp convertOp : convertOps) {
-    hoistConvertOnTopOfExtOrBroadcast(convertOp);
-  }
+  module.walk([](FuncOp funcOp) {
+    LayoutRematerialization layoutRemat(funcOp);
+    layoutRemat.hoistConvertOnTopOfExtOrBroadcast();
+    layoutRemat.cleanup();
+  });
 }
 
 class TritonGPURemoveLayoutConversionsPass
