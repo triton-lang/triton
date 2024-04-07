@@ -309,8 +309,14 @@ class CMakeBuild(build_ext):
     def get_proton_cmake_args(self):
         cmake_args = ["-DTRITON_BUILD_PROTON=ON"]
         cmake_args += get_thirdparty_packages([get_json_package_info(), get_pybind11_package_info()])
-        if cuda_root := get_env_with_keys(["CUDA_HOME", "CUDA_ROOT"]):
-            cmake_args += ["-DCUDAToolkit_ROOT=" + cuda_root]
+        # Find cuda backend
+        cuda_include_dir = ""
+        for backend in backends:
+            if backend.name == "nvidia":
+                cuda_include_dir = os.path.abspath(os.path.join(backend.install_dir, "include"))
+                break
+        if cuda_include_dir:
+            cmake_args += ["-DCUDA_INCLUDE_DIR=" + cuda_include_dir]
         if cupti_root := get_env_with_keys(["CUPTI_HOME", "CUPTI_ROOT"]):
             cmake_args += ["-DCUPTI_INCLUDE_DIR=" + cupti_root + "/include"]
         return cmake_args
