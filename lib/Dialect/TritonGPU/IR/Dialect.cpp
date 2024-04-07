@@ -864,8 +864,16 @@ SmallVector<unsigned> DotOperandEncodingAttr::getCTASplitNum() const {
   return res;
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpsPerCTA() const {
-  llvm::report_fatal_error(
-      "getWarpsPerCTA not implemented for DotOperandEncodingAttr");
+  auto parentLayout = getParent();
+  assert(parentLayout && "DotOperandEncodingAttr must have a parent");
+  if (auto distributedLayout =
+          parentLayout.dyn_cast<DistributedEncodingTrait>()) {
+    return distributedLayout.getWarpsPerCTA();
+  } else {
+    llvm::report_fatal_error(
+        "DotOperandEncodingAttr non-DistributedEncodingAttr parent not "
+        "supported yet");
+  }
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpOrder() const {
   return ::getOrder(*this);
