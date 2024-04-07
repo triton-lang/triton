@@ -20,14 +20,14 @@ tt.func @load_ops(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
   %mask = arith.constant dense<true> : tensor<128xi1>
   %other = arith.constant dense<0.0e+0> : tensor<128xf32>
   // CHECK: %{{.*}} = tt.load %{{.*}} : {{.*}}
-  %a = tt.load %ptrs : tensor<128x!tt.ptr<f32, 1>>
+  %a = tt.load %ptrs : tensor<128x!tt.ptr<f32>>
   // CHECK: %{{.*}} = tt.load %{{.*}}, %{{.*}} : {{.*}}
-  %b = tt.load %ptrs, %mask : tensor<128x!tt.ptr<f32, 1>>
+  %b = tt.load %ptrs, %mask : tensor<128x!tt.ptr<f32>>
   // CHECK: %{{.*}} = tt.load %{{.*}}, %{{.*}}, %{{.*}} : {{.*}}
-  %c = tt.load %ptrs, %mask, %other : tensor<128x!tt.ptr<f32, 1>>
-  tt.store %ptrs, %a : tensor<128x!tt.ptr<f32, 1>>
-  tt.store %ptrs, %b : tensor<128x!tt.ptr<f32, 1>>
-  tt.store %ptrs, %c : tensor<128x!tt.ptr<f32, 1>>
+  %c = tt.load %ptrs, %mask, %other : tensor<128x!tt.ptr<f32>>
+  tt.store %ptrs, %a : tensor<128x!tt.ptr<f32>>
+  tt.store %ptrs, %b : tensor<128x!tt.ptr<f32>>
+  tt.store %ptrs, %c : tensor<128x!tt.ptr<f32>>
   tt.return
 }
 }
@@ -84,14 +84,14 @@ tt.func public @select_op(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg
   %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
   %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
   %2 = tt.addptr %1, %0 : tensor<128x!tt.ptr<f32>>, tensor<128xi32>
-  %3 = tt.load %2 : tensor<128x!tt.ptr<f32, 1>>
+  %3 = tt.load %2 : tensor<128x!tt.ptr<f32>>
 
   // CHECK: %{{.*}} = arith.select %arg2, %{{.*}}, %{{.*}} : tensor<128xf32, #blocked>
   %4 = arith.select %arg2, %cst, %3 : tensor<128xf32>
 
   %5 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
   %6 = tt.addptr %5, %0 : tensor<128x!tt.ptr<f32>>, tensor<128xi32>
-  tt.store %6, %4 : tensor<128x!tt.ptr<f32, 1>>
+  tt.store %6, %4 : tensor<128x!tt.ptr<f32>>
   tt.return
 }
 }

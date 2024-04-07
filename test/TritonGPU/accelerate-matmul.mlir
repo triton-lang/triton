@@ -17,7 +17,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
    %164: tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked2}>>,
    %165: tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked2}>>,
    %173: tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked1}>>,
-   %153: tensor<128x64x!tt.ptr<f16, 1>, #blocked1>) {
+   %153: tensor<128x64x!tt.ptr<f16>, #blocked1>) {
     %c0_i32 = arith.constant 0 : i32
     %c8_i32 = arith.constant 8 : i32
     %c1_i32 = arith.constant 1 : i32
@@ -42,7 +42,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
       %174 = tt.dot %172, %173, %arg16 : tensor<128x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked1}>> * tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked1}>> -> tensor<128x64xf16, #blocked1>
       scf.yield %174 : tensor<128x64xf16, #blocked1>
     }
-    tt.store %153, %149 : tensor<128x64x!tt.ptr<f16, 1>, #blocked1>
+    tt.store %153, %149 : tensor<128x64x!tt.ptr<f16>, #blocked1>
     tt.return
   }
 }
@@ -135,7 +135,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 // CHECK: #mma = #triton_gpu.nvidia_mma<{versionMajor = 3, {{.*}}, instrShape = [16, 32, 16]}>
 #blocked = #triton_gpu.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [32, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
-  tt.func @check_instrShape_per_warps(%arg0: !tt.ptr<f32, 1> {tt.divisibility = 16 : i32}) {
+  tt.func @check_instrShape_per_warps(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
     // CHECK-LABEL: check_instrShape_per_warps
     %mask = arith.constant dense<true> : tensor<128x128xi1, #blocked>
     %zero_f32 = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
@@ -143,8 +143,8 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %b = arith.constant dense<0.000000e+00> : tensor<128x128xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>>
 
     %result = tt.dot %a, %b, %zero_f32 : tensor<128x128xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x128xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x128xf32, #blocked>
-    %result_ptr = tt.splat %arg0 : !tt.ptr<f32, 1> -> tensor<128x128x!tt.ptr<f32, 1>, #blocked>
-    tt.store %result_ptr, %result, %mask : tensor<128x128x!tt.ptr<f32, 1>, #blocked>
+    %result_ptr = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x128x!tt.ptr<f32>, #blocked>
+    tt.store %result_ptr, %result, %mask : tensor<128x128x!tt.ptr<f32>, #blocked>
     tt.return
   }
 }

@@ -30,8 +30,8 @@ tt.func @push_elementwise(
                    %pa: tensor<16x16x!tt.ptr<i8>, #ALR> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
                    %pb: tensor<16x16x!tt.ptr<f16>, #BLC> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
                    %c: tensor<16x16xf32, #Cv2>) -> tensor<16x16xf32, #Cv2>{
-  %ai8 = tt.load %pa : tensor<16x16x!tt.ptr<i8, 1>, #ALR>
-  %b = tt.load %pb : tensor<16x16x!tt.ptr<f16, 1>, #BLC>
+  %ai8 = tt.load %pa : tensor<16x16x!tt.ptr<i8>, #ALR>
+  %b = tt.load %pb : tensor<16x16x!tt.ptr<f16>, #BLC>
   %af8 = tt.bitcast %ai8: tensor<16x16xi8, #ALR> -> tensor<16x16xf8E5M2, #ALR>
   %a = tt.fp_to_fp %af8: tensor<16x16xf8E5M2, #ALR> -> tensor<16x16xf16, #ALR>
   %dota = triton_gpu.convert_layout %a : tensor<16x16xf16, #ALR> -> tensor<16x16xf16, #Av2k4>
@@ -52,9 +52,9 @@ tt.func @succeeds_if_arg_is_not_convert_layout(
                    %pa: tensor<16x16x!tt.ptr<i8>, #ALR> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
                    %pb: tensor<16x16x!tt.ptr<f16>, #BLC> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
                    %c: tensor<16x16xf32, #Cv2>) -> tensor<16x16xf32, #Cv2>{
-  %ai8 = tt.load %pa : tensor<16x16x!tt.ptr<i8, 1>, #ALR>
+  %ai8 = tt.load %pa : tensor<16x16x!tt.ptr<i8>, #ALR>
   %dotai8 = triton_gpu.convert_layout %ai8 : tensor<16x16xi8, #ALR> -> tensor<16x16xi8, #Av2k4>
-  %b = tt.load %pb : tensor<16x16x!tt.ptr<f16, 1>, #BLC>
+  %b = tt.load %pb : tensor<16x16x!tt.ptr<f16>, #BLC>
   %dotaf8 = tt.bitcast %dotai8 : tensor<16x16xi8, #Av2k4> -> tensor<16x16xf8E5M2, #Av2k4>
   %dota = tt.fp_to_fp %dotaf8 : tensor<16x16xf8E5M2, #Av2k4> -> tensor<16x16xf16, #Av2k4>
   %dotb = triton_gpu.convert_layout %b : tensor<16x16xf16, #BLC> -> tensor<16x16xf16, #Bv2k4>
@@ -73,7 +73,7 @@ tt.func @push_inline_asm_op(
                    %pa: tensor<16x16x!tt.ptr<i8>, #ALR> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
                    %dotb: tensor<16x16xf16, #Bv2k4>,
                    %c: tensor<16x16xf32, #Cv2>) -> tensor<16x16xf32, #Cv2>{
-  %ai8 = tt.load %pa : tensor<16x16x!tt.ptr<i8, 1>, #ALR>
+  %ai8 = tt.load %pa : tensor<16x16x!tt.ptr<i8>, #ALR>
   %dotaf8 = tt.bitcast %ai8 : tensor<16x16xi8, #ALR> -> tensor<16x16xf8E5M2, #ALR>
   %dota = tt.elementwise_inline_asm "{ cvt.rn.satfinite.e4m3x2.f16x2 $0, $1; }" {constraints = "=r,r", packed_element = 2 : i32, pure = true} %dotaf8 : tensor<16x16xf8E5M2, #ALR> -> tensor<16x16xf16, #ALR>
   %dota_cvt = triton_gpu.convert_layout %dota : tensor<16x16xf16, #ALR> -> tensor<16x16xf16, #Av2k4>
@@ -95,8 +95,8 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.compute-capabil
 // CHECK: #[[MMA:.*]] = #triton_gpu.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 4], instrShape = []}>
 
 // CHECK: tt.func @push_convert_both_operands
-// CHECK: %[[ALOAD:.*]] = tt.load %{{.*}} : tensor<16x16x!tt.ptr<f16, 1>, #[[BA]]>
-// CHECK: %[[BLOAD:.*]] = tt.load %{{.*}} : tensor<16x16x!tt.ptr<f16, 1>, #[[BB]]>
+// CHECK: %[[ALOAD:.*]] = tt.load %{{.*}} : tensor<16x16x!tt.ptr<f16>, #[[BA]]>
+// CHECK: %[[BLOAD:.*]] = tt.load %{{.*}} : tensor<16x16x!tt.ptr<f16>, #[[BB]]>
 // CHECK: %[[ACVT:.*]] = triton_gpu.convert_layout %[[ALOAD]] : tensor<16x16xf16, #[[BA]]> -> tensor<16x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #[[MMA]], kWidth = 2}>>
 // CHECK: %[[AEXT:.*]] = arith.extf %[[ACVT]] : tensor<16x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #[[MMA]], kWidth = 2}>> to tensor<16x16xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #[[MMA]], kWidth = 2}>>
 // CHECK: %[[BCVT:.*]] = triton_gpu.convert_layout %[[BLOAD]] : tensor<16x16xf16, #[[BB]]> -> tensor<16x16xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #[[MMA]], kWidth = 2}>>
@@ -106,8 +106,8 @@ tt.func @push_convert_both_operands(
                    %pa: tensor<16x16x!tt.ptr<f16>, #blockedA> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
                    %pb: tensor<16x16x!tt.ptr<f16>, #blockedB> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
                    %c: tensor<16x16xf32, #mma>) -> tensor<16x16xf32, #mma>{
-  %a = tt.load %pa : tensor<16x16x!tt.ptr<f16, 1>, #blockedA>
-  %b = tt.load %pb : tensor<16x16x!tt.ptr<f16, 1>, #blockedB>
+  %a = tt.load %pa : tensor<16x16x!tt.ptr<f16>, #blockedA>
+  %b = tt.load %pb : tensor<16x16x!tt.ptr<f16>, #blockedB>
   %ae = arith.extf %a : tensor<16x16xf16, #blockedA> to tensor<16x16xf32, #blockedA>
   %be = arith.extf %b : tensor<16x16xf16, #blockedB> to tensor<16x16xf32, #blockedB>
   %al = triton_gpu.convert_layout %ae : tensor<16x16xf32, #blockedA> -> tensor<16x16xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
@@ -131,8 +131,8 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.compute-capabil
 
 // CHECK: tt.func @update_kwidth_slice
 // CHECK: %[[CST:.+]] = arith.constant dense<1.000000e+00> : tensor<16x16xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #[[MMA]], kWidth = 2}>>
-// CHECK: %[[ALOAD:.*]] = tt.load %{{.*}} : tensor<16x16x!tt.ptr<f16, 1>, #[[BA]]>
-// CHECK: %[[BLOAD:.*]] = tt.load %{{.*}} : tensor<16x16x!tt.ptr<f16, 1>, #[[BB]]>
+// CHECK: %[[ALOAD:.*]] = tt.load %{{.*}} : tensor<16x16x!tt.ptr<f16>, #[[BA]]>
+// CHECK: %[[BLOAD:.*]] = tt.load %{{.*}} : tensor<16x16x!tt.ptr<f16>, #[[BB]]>
 // CHECK: %[[ACVT:.*]] = triton_gpu.convert_layout %[[ALOAD]] : tensor<16x16xf16, #[[BA]]> -> tensor<16x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #[[MMA]], kWidth = 2}>>
 // CHECK: %[[AEXT:.*]] = arith.extf %[[ACVT]] : tensor<16x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #[[MMA]], kWidth = 2}>> to tensor<16x16xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #[[MMA]], kWidth = 2}>>
 // CHECK: %[[BCVT:.*]] = triton_gpu.convert_layout %[[BLOAD]] : tensor<16x16xf16, #[[BB]]> -> tensor<16x16xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #[[MMA]], kWidth = 2}>>
@@ -144,8 +144,8 @@ tt.func @update_kwidth_slice(
                    %pb: tensor<16x16x!tt.ptr<f16>, #blockedB> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
                    %c: tensor<16x16xf32, #mma>) -> tensor<16x16xf32, #mma>{
   %cst = arith.constant dense<1.000000e+00> : tensor<16x16xf32, #blockedB>
-  %a = tt.load %pa : tensor<16x16x!tt.ptr<f16, 1>, #blockedA>
-  %b = tt.load %pb : tensor<16x16x!tt.ptr<f16, 1>, #blockedB>
+  %a = tt.load %pa : tensor<16x16x!tt.ptr<f16>, #blockedA>
+  %b = tt.load %pb : tensor<16x16x!tt.ptr<f16>, #blockedB>
   %ae = arith.extf %a : tensor<16x16xf16, #blockedA> to tensor<16x16xf32, #blockedA>
   %be = arith.extf %b : tensor<16x16xf16, #blockedB> to tensor<16x16xf32, #blockedB>
   %add = arith.addf %be, %cst : tensor<16x16xf32, #blockedB>
@@ -195,12 +195,12 @@ tt.func @mma_v3_reg_operand_A_fp8(%arg0: tensor<128x64xf8E5M2, #mma>, %arg1: !tt
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
 // CHECK: tt.func @a_impl
 // CHECK-NOT: %[[SELECT:.*]] = arith.select {{.*}} : tensor<128x128xi1, #triton_gpu.dot_op<{{.*}}>, tensor<128x128xf16, #triton_gpu.dot_op<{{.*}}>
-  tt.func @a_impl(%pa: tensor<128x128x!tt.ptr<f16, 1>, #blocked>) -> tensor<128x128xf32, #mma> {
+  tt.func @a_impl(%pa: tensor<128x128x!tt.ptr<f16>, #blocked>) -> tensor<128x128xf32, #mma> {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x128xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
     %cst_3 = arith.constant dense<5> : tensor<128x1xi32, #blocked>
     %cst_4 = arith.constant dense<0.000000e+00> : tensor<128x128xf16, #blocked>
-    %tl = tt.load %pa : tensor<128x128x!tt.ptr<f16, 1>, #blocked>
+    %tl = tt.load %pa : tensor<128x128x!tt.ptr<f16>, #blocked>
     %tr = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
     %te = tt.expand_dims %tr {axis = 1 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
     %tc = arith.cmpi slt, %te, %cst_3 : tensor<128x1xi32, #blocked>

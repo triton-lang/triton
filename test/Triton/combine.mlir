@@ -72,16 +72,16 @@ tt.func @test_combine_addptr_pattern(%base: !tt.ptr<f32>) -> tensor<8x!tt.ptr<f3
 
     %base_ = tt.splat %base : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
 
-    // CHECK-NEXT: %[[tmp0:.*]] = tt.splat %{{.*}} : !tt.ptr<f32, 1> -> tensor<8x!tt.ptr<f32, 1>>
+    // CHECK-NEXT: %[[tmp0:.*]] = tt.splat %{{.*}} : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
 
     %idx0 = tt.splat %off0 : i32 -> tensor<8xi32>
     %idx1 = tt.splat %off1 : i32 -> tensor<8xi32>
 
-    // CHECK-NEXT: %1 = tt.addptr %[[tmp0]], %[[cst]] : tensor<8x!tt.ptr<f32, 1>>, tensor<8xi32>
+    // CHECK-NEXT: %1 = tt.addptr %[[tmp0]], %[[cst]] : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
     %ptr0 = tt.addptr %base_, %idx0 : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
     %ptr1 = tt.addptr %ptr0, %idx1 : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
 
-    tt.return %ptr1 : tensor<8x!tt.ptr<f32, 1>>
+    tt.return %ptr1 : tensor<8x!tt.ptr<f32>>
 }
 
 // CHECK-LABEL: @test_combine_addptr_pattern_i64
@@ -93,15 +93,15 @@ tt.func @test_combine_addptr_pattern_i64(%base: !tt.ptr<f32>) -> tensor<8x!tt.pt
 
     %base_ = tt.splat %base : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
 
-    // CHECK-NEXT: %[[tmp0:.*]] = tt.splat %{{.*}} : !tt.ptr<f32, 1> -> tensor<8x!tt.ptr<f32, 1>>
+    // CHECK-NEXT: %[[tmp0:.*]] = tt.splat %{{.*}} : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
 
     %idx0 = tt.splat %off0 : i64 -> tensor<8xi64>
 
-    // CHECK-NEXT: %1 = tt.addptr %[[tmp0]], %[[cst]] : tensor<8x!tt.ptr<f32, 1>>, tensor<8xi64>
+    // CHECK-NEXT: %1 = tt.addptr %[[tmp0]], %[[cst]] : tensor<8x!tt.ptr<f32>>, tensor<8xi64>
     %ptr0 = tt.addptr %base_, %idx0 : tensor<8x!tt.ptr<f32>>, tensor<8xi64>
     %ptr1 = tt.addptr %ptr0, %off1 : tensor<8x!tt.ptr<f32>>, tensor<8xi64>
 
-    tt.return %ptr1 : tensor<8x!tt.ptr<f32, 1>>
+    tt.return %ptr1 : tensor<8x!tt.ptr<f32>>
 }
 
 // CHECK-LABEL: @test_combine_addptr_pattern_scalar
@@ -110,11 +110,11 @@ tt.func @test_combine_addptr_pattern_scalar(%base: !tt.ptr<f32>) -> !tt.ptr<f32>
     %off1 = arith.constant 15 : i32
 
     // CHECK-NEXT: %[[cst:.*]] = arith.constant 25 : i32
-    // CHECK-NEXT: %0 = tt.addptr %{{.*}}, %[[cst]] : !tt.ptr<f32, 1>, i32
+    // CHECK-NEXT: %0 = tt.addptr %{{.*}}, %[[cst]] : !tt.ptr<f32>, i32
     %ptr0 = tt.addptr %base, %off0 : !tt.ptr<f32>, i32
     %ptr1 = tt.addptr %ptr0, %off1 : !tt.ptr<f32>, i32
 
-    tt.return %ptr1 : !tt.ptr<f32, 1>
+    tt.return %ptr1 : !tt.ptr<f32>
 }
 
 // CHECK-LABEL: @test_not_combine_addptr_pattern_1
@@ -174,12 +174,12 @@ tt.func @test_combine_select_masked_load_pattern(%ptr: tensor<8x!tt.ptr<f32>>, %
     %mask = tt.splat %cond : i1 -> tensor<8xi1>
     %false_val = arith.constant dense<0.0> : tensor<8xf32>
 
-    // CHECK: %[[res1:.*]] = tt.load %{{.*}}, %{{.*}}, %{{.*}} : tensor<8x!tt.ptr<f32, 1>>
-    %x = tt.load %ptr, %mask, %false_val : tensor<8x!tt.ptr<f32, 1>>
+    // CHECK: %[[res1:.*]] = tt.load %{{.*}}, %{{.*}}, %{{.*}} : tensor<8x!tt.ptr<f32>>
+    %x = tt.load %ptr, %mask, %false_val : tensor<8x!tt.ptr<f32>>
     %0 = arith.select %cond, %x, %false_val : tensor<8xf32>
 
-    // CHECK: %[[res2:.*]] = tt.load %{{.*}}, %{{.*}}, %{{.*}} : tensor<8x!tt.ptr<f32, 1>>
-    %y = tt.load %ptr, %mask, %false_val : tensor<8x!tt.ptr<f32, 1>>
+    // CHECK: %[[res2:.*]] = tt.load %{{.*}}, %{{.*}}, %{{.*}} : tensor<8x!tt.ptr<f32>>
+    %y = tt.load %ptr, %mask, %false_val : tensor<8x!tt.ptr<f32>>
     %1 = arith.select %cond, %y, %false_val : tensor<8xf32>
 
     // CHECK: tt.return %[[res1]], %[[res2]] : tensor<8xf32>, tensor<8xf32>
@@ -195,13 +195,13 @@ tt.func @test_combine_select_masked_load_fail_pattern(%ptr: tensor<8x!tt.ptr<f32
     %0 = arith.select %cond0, %dummy_load, %false_val : tensor<8xf32>
 
     // Case 2: value at the "broadcast" position is not an "op".  Select should not be canonicalized.
-    %real_load0 = tt.load %ptr, %dummy_broadcast, %false_val : tensor<8x!tt.ptr<f32, 1>>
+    %real_load0 = tt.load %ptr, %dummy_broadcast, %false_val : tensor<8x!tt.ptr<f32>>
     // CHECK: %{{.*}} = arith.select %{{.*}}, %{{.*}}, %{{.*}} : tensor<8xf32>
     %1 = arith.select %cond0, %real_load0, %false_val : tensor<8xf32>
 
     // Case 3: condition of "broadcast" is not the same as the condition of "select".  Select should not be canonicalized.
     %cond0_ = tt.splat %cond0 : i1 -> tensor<8xi1>
-    %real_load1 = tt.load %ptr, %cond0_, %false_val : tensor<8x!tt.ptr<f32, 1>>
+    %real_load1 = tt.load %ptr, %cond0_, %false_val : tensor<8x!tt.ptr<f32>>
     // CHECK: %{{.*}} = arith.select %{{.*}}, %{{.*}}, %{{.*}} : tensor<8xf32>
     %2 = arith.select %cond1, %real_load1, %false_val : tensor<8xf32>
 
@@ -225,15 +225,15 @@ tt.func @test_canonicalize_masked_load_pattern(%ptr: tensor<8x!tt.ptr<f32>>) -> 
     %other_val = arith.constant dense<0.0> : tensor<8xf32>
 
     // true_mask with other
-    // CHECK: %[[res1:.*]] = tt.load %{{.*}} : tensor<8x!tt.ptr<f32, 1>>
-    %x = tt.load %ptr, %true_mask : tensor<8x!tt.ptr<f32, 1>>
+    // CHECK: %[[res1:.*]] = tt.load %{{.*}} : tensor<8x!tt.ptr<f32>>
+    %x = tt.load %ptr, %true_mask : tensor<8x!tt.ptr<f32>>
 
     // true_mask without other
-    // CHECK: %[[res2:.*]] = tt.load %{{.*}} : tensor<8x!tt.ptr<f32, 1>>
-    %y = tt.load %ptr, %true_mask, %other_val : tensor<8x!tt.ptr<f32, 1>>
+    // CHECK: %[[res2:.*]] = tt.load %{{.*}} : tensor<8x!tt.ptr<f32>>
+    %y = tt.load %ptr, %true_mask, %other_val : tensor<8x!tt.ptr<f32>>
 
     // false_mask with other. It should become "other" (i.e., %y)
-    %z = tt.load %ptr, %false_mask, %y : tensor<8x!tt.ptr<f32, 1>>
+    %z = tt.load %ptr, %false_mask, %y : tensor<8x!tt.ptr<f32>>
 
     // CHECK: tt.return %[[res1]], %[[res2]], %[[res2]] : tensor<8xf32>, tensor<8xf32>, tensor<8xf32>
     tt.return %x, %y, %z: tensor<8xf32>, tensor<8xf32>, tensor<8xf32>
@@ -244,10 +244,10 @@ tt.func @test_canonicalize_masked_load_fail_pattern(%ptr: tensor<8x!tt.ptr<f32>>
     %other_val = arith.constant dense<0.0> : tensor<8xf32>
 
     // Case: value at the "mask" position is not an "op".  Load should not be canonicalized.
-    // CHECK: %[[res1:.*]] = tt.load %{{.*}}, %{{.*}} : tensor<8x!tt.ptr<f32, 1>>
-    %x = tt.load %ptr, %mask : tensor<8x!tt.ptr<f32, 1>>
-    // CHECK: %[[res1:.*]] = tt.load %{{.*}}, %{{.*}}, %{{.*}} : tensor<8x!tt.ptr<f32, 1>>
-    %y = tt.load %ptr, %mask, %other_val : tensor<8x!tt.ptr<f32, 1>>
+    // CHECK: %[[res1:.*]] = tt.load %{{.*}}, %{{.*}} : tensor<8x!tt.ptr<f32>>
+    %x = tt.load %ptr, %mask : tensor<8x!tt.ptr<f32>>
+    // CHECK: %[[res1:.*]] = tt.load %{{.*}}, %{{.*}}, %{{.*}} : tensor<8x!tt.ptr<f32>>
+    %y = tt.load %ptr, %mask, %other_val : tensor<8x!tt.ptr<f32>>
 
     tt.return %x, %y: tensor<8xf32>, tensor<8xf32>
 }
@@ -257,20 +257,20 @@ tt.func @test_canonicalize_masked_store_pattern(%ptr: tensor<8x!tt.ptr<f32>>, %v
     %true_mask = arith.constant dense<true> : tensor<8xi1>
     %false_mask = arith.constant dense<false> : tensor<8xi1>
 
-    // CHECK: tt.store %{{.*}}, %{{.*}} : tensor<8x!tt.ptr<f32, 1>>
-    tt.store %ptr, %val, %true_mask : tensor<8x!tt.ptr<f32, 1>>
+    // CHECK: tt.store %{{.*}}, %{{.*}} : tensor<8x!tt.ptr<f32>>
+    tt.store %ptr, %val, %true_mask : tensor<8x!tt.ptr<f32>>
 
     // The following store should disappear.
     // CHECK-NEXT: tt.return
-    tt.store %ptr, %val, %false_mask : tensor<8x!tt.ptr<f32, 1>>
+    tt.store %ptr, %val, %false_mask : tensor<8x!tt.ptr<f32>>
     tt.return
 }
 
 // CHECK-LABEL: @test_canonicalize_masked_store_fail_pattern
 tt.func @test_canonicalize_masked_store_fail_pattern(%ptr: tensor<8x!tt.ptr<f32>>, %val: tensor<8xf32>, %mask: tensor<8xi1>) {
     // Case: value at the "mask" position is not an "op".  Store should not be canonicalized.
-    // CHECK: tt.store %{{.*}}, %{{.*}}, %{{.*}} : tensor<8x!tt.ptr<f32, 1>>
-    tt.store %ptr, %val, %mask : tensor<8x!tt.ptr<f32, 1>>
+    // CHECK: tt.store %{{.*}}, %{{.*}}, %{{.*}} : tensor<8x!tt.ptr<f32>>
+    tt.store %ptr, %val, %mask : tensor<8x!tt.ptr<f32>>
     tt.return
 }
 

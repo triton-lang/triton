@@ -38,7 +38,7 @@ module {
     }
     %16 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>>
     %17 = tt.addptr %16, %4 : tensor<256x!tt.ptr<f32>>, tensor<256xi32>
-    tt.store %17, %15#0, %6 : tensor<256x!tt.ptr<f32, 1>>
+    tt.store %17, %15#0, %6 : tensor<256x!tt.ptr<f32>>
     tt.return
   }
 }

@@ -27,10 +27,10 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>,
   %b_off = arith.constant dense<4> : tensor<32x128xi32, #BL>
 
   scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %prev_c = %c_init) -> (tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>) {
-    %a_ = tt.load %a_ptr, %a_mask, %a_other : tensor<128x32x!tt.ptr<f16, 1>, #AL>
+    %a_ = tt.load %a_ptr, %a_mask, %a_other : tensor<128x32x!tt.ptr<f16>, #AL>
     // CHECK: offset = 0, size = 4608
     %a = triton_gpu.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A_DOT>
-    %b_ = tt.load %b_ptr, %b_mask, %b_other : tensor<32x128x!tt.ptr<f16, 1>, #BL>
+    %b_ = tt.load %b_ptr, %b_mask, %b_other : tensor<32x128x!tt.ptr<f16>, #BL>
     // CHECK-NEXT: offset = 0, size = 4224
     %b = triton_gpu.convert_layout %b_ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B_DOT>
 
@@ -55,17 +55,17 @@ tt.func @reusable(%A : !tt.ptr<f16>) {
 
   %a_ptr = tt.splat %A : !tt.ptr<f16> -> tensor<128x32x!tt.ptr<f16>, #AL>
   %b_ptr = tt.splat %A : !tt.ptr<f16> -> tensor<32x128x!tt.ptr<f16>, #AL>
-  %a1_ = tt.load %a_ptr, %cst1, %cst2 : tensor<128x32x!tt.ptr<f16, 1>, #AL>
+  %a1_ = tt.load %a_ptr, %cst1, %cst2 : tensor<128x32x!tt.ptr<f16>, #AL>
   // CHECK-NEXT: offset = 0, size = 4608
   %a1 = triton_gpu.convert_layout %a1_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A_DOT>
-  %a2_ = tt.load %b_ptr, %cst3, %cst4 : tensor<32x128x!tt.ptr<f16, 1>, #AL>
+  %a2_ = tt.load %b_ptr, %cst3, %cst4 : tensor<32x128x!tt.ptr<f16>, #AL>
   // CHECK-NEXT: offset = 0, size = 1152
   %a2 = triton_gpu.convert_layout %a2_ : tensor<32x128xf16, #AL> -> tensor<32x128xf16, #B_DOT>
-  %a3_ = tt.load %a_ptr, %cst1, %cst2 : tensor<128x32x!tt.ptr<f16, 1>, #AL>
+  %a3_ = tt.load %a_ptr, %cst1, %cst2 : tensor<128x32x!tt.ptr<f16>, #AL>
   // CHECK-NEXT: offset = 0, size = 4608
   %a3 = triton_gpu.convert_layout %a3_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A_DOT>
   %c = tt.dot %a1, %a2, %c_init : tensor<128x32xf16, #A_DOT> * tensor<32x128xf16, #B_DOT> -> tensor<128x128xf32, #C>
-  %a4_ = tt.load %b_ptr, %cst3, %cst4 : tensor<32x128x!tt.ptr<f16, 1>, #AL>
+  %a4_ = tt.load %b_ptr, %cst3, %cst4 : tensor<32x128x!tt.ptr<f16>, #AL>
   // CHECK-NEXT: offset = 0, size = 1152
   %a4 = triton_gpu.convert_layout %a4_ : tensor<32x128xf16, #AL> -> tensor<32x128xf16, #B_DOT>
   %c1 = tt.dot %a3, %a4, %c : tensor<128x32xf16, #A_DOT> * tensor<32x128xf16, #B_DOT> -> tensor<128x128xf32, #C>

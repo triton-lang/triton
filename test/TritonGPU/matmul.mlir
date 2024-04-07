@@ -100,7 +100,7 @@ tt.func @matmul_kernel__Pfp32_Pfp32_Pfp32_i32_i32_i32_i32_i32_i32_i32_i32_i32__1
     %73 = tt.broadcast %69 : tensor<64x1xi1> -> tensor<64x64xi1>
     %74 = tt.broadcast %72 : tensor<1x64xi1> -> tensor<64x64xi1>
     %75 = arith.andi %73, %74 : tensor<64x64xi1>
-    tt.store %66, %47#0, %75 : tensor<64x64x!tt.ptr<f32, 1>>
+    tt.store %66, %47#0, %75 : tensor<64x64x!tt.ptr<f32>>
     tt.return
   }
 }
