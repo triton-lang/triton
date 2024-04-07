@@ -392,6 +392,7 @@ class CMakeBuild(build_ext):
         if check_env_flag("TRITON_BUILD_PROTON"):
             cmake_args += self.get_proton_cmake_args()
 
+        print(cmake_args)
         env = os.environ.copy()
         cmake_dir = get_cmake_dir()
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=cmake_dir, env=env)
