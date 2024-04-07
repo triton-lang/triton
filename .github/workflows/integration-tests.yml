@@ -168,7 +168,7 @@ jobs:
       - name: Install Triton
         run: |
           export CUPTI_ROOT=$(pip show nvidia-cuda-cupti-cu12 | grep Location | awk '{print $2}')/nvidia/cuda_cupti
-          export CUDA_ROOT=$(pip show nvidia-cuda-runtime-cu12 | grep Location | awk '{print $2}')/nvidia/cuda
+          export CUDA_ROOT=$(pip show nvidia-cuda-runtime-cu12 | grep Location | awk '{print $2}')/nvidia/cuda_runtime
           echo "PATH is '$PATH'"
           echo "CUPIT_ROOT is '$CUPTI_ROOT'"
           echo "CUDA_ROOT is '$CUDA_ROOT'"
