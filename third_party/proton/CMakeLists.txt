@@ -13,11 +13,13 @@ endif()
 
 # Try to find CUPTI from the default include dir, if not found, search the
 # EXTRAS dir
-find_path(
-  CUPTI_INCLUDE_DIR
-  NAMES cupti.h
-  HINTS ${CUDAToolkit_INCLUDE_DIRS}
-  PATH_SUFFIXES include)
+if(NOT DEFINED CUPTI_INCLUDE_DIR)
+  find_path(
+    CUPTI_INCLUDE_DIR
+    NAMES cupti.h
+    HINTS ${CUDAToolkit_INCLUDE_DIRS}
+    PATH_SUFFIXES include)
+endif()
 
 if(NOT CUPTI_INCLUDE_DIR)
   find_path(

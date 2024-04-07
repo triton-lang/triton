@@ -162,10 +162,13 @@ jobs:
         run: |
           python3 -m pip install --upgrade pip
           python3 -m pip install wheel cmake==3.24 ninja pytest-xdist lit
+          python3 -m pip install nvidia-cuda-cupti-cu12
 
       - name: Install Triton
         run: |
+          export CUPTI_ROOT=$(pip show nvidia-cuda-cupti-cu12 | grep Location | awk '{print $2}')/nvidia/cuda_cupti
           echo "PATH is '$PATH'"
+          echo "CUPIT_ROOT is '$CUPTI_ROOT'"
           cd python
           TRITON_BUILD_PROTON=true TRITON_BUILD_WITH_CCACHE=true python3 -m pip install --no-build-isolation -vvv '.[tests]'
 

@@ -102,13 +102,11 @@ def get_build_type():
         return "TritonRelBuildWithAsserts"
 
 
-def get_cuda_root():
-    if "CUDA_HOME" in os.environ:
-        return os.environ["CUDA_HOME"]
-    elif "CUDA_ROOT" in os.environ:
-        return os.environ["CUDA_ROOT"]
-    else:
-        return ""
+def get_env_with_keys(key: list):
+    for k in key:
+        if k in os.environ:
+            return os.environ[k]
+    return ""
 
 
 # --- third party packages -----
@@ -311,8 +309,10 @@ class CMakeBuild(build_ext):
     def get_proton_cmake_args(self):
         cmake_args = ["-DTRITON_BUILD_PROTON=ON"]
         cmake_args += get_thirdparty_packages([get_json_package_info(), get_pybind11_package_info()])
-        if cuda_root := get_cuda_root():
+        if cuda_root := get_env_with_keys(["CUDA_HOME", "CUDA_ROOT"]):
             cmake_args += ["-DCUDAToolkit_ROOT=" + cuda_root]
+        if cupti_root := get_env_with_keys(["CUPTI_HOME", "CUPTI_ROOT"]):
+            cmake_args += ["-DCUPTI_INCLUDE_DIR=" + cupti_root + "/include"]
         return cmake_args
 
     def build_extension(self, ext):
