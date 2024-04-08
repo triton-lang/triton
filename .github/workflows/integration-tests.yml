@@ -164,10 +164,14 @@ jobs:
           python3 -m pip install wheel cmake==3.24 ninja pytest-xdist lit
 
       - name: Install Triton
+        env:
+          TRITON_BUILD_PROTON: "true"
+          TRITON_BUILD_WITH_CCACHE: "true"
+          CUDA_HOME: "/usr/local/cuda"
         run: |
           echo "PATH is '$PATH'"
           cd python
-          CUDA_HOME=/usr/local/cuda TRITON_BUILD_PROTON=true TRITON_BUILD_WITH_CCACHE=true python3 -m pip install --no-build-isolation -vvv '.[tests]'
+          python3 -m pip install --no-build-isolation -vvv '.[tests]'
 
       - name: Run lit tests
         run: |
@@ -211,9 +215,10 @@ jobs:
           ctest
 
       - name: Run Proton tests
+        env:
+          LD_LIBRARY_PATH: "/usr/local/cuda/extras/CUPTI/lib64:$LD_LIBRARY_PATH"
         run: |
           cd third_party/proton
-          export LD_LIBRARY_PATH=/usr/local/cuda/extras/CUPTI/lib64:$LD_LIBRARY_PATH
           python3 -m pytest -vvv test
           python3 tutorials/dynamic_net.py --profile
           python3 tutorials/matmul.py --profile
