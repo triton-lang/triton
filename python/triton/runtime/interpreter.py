@@ -435,7 +435,7 @@ class InterpreterBuilder:
         dtype_np = _get_np_dtype(dtype_tt)
         if padding_option is None:
             other = None
-        if padding_option == _ir.PADDING_OPTION.PAD_ZERO:
+        elif padding_option == _ir.PADDING_OPTION.PAD_ZERO:
             other = TensorHandle(np.zeros_like(ptrs.data, dtype=dtype_np), dtype_tt)
         elif padding_option == _ir.PADDING_OPTION.PAD_NAN:
             other = TensorHandle(np.full_like(ptrs.data, float('nan'), dtype=dtype_np), dtype_tt)
