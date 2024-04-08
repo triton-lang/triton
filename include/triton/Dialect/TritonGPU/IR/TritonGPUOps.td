@@ -117,7 +117,7 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
 
   let arguments = (
     ins TT_PtrTensor:$src,
-    TT_MemDescType:$dst,
+    TT_MemDescType:$result,
     Optional<I1Tensor>:$mask,
     Optional<TT_Type>:$other,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
@@ -126,7 +126,7 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
   );
 
   let builders = [
-      OpBuilder<(ins "Value":$src, "Value":$dst,
+      OpBuilder<(ins "Value":$src, "Value":$result,
                      "triton::CacheModifier":$cache,
                      "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
   ];
@@ -150,9 +150,9 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
   // Note there are no commas between other, cacheModifier, and evictionPolicy,
   // due to limitations in MLIR's asm parser.
   let assemblyFormat = [{
-    $src `,` $dst (`mask` $mask^)? (`other` $other^)?
+    $src `,` $result (`mask` $mask^)? (`other` $other^)?
     oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
-    attr-dict `:` type($src) `->` type($dst)
+    attr-dict `:` type($src) `->` type($result)
   }];
 }
 
@@ -166,9 +166,9 @@ def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEf
 
     Explicitly deallocating a buffer is optional; see local_dealloc.
   }];
-  let arguments = (ins Optional<TT_Tensor>:$init);
+  let arguments = (ins Optional<TT_Tensor>:$src);
 
-  let assemblyFormat = [{$init attr-dict `:` functional-type(operands, results)}];
+  let assemblyFormat = [{$src attr-dict `:` functional-type(operands, results)}];
 
   let results = (outs TT_MemDescType:$result);
 }
@@ -191,9 +191,9 @@ def TTG_LocalDeallocOp : TTG_Op<"local_dealloc", [MemoryEffects<[MemFree<SharedM
     operand.
   }];
 
-  let arguments = (ins TT_MemDescType:$ptr);
+  let arguments = (ins TT_MemDescType:$src);
 
-  let assemblyFormat = [{$ptr attr-dict `:` qualified(type($ptr))}];
+  let assemblyFormat = [{$src attr-dict `:` qualified(type($src))}];
 }
 
 def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
@@ -211,9 +211,9 @@ def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
     Then in Python syntax, the subview covers input[1][0:4][4:8].
   }];
   let arguments = (
-    ins TT_MemDescType:$desc, Variadic<I32>:$offsets);
+    ins TT_MemDescType:$src, Variadic<I32>:$offsets);
 
-  let assemblyFormat = [{$desc `[` $offsets `]` attr-dict `:` qualified(type($desc)) `->` qualified(type($result))}];
+  let assemblyFormat = [{$src `[` $offsets `]` attr-dict `:` qualified(type($src)) `->` qualified(type($result))}];
 
   let results = (outs TT_MemDescType:$result);
 

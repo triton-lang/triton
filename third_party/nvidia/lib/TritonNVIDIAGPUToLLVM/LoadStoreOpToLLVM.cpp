@@ -781,7 +781,7 @@ struct AsyncCopyGlobalToLocalOpConversion
     auto funcOp = op->getParentOfType<FunctionOpInterface>();
 
     auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getDst().getType();
+    auto dstTy = op.getResult().getType();
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     auto srcLayout = srcTy.getEncoding();
     assert((srcLayout.isa<BlockedEncodingAttr, SliceEncodingAttr>() &&
@@ -791,7 +791,7 @@ struct AsyncCopyGlobalToLocalOpConversion
     assert((srcShape.size() <= 3) &&
            "insert_slice_async: Unexpected rank of %src");
 
-    Value llDst = adaptor.getDst();
+    Value llDst = adaptor.getResult();
     Value llSrc = adaptor.getSrc();
     Value llMask = adaptor.getMask();
     Value llOther = adaptor.getOther();
