@@ -1584,8 +1584,6 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 #shared = #triton_gpu.shared<{vec = 16, perPhase = 2, maxPhase = 4, order = [1, 0], hasLeadingOffset = false}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
 // CHECK-LABEL: cvt_mma_to_dot_int8
-// CHECK: prmt.b32
-// CHECK: prmt.b32
 // CHECK: nvvm.shfl.sync
 // CHECK: nvvm.shfl.sync
 // CHECK: prmt.b32
@@ -1602,8 +1600,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 #shared = #triton_gpu.shared<{vec = 16, perPhase = 2, maxPhase = 4, order = [1, 0], hasLeadingOffset = false}>
 module attributes {"triton_gpu.compute-capability" = 89 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
 // CHECK-LABEL: cvt_mma_to_dot_fp8
-// CHECK: prmt.b32
-// CHECK: prmt.b32
 // CHECK: nvvm.shfl.sync
 // CHECK: nvvm.shfl.sync
 // CHECK: prmt.b32
