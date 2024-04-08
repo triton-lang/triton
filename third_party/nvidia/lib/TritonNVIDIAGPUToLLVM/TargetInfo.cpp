@@ -254,27 +254,27 @@ Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
   return builder.launch(rewriter, loc, elemTy);
 }
 
-Value TargetInfo::shuffleXor(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::shuffleXor(ConversionPatternRewriter &rewriter, Location loc,
                              Value val, int i) const {
   return LLVM::NVIDIA::shuffleXor(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleUp(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::shuffleUp(ConversionPatternRewriter &rewriter, Location loc,
                             Value val, int i) const {
   return LLVM::NVIDIA::shuffleUp(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
                              Value val, int i) const {
   return LLVM::NVIDIA::shuffleIdx(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
                              Value val, Value i) const {
   return LLVM::NVIDIA::shuffleIdx(loc, rewriter, val, i);
 }
 
-Value TargetInfo::programId(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::programId(ConversionPatternRewriter &rewriter, Location loc,
                             ModuleOp moduleOp, int axis) const {
   return LLVM::NVIDIA::llGetPid(loc, rewriter, moduleOp, axis);
 }
@@ -332,9 +332,15 @@ bool TargetInfo::processReplicaUsingStMatrix(
   return false;
 }
 
-void TargetInfo::printf(Value formatStrStart, int /*formatStrByteCount*/,
-                        ValueRange args,
-                        ConversionPatternRewriter &rewriter) const {
+std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
+  std::string funcName =
+      resultElementTy.isInteger(32) ? "__nv_umulhi" : "__nv_umul64hi";
+  return funcName;
+}
+
+void TargetInfo::printf(ConversionPatternRewriter &rewriter,
+                        Value formatStrStart, int /*formatStrByteCount*/,
+                        ValueRange args) const {
   auto *ctx = rewriter.getContext();
   Type ptr = ptr_ty(ctx);
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();

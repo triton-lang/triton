@@ -47,14 +47,11 @@ tt.func @remat(%arg0: i32) -> tensor<1024xi32, #layout1> {
   %5 = triton_gpu.convert_layout %2 : tensor<1024xi32, #layout0> -> tensor<1024xi32, #layout1>
   %6 = arith.addi %3, %5 : tensor<1024xi32, #layout1>
   tt.return %6: tensor<1024xi32, #layout1>
-  // CHECK: %0 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, [[$target_layout]]>
-  // CHECK: %1 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, [[$target_layout]]>
-  // CHECK: %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, [[$target_layout]]>
-  // CHECK: %3 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, [[$target_layout]]>
-  // CHECK: %4 = arith.muli %0, %2 : tensor<1024xi32, [[$target_layout]]>
-  // CHECK: %5 = arith.muli %1, %3 : tensor<1024xi32, [[$target_layout]]>
-  // CHECK: %6 = arith.addi %4, %5 : tensor<1024xi32, [[$target_layout]]>
-  // CHECK: tt.return %6 : tensor<1024xi32, [[$target_layout]]>
+  // CHECK: %[[A:.+]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, [[$target_layout]]>
+  // CHECK: %[[B:.+]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, [[$target_layout]]>
+  // CHECK: %[[C:.+]] = arith.muli %[[A]], %[[B]] : tensor<1024xi32, [[$target_layout]]>
+  // CHECK: %[[D:.+]] = arith.addi %[[C]], %[[C]] : tensor<1024xi32, [[$target_layout]]>
+  // CHECK: tt.return %[[D]] : tensor<1024xi32, [[$target_layout]]>
 }
 
 // Always rematerialize single value loads
@@ -2209,15 +2206,15 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
     // CHECK: arith.constant {{.*}} : tensor<32xf32, #blocked>
     // CHECK: arith.constant {{.*}} : tensor<32xf32, #blocked>
     // CHECK-NOT: triton_gpu.convert_layout
-    // CHECK: %[[for:[0-9]*]]:3 = scf.for {{.*}} -> (tensor<32xf32, #blocked1>, tensor<32xf32, #blocked>, tensor<32xf32, #blocked>)
+    // CHECK: %[[for:[0-9]*]]:2 = scf.for {{.*}} -> (tensor<32xf32, #blocked>, tensor<32xf32, #blocked>)
 
     // CHECK-NOT: triton_gpu.convert_layout
-    // CHECK: scf.if %{{.*}} -> (tensor<32xf32, #blocked1>, tensor<32xf32, #blocked>, tensor<32xf32, #blocked>)
+    // CHECK: scf.if %{{.*}} -> (tensor<32xf32, #blocked>, tensor<32xf32, #blocked>)
     // CHECK-NOT: triton_gpu.convert_layout
-    // CHECK: scf.yield {{.*}} : tensor<32xf32, #blocked1>, tensor<32xf32, #blocked>, tensor<32xf32, #blocked>
-    // CHECK: scf.yield {{.*}} : tensor<32xf32, #blocked1>, tensor<32xf32, #blocked>, tensor<32xf32, #blocked>
-    // TODO: This should be rematerialized as %1#2
-    // CHECK: triton_gpu.convert_layout %[[for]]#0
+    // CHECK: scf.yield {{.*}} : tensor<32xf32, #blocked>, tensor<32xf32, #blocked>
+    // CHECK: scf.yield {{.*}} : tensor<32xf32, #blocked>, tensor<32xf32, #blocked>
+    // CHECK-NOT: triton_gpu.convert_layout
+    // CHECK: tt.return %[[for]]#1, %[[for]]#0
     %cst = arith.constant dense<1.000000e+00> : tensor<32xf32, #blocked1>
     %cst_0 = arith.constant dense<2.000000e+00> : tensor<32xf32, #blocked>
     %c0_i32 = arith.constant 0 : i32

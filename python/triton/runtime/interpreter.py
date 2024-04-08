@@ -70,7 +70,7 @@ class InterpreterOptions:
     arch: str = None
     allow_fp8e4nv: bool = False
     default_dot_input_precision: str = "tf32"
-    allowed_dot_input_precisions: Tuple[str] = ("tf32", "3xtf32", "ieee")
+    allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: int = 0
 
 
@@ -411,7 +411,7 @@ class InterpreterBuilder:
         return TensorHandle(np.transpose(arg.data, perm), arg.dtype)
 
     def create_dot(self, a, b, d, input_precision, max_num_imprecise_acc):
-        return TensorHandle(np.matmul(a.data, b.data) + d.data, d.dtype)
+        return TensorHandle(np.matmul(a.data, b.data, dtype=d.data.dtype) + d.data, d.dtype)
 
     def create_make_range(self, start, stop):
         return TensorHandle(np.arange(start, stop, dtype=np.int32), tl.int32)
@@ -431,9 +431,16 @@ class InterpreterBuilder:
     def create_tensor_pointer_load(self, ptr, boundary_check, padding_option, cache_modifier, eviction_policy,
                                    is_volatile):
         ptrs, masks = ptr.materialize_pointers(boundary_check)
-        if padding_option is not None:
-            raise NotImplementedError("padding_option not supported in interpreter mode")
-        other = None
+        dtype_tt = ptrs.get_element_ty()
+        dtype_np = _get_np_dtype(dtype_tt)
+        if padding_option is None:
+            other = None
+        elif padding_option == _ir.PADDING_OPTION.PAD_ZERO:
+            other = TensorHandle(np.zeros_like(ptrs.data, dtype=dtype_np), dtype_tt)
+        elif padding_option == _ir.PADDING_OPTION.PAD_NAN:
+            other = TensorHandle(np.full_like(ptrs.data, float('nan'), dtype=dtype_np), dtype_tt)
+        else:
+            raise ValueError(f"unsupported padding option {padding_option}")
         return self.create_masked_load(ptrs, masks, other, cache_modifier, eviction_policy, is_volatile)
 
     def create_tensor_pointer_store(self, ptr, value, boundary_check, cache_modifier, eviction_policy):
