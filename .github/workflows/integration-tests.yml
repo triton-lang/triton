@@ -165,10 +165,9 @@ jobs:
 
       - name: Install Triton
         run: |
-          ls /usr/local/cuda/extras/CUPTI/include
           echo "PATH is '$PATH'"
           cd python
-          TRITON_BUILD_PROTON=true TRITON_BUILD_WITH_CCACHE=true python3 -m pip install --no-build-isolation -vvv '.[tests]'
+          CUDA_HOME=/usr/local/cuda TRITON_BUILD_PROTON=true TRITON_BUILD_WITH_CCACHE=true python3 -m pip install --no-build-isolation -vvv '.[tests]'
 
       - name: Run lit tests
         run: |
