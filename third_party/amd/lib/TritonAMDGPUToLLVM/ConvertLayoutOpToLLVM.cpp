@@ -141,37 +141,19 @@ private:
     RankedTensorType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
     if (isMfmaToDotShortcut(srcTy, dstTy)) {
-      // get source values
-      auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-      unsigned elems = getTotalElemsPerThread(srcTy);
-      Type elemTy =
-          this->getTypeConverter()->convertType(srcTy.getElementType());
-      // for the destination type, we need to pack values together
-      // so they can be consumed by tensor core operations
-      SmallVector<Value> vecVals;
-      SmallVector<Type> types;
-      auto elemSize = elemTy.getIntOrFloatBitWidth();
-      // TODO: Support types other than float16 and
-      // bf16 (represented as int16 in llvm ir).
-      assert((type::isFloat(elemTy) || type::isInt(elemTy)) && elemSize == 16);
       // vecSize is an number of sequential elements stored by one thread
-      // - For MFMA (nonKDim == 32) encoding it is 4
-      // - For MFMA (nonKDim == 32) operand encoding it is
-      // dotOperandEndocing::kWidth,
-      //   which is 4 for fp16 and bfloat16 dtypes
+      // - For MFMA encoding (encoding of the result tensor of dot
+      // operation) it is 4
+      // - For MFMA operand encoding it is
+      // dotOperandEncoding::kWidth,
+      //   which is 4 in certain cases (e.g. fp16 and bfloat16 dtypes with kpack
+      //   = 1)
       //
-      // For mentioned types MFMA and MFMA operand layouts are the same
-      const unsigned vecSize = 4;
-      Type vecTy = vec_ty(elemTy, vecSize);
-      types = SmallVector<Type>(elems / vecSize, vecTy);
-      for (unsigned i = 0; i < elems; i += vecSize) {
-        Value packed = rewriter.create<LLVM::UndefOp>(loc, vecTy);
-        for (unsigned j = 0; j < vecSize; j++)
-          packed = insert_element(vecTy, packed, vals[i + j], i32_val(j));
-        vecVals.push_back(packed);
-      }
+      // For cases where these two values are equal MFMA and MFMA operand
+      // layouts are the same.
+      auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
       Value view =
-          packLLElements(loc, getTypeConverter(), vecVals, rewriter, dstTy);
+          packLLElements(loc, getTypeConverter(), vals, rewriter, dstTy);
       rewriter.replaceOp(op, view);
       return success();
     }

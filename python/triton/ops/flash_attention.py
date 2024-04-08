@@ -9,9 +9,14 @@ Sequence Parallel implementation inspired by HazyResearch
 """
 
 import torch
+import triton
 
 from .. import cdiv, jit
 from .. import language as tl
+
+
+def is_hip():
+    return triton.runtime.driver.active.get_current_target()[0] == "hip"
 
 
 @jit
@@ -407,6 +412,11 @@ class _attention(torch.autograd.Function):
         capability = torch.cuda.get_device_capability()
         MMA_V3 = capability[0] >= 9
         BLOCK = 128
+
+        if is_hip():
+            # Bwd pass runs out of shared memory on HIP with larger block size.
+            BLOCK = 64
+
         q, k, v, o, L = ctx.saved_tensors
         sequence_parallel = ctx.sequence_parallel
         seq_len_kv = k.shape[2]
