@@ -29,7 +29,7 @@ endif()
 
 # Check if CUPTI was found
 if(NOT CUPTI_INCLUDE_DIR)
-  message(FATAL_ERROR "CUPTI include directory not found")
+  message(FATAL_ERROR "CUPTI include directory not found: CUDAToolkit_ROOT=${CUDAToolkit_ROOT}")
 else()
   message(STATUS "Found CUPTI include directory: ${CUPTI_INCLUDE_DIR}")
 endif()
