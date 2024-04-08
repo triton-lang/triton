@@ -834,8 +834,10 @@ emitBaseIndexForMfmaLayout(Location loc, RewriterBase &rewriter,
   }
   // TODO(Lixun): It is assumed when rank = 3, warpsPerCTA is set to
   // {numWarps, 1, 1}. We need to generalize the offset computation.
-  if (rank == 3)
+  if (rank == 3) {
+    assert(_warpsPerCTA[1] == 1 && _warpsPerCTA[2] == 1);
     multiDimBase[0] = urem(warpId, i32_val(shape[0]));
+  }
   return multiDimBase;
 }
 

@@ -196,11 +196,8 @@ bool isColMajor(::llvm::ArrayRef<unsigned> order) {
 
 bool isKMajor(::llvm::ArrayRef<unsigned> order, int opIdx) {
   auto rank = order.size();
-  if ((rank == 2) && (order[0] + opIdx == 1))
-    return true;
-  if ((rank == 3) && (order[0] + opIdx == 2))
-    return true;
-  return false;
+  int kdim = opIdx == 0 ? rank - 1 : rank - 2;
+  return order[0] == kdim;
 }
 
 /**
