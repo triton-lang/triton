@@ -304,7 +304,9 @@ jobs:
           # Run runtime tests serially to avoid race condition with cache handling
           python3 -m pytest -vvv runtime/ --ignore=runtime/test_subproc.py
           # Run hopper tests
-          python3 -m pytest -vs hopper/test_mixed_io.py hopper/test_tma_store_gemm.py
+          python3 -m pytest -vs hopper/test_mixed_io.py \
+                                hopper/test_tma_store_gemm.py \
+                                hopper/test_persistent_warp_specialized_fused-attention.py
 
       - name: Run partial tests on HIP
         run: |
