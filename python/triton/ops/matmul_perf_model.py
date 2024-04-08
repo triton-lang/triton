@@ -97,7 +97,7 @@ def estimate_matmul_time(
     return total_time_ms
 
 
-def early_config_prune(configs, named_args):
+def early_config_prune(configs, named_args, **kwargs):
     device = torch.cuda.current_device()
     capability = torch.cuda.get_device_capability()
     # BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, num_warps, num_stages
