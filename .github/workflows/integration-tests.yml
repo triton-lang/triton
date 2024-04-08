@@ -174,8 +174,8 @@ jobs:
           echo "CUPIT_ROOT is '$CUPTI_ROOT'"
           echo "CUDA_ROOT is '$CUDA_ROOT'"
           # Move host_define.h to the correct location
-          mkdir $CUDA_ROOT/crt
-          cp $CUDA_ROOT/host_defines.h $CUDA_ROOT/crt/host_defines.h
+          sudo mkdir $CUDA_ROOT/crt
+          sudo cp $CUDA_ROOT/host_defines.h $CUDA_ROOT/crt/host_defines.h
           cd python
           TRITON_BUILD_PROTON=true TRITON_BUILD_WITH_CCACHE=true python3 -m pip install --no-build-isolation -vvv '.[tests]'
 
