@@ -49,8 +49,12 @@ def test_prune_configs(with_perf_model: bool):
     dst = torch.empty(N, device='cuda')
     records = {}
 
-    def early_config_prune(configs, named_args):
+    def early_config_prune(configs, named_args, **kwargs):
         records['run_early_config_prune'] = True
+        if "N" in kwargs and kwargs["N"] == 1024:
+            records['capture_kwargs'] = True
+        if "dst" in named_args and "src" in named_args and len(named_args) == 2:
+            records['capture_named_args'] = True
         return [configs[0]]
 
     def perf_model(*args, **kwargs):
@@ -72,10 +76,13 @@ def test_prune_configs(with_perf_model: bool):
         tl.store(dst + offsets, x, mask=offsets < N)
 
     grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )
-    _kernel[grid](dst, src, N)
+    _kernel[grid](dst, src, N=N)
     torch.testing.assert_close(src, dst)
-    assert len(records) == 1
     if with_perf_model:
+        assert len(records) == 1
         assert records['run_perf_model']
     else:
+        assert len(records) == 3
         assert records['run_early_config_prune']
+        assert records['capture_kwargs']
+        assert records['capture_named_args']
