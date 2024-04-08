@@ -213,6 +213,7 @@ jobs:
       - name: Run Proton tests
         run: |
           cd third_party/proton
+          export LD_LIBRARY_PATH=/usr/local/cuda/extras/CUPTI/lib64:$LD_LIBRARY_PATH
           python3 -m pytest -vvv test
           python3 tutorials/dynamic_net.py --profile
           python3 tutorials/matmul.py --profile
