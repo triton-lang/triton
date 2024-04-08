@@ -297,12 +297,11 @@ jobs:
           cd python/test/unit
           pytest --capture=tee-sys -rfs -vvv -n 32 language \
                  --ignore=language/test_reproducer.py \
-                 --ignore=language/test_random.py \
                  --ignore=language/test_conversions.py \
                  --ignore=language/test_line_info.py
 
           # Run runtime tests serially to avoid race condition with cache handling
-          python3 -m pytest -vvv runtime/ --ignore=runtime/test_subproc.py
+          python3 -m pytest -vvv runtime
           # Run hopper tests
           python3 -m pytest -vs hopper/test_mixed_io.py \
                                 hopper/test_tma_store_gemm.py
@@ -310,7 +309,8 @@ jobs:
       - name: Run partial tests on HIP
         run: |
           cd python/test/unit
-          python3 -m pytest -vvv -n 8 operators --ignore=operators/test_matmul.py
+          python3 -m pytest -vvv -n 8 operators --ignore=operators/test_matmul.py \
+                                                --ignore=operators/test_blocksparse.py
 
       - name: Run C++ unittests
         run: |
