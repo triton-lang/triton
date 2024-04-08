@@ -8,6 +8,8 @@ on:
   merge_group:
     branches: [main, 'dev-**']
     types: [checks_requested]
+  push:
+    branches: [main]
 
 concurrency:
   group: ${{ github.ref }}
@@ -16,7 +18,9 @@ concurrency:
 permissions: read-all
 
 env:
+  TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
   TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
+  TRITON_DISABLE_LINE_INFO: 1
 
 jobs:
   Runner-Preparation:
@@ -26,8 +30,37 @@ jobs:
       matrix-CUDA: ${{ steps.set-matrix.outputs.matrix-CUDA }}
       matrix-HIP: ${{ steps.set-matrix.outputs.matrix-HIP }}
     steps:
+      - name: Decide pre-submit integration test enablement
+        # Always enable integration tests for pre-submit pull requests.
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "enable_integration=true" >> $GITHUB_ENV
+
+      - name: Checkout post-submit commits
+        if: github.event_name == 'push'
+        uses: actions/checkout@v4
+        with:
+          # Only fetch two commits to check the latest changed files.
+          fetch-depth: 2
+
+      - name: Detect post-submit changed files
+        id: detect-change
+        if: github.event_name == 'push'
+        uses: tj-actions/changed-files@v44
+        with:
+          # Monitor hash or version files in the cmake/ directory for changes.
+          files: |
+            cmake/*.txt
+
+      - name: Decide post-submit integration test enablement
+        # Only enable integration tests for post-submit when build dependency changes.
+        if: github.event_name == 'push' && steps.detect-change.outputs.any_changed == 'true'
+        run: |
+          echo "enable_integration=true" >> $GITHUB_ENV
+
       - name: Prepare runner matrix
         id: set-matrix
+        if: env.enable_integration == 'true'
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
             echo '::set-output name=matrix-CUDA::[["self-hosted", "A100"], ["self-hosted", "H100"]]'
@@ -39,6 +72,7 @@ jobs:
 
   pre-commit:
     name: pre-commit (code formatting)
+    if: github.event_name == 'pull_request'
     needs: Runner-Preparation
     runs-on: ubuntu-latest
 
@@ -92,7 +126,6 @@ jobs:
           submodules: "true"
 
       - name: Compute build dependency cache keys
-        if: false
         id: cache-key
         run: |
           echo "llvm=$(cat cmake/llvm-hash.txt | cut -c 1-8)" >> $GITHUB_OUTPUT
@@ -101,8 +134,6 @@ jobs:
         shell: bash
 
       - name: Cache build dependency
-        # Caching disabled until we can automatically generate on the main branch
-        if: false
         uses: actions/cache@v4
         with:
           # Note that we cannot use environment variables here given there is
@@ -114,35 +145,32 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}
 
       - name: Inspect cache directory
-        if: false
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
 
-      - name: Set CUDA ENV
-        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
-        run: |
-          echo "BACKEND=CUDA" >> "${GITHUB_ENV}"
-          echo "TRITON_DISABLE_LINE_INFO=1" >> "${GITHUB_ENV}"
-
       - name: Update PATH
         run: |
-          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Install Triton
-        if: ${{ env.BACKEND == 'CUDA'}}
+      - name: Install apt dependencies
         run: |
-          cd python
-          python3 -m pip install --upgrade pip
-          python3 -m pip install cmake==3.24 ninja pytest-xdist
           sudo apt-get update -y
           sudo apt-get install -y ccache clang lld
-          TRITON_BUILD_WITH_CLANG_LLD=true TRITON_BUILD_WITH_CCACHE=true python3 -m pip install --no-build-isolation -vvv '.[tests]'
+
+      - name: Install pip dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install wheel cmake==3.24 ninja pytest-xdist lit
+
+      - name: Install Triton
+        run: |
+          echo "PATH is '$PATH'"
+          cd python
+          TRITON_BUILD_WITH_CCACHE=true python3 -m pip install --no-build-isolation -vvv '.[tests]'
 
       - name: Run lit tests
-        if: ${{ env.BACKEND == 'CUDA'}}
         run: |
-          python3 -m pip install lit
           cd python
           LIT_TEST_DIR="build/$(ls build | grep -i cmake)/test"
           if [ ! -d "${LIT_TEST_DIR}" ]; then
@@ -151,7 +179,6 @@ jobs:
           lit -v "${LIT_TEST_DIR}"
 
       - name: Run python tests on CUDA
-        if: ${{ env.BACKEND == 'CUDA' }}
         run: |
           cd python/test/unit
           python3 -m pytest -vvv -n 8 --ignore=hopper/test_flashattention.py --ignore=runtime --ignore=operators --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
@@ -164,28 +191,26 @@ jobs:
           python3 -m pytest -vs hopper/test_flashattention.py
 
       - name: Run interpreter tests
+        if: ${{matrix.runner[0] == 'self-hosted' && matrix.runner[1] == 'H100'}}
         env:
           TRITON_INTERPRET: "1"
         run: |
           cd python/test/unit
-          python3 -m pytest -vvv -n 8 -m interpreter language/test_core.py language/test_standard.py language/test_random.py --device cpu
-          python3 -m pytest -n 8 -m interpreter -vvv -s operators/test_flash_attention.py::test_op --device cpu
+          python3 -m pytest -vvv -n 16 -m interpreter language/test_core.py language/test_standard.py \
+           language/test_random.py operators/test_flash_attention.py::test_op --device cpu
 
       - name: Run partial tests on CUDA
-        if: ${{ env.BACKEND == 'CUDA' }}
         run: |
           cd python/test/unit
           python3 -m pytest -vvv -n 8 operators
 
-      - name: Run CXX unittests
-        if: ${{ env.BACKEND == 'CUDA'}}
+      - name: Run C++ unittests
         run: |
           cd python
           cd "build/$(ls build | grep -i cmake)"
           ctest
 
       - name: Inspect cache directory
-        if: false
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
@@ -213,7 +238,6 @@ jobs:
           submodules: 'true'
 
       - name: Compute build dependency cache keys
-        if: false
         id: cache-key
         run: |
           echo "llvm=$(cat cmake/llvm-hash.txt | cut -c 1-8)" >> $GITHUB_OUTPUT
@@ -223,13 +247,11 @@ jobs:
 
       - name: Clear triton cache directory
         run: |
+          rm -rf ~/.triton
           mkdir -p ~/.triton
           ls -alh ~/.triton
-          rm -rf ~/.triton
 
       - name: Cache build dependency
-        if: false
-        # Caching disabled until we can automatically generate on the main branch
         uses: actions/cache@v4
         with:
           # Note that we cannot use environment variables here given there is
@@ -241,27 +263,35 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}
 
       - name: Inspect cache directory
-        if: false
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
 
-      - name: Set ROCM ENV
-        run: |
-          echo "BACKEND=ROCM" >> "${GITHUB_ENV}"
-
       - name: Update PATH
         run: |
-          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
+          echo "/opt/rocm/llvm/bin" >> $GITHUB_PATH
 
-      - name: Install Triton on ROCM
+      - name: Install pip dependencies
         run: |
+          python3 -m pip install lit
+
+      - name: Install Triton
+        run: |
+          echo "PATH is '$PATH'"
           pip uninstall -y triton
-          export PATH="/opt/rocm/llvm/bin:$PATH"
-          export TRITON_BUILD_WITH_CLANG_LLD=true
           cd python
           pip install -v -e .
-      - name: Run python tests on ROCM
+
+      - name: Run lit tests
+        run: |
+          cd python
+          LIT_TEST_DIR="build/$(ls build | grep -i cmake)/test"
+          if [ ! -d "${LIT_TEST_DIR}" ]; then
+            echo "Coult not find '${LIT_TEST_DIR}'" ; exit -1
+          fi
+          lit -v "${LIT_TEST_DIR}"
+
+      - name: Run python tests on HIP
         run: |
           cd python
           pytest --capture=tee-sys -rfs -vvv -n 32 ./test/unit/language/test_core.py \
@@ -271,8 +301,13 @@ jobs:
               ./test/unit/language/test_compile_errors.py \
               ./test/unit/language/test_block_pointer.py
 
+      - name: Run C++ unittests
+        run: |
+          cd python
+          cd "build/$(ls build | grep -i cmake)"
+          ctest
+
       - name: Inspect cache directory
-        if: false
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton

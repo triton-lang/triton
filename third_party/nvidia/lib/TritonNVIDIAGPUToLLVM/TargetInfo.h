@@ -38,6 +38,8 @@ public:
       ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
       ArrayRef<unsigned> outOrd, unsigned accumNumReplicates) const override;
 
+  std::string getMulhiFuncName(Type resultElementTy) const override;
+
   void printf(ConversionPatternRewriter &rewriter, Value formatStrStart,
               int formatStrByteCount, ValueRange args) const override;
   void assertFail(ConversionPatternRewriter &rewriter, Location loc,

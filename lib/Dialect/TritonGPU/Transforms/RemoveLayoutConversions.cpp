@@ -170,6 +170,11 @@ public:
                     ConvertLayoutOp convertOp);
 
 private:
+  void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
+  // Existing tuples of (value, layout) that needs to be updated when recreating
+  // scf ops. This prevents keeping track of Values that have been delete when
+  // rewriting slices.
+  DenseMap<Value, Attribute> mappedValues;
   // map of the values remat based on encoding.
   DenseMap<std::pair<Value, Attribute>, Value> rematMapping;
   // DenseMap<std::pair<Operation*, Attribute>, Operation*>
@@ -181,6 +186,7 @@ void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
                                             Value newV) {
   LDBG("addRematValue " << old << " encoding " << encoding << " " << newV);
   rematMapping[{old, encoding}] = newV;
+  mappedValues[old] = encoding;
 }
 
 // Remove unneeded values now that we are done with the rematMapping.
@@ -796,12 +802,44 @@ bool canBeRemat(Operation *op) {
   return true;
 }
 
+void LayoutRematerialization::updateRematMapping(
+    SmallVector<std::tuple<Value, Value>> &values) {
+  for (auto [old, newV] : values) {
+    auto it = mappedValues.find(old);
+    if (it != mappedValues.end()) {
+      Attribute encoding = it->second;
+      auto rematIt = rematMapping.find({old, it->second});
+      assert(rematIt != rematMapping.end());
+      Value replacedValue = rematIt->second;
+      rematMapping.erase(rematIt);
+      mappedValues.erase(it);
+      // Loop through the replacement value to find the new version of remat
+      // value. This should be okay as the number of values should be small.
+      for (auto [before, after] : values) {
+        if (before == replacedValue) {
+          replacedValue = after;
+          break;
+        }
+      }
+      rematMapping[{newV, encoding}] = replacedValue;
+      mappedValues[newV] = encoding;
+    }
+  }
+}
+
 void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
                                            DenseMap<Value, Attribute> &layout,
                                            ConvertLayoutOp convertOp,
                                            IRMapping &mapping) {
   SetVector<Operation *> opsToRewrite;
   for (Value v : slice) {
+    auto layoutIt = layout.find(v);
+    assert(layoutIt != layout.end());
+    // If we already have a remat value for this value, use it.
+    if (hasRematValue(v, layoutIt->second)) {
+      mapping.map(v, getRematValue(v, layoutIt->second));
+      continue;
+    }
     if (v.getDefiningOp()) {
       opsToRewrite.insert(v.getDefiningOp());
       if (auto ifOp = v.getDefiningOp<scf::IfOp>()) {
@@ -879,7 +917,8 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
         if (slice.count(res)) {
           // Why can't we use res instead of ifOp.getResult(oldIdx)?
           mapping.map(ifOp.getResult(oldIdx), newIfOp.getResult(newIdx));
-          addRematValue(res, layout[res], newIfOp.getResult(newIdx));
+          addRematValue(ifOp.getResult(oldIdx), layout[res],
+                        newIfOp.getResult(newIdx));
           ++newIdx;
         }
         ++oldIdx;
@@ -908,6 +947,8 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       auto cvt = builder.create<ConvertLayoutOp>(op->getLoc(), newType,
                                                  newOp->getResult(0));
       mapping.map(op->getResult(0), cvt.getResult());
+      addRematValue(op->getResult(0), layout[op->getResult(0)],
+                    cvt.getResult());
       continue;
     }
     Operation *newOp = builder.clone(*op, mapping);
@@ -919,12 +960,14 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
           old.getType().cast<RankedTensorType>().getShape(),
           old.getType().cast<RankedTensorType>().getElementType(), it->second);
       newV.setType(newType);
+      addRematValue(old, it->second, newV);
     }
   }
   // Check mapping and see if there are existing convertOps on the old Argument
   convertOp.replaceAllUsesWith(mapping.lookup(convertOp.getSrc()));
   opToDelete.insert(convertOp);
 
+  updateRematMapping(replacements);
   for (auto &kv : replacements) {
     builder.replaceAllUsesWith(std::get<0>(kv), std::get<1>(kv));
   }
