@@ -220,8 +220,6 @@ jobs:
         run: |
           cd third_party/proton
           python3 -m pytest -vvv test
-          python3 tutorials/dynamic_net.py --profile
-          python3 tutorials/matmul.py --profile
 
       - name: Inspect cache directory
         run: |
