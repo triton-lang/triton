@@ -9,7 +9,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
     // GCN: [[PTR:%[a-z0-9]+]] = triton_gpu.convert_layout {{.*}} : tensor<{{.*}}, #blocked> -> tensor<{{.*}}, #mma>
     // GCN: tt.store [[PTR]], {{.*}} : tensor<{{.*}}, #mma>
     %converted_data = triton_gpu.convert_layout %data : tensor<64x64xf16, #mfma> -> tensor<64x64xf16, #blocked>
-    tt.store %ptr, %converted_data {cache = 1 : i32, evict = 1 : i32} : tensor<64x64xf16, #blocked>
+    tt.store %ptr, %converted_data : tensor<64x64x!tt.ptr<f16>, #blocked>
     tt.return
   }
 }
@@ -26,7 +26,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
     // GCN: tt.store [[PTR]], {{.*}} : tensor<{{.*}}, #mma>
     %converted_data = triton_gpu.convert_layout %data : tensor<64x64xf32, #mfma> -> tensor<64x64xf32, #blocked>
     %trunked = arith.truncf %converted_data : tensor<64x64xf32, #blocked> to tensor<64x64xf16, #blocked>
-    tt.store %ptr, %trunked {cache = 1 : i32, evict = 1 : i32} : tensor<64x64xf16, #blocked>
+    tt.store %ptr, %trunked : tensor<64x64x!tt.ptr<f16>, #blocked>
     tt.return
   }
 }

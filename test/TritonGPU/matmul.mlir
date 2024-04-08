@@ -60,9 +60,9 @@ tt.func @matmul_kernel__Pfp32_Pfp32_Pfp32_i32_i32_i32_i32_i32_i32_i32_i32_i32__1
     %45 = tt.addptr %44, %43 : tensor<64x64x!tt.ptr<f32>>, tensor<64x64xi32>
     %46 = arith.index_cast %arg5 : i32 to index
     %47:3 = scf.for %arg12 = %c0 to %46 step %c64 iter_args(%arg13 = %cst_0, %arg14 = %34, %arg15 = %45) -> (tensor<64x64xf32>, tensor<64x64x!tt.ptr<f32>>, tensor<64x64x!tt.ptr<f32>>) {
-      %76 = tt.load %arg14, %cst, %cst_0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false, transA=false, transB=false} : tensor<64x64xf32>
-      %77 = tt.load %arg15, %cst, %cst_0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false, transA=false, transB=false} : tensor<64x64xf32>
-      %78 = tt.dot %76, %77, %cst_0 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<64x64xf32> * tensor<64x64xf32> -> tensor<64x64xf32>
+      %76 = tt.load %arg14, %cst, %cst_0 : tensor<64x64x!tt.ptr<f32>>
+      %77 = tt.load %arg15, %cst, %cst_0 : tensor<64x64x!tt.ptr<f32>>
+      %78 = tt.dot %76, %77, %cst_0 : tensor<64x64xf32> * tensor<64x64xf32> -> tensor<64x64xf32>
       %79 = arith.addf %arg13, %78 : tensor<64x64xf32>
       %80 = arith.muli %arg7, %c64_i32 : i32
       %81 = tt.splat %80 : i32 -> tensor<64x64xi32>
@@ -100,7 +100,7 @@ tt.func @matmul_kernel__Pfp32_Pfp32_Pfp32_i32_i32_i32_i32_i32_i32_i32_i32_i32__1
     %73 = tt.broadcast %69 : tensor<64x1xi1> -> tensor<64x64xi1>
     %74 = tt.broadcast %72 : tensor<1x64xi1> -> tensor<64x64xi1>
     %75 = arith.andi %73, %74 : tensor<64x64xi1>
-    tt.store %66, %47#0, %75 : tensor<64x64xf32>
+    tt.store %66, %47#0, %75 : tensor<64x64x!tt.ptr<f32>>
     tt.return
   }
 }

@@ -105,7 +105,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     return;
   }
   if (auto alloc = dyn_cast<triton::gpu::LocalAllocOp>(op)) {
-    if (!alloc.getInit())
+    if (!alloc.getSrc())
       return;
   }
 

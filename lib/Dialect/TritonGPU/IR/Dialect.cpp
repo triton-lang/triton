@@ -2594,9 +2594,9 @@ struct CanonicalizeConvertFromAlloc
   mlir::LogicalResult
   matchAndRewrite(triton::gpu::LocalAllocOp op,
                   PatternRewriter &rewriter) const override {
-    if (!op.getInit())
+    if (!op.getSrc())
       return failure();
-    auto convert = op.getInit().getDefiningOp<ConvertLayoutOp>();
+    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
     if (!convert)
       return failure();
     rewriter.replaceOpWithNewOp<triton::gpu::LocalAllocOp>(
@@ -2745,7 +2745,7 @@ void LocalAllocOp::getEffects(
 }
 
 LogicalResult MemDescSubviewOp::verify() {
-  auto srcTy = getDesc().getType();
+  auto srcTy = getSrc().getType();
   auto dstTy = getType();
 
   if (srcTy.getElementType() != dstTy.getElementType()) {

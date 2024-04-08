@@ -6,6 +6,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir;
 namespace ttg = mlir::triton::gpu;
@@ -235,31 +236,4 @@ OpTrait::impl::verifySameLoadStoreOperandsAndResultShape(Operation *op) {
              << "requires the same shape for all operands and results";
 
   return verifySameLoadStoreOperandsShape(op);
-}
-
-bool OpTrait::impl::verifyLoadStorePointerAndValueType(Type valueType,
-                                                       Type ptrType) {
-  if (triton::isTensorPointerType(ptrType)) {
-    // The encoding of tensor pointers is meaningless, we only check shapes and
-    // the type of elements
-    auto tensorAType = ptrType.cast<triton::PointerType>()
-                           .getPointeeType()
-                           .cast<RankedTensorType>();
-    if (!isa<RankedTensorType>(valueType))
-      return false;
-    auto tensorBType = valueType.cast<RankedTensorType>();
-    return tensorAType.getShape() == tensorBType.getShape() &&
-           tensorAType.getElementType() == tensorBType.getElementType();
-  } else if (auto rankedType = ptrType.dyn_cast<RankedTensorType>()) {
-    if (auto elementPtrType =
-            dyn_cast<triton::PointerType>(rankedType.getElementType())) {
-      auto inferValueType = RankedTensorType::get(
-          rankedType.getShape(), elementPtrType.getPointeeType(),
-          rankedType.getEncoding());
-      return inferValueType == valueType;
-    }
-  } else if (auto scalarPtrType = ptrType.dyn_cast<triton::PointerType>()) {
-    return scalarPtrType.getPointeeType() == valueType;
-  }
-  return false;
 }

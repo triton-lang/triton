@@ -98,7 +98,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   tt.func @dot_reg_operand_A(%a: tensor<128x64xf16, #mma>, %b: !tt.memdesc<64x64xf16, #shared>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x64xf32, #mma>
     %opA = triton_gpu.convert_layout %a : tensor<128x64xf16, #mma> -> tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>>
-    %m = tt.dot %opA, %b, %cst {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} :
+    %m = tt.dot %opA, %b, %cst, inputPrecision = tf32 :
       tensor<128x64xf16,  #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>> * !tt.memdesc<64x64xf16, #shared> -> tensor<128x64xf32, #mma>
     tt.return
   }
@@ -116,7 +116,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   // CHECK: nvgpu.wgmma_wait_group %{{.*}} {pendings = 0 : i32}
   tt.func @dot_reg_operand_A_fp8(%a: tensor<128x128xf8E5M2, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>>, %b: !tt.memdesc<128x256xf8E5M2, #shared>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #mma1>
-    %m = tt.dot %a, %b, %cst {inputPrecision = 0 : i32, maxNumImpreciseAcc = 1073741824 : i32} :
+    %m = tt.dot %a, %b, %cst, inputPrecision = tf32 {maxNumImpreciseAcc = 1073741824 : i32} :
       tensor<128x128xf8E5M2, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>> * !tt.memdesc<128x256xf8E5M2, #shared> -> tensor<128x256xf32, #mma1>
     tt.return
   }
@@ -139,14 +139,14 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %out2 = tt.fp_to_fp %in0 : tensor<128xf8E5M2, #blocked> -> tensor<128xbf16, #blocked>
 
     // CHECK-COUNT-2: cvt.rn.satfinite.e5m2x2.f16x2 {{.*}} "=h,r" %{{.*}} : (i32) -> vector<2xi8>
-    %out3 = tt.fp_to_fp %in2 {rounding = 1 : i32} : tensor<128xf16, #blocked> -> tensor<128xf8E5M2, #blocked>
+    %out3 = tt.fp_to_fp %in2, rounding = rtne : tensor<128xf16, #blocked> -> tensor<128xf8E5M2, #blocked>
     // CHECK-COUNT-2: cvt.rn.satfinite.e4m3x2.f16x2 {{.*}} "=h,r" %{{.*}} : (i32) -> vector<2xi8>
-    %out4 = tt.fp_to_fp %in2 {rounding = 1 : i32} : tensor<128xf16, #blocked> -> tensor<128xf8E4M3FNUZ, #blocked>
+    %out4 = tt.fp_to_fp %in2, rounding = rtne : tensor<128xf16, #blocked> -> tensor<128xf8E4M3FNUZ, #blocked>
 
     // CHECK-COUNT-2: cvt.rn.satfinite.e5m2x2.f32 {{.*}} "=h,r,r" %{{.*}}, %{{.*}} : (i32, i32) -> vector<2xi8>
-    %out5 = tt.fp_to_fp %in3 {rounding = 1 : i32} : tensor<128xf32, #blocked> -> tensor<128xf8E5M2, #blocked>
+    %out5 = tt.fp_to_fp %in3, rounding = rtne : tensor<128xf32, #blocked> -> tensor<128xf8E5M2, #blocked>
     // CHECK-COUNT-2: cvt.rn.satfinite.e4m3x2.f32 {{.*}} "=h,r,r" %{{.*}}, %{{.*}} : (i32, i32) -> vector<2xi8>
-    %out6 = tt.fp_to_fp %in3 {rounding = 1 : i32} : tensor<128xf32, #blocked> -> tensor<128xf8E4M3FNUZ, #blocked>
+    %out6 = tt.fp_to_fp %in3, rounding = rtne : tensor<128xf32, #blocked> -> tensor<128xf8E4M3FNUZ, #blocked>
     tt.return
   }
 }
@@ -161,7 +161,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %neg_limit = arith.subf %cst, %limit : tensor<1024xf32, #blocked>
 
     // CHECK: "min.xorsign.abs.f32 $0, $1, $2;", "=f,f,f"
-    %12 = tt.clampf %x, %neg_limit, %limit {propagateNan = 0 : i32} : tensor<1024xf32, #blocked>
+    %12 = tt.clampf %x, %neg_limit, %limit, propagateNan = none : tensor<1024xf32, #blocked>
     tt.return
   }
 }
@@ -208,7 +208,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 // CHECK-COUNT-128: llvm.fadd
   tt.func @dot_zero_acc_operand(%a: !tt.memdesc<128x128xf8E5M2, #shared>, %b: !tt.memdesc<128x128xf8E5M2, #shared1>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
-    %m = tt.dot %a, %b, %cst {inputPrecision = 0 : i32, maxNumImpreciseAcc = 64 : i32} :
+    %m = tt.dot %a, %b, %cst, inputPrecision = tf32 {maxNumImpreciseAcc = 64 : i32} :
       !tt.memdesc<128x128xf8E5M2, #shared> * !tt.memdesc<128x128xf8E5M2, #shared1> -> tensor<128x128xf32, #mma>
     tt.return
   }
