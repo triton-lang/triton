@@ -198,6 +198,12 @@ using namespace mlir::triton;
 
 Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v);
 
+/// Create a 64-bit integer constant.
+Value createConstantI64(Location loc, OpBuilder &rewriter, int64_t v);
+
+/// Create a 16-bit float constant.
+Value createConstantF16(Location loc, OpBuilder &rewriter, float v);
+
 /// Create a 32-bit float constant.
 Value createConstantF32(Location loc, OpBuilder &rewriter, float v);
 
