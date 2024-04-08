@@ -1,4 +1,4 @@
-project(Proton CUDA CXX)
+project(Proton CXX)
 
 set(PROTON_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/csrc)
 set(PROTON_EXTERN_DIR ${CMAKE_CURRENT_SOURCE_DIR}/extern)
