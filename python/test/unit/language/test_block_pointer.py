@@ -73,6 +73,7 @@ def matmul_no_scf_with_advance_kernel(  #
     tl.store(c_ptrs, c)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("shape, num_warps", [  #
     (shape, num_warps) for shape in [
         [64, 64, 16],
@@ -80,11 +81,11 @@ def matmul_no_scf_with_advance_kernel(  #
         [64, 64, 64],
     ] for num_warps in [4, 8]
 ])
-def test_block_ptr_matmul_no_scf(shape, num_warps):
+def test_block_ptr_matmul_no_scf(shape, num_warps, device):
     m, n, k = shape
-    a = torch.randn((m, k), device="cuda", dtype=torch.float16)
-    b = torch.randn((k, n), device="cuda", dtype=torch.float16)
-    c = torch.empty((m, n), device="cuda", dtype=torch.float32)
+    a = torch.randn((m, k), device=device, dtype=torch.float16)
+    b = torch.randn((k, n), device=device, dtype=torch.float16)
+    c = torch.empty((m, n), device=device, dtype=torch.float32)
 
     grid = lambda META: (1, )
     matmul_no_scf_with_advance_kernel[grid](
