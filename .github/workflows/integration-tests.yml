@@ -294,14 +294,17 @@ jobs:
 
       - name: Run python tests on HIP
         run: |
-          cd python
-          pytest --capture=tee-sys -rfs -vvv -n 32 ./test/unit/language/test_core.py \
-              ./test/unit/language/test_annotations.py \
-              ./test/unit/language/test_subprocess.py \
-              ./test/unit/language/test_standard.py \
-              ./test/unit/language/test_compile_errors.py \
-              ./test/unit/language/test_block_pointer.py \
-              ./test/unit/operators/test_flash_attention.py
+          cd python/test/unit
+          pytest --capture=tee-sys -rfs -vvv -n 32 language --ignore=language/test_reproducer.py --ignore=language/test_random.py --ignore=language/test_conversion.py
+          # Run runtime tests serially to avoid race condition with cache handling
+          python3 -m pytest -vvv runtime/ --ignore=runtime/test_subproc.py
+          # Run hopper tests
+          python3 -m pytest -vs hopper/Test_mix_io.py hopper/test_tma_store_gemm.py
+
+      - name: Run partial tests on HIP
+        run: |
+          cd python/test/unit
+          python3 -m pytest -vvv -n 8 operators --ignore=operators/test_matmul.py
 
       - name: Run C++ unittests
         run: |
