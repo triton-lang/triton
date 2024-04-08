@@ -295,7 +295,7 @@ jobs:
       - name: Run python tests on HIP
         run: |
           cd python/test/unit
-          pytest --capture=tee-sys -rfs -vvv -n 32 language\
+          pytest --capture=tee-sys -rfs -vvv -n 32 language \
                  --ignore=language/test_reproducer.py \
                  --ignore=language/test_random.py \
                  --ignore=language/test_conversions.py \
