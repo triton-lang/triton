@@ -189,7 +189,6 @@ static bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
   return false;
 }
 
-#ifdef USE_ROCM
 // Look ahead to at the transitive uses and see if there is a convert to mfma or
 // wmma operations.
 // TODO: unify with hasConvertToMMATransisitiveUse?
@@ -228,7 +227,6 @@ static bool hasConvertToAmdMmaTransisitiveUse(Operation *op,
   }
   return false;
 }
-#endif
 
 // Return true if the op is an op with a layout we don't want to change. We will
 // propagate the layout starting from anchor ops.

@@ -151,11 +151,6 @@ private:
       //
       // For cases where these two values are equal MFMA and MFMA operand
       // layouts are the same.
-      auto dstLayout = dstTy.getEncoding();
-      auto dotOperandLayout = dstLayout.cast<DotOperandEncodingAttr>();
-      assert(dotOperandLayout.getOpIdx() == 0 &&
-             dotOperandLayout.getKWidth() == 4);
-      // get source values
       auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
       Value view =
           packLLElements(loc, getTypeConverter(), vals, rewriter, dstTy);
