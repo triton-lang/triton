@@ -24,8 +24,6 @@ std::unique_ptr<Pass> createTritonAMDGPUCoalescePass();
 
 std::unique_ptr<Pass> createTritonAMDGPUReorderInstructionsPass();
 
-std::unique_ptr<Pass> createTritonAMDGPUDecomposeConversionsPass();
-
 std::unique_ptr<Pass> createTritonAMDGPURemoveLayoutConversionsPass();
 
 std::unique_ptr<Pass> createTritonAMDGPUVerifier();
