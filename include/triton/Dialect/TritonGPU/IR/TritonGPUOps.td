@@ -193,6 +193,7 @@ def TTG_LocalDeallocOp : TTG_Op<"local_dealloc", [MemoryEffects<[MemFree<SharedM
 
   let arguments = (ins TT_MemDescType:$src);
 
+  // Use qualified() otherwise "!tt.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src attr-dict `:` qualified(type($src))}];
 }
 
@@ -213,6 +214,7 @@ def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
   let arguments = (
     ins TT_MemDescType:$src, Variadic<I32>:$offsets);
 
+  // Use qualified() otherwise "!tt.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src `[` $offsets `]` attr-dict `:` qualified(type($src)) `->` qualified(type($result))}];
 
   let results = (outs TT_MemDescType:$result);
@@ -227,7 +229,10 @@ def TTG_LocalLoadOp : TTG_Op<"local_load", [MemoryEffects<[MemRead<SharedMemory>
     Load a tensor from the local memory descriptor into a distributed tensor.
   }];
   let arguments = (ins TT_MemDescType:$src);
+
+  // Use qualified() otherwise "!tt.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src attr-dict `:` qualified(type($src)) `->` type($result)}];
+
   let results = (outs TT_Tensor:$result);
 }
 
