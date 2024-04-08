@@ -189,7 +189,6 @@ static bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
   return false;
 }
 
-#ifdef USE_ROCM
 // Look ahead to at the transitive uses and see if there is a convert to mfma or
 // wmma operations.
 // TODO: unify with hasConvertToMMATransisitiveUse?
@@ -204,10 +203,12 @@ static bool hasConvertToAmdMmaTransisitiveUse(Operation *op,
     getForwardSlice(currentValue, &forwardSlice);
     for (Operation *op : forwardSlice) {
       if (auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-        if (convertOp.getResult()
-                .getType()
-                .cast<RankedTensorType>()
-                .getEncoding() == encoding)
+        Attribute dstEncoding = convertOp.getResult()
+                                    .getType()
+                                    .cast<RankedTensorType>()
+                                    .getEncoding();
+        if (dstEncoding.isa<triton::gpu::AMDMfmaEncodingAttr,
+                            triton::gpu::AMDWmmaEncodingAttr>())
           return true;
       }
       auto yield = dyn_cast<scf::YieldOp>(op);
@@ -226,7 +227,6 @@ static bool hasConvertToAmdMmaTransisitiveUse(Operation *op,
   }
   return false;
 }
-#endif
 
 // Return true if the op is an op with a layout we don't want to change. We will
 // propagate the layout starting from anchor ops.

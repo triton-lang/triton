@@ -579,11 +579,10 @@ bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
   // improved. In addition, we can enable this shortcut for regular MFMA
   // layout when opIdx == 1.
   return mfmaLayout.getWarpsPerCTA()[1] == 1 &&
-         dotOperandLayout.getOpIdx() == 0 &&
-         dotOperandLayout.getKWidth() == 4 &&
+         dotOperandLayout.getOpIdx() == 0 && mfmaLayout.getIsTransposed() &&
+         dotOperandLayout.getKWidth() == getContigPerThread(mfmaLayout)[1] &&
          dotOperandLayout.getParent() == mfmaLayout &&
          (mfmaLayout.getMDim() == 32 || mfmaLayout.getMDim() == 16) &&
-         mfmaLayout.getIsTransposed() &&
          (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16());
 }
 
