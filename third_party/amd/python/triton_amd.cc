@@ -25,8 +25,6 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_2("add_accelerate_matmul",
                      mlir::createTritonAMDGPUAccelerateMatmulPass,
                      const std::string, int);
-  ADD_PASS_WRAPPER_0("add_decompose_conversions",
-                     mlir::createTritonAMDGPUDecomposeConversionsPass);
   ADD_PASS_WRAPPER_0("add_optimize_epilogue",
                      mlir::createTritonAMDGPUOptimizeEpiloguePass);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
