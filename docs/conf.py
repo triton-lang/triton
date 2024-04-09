@@ -253,6 +253,8 @@ html_sidebars = {
     ]
 }
 
+html_logo = "https://cdn.openai.com/triton/assets/triton-logo.png"
+
 # -- Options for HTMLHelp output ------------------------------------------
 
 # Output file base name for HTML help builder.
