@@ -5,6 +5,7 @@ import inspect
 import copy
 from functools import reduce
 from contextlib import contextmanager
+import textwrap
 
 # ---------- AST Helpers -------------
 
@@ -115,6 +116,7 @@ class SpecializationVisitor(ast.NodeTransformer):
         self.whitelist |= {v for v in symbols.values() if v.__class__ in [meta_tuple, meta_macro]}
         self.scopes = []
         self.lengths = dict()
+        self.signature = None
         super().__init__()
     
     @contextmanager
@@ -163,6 +165,7 @@ class SpecializationVisitor(ast.NodeTransformer):
             symbols = {arg: self._resolve_symbol(arg.arg) for arg in node.args.args}
             args = [[k] if v is None else v.expand_args() for k, v in symbols.items()]
             node.args.args = reduce(list.__add__, args)
+            node.decorator_list = []
             self.generic_visit(node)
         return node
     
@@ -174,7 +177,6 @@ class SpecializationVisitor(ast.NodeTransformer):
         return self.generic_visit(node)
         
     def visit_Call(self, node):
-        # print(ast.unparse(node))
         if (impl := self._resolve_symbol(node.func)) is None:
             return self.generic_visit(node)
         ret = ast.copy_location(impl(self.scopes[-1], node, self.lengths), node)
@@ -182,21 +184,49 @@ class SpecializationVisitor(ast.NodeTransformer):
 
 
 def specialize(func, **kwargs):
-    source = inspect.getsource(func)
-    tree = ast.parse(source)
+    assert isinstance(func, Template)
+    tree = func.parse()
     symbols = globals()
     symbols.update({k: v for k,v in kwargs.items() if isinstance(v, meta_tuple)})
     symbols.update({k: meta_macro(v) for k,v in kwargs.items() if callable(v)})
     visitor = SpecializationVisitor(symbols=symbols)
     new_tree = visitor.visit(tree)
     new_source = ast.unparse(new_tree)
-
     return new_source
 
 
 # ------------------------------------
 # ------------- Template -------------
 
+class Template:
+
+    def __init__(self, fn) -> None:
+        self.fn = fn
+    
+    def parse(self):
+        source = inspect.getsource(self.fn)
+        tree = ast.parse(source)
+        assert isinstance(tree, ast.Module)
+        assert len(tree.body) == 1
+        assert isinstance(tree.body[0], ast.FunctionDef)
+        return tree
+
+def template(fn):
+    return Template(fn)
+
+class LiveFunction:
+
+    def __init__(self, fn) -> None:
+        self.fn = fn
+        self.signature = inspect.signature(fn)
+        self.starting_line_number = inspect.getsourcelines(fn)[1]
+        self.src = textwrap.dedent(inspect.getsource(fn))
+        self.src = self.src[self.src.find("def"):]
+        self.__name__ = fn.__name__
+    
+
+
+@template
 def normalize(Outs: meta_tuple, Ins: meta_tuple, 
               stride_om, stride_im, M, N, BLOCK_N: tl.constexpr,
               InitState: meta_macro,
