@@ -14,7 +14,7 @@ module attributes {
     "triton_gpu.num-ctas" = 2 : i32,
     "triton_gpu.threads-per-warp" = 32 : i32
 } {
-    tt.func public @fn(%arg0: !tt.ptr<i32, 1>) {
+    tt.func public @fn(%arg0: !tt.ptr<i32>) {
         // expected-error @+1 {{threads per warp}}
         %t = tt.splat %arg0 : !tt.ptr<i32,1> -> tensor<8x1x!tt.ptr<i32,1>, #blocked>
         tt.return
@@ -37,7 +37,7 @@ module attributes {
     "triton_gpu.num-ctas" = 2 : i32,
     "triton_gpu.threads-per-warp" = 32 : i32
 } {
-    tt.func public @fn(%arg0: !tt.ptr<i32, 1>) {
+    tt.func public @fn(%arg0: !tt.ptr<i32>) {
         // expected-error @+1 {{warps per CTA}}
         %t = tt.splat %arg0 : !tt.ptr<i32,1> -> tensor<8x1x!tt.ptr<i32,1>, #blocked>
         tt.return
@@ -60,7 +60,7 @@ module attributes {
     "triton_gpu.num-ctas" = 2 : i32,
     "triton_gpu.threads-per-warp" = 32 : i32
 } {
-    tt.func public @fn(%arg0: !tt.ptr<i32, 1>) {
+    tt.func public @fn(%arg0: !tt.ptr<i32>) {
         // expected-error @+1 {{CTAs per CGA}}
         %t = tt.splat %arg0 : !tt.ptr<i32,1> -> tensor<8x1x!tt.ptr<i32,1>, #blocked>
         tt.return
@@ -83,7 +83,7 @@ module attributes {
     "triton_gpu.num-ctas" = 2 : i32,
     "triton_gpu.threads-per-warp" = 32 : i32
 } {
-    tt.func public @fn(%arg0: !tt.ptr<i32, 1>) {
+    tt.func public @fn(%arg0: !tt.ptr<i32>) {
         // Note it's a 3d tensor here, but #blocked is 2D.
         // expected-error @+1 {{rank}}
         %t = tt.splat %arg0 : !tt.ptr<i32,1> -> tensor<8x1x1x!tt.ptr<i32,1>, #blocked>

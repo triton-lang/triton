@@ -63,7 +63,7 @@ jobs:
         if: env.enable_integration == 'true'
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
-            echo '::set-output name=matrix-CUDA::[["self-hosted", "H100"]]'
+            echo '::set-output name=matrix-CUDA::[["self-hosted", "A100"], ["self-hosted", "H100"]]'
             echo '::set-output name=matrix-HIP::[["self-hosted", "gfx90a"]]'
           else
             echo '::set-output name=matrix-CUDA::["ubuntu-latest"]'

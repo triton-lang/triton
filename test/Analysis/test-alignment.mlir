@@ -495,7 +495,7 @@ tt.func @for_dynamic(%lb: index {tt.divisibility = 16 : i32}, %step: index {tt.d
 // -----
 
 // CHECK-LABEL: @for_if
-tt.func @for_if(%i1: i1, %arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}) {
+tt.func @for_if(%i1: i1, %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
   // CHECK: contiguity = [1], divisibility = [4611686018427387904], constancy = [1], constant_value = 0
   %c0_i32 = arith.constant 0 : i32
   // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [1], constant_value = 1
@@ -505,21 +505,21 @@ tt.func @for_if(%i1: i1, %arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}) {
   // CHECK-NEXT: contiguity = [1, 1], divisibility = [64, 64], constancy = [128, 64], constant_value = 64
   %cst = arith.constant dense<64> : tensor<128x64xi32>
   // CHECK-NEXT: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>
-  %1 = tt.splat %arg0 : !tt.ptr<f16, 1> -> tensor<128x64x!tt.ptr<f16, 1>>
-  %2 = scf.for %arg9 = %c0_i32 to %c10_i32 step %c1_i32 iter_args(%arg1 = %1) -> (tensor<128x64x!tt.ptr<f16, 1>>): i32 {
+  %1 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>>
+  %2 = scf.for %arg9 = %c0_i32 to %c10_i32 step %c1_i32 iter_args(%arg1 = %1) -> (tensor<128x64x!tt.ptr<f16>>): i32 {
     // CHECK: scf.if
     // CHECK: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>
-    %3 = scf.if %i1 -> (tensor<128x64x!tt.ptr<f16, 1>>) {
-      scf.yield %arg1 : tensor<128x64x!tt.ptr<f16, 1>>
+    %3 = scf.if %i1 -> (tensor<128x64x!tt.ptr<f16>>) {
+      scf.yield %arg1 : tensor<128x64x!tt.ptr<f16>>
     } else {
-      scf.yield %arg1 : tensor<128x64x!tt.ptr<f16, 1>>
+      scf.yield %arg1 : tensor<128x64x!tt.ptr<f16>>
     }
     // CHECK: tt.addptr
     // CHECK-SAME: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>
-    %4 = tt.addptr %3, %cst : tensor<128x64x!tt.ptr<f16, 1>>, tensor<128x64xi32>
+    %4 = tt.addptr %3, %cst : tensor<128x64x!tt.ptr<f16>>, tensor<128x64xi32>
     // CHECK: scf.for
     // CHECK: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>
-    scf.yield %1 : tensor<128x64x!tt.ptr<f16, 1>>
+    scf.yield %1 : tensor<128x64x!tt.ptr<f16>>
   }
   tt.return
 }
@@ -527,7 +527,7 @@ tt.func @for_if(%i1: i1, %arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}) {
 // -----
 
 // CHECK-LABEL: @for_if_for
-tt.func @for_if_for(%i1: i1, %arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 8 : i32}) {
+tt.func @for_if_for(%i1: i1, %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 8 : i32}) {
   // CHECK: contiguity = [1], divisibility = [4611686018427387904], constancy = [1], constant_value = 0
   %c0_i32 = arith.constant 0 : i32
   // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [1], constant_value = 1
@@ -537,9 +537,9 @@ tt.func @for_if_for(%i1: i1, %arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}
   // CHECK-NEXT: contiguity = [1, 1], divisibility = [64, 64], constancy = [128, 64], constant_value = 64
   %cst = arith.constant dense<64> : tensor<128x64xi32>
   // CHECK-NEXT: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>
-  %1 = tt.splat %arg0 : !tt.ptr<f16, 1> -> tensor<128x64x!tt.ptr<f16, 1>>
+  %1 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>>
   // CHECK-NEXT: contiguity = [1, 1], divisibility = [8, 8], constancy = [128, 64], constant_value = <none>
-  %2 = tt.splat %arg1 : !tt.ptr<f16, 1> -> tensor<128x64x!tt.ptr<f16, 1>>
+  %2 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>>
   // CHECK: scf.for
   // CHECK: contiguity = [1, 1], divisibility = [8, 8], constancy = [128, 64], constant_value = <none>
   // CHECK: scf.if
@@ -548,17 +548,17 @@ tt.func @for_if_for(%i1: i1, %arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}
   // CHECK-SAME: contiguity = [1, 1], divisibility = [8, 8], constancy = [128, 64], constant_value = <none>
   // CHECK: scf.for
   // CHECK: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>
-  %3 = scf.for %arg9 = %c0_i32 to %c10_i32 step %c1_i32 iter_args(%arg2 = %1) -> (tensor<128x64x!tt.ptr<f16, 1>>) : i32 {
-    %4 = scf.if %i1 -> (tensor<128x64x!tt.ptr<f16, 1>>) {
-      %5 = scf.for %arg10 = %c0_i32 to %c10_i32 step %c1_i32 iter_args(%arg3 = %2) -> (tensor<128x64x!tt.ptr<f16, 1>>) : i32 {
-        scf.yield %arg3 : tensor<128x64x!tt.ptr<f16, 1>>
+  %3 = scf.for %arg9 = %c0_i32 to %c10_i32 step %c1_i32 iter_args(%arg2 = %1) -> (tensor<128x64x!tt.ptr<f16>>) : i32 {
+    %4 = scf.if %i1 -> (tensor<128x64x!tt.ptr<f16>>) {
+      %5 = scf.for %arg10 = %c0_i32 to %c10_i32 step %c1_i32 iter_args(%arg3 = %2) -> (tensor<128x64x!tt.ptr<f16>>) : i32 {
+        scf.yield %arg3 : tensor<128x64x!tt.ptr<f16>>
       }
-      scf.yield %5 : tensor<128x64x!tt.ptr<f16, 1>>
+      scf.yield %5 : tensor<128x64x!tt.ptr<f16>>
     } else {
-      scf.yield %arg2 : tensor<128x64x!tt.ptr<f16, 1>>
+      scf.yield %arg2 : tensor<128x64x!tt.ptr<f16>>
     }
-    %6 = tt.addptr %4, %cst : tensor<128x64x!tt.ptr<f16, 1>>, tensor<128x64xi32>
-    scf.yield %1 : tensor<128x64x!tt.ptr<f16, 1>>
+    %6 = tt.addptr %4, %cst : tensor<128x64x!tt.ptr<f16>>, tensor<128x64xi32>
+    scf.yield %1 : tensor<128x64x!tt.ptr<f16>>
   }
   tt.return
 }
@@ -612,8 +612,8 @@ tt.func @permute_2d(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32
   // CHECK-NEXT: contiguity = [128, 1], divisibility = [16, 4], constancy = [1, 1], constant_value = <none>
   %19 = tt.addptr %17, %18 : tensor<128x128x!tt.ptr<f32>>, tensor<128x128xi32>
   // CHECK-NEXT: contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
-  %20 = tt.load %10, %cst, %cst_0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x128xf32>
-  tt.store %19, %20, %cst : tensor<128x128xf32>
+  %20 = tt.load %10, %cst, %cst_0 : tensor<128x128x!tt.ptr<f32>>
+  tt.store %19, %20, %cst : tensor<128x128x!tt.ptr<f32>>
   tt.return
 }
 
@@ -640,9 +640,9 @@ tt.func @load_constancy(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1:
   // CHECK-NEXT: constancy = [16]
   %7 = tt.addptr %3, %2 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
   // CHECK-NEXT: constancy = [16]
-  %8 = tt.load %7 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<1024xf32>
+  %8 = tt.load %7 : tensor<1024x!tt.ptr<f32>>
   // CHECK-NEXT: constancy = [8]
-  %9 = tt.load %7, %6 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<1024xf32>
+  %9 = tt.load %7, %6 : tensor<1024x!tt.ptr<f32>>
   tt.return
 }
 
@@ -673,7 +673,7 @@ tt.func @store_constant_align(%addr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, 
   %mask = arith.cmpi slt, %4, %9 : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
   %cst = arith.constant dense<0.0> : tensor<128xf32>
-  tt.store %5, %cst, %mask : tensor<128xf32>
+  tt.store %5, %cst, %mask : tensor<128x!tt.ptr<f32>>
   tt.return
 }
 
@@ -696,13 +696,13 @@ tt.func @vecadd_mask_align_16(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, 
   %9 = tt.splat %n_elements : i32 -> tensor<64xi32>
   // CHECK: arith.cmpi slt, %{{.*}} => contiguity = [1], divisibility = [1], constancy = [16], constant_value = <none>
   %mask = arith.cmpi slt, %4, %9 : tensor<64xi32>
-  %11 = tt.load %6, %mask {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64xf32>
-  %12 = tt.load %8, %mask {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64xf32>
+  %11 = tt.load %6, %mask : tensor<64x!tt.ptr<f32>>
+  %12 = tt.load %8, %mask : tensor<64x!tt.ptr<f32>>
   %13 = arith.addf %11, %12 : tensor<64xf32>
   %14 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
   // CHECK: tt.addptr %{{.*}} => contiguity = [64], divisibility = [16], constancy = [1], constant_value = <none>
   %15 = tt.addptr %14, %4 : tensor<64x!tt.ptr<f32>>, tensor<64xi32>
-  tt.store %15, %13, %mask : tensor<64xf32>
+  tt.store %15, %13, %mask : tensor<64x!tt.ptr<f32>>
   tt.return
 }
 
@@ -725,12 +725,12 @@ tt.func @vecadd_mask_align_1(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %
   %9 = tt.splat %n_elements : i32 -> tensor<64xi32>
   // CHECK: arith.cmpi slt, %{{.*}} => contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
   %10 = arith.cmpi slt, %4, %9 : tensor<64xi32>
-  %11 = tt.load %6, %10 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64xf32>
-  %12 = tt.load %8, %10 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64xf32>
+  %11 = tt.load %6, %10 : tensor<64x!tt.ptr<f32>>
+  %12 = tt.load %8, %10 : tensor<64x!tt.ptr<f32>>
   %13 = arith.addf %11, %12 : tensor<64xf32>
   %14 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
   %15 = tt.addptr %14, %4 : tensor<64x!tt.ptr<f32>>, tensor<64xi32>
-  tt.store %15, %13, %10 : tensor<64xf32>
+  tt.store %15, %13, %10 : tensor<64x!tt.ptr<f32>>
   tt.return
 }
 
@@ -824,7 +824,6 @@ tt.func @call_graph(%arg0: i32) {
 // CHECK-LABEL: @tensor_ptr
 tt.func @tensor_ptr(%arg0: !tt.ptr<tensor<64x16xi32>, 1>) {
   // CHECK: contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
-  %0 = tt.load %arg0 {boundaryCheck = array<i32: 0>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} :
-    !tt.ptr<tensor<64x16xi32>, 1> -> tensor<64x16xi32>
+  %0 = tt.load %arg0 : !tt.ptr<tensor<64x16xi32>, 1>
   tt.return
 }
