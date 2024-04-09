@@ -10,6 +10,8 @@ from ..language import constexpr, tensor, str_to_ty
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
+from functools import reduce
+import operator
 
 
 def mangle_ty(ty):
@@ -70,24 +72,6 @@ def _check_fn_args(node, fn, args):
                     fn.src, node,
                     f'Function {fn.__name__} is marked noinline, but was called with non-scalar argument {fn.arg_names[idx]}:{arg}'
                 )
-
-
-def _get_fn_file_line(fn):
-    base_fn = fn
-    while not isinstance(base_fn, JITFunction):
-        base_fn = base_fn.fn
-    file_name = base_fn.fn.__code__.co_filename
-    lines, begin_line = inspect.getsourcelines(base_fn.fn)
-    # Match the following pattern:
-    # @triton.autotune(...) <- foo.__code__.co_firstlineno
-    # @triton.heuristics(...)
-    # @triton.jit
-    # def foo(...): <- this line is the first line
-    for idx, line in enumerate(lines):
-        if line.strip().startswith("def "):
-            begin_line += idx
-            break
-    return file_name, begin_line
 
 
 _condition_types = {bool, int, type(None)}  # Python types accepted for conditionals inside kernels
@@ -209,7 +193,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     def __init__(self, context, prototype, gscope, attributes, constants, function_name, jit_fn: JITFunction, options,
                  codegen_fns, debug=None, module=None, is_kernel=False, function_types: Optional[Dict] = None,
-                 noinline=False, file_name: Optional[str] = None, begin_line=0):
+                 noinline=False, file_name: Optional[str] = None, begin_line=0, tuple_args=None):
         self.context = context
         self.builder = ir.builder(context)
         self.file_name = file_name
@@ -241,6 +225,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.local_defs: Dict[str, tensor] = {}
         self.global_uses: Dict[str, tensor] = {}
         self.dereference_name: Callable[[str], Any] = self._define_name_lookup()
+        self.tuple_args = dict() if tuple_args is None else tuple_args
         self.fn = None
 
     builtin_namespace: Dict[str, Any] = {_.__name__: _ for _ in (len, range, float, int, isinstance, getattr)}
@@ -375,17 +360,22 @@ class CodeGenerator(ast.NodeVisitor):
                 if not _is_constexpr(cst):
                     cst = constexpr(self.constants[i])
                 arg_values.append(cst)
+                self.set_value(arg_name, cst)
                 continue
+            elif arg_name in self.tuple_args:
+                arity = len(self.tuple_args[arg_name])
+                for off, x in enumerate(self.tuple_args[arg_name]):
+                    arg_values.append(tensor(self.fn.args(idx+off), self.prototype.param_types[idx+off]))
+                idx += arity
+                self.set_value(arg_name, arg_values[-arity:])
             else:
                 if i in self.attributes:
                     for name, value in self.attributes[i]:
                         self.fn.set_arg_attr(idx, name, value)
                 arg_values.append(tensor(self.fn.args(idx), self.prototype.param_types[idx]))
+                self.set_value(arg_name, arg_values[-1])
                 idx += 1
-
         insert_pt = self.builder.get_insertion_block()
-        for arg_name, arg_value in zip(arg_names, arg_values):
-            self.set_value(arg_name, arg_value)
         self.builder.set_insertion_point_to_start(entry)
         # visit function body
         self.visit_compound_statement(node.body)
@@ -443,10 +433,10 @@ class CodeGenerator(ast.NodeVisitor):
         names = _names[0]
         values = self.visit(node.value)
         if not _is_list_like(names):
-            names = [names]
-        if not _is_list_like(values):
-            values = [values]
+            self.set_value(names, values)
+            return
         native_nontensor_types = (language.dtype, )
+        assert len(names) == len(values)
         for name, value in zip(names, values):
             # by default, constexpr are assigned into python variable
             value = _unwrap_if_constexpr(value)
@@ -840,6 +830,15 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_ExtSlice(self, node):
         return [self.visit(dim) for dim in node.dims]
 
+    def _as_tuple(self, value):
+        if isinstance(value, str):
+            return (value,)
+        try:
+            iter(value)
+            return value
+        except TypeError:
+            return (value,)
+        
     def visit_For(self, node):
         IteratorClass = self.visit(node.iter.func)
         iter_args = [self.visit(arg) for arg in node.iter.args]
@@ -920,16 +919,18 @@ class CodeGenerator(ast.NodeVisitor):
             names = []
             for name in self.local_defs:
                 if name in liveins:
-                    assert _is_triton_tensor(self.local_defs[name]), f'{name} is not tensor'
-                    assert _is_triton_tensor(liveins[name])
-                    assert self.local_defs[name].type == liveins[name].type, \
-                        f'Loop-carried variable {name} has initial type {liveins[name].type} '\
-                        f'but is re-assigned to {self.local_defs[name].type} in loop! '\
-                        f'Please make sure that the type stays consistent.'
-
+                    local_defs = self._as_tuple(self.local_defs[name])
+                    local_lives = self._as_tuple(liveins[name])
+                    for (local_def, local_live) in zip(local_defs, local_lives):
+                        assert _is_triton_tensor(local_def), f'{name} is not tensor'
+                        assert _is_triton_tensor(local_live)
+                        assert local_def.type == local_live.type, \
+                            f'Loop-carried variable {name} has initial type {local_live.type} '\
+                            f'but is re-assigned to {local_def.type} in loop! '\
+                            f'Please make sure that the type stays consistent.'
+                        init_args.append(language.core._to_tensor(local_live, self.builder))
+                        yields.append(language.core._to_tensor(local_def, self.builder))
                     names.append(name)
-                    init_args.append(language.core._to_tensor(liveins[name], self.builder))
-                    yields.append(language.core._to_tensor(self.local_defs[name], self.builder))
 
             # create ForOp
             self._set_insertion_point_and_loc(ip, last_loc)
@@ -939,14 +940,23 @@ class CodeGenerator(ast.NodeVisitor):
 
             self.scf_stack.append(node)
             self.builder.set_insertion_point_to_start(for_op.get_body(0))
-            for i, name in enumerate(names):
-                self.set_value(name, language.core.tensor(for_op.get_body(0).arg(i + 1), yields[i].type))
+            i = 0
+            for name in names:
+                numel = len(self._as_tuple(liveins[name]))
+                vals = [language.core.tensor(for_op.get_body(0).arg(i + j + 1), yields[i + j].type) for j in range(numel)]
+                if isinstance(liveins[name], tuple):
+                    self.set_value(name, tuple(vals))
+                else:
+                    self.set_value(name, vals[0])
+                i += numel
             self.visit_compound_statement(node.body)
             self.scf_stack.pop()
             yields = []
             for name in self.local_defs:
                 if name in liveins:
-                    yields.append(language.core._to_tensor(self.local_defs[name], self.builder))
+                    numel = len(self._as_tuple(liveins[name]))
+                    vals = self._as_tuple(self.local_defs[name])
+                    yields.extend([language.core._to_tensor(v, self.builder) for v in vals])
 
             # create YieldOp
             if len(yields) > 0:
@@ -964,8 +974,15 @@ class CodeGenerator(ast.NodeVisitor):
             self.set_value(node.target.id, language.core.tensor(iv, iv_type))
 
         # update lscope & local_defs (ForOp defines new values)
-        for i, name in enumerate(names):
-            self.set_value(name, language.core.tensor(for_op.get_result(i), yields[i].type))
+        i = 0
+        for name in names:
+            numel = len(self._as_tuple(liveins[name]))
+            vals = [language.core.tensor(for_op.get_result(i + j), yields[i + j].type) for j in range(numel)]
+            if isinstance(liveins[name], tuple):
+                self.set_value(name, tuple(vals))
+            else:
+                self.set_value(name, vals[0])
+            i += numel
 
         for stmt in node.orelse:
             assert False, "Don't know what to do with else after for"
@@ -991,10 +1008,19 @@ class CodeGenerator(ast.NodeVisitor):
         # Convert assert to triton's device_assert which happens on the device
         return language.core.device_assert(test, msg, _builder=self.builder)
 
+    def _extend_args(self, arg):
+        if _is_triton_tensor(arg):
+            return [arg]
+        if isinstance(arg, tuple):
+            return reduce(operator.add, [self._extend_args(x) for x in arg])
+        return [constexpr(arg)]
+
     def call_JitFunction(self, fn: JITFunction, args, kwargs):
-        args = inspect.getcallargs(fn.fn, *args, **kwargs)
+        original_args = args
+        args = fn.fn.getcallargs(*args, **kwargs)
         args = [args[name] for name in fn.arg_names]
-        args = [arg if _is_triton_tensor(arg) else constexpr(arg) for arg in args]
+        if len(args) > 0:
+            args = reduce(operator.add, [self._extend_args(x) for x in args])
         # generate function def
         attributes = dict()
         constexprs = [i for i, arg in enumerate(args) if _is_constexpr(arg)]
@@ -1003,18 +1029,22 @@ class CodeGenerator(ast.NodeVisitor):
         args = [None if i in constexprs else arg for i, arg in enumerate(args)]
         arg_vals = [arg.handle for arg in args if arg is not None]
         arg_types = [arg.type for arg in args if arg is not None]
+        args_ids = [id(arg) for arg in args]
         fn_name = mangle_fn(fn.__name__, arg_types, constants)
+        tuple_args = {fn.arg_names[i]: [args_ids.index(id(arg)) for arg in val] for i, val in enumerate(original_args) if isinstance(val, tuple)}
         # generate function def if necessary
         if not self.module.has_function(fn_name):
             prototype = language.function_type([], arg_types)
             gscope = fn.__globals__
             # If the callee is not set, we use the same debug setting as the caller
-            file_name, begin_line = _get_fn_file_line(fn)
+            file_name, begin_line = fn.fn.location()
             debug = self.debug if fn.debug is None else fn.debug
             generator = CodeGenerator(self.context, prototype, gscope, attributes, constants, module=self.module,
                                       jit_fn=fn, function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
-                                      options=self.builder.options, codegen_fns=self.builder.codegen_fns, debug=debug)
+                                      options=self.builder.options, codegen_fns=self.builder.codegen_fns, 
+                                      tuple_args=tuple_args,
+                                      debug=debug)
             try:
                 generator.visit(fn.parse())
             except Exception as e:
@@ -1233,7 +1263,7 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns):
     all_constants = constants.copy()
     all_constants.update(new_constants)
     arg_types = [str_to_ty(v) for k, v in specialization.signature.items() if k not in specialization.constants]
-    file_name, begin_line = _get_fn_file_line(fn)
+    file_name, begin_line = fn.fn.location()
 
     prototype = language.function_type([], arg_types)
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name,

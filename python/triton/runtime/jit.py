@@ -9,6 +9,7 @@ from collections import defaultdict
 from functools import cached_property
 from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload
 from ..runtime.driver import driver
+import re
 
 TRITON_MODULE = __name__[:-len(".runtime.jit")]
 
@@ -215,6 +216,30 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
     }
     serialized_obj = json.dumps(obj)
     return serialized_obj
+
+
+class LiveFunction:
+
+    def __init__(self, fn) -> None:
+        self.fn = fn
+        self.signature = inspect.signature(fn)
+        self.src = textwrap.dedent(inspect.getsource(fn))
+        self.src = self.src[re.search(r"^def\s+\w+\s*\(", self.src, re.MULTILINE).start():]
+        self.__name__ = fn.__name__
+        self.__module__ = fn.__module__
+        self.__globals__ = fn.__globals__
+        self.__code__ = fn.__code__
+ 
+    def location(self) -> None:
+        file_name = self.fn.__code__.co_filename
+        lines, begin_line = inspect.getsourcelines(self.fn)
+        begin_line += next((i for i, L in enumerate(lines) if L.strip().startswith("def")))
+        return file_name, begin_line
+    
+    def getcallargs(self, *args, **kwargs):
+        return inspect.getcallargs(self.fn, *args, **kwargs)
+
+    
 
 
 class JITFunction(KernelInterface[T]):
@@ -463,11 +488,11 @@ class JITFunction(KernelInterface[T]):
         do_not_specialize = do_not_specialize if do_not_specialize else []
 
         self.fn = fn
+
         self.module = fn.__module__
         self.version = version
-        self.signature = inspect.signature(fn)
+        self.signature = fn.signature
         self.do_not_specialize = do_not_specialize
-        self.starting_line_number = inspect.getsourcelines(fn)[1]
         self.repr = lambda _: fn.__name__ if repr is None else repr(_)
         self.launch_metadata = launch_metadata
 
@@ -477,8 +502,7 @@ class JITFunction(KernelInterface[T]):
             self.params.append(KernelParam(i, param, dns))
 
         # function source code (without decorators)
-        self.src = textwrap.dedent(inspect.getsource(fn))
-        self.src = self.src[self.src.find("def"):]
+        self.src = fn.src
         # cache of just-in-time compiled kernels
         self.cache = defaultdict(dict)
         self.hash = None
@@ -508,7 +532,7 @@ class JITFunction(KernelInterface[T]):
         if self.hash is None:
             dependencies_finder = DependenciesFinder(globals=self.__globals__, src=self.src)
             dependencies_finder.visit(self.parse())
-            self.hash = dependencies_finder.ret + str(self.starting_line_number)
+            self.hash = dependencies_finder.ret + str(self.fn.location()[1])
         return self.hash
 
     def warmup(self, *args, grid, **kwargs):
@@ -620,7 +644,7 @@ def jit(
             return InterpretedFunction(fn)
         else:
             return JITFunction(
-                fn,
+                LiveFunction(fn),
                 version=version,
                 do_not_specialize=do_not_specialize,
                 debug=debug,

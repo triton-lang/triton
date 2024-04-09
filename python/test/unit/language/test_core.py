@@ -622,6 +622,32 @@ def test_broadcast(dtype, device):
     assert (y_broadcasted_np == to_numpy(y_broadcasted_tri)).all()
 
 
+# -----------
+# test tuples
+# -----------
+
+@triton.jit
+def unpack(xy):
+    return xy[0], xy[1]
+
+@triton.jit
+def tuple_kernel(X, Y, A, B, x1, y1):
+    xy = x1, y1
+    x2, y2 = xy
+    x3, y3 = unpack(xy)
+    tl.store(X, xy[0])
+    tl.store(Y, xy[1])
+    tl.store(A, x1==x2)
+    tl.store(B, y1==y2)
+
+def test_tuple2(device):
+    data = torch.empty(4, dtype=torch.int32, device=device)
+    tuple_kernel[(1,)](data[0], data[1], data[2], data[3], 2, 3)
+    assert data[0] == 2
+    assert data[1] == 3
+    assert data[2] == True
+    assert data[3] == True
+
 # ----------
 # test slice
 # ----------

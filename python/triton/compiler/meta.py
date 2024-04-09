@@ -6,6 +6,7 @@ import copy
 from functools import reduce
 from contextlib import contextmanager
 import textwrap
+import re
 
 # ---------- AST Helpers -------------
 
@@ -88,9 +89,19 @@ def meta_zip(*args):
 
 def meta_map(scope, node, lengths):
     fn_args = node.args[1].args.args
-    fn_body = node.args[1].body
-    elts = [replace_ast_name(fn_body, fn_args[0].arg, new_node) for new_node in _make_iterator(node.args[0], lengths)]
+    elts = [replace_ast_name(copy.deepcopy(node.args[1].body), fn_args[0].arg, new_node) for new_node in _make_iterator(node.args[0], lengths)]
     return ast.Tuple(elts=elts, ctx=ast.Load())
+
+def meta_reduce(scope, node, lengths):
+    fn_args = node.args[1].args.args
+    iterator = _make_iterator(node.args[0], lengths)
+    ret = next(iterator)
+    for curr in iterator:
+        fn_body = copy.deepcopy(node.args[1].body)
+        ret = replace_ast_name(fn_body, fn_args[0].arg, ret)
+        ret = replace_ast_name(fn_body, fn_args[1].arg, curr)
+    return ret
+
 
 def meta_for_each(scope, node, lengths):
     idx = next((i for i, v in enumerate(scope.body) if v == node or (isinstance(v, ast.Expr) and v.value==node)))
@@ -112,7 +123,7 @@ class SpecializationVisitor(ast.NodeTransformer):
     def __init__(self, symbols):
         self.symbols = symbols
         self.whitelist = {}
-        self.whitelist = {meta_zip, meta_map, meta_for_each}
+        self.whitelist = {meta_zip, meta_map, meta_reduce, meta_for_each}
         self.whitelist |= {v for v in symbols.values() if v.__class__ in [meta_tuple, meta_macro]}
         self.scopes = []
         self.lengths = dict()
@@ -184,15 +195,16 @@ class SpecializationVisitor(ast.NodeTransformer):
 
 
 def specialize(func, **kwargs):
-    assert isinstance(func, Template)
-    tree = func.parse()
-    symbols = globals()
-    symbols.update({k: v for k,v in kwargs.items() if isinstance(v, meta_tuple)})
-    symbols.update({k: meta_macro(v) for k,v in kwargs.items() if callable(v)})
-    visitor = SpecializationVisitor(symbols=symbols)
-    new_tree = visitor.visit(tree)
-    new_source = ast.unparse(new_tree)
-    return new_source
+    return triton.JITFunction(SpecializedTemplate(func.fn, **kwargs))
+    # assert isinstance(func, Template)
+    # tree = func.parse()
+    # symbols = globals()
+    # symbols.update({k: v for k,v in kwargs.items() if isinstance(v, meta_tuple)})
+    # symbols.update({k: meta_macro(v) for k,v in kwargs.items() if callable(v)})
+    # visitor = SpecializationVisitor(symbols=symbols)
+    # new_tree = visitor.visit(tree)
+    # new_source = ast.unparse(new_tree)
+    # return new_source
 
 
 # ------------------------------------
@@ -214,17 +226,40 @@ class Template:
 def template(fn):
     return Template(fn)
 
-class LiveFunction:
+class SpecializedTemplate:
 
-    def __init__(self, fn) -> None:
+    def __init__(self, fn, **kwargs) -> None:
         self.fn = fn
-        self.signature = inspect.signature(fn)
-        self.starting_line_number = inspect.getsourcelines(fn)[1]
-        self.src = textwrap.dedent(inspect.getsource(fn))
-        self.src = self.src[self.src.find("def"):]
+        # process function
+        symbols = globals()
+        symbols.update({k: v for k,v in kwargs.items() if isinstance(v, meta_tuple)})
+        symbols.update({k: meta_macro(v) for k,v in kwargs.items() if callable(v)})
+        visitor = SpecializationVisitor(symbols=symbols)
+        tree = ast.parse(inspect.getsource(fn))
+        new_tree = visitor.visit(tree)
+        self.src = ast.unparse(new_tree)
+        self.src = self.src[re.search(r"^def\s+\w+\s*\(", self.src, re.MULTILINE).start():]
+        # attributes
         self.__name__ = fn.__name__
-    
+        self.__module__ = fn.__module__
+        self.__globals__ = fn.__globals__
+        self.__code__ = fn.__code__
+        # signature
+        signature = inspect.signature(fn)
+        parameters = []
+        for name, val in signature.parameters.items():
+            if val.annotation == meta_tuple:
+                for name in kwargs[name].names:
+                    parameters.append(inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD))
+            elif val.annotation == meta_macro:
+                pass
+            else:
+                parameters += [val]
+        self.signature = inspect.Signature(parameters, return_annotation=signature.return_annotation)
 
+        
+    def location(self) -> None:
+        return "", 0
 
 @template
 def normalize(Outs: meta_tuple, Ins: meta_tuple, 
@@ -245,6 +280,7 @@ def normalize(Outs: meta_tuple, Ins: meta_tuple,
     final_state = curr_state
     for start_n in range(pid_n*BLOCK_N, N, BLOCK_N):
         offs_n = start_n + tl.arange(0, BLOCK_N)
+        mask_n = offs_n < N
         inputs = meta_map(Ins, lambda In: tl.load(In + offs_n, mask=mask_n))
         outputs = meta_map(inputs, lambda x: ApplyState(final_state, x))
         meta_for_each(meta_zip(Outs, outputs), 
@@ -255,14 +291,14 @@ def softmax_init():
     return 0., float("-inf")
 
 @triton.jit
-def softmax_update(state, value):
-    m_ip1 = tl.maximum(state[1], tl.max(value, axis=0))
-    d_ip1 = state[0] * tl.exp(state[1] - m_ip1) + tl.sum(tl.exp(value - m_ip1), 0)
+def softmax_update(state, values):
+    m_ip1 = tl.maximum(state[1], tl.max(values[0], axis=0))
+    d_ip1 = state[0] * tl.exp(state[1] - m_ip1) + tl.sum(tl.exp(values[0] - m_ip1), 0)
     return d_ip1, m_ip1
 
 @triton.jit
-def softmax_apply(state, value):
-    return tl.exp(value - state[1]) / state[0]
+def softmax_apply(state, values):
+    return tl.exp(values - state[1]) / state[0]
 
 
 softmax = specialize(normalize, 
@@ -271,4 +307,23 @@ softmax = specialize(normalize,
                     InitState=softmax_init, 
                     UpdateState=softmax_update,
                     ApplyState=softmax_apply)
-print(softmax)
+
+import torch
+# x = torch.randn((1, 1024), dtype=torch.float16, device="cuda")
+# y = torch.empty_like(x)
+# softmax[(1,)](y, x, y.stride(0), x.stride(0), x.shape[0], x.shape[1], BLOCK_N=1024)
+# print(torch.softmax(x, -1))
+# print(y)
+
+
+@template
+def addN(Out, Ins: meta_tuple, N, BLOCK_N: tl.constexpr):
+    pid = tl.program_id(0)
+    off_n = pid * BLOCK_N + tl.arange(0, BLOCK_N)
+    Ins = meta_map(Ins, lambda In: In + off_n)
+    inputs = meta_map(Ins, lambda In: tl.load(In))
+    ret = meta_reduce(inputs, lambda a, b: a + b)
+    tl.store(Out, ret)
+
+add3 = specialize(addN,
+                  Ins=meta_tuple("X1", "X2", "X3"))
