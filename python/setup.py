@@ -1,4 +1,3 @@
-import distro
 import os
 import platform
 import re
@@ -134,13 +133,25 @@ def get_llvm_package_info():
     if system == "Darwin":
         system_suffix = f"macos-{arch}"
     elif system == "Linux":
-        linux_dist = distro.id()
-        # AlmaLinux is compatible with CentOS (both RHEL-based).
-        # Use CentOS LLVM pre-packaged binaries.
-        # AlmaLinux 8 is used for cibuildwheel manylinux_2_28 image.
-        if linux_dist == "almalinux":
-            linux_dist = "centos"
-        system_suffix = f"{linux_dist}-{arch}"
+        if arch == 'arm64':
+            system = 'ubuntu-arm64'
+        else:
+            # Ubuntu-22 LLVM build requires GLIBCXX_3.4.26.
+            target_libcxx_found = False
+            if os.path.isfile("/usr/lib/" + platform.machine() + "-linux-gnu/libstdc++.so.6"):
+                check_libcxx_version = \
+                    subprocess.run("strings /usr/lib/"+platform.machine()+"-linux-gnu/libstdc++.so.6 | grep GLIBCXX_3.4.26", check=False, shell=True)
+                target_libcxx_found = check_libcxx_version.returncode == 0
+            elif os.path.isfile("/usr/lib64/libstdc++.so.6"):
+                check_libcxx_version = \
+                    subprocess.run("strings /usr/lib64/libstdc++.so.6 | grep GLIBCXX_3.4.26", check=False, shell=True)
+                target_libcxx_found = check_libcxx_version.returncode == 0
+            if target_libcxx_found:
+                system = "ubuntu-x64"
+            else:
+                vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
+                vglibc = vglibc[0] * 100 + vglibc[1]
+                system = 'almalinux-x64' if vglibc > 217 else 'centos-x64'
     else:
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     # use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")

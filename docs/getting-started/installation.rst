@@ -37,7 +37,7 @@ You can install the Python package from source by running the following commands
 
       git clone https://github.com/openai/triton.git;
       cd triton/python;
-      pip install ninja cmake wheel distro; # build-time dependencies
+      pip install ninja cmake wheel; # build-time dependencies
       pip install -e .
 
 Note that, if llvm is not present on your system, the setup.py script will download the official LLVM static libraries and link against that.
