@@ -416,7 +416,7 @@ class JITFunction(KernelInterface[T]):
         # compute cache key
         args = [KernelArg(arg_value, param) for (_, arg_value), param in zip(bound_args.arguments.items(), self.params)]
         signature = {arg.param.name: arg.mangled_type() for arg in args if not arg.param.is_constexpr}
-        sig_key = signature.values()
+        sig_key = tuple(signature.values())
         spec_key = tuple(arg.specialization_key() for arg in args if not arg.param.do_not_specialize)
         constexpr_key = tuple(arg.value for arg in args if arg.param.is_constexpr)
         key = (sig_key, constexpr_key, spec_key, options)
