@@ -474,7 +474,7 @@ private:
 
   /// Computes the shared memory offsets for all related values.
   /// Paper: Algorithms for Compile-Time Memory Optimization
-  /// (https://www.cs.utexas.edu/users/harrison/papers/compile-time.pdf)
+  /// (https://dl.acm.org/doi/pdf/10.5555/314500.315082)
   void computeOffsets() {
     SmallVector<BufferT *> buffers;
     for (auto bufferIter : bufferRange) {

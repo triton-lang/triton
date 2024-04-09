@@ -12,7 +12,7 @@ module attributes {"triton_gpu.compute-capability" = 70 : i32, "triton_gpu.num-c
     // CHECK-NEXT: llvm.intr.minnum
     // CHECK-NEXT: llvm.mlir.constant
     // CHECK-NEXT: llvm.select
-    %12 = tt.clampf %x, %neg_limit, %limit {propagateNan = 65535 : i32} : tensor<1024xf32, #blocked>
+    %12 = tt.clampf %x, %neg_limit, %limit, propagateNan = all : tensor<1024xf32, #blocked>
     tt.return
   }
 }

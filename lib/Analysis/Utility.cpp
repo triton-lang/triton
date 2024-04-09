@@ -484,8 +484,8 @@ static bool supportWMMATypes(Type a, Type b, Type c, Type d) {
       return false;
     auto aWidth = a.getIntOrFloatBitWidth();
     auto cWidth = c.getIntOrFloatBitWidth();
-    bool aValid = a.isUnsignedInteger() && (aWidth == 4 || aWidth == 8);
-    bool cValid = c.isSignedInteger() && cWidth == 32;
+    bool aValid = a.isUnsignedInteger() && aWidth <= 8;
+    bool cValid = cWidth <= 32;
     return aValid && cValid;
   } else if (a.isa<FloatType>()) {
     if (a.isBF16())
@@ -579,11 +579,10 @@ bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
   // improved. In addition, we can enable this shortcut for regular MFMA
   // layout when opIdx == 1.
   return mfmaLayout.getWarpsPerCTA()[1] == 1 &&
-         dotOperandLayout.getOpIdx() == 0 &&
-         dotOperandLayout.getKWidth() == 4 &&
+         dotOperandLayout.getOpIdx() == 0 && mfmaLayout.getIsTransposed() &&
+         dotOperandLayout.getKWidth() == getContigPerThread(mfmaLayout)[1] &&
          dotOperandLayout.getParent() == mfmaLayout &&
          (mfmaLayout.getMDim() == 32 || mfmaLayout.getMDim() == 16) &&
-         mfmaLayout.getIsTransposed() &&
          (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16());
 }
 

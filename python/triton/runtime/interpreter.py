@@ -431,9 +431,16 @@ class InterpreterBuilder:
     def create_tensor_pointer_load(self, ptr, boundary_check, padding_option, cache_modifier, eviction_policy,
                                    is_volatile):
         ptrs, masks = ptr.materialize_pointers(boundary_check)
-        if padding_option is not None:
-            raise NotImplementedError("padding_option not supported in interpreter mode")
-        other = None
+        dtype_tt = ptrs.get_element_ty()
+        dtype_np = _get_np_dtype(dtype_tt)
+        if padding_option is None:
+            other = None
+        elif padding_option == _ir.PADDING_OPTION.PAD_ZERO:
+            other = TensorHandle(np.zeros_like(ptrs.data, dtype=dtype_np), dtype_tt)
+        elif padding_option == _ir.PADDING_OPTION.PAD_NAN:
+            other = TensorHandle(np.full_like(ptrs.data, float('nan'), dtype=dtype_np), dtype_tt)
+        else:
+            raise ValueError(f"unsupported padding option {padding_option}")
         return self.create_masked_load(ptrs, masks, other, cache_modifier, eviction_policy, is_volatile)
 
     def create_tensor_pointer_store(self, ptr, value, boundary_check, cache_modifier, eviction_policy):
