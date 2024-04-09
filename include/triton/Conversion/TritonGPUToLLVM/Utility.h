@@ -803,7 +803,6 @@ emitBaseIndexForMfmaLayout(Location loc, RewriterBase &rewriter,
     effectiveWarpSize = i32_val(uniqueValuesPerWarp);
   }
   Value laneId = urem(threadId, effectiveWarpSize);
-  // Note: here we assume warpId goes along the M dim first
   Value warpId = udiv(threadId, warpSize);
   SmallVector<Value> multiDimWarpId = delinearize(
       rewriter, loc, warpId, _warpsPerCTA, triton::gpu::getOrder(mfmaLayout));

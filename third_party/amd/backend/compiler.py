@@ -23,7 +23,7 @@ class HIPOptions:
     arch: str = None
     allow_fp8e4nv: bool = False
     default_dot_input_precision: str = "ieee"
-    allowed_dot_input_precisions: Tuple[str] = ("tf32", "ieee")
+    allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     enable_fp_fusion: bool = True
     capability: int = None
     matrix_inst_shape: int = 0
