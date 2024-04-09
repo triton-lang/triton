@@ -1427,12 +1427,11 @@ void SharedEncodingAttr::print(AsmPrinter &printer) const {
 
 SmallVector<unsigned>
 AMDMfmaEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
-  auto nonKDim = getMDim();
   auto warpsPerCTA = getWarpsPerCTA();
   auto rank = warpsPerCTA.size();
   SmallVector<unsigned> shapePerCTATile(warpsPerCTA.begin(), warpsPerCTA.end());
-  shapePerCTATile[rank - 1] *= nonKDim;
-  shapePerCTATile[rank - 2] *= nonKDim;
+  shapePerCTATile[rank - 1] *= getMDim();
+  shapePerCTATile[rank - 2] *= getNDim();
   return shapePerCTATile;
 }
 
