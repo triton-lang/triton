@@ -3183,9 +3183,9 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
 def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
     if is_hip():
         # hip does not support tf32 precision, so use ieee for all tests
-        input_precision="ieee"
+        input_precision = "ieee"
     else:
-        input_precision="tf32" if in_dtype_str == 'float32' else "ieee",
+        input_precision = "tf32" if in_dtype_str == 'float32' else "ieee"
 
     @triton.jit
     def kernel(
