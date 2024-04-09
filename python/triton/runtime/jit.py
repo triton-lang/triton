@@ -1,5 +1,6 @@
 from __future__ import annotations, division
 import ast
+import functools
 import hashlib
 import inspect
 import itertools
@@ -281,6 +282,7 @@ class JITFunction(KernelInterface[T]):
         # equal_to_1)
 
     @staticmethod
+    @functools.lru_cache(None)
     def _type_of(key, is_const=False):
         # `None` is nullptr.  Implicitly convert to *i8.
         if key is None:
