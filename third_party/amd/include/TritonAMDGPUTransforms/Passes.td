@@ -141,14 +141,4 @@ def TritonAMDGPUReorderInstructions: Pass<"tritonamdgpu-reorder-instructions", "
   let dependentDialects = [];
 }
 
-def TritonAMDGPUDecomposeConversions: Pass<"tritonamdgpu-decompose-conversions", "mlir::ModuleOp"> {
-  let summary = "Decompose convert[distributed -> dotOperand] into convert[distributed -> shared -> dotOperand]";
-
-  let description = "Decomposing conversions this way makes it possible to use CSE and re-use #shared tensors";
-
-  let constructor = "mlir::createTritonAMDGPUDecomposeConversionsPass()";
-
-  let dependentDialects = [];
-}
-
 #endif
