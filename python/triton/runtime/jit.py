@@ -413,7 +413,8 @@ class JITFunction(KernelInterface[T]):
         grid_2 = grid[2] if grid_size > 2 else 1
         # compute cache key
         args = [KernelArg(arg_value, param) for (_, arg_value), param in zip(bound_args.arguments.items(), self.params)]
-        sig_key = tuple(arg.mangled_type() for arg in args if not arg.param.is_constexpr)
+        signature = {arg.param.name: arg.mangled_type() for arg in args if not arg.param.is_constexpr}
+        sig_key = signature.values()
         spec_key = tuple(arg.specialization_key() for arg in args if not arg.param.do_not_specialize)
         constexpr_key = tuple(arg.value for arg in args if arg.param.is_constexpr)
         key = (sig_key, constexpr_key, spec_key, options)
@@ -430,9 +431,6 @@ class JITFunction(KernelInterface[T]):
                 if callable(arg):
                     raise TypeError(f"Callable constexpr at index {i} is not supported")
 
-            # Build kernel signature -- doesn't include constexpr arguments.
-            signature = {arg.param.name: arg.mangled_type() for arg in args if not arg.param.is_constexpr}
-
             if self._call_hook(key, signature, device, constants, options, configs):
                 return None
             # compile the kernel
@@ -446,7 +444,6 @@ class JITFunction(KernelInterface[T]):
         kernel = self.cache[device][key]
 
         # Verify key signature from the cache
-        signature = {arg.param.name: arg.mangled_type() for arg in args if not arg.param.is_constexpr}
         if kernel.src.signature != signature:
             raise RuntimeError(f"Signature mismatch for cached kernel {self.fn.__name__}:\n"
                                f"  Cached signature: {kernel.src.signature}\n"
