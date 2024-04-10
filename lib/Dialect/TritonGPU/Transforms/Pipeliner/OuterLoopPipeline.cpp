@@ -58,7 +58,7 @@ static void hoistAllocAndConst(scf::ForOp forOp) {
     if (auto allocOp = dyn_cast<ttg::LocalAllocOp>(op)) {
       // We hoist the allocOp only if it is created by the inner loop
       // pipelining.
-      if (!allocOp.getInit())
+      if (!allocOp.getSrc())
         toHoist.push_back(&op);
     } else if (isa<arith::ConstantOp>(op)) {
       toHoist.push_back(&op);

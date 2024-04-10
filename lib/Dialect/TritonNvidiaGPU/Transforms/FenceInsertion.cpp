@@ -86,7 +86,7 @@ private:
       return false;
     // reach convertlayout
     if (op && isa<ttg::LocalAllocOp>(op) &&
-        cast<ttg::LocalAllocOp>(op).getInit())
+        cast<ttg::LocalAllocOp>(op).getSrc())
       return true;
     // root and not BlockArgument
     if (!op && !isa<BlockArgument>(operand))

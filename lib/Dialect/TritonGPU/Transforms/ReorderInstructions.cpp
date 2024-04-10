@@ -86,9 +86,9 @@ public:
       kv.first->moveBefore(kv.second);
     // Move alloc(load) immediately after dependent load
     m.walk([&](triton::gpu::LocalAllocOp op) {
-      if (!op.getInit())
+      if (!op.getSrc())
         return;
-      Operation *argOp = op.getInit().getDefiningOp();
+      Operation *argOp = op.getSrc().getDefiningOp();
       if (!argOp)
         return;
       moveAfter(op, argOp);

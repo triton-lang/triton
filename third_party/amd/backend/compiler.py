@@ -134,7 +134,7 @@ class HIPBackend(BaseBackend):
             passes.common.add_canonicalizer(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm)
         amd.passes.ttgpuir.add_remove_layout_conversions(pm)
-        amd.passes.ttgpuir.add_decompose_conversions(pm)
+        passes.ttgpuir.add_reduce_data_duplication(pm)
         if opt.num_stages != 0:
             amd.passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)

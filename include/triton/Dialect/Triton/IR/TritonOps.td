@@ -98,11 +98,14 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
         F8 <-> FP16, BF16, FP32, FP64
     }];
 
-    let arguments = (ins TT_FloatTensor:$src, OptionalAttr<TT_RoundingModeAttr>:$rounding);
+    let arguments = (
+      ins TT_FloatTensor:$src,
+      OptionalAttr<TT_RoundingModeAttr>:$rounding
+    );
 
     let results = (outs TT_FloatTensor:$result);
 
-    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
+    let assemblyFormat = "$src attr-dict  (`,` `rounding` `=` $rounding^)? `:` type($src) `->` type($result)";
 
     let hasVerifier = 1;
 }
@@ -122,11 +125,20 @@ def TT_ClampFOp : TT_Op<"clampf", [Elementwise,
         The operation takes three arguments: x, min, and max. It returns a tensor of the same shape as x with its values clamped to the range [min, max].
     }];
 
-    let arguments = (ins TT_FloatLike:$x, TT_FloatLike:$min, TT_FloatLike:$max, TT_PropagateNanAttr:$propagateNan);
+    let arguments = (
+      ins
+      TT_FloatLike:$x,
+      TT_FloatLike:$min,
+      TT_FloatLike:$max,
+      TT_PropagateNanAttr:$propagateNan
+    );
 
     let results = (outs TT_FloatLike:$result);
 
-    let assemblyFormat = "$x `,` $min `,` $max attr-dict `:` type($result)";
+    // List $propagateNan explicitly rather than relying on attr-dict to pick it
+    // up, because if it's inside attr-dict, its value will be printed as a
+    // number rather than as a meaningful string.
+    let assemblyFormat = "$x `,` $min `,` $max `,` `propagateNan` `=` $propagateNan attr-dict `:` type($result)";
 }
 
 //
@@ -214,26 +226,32 @@ def TT_AdvanceOp : TT_Op<"advance",
 //
 // Load/Store Ops
 //
-def TT_LoadOp : TT_Op<"load",
-                      [SameLoadStoreOperandsAndResultShape,
-                       SameLoadStoreOperandsAndResultEncoding,
-                       AttrSizedOperandSegments,
-                       DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
-                       TypesMatchWith<"infer ptr type from result type",
-                                      "result", "ptr", "$_self",
-                                      "mlir::OpTrait::impl::verifyLoadStorePointerAndValueType">,
-                       TypesMatchWith<"infer mask type from result type or none",
-                                      "result", "mask", "getI1SameShape($_self)",
-                                      "($_op.getOperands().size() <= 1) || std::equal_to<>()">,
-                       TypesMatchWith<"infer other type from result type or none",
-                                      "result", "other", "$_self",
-                                      "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
+def TT_LoadOp : TT_Op<"load", [
+  SameLoadStoreOperandsAndResultShape,
+  SameLoadStoreOperandsAndResultEncoding,
+  AttrSizedOperandSegments,
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+  DeclareOpInterfaceMethods<InferTypeOpInterface>,
+  TypesMatchWith<"result matches ptr type", "ptr", "result", "getPointeeType($_self)">,
+  TypesMatchWith<"mask type matches ptr type", "ptr", "mask", "getI1SameShape(getPointeeType($_self))",
+                 "($_op.getOperands().size() <= 1) || std::equal_to<>()">,
+  TypesMatchWith<"other matches ptr type", "ptr", "other", "getPointeeType($_self)",
+                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">
+]> {
     let summary = "Load from a tensor of pointers or from a tensor pointer";
 
-    let arguments = (ins AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>:$ptr, Optional<TT_BoolLike>:$mask,
-                         Optional<TT_Type>:$other, OptionalAttr<DenseI32ArrayAttr>:$boundaryCheck,
-                         OptionalAttr<TT_PaddingOptionAttr>:$padding, TT_CacheModifierAttr:$cache,
-                         TT_EvictionPolicyAttr:$evict, BoolAttr:$isVolatile);
+    let arguments = (
+      ins
+      AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>:$ptr,
+      Optional<TT_BoolLike>:$mask,
+      Optional<TT_Type>:$other,
+
+      DefaultValuedAttr<DenseI32ArrayAttr, "::llvm::ArrayRef<int32_t>{}">:$boundaryCheck,
+      OptionalAttr<TT_PaddingOptionAttr>:$padding,
+      DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
+      DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict,
+      DefaultValuedAttr<BoolAttr, "false">:$isVolatile
+    );
 
     let results = (outs TT_Type:$result);
 
@@ -253,34 +271,57 @@ def TT_LoadOp : TT_Op<"load",
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
         // A utility function to build the operation with all attributes
         OpBuilder<(ins "Value":$ptr, "Value":$mask, "Value":$other,
-                       "std::optional<ArrayRef<int32_t>>":$boundaryCheck,
+                       "ArrayRef<int32_t>":$boundaryCheck,
                        "std::optional<triton::PaddingOption>":$padding, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>
     ];
 
-    // Format: `tt.load operands attrs : optional(type(ptr)) -> type(result)`
-    // We need an extra `optional(type(ptr))` for inferring the tensor pointer type with back compatibility
-    let hasCustomAssemblyFormat = 1;
+    // Specify `cacheModifier` and `evictionPolicy` explicitly in the
+    // assemblyFormat instead of as part of attr-dict so that they get printed
+    // as strings rather than opaque integers.
+    //
+    // Note there's no comma between `other` and `cacheModifier` and between
+    // `cacheModifier` and `evictionPolicy`.  This is due to an apparent
+    // limitation in the MLIR custom-format parser.  In oilist, the initial
+    // keywords of each clause have to be unique, so they can't be `,`.
+    //
+    // Even if we gave up on order-independence and used vanilla optional
+    // clauses, the format (`,` `foo` `=` $foo^)? (`,` `bar` `=` $bar^)?  will
+    // not match the string ", bar = 0" because after the initial comma (first
+    // token of the first optional clause) we expect to see "foo".
+    let assemblyFormat = [{
+      $ptr (`,` $mask^)? (`,` $other^)?
+      oilist(
+        `cacheModifier` `=` $cache |
+        `evictionPolicy` `=` $evict
+      )
+      attr-dict `:` type($ptr)
+    }];
 
     let hasCanonicalizer = 1;
 }
 
-def TT_StoreOp : TT_Op<"store",
-                       [SameLoadStoreOperandsShape,
-                        SameLoadStoreOperandsEncoding,
-                        MemoryEffects<[MemWrite<GlobalMemory>]>,
-                        TypesMatchWith<"infer ptr type from value type",
-                                       "value", "ptr", "$_self",
-                                       "mlir::OpTrait::impl::verifyLoadStorePointerAndValueType">,
-                        TypesMatchWith<"infer mask type from value type",
-                                       "value", "mask", "getI1SameShape($_self)",
-                                       "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
+def TT_StoreOp : TT_Op<"store", [
+  SameLoadStoreOperandsShape,
+  SameLoadStoreOperandsEncoding,
+  MemoryEffects<[MemWrite<GlobalMemory>]>,
+  TypesMatchWith<"value type matches ptr type", "ptr", "value",
+                 "getPointeeType($_self)">,
+  TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+                 "getI1SameShape(getPointeeType($_self))",
+                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">
+]> {
     let summary = "Store by a tensor of pointers or by a tensor pointer";
 
-    let arguments = (ins AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>:$ptr, TT_Type:$value, Optional<TT_BoolLike>:$mask,
-                         OptionalAttr<DenseI32ArrayAttr>:$boundaryCheck,
-                         DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
-                         DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict);
+    let arguments = (
+      ins
+      AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>:$ptr,
+      TT_Type:$value,
+      Optional<TT_BoolLike>:$mask,
+      DefaultValuedAttr<DenseI32ArrayAttr, "::llvm::ArrayRef<int32_t>{}">:$boundaryCheck,
+      DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
+      DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict
+    );
 
     let builders = [
         // A tensor of pointers or a pointer to a scalar
@@ -293,9 +334,17 @@ def TT_StoreOp : TT_Op<"store",
                        "triton::EvictionPolicy":$evict)>
     ];
 
-    // Format: `tt.store operands attrs : optional(type(ptr)), type(val)
-    // We need an extra `optional(type(ptr))` for inferring the tensor pointer type with back compatibility
-    let hasCustomAssemblyFormat = 1;
+    // Specify cacheModifier and evictionPolicy explicitly, instead of leaving
+    // them in attr-dict, because this way their values get printed as strings,
+    // rather than as opaque integers.
+    //
+    // Note there are no commas between mask, cacheModifier, and evictionPolicy,
+    // due to limitations in MLIR's asm parser.
+    let assemblyFormat = [{
+      $ptr `,` $value (`,` $mask^)?
+      oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
+      attr-dict `:` type($ptr)
+    }];
 
     let hasCanonicalizer = 1;
 }
@@ -303,16 +352,17 @@ def TT_StoreOp : TT_Op<"store",
 //
 // Atomic Ops
 //
-def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
-                                          SameOperandsAndResultEncoding,
-                                          MemoryEffects<[MemRead<GlobalMemory>]>,
-                                          MemoryEffects<[MemWrite<GlobalMemory>]>,
-                                          TypesMatchWith<"infer ptr type from value type",
-                                                         "val", "ptr",
-                                                         "getPointerTypeSameShape($_self)">,
-                                          TypesMatchWith<"infer mask type from value type",
-                                                         "val", "mask", "getI1SameShape($_self)",
-                                                       "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
+def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
+  SameOperandsAndResultShape,
+  SameOperandsAndResultEncoding,
+  MemoryEffects<[MemRead<GlobalMemory>]>,
+  MemoryEffects<[MemWrite<GlobalMemory>]>,
+  TypesMatchWith<"ptr type matches value type", "val", "ptr",
+                 "getPointerTypeSameShape($_self)">,
+  TypesMatchWith<"mask type matches value type",
+                 "val", "mask", "getI1SameShape($_self)",
+                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">
+]> {
     let summary = "atomic rmw";
 
     let description = [{
@@ -326,6 +376,13 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
                          TT_MemSemanticAttr:$sem, TT_MemSyncScopeAttr:$scope);
 
     let results = (outs TT_Type:$result);
+
+    // Explicitly list $atomic_rmw_op, $sem, and $scope rather than relying on
+    // attr-dict so they're printed as strings rather than opaque integers.
+    let assemblyFormat = [{
+      $atomic_rmw_op `,` $sem `,` $scope `,` $ptr `,` $val (`,` $mask^)?  attr-dict `:`
+      functional-type(operands, $result)
+    }];
 }
 
 def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead<GlobalMemory>]>,
@@ -348,6 +405,13 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead<GlobalMemory>]>
                      TT_MemSemanticAttr:$sem, TT_MemSyncScopeAttr:$scope);
 
     let results = (outs TT_Type:$result);
+
+    // Explicitly list $sem and $scope rather than relying on attr-dict so
+    // they're printed as strings rather than opaque integers.
+    let assemblyFormat = [{
+      $sem `,` $scope `,` $ptr `,` $cmp `,` $val attr-dict `:`
+      functional-type(operands, $result)
+     }];
 }
 
 //
@@ -574,16 +638,23 @@ def TT_DotOp : TT_Op<"dot", [Pure,
         If the GPU does not have Tensor cores or the inputs are not f32, this flag is ignored.
     }];
 
-    let arguments = (ins
+    let arguments = (
+      ins
       TT_TensorOrMemDesc:$a,
       TT_TensorOrMemDesc:$b,
       TT_FpIntTensor:$c,
-      TT_InputPrecisionAttr:$inputPrecision,
-      I32Attr:$maxNumImpreciseAcc);
+      DefaultValuedAttr<TT_InputPrecisionAttr, "::mlir::triton::InputPrecision::IEEE">:$inputPrecision,
+      DefaultValuedAttr<I32Attr, "0">:$maxNumImpreciseAcc
+    );
 
     let results = (outs TT_FpIntTensor:$d);
 
-    let assemblyFormat = "$a`,` $b`,` $c attr-dict `:` type($a) `*` type($b) `->` type($d)";
+    // attr-dict prints enums as integers.  To get inputPrecision printed as a
+    // string, we need to specify it explicitly.
+    let assemblyFormat = [{
+      $a`,` $b`,` $c (`,` `inputPrecision` `=` $inputPrecision^)? attr-dict `:`
+      type($a) `*` type($b) `->` type($d)
+    }];
     let hasVerifier = 1;
 }
 

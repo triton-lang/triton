@@ -40,7 +40,11 @@ Type PointerType::parse(AsmParser &parser) {
 }
 
 void PointerType::print(AsmPrinter &printer) const {
-  printer << "<" << getPointeeType() << ", " << getAddressSpace() << ">";
+  if (getAddressSpace() == 1) {
+    printer << "<" << getPointeeType() << ">";
+  } else {
+    printer << "<" << getPointeeType() << ", " << getAddressSpace() << ">";
+  }
 }
 
 static constexpr llvm::StringRef kMutableMemory = "mutable";

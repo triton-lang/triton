@@ -222,11 +222,11 @@ public:
     if (!dotEnc || dotEnc.getVersionMajor() != 3)
       return failure();
 
-    if (!allocOp.getInit())
+    if (!allocOp.getSrc())
       return failure();
 
     // Match outerCvt(trans(innerCvt(x))).
-    auto trans = allocOp.getInit().getDefiningOp<TransOp>();
+    auto trans = allocOp.getSrc().getDefiningOp<TransOp>();
     if (!trans || trans.getOrder() != ArrayRef<int32_t>({1, 0}))
       return failure();
 
@@ -276,7 +276,7 @@ struct MMAV3UseRegOperand : public OpRewritePattern<DotOp> {
   LogicalResult matchAndRewrite(DotOp dotOp,
                                 PatternRewriter &rewriter) const override {
     auto alloc = dotOp.getOperand(0).getDefiningOp<LocalAllocOp>();
-    if (!alloc || !alloc.getInit())
+    if (!alloc || !alloc.getSrc())
       return failure();
 
     auto getEncoding = [](Value v) {
@@ -285,14 +285,13 @@ struct MMAV3UseRegOperand : public OpRewritePattern<DotOp> {
 
     if (!getEncoding(dotOp.getOperand(0)).isa<SharedEncodingAttr>())
       return failure();
-    auto srcEnc =
-        getEncoding(alloc.getInit()).dyn_cast<NvidiaMmaEncodingAttr>();
+    auto srcEnc = getEncoding(alloc.getSrc()).dyn_cast<NvidiaMmaEncodingAttr>();
     auto dstEnc =
         getEncoding(dotOp.getResult()).dyn_cast<NvidiaMmaEncodingAttr>();
     if (!srcEnc || srcEnc.getVersionMajor() != 3 || !dstEnc ||
         dstEnc.getVersionMajor() != 3)
       return failure();
-    auto srcTy = alloc.getInit().getType().cast<RankedTensorType>();
+    auto srcTy = alloc.getSrc().getType().cast<RankedTensorType>();
     auto dotOperandEnc = DotOperandEncodingAttr::get(
         dotOp.getContext(), /*opIdx=*/0, srcEnc, /*kWidth=*/0);
     auto newTy = RankedTensorType::get(srcTy.getShape(), srcTy.getElementType(),
@@ -300,8 +299,8 @@ struct MMAV3UseRegOperand : public OpRewritePattern<DotOp> {
     if (!isMmaToDotShortcut(srcTy, newTy))
       return failure();
 
-    Value newOperand = rewriter.create<ConvertLayoutOp>(dotOp.getLoc(), newTy,
-                                                        alloc.getInit());
+    Value newOperand =
+        rewriter.create<ConvertLayoutOp>(dotOp.getLoc(), newTy, alloc.getSrc());
     rewriter.modifyOpInPlace(dotOp, [&]() { dotOp.setOperand(0, newOperand); });
     return success();
   }

@@ -15,7 +15,7 @@ This is the development repository of Triton, a language and compiler for writin
 
 The foundations of this project are described in the following MAPL2019 publication: [Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations](http://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf). Please consider citing this work if you use Triton!
 
-The [official documentation](https://triton-lang.org) contains installation instructions and tutorials.
+The [official documentation](https://triton-lang.org) contains installation instructions and tutorials.  See also these third-party [Triton puzzles](https://github.com/srush/Triton-Puzzles), which can all be run using the Triton interpreter -- no GPU required.
 
 # Quick Installation
 
@@ -157,6 +157,24 @@ Then you can e.g. rebuild and run lit with the following command.
 ```
 $ ninja -C build && ( cd build ; lit test )
 ```
+
+# Tips for hacking
+
+**Helpful environment variables**
+
+- `MLIR_ENABLE_DUMP=1` dumps the IR before every MLIR pass Triton runs.
+- `LLVM_IR_ENABLE_DUMP=1` dumps the IR before every pass run over the LLVM IR.
+- `TRITON_INTERPRET=1` uses the Triton interpreter instead of running on the
+  GPU.  You can insert Python breakpoints in your kernel code!
+- `TRITON_ENABLE_LLVM_DEBUG=1` passes `-debug` to LLVM, printing a lot of
+  debugging information to stdout.  If this is too noisy, run with just
+  `LLVM_IR_ENABLE_DUMP=1`, extract the IR before the LLVM pass of interest, and
+  then run LLVM's `opt` standalone, perhaps passing `-debug-only=foo` on the
+  command line.
+- `USE_TTGIR_LOC` reparses the ttgir such that the location information will
+  be the line number of the ttgir instead of line number of the python file.
+  This can provide a direct mapping from ttgir to llir/ptx. When used with
+  performance tools, it can provide a breakdown on ttgir instructions.
 
 # Changelog
 
