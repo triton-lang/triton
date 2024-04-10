@@ -38,6 +38,7 @@
           
           <a href="../../index.html" class="icon icon-home">
             Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
           </a>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
@@ -285,6 +286,23 @@ more than 10% on some hardware architecture (e.g., 220 to 245 TFLOPS on A100).</
                       <span class="n">num_warps</span><span class="o">=</span><span class="mi">2</span><span class="p">),</span>
         <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
                       <span class="n">num_warps</span><span class="o">=</span><span class="mi">2</span><span class="p">),</span>
+        <span class="c1"># Good config for fp8 inputs.</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">8</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">8</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">),</span>
     <span class="p">],</span>
     <span class="n">key</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;M&#39;</span><span class="p">,</span> <span class="s1">&#39;N&#39;</span><span class="p">,</span> <span class="s1">&#39;K&#39;</span><span class="p">],</span>
 <span class="p">)</span>
@@ -347,7 +365,7 @@ more than 10% on some hardware architecture (e.g., 220 to 245 TFLOPS on A100).</
         <span class="n">a</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">a_ptrs</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">&lt;</span> <span class="n">K</span> <span class="o">-</span> <span class="n">k</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_K</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mf">0.0</span><span class="p">)</span>
         <span class="n">b</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">b_ptrs</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">offs_k</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">K</span> <span class="o">-</span> <span class="n">k</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_K</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mf">0.0</span><span class="p">)</span>
         <span class="c1"># We accumulate along the K dimension.</span>
-        <span class="n">accumulator</span> <span class="o">+=</span> <span class="n">tl</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
+        <span class="n">accumulator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">accumulator</span><span class="p">)</span>
         <span class="c1"># Advance the ptrs to the next K block.</span>
         <span class="n">a_ptrs</span> <span class="o">+=</span> <span class="n">BLOCK_SIZE_K</span> <span class="o">*</span> <span class="n">stride_ak</span>
         <span class="n">b_ptrs</span> <span class="o">+=</span> <span class="n">BLOCK_SIZE_K</span> <span class="o">*</span> <span class="n">stride_bk</span>
@@ -379,7 +397,6 @@ and (1) checks any shape constraint; (2) allocates the output; (3) launches the 
     <span class="c1"># Check constraints.</span>
     <span class="k">assert</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="s2">&quot;Incompatible dimensions&quot;</span>
     <span class="k">assert</span> <span class="n">a</span><span class="o">.</span><span class="n">is_contiguous</span><span class="p">(),</span> <span class="s2">&quot;Matrix A must be contiguous&quot;</span>
-    <span class="k">assert</span> <span class="n">b</span><span class="o">.</span><span class="n">is_contiguous</span><span class="p">(),</span> <span class="s2">&quot;Matrix B must be contiguous&quot;</span>
     <span class="n">M</span><span class="p">,</span> <span class="n">K</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span>
     <span class="n">K</span><span class="p">,</span> <span class="n">N</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span>
     <span class="c1"># Allocates output.</span>
@@ -419,6 +436,8 @@ and (1) checks any shape constraint; (2) allocates the output; (3) launches the 
     <span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">512</span><span class="p">,</span> <span class="mi">512</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
     <span class="n">b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">512</span><span class="p">,</span> <span class="mi">512</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
     <span class="n">a</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e5m2</span><span class="p">)</span>
+    <span class="c1"># pre-transpose b for efficiency.</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span>
     <span class="n">b</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e5m2</span><span class="p">)</span>
     <span class="n">triton_output</span> <span class="o">=</span> <span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
     <span class="n">torch_output</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">),</span> <span class="n">b</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">))</span>
@@ -447,21 +466,21 @@ torch_output_with_fp16_inputs=tensor([[-10.9531,  -4.7109,  15.6953,  ..., -28.4
         [-17.0938, -19.0000,  -0.3831,  ...,  21.5469, -30.2344, -13.2188]],
        device=&#39;cuda:0&#39;, dtype=torch.float16)
 ✅ Triton and Torch match
-triton_output_with_fp8_inputs=tensor([[-11.2812,  -5.6875,  13.5391,  ..., -28.4531,   4.0352, -24.2969],
-        [ 23.9375,  10.4766,  -5.2539,  ..., -12.7969,  -7.2891,  29.1875],
-        [-13.3516,  14.9219,  18.6562,  ..., -21.2031,  -9.2734,   9.2266],
+triton_output_with_fp8_inputs=tensor([[-21.4375,  13.1719,   6.0352,  ...,  28.7031,   8.6719, -40.7500],
+        [ 10.0000,  37.0000,  -5.5664,  ...,  20.9844,  46.8125,  30.8281],
+        [ 19.5625,  -3.0078, -20.0469,  ...,  -2.1309,  -8.0625,  12.5625],
         ...,
-        [ 38.8125,  15.0000, -27.2500,  ...,  -3.6387,  -1.4170,  44.5000],
-        [ -7.6250, -16.7500,   6.4062,  ..., -21.7031,  22.2344,  16.0312],
-        [-15.6641, -20.7188,   1.3037,  ...,  20.1875, -29.1250, -13.8828]],
+        [-18.1562, -34.1562, -27.4219,  ..., -27.3906, -24.0938, -12.3516],
+        [ -3.3945,  -8.6250, -23.6562,  ...,  -4.1094,  -3.5332, -16.0781],
+        [-23.9688,  -3.2637, -33.6875,  ...,  17.3125, -36.6250,  25.8594]],
        device=&#39;cuda:0&#39;, dtype=torch.float16)
-torch_output_with_fp8_inputs=tensor([[-11.2812,  -5.6875,  13.5391,  ..., -28.4531,   4.0352, -24.2969],
-        [ 23.9375,  10.4766,  -5.2539,  ..., -12.7969,  -7.2891,  29.1875],
-        [-13.3516,  14.9219,  18.6562,  ..., -21.2031,  -9.2734,   9.2266],
+torch_output_with_fp8_inputs=tensor([[-21.4375,  13.1719,   6.0352,  ...,  28.7031,   8.6719, -40.7500],
+        [ 10.0000,  37.0000,  -5.5664,  ...,  20.9844,  46.8125,  30.8281],
+        [ 19.5625,  -3.0078, -20.0469,  ...,  -2.1309,  -8.0625,  12.5625],
         ...,
-        [ 38.8125,  15.0000, -27.2500,  ...,  -3.6387,  -1.4170,  44.5000],
-        [ -7.6250, -16.7500,   6.4062,  ..., -21.7031,  22.2344,  16.0312],
-        [-15.6641, -20.7188,   1.3037,  ...,  20.1875, -29.1250, -13.8828]],
+        [-18.1562, -34.1562, -27.4219,  ..., -27.3906, -24.0938, -12.3516],
+        [ -3.3945,  -8.6250, -23.6562,  ...,  -4.1094,  -3.5332, -16.0781],
+        [-23.9688,  -3.2637, -33.6875,  ...,  17.3125, -36.6250,  25.8594]],
        device=&#39;cuda:0&#39;, dtype=torch.float16)
 ✅ Triton and Torch match
 </pre></div>
@@ -483,8 +502,9 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
             <span class="n">x_vals</span><span class="o">=</span><span class="p">[</span><span class="mi">128</span> <span class="o">*</span> <span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">33</span><span class="p">)],</span>  <span class="c1"># Different possible values for `x_name`</span>
             <span class="n">line_arg</span><span class="o">=</span><span class="s2">&quot;provider&quot;</span><span class="p">,</span>  <span class="c1"># Argument name whose value corresponds to a different line in the plot</span>
             <span class="c1"># Possible values for `line_arg`</span>
-            <span class="n">line_vals</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;cublas&quot;</span><span class="p">,</span> <span class="s2">&quot;triton&quot;</span><span class="p">],</span>  <span class="c1"># Label name for the lines</span>
-            <span class="n">line_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;cuBLAS&quot;</span><span class="p">,</span> <span class="s2">&quot;Triton&quot;</span><span class="p">],</span>  <span class="c1"># Line styles</span>
+            <span class="c1"># Don&#39;t compare to cublas for fp8 cases as torch.matmul doesn&#39;t support fp8 at the moment.</span>
+            <span class="n">line_vals</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;triton&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">fp8_inputs</span> <span class="k">else</span> <span class="p">[</span><span class="s2">&quot;cublas&quot;</span><span class="p">,</span> <span class="s2">&quot;triton&quot;</span><span class="p">],</span>  <span class="c1"># Label name for the lines</span>
+            <span class="n">line_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;Triton&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">fp8_inputs</span> <span class="k">else</span> <span class="p">[</span><span class="s2">&quot;cuBLAS&quot;</span><span class="p">,</span> <span class="s2">&quot;Triton&quot;</span><span class="p">],</span>  <span class="c1"># Line styles</span>
             <span class="n">styles</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;green&quot;</span><span class="p">,</span> <span class="s2">&quot;-&quot;</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;blue&quot;</span><span class="p">,</span> <span class="s2">&quot;-&quot;</span><span class="p">)],</span>
             <span class="n">ylabel</span><span class="o">=</span><span class="s2">&quot;TFLOPS&quot;</span><span class="p">,</span>  <span class="c1"># Label name for the y-axis</span>
             <span class="n">plot_name</span><span class="o">=</span><span class="s2">&quot;matmul-performance-&quot;</span> <span class="o">+</span>
@@ -497,13 +517,14 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
 <span class="k">def</span> <span class="nf">benchmark</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">provider</span><span class="p">,</span> <span class="n">fp8_inputs</span><span class="p">):</span>
     <span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
     <span class="n">b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">TORCH_HAS_FP8</span> <span class="ow">and</span> <span class="n">fp8_inputs</span><span class="p">:</span>
+        <span class="n">a</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e5m2</span><span class="p">)</span>
+        <span class="n">b</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span>
+        <span class="n">b</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e5m2</span><span class="p">)</span>
     <span class="n">quantiles</span> <span class="o">=</span> <span class="p">[</span><span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">,</span> <span class="mf">0.8</span><span class="p">]</span>
     <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s1">&#39;cublas&#39;</span><span class="p">:</span>
         <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">),</span> <span class="n">quantiles</span><span class="o">=</span><span class="n">quantiles</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s1">&#39;triton&#39;</span><span class="p">:</span>
-        <span class="k">if</span> <span class="n">TORCH_HAS_FP8</span> <span class="ow">and</span> <span class="n">fp8_inputs</span><span class="p">:</span>
-            <span class="n">a</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e5m2</span><span class="p">)</span>
-            <span class="n">b</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e5m2</span><span class="p">)</span>
         <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">),</span> <span class="n">quantiles</span><span class="o">=</span><span class="n">quantiles</span><span class="p">)</span>
     <span class="n">perf</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">ms</span><span class="p">:</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">M</span> <span class="o">*</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span> <span class="o">*</span> <span class="mf">1e-12</span> <span class="o">/</span> <span class="p">(</span><span class="n">ms</span> <span class="o">*</span> <span class="mf">1e-3</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">perf</span><span class="p">(</span><span class="n">ms</span><span class="p">),</span> <span class="n">perf</span><span class="p">(</span><span class="n">max_ms</span><span class="p">),</span> <span class="n">perf</span><span class="p">(</span><span class="n">min_ms</span><span class="p">)</span>
@@ -518,73 +539,73 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
 </ul>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>matmul-performance-fp16:
          M       N       K      cuBLAS      Triton
-0    256.0   256.0   256.0    4.096000    0.217007
-1    384.0   384.0   384.0   11.059200    0.727579
-2    512.0   512.0   512.0   26.214401    1.759356
-3    640.0   640.0   640.0   42.666665    3.413333
-4    768.0   768.0   768.0   63.195428    5.937826
-5    896.0   896.0   896.0   78.051553    9.622794
-6   1024.0  1024.0  1024.0  110.376426   13.981013
-7   1152.0  1152.0  1152.0  135.726544   19.774728
-8   1280.0  1280.0  1280.0  163.840004   27.863946
-9   1408.0  1408.0  1408.0  155.765024   34.947283
-10  1536.0  1536.0  1536.0  181.484314   44.515018
-11  1664.0  1664.0  1664.0  183.651271   56.243201
-12  1792.0  1792.0  1792.0  172.914215   70.246402
-13  1920.0  1920.0  1920.0  203.294114   86.400002
-14  2048.0  2048.0  2048.0  223.696203  104.206308
-15  2176.0  2176.0  2176.0  211.827867  125.772803
-16  2304.0  2304.0  2304.0  231.921091  148.371872
-17  2432.0  2432.0  2432.0  203.583068  176.694739
-18  2560.0  2560.0  2560.0  221.405396  204.800005
-19  2688.0  2688.0  2688.0  198.602388  200.704002
-20  2816.0  2816.0  2816.0  211.719459  211.719459
-21  2944.0  2944.0  2944.0  214.810477  226.527416
-22  3072.0  3072.0  3072.0  205.156169  211.280236
-23  3200.0  3200.0  3200.0  216.949149  219.931269
-24  3328.0  3328.0  3328.0  205.689424  209.887165
-25  3456.0  3456.0  3456.0  217.896133  217.308808
-26  3584.0  3584.0  3584.0  217.712813  210.082692
-27  3712.0  3712.0  3712.0  212.096269  215.295995
-28  3840.0  3840.0  3840.0  208.271176  210.250955
-29  3968.0  3968.0  3968.0  211.479948  215.971570
-30  4096.0  4096.0  4096.0  218.952244  219.310012
+0    256.0   256.0   256.0    4.096000    0.258016
+1    384.0   384.0   384.0   12.288000    0.727579
+2    512.0   512.0   512.0   26.214401    1.747627
+3    640.0   640.0   640.0   42.666665    4.357447
+4    768.0   768.0   768.0   68.056616    7.693356
+5    896.0   896.0   896.0   78.051553   11.106150
+6   1024.0  1024.0  1024.0  104.857603   13.706876
+7   1152.0  1152.0  1152.0  135.726544   19.644632
+8   1280.0  1280.0  1280.0  157.538463   30.567164
+9   1408.0  1408.0  1408.0  155.765024   34.287899
+10  1536.0  1536.0  1536.0  181.484314   62.086736
+11  1664.0  1664.0  1664.0  183.651271   58.434496
+12  1792.0  1792.0  1792.0  175.616000   68.117719
+13  1920.0  1920.0  1920.0  203.294114  113.311478
+14  2048.0  2048.0  2048.0  226.719125  106.861247
+15  2176.0  2176.0  2176.0  214.081356  128.997748
+16  2304.0  2304.0  2304.0  234.194828  188.093471
+17  2432.0  2432.0  2432.0  205.069087  209.660176
+18  2560.0  2560.0  2560.0  227.555548  225.986210
+19  2688.0  2688.0  2688.0  198.602388  202.850569
+20  2816.0  2816.0  2816.0  216.986107  215.911925
+21  2944.0  2944.0  2944.0  223.479969  229.659141
+22  3072.0  3072.0  3072.0  209.715208  211.280236
+23  3200.0  3200.0  3200.0  214.765101  224.561413
+24  3328.0  3328.0  3328.0  208.670419  211.118166
+25  3456.0  3456.0  3456.0  219.677297  223.948797
+26  3584.0  3584.0  3584.0  223.115110  211.565625
+27  3712.0  3712.0  3712.0  210.753890  222.488510
+28  3840.0  3840.0  3840.0  206.714019  213.498075
+29  3968.0  3968.0  3968.0  211.479948  222.265826
+30  4096.0  4096.0  4096.0  222.214781  221.116512
 matmul-performance-fp8:
-         M       N       K      cuBLAS      Triton
-0    256.0   256.0   256.0    4.096000    0.222912
-1    384.0   384.0   384.0   11.059200    0.752327
-2    512.0   512.0   512.0   26.214401    1.736053
-3    640.0   640.0   640.0   42.666665    3.436242
-4    768.0   768.0   768.0   63.195428    5.937826
-5    896.0   896.0   896.0   78.051553    9.557333
-6   1024.0  1024.0  1024.0  110.376426   14.074846
-7   1152.0  1152.0  1152.0  135.726544   19.389507
-8   1280.0  1280.0  1280.0  163.840004   26.597404
-9   1408.0  1408.0  1408.0  155.765024   34.724687
-10  1536.0  1536.0  1536.0  181.484314   45.082089
-11  1664.0  1664.0  1664.0  183.651271   58.057496
-12  1792.0  1792.0  1792.0  172.914215   71.361419
-13  1920.0  1920.0  1920.0  203.294114   89.187096
-14  2048.0  2048.0  2048.0  223.696203  106.184915
-15  2176.0  2176.0  2176.0  209.621326  127.364865
-16  2304.0  2304.0  2304.0  229.691080  148.371872
-17  2432.0  2432.0  2432.0  202.118452  148.647959
-18  2560.0  2560.0  2560.0  224.438347  163.840004
-19  2688.0  2688.0  2688.0  197.567993  147.027357
-20  2816.0  2816.0  2816.0  208.680416  159.758996
-21  2944.0  2944.0  2944.0  237.314440  171.848388
-22  3072.0  3072.0  3072.0  204.415528  159.501703
-23  3200.0  3200.0  3200.0  212.624590  170.212761
-24  3328.0  3328.0  3328.0  205.103410  160.336957
-25  3456.0  3456.0  3456.0  209.951993  170.447292
-26  3584.0  3584.0  3584.0  214.595213  163.482532
-27  3712.0  3712.0  3712.0  202.631518  171.644919
-28  3840.0  3840.0  3840.0  199.985526  166.303760
-29  3968.0  3968.0  3968.0  204.395201  171.141561
-30  4096.0  4096.0  4096.0  210.043401  166.111053
+         M       N       K      Triton
+0    256.0   256.0   256.0    0.303407
+1    384.0   384.0   384.0    0.742228
+2    512.0   512.0   512.0    1.736053
+3    640.0   640.0   640.0    4.491228
+4    768.0   768.0   768.0    5.898240
+5    896.0   896.0   896.0   12.772073
+6   1024.0  1024.0  1024.0   13.706876
+7   1152.0  1152.0  1152.0   27.145309
+8   1280.0  1280.0  1280.0   25.924051
+9   1408.0  1408.0  1408.0   34.504912
+10  1536.0  1536.0  1536.0   61.016274
+11  1664.0  1664.0  1664.0   57.685335
+12  1792.0  1792.0  1792.0   71.588687
+13  1920.0  1920.0  1920.0   89.187096
+14  2048.0  2048.0  2048.0  105.517080
+15  2176.0  2176.0  2176.0  126.563822
+16  2304.0  2304.0  2304.0  154.115302
+17  2432.0  2432.0  2432.0  177.813069
+18  2560.0  2560.0  2560.0  215.578957
+19  2688.0  2688.0  2688.0  203.941156
+20  2816.0  2816.0  2816.0  216.986107
+21  2944.0  2944.0  2944.0  213.888550
+22  3072.0  3072.0  3072.0  210.494802
+23  3200.0  3200.0  3200.0  210.526325
+24  3328.0  3328.0  3328.0  209.887165
+25  3456.0  3456.0  3456.0  209.951993
+26  3584.0  3584.0  3584.0  216.142772
+27  3712.0  3712.0  3712.0  211.199462
+28  3840.0  3840.0  3840.0  208.664143
+29  3968.0  3968.0  3968.0  213.328563
+30  4096.0  4096.0  4096.0  221.481394
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (1 minutes 24.159 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (2 minutes 18.126 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-03-matrix-multiplication-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/b51b68bc1c6b1a5e509f67800b6235af/03-matrix-multiplication.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">03-matrix-multiplication.ipynb</span></code></a></p>

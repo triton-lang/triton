@@ -38,6 +38,7 @@
           
           <a href="../../index.html" class="icon icon-home">
             Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
           </a>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
@@ -124,39 +125,39 @@ Credits: OpenAI kernel team</p>
 </ul>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>fused-attention-batch4-head48-d64-fwd-causal=True-fp8=False:
      N_CTX      Triton
-0   1024.0   81.397158
-1   2048.0  146.492244
-2   4096.0  159.581671
-3   8192.0  167.588856
-4  16384.0  173.484981
+0   1024.0   80.453665
+1   2048.0  147.997989
+2   4096.0  160.010942
+3   8192.0  169.228235
+4  16384.0  174.594534
 fused-attention-batch4-head48-d64-fwd-causal=True-fp8=True:
      N_CTX      Triton
-0   1024.0   82.278113
-1   2048.0  118.202784
-2   4096.0  129.827469
-3   8192.0  135.832155
-4  16384.0  138.956732
+0   1024.0   83.463662
+1   2048.0  118.576018
+2   4096.0  129.553795
+3   8192.0  136.038663
+4  16384.0  139.315816
 fused-attention-batch4-head48-d64-fwd-causal=False-fp8=False:
      N_CTX      Triton
-0   1024.0  159.108645
-1   2048.0  168.615235
-2   4096.0  172.457569
-3   8192.0  176.472637
-4  16384.0  176.360555
+0   1024.0  153.953620
+1   2048.0  169.886287
+2   4096.0  173.489419
+3   8192.0  176.329662
+4  16384.0  178.074023
 fused-attention-batch4-head48-d64-fwd-causal=False-fp8=True:
      N_CTX      Triton
-0   1024.0  136.116870
-1   2048.0  145.939123
-2   4096.0  148.787206
-3   8192.0  150.135197
-4  16384.0  150.771144
+0   1024.0  136.433547
+1   2048.0  146.116213
+2   4096.0  149.614869
+3   8192.0  150.322610
+4  16384.0  150.970771
 fused-attention-batch4-head48-d64-bwd-causal=True-fp8=False:
      N_CTX      Triton
-0   1024.0   75.781401
-1   2048.0   99.958034
-2   4096.0  118.474288
-3   8192.0  130.501333
-4  16384.0  137.163312
+0   1024.0   75.969171
+1   2048.0  101.238099
+2   4096.0  118.385646
+3   8192.0  130.590220
+4  16384.0  135.993579
 </pre></div>
 </div>
 <div class="line-block">
@@ -809,7 +810,7 @@ fused-attention-batch4-head48-d64-bwd-causal=True-fp8=False:
 <span class="n">bench_flash_attention</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s2">&quot;.&quot;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 29.271 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 29.429 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-06-fused-attention-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/3176accb6c7288b0e45f41d94eebacb9/06-fused-attention.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">06-fused-attention.ipynb</span></code></a></p>

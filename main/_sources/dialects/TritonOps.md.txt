@@ -235,6 +235,14 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 
 _Atomic cas_
 
+
+Syntax:
+
+```
+operation ::= `tt.atomic_cas` $sem `,` $scope `,` $ptr `,` $cmp `,` $val attr-dict `:`
+              functional-type(operands, $result)
+```
+
 compare $cmp with data $old at location $ptr,
 
 if $old == $cmp, store $val to $ptr,
@@ -281,6 +289,14 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMem
 ### `tt.atomic_rmw` (triton::AtomicRMWOp)
 
 _Atomic rmw_
+
+
+Syntax:
+
+```
+operation ::= `tt.atomic_rmw` $atomic_rmw_op `,` $sem `,` $scope `,` $ptr `,` $val (`,` $mask^)?  attr-dict `:`
+              functional-type(operands, $result)
+```
 
 load data at $ptr, do $rmw_op with $val, and store result to $ptr.
 
@@ -434,7 +450,7 @@ _Clamp operation for floating point types_
 Syntax:
 
 ```
-operation ::= `tt.clampf` $x `,` $min `,` $max attr-dict `:` type($result)
+operation ::= `tt.clampf` $x `,` $min `,` $max `,` `propagateNan` `=` $propagateNan attr-dict `:` type($result)
 ```
 
 Clamp operation for floating point types.
@@ -478,7 +494,8 @@ _Dot_
 Syntax:
 
 ```
-operation ::= `tt.dot` $a`,` $b`,` $c attr-dict `:` type($a) `*` type($b) `->` type($d)
+operation ::= `tt.dot` $a`,` $b`,` $c (`,` `inputPrecision` `=` $inputPrecision^)? attr-dict `:`
+              type($a) `*` type($b) `->` type($d)
 ```
 
 $d = matrix_multiply($a, $b) + $c. $inputPrecision describes how to exercise the TC
@@ -643,7 +660,7 @@ _Floating point casting for custom types_
 Syntax:
 
 ```
-operation ::= `tt.fp_to_fp` $src attr-dict `:` type($src) `->` type($result)
+operation ::= `tt.fp_to_fp` $src attr-dict  (`,` `rounding` `=` $rounding^)? `:` type($src) `->` type($result)
 ```
 
 Floating point casting for custom types (F8), and non-default rounding modes.
@@ -843,9 +860,21 @@ Effects: `MemoryEffects::Effect{}`
 _Load from a tensor of pointers or from a tensor pointer_
 
 
+Syntax:
+
+```
+operation ::= `tt.load` $ptr (`,` $mask^)? (`,` $other^)?
+              oilist(
+              `cacheModifier` `=` $cache |
+              `evictionPolicy` `=` $evict
+              )
+              attr-dict `:` type($ptr)
+```
+
+
 Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsAndResultEncoding`, `SameLoadStoreOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `MemoryEffectOpInterface`
+Interfaces: `InferTypeOpInterface`, `MemoryEffectOpInterface`
 
 #### Attributes:
 
@@ -1342,6 +1371,15 @@ Effects: `MemoryEffects::Effect{}`
 ### `tt.store` (triton::StoreOp)
 
 _Store by a tensor of pointers or by a tensor pointer_
+
+
+Syntax:
+
+```
+operation ::= `tt.store` $ptr `,` $value (`,` $mask^)?
+              oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
+              attr-dict `:` type($ptr)
+```
 
 
 Traits: `SameLoadStoreOperandsEncoding`, `SameLoadStoreOperandsShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`

@@ -70,7 +70,9 @@ _Copy data from global memory to local memory asynchronously_
 Syntax:
 
 ```
-operation ::= `triton_gpu.async_copy_global_to_local` $src `,` $dst (`mask` $mask^)? (`other` $other^)? attr-dict `:` type($src) `->` type($dst)
+operation ::= `triton_gpu.async_copy_global_to_local` $src `,` $result (`mask` $mask^)? (`other` $other^)?
+              oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
+              attr-dict `:` type($src) `->` type($result)
 ```
 
 This operation copies data from global memory to local memory asynchronously.
@@ -107,7 +109,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMem
 | Operand | Description |
 | :-----: | ----------- |
 | `src` | ranked tensor of ptr values
-| `dst` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+| `result` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
 | `mask` | tensor of 1-bit signless integer values
 | `other` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or ptr
 
@@ -182,7 +184,7 @@ _Allocate tensor_
 Syntax:
 
 ```
-operation ::= `triton_gpu.local_alloc` $init attr-dict `:` functional-type(operands, results)
+operation ::= `triton_gpu.local_alloc` $src attr-dict `:` functional-type(operands, results)
 ```
 
 This operation allocates buffer in shared memory and return a descriptor
@@ -198,7 +200,7 @@ Interfaces: `MemoryEffectOpInterface`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `init` | ranked tensor of floating-point or integer or ptr values
+| `src` | ranked tensor of floating-point or integer or ptr values
 
 #### Results:
 
@@ -214,7 +216,7 @@ _Dealloc buffer_
 Syntax:
 
 ```
-operation ::= `triton_gpu.local_dealloc` $ptr attr-dict `:` qualified(type($ptr))
+operation ::= `triton_gpu.local_dealloc` $src attr-dict `:` qualified(type($src))
 ```
 
 This operation deallocates a buffer explicitly. Using the buffer after this
@@ -239,7 +241,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Free on ::mlir::triton::gpu::Shar
 
 | Operand | Description |
 | :-----: | ----------- |
-| `ptr` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+| `src` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
 
 ### `triton_gpu.local_load` (triton::gpu::LocalLoadOp)
 
@@ -280,7 +282,7 @@ _Take a subview of the descriptor._
 Syntax:
 
 ```
-operation ::= `triton_gpu.memdesc_subview` $desc `[` $offsets `]` attr-dict `:` qualified(type($desc)) `->` qualified(type($result))
+operation ::= `triton_gpu.memdesc_subview` $src `[` $offsets `]` attr-dict `:` qualified(type($src)) `->` qualified(type($result))
 ```
 
 This operation returns a new descriptor representing a subview of the buffer.
@@ -303,7 +305,7 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `desc` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+| `src` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
 | `offsets` | variadic of 32-bit signless integer
 
 #### Results:
