@@ -766,8 +766,7 @@ private:
     // get source values
     auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     unsigned elems = getTotalElemsPerThread(srcTy);
-    Type elemTy =
-        this->getTypeConverter()->convertType(srcTy.getElementType());
+    Type elemTy = this->getTypeConverter()->convertType(srcTy.getElementType());
     // for the destination type, we need to pack values together
     // so they can be consumed by tensor core operations
     SmallVector<Value> vecVals;
@@ -814,8 +813,8 @@ private:
       reorderedVals.push_back(bitcast(vecVals[i + 3], i32_ty));
     }
 
-    Value view = packLLElements(loc, getTypeConverter(), reorderedVals,
-                                rewriter, dstTy);
+    Value view =
+        packLLElements(loc, getTypeConverter(), reorderedVals, rewriter, dstTy);
     rewriter.replaceOp(op, view);
   }
 
