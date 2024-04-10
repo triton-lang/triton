@@ -163,6 +163,10 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install wheel cmake==3.24 ninja pytest-xdist lit
 
+      - name: Print PyTorch version
+        run: |
+          python -c "import torch; print(torch.__version__)"
+
       - name: Install Triton
         run: |
           echo "PATH is '$PATH'"
@@ -275,6 +279,10 @@ jobs:
       - name: Install pip dependencies
         run: |
           python3 -m pip install lit
+
+      - name: Print PyTorch version
+        run: |
+          python -c "import torch; print(torch.__version__)"
 
       - name: Install Triton
         run: |
