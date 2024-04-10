@@ -685,11 +685,11 @@ private:
 
       Value vecVal = bitcast(upper, vec_ty(i8_ty, 4));
       for (int j = 0; j < 4; j++) {
-        retVals.push_back(extract_element(i8_ty, vecVal, i32_val(i)));
+        retVals.push_back(extract_element(i8_ty, vecVal, i32_val(j)));
       }
       vecVal = bitcast(lower, vec_ty(i8_ty, 4));
       for (int j = 0; j < 4; j++) {
-        retVals.push_back(extract_element(i8_ty, vecVal, i32_val(i)));
+        retVals.push_back(extract_element(i8_ty, vecVal, i32_val(j)));
       }
     }
     Value result =
