@@ -4,15 +4,11 @@ import logging
 import os
 import textwrap
 from collections import defaultdict
-from typing import Callable, Iterable, Optional, Union
 
-import coloredlogs
 from torch.utils.cpp_extension import load
-
 from triton.compiler import CompiledKernel, compile
 from triton.compiler import get_arch_default_num_stages as _get_arch_default_num_stages
 from triton.compiler import get_arch_default_num_warps as _get_arch_default_num_warps
-from triton.runtime.jit import InterpretedFunction
 from triton.runtime.jit import JITFunction as _JITFunction
 from triton.runtime.jit import (
     KernelArg,
@@ -25,17 +21,16 @@ from triton.runtime.jit import (
 )
 
 logger = logging.getLogger(__name__)
-try:
-    import coloredlogs
 
-    coloredlogs.install(level="INFO", logger=logger)
-except:
-    pass
+import pathlib
+import torch
+
+path = pathlib.Path(__file__).parent.resolve()
 
 m = load(
-    name="low_latency_jit_function",
-    sources=["low_latency_jit_function.cpp"],
-    extra_cflags=["-O2"],
+    name="jit_function",
+    sources=(path / "jit_function.cpp").as_posix(),
+    extra_cflags=["-O3"],
     # with_cuda=True,
 )
 logger.warning("Loaded low_latency_jit_function")
@@ -51,7 +46,14 @@ def get_arch_default_num_stages(device_type, capability=None):
     return _get_arch_default_num_stages(device_type, capability)
 
 
-class LowLatencyJITFunction(_JITFunction, m.LowLatencyJITFunction):
+@functools.cache
+def get_supported_device_type():
+    import torch
+
+    return "hip" if torch.version.hip else "cuda"
+
+
+class LowLatencyJITFunctionCPP(_JITFunction, m.LowLatencyJITFunction):
     @staticmethod
     def _pinned_memory_of(arg):
         if hasattr(arg, "is_pinned"):
@@ -76,32 +78,12 @@ class LowLatencyJITFunction(_JITFunction, m.LowLatencyJITFunction):
     ):
         # logger.error(args)
         keys, non_constexpr_arg_values = self.get_call_params_tuple(args, kwargs)
+        # device, stream, keys, non_constexpr_arg_values = self.get_call_params_tuple(args, kwargs)
+        # logger.error(keys)
 
         assert num_ctas > 0
         assert grid is not None
-        if device_type is None:
-            bound_args = self.signature.bind(*args, **kwargs)
-            bound_args.apply_defaults()
-            assert len(bound_args.arguments) == len(self.params)
-            args = [
-                KernelArg(arg_value, param)
-                for (_, arg_value), param in zip(
-                    bound_args.arguments.items(), self.params
-                )
-            ]
-            non_constexpr_arg_values = [
-                arg.value for arg in args if not arg.param.is_constexpr
-            ]
-            device_types = [self._device_of(arg) for arg in non_constexpr_arg_values]
-            device_types = [
-                _device_type for _device_type in device_types if _device_type != ""
-            ]
-            device_type = self._conclude_device_type(
-                device_types,
-                [self._pinned_memory_of(arg) for arg in non_constexpr_arg_values],
-            )
-        if callable(grid):
-            grid = grid(dict(bound_args.arguments))
+        device_type = device_type if device_type else get_supported_device_type()
 
         device_backend = None
         if device_type != "cuda":
@@ -128,7 +110,9 @@ class LowLatencyJITFunction(_JITFunction, m.LowLatencyJITFunction):
             num_stages = get_arch_default_num_stages(device_type)
 
         key = (
-            *keys,
+            device,
+            keys,
+            extern_libs,
             num_warps,
             num_ctas,
             num_stages,
@@ -136,11 +120,11 @@ class LowLatencyJITFunction(_JITFunction, m.LowLatencyJITFunction):
             enable_fp_fusion,
             self.debug,
         )
-        if extern_libs is not None:
-            key = (key, tuple(extern_libs.items()))
+        # if extern_libs is not None:
+        #     key = (key, tuple(extern_libs.items()))
 
         # Kernel is not cached; we have to compile.
-        if key not in self.cache[device]:
+        if key not in self.cache:
             logger.info(f"Compiling {self.name}")
             bound_args = self.signature.bind(*args, **kwargs)
             bound_args.apply_defaults()
@@ -184,7 +168,7 @@ class LowLatencyJITFunction(_JITFunction, m.LowLatencyJITFunction):
             ):
                 return None
 
-            self.cache[device][key] = compile(
+            self.cache[key] = compile(
                 self,
                 signature=signature,
                 device=device,
@@ -200,7 +184,7 @@ class LowLatencyJITFunction(_JITFunction, m.LowLatencyJITFunction):
                 device_type=device_type,
             )
 
-        bin = self.cache[device][key]
+        bin = self.cache[key]
         if not warmup:
             grid_size = len(grid)
             bin.c_wrapper(
@@ -215,10 +199,11 @@ class LowLatencyJITFunction(_JITFunction, m.LowLatencyJITFunction):
                 bin.shared,
                 stream,
                 bin.cu_function,
-                CompiledKernel.launch_enter_hook,
-                CompiledKernel.launch_exit_hook,
-                bin,
-                *bin.assemble_tensormap_to_arg(non_constexpr_arg_values),
+                # CompiledKernel.launch_enter_hook,
+                # CompiledKernel.launch_exit_hook,
+                # bin,
+                # *bin.assemble_tensormap_to_arg(non_constexpr_arg_values),
+                *(_.data_ptr() if torch.is_tensor(_) else _ for _ in bin.assemble_tensormap_to_arg(non_constexpr_arg_values)),
             )
         return bin
 
@@ -254,7 +239,7 @@ class LowLatencyJITFunction(_JITFunction, m.LowLatencyJITFunction):
         self.src = textwrap.dedent(inspect.getsource(fn))
         self.src = self.src[self.src.find("def") :]
         # cache of just-in-time compiled kernels
-        self.cache = defaultdict(dict)
+        self.cache = dict()
         self.hash = None
         # JITFunction can be instantiated as kernel
         # when called with a grid using __getitem__
@@ -277,50 +262,4 @@ class LowLatencyJITFunction(_JITFunction, m.LowLatencyJITFunction):
         self.__module__ = fn.__module__
 
     def __repr__(self):
-        return f"LowLatencyJITFunction({self.module}:{self.fn.__name__})"
-
-
-def jit(
-    fn: Optional[Callable] = None,
-    *,
-    version=None,
-    do_not_specialize: Optional[Iterable[int]] = None,
-    debug: Optional[bool] = None,
-    noinline: Optional[bool] = None,
-) -> Union[_JITFunction, Callable[[], _JITFunction]]:
-    """
-    Decorator for JIT-compiling a function using the Triton compiler.
-
-    :note: When a jit'd function is called, arguments are
-        implicitly converted to pointers if they have a :code:`.data_ptr()` method
-        and a `.dtype` attribute.
-
-    :note: This function will be compiled and run on the GPU. It will only have access to:
-
-           * python primitives,
-           * builtins within the triton package,
-           * arguments to this function,
-           * other jit'd functions
-
-    :param fn: the function to be jit-compiled
-    :type fn: Callable
-    """
-
-    def decorator(fn) -> LowLatencyJITFunction:
-        assert callable(fn)
-        if os.getenv("TRITON_INTERPRET", "0") == "1":
-            return InterpretedFunction(fn)
-        else:
-            return LowLatencyJITFunction(
-                fn,
-                version=version,
-                do_not_specialize=do_not_specialize,
-                debug=debug,
-                noinline=noinline,
-            )
-
-    if fn is not None:
-        return decorator(fn)
-
-    else:
-        return decorator
+        return f"LowLatencyJITFunctionCPP({self.module}:{self.fn.__name__})"

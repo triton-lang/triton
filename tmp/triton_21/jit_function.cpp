@@ -24,7 +24,7 @@ public:
   const int divisibility_;
   const int divisibility_8_;
 
-  static SignatureParam from_py_object(const py::object &param,
+  static SignatureParam from_py_object(const py::handle &param,
                                        const int divisibility,
                                        const int divisibility_8) {
     ValueType value = std::monostate{};
@@ -94,25 +94,25 @@ public:
     }
   }
 
-  std::vector<py::object>
+  std::string
   get_specialization_key(const ValueType &value = std::monostate{}) const {
-    std::vector<py::object> spec_key;
+    std::string res = "";
     if (std::holds_alternative<int>(value)) {
       const auto &val = std::get<int>(value);
-      spec_key.emplace_back(py::bool_(val % divisibility_ == 0));
-      spec_key.emplace_back(py::bool_(val % divisibility_8_ == 0));
-      spec_key.emplace_back(py::bool_(val == 1));
+      res += std::to_string(val % divisibility_ == 0);
+      res += std::to_string(val % divisibility_8_ == 0);
+      res += std::to_string(val == 1);
     } else if (std::holds_alternative<float>(value)) {
-      spec_key.emplace_back(py::bool_(false));
+      res += std::to_string(false);
     } else if (std::holds_alternative<torch::Tensor>(value)) {
       // LOG(INFO) << "get_signature_key: Tensor";
       const auto &val = std::get<torch::Tensor>(value);
       const auto data_ptr = reinterpret_cast<const uint64_t>(val.data_ptr());
-      spec_key.emplace_back(py::bool_(data_ptr % divisibility_ == 0));
+      res += std::to_string(data_ptr % divisibility_ == 0);
     } else {
-      spec_key.emplace_back(py::bool_(false));
+      res += std::to_string(false);
     }
-    return spec_key;
+    return res;
   }
 
   void print() const {
@@ -138,7 +138,7 @@ class LowLatencyJITFunction {
 
 public:
   LowLatencyJITFunction(const int divisibility, const int divisibility_8,
-                   const std::vector<py::object> &params,
+                   const std::vector<py::handle> &params,
                    const std::string &cuda_version_key)
       : divisibility_(divisibility), divisibility_8_(divisibility_8),
         cuda_version_key_(cuda_version_key) {
@@ -153,12 +153,17 @@ public:
     }
   }
 
-  py::tuple get_call_params_tuple(const std::vector<py::object> &args,
+  py::tuple get_call_params_tuple(const std::vector<py::handle> &args,
                                   const py::dict &kwargs) const {
     // LOG(INFO) << "args = " << args << ", kwargs = " << kwargs;
 
     std::vector<std::string> sig_key;
-    std::vector<py::object> constexpr_key, spec_key, non_constexpr_arg_values;
+    std::string constexpr_key = "";
+    std::string spec_key = "";
+    std::vector<py::handle> non_constexpr_arg_values;
+
+    // const auto device = c10::cuda::current_device();
+    // const auto stream = c10::cuda::getCurrentCUDAStream();
 
     size_t idx = 0;
     const size_t args_size = args.size();
@@ -167,33 +172,30 @@ public:
       const auto &arg = args[idx];
 
       if (s_param.is_constexpr_) {
-        constexpr_key.push_back(arg);
+        constexpr_key += std::to_string(arg.cast<int64_t>()) + ",";
         if (!s_param.do_not_specialize_) {
-          spec_key.emplace_back(py::tuple(
-              py::cast(s_param.get_specialization_key(arg.cast<int>()))));
+          spec_key += s_param.get_specialization_key(arg.cast<int>()) + ",";
         }
       } else {
         non_constexpr_arg_values.push_back(arg);
         if (py::isinstance<py::int_>(arg)) {
           sig_key.emplace_back(s_param.get_signature_key(arg.cast<int>()));
           if (!s_param.do_not_specialize_) {
-            spec_key.emplace_back(py::tuple(
-                py::cast(s_param.get_specialization_key(arg.cast<int>()))));
+            spec_key += s_param.get_specialization_key(arg.cast<int>()) + ",";
           }
         } else if (py::isinstance<py::float_>(arg)) {
           sig_key.emplace_back(s_param.get_signature_key(arg.cast<float>()));
           if (!s_param.do_not_specialize_) {
-            spec_key.emplace_back(py::tuple(
-                py::cast(s_param.get_specialization_key(arg.cast<float>()))));
+            spec_key += s_param.get_specialization_key(arg.cast<float>()) + ",";
           }
         } else {
           if (torch_py_module.attr("is_tensor")(arg).cast<bool>()) {
             // LOG(INFO) << "is_tensor";
             sig_key.emplace_back(
-                s_param.get_signature_key(arg.cast<torch::Tensor>()));
+                s_param.get_signature_key(arg.cast<torch::Tensor>())
+            );
             if (!s_param.do_not_specialize_) {
-              spec_key.emplace_back(py::tuple(py::cast(
-                  s_param.get_specialization_key(arg.cast<torch::Tensor>()))));
+              spec_key += s_param.get_specialization_key(arg.cast<torch::Tensor>()) + ",";
             }
           } else {
             throw std::runtime_error("Unsupported type");
@@ -205,11 +207,15 @@ public:
       throw std::runtime_error("Wrong number of params");
     }
 
-    return py::make_tuple(py::make_tuple(cuda_version_key_,
-                                         py::tuple(py::cast(sig_key)),
-                                         py::tuple(py::cast(constexpr_key)),
-                                         py::tuple(py::cast(spec_key))),
-                          py::tuple(py::cast(non_constexpr_arg_values)));
+    return py::make_tuple(
+      // int(device),
+      // int(stream.id()),
+      py::make_tuple(
+      cuda_version_key_ + (",(" 
+      + constexpr_key + "),(" 
+      + spec_key + ")"),
+      py::tuple(py::cast(sig_key))),
+      py::tuple(py::cast(non_constexpr_arg_values)));
   }
 
   void print() const { LOG(WARNING) << "LowLatencyJITFunction::print"; }
@@ -221,10 +227,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   // float, std::string>>()) .def("print", &SignatureParam::print);
 
   py::class_<LowLatencyJITFunction>(m, "LowLatencyJITFunction")
-      .def(py::init<const int, const int, const std::vector<py::object> &,
+      .def(py::init<const int, const int, const std::vector<py::handle> &,
                     const std::string &>(),
            py::arg("divisibility"), py::arg("divisibility_8"),
-           py::arg("params") = std::vector<py::object>(),
+           py::arg("params") = std::vector<py::handle>(),
            py::arg("cuda_version_key") = std::string())
       .def("print", &LowLatencyJITFunction::print)
       .def("get_call_params_tuple", &LowLatencyJITFunction::get_call_params_tuple);
