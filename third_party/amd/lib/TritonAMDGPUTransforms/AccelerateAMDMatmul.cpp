@@ -184,11 +184,13 @@ Value convertAndCastTensor(mlir::PatternRewriter &rewriter, Value value,
 class BlockedToMFMA : public mlir::RewritePattern {
   int mfmaVersion;
   int enforcedNonKDim;
+  int kpack;
 
 public:
-  BlockedToMFMA(mlir::MLIRContext *context, int mfmaVersion, int nonKDim)
+  BlockedToMFMA(mlir::MLIRContext *context, int mfmaVersion, int nonKDim,
+                int kpack)
       : mlir::RewritePattern(tt::DotOp::getOperationName(), 2, context),
-        mfmaVersion(mfmaVersion), enforcedNonKDim(nonKDim) {}
+        mfmaVersion(mfmaVersion), enforcedNonKDim(nonKDim), kpack(kpack) {}
 
   bool isChainDot(tt::DotOp &dotOp) const {
     auto filter = [&dotOp](Operation *op) {
@@ -204,6 +206,22 @@ public:
       if (isa<tt::DotOp>(op) && (op != dotOp))
         return true;
     }
+    return false;
+  }
+
+  bool isSecondDot(tt::DotOp &dotOp) const {
+    auto filter = [&dotOp](Operation *op) {
+      return op->getParentRegion() == dotOp->getParentRegion();
+    };
+    mlir::BackwardSliceOptions bwdOpt;
+    bwdOpt.omitBlockArguments = true;
+    bwdOpt.filter = filter;
+    SetVector<Operation *> slices;
+    mlir::getBackwardSlice(dotOp.getResult(), &slices, bwdOpt);
+    if (llvm::find_if(slices, [](Operation *op) {
+          return isa<tt::DotOp>(op);
+        }) != slices.end())
+      return true;
     return false;
   }
 
@@ -319,8 +337,8 @@ public:
     auto oldAcc = dotOp.getOperand(2);
     auto newAcc = convertAndCastTensor(rewriter, oldAcc, mfmaEnc, mfmaAccType);
 
-    // kWidth is a number of consecutive elements per one instruction per one
-    // thread
+    // kWidth is initialized as k_base, which is the number of elements hold by
+    // one thread per mfma instruction
     auto kWidth = -1;
     // in mfma 32x32 case argument matrix groups elements in 2 groups
     // in mfma 16x16 case argument matrix groups elements in 4 groups
@@ -334,6 +352,14 @@ public:
     if (mDim == 4 && nDim == 64 || mDim == 64 && nDim == 4)
       kWidth = kDim;
     assert(kWidth != -1);
+
+    // We want to extend kWidth by kpack (kpack=1 means no extension)
+    // to increase ds_read vector size
+    // However, in FA, the second dot can only use kWidth = k_bse since it's
+    // limited by the result of the first dot, which is of mfmaLayout.
+    if (!isSecondDot(dotOp))
+      kWidth *= kpack;
+
     auto newAType = RankedTensorType::get(
         oldAType.getShape(), oldAType.getElementType(),
         ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth));
@@ -503,10 +529,11 @@ class TritonAMDGPUAccelerateMatmulPass
           TritonAMDGPUAccelerateMatmulPass> {
 public:
   TritonAMDGPUAccelerateMatmulPass() = default;
-  TritonAMDGPUAccelerateMatmulPass(StringRef archGen,
-                                   int matrixInstructionSize) {
+  TritonAMDGPUAccelerateMatmulPass(StringRef archGen, int matrixInstructionSize,
+                                   int kpack) {
     this->archGenerationName = archGen.data();
     this->matrixInstructionSize = matrixInstructionSize;
+    this->kpack = kpack;
   }
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -518,7 +545,7 @@ public:
         MatrixCoreVersion::CDNA_MFMA2 == matrixCoreVer ||
         MatrixCoreVersion::CDNA_MFMA3 == matrixCoreVer) {
       patterns.add<::BlockedToMFMA>(context, getMfmaVersion(matrixCoreVer),
-                                    matrixInstructionSize);
+                                    matrixInstructionSize, kpack);
     } else if (matrixCoreVer == MatrixCoreVersion::RDNA_WMMA) {
       patterns.add<::BlockedToWMMA>(context);
     }
@@ -529,9 +556,8 @@ public:
   }
 };
 
-std::unique_ptr<Pass>
-mlir::createTritonAMDGPUAccelerateMatmulPass(std::string archGen,
-                                             int matrixInstructionSize) {
+std::unique_ptr<Pass> mlir::createTritonAMDGPUAccelerateMatmulPass(
+    std::string archGen, int matrixInstructionSize, int kpack) {
   return std::make_unique<TritonAMDGPUAccelerateMatmulPass>(
-      archGen, matrixInstructionSize);
+      archGen, matrixInstructionSize, kpack);
 }
