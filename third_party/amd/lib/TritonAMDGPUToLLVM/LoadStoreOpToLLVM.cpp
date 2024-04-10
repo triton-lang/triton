@@ -361,7 +361,7 @@ void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
 }
 } // namespace
 
-static LLVM::AtomicOrdering llvmMemoryOrdering(MemSemantic memOrdering) {
+static LLVM::AtomicOrdering getMemoryOrdering(MemSemantic memOrdering) {
   switch (memOrdering) {
   case MemSemantic::RELAXED:
     return LLVM::AtomicOrdering::monotonic;
@@ -405,7 +405,7 @@ struct AtomicCASOpConversion
     auto valElements = unpackLLElements(loc, llVal, rewriter);
 
     auto memOrdering = op.getSem();
-    auto atomicMemOrdering = llvmMemoryOrdering(memOrdering);
+    auto atomicMemOrdering = getMemoryOrdering(memOrdering);
 
     // deal with tensor or scalar
     auto valueTy = op.getResult().getType();
@@ -594,7 +594,7 @@ struct AtomicRMWOpConversion
                 icmp_slt(mul(tid, i32_val(elemsPerThread)), i32_val(numElems)));
 
     auto memOrdering = op.getSem();
-    auto atomicMemOrdering = llvmMemoryOrdering(memOrdering);
+    auto atomicMemOrdering = getMemoryOrdering(memOrdering);
 
     auto vecTy = vec_ty(valueElemTy, vec);
     auto retType = vec == 1 ? valueElemTy : vecTy;
