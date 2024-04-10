@@ -171,6 +171,10 @@ $ ninja -C build && ( cd build ; lit test )
   `LLVM_IR_ENABLE_DUMP=1`, extract the IR before the LLVM pass of interest, and
   then run LLVM's `opt` standalone, perhaps passing `-debug-only=foo` on the
   command line.
+- `USE_TTGIR_LOC` reparses the ttgir such that the location information will
+  be the line number of the ttgir instead of line number of the python file.
+  This can provide a direct mapping from ttgir to llir/ptx. When used with
+  performance tools, it can provide a breakdown on ttgir instructions.
 
 # Changelog
 
