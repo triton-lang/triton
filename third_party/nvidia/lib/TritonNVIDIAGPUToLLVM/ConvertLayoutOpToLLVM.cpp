@@ -609,24 +609,6 @@ private:
     return pack;
   }
 
-  Value pack2xB16ToI32(Location loc, const SmallVector<Value> &vals,
-                       unsigned start,
-                       ConversionPatternRewriter &rewriter) const {
-    auto anyext = [&](Value v) {
-      assert(v.getType().getIntOrFloatBitWidth() == 16);
-      Value i16x2 = undef(vec_ty(i16_ty, 2));
-      i16x2 = insert_element(vec_ty(i16_ty, 2), i16x2, bitcast(v, i16_ty),
-                             i32_val(0));
-      Value i32 = bitcast(i16x2, i32_ty);
-      return i32;
-    };
-
-    Value v0 = anyext(vals[start + 0]);
-    Value v1 = anyext(vals[start + 1]);
-    Value pack = LLVM::NVIDIA::permute(loc, rewriter, v0, v1, i32_val(0x5410));
-    return pack;
-  }
-
   // Convert from accumulator MMA layout to 8bit dot operand layout.
   // The conversion logic is taken from:
   // https://github.com/ColfaxResearch/cutlass-kernels/blob/a9de6446c1c0415c926025cea284210c799b11f8/src/fmha-pipeline/reg2reg.h#L45
@@ -697,7 +679,7 @@ private:
     rewriter.replaceOp(op, result);
   }
 
-  void convert8BitsMMAV2To8BitsDotOperand(
+  void convertMMAV2To8BitsDotOperand(
       triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
@@ -725,7 +707,7 @@ private:
     rewriter.replaceOp(op, result);
   }
 
-  void convert16BitsMMAV2To16BitsDotOperand(
+  void convertMMAV2To16BitsDotOperand(
       triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
@@ -805,14 +787,11 @@ private:
 
     if (isMmaToDotShortcut(srcTy, dstTy)) {
       if (srcTy.getElementType().getIntOrFloatBitWidth() == 8) {
-        convert8BitsMMAV2To8BitsDotOperand(op, adaptor, rewriter);
+        convertMMAV2To8BitsDotOperand(op, adaptor, rewriter);
         return success();
       }
 
-      // TODO: detect and call convert8BitsMMAV2To16BitsDotOperand
-      //  if src is result of 8 bit MMA cast to 16 bit
-
-      convert16BitsMMAV2To16BitsDotOperand(op, adaptor, rewriter);
+      convertMMAV2To16BitsDotOperand(op, adaptor, rewriter);
       return success();
     }
     return failure();
