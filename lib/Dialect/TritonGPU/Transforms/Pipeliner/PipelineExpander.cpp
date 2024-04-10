@@ -222,37 +222,24 @@ bool LoopPipelinerInternal::verifySchedule() {
   int64_t numCylesPerIter = opOrder.size();
   // Pre-compute the unrolled cycle of each op.
   DenseMap<Operation *, int64_t> unrolledCyles;
-  llvm::outs() << "numCylesPerIter: " << numCylesPerIter << "\n";
-  llvm::outs() << "Calculating unrolledCycles: \n";
   for (int64_t cycle = 0; cycle < numCylesPerIter; cycle++) {
     Operation *op = opOrder[cycle];
     auto it = stages.find(op);
     assert(it != stages.end());
     int64_t stage = it->second;
     op->walk<WalkOrder::PreOrder>([&](Operation *def) {
-      // unrolledCyles[nested] = cycle;
       unrolledCyles[def] = cycle + stage * numCylesPerIter;
-      def->dump();
-      llvm::outs() << "unrolledCycles: " << cycle + stage * numCylesPerIter
-                   << "\n";
     });
   }
 
-  llvm::outs() << "Verifying schedule: \n";
   for (Operation *op : opOrder) {
     bool valid = false;
     op->walk<WalkOrder::PreOrder>([&](Operation *consumer) {
-      consumer->dump();
       int64_t consumerCycle = unrolledCyles[consumer];
-      llvm::outs() << "consumerCycle: " << consumerCycle << "\n";
       for (Value operand : consumer->getOperands()) {
         auto [producer, distance] = getDefiningOpAndDistance(operand);
-        if (!producer) {
-          llvm::outs() << "producer not found\n";
+        if (!producer)
           continue;
-        }
-        llvm::outs() << "producer: ";
-        producer->dump();
         auto it = unrolledCyles.find(producer);
         // Skip producer coming from outside the loop.
         if (it == unrolledCyles.end())
