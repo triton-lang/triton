@@ -725,38 +725,6 @@ private:
     rewriter.replaceOp(op, result);
   }
 
-  void convert8BitsMMAV2To16BitsDotOperand(
-      triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter) const {
-    auto loc = op.getLoc();
-    auto dstTy = op.getType();
-    auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    SmallVector<Value> retVals;
-    assert(vals.size() % 16 == 0 && "Unsupported MMA output size");
-    unsigned srcBits = vals[0].getType().getIntOrFloatBitWidth();
-    assert(srcBits == 16 && "Unsupported src element size");
-    auto s = vals.size();
-    for (int i = 0; i < vals.size(); i += 4) {
-      Value upper;
-      Value lower;
-      if (i % 8 == 0) {
-        upper = pack2xB16ToI32(loc, vals, i, rewriter);
-        lower = pack2xB16ToI32(loc, vals, i + 4, rewriter);
-      } else {
-        upper = pack2xB16ToI32(loc, vals, i - 2, rewriter);
-        lower = pack2xB16ToI32(loc, vals, i + 2, rewriter);
-      }
-
-      shuffle8BitsMMAToDotOperand(loc, upper, lower, 16, rewriter);
-
-      retVals.push_back(upper);
-      retVals.push_back(lower);
-    }
-    Value result =
-        packLLElements(loc, getTypeConverter(), retVals, rewriter, dstTy);
-    rewriter.replaceOp(op, result);
-  }
-
   void convert16BitsMMAV2To16BitsDotOperand(
       triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const {
