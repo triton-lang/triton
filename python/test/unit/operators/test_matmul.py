@@ -177,7 +177,7 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
 
     if is_hip():
         if INPUT_PRECISION == 'tf32x3' or is_fp8(ADTYPE) or is_fp8(BDTYPE):
-            pytest.skip("Skip fp8 inputs and tf32x3 precison on hip")
+            pytest.skip("fp8 inputs or tf32x3 precison does not have native support on hip")
     # allocate/transpose inputs
     a = init_input(M, K, ADTYPE, ACC_DTYPE)
     b = init_input(K, N, BDTYPE, ACC_DTYPE)
