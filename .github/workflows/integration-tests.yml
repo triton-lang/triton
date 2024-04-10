@@ -311,8 +311,7 @@ jobs:
       - name: Run partial tests on HIP
         run: |
           cd python/test/unit
-          python3 -m pytest -vvv -n 8 operators --ignore=operators/test_matmul.py \
-                                                --ignore=operators/test_blocksparse.py
+          python3 -m pytest -vvv -n 8 operators --ignore=operators/test_blocksparse.py
 
       - name: Run C++ unittests
         run: |
