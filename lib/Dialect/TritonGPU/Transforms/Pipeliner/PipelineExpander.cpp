@@ -222,29 +222,53 @@ bool LoopPipelinerInternal::verifySchedule() {
   int64_t numCylesPerIter = opOrder.size();
   // Pre-compute the unrolled cycle of each op.
   DenseMap<Operation *, int64_t> unrolledCyles;
+  llvm::outs() << "numCylesPerIter: " << numCylesPerIter << "\n";
+  llvm::outs() << "Calculating unrolledCycles: \n";
   for (int64_t cycle = 0; cycle < numCylesPerIter; cycle++) {
-    Operation *def = opOrder[cycle];
-    auto it = stages.find(def);
+    Operation *op = opOrder[cycle];
+    auto it = stages.find(op);
     assert(it != stages.end());
     int64_t stage = it->second;
-    unrolledCyles[def] = cycle + stage * numCylesPerIter;
+    op->walk<WalkOrder::PreOrder>([&](Operation *def) {
+      // unrolledCyles[nested] = cycle;
+      unrolledCyles[def] = cycle + stage * numCylesPerIter;
+      def->dump();
+      llvm::outs() << "unrolledCycles: " << cycle + stage * numCylesPerIter
+                   << "\n";
+    });
   }
-  for (Operation *consumer : opOrder) {
-    int64_t consumerCycle = unrolledCyles[consumer];
-    for (Value operand : consumer->getOperands()) {
-      auto [producer, distance] = getDefiningOpAndDistance(operand);
-      if (!producer)
-        continue;
-      auto it = unrolledCyles.find(producer);
-      // Skip producer coming from outside the loop.
-      if (it == unrolledCyles.end())
-        continue;
-      int64_t producerCycle = it->second;
-      if (consumerCycle < producerCycle - numCylesPerIter * distance) {
-        consumer->emitError("operation scheduled before its operands");
-        return false;
+
+  llvm::outs() << "Verifying schedule: \n";
+  for (Operation *op : opOrder) {
+    bool valid = false;
+    op->walk<WalkOrder::PreOrder>([&](Operation *consumer) {
+      consumer->dump();
+      int64_t consumerCycle = unrolledCyles[consumer];
+      llvm::outs() << "consumerCycle: " << consumerCycle << "\n";
+      for (Value operand : consumer->getOperands()) {
+        auto [producer, distance] = getDefiningOpAndDistance(operand);
+        if (!producer) {
+          llvm::outs() << "producer not found\n";
+          continue;
+        }
+        llvm::outs() << "producer: ";
+        producer->dump();
+        auto it = unrolledCyles.find(producer);
+        // Skip producer coming from outside the loop.
+        if (it == unrolledCyles.end())
+          continue;
+        int64_t producerCycle = it->second;
+        if (consumerCycle < producerCycle - numCylesPerIter * distance) {
+          valid = false;
+          consumer->emitError("operation scheduled before its operands");
+          return WalkResult::interrupt();
+        }
       }
-    }
+      valid = true;
+      return WalkResult::advance();
+    });
+    if (!valid)
+      return false;
   }
   return true;
 }
