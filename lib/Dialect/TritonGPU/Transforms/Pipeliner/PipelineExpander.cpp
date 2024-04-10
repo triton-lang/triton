@@ -215,6 +215,19 @@ bool LoopPipelinerInternal::initializeLoopInfo(
   return true;
 }
 
+/// Find Values that are defined by the block containing the `op` and used by
+/// it or any nested operation - set of operands of anything within the `op`.
+static SmallVector<Value> getNestedOperands(Operation *op) {
+  SmallVector<Value> operands;
+  op->walk([&](Operation *nestedOp) {
+    for (Value operand : nestedOp->getOperands()) {
+      if (operand.getParentBlock()->getParentOp()->isAncestor(nestedOp))
+        operands.push_back(operand);
+    }
+  });
+  return operands;
+}
+
 /// Compute unrolled cycles of each op (consumer) and verify that each op is
 /// scheduled after its operands (producers) while adjusting for the distance
 /// between producer and consumer.
@@ -223,39 +236,28 @@ bool LoopPipelinerInternal::verifySchedule() {
   // Pre-compute the unrolled cycle of each op.
   DenseMap<Operation *, int64_t> unrolledCyles;
   for (int64_t cycle = 0; cycle < numCylesPerIter; cycle++) {
-    Operation *op = opOrder[cycle];
-    auto it = stages.find(op);
+    Operation *def = opOrder[cycle];
+    auto it = stages.find(def);
     assert(it != stages.end());
     int64_t stage = it->second;
-    op->walk<WalkOrder::PreOrder>([&](Operation *def) {
-      unrolledCyles[def] = cycle + stage * numCylesPerIter;
-    });
+    unrolledCyles[def] = cycle + stage * numCylesPerIter;
   }
-
-  for (Operation *op : opOrder) {
-    bool valid = false;
-    op->walk<WalkOrder::PreOrder>([&](Operation *consumer) {
-      int64_t consumerCycle = unrolledCyles[consumer];
-      for (Value operand : consumer->getOperands()) {
-        auto [producer, distance] = getDefiningOpAndDistance(operand);
-        if (!producer)
-          continue;
-        auto it = unrolledCyles.find(producer);
-        // Skip producer coming from outside the loop.
-        if (it == unrolledCyles.end())
-          continue;
-        int64_t producerCycle = it->second;
-        if (consumerCycle < producerCycle - numCylesPerIter * distance) {
-          valid = false;
-          consumer->emitError("operation scheduled before its operands");
-          return WalkResult::interrupt();
-        }
+  for (Operation *consumer : opOrder) {
+    int64_t consumerCycle = unrolledCyles[consumer];
+    for (Value operand : getNestedOperands(consumer)) {
+      auto [producer, distance] = getDefiningOpAndDistance(operand);
+      if (!producer)
+        continue;
+      auto it = unrolledCyles.find(producer);
+      // Skip producer coming from outside the loop.
+      if (it == unrolledCyles.end())
+        continue;
+      int64_t producerCycle = it->second;
+      if (consumerCycle < producerCycle - numCylesPerIter * distance) {
+        consumer->emitError("operation scheduled before its operands");
+        return false;
       }
-      valid = true;
-      return WalkResult::advance();
-    });
-    if (!valid)
-      return false;
+    }
   }
   return true;
 }
