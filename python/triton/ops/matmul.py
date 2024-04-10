@@ -199,7 +199,7 @@ class _matmul(torch.autograd.Function):
             ab_dtype = None
         # launch kernel
         grid = lambda META: (cdiv(M, META['BLOCK_M']) * cdiv(N, META['BLOCK_N']), META['SPLIT_K'])
-        _kernel[grid](
+        kernel_info = _kernel[grid](
             a, b, c, M, N, K,  #
             a.stride(0), a.stride(1),  #
             b.stride(0), b.stride(1),  #
@@ -208,6 +208,10 @@ class _matmul(torch.autograd.Function):
             input_precision=input_precision,  #
             fp8_fast_accum=fp8_fast_accum,  #
             GROUP_M=8, AB_DTYPE=ab_dtype)
+        for ir in ["ttir", "ttgir", "llir", "ptx"]:
+            kname = kernel_info.metadata.name
+            with open(f"{kname}_{ir}.f32.txt", "w") as f:
+                f.write(kernel_info.asm[ir])
         return c
 
     @staticmethod

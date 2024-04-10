@@ -349,7 +349,7 @@ compared to 1*64 when the hasLeadingOffset is false.
               int k = needTrans ? matShape[1] : matShape[2];
               int vec = (order[0] == rank-1) ? n : k;
               int mmaStride = (order[0] == rank-1) ? k : n;
-              int maxPhase = mmaStride / perPhase;
+              int maxPhase = std::max(mmaStride / perPhase, 1);
               return get(context, vec, perPhase, maxPhase, order, CTALayout);
           }
 

@@ -102,6 +102,62 @@ SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
     }
     return ret;
   }
+  if (inBitWidth == 8 && ouBitWidth == 32) {
+    SmallVector<Value> ret;
+    // for (unsigned i = 0; i < values.size(); i += 32) {
+    //   ret.push_back(values[i + 0]);
+    //   ret.push_back(values[i + 1]);
+    //   ret.push_back(values[i + 2]);
+    //   ret.push_back(values[i + 3]);
+    //   ret.push_back(values[i + 4]);
+    //   ret.push_back(values[i + 5]);
+    //   ret.push_back(values[i + 6]);
+    //   ret.push_back(values[i + 7]);
+    //   ret.push_back(values[i + 16]);
+    //   ret.push_back(values[i + 17]);
+    //   ret.push_back(values[i + 18]);
+    //   ret.push_back(values[i + 19]);
+    //   ret.push_back(values[i + 20]);
+    //   ret.push_back(values[i + 21]);
+    //   ret.push_back(values[i + 22]);
+    //   ret.push_back(values[i + 23]);
+    //   ret.push_back(values[i + 8]);
+    //   ret.push_back(values[i + 9]);
+    //   ret.push_back(values[i + 10]);
+    //   ret.push_back(values[i + 11]);
+    //   ret.push_back(values[i + 12]);
+    //   ret.push_back(values[i + 13]);
+    //   ret.push_back(values[i + 14]);
+    //   ret.push_back(values[i + 15]);
+    //   ret.push_back(values[i + 24]);
+    //   ret.push_back(values[i + 25]);
+    //   ret.push_back(values[i + 26]);
+    //   ret.push_back(values[i + 27]);
+    //   ret.push_back(values[i + 28]);
+    //   ret.push_back(values[i + 29]);
+    //   ret.push_back(values[i + 30]);
+    //   ret.push_back(values[i + 31]);
+    // }
+    for (unsigned i = 0; i < values.size(); i += 16) {
+      ret.push_back(values[i + 0]);
+      ret.push_back(values[i + 1]);
+      ret.push_back(values[i + 2]);
+      ret.push_back(values[i + 3]);
+      ret.push_back(values[i + 8]);
+      ret.push_back(values[i + 9]);
+      ret.push_back(values[i + 10]);
+      ret.push_back(values[i + 11]);
+      ret.push_back(values[i + 4]);
+      ret.push_back(values[i + 5]);
+      ret.push_back(values[i + 6]);
+      ret.push_back(values[i + 7]);
+      ret.push_back(values[i + 12]);
+      ret.push_back(values[i + 13]);
+      ret.push_back(values[i + 14]);
+      ret.push_back(values[i + 15]);
+    }
+    return ret;
+  }
   llvm_unreachable("unimplemented code path");
 }
 

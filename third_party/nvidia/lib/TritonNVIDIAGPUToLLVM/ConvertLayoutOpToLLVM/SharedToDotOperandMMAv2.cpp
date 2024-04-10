@@ -276,9 +276,10 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value lane,
         // Compute id of this ptr
         int idx = rep * 2 * kWidth;
         if (needTrans) {
-          idx += quadId * vecWidth;
-          idx += elemId % vecWidth;
-          idx += elemId / vecWidth * kWidth;
+          int width = std::min(vecWidth, kWidth);
+          idx += quadId * width;
+          idx += elemId % width;
+          idx += elemId / width * kWidth;
         } else {
           idx += quadId * kWidth;
           idx += elemId;
@@ -365,10 +366,12 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
   } else {
     // base pointers
     std::array<std::array<Value, 4>, 2> ptrs;
-    for (int i = 0; i < vecWidth; i++)
+    int width = vecWidth; // std::min(vecWidth, kWidth);
+
+    for (int i = 0; i < width; i++)
       ptrs[0][i] = getPtr(ptrIdx + i);
-    for (int i = 0; i < vecWidth; i++)
-      ptrs[1][i] = getPtr(ptrIdx + i + vecWidth);
+    for (int i = 0; i < width; i++)
+      ptrs[1][i] = getPtr(ptrIdx + i + width);
     // static offsets along outer dimension
     int _i0 = matIdx[order[1]] * (stridedLoadMatOffset * stridedMatShape);
     int _i1 = _i0;
@@ -389,7 +392,7 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
     SmallVector<SmallVector<Value>> vptrs(4, SmallVector<Value>(vecWidth));
 
     for (int i = 0; i < 4; ++i)
-      for (int j = 0; j < vecWidth; ++j) {
+      for (int j = 0; j < width; ++j) {
         vptrs[i][j] = gep(ptr_ty(ctx, 3), shemTy, ptrs[i / 2][j], ii[i % 2]);
       }
     // row + trans and col + no-trans are equivalent
@@ -410,6 +413,7 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
         int idx = m * 2 + r;
         Value ptr = bitcast(vptrs[idx][e], ptr_ty(ctx, 3));
         Value val = load(packedTy, ptr);
+        val.dump();
         Value canonval = bitcast(val, vec_ty(canonInt, canonWidth));
         for (int w = 0; w < canonWidth; ++w) {
           int ridx = idx + w * kWidth / vecWidth;
@@ -452,6 +456,7 @@ MMA16816SmemLoader::MMA16816SmemLoader(
   nonKOrder = (kOrder == 2) ? 1 : 2;
   canUseLdmatrix = elemBytes == 2 || (!needTrans);
   canUseLdmatrix = canUseLdmatrix && (kWidth == vecWidth);
+  // vecWidth = std::min(vecWidth, kWidth);
 
   if (canUseLdmatrix) {
     // Each CTA, the warps is arranged as [1xwarpsPerTile] if not transposed,
@@ -461,7 +466,7 @@ MMA16816SmemLoader::MMA16816SmemLoader(
   } else {
     numPtrs = tileShape[order[0]] / (needTrans ? warpsPerTile : 1) /
               matShape[order[0]];
-    numPtrs *= kWidth;
+    numPtrs *= vecWidth;
   }
   numPtrs = std::max<int>(numPtrs, 2);
 

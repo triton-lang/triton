@@ -306,10 +306,22 @@ public:
       a = getMMAv3Operand(a, rewriter, 0);
       b = getMMAv3Operand(b, rewriter, 1);
     } else {
-
       // convert operands
-      int minBitwidth =
-          std::min(computeOrigBitWidth(a), computeOrigBitWidth(b));
+      int aBitWidth = computeOrigBitWidth(a);
+      int bBitWidth = computeOrigBitWidth(b);
+      int minBitwidth = std::min(aBitWidth, bBitWidth);
+      int maxBitwidth = std::max(aBitWidth, bBitWidth);
+
+      if (minBitwidth != maxBitwidth) {
+        if (versionMajor == 2) {
+          if (maxBitwidth == 32) {
+            // mma.m16n8k8 allows one thread to own two elements of the same
+            // row.
+            minBitwidth = maxBitwidth;
+          }
+        }
+      }
+
       Type minType = IntegerType::get(ctx, minBitwidth);
       // convert A operand
       auto newAEncoding = ttg::DotOperandEncodingAttr::get(

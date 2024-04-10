@@ -26,6 +26,10 @@ static cl::opt<std::string> InputFilename(cl::Positional,
                                           cl::init("-"),
                                           cl::value_desc("filename"));
 
+static cl::opt<std::string> OutputFilename("o",
+                                           cl::desc("Override output filename"),
+                                           cl::value_desc("filename"));
+
 static cl::opt<std::string> ClDataLayout("data-layout",
                                          cl::desc("data layout string to use"),
                                          cl::value_desc("layout-string"),
@@ -101,7 +105,10 @@ int main(int argc, char **argv) {
 
   // Write to standard output.
   std::unique_ptr<ToolOutputFile> Out;
-  std::string OutputFilename = "-";
+  // Default to standard output.
+  if (OutputFilename.empty())
+    OutputFilename = "-";
+  errs() << OutputFilename << "\n";
   std::error_code EC;
   sys::fs::OpenFlags Flags = sys::fs::OF_TextWithCRLF;
   Out.reset(new ToolOutputFile(OutputFilename, EC, Flags));
@@ -110,5 +117,6 @@ int main(int argc, char **argv) {
     return 1;
   }
   Out->os() << *M << "\n";
+  Out->keep();
   return 0;
 }

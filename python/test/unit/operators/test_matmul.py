@@ -81,6 +81,7 @@ import triton.ops
             ("float16", "float8e5"),
             ("int8", "bfloat16"),
             ("float16", "int8"),
+            ("float32", "int8"),
             ("float16", "float32"),
             ("float32", "float16"),
             ("bfloat16", "float32"),
