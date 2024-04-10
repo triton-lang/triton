@@ -8,6 +8,10 @@ import triton.language as tl
 import triton.ops
 
 
+def is_hip():
+    return triton.runtime.driver.active.get_current_target()[0] == "hip"
+
+
 @pytest.mark.parametrize(
     "BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, ADTYPE, BDTYPE, INPUT_PRECISION, F8_FASTACCUM, ACC_DTYPE, OUTPUT_DTYPE",
     itertools.chain(
@@ -171,6 +175,9 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
         ret = (2.**exponents).to(getattr(torch, dtype)).to("cuda")
         return ret
 
+    if is_hip():
+        if INPUT_PRECISION == 'tf32x3' or is_fp8(ADTYPE) or is_fp8(BDTYPE):
+            pytest.skip("Skip fp8 inputs and tf32x3 precison on hip")
     # allocate/transpose inputs
     a = init_input(M, K, ADTYPE, ACC_DTYPE)
     b = init_input(K, N, BDTYPE, ACC_DTYPE)
