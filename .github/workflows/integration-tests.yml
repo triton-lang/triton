@@ -165,7 +165,7 @@ jobs:
 
       - name: Print PyTorch version
         run: |
-          python -c "import torch; print(torch.__version__)"
+          python3 -c "import torch; print(torch.__version__)"
 
       - name: Install Triton
         run: |
@@ -282,7 +282,7 @@ jobs:
 
       - name: Print PyTorch version
         run: |
-          python -c "import torch; print(torch.__version__)"
+          python3 -c "import torch; print(torch.__version__)"
 
       - name: Install Triton
         run: |
