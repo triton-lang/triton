@@ -4660,7 +4660,7 @@ def compute_rep_shape(layout):
         rep_shape = np.multiply(warp_shape, layout.warps_per_cta)
         return rep_shape
     else:
-        assert "TODO: support compute_rep_shape for layout " + str(type(layout))
+        assert False, "TODO: support compute_rep_shape for layout " + str(type(layout))
 
 
 # This function gives a lower bound approximation of scratch buffer shape for convert_layout operation
@@ -4685,7 +4685,10 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     if str(src_layout) == str(dst_layout):
         pytest.skip()
     if is_hip():
-        scratch_shape = compute_scratch_buffer_shape(src_layout, dst_layout, (M, N))
+        try:
+            scratch_shape = compute_scratch_buffer_shape(src_layout, dst_layout, (M, N))
+        except AssertionError:
+            pytest.skip("Can't compute scratch buffer size")
         lds_size = 65536
         # consider int32 dtype in scratch buffer size,
         # because it is the largest dtype used in convert_layout in this test
