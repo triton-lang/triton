@@ -215,8 +215,7 @@ bool LoopPipelinerInternal::initializeLoopInfo(
   return true;
 }
 
-/// Find Values that are defined by the block containing the `op` and used by
-/// it or any nested operation - set of operands of anything within the `op`.
+/// Find operands of all the nested operations within `op`.
 static SetVector<Value> getNestedOperands(Operation *op) {
   SetVector<Value> operands;
   op->walk([&](Operation *nestedOp) {
