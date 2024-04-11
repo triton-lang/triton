@@ -201,6 +201,10 @@ class HIPBackend(BaseBackend):
         kernels[0].add_fn_attr("amdgpu-flat-work-group-size", f"1,{options.num_warps*options.warp_size}")
         kernels[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
         kernels[0].add_fn_attr("denormal-fp-math-f32", "preserve-sign")
+        # Hint the compiler that we'd like the firmware to set the kernel arguments
+        # to user SGPRs so that the kernel does not need to s_load its arguments
+        # from memory.
+        kernels[0].set_fn_arg_inreg()
 
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
