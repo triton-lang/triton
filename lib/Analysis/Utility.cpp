@@ -465,8 +465,12 @@ bool supportMFMA(triton::DotOp op) {
   auto aShape = aTy.getShape();
   auto bShape = bTy.getShape();
 
-  assert(aShape[1] == bShape[0]);
-  if (!supportMFMAGranularity(aShape[0], bShape[1], aShape[1]))
+  auto rank = aShape.size();
+  auto M = aShape[rank - 2];
+  auto N = bShape[rank - 1];
+  auto K = aShape[rank - 1];
+  assert(K == bShape[rank - 2]);
+  if (!supportMFMAGranularity(M, N, K))
     return false;
 
   return true;
@@ -484,8 +488,8 @@ static bool supportWMMATypes(Type a, Type b, Type c, Type d) {
       return false;
     auto aWidth = a.getIntOrFloatBitWidth();
     auto cWidth = c.getIntOrFloatBitWidth();
-    bool aValid = a.isUnsignedInteger() && (aWidth == 4 || aWidth == 8);
-    bool cValid = c.isSignedInteger() && cWidth == 32;
+    bool aValid = a.isUnsignedInteger() && aWidth <= 8;
+    bool cValid = cWidth <= 32;
     return aValid && cValid;
   } else if (a.isa<FloatType>()) {
     if (a.isBF16())

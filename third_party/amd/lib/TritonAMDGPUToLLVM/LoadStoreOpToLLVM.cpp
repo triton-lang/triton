@@ -202,44 +202,41 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       assert(wordNElems * nWords * numVecs == numElems);
 
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
-      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
-        size_t elemOffset = vecStart + wordIdx * wordNElems;
-        Type int_ty = IntegerType::get(getContext(), width);
-        Value ptr = addrspacecast(ptr_ty(getContext()), ptrElems[elemOffset]);
-        auto loaded = rewriter.create<scf::IfOp>(
-            loc, pred,
-            [&](OpBuilder &builder, Location loc) {
-              auto loadVal = builder.create<LLVM::LoadOp>(loc, int_ty, ptr);
-              builder.create<mlir::scf::YieldOp>(loc, ValueRange({loadVal}));
-            },
-            [&](OpBuilder &builder, Location loc) {
-              Value zeroVal = int_val(width, 0);
-              Value otherVal;
-              if (other) {
-                auto vecTy = LLVM::getFixedVectorType(valueElemTy, wordNElems);
-                Value v = undef(vecTy);
-                for (size_t s = 0; s < wordNElems; ++s) {
-                  Value falseVal = otherElems[elemOffset + s];
-                  Value sVal = createIndexAttrConstant(
-                      rewriter, loc, this->getTypeConverter()->getIndexType(),
-                      s);
-                  v = insert_element(vecTy, v, falseVal, sVal);
-                }
-                otherVal = bitcast(v, IntegerType::get(getContext(), width));
+      auto vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
+      auto loaded = rewriter.create<scf::IfOp>(
+          loc, pred,
+          [&](OpBuilder &builder, Location loc) {
+            Value ptr = addrspacecast(ptr_ty(getContext()), ptrElems[vecStart]);
+            auto loadVal = rewriter.create<LLVM::LoadOp>(loc, vecTy, ptr);
+            builder.create<mlir::scf::YieldOp>(loc, ValueRange({loadVal}));
+          },
+          [&](OpBuilder &builder, Location loc) {
+            mlir::Attribute zero = builder.getZeroAttr(valueElemTy);
+            auto denseValue =
+                DenseElementsAttr::get(vecTy.cast<mlir::ShapedType>(), zero);
+            Value zeroVal =
+                rewriter.create<LLVM::ConstantOp>(loc, vecTy, denseValue);
+            Value otherVal;
+            if (other) {
+              Value v = undef(vecTy);
+              for (size_t s = 0; s < vec; ++s) {
+                Value falseVal = otherElems[vecStart + s];
+                Value sVal = createIndexAttrConstant(
+                    rewriter, loc, this->getTypeConverter()->getIndexType(), s);
+                v = insert_element(vecTy, v, falseVal, sVal);
               }
-              Value falseVal = other ? otherVal : zeroVal;
-              builder.create<mlir::scf::YieldOp>(loc, ValueRange({falseVal}));
-            });
-        Value loadVal =
-            bitcast(loaded->getResult(0),
-                    LLVM::getFixedVectorType(valueElemTy, wordNElems));
-        for (size_t ii = 0; ii < wordNElems; ++ii) {
-          Value vecIdx = createIndexAttrConstant(
-              rewriter, loc, this->getTypeConverter()->getIndexType(),
-              ii % wordNElems);
-          Value loaded = extract_element(valueElemTy, loadVal, vecIdx);
-          loadedVals.push_back(loaded);
-        }
+              otherVal = v;
+            }
+            Value falseVal = other ? otherVal : zeroVal;
+            builder.create<mlir::scf::YieldOp>(loc, ValueRange({falseVal}));
+          });
+
+      Value loadVal = bitcast(loaded->getResult(0), vecTy);
+      for (size_t ii = 0; ii < vec; ++ii) {
+        Value vecIdx = createIndexAttrConstant(
+            rewriter, loc, this->getTypeConverter()->getIndexType(), ii % vec);
+        Value loaded = extract_element(valueElemTy, loadVal, vecIdx);
+        loadedVals.push_back(loaded);
       }
     } // end vec
 
@@ -364,6 +361,21 @@ void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
 }
 } // namespace
 
+static LLVM::AtomicOrdering getMemoryOrdering(MemSemantic memOrdering) {
+  switch (memOrdering) {
+  case MemSemantic::RELAXED:
+    return LLVM::AtomicOrdering::monotonic;
+  case MemSemantic::ACQUIRE:
+    return LLVM::AtomicOrdering::acquire;
+  case MemSemantic::RELEASE:
+    return LLVM::AtomicOrdering::release;
+  case MemSemantic::ACQUIRE_RELEASE:
+    return LLVM::AtomicOrdering::acq_rel;
+  default:
+    return LLVM::AtomicOrdering::acq_rel;
+  }
+}
+
 struct AtomicCASOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicCASOp>,
       public LoadStoreConversionBase {
@@ -391,6 +403,9 @@ struct AtomicCASOpConversion
     auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
     auto cmpElements = unpackLLElements(loc, llCmp, rewriter);
     auto valElements = unpackLLElements(loc, llVal, rewriter);
+
+    auto memOrdering = op.getSem();
+    auto atomicMemOrdering = getMemoryOrdering(memOrdering);
 
     // deal with tensor or scalar
     auto valueTy = op.getResult().getType();
@@ -429,7 +444,7 @@ struct AtomicCASOpConversion
       if (TensorTy) { // for tensor
         auto retType = vec == 1 ? valueElemTy : vecTy;
         // TODO: USE ATOMIC CAS OP on Tensor
-        auto successOrdering = LLVM::AtomicOrdering::acq_rel;
+        auto successOrdering = atomicMemOrdering;
         auto failureOrdering = LLVM::AtomicOrdering::monotonic;
         auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
             loc, casPtr, casCmp, casVal, successOrdering, failureOrdering,
@@ -578,6 +593,9 @@ struct AtomicRMWOpConversion
     mask = and_(mask,
                 icmp_slt(mul(tid, i32_val(elemsPerThread)), i32_val(numElems)));
 
+    auto memOrdering = op.getSem();
+    auto atomicMemOrdering = getMemoryOrdering(memOrdering);
+
     auto vecTy = vec_ty(valueElemTy, vec);
     auto retType = vec == 1 ? valueElemTy : vecTy;
     SmallVector<Value> resultVals(elemsPerThread);
@@ -607,7 +625,7 @@ struct AtomicRMWOpConversion
       Value atom = rewriter
                        .create<LLVM::AtomicRMWOp>(
                            loc, *maybeKind, rmwPtr, valElements[i],
-                           LLVM::AtomicOrdering::monotonic, StringRef("agent"))
+                           atomicMemOrdering, StringRef("agent"))
                        .getResult();
 
       // NV for the f16v2 case generates one packed instruction. We have to
@@ -618,7 +636,7 @@ struct AtomicRMWOpConversion
             rewriter
                 .create<LLVM::AtomicRMWOp>(
                     loc, *maybeKind, ptrElements[i + 1], valElements[i + 1],
-                    LLVM::AtomicOrdering::monotonic, StringRef("agent"))
+                    atomicMemOrdering, StringRef("agent"))
                 .getResult();
         auto tmp = insert_element(vecTy, undef(vecTy), atom, i32_val(0));
         atom = insert_element(vecTy, tmp, atom2, i32_val(1)).getResult();

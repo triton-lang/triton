@@ -75,7 +75,10 @@ def TritonAMDGPUAccelerateMatmul : Pass<"tritonamdgpu-accelerate-matmul", "mlir:
            "GFX generation name of target device.">,
     Option<"matrixInstructionSize", "matrix-instruction-size",
            "int32_t", /*default*/"0",
-           "enforce matrix instruction MN size">
+           "enforce matrix instruction MN size">,
+    Option<"kPack", "kPack",
+           "int32_t", /*default*/"1",
+           "KWidth / kBase">
   ];
 }
 
@@ -137,16 +140,6 @@ def TritonAMDGPUReorderInstructions: Pass<"tritonamdgpu-reorder-instructions", "
                     "order more friendly to `ptxas`.";
 
   let constructor = "mlir::createTritonAMDGPUReorderInstructionsPass()";
-
-  let dependentDialects = [];
-}
-
-def TritonAMDGPUDecomposeConversions: Pass<"tritonamdgpu-decompose-conversions", "mlir::ModuleOp"> {
-  let summary = "Decompose convert[distributed -> dotOperand] into convert[distributed -> shared -> dotOperand]";
-
-  let description = "Decomposing conversions this way makes it possible to use CSE and re-use #shared tensors";
-
-  let constructor = "mlir::createTritonAMDGPUDecomposeConversionsPass()";
 
   let dependentDialects = [];
 }

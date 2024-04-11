@@ -241,21 +241,9 @@ compared to 1*64 when the hasLeadingOffset is false.
             int elemsPerOneBanksRow = (numBanks * bankBitWidth) / typeWidthInBit;
 
             int perPhase = std::max(1, elemsPerOneBanksRow / innerDimLength);
-            // Note: the following settings is customized to avoid
-            // **load** bank conflicts
-            //
-            // vecSize is set to k_base, which is the number of elements each
-            // workitem loads for one mfma instruction.
-            // For now, the k_base rules are as follows
-            // 1. All selected mfma instructions produce a single block
-            // 2. For f16 data type, 2 VGPRs are used for operand A --> k_base = 4
-            // 3. For non-f16 data types, 1 VGPR is used for operand A
-            //    k_base = 32 / elemTypeInBits
-            // 4. TODO: what about f64?
-            //
-            // maxPhase is set to SIMDWidth / perPhase
-            int vecSize = ((typeWidthInBit == 16) ? 64 : 32 ) / typeWidthInBit;
-            int maxPhase = SIMDWidth / perPhase;
+            // vecSize is set to kWidth of the dotop layout
+            int vecSize = dotOpEnc.getKWidth();
+            int maxPhase = std::min(SIMDWidth / perPhase, innerDimLength / vecSize);
 
             // TODO (zhanglx): figure out better parameters for mfma4
             if (mfmaEnc.getMDim() == 4)

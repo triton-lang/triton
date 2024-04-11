@@ -61,12 +61,14 @@ ValueTable getValuesFromDotOperandLayoutStruct(
         rawElems = insert_element(ty, rawElems,
                                   elems[kWidth * (n1 * i + j) + k], i32_val(k));
       }
+
       Value convertedElems;
       if (type.isBF16() || type.isF16()) {
         convertedElems = rawElems;
       } else {
-        convertedElems =
-            bitcast(rawElems, int_ty(type.getIntOrFloatBitWidth()));
+        convertedElems = bitcast(
+            rawElems, vec_ty(i32_ty, kWidth * type.getIntOrFloatBitWidth() /
+                                         i32_ty.getIntOrFloatBitWidth()));
       }
       vals[{i, j}] = convertedElems;
     }
@@ -98,9 +100,9 @@ static WMMAInstrType getWMMAInstrTypeFromDot(DotOp op) {
     return WMMAInstrType::FP16_FP16;
   if (dElemTy.isBF16() && aElemTy.isBF16())
     return WMMAInstrType::BF16_BF16;
-  if (dElemTy.isSignedInteger(32) && aElemTy.isUnsignedInteger(8))
+  if (dElemTy.isInteger(32) && aElemTy.isInteger(8))
     return WMMAInstrType::INT32_IU8;
-  if (dElemTy.isSignedInteger(32) && aElemTy.isUnsignedInteger(4))
+  if (dElemTy.isInteger(32) && aElemTy.isInteger(4))
     return WMMAInstrType::INT32_IU4;
 
   return WMMAInstrType::NOT_APPLICABLE;
@@ -126,10 +128,12 @@ Value generateWMMAOp(ConversionPatternRewriter &rewriter, Location loc,
         loc, TypeRange{resType}, ValueRange{valA, valB, valC, falseFlag});
   case WMMAInstrType::INT32_IU8:
     return rewriter.create<ROCDL::wmma_i32_16x16x16_iu8>(
-        loc, TypeRange{resType}, ValueRange{valA, valB, valC, falseFlag});
+        loc, TypeRange{resType},
+        ValueRange{falseFlag, valA, falseFlag, valB, valC, falseFlag});
   case WMMAInstrType::INT32_IU4:
     return rewriter.create<ROCDL::wmma_i32_16x16x16_iu4>(
-        loc, TypeRange{resType}, ValueRange{valA, valB, valC, falseFlag});
+        loc, TypeRange{resType},
+        ValueRange{falseFlag, valA, falseFlag, valB, valC, falseFlag});
   default:
     llvm::report_fatal_error("WMMA data type not supported");
   }
