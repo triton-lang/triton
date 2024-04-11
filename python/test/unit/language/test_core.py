@@ -1493,8 +1493,8 @@ def test_atomic_cas(sem, num_ctas, device):
 
     Lock = torch.zeros((1, ), device=device, dtype=torch.int32)
     data = torch.zeros((128, ), device=device, dtype=torch.float32)
-    ref = torch.full((128, ), 64.0)
-    h = serialized_add[(64, )](data, Lock, SEM=sem, num_ctas=num_ctas)
+    ref = torch.full((128, ), 2000.0)
+    h = serialized_add[(2000, )](data, Lock, SEM=sem, num_ctas=num_ctas)
     sem_str = "acq_rel" if sem is None else sem
     np.testing.assert_allclose(to_numpy(data), to_numpy(ref))
     if not is_cuda():

@@ -361,6 +361,21 @@ void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
 }
 } // namespace
 
+static LLVM::AtomicOrdering getMemoryOrdering(MemSemantic memOrdering) {
+  switch (memOrdering) {
+  case MemSemantic::RELAXED:
+    return LLVM::AtomicOrdering::monotonic;
+  case MemSemantic::ACQUIRE:
+    return LLVM::AtomicOrdering::acquire;
+  case MemSemantic::RELEASE:
+    return LLVM::AtomicOrdering::release;
+  case MemSemantic::ACQUIRE_RELEASE:
+    return LLVM::AtomicOrdering::acq_rel;
+  default:
+    return LLVM::AtomicOrdering::acq_rel;
+  }
+}
+
 struct AtomicCASOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicCASOp>,
       public LoadStoreConversionBase {
@@ -388,6 +403,9 @@ struct AtomicCASOpConversion
     auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
     auto cmpElements = unpackLLElements(loc, llCmp, rewriter);
     auto valElements = unpackLLElements(loc, llVal, rewriter);
+
+    auto memOrdering = op.getSem();
+    auto atomicMemOrdering = getMemoryOrdering(memOrdering);
 
     // deal with tensor or scalar
     auto valueTy = op.getResult().getType();
@@ -426,7 +444,7 @@ struct AtomicCASOpConversion
       if (TensorTy) { // for tensor
         auto retType = vec == 1 ? valueElemTy : vecTy;
         // TODO: USE ATOMIC CAS OP on Tensor
-        auto successOrdering = LLVM::AtomicOrdering::acq_rel;
+        auto successOrdering = atomicMemOrdering;
         auto failureOrdering = LLVM::AtomicOrdering::monotonic;
         auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
             loc, casPtr, casCmp, casVal, successOrdering, failureOrdering,
@@ -575,6 +593,9 @@ struct AtomicRMWOpConversion
     mask = and_(mask,
                 icmp_slt(mul(tid, i32_val(elemsPerThread)), i32_val(numElems)));
 
+    auto memOrdering = op.getSem();
+    auto atomicMemOrdering = getMemoryOrdering(memOrdering);
+
     auto vecTy = vec_ty(valueElemTy, vec);
     auto retType = vec == 1 ? valueElemTy : vecTy;
     SmallVector<Value> resultVals(elemsPerThread);
@@ -604,7 +625,7 @@ struct AtomicRMWOpConversion
       Value atom = rewriter
                        .create<LLVM::AtomicRMWOp>(
                            loc, *maybeKind, rmwPtr, valElements[i],
-                           LLVM::AtomicOrdering::monotonic, StringRef("agent"))
+                           atomicMemOrdering, StringRef("agent"))
                        .getResult();
 
       // NV for the f16v2 case generates one packed instruction. We have to
@@ -615,7 +636,7 @@ struct AtomicRMWOpConversion
             rewriter
                 .create<LLVM::AtomicRMWOp>(
                     loc, *maybeKind, ptrElements[i + 1], valElements[i + 1],
-                    LLVM::AtomicOrdering::monotonic, StringRef("agent"))
+                    atomicMemOrdering, StringRef("agent"))
                 .getResult();
         auto tmp = insert_element(vecTy, undef(vecTy), atom, i32_val(0));
         atom = insert_element(vecTy, tmp, atom2, i32_val(1)).getResult();
