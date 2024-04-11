@@ -589,24 +589,16 @@ private:
   Value pack4xB8ToI32(Location loc, const SmallVector<Value> &vals,
                       unsigned start,
                       ConversionPatternRewriter &rewriter) const {
-    auto anyext = [&](Value v) {
-      assert(v.getType().getIntOrFloatBitWidth() == 8);
-      Value i8x4 = undef(vec_ty(i8_ty, 4));
-      i8x4 =
-          insert_element(vec_ty(i8_ty, 4), i8x4, bitcast(v, i8_ty), i32_val(0));
-      Value i32 = bitcast(i8x4, i32_ty);
-      return i32;
-    };
-
-    Value v0 = anyext(vals[start + 0]);
-    Value v1 = anyext(vals[start + 1]);
-    Value v2 = anyext(vals[start + 2]);
-    Value v3 = anyext(vals[start + 3]);
-    Value v01 = LLVM::NVIDIA::permute(loc, rewriter, v0, v1, i32_val(0x0040));
-    Value v23 = LLVM::NVIDIA::permute(loc, rewriter, v2, v3, i32_val(0x0040));
-    Value pack =
-        LLVM::NVIDIA::permute(loc, rewriter, v01, v23, i32_val(0x5410));
-    return pack;
+    Value pack = undef(vec_ty(i8_ty, 4));
+    pack = insert_element(vec_ty(i8_ty, 4), pack,
+                          bitcast(vals[start + 0], i8_ty), i32_val(0));
+    pack = insert_element(vec_ty(i8_ty, 4), pack,
+                          bitcast(vals[start + 1], i8_ty), i32_val(1));
+    pack = insert_element(vec_ty(i8_ty, 4), pack,
+                          bitcast(vals[start + 2], i8_ty), i32_val(2));
+    pack = insert_element(vec_ty(i8_ty, 4), pack,
+                          bitcast(vals[start + 3], i8_ty), i32_val(3));
+    return bitcast(pack, i32_ty);
   }
 
   // Convert from accumulator MMA layout to 8bit dot operand layout.
