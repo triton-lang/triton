@@ -217,12 +217,11 @@ bool LoopPipelinerInternal::initializeLoopInfo(
 
 /// Find Values that are defined by the block containing the `op` and used by
 /// it or any nested operation - set of operands of anything within the `op`.
-static SmallVector<Value> getNestedOperands(Operation *op) {
-  SmallVector<Value> operands;
+static SetVector<Value> getNestedOperands(Operation *op) {
+  SetVector<Value> operands;
   op->walk([&](Operation *nestedOp) {
     for (Value operand : nestedOp->getOperands()) {
-      if (operand.getParentBlock()->getParentOp()->isAncestor(nestedOp))
-        operands.push_back(operand);
+      operands.insert(operand);
     }
   });
   return operands;
