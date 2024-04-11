@@ -283,20 +283,11 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
     return NULL;
   }}
 
-  // extract kernel metadata
-  int num_warps     = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "num_warps"));
-  int num_ctas      = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "num_ctas"));
-  int shared_memory = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "shared"));
-
-  // extract cluster dims
-  PyObject *clusterDim =  PyObject_GetAttrString(kernel_metadata, "cluster_dims");
-  if (!PyTuple_Check(kernel_metadata)) {{
-    PyErr_SetString(PyExc_TypeError, "kernel_metadata.cluster_dims must be a tuple");
+  int num_warps, num_ctas, shared_memory, clusterDimX, clusterDimY, clusterDimZ;
+  if (!PyArg_ParseTuple(kernel_metadata, \"iiiiii\", &num_warps, &num_ctas, &shared_memory, &clusterDimX, &clusterDimY, &clusterDimZ)) {{
+    PyErr_SetString(PyExc_TypeError, "kernel_metadata must be a tuple");
     return NULL;
   }}
-  int clusterDimX   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 0));
-  int clusterDimY   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 1));
-  int clusterDimZ   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 2));
 
   // extract launch metadata
   if (launch_enter_hook != Py_None){{

@@ -455,7 +455,7 @@ class JITFunction(KernelInterface[T]):
         if not warmup:
             args = [arg.value for arg in args if not arg.param.is_constexpr]
             launch_metadata = kernel.launch_metadata(grid, stream, *args)
-            kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.metadata, launch_metadata,
+            kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
                        CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, *args)
         return kernel
 
