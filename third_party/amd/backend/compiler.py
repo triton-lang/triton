@@ -90,6 +90,9 @@ class HIPBackend(BaseBackend):
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts})
         return HIPOptions(**args)
 
+    def pack_metadata(self, metadata):
+        return metadata
+
     def get_codegen_implementation(self):
         codegen_fns = dict()
         return codegen_fns

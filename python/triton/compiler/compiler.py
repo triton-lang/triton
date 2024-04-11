@@ -326,12 +326,14 @@ class CompiledKernel:
         metadata['cluster_dims'] = tuple(metadata['cluster_dims'])
         KernelMetadata = namedtuple('KernelMetadata', sorted(list(metadata.keys())))
         self.metadata = KernelMetadata(**metadata)
+        backend = make_backend(self.metadata.target)
+        self.packed_metadata = backend.pack_metadata(self.metadata)
         self.src = src
         self.hash = hash
         self.name = self.metadata.name
         # stores the text of each level of IR that was generated during compilation
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
-        binary_ext = make_backend(self.metadata.target).binary_ext
+        binary_ext = backend.binary_ext
         self.asm = {
             file.suffix[1:]: file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
             for file in asm_files
@@ -380,7 +382,7 @@ class CompiledKernel:
                 device = driver.active.get_current_device()
                 stream = driver.active.get_current_stream(device)
             launch_metadata = self.launch_metadata(grid, stream, *args)
-            self.run(grid[0], grid[1], grid[2], stream, self.function, self.metadata, launch_metadata,
+            self.run(grid[0], grid[1], grid[2], stream, self.function, self.packed_metadata, launch_metadata,
                      CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, *args)
 
         return runner
