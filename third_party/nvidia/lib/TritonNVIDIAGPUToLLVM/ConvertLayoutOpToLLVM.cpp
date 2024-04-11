@@ -679,9 +679,10 @@ private:
     rewriter.replaceOp(op, result);
   }
 
-  void convertMMAV2To8BitsDotOperand(
-      triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter) const {
+  void
+  convertMMAV2To8BitsDotOperand(triton::gpu::ConvertLayoutOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto dstTy = op.getType();
     auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
@@ -707,9 +708,10 @@ private:
     rewriter.replaceOp(op, result);
   }
 
-  void convertMMAV2To16BitsDotOperand(
-      triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter) const {
+  void
+  convertMMAV2To16BitsDotOperand(triton::gpu::ConvertLayoutOp op,
+                                 OpAdaptor adaptor,
+                                 ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
