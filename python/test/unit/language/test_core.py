@@ -4,6 +4,7 @@ import re
 from typing import Optional, Union
 import math
 import textwrap
+import tempfile
 
 import numpy as np
 import pytest
@@ -2435,7 +2436,6 @@ def test_scan_layouts(M, N, src_layout, axis, device):
     }}
     """
 
-    import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
@@ -2573,7 +2573,6 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
         }}) {{axis = {axis} : i32}} : (tensor<{M}x{N}x{ty}, #src>) -> tensor<{rdims_1d}x{ty}, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #src}}>>
     """ + epilogue
 
-    import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
@@ -2628,7 +2627,6 @@ def test_store_op(M, src_layout, device):
     }}
     """
 
-    import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
@@ -2679,7 +2677,6 @@ def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device):
         }}
     }}
     """
-    import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
@@ -2762,7 +2759,6 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis):
     }}
     }}
     """
-    import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
@@ -4684,7 +4680,8 @@ layouts = [
     BlockedLayout([8, 1], [16, THREADS_PER_WARP // 16], [1, 4], [0, 1], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([4, 1], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([4, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1])
+    BlockedLayout([4, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]),
 ]
 
 intermediate_layouts = [
@@ -4701,7 +4698,7 @@ def compute_rep_shape(layout):
         rep_shape = np.multiply(warp_shape, layout.warps_per_cta)
         return rep_shape
     else:
-        assert "TODO: support compute_rep_shape for layout " + str(type(layout))
+        assert False, "TODO: support compute_rep_shape for layout " + str(type(layout))
 
 
 # This function gives a lower bound approximation of scratch buffer shape for convert_layout operation
@@ -4719,11 +4716,17 @@ def compute_scratch_buffer_shape(src_layout, dst_layout, shape):
 @pytest.mark.parametrize("dst_layout", layouts)
 def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     if (M == 1 or N == 1) and interm_layout:
+        # TODO(jlebar): These OOB accesses don't even hit an assert in the
+        # compiler, and some of them return the wrong result instead of
+        # crashing!
         pytest.skip("Out of bound access when maxPhase > 1")
     if str(src_layout) == str(dst_layout):
         pytest.skip()
     if is_hip():
-        scratch_shape = compute_scratch_buffer_shape(src_layout, dst_layout, (M, N))
+        try:
+            scratch_shape = compute_scratch_buffer_shape(src_layout, dst_layout, (M, N))
+        except AssertionError:
+            pytest.skip("Can't compute scratch buffer size")
         lds_size = 65536
         # consider int32 dtype in scratch buffer size,
         # because it is the largest dtype used in convert_layout in this test
@@ -4781,8 +4784,6 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     x = to_triton(numpy_random((M, N), dtype_str=dtype), device=device)
     z = torch.empty_like(x, device=device)
 
-    # write the IR to a temporary file using mkstemp
-    import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
@@ -4877,8 +4878,6 @@ def test_convertmma2mma(M, N, mma_pair, dtype, device):
         x = to_triton(numpy_random((M, N), dtype_str=dtype), device=device)
         z = torch.empty_like(x)
 
-        # write the IR to a temporary file using mkstemp
-        import tempfile
         with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
             f.write(ir)
             f.flush()
