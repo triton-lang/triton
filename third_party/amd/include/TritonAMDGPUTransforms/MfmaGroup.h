@@ -36,8 +36,8 @@ struct MfmaInsnAttr {
   unsigned m;
   unsigned n;
   unsigned k;
-  // k_base refers to the number of elements per thread
-  unsigned k_base;
+  // kBase refers to the number of elements per thread
+  unsigned kBase;
   llvm::StringRef insn;
 };
 

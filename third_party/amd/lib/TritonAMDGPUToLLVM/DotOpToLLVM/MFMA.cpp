@@ -187,8 +187,9 @@ struct DotOpMFMAConversionHelper {
         MfmaInsn::selectMfma(mDim, nDim, elemTyA, elemTyB, mfmaVersion);
     if (failed(maybeMfmaInsn))
       llvm::report_fatal_error("No match found in MFMA database\n");
-    else
-      mfmaInsnName = (*maybeMfmaInsn).getInsnName();
+
+    mfmaInsnName = maybeMfmaInsn->getInsnName();
+    unsigned kBase = maybeMfmaInsn->getKBase();
 
     auto aEncoding = aTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
     auto bEncoding = bTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
@@ -212,10 +213,13 @@ struct DotOpMFMAConversionHelper {
     auto numRepB = repA[0];
     assert(repA[0] == repB[0]);
 
-    ValueTable ha = getValuesFromDotOperandLayoutStruct(
-        loadedA, numRepB, numRepM, numRepK, kWidth, aTensorTy.getElementType());
-    ValueTable hb = getValuesFromDotOperandLayoutStruct(
-        loadedB, numRepB, numRepN, numRepK, kWidth, aTensorTy.getElementType());
+    auto operandA = getValuesFromDotOperandLayoutStruct(
+        loadedA, numRepB, numRepM, numRepK, kWidth, kBase,
+        aTensorTy.getElementType());
+    auto operandB = getValuesFromDotOperandLayoutStruct(
+        loadedB, numRepB, numRepN, numRepK, kWidth, kBase,
+        aTensorTy.getElementType());
+
     auto dstElemTy = dTensorTy.getElementType();
     auto fc = unpackLLElements(loc, loadedC, rewriter);
 
@@ -240,11 +244,13 @@ struct DotOpMFMAConversionHelper {
           }
           acc = zeroAuxiliarBlocks(subBlocks, acc);
           for (int k = 0; k < numRepK; k++) {
-            acc = mfmaLayout.getIsTransposed()
-                      ? generateMFMAOp(mfmaInsnName, hb[{b, n, k}],
-                                       ha[{b, m, k}], acc)
-                      : generateMFMAOp(mfmaInsnName, ha[{b, m, k}],
-                                       hb[{b, n, k}], acc);
+            for (int kPack = 0; kPack < kWidth / kBase; ++kPack)
+              acc =
+                  mfmaLayout.getIsTransposed()
+                      ? generateMFMAOp(mfmaInsnName, operandB[kPack][{b, n, k}],
+                                       operandA[kPack][{b, m, k}], acc)
+                      : generateMFMAOp(mfmaInsnName, operandA[kPack][{b, m, k}],
+                                       operandB[kPack][{b, n, k}], acc);
           }
           acc = reduceSubBlocks(subBlocks, acc);
           for (unsigned v = 0; v < elemsPerVec; ++v) {
@@ -265,14 +271,43 @@ struct DotOpMFMAConversionHelper {
   }
 
   /**
+   * @brief extract vector from rawElems based on kWidth and kBase
+   * rawElems is a vector of kWidth elements. We need to prepare vector(s) of
+   * kBase elements for each mfma instruction
+   */
+  SmallVector<Value> extractOperands(Value rawElems, int kWidth, int kBase,
+                                     Type type) const {
+    int kpack = kWidth / kBase;
+    SmallVector<Value> results;
+    auto vecTy = vec_ty(type, kBase);
+    for (int k = 0; k < kpack; ++k) {
+      Value vec = undef(vecTy);
+      for (int elemId = 0; elemId < kBase; ++elemId) {
+        auto val = extract_element(type, rawElems, i32_val(elemId + k * kBase));
+        vec = insert_element(vecTy, vec, val, i32_val(elemId));
+      }
+      if (type.getIntOrFloatBitWidth() == 8) {
+        if (4 == kBase)
+          // This is for int8 on pre- MI300 GPUs
+          results.push_back(bitcast(vec, i32_ty));
+        if (8 == kBase)
+          results.push_back(bitcast(vec, i64_ty));
+      } else
+        results.push_back(vec);
+    }
+    return results;
+  }
+
+  /**
    * @brief Converts dot operand structure to value table and converts types
    * appropriate for mfma instructions
    */
-  ValueTable getValuesFromDotOperandLayoutStruct(Value value, int batch, int n0,
-                                                 int n1, int kWidth,
-                                                 Type type) const {
+  SmallVector<ValueTable>
+  getValuesFromDotOperandLayoutStruct(Value value, int batch, int n0, int n1,
+                                      int kWidth, int kBase, Type type) const {
     auto elems = unpackLLElements(loc, value, rewriter);
-    ValueTable vals;
+    int kpack = kWidth / kBase;
+    SmallVector<ValueTable> dotOpVals(kpack);
     for (int b = 0; b < batch; ++b) {
       for (int i = 0; i < n0; i++) {
         for (int j = 0; j < n1; j++) {
@@ -288,21 +323,27 @@ struct DotOpMFMAConversionHelper {
 
           Value convertedElems;
           if (type.isF32()) {
-            convertedElems = extract_element(type, rawElems, i32_val(0));
-          } else if (type.getIntOrFloatBitWidth() == 8) {
-            if (kWidth == 4)
-              convertedElems = bitcast(rawElems, i32_ty);
-            if (kWidth == 8)
-              convertedElems = bitcast(rawElems, i64_ty);
+            for (int k = 0; k < kpack; ++k)
+              dotOpVals[k][{b, i, j}] =
+                  extract_element(type, rawElems, i32_val(k));
           } else {
-            assert(type.isBF16() || type.isF16());
-            convertedElems = rawElems;
+            SmallVector<Value> vals;
+            if (type.getIntOrFloatBitWidth() == 8) {
+              vals = extractOperands(rawElems, kWidth, kBase, i8_ty);
+            } else if (type.isBF16()) {
+              vals = extractOperands(rawElems, kWidth, kBase, i16_ty);
+            } else {
+              assert(type.isF16() && "Unsupported data type");
+              vals = extractOperands(rawElems, kWidth, kBase, f16_ty);
+            }
+            for (int k = 0; k < kpack; ++k) {
+              dotOpVals[k][{b, i, j}] = vals[k];
+            }
           }
-          vals[{b, i, j}] = convertedElems;
         }
       }
     }
-    return vals;
+    return dotOpVals;
   }
 };
 
