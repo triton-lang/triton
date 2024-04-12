@@ -2976,7 +2976,7 @@ def convert_fp8_to_fp32(x, device, dtype_str):
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, num_ctas, device):
     if is_interpreter():
         if in_dtype == 'bfloat16':
-            pytest.skip("bfloat16, float8e4nv and float8e5 not supported because numpy doesn't understand them")
+            pytest.skip("bfloat16 is not supported in the interpreter")
     else:
         check_cuda_only(device)
 
