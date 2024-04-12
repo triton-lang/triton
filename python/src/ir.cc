@@ -1567,7 +1567,11 @@ void init_triton_ir(py::module &&m) {
         auto reproducerPath = triton::tools::getenv("TRITON_REPRODUCER_PATH");
         if (!reproducerPath.empty()) {
           auto anchorName = self.getOpAnchorName();
+          llvm::outs() << "anchorName = " << anchorName << "\n";
           auto passes = self.getPasses();
+          for (auto& p : passes) {
+            llvm::outs() << "passName = " << p.getName() << "\n";
+          }
           Operation *op = mod.getOperation();
           makeReproducer(anchorName, passes, op, reproducerPath);
         }
