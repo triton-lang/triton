@@ -432,6 +432,9 @@ class JITFunction(KernelInterface[T]):
         # bind non-reserved keyword args and set defaults
         if self.binder is None:
             self.binder = create_function_from_signature(self.signature)
+            self.constexpr_indices = [i for (i, p) in enumerate(self.params) if p.is_constexpr]
+            self.non_constexpr_indices = [i for (i, p) in enumerate(self.params) if not p.is_constexpr]
+            self.specialised_indices = [i for (i, p) in enumerate(self.params) if not arg.param.do_not_specialize]
 
         kwargs = {k: v for k, v in kwargs.items() if k not in options.__dict__}
         bound_args = self.binder(*args, **kwargs)
@@ -447,11 +450,15 @@ class JITFunction(KernelInterface[T]):
         grid_0 = grid[0]
         grid_1 = grid[1] if grid_size > 1 else 1
         grid_2 = grid[2] if grid_size > 2 else 1
+
         # compute cache key
         args = [KernelArg(arg_value, param) for (_, arg_value), param in zip(bound_args.items(), self.params)]
-        sig_key = tuple(arg.mangled_type() for arg in args if not arg.param.is_constexpr)
-        spec_key = tuple(arg.specialization_key() for arg in args if not arg.param.do_not_specialize)
-        constexpr_key = tuple(arg.value for arg in args if arg.param.is_constexpr)
+
+        signature = {args[i].param.name : args[i].mangled_type() for i in self.non_constexpr_indices}
+        sig_key = tuple(signature.values())
+        spec_key = tuple(args[i].specialization_key() for i in self.specialised_indices)
+        constexpr_key = tuple(args[i].value for i in self.constexpr_indices)
+
         key = (sig_key, constexpr_key, spec_key, options)
         key = str(key)
         # Kernel is not cached; we have to compile.
@@ -466,9 +473,6 @@ class JITFunction(KernelInterface[T]):
                 if callable(arg):
                     raise TypeError(f"Callable constexpr at index {i} is not supported")
 
-            # Build kernel signature -- doesn't include constexpr arguments.
-            signature = {arg.param.name: arg.mangled_type() for arg in args if not arg.param.is_constexpr}
-
             if self._call_hook(key, signature, device, constants, options, configs):
                 return None
             # compile the kernel
@@ -482,14 +486,13 @@ class JITFunction(KernelInterface[T]):
         kernel = self.cache[device][key]
 
         # Verify key signature from the cache
-        signature = {arg.param.name: arg.mangled_type() for arg in args if not arg.param.is_constexpr}
         if kernel.src.signature != signature:
             raise RuntimeError(f"Signature mismatch for cached kernel {self.fn.__name__}:\n"
                                f"  Cached signature: {kernel.src.signature}\n"
                                f"  Call signature:   {signature}")
 
         if not warmup:
-            args = [arg.value for arg in args if not arg.param.is_constexpr]
+            args = [args[i].value for i in self.non_constexpr_indices]
             launch_metadata = kernel.launch_metadata(grid, stream, *args)
             kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
                        CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, *args)
