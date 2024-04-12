@@ -258,8 +258,8 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
     if src_dtype == 'float8e4nv' and torch.cuda.get_device_capability(0) < (9, 0):
         pytest.skip("float8e4nv upcast tests only supported on compute capability 9.0+")
 
-    if src_dtype == 'float8e4nv' and torch.version.hip is not None:
-        pytest.skip("float8e4nv upcast tests not supported on ROCm")
+    if src_dtype in ('float8e4nv', 'float8e4b15') and torch.version.hip is not None:
+        pytest.skip(f"{src_dtype} upcast tests not supported on ROCm")
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias, max_repr)
     stuff = {

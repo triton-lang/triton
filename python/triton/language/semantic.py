@@ -758,8 +758,8 @@ def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder, fp_downcast_ro
         assert builder.options.allow_fp8e4nv, "fp8e4nv data type is not supported on CUDA arch < 89"
 
     if (src_sca_ty.is_fp8e4b15() or dst_sca_ty.is_fp8e4b15()):
-        assert builder.codegen_fns[
-            "convert_custom_types"] is not None, "target doesn't provide conversion for this type."
+        assert builder.codegen_fns.get(
+            "convert_custom_types") is not None, "target doesn't provide conversion for this type."
         return builder.codegen_fns["convert_custom_types"](input, dst_ty, fp_downcast_rounding, _builder=builder)
     # Casting with customized floating types involved: fp8 <=> bf16, fp16, fp32, fp64
     # and non-default rounding modes for downcasting
