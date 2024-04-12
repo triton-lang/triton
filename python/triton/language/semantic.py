@@ -1312,8 +1312,6 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
                 return
             assert lhs_dtype == rhs_dtype, f"First input ({lhs_dtype}) and second input ({rhs_dtype}) must have the same dtype!"
         else:
-            assert not lhs_dtype.is_fp8e4b15() and not rhs_dtype.is_fp8e4b15(
-            ), "Dot op does not support fp8e4b15 on CUDA arch >= 90"
             if lhs_dtype.is_int() or rhs_dtype.is_int():
                 assert lhs_dtype == rhs_dtype, f"Both operands must be same type. First operand ({lhs_dtype}) and second operand ({rhs_dtype})"
                 assert lhs_dtype.is_int8() or lhs_dtype.is_uint8(
@@ -1331,11 +1329,11 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
                 assert lhs_dtype == rhs_dtype, f"First input ({lhs_dtype}) and second input ({rhs_dtype}) must have the same dtype!"
 
     assert lhs.type.is_block() and rhs.type.is_block()
-
-    assert_dtypes_valid(lhs.dtype, rhs.dtype, builder.options)
     if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():
         lhs = cast(lhs, tl.float16, builder)
         rhs = cast(rhs, tl.float16, builder)
+
+    assert_dtypes_valid(lhs.dtype, rhs.dtype, builder.options)
 
     if input_precision is None:
         input_precision = builder.options.default_dot_input_precision
