@@ -11,6 +11,14 @@ class DriverBase(metaclass=ABCMeta):
     def get_current_target(self):
         pass
 
+    @abstractmethod
+    def type_to_cpp_type(self, ty):
+        pass
+
+    @abstractmethod
+    def get_bin_name(self):
+        pass
+
     def __init__(self) -> None:
         pass
 

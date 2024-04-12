@@ -3,12 +3,24 @@ import os
 import subprocess
 import sys
 import tempfile
+import pytest
 
+import torch
 import numpy as np
 
 import triton
 from triton.backends.compiler import GPUTarget
-from triton.backends.nvidia.driver import include_dir, library_dirs
+
+def is_interpreter():
+    return os.environ.get('TRITON_INTERPRET', '0') == '1'
+
+def is_cuda():
+    return not is_interpreter() and \
+        triton.runtime.driver.active.get_current_target().backend == "cuda"
+
+def is_hip():
+    return not is_interpreter() and \
+        triton.runtime.driver.active.get_current_target().backend == "hip"
 
 kernel_utils_src = """
 import triton
@@ -60,7 +72,7 @@ def kernel(C, A, B, M, N, K,
   tl.store(c_ptrs, c)
 """
 
-test_utils_src = """
+test_includes_src_cuda = """
 #include <cuda.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -68,6 +80,20 @@ test_utils_src = """
 #include <assert.h>
 #include "kernel.h"
 
+"""
+
+test_includes_src_hip = """
+#define __HIP_PLATFORM_AMD__
+#include <hip/hip_runtime.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+#include <assert.h>
+#include "kernel.h"
+
+"""
+
+test_utils_src = """
 static void write_buffer_to_csv(char *filename, int32_t *buffer, int size) {
     FILE *file = fopen(filename, "w");
     if (file == NULL) {
@@ -99,6 +125,12 @@ static void read_csv_to_buffer(char *filename, int16_t *buffer, int size) {
 
 def gen_kernel_library(dir, libname):
     c_files = glob.glob(os.path.join(dir, "*.c"))
+    if is_cuda():
+        from triton.backends.nvidia.driver import include_dir, library_dirs
+        lib_dirs = library_dirs()
+    elif is_hip():
+        from triton.backends.amd.driver import include_dir, _get_path_to_hip_runtime_dylib
+        lib_dirs = _get_path_to_hip_runtime_dylib()
     subprocess.run(
         ["gcc"] + c_files + ["-I", include_dir[0], "-c", "-fPIC"],
         check=True,
@@ -107,17 +139,72 @@ def gen_kernel_library(dir, libname):
     o_files = glob.glob(os.path.join(dir, "*.o"))
 
     command = ["gcc", *o_files, "-shared", "-o", libname]
-    for lib_dir in library_dirs():
+    for lib_dir in lib_dirs:
         command.extend(["-L", lib_dir])
     subprocess.run(command, check=True, cwd=dir)
 
 
 def gen_test_bin(dir, M, N, K, exe="test", algo_id=0):
-    test_src = f"""
+    test_src_hip = f"""
 int main(int argc, char **argv) {{
   int M = {M}, N = {N}, K = {K};
 
-  // initialize CUDA handles
+  // initialize hip handles
+  hipDevice_t dev;
+  hipCtx_t ctx;
+  hipStream_t stream;
+  hipDeviceptr_t A, B, C;
+  hipError_t err = 0;
+  hipInit(0);
+  hipDeviceGet(&dev, 0);
+  hipMalloc(&A, M * K * 2);
+  hipMalloc(&B, K * N * 2);
+  hipMalloc(&C, M * N * 4);
+  hipStreamCreate(&stream);
+  load_matmul_fp16();
+
+  // initialize input data
+  int16_t hA[M*K];
+  int16_t hB[K*N];
+  memset(hA, 0, M*K*2);
+  memset(hB, 0, K*N*2);
+  read_csv_to_buffer(argv[1], hA, M*K);
+  read_csv_to_buffer(argv[2], hB, K*N);
+  hipMemcpyHtoD(A, hA, M*K*2);
+  hipMemcpyHtoD(B, hB, K*N*2);
+
+  // launch kernel
+  hipStreamSynchronize(stream);
+  hipError_t ret;
+  int algo_id = {algo_id};
+  if (algo_id == 0) {{
+    ret = matmul_fp16_default(stream, C, A, B, M, N, K, N, 1, K, 1, N, 1);
+  }} else {{
+    ret = matmul_fp16(stream, C, A, B, M, N, K, N, 1, K, 1, N, 1, {algo_id});
+  }}
+  if (ret != 0) fprintf(stderr, "kernel launch failed\\n");
+  assert(ret == 0);
+
+  hipStreamSynchronize(stream);
+
+  // read data
+  int32_t hC[M*N];
+  memset(hC, 0, M*N*4);
+  hipMemcpyDtoH(hC, C, M*N*4);
+  write_buffer_to_csv(argv[3], hC, M*N);
+
+  // free cuda handles
+  unload_matmul_fp16();
+  hipFree(A);
+  hipFree(B);
+  hipFree(C);
+}}
+"""
+    test_src_cuda = f"""
+int main(int argc, char **argv) {{
+  int M = {M}, N = {N}, K = {K};
+
+   // initialize CUDA handles
   CUdevice dev;
   CUcontext ctx;
   CUstream stream;
@@ -170,16 +257,29 @@ int main(int argc, char **argv) {{
   cuCtxDestroy(ctx);
 }}
 """
-    src = test_utils_src + test_src
+    if is_cuda():
+        src = test_includes_src_cuda + test_utils_src + test_src_cuda
+    elif is_hip():
+        src = test_includes_src_hip + test_utils_src + test_src_hip
     with open(os.path.join(dir, "test.c"), "w") as file:
         file.write(src)
 
-    command = ["gcc", "test.c"]
+    if is_cuda():
+        from triton.backends.nvidia.driver import include_dir, library_dirs
+        lib_dirs = library_dirs()
+        command = ["gcc", "test.c"]
+    elif is_hip():
+        from triton.backends.amd.driver import include_dir, _get_path_to_hip_runtime_dylib
+        lib_dirs = _get_path_to_hip_runtime_dylib()
+        command = ["hipcc", "test.c"]
     for inc_dir in include_dir:
         command.extend(["-I", inc_dir])
-    for lib_dir in library_dirs():
+    for lib_dir in lib_dirs:
         command.extend(["-L", lib_dir])
-    command.extend(["-l", "cuda", "-L", dir, "-l", "kernel", "-o", exe])
+    if is_cuda():
+        command.extend(["-l", "cuda", "-L", dir, "-l", "kernel", "-o", exe])
+    elif is_hip():
+        command.extend(["-L", dir, "-l", "kernel", "-o", exe])
     subprocess.run(command, check=True, cwd=dir)
 
 
@@ -259,7 +359,10 @@ def compile_aot_kernels(dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints):
 
 
 def link_aot_kernels(dir):
-    linker_path = os.path.join(triton.tools.__path__[0], "link.py")
+    if is_hip():
+        linker_path = os.path.join(triton.tools.__path__[0], "../backends/amd/tools/link.py")
+    else:
+        linker_path = os.path.join(triton.tools.__path__[0], "../backends/nvidia/tools/link.py")
 
     # link all desired configs
     h_files = glob.glob(os.path.join(dir, "*.h"))
@@ -425,6 +528,9 @@ def test_compile_link_autotune_matmul():
 
 
 def test_ttgir_to_ptx():
+    if is_hip():
+        pytest.skip('test_ttgir_to_ptx is not supported on HIP.')
+
     src = """
 module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32, "triton_gpu.num-ctas" = 1 : i32} {
   tt.func public @sum_kernel_0d1d(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i32>) {

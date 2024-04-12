@@ -2,13 +2,14 @@ import binascii
 import hashlib
 import importlib.util
 import sys
+import json
 from argparse import ArgumentParser
 from pathlib import Path
 from typing import List
 
 import triton
+from triton.tools.driver import driver
 from triton.compiler.code_generator import kernel_suffix
-from triton.backends.nvidia.driver import ty_to_cpp
 
 desc = """
 Triton ahead-of-time compiler:
@@ -120,14 +121,16 @@ if __name__ == "__main__":
     # dump C stub code
     suffix = kernel_suffix(signature.values(), attrs)
     func_name = '_'.join([out_name, sig_hash, suffix])
-    hex_ = str(binascii.hexlify(ccinfo.asm["cubin"]))[2:-1]
+    bin_name = driver.active.get_bin_name()
+    backend_name = "amd" if bin_name=="hsaco" else "nvidia"
+    hex_ = str(binascii.hexlify(ccinfo.asm[bin_name]))[2:-1]
     params = {
         "kernel_name": func_name,
         "triton_kernel_name": args.kernel_name,
         "bin_size": len(hex_),
         "bin_data": ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])]),
-        "signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),
-        "full_signature": ", ".join([f"{ty_to_cpp(signature[i])} {kernel.arg_names[i]}" for i in signature.keys()]),
+        "signature": ", ".join([f"{driver.active.type_to_cpp_type(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),
+        "full_signature": ", ".join([f"{driver.active.type_to_cpp_type(signature[i])} {kernel.arg_names[i]}" for i in signature.keys()]),
         "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names]),
         "num_args": len(arg_names),
         "kernel_docstring": doc_string,
@@ -140,6 +143,6 @@ if __name__ == "__main__":
         "_placeholder": "",
     }
     for ext in ['h', 'c']:
-        template_path = Path(__file__).parent / f"compile.{ext}"
+        template_path = Path(__file__).parent.parent / "backends" / f"{backend_name}" / "tools" / f"compile.{ext}"
         with out_path.with_suffix(f".{sig_hash}_{suffix}.{ext}").open("w") as fp:
             fp.write(Path(template_path).read_text().format(**params))

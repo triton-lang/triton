@@ -436,3 +436,9 @@ class HIPDriver(GPUDriver):
         arch = device_properties['arch']
         warp_size = device_properties['warpSize']
         return GPUTarget("hip", arch.split(':')[0], warp_size)
+
+    def type_to_cpp_type(self, ty):
+        return ty_to_cpp(ty)
+
+    def get_bin_name(self):
+        return "hsaco"

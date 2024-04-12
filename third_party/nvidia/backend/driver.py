@@ -382,3 +382,9 @@ class CudaDriver(GPUDriver):
     def is_active():
         import torch
         return torch.cuda.is_available() and (torch.version.hip is None)
+
+    def type_to_cpp_type(self, ty):
+        return ty_to_cpp(ty)
+
+    def get_bin_name(self):
+        return "cubin"
