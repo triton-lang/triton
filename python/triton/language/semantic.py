@@ -1317,10 +1317,18 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
                 assert lhs_dtype.is_int8() or lhs_dtype.is_uint8(
                 ), f"Both operands must be either int8 or uint8. Operand type ({lhs_dtype})"
             elif lhs_dtype.is_fp8() or rhs_dtype.is_fp8():
-                assert lhs_dtype.is_fp8e4nv() or lhs_dtype.is_fp8e5(
-                ), f"Only supports fp8e4nv or fp8e5. First operand ({lhs_dtype})"
-                assert rhs_dtype.is_fp8e4nv() or rhs_dtype.is_fp8e5(
-                ), f"Only supports fp8e4nv or fp8e5. Second operand ({rhs_dtype})"
+                if options.allow_fp8e4b15:
+                    allowed_types = ['fp8e4nv', 'fp8e5', 'fp8e4b15']
+                else:
+                    allowed_types = ['fp8e4nv', 'fp8e5']
+
+                def _validate_dtype(dtype, allowed_types, operand_name):
+                    if not any(getattr(dtype, f'is_{dtype_name}')() for dtype_name in allowed_types):
+                        supported_types = ', '.join(allowed_types)
+                        raise AssertionError(f"Only supports {supported_types}. {operand_name} ({dtype})")
+
+                _validate_dtype(lhs_dtype, allowed_types, "First operand")
+                _validate_dtype(rhs_dtype, allowed_types, "Second operand")
             else:
                 assert lhs_dtype.is_fp16() or lhs_dtype.is_bf16() or lhs_dtype.is_fp32() or lhs_dtype.is_int1(
                 ), f"Unsupported dtype {lhs_dtype}"
@@ -1329,11 +1337,10 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
                 assert lhs_dtype == rhs_dtype, f"First input ({lhs_dtype}) and second input ({rhs_dtype}) must have the same dtype!"
 
     assert lhs.type.is_block() and rhs.type.is_block()
+    assert_dtypes_valid(lhs.dtype, rhs.dtype, builder.options)
     if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():
         lhs = cast(lhs, tl.float16, builder)
         rhs = cast(rhs, tl.float16, builder)
-
-    assert_dtypes_valid(lhs.dtype, rhs.dtype, builder.options)
 
     if input_precision is None:
         input_precision = builder.options.default_dot_input_precision

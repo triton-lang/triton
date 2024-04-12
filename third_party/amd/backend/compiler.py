@@ -22,6 +22,7 @@ class HIPOptions:
     debug: bool = False
     arch: str = None
     allow_fp8e4nv: bool = False
+    allow_fp8e4b15: bool = False
     default_dot_input_precision: str = "ieee"
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     enable_fp_fusion: bool = True
@@ -49,7 +50,7 @@ class HIPOptions:
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
-        extern_libs = dict() if self.extern_libs is None else dict(self.extern_libs)
+        extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         # Ignore user-defined warp size for gfx9
         warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch else 64
         object.__setattr__(self, 'warp_size', warp_size)
@@ -86,7 +87,7 @@ class HIPBackend(BaseBackend):
         return metadata
 
     def get_codegen_implementation(self):
-        codegen_fns = dict()
+        codegen_fns = {}
         return codegen_fns
 
     def load_dialects(self, ctx):
