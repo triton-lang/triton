@@ -434,7 +434,7 @@ class JITFunction(KernelInterface[T]):
             self.binder = create_function_from_signature(self.signature)
             self.constexpr_indices = [i for (i, p) in enumerate(self.params) if p.is_constexpr]
             self.non_constexpr_indices = [i for (i, p) in enumerate(self.params) if not p.is_constexpr]
-            self.specialised_indices = [i for (i, p) in enumerate(self.params) if not arg.param.do_not_specialize]
+            self.specialised_indices = [i for (i, p) in enumerate(self.params) if not p.do_not_specialize]
 
         kwargs = {k: v for k, v in kwargs.items() if k not in options.__dict__}
         bound_args = self.binder(*args, **kwargs)
