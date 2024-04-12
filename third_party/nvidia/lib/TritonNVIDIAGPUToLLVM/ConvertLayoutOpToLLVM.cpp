@@ -605,10 +605,7 @@ private:
   // The conversion logic is taken from:
   // https://github.com/ColfaxResearch/cutlass-kernels/blob/a9de6446c1c0415c926025cea284210c799b11f8/src/fmha-pipeline/reg2reg.h#L45
   void shuffle8BitsMMAToDotOperand(Location loc, Value &upper, Value &lower,
-                                   unsigned srcBits,
                                    ConversionPatternRewriter &rewriter) const {
-    assert((srcBits == 8 || srcBits == 16) && "Unsupported src element size");
-
     Value threadIdx = getThreadId(rewriter, loc);
     // (threadIdx + 1) & 2 == 0, select thread 0 3
     Value cnd =
@@ -632,15 +629,11 @@ private:
     lower0 =
         rewriter.create<NVVM::ShflOp>(loc, i32_ty, mask, lower0, lowerIdx,
                                       clamp, NVVM::ShflKind::idx, UnitAttr());
-    if (srcBits == 8) {
-      Value selectorEx4 = select(cnd, i32_val(0x5410), i32_val(0x1054));
-      Value selectorEx5 = select(cnd, i32_val(0x7632), i32_val(0x3276));
-      upper = LLVM::NVIDIA::permute(loc, rewriter, upper0, lower0, selectorEx4);
-      lower = LLVM::NVIDIA::permute(loc, rewriter, upper0, lower0, selectorEx5);
-    } else {
-      upper = select(cnd, upper0, lower0);
-      lower = select(cnd, lower0, upper0);
-    }
+
+    Value selectorEx4 = select(cnd, i32_val(0x5410), i32_val(0x1054));
+    Value selectorEx5 = select(cnd, i32_val(0x7632), i32_val(0x3276));
+    upper = LLVM::NVIDIA::permute(loc, rewriter, upper0, lower0, selectorEx4);
+    lower = LLVM::NVIDIA::permute(loc, rewriter, upper0, lower0, selectorEx5);
   }
 
   void
@@ -655,7 +648,7 @@ private:
       Value upper = pack4xB8ToI32(loc, vals, i, rewriter);
       Value lower = pack4xB8ToI32(loc, vals, i + 4, rewriter);
 
-      shuffle8BitsMMAToDotOperand(loc, upper, lower, 8, rewriter);
+      shuffle8BitsMMAToDotOperand(loc, upper, lower, rewriter);
 
       Value vecVal = bitcast(upper, vec_ty(i8_ty, 4));
       for (int j = 0; j < 4; j++) {
@@ -686,7 +679,7 @@ private:
       Value upper = pack4xB8ToI32(loc, vals, i, rewriter);
       Value lower = pack4xB8ToI32(loc, vals, i + 4, rewriter);
 
-      shuffle8BitsMMAToDotOperand(loc, upper, lower, 8, rewriter);
+      shuffle8BitsMMAToDotOperand(loc, upper, lower, rewriter);
 
       if (i % 16 != 0) {
         std::swap(retVals.back(), upper);
