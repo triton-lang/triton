@@ -388,7 +388,7 @@ class InterpreterBuilder:
     def create_fp_to_fp(self, src, dst_type, rounding_mode):
         src_element_type = src.dtype.scalar
         dst_element_type = dst_type.scalar
-        data = _convert_float(src.data, src_element_type, dst_element_type, _ir.ROUNDING_MODE.RTNE)
+        data = _convert_float(src.data, src_element_type, dst_element_type, rounding_mode)
         return TensorHandle(data, dst_type.scalar)
 
     def create_bitcast(self, src, dst_type):
