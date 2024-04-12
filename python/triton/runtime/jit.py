@@ -243,7 +243,11 @@ def create_function_from_signature(sig):
     func_body = f"def dynamic_func({args_str}):\n    return {{{dict_str}}}"
 
     # Prepare defaults to be inserted into function namespace
-    func_namespace = {f"default_{name}": param.default for name, param in sig.parameters.items() if param.default is not inspect.Parameter.empty}
+    func_namespace = {
+        f"default_{name}": param.default
+        for name, param in sig.parameters.items()
+        if param.default is not inspect.Parameter.empty
+    }
 
     # Execute the function string in func_namespace to create the function
     exec(func_body, func_namespace)
@@ -454,7 +458,7 @@ class JITFunction(KernelInterface[T]):
         # compute cache key
         args = [KernelArg(arg_value, param) for (_, arg_value), param in zip(bound_args.items(), self.params)]
 
-        signature = {args[i].param.name : args[i].mangled_type() for i in self.non_constexpr_indices}
+        signature = {args[i].param.name: args[i].mangled_type() for i in self.non_constexpr_indices}
         sig_key = tuple(signature.values())
         spec_key = tuple(args[i].specialization_key() for i in self.specialised_indices)
         constexpr_key = tuple(args[i].value for i in self.constexpr_indices)
