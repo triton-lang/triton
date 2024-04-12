@@ -289,7 +289,7 @@ jobs:
 
       - name: Run python tests on HIP
         run: |
-          pytest --capture=tee-sys -rfs -vvv python/tutorial/06-fused-attention.py
+          pytest --capture=tee-sys -rfs -vvv python/tutorials/06-fused-attention.py
           cd python/test/unit
           pytest --capture=tee-sys -rfs -vvv -n 32 language operators \
                  --ignore=language/test_reproducer.py \
