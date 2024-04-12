@@ -456,7 +456,7 @@ static bool createCoarseSchedule(
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
   tt::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
-  // 1. Get all loads that are (transitively) used by dot ops and their distance
+  // Get all loads that are (transitively) used by dot ops and their distance
   // to the dot op.
   llvm::MapVector<tt::LoadOp, std::pair<int, Operation *>>
       loadOpToIndLevelAndUse = loadOpsToIndirectionLevelAndUse(forOp);
@@ -471,7 +471,7 @@ static bool createCoarseSchedule(
   if (loadOpToIndLevelAndUse.empty())
     return false;
 
-  // 1. Check which loads are good for pipelining, and assign them
+  // Check which loads are good for pipelining, and assign them
   // memory layouts.
   DenseSet<tt::LoadOp> loadsToPipeline =
       assignMemoryLayouts(loadToInfo, loadOpToIndLevelAndUse, axisInfoAnalysis);
@@ -479,13 +479,16 @@ static bool createCoarseSchedule(
   if (loadsToPipeline.empty())
     return false;
 
-  int maxDistance = -1;
+  // Calculate the stage distance between applicable loads.
+  int maxIndirectionLevel = -1;
   for (tt::LoadOp op : loadsToPipeline) {
-    maxDistance = std::max(maxDistance, loadOpToIndLevelAndUse[op].first);
+    maxIndirectionLevel =
+        std::max(maxIndirectionLevel, loadOpToIndLevelAndUse[op].first);
   }
-  unsigned stagesBetweenLoads = ceil<unsigned>(numStages - 2, maxDistance + 1);
+  unsigned stagesBetweenLoads =
+      ceil<unsigned>(numStages - 2, maxIndirectionLevel + 1);
 
-  // Start by initializing PipelinedOpInfo for users of the loads.
+  // Put the root uses of the loads in the last stage.
   for (auto &[loadOp, distAndUse] : loadOpToIndLevelAndUse) {
     // Non-LoadOp(s) are the root uses of all LoadOp(s) and should be
     // always present in the opInfo
@@ -493,10 +496,12 @@ static bool createCoarseSchedule(
       opToStage[distAndUse.second] = numStages - 1;
   }
 
+  // Assign stages to the loads.
   for (tt::LoadOp op : loadsToPipeline) {
     opToStage[op] = loadOpToIndLevelAndUse[op].first * stagesBetweenLoads;
   }
 
+  // Distance from the load to the use.
   for (tt::LoadOp op : loadsToPipeline) {
     loadToInfo[op].distToUse =
         opToStage[loadOpToIndLevelAndUse[op].second] - opToStage[op];
