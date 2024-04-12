@@ -5,6 +5,10 @@ import triton
 import triton.ops
 
 
+def is_hip():
+    return triton.runtime.driver.active.get_current_target()[0] == "hip"
+
+
 def sparsify_tensor(x, mask, block):
     ret = torch.empty((x.size(0), mask.sum(), block, block), dtype=x.dtype, device=x.device)
     for idx, (h, i, j) in enumerate(zip(*mask.nonzero(as_tuple=True))):
@@ -84,10 +88,11 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, device, Z=3, H=2, M=512, N
     c_tri.backward(dc_tri)
     da_tri = a_tri.grad
     db_tri = b_tri.grad
+    atol = 1e-3 if is_hip() else 0
     # compare
-    torch.testing.assert_close(c_ref, c_tri)
-    torch.testing.assert_close(da_ref, da_tri)
-    torch.testing.assert_close(db_ref, db_tri)
+    torch.testing.assert_close(c_ref, c_tri, atol=atol, rtol=0)
+    torch.testing.assert_close(da_ref, da_tri, atol=atol, rtol=0)
+    torch.testing.assert_close(db_ref, db_tri, atol=atol, rtol=0)
 
 
 configs = [
@@ -196,8 +201,9 @@ def test_attention_fwd_bwd(
     # comparison
     # print(f"Triton loss {loss} and torch loss {torch_loss}.  Also checking grads...")
     torch.testing.assert_close(loss, torch_loss, atol=1e-3, rtol=0)
+    atol = 1e-3 if is_hip() else 0
     for g1, g2 in zip(grads, torch_grads):
-        torch.testing.assert_close(g1, g2)
+        torch.testing.assert_close(g1, g2, atol=atol, rtol=0)
 
 
 @pytest.mark.parametrize("block", [16, 32, 64])
