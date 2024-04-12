@@ -35,7 +35,7 @@ def test_reproducer():
     ttgir_to_llvm_pass = "convert-triton-"
     if is_hip():
         ttgir_to_llvm_pass += "amd"
-    ttgir_to_llvm_pass += "gpu-to-llv"
+    ttgir_to_llvm_pass += "gpu-to-llvm"
 
     if ttgir_to_llvm_pass not in foundPipeline:
         raise Exception("Failed to find triton passes in pipeline")
