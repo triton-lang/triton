@@ -36,7 +36,7 @@ namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace {
 
-struct PipelinedOpInfo {
+/*struct PipelinedOpInfo {
   int stage = -1;
   Operation *use = nullptr;
 
@@ -45,6 +45,15 @@ struct PipelinedOpInfo {
   // Blocked encoding is used for loads feeding into other loads.
   ttg::BlockedEncodingAttr blockedEncoding = nullptr;
   bool loadIsMMAV3 = false;
+};*/
+
+struct LoadInfo {
+  // Layout of the data in the shared memory.
+  ttg::SharedEncodingAttr sharedEncoding = nullptr;
+  // Blocked encoding is used for loads not used by the dot.
+  ttg::BlockedEncodingAttr blockedEncoding = nullptr;
+  bool loadIsMMAV3 = false;
+  int distToUse = -1;
 };
 
 } // namespace
@@ -72,7 +81,9 @@ static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
 static void
 createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
                 Value insertIdx, Value extractIdx,
-                llvm::MapVector<Operation *, PipelinedOpInfo> &opToInfo) {
+                // llvm::MapVector<Operation *, PipelinedOpInfo> &opToInfo,
+                llvm::MapVector<Operation *, int> &opToStage,
+                llvm::DenseMap<tt::LoadOp, LoadInfo> &loadToInfo) {
   OpBuilder builder(forOp);
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
   // Replace the load with insert/extract slice.
@@ -80,10 +91,10 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   Location loc = loadOp.getLoc();
   Value src = loadOp.getPtr();
   Value mask = loadOp.getMask();
-  if (!isExpensiveLoadOrStore(loadOp) && opToInfo[loadOp].blockedEncoding) {
+  if (!isExpensiveLoadOrStore(loadOp) && loadToInfo[loadOp].blockedEncoding) {
     // For inexpensive loads that do not directly feed into dot ops
     // we want to use optimal layout for the data.
-    ttg::BlockedEncodingAttr encoding = opToInfo[loadOp].blockedEncoding;
+    ttg::BlockedEncodingAttr encoding = loadToInfo[loadOp].blockedEncoding;
     auto convertBlockLayout = [&](Value src) {
       auto ty = src.getType().cast<RankedTensorType>();
       auto newTy =
@@ -112,11 +123,11 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
       builder.create<ttg::AsyncCommitGroupOp>(loc, copy->getResult(0));
   builder.create<ttg::AsyncWaitOp>(loc, commmit->getResult(0), 0);
 
-  int stage = opToInfo[loadOp].stage;
-  bool isMMV3Load = opToInfo[loadOp].loadIsMMAV3;
-  opToInfo.insert({copy, {.stage = stage}});
-  opToInfo.insert({commmit, {.stage = stage}});
-  opToInfo.erase(loadOp);
+  int stage = opToStage[loadOp];
+  bool isMMV3Load = loadToInfo[loadOp].loadIsMMAV3;
+  opToStage[copy] = stage;
+  opToStage[commmit] = stage;
+  opToStage.erase(loadOp);
 
   // Extract part.
   SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
@@ -257,49 +268,23 @@ getSharedEncoding(tt::LoadOp loadOp, bool isMMAV3) {
                                       ctaLayout);
 }
 
-// Create a map from load ops to their distance to the nearest dot op and the
+// Create a map from load ops to their indirection level and the
 // final use of the load op (another load op, or a dot op).
+// Indirection level is "0" for the load op directly used by the dot op,
+// "1" for the load op used by the load op used by the dot op, and so on.
 static llvm::MapVector<tt::LoadOp, std::pair<int, Operation *>>
-loadOpsToDistanceAndUse(scf::ForOp forOp) {
-  llvm::MapVector<tt::LoadOp, std::pair<int, Operation *>> loadOpToDistAndUse;
+loadOpsToIndirectionLevelAndUse(scf::ForOp forOp) {
+  llvm::MapVector<tt::LoadOp, std::pair<int, Operation *>>
+      loadOpToIndLevelAndUse;
   DenseSet<Operation *> seen;
-
-  ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
-  tt::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
-
-  auto isCandidate = [&](tt::LoadOp loadOp) -> bool {
-    assert(!isLoadFromTensorPtr(loadOp) &&
-           "Block ptr should have been lowered before this pass.");
-    auto ptr = loadOp.getPtr();
-    unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
-    if (auto mask = loadOp.getMask())
-      vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
-
-    auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
-    if (!tensorTy)
-      return false;
-    auto ty =
-        tensorTy.getElementType().cast<tt::PointerType>().getPointeeType();
-    unsigned width = vec * ty.getIntOrFloatBitWidth();
-
-    // We do not pipeline all loads for the following reasons:
-    // 1. On nvidia GPUs, cp.async's cp-size can only be 4, 8, or 16.
-    // 2. It's likely that pipling small loads won't offer much performance
-    //    improvement and may even hurt performance by increasing register
-    //    pressure.
-    LDBG("Load " << *loadOp << " has width " << width);
-    return width >= 32;
-  };
 
   std::function<void(Operation * op, int, Operation *)> dfs =
       [&](Operation *op, int distance, Operation *use) {
         if (!seen.insert(op).second)
           return;
         if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-          if (!isCandidate(loadOp))
-            return;
           // TODO: What if there are multiple uses at different distances?
-          loadOpToDistAndUse[loadOp] = std::make_pair(distance, use);
+          loadOpToIndLevelAndUse[loadOp] = std::make_pair(distance, use);
           use = op;
           distance++;
         }
@@ -327,7 +312,7 @@ loadOpsToDistanceAndUse(scf::ForOp forOp) {
     }
   }
 
-  return loadOpToDistAndUse;
+  return loadOpToIndLevelAndUse;
 }
 
 static bool loadIsMMAv3(tt::LoadOp loadOp) {
@@ -353,44 +338,40 @@ static bool loadIsMMAv3(tt::LoadOp loadOp) {
   return oldOrder == newOrder;
 }
 
-/// Collect ops to pipeline. Returns true if any ops are found to pipeline.
-static bool
-collectOpsToPipeline(scf::ForOp forOp,
-                     llvm::MapVector<Operation *, PipelinedOpInfo> &opInfo,
-                     int numStages) {
-  ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
-  tt::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
+static llvm::DenseSet<tt::LoadOp>
+assignMemoryLayouts(llvm::DenseMap<tt::LoadOp, LoadInfo> &loadToInfo,
+                    llvm::MapVector<tt::LoadOp, std::pair<int, Operation *>>
+                        &loadOpToIndLevelAndUse,
+                    tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
 
-  // Loads ordered by their dependency distance to the nearest dot op.
-  llvm::MapVector<tt::LoadOp, std::pair<int, Operation *>> loadOpToDistAndUse =
-      loadOpsToDistanceAndUse(forOp);
-  LLVM_DEBUG({
-    LDBG("Found " << loadOpToDistAndUse.size() << " loads to pipeline:");
-    for (const auto &[k, v] : loadOpToDistAndUse) {
-      LDBG("  - distance: " << v.first);
-      LDBG("    op to pipeline: " << *k);
-      LDBG("    use: " << *v.second);
-    }
-  });
-  if (loadOpToDistAndUse.empty())
-    return false;
+  llvm::DenseSet<tt::LoadOp> loadsToPipeline;
 
-  // Start by initializing PipelinedOpInfo for users of the loads.
-  for (auto &[loadOp, distAndUse] : loadOpToDistAndUse) {
-    // Non-LoadOp(s) are the root uses of all LoadOp(s) and should be
-    // always present in the opInfo
-    if (!isa<tt::LoadOp>(distAndUse.second))
-      opInfo[distAndUse.second] = PipelinedOpInfo();
-  }
+  for (auto &[loadOp, distAndUse] : loadOpToIndLevelAndUse) {
+    LoadInfo loadInfo;
 
-  int maxDistance = *triton::max_element(
-      llvm::make_first_range(llvm::make_second_range(loadOpToDistAndUse)));
-  unsigned stagesBetweenLoads = ceil<unsigned>(numStages - 2, maxDistance + 1);
+    assert(!isLoadFromTensorPtr(loadOp) &&
+           "Block ptr should have been lowered before this pass.");
+    auto ptr = loadOp.getPtr();
+    unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
+    if (auto mask = loadOp.getMask())
+      vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
 
-  // Then consider the load ops that feed into the dot ops or are used by other
-  // loads.
-  for (auto &[loadOp, distAndUse] : loadOpToDistAndUse) {
-    PipelinedOpInfo loadInfo;
+    auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
+    if (!tensorTy)
+      continue;
+    auto ty =
+        tensorTy.getElementType().cast<tt::PointerType>().getPointeeType();
+    unsigned width = vec * ty.getIntOrFloatBitWidth();
+
+    // We do not pipeline all loads for the following reasons:
+    // 1. On nvidia GPUs, cp.async's cp-size can only be 4, 8, or 16.
+    // 2. It's likely that pipling small loads won't offer much performance
+    //    improvement and may even hurt performance by increasing register
+    //    pressure.
+    LDBG("Load " << *loadOp << " has width " << width);
+    if (width < 32)
+      continue;
+
     if (auto dot = dyn_cast<tt::DotOp>(distAndUse.second)) {
       if (loadIsMMAv3(loadOp)) {
         loadInfo.loadIsMMAV3 = true;
@@ -434,15 +415,15 @@ collectOpsToPipeline(scf::ForOp forOp,
           }
         }
       }
-    } else if (isa<tt::LoadOp>(distAndUse.second)) {
+    } else if (auto loadOp = cast<tt::LoadOp>(distAndUse.second)) {
       // The use of this loadOp is another loadOp. If the use is not in the
-      // loadInfo already, it means that the use is not valid for pipelining
-      // for some reason. We should skip this loadOp, too. Note that we have
-      // an assumption that distAndUse.second (i.e. the use of this loadOp)
-      // has already be processed in a previous loop iteration. This assumption
-      // is held by how loadOpsToDistanceAndUse recursively collects
-      // loadOpToDistAndUse using DFS.
-      if (opInfo.find(distAndUse.second) == opInfo.end()) {
+      // loadsToPipeline already, it means that the use is not valid for
+      // pipelining for some reason. We should skip this loadOp, too. Note that
+      // we have an assumption that distAndUse.second (i.e. the use of this
+      // loadOp) has already be processed in a previous loop iteration. This
+      // assumption is held by how loadOpsToIndirectionLevelAndUse recursively
+      // collects loadOpToIndLevelAndUse using DFS.
+      if (loadsToPipeline.count(loadOp) == 0) {
         continue;
       }
     }
@@ -461,22 +442,64 @@ collectOpsToPipeline(scf::ForOp forOp,
       continue;
     }
 
-    loadInfo.stage = (maxDistance - distAndUse.first) * stagesBetweenLoads;
-    loadInfo.use = distAndUse.second;
-    opInfo[loadOp] = loadInfo;
+    loadsToPipeline.insert(loadOp);
+    loadToInfo[loadOp] = loadInfo;
   }
 
-  // Last, find root load users (i.e. users that aren't used by another stage of
-  // the pipeline) and assign them to the last stage.
-  //
-  // We cannot use forOp.walk(...) here because we only want to visit the
-  // operations in the loop body block. Nested blocks are handled separately.
-  for (Operation &op : forOp) {
-    auto iter = opInfo.find(&op);
-    if (iter != opInfo.end() && iter->second.stage == -1) {
-      assert(!isa<tt::LoadOp>(iter->first));
-      iter->second.stage = numStages - 1;
+  return loadsToPipeline;
+}
+
+/// Collect ops to pipeline. Returns true if any ops are found to pipeline.
+static bool createCoarseSchedule(
+    scf::ForOp forOp, llvm::MapVector<Operation *, int> &opToStage,
+    llvm::DenseMap<tt::LoadOp, LoadInfo> &loadToInfo, int numStages) {
+  ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
+  tt::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
+
+  // 1. Get all loads that are (transitively) used by dot ops and their distance
+  // to the dot op.
+  llvm::MapVector<tt::LoadOp, std::pair<int, Operation *>>
+      loadOpToIndLevelAndUse = loadOpsToIndirectionLevelAndUse(forOp);
+  LLVM_DEBUG({
+    LDBG("Found " << loadOpToIndLevelAndUse.size() << " loads to pipeline:");
+    for (const auto &[k, v] : loadOpToIndLevelAndUse) {
+      LDBG("  - indirection level: " << v.first);
+      LDBG("    op to pipeline: " << *k);
+      LDBG("    use: " << *v.second);
     }
+  });
+  if (loadOpToIndLevelAndUse.empty())
+    return false;
+
+  // 1. Check which loads are good for pipelining, and assign them
+  // memory layouts.
+  DenseSet<tt::LoadOp> loadsToPipeline =
+      assignMemoryLayouts(loadToInfo, loadOpToIndLevelAndUse, axisInfoAnalysis);
+
+  if (loadsToPipeline.empty())
+    return false;
+
+  int maxDistance = -1;
+  for (tt::LoadOp op : loadsToPipeline) {
+    maxDistance = std::max(maxDistance, loadOpToIndLevelAndUse[op].first);
+  }
+  unsigned stagesBetweenLoads = ceil<unsigned>(numStages - 2, maxDistance + 1);
+
+  // Start by initializing PipelinedOpInfo for users of the loads.
+  for (auto &[loadOp, distAndUse] : loadOpToIndLevelAndUse) {
+    // Non-LoadOp(s) are the root uses of all LoadOp(s) and should be
+    // always present in the opInfo
+    if (!isa<tt::LoadOp>(distAndUse.second))
+      opToStage[distAndUse.second] = numStages - 1;
+  }
+
+  for (tt::LoadOp op : loadsToPipeline) {
+    opToStage[op] = loadOpToIndLevelAndUse[op].first * stagesBetweenLoads;
+  }
+
+  for (tt::LoadOp op : loadsToPipeline) {
+    loadToInfo[op].distToUse =
+        opToStage[loadOpToIndLevelAndUse[op].second] - opToStage[op];
   }
 
   return true;
@@ -499,9 +522,9 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
 // Convert load ops into their asyn version and apply multi-buffering based on
 // the required number of buffers.
 static SmallVector<Value>
-createAsyncOps(scf::ForOp &forOp,
-               llvm::MapVector<Operation *, PipelinedOpInfo> &opToInfo,
-               int numBuffers, bool hasMMAV3) {
+createAsyncOps(scf::ForOp &forOp, llvm::MapVector<Operation *, int> &opToStage,
+               llvm::DenseMap<tt::LoadOp, LoadInfo> &loadToInfo, int numBuffers,
+               bool hasMMAV3) {
   struct AsyncLoad {
     AsyncLoad(tt::LoadOp loadOp, Value alloc) : loadOp(loadOp), alloc(alloc) {}
     tt::LoadOp loadOp;
@@ -509,14 +532,12 @@ createAsyncOps(scf::ForOp &forOp,
   };
   SmallVector<AsyncLoad> asyncLoads;
   SmallVector<Value> allocs;
-  for (auto &[op, info] : opToInfo) {
-    if (tt::LoadOp loadOp = dyn_cast<tt::LoadOp>(op)) {
-      assert(info.sharedEncoding && "LoadOp shared encoding not defined.");
-      Value alloc = createAlloc(forOp, loadOp, info.sharedEncoding, numBuffers);
-      assert(alloc && "Failed to create alloc for the async load.");
-      allocs.push_back(alloc);
-      asyncLoads.emplace_back(loadOp, alloc);
-    }
+  for (auto &[loadOp, info] : loadToInfo) {
+    assert(info.sharedEncoding && "LoadOp shared encoding not defined.");
+    Value alloc = createAlloc(forOp, loadOp, info.sharedEncoding, numBuffers);
+    assert(alloc && "Failed to create alloc for the async load.");
+    allocs.push_back(alloc);
+    asyncLoads.emplace_back(loadOp, alloc);
   }
 
   IRRewriter builder(forOp.getContext());
@@ -559,7 +580,7 @@ createAsyncOps(scf::ForOp &forOp,
 
   for (AsyncLoad &asyncLoad : asyncLoads) {
     createAsyncCopy(forOp, asyncLoad.loadOp, asyncLoad.alloc, insertIdx,
-                    extractIdx, opToInfo);
+                    extractIdx, opToStage, loadToInfo);
   }
   SmallVector<Value> newYieldOperands = {insertIdx, extractIdx};
   // Patch the yield with the updated counters.
@@ -582,26 +603,12 @@ printSchedule(std::vector<std::pair<Operation *, unsigned>> &schedule,
   }
 }
 
-static bool
-isScheduleValid(scf::ForOp forOp,
-                std::vector<std::pair<Operation *, unsigned>> &schedule) {
-  DenseSet<Operation *> seen;
-  for (auto &pair : schedule) {
-    if (!seen.insert(pair.first).second)
-      return false;
-  }
-  auto loopBody = forOp.getBody()->without_terminator();
-  auto numOps = std::distance(loopBody.begin(), loopBody.end());
-  if (seen.size() != numOps)
-    return false;
-  return true;
-}
-
 // Create the schedule for a matmul loop. This is ad hoc based on how we know
 // matmul loops should be pipelined and is not a generic scheduler.
 static std::vector<std::pair<Operation *, unsigned>>
 createSchedule(scf::ForOp forOp, int numStages,
-               llvm::MapVector<Operation *, PipelinedOpInfo> &opToInfo,
+               llvm::MapVector<Operation *, int> &opToStage,
+               llvm::DenseMap<tt::LoadOp, LoadInfo> &loadToInfo,
                bool prefetchExtract) {
   LLVM_DEBUG({
     LDBG("For loop:");
@@ -610,21 +617,21 @@ createSchedule(scf::ForOp forOp, int numStages,
     LDBG("Initial schedule:");
     for (int i = 0; i < numStages; i++) {
       LDBG("- Ops in stage " << i);
-      for (auto &[op, info] : opToInfo) {
-        if (i == info.stage) {
+      for (auto &[op, stage] : opToStage) {
+        if (i == stage) {
           op->dump();
         }
       }
     }
   });
 
-  SmallVector<Operation *> extractOps;
+  SmallVector<Operation *> useMemOps;
   // Find the insert/extract ops that will go respectively in stage 0 and stage
   // `numStages - 2`. All the other operations will go in stage `numStages - 1`.
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (prefetchExtract) {
       if (isa<ttg::MemDescSubviewOp, ttg::AsyncWaitOp>(op))
-        extractOps.push_back(&op);
+        useMemOps.push_back(&op);
     }
   }
 
@@ -634,27 +641,29 @@ createSchedule(scf::ForOp forOp, int numStages,
     }
   };
 
-  SmallVector<DenseSet<Operation *>> insertOps(numStages);
-  for (auto &[op, info] : opToInfo) {
+  SmallVector<DenseSet<Operation *>> defMemOps(numStages);
+  for (auto &[op, stage] : opToStage) {
     if (isa<ttg::AsyncCopyGlobalToLocalOp, ttg::AsyncCommitGroupOp>(op)) {
-      insertOps[info.stage].insert(op);
+      defMemOps[stage].insert(op);
     }
   }
 
   // Inserts and dependencies grouped by stage.
-  SmallVector<DenseSet<Operation *>> insertAndDeps(numStages);
+  SmallVector<DenseSet<Operation *>> defMemOpsAndDeps(
+      numStages); // TODO pawel: rename
   DenseSet<Operation *> seen;
   for (int stage = 0; stage < numStages; stage++) {
-    for (Operation *op : insertOps[stage]) {
-      tt::addDep(op, insertAndDeps[stage], false, &seen);
-      seen.insert(insertAndDeps[stage].begin(), insertAndDeps[stage].end());
+    for (Operation *op : defMemOps[stage]) {
+      tt::addDep(op, defMemOpsAndDeps[stage], false, &seen);
+      seen.insert(defMemOpsAndDeps[stage].begin(),
+                  defMemOpsAndDeps[stage].end());
     }
   }
 
   LLVM_DEBUG({
     for (int stage = 0; stage < numStages; stage++) {
-      LDBG("- insertAndDeps " << stage);
-      printDenseSet(insertAndDeps[stage]);
+      LDBG("- defMemOpsAndDeps " << stage);
+      printDenseSet(defMemOpsAndDeps[stage]);
     }
   });
 
@@ -672,7 +681,7 @@ createSchedule(scf::ForOp forOp, int numStages,
   // Find dependencies with distance of 1.
   SmallVector<DenseSet<Operation *>> distanceOneUsers(numStages);
   for (int stage = 0; stage < numStages - 1; stage++) {
-    auto &group = insertAndDeps[stage];
+    auto &group = defMemOpsAndDeps[stage];
     for (Operation *op : group) {
       for (Value operand : getNestedOperands(op)) {
         if (auto arg = operand.dyn_cast<BlockArgument>()) {
@@ -698,13 +707,13 @@ createSchedule(scf::ForOp forOp, int numStages,
   for (unsigned i = 0; i < distanceOneUsers.size(); i++) {
     for (auto op : distanceOneUsers[i]) {
       if (isa<tt::LoadOp>(op))
-        tt::addDep(op, insertAndDeps[i], true);
+        tt::addDep(op, defMemOpsAndDeps[i], true);
     }
   }
 
-  DenseSet<Operation *> allInsertAndDeps;
-  for (auto &set : insertAndDeps) {
-    allInsertAndDeps.insert(set.begin(), set.end());
+  DenseSet<Operation *> allDefMemAndDeps;
+  for (auto &set : defMemOpsAndDeps) {
+    allDefMemAndDeps.insert(set.begin(), set.end());
   }
 
   // Rest of the distance 1 dependencies will be scheduled one
@@ -714,7 +723,7 @@ createSchedule(scf::ForOp forOp, int numStages,
     auto &group = distanceOneUsers[i];
     for (auto op : group) {
       if (!isa<tt::LoadOp>(op))
-        tt::addDep(op, stage1deps[i + 1], true, &allInsertAndDeps);
+        tt::addDep(op, stage1deps[i + 1], true, &allDefMemAndDeps);
     }
     LLVM_DEBUG({
       LDBG("- stage1deps " << i);
@@ -727,20 +736,20 @@ createSchedule(scf::ForOp forOp, int numStages,
     allStage1Deps.insert(set.begin(), set.end());
   }
 
-  DenseSet<Operation *> extractAndDeps;
-  for (Operation *op : extractOps) {
-    tt::addDep(op, extractAndDeps, true, &allInsertAndDeps);
+  DenseSet<Operation *> useMemAndDeps;
+  for (Operation *op : useMemOps) {
+    tt::addDep(op, useMemAndDeps, true, &allDefMemAndDeps);
   }
   LLVM_DEBUG({
-    LDBG("- extractAndDeps:");
-    printDenseSet(extractAndDeps);
+    LDBG("- useMemAndDeps:");
+    printDenseSet(useMemAndDeps);
   });
 
   std::vector<std::pair<Operation *, unsigned>> schedule;
   // Schedule stage `numStage - 1` first.
   tt::addOps(forOp, numStages - 1, schedule, [&](Operation *op) {
-    return allInsertAndDeps.count(op) == 0 && allStage1Deps.count(op) == 0 &&
-           extractAndDeps.count(op) == 0;
+    return allDefMemAndDeps.count(op) == 0 && allStage1Deps.count(op) == 0 &&
+           useMemAndDeps.count(op) == 0;
   });
 
   // Schedule some dependencies with distance of 1 into stage 1 to reduce
@@ -754,7 +763,7 @@ createSchedule(scf::ForOp forOp, int numStages,
   }
 
   for (int i = numStages - 1; i >= 0; i--) {
-    auto &group = insertAndDeps[i];
+    auto &group = defMemOpsAndDeps[i];
     tt::addOps(forOp, i, schedule,
                [&](Operation *op) { return group.count(op); });
   }
@@ -762,10 +771,9 @@ createSchedule(scf::ForOp forOp, int numStages,
   // Finally schedule the extract ops in stage `numStage - 2` so that they get
   // pre-fetched and play well with pretech pass.
   tt::addOps(forOp, numStages - 2, schedule,
-             [&](Operation *op) { return extractAndDeps.count(op); });
+             [&](Operation *op) { return useMemAndDeps.count(op); });
 
   LLVM_DEBUG(printSchedule(schedule, numStages));
-  assert(isScheduleValid(forOp, schedule) && "Invalid schedule.");
 
   return schedule;
 }
@@ -776,46 +784,37 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     scf::ForOp &forOp, int numStages, mlir::triton::PipeliningOption &options) {
   // 1. First collect "interesting" operations with a stage where to schedule
   // them. This gives a coarse scheduling for the loop.
-  llvm::MapVector<Operation *, PipelinedOpInfo> opToInfo;
-  if (!collectOpsToPipeline(forOp, opToInfo, numStages))
+  llvm::MapVector<Operation *, int> opToStage;
+  llvm::DenseMap<tt::LoadOp, LoadInfo> loadToInfo;
+  if (!createCoarseSchedule(forOp, opToStage, loadToInfo, numStages))
     return false;
 
   bool hasMMAV3 =
-      llvm::any_of(opToInfo, [](auto &kv) { return kv.second.loadIsMMAV3; });
+      llvm::any_of(loadToInfo, [](auto &kv) { return kv.second.loadIsMMAV3; });
 
   // Calculate the number of buffers needed for each load.
   // TODO pawel: we could do more fine-grained allocation here and
   // allocate only the number of buffers that specific loads need.
   // Instead, we allocate the maximum number of buffers needed by any load.
-  int maxNumBuffers = -1;
-  for (auto &[op, info] : opToInfo) {
-    if (!isa<tt::LoadOp>(op))
-      continue;
-    assert(info.stage != -1 && "LoadOp stage not defined");
-    assert(info.use && "LoadOp use not defined");
-    assert(opToInfo.count(info.use) && "Use not in opToInfo");
-
-    int defStage = info.stage;
-    int useStage = opToInfo[info.use].stage;
-    int numBuffers = useStage - defStage;
-
-    if (hasMMAV3 && isa<tt::DotOp>(info.use)) {
-      // For MMAv3, we need an extra buffer as this is assumed in the wgmma
-      // pipelining post-processing.
-      numBuffers++;
-    }
-    if (numBuffers > maxNumBuffers)
-      maxNumBuffers = numBuffers;
-  }
+  int maxNumBuffers =
+      llvm::max_element(llvm::make_second_range(loadToInfo), [](auto &lhs,
+                                                                auto &rhs) {
+        return lhs.distToUse < rhs.distToUse;
+      })->distToUse;
+  if (hasMMAV3) {
+    // For MMAv3, we need an extra buffer as this is assumed in the wgmma
+    // pipelining post-processing.
+    maxNumBuffers++;
+  };
 
   // 2. Convert the loads into async loads and create the allocs.
   SmallVector<Value> allocs =
-      createAsyncOps(forOp, opToInfo, maxNumBuffers, hasMMAV3);
+      createAsyncOps(forOp, opToStage, loadToInfo, maxNumBuffers, hasMMAV3);
 
   // 3. Create the final schedule for the kernel loop. This will dictate the
   // stages and order of operations to the pipeline expander.
-  std::vector<std::pair<Operation *, unsigned>> schedule =
-      createSchedule(forOp, numStages, opToInfo, /*prefetchExtract=*/!hasMMAV3);
+  std::vector<std::pair<Operation *, unsigned>> schedule = createSchedule(
+      forOp, numStages, opToStage, loadToInfo, /*prefetchExtract=*/!hasMMAV3);
 
   // 4. Fill out the pipeline options.
   options.getScheduleFn =
