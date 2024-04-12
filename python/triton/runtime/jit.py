@@ -218,6 +218,40 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
     return serialized_obj
 
 
+def create_function_from_signature(sig):
+    """
+    Equivalent to sig.bind followed by apply_defaults. This generates a
+    native Python function (using exec) which can be memoized on a per-kernel
+    basis to avoid having to run these expensive functions -- which constitute
+    much of the kernel launch overhead -- every time we run the kernel.
+    """
+
+    # Create the function argument list and the dict entries for the return statement
+    func_args = []
+    dict_entries = []
+    for name, param in sig.parameters.items():
+        if param.default is inspect.Parameter.empty:
+            func_args.append(name)
+            dict_entries.append(f"'{name}': {name}")
+        else:
+            func_args.append(f"{name}=default_{name}")
+            dict_entries.append(f"'{name}': {name}")
+
+    # Join all arguments into a function definition string
+    args_str = ', '.join(func_args)
+    dict_str = ', '.join(dict_entries)
+    func_body = f"def dynamic_func({args_str}):\n    return {{{dict_str}}}"
+
+    # Prepare defaults to be inserted into function namespace
+    func_namespace = {f"default_{name}": param.default for name, param in sig.parameters.items() if param.default is not inspect.Parameter.empty}
+
+    # Execute the function string in func_namespace to create the function
+    exec(func_body, func_namespace)
+
+    # Extract the newly created function from the namespace
+    return func_namespace['dynamic_func']
+
+
 class JITFunction(KernelInterface[T]):
     # Hook for inspecting compiled functions and modules
     cache_hook = None
@@ -396,23 +430,25 @@ class JITFunction(KernelInterface[T]):
             hook(*args, **kwargs)
 
         # bind non-reserved keyword args and set defaults
+        if self.binder is None:
+            self.binder = create_function_from_signature(self.signature)
+
         kwargs = {k: v for k, v in kwargs.items() if k not in options.__dict__}
-        bound_args = self.signature.bind(*args, **kwargs)
-        bound_args.apply_defaults()
-        assert len(bound_args.arguments) == len(self.params)
+        bound_args = self.binder(*args, **kwargs)
+        assert len(bound_args) == len(self.params)
         # canonicalize grid
         assert grid is not None
         if callable(grid):
             # Arguments are passed as a dict to `grid`, by contract.
             # TODO(jlebar): In the new launch API, pass the compiler flags as a
             # second parameter to `grid`.
-            grid = grid(dict(bound_args.arguments))
+            grid = grid(dict(bound_args))
         grid_size = len(grid)
         grid_0 = grid[0]
         grid_1 = grid[1] if grid_size > 1 else 1
         grid_2 = grid[2] if grid_size > 2 else 1
         # compute cache key
-        args = [KernelArg(arg_value, param) for (_, arg_value), param in zip(bound_args.arguments.items(), self.params)]
+        args = [KernelArg(arg_value, param) for (_, arg_value), param in zip(bound_args.items(), self.params)]
         sig_key = tuple(arg.mangled_type() for arg in args if not arg.param.is_constexpr)
         spec_key = tuple(arg.specialization_key() for arg in args if not arg.param.do_not_specialize)
         constexpr_key = tuple(arg.value for arg in args if arg.param.is_constexpr)
@@ -471,6 +507,8 @@ class JITFunction(KernelInterface[T]):
         self.starting_line_number = inspect.getsourcelines(fn)[1]
         self.repr = lambda _: fn.__name__ if repr is None else repr(_)
         self.launch_metadata = launch_metadata
+
+        self.binder = None
 
         self.params = []
         for i, param in enumerate(self.signature.parameters.values()):
