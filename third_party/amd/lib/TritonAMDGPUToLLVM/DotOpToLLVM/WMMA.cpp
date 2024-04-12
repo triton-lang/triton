@@ -45,32 +45,38 @@ enum class WMMAInstrType : uint8_t {
   NOT_APPLICABLE,
 };
 
-using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
+using ValueTable = std::map<std::tuple<unsigned, unsigned, unsigned>, Value>;
 
-ValueTable getValuesFromDotOperandLayoutStruct(
-    ConversionPatternRewriter &rewriter, const LLVMTypeConverter *typeConverter,
-    Value value, int n0, int n1, int kWidth, Type type, Location loc) {
+ValueTable
+getValuesFromDotOperandLayoutStruct(ConversionPatternRewriter &rewriter,
+                                    const LLVMTypeConverter *typeConverter,
+                                    Value value, int batch, int n0, int n1,
+                                    int kWidth, Type type, Location loc) {
   auto elems = unpackLLElements(loc, value, rewriter);
   ValueTable vals;
-  for (int i = 0; i < n0; i++) {
-    for (int j = 0; j < n1; j++) {
-      Type elemTy = typeConverter->convertType(type);
-      Type ty = vec_ty(elemTy, kWidth);
-      Value rawElems = undef(ty);
-      for (int k = 0; k < kWidth; ++k) {
-        rawElems = insert_element(ty, rawElems,
-                                  elems[kWidth * (n1 * i + j) + k], i32_val(k));
-      }
+  for (int b = 0; b < batch; b++) {
+    for (int i = 0; i < n0; i++) {
+      for (int j = 0; j < n1; j++) {
+        Type elemTy = typeConverter->convertType(type);
+        Type ty = vec_ty(elemTy, kWidth);
+        Value rawElems = undef(ty);
+        for (int k = 0; k < kWidth; ++k) {
+          rawElems = insert_element(
+              ty, rawElems,
+              elems[n0 * n1 * kWidth * b + kWidth * (n1 * i + j) + k],
+              i32_val(k));
+        }
 
-      Value convertedElems;
-      if (type.isBF16() || type.isF16()) {
-        convertedElems = rawElems;
-      } else {
-        convertedElems = bitcast(
-            rawElems, vec_ty(i32_ty, kWidth * type.getIntOrFloatBitWidth() /
-                                         i32_ty.getIntOrFloatBitWidth()));
+        Value convertedElems;
+        if (type.isBF16() || type.isF16()) {
+          convertedElems = rawElems;
+        } else {
+          convertedElems = bitcast(
+              rawElems, vec_ty(i32_ty, kWidth * type.getIntOrFloatBitWidth() /
+                                           i32_ty.getIntOrFloatBitWidth()));
+        }
+        vals[{b, i, j}] = convertedElems;
       }
-      vals[{i, j}] = convertedElems;
     }
   }
   return vals;
@@ -172,52 +178,57 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto repB =
       wmmaLayout.getWMMARepForOperands(bTensorTy.getShape(), elemTy, kWidth, 1);
 
-  assert(repA[1] == repB[0]);
+  assert(repA[2] == repB[1]);
 
   Value loadedA = adaptor.getA();
   Value loadedB = adaptor.getB();
   Value loadedC = adaptor.getC();
-  auto numRepM = repA[0];
-  auto numRepN = repB[1];
-  auto numRepK = repA[1];
+  auto numRepM = repA[1];
+  auto numRepN = repB[2];
+  auto numRepK = repA[2];
+  auto numRepB = repA[0];
 
   ValueTable ha = getValuesFromDotOperandLayoutStruct(
-      rewriter, typeConverter, loadedA, numRepM, numRepK, kWidth,
+      rewriter, typeConverter, loadedA, numRepB, numRepM, numRepK, kWidth,
       aTensorTy.getElementType(), loc);
   ValueTable hb = getValuesFromDotOperandLayoutStruct(
-      rewriter, typeConverter, loadedB, numRepN, numRepK, kWidth,
+      rewriter, typeConverter, loadedB, numRepB, numRepN, numRepK, kWidth,
       aTensorTy.getElementType(), loc);
   auto dstElemTy = dTensorTy.getElementType();
   auto fc = unpackLLElements(loc, loadedC, rewriter);
 
   unsigned warpSize = triton::gpu::getWarpSize(wmmaLayout);
-  // TODO get rid of magic numbers
-  unsigned vgprElemWidth = 32;
+  constexpr unsigned vgprElemBitWidth = 32;
   unsigned paddedOutputElemSize =
-      vgprElemWidth / dstElemTy.getIntOrFloatBitWidth();
+      vgprElemBitWidth / dstElemTy.getIntOrFloatBitWidth();
   // compute number of output elements that each thread holds for one WMMA
   // instruction.
   auto elemsPerVec = mnkDim[0] * mnkDim[1] * paddedOutputElemSize / warpSize;
   auto dElemsToStorePerThread = mnkDim[0] * mnkDim[1] / warpSize;
   auto vecTy = vec_ty(dstElemTy, elemsPerVec);
-  for (int m = 0; m < numRepM; ++m) {
-    for (int n = 0; n < numRepN; ++n) {
-      Value acc = undef(vecTy);
-      for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
-        acc = insert_element(vecTy, acc,
-                             fc[m * numRepN * dElemsToStorePerThread +
+  for (int b = 0; b < numRepB; ++b) {
+    for (int m = 0; m < numRepM; ++m) {
+      for (int n = 0; n < numRepN; ++n) {
+        Value acc = undef(vecTy);
+        for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
+          acc =
+              insert_element(vecTy, acc,
+                             fc[b * numRepM * numRepN * dElemsToStorePerThread +
+                                m * numRepN * dElemsToStorePerThread +
                                 n * dElemsToStorePerThread + v],
                              i32_val(v * paddedOutputElemSize));
-      }
-      for (size_t k = 0; k < numRepK; k++) {
-        acc = generateWMMAOp(rewriter, loc, wmmaInstrType, ha[{m, k}],
-                             hb[{n, k}], acc, aTensorTy.getElementType(),
-                             bTensorTy.getElementType());
-      }
-      for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
-        fc[m * numRepN * dElemsToStorePerThread + n * dElemsToStorePerThread +
-           v] =
-            extract_element(dstElemTy, acc, i32_val(v * paddedOutputElemSize));
+        }
+        for (size_t k = 0; k < numRepK; k++) {
+          acc = generateWMMAOp(rewriter, loc, wmmaInstrType, ha[{b, m, k}],
+                               hb[{b, n, k}], acc, aTensorTy.getElementType(),
+                               bTensorTy.getElementType());
+        }
+        for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
+          fc[b * numRepM * numRepN * dElemsToStorePerThread +
+             m * numRepN * dElemsToStorePerThread + n * dElemsToStorePerThread +
+             v] = extract_element(dstElemTy, acc,
+                                  i32_val(v * paddedOutputElemSize));
+        }
       }
     }
   }
