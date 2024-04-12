@@ -6,8 +6,10 @@ import pytest
 import torch
 import triton
 
+
 def is_hip():
     return triton.runtime.driver.active.get_current_target()[0] == "hip"
+
 
 @triton.jit
 def triton_():
