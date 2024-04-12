@@ -355,7 +355,6 @@ class JITFunction(KernelInterface[T]):
         elif isinstance(key, str):
             return key
 
-
         dtype_str = str(key).split(".")[-1]
         dtype_str = type_canonicalisation_dict[dtype_str]
         const_str = "k" if is_const else ""
