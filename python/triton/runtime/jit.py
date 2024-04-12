@@ -357,7 +357,7 @@ class JITFunction(KernelInterface[T]):
 
         dtype_str = str(key).split(".")[-1]
         dtype_str = type_canonicalisation_dict[dtype_str]
-        const_str = "k" if is_const else ""
+        const_str = "*k" if is_const else "*"
         return const_str + dtype_str
 
     def _make_constants(self, constexpr_key):
