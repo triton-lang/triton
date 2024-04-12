@@ -1364,7 +1364,7 @@ tt.func @matmul_nested_ops(%lb : index, %ub : index, %step : index,
     }
     %a_ = tt.load %inc_a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
     %a = triton_gpu.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
-    
+
     %c = tt.dot %a, %b, %prev_c : tensor<128x32xf16, #A> * tensor<32x128xf16, #B> -> tensor<128x128xf32, #C>
 
     %next_a_ptr = tt.addptr %inc_a_ptr, %a_off : tensor<128x32x!tt.ptr<f16>, #AL>, tensor<128x32xi32, #AL>
