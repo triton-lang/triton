@@ -256,6 +256,35 @@ def create_function_from_signature(sig):
     return func_namespace['dynamic_func']
 
 
+type_canonicalisation_dict = {
+    "bool": "i1",
+    "float8e4nv": "fp8e4nv",
+    "float8e5": "fp8e5",
+    "float8e4b15": "fp8e4b15",
+    "float8_e4m3fn": "fp8e4nv",
+    "float8e4b8": "fp8e4b8",
+    "float8_e4m3fnuz": "fp8e4b8",
+    "float8_e5m2": "fp8e5",
+    "float8e5b16": "fp8e5b16",
+    "float8_e5m2fnuz": "fp8e5b16",
+    "float16": "fp16",
+    "bfloat16": "bf16",
+    "float32": "fp32",
+    "float64": "fp64",
+    "int8": "i8",
+    "int16": "i16",
+    "int32": "i32",
+    "int64": "i64",
+    "uint8": "u8",
+    "uint16": "u16",
+    "uint32": "u32",
+    "uint64": "u64",
+}
+
+for v in list(type_canonicalisation_dict.values()):
+    type_canonicalisation_dict[v] = v
+
+
 class JITFunction(KernelInterface[T]):
     # Hook for inspecting compiled functions and modules
     cache_hook = None
@@ -323,36 +352,14 @@ class JITFunction(KernelInterface[T]):
         # `None` is nullptr.  Implicitly convert to *i8.
         if key is None:
             return "*i8"
+        elif isinstance(key, str):
+            return key
+
+
         dtype_str = str(key).split(".")[-1]
-        tys = {
-            "bool": "i1",
-            "float8e4nv": "fp8e4nv",
-            "float8e5": "fp8e5",
-            "float8e4b15": "fp8e4b15",
-            "float8_e4m3fn": "fp8e4nv",
-            "float8e4b8": "fp8e4b8",
-            "float8_e4m3fnuz": "fp8e4b8",
-            "float8_e5m2": "fp8e5",
-            "float8e5b16": "fp8e5b16",
-            "float8_e5m2fnuz": "fp8e5b16",
-            "float16": "fp16",
-            "bfloat16": "bf16",
-            "float32": "fp32",
-            "float64": "fp64",
-            "int8": "i8",
-            "int16": "i16",
-            "int32": "i32",
-            "int64": "i64",
-            "uint8": "u8",
-            "uint16": "u16",
-            "uint32": "u32",
-            "uint64": "u64",
-        }
-        # reinterpret can create triton type
-        for v in list(tys.values()):
-            tys[v] = v
+        dtype_str = type_canonicalisation_dict[dtype_str]
         const_str = "k" if is_const else ""
-        return key if isinstance(key, str) else f"*{const_str}{tys[dtype_str]}"
+        return const_str + dtype_str
 
     def _make_constants(self, constexpr_key):
         constants = dict(zip(self.constexprs, constexpr_key))
