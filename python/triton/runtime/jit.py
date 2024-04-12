@@ -133,6 +133,17 @@ class KernelParam:
         return _normalize_ty(self._param.annotation)
 
     @cached_property
+    def annotation_type(self):
+        annotation = self.annotation
+        for ty1, ty2 in [("uint", 'u'), ("int", 'i')]:
+            width = annotation[annotation.find(ty1) + len(ty1):]
+            if width and ty1 in annotation:
+                return f"{ty2}{width}"
+        if annotation == "bool":
+            return "u1"
+        return ""
+
+    @cached_property
     def is_constexpr(self):
         return "constexpr" in self.annotation
 
@@ -164,18 +175,10 @@ class KernelArg:
         return self.param.name
 
     def mangled_type(self):
-        annotation = self.param.annotation
-        for ty1, ty2 in [("uint", 'u'), ("int", 'i')]:
-            width = annotation[annotation.find(ty1) + len(ty1):]
-            if width and ty1 in annotation:
-                return f"{ty2}{width}"
-        if annotation == "bool":
-            return "u1"
-
-        if "Tensor" in annotation:
-            key = self.value.dtype
-        else:
-            key = JITFunction._key_of(self.value)
+        annotation_type = self.param.annotation_type
+        if annotation_type:
+            return annotation_type
+        key = JITFunction._key_of(self.value)
         return JITFunction._type_of(key, self.param.is_const)
 
     def specialization_key(self):
