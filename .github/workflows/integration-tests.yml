@@ -291,7 +291,6 @@ jobs:
         run: |
           cd python/test/unit
           pytest --capture=tee-sys -rfs -vvv -n 32 language operators \
-                 --ignore=language/test_reproducer.py \
                  --ignore=language/test_conversions.py \
                  --ignore=language/test_line_info.py \
                  --ignore=operators/test_blocksparse.py
