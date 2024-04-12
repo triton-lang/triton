@@ -386,7 +386,6 @@ class InterpreterBuilder:
     create_int_cast = lambda self, src, dst_type, is_signed: self.cast_impl(src, dst_type)
 
     def create_fp_to_fp(self, src, dst_type, rounding_mode):
-        # XXX: rounding_mode not implemented yet
         src_element_type = src.dtype.scalar
         dst_element_type = dst_type.scalar
         data = _convert_float(src.data, src_element_type, dst_element_type, _ir.ROUNDING_MODE.RTNE)

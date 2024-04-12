@@ -1595,16 +1595,12 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
     if dtype_z.startswith('bfloat') or dtype_x.startswith('bfloat') or dtype_z.startswith(
             'float8') or dtype_x.startswith('float8'):
         assert bitcast is False
+        z_ref = x_tri.to(z_tri.dtype)
         if dtype_z.startswith('float8') and device not in ['cuda']:
-            # Cast to back to higher precision because subtraction is not supported for float8 on some devices like CPU
-            z_ref = x_tri.to(torch.float32)
-            z_tri = z_tri.to(torch.float32)
+            t = z_ref.byte() ^ z_tri.byte()
+            torch.testing.assert_close(torch.zeros_like(t, dtype=torch.uint8), t)
         else:
-            z_ref = x_tri.to(z_tri.dtype)
-        for i in range(size):
-            if z_tri[i] != z_ref[i]:
-                print(i, z_tri[i], x_tri[i])
-        torch.testing.assert_close(z_ref, z_tri, rtol=0, atol=0)
+            torch.testing.assert_close(z_ref, z_tri, rtol=0, atol=0)
     else:
         if bitcast:
             z_ref = x.view(getattr(np, dtype_z_np))
@@ -3045,8 +3041,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             z = num / den[:, None]
         if CHAIN_DOT:
             w = tl.load(Ws)
-            t = z.to(w.dtype)
-            z = tl.dot(t, w, input_precision=INPUT_PRECISION, out_dtype=out_dtype)
+            z = tl.dot(z.to(w.dtype), w, input_precision=INPUT_PRECISION, out_dtype=out_dtype)
         tl.store(Zs, z)
 
     # input
