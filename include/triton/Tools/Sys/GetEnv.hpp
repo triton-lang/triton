@@ -26,6 +26,7 @@
 #include <assert.h>
 #include <cstdlib>
 #include <set>
+#include <sstream>
 #include <string>
 
 namespace mlir::triton {
