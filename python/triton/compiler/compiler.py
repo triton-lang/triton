@@ -56,7 +56,7 @@ prototype_pattern = {
     "ptx": ptx_prototype_pattern,
 }
 
-mlir_arg_type_pattern = r'%\w+: ((?:[^,\s<]+|<[^>]+>)+),?'
+mlir_arg_type_pattern = r'%\w+: ((?:[^,\s<)]+|<[^>]+>)+),?'
 ptx_arg_type_pattern = r"\.param\s+\.(\w+)"
 arg_type_pattern = {
     "ttir": mlir_arg_type_pattern,
@@ -269,6 +269,7 @@ def compile(src, target=None, options=None):
     except Exception as e:
         filter_traceback(e)
         raise
+    use_ttgir_loc = os.environ.get("USE_TTGIR_LOC", "0") == "1"
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         ir_filename = f"{src.name}.{ext}"
@@ -279,6 +280,11 @@ def compile(src, target=None, options=None):
             print(f"\nOverriding kernel with file {ir_filename}")
             full_name = fn_override_manager.get_file(ir_filename)
             next_module = parse(full_name, ext, context)
+        # use an env variable to parse ttgir from file
+        if use_ttgir_loc and ext == "ttgir":
+            ttgir_full_name = fn_cache_manager.get_file(ir_filename)
+            next_module = parse(ttgir_full_name, ext, context)
+            print(f"re-parse ttgir with {ttgir_full_name}")
         module = next_module
     # write-back metadata
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
@@ -326,12 +332,14 @@ class CompiledKernel:
         metadata['cluster_dims'] = tuple(metadata['cluster_dims'])
         KernelMetadata = namedtuple('KernelMetadata', sorted(list(metadata.keys())))
         self.metadata = KernelMetadata(**metadata)
+        backend = make_backend(self.metadata.target)
+        self.packed_metadata = backend.pack_metadata(self.metadata)
         self.src = src
         self.hash = hash
         self.name = self.metadata.name
         # stores the text of each level of IR that was generated during compilation
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
-        binary_ext = make_backend(self.metadata.target).binary_ext
+        binary_ext = backend.binary_ext
         self.asm = {
             file.suffix[1:]: file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
             for file in asm_files
@@ -380,7 +388,7 @@ class CompiledKernel:
                 device = driver.active.get_current_device()
                 stream = driver.active.get_current_stream(device)
             launch_metadata = self.launch_metadata(grid, stream, *args)
-            self.run(grid[0], grid[1], grid[2], stream, self.function, self.metadata, launch_metadata,
+            self.run(grid[0], grid[1], grid[2], stream, self.function, self.packed_metadata, launch_metadata,
                      CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, *args)
 
         return runner

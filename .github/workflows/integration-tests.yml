@@ -181,7 +181,7 @@ jobs:
       - name: Run python tests on CUDA
         run: |
           cd python/test/unit
-          python3 -m pytest -vvv -n 8 --ignore=hopper/test_flashattention.py --ignore=runtime --ignore=operators --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+          python3 -m pytest -vvv -n 8 --ignore=hopper/test_flashattention.py --ignore=runtime --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
           python3 -m pytest -vvv -n 8 language/test_subprocess.py
           # Run runtime tests serially to avoid race condition with cache handling
           python3 -m pytest -vvv runtime/
@@ -199,11 +199,6 @@ jobs:
           python3 -m pytest -vvv -n 16 -m interpreter language/test_core.py language/test_standard.py \
            language/test_random.py language/test_block_pointer.py operators/test_flash_attention.py::test_op \
            --device cpu
-
-      - name: Run partial tests on CUDA
-        run: |
-          cd python/test/unit
-          python3 -m pytest -vvv -n 8 operators
 
       - name: Run C++ unittests
         run: |
@@ -294,14 +289,20 @@ jobs:
 
       - name: Run python tests on HIP
         run: |
-          cd python
-          pytest --capture=tee-sys -rfs -vvv -n 32 ./test/unit/language/test_core.py \
-              ./test/unit/language/test_annotations.py \
-              ./test/unit/language/test_subprocess.py \
-              ./test/unit/language/test_standard.py \
-              ./test/unit/language/test_compile_errors.py \
-              ./test/unit/language/test_block_pointer.py \
-              ./test/unit/operators/test_flash_attention.py
+          cd python/test/unit
+          pytest --capture=tee-sys -rfs -vvv -n 32 language operators \
+                 --ignore=language/test_reproducer.py \
+                 --ignore=language/test_conversions.py \
+                 --ignore=language/test_line_info.py \
+                 --ignore=operators/test_blocksparse.py
+          # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -vvv -n 8 language/test_line_info.py
+
+          # Run runtime tests serially to avoid race condition with cache handling
+          python3 -m pytest -vvv runtime
+          # Run hopper tests
+          python3 -m pytest -vs hopper/test_mixed_io.py \
+                                hopper/test_tma_store_gemm.py
 
       - name: Run C++ unittests
         run: |

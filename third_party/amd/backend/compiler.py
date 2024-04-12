@@ -26,7 +26,8 @@ class HIPOptions:
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     enable_fp_fusion: bool = True
     capability: int = None
-    matrix_inst_shape: int = 0
+    matrix_instr_nonkdim: int = 0
+    kpack: int = 1
     max_num_imprecise_acc_default: int = 0
 
     @staticmethod
@@ -81,6 +82,9 @@ class HIPBackend(BaseBackend):
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts})
         return HIPOptions(**args)
 
+    def pack_metadata(self, metadata):
+        return metadata
+
     def get_codegen_implementation(self):
         codegen_fns = dict()
         return codegen_fns
@@ -125,7 +129,7 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_coalesce(pm)
         amd.passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
-        amd.passes.ttgpuir.add_accelerate_matmul(pm, opt.arch, opt.matrix_inst_shape)
+        amd.passes.ttgpuir.add_accelerate_matmul(pm, opt.arch, opt.matrix_instr_nonkdim, opt.kpack)
         amd.passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm)
@@ -134,7 +138,7 @@ class HIPBackend(BaseBackend):
             passes.common.add_canonicalizer(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm)
         amd.passes.ttgpuir.add_remove_layout_conversions(pm)
-        amd.passes.ttgpuir.add_decompose_conversions(pm)
+        passes.ttgpuir.add_reduce_data_duplication(pm)
         if opt.num_stages != 0:
             amd.passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)

@@ -48,6 +48,14 @@ public:
              dstDotOp.getParent() == srcMmaEncoding))
           return;
       }
+      if (auto srcMfmaEncoding =
+              srcEncoding.dyn_cast<triton::gpu::AMDMfmaEncodingAttr>()) {
+
+        if (srcMfmaEncoding.getWarpsPerCTA()[1] == 1 &&
+            srcMfmaEncoding.getIsTransposed() &&
+            dstDotOp.getParent() == srcMfmaEncoding)
+          return;
+      }
       auto srcOrder = triton::gpu::getOrder(srcEncoding);
       auto rank = srcOrder.size();
       SmallVector<unsigned> sharedOrder;

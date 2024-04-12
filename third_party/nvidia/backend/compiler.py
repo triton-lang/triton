@@ -108,6 +108,16 @@ class CUDABackend(BaseBackend):
         args["max_num_imprecise_acc_default"] = 2**30 if self.capability == 90 else 0
         return CUDAOptions(**args)
 
+    def pack_metadata(self, metadata):
+        return (
+            metadata.num_warps,
+            metadata.num_ctas,
+            metadata.shared,
+            metadata.cluster_dims[0],
+            metadata.cluster_dims[1],
+            metadata.cluster_dims[2],
+        )
+
     def get_codegen_implementation(self):
         import triton.language.extra.cuda as cuda
         codegen_fns = dict()
