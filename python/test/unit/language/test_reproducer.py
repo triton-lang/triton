@@ -5,10 +5,7 @@ import pytest
 
 import torch
 import triton
-
-
-def is_hip():
-    return triton.runtime.driver.active.get_current_target()[0] == "hip"
+import re
 
 
 @triton.jit
@@ -34,12 +31,9 @@ def test_reproducer():
             foundPipeline = line
     if 0 == len(foundPipeline):
         raise Exception("Failed to find pipeline info in reproducer file.")
-    ttgir_to_llvm_pass = "convert-triton-"
-    if is_hip():
-        ttgir_to_llvm_pass += "amd"
-    ttgir_to_llvm_pass += "gpu-to-llvm"
 
-    if ttgir_to_llvm_pass not in foundPipeline:
+    ttgir_to_llvm_pass = re.compile("convert-triton-{{.*}}gpu-to-llvm")
+    if ttgir_to_llvm_pass.search(foundPipeline):
         raise Exception("Failed to find triton passes in pipeline")
     # cleanup
     if os.path.exists(tmpdir):
