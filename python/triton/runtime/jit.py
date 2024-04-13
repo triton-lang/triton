@@ -175,6 +175,7 @@ def compute_spec_key(v):
 
 dtype2str = {}
 
+
 def mangle_type(arg, is_const=False):
 
     if hasattr(arg, "dtype"):
@@ -498,7 +499,10 @@ class JITFunction(KernelInterface[T]):
         # compute cache key
         args = [KernelArg(arg_value, param) for arg_value, param in zip(bound_args.values(), self.params)]
 
-        signature = {args[i].param.name: mangle_type(args[i].value, args[i].param.is_const) for i in self.non_constexpr_indices}
+        signature = {
+            args[i].param.name: mangle_type(args[i].value, args[i].param.is_const)
+            for i in self.non_constexpr_indices
+        }
         sig_key = ''.join(signature.values())
         spec_key = ''.join(compute_spec_key(args[i].value) for i in self.specialised_indices)
         constexpr_key = tuple(args[i].value for i in self.constexpr_indices)
@@ -512,7 +516,7 @@ class JITFunction(KernelInterface[T]):
             # done here rather than when we build the signature as otherwise
             # the kernel cache key could not distinguish between byte pointers
             # and None arguments, resulting in a downstream mismatch:
-            signature = {k : ('*i8' if (v == 'none') else v) for (k, v) in signature.items()}
+            signature = {k: ('*i8' if (v == 'none') else v) for (k, v) in signature.items()}
 
             backend = make_backend(target)
             options = backend.parse_options(kwargs)
