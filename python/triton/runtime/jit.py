@@ -243,7 +243,7 @@ def create_function_from_signature(sig):
     # Join all arguments into a function definition string
     args_str = ', '.join(func_args)
     dict_str = ', '.join(dict_entries)
-    func_body = f"def dynamic_func({args_str}):\n    return {{{dict_str}}}"
+    func_body = f"def dynamic_func(%s, **excess_kwargs):\n    return {%s}, excess_kwargs" % (args_str, dict_str)
 
     # Prepare defaults to be inserted into function namespace
     func_namespace = {
@@ -434,9 +434,7 @@ class JITFunction(KernelInterface[T]):
         device = driver.active.get_current_device()
         stream = driver.active.get_current_stream(device)
         target = driver.active.get_current_target()
-        backend = make_backend(target)
         kwargs["debug"] = self.debug
-        options = backend.parse_options(kwargs)
 
         # Execute pre run hooks with args and kwargs
         for hook in self.pre_run_hooks:
@@ -449,8 +447,7 @@ class JITFunction(KernelInterface[T]):
             self.non_constexpr_indices = [i for (i, p) in enumerate(self.params) if not p.is_constexpr]
             self.specialised_indices = [i for (i, p) in enumerate(self.params) if not p.do_not_specialize]
 
-        kwargs = {k: v for k, v in kwargs.items() if k not in options.__dict__}
-        bound_args = self.binder(*args, **kwargs)
+        bound_args, excess_kwargs = self.binder(*args, **kwargs)
         assert len(bound_args) == len(self.params)
         # canonicalize grid
         assert grid is not None
@@ -472,10 +469,15 @@ class JITFunction(KernelInterface[T]):
         spec_key = tuple(args[i].specialization_key() for i in self.specialised_indices)
         constexpr_key = tuple(args[i].value for i in self.constexpr_indices)
 
-        key = (sig_key, constexpr_key, spec_key, options)
+        key = (sig_key, constexpr_key, spec_key, excess_kwargs, target)
         key = str(key)
         # Kernel is not cached; we have to compile.
         if key not in self.cache[device]:
+            backend = make_backend(target)
+            options = backend.parse_options(kwargs)
+            for k in excess_kwargs:
+                if k not in options.__dict__:
+                    raise KeyError("Keyword argument %s was specified but unrecognised" % k)
             configs = (self._get_config(*[arg.value for arg in args]), )
             constants = {
                 arg.param.name: arg.value
