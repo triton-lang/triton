@@ -257,7 +257,7 @@ def create_function_from_signature(sig, kparams):
             else:
                 signature_types.append('mangle_type(%s, %s)' % (name, 'True' if kp.is_const else 'False'))
 
-    cache_key = ''.join([x + ', ' for x in signature_dtypes + specialisations])
+    cache_key = ''.join([x + ', ' for x in signature_types + specialisations])
     constexpr_vals = ''.join([x + ', ' for x in constexpr_vals])
 
     func_args.append('**excess_kwargs')
