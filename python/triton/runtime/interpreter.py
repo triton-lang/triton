@@ -16,6 +16,12 @@ from .._C.libtriton import ir as _ir
 class TensorHandle:
 
     def __init__(self, data, dtype):
+        '''
+            data: numpy array
+            dtype: triton type, either pointer_type or scalar_type.
+            we don't store block_type here because the shape information is already availale in the data field
+            attr: a dictionary of attributes
+        '''
         self.data = data
         self.dtype = dtype
         self.attr = {}
@@ -47,7 +53,7 @@ class BlockPointerHandle:
         self.order = order
 
     def materialize_pointers(self, boundary_check):
-        dtype_tt = self.base.dtype.element_ty
+        dtype_tt = self.base.get_element_ty()
         n_bytes = dtype_tt.primitive_bitwidth // 8
         tensor_shape = self.tensor_shape
         ptrs = np.broadcast_to(self.base.data, self.tensor_shape)
@@ -59,7 +65,7 @@ class BlockPointerHandle:
             ptrs = ptrs + (n_bytes * off * self.strides[dim].data).astype(np.uint64)
             if dim in boundary_check:
                 masks = np.logical_and(masks, off < self.shape[dim].data)
-        ptrs = TensorHandle(ptrs, self.base.dtype)
+        ptrs = TensorHandle(ptrs, self.base.dtype.scalar)
         return ptrs, masks
 
 
@@ -68,7 +74,8 @@ class InterpreterOptions:
     extern_libs: dict = None
     debug: bool = False
     arch: str = None
-    allow_fp8e4nv: bool = False
+    allow_fp8e4nv: bool = True
+    allow_fp8e4b15: bool = True
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: int = 0
@@ -102,12 +109,82 @@ def _get_np_dtype(tt_dtype):
         tl.uint32: np.dtype(np.uint32),
         tl.int64: np.dtype(np.int64),
         tl.uint64: np.dtype(np.uint64),
+        # float8 types are stored as uint8
+        tl.float8e5: np.dtype(np.uint8),
+        tl.float8e5b16: np.dtype(np.uint8),
+        tl.float8e4nv: np.dtype(np.uint8),
+        tl.float8e4b8: np.dtype(np.uint8),
+        tl.float8e4b15: np.dtype(np.uint8),
     }
     if isinstance(tt_dtype, tl.block_type):
         if isinstance(tt_dtype.element_ty, tl.pointer_type):
             return np.dtype(np.uint64)
         return np_types[tt_dtype.element_ty]
     return np_types[tt_dtype]
+
+
+def _convert_float(input, input_dtype, output_dtype, rounding_mode):
+    input_uint_dtype = getattr(np, f"uint{input_dtype.primitive_bitwidth}")
+    output_unint_dtype = getattr(np, f"uint{output_dtype.primitive_bitwidth}")
+    input_bin = np.frombuffer(input.tobytes(), dtype=input_uint_dtype)
+    sign = (input_bin >> (input_dtype.primitive_bitwidth - 1)) & 0x01
+    input_exponent_width = input_dtype.primitive_bitwidth - input_dtype.fp_mantissa_width - 1
+    output_exponent_width = output_dtype.primitive_bitwidth - output_dtype.fp_mantissa_width - 1
+    significand = input_bin & ((1 << input_dtype.fp_mantissa_width) - 1)
+    bias_input = input_dtype.exponent_bias
+    bias_output = output_dtype.exponent_bias
+    exponent = ((input_bin >> input_dtype.fp_mantissa_width) & ((1 << input_exponent_width) - 1)).astype(np.int32)
+    subnormal_index = exponent == 0
+    if np.any(subnormal_index):
+        # Credit to Phil: phil@openai.com
+        # subnormal repr: ((-1.0)**sign) * (2.0**(1 - exp_bias)) * (2^(m0) + 2^(m1) + ... + 2^(mn))
+        # where m0, m1, ..., mn are the 1-bit of the mantissa
+        # convert it to normal repr: ((-1.0)**sign) * (2.0**(1 + m0 - exp_bias)) * (1 + 2^(m1 - m0) + ... + 2^(mn - m0))
+        bit_pos = np.zeros_like(input_bin, dtype=np.int32)
+        # Find the most significant bit of the mantissa in the significand
+        for i in range(input_dtype.fp_mantissa_width):
+            bit_index = ((significand >> i) & 0x01)
+            # pos should be >= 1
+            bit_pos[bit_index == 1] = input_dtype.fp_mantissa_width - i
+        zero_significand_index = significand == 0
+        exponent[subnormal_index] = 1 - bit_pos[subnormal_index]
+        # 0 significand and subnormal should be treated as 0
+        exponent[zero_significand_index & subnormal_index] = bias_input - bias_output
+        significand[subnormal_index] = (significand[subnormal_index] << bit_pos[subnormal_index]) & (
+            (1 << input_dtype.fp_mantissa_width) - 1)
+    # Prevent overflow and underflow
+    exponent_output = np.maximum(0, np.minimum((exponent - bias_input + bias_output), (1 << output_exponent_width) - 1))
+    exponent_output = exponent_output.astype(output_unint_dtype)
+    sign_output = sign.astype(output_unint_dtype)
+    if input_dtype.primitive_bitwidth > output_dtype.primitive_bitwidth:  # Downcast
+        significand_output = (significand >> (input_dtype.fp_mantissa_width - output_dtype.fp_mantissa_width)) & (
+            (1 << output_dtype.fp_mantissa_width) - 1)
+        if rounding_mode == _ir.ROUNDING_MODE.RTNE:  # Round to nearst even
+            # find the cut-off bit
+            cut_off = significand & (1 << (input_dtype.fp_mantissa_width - output_dtype.fp_mantissa_width - 1))
+            significand_output = significand_output + (cut_off > 0)
+        significand_output = significand_output.astype(output_unint_dtype)
+    else:  # Upcast
+        significand_output = (significand.astype(output_unint_dtype) <<
+                              (output_dtype.fp_mantissa_width - input_dtype.fp_mantissa_width)) & (
+                                  (1 << output_dtype.fp_mantissa_width) - 1)
+    subnormal_index = exponent_output == 0
+    if np.any(subnormal_index):  # underflow
+        # normal repr: ((-1.0)**sign) * (2.0**(exp - exp_bias_input)) * (1 + 2^(m0) + 2^(m1) + ... + 2^(mn))
+        # where m0, m1, ..., mn are the 1-bit of the mantissa
+        # shift = (1 - exp_bias_output) - (exp - exp_bias_input)
+        # convert it to subnormal repr: ((-1.0)**sign) * (2.0**(1 - exp_bias_output)) * (2^(-shift) + 2^(m0 - shift) + 2^(m1 - shift) + ... + 2^(mn - shift))
+        exponent = ((input_bin >> input_dtype.fp_mantissa_width) & ((1 << input_exponent_width) - 1)).astype(np.int32)
+        non_zero_exponent_index = exponent != 0
+        # If the original exponent is not zero, we still need to shift the significand and consider the 1.0 part in mantissa
+        subnormal_index = subnormal_index & non_zero_exponent_index
+        shift = np.zeros_like(input_bin, dtype=np.int32)
+        shift[subnormal_index] = (1 - bias_output) - (exponent[subnormal_index] - bias_input)
+        significand_output[subnormal_index] = (significand_output[subnormal_index] >> shift[subnormal_index]) | (
+            1 << (output_dtype.fp_mantissa_width - shift[subnormal_index]))
+    output = (sign_output << (output_dtype.primitive_bitwidth - 1)) | (
+        exponent_output << output_dtype.fp_mantissa_width) | significand_output
+    return output.reshape(input.shape)
 
 
 def _erf(x):
@@ -124,6 +201,13 @@ def _umulhi_64(a, b):
 np_erf_fp32 = np.vectorize(_erf, otypes=[np.float32])
 np_erf_fp64 = np.vectorize(_erf, otypes=[np.float64])
 np_umulhi_u64 = np.vectorize(_umulhi_64, otypes=[np.uint64])
+
+
+class ExtraFunctions:
+
+    @staticmethod
+    def _convert_custom_types(input, dst_ty, fp_downcast_rounding, _builder):
+        return tl.tensor(_builder.create_fp_to_fp(input.handle, dst_ty, fp_downcast_rounding), dst_ty)
 
 
 class InterpreterBuilder:
@@ -150,7 +234,8 @@ class InterpreterBuilder:
     def __init__(self) -> None:
         self.arch = None
         self.options = InterpreterOptions()
-        # pass
+        self.codegen_fns = {}
+        self.codegen_fns["convert_custom_types"] = ExtraFunctions._convert_custom_types
 
     def set_grid_idx(self, x, y, z):
         if not x < self.grid_dim[0]:
@@ -198,6 +283,21 @@ class InterpreterBuilder:
 
     def get_uint64_ty(self):
         return tl.uint64
+
+    def get_fp8e4nv_ty(self):
+        return tl.float8e4nv
+
+    def get_fp8e4b15_ty(self):
+        return tl.float8e4b15
+
+    def get_fp8e4b8_ty(self):
+        return tl.float8e4b8
+
+    def get_fp8e5_ty(self):
+        return tl.float8e5
+
+    def get_fp8e5b16_ty(self):
+        return tl.float8e5b16
 
     def get_ptr_ty(self, elt_ty, addr_space):
         return tl.pointer_type(elt_ty, addr_space)
@@ -276,7 +376,7 @@ class InterpreterBuilder:
 
     # casting ops
     def cast_impl(self, src, dst_type):
-        return TensorHandle(src.data.astype(_get_np_dtype(dst_type)), dst_type)
+        return TensorHandle(src.data.astype(_get_np_dtype(dst_type)), dst_type.scalar)
 
     create_si_to_fp = lambda self, src, dst_type: self.cast_impl(src, dst_type)
     create_ui_to_fp = lambda self, src, dst_type: self.cast_impl(src, dst_type)
@@ -286,15 +386,18 @@ class InterpreterBuilder:
     create_fp_trunc = lambda self, src, dst_type: self.cast_impl(src, dst_type)
     create_int_cast = lambda self, src, dst_type, is_signed: self.cast_impl(src, dst_type)
 
-    def create_fp_to_fp(self, src, dst_type):
-        raise NotImplementedError("fp_to_fp not supported in interpreter mode")
+    def create_fp_to_fp(self, src, dst_type, rounding_mode):
+        src_element_type = src.dtype.scalar
+        dst_element_type = dst_type.scalar
+        data = _convert_float(src.data, src_element_type, dst_element_type, rounding_mode).view(_get_np_dtype(dst_type))
+        return TensorHandle(data, dst_type.scalar)
 
     def create_bitcast(self, src, dst_type):
-        return TensorHandle(src.data.view(_get_np_dtype(dst_type)), dst_type)
+        return TensorHandle(src.data.view(_get_np_dtype(dst_type)), dst_type.scalar)
 
     # binary operators
     def binary_op(self, lhs, rhs, op):
-        return TensorHandle(op(lhs.data, rhs.data), lhs.dtype)
+        return TensorHandle(op(lhs.data, rhs.data), lhs.dtype.scalar)
 
     create_fadd = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.add)
     create_fmul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
@@ -350,7 +453,7 @@ class InterpreterBuilder:
         # Triton has IEEE, not numpy/torch, semantics for %, and those carry
         # through to //, so we have to use a nonstandard expression to get a
         # reference result for //.
-        return TensorHandle((lhs.data - np.fmod(lhs.data, rhs.data)) // rhs.data, lhs.dtype)
+        return TensorHandle((lhs.data - np.fmod(lhs.data, rhs.data)) // rhs.data, lhs.dtype.scalar)
 
     def create_ashr(self, lhs, rhs):
         # Triton's rshift operator depends on the signedness of the left operand
@@ -363,32 +466,41 @@ class InterpreterBuilder:
     def create_umulhi(self, lhs, rhs):
         dtype = lhs.data.dtype
         if dtype == np.int64 or dtype == np.uint64:
-            return TensorHandle(np_umulhi_u64(lhs.data, rhs.data), lhs.dtype)
+            return TensorHandle(np_umulhi_u64(lhs.data, rhs.data), lhs.dtype.scalar)
         else:
             compute_dtype = getattr(np, f"uint{dtype.itemsize * 8 * 2}")
             lhs_data = lhs.data.astype(compute_dtype)
             rhs_data = rhs.data.astype(compute_dtype)
             ret_data = np.multiply(lhs_data, rhs_data) >> (dtype.itemsize * 8)
-            return TensorHandle(ret_data.astype(dtype), lhs.dtype)
+            return TensorHandle(ret_data.astype(dtype), lhs.dtype.scalar)
 
     # ternary functions
     def ternary_op(self, lhs, rhs, other, op):
-        return TensorHandle(op(lhs.data, rhs.data, other.data), other.dtype)
+        return TensorHandle(op(lhs.data, rhs.data, other.data), other.dtype.scalar)
 
     create_clampf = lambda self, arg, lo, hi, propagate_nans: self.ternary_op(arg, lo, hi, np.clip)
     create_select = lambda self, cond, lhs, rhs: self.ternary_op(cond, lhs, rhs, np.where)
 
     def create_fma(self, x, y, z):
-        return TensorHandle(x.data * y.data + z.data, z.dtype)
+        return TensorHandle(x.data * y.data + z.data, z.dtype.scalar)
 
     # unary functions
     def unary_op(self, arg, op):
-        return TensorHandle(op(arg.data), arg.dtype)
+        return TensorHandle(op(arg.data), arg.dtype.scalar)
+
+    def create_fabs(self, arg):
+        # Mask out the sign bit based on the primitive length
+        dtype_tt = arg.dtype
+        mask_bitwidth = dtype_tt.primitive_bitwidth - 1
+        np_uint_dtype = getattr(np, f"uint{dtype_tt.primitive_bitwidth}")
+        data = arg.data.view(np_uint_dtype)
+        mask = (1 << mask_bitwidth) - 1
+        ret = (data & mask).view(_get_np_dtype(dtype_tt))
+        return TensorHandle(ret, arg.dtype.scalar)
 
     create_cos = lambda self, arg: self.unary_op(arg, np.cos)
     create_exp = lambda self, arg: self.unary_op(arg, np.exp)
     create_exp2 = lambda self, arg: self.unary_op(arg, np.exp2)
-    create_fabs = lambda self, arg: self.unary_op(arg, np.abs)
     create_iabs = lambda self, arg: self.unary_op(arg, np.abs)
     create_floor = lambda self, arg: self.unary_op(arg, np.floor)
     create_log = lambda self, arg: self.unary_op(arg, np.log)
@@ -399,19 +511,25 @@ class InterpreterBuilder:
 
     def create_erf(self, arg):
         ret = np_erf_fp32(arg.data) if arg.data.dtype == np.float32 else np_erf_fp64(arg.data)
-        return TensorHandle(ret, arg.dtype)
+        return TensorHandle(ret, arg.dtype.scalar)
 
     def create_rsqrt(self, arg):
-        return TensorHandle(1 / np.sqrt(arg.data), arg.dtype)
+        return TensorHandle(1 / np.sqrt(arg.data), arg.dtype.scalar)
 
     # tensor operators
-    create_reshape = lambda self, arg, shape, allow_reorder: TensorHandle(arg.data.reshape(shape), arg.dtype)
+    create_reshape = lambda self, arg, shape, allow_reorder: TensorHandle(arg.data.reshape(shape), arg.dtype.scalar)
 
     def create_trans(self, arg, perm):
-        return TensorHandle(np.transpose(arg.data, perm), arg.dtype)
+        return TensorHandle(np.transpose(arg.data, perm), arg.dtype.scalar)
 
     def create_dot(self, a, b, d, input_precision, max_num_imprecise_acc):
-        return TensorHandle(np.matmul(a.data, b.data, dtype=d.data.dtype) + d.data, d.dtype)
+        a_data = a.data
+        b_data = b.data
+        if (a.dtype.primitive_bitwidth == 8 and a.dtype.is_floating()) or \
+           (b.dtype.primitive_bitwidth == 8 and b.dtype.is_floating()):
+            a_data = _convert_float(a_data, a.dtype, tl.float16, None).view(np.float16)
+            b_data = _convert_float(b_data, b.dtype, tl.float16, None).view(np.float16)
+        return TensorHandle(np.matmul(a_data, b_data, dtype=d.data.dtype) + d.data, d.dtype.scalar)
 
     def create_make_range(self, start, stop):
         return TensorHandle(np.arange(start, stop, dtype=np.int32), tl.int32)
@@ -448,40 +566,39 @@ class InterpreterBuilder:
         return self.create_masked_store(ptrs, value, masks, cache_modifier, eviction_policy)
 
     def create_expand_dims(self, arg, axis):
-        return TensorHandle(np.expand_dims(arg.data, axis), arg.dtype)
+        return TensorHandle(np.expand_dims(arg.data, axis), arg.dtype.scalar)
 
     def create_broadcast(self, arg, shape):
-        return TensorHandle(np.broadcast_to(arg.data, shape), arg.dtype)
+        return TensorHandle(np.broadcast_to(arg.data, shape), arg.dtype.scalar)
 
     def create_int_to_ptr(self, val, dst_ty):
-        return TensorHandle(val.data.astype(np.uint64), dst_ty)
+        return TensorHandle(val.data.astype(np.uint64), dst_ty.scalar)
 
     def create_ptr_to_int(self, val, dst_ty):
-        return TensorHandle(val.data.astype(np.uint64), dst_ty)
+        return TensorHandle(val.data.astype(np.uint64), dst_ty.scalar)
 
     def create_cat(self, lhs, rhs):
-        return TensorHandle(np.concatenate([lhs.data, rhs.data]), lhs.dtype)
+        return TensorHandle(np.concatenate([lhs.data, rhs.data]), lhs.dtype.scalar)
 
     def create_join(self, lhs, rhs):
         # Triton only supports joining two original tensors into a new one along the last axis
-        return TensorHandle(np.stack([lhs.data, rhs.data], axis=-1), lhs.dtype)
+        return TensorHandle(np.stack([lhs.data, rhs.data], axis=-1), lhs.dtype.scalar)
 
     def create_split(self, val):
         # Triton only supports splitting the original tensor into two along the last axis
-        return (TensorHandle(val.data[..., 0], val.dtype), TensorHandle(val.data[..., 1], val.dtype))
+        return (TensorHandle(val.data[..., 0], val.dtype.scalar), TensorHandle(val.data[..., 1], val.dtype.scalar))
 
     def create_splat(self, arg, shape):
         if isinstance(arg.dtype, tl.block_type):
-            return TensorHandle(np.full(shape, arg.data[0], dtype=_get_np_dtype(arg.dtype)), arg.dtype)
+            return TensorHandle(np.full(shape, arg.data[0], dtype=_get_np_dtype(arg.dtype)), arg.dtype.scalar)
         else:  # scalar
-            block_type = tl.block_type(arg.dtype, shape)
-            return TensorHandle(np.full(shape, arg.data, dtype=_get_np_dtype(arg.dtype)), block_type)
+            return TensorHandle(np.full(shape, arg.data, dtype=_get_np_dtype(arg.dtype)), arg.dtype.scalar)
 
     def create_atomic_cas(self, ptr, cmp, val, sem, scope):
         if sem not in self.ir_sem_to_interpreter_sem:
             raise ValueError(f"unsupported semantic {sem}")
         sem = self.ir_sem_to_interpreter_sem[sem]
-        return TensorHandle(_interpreter.atomic_cas(ptr.data, cmp.data, val.data, sem), cmp.dtype)
+        return TensorHandle(_interpreter.atomic_cas(ptr.data, cmp.data, val.data, sem), cmp.dtype.scalar)
 
     def create_atomic_rmw(self, rmwOp, ptr, val, mask, sem, scope):
         if rmwOp not in self.ir_rmw_op_to_interpreter_rmw_op:
@@ -490,7 +607,7 @@ class InterpreterBuilder:
             raise ValueError(f"unsupported semantic {sem}")
         rmwOp = self.ir_rmw_op_to_interpreter_rmw_op[rmwOp]
         sem = self.ir_sem_to_interpreter_sem[sem]
-        return TensorHandle(_interpreter.atomic_rmw(rmwOp, ptr.data, val.data, mask.data, sem), val.dtype)
+        return TensorHandle(_interpreter.atomic_rmw(rmwOp, ptr.data, val.data, mask.data, sem), val.dtype.scalar)
 
     def create_extern_elementwise(self, libName, libPath, symbol, argList, retType, isPure):
         raise NotImplementedError("extern_elementwise not supported in interpreter mode")
@@ -532,7 +649,7 @@ class InterpreterBuilder:
     def get_all_ones_value(self, type):
         np_type = _get_np_dtype(type)
         if "int" in np_type.name:
-            return TensorHandle(np.full(1, -1, dtype=np_type), type)
+            return TensorHandle(np.full(1, -1, dtype=np_type), type.scalar)
         else:
             raise TypeError(f"unsupported type {type}")
 
@@ -560,7 +677,7 @@ def _patch_lang_tensor(tensor):
         return bool(data) if data.size == 1 else True
 
     def _get_transpose(self):
-        return tl.core.tensor(TensorHandle(np.transpose(self.handle.data), self.handle.dtype), self.dtype)
+        return tl.core.tensor(TensorHandle(np.transpose(self.handle.data), self.handle.dtype), self.dtype.scalar)
 
     tensor.__index__ = lambda self: int(self.handle.data)
     tensor.__bool__ = lambda self: _get_bool(self)
@@ -591,7 +708,7 @@ class ReduceScanOpIneterface:
         else:
             ret = np.array([ret], dtype=_get_np_dtype(dtype))
             ret_type = dtype
-        return tl.core.tensor(TensorHandle(ret, dtype), ret_type)
+        return tl.core.tensor(TensorHandle(ret, dtype.scalar), ret_type)
 
     def apply(self, input):
         if not isinstance(input, tuple):
