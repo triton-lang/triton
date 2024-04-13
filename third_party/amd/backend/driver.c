@@ -1,5 +1,9 @@
 #define __HIP_PLATFORM_AMD__
+// clang-format off
+// hip_depreated.h needs definitions from hip_runtime.h.
 #include <hip/hip_runtime.h>
+#include <hip/hip_deprecated.h>
+// clang-format on
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <dlfcn.h>
@@ -14,9 +18,23 @@ static const char *hipLibSearchPaths[] = {"/*py_libhip_search_path*/"};
 // in this file.
 // |FOR_EACH_ERR_FN| is a macro to process APIs that return hipError_t;
 // |FOR_EACH_STR_FN| is a macro to process APIs that return const char *.
+//
+// HIP 6.0 introduced an updated hipGetDeviceProperties API under a new symbol,
+// hipGetDevicePropertiesR0600. However, the associated hipDeviceProp_t was
+// directly updated with breaking changes to match hipGetDevicePropertiesR0600
+// in the header file. We include the header file from HIP 6.0. So here if we
+// use hipGetDeviceProperties together with hipDeviceProp_t we will use the
+// old API with a new struct definition and mess up the interpretation.
+//
+// This is a known issue: https://github.com/ROCm/ROCm/issues/2728.
+//
+// For now explicitly defer to the old hipDeviceProp_t struct. This should work
+// for both 5.x and 6.x. In the long term we need to switch to use
+// hipGetProcAddress once available:
+// https://github.com/ROCm/clr/commit/0479cdb3dd30ef58718cad44e424bd793c394cc0
 #define HIP_SYMBOL_LIST(FOR_EACH_ERR_FN, FOR_EACH_STR_FN)                      \
   FOR_EACH_STR_FN(hipGetErrorString, hipError_t hipError)                      \
-  FOR_EACH_ERR_FN(hipGetDevicePropertiesR0600, hipDeviceProp_t *prop,          \
+  FOR_EACH_ERR_FN(hipGetDeviceProperties, hipDeviceProp_tR0000 *prop,          \
                   int deviceId)                                                \
   FOR_EACH_ERR_FN(hipModuleLoadDataEx, hipModule_t *module, const void *image, \
                   unsigned int numOptions, hipJitOption *options,              \
@@ -107,8 +125,8 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   if (!PyArg_ParseTuple(args, "i", &device_id))
     return NULL;
 
-  hipDeviceProp_t props;
-  HIP_CHECK(hipSymbolTable.hipGetDevicePropertiesR0600(&props, device_id));
+  hipDeviceProp_tR0000 props;
+  HIP_CHECK(hipSymbolTable.hipGetDeviceProperties(&props, device_id));
 
   // create a struct to hold device properties
   return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:s, s:i}", "max_shared_mem",
