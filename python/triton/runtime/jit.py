@@ -111,11 +111,7 @@ def _normalize_ty(ty) -> str:
 
 
 class KernelParam:
-    """Represents a parameter to a @jit'ed function.
-
-    A parameter is just the name plus metadata; a parameter plus a value is a
-    KernelArg.
-    """
+    """Represents a parameter (name plus metadata) to a @jit'ed function."""
 
     def __init__(self, num: int, param: inspect.Parameter, do_not_specialize: bool):
         self.num = num
@@ -160,41 +156,47 @@ class KernelParam:
         return self._param.default != inspect.Parameter.empty
 
 
-class KernelArg:
-    """Represents an argument to a @jit'ed function.
+def compute_spec_key(v):
 
-    An argument is a parameter plus a value.
-    """
+    if hasattr(v, "data_ptr") and (v.data_ptr() % 16 == 0):
+        return "D"
+    elif isinstance(v, int):
+        # bool is a subclass of int, so we don't check explicitly above.
+        if (v % 16 == 0):
+            return "D"
+        elif v == 1:
+            return "1"
+    return "N"
 
-    def __init__(self, value, param):
-        self.value = value
-        self.param = param
 
-    @property
-    def name(self):
-        return self.param.name
+dtype2str = {}
 
-    def mangled_type(self):
-        annotation_type = self.param.annotation_type
-        if annotation_type:
-            return annotation_type
-        key = JITFunction._key_of(self.value)
-        return JITFunction._type_of(key, self.param.is_const)
 
-    def specialization_key(self):
-        assert not self.param.do_not_specialize
+def mangle_type(arg, is_const=False):
 
-        if hasattr(self.value, "data_ptr"):
-            return (self.value.data_ptr() % JITFunction.divisibility == 0, )
-
-        if isinstance(self.value, int):
-            # bool is a subclass of int, so we don't check explicitly above.
-            return (
-                self.value % JITFunction.divisibility == 0,
-                self.value == 1,
-            )
-
-        return (False, )
+    if hasattr(arg, "dtype"):
+        # dtypes are hashable so we can memoize this mapping:
+        dsk = (arg.dtype, is_const)
+        res = dtype2str.get(dsk, None)
+        if res is None:
+            res = ("*k" if dsk[1] else "*") + type_canonicalisation_dict[str(dsk[0]).split('.')[-1]]
+            dtype2str[dsk] = res
+        return res
+    elif isinstance(arg, bool):
+        return "i1"
+    elif isinstance(arg, int):
+        if -(2**31) <= arg and arg <= 2**31 - 1:
+            return "i32"
+        elif 2**63 <= arg and arg <= 2**64 - 1:
+            return "u64"
+        else:
+            return "i64"
+    elif isinstance(arg, float):
+        return "fp32"
+    elif arg is None:
+        return "none"
+    else:
+        raise TypeError(f"Unsupported type {type(arg)} for {arg}")
 
 
 class KernelInterface(Generic[T]):
@@ -239,11 +241,12 @@ def create_function_from_signature(sig):
         else:
             func_args.append(f"{name}=default_{name}")
             dict_entries.append(f"'{name}': {name}")
+    func_args.append('**excess_kwargs')
 
     # Join all arguments into a function definition string
     args_str = ', '.join(func_args)
     dict_str = ', '.join(dict_entries)
-    func_body = f"def dynamic_func({args_str}):\n    return {{{dict_str}}}"
+    func_body = "def dynamic_func(%s):\n    return {%s}, excess_kwargs" % (args_str, dict_str)
 
     # Prepare defaults to be inserted into function namespace
     func_namespace = {
@@ -321,7 +324,6 @@ class JITFunction(KernelInterface[T]):
             return (arg % 16 == 0, arg == 1)
         return (arg is None, )
 
-    # TODO(jlebar): Fold this into the KernelArg class.
     def _get_config(self, *args):
         from ..compiler import AttrsDescriptor
 
@@ -434,9 +436,7 @@ class JITFunction(KernelInterface[T]):
         device = driver.active.get_current_device()
         stream = driver.active.get_current_stream(device)
         target = driver.active.get_current_target()
-        backend = make_backend(target)
         kwargs["debug"] = self.debug
-        options = backend.parse_options(kwargs)
 
         # Execute pre run hooks with args and kwargs
         for hook in self.pre_run_hooks:
@@ -447,10 +447,11 @@ class JITFunction(KernelInterface[T]):
             self.binder = create_function_from_signature(self.signature)
             self.constexpr_indices = [i for (i, p) in enumerate(self.params) if p.is_constexpr]
             self.non_constexpr_indices = [i for (i, p) in enumerate(self.params) if not p.is_constexpr]
-            self.specialised_indices = [i for (i, p) in enumerate(self.params) if not p.do_not_specialize]
+            self.specialised_indices = [
+                i for (i, p) in enumerate(self.params) if (not p.do_not_specialize) and (not p.is_constexpr)
+            ]
 
-        kwargs = {k: v for k, v in kwargs.items() if k not in options.__dict__}
-        bound_args = self.binder(*args, **kwargs)
+        bound_args, excess_kwargs = self.binder(*args, **kwargs)
         assert len(bound_args) == len(self.params)
         # canonicalize grid
         assert grid is not None
@@ -465,22 +466,34 @@ class JITFunction(KernelInterface[T]):
         grid_2 = grid[2] if grid_size > 2 else 1
 
         # compute cache key
-        args = [KernelArg(arg_value, param) for (_, arg_value), param in zip(bound_args.items(), self.params)]
+        bound_vals = tuple(bound_args.values())
+        sigvals = tuple((self.params[i].annotation_type or mangle_type(bound_vals[i], self.params[i].is_const))
+                        for i in self.non_constexpr_indices)
+        spec_key = ''.join(compute_spec_key(bound_vals[i]) for i in self.specialised_indices)
+        constexpr_key = tuple(bound_vals[i] for i in self.constexpr_indices)
 
-        signature = {args[i].param.name: args[i].mangled_type() for i in self.non_constexpr_indices}
-        sig_key = tuple(signature.values())
-        spec_key = tuple(args[i].specialization_key() for i in self.specialised_indices)
-        constexpr_key = tuple(args[i].value for i in self.constexpr_indices)
-
-        key = (sig_key, constexpr_key, spec_key, options)
+        key = (sigvals, constexpr_key, spec_key, excess_kwargs, target)
         key = str(key)
         # Kernel is not cached; we have to compile.
         if key not in self.cache[device]:
-            configs = (self._get_config(*[arg.value for arg in args]), )
+
+            # `None` is nullptr. Implicitly convert to *i8. This needs to be
+            # done here rather than when we build the signature as otherwise
+            # the kernel cache key could not distinguish between byte pointers
+            # and None arguments, resulting in a downstream mismatch:
+            sigkeys = [self.params[i].name for i in self.non_constexpr_indices]
+            signature = {k: ('*i8' if (v == 'none') else v) for (k, v) in zip(sigkeys, sigvals)}
+
+            backend = make_backend(target)
+            options = backend.parse_options(kwargs)
+            for k in excess_kwargs:
+                if k not in options.__dict__:
+                    raise KeyError("Keyword argument %s was specified but unrecognised" % k)
+            configs = (self._get_config(*bound_vals), )
             constants = {
-                arg.param.name: arg.value
-                for arg in args
-                if arg.param.is_constexpr or arg.param.num in configs[0].equal_to_1 or arg.value is None
+                p.name: v
+                for (v, p) in zip(bound_vals, self.params)
+                if p.is_constexpr or p.num in configs[0].equal_to_1 or v is None
             }
             for i, arg in constants.items():
                 if callable(arg):
@@ -498,14 +511,8 @@ class JITFunction(KernelInterface[T]):
 
         kernel = self.cache[device][key]
 
-        # Verify key signature from the cache
-        if kernel.src.signature != signature:
-            raise RuntimeError(f"Signature mismatch for cached kernel {self.fn.__name__}:\n"
-                               f"  Cached signature: {kernel.src.signature}\n"
-                               f"  Call signature:   {signature}")
-
         if not warmup:
-            args = [args[i].value for i in self.non_constexpr_indices]
+            args = [bound_vals[i] for i in self.non_constexpr_indices]
             launch_metadata = kernel.launch_metadata(grid, stream, *args)
             kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
                        CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, *args)
