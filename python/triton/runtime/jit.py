@@ -175,7 +175,7 @@ def compute_spec_key(v):
 
 dtype2str = {}
 
-def mangle_type(v, is_const=False):
+def mangle_type(arg, is_const=False):
 
     if hasattr(arg, "dtype"):
         # dtypes are hashable so we can memoize this mapping:
