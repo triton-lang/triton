@@ -75,6 +75,7 @@ class InterpreterOptions:
     debug: bool = False
     arch: str = None
     allow_fp8e4nv: bool = True
+    allow_fp8e4b15: bool = True
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: int = 0
