@@ -467,7 +467,8 @@ class JITFunction(KernelInterface[T]):
 
         # compute cache key
         bound_vals = tuple(bound_args.values())
-        sigvals = tuple(mangle_type(bound_vals[i], self.params[i].is_const) for i in self.non_constexpr_indices)
+        sigvals = tuple((self.params[i].annotation_type or mangle_type(bound_vals[i], self.params[i].is_const))
+                        for i in self.non_constexpr_indices)
         spec_key = ''.join(compute_spec_key(bound_vals[i]) for i in self.specialised_indices)
         constexpr_key = tuple(bound_vals[i] for i in self.constexpr_indices)
 
