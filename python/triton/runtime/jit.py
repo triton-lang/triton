@@ -243,7 +243,7 @@ def create_function_from_signature(sig):
     # Join all arguments into a function definition string
     args_str = ', '.join(func_args)
     dict_str = ', '.join(dict_entries)
-    func_body = f"def dynamic_func(%s, **excess_kwargs):\n    return {%s}, excess_kwargs" % (args_str, dict_str)
+    func_body = "def dynamic_func(%s, **excess_kwargs):\n    return {%s}, excess_kwargs" % (args_str, dict_str)
 
     # Prepare defaults to be inserted into function namespace
     func_namespace = {
