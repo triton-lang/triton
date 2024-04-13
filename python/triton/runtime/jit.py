@@ -223,7 +223,7 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
     return serialized_obj
 
 
-def create_function_from_signature(sig):
+def create_function_from_signature(sig, kparams):
     """
     Equivalent to sig.bind followed by apply_defaults. This generates a
     native Python function (using exec) which can be memoized on a per-kernel
@@ -231,22 +231,41 @@ def create_function_from_signature(sig):
     much of the kernel launch overhead -- every time we run the kernel.
     """
 
+    assert len(sig.parameters) == len(kparams)
+
     # Create the function argument list and the dict entries for the return statement
     func_args = []
     dict_entries = []
-    for name, param in sig.parameters.items():
-        if param.default is inspect.Parameter.empty:
+    constexpr_vals = []
+    signature_types = []
+    specialisations = []
+
+    for ((name, sp), kp) in zip(sig.parameters.items(), kparams):
+        if sp.default is inspect.Parameter.empty:
             func_args.append(name)
             dict_entries.append(f"'{name}': {name}")
         else:
             func_args.append(f"{name}=default_{name}")
             dict_entries.append(f"'{name}': {name}")
+        if kp.is_constexpr:
+            constexpr_vals.append(name)
+        else:
+            if not kp.do_not_specialize:
+                specialisations.append('compute_spec_key(%s)' % name)
+            if kp.annotation_type:
+                signature_types.append('"%s"' % kp.annotation_type)
+            else:
+                signature_types.append('mangle_type(%s, %s)' % (name, 'True' if kp.is_const else 'False'))
+
+    cache_key = ''.join([x + ', ' for x in signature_dtypes + specialisations])
+    constexpr_vals = ''.join([x + ', ' for x in constexpr_vals])
+
     func_args.append('**excess_kwargs')
 
     # Join all arguments into a function definition string
     args_str = ', '.join(func_args)
     dict_str = ', '.join(dict_entries)
-    func_body = "def dynamic_func(%s):\n    return {%s}, excess_kwargs" % (args_str, dict_str)
+    func_body = "def dynamic_func(%s):\n    return {%s}, (%s), (%s), excess_kwargs" % (args_str, dict_str, cache_key, constexpr_vals)
 
     # Prepare defaults to be inserted into function namespace
     func_namespace = {
@@ -444,14 +463,15 @@ class JITFunction(KernelInterface[T]):
 
         # bind non-reserved keyword args and set defaults
         if self.binder is None:
-            self.binder = create_function_from_signature(self.signature)
+            self.binder = create_function_from_signature(self.signature, self.params)
             self.constexpr_indices = [i for (i, p) in enumerate(self.params) if p.is_constexpr]
             self.non_constexpr_indices = [i for (i, p) in enumerate(self.params) if not p.is_constexpr]
             self.specialised_indices = [
                 i for (i, p) in enumerate(self.params) if (not p.do_not_specialize) and (not p.is_constexpr)
             ]
 
-        bound_args, excess_kwargs = self.binder(*args, **kwargs)
+        bound_args, sig_and_spec, constexpr_vals, excess_kwargs = self.binder(*args, **kwargs)
+
         assert len(bound_args) == len(self.params)
         # canonicalize grid
         assert grid is not None
@@ -465,15 +485,11 @@ class JITFunction(KernelInterface[T]):
         grid_1 = grid[1] if grid_size > 1 else 1
         grid_2 = grid[2] if grid_size > 2 else 1
 
+        key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs, target))
+
         # compute cache key
         bound_vals = tuple(bound_args.values())
-        sigvals = tuple((self.params[i].annotation_type or mangle_type(bound_vals[i], self.params[i].is_const))
-                        for i in self.non_constexpr_indices)
-        spec_key = ''.join(compute_spec_key(bound_vals[i]) for i in self.specialised_indices)
-        constexpr_key = tuple(bound_vals[i] for i in self.constexpr_indices)
 
-        key = (sigvals, constexpr_key, spec_key, excess_kwargs, target)
-        key = str(key)
         # Kernel is not cached; we have to compile.
         if key not in self.cache[device]:
 
@@ -482,6 +498,7 @@ class JITFunction(KernelInterface[T]):
             # the kernel cache key could not distinguish between byte pointers
             # and None arguments, resulting in a downstream mismatch:
             sigkeys = [self.params[i].name for i in self.non_constexpr_indices]
+            sigvals = sig_and_spec[:len(sigkeys)]
             signature = {k: ('*i8' if (v == 'none') else v) for (k, v) in zip(sigkeys, sigvals)}
 
             backend = make_backend(target)
