@@ -1,3 +1,4 @@
+import functools
 import os
 import hashlib
 import subprocess
@@ -11,6 +12,7 @@ dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir = [os.path.join(dirname, "include")]
 
 
+@functools.lru_cache()
 def _get_path_to_hip_runtime_dylib():
     lib_name = "libamdhip64.so"
 
