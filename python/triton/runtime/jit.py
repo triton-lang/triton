@@ -199,7 +199,6 @@ class KernelArg:
         return compute_spec_key(self.value)
 
 
-
 class KernelInterface(Generic[T]):
     run: T
 
@@ -448,7 +447,9 @@ class JITFunction(KernelInterface[T]):
             self.binder = create_function_from_signature(self.signature)
             self.constexpr_indices = [i for (i, p) in enumerate(self.params) if p.is_constexpr]
             self.non_constexpr_indices = [i for (i, p) in enumerate(self.params) if not p.is_constexpr]
-            self.specialised_indices = [i for (i, p) in enumerate(self.params) if not p.do_not_specialize]
+            self.specialised_indices = [
+                i for (i, p) in enumerate(self.params) if (not p.do_not_specialize) and (not p.is_constexpr)
+            ]
 
         bound_args, excess_kwargs = self.binder(*args, **kwargs)
         assert len(bound_args) == len(self.params)
