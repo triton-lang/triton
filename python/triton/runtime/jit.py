@@ -184,17 +184,15 @@ class KernelArg:
     def specialization_key(self):
         assert not self.param.do_not_specialize
 
-        if hasattr(self.value, "data_ptr"):
-            return (self.value.data_ptr() % JITFunction.divisibility == 0, )
-
-        if isinstance(self.value, int):
+        if hasattr(self.value, "data_ptr") and (self.value.data_ptr() % JITFunction.divisibility == 0):
+            return "D"
+        elif isinstance(self.value, int):
             # bool is a subclass of int, so we don't check explicitly above.
-            return (
-                self.value % JITFunction.divisibility == 0,
-                self.value == 1,
-            )
-
-        return (False, )
+            if (self.value % JITFunction.divisibility == 0):
+                return "D"
+            elif self.value == 1:
+                return "1"
+        return "N"
 
 
 class KernelInterface(Generic[T]):
@@ -465,8 +463,8 @@ class JITFunction(KernelInterface[T]):
         args = [KernelArg(arg_value, param) for (_, arg_value), param in zip(bound_args.items(), self.params)]
 
         signature = {args[i].param.name: args[i].mangled_type() for i in self.non_constexpr_indices}
-        sig_key = tuple(signature.values())
-        spec_key = tuple(args[i].specialization_key() for i in self.specialised_indices)
+        sig_key = ''.join(signature.values())
+        spec_key = ''.join(args[i].specialization_key() for i in self.specialised_indices)
         constexpr_key = tuple(args[i].value for i in self.constexpr_indices)
 
         key = (sig_key, constexpr_key, spec_key, excess_kwargs, target)
