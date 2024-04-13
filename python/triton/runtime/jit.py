@@ -111,11 +111,7 @@ def _normalize_ty(ty) -> str:
 
 
 class KernelParam:
-    """Represents a parameter to a @jit'ed function.
-
-    A parameter is just the name plus metadata; a parameter plus a value is a
-    KernelArg.
-    """
+    """Represents a parameter (name plus metadata) to a @jit'ed function."""
 
     def __init__(self, num: int, param: inspect.Parameter, do_not_specialize: bool):
         self.num = num
@@ -201,32 +197,6 @@ def mangle_type(arg, is_const=False):
         return "none"
     else:
         raise TypeError(f"Unsupported type {type(arg)} for {arg}")
-
-
-class KernelArg:
-    """Represents an argument to a @jit'ed function.
-
-    An argument is a parameter plus a value.
-    """
-
-    def __init__(self, value, param):
-        self.value = value
-        self.param = param
-
-    @property
-    def name(self):
-        return self.param.name
-
-    def mangled_type(self):
-        annotation_type = self.param.annotation_type
-        if annotation_type:
-            return annotation_type
-        key = JITFunction._key_of(self.value)
-        return JITFunction._type_of(key, self.param.is_const)
-
-    def specialization_key(self):
-        assert not self.param.do_not_specialize
-        return compute_spec_key(self.value)
 
 
 class KernelInterface(Generic[T]):
@@ -354,7 +324,6 @@ class JITFunction(KernelInterface[T]):
             return (arg % 16 == 0, arg == 1)
         return (arg is None, )
 
-    # TODO(jlebar): Fold this into the KernelArg class.
     def _get_config(self, *args):
         from ..compiler import AttrsDescriptor
 
@@ -507,8 +476,6 @@ class JITFunction(KernelInterface[T]):
         # Kernel is not cached; we have to compile.
         if key not in self.cache[device]:
 
-            args = [KernelArg(v, p) for (v, p) in zip(bound_vals, self.params)]
-
             # `None` is nullptr. Implicitly convert to *i8. This needs to be
             # done here rather than when we build the signature as otherwise
             # the kernel cache key could not distinguish between byte pointers
@@ -521,11 +488,11 @@ class JITFunction(KernelInterface[T]):
             for k in excess_kwargs:
                 if k not in options.__dict__:
                     raise KeyError("Keyword argument %s was specified but unrecognised" % k)
-            configs = (self._get_config(*[arg.value for arg in args]), )
+            configs = (self._get_config(*bound_vals), )
             constants = {
-                arg.param.name: arg.value
-                for arg in args
-                if arg.param.is_constexpr or arg.param.num in configs[0].equal_to_1 or arg.value is None
+                p.name: v
+                for (v, p) in zip(bound_vals, self.params)
+                if p.is_constexpr or p.num in configs[0].equal_to_1 or v is None
             }
             for i, arg in constants.items():
                 if callable(arg):
