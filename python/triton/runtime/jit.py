@@ -266,7 +266,8 @@ def create_function_from_signature(sig, kparams):
     # Join all arguments into a function definition string
     args_str = ', '.join(func_args)
     dict_str = ', '.join(dict_entries)
-    func_body = "def dynamic_func(%s):\n    return {%s}, (%s), (%s), (%s), excess_kwargs" % (args_str, dict_str, cache_key, constexpr_vals, non_constexpr_vals)
+    func_body = "def dynamic_func(%s):\n    return {%s}, (%s), (%s), (%s), excess_kwargs" % (
+        args_str, dict_str, cache_key, constexpr_vals, non_constexpr_vals)
 
     # Prepare defaults to be inserted into function namespace
     func_namespace = {
