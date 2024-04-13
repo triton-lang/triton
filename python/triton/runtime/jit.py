@@ -274,6 +274,9 @@ def create_function_from_signature(sig, kparams):
         if param.default is not inspect.Parameter.empty
     }
 
+    func_namespace['mangle_type'] = mangle_type
+    func_namespace['compute_spec_key'] = compute_spec_key
+
     # Execute the function string in func_namespace to create the function
     exec(func_body, func_namespace)
 
