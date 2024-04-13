@@ -204,8 +204,9 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
-        passes.common.add_cse(pm)
-        passes.common.add_symbol_dce(pm)
+        if os.environ.get("DISABLE_LLVM_OPT", "0") == "0":
+            passes.common.add_cse(pm)
+            passes.common.add_symbol_dce(pm)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
         pm.run(mod)

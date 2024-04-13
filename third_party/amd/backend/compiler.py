@@ -167,14 +167,17 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_allocate_shared_memory(pm)
         amd.passes.ttgpuir.add_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
-        passes.common.add_cse(pm)
+        enable_llvm_opt = os.environ.get("DISABLE_LLVM_OPT", "0") == "0"
+        if enable_llvm_opt:
+            passes.common.add_cse(pm)
 
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_cf_to_llvmir(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
-        passes.common.add_cse(pm)
-        passes.common.add_symbol_dce(pm)
+        if enable_llvm_opt:
+            passes.common.add_cse(pm)
+            passes.common.add_symbol_dce(pm)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
         pm.run(mod)
