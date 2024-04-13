@@ -182,7 +182,7 @@ def mangle_type(arg, is_const=False):
         dsk = (arg.dtype, is_const)
         res = dtype2str.get(dsk, None)
         if res is None:
-            res = ("*k" if dsk[1] else "*") + type_canonicalisation_dict[dsk[0].split('.')[-1]]
+            res = ("*k" if dsk[1] else "*") + type_canonicalisation_dict[str(dsk[0]).split('.')[-1]]
             dtype2str[dsk] = res
         return res
     elif isinstance(arg, bool):
