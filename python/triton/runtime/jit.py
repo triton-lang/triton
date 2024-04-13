@@ -173,6 +173,35 @@ def compute_spec_key(v):
     return "N"
 
 
+dtype2str = {}
+
+def mangle_type(v, is_const=False):
+
+    if hasattr(arg, "dtype"):
+        # dtypes are hashable so we can memoize this mapping:
+        dsk = (arg.dtype, is_const)
+        res = dtype2str.get(dsk, None)
+        if res is None:
+            res = ("*k" if dsk[1] else "*") + type_canonicalisation_dict[dsk[0].split('.')[-1]]
+            dtype2str[dsk] = res
+        return res
+    elif isinstance(arg, bool):
+        return "i1"
+    elif isinstance(arg, int):
+        if -(2**31) <= arg and arg <= 2**31 - 1:
+            return "i32"
+        elif 2**63 <= arg and arg <= 2**64 - 1:
+            return "u64"
+        else:
+            return "i64"
+    elif isinstance(arg, float):
+        return "fp32"
+    elif arg is None:
+        return "none"
+    else:
+        raise TypeError(f"Unsupported type {type(arg)} for {arg}")
+
+
 class KernelArg:
     """Represents an argument to a @jit'ed function.
 
@@ -241,11 +270,12 @@ def create_function_from_signature(sig):
         else:
             func_args.append(f"{name}=default_{name}")
             dict_entries.append(f"'{name}': {name}")
+    func_args.append('**excess_kwargs')
 
     # Join all arguments into a function definition string
     args_str = ', '.join(func_args)
     dict_str = ', '.join(dict_entries)
-    func_body = "def dynamic_func(%s, **excess_kwargs):\n    return {%s}, excess_kwargs" % (args_str, dict_str)
+    func_body = "def dynamic_func(%s):\n    return {%s}, excess_kwargs" % (args_str, dict_str)
 
     # Prepare defaults to be inserted into function namespace
     func_namespace = {
@@ -466,9 +496,9 @@ class JITFunction(KernelInterface[T]):
         grid_2 = grid[2] if grid_size > 2 else 1
 
         # compute cache key
-        args = [KernelArg(arg_value, param) for (_, arg_value), param in zip(bound_args.items(), self.params)]
+        args = [KernelArg(arg_value, param) for arg_value, param in zip(bound_args.values(), self.params)]
 
-        signature = {args[i].param.name: args[i].mangled_type() for i in self.non_constexpr_indices}
+        signature = {args[i].param.name: mangle_type(args[i].value, args[i].param.is_const) for i in self.non_constexpr_indices}
         sig_key = ''.join(signature.values())
         spec_key = ''.join(compute_spec_key(args[i].value) for i in self.specialised_indices)
         constexpr_key = tuple(args[i].value for i in self.constexpr_indices)
@@ -477,6 +507,13 @@ class JITFunction(KernelInterface[T]):
         key = str(key)
         # Kernel is not cached; we have to compile.
         if key not in self.cache[device]:
+
+            # `None` is nullptr. Implicitly convert to *i8. This needs to be
+            # done here rather than when we build the signature as otherwise
+            # the kernel cache key could not distinguish between byte pointers
+            # and None arguments, resulting in a downstream mismatch:
+            signature = {k : ('*i8' if (v == 'none') else v) for (k, v) in signature.items()}
+
             backend = make_backend(target)
             options = backend.parse_options(kwargs)
             for k in excess_kwargs:
@@ -503,12 +540,6 @@ class JITFunction(KernelInterface[T]):
             )
 
         kernel = self.cache[device][key]
-
-        # Verify key signature from the cache
-        if kernel.src.signature != signature:
-            raise RuntimeError(f"Signature mismatch for cached kernel {self.fn.__name__}:\n"
-                               f"  Cached signature: {kernel.src.signature}\n"
-                               f"  Call signature:   {signature}")
 
         if not warmup:
             args = [args[i].value for i in self.non_constexpr_indices]
