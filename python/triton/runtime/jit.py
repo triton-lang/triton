@@ -174,14 +174,8 @@ dtype2str = {}
 
 def mangle_type(arg, is_const=False):
 
-    if hasattr(arg, "dtype"):
-        # dtypes are hashable so we can memoize this mapping:
-        dsk = (arg.dtype, is_const)
-        res = dtype2str.get(dsk, None)
-        if res is None:
-            res = ("*k" if dsk[1] else "*") + type_canonicalisation_dict[str(dsk[0]).split('.')[-1]]
-            dtype2str[dsk] = res
-        return res
+    if arg is None:
+        return "none"
     elif isinstance(arg, bool):
         return "i1"
     elif isinstance(arg, int):
@@ -193,10 +187,14 @@ def mangle_type(arg, is_const=False):
             return "i64"
     elif isinstance(arg, float):
         return "fp32"
-    elif arg is None:
-        return "none"
     else:
-        raise TypeError(f"Unsupported type {type(arg)} for {arg}")
+        # dtypes are hashable so we can memoize this mapping:
+        dsk = (arg.dtype, is_const)
+        res = dtype2str.get(dsk, None)
+        if res is None:
+            res = ("*k" if dsk[1] else "*") + type_canonicalisation_dict[str(dsk[0]).split('.')[-1]]
+            dtype2str[dsk] = res
+        return res
 
 
 class KernelInterface(Generic[T]):
@@ -237,6 +235,7 @@ def create_function_from_signature(sig, kparams):
     func_args = []
     dict_entries = []
     constexpr_vals = []
+    non_constexpr_vals = []
     signature_types = []
     specialisations = []
 
@@ -250,6 +249,7 @@ def create_function_from_signature(sig, kparams):
         if kp.is_constexpr:
             constexpr_vals.append(name)
         else:
+            non_constexpr_vals.append(name)
             if not kp.do_not_specialize:
                 specialisations.append('compute_spec_key(%s)' % name)
             if kp.annotation_type:
@@ -259,13 +259,14 @@ def create_function_from_signature(sig, kparams):
 
     cache_key = ''.join([x + ', ' for x in signature_types + specialisations])
     constexpr_vals = ''.join([x + ', ' for x in constexpr_vals])
+    non_constexpr_vals = ''.join([x + ', ' for x in non_constexpr_vals])
 
     func_args.append('**excess_kwargs')
 
     # Join all arguments into a function definition string
     args_str = ', '.join(func_args)
     dict_str = ', '.join(dict_entries)
-    func_body = "def dynamic_func(%s):\n    return {%s}, (%s), (%s), excess_kwargs" % (args_str, dict_str, cache_key, constexpr_vals)
+    func_body = "def dynamic_func(%s):\n    return {%s}, (%s), (%s), (%s), excess_kwargs" % (args_str, dict_str, cache_key, constexpr_vals, non_constexpr_vals)
 
     # Prepare defaults to be inserted into function namespace
     func_namespace = {
@@ -473,9 +474,8 @@ class JITFunction(KernelInterface[T]):
                 i for (i, p) in enumerate(self.params) if (not p.do_not_specialize) and (not p.is_constexpr)
             ]
 
-        bound_args, sig_and_spec, constexpr_vals, excess_kwargs = self.binder(*args, **kwargs)
+        bound_args, sig_and_spec, constexpr_vals, non_constexpr_vals, excess_kwargs = self.binder(*args, **kwargs)
 
-        assert len(bound_args) == len(self.params)
         # canonicalize grid
         assert grid is not None
         if callable(grid):
@@ -488,13 +488,13 @@ class JITFunction(KernelInterface[T]):
         grid_1 = grid[1] if grid_size > 1 else 1
         grid_2 = grid[2] if grid_size > 2 else 1
 
-        key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs, target))
-
         # compute cache key
-        bound_vals = tuple(bound_args.values())
+        key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs, target))
 
         # Kernel is not cached; we have to compile.
         if key not in self.cache[device]:
+
+            bound_vals = tuple(bound_args.values())
 
             # `None` is nullptr. Implicitly convert to *i8. This needs to be
             # done here rather than when we build the signature as otherwise
@@ -532,10 +532,9 @@ class JITFunction(KernelInterface[T]):
         kernel = self.cache[device][key]
 
         if not warmup:
-            args = [bound_vals[i] for i in self.non_constexpr_indices]
-            launch_metadata = kernel.launch_metadata(grid, stream, *args)
+            launch_metadata = kernel.launch_metadata(grid, stream, *non_constexpr_vals)
             kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
-                       CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, *args)
+                       CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, *non_constexpr_vals)
         return kernel
 
     def __init__(self, fn, version=None, do_not_specialize=None, debug=None, noinline=None, repr=None,
