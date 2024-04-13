@@ -2,15 +2,88 @@
 #include <hip/hip_runtime.h>
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+// The list of paths to search for the HIP runtime library. The caller Python
+// code should substitute the search path placeholder.
+static const char *hipLibSearchPaths[] = {"/*py_libhip_search_path*/"};
+
+// The list of HIP dynamic library symbols and their signature we are interested
+// in this file.
+// |FOR_EACH_ERR_FN| is a macro to process APIs that return hipError_t;
+// |FOR_EACH_STR_FN| is a macro to process APIs that return const char *.
+#define HIP_SYMBOL_LIST(FOR_EACH_ERR_FN, FOR_EACH_STR_FN)                      \
+  FOR_EACH_STR_FN(hipGetErrorString, hipError_t hipError)                      \
+  FOR_EACH_ERR_FN(hipGetDevicePropertiesR0600, hipDeviceProp_t *prop,          \
+                  int deviceId)                                                \
+  FOR_EACH_ERR_FN(hipModuleLoadDataEx, hipModule_t *module, const void *image, \
+                  unsigned int numOptions, hipJitOption *options,              \
+                  void **optionValues)                                         \
+  FOR_EACH_ERR_FN(hipModuleGetFunction, hipFunction_t *function,               \
+                  hipModule_t module, const char *kname)
+
+// The HIP symbol table for holding resolved dynamic library symbols.
+struct HIPSymbolTable {
+#define DEFINE_EACH_ERR_FIELD(hipSymbolName, ...)                              \
+  hipError_t (*hipSymbolName)(__VA_ARGS__);
+#define DEFINE_EACH_STR_FIELD(hipSymbolName, ...)                              \
+  const char *(*hipSymbolName)(__VA_ARGS__);
+
+  HIP_SYMBOL_LIST(DEFINE_EACH_ERR_FIELD, DEFINE_EACH_STR_FIELD)
+};
+
+static struct HIPSymbolTable hipSymbolTable;
+
+bool initSymbolTable() {
+  // Use the HIP runtime library loaded into the existing process if it exits.
+  void *lib = dlopen("libamdhip64.so", RTLD_NOLOAD);
+  if (lib) {
+    // printf("[triton] chosen loaded libamdhip64.so in the process\n");
+  }
+
+  // Otherwise, go through the list of search paths to dlopen the first HIP
+  // driver library.
+  if (!lib) {
+    int n = sizeof(hipLibSearchPaths) / sizeof(hipLibSearchPaths[0]);
+    for (int i = 0; i < n; ++i) {
+      void *handle = dlopen(hipLibSearchPaths[i], RTLD_LAZY | RTLD_LOCAL);
+      if (handle) {
+        lib = handle;
+        // printf("[triton] chosen %s\n", hipLibSearchPaths[i]);
+      }
+    }
+  }
+  if (!lib) {
+    PyErr_SetString(PyExc_RuntimeError, "cannot open libamdhip64.so");
+    return false;
+  }
+
+  // Resolve all symbols we are interested in.
+  dlerror(); // Clear existing errors
+  const char *error = NULL;
+#define QUERY_EACH_FN(hipSymbolName, ...)                                      \
+  *(void **)&hipSymbolTable.hipSymbolName = dlsym(lib, #hipSymbolName);        \
+  error = dlerror();                                                           \
+  if (error) {                                                                 \
+    PyErr_SetString(PyExc_RuntimeError,                                        \
+                    "cannot query " #hipSymbolName " from libamdhip64.so");    \
+    dlclose(lib);                                                              \
+    return false;                                                              \
+  }
+
+  HIP_SYMBOL_LIST(QUERY_EACH_FN, QUERY_EACH_FN)
+
+  return true;
+}
 
 static inline void gpuAssert(hipError_t code, const char *file, int line) {
   {
     if (code != HIP_SUCCESS) {
       {
         const char *prefix = "Triton Error [HIP]: ";
-        const char *str = hipGetErrorString(code);
+        const char *str = hipSymbolTable.hipGetErrorString(code);
         char err[1024] = {0};
         snprintf(err, 1024, "%s Code: %d, Messsage: %s", prefix, code, str);
         PyGILState_STATE gil_state;
@@ -35,7 +108,7 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
     return NULL;
 
   hipDeviceProp_t props;
-  HIP_CHECK(hipGetDeviceProperties(&props, device_id));
+  HIP_CHECK(hipSymbolTable.hipGetDevicePropertiesR0600(&props, device_id));
 
   // create a struct to hold device properties
   return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:s, s:i}", "max_shared_mem",
@@ -72,8 +145,8 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   // launch HIP Binary
   hipModule_t mod;
   hipFunction_t fun;
-  HIP_CHECK(hipModuleLoadDataEx(&mod, data, 5, opt, optval))
-  HIP_CHECK(hipModuleGetFunction(&fun, mod, name));
+  HIP_CHECK(hipSymbolTable.hipModuleLoadDataEx(&mod, data, 5, opt, optval))
+  HIP_CHECK(hipSymbolTable.hipModuleGetFunction(&fun, mod, name));
 
   // get allocated registers and spilled registers from the function
   int n_regs = 0;
@@ -99,10 +172,15 @@ static struct PyModuleDef ModuleDef = {PyModuleDef_HEAD_INIT, "hip_utils",
                                        ModuleMethods};
 
 PyMODINIT_FUNC PyInit_hip_utils(void) {
+  if (!initSymbolTable()) {
+    return NULL;
+  }
+
   PyObject *m = PyModule_Create(&ModuleDef);
   if (m == NULL) {
     return NULL;
   }
   PyModule_AddFunctions(m, ModuleMethods);
+
   return m;
 }
