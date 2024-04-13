@@ -497,26 +497,24 @@ class JITFunction(KernelInterface[T]):
         grid_2 = grid[2] if grid_size > 2 else 1
 
         # compute cache key
-        args = [KernelArg(arg_value, param) for arg_value, param in zip(bound_args.values(), self.params)]
+        bound_vals = tuple(bound_args.values())
+        sigvals = tuple(mangle_type(bound_vals[i], self.params[i].is_const) for i in self.non_constexpr_indices)
+        spec_key = ''.join(compute_spec_key(bound_vals[i]) for i in self.specialised_indices)
+        constexpr_key = tuple(bound_vals[i] for i in self.constexpr_indices)
 
-        signature = {
-            args[i].param.name: mangle_type(args[i].value, args[i].param.is_const)
-            for i in self.non_constexpr_indices
-        }
-        sig_key = ''.join(signature.values())
-        spec_key = ''.join(compute_spec_key(args[i].value) for i in self.specialised_indices)
-        constexpr_key = tuple(args[i].value for i in self.constexpr_indices)
-
-        key = (sig_key, constexpr_key, spec_key, excess_kwargs, target)
+        key = (sigvals, constexpr_key, spec_key, excess_kwargs, target)
         key = str(key)
         # Kernel is not cached; we have to compile.
         if key not in self.cache[device]:
+
+            args = [KernelArg(v, p) for (v, p) in zip(bound_vals, self.params)]
 
             # `None` is nullptr. Implicitly convert to *i8. This needs to be
             # done here rather than when we build the signature as otherwise
             # the kernel cache key could not distinguish between byte pointers
             # and None arguments, resulting in a downstream mismatch:
-            signature = {k: ('*i8' if (v == 'none') else v) for (k, v) in signature.items()}
+            sigkeys = [self.params[i].name for i in self.non_constexpr_indices]
+            signature = {k: ('*i8' if (v == 'none') else v) for (k, v) in zip(sigkeys, sigvals)}
 
             backend = make_backend(target)
             options = backend.parse_options(kwargs)
@@ -546,7 +544,7 @@ class JITFunction(KernelInterface[T]):
         kernel = self.cache[device][key]
 
         if not warmup:
-            args = [args[i].value for i in self.non_constexpr_indices]
+            args = [bound_vals[i] for i in self.non_constexpr_indices]
             launch_metadata = kernel.launch_metadata(grid, stream, *args)
             kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
                        CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, *args)
