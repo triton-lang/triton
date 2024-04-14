@@ -5,6 +5,7 @@ import pytest
 
 import torch
 import triton
+import re
 
 
 @triton.jit
@@ -30,7 +31,9 @@ def test_reproducer():
             foundPipeline = line
     if 0 == len(foundPipeline):
         raise Exception("Failed to find pipeline info in reproducer file.")
-    if "convert-triton-gpu-to-llvm" not in foundPipeline:
+
+    ttgir_to_llvm_pass = re.compile("convert-triton-{{.*}}gpu-to-llvm")
+    if ttgir_to_llvm_pass.search(foundPipeline):
         raise Exception("Failed to find triton passes in pipeline")
     # cleanup
     if os.path.exists(tmpdir):
