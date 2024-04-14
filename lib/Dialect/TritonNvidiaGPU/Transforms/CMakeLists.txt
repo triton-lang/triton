@@ -1,6 +1,6 @@
 add_triton_library(TritonNvidiaGPUTransforms
-  PlanCTA.cpp
   FenceInsertion.cpp
+  PlanCTA.cpp
 
   DEPENDS
   TritonNvidiaGPUTransformsIncGen

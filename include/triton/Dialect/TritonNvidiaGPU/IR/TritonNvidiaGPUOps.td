@@ -57,15 +57,6 @@ def TTNG_FenceAsyncSharedOp : TTNG_Op<"fence_async_shared"> {
   }];
 }
 
-def TTNG_GetClusterCTAIdOp : TTNG_Op<"get_cluster_cta_id", [Pure]> {
-  let description = [{
-    Returns the one dimensional cluster_cta_id.
-  }];
-
-  let results = (outs I32:$result);
-  let assemblyFormat = "attr-dict `:` type($result)";
-}
-
 def TTNG_ClusterArriveOp : TTNG_Op<"cluster_arrive", []> {
   let arguments = (ins I1Attr:$relaxed);
   let assemblyFormat = "attr-dict";
