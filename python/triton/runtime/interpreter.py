@@ -916,7 +916,7 @@ class GridExecutor:
     def _restore_args_dev(self, args_dev, args_hst):
         for arg_dev, arg_hst in zip(args_dev, args_hst):
             if hasattr(arg_dev, "data_ptr"):
-                arg_dev.data.copy_(arg_hst.to(arg_dev.device))
+                arg_dev.data.copy_(arg_hst.to(arg_dev.device).data)
 
     def __call__(self, *args_dev, **kwargs):
         # copy arguments to the host
