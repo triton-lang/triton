@@ -24,31 +24,11 @@ namespace {
 using OperandsAndConstraints = std::vector<std::pair<mlir::Value, std::string>>;
 typedef std::vector<std::string> Constraints;
 
-const std::string Reg_Alloc_Op = "setmaxnreg.inc.sync.aligned.u32 #regCount;";
 const std::string Wgmma_Fence_Op = "wgmma.fence.sync.aligned;";
-const std::string Cga_Barrier_Sync_op = "barrier.cluster.sync.aligned;";
 const std::string Wgmma_Commit_Group_Op = "wgmma.commit_group.sync.aligned;";
 const std::string Cluster_Wait_Op = "barrier.cluster.wait.aligned;";
 const std::string Fence_Mbarrier_Init_Op =
     "fence.mbarrier_init.release.cluster;";
-const std::string Cga_Barrier_Arrive_Op = "barrier.cluster.arrive;";
-const std::string Cga_Barrier_Wait_Op = "barrier.cluster.wait;";
-const std::string Reg_Dealloc_Op = "setmaxnreg.dec.sync.aligned.u32 #regCount;";
-
-const std::string Mbarrier_Init_Op =
-    "@$1 mbarrier.init.shared.b64 [$0], #count;";
-const std::string Mbarrier_Wait_Op =
-    "{                                                           \n"
-    ".reg .pred P1;                                              \n"
-    "LAB_WAIT:                                                   \n"
-    "mbarrier.try_wait.parity.shared.b64 P1, [$0], $1, 0x989680; \n"
-    "@P1 bra.uni DONE;                                           \n"
-    "bra.uni LAB_WAIT;                                           \n"
-    "DONE:                                                       \n"
-    "}                                                           \n";
-const std::string Named_Barrier_Arrive_Op = "bar.arrive $0, $1;";
-const std::string Named_Barrier_Wait_Op = "bar.sync $0, $1;";
-const std::string Sts64_Op = "st.shared.v2.b32 [$0], {$1, $2};";
 const std::string Cluster_Cta_Id_Op = "{\n"
                                       ".reg .u32 a<5>;              \n"
                                       "mov.u32 a0, %cluster_ctaid.x;\n"  // x
@@ -704,14 +684,14 @@ public:
     POPULATE_NVGPU_OP(ttn::WGMMAFenceOp, Wgmma_Fence_Op)
     POPULATE_NVGPU_OP(ttn::WGMMACommitGroupOp, Wgmma_Commit_Group_Op)
     POPULATE_NVGPU_OP(ttn::ClusterWaitOp, Cluster_Wait_Op)
-    POPULATE_NVGPU_OP(ttn::FenceMBarrierInitOp, Fence_Mbarrier_Init_Op)
 #undef POPULATE_NVGPU_OP
     patterns.add<NVGPUOpGenericPattern<ttn::ClusterCTAIdOp>>(
         context, Cluster_Cta_Id_Op, Constraints({"=r"}), Constraints());
 
-    patterns.add<FenceAsyncSharedOpPattern, StoreMatrixOpPattern,
-                 ClusterArriveOpPattern, LoadDSmemOpPattern, WGMMAOpPattern,
-                 WGMMAWaitGroupOpPattern, StoreDSmemOpPattern>(context);
+    patterns
+        .add<FenceAsyncSharedOpPattern, StoreMatrixOpPattern,
+             ClusterArriveOpPattern, WGMMAOpPattern, WGMMAWaitGroupOpPattern>(
+            context);
 
     if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();

@@ -33,24 +33,10 @@ struct GetNumProgramsOpConversion
   }
 };
 
-struct GetClusterCTAIdOpConversion
-    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::GetClusterCTAIdOp> {
-  using ConvertOpToLLVMPattern<
-      triton::nvidia_gpu::GetClusterCTAIdOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::GetClusterCTAIdOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOp(op, getClusterCTAId(rewriter, op->getLoc()));
-    return success();
-  }
-};
-
 } // namespace
 
 void mlir::triton::NVIDIA::populateSPMDOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<GetNumProgramsOpConversion>(typeConverter, benefit);
-  patterns.add<GetClusterCTAIdOpConversion>(typeConverter, benefit);
 }

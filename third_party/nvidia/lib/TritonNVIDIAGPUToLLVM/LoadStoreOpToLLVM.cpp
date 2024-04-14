@@ -952,48 +952,6 @@ struct AsyncCommitGroupOpConversion
   }
 };
 
-struct AsyncBulkWaitOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::AsyncBulkWaitOp> {
-  using ConvertOpToLLVMPattern<
-      triton::gpu::AsyncBulkWaitOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::AsyncBulkWaitOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    PTXBuilder ptxBuilder;
-    auto &asyncBulkWaitOp = *ptxBuilder.create<>("cp.async.bulk.wait_group");
-    auto num = op->getAttrOfType<IntegerAttr>("num").getInt();
-    asyncBulkWaitOp(ptxBuilder.newConstantOperand(num));
-
-    auto ctx = op.getContext();
-    auto loc = op.getLoc();
-    auto voidTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, voidTy);
-
-    // Safe to remove the op since it doesn't have any return value.
-    rewriter.eraseOp(op);
-    return success();
-  }
-};
-
-struct AsyncBulkCommitGroupOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::AsyncBulkCommitGroupOp> {
-  using ConvertOpToLLVMPattern<
-      triton::gpu::AsyncBulkCommitGroupOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::AsyncBulkCommitGroupOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-
-    PTXBuilder ptxBuilder;
-    ptxBuilder.create<>("cp.async.bulk.commit_group")->operator()();
-    ptxBuilder.launch(rewriter, op.getLoc(), void_ty(op.getContext()));
-    // Safe to remove the op since it doesn't have any return value.
-    rewriter.eraseOp(op);
-    return success();
-  }
-};
-
 } // namespace
 
 void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
@@ -1007,6 +965,4 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
                                                    axisInfoAnalysis, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
-  patterns.add<AsyncBulkCommitGroupOpConversion>(typeConverter, benefit);
-  patterns.add<AsyncBulkWaitOpConversion>(typeConverter, benefit);
 }
