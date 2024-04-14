@@ -80,7 +80,8 @@ def test_hook():
         # get arg's element size
         element_size = args["x"].element_size()
         key = "flops" + str(element_size * 8)
-        return {"name": "foo_test", key: 1.0}
+        num_ctas = metadata.num_ctas
+        return {"name": f"foo_test_{num_ctas}ctas", key: 1.0}
 
     @triton.jit(launch_metadata=metadata_fn)
     def foo(x, y):
@@ -98,5 +99,5 @@ def test_hook():
         data = json.load(f)
         assert len(data[0]["children"]) == 1
         assert data[0]["children"][0]["frame"]["name"] == "test0"
-        assert data[0]["children"][0]["children"][0]["frame"]["name"] == "foo_test"
+        assert data[0]["children"][0]["children"][0]["frame"]["name"] == "foo_test_1ctas"
         assert data[0]["children"][0]["children"][0]["metrics"]["flops32"] == 1.0
