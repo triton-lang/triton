@@ -1772,9 +1772,10 @@ def test_join_with_mma(device):
 
 
 @pytest.mark.interpreter
-def test_interleave(device):
+@pytest.mark.parametrize("debug", [False, True])
+def test_interleave(device, debug):
 
-    @triton.jit
+    @triton.jit(debug=debug)
     def kernel(Z, N: tl.constexpr):
         z = tl.interleave(tl.arange(0, N), tl.arange(N, 2 * N))
         tl.store(Z + tl.arange(0, 2 * N), z)
