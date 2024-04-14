@@ -721,6 +721,7 @@ class TensorWrapper:
     def __init__(self, base, dtype):
         self.dtype = dtype
         self.base = base
+        self.data = base.data
         self.device = base.device
         self.shape = self.base.shape
 
