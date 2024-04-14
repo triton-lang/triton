@@ -65,13 +65,13 @@ jobs:
         ref: ${{ env.llvm_commit_hash }}
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: 3.11
 
     - name: Set up MSVC
       if: matrix.config.arch == 'x64' && (matrix.config.target-os == 'windows')
-      uses: ilammy/msvc-dev-cmd@v1.4.1
+      uses: ilammy/msvc-dev-cmd@v1.13.0
       with:
         arch: amd64
 
