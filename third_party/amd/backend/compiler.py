@@ -208,7 +208,7 @@ class HIPBackend(BaseBackend):
         return str(llvm_mod)
 
     @staticmethod
-    def make_hsaco(src, metadata, options):
+    def make_amdgcn(src, metadata, options):
         # Find kernel names (there should only be one)
         # We get the name at the last possible step to accomodate `triton.compile`
         # on user-provided LLVM
@@ -216,13 +216,16 @@ class HIPBackend(BaseBackend):
         assert len(names) == 1
         metadata["name"] = names[0]
         # llvm -> hsaco
-        hsaco = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion, True)
+        amdgcn = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion, False)
         if os.environ.get("AMDGCN_ENABLE_DUMP", "0") == "1":
-            hsaco_str = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion,
-                                              False)
             print("// -----// AMDGCN Dump //----- //")
-            print(hsaco_str)
-        import subprocess
+            print(amdgcn)
+        return amdgcn
+
+    @staticmethod
+    def make_hsaco(src, metadata, options):
+        hsaco = amd.assemble_amdgcn(src, options.arch, '')
+
         rocm_path = HIPBackend.path_to_rocm_lld()
         with tempfile.NamedTemporaryFile() as tmp_out:
             with tempfile.NamedTemporaryFile() as tmp_in:
@@ -237,8 +240,7 @@ class HIPBackend(BaseBackend):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
         stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, 90)
-        # TODO: first amdgcn, then hsaco
-        # stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)
+        stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)
         stages["hsaco"] = lambda src, metadata: self.make_hsaco(src, metadata, options)
 
     @functools.lru_cache()
