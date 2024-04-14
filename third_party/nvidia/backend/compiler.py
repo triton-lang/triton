@@ -68,6 +68,7 @@ class CUDAOptions:
     ptx_version: int = None
     enable_fp_fusion: bool = True
     allow_fp8e4nv: bool = False
+    allow_fp8e4b15: bool = False
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: bool = None
@@ -76,7 +77,7 @@ class CUDAOptions:
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
-        extern_libs = dict() if self.extern_libs is None else dict(self.extern_libs)
+        extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         if not extern_libs.get('libdevice', None):
             extern_libs['libdevice'] = os.getenv("TRITON_LIBDEVICE_PATH", str(default_libdir / 'libdevice.10.bc'))
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
@@ -105,6 +106,7 @@ class CUDABackend(BaseBackend):
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts}
         args["allow_fp8e4nv"] = self.capability >= 89
+        args["allow_fp8e4b15"] = self.capability < 90
         args["max_num_imprecise_acc_default"] = 2**30 if self.capability == 90 else 0
         return CUDAOptions(**args)
 
@@ -120,9 +122,10 @@ class CUDABackend(BaseBackend):
 
     def get_codegen_implementation(self):
         import triton.language.extra.cuda as cuda
-        codegen_fns = dict()
-        codegen_fns[
-            "convert_custom_types"] = cuda.convert_custom_float8_sm80 if self.capability >= 80 else cuda.convert_custom_float8_sm70
+        codegen_fns = {
+            "convert_custom_types":
+            cuda.convert_custom_float8_sm80 if self.capability >= 80 else cuda.convert_custom_float8_sm70
+        }
         return codegen_fns
 
     def load_dialects(self, ctx):

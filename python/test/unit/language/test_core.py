@@ -158,11 +158,8 @@ def check_type_supported(dtype, device):
         if cc[0] < 9 and dtype in {tl.float8e4nv, "float8e4nv", "float8_e4m3fn"}:
             pytest.skip("float8e4nv is only supported on NVGPU with cc >= 90")
     if is_interpreter():
-        if dtype in [
-                tl.float8e4nv, "float8e4nv", tl.bfloat16, "bfloat16", tl.float8e5, "float8e5", tl.float8e4b15,
-                "float8e4b15", torch.bfloat16, torch.float8_e4m3fn, "float8_e4m3fn", torch.float8_e5m2, "float8_e5m2"
-        ]:
-            pytest.skip("bfloat16 and float8 are not supported in the interpreter")
+        if dtype in [tl.bfloat16, "bfloat16", torch.bfloat16]:
+            pytest.skip("bfloat16 is not supported in the interpreter")
 
 
 class MfmaLayout:
@@ -1024,6 +1021,7 @@ def test_abs(dtype_x, device):
     _test_unary(dtype_x, 'tl.abs(x)', 'np.abs(x) ', device=device)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4nv, tl.float8e5])
 def test_abs_fp8(in_dtype, device):
     if is_hip():
@@ -1598,7 +1596,11 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
             'float8') or dtype_x.startswith('float8'):
         assert bitcast is False
         z_ref = x_tri.to(z_tri.dtype)
-        torch.testing.assert_close(z_ref, z_tri, rtol=0, atol=0)
+        if dtype_z.startswith('float8') and device not in ['cuda']:
+            t = z_ref.byte() ^ z_tri.byte()
+            torch.testing.assert_close(torch.zeros_like(t, dtype=torch.uint8), t)
+        else:
+            torch.testing.assert_close(z_ref, z_tri, rtol=0, atol=0)
     else:
         if bitcast:
             z_ref = x.view(getattr(np, dtype_z_np))
@@ -1770,9 +1772,10 @@ def test_join_with_mma(device):
 
 
 @pytest.mark.interpreter
-def test_interleave(device):
+@pytest.mark.parametrize("debug", [False, True])
+def test_interleave(device, debug):
 
-    @triton.jit
+    @triton.jit(debug=debug)
     def kernel(Z, N: tl.constexpr):
         z = tl.interleave(tl.arange(0, N), tl.arange(N, 2 * N))
         tl.store(Z + tl.arange(0, 2 * N), z)
@@ -2969,36 +2972,36 @@ def convert_fp8_to_fp32(x, device, dtype_str):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, num_ctas, device):
     if is_interpreter():
-        if in_dtype == 'bfloat16' or in_dtype == 'float8e4nv' or in_dtype == 'float8e5':
-            pytest.skip("bfloat16, float8e4nv and float8e5 not supported because numpy doesn't understand them")
+        if in_dtype == 'bfloat16':
+            pytest.skip("bfloat16 is not supported in the interpreter")
     else:
         check_cuda_only(device)
 
-    capability = torch.cuda.get_device_capability()
+        capability = torch.cuda.get_device_capability()
 
-    if capability[0] < 7:
-        pytest.skip("Only test tl.dot() on devices with sm >= 70")
-    if capability[0] < 8:
-        if capability[1] == 0 and in_dtype == 'int8':
-            pytest.skip("Only test int8 on devices with sm >= 75")
-        if input_precision != "ieee":
-            pytest.skip("Only test tf32 on devices with sm >= 80")
-    if capability[0] == 7:
-        if (M, N, K, num_warps) in [(128, 256, 32, 8), (64, 128, 128, 4), (64, 128, 128, 2)]:
-            pytest.skip("shared memory out of resource")
-        if out_dtype == 'float16':
-            # TODO: support out_dtype=float16 for tl.dot on V100
-            pytest.skip("Only test out_dtype=float16 on devices with sm >=80")
-    if capability[0] < 9 and in_dtype == 'float8e4nv':
-        pytest.skip("float8e4nv not supported on sm <= 80")
-    if is_hip() and (in_dtype == 'float8e4nv' or in_dtype == 'float8e5'):
-        pytest.skip("float8e4nv and float8e5 not supported on HIP")
-    if is_hip() and (input_precision != "ieee"):
-        pytest.skip(f"{input_precision} not supported on HIP")
-    if is_hip() and (kpack == 2 and in_dtype == 'int8' and K < 64):
-        pytest.skip("kpack too large for K")
-    if not is_hip() and kpack == 2:
-        pytest.skip("Skip duplicated tests on nv path")
+        if capability[0] < 7:
+            pytest.skip("Only test tl.dot() on devices with sm >= 70")
+        if capability[0] < 8:
+            if capability[1] == 0 and in_dtype == 'int8':
+                pytest.skip("Only test int8 on devices with sm >= 75")
+            if input_precision != "ieee":
+                pytest.skip("Only test tf32 on devices with sm >= 80")
+        if capability[0] == 7:
+            if (M, N, K, num_warps) in [(128, 256, 32, 8), (64, 128, 128, 4), (64, 128, 128, 2)]:
+                pytest.skip("shared memory out of resource")
+            if out_dtype == 'float16':
+                # TODO: support out_dtype=float16 for tl.dot on V100
+                pytest.skip("Only test out_dtype=float16 on devices with sm >=80")
+        if capability[0] < 9 and in_dtype == 'float8e4nv':
+            pytest.skip("float8e4nv not supported on sm <= 80")
+        if is_hip() and (in_dtype == 'float8e4nv' or in_dtype == 'float8e5'):
+            pytest.skip("float8e4nv and float8e5 not supported on HIP")
+        if is_hip() and (input_precision != "ieee"):
+            pytest.skip(f"{input_precision} not supported on HIP")
+        if is_hip() and (kpack == 2 and in_dtype == 'int8' and K < 64):
+            pytest.skip("kpack too large for K")
+        if not is_hip() and kpack == 2:
+            pytest.skip("Skip duplicated tests on nv path")
 
     torch.backends.cuda.matmul.allow_tf32 = input_precision == "tf32"
 
@@ -3288,6 +3291,7 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
     np.testing.assert_allclose(out_ref, to_numpy(out_tri), rtol=0.01, atol=1e-2)
 
 
+@pytest.mark.interpreter
 def test_max_num_imprecise_acc(device):
 
     if not hasattr(torch, 'float8_e5m2'):
@@ -5012,12 +5016,14 @@ def matmul_kernel(  #
     tl.store(c_ptrs, accumulator)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("in_type_str", ['float8e5', 'float8e4nv', 'float8e4b15'])
 @pytest.mark.parametrize("low_precision_acc", [0, 32, 64, 128])
 def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
     if is_hip():
         pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
-    if device in ['cuda']:
+    if not is_interpreter():
+        check_cuda_only(device)
         cc = torch.cuda.get_device_capability()
         if cc[0] >= 9 and in_type_str == "float8e4b15":
             pytest.skip("Dot op does not support fp8e4b15 on CUDA arch >= 90")
@@ -5026,7 +5032,6 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 128
     A = numpy_random((M, K), dtype_str=in_type_str)
     B = numpy_random((K, N), dtype_str=in_type_str)
-    Bt = B.T
     C = torch.empty((M, N), dtype=torch.float32, device=device)
     num_warps = 8
     a = to_triton(A, device=device, dst_type=in_type_str)
@@ -5034,10 +5039,10 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
     grid = (triton.cdiv(M, BLOCK_M), 1)
     matmul_kernel[grid](a, b, C, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), C.stride(0), C.stride(1),
                         BLOCK_M, BLOCK_N, BLOCK_K, low_precision_acc, num_warps=num_warps)
-    torch_a = torch.from_numpy(A)
-    th_a = f8_to_f16(torch_a.cuda(), in_type_str)
-    torch_b = torch.from_numpy(B)
-    th_b = f8_to_f16(torch_b.cuda(), in_type_str)
+    torch_a = torch.from_numpy(A).to(device=device)
+    th_a = f8_to_f16(torch_a, in_type_str)
+    torch_b = torch.from_numpy(B).to(device=device)
+    th_b = f8_to_f16(torch_b, in_type_str)
     ref_out = torch.matmul(th_a, th_b).to(torch.float32)
     if in_type_str == 'float8e4nv':
         torch.testing.assert_close(ref_out, C, rtol=0.01, atol=0.01)

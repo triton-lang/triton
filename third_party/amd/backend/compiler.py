@@ -22,6 +22,7 @@ class HIPOptions:
     debug: bool = False
     arch: str = None
     allow_fp8e4nv: bool = False
+    allow_fp8e4b15: bool = False
     default_dot_input_precision: str = "ieee"
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     enable_fp_fusion: bool = True
@@ -49,11 +50,11 @@ class HIPOptions:
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
-        extern_libs = dict() if self.extern_libs is None else dict(self.extern_libs)
+        extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         # Ignore user-defined warp size for gfx9
         warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch else 64
         object.__setattr__(self, 'warp_size', warp_size)
-        libs = ["ocml", "ockl"]
+        libs = ["cuda2gcn", "ocml", "ockl"]
         for lib in libs:
             extern_libs[lib] = str(default_libdir / f'{lib}.bc')
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
@@ -86,7 +87,7 @@ class HIPBackend(BaseBackend):
         return metadata
 
     def get_codegen_implementation(self):
-        codegen_fns = dict()
+        codegen_fns = {}
         return codegen_fns
 
     def load_dialects(self, ctx):
@@ -155,18 +156,12 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_decompose_unsupported_conversions(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
-        pm.run(mod)
 
-        pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
         passes.ttgpuir.add_allocate_shared_memory(pm)
         amd.passes.ttgpuir.add_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
-        pm.run(mod)
 
-        pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_cf_to_llvmir(pm)
         passes.convert.add_arith_to_llvmir(pm)
@@ -213,7 +208,7 @@ class HIPBackend(BaseBackend):
         return str(llvm_mod)
 
     @staticmethod
-    def make_hsaco(src, metadata, options):
+    def make_amdgcn(src, metadata, options):
         # Find kernel names (there should only be one)
         # We get the name at the last possible step to accomodate `triton.compile`
         # on user-provided LLVM
@@ -221,13 +216,16 @@ class HIPBackend(BaseBackend):
         assert len(names) == 1
         metadata["name"] = names[0]
         # llvm -> hsaco
-        hsaco = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion, True)
+        amdgcn = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion, False)
         if os.environ.get("AMDGCN_ENABLE_DUMP", "0") == "1":
-            hsaco_str = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion,
-                                              False)
             print("// -----// AMDGCN Dump //----- //")
-            print(hsaco_str)
-        import subprocess
+            print(amdgcn)
+        return amdgcn
+
+    @staticmethod
+    def make_hsaco(src, metadata, options):
+        hsaco = amd.assemble_amdgcn(src, options.arch, '')
+
         rocm_path = HIPBackend.path_to_rocm_lld()
         with tempfile.NamedTemporaryFile() as tmp_out:
             with tempfile.NamedTemporaryFile() as tmp_in:
@@ -242,8 +240,7 @@ class HIPBackend(BaseBackend):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
         stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, 90)
-        # TODO: first amdgcn, then hsaco
-        # stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)
+        stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)
         stages["hsaco"] = lambda src, metadata: self.make_hsaco(src, metadata, options)
 
     @functools.lru_cache()
