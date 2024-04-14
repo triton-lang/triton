@@ -4,12 +4,31 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "passes.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Module.h"
+#include "llvm/MC/MCAsmBackend.h"
+#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCCodeEmitter.h"
+#include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCObjectFileInfo.h"
+#include "llvm/MC/MCObjectWriter.h"
+#include "llvm/MC/MCParser/MCAsmParser.h"
+#include "llvm/MC/MCParser/MCTargetAsmParser.h"
+#include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/MC/MCSection.h"
+#include "llvm/MC/MCStreamer.h"
+#include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/MC/MCTargetOptions.h"
+#include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/TargetParser.h"
 #include <mutex>
 #include <pybind11/pybind11.h>
+#include <stdexcept>
 
 namespace py = pybind11;
 
@@ -22,9 +41,9 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm) {
     pm.addPass(mlir::triton::AMD::createDecomposeUnsupportedConversionsPass());
   });
-  ADD_PASS_WRAPPER_2("add_accelerate_matmul",
+  ADD_PASS_WRAPPER_3("add_accelerate_matmul",
                      mlir::createTritonAMDGPUAccelerateMatmulPass,
-                     const std::string, int);
+                     const std::string, int, int);
   ADD_PASS_WRAPPER_0("add_optimize_epilogue",
                      mlir::createTritonAMDGPUOptimizeEpiloguePass);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
@@ -114,4 +133,71 @@ void init_triton_amd(py::module &&m) {
     if (auto *openclVersion = module->getNamedMetadata("opencl.ocl.version"))
       module->eraseNamedMetadata(openclVersion);
   });
+
+  m.def(
+      "assemble_amdgcn",
+      [](const std::string &assembly, const std::string &chip,
+         const std::string &features) {
+        std::string error;
+
+        const char *targetTriple = "amdgcn-amd-amdhsa";
+        llvm::Triple triple(targetTriple);
+        const llvm::Target *target =
+            llvm::TargetRegistry::lookupTarget(triple.normalize(), error);
+        if (!target)
+          throw std::runtime_error("target lookup error: " + error);
+
+        llvm::SourceMgr srcMgr;
+        srcMgr.AddNewSourceBuffer(llvm::MemoryBuffer::getMemBuffer(assembly),
+                                  llvm::SMLoc());
+
+        const llvm::MCTargetOptions mcOptions;
+        std::unique_ptr<llvm::MCRegisterInfo> mri(
+            target->createMCRegInfo(targetTriple));
+        std::unique_ptr<llvm::MCAsmInfo> mai(
+            target->createMCAsmInfo(*mri, targetTriple, mcOptions));
+        std::unique_ptr<llvm::MCSubtargetInfo> sti(
+            target->createMCSubtargetInfo(targetTriple, chip, features));
+
+        llvm::MCContext ctx(triple, mai.get(), mri.get(), sti.get(), &srcMgr,
+                            &mcOptions);
+        std::unique_ptr<llvm::MCObjectFileInfo> mofi(
+            target->createMCObjectFileInfo(ctx, /*PIC=*/false,
+                                           /*LargeCodeModel=*/false));
+        ctx.setObjectFileInfo(mofi.get());
+
+        llvm::SmallString<128> cwd;
+        if (!llvm::sys::fs::current_path(cwd))
+          ctx.setCompilationDir(cwd);
+
+        llvm::SmallVector<char, 0> result;
+        llvm::raw_svector_ostream svos(result);
+
+        std::unique_ptr<llvm::MCStreamer> mcStreamer;
+        std::unique_ptr<llvm::MCInstrInfo> mcii(target->createMCInstrInfo());
+
+        std::unique_ptr<llvm::MCCodeEmitter> ce(
+            target->createMCCodeEmitter(*mcii, ctx));
+        std::unique_ptr<llvm::MCAsmBackend> mab(
+            target->createMCAsmBackend(*sti, *mri, mcOptions));
+        mcStreamer.reset(target->createMCObjectStreamer(
+            triple, ctx, std::move(mab), mab->createObjectWriter(svos),
+            std::move(ce), *sti, mcOptions.MCRelaxAll,
+            mcOptions.MCIncrementalLinkerCompatible,
+            /*DWARFMustBeAtTheEnd=*/false));
+        mcStreamer->setUseAssemblerInfoForParsing(true);
+
+        std::unique_ptr<llvm::MCAsmParser> parser(
+            createMCAsmParser(srcMgr, ctx, *mcStreamer, *mai));
+        std::unique_ptr<llvm::MCTargetAsmParser> tap(
+            target->createMCAsmParser(*sti, *parser, *mcii, mcOptions));
+        if (!tap)
+          throw std::runtime_error("assembler initializtion error");
+
+        parser->setTargetParser(*tap);
+        parser->Run(/*NoInitialTextSection=*/false);
+
+        return py::bytes(std::string(result.begin(), result.end()));
+      },
+      py::return_value_policy::take_ownership);
 }

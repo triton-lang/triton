@@ -100,8 +100,9 @@ SmallVector<unsigned, 2> warpsPerTile(tt::DotOp dotOp,
 }
 
 SmallVector<unsigned, 2>
-warpsPerTileMFMA(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
-  return warpsPerTile(dotOp, shape, numWarps, {32, 32});
+warpsPerTileMFMA(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps,
+                 SmallVector<int64_t, 2> shapePerWarp) {
+  return warpsPerTile(dotOp, shape, numWarps, shapePerWarp);
 }
 
 SmallVector<unsigned, 2>
@@ -184,11 +185,13 @@ Value convertAndCastTensor(mlir::PatternRewriter &rewriter, Value value,
 class BlockedToMFMA : public mlir::RewritePattern {
   int mfmaVersion;
   int enforcedNonKDim;
+  int kPack;
 
 public:
-  BlockedToMFMA(mlir::MLIRContext *context, int mfmaVersion, int nonKDim)
+  BlockedToMFMA(mlir::MLIRContext *context, int mfmaVersion, int nonKDim,
+                int kPack)
       : mlir::RewritePattern(tt::DotOp::getOperationName(), 2, context),
-        mfmaVersion(mfmaVersion), enforcedNonKDim(nonKDim) {}
+        mfmaVersion(mfmaVersion), enforcedNonKDim(nonKDim), kPack(kPack) {}
 
   bool isChainDot(tt::DotOp &dotOp) const {
     auto filter = [&dotOp](Operation *op) {
@@ -207,10 +210,27 @@ public:
     return false;
   }
 
+  bool isSecondDot(tt::DotOp &dotOp) const {
+    auto filter = [&dotOp](Operation *op) {
+      return op->getParentRegion() == dotOp->getParentRegion();
+    };
+    mlir::BackwardSliceOptions bwdOpt;
+    bwdOpt.omitBlockArguments = true;
+    bwdOpt.filter = filter;
+    SetVector<Operation *> slices;
+    mlir::getBackwardSlice(dotOp.getResult(), &slices, bwdOpt);
+    if (llvm::find_if(slices, [](Operation *op) {
+          return isa<tt::DotOp>(op);
+        }) != slices.end())
+      return true;
+    return false;
+  }
+
   /// @brief Choose MFMA instruction parameters
   /// @param dot target dot operation
-  /// @return pair {mDim, nDim, kDim} sizes of one MFMA instruction arguments
-  std::tuple<unsigned, unsigned, unsigned>
+  /// @return pair {mDim, nDim, kDim, kBase} sizes of one MFMA instruction
+  /// arguments
+  std::tuple<unsigned, unsigned, unsigned, unsigned>
   chooseMfmaDimensions(tt::DotOp dot) const {
     // number of matrix elements along k dim per one MFMA intruction
     unsigned kDim = 0;
@@ -261,13 +281,15 @@ public:
         MfmaInsn::selectMfma(mDim, nDim, dataTypeA, dataTypeB, mfmaVersion);
     if (failed(maybeMfmaInsn))
       llvm::report_fatal_error("No match found in MFMA database\n");
-    else
-      kDim = (*maybeMfmaInsn).getKDim();
+
+    kDim = maybeMfmaInsn->getKDim();
+    unsigned kBase = maybeMfmaInsn->getKBase();
+
     assert(kDim != 0);
 
     assert(M % mDim == 0 && N % nDim == 0);
     assert(opType.getShape()[rank - 1] % kDim == 0);
-    return {mDim, nDim, kDim};
+    return {mDim, nDim, kDim, kBase};
   }
 
   mlir::LogicalResult
@@ -299,9 +321,10 @@ public:
 
     ttg::AMDMfmaEncodingAttr mfmaEnc;
 
-    auto [mDim, nDim, kDim] = chooseMfmaDimensions(dotOp);
+    auto [mDim, nDim, kDim, kBase] = chooseMfmaDimensions(dotOp);
 
-    auto warpsPerTile = warpsPerTileMFMA(dotOp, retShape, numWarps);
+    auto warpsPerTile =
+        warpsPerTileMFMA(dotOp, retShape, numWarps, {mDim, nDim});
 
     bool isTransposed = isChainDot(dotOp);
     mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
@@ -319,21 +342,46 @@ public:
     auto oldAcc = dotOp.getOperand(2);
     auto newAcc = convertAndCastTensor(rewriter, oldAcc, mfmaEnc, mfmaAccType);
 
-    // kWidth is a number of consecutive elements per one instruction per one
-    // thread
-    auto kWidth = -1;
-    // in mfma 32x32 case argument matrix groups elements in 2 groups
-    // in mfma 16x16 case argument matrix groups elements in 4 groups
+    // Here is a brief explanation of kWidth, kBase, and kDim
+    // 1. kWidth: the number of elements each thread loads from shared memory in
+    //    preparation for mfma instructions. In theory each thread can issue one
+    //    or more load instructions to load a total of kWidth elements, since
+    //    those elements are not required to be in contiguous addresses in
+    //    shared memory. But in practice, we make sure the kWidth elements can
+    //    be loaded from shared memory by a single ds_read instruction by
+    //    setting vecSize of the sharedLayout to be kWidth.
+    // 2. kDim: the k dimension size of the mfma instruction. E.g. instruction
+    //    mfma_32x32x16 has kDim = 16, meaning this mfma instruction can compute
+    //    a matmul of operands with shape 32x16 and 16x32.
+    // 3. kBase: the number of elements each thread holds for a single mfma
+    //    instruction.
+    // 4. relation between kBase and kDim:
+    //    4.1 For mfma_32, kBase = kDim / 2
+    //    4.2 For mfma_16, kBase = kDim / 4
+    //    4.3 For mfma_4, it depends on how mfma_4 is used. We'll extend to
+    //        mfma_4 later.
+    // 5. relation between kWidth and kBase: For now it supports two cases
+    //    5.1 kWidth = kBase, i.e. kPack = 1. In this case, each load from
+    //        shared memory results in one mfma instruction.
+    //    5.2 kWidth = 2 * kBase, i.e. kPack = 2. In this case, each load from
+    //        shared memory results in two mfma instructions, since one mfma
+    //        can only consume kBase elements from each thread.
+    //    Note that we cannot have larger kPack since kPack = 2 means
+    //    ds_read_b128, which is the largest vector size for shared memory load.
+    auto kWidth = kBase;
     // in mfma 4x4 case argument matrix groups in 16 groups
-    if (mDim == 32 && nDim == 32)
-      kWidth = kDim / 2;
-    if (mDim == 16 && nDim == 16)
-      kWidth = kDim / 4;
     if (mDim == 4 && nDim == 4)
       kWidth = kDim / 16;
     if (mDim == 4 && nDim == 64 || mDim == 64 && nDim == 4)
       kWidth = kDim;
-    assert(kWidth != -1);
+
+    // We want to extend kWidth by kPack (kPack=1 means no extension)
+    // to increase ds_read vector size
+    // However, in FA, the second dot can only use kWidth = kBase since it's
+    // limited by the result of the first dot, which is of mfmaLayout.
+    if (!isSecondDot(dotOp))
+      kWidth *= kPack;
+
     auto newAType = RankedTensorType::get(
         oldAType.getShape(), oldAType.getElementType(),
         ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth));
@@ -503,10 +551,11 @@ class TritonAMDGPUAccelerateMatmulPass
           TritonAMDGPUAccelerateMatmulPass> {
 public:
   TritonAMDGPUAccelerateMatmulPass() = default;
-  TritonAMDGPUAccelerateMatmulPass(StringRef archGen,
-                                   int matrixInstructionSize) {
+  TritonAMDGPUAccelerateMatmulPass(StringRef archGen, int matrixInstructionSize,
+                                   int kPack) {
     this->archGenerationName = archGen.data();
     this->matrixInstructionSize = matrixInstructionSize;
+    this->kPack = kPack;
   }
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -518,7 +567,7 @@ public:
         MatrixCoreVersion::CDNA_MFMA2 == matrixCoreVer ||
         MatrixCoreVersion::CDNA_MFMA3 == matrixCoreVer) {
       patterns.add<::BlockedToMFMA>(context, getMfmaVersion(matrixCoreVer),
-                                    matrixInstructionSize);
+                                    matrixInstructionSize, kPack);
     } else if (matrixCoreVer == MatrixCoreVersion::RDNA_WMMA) {
       patterns.add<::BlockedToWMMA>(context);
     }
@@ -529,9 +578,8 @@ public:
   }
 };
 
-std::unique_ptr<Pass>
-mlir::createTritonAMDGPUAccelerateMatmulPass(std::string archGen,
-                                             int matrixInstructionSize) {
+std::unique_ptr<Pass> mlir::createTritonAMDGPUAccelerateMatmulPass(
+    std::string archGen, int matrixInstructionSize, int kPack) {
   return std::make_unique<TritonAMDGPUAccelerateMatmulPass>(
-      archGen, matrixInstructionSize);
+      archGen, matrixInstructionSize, kPack);
 }

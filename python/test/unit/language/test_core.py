@@ -4,6 +4,7 @@ import re
 from typing import Optional, Union
 import math
 import textwrap
+import tempfile
 
 import numpy as np
 import pytest
@@ -157,11 +158,8 @@ def check_type_supported(dtype, device):
         if cc[0] < 9 and dtype in {tl.float8e4nv, "float8e4nv", "float8_e4m3fn"}:
             pytest.skip("float8e4nv is only supported on NVGPU with cc >= 90")
     if is_interpreter():
-        if dtype in [
-                tl.float8e4nv, "float8e4nv", tl.bfloat16, "bfloat16", tl.float8e5, "float8e5", tl.float8e4b15,
-                "float8e4b15", torch.bfloat16, torch.float8_e4m3fn, "float8_e4m3fn", torch.float8_e5m2, "float8_e5m2"
-        ]:
-            pytest.skip("bfloat16 and float8 are not supported in the interpreter")
+        if dtype in [tl.bfloat16, "bfloat16", torch.bfloat16]:
+            pytest.skip("bfloat16 is not supported in the interpreter")
 
 
 class MfmaLayout:
@@ -1023,6 +1021,7 @@ def test_abs(dtype_x, device):
     _test_unary(dtype_x, 'tl.abs(x)', 'np.abs(x) ', device=device)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4nv, tl.float8e5])
 def test_abs_fp8(in_dtype, device):
     if is_hip():
@@ -1493,8 +1492,8 @@ def test_atomic_cas(sem, num_ctas, device):
 
     Lock = torch.zeros((1, ), device=device, dtype=torch.int32)
     data = torch.zeros((128, ), device=device, dtype=torch.float32)
-    ref = torch.full((128, ), 64.0)
-    h = serialized_add[(64, )](data, Lock, SEM=sem, num_ctas=num_ctas)
+    ref = torch.full((128, ), 2000.0)
+    h = serialized_add[(2000, )](data, Lock, SEM=sem, num_ctas=num_ctas)
     sem_str = "acq_rel" if sem is None else sem
     np.testing.assert_allclose(to_numpy(data), to_numpy(ref))
     if not is_cuda():
@@ -1597,7 +1596,11 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
             'float8') or dtype_x.startswith('float8'):
         assert bitcast is False
         z_ref = x_tri.to(z_tri.dtype)
-        torch.testing.assert_close(z_ref, z_tri, rtol=0, atol=0)
+        if dtype_z.startswith('float8') and device not in ['cuda']:
+            t = z_ref.byte() ^ z_tri.byte()
+            torch.testing.assert_close(torch.zeros_like(t, dtype=torch.uint8), t)
+        else:
+            torch.testing.assert_close(z_ref, z_tri, rtol=0, atol=0)
     else:
         if bitcast:
             z_ref = x.view(getattr(np, dtype_z_np))
@@ -1769,9 +1772,10 @@ def test_join_with_mma(device):
 
 
 @pytest.mark.interpreter
-def test_interleave(device):
+@pytest.mark.parametrize("debug", [False, True])
+def test_interleave(device, debug):
 
-    @triton.jit
+    @triton.jit(debug=debug)
     def kernel(Z, N: tl.constexpr):
         z = tl.interleave(tl.arange(0, N), tl.arange(N, 2 * N))
         tl.store(Z + tl.arange(0, 2 * N), z)
@@ -2435,7 +2439,6 @@ def test_scan_layouts(M, N, src_layout, axis, device):
     }}
     """
 
-    import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
@@ -2573,7 +2576,6 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
         }}) {{axis = {axis} : i32}} : (tensor<{M}x{N}x{ty}, #src>) -> tensor<{rdims_1d}x{ty}, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #src}}>>
     """ + epilogue
 
-    import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
@@ -2628,7 +2630,6 @@ def test_store_op(M, src_layout, device):
     }}
     """
 
-    import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
@@ -2679,7 +2680,6 @@ def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device):
         }}
     }}
     """
-    import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
@@ -2762,7 +2762,6 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis):
     }}
     }}
     """
-    import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
@@ -2949,55 +2948,60 @@ def convert_fp8_to_fp32(x, device, dtype_str):
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
-    "M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype",
-    [(*shape, 4, False, False, epilogue, input_precision, in_dtype, out_dtype)
+    "M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack",
+    [(*shape, 4, False, False, epilogue, input_precision, in_dtype, out_dtype, 1)
      for shape in [(64, 64, 64), (32, 32, 32), (16, 16, 16)]
      for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
      for input_precision in ['tf32', 'tf32x3', 'ieee']
      for in_dtype, out_dtype in [('float16', 'float16'), ('float16', 'float32'), ('float32', 'float32')]
      if not (input_precision != 'ieee' and (in_dtype in ['float16']))] +
-    [(*shape_nw, col_a, col_b, 'none', input_precision, in_dtype, out_dtype)
+    [(*shape_nw, col_a, col_b, 'none', input_precision, in_dtype, out_dtype, kpack)
      for shape_nw in [[128, 256, 32, 8], [128, 16, 32, 4], [32, 128, 64, 4], [128, 128, 64, 4], [64, 128, 128, 4],
                       [32, 128, 64, 2], [64, 64, 32, 4], [32, 32, 128, 16], [128, 128, 64, 2], [64, 128, 128, 2]]
-     for input_precision in ["tf32"]
+     for input_precision in ["tf32", "ieee"]
      for col_a in [True, False]
      for col_b in [True, False]
      for in_dtype, out_dtype in [('int8', 'int8'), ('float16', 'float16'), ('float16', 'float32'), ('float32',
-                                                                                                    'float32')]] +
-    [(64, 64, 64, 4, col_a, col_b, 'none', 'ieee', 'float32', 'float32')
-     for col_a in [True, False]
-     for col_b in [True, False]] + [(64, 64, 64, 4, False, False, 'chain-dot', 'ieee', 'bfloat16', 'float32')] +
-    [(128, 128, 64, 4, False, False, 'chain-dot', 'ieee', float8_type, 'float32')
+                                                                                                    'float32')]
+     for kpack in [1, 2]] + [(64, 64, 64, 4, col_a, col_b, 'none', 'ieee', 'float32', 'float32', 1)
+                             for col_a in [True, False]
+                             for col_b in [True, False]] +
+    [(64, 64, 64, 4, False, False, 'chain-dot', 'ieee', 'bfloat16', 'float32', 1)] +
+    [(128, 128, 64, 4, False, False, 'chain-dot', 'ieee', float8_type, 'float32', 1)
      for float8_type in ["float8e5", "float8e4nv"]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, num_ctas, device):
+def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, num_ctas, device):
     if is_interpreter():
-        if in_dtype == 'bfloat16' or in_dtype == 'float8e4nv' or in_dtype == 'float8e5':
-            pytest.skip("bfloat16, float8e4nv and float8e5 not supported because numpy doesn't understand them")
+        if in_dtype == 'bfloat16':
+            pytest.skip("bfloat16 is not supported in the interpreter")
     else:
         check_cuda_only(device)
 
-    capability = torch.cuda.get_device_capability()
+        capability = torch.cuda.get_device_capability()
 
-    if capability[0] < 7:
-        pytest.skip("Only test tl.dot() on devices with sm >= 70")
-    if capability[0] < 8:
-        if capability[1] == 0 and in_dtype == 'int8':
-            pytest.skip("Only test int8 on devices with sm >= 75")
-        if input_precision != "ieee":
-            pytest.skip("Only test tf32 on devices with sm >= 80")
-    if capability[0] == 7:
-        if (M, N, K, num_warps) in [(128, 256, 32, 8), (64, 128, 128, 4), (64, 128, 128, 2)]:
-            pytest.skip("shared memory out of resource")
-        if out_dtype == 'float16':
-            # TODO: support out_dtype=float16 for tl.dot on V100
-            pytest.skip("Only test out_dtype=float16 on devices with sm >=80")
-    if capability[0] < 9 and in_dtype == 'float8e4nv':
-        pytest.skip("float8e4nv not supported on sm <= 80")
-    if is_hip() and (in_dtype == 'float8e4nv' or in_dtype == 'float8e5'):
-        pytest.skip("float8e4nv and float8e5 not supported on HIP")
-    if is_hip() and (input_precision != "ieee"):
-        pytest.skip(f"{input_precision} not supported on HIP")
+        if capability[0] < 7:
+            pytest.skip("Only test tl.dot() on devices with sm >= 70")
+        if capability[0] < 8:
+            if capability[1] == 0 and in_dtype == 'int8':
+                pytest.skip("Only test int8 on devices with sm >= 75")
+            if input_precision != "ieee":
+                pytest.skip("Only test tf32 on devices with sm >= 80")
+        if capability[0] == 7:
+            if (M, N, K, num_warps) in [(128, 256, 32, 8), (64, 128, 128, 4), (64, 128, 128, 2)]:
+                pytest.skip("shared memory out of resource")
+            if out_dtype == 'float16':
+                # TODO: support out_dtype=float16 for tl.dot on V100
+                pytest.skip("Only test out_dtype=float16 on devices with sm >=80")
+        if capability[0] < 9 and in_dtype == 'float8e4nv':
+            pytest.skip("float8e4nv not supported on sm <= 80")
+        if is_hip() and (in_dtype == 'float8e4nv' or in_dtype == 'float8e5'):
+            pytest.skip("float8e4nv and float8e5 not supported on HIP")
+        if is_hip() and (input_precision != "ieee"):
+            pytest.skip(f"{input_precision} not supported on HIP")
+        if is_hip() and (kpack == 2 and in_dtype == 'int8' and K < 64):
+            pytest.skip("kpack too large for K")
+        if not is_hip() and kpack == 2:
+            pytest.skip("Skip duplicated tests on nv path")
 
     torch.backends.cuda.matmul.allow_tf32 = input_precision == "tf32"
 
@@ -3082,12 +3086,18 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     else:
         out_dtype = tl.float32
 
+    kern_kwargs = {
+        'COL_A': col_a, 'COL_B': col_b, 'BLOCK_M': M, 'BLOCK_K': K, 'BLOCK_N': N, 'ADD_MATRIX':
+        epilogue == 'add-matrix', 'ADD_ROWS': epilogue == 'add-rows', 'ADD_COLS': epilogue == 'add-cols', 'DO_SOFTMAX':
+        epilogue == 'softmax', 'CHAIN_DOT': epilogue == 'chain-dot', 'INPUT_PRECISION': input_precision, 'num_warps':
+        num_warps, 'num_ctas': num_ctas, 'out_dtype': out_dtype
+    }
+
+    if is_hip():
+        kern_kwargs['kpack'] = kpack
+
     pgm = kernel[(1, 1)](x_tri, x_tri.stride(0), x_tri.stride(1), y_tri, y_tri.stride(0), y_tri.stride(1), w_tri,
-                         w_tri.stride(0), w_tri.stride(1), z_tri, z_tri.stride(0), z_tri.stride(1), COL_A=col_a,
-                         COL_B=col_b, BLOCK_M=M, BLOCK_K=K, BLOCK_N=N, ADD_MATRIX=epilogue == 'add-matrix',
-                         ADD_ROWS=epilogue == 'add-rows', ADD_COLS=epilogue == 'add-cols',
-                         DO_SOFTMAX=epilogue == 'softmax', CHAIN_DOT=epilogue == 'chain-dot',
-                         INPUT_PRECISION=input_precision, num_warps=num_warps, num_ctas=num_ctas, out_dtype=out_dtype)
+                         w_tri.stride(0), w_tri.stride(1), z_tri, z_tri.stride(0), z_tri.stride(1), **kern_kwargs)
 
     if epilogue == 'softmax' and (in_dtype != 'float32' or input_precision == "tf32"):
         if not is_cuda():
@@ -3281,6 +3291,7 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
     np.testing.assert_allclose(out_ref, to_numpy(out_tri), rtol=0.01, atol=1e-2)
 
 
+@pytest.mark.interpreter
 def test_max_num_imprecise_acc(device):
 
     if not hasattr(torch, 'float8_e5m2'):
@@ -4684,7 +4695,8 @@ layouts = [
     BlockedLayout([8, 1], [16, THREADS_PER_WARP // 16], [1, 4], [0, 1], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([4, 1], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([4, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1])
+    BlockedLayout([4, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]),
 ]
 
 intermediate_layouts = [
@@ -4701,7 +4713,7 @@ def compute_rep_shape(layout):
         rep_shape = np.multiply(warp_shape, layout.warps_per_cta)
         return rep_shape
     else:
-        assert "TODO: support compute_rep_shape for layout " + str(type(layout))
+        assert False, "TODO: support compute_rep_shape for layout " + str(type(layout))
 
 
 # This function gives a lower bound approximation of scratch buffer shape for convert_layout operation
@@ -4719,11 +4731,17 @@ def compute_scratch_buffer_shape(src_layout, dst_layout, shape):
 @pytest.mark.parametrize("dst_layout", layouts)
 def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     if (M == 1 or N == 1) and interm_layout:
+        # TODO(jlebar): These OOB accesses don't even hit an assert in the
+        # compiler, and some of them return the wrong result instead of
+        # crashing!
         pytest.skip("Out of bound access when maxPhase > 1")
     if str(src_layout) == str(dst_layout):
         pytest.skip()
     if is_hip():
-        scratch_shape = compute_scratch_buffer_shape(src_layout, dst_layout, (M, N))
+        try:
+            scratch_shape = compute_scratch_buffer_shape(src_layout, dst_layout, (M, N))
+        except AssertionError:
+            pytest.skip("Can't compute scratch buffer size")
         lds_size = 65536
         # consider int32 dtype in scratch buffer size,
         # because it is the largest dtype used in convert_layout in this test
@@ -4781,8 +4799,6 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     x = to_triton(numpy_random((M, N), dtype_str=dtype), device=device)
     z = torch.empty_like(x, device=device)
 
-    # write the IR to a temporary file using mkstemp
-    import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
@@ -4877,8 +4893,6 @@ def test_convertmma2mma(M, N, mma_pair, dtype, device):
         x = to_triton(numpy_random((M, N), dtype_str=dtype), device=device)
         z = torch.empty_like(x)
 
-        # write the IR to a temporary file using mkstemp
-        import tempfile
         with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
             f.write(ir)
             f.flush()
@@ -5002,12 +5016,14 @@ def matmul_kernel(  #
     tl.store(c_ptrs, accumulator)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("in_type_str", ['float8e5', 'float8e4nv', 'float8e4b15'])
 @pytest.mark.parametrize("low_precision_acc", [0, 32, 64, 128])
 def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
     if is_hip():
         pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
-    if device in ['cuda']:
+    if not is_interpreter():
+        check_cuda_only(device)
         cc = torch.cuda.get_device_capability()
         if cc[0] >= 9 and in_type_str == "float8e4b15":
             pytest.skip("Dot op does not support fp8e4b15 on CUDA arch >= 90")
@@ -5016,7 +5032,6 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 128
     A = numpy_random((M, K), dtype_str=in_type_str)
     B = numpy_random((K, N), dtype_str=in_type_str)
-    Bt = B.T
     C = torch.empty((M, N), dtype=torch.float32, device=device)
     num_warps = 8
     a = to_triton(A, device=device, dst_type=in_type_str)
@@ -5024,10 +5039,10 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
     grid = (triton.cdiv(M, BLOCK_M), 1)
     matmul_kernel[grid](a, b, C, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), C.stride(0), C.stride(1),
                         BLOCK_M, BLOCK_N, BLOCK_K, low_precision_acc, num_warps=num_warps)
-    torch_a = torch.from_numpy(A)
-    th_a = f8_to_f16(torch_a.cuda(), in_type_str)
-    torch_b = torch.from_numpy(B)
-    th_b = f8_to_f16(torch_b.cuda(), in_type_str)
+    torch_a = torch.from_numpy(A).to(device=device)
+    th_a = f8_to_f16(torch_a, in_type_str)
+    torch_b = torch.from_numpy(B).to(device=device)
+    th_b = f8_to_f16(torch_b, in_type_str)
     ref_out = torch.matmul(th_a, th_b).to(torch.float32)
     if in_type_str == 'float8e4nv':
         torch.testing.assert_close(ref_out, C, rtol=0.01, atol=0.01)

@@ -658,12 +658,23 @@ createSchedule(scf::ForOp forOp, int numStages,
     }
   });
 
+  auto getNestedOperands = [](Operation *op) -> SmallVector<Value> {
+    SmallVector<Value> operands;
+    op->walk([&](Operation *nestedOp) {
+      for (Value operand : nestedOp->getOperands()) {
+        if (operand.getParentBlock()->getParentOp()->isAncestor(nestedOp))
+          operands.push_back(operand);
+      }
+    });
+    return operands;
+  };
+
   // Find dependencies with distance of 1.
   SmallVector<DenseSet<Operation *>> distanceOneUsers(numStages);
   for (int stage = 0; stage < numStages - 1; stage++) {
     auto &group = insertAndDeps[stage];
     for (Operation *op : group) {
-      for (Value operand : op->getOperands()) {
+      for (Value operand : getNestedOperands(op)) {
         if (auto arg = operand.dyn_cast<BlockArgument>()) {
           if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
             auto yieldOp = op->getBlock()->getTerminator();
