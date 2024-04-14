@@ -787,8 +787,8 @@ class ReduceOps(ReduceScanOpIneterface):
         if val_reduce_op:
             val = self.to_tensor(val_reduce_op(input.handle.data, axis=self.axis, keepdims=self.keep_dims), input.dtype)
         if idx_reduce_op:
-            idx = self.to_tensor(idx_reduce_op(input.handle.data, axis=self.axis, keepdims=self.keep_dims), input.dtype)
-        if val and idx:
+            idx = self.to_tensor(idx_reduce_op(input.handle.data, axis=self.axis, keepdims=self.keep_dims), tl.int32)
+        if val is not None and idx is not None:
             return val, idx
         elif val:
             return val
@@ -1033,7 +1033,7 @@ class GridExecutor:
     def _restore_args_dev(self, args_dev, args_hst):
         for arg_dev, arg_hst in zip(args_dev, args_hst):
             if hasattr(arg_dev, "data_ptr"):
-                arg_dev.copy_(arg_hst.to(arg_dev.device))
+                arg_dev.data.copy_(arg_hst.to(arg_dev.device).data)
 
     def __call__(self, *args_dev, **kwargs):
         # copy arguments to the host
