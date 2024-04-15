@@ -481,18 +481,6 @@ class JITFunction(KernelInterface[T]):
 
         bound_args, sig_and_spec, constexpr_vals, non_constexpr_vals, excess_kwargs = self.binder(*args, **kwargs)
 
-        # canonicalize grid
-        assert grid is not None
-        if callable(grid):
-            # Arguments are passed as a dict to `grid`, by contract.
-            # TODO(jlebar): In the new launch API, pass the compiler flags as a
-            # second parameter to `grid`.
-            grid = grid(dict(bound_args))
-        grid_size = len(grid)
-        grid_0 = grid[0]
-        grid_1 = grid[1] if grid_size > 1 else 1
-        grid_2 = grid[2] if grid_size > 2 else 1
-
         # compute cache key
         key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs))
         kernel = self.cache[device].get(key, None)
@@ -543,6 +531,19 @@ class JITFunction(KernelInterface[T]):
             self.cache[device][key] = kernel
 
         if not warmup:
+            # canonicalize grid
+            assert grid is not None
+            if callable(grid):
+                # Arguments are passed as a dict to `grid`, by contract.
+                # TODO(jlebar): In the new launch API, pass the compiler flags as a
+                # second parameter to `grid`.
+                grid = grid(bound_args)
+            grid_size = len(grid)
+            grid_0 = grid[0]
+            grid_1 = grid[1] if grid_size > 1 else 1
+            grid_2 = grid[2] if grid_size > 2 else 1
+
+            # launch kernel
             launch_metadata = kernel.launch_metadata(grid, stream, *non_constexpr_vals)
             kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
                        self.CompiledKernel.launch_enter_hook, self.CompiledKernel.launch_exit_hook, *non_constexpr_vals)
