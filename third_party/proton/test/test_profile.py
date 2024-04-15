@@ -97,7 +97,7 @@ def test_hook():
         with proton.scope("test0"):
             foo[
                 1,
-            ](x, y, num_warps=4)
+            ](x, 1, y, num_warps=4)
         proton.finalize()
         data = json.load(f)
         assert len(data[0]["children"]) == 1
