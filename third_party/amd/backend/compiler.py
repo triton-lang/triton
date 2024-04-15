@@ -45,13 +45,13 @@ class HIPOptions:
     @staticmethod
     def get_compute_capability(arch: str) -> int:
         arch_dict = {
-                'gfx940' : 300,
-                'gfx941' : 300,
-                'gfx942' : 300,
-                'gfx90a' : 200,
-                'gfx908' : 100,
-                'gfx906' : 60,
-                }
+            'gfx940': 300,
+            'gfx941': 300,
+            'gfx942': 300,
+            'gfx90a': 200,
+            'gfx908': 100,
+            'gfx906': 60,
+        }
         return arch_dict.get(arch, 0)
 
     def has_amd_mma_instr(self) -> bool:

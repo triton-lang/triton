@@ -275,8 +275,8 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonAMDGPUToLLVMPass() {
   return std::make_unique<ConvertTritonAMDGPUToLLVM>(90);
 }
 
-std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonAMDGPUToLLVMPass(
-		int computeCapability) {
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertTritonAMDGPUToLLVMPass(int computeCapability) {
   return std::make_unique<ConvertTritonAMDGPUToLLVM>(computeCapability);
 }
 

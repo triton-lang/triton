@@ -76,7 +76,7 @@ def launch_exhaustive_populate(dst_dtype, offset, numel, force_odd, output_bits,
     assert(numel % BLOCK_SIZE == 0)
     dst = torch.empty((numel,), dtype=matching_int(dst_dtype), device=device)
     exhaustive_populate[(numel // BLOCK_SIZE,)](triton.reinterpret(dst, dst_dtype), offset, BLOCK_SIZE, force_odd, output_bits, max_repr)
-    # 0x80 in float8e4b8 or float8e5b16 represents inf/nan. We don't to have that
+    # 0x80 in float8e4b8 or float8e5b16 represents inf/nan. We don't need to have that
     # as input to the conversion kernels.
     if dst_dtype == tl.float8e4b8 or dst_dtype == tl.float8e5b16:
         dst = torch.where(dst == 0x80, 0, dst)

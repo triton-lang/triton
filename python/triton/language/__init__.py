@@ -261,8 +261,6 @@ def str_to_ty(name):
         "fp8e5": float8e5,
         "fp8e5b16": float8e5b16,
         "fp8e4b15": float8e4b15,
-        "fp8e4b8": float8e4b8,
-        "fp8e5b16": float8e5b16,
         "fp16": float16,
         "bf16": bfloat16,
         "fp32": float32,

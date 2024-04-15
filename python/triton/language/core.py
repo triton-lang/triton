@@ -226,9 +226,6 @@ class dtype:
     def is_fp8e4b15(self):
         return self.name == 'fp8e4b15'
 
-    def is_fp8e4b8(self):
-        return self.name == 'fp8e4b8'
-
     def is_fp8e5(self):
         return self.name == 'fp8e5'
 
