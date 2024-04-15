@@ -204,7 +204,7 @@ class HIPBackend(BaseBackend):
         # Hint the compiler that we'd like the firmware to set the kernel arguments
         # to user SGPRs so that the kernel does not need to s_load its arguments
         # from memory.
-        kernels[0].set_fn_arg_inreg()
+        amd.set_fn_arg_inreg(kernels[0])
 
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]

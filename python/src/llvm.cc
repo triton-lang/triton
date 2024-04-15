@@ -157,16 +157,6 @@ void init_triton_llvm(py::module &&m) {
       .def("set_calling_conv", &llvm::Function::setCallingConv)
       .def("add_fn_attr", [](llvm::Function *fn, std::string &name,
                              std::string &val) { fn->addFnAttr(name, val); })
-      .def("set_fn_arg_inreg",
-           [](llvm::Function *fn) {
-             for (unsigned I = 0; I < fn->arg_size(); ++I) {
-               Argument &Arg = *fn->getArg(I);
-               // Check for incompatible attributes.
-               if (Arg.hasByRefAttr() || Arg.hasNestAttr())
-                 break;
-               Arg.addAttr(llvm::Attribute::InReg);
-             }
-           })
       .def("has_public_visibility",
            [](llvm::Function *fn) {
              return fn->getVisibility() == llvm::GlobalValue::DefaultVisibility;
