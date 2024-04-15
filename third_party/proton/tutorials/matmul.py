@@ -3,6 +3,7 @@ import torch
 import triton
 import triton.language as tl
 import triton.profiler as proton
+from typing import NamedTuple
 import argparse
 
 
@@ -17,7 +18,7 @@ def unpack_grid(grid):
 
 def metadata_fn(
     grid: tuple,
-    metadata: dict,
+    metadata: NamedTuple,
     args: dict,
 ):
     grid_x, grid_y, grid_z = unpack_grid(grid)

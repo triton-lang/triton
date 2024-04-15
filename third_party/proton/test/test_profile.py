@@ -4,6 +4,7 @@ import triton.profiler as proton
 import tempfile
 import json
 import pytest
+from typing import NamedTuple
 
 import triton.language as tl
 
@@ -76,16 +77,18 @@ def test_metrics():
 
 def test_hook():
 
-    def metadata_fn(grid: tuple, metadata: dict, args: dict):
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         # get arg's element size
-        element_size = args["x"].element_size()
+        element_size = args["x"].element_size()  # non-const
+        size = args["size"]  # const
         key = "flops" + str(element_size * 8)
         num_ctas = metadata.num_ctas
-        return {"name": f"foo_test_{num_ctas}ctas", key: 1.0}
+        return {"name": f"foo_test_{num_ctas}ctas_{size}elems", key: 1.0}
 
     @triton.jit(launch_metadata=metadata_fn)
-    def foo(x, y):
-        tl.store(y, tl.load(x))
+    def foo(x, size: tl.constexpr, y):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
 
     x = torch.tensor([2], device="cuda", dtype=torch.float32)
     y = torch.zeros_like(x)
@@ -94,10 +97,10 @@ def test_hook():
         with proton.scope("test0"):
             foo[
                 1,
-            ](x, y, num_warps=4)
+            ](x, 1, y, num_warps=4)
         proton.finalize()
         data = json.load(f)
         assert len(data[0]["children"]) == 1
         assert data[0]["children"][0]["frame"]["name"] == "test0"
-        assert data[0]["children"][0]["children"][0]["frame"]["name"] == "foo_test_1ctas"
+        assert data[0]["children"][0]["children"][0]["frame"]["name"] == "foo_test_1ctas_1elems"
         assert data[0]["children"][0]["children"][0]["metrics"]["flops32"] == 1.0
