@@ -414,7 +414,24 @@ class HIPLauncher(object):
         self.launch = mod.launch
 
     def __call__(self, *args, **kwargs):
-        self.launch(*args, **kwargs)
+        # Workaround for pytorch inductor precompiled kernels that do not call triton JIT
+        # but call launch in the old API before https://github.com/openai/triton/pull/3655
+        if isinstance(args[5], tuple) and hasattr(args[5], '_fields'):
+            kernel_metadata = args[5]
+            packed_metadata = (
+                kernel_metadata.num_warps,
+                kernel_metadata.num_ctas,
+                kernel_metadata.shared,
+                kernel_metadata.cluster_dims[0],
+                kernel_metadata.cluster_dims[1],
+                kernel_metadata.cluster_dims[2],
+            )
+            l_args = list(args)
+            l_args[5] = packed_metadata
+            t_args = tuple(l_args)
+            self.launch(*t_args, **kwargs)
+        else:
+            self.launch(*args, **kwargs)
 
 
 class HIPDriver(GPUDriver):
