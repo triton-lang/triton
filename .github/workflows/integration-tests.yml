@@ -164,10 +164,14 @@ jobs:
           python3 -m pip install wheel cmake==3.24 ninja pytest-xdist lit
 
       - name: Install Triton
+        env:
+          TRITON_BUILD_PROTON: "true"
+          TRITON_BUILD_WITH_CCACHE: "true"
+          CUDA_HOME: "/usr/local/cuda"
         run: |
           echo "PATH is '$PATH'"
           cd python
-          TRITON_BUILD_WITH_CCACHE=true python3 -m pip install --no-build-isolation -vvv '.[tests]'
+          python3 -m pip install --no-build-isolation -vvv '.[tests]'
 
       - name: Run lit tests
         run: |
@@ -206,12 +210,18 @@ jobs:
           cd "build/$(ls build | grep -i cmake)"
           ctest
 
+      - name: Run Proton tests
+        env:
+          LD_LIBRARY_PATH: "/usr/local/cuda/extras/CUPTI/lib64:$LD_LIBRARY_PATH"
+        run: |
+          cd third_party/proton
+          python3 -m pytest -vvv test
+
       - name: Inspect cache directory
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
           du -sh ~/.triton/**
-
 
   Integration-Tests-AMD:
     needs: Runner-Preparation
