@@ -450,50 +450,54 @@ class JITFunction(KernelInterface[T]):
         assert callable(hook)
         self.pre_run_hooks.append(hook)
 
-    def run(self, *args, grid, warmup, **kwargs):
+    def create_binder(self):
+        """
+        Precompute as much as possible.
+        """
         from ..compiler import CompiledKernel, compile, ASTSource, make_backend
-        # deprecated arguments
-        assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
-        assert "device" not in kwargs, "device option is deprecated; current device will be used"
-        assert "stream" not in kwargs, "stream option is deprecated; current stream will be used"
+        self.CompiledKernel = CompiledKernel
+        self.compile = compile
+        self.ASTSource = ASTSource
+        self.make_backend = make_backend
+        self.binder = create_function_from_signature(self.signature, self.params)
+        self.constexpr_indices = [i for (i, p) in enumerate(self.params) if p.is_constexpr]
+        self.non_constexpr_indices = [i for (i, p) in enumerate(self.params) if not p.is_constexpr]
+        self.specialised_indices = [
+            i for (i, p) in enumerate(self.params) if (not p.do_not_specialize) and (not p.is_constexpr)
+        ]
+
+    def run(self, *args, grid, warmup, **kwargs):
         # parse options
         device = driver.active.get_current_device()
         stream = driver.active.get_current_stream(device)
-        target = driver.active.get_current_target()
         kwargs["debug"] = self.debug
 
         # Execute pre run hooks with args and kwargs
         for hook in self.pre_run_hooks:
             hook(*args, **kwargs)
 
-        # bind non-reserved keyword args and set defaults
         if self.binder is None:
-            self.binder = create_function_from_signature(self.signature, self.params)
-            self.constexpr_indices = [i for (i, p) in enumerate(self.params) if p.is_constexpr]
-            self.non_constexpr_indices = [i for (i, p) in enumerate(self.params) if not p.is_constexpr]
-            self.specialised_indices = [
-                i for (i, p) in enumerate(self.params) if (not p.do_not_specialize) and (not p.is_constexpr)
-            ]
+            self.create_binder()
 
         bound_args, sig_and_spec, constexpr_vals, non_constexpr_vals, excess_kwargs = self.binder(*args, **kwargs)
 
-        # canonicalize grid
-        assert grid is not None
-        if callable(grid):
-            # Arguments are passed as a dict to `grid`, by contract.
-            # TODO(jlebar): In the new launch API, pass the compiler flags as a
-            # second parameter to `grid`.
-            grid = grid(dict(bound_args))
-        grid_size = len(grid)
-        grid_0 = grid[0]
-        grid_1 = grid[1] if grid_size > 1 else 1
-        grid_2 = grid[2] if grid_size > 2 else 1
-
         # compute cache key
-        key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs, target))
+        key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs))
+        kernel = self.cache[device].get(key, None)
 
-        # Kernel is not cached; we have to compile.
-        if key not in self.cache[device]:
+        if kernel is None:
+            # Kernel is not cached; we have to compile.
+            target = driver.active.get_current_target()
+            backend = self.make_backend(target)
+            options = backend.parse_options(kwargs)
+
+            # deprecated arguments
+            assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
+            assert "device" not in kwargs, "device option is deprecated; current device will be used"
+            assert "stream" not in kwargs, "stream option is deprecated; current stream will be used"
+            for k in excess_kwargs:
+                if k not in options.__dict__:
+                    raise KeyError("Keyword argument %s was specified but unrecognised" % k)
 
             bound_vals = tuple(bound_args.values())
 
@@ -505,11 +509,6 @@ class JITFunction(KernelInterface[T]):
             sigvals = sig_and_spec[:len(sigkeys)]
             signature = {k: ('*i8' if (v == 'none') else v) for (k, v) in zip(sigkeys, sigvals)}
 
-            backend = make_backend(target)
-            options = backend.parse_options(kwargs)
-            for k in excess_kwargs:
-                if k not in options.__dict__:
-                    raise KeyError("Keyword argument %s was specified but unrecognised" % k)
             configs = (self._get_config(*bound_vals), )
             constants = {
                 p.name: v
@@ -523,19 +522,31 @@ class JITFunction(KernelInterface[T]):
             if self._call_hook(key, signature, device, constants, options, configs):
                 return None
             # compile the kernel
-            src = ASTSource(self, signature, constants, configs[0])
-            self.cache[device][key] = compile(
+            src = self.ASTSource(self, signature, constants, configs[0])
+            kernel = self.compile(
                 src,
                 target=target,
                 options=options.__dict__,
             )
-
-        kernel = self.cache[device][key]
+            self.cache[device][key] = kernel
 
         if not warmup:
+            # canonicalize grid
+            assert grid is not None
+            if callable(grid):
+                # Arguments are passed as a dict to `grid`, by contract.
+                # TODO(jlebar): In the new launch API, pass the compiler flags as a
+                # second parameter to `grid`.
+                grid = grid(bound_args)
+            grid_size = len(grid)
+            grid_0 = grid[0]
+            grid_1 = grid[1] if grid_size > 1 else 1
+            grid_2 = grid[2] if grid_size > 2 else 1
+
+            # launch kernel
             launch_metadata = kernel.launch_metadata(grid, stream, *non_constexpr_vals)
             kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
-                       CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, *non_constexpr_vals)
+                       self.CompiledKernel.launch_enter_hook, self.CompiledKernel.launch_exit_hook, *non_constexpr_vals)
         return kernel
 
     def __init__(self, fn, version=None, do_not_specialize=None, debug=None, noinline=None, repr=None,
