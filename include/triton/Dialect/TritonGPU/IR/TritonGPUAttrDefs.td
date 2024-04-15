@@ -230,6 +230,8 @@ compared to 1*64 when the hasLeadingOffset is false.
         // ---- begin GFX908/GFX90A ----
         if (auto mfmaEnc = dotOpEnc.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
           int kDimNum = dotOpEnc.getOpIdx() == 0 ? 1 : 0;
+          if (needTrans)
+            kDimNum = 1 - kDimNum;
           bool isKDimInner = (order[0] == kDimNum);
           if (isKDimInner) {
             const int numBanks = 32;
