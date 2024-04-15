@@ -466,7 +466,6 @@ class JITFunction(KernelInterface[T]):
             i for (i, p) in enumerate(self.params) if (not p.do_not_specialize) and (not p.is_constexpr)
         ]
 
-
     def run(self, *args, grid, warmup, **kwargs):
         # parse options
         device = driver.active.get_current_device()
@@ -501,6 +500,8 @@ class JITFunction(KernelInterface[T]):
 
         if kernel is None:
             # Kernel is not cached; we have to compile.
+            backend = self.make_backend(target)
+            options = backend.parse_options(kwargs)
 
             # deprecated arguments
             assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
@@ -520,8 +521,6 @@ class JITFunction(KernelInterface[T]):
             sigvals = sig_and_spec[:len(sigkeys)]
             signature = {k: ('*i8' if (v == 'none') else v) for (k, v) in zip(sigkeys, sigvals)}
 
-            backend = self.make_backend(target)
-            options = backend.parse_options(kwargs)
             configs = (self._get_config(*bound_vals), )
             constants = {
                 p.name: v
