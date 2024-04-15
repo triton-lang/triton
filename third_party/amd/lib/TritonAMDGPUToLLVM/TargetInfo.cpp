@@ -68,8 +68,9 @@ Value TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
 }
 
 Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
-                             Value ptr, Type elemTy, Value pred) const {
-  return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred,
+                             const TypeConverter *converter, Value ptr,
+                             Type elemTy, Value pred) const {
+  return mlir::LLVM::AMD::llLoad(rewriter, loc, converter, ptr, elemTy, pred,
                                  0 /*vecStart*/, {} /*otherElems*/);
 }
 

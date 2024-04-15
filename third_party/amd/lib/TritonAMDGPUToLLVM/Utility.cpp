@@ -137,9 +137,9 @@ Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
 }
 
-Value llLoad(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-             Type elemTy, Value pred, unsigned vecStart,
-             SmallVector<Value> otherElems) {
+Value llLoad(ConversionPatternRewriter &rewriter, Location loc,
+             const TypeConverter *converter, Value ptr, Type elemTy, Value pred,
+             unsigned vecStart, SmallVector<Value> otherElems) {
   Block *currentBlock = rewriter.getInsertionBlock();
   Block *afterLoad =
       rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
@@ -169,8 +169,7 @@ Value llLoad(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
     Value v = undef(elemTy);
     for (size_t s = 0; s < vec; ++s) {
       Value otherElem = otherElems[vecStart + s];
-      Value indexVal = rewriter.create<LLVM::ConstantOp>(
-          loc, rewriter.getIndexType(), rewriter.getIndexAttr(s));
+      Value indexVal = createIndexConstant(rewriter, loc, converter, s);
       v = insert_element(elemTy, v, otherElem, indexVal);
     }
     falseVal = v;

@@ -206,8 +206,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
       auto vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
       Value ptr = addrspacecast(ptr_ty(getContext()), ptrElems[vecStart]);
-      auto loadVal =
-          llLoad(rewriter, loc, ptr, vecTy, pred, vecStart, otherElems);
+      auto loadVal = llLoad(rewriter, loc, getTypeConverter(), ptr, vecTy, pred,
+                            vecStart, otherElems);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, this->getTypeConverter()->getIndexType(), ii % vec);

@@ -24,9 +24,9 @@ Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
 
 // Loads from shared or global memory with predication.
 // `otherElems` is used to mask out the elements that are not loaded
-Value llLoad(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-             Type elemTy, Value pred, unsigned vecStart,
-             SmallVector<Value> otherElems);
+Value llLoad(ConversionPatternRewriter &rewriter, Location loc,
+             const TypeConverter *converter, Value ptr, Type elemTy, Value pred,
+             unsigned vecStart, SmallVector<Value> otherElems);
 
 // Stores to shared or global memory with predication.
 Value llStore(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
