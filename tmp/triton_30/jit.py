@@ -4,6 +4,13 @@ from typing import Callable, Iterable, Optional, Union
 from triton.runtime.jit import JITFunction, T
 
 
+def _getitem(self, grid):
+    return lambda *args, **kwargs: self.run(*args, grid=grid, **kwargs)
+
+
+JITFunction.__getitem__ = _getitem
+
+
 def jit(
     fn: Optional[T] = None,
     *,
@@ -19,13 +26,10 @@ def jit(
 
             return InterpretedFunction(fn)
         else:
-            jit_cls = JITFunction
-            if os.getenv("TRITON_EXPERIMENTAL_JIT_FUNCTION_CPP", "0") == "1":
-                from .low_latency_jit_cpp import LowLatencyJITFunctionCPP as jit_cls
-            elif os.getenv("TRITON_EXPERIMENTAL_JIT_FUNCTION_PYTHON", "0") == "1":
-                from .low_latency_jit_python import (
-                    LowLatencyJITFunctionPython as jit_cls,
-                )
+            if os.getenv("TRITON_OLD_JIT_FUNCTION", "0") == "1":
+                from .jit_old import JITFunction as jit_cls
+            else:
+                jit_cls = JITFunction
             return jit_cls(
                 fn,
                 version=version,

@@ -153,11 +153,14 @@ class LowLatencyJITFunctionPython(_JITFunction):
 
         # sig_key = tuple(arg.signature_key() for arg in args if not arg.param.is_constexpr)
         # spec_key = tuple(arg.specialization_key() for arg in args if not arg.param.do_not_specialize)
-        sig_key = tuple(args[idx].signature_key() for idx in self.constexpr_indices)
+        sig_key = tuple(args[idx].signature_key() for idx in self.non_constexpr_indices)
+        # logger.error(sig_key)
         spec_key = tuple(
-            args[idx].specialization_key() for idx in self.do_not_specialize_indices
+            args[idx].specialization_key() for idx in self.not_do_not_specialize_indices
         )
+        # logger.error(spec_key)
         constexpr_key = tuple(args[idx].value for idx in self.constexpr_indices)
+        # logger.error(constexpr_key)
 
         assert num_ctas > 0
         assert grid is not None
@@ -276,6 +279,7 @@ class LowLatencyJITFunctionPython(_JITFunction):
                 device_type=device_type,
             )
 
+        # logger.error(key)
         bin = self.cache[key]
         if not warmup:
             bin.c_wrapper(
@@ -290,10 +294,10 @@ class LowLatencyJITFunctionPython(_JITFunction):
                 bin.shared,
                 stream,
                 bin.cu_function,
-                # CompiledKernel.launch_enter_hook,
-                # CompiledKernel.launch_exit_hook,
-                # bin,
-                *(_.data_ptr() if torch.is_tensor(_) else _ for _ in bin.assemble_tensormap_to_arg(non_constexpr_arg_values)),
+                CompiledKernel.launch_enter_hook,
+                CompiledKernel.launch_exit_hook,
+                bin,
+                *bin.assemble_tensormap_to_arg(non_constexpr_arg_values),
             )
         return bin
 
@@ -321,7 +325,7 @@ class LowLatencyJITFunctionPython(_JITFunction):
 
         self.params = []
         for i, param in enumerate(self.signature.parameters.values()):
-            dns = len(do_not_specialize) > 0 and (
+            dns = do_not_specialize and (
                 i in do_not_specialize or param.name in do_not_specialize
             )
             self.params.append(KernelParam(i, param, dns))
@@ -332,8 +336,8 @@ class LowLatencyJITFunctionPython(_JITFunction):
         self.constexpr_indices = [
             idx for idx, p in enumerate(self.params) if p.is_constexpr
         ]
-        self.do_not_specialize_indices = [
-            idx for idx, p in enumerate(self.params) if p.do_not_specialize
+        self.not_do_not_specialize_indices = [
+            idx for idx, p in enumerate(self.params) if not p.do_not_specialize
         ]
 
         # function source code (without decorators)

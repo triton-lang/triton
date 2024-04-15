@@ -145,13 +145,36 @@ def get_kernels(backward=False) -> Dict[str, Tuple[triton.runtime.JITFunction, .
     os.environ["TRITON_EXPERIMENTAL_JIT_FUNCTION_CPP"] = "0"
     kernels["default"] = _get_kernels(backward=backward)
 
-    os.environ["TRITON_EXPERIMENTAL_JIT_FUNCTION_PYTHON"] = "1"
-    kernels["python"] = _get_kernels(backward=backward)
-    os.environ["TRITON_EXPERIMENTAL_JIT_FUNCTION_PYTHON"] = "0"
+    if TRITON_MAJOR < 3:
+        from triton_21.low_latency_jit_python_generated import (
+            LowLatencyJITFunctionPythonGeneratedShort,
+            LowLatencyJITFunctionPythonGeneratedLong,
+        )
+        _tmp = _get_kernels(backward=backward)
+        kernels["python_generated"] = (
+            LowLatencyJITFunctionPythonGeneratedShort(_tmp[0]),
+            LowLatencyJITFunctionPythonGeneratedLong(_tmp[1]),
+        )
+        from triton_21.low_latency_jit_python_generated_with_type import (
+            LowLatencyJITFunctionPythonGeneratedWithTypeShort,
+            LowLatencyJITFunctionPythonGeneratedWithTypeLong,
+        )
+        kernels["python_generated_with_type"] = (
+            LowLatencyJITFunctionPythonGeneratedWithTypeShort(_tmp[0]),
+            LowLatencyJITFunctionPythonGeneratedWithTypeLong(_tmp[1]),
+        )
 
-    os.environ["TRITON_EXPERIMENTAL_JIT_FUNCTION_CPP"] = "1"
-    kernels["cpp"] = _get_kernels(backward=backward)
-    os.environ["TRITON_EXPERIMENTAL_JIT_FUNCTION_CPP"] = "0"
+        os.environ["TRITON_EXPERIMENTAL_JIT_FUNCTION_PYTHON"] = "1"
+        kernels["python"] = _get_kernels(backward=backward)
+        os.environ["TRITON_EXPERIMENTAL_JIT_FUNCTION_PYTHON"] = "0"
+
+        # os.environ["TRITON_EXPERIMENTAL_JIT_FUNCTION_CPP"] = "1"
+        # kernels["cpp"] = _get_kernels(backward=backward)
+        # os.environ["TRITON_EXPERIMENTAL_JIT_FUNCTION_CPP"] = "0"
+    else:
+        os.environ["TRITON_OLD_JIT_FUNCTION"] = "1"
+        kernels["old"] = _get_kernels(backward=backward)
+        os.environ["TRITON_OLD_JIT_FUNCTION"] = "0"
 
     return kernels
 
@@ -179,13 +202,10 @@ def run_benchmarks(
     for _ in tqdm(range(num_runs)):
         res.append(benchmark())
 
-    unit = "ms"
     df = pd.DataFrame(res)
-    if df.mean().mean() < 1:
-        df *= 1000
-        unit = "us"
+    df *= 1000
 
-    df.to_csv(f"{name}_{unit}_triton_{TRITON_MAJOR}.csv", index=False)
+    df.to_csv(f"{name}_triton_{TRITON_MAJOR}.csv", index=False)
     print(df.mean().T)
 
     return df
