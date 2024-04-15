@@ -61,15 +61,6 @@ operation ::= `nvgpu.fence_async_shared` attr-dict
 <tr><td><code>bCluster</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 </table>
 
-### `nvgpu.fence_mbarrier_init` (triton::nvgpu::FenceMBarrierInitOp)
-
-Syntax:
-
-```
-operation ::= `nvgpu.fence_mbarrier_init` attr-dict
-```
-
-
 ### `nvgpu.load_dsmem` (triton::nvgpu::LoadDSmemOp)
 
 Syntax:

@@ -133,25 +133,3 @@ Traits: `VerifyTensorLayoutsTrait`
 <tr><td><code>bCluster</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 </table>
 
-### `triton_nvidia_gpu.get_cluster_cta_id` (triton::nvidia_gpu::GetClusterCTAIdOp)
-
-Syntax:
-
-```
-operation ::= `triton_nvidia_gpu.get_cluster_cta_id` attr-dict `:` type($result)
-```
-
-Returns the one dimensional cluster_cta_id.
-
-Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
-
-Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{}`
-
-#### Results:
-
-| Result | Description |
-| :----: | ----------- |
-| `result` | 32-bit signless integer
-
