@@ -102,6 +102,10 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def path_to_rocm_lld():
+        # First check backend for ld.lld (used for pytorch wheels)
+        lld = Path(__file__).parent / "llvm/bin/ld.lld"
+        if lld.is_file():
+            return lld
         lld = Path("/opt/rocm/llvm/bin/ld.lld")
         if lld.is_file():
             return lld
