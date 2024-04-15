@@ -376,15 +376,15 @@ class CompiledKernel:
         ret = LazyDict({"name": self.name, "function": self.function, "stream": stream})
         if not isinstance(self.src, ASTSource) or self.src.fn.launch_metadata is None:
             return ret
-        args = {}
+        arg_dict = {}
         arg_idx = 0
         for arg_name in self.src.fn.arg_names:
             if arg_name in self.src.constants:
-                args[arg_name] = self.src.constants[arg_name]
+                arg_dict[arg_name] = self.src.constants[arg_name]
             else:
-                args[arg_name] = args[arg_idx]
+                arg_dict[arg_name] = args[arg_idx]
                 arg_idx += 1
-        ret.add(self.src.fn.launch_metadata, (grid, self.metadata, args))
+        ret.add(self.src.fn.launch_metadata, (grid, self.metadata, arg_dict))
         return ret
 
     def __getitem__(self, grid):
