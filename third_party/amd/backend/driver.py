@@ -438,9 +438,13 @@ class HIPDriver(GPUDriver):
         import torch
         return torch.version.hip is not None
 
-    def get_current_target(self):
-        device = self.get_current_device()
+    @functools.lru_cache()
+    def _get_device_target(self, device):
         device_properties = self.utils.get_device_properties(device)
         arch = device_properties['arch']
         warp_size = device_properties['warpSize']
         return ["hip", arch.split(':')[0], warp_size]
+
+    def get_current_target(self):
+        device = self.get_current_device()
+        return self._get_device_target(self, device)

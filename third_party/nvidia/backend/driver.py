@@ -369,12 +369,16 @@ class CudaDriver(GPUDriver):
         self.launcher_cls = CudaLauncher
         super().__init__()
 
-    def get_current_target(self):
-        device = self.get_current_device()
+    @functools.lru_cache()
+    def _get_device_target(self, device):
         capability = self.get_device_capability(device)
         capability = capability[0] * 10 + capability[1]
         warp_size = 32
         return ("cuda", capability, warp_size)
+
+    def get_current_target(self):
+        device = self.get_current_device()
+        return self._get_device_target(device)
 
     @staticmethod
     def is_active():
