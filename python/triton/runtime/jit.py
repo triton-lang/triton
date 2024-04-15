@@ -470,7 +470,6 @@ class JITFunction(KernelInterface[T]):
         # parse options
         device = driver.active.get_current_device()
         stream = driver.active.get_current_stream(device)
-        target = driver.active.get_current_target()
         kwargs["debug"] = self.debug
 
         # Execute pre run hooks with args and kwargs
@@ -495,11 +494,12 @@ class JITFunction(KernelInterface[T]):
         grid_2 = grid[2] if grid_size > 2 else 1
 
         # compute cache key
-        key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs, target))
+        key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs))
         kernel = self.cache[device].get(key, None)
 
         if kernel is None:
             # Kernel is not cached; we have to compile.
+            target = driver.active.get_current_target()
             backend = self.make_backend(target)
             options = backend.parse_options(kwargs)
 
