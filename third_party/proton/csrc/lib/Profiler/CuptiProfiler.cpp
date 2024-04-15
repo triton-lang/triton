@@ -177,6 +177,8 @@ std::pair<bool, bool> matchKernelCbId(CUpti_CallbackId cbId) {
   case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_v7000:
   case CUPTI_RUNTIME_TRACE_CBID_cudaLaunch_ptsz_v7000:
   case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_ptsz_v7000:
+  case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernelExC_v11060:
+  case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernelExC_ptsz_v11060:
   case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchCooperativeKernel_v9000:
   case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchCooperativeKernel_ptsz_v9000:
   case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchCooperativeKernelMultiDevice_v9000: {
@@ -188,6 +190,8 @@ std::pair<bool, bool> matchKernelCbId(CUpti_CallbackId cbId) {
   case CUPTI_DRIVER_TRACE_CBID_cuLaunchGridAsync:
   case CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel:
   case CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel_ptsz:
+  case CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx:
+  case CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx_ptsz:
   case CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel:
   case CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel_ptsz:
   case CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernelMultiDevice: {
