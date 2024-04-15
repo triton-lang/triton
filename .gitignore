@@ -15,7 +15,7 @@ python/triton/backends/
 !python/triton/backends/driver.py
 
 # Proton
-python/triton/profiler/
+python/triton/profiler
 
 # Python caches
 __pycache__/

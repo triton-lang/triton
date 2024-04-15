@@ -4,7 +4,7 @@ import json
 
 import hatchet as ht
 import triton._C.libproton.proton as libproton
-from proton.hook import COMPUTE_METADATA_SCOPE_NAME
+from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME
 
 
 def match_available_metrics(metrics, raw_metrics):

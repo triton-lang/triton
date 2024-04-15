@@ -20,15 +20,22 @@ TRITON_BUILD_PROTON=1 pip install .
 
 More examples can be found in the [tutorials](tutorials) directory.
 
-Proton can be used to profile *functions*, *regions* in Python code. The following example demonstrates how to use Proton to profile a simple Python function.
+Proton can be used to profile *functions* and *regions* in Python code.
+
+- The following examples demonstrate how to use Proton to profile a simple Python function.
 
 ```python
 import triton.profiler as proton
 
-# Profile a single function
 # name: The path to the profile data
-# context: The method used to annotate the context of each GPU kernel
-session_id = proton.start(func, name="profile_name", context="python")(args)
+# context: The method used to annotate the context of each GPU kernel. Currently, "shadow" and "python" are supported.
+session_id = proton.profile(func, name="profile_name", context="python")(args)
+```
+
+- The following examples demonstrate how to use Proton to profile a region in Python code.
+
+```python
+session_id = proton.start(name="profile_name", context="python")
 ...
 # Skip a region
 proton.deactivate(session_id)
@@ -42,16 +49,22 @@ proton.finalize()
 
 ### Scope
 
-Unlike the *python* context that provide users with files, functions, and lines where the GPU kernels are invoked, the *scope* context provides users with the annotated regions in the code. The following example demonstrates how to use the *scope* context.
+Unlike the *python* context that provide users with files, functions, and lines where the GPU kernels are invoked, the *shadow* context provides users with the annotated regions in the code. The following example demonstrates how to use the *shadow* context.
 
 ```python
 import triton.profiler as proton
+
+
+session_id = proton.start(name="profile_name", context="shadow")
 
 with proton.scope("test0"):
     with proton.scope("test1"):
         foo[1,](x, y)
 with proton.scope("test2"):
     foo[1,](x, y)
+
+...
+proton.finalize()
 ```
 
 The *scope* utility also accepts flexible metrics, provided with a dictionary that maps from a string (metric name) to a value (int or float).
@@ -70,12 +83,14 @@ with proton.scope("test2", {"bytes": 3000}):
 
 ```python
 import triton.profiler as proton
+from typing import NamedTuple
 
+# hook: When hook="triton", it enables proton to invoke launch_metadata function before launching the GPU kernel
 proton.start("profile_name", hook="triton")
 
 def metadata_fn(
     grid: tuple,
-    metadata: dict,
+    metadata: NamedTuple,
     args: dict
 ):
     return {"name": "<kernel_name>", "flops8": 1.0}

@@ -1,5 +1,5 @@
 from .scope import enter_scope, exit_scope
-from triton.compiler import CompiledKernel
+from triton.compiler import CompiledKernel, LazyDict
 
 COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata"
 
@@ -8,7 +8,7 @@ class TritonHook:
     metrics = ["flops8", "flops16", "flops32", "flops64", "bytes"]
 
     @staticmethod
-    def enter(metadata: dict) -> None:
+    def enter(metadata: LazyDict) -> None:
         enter_scope(COMPUTE_METADATA_SCOPE_NAME)
         metadata = metadata.get()
         exit_scope()
@@ -16,7 +16,7 @@ class TritonHook:
         enter_scope(metadata["name"], triton_op=True, metrics=fn_metrics)
 
     @staticmethod
-    def exit(metadata: dict) -> None:
+    def exit(metadata: LazyDict) -> None:
         exit_scope(triton_op=True)
 
 

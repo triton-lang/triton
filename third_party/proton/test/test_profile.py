@@ -4,6 +4,7 @@ import triton.profiler as proton
 import tempfile
 import json
 import pytest
+from typing import NamedTuple
 
 import triton.language as tl
 
@@ -76,7 +77,7 @@ def test_metrics():
 
 def test_hook():
 
-    def metadata_fn(grid: tuple, metadata: dict, args: dict):
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         # get arg's element size
         element_size = args["x"].element_size()
         key = "flops" + str(element_size * 8)
