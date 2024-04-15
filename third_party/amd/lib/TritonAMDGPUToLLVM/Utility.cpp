@@ -155,9 +155,13 @@ Value llLoad(ConversionPatternRewriter &rewriter, Location loc,
   rewriter.setInsertionPointToStart(falseBlock);
   auto valueElemTy = getElementTypeOrSelf(elemTy);
   mlir::Attribute zero = rewriter.getZeroAttr(valueElemTy);
-  auto denseValue =
-      DenseElementsAttr::get(elemTy.cast<mlir::ShapedType>(), zero);
-  Value zeroVal = rewriter.create<LLVM::ConstantOp>(loc, elemTy, denseValue);
+  Value zeroVal;
+  if (auto shapedTy = elemTy.dyn_cast<mlir::ShapedType>()) {
+    auto denseValue = DenseElementsAttr::get(shapedTy, zero);
+    zeroVal = rewriter.create<LLVM::ConstantOp>(loc, elemTy, denseValue);
+  } else {
+    zeroVal = rewriter.create<LLVM::ConstantOp>(loc, elemTy, zero);
+  }
   Value falseVal = zeroVal;
   // If we need to mask the loaded value with other elements
   if (otherElems.size() != 0) {
