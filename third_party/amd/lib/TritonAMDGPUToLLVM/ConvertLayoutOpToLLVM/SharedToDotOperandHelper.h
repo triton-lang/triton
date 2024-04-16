@@ -37,6 +37,8 @@ Value computeOffset(ConversionPatternRewriter &rewriter, Location loc,
 Value computeBasePtr(ConversionPatternRewriter &rewriter, Location loc,
                      const SharedMemoryObject &smemObj);
 
+bool isKMajor(llvm::ArrayRef<unsigned> order, int opIdx);
+
 using computeTensorElemMappingInBlockT =
     std::function<llvm::SmallVector<llvm::SmallVector<Value>>(
         ConversionPatternRewriter &, Location, const ArrayRef<int64_t> &, Value,
