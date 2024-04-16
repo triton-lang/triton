@@ -125,7 +125,7 @@ def parse(metrics, filename, include, exclude, threshold, depth):
 
 def show_metrics(file_name):
     with open(file_name, "r") as f:
-        gf, raw_metrics = get_raw_metrics(f)
+        _, raw_metrics = get_raw_metrics(f)
         print("Available metrics:")
         if raw_metrics:
             print("\n".join(raw_metrics))
