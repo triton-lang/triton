@@ -14,7 +14,6 @@ from pathlib import Path
 import re
 import functools
 import os
-import pkgutil
 
 
 @dataclass
@@ -143,33 +142,24 @@ class IRSource:
         return dict()
 
 
-# This is an alternative implementation of pkgutil.walk_packages which isn't very reliable
-# in that it does not handle same-named but different-pathed files well unless using module
-# prefixes explicitly. Using prefixes is not bullet-proof to future path structure changes.
-def iter_modules_recursively(paths):
-    for path in paths:
-        for lib in pkgutil.iter_modules([path]):
-            if lib.ispkg:
-                lib_path = os.path.join(lib.module_finder.path, lib.name)
-                yield from iter_modules_recursively([lib_path])
-            else:
-                yield lib.module_finder.find_spec(lib.name).origin
-
-
 @functools.lru_cache()
 def triton_key():
+    import pkgutil
     TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     contents = []
     # frontend
     with open(__file__, "rb") as f:
         contents += [hashlib.sha256(f.read()).hexdigest()]
     # compiler
-    compiler_path = os.path.join(TRITON_PATH, 'compiler')
-    backends_path = os.path.join(TRITON_PATH, 'compiler', 'backends')
-    tp_backends_path = os.path.join(TRITON_PATH, 'backends')
-    for module_name in iter_modules_recursively([compiler_path, backends_path, tp_backends_path]):
-        with open(module_name, "rb") as f:
-            contents += [hashlib.sha256(f.read()).hexdigest()]
+    path_prefixes = [
+        (os.path.join(TRITON_PATH, "compiler"), "triton.compiler."),
+        (os.path.join(TRITON_PATH, "backends"), "triton.backends."),
+    ]
+    for path, prefix in path_prefixes:
+        for lib in pkgutil.walk_packages([path], prefix=prefix):
+            with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+                contents += [hashlib.sha256(f.read()).hexdigest()]
+
     # backend
     libtriton_hash = hashlib.sha256()
     with open(os.path.join(TRITON_PATH, "_C/libtriton.so"), "rb") as f:
@@ -181,8 +171,8 @@ def triton_key():
     contents.append(libtriton_hash.hexdigest())
     # language
     language_path = os.path.join(TRITON_PATH, 'language')
-    for module_name in iter_modules_recursively([language_path]):
-        with open(module_name, "rb") as f:
+    for lib in pkgutil.iter_modules([language_path]):
+        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
             contents += [hashlib.sha256(f.read()).hexdigest()]
     return f'{__version__}' + '-'.join(contents)
 
