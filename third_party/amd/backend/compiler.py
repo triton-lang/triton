@@ -54,7 +54,7 @@ class HIPOptions:
         # Ignore user-defined warp size for gfx9
         warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch else 64
         object.__setattr__(self, 'warp_size', warp_size)
-        libs = ["cuda2gcn", "ocml", "ockl"]
+        libs = ["cuda2gcn", "opencl", "ocml", "ockl"]
         for lib in libs:
             extern_libs[lib] = str(default_libdir / f'{lib}.bc')
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
@@ -84,7 +84,14 @@ class HIPBackend(BaseBackend):
         return HIPOptions(**args)
 
     def pack_metadata(self, metadata):
-        return metadata
+        return (
+            metadata.num_warps,
+            metadata.num_ctas,
+            metadata.shared,
+            metadata.cluster_dims[0],
+            metadata.cluster_dims[1],
+            metadata.cluster_dims[2],
+        )
 
     def get_codegen_implementation(self):
         codegen_fns = {}
@@ -95,6 +102,10 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def path_to_rocm_lld():
+        # First check backend for ld.lld (used for pytorch wheels)
+        lld = Path(__file__).parent / "llvm/bin/ld.lld"
+        if lld.is_file():
+            return lld
         lld = Path("/opt/rocm/llvm/bin/ld.lld")
         if lld.is_file():
             return lld
@@ -194,6 +205,10 @@ class HIPBackend(BaseBackend):
         kernels[0].add_fn_attr("amdgpu-flat-work-group-size", f"1,{options.num_warps*options.warp_size}")
         kernels[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
         kernels[0].add_fn_attr("denormal-fp-math-f32", "preserve-sign")
+        # Hint the compiler that we'd like the firmware to set the kernel arguments
+        # to user SGPRs so that the kernel does not need to s_load its arguments
+        # from memory.
+        amd.set_all_fn_arg_inreg(kernels[0])
 
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]

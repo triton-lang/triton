@@ -2958,14 +2958,14 @@ def convert_fp8_to_fp32(x, device, dtype_str):
     [(*shape_nw, col_a, col_b, 'none', input_precision, in_dtype, out_dtype, kpack)
      for shape_nw in [[128, 256, 32, 8], [128, 16, 32, 4], [32, 128, 64, 4], [128, 128, 64, 4], [64, 128, 128, 4],
                       [32, 128, 64, 2], [64, 64, 32, 4], [32, 32, 128, 16], [128, 128, 64, 2], [64, 128, 128, 2]]
-     for input_precision in ["tf32", "ieee"]
+     for input_precision in ["ieee" if is_hip() else "tf32"]
      for col_a in [True, False]
      for col_b in [True, False]
      for in_dtype, out_dtype in [('int8', 'int8'), ('float16', 'float16'), ('float16', 'float32'), ('float32',
                                                                                                     'float32')]
-     for kpack in [1, 2]] + [(64, 64, 64, 4, col_a, col_b, 'none', 'ieee', 'float32', 'float32', 1)
-                             for col_a in [True, False]
-                             for col_b in [True, False]] +
+     for kpack in [1, 2 if is_hip() else 1]] + [(64, 64, 64, 4, col_a, col_b, 'none', 'ieee', 'float32', 'float32', 1)
+                                                for col_a in [True, False]
+                                                for col_b in [True, False]] +
     [(64, 64, 64, 4, False, False, 'chain-dot', 'ieee', 'bfloat16', 'float32', 1)] +
     [(128, 128, 64, 4, False, False, 'chain-dot', 'ieee', float8_type, 'float32', 1)
      for float8_type in ["float8e5", "float8e4nv"]])

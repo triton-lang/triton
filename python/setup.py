@@ -1,6 +1,7 @@
 import os
 import platform
 import re
+import contextlib
 import shutil
 import subprocess
 import sys
@@ -101,6 +102,13 @@ def get_build_type():
         return "TritonRelBuildWithAsserts"
 
 
+def get_env_with_keys(key: list):
+    for k in key:
+        if k in os.environ:
+            return os.environ[k]
+    return ""
+
+
 # --- third party packages -----
 
 
@@ -124,9 +132,14 @@ def get_pybind11_package_info():
     return Package("pybind11", name, url, "PYBIND11_INCLUDE_DIR", "", "PYBIND11_SYSPATH")
 
 
+# json
+def get_json_package_info():
+    name = "json"
+    url = "https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz"
+    return Package("json", name, url, "JSON_INCLUDE_DIR", "", "JSON_SYSPATH")
+
+
 # llvm
-
-
 def get_llvm_package_info():
     system = platform.system()
     arch = {"x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
@@ -176,29 +189,25 @@ def open_url(url):
 
 
 def get_triton_cache_path():
-    user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or \
-            os.getenv("HOMEPATH") or None
+    user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or os.getenv("HOMEPATH") or None
     if not user_home:
         raise RuntimeError("Could not find user home directory")
     return os.path.join(user_home, ".triton")
 
 
-def get_thirdparty_packages():
+def get_thirdparty_packages(packages: list):
     triton_cache_path = get_triton_cache_path()
-    packages = [get_pybind11_package_info(), get_llvm_package_info()]
     thirdparty_cmake_args = []
     for p in packages:
         package_root_dir = os.path.join(triton_cache_path, p.package)
         package_dir = os.path.join(package_root_dir, p.name)
-        if p.syspath_var_name in os.environ:
+        if os.environ.get(p.syspath_var_name):
             package_dir = os.environ[p.syspath_var_name]
         version_file_path = os.path.join(package_dir, "version.txt")
         if p.syspath_var_name not in os.environ and\
            (not os.path.exists(version_file_path) or Path(version_file_path).read_text() != p.url):
-            try:
+            with contextlib.suppress(Exception):
                 shutil.rmtree(package_root_dir)
-            except Exception:
-                pass
             os.makedirs(package_root_dir, exist_ok=True)
             print(f'downloading and extracting {p.url} ...')
             file = tarfile.open(fileobj=open_url(p.url), mode="r|*")
@@ -303,11 +312,18 @@ class CMakeBuild(build_ext):
         for ext in self.extensions:
             self.build_extension(ext)
 
+    def get_proton_cmake_args(self):
+        cmake_args = ["-DTRITON_BUILD_PROTON=ON"]
+        cmake_args += get_thirdparty_packages([get_json_package_info(), get_pybind11_package_info()])
+        if cuda_root := get_env_with_keys(["CUDA_HOME", "CUDA_ROOT"]):
+            cmake_args += ["-DCUDAToolkit_ROOT=" + cuda_root]
+        return cmake_args
+
     def build_extension(self, ext):
         lit_dir = shutil.which('lit')
         ninja_dir = shutil.which('ninja')
         # lit is used by the test suite
-        thirdparty_cmake_args = get_thirdparty_packages()
+        thirdparty_cmake_args = get_thirdparty_packages([get_pybind11_package_info(), get_llvm_package_info()])
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
         if not os.path.exists(self.build_temp):
@@ -371,6 +387,9 @@ class CMakeBuild(build_ext):
                 "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
             ]
 
+        if check_env_flag("TRITON_BUILD_PROTON"):
+            cmake_args += self.get_proton_cmake_args()
+
         env = os.environ.copy()
         cmake_dir = get_cmake_dir()
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=cmake_dir, env=env)
@@ -415,46 +434,58 @@ def add_link_to_backends():
         os.symlink(backend.backend_dir, backend.install_dir)
 
 
+def add_link_to_proton():
+    proton_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, "third_party", "proton", "proton"))
+    proton_install_dir = os.path.join(os.path.dirname(__file__), "triton", "profiler")
+    if os.path.islink(proton_install_dir):
+        os.unlink(proton_install_dir)
+    if os.path.exists(proton_install_dir):
+        shutil.rmtree(proton_install_dir)
+    os.symlink(proton_dir, proton_install_dir)
+
+
+def add_links():
+    add_link_to_backends()
+    add_link_to_proton()
+
+
 class plugin_install(install):
 
     def run(self):
-        add_link_to_backends()
+        add_links()
         install.run(self)
 
 
 class plugin_develop(develop):
 
     def run(self):
-        add_link_to_backends()
+        add_links()
         develop.run(self)
 
 
 class plugin_bdist_wheel(bdist_wheel):
 
     def run(self):
-        add_link_to_backends()
+        add_links()
         bdist_wheel.run(self)
 
 
 class plugin_egginfo(egg_info):
 
     def run(self):
-        add_link_to_backends()
+        add_links()
         egg_info.run(self)
 
 
-package_data = dict()
-package_data["triton/tools"] = ["compile.h", "compile.c"]
-package_data.update({f"triton/backends/{b.name}": b.package_data for b in backends})
+package_data = {
+    "triton/tools": ["compile.h", "compile.c"],
+    **{f"triton/backends/{b.name}": b.package_data
+       for b in backends},
+}
 
-setup(
-    name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
-    version="3.0.0" + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
-    author="Philippe Tillet",
-    author_email="phil@openai.com",
-    description="A language and compiler for custom Deep Learning operations",
-    long_description="",
-    packages=[
+
+def get_packages():
+    packages = [
         "triton",
         "triton/_C",
         "triton/compiler",
@@ -466,8 +497,37 @@ setup(
         "triton/runtime",
         "triton/backends",
         "triton/tools",
-    ] + [f'triton/backends/{backend.name}' for backend in backends],
-    install_requires=["filelock"],
+    ]
+    packages += [f'triton/backends/{backend.name}' for backend in backends]
+    if check_env_flag("TRITON_BUILD_PROTON"):
+        packages += ["triton/profiler"]
+    return packages
+
+
+def get_entry_points():
+    entry_points = {}
+    if check_env_flag("TRITON_BUILD_PROTON"):
+        entry_points["console_scripts"] = ["proton-viewer = triton.profiler.viewer:main"]
+    return entry_points
+
+
+def get_install_requires():
+    install_requires = ["filelock"]
+    if check_env_flag("TRITON_BUILD_PROTON"):
+        install_requires.append("llnl-hatchet")
+    return install_requires
+
+
+setup(
+    name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
+    version="3.0.0" + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
+    author="Philippe Tillet",
+    author_email="phil@openai.com",
+    description="A language and compiler for custom Deep Learning operations",
+    long_description="",
+    packages=get_packages(),
+    entry_points=get_entry_points(),
+    install_requires=get_install_requires(),
     package_data=package_data,
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],

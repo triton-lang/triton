@@ -200,4 +200,13 @@ void init_triton_amd(py::module &&m) {
         return py::bytes(std::string(result.begin(), result.end()));
       },
       py::return_value_policy::take_ownership);
+
+  m.def("set_all_fn_arg_inreg", [](llvm::Function *fn) {
+    for (llvm::Argument &arg : fn->args()) {
+      // Check for incompatible attributes.
+      if (arg.hasByRefAttr() || arg.hasNestAttr())
+        continue;
+      arg.addAttr(llvm::Attribute::InReg);
+    }
+  });
 }
