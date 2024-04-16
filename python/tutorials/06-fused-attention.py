@@ -569,7 +569,11 @@ def test_op(Z, H, N_CTX, D_HEAD, causal, dtype=torch.float16):
     tri_dq, q.grad = q.grad.clone(), None
     # compare
     assert torch.allclose(ref_out, tri_out, atol=1e-2, rtol=0)
-    rtol = 0.0 if torch.version.hip is None else 1e-2
+    rtol = 0.0
+    # Relative tolerance workaround for known hardware limitation of MI200 GPU.
+    # For detailss see https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
+    if torch.version.hip is not None and triton.runtime.driver.active.get_current_target()[1] == "gfx90a":
+        rtol = 1e-2
     assert torch.allclose(ref_dv, tri_dv, atol=1e-2, rtol=rtol)
     assert torch.allclose(ref_dk, tri_dk, atol=1e-2, rtol=rtol)
     assert torch.allclose(ref_dq, tri_dq, atol=1e-2, rtol=rtol)
