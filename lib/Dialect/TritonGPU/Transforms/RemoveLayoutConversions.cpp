@@ -929,11 +929,35 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
     builder.setInsertionPoint(op);
     if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
       auto yieldOperands = llvm::to_vector(yieldOp.getOperands());
+      auto forOp = llvm::dyn_cast<scf::ForOp>(yieldOp->getParentOp());
+      SetVector<unsigned> yieldOpndsIdx;
+      if (forOp) {
+        for (auto blockArg : forOp.getRegionIterArgs()) {
+          // Find the corresponding BlockArg for the yield operand and see
+          // if it is in the slice.
+          if (slice.count(blockArg)) {
+            yieldOpndsIdx.insert(blockArg.getArgNumber() -
+                                 forOp.getNumInductionVars());
+          }
+        }
+      }
+      unsigned opndIdx = 0;
       for (Value operand : yieldOp.getOperands()) {
+        if (forOp && yieldOpndsIdx.count(opndIdx) == 0) {
+          ++opndIdx;
+          continue;
+        }
+        ++opndIdx;
         if (slice.count(operand) == 0)
           continue;
+        LDBG("rewrite Yield: add one operand " << mapping.lookup(operand));
         yieldOperands.push_back(mapping.lookup(operand));
       }
+      if (forOp)
+        LDBG("rewrite Yield: num of operands "
+             << yieldOperands.size() << ", forOp operands "
+             << forOp.getRegionIterArgs().size() << ", ind vars "
+             << forOp.getNumInductionVars());
       builder.create<scf::YieldOp>(op->getLoc(), yieldOperands);
       op->erase();
       continue;
