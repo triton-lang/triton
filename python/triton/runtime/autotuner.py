@@ -207,8 +207,8 @@ class Config:
     """
     An object that represents a possible kernel configuration for the auto-tuner to try.
 
-    :ivar meta: a dictionary of meta-parameters to pass to the kernel as keyword arguments.
-    :type meta: dict[Str, Any]
+    :ivar kwargs: a dictionary of meta-parameters to pass to the kernel as keyword arguments.
+    :type kwargs: dict[Str, Any]
     :ivar num_warps: the number of warps to use for the kernel when compiled for GPUs. For example, if
                       `num_warps=8`, then each kernel instance will be automatically parallelized to
                       cooperatively execute using `8 * 32 = 256` threads.
@@ -247,8 +247,8 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     .. code-block:: python
 
         @triton.autotune(configs=[
-            triton.Config(meta={'BLOCK_SIZE': 128}, num_warps=4),
-            triton.Config(meta={'BLOCK_SIZE': 1024}, num_warps=8),
+            triton.Config(kwargs={'BLOCK_SIZE': 128}, num_warps=4),
+            triton.Config(kwargs={'BLOCK_SIZE': 1024}, num_warps=8),
           ],
           key=['x_size'] # the two above configs will be evaluated anytime
                          # the value of x_size changes
