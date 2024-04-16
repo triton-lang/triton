@@ -143,6 +143,9 @@ class IRSource:
         return dict()
 
 
+# This is an alternative implementation of pkgutil.walk_packages which isn't very reliable
+# in that it does not handle same-named but different-pathed files well unless using module
+# prefixes explicitly. Using prefixes is not bullet-proof to future path structure changes.
 def iter_modules_recursively(paths):
     for path in paths:
         for lib in pkgutil.iter_modules([path]):
