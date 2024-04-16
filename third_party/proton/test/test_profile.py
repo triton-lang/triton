@@ -89,7 +89,7 @@ def test_metrics_ignore():
 
 
 def test_scope_backward():
-    with open("test.hatchet", "w+") as f:
+    with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
         proton.start(f.name.split(".")[0])
         with proton.scope("ones1"):
             a = torch.ones((100, 100), device="cuda", requires_grad=True)
@@ -98,11 +98,12 @@ def test_scope_backward():
         with proton.scope("ones2"):
             loss = torch.ones_like(a2)
 
-        # Backward triggers two kernels
-        a2.backward(loss)
+        # Backward triggers two kernels in a single scope
+        with proton.scope("backward"):
+            a2.backward(loss)
         proton.finalize()
         data = json.load(f)
-        assert len(data[0]["children"]) == 5
+        assert len(data[0]["children"]) == 4
 
 
 def test_hook():
