@@ -88,6 +88,23 @@ def test_metrics_ignore():
         assert len(data[0]["children"]) == 0
 
 
+def test_scope_backward():
+    with open("test.hatchet", "w+") as f:
+        proton.start(f.name.split(".")[0])
+        with proton.scope("ones1"):
+            a = torch.ones((100, 100), device="cuda", requires_grad=True)
+        with proton.scope("plus"):
+            a2 = a * a * a
+        with proton.scope("ones2"):
+            loss = torch.ones_like(a2)
+
+        # Backward triggers two kernels
+        a2.backward(loss)
+        proton.finalize()
+        data = json.load(f)
+        assert len(data[0]["children"]) == 5
+
+
 def test_hook():
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
