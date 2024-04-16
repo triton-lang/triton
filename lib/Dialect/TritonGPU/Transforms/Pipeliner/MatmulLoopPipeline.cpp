@@ -121,7 +121,8 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
       loadOp.getEvict(), loadOp.getIsVolatile());
   Operation *commmit =
       builder.create<ttg::AsyncCommitGroupOp>(loc, copy->getResult(0));
-  builder.create<ttg::AsyncWaitOp>(loc, commmit->getResult(0), 0);
+  Operation *wait =
+      builder.create<ttg::AsyncWaitOp>(loc, commmit->getResult(0), 0);
 
   int stage = opToStage[loadOp];
   bool isMMV3Load = loadToInfo[loadOp].loadIsMMAV3;
@@ -155,6 +156,7 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
 
     // Prefetch load if is not MMAV3 and is used by the dot.
     if (loadToInfo[loadOp].usedByDot) {
+      opToStage[wait] = numStages - 2;
       opToStage[viewLoad] = numStages - 2;
     }
   }
@@ -277,9 +279,9 @@ getSharedEncoding(tt::LoadOp loadOp, bool isMMAV3) {
 // final use of the load op (another load op, or a dot op).
 // Indirection level is "0" for the load op directly used by the dot op,
 // "1" for the load op used by the load op used by the dot op, and so on.
-static llvm::MapVector<tt::LoadOp, std::pair<int, Operation *>>
+static llvm::SmallVector<std::tuple<tt::LoadOp, int, Operation *>>
 loadOpsToIndirectionLevelAndUse(scf::ForOp forOp) {
-  llvm::MapVector<tt::LoadOp, std::pair<int, Operation *>>
+  llvm::SmallVector<std::tuple<tt::LoadOp, int, Operation *>>
       loadOpToIndLevelAndUse;
   DenseSet<Operation *> seen;
 
@@ -289,7 +291,8 @@ loadOpsToIndirectionLevelAndUse(scf::ForOp forOp) {
           return;
         if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
           // TODO: What if there are multiple uses at different distances?
-          loadOpToIndLevelAndUse[loadOp] = std::make_pair(distance, use);
+          loadOpToIndLevelAndUse.push_back(
+              std::make_tuple(loadOp, distance, use));
           use = op;
           distance++;
         }
@@ -305,6 +308,7 @@ loadOpsToIndirectionLevelAndUse(scf::ForOp forOp) {
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (!isa<tt::DotOp>(op))
       continue;
+    seen.clear();
     dfs(&op, 0, &op);
   }
 
@@ -345,15 +349,19 @@ static bool loadIsMMAv3(tt::LoadOp loadOp) {
 
 static llvm::DenseSet<tt::LoadOp>
 assignMemoryLayouts(llvm::DenseMap<tt::LoadOp, LoadInfo> &loadToInfo,
-                    llvm::MapVector<tt::LoadOp, std::pair<int, Operation *>>
+                    llvm::SmallVector<std::tuple<tt::LoadOp, int, Operation *>>
                         &loadOpToIndLevelAndUse,
                     tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
 
   llvm::DenseSet<tt::LoadOp> loadsToPipeline;
 
-  for (auto &[loadOp, distAndUse] : loadOpToIndLevelAndUse) {
+  for (auto &[loadOp, dist, use] : loadOpToIndLevelAndUse) {
     assert(!isLoadFromTensorPtr(loadOp) &&
            "Block ptr should have been lowered before this pass.");
+
+    if (loadsToPipeline.count(loadOp))
+      // TODO pawel: err, we'd need to verify that the distance is the same
+      continue;
 
     LoadInfo loadInfo;
     auto ptr = loadOp.getPtr();
@@ -377,7 +385,7 @@ assignMemoryLayouts(llvm::DenseMap<tt::LoadOp, LoadInfo> &loadToInfo,
     if (width < 32)
       continue;
 
-    if (auto dot = dyn_cast<tt::DotOp>(distAndUse.second)) {
+    if (auto dot = dyn_cast<tt::DotOp>(use)) {
       loadInfo.usedByDot = true;
       if (loadIsMMAv3(loadOp)) {
         loadInfo.loadIsMMAV3 = true;
@@ -421,7 +429,7 @@ assignMemoryLayouts(llvm::DenseMap<tt::LoadOp, LoadInfo> &loadToInfo,
           }
         }
       }
-    } else if (auto loadOp = cast<tt::LoadOp>(distAndUse.second)) {
+    } else if (auto loadOp = dyn_cast<tt::LoadOp>(use)) {
       // The use of this loadOp is another loadOp. If the use is not in the
       // loadsToPipeline already, it means that the use is not valid for
       // pipelining for some reason. We should skip this loadOp, too. Note that
@@ -436,7 +444,7 @@ assignMemoryLayouts(llvm::DenseMap<tt::LoadOp, LoadInfo> &loadToInfo,
 
     // If we still don't have a shared encoding, try a "generic" shared
     // encoding.
-    if (!loadInfo.sharedEncoding && !isMMAv3Dot(distAndUse.second)) {
+    if (!loadInfo.sharedEncoding && !isMMAv3Dot(use)) {
       loadInfo.sharedEncoding =
           getSharedEncoding(loadOp, /*isMMAV3=*/loadInfo.loadIsMMAV3)
               .value_or(nullptr);
@@ -464,14 +472,14 @@ static bool createCoarseSchedule(
 
   // Get all loads that are (transitively) used by dot ops and their distance
   // to the dot op.
-  llvm::MapVector<tt::LoadOp, std::pair<int, Operation *>>
+  llvm::SmallVector<std::tuple<tt::LoadOp, int, Operation *>>
       loadOpToIndLevelAndUse = loadOpsToIndirectionLevelAndUse(forOp);
   LLVM_DEBUG({
     LDBG("Found " << loadOpToIndLevelAndUse.size() << " loads to pipeline:");
-    for (const auto &[k, v] : loadOpToIndLevelAndUse) {
-      LDBG("  - indirection level: " << v.first);
-      LDBG("    op to pipeline: " << *k);
-      LDBG("    use: " << *v.second);
+    for (const auto &[l, i, u] : loadOpToIndLevelAndUse) {
+      LDBG("  - load: " << *l);
+      LDBG("    at indirection level: " << i);
+      LDBG("    used by op: " << *u);
     }
   });
   if (loadOpToIndLevelAndUse.empty())
@@ -487,30 +495,34 @@ static bool createCoarseSchedule(
 
   // Calculate the stage distance between applicable loads.
   int maxIndirectionLevel = -1;
-  for (tt::LoadOp op : loadsToPipeline) {
-    maxIndirectionLevel =
-        std::max(maxIndirectionLevel, loadOpToIndLevelAndUse[op].first);
+  for (auto [loadOp, dist, use] : loadOpToIndLevelAndUse) {
+    if (loadsToPipeline.count(loadOp) == 0)
+      continue;
+    maxIndirectionLevel = std::max(maxIndirectionLevel, dist);
   }
   unsigned stagesBetweenLoads =
       ceil<unsigned>(numStages - 2, maxIndirectionLevel + 1);
 
   // Put the root uses of the loads in the last stage.
-  for (auto &[loadOp, distAndUse] : loadOpToIndLevelAndUse) {
+  for (auto &[loadOp, dist, use] : loadOpToIndLevelAndUse) {
     // Non-LoadOp(s) are the root uses of all LoadOp(s) and should be
     // always present in the opInfo
-    if (!isa<tt::LoadOp>(distAndUse.second))
-      opToStage[distAndUse.second] = numStages - 1;
+    if (!isa<tt::LoadOp>(use))
+      opToStage[use] = numStages - 1;
   }
 
   // Assign stages to the loads.
-  for (tt::LoadOp op : loadsToPipeline) {
-    opToStage[op] = loadOpToIndLevelAndUse[op].first * stagesBetweenLoads;
+  for (auto [loadOp, dist, use] : loadOpToIndLevelAndUse) {
+    if (loadsToPipeline.count(loadOp) == 0)
+      continue;
+    opToStage[loadOp] = dist * stagesBetweenLoads;
   }
 
   // Distance from the load to the use.
-  for (tt::LoadOp op : loadsToPipeline) {
-    loadToInfo[op].distToUse =
-        opToStage[loadOpToIndLevelAndUse[op].second] - opToStage[op];
+  for (auto [loadOp, dist, use] : loadOpToIndLevelAndUse) {
+    if (loadsToPipeline.count(loadOp) == 0)
+      continue;
+    loadToInfo[loadOp].distToUse = opToStage[use] - opToStage[loadOp];
   }
 
   return true;
@@ -732,10 +744,6 @@ createSchedule(scf::ForOp forOp, int numStages,
 
   // Create the actual schedule
   std::vector<std::pair<Operation *, unsigned>> schedule;
-  // Schedule everything still without stage to `numStage - 1`.
-  tt::addOps(forOp, numStages - 1, schedule, [&](Operation *op) {
-    return (allAnchorsAndDeps.count(op) == 0 && allStage1Deps.count(op) == 0);
-  });
 
   // Schedule dependencies with distance of 1 into stage 1 to reduce pressure.
   // Insert the ops in the reverse order of the stages. This helps with saving
@@ -750,6 +758,14 @@ createSchedule(scf::ForOp forOp, int numStages,
     auto &group = anchorOpsAndDeps[i];
     tt::addOps(forOp, i, schedule,
                [&](Operation *op) { return group.count(op); });
+
+    if (i == numStages - 1) {
+      // Schedule everything still without stage to `numStage - 1`.
+      tt::addOps(forOp, numStages - 1, schedule, [&](Operation *op) {
+        return (allAnchorsAndDeps.count(op) == 0 &&
+                allStage1Deps.count(op) == 0);
+      });
+    }
   }
 
   /*
