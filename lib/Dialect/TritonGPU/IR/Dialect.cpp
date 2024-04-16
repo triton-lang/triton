@@ -1999,7 +1999,10 @@ Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
   unsigned kWidth = 0;
   Attribute _kWidth = attrs.get("kWidth");
   if (_kWidth) {
-    if (!mmaParent || mmaParent.isVolta()) {
+    bool isAmdWithKWidth =
+        parent.isa<AMDMfmaEncodingAttr>() || parent.isa<AMDWmmaEncodingAttr>();
+    bool isNvidiaWithKWidth = mmaParent && !mmaParent.isVolta();
+    if (!isAmdWithKWidth && !isNvidiaWithKWidth) {
       auto loc = parser.getNameLoc();
       parser.emitError(loc, "kWidth only supported for MMAv2+ parent");
       return Attribute();
@@ -2014,10 +2017,14 @@ Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
-  auto mmaParent = mlir::dyn_cast<NvidiaMmaEncodingAttr>(getParent());
+  auto parent = getParent();
+  auto mmaParent = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent);
   printer << "<{"
           << "opIdx = " << getOpIdx() << ", parent = " << getParent();
-  if (mmaParent && mmaParent.isAmpere())
+  bool isAmdWithKWidth =
+      parent.isa<AMDMfmaEncodingAttr>() || parent.isa<AMDWmmaEncodingAttr>();
+  bool isNvidiaWithKWidth = mmaParent && mmaParent.isAmpere();
+  if (isAmdWithKWidth || isNvidiaWithKWidth)
     printer << ", kWidth = " << getKWidth();
   printer << "}>";
 }
