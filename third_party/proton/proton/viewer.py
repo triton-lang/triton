@@ -187,7 +187,7 @@ There are two modes:
         "-d",
         "--depth",
         type=int,
-        default=None,
+        default=100,
         help="The depth of the tree to display",
     )
 
