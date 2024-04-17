@@ -1,3 +1,16 @@
+# Triton-CPU
+
+A long-lived development branch to build an experimental CPU backend for [Triton](https://github.com/openai/triton).
+
+This repository clones the main Triton repository, but we intend to minimize
+divergences in the core (and ideally upstream anything that needs to change and
+isn't too CPU-specific).  Most of the CPU work should be in a backend
+subdirectory (similar to how GPU vendors are supported today).  We're starting
+with a clone to give ourselves maximum development flexibility as this project
+gets off the ground!
+
+# Upstream README
+
 <div align="center">
   <img src="https://cdn.openai.com/triton/assets/triton-logo.png" alt="Triton logo" width="88" height="100">
 </div>
