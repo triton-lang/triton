@@ -105,6 +105,9 @@ def matmul_no_scf_kernel(a_ptr, b_ptr, c_ptr,  #
     ] for USE_TMA_EPILOGUE in [True, False]]))
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
 def test_gemm_no_scf(M, N, K, NUM_CTAS, NUM_WARPS, TRANS_A, TRANS_B, OUTPUT_TYPE, USE_TMA_EPILOGUE):
+    if is_hip() and NUM_CTAS > 1:
+        pytest.skip("NUM_CTAS > 1 is not supported in HIP backend")
+
     if (TRANS_A):
         a = torch.randn((K, M), device='cuda', dtype=torch.float16).T
     else:
@@ -119,11 +122,6 @@ def test_gemm_no_scf(M, N, K, NUM_CTAS, NUM_WARPS, TRANS_A, TRANS_B, OUTPUT_TYPE
     else:
         c = torch.empty((M, N), device=a.device, dtype=torch.float32)
 
-    # input "num_ctas" is specific for nvidia backend
-    kwargs = {}
-    if not is_hip():
-        kwargs["num_ctas"] = NUM_CTAS
-
     matmul_no_scf_kernel[(1, 1)](
         a_ptr=a, b_ptr=b, c_ptr=c,  #
         M=M, N=N, K=K,  #
@@ -132,6 +130,7 @@ def test_gemm_no_scf(M, N, K, NUM_CTAS, NUM_WARPS, TRANS_A, TRANS_B, OUTPUT_TYPE
         stride_cm=c.stride(0), stride_cn=c.stride(1),  #
         BLOCK_M=M, BLOCK_N=N, BLOCK_K=K,  #
         num_warps=NUM_WARPS,  #
+        num_ctas=NUM_CTAS,  #
         FLOAT16_OUTPUT=(OUTPUT_TYPE == "float16"),  #
         USE_TMA_EPILOGUE=USE_TMA_EPILOGUE)
     a_f32 = a.to(torch.float32)
@@ -340,6 +339,9 @@ def test_gemm(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, 
     ]:
         pytest.skip('Known legacy issue, ldmatrix can only support x4')
 
+    if is_hip() and NUM_CTAS > 1:
+        pytest.skip("NUM_CTAS > 1 is not supported in HIP backend")
+
     if epilogue == 'add-rows' and NUM_CTAS > 1:
         pytest.skip('known failure: error getCTAsPerCGA for SliceEncodingAttr is not well-defined.')
 
@@ -419,11 +421,6 @@ def test_gemm(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, 
     def grid(META):
         return (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), )
 
-    # input "num_ctas" is specific for nvidia backend
-    kwargs = {}
-    if not is_hip():
-        kwargs["num_ctas"] = NUM_CTAS
-
     pgm = matmul_kernel[grid](
         a_ptr=a, b_ptr=b, w_ptr=w, bias_ptr=bias, z_ptr=z,  #
         M=M, N=N, K=K,  #
@@ -443,7 +440,7 @@ def test_gemm(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, 
         B_ORDER_0=b_order[0], B_ORDER_1=b_order[1],  #
         W_ORDER_0=w_order[0], W_ORDER_1=w_order[1],  #
         Z_ORDER_0=z_order[0], Z_ORDER_1=z_order[1],  #
-        num_warps=NUM_WARPS, num_stages=NUM_STAGES, **kwargs)
+        num_warps=NUM_WARPS, num_ctas=NUM_CTAS, num_stages=NUM_STAGES)
 
     torch.set_printoptions(profile="full")
     golden = torch.nn.functional.normalize(golden)
@@ -451,9 +448,11 @@ def test_gemm(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, 
     assert_close(z, golden, rtol=1e-2, atol=1e-3, check_dtype=False)
 
     # check is cuda backend specific
-    if not is_hip():
-        disable_mmav3 = os.environ.get('DISABLE_MMA_V3', 'not found').lower()
-        if disable_mmav3 not in ["on", "true", "1"] and BLOCK_M >= 64 and NUM_CTAS == 1 and BLOCK_N <= 256:
-            ptx = pgm.asm['ptx']
-            wgmma_n = int(max(BLOCK_N / max(NUM_WARPS / max(BLOCK_M / 16, 1), 1), 8))
-            assert re.search(r'wgmma.mma_async.sync.aligned.m\d+n{}k16(?:.row.col)?.f32.f16.f16'.format(wgmma_n), ptx)
+    if is_hip():
+        return
+
+    disable_mmav3 = os.environ.get('DISABLE_MMA_V3', 'not found').lower()
+    if disable_mmav3 not in ["on", "true", "1"] and BLOCK_M >= 64 and NUM_CTAS == 1 and BLOCK_N <= 256:
+        ptx = pgm.asm['ptx']
+        wgmma_n = int(max(BLOCK_N / max(NUM_WARPS / max(BLOCK_M / 16, 1), 1), 8))
+        assert re.search(r'wgmma.mma_async.sync.aligned.m\d+n{}k16(?:.row.col)?.f32.f16.f16'.format(wgmma_n), ptx)
