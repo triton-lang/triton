@@ -32,12 +32,9 @@ import triton
 import triton.language as tl
 
 
-def is_hip():
-    return triton.runtime.driver.active.get_current_target()[0] == "hip"
-
-
-def get_target():
-    return triton.runtime.driver.active.get_current_target()
+def is_hip_mi200():
+    target = triton.runtime.driver.active.get_current_target()
+    return target[0] == 'hip' and target[1] == 'gfx90a'
 
 
 @triton.autotune(
@@ -329,7 +326,10 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     tri_dq, q.grad = q.grad.clone(), None
     # compare
     assert torch.allclose(ref_out, tri_out, atol=1e-2, rtol=0)
-    atol = 4e-2 if is_hip() and get_target()[1] == 'gfx90a' else 1e-2
+    # Bigger tolerance for AMD MI200 devices.
+    # MI200 devices use reduced precision fp16 and bf16 and flush input and
+    # output denormal values to zero. Detailed info is at: https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
+    atol = 4e-2 if is_hip_mi200() else 1e-2
     assert torch.allclose(ref_dv, tri_dv, atol=atol, rtol=0)
     assert torch.allclose(ref_dk, tri_dk, atol=1e-2, rtol=0)
     assert torch.allclose(ref_dq, tri_dq, atol=1e-2, rtol=0)
