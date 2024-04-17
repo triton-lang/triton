@@ -5,12 +5,9 @@ import triton
 import triton.ops
 
 
-def is_hip():
-    return triton.runtime.driver.active.get_current_target()[0] == 'hip'
-
-
-def get_target():
-    return triton.runtime.driver.active.get_current_target()
+def is_hip_mi200():
+    target = triton.runtime.driver.active.get_current_target()
+    return target[0] == 'hip' and target[1] == 'gfx90a'
 
 
 def sparsify_tensor(x, mask, block):
@@ -92,10 +89,11 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, device, Z=3, H=2, M=512, N
     c_tri.backward(dc_tri)
     da_tri = a_tri.grad
     db_tri = b_tri.grad
-    tol = {}
-    if is_hip() and get_target()[1] == 'gfx90a':
-        tol["atol"] = 1e-3
-        tol["rtol"] = 0
+
+    # Bigger tolerance for AMD MI200 devices.
+    # MI200 devices use reduced precision fp16 and bf16 and flush input and
+    # output denormal values to zero. Detailed info is at: https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
+    tol = {'atol': 1e-3, 'rtol': 0} if is_hip_mi200() else {}
 
     # compare
     torch.testing.assert_close(c_ref, c_tri, **tol)
@@ -209,10 +207,11 @@ def test_attention_fwd_bwd(
     # comparison
     # print(f"Triton loss {loss} and torch loss {torch_loss}.  Also checking grads...")
     torch.testing.assert_close(loss, torch_loss, atol=1e-3, rtol=0)
-    tol = {}
-    if is_hip() and get_target()[1] == 'gfx90a':
-        tol["atol"] = 1e-3
-        tol["rtol"] = 0
+
+    # Bigger tolerance for AMD MI200 devices.
+    # MI200 devices use reduced precision fp16 and bf16 and flush input and
+    # output denormal values to zero. Detailed info is at: https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
+    tol = {'atol': 1e-3, 'rtol': 0} if is_hip_mi200() else {}
     for g1, g2 in zip(grads, torch_grads):
         torch.testing.assert_close(g1, g2, **tol)
 
