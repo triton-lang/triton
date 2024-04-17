@@ -313,7 +313,8 @@ jobs:
           # Run hopper tests
           python3 -m pytest -vs hopper/test_mixed_io.py \
                                 hopper/test_gemm.py \
-                                hopper/test_tma_store_gemm.py
+                                hopper/test_tma_store_gemm.py \
+                                hopper/test_persistent_warp_specialized_fused-attention.py
 
       - name: Run C++ unittests
         run: |
