@@ -28,7 +28,7 @@ Extra Credits:
 - Original flash attention paper (https://arxiv.org/abs/2205.14135)
 - Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
 
-.. GENERATED FROM PYTHON SOURCE LINES 13-659
+.. GENERATED FROM PYTHON SOURCE LINES 13-665
 
 
 
@@ -77,39 +77,39 @@ Extra Credits:
 
     fused-attention-batch4-head48-d64-fwd-causal=True-fp8=False:
          N_CTX      Triton
-    0   1024.0  119.217383
-    1   2048.0  144.376136
-    2   4096.0  158.141987
-    3   8192.0  169.190884
-    4  16384.0  174.530679
+    0   1024.0  119.336348
+    1   2048.0  144.201517
+    2   4096.0  157.512521
+    3   8192.0  167.058679
+    4  16384.0  172.424023
     fused-attention-batch4-head48-d64-fwd-causal=True-fp8=True:
          N_CTX      Triton
-    0   1024.0   97.962794
-    1   2048.0  118.576897
-    2   4096.0  129.555193
-    3   8192.0  134.755340
-    4  16384.0  137.850668
+    0   1024.0   98.005708
+    1   2048.0  117.525855
+    2   4096.0  129.146583
+    3   8192.0  134.523202
+    4  16384.0  138.001272
     fused-attention-batch4-head48-d64-fwd-causal=False-fp8=False:
          N_CTX      Triton
-    0   1024.0  159.139392
-    1   2048.0  168.158849
-    2   4096.0  172.922161
-    3   8192.0  175.604856
-    4  16384.0  178.066634
+    0   1024.0  159.624946
+    1   2048.0  168.114418
+    2   4096.0  173.162159
+    3   8192.0  175.601040
+    4  16384.0  178.071566
     fused-attention-batch4-head48-d64-fwd-causal=False-fp8=True:
          N_CTX      Triton
-    0   1024.0  136.444656
-    1   2048.0  144.634414
-    2   4096.0  149.086965
-    3   8192.0  150.336632
-    4  16384.0  149.400556
+    0   1024.0  136.409915
+    1   2048.0  144.847428
+    2   4096.0  149.234864
+    3   8192.0  150.326112
+    4  16384.0  150.984914
     fused-attention-batch4-head48-d64-bwd-causal=True-fp8=False:
          N_CTX      Triton
-    0   1024.0   75.457645
-    1   2048.0  100.585003
-    2   4096.0  118.268026
-    3   8192.0  129.212885
-    4  16384.0  135.735707
+    0   1024.0   75.759692
+    1   2048.0  100.078630
+    2   4096.0  118.160753
+    3   8192.0  129.199062
+    4  16384.0  136.348169
 
 
 
@@ -679,9 +679,14 @@ Extra Credits:
         tri_dq, q.grad = q.grad.clone(), None
         # compare
         assert torch.allclose(ref_out, tri_out, atol=1e-2, rtol=0)
-        assert torch.allclose(ref_dv, tri_dv, atol=1e-2, rtol=0)
-        assert torch.allclose(ref_dk, tri_dk, atol=1e-2, rtol=0)
-        assert torch.allclose(ref_dq, tri_dq, atol=1e-2, rtol=0)
+        rtol = 0.0
+        # Relative tolerance workaround for known hardware limitation of MI200 GPU.
+        # For detailss see https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
+        if torch.version.hip is not None and triton.runtime.driver.active.get_current_target()[1] == "gfx90a":
+            rtol = 1e-2
+        assert torch.allclose(ref_dv, tri_dv, atol=1e-2, rtol=rtol)
+        assert torch.allclose(ref_dk, tri_dk, atol=1e-2, rtol=rtol)
+        assert torch.allclose(ref_dq, tri_dq, atol=1e-2, rtol=rtol)
 
 
     try:
@@ -764,13 +769,14 @@ Extra Credits:
         return total_flops / ms * 1e-9
 
 
-    # only works on post-Ampere GPUs right now
-    bench_flash_attention.run(save_path=".", print_data=True)
+    if __name__ == "__main__":
+        # only works on post-Ampere GPUs right now
+        bench_flash_attention.run(save_path=".", print_data=True)
 
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 27.932 seconds)
+   **Total running time of the script:** (0 minutes 27.934 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:
