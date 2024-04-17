@@ -1,11 +1,24 @@
 # fmt: off
 
 
+import os
 import numpy as np
 import torch
 import pytest
 import triton
 import triton.language as tl
+
+def is_interpreter():
+    return os.environ.get('TRITON_INTERPRET', '0') == '1'
+
+def is_cuda():
+    return not is_interpreter() and triton.runtime.driver.active.get_current_target()[0] == "cuda"
+
+def is_hip():
+    return not is_interpreter() and triton.runtime.driver.active.get_current_target()[0] == "hip"
+
+def is_on_mi300():
+    return is_hip() and triton.runtime.driver.active.get_current_target()[1] in ('gfx940', 'gfx941', 'gfx942')
 
 def matching_int(dtype):
     if dtype.primitive_bitwidth == 8:
@@ -318,13 +331,13 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
 ])
 def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
 
-    if src_dtype != 'float32' and torch.version.hip is None and torch.cuda.get_device_capability(0) < (9, 0):
+    if src_dtype != 'float32' and is_cuda() and torch.cuda.get_device_capability(0) < (9, 0):
         pytest.skip("non-float32 downcast tests only supported on NVGPU with compute capability 9.0+")
 
-    if (dst_dtype == 'float8e5' or dst_dtype == 'float8e4nv') and rounding == 'rtne' and (torch.version.hip is not None or torch.cuda.get_device_capability(0) < (9, 0)):
+    if (dst_dtype == 'float8e5' or dst_dtype == 'float8e4nv') and rounding == 'rtne' and (is_hip() or torch.cuda.get_device_capability(0) < (9, 0)):
         pytest.skip("float8e5 and float8e4nv downcast with RTNE rounding tests only supported on NVGPU with compute capability 9.0+")
 
-    if (dst_dtype == 'float8e5b16' or dst_dtype == 'float8e4b8') and rounding == 'rtne' and (torch.version.hip is None or torch.cuda.get_device_capability(0) != (9, 4)):
+    if (dst_dtype == 'float8e5b16' or dst_dtype == 'float8e4b8') and rounding == 'rtne' and (is_cuda() or not is_on_mi300()):
         pytest.skip("float8e5b16 and float8e4b8 downcast with RTNE rounding tests only supported on AMDGPU MI300")
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias)

@@ -271,6 +271,8 @@ private:
 namespace mlir {
 namespace triton {
 
+// TODO: Clean up the code regarding usage of computeCapability
+// We need to converge on how we define that for AMDGPU
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonAMDGPUToLLVMPass() {
   return std::make_unique<ConvertTritonAMDGPUToLLVM>(90);
 }

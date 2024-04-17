@@ -1,3 +1,3 @@
 from . import cuda
 
-__all__ = ['cuda', 'hip']
+__all__ = ['cuda']

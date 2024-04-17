@@ -19,9 +19,11 @@ namespace {
 // ROCM utility functions for data type conversion
 /* ----- FP8E5M2 ------ */
 // This data-type is the standard FP8E5M2 format
-// This function is not fully functional for the denorm values
-// And currently it is not used as we don't have HW native support on
-// MI300. We will rewrite it if upstream adds the support for A100
+// NVIDIA GPU supports it natively but we don't have hardware native
+// support on MI300.
+// The SW based downcast with RTNE is not fully functional for the
+// denorm values. We need rewrite it if we need to emulate this data type
+// on AMDGPU.
 static SmallVector<Value>
 Fp16_to_Fp8E5M2_RTNE(Location loc, ConversionPatternRewriter &rewriter,
                      const SmallVector<Value> &v) {
@@ -110,7 +112,7 @@ static SmallVector<Value> cvtFp8ToFp32(Location loc,
                                        ConversionPatternRewriter &rewriter,
                                        Value v0, Value v1,
                                        const std::string &fp8_format) {
-  assert(fp8_format == "fp8" or fp8_format == "bf8");
+  assert(fp8_format == "fp8" || fp8_format == "bf8");
   std::string ins_str = "v_cvt_pk_f32_" + fp8_format;
 
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
@@ -140,7 +142,7 @@ static SmallVector<Value> cvtFp32ToFp8(Location loc,
                                        ConversionPatternRewriter &rewriter,
                                        Value v0, Value v1,
                                        const std::string &fp8_format) {
-  assert(fp8_format == "fp8" or fp8_format == "bf8");
+  assert(fp8_format == "fp8" || fp8_format == "bf8");
   std::string ins_str = "v_cvt_pk_" + fp8_format + "_f32";
 
   GCNBuilder builder;
@@ -163,7 +165,7 @@ static SmallVector<Value> cvtFp32ToFp8(Location loc,
 static SmallVector<Value>
 convert_val_Fp16_to_Fp8(Location loc, ConversionPatternRewriter &rewriter,
                         Value v0, Value v1, const std::string &fp8_format) {
-  assert(fp8_format == "fp8" or fp8_format == "bf8");
+  assert(fp8_format == "fp8" || fp8_format == "bf8");
   std::string ins_str = "v_cvt_pk_" + fp8_format + "_f32";
 
   auto f32_0 = cvtFp16ToFp32(loc, rewriter, v0);
@@ -297,40 +299,40 @@ static Value convertBf16ToFp32(Location loc,
   auto as_int16 = bitcast(v, i16_ty);
   auto as_int32 = zext(i32_ty, as_int16);
   auto shifted = shl(i32_ty, as_int32, i32_val(16));
-  return (bitcast(shifted, f32_ty));
+  return bitcast(shifted, f32_ty);
 }
 
 static Value convertFp32ToBf16(Location loc,
                                ConversionPatternRewriter &rewriter,
                                const Value &v, const RoundingMode rounding) {
-  if (rounding == RoundingMode::RTNE) {
-    auto as_uint32 = bitcast(v, i32_ty);
-    auto check_exponent =
-        and_(i32_ty, xor_(i32_ty, as_uint32, i32_val(0xffffffff)),
-             i32_val(0x7f800000));
-    auto exponent_not_all1s = icmp_ne(check_exponent, i32_val(0));
-    auto exponent_all1s = icmp_eq(check_exponent, i32_val(0));
-    auto rounded =
-        add(i32_ty, i32_val(0x7fff),
-            and_(i32_ty, lshr(i32_ty, as_uint32, i32_val(16)), i32_val(1)));
-    rounded = add(i32_ty, rounded, as_uint32);
-    auto res = select(exponent_not_all1s, rounded, as_uint32);
-
-    auto preserve_nan =
-        and_(i1_ty, exponent_all1s,
-             icmp_ne(and_(i32_ty, as_uint32, i32_val(0xffff)), i32_val(0)));
-    auto nan = or_(i32_ty, as_uint32, i32_val(0x10000));
-    res = select(preserve_nan, nan, res);
-
-    auto shifted = lshr(i32_ty, res, i32_val(16));
-    auto truncated = trunc(i16_ty, shifted);
-    return truncated;
-  } else { // if (rounding == RoundingMode::RTZ)
+  if (rounding == RoundingMode::RTZ) {
     auto as_int32 = bitcast(v, i32_ty);
     auto shifted = lshr(i32_ty, as_int32, i32_val(16));
     auto truncated = trunc(i16_ty, shifted);
-    return (bitcast(truncated, i16_ty));
+    return bitcast(truncated, i16_ty);
   }
+  // Otherwise it is (rounding == RoundingMode::RTNE)
+  auto as_uint32 = bitcast(v, i32_ty);
+  auto check_exponent =
+      and_(i32_ty, xor_(i32_ty, as_uint32, i32_val(0xffffffff)),
+           i32_val(0x7f800000));
+  auto exponent_not_all1s = icmp_ne(check_exponent, i32_val(0));
+  auto exponent_all1s = icmp_eq(check_exponent, i32_val(0));
+  auto rounded =
+      add(i32_ty, i32_val(0x7fff),
+          and_(i32_ty, lshr(i32_ty, as_uint32, i32_val(16)), i32_val(1)));
+  rounded = add(i32_ty, rounded, as_uint32);
+  auto res = select(exponent_not_all1s, rounded, as_uint32);
+
+  auto preserve_nan =
+      and_(i1_ty, exponent_all1s,
+           icmp_ne(and_(i32_ty, as_uint32, i32_val(0xffff)), i32_val(0)));
+  auto nan = or_(i32_ty, as_uint32, i32_val(0x10000));
+  res = select(preserve_nan, nan, res);
+
+  auto shifted = lshr(i32_ty, res, i32_val(16));
+  auto truncated = trunc(i16_ty, shifted);
+  return truncated;
 }
 
 static Value Fp8E5M2FNUZ_to_Fp16_oneValue(Location loc,
@@ -840,16 +842,9 @@ struct FpToFpOpConversion
     return cvtFp16ToFp32(loc, rewriter, v);
   }
 
-  static Value convertFp32ToFp16NZ(Location loc,
-                                   ConversionPatternRewriter &rewriter,
-                                   const Value &v) {
-
-    // TODO: Do we need RTZ here??
-    return cvtFp32ToFp16(loc, rewriter, v, RoundingMode::RTNE);
-  }
-
-  ConverterT getConversionFunc(Type srcTy, Type dstTy,
-                               std::optional<RoundingMode> roundingMode) const {
+  mlir::FailureOr<ConverterT>
+  getConversionFunc(Type srcTy, Type dstTy,
+                    std::optional<RoundingMode> roundingMode) const {
     auto F8E4M3B15TyID = TypeID::get<mlir::Float8E4M3B11FNUZType>();
     auto F8E4M3FNUZTyID = TypeID::get<mlir::Float8E4M3FNUZType>();
     auto F8E5M2FNUZTyID = TypeID::get<mlir::Float8E5M2FNUZType>();
@@ -900,15 +895,9 @@ struct FpToFpOpConversion
         srcTy.getTypeID(), dstTy.getTypeID(),
         roundingMode.value_or(undefRounding)};
     if (srcMap.count(key) == 0) {
-      llvm::errs() << "Unsupported conversion from " << srcTy << " to "
-                   << dstTy;
-      if (roundingMode.has_value())
-        llvm::errs() << " with rounding mode "
-                     << stringifyRoundingMode(roundingMode.value());
-      llvm::errs() << "\n";
-      llvm::report_fatal_error("Unsupported rounding mode for conversion.");
+      return mlir::failure();
     }
-    return srcMap.lookup(key);
+    return mlir::FailureOr(srcMap.lookup(key));
   }
 
   SmallVector<Value> createDestOps(triton::FpToFpOp op, OpAdaptor adaptor,
@@ -966,8 +955,21 @@ struct FpToFpOpConversion
     inVals.resize(numElements, undef(typeConverter->convertType(srcType)));
     SmallVector<Value> outVals;
     if (srcType != dstType) {
-      auto cvtFunc = getConversionFunc(srcType, dstType, roundingMode);
-      outVals = cvtFunc(loc, rewriter, inVals);
+      auto getCvtFunc = getConversionFunc(srcType, dstType, roundingMode);
+      if (failed(getCvtFunc)) {
+        std::string err_msg;
+        llvm::raw_string_ostream errs(err_msg);
+        errs << "Unsupported conversion from " << srcType << " to " << dstType;
+        if (roundingMode.has_value())
+          errs << " with rounding mode "
+               << stringifyRoundingMode(roundingMode.value());
+        errs << "\n";
+        mlir::emitError(loc, err_msg);
+        llvm::report_fatal_error("Unsupported rounding mode for conversion.");
+      } else {
+        auto cvtFunc = getCvtFunc.value();
+        outVals = cvtFunc(loc, rewriter, inVals);
+      }
     } else {
       outVals = inVals;
     }
