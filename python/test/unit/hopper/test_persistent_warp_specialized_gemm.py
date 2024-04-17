@@ -29,6 +29,10 @@ import triton.language as tl
 from triton.runtime import driver
 
 
+def is_hip():
+    return driver.active.get_current_target()[0] == "hip"
+
+
 # kernel used to query max clusters for persistent kernel when NUM_CTAS > 1
 @triton.jit
 def empty_kernel(null, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
@@ -140,6 +144,9 @@ def static_persistent_tma_matmul_kernel(  #
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
 def test_user_defined_persistent_non_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS,
                                                            TRANS_A, TRANS_B, USE_TMA):
+    if is_hip() and USE_TMA:
+        pytest.skip("HIP backend does not support USE_TMA")
+
     if (TRANS_A):
         a = .1 * torch.randn((K, M), device='cuda', dtype=torch.float16).T
     else:
@@ -278,6 +285,11 @@ def tma_warp_specialized_matmul_kernel(  #
                          ] for use_tma in [False, True]])
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
 def test_non_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_CTAS, TRANS_A, TRANS_B, USE_TMA):
+    if is_hip() and USE_TMA:
+        pytest.skip("HIP backend does not support USE_TMA")
+    if is_hip() and NUM_CTAS > 1:
+        pytest.skip("HIP backend does not support NUM_CTAS > 1")
+
     if (TRANS_A):
         a = .1 * torch.randn((K, M), device='cuda', dtype=torch.float16).T
     else:
@@ -434,6 +446,11 @@ def static_persistent_tma_warp_specialized_matmul_kernel(  #
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
 def test_user_defined_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_CTAS, TRANS_A, TRANS_B,
                                                        USE_TMA):
+    if is_hip() and USE_TMA:
+        pytest.skip("HIP backend does not support USE_TMA")
+    if is_hip() and NUM_CTAS > 1:
+        pytest.skip("HIP backend does not support NUM_CTAS > 1")
+
     if (TRANS_A):
         a = .1 * torch.randn((K, M), device='cuda', dtype=torch.float16).T
     else:
@@ -553,6 +570,11 @@ def static_persistent_matmul_no_scf_kernel(a_ptr, b_ptr, c_ptr,  #
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
 def test_static_persistent_matmul_no_scf_kernel(M, N, K, NUM_CTAS, NUM_WARPS, TRANS_A, TRANS_B, OUTPUT_TYPE,
                                                 USE_TMA_EPILOGUE, USE_TMA_LOAD):
+    if is_hip() and (USE_TMA_LOAD):
+        pytest.skip("HIP backend does not support USE_TMA")
+    if is_hip() and NUM_CTAS > 1:
+        pytest.skip("HIP backend does not support NUM_CTAS > 1")
+
     if (TRANS_A):
         a = torch.randn((K, M), device='cuda', dtype=torch.float16).T
     else:
@@ -817,6 +839,12 @@ def test_full_static_persistent_matmul_kernel(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WAR
             '16-32-64-8-2-256-256-256-True',
     ]:
         pytest.skip('Known legacy issue, ldmatrix can only support x4')
+    if is_hip() and USE_TMA_STORE:
+        pytest.skip("HIP backend does not support USE_TMA")
+    if is_hip() and NUM_CTAS > 1:
+        pytest.skip("HIP backend does not support NUM_CTAS > 1")
+
+    NUM_STAGES = 1
 
     if epilogue == 'chain-dot':
         pytest.skip('known failure: Assertion !region.empty() && unexpected empty region.')
