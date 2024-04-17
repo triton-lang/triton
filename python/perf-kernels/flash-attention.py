@@ -106,8 +106,7 @@ class MetaData():
         assert q.shape[-1] == k.shape[-1] and q.shape[-1] == v.shape[-1]
         # TODO: Change assert if we support qkl f8 and v f16
         assert q.dtype == k.dtype and q.dtype == v.dtype
-        # TODO: Fix assert to check head size <=256 once supported
-        assert head_size <= 128
+        assert head_size <= 256
         assert o.shape == q.shape
         assert (nheads_q % nheads_k) == 0
 
@@ -268,6 +267,7 @@ def _attn_fwd_inner(
        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': True}, num_stages=1, num_warps=4),
        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False}, num_stages=1, num_warps=4),
        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'waves_per_eu': 4, 'PRE_LOAD_V': False}, num_stages=1, num_warps=8),
+       triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1, num_warps=4),
        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'waves_per_eu': 4, 'PRE_LOAD_V': False}, num_stages=1, num_warps=8),
        # TODO: This config fails with head_size not pow2 with data mismatches. Check why.
     #    triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1, num_warps=4),
@@ -847,7 +847,7 @@ class _attention(torch.autograd.Function):
             o_strides = (o.stride(0), o.stride(1), o.stride(2), o.stride(3))
 
         # Get closest power of 2 over or equal to 32.
-        unpadded_head_dims = {32, 64, 128}
+        unpadded_head_dims = {32, 64, 128, 256}
         if head_size not in unpadded_head_dims:
             padded_d_model = None
             for i in unpadded_head_dims:
