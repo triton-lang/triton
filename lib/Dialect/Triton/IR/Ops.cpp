@@ -594,6 +594,19 @@ llvm::SmallVector<Type> ScanOp::getElementTypes() {
 
 unsigned ScanOp::getNumOperands() { return this->getOperands().size(); }
 
+//-- MapElementwiseOp
+LogicalResult MapElementwiseOp::verify() {
+  if (getOperands().empty()) {
+    return emitOpError() << "MapElementwiseOp must have at least 1 operand";
+  }
+  return success();
+}
+
+LogicalResult MapElementwiseOp::verifyRegions() {
+  // TODO
+  return success();
+}
+
 //-- SplatOp --
 OpFoldResult SplatOp::fold(FoldAdaptor adaptor) {
   auto value = adaptor.getSrc();
