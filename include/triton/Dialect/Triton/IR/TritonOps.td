@@ -797,6 +797,27 @@ def TT_ScanReturnOp: TT_Op<"scan.return",
     let assemblyFormat = "$result attr-dict `:` type($result)";
 }
 
+//
+// Map Elementwise op
+//
+def TT_MapElementwiseOp: TT_Op<"map_elementwise", [Elementwise,
+                                                   SameOperandsAndResultEncoding,
+                                                   SameOperandsAndResultShape,
+                                                   RecursiveMemoryEffects]> {
+    let summary = "Map a scalar subregion over a tensor";
+    let arguments = (ins Variadic<TT_Tensor>:$srcs);
+    let results = (outs Variadic<TT_Tensor>:$result);
+    let regions = (region AnyRegion:$scalarOp);
+    let hasVerifier = 1;
+    let hasRegionVerifier = 1;
+}
+
+def TT_MapElementwiseReturnOp: TT_Op<"map_elementwise.return",
+                               [HasParent<"MapElementwiseOp">, Pure, Terminator, ReturnLike]> {
+    let summary = "terminator for map elementwise operator";
+    let arguments = (ins Variadic<AnyType>:$result);
+    let assemblyFormat = "$result attr-dict `:` type($result)";
+}
 
 //
 // External Elementwise op

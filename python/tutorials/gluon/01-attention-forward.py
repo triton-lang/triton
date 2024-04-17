@@ -598,32 +598,22 @@ def _attn_fwd_mma(config, chnls, descs, M, STAGE: gl.constexpr):
 
 
 @gluon.jit
-def _mask_inner(qk, mask, i: gl.constexpr):
-    mask_i_bit = mask & (1 << i) == 0
-    return gl.where(mask_i_bit, qk, -float("inf"))
-
-
-@gluon.jit
-def _mask_frag(qk, col_limit_right, s: gl.constexpr):
-    col_limit_right_s = col_limit_right - s
-    col_limit_right_cur = max(col_limit_right_s, 0)
-    mask = -1 << col_limit_right_cur
-    return _interleave_n(qk, mask, 1, _mask_inner)
-
-
-@gluon.jit
-def _mask_bits(qk, col_limit_right):
-    # FIXME: This is a more concise implementation (which compiles faster) but
-    # it results in slightly slower code due to the lack of interleaving.
-    offs_n = gl.arange(0, qk.shape[1], layout=gl.SliceLayout(0, qk.type.layout))[None, :]
-    s = offs_n & ~0xf
-    i = offs_n & 0xf
-
+def _mask_scalar(qk, col_limit_right, s, i):
     col_lim_right_s = col_limit_right - s
     col_lim_right_cur = max(col_lim_right_s, 0)
     mask = -1 << col_lim_right_cur
     mask_i_bit = (mask & (1 << i)) == 0
     return gl.where(mask_i_bit, qk, -float("inf"))
+
+
+@gluon.jit
+def _mask_bits(qk, col_limit_right):
+    # NOTE: We use map_elementiwse here in order to generate an interleaved sequence of instructions
+    # that processes one element of qk at a time. This improves ptxas's resulting SASS.
+    offs_n = gl.arange(0, qk.shape[1])[None, :]
+    s = offs_n & ~0xf
+    i = offs_n & 0xf
+    return gl.map_elementwise(_mask_scalar, qk, col_limit_right, s, i)
 
 
 @gluon.jit
@@ -638,7 +628,7 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
 
         if STAGE == 2:
             col_limit_right = (offs_m - start_n + 1)[:, None].broadcast_to(qk.shape)
-            qk = _interleave_n(qk, col_limit_right, 16, _mask_frag)
+            qk = _mask_bits(qk, col_limit_right)
 
         m_ij = gl.maximum(m_i, gl.max(qk, 1) * config.qk_scale)
         alpha = gl.exp2(m_i - m_ij)

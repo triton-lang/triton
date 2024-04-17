@@ -1646,6 +1646,15 @@ void init_triton_ir(py::module &&m) {
              }
              return self.create<ScanReturnOp>(return_values);
            })
+      .def("create_map_elementwise",
+           [](TritonOpBuilder &self, std::vector<Value> inputs,
+              std::vector<Type> returnTys) -> OpState {
+             return self.create<MapElementwiseOp>(returnTys, inputs);
+           })
+      .def("create_map_elementwise_ret",
+           [](TritonOpBuilder &self, std::vector<Value> returnVals) -> OpState {
+             return self.create<MapElementwiseReturnOp>(returnVals);
+           })
       .def("create_ptr_to_int",
            [](TritonOpBuilder &self, Value &val, Type &type) -> Value {
              return self.create<PtrToIntOp>(type, val);

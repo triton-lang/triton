@@ -51,6 +51,7 @@ _IMPORT_FROM_TRITON: List[str] = [
     "inline_asm_elementwise",
     "join",
     "load",
+    "map_elementwise",
     "maximum",
     "max_constancy",
     "max_contiguous",
