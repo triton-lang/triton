@@ -6,7 +6,6 @@ from .flags import get_profiling_on
 from triton._C.libproton import proton as libproton
 
 _local = threading.local()
-_local.scopes = []
 
 
 class scope:
@@ -71,6 +70,8 @@ def enter_scope(name: str, *, triton_op: bool = False, metrics: Optional[dict[st
     if not get_profiling_on():
         return -1
     id = libproton.record_scope()
+    if not hasattr(_local, "scopes"):
+        _local.scopes = []
     _local.scopes.append((id, name))
     if triton_op:
         libproton.enter_op(id, name)
