@@ -115,7 +115,7 @@ class Autotuner(KernelInterface):
                 return bench_res
             return do_bench(kernel_call, warmup=self.num_warmups, rep=self.num_reps, quantiles=(0.5, 0.2, 0.8))
         except OutOfResources:
-            return [float("inf"), float("inf"), float("inf")]
+            return float("inf") if self.use_cuda_graph else [float("inf"), float("inf"), float("inf")]
 
     def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
