@@ -102,7 +102,7 @@ def derive_metrics(gf, metrics, raw_metrics):
     return derived_metrics + original_metrics
 
 
-def parse(metrics, filename, include, exclude, threshold):
+def parse(metrics, filename, include, exclude, threshold, depth):
     with open(filename, "r") as f:
         gf, raw_metrics = get_raw_metrics(f)
         assert len(raw_metrics) > 0, "No metrics found in the input file"
@@ -120,12 +120,12 @@ def parse(metrics, filename, include, exclude, threshold):
             # TODO: generalize to support multiple metrics
             query = ["*", {metrics[0]: f">= {threshold}"}]
             gf = gf.filter(query, squash=True)
-        print(gf.tree(metric_column=metrics, expand_name=True))
+        print(gf.tree(metric_column=metrics, expand_name=True, depth=depth))
 
 
 def show_metrics(file_name):
     with open(file_name, "r") as f:
-        gf, raw_metrics = get_raw_metrics(f)
+        _, raw_metrics = get_raw_metrics(f)
         print("Available metrics:")
         if raw_metrics:
             print("\n".join(raw_metrics))
@@ -183,6 +183,14 @@ There are two modes:
         "Exclude frames(kernels) whose metrics are below the given threshold. This filter only applies on the first metric.",
     )
 
+    argparser.add_argument(
+        "-d",
+        "--depth",
+        type=int,
+        default=100,
+        help="The depth of the tree to display",
+    )
+
     args, target_args = argparser.parse_known_args()
     assert len(target_args) == 1, "Must specify a file to read"
 
@@ -191,9 +199,10 @@ There are two modes:
     include = args.include
     exclude = args.exclude
     threshold = args.threshold
+    depth = args.depth
     if include and exclude:
         raise ValueError("Cannot specify both include and exclude")
     if args.list:
         show_metrics(file_name)
     elif metrics:
-        parse(metrics, file_name, include, exclude, threshold)
+        parse(metrics, file_name, include, exclude, threshold, depth)

@@ -38,13 +38,9 @@ def test_triton():
         proton.start(f.name.split(".")[0])
         with proton.scope("test0"):
             with proton.scope("test1"):
-                foo[
-                    1,
-                ](x, y)
+                foo[(1, )](x, y)
         with proton.scope("test2"):
-            foo[
-                1,
-            ](x, y)
+            foo[(1, )](x, y)
         proton.finalize()
         data = json.load(f)
         assert len(data[0]["children"]) == 2
@@ -65,14 +61,49 @@ def test_metrics():
     with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
         proton.start(f.name.split(".")[0])
         with proton.scope("test0", {"foo": 1.0}):
-            foo[
-                1,
-            ](x, y)
+            foo[(1, )](x, y)
         proton.finalize()
         data = json.load(f)
         assert len(data[0]["children"]) == 1
         assert data[0]["children"][0]["frame"]["name"] == "test0"
         assert data[0]["children"][0]["metrics"]["foo"] == 1.0
+
+
+def test_metrics_ignore():
+
+    @triton.jit
+    def foo(x, y):
+        tl.store(y, tl.load(x))
+
+    x = torch.tensor([2], device="cuda")
+    y = torch.zeros_like(x)
+    with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
+        session_id = proton.start(f.name.split(".")[0])
+        proton.deactivate(session_id)
+        with proton.scope("test0", {"foo": 1.0}):
+            foo[(1, )](x, y)
+        proton.activate(session_id)
+        proton.finalize()
+        data = json.load(f)
+        assert len(data[0]["children"]) == 0
+
+
+def test_scope_backward():
+    with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
+        proton.start(f.name.split(".")[0])
+        with proton.scope("ones1"):
+            a = torch.ones((100, 100), device="cuda", requires_grad=True)
+        with proton.scope("plus"):
+            a2 = a * a * a
+        with proton.scope("ones2"):
+            loss = torch.ones_like(a2)
+
+        # Backward triggers two kernels in a single scope
+        with proton.scope("backward"):
+            a2.backward(loss)
+        proton.finalize()
+        data = json.load(f)
+        assert len(data[0]["children"]) == 4
 
 
 def test_hook():
@@ -95,9 +126,7 @@ def test_hook():
     with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
         proton.start(f.name.split(".")[0], hook="triton")
         with proton.scope("test0"):
-            foo[
-                1,
-            ](x, 1, y, num_warps=4)
+            foo[(1, )](x, 1, y, num_warps=4)
         proton.finalize()
         data = json.load(f)
         assert len(data[0]["children"]) == 1
