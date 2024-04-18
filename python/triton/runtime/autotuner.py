@@ -31,7 +31,6 @@ class Autotuner(KernelInterface):
             'top_k': number of configs to bench
             'prune_num_stages_by'(optional): a function used to prune num_stages. It takes configs:List[Config] as its input, and returns pruned configs.
         """
-        import torch
         if not configs:
             self.configs = [Config({}, num_warps=4, num_stages=2, num_ctas=1)]
         else:
@@ -80,6 +79,7 @@ class Autotuner(KernelInterface):
         self.fn = fn
         self.num_warmups = warmup
         self.num_reps = rep
+        import torch
         self.use_cuda_graph = use_cuda_graph and torch.cuda.is_available()
         self.benchmarkig_stream = torch.cuda.Stream() if self.use_cuda_graph else None
 
@@ -109,6 +109,7 @@ class Autotuner(KernelInterface):
 
         try:
             if self.use_cuda_graph:
+                import torch
                 with torch.cuda.stream(self.benchmarkig_stream):
                     bench_res = do_bench_cudagraph(kernel_call, rep=self.num_reps, return_mode="median")
                 return bench_res
