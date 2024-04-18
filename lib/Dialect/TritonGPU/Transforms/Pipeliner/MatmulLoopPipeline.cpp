@@ -495,6 +495,8 @@ static bool createCoarseSchedule(
   if (loadsToPipeline.empty())
     return false;
 
+  DenseSet<Operation *> rootUsers;
+
   // Calculate the stage distance between applicable loads.
   int maxIndirectionLevel = -1;
   for (auto [loadOp, dist, use] : loadOpToIndLevelAndUse) {
@@ -509,8 +511,10 @@ static bool createCoarseSchedule(
   for (auto &[loadOp, dist, use] : loadOpToIndLevelAndUse) {
     // Non-LoadOp(s) are the root uses of all LoadOp(s) and should be
     // always present in the opInfo
-    if (!isa<tt::LoadOp>(use))
+    if (!isa<tt::LoadOp>(use)) {
       opToStageAndOrder[use] = std::make_pair(numStages - 1, 0);
+      rootUsers.insert(use);
+    }
   }
 
   // Assign stages to the loads.
@@ -527,6 +531,53 @@ static bool createCoarseSchedule(
       continue;
     loadToInfo[loadOp].distToUse =
         opToStageAndOrder[use].first - opToStageAndOrder[loadOp].first;
+  }
+
+  // Look for the IfOp that is in the backward slice of the loads and put it in
+  // the beginning of the loop.
+  for (auto loadOp : loadsToPipeline) {
+    SetVector<Operation *> backwardSlice;
+    BackwardSliceOptions opt;
+    opt.omitBlockArguments = true;
+    getBackwardSlice((Operation *)loadOp, &backwardSlice, opt);
+
+    int loadStage = opToStageAndOrder[loadOp].first;
+    for (auto op : backwardSlice) {
+      if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+        opToStageAndOrder[ifOp] = {
+            loadStage, -2}; // -2 will be even before regular dist1uses
+      }
+    }
+  }
+
+  // Look for the IfOp that is in the forward slice of the root users and put it
+  // at the end of the loop.
+  for (auto rootUser : rootUsers) {
+    SetVector<Operation *> forwardSlice;
+    getForwardSlice(rootUser, &forwardSlice);
+
+    int stage = opToStageAndOrder[rootUser].first;
+    for (auto op : forwardSlice) {
+      scf::IfOp ifOp = dyn_cast<scf::IfOp>(op);
+      if (ifOp == nullptr) {
+        // check if the op is in the body of an if op that's part of the loop
+        auto parentOp = op->getParentOp();
+        if (parentOp != nullptr &&
+            parentOp->getParentOp() == forOp.getOperation()) {
+          ifOp = dyn_cast<scf::IfOp>(parentOp);
+        }
+      }
+      if (ifOp && !opToStageAndOrder.count(ifOp)) {
+        opToStageAndOrder[ifOp] = {stage,
+                                   2}; // 2 will be even after extracts //
+                                       // numStages-1 is so ad-hoc it hurts
+        // otherwise it does not work, because some of the dependencies are in
+        // the last stage (the dot is in the last stage after all) Right! We
+        // should not be looking throught the forward slice of the loads, but
+        // rather the forward slice of the dot (root!) op. Then it is obvious
+        // that it should go to the same stage as the root.
+      }
+    }
   }
 
   return true;
@@ -659,10 +710,13 @@ static std::vector<std::pair<Operation *, unsigned>> createSchedule(
     }
   };
 
-  const int numOrders = 2;
+  int minOrder = *llvm::min_element(
+      llvm::make_second_range(llvm::make_second_range(opToStageAndOrder)));
+  int maxOrder = *llvm::max_element(
+      llvm::make_second_range(llvm::make_second_range(opToStageAndOrder)));
 
   for (int stage = 0; stage < numStages; stage++) {
-    for (int order = 0; order < numOrders; order++) {
+    for (int order = minOrder; order <= maxOrder; order++) {
 
       DenseSet<Operation *> anchorOpsAndDeps;
       for (auto &[op, stageAndOrder] : opToStageAndOrder) {
@@ -673,11 +727,16 @@ static std::vector<std::pair<Operation *, unsigned>> createSchedule(
 
       for (auto op : anchorOpsAndDeps) {
         if (opToStageAndOrder.count(op) == 0) {
-          opToStageAndOrder[op] = {stage, std::min(0, order)};
+          opToStageAndOrder[op] = {stage, order};
         }
       }
     }
   }
+
+  minOrder = *llvm::min_element(
+      llvm::make_second_range(llvm::make_second_range(opToStageAndOrder)));
+  maxOrder = *llvm::max_element(
+      llvm::make_second_range(llvm::make_second_range(opToStageAndOrder)));
 
   LLVM_DEBUG({
     LDBG("Scheduled dependencies:");
@@ -751,6 +810,11 @@ static std::vector<std::pair<Operation *, unsigned>> createSchedule(
       printDenseSet(distanceOneUsers[order][stage]);
     });*/
   }
+
+  minOrder = *llvm::min_element(
+      llvm::make_second_range(llvm::make_second_range(opToStageAndOrder)));
+  maxOrder = *llvm::max_element(
+      llvm::make_second_range(llvm::make_second_range(opToStageAndOrder)));
 
   LLVM_DEBUG({
     LDBG("Scheduled dependencies with dist 1:");
@@ -828,8 +892,15 @@ static std::vector<std::pair<Operation *, unsigned>> createSchedule(
   // Schedule dependencies with distance of 1 into stage 1 to reduce pressure.
   // Insert the ops in the reverse order of the stages. This helps with saving
   // the number of required buffers.
-  const int minOrder = -1;
-  for (int ord = minOrder; ord < numOrders; ord++) {
+  // TODO pawel: this causes liveranges to be longer than necessary:
+  // order 0:
+  //  stage n-1, n-2, ..., 1, 0
+  // order 1:
+  //  stage n-1, n-2, ..., 1, 0
+  // Stuff from order 0 stage 1 for example used in order 1 stage 0 needs to
+  // be live through all of stage 1. Previously we were scheduling stage n-1,
+  // and then dist1uses followed by inserts/deps.
+  for (int ord = minOrder; ord <= maxOrder; ord++) {
     for (int stage = numStages - 1; stage >= 0; stage--) {
       for (auto &op : forOp.getBody()->without_terminator()) {
         assert(opToStageAndOrder.count(&op) && "Op not in schedule!");
