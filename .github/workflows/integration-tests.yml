@@ -43,17 +43,57 @@ jobs:
         with:
           # Only fetch two commits to check the latest changed files.
           fetch-depth: 2
-      - name: Detect post-submit changed files
+      - name: Detect if build deps (e.g. LLVM hash) changed
         id: detect-change
         if: github.event_name == 'push'
         uses: tj-actions/changed-files@v44
         with:
-          # Monitor hash or version files in the cmake/ directory for changes.
           files: |
             cmake/*.txt
-      - name: Decide post-submit integration test enablement
-        # Only enable integration tests for post-submit when build dependency changes.
-        if: github.event_name == 'push' && steps.detect-change.outputs.any_changed == 'true'
+      - name: Detect if enough time has passed since last post-submit run
+        id: detect-time
+        if: github.event_name == 'push'
+        run: |
+          GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
+          REPO_NAME="${{ github.repository }}"
+          WORKFLOW_ID="$(basename ${{ github.workflow }})"
+
+          # Fetch the last run time of this workflow
+          LAST_RUN=$(curl -s \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/$REPO_NAME/actions/workflows/$WORKFLOW_ID/runs?status=success&per_page=1" \
+            | jq -r '.workflow_runs[0].updated_at')
+
+          # Convert to timestamp
+          LAST_RUN_TS=$(date -d "$LAST_RUN" +%s)
+          NOW_TS=$(date +%s)
+          DIFF=$(( (NOW_TS - LAST_RUN_TS) / 3600 )) # Difference in hours
+
+          echo "Last run was $DIFF hours ago."
+
+          if [ "$DIFF" -ge 4 ]; then
+            echo "Run allowed."
+            echo "n_hours_since_last_run=true" >> $GITHUB_ENV
+          else
+            echo "Run not allowed. Last run was less than 4hr ago."
+            echo "n_hours_since_last_run=false" >> $GITHUB_ENV
+      # We want to run integration tests on the main branch (i.e. post-submit)
+      # occasionally, because pre-submit CI caches will only read from caches
+      # generated from the main branch (or the PR's branch), and we want these
+      # caches to be recent.
+      #
+      # But we also don't want to run the tests on *every* commit, because this
+      # would compete for resources with pre-commit CI (and the whole point of
+      # caching is to speed up CI).
+      #
+      # As a compromise, run every N hours, or if a build dependency changes
+      # (e.g.  we update the LLVM hash).
+      - name: Decide whether to run integration tests post-submit
+        if: |
+          github.event_name == 'push' &&
+          (steps.detect-change.outputs.any_changed == 'true' ||
+           env.n_hours_since_last_run == 'true')
         run: |
           echo "enable_integration=true" >> $GITHUB_ENV
       - name: Prepare runner matrix
