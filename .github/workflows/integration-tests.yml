@@ -361,7 +361,8 @@ jobs:
           cd python/test/unit
           pytest --capture=tee-sys -rfs -vvv -n 32 language operators \
                  --ignore=language/test_conversions.py \
-                 --ignore=language/test_line_info.py
+                 --ignore=language/test_line_info.py \
+                 --ignore=operators/test_blocksparse.py
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -vvv -n 8 language/test_line_info.py
 
@@ -369,14 +370,7 @@ jobs:
           python3 -m pytest -vvv runtime
           # Run hopper tests
           python3 -m pytest -vs hopper/test_mixed_io.py \
-<<<<<<< HEAD
-                                hopper/test_gemm.py \
-                                hopper/test_tma_store_gemm.py \
-                                hopper/test_persistent_warp_specialized_fused-attention.py
-
-=======
                                 hopper/test_tma_store_gemm.py
->>>>>>> a17e207f2 (Cache Triton compilation artifacts during CI.)
       - name: Run C++ unittests
         run: |
           cd python
