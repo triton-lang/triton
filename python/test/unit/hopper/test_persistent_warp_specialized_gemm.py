@@ -719,7 +719,6 @@ def full_static_persistent_matmul_kernel(a_ptr, b_ptr, w_ptr, bias_ptr, z_ptr,  
         (128, 128, 64, 4, 1, *shape_w_c, 'none', out_dtype, use_tma_store, 3) for shape_w_c in [
             [4096, 1, 1024, False, False],
             [2048, 204, 1000, True, False],
-            # [16, 524288, 32, False, True],
             [16, 524288, 32, False, True],
         ] for out_dtype in ['float16', 'float32'] for use_tma_store in [False, True]
     ] + [
