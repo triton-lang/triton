@@ -220,12 +220,21 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
       auto yield = dyn_cast<scf::YieldOp>(op);
       if (!yield)
         continue;
+      if (auto ifOp = dyn_cast<scf::IfOp>(yield->getParentOp())) {
+        for (OpOperand &operand : yield->getOpOperands()) {
+          Operation *def = operand.get().getDefiningOp();
+          if (def &&
+              (forwardSlice.count(def) || operand.get() == currentValue) &&
+              (seen.insert(operand.get()).second == true))
+            queue.push_back(ifOp.getResult(operand.getOperandNumber()));
+        }
+      }
       auto forOp = dyn_cast<scf::ForOp>(yield.getOperation()->getParentOp());
       if (!forOp)
         continue;
       for (OpOperand &operand : yield->getOpOperands()) {
         Operation *def = operand.get().getDefiningOp();
-        if (def && forwardSlice.count(def) &&
+        if (def && (forwardSlice.count(def) || operand.get() == currentValue) &&
             (seen.insert(operand.get()).second == true))
           queue.push_back(forOp.getRegionIterArg(operand.getOperandNumber()));
       }
