@@ -323,7 +323,8 @@ def test_non_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K
             c.stride(0), c.stride(1),  #
             BLOCK_M, BLOCK_N, BLOCK_K,  #
             num_warps=4,  #
-            num_ctas=NUM_CTAS)
+            num_ctas=NUM_CTAS, 
+            num_stages=1)
 
     th_c = torch.matmul(a, b)
     torch.testing.assert_close(th_c, c, atol=1e-2, rtol=0, check_dtype=False)
@@ -478,7 +479,7 @@ def test_user_defined_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N
             b.stride(0), b.stride(1),  #
             c.stride(0), c.stride(1),  #
             BLOCK_M, BLOCK_N, BLOCK_K, NUM_SMS,  #
-            num_warps=4, num_ctas=NUM_CTAS)
+            num_warps=4, num_ctas=NUM_CTAS, num_stages=1)
 
     th_c = torch.matmul(a, b)
     torch.testing.assert_close(th_c, c, atol=1e-2, rtol=0, check_dtype=False)
@@ -590,6 +591,7 @@ def test_static_persistent_matmul_no_scf_kernel(M, N, K, NUM_CTAS, NUM_WARPS, TR
         c = torch.empty((M, N), device=a.device, dtype=torch.float32)
 
     NUM_SMS = torch.cuda.get_device_properties('cuda').multi_processor_count
+    print(f"NUM_SMS = {NUM_SMS}")
 
     # TODO: set `enable_warp_specialization=False` will lead to compilation error.
     static_persistent_matmul_no_scf_kernel[(NUM_SMS, )](
@@ -603,7 +605,7 @@ def test_static_persistent_matmul_no_scf_kernel(M, N, K, NUM_CTAS, NUM_WARPS, TR
         num_ctas=NUM_CTAS,  #
         FLOAT16_OUTPUT=(OUTPUT_TYPE == "float16"),  #
         USE_TMA_EPILOGUE=USE_TMA_EPILOGUE,  #
-        USE_TMA_LOAD=USE_TMA_LOAD)
+        USE_TMA_LOAD=USE_TMA_LOAD, num_stages=1)
     a_f32 = a.to(torch.float32)
     b_f32 = b.to(torch.float32)
     golden = torch.matmul(a_f32, b_f32)
@@ -726,6 +728,7 @@ def full_static_persistent_matmul_kernel(a_ptr, b_ptr, w_ptr, bias_ptr, z_ptr,  
         (128, 128, 64, 4, 1, *shape_w_c, 'none', out_dtype, use_tma_store, 3) for shape_w_c in [
             [4096, 1, 1024, False, False],
             [2048, 204, 1000, True, False],
+            # [16, 524288, 32, False, True],
             [16, 524288, 32, False, True],
         ] for out_dtype in ['float16', 'float32'] for use_tma_store in [False, True]
     ] + [
@@ -945,7 +948,7 @@ def test_full_static_persistent_matmul_kernel(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WAR
         A_ORDER_0=a_order[0], A_ORDER_1=a_order[1],  #
         B_ORDER_0=b_order[0], B_ORDER_1=b_order[1],  #
         num_warps=NUM_WARPS, num_ctas=NUM_CTAS, num_stages=NUM_STAGES,  #
-        NUM_SMS=NUM_SMS)
+        NUM_SMS=NUM_SMS, matrix_instr_nonkdim=16)
 
     torch.set_printoptions(profile="full")
     golden = torch.nn.functional.normalize(golden)
