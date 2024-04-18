@@ -31,9 +31,9 @@ void TreeData::stopOp(const Scope &scope) {}
 void TreeData::addMetric(size_t scopeId, std::shared_ptr<Metric> metric) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  if (scopeIdIt == scopeIdToContextId.end()) {
-    throw std::runtime_error("scopeId not found");
-  }
+  // The profile data is deactived, ignore the metric
+  if (scopeIdIt == scopeIdToContextId.end())
+    return;
   auto contextId = scopeIdIt->second;
   auto &node = tree->getNode(contextId);
   if (node.metrics.find(metric->getKind()) == node.metrics.end())
@@ -48,10 +48,9 @@ void TreeData::addMetrics(
   auto scopeIdIt = scopeIdToContextId.find(scopeId);
   auto contextId = Tree::TreeNode::DummyId;
   if (scopeIdIt == scopeIdToContextId.end()) {
-    if (contextSource == nullptr) {
-      // TODO: This is a hack, we should attribute it to an unknown context
-      throw std::runtime_error("scopeId not found");
-    }
+    if (contextSource == nullptr)
+      throw std::runtime_error("ContextSource is not set");
+    // Attribute the metric to the last context
     std::vector<Context> contexts = contextSource->getContexts();
     contextId = tree->addNode(contexts);
   } else {

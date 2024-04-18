@@ -1,3 +1,4 @@
+import json
 import triton.profiler as proton
 import tempfile
 import pathlib
@@ -78,17 +79,28 @@ def test_hook():
 
 def test_scope_metrics():
     with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
-        proton.start(f.name.split(".")[0])
-        with proton.scope("test", {"a": 1.0}):
+        session_id = proton.start(f.name.split(".")[0])
+        # Test different scope creation methods
+        with proton.scope("test0", {"a": 1.0}):
             pass
 
-        @proton.scope("test", {"a": 1.0})
+        @proton.scope("test1", {"a": 1.0})
         def foo():
             pass
 
         foo()
 
-        proton.enter_scope("test", metrics={"a": 1.0})
+        # After deactivation, the metrics should be ignored
+        proton.deactivate(session_id)
+        proton.enter_scope("test2", metrics={"a": 1.0})
         proton.exit_scope()
+
+        # Metrics should be recorded again after reactivation
+        proton.activate(session_id)
+        proton.enter_scope("test3", metrics={"a": 1.0})
+        proton.exit_scope()
+
         proton.finalize()
         assert pathlib.Path(f.name).exists()
+        data = json.load(f)
+        assert len(data[0]["children"]) == 3
