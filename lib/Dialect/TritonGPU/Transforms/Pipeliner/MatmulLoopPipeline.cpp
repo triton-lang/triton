@@ -568,14 +568,7 @@ static bool createCoarseSchedule(
         }
       }
       if (ifOp && !opToStageAndOrder.count(ifOp)) {
-        opToStageAndOrder[ifOp] = {stage,
-                                   2}; // 2 will be even after extracts //
-                                       // numStages-1 is so ad-hoc it hurts
-        // otherwise it does not work, because some of the dependencies are in
-        // the last stage (the dot is in the last stage after all) Right! We
-        // should not be looking throught the forward slice of the loads, but
-        // rather the forward slice of the dot (root!) op. Then it is obvious
-        // that it should go to the same stage as the root.
+        opToStageAndOrder[ifOp] = {stage, 2}; // 2 will be even after extracts
       }
     }
   }
@@ -798,8 +791,9 @@ static std::vector<std::pair<Operation *, unsigned>> createSchedule(
                   opToStageAndOrder[user] = {stage, order};
             } else {
               for (auto user : distanceOneUsers)
-                if (opToStageAndOrder.count(user) == 0)
+                if (opToStageAndOrder.count(user) == 0) {
                   opToStageAndOrder[user] = {stage + 1, order - 1};
+                }
             }
           }
         }
