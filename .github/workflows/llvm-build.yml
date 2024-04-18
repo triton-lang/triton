@@ -260,7 +260,7 @@ jobs:
       with:
         name: llvm-${{ matrix.config.target-os }}-${{ matrix.config.arch }}
         path: |
-          ${{ github.workspace }}/llvm-*.tar.gz
+          ${{ github.workspace }}/llvm-*-${{ matrix.config.target-os }}-${{ matrix.config.arch }}.tar.gz
 
     - name: Azure Login
       if: ${{ (github.repository == 'openai/triton') }}
