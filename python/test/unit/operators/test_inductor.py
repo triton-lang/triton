@@ -5,7 +5,7 @@ import triton
 import triton.language as tl
 
 
-def test_normalization_with_remat():
+def test_normalization_with_remat(device):
 
     @triton.jit
     def triton_(in_out_ptr0, in_out_ptr1, in_ptr0, in_ptr1, in_ptr2, in_ptr3, xnumel, rnumel, XBLOCK: tl.constexpr,
@@ -47,17 +47,17 @@ def test_normalization_with_remat():
 
     torch.manual_seed(123)
 
-    buf14 = torch.rand(8, 64, 64, 64, device="cuda")
-    buf16 = torch.rand(8, 1, 64, device="cuda")
-    arg114_1 = torch.rand(64, device="cuda")
-    arg115_1 = torch.rand(64, device="cuda")
-    arg8_1 = torch.rand(64, device="cuda")
-    arg9_1 = torch.rand(64, device="cuda")
+    buf14 = torch.rand(8, 64, 64, 64, device=device)
+    buf16 = torch.rand(8, 1, 64, device=device)
+    arg114_1 = torch.rand(64, device=device)
+    arg115_1 = torch.rand(64, device=device)
+    arg8_1 = torch.rand(64, device=device)
+    arg9_1 = torch.rand(64, device=device)
     triton_[(512, )](buf14, buf16, arg114_1, arg115_1, arg8_1, arg9_1, 512, 4096, 1, 2048)
     torch.testing.assert_close(buf16.mean().item(), buf14.mean().item(), atol=1e-7, rtol=0)
 
 
-def test_avg_pool_bw():
+def test_avg_pool_bw(device):
 
     @triton.jit
     def triton_(in_ptr0, out_ptr0, XBLOCK: tl.constexpr):
@@ -146,7 +146,7 @@ def test_avg_pool_bw():
         tmp76 = tl.where(tmp74, tmp75, tmp71)
         tl.store(out_ptr0 + (x5 + tl.zeros([XBLOCK], tl.int32)), tmp76, None)
 
-    inp = torch.ones(8, 2048, 8, 8, device="cuda", dtype=torch.half)
+    inp = torch.ones(8, 2048, 8, 8, device=device, dtype=torch.half)
     out = torch.ones_like(inp) * 3
     numel = inp.numel()
     triton_[(numel // 1024, )](inp, out, 1024)
@@ -159,7 +159,7 @@ def test_avg_pool_bw():
 
 @pytest.mark.parametrize("RBLOCK", [1, 16, 32, 64, 128])
 @pytest.mark.parametrize("num_warps", [1, 4])
-def test_scan2d_broadcast(RBLOCK, num_warps):
+def test_scan2d_broadcast(RBLOCK, num_warps, device):
 
     @triton.jit(debug=True)
     def fn(in_ptr, out_ptr, XBLOCK: tl.constexpr, RBLOCK: tl.constexpr):
@@ -172,14 +172,14 @@ def test_scan2d_broadcast(RBLOCK, num_warps):
         tl.store(out_ptr + xindex * RBLOCK + rindex, scan)
 
     XBLOCK = 4
-    input = torch.randint(0, 10, (1, RBLOCK), dtype=torch.int64, device='cuda')
-    output = torch.empty((XBLOCK, RBLOCK), dtype=torch.int64, device='cuda')
+    input = torch.randint(0, 10, (1, RBLOCK), dtype=torch.int64, device=device)
+    output = torch.empty((XBLOCK, RBLOCK), dtype=torch.int64, device=device)
     fn[(1, )](input, output, XBLOCK, RBLOCK, num_warps=num_warps)
     ref = input.cumsum(1).broadcast_to((XBLOCK, RBLOCK))
     torch.testing.assert_close(output, ref)
 
 
-def test_scan2d_for():
+def test_scan2d_for(device):
 
     @triton.jit
     def fn(out_ptr0, rnumel, RBLOCK: tl.constexpr):
@@ -192,7 +192,7 @@ def test_scan2d_for():
             tl.store(out_ptr0 + rindex, tmp6, rmask)
 
     RBLOCK = 8
-    out0 = torch.empty(RBLOCK, device="cuda", dtype=torch.int64)
+    out0 = torch.empty(RBLOCK, device=device, dtype=torch.int64)
     fn[(1, )](out0, RBLOCK, RBLOCK)
-    ref = torch.arange(RBLOCK, device="cuda", dtype=torch.int64) + 1
+    ref = torch.arange(RBLOCK, device=device, dtype=torch.int64) + 1
     torch.testing.assert_close(out0, ref)

@@ -5,6 +5,11 @@ import triton
 import triton.ops
 
 
+def is_hip_mi200():
+    target = triton.runtime.driver.active.get_current_target()
+    return target[0] == 'hip' and target[1] == 'gfx90a'
+
+
 def sparsify_tensor(x, mask, block):
     ret = torch.empty((x.size(0), mask.sum(), block, block), dtype=x.dtype, device=x.device)
     for idx, (h, i, j) in enumerate(zip(*mask.nonzero(as_tuple=True))):
@@ -37,7 +42,7 @@ def mask_tensor(x, mask, block, value=0):
 @pytest.mark.parametrize("TRANS_B", [False, True])
 @pytest.mark.parametrize("BLOCK", [16, 32, 64])
 @pytest.mark.parametrize("DTYPE", [torch.float16])
-def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=256):
+def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, device, Z=3, H=2, M=512, N=384, K=256):
     seed = 0
     torch.manual_seed(seed)
     is_sdd = MODE == "sdd"
@@ -79,15 +84,21 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     b_tri = do_sparsify(b_tri) if is_dds else b_tri
     a_tri.retain_grad()
     b_tri.retain_grad()
-    op = triton.ops.blocksparse.matmul(layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B, device="cuda")
+    op = triton.ops.blocksparse.matmul(layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B, device=device)
     c_tri = op(a_tri, b_tri)
     c_tri.backward(dc_tri)
     da_tri = a_tri.grad
     db_tri = b_tri.grad
+
+    # Bigger tolerance for AMD MI200 devices.
+    # MI200 devices use reduced precision fp16 and bf16 and flush input and
+    # output denormal values to zero. Detailed info is at: https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
+    tol = {'atol': 1e-3, 'rtol': 0} if is_hip_mi200() else {}
+
     # compare
-    torch.testing.assert_close(c_ref, c_tri)
-    torch.testing.assert_close(da_ref, da_tri)
-    torch.testing.assert_close(db_ref, db_tri)
+    torch.testing.assert_close(c_ref, c_tri, **tol)
+    torch.testing.assert_close(da_ref, da_tri, **tol)
+    torch.testing.assert_close(db_ref, db_tri, **tol)
 
 
 configs = [
@@ -100,7 +111,7 @@ configs = [
 
 @pytest.mark.parametrize("is_dense", [False, True])
 @pytest.mark.parametrize("BLOCK, WIDTH", configs)
-def test_softmax(BLOCK, WIDTH, is_dense, Z=2, H=2, is_causal=True, scale=0.4):
+def test_softmax(BLOCK, WIDTH, is_dense, device, Z=2, H=2, is_causal=True, scale=0.4):
     # set seed
     torch.random.manual_seed(0)
     Z, H, M, N = 2, 3, WIDTH, WIDTH
@@ -119,7 +130,7 @@ def test_softmax(BLOCK, WIDTH, is_dense, Z=2, H=2, is_causal=True, scale=0.4):
     # compute [torch]
     a_ref = mask_tensor(a_ref, layout, BLOCK, value=float("-inf"))
     a_ref.retain_grad()
-    at_mask = torch.ones((M, N), device="cuda")
+    at_mask = torch.ones((M, N), device=device)
     if is_causal:
         at_mask = torch.tril(at_mask)
     M = at_mask[None, None, :, :] + torch.zeros_like(a_ref)
@@ -132,7 +143,7 @@ def test_softmax(BLOCK, WIDTH, is_dense, Z=2, H=2, is_causal=True, scale=0.4):
     a_tri = sparsify_tensor(a_tri, layout, BLOCK)
     a_tri.retain_grad()
     dout_tri = sparsify_tensor(dout_tri, layout, BLOCK)
-    op = triton.ops.blocksparse.softmax(layout, BLOCK, device="cuda", is_dense=is_dense)
+    op = triton.ops.blocksparse.softmax(layout, BLOCK, device=device, is_dense=is_dense)
     out_tri = op(a_tri, scale=scale, is_causal=is_causal)
     out_tri.backward(dout_tri)
     da_tri = a_tri.grad
@@ -146,6 +157,7 @@ def test_softmax(BLOCK, WIDTH, is_dense, Z=2, H=2, is_causal=True, scale=0.4):
 def test_attention_fwd_bwd(
     block,
     dtype,
+    device,
     input_scale=1.0,
     scale=1 / 8.0,
     n_ctx=256,
@@ -177,7 +189,7 @@ def test_attention_fwd_bwd(
 
     # Torch version:
     torch_q, torch_k, torch_v = [x.clone() for x in qkvs]
-    attn_mask = torch.ones([n_ctx, n_ctx], device="cuda", dtype=dtype)
+    attn_mask = torch.ones([n_ctx, n_ctx], device=device, dtype=dtype)
     attn_mask = torch.tril(attn_mask, diagonal=0)
     attn_mask = 1e6 * (-1 + (attn_mask.reshape((1, 1, n_ctx, n_ctx)).cuda()))
     torch_q.retain_grad()
@@ -195,8 +207,13 @@ def test_attention_fwd_bwd(
     # comparison
     # print(f"Triton loss {loss} and torch loss {torch_loss}.  Also checking grads...")
     torch.testing.assert_close(loss, torch_loss, atol=1e-3, rtol=0)
+
+    # Bigger tolerance for AMD MI200 devices.
+    # MI200 devices use reduced precision fp16 and bf16 and flush input and
+    # output denormal values to zero. Detailed info is at: https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
+    tol = {'atol': 1e-3, 'rtol': 0} if is_hip_mi200() else {}
     for g1, g2 in zip(grads, torch_grads):
-        torch.testing.assert_close(g1, g2)
+        torch.testing.assert_close(g1, g2, **tol)
 
 
 @pytest.mark.parametrize("block", [16, 32, 64])

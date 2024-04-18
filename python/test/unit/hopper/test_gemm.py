@@ -31,6 +31,10 @@ import triton
 import triton.language as tl
 
 
+def is_hip():
+    return triton.runtime.driver.active.get_current_target()[0] == "hip"
+
+
 @triton.jit
 def matmul_no_scf_kernel(a_ptr, b_ptr, c_ptr,  #
                          M, N, K,  #
@@ -101,6 +105,9 @@ def matmul_no_scf_kernel(a_ptr, b_ptr, c_ptr,  #
     ] for USE_TMA_EPILOGUE in [True, False]]))
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
 def test_gemm_no_scf(M, N, K, NUM_CTAS, NUM_WARPS, TRANS_A, TRANS_B, OUTPUT_TYPE, USE_TMA_EPILOGUE):
+    if is_hip() and NUM_CTAS > 1:
+        pytest.skip("NUM_CTAS > 1 is not supported in HIP backend")
+
     if (TRANS_A):
         a = torch.randn((K, M), device='cuda', dtype=torch.float16).T
     else:
@@ -332,6 +339,9 @@ def test_gemm(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, 
     ]:
         pytest.skip('Known legacy issue, ldmatrix can only support x4')
 
+    if is_hip() and NUM_CTAS > 1:
+        pytest.skip("NUM_CTAS > 1 is not supported in HIP backend")
+
     if epilogue == 'add-rows' and NUM_CTAS > 1:
         pytest.skip('known failure: error getCTAsPerCGA for SliceEncodingAttr is not well-defined.')
 
@@ -436,6 +446,10 @@ def test_gemm(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, 
     golden = torch.nn.functional.normalize(golden)
     z = torch.nn.functional.normalize(z)
     assert_close(z, golden, rtol=1e-2, atol=1e-3, check_dtype=False)
+
+    # check is cuda backend specific
+    if is_hip():
+        return
 
     disable_mmav3 = os.environ.get('DISABLE_MMA_V3', 'not found').lower()
     if disable_mmav3 not in ["on", "true", "1"] and BLOCK_M >= 64 and NUM_CTAS == 1 and BLOCK_N <= 256:

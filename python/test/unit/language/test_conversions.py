@@ -29,9 +29,9 @@ def type_convert_triton(src, dst, rounding : tl.constexpr, BLOCK_SIZE : tl.const
     tl.store(dst + idxs, y)
 
 
-def launch_type_convert_triton(src, src_dtype, dst_dtype, rounding=None, BLOCK_SIZE=4096):
+def launch_type_convert_triton(src, src_dtype, dst_dtype, device, rounding=None, BLOCK_SIZE=4096):
 
-    dst = torch.empty(src.shape, dtype=matching_int(dst_dtype), device='cuda')
+    dst = torch.empty(src.shape, dtype=matching_int(dst_dtype), device=device)
     type_convert_triton[(src.shape[0] // BLOCK_SIZE,)](triton.reinterpret(src, src_dtype), triton.reinterpret(dst, dst_dtype), rounding, BLOCK_SIZE)
     return dst
 
@@ -71,10 +71,10 @@ def exhaustive_populate(dst, offset, BLOCK_SIZE : tl.constexpr, force_odd : tl.c
     tl.store(dst + idxs, vals)
 
 
-def launch_exhaustive_populate(dst_dtype, offset, numel, force_odd, output_bits, max_repr, BLOCK_SIZE=4096):
+def launch_exhaustive_populate(dst_dtype, offset, numel, force_odd, output_bits, max_repr, device, BLOCK_SIZE=4096):
 
     assert(numel % BLOCK_SIZE == 0)
-    dst = torch.empty((numel,), dtype=matching_int(dst_dtype), device='cuda')
+    dst = torch.empty((numel,), dtype=matching_int(dst_dtype), device=device)
     exhaustive_populate[(numel // BLOCK_SIZE,)](triton.reinterpret(dst, dst_dtype), offset, BLOCK_SIZE, force_odd, output_bits, max_repr)
     return dst
 
@@ -146,9 +146,9 @@ def downcast_emulated(src, dst, rounding : tl.constexpr, BLOCK_SIZE : tl.constex
     tl.store(dst + idxs, y)
 
 
-def launch_downcast_emulated(src, src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, BLOCK_SIZE=4096):
+def launch_downcast_emulated(src, src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, device, BLOCK_SIZE=4096):
 
-    dst = torch.empty(src.shape, dtype=matching_int(dst_dtype), device='cuda')
+    dst = torch.empty(src.shape, dtype=matching_int(dst_dtype), device=device)
     downcast_emulated[(src.shape[0] // BLOCK_SIZE,)](
         triton.reinterpret(src, src_dtype), triton.reinterpret(dst, dst_dtype), rounding, BLOCK_SIZE, exponent_bits, mantissa_bits, exponent_bias)
     return dst
@@ -188,23 +188,23 @@ def upcast_emulated(src, dst, BLOCK_SIZE : tl.constexpr, exponent_bits : tl.cons
     tl.store(dst + idxs, y)
 
 
-def launch_upcast_emulated(src, exponent_bits, mantissa_bits, exponent_bias, BLOCK_SIZE=4096):
+def launch_upcast_emulated(src, exponent_bits, mantissa_bits, exponent_bias, device, BLOCK_SIZE=4096):
 
-    dst = torch.empty(src.shape, dtype=torch.int32, device='cuda')
+    dst = torch.empty(src.shape, dtype=torch.int32, device=device)
     upcast_emulated[(src.shape[0] // BLOCK_SIZE,)](src, triton.reinterpret(dst, tl.float32), BLOCK_SIZE, exponent_bits, mantissa_bits, exponent_bias)
     return dst
 
 
-def downcast_test(src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, max_repr, offset):
+def downcast_test(src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, max_repr, offset, device):
 
-    src = launch_exhaustive_populate(src_dtype, offset << 24, 2**24, False, src_dtype.primitive_bitwidth, max_repr)
-    dst = launch_type_convert_triton(src, src_dtype, dst_dtype, rounding)
-    src = launch_type_convert_triton(src, src_dtype, tl.float32)
+    src = launch_exhaustive_populate(src_dtype, offset << 24, 2**24, False, src_dtype.primitive_bitwidth, max_repr, device)
+    dst = launch_type_convert_triton(src, src_dtype, dst_dtype, device=device, rounding=rounding)
+    src = launch_type_convert_triton(src, src_dtype, tl.float32, device=device)
 
-    dst2 = launch_downcast_emulated(src, tl.float32, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias)
+    dst2 = launch_downcast_emulated(src, tl.float32, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, device=device)
 
-    dst = launch_upcast_emulated(dst, exponent_bits, mantissa_bits, exponent_bias)
-    dst2 = launch_upcast_emulated(dst2, exponent_bits, mantissa_bits, exponent_bias)
+    dst = launch_upcast_emulated(dst, exponent_bits, mantissa_bits, exponent_bias, device=device)
+    dst2 = launch_upcast_emulated(dst2, exponent_bits, mantissa_bits, exponent_bias, device=device)
 
     if not (torch.equal(dst, dst2)):
 
@@ -224,16 +224,16 @@ def downcast_test(src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, 
         raise ValueError('%d elements mismatch' % (dst != dst2).sum())
 
 
-def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bias, max_repr):
+def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bias, max_repr, device):
 
     numbits_src = exponent_bits + mantissa_bits + 1
 
-    src = launch_exhaustive_populate(src_dtype, 0, 65536, False, numbits_src, max_repr)
+    src = launch_exhaustive_populate(src_dtype, 0, 65536, False, numbits_src, max_repr, device=device)
 
-    dst = launch_type_convert_triton(src, src_dtype, dst_dtype)
-    dst = launch_type_convert_triton(dst, dst_dtype, tl.float32)
+    dst = launch_type_convert_triton(src, src_dtype, dst_dtype, device=device)
+    dst = launch_type_convert_triton(dst, dst_dtype, tl.float32, device=device)
 
-    dst2 = launch_upcast_emulated(src, exponent_bits, mantissa_bits, exponent_bias)
+    dst2 = launch_upcast_emulated(src, exponent_bits, mantissa_bits, exponent_bias, device=device)
 
     assert(torch.equal(dst, dst2))
 
@@ -254,7 +254,7 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
     ('float8e4nv', 'bfloat16'),
     ('float8e4nv', 'float32'),
 ])
-def test_typeconvert_upcast(src_dtype, dst_dtype):
+def test_typeconvert_upcast(src_dtype, dst_dtype, device):
 
     if src_dtype == 'float8e4nv' and torch.cuda.get_device_capability(0) < (9, 0):
         pytest.skip("float8e4nv upcast tests only supported on compute capability 9.0+")
@@ -268,7 +268,7 @@ def test_typeconvert_upcast(src_dtype, dst_dtype):
         'bfloat16': (8, 7, 127, 0x7f7f),
     }[src_dtype]
 
-    upcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), *stuff)
+    upcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), *stuff, device=device)
 
 @pytest.mark.parametrize("src_dtype, dst_dtype, rounding, max_repr", [
     ('float32', 'float16', 'rtne', 0x477fe000),
@@ -286,7 +286,7 @@ def test_typeconvert_upcast(src_dtype, dst_dtype):
     ('float16', 'float8e5', 'rtne', 0x7b00),
     ('float16', 'float8e4nv', 'rtne', 0x5f00),
 ])
-def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr):
+def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
 
     if src_dtype != 'float32' and torch.cuda.get_device_capability(0) < (9, 0):
         pytest.skip("non-float32 downcast tests only supported on compute capability 9.0+")
@@ -304,4 +304,4 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr):
     }[dst_dtype]
 
     for i in range(256):
-        downcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), rounding, *stuff, max_repr, i)
+        downcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), rounding, *stuff, max_repr, i, device=device)
