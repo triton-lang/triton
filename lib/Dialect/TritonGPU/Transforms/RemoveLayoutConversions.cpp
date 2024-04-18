@@ -207,6 +207,25 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
     queue.pop_back();
     getForwardSlice(currentValue, &forwardSlice);
     for (Operation *op : forwardSlice) {
+      // HACK: Stop propagation if the op is using mma layout but is producing
+      // tensor smaller than the layout we would like to propagate. This is to
+      // avoid stepping into the known bug.
+      for (auto result : op->getResults()) {
+        auto tensorType = result.getType().dyn_cast<RankedTensorType>();
+        if (tensorType &&
+            tensorType.getEncoding().isa<NvidiaMmaEncodingAttr>()) {
+          auto mmaInstrShape =
+              encoding.cast<NvidiaMmaEncodingAttr>().getInstrShape();
+          for (size_t i = 0;
+               i < std::min((size_t)tensorType.getRank(), mmaInstrShape.size());
+               i++) {
+            if (tensorType.getShape()[i] < mmaInstrShape[i]) {
+              return false;
+            }
+          }
+        }
+      }
+
       if (auto convertOp = dyn_cast<ConvertLayoutOp>(op)) {
         Attribute dstEncoding = convertOp.getType().getEncoding();
         if (auto mmaLayout = dstEncoding.dyn_cast<NvidiaMmaEncodingAttr>())
