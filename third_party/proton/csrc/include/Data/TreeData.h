@@ -3,6 +3,7 @@
 
 #include "Context/Context.h"
 #include "Data.h"
+#include <stdexcept>
 
 namespace proton {
 

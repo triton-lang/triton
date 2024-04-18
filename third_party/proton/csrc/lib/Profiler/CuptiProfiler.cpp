@@ -6,6 +6,7 @@
 
 #include <cstdlib>
 #include <memory>
+#include <stdexcept>
 
 namespace proton {
 
