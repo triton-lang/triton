@@ -211,7 +211,7 @@ class HIPBackend(BaseBackend):
         amd.set_all_fn_arg_inreg(kernels[0])
 
         if options.extern_libs:
-            paths = [path for (name, path) in options.extern_libs]
+            paths = [path for (name, path) in options.extern_libs if amd.check_extern_lib(llvm_mod, name)]
             llvm.link_extern_libs(llvm_mod, paths)
 
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
