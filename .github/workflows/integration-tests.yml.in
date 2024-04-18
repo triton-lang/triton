@@ -66,21 +66,33 @@ jobs:
           # ID of integration-tests workflow
           WORKFLOW_ID="11678186"
 
-          # Fetch the last run time of this workflow
-          LAST_RUN=$(curl -s \
+          # Get the jobs URL for each instance of this workflow that completed successfully <4hr ago.
+          JOBS_URLS=$(curl -s \
             -H "Authorization: token $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/$REPO_NAME/actions/workflows/$WORKFLOW_ID/runs?branch=main&status=success&per_page=1" \
-            | jq -r '.workflow_runs[0].updated_at')
+            "https://api.github.com/repos/openai/triton/actions/workflows/$WORKFLOW_ID/runs?branch=main&status=success&event=push&created=<$(date -u -Iseconds -d '4 hours ago')" \
+            | jq -r '.workflow_runs[].jobs_url')
 
-          # Convert to timestamp
-          LAST_RUN_TS=$(date -d "$LAST_RUN" +%s)
-          NOW_TS=$(date +%s)
-          DIFF=$(( (NOW_TS - LAST_RUN_TS) / 3600 )) # Difference in hours
+          GOT_SUCCESS="false"
+          for URL in $JOBS_URLS; do
+            echo "Considering $URL"
+            STATUS=$(\
+              curl -s \
+                -H "Authorization: token $GITHUB_TOKEN" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "$URL" \
+              | jq -r '.jobs[] | select(.name=="Runner-Preparation") | .steps[]
+                    | select(.name | contains("run integration tests")) | .conclusion')
+            echo "Status is $STATUS"
+            if [[ $STATUS == "success" ]]; then
+              GOT_SUCCESS="true"
+              break
+            fi
+          done
 
-          echo "Last run was $DIFF hours ago."
-
-          if [ "$DIFF" -ge 4 ]; then
+          # Did any of the aforementioned steps succeed?  If so, skip the build.
+          #if [[ "$CONCLUSIONS" == *"success"* ]]; then
+          if [[ "$GOT_SUCCESS" == "true" ]]; then
             echo "Will run CI; last build was long enough ago."
             echo "n_hours_since_last_run=true" >> $GITHUB_ENV
           else
@@ -99,6 +111,10 @@ jobs:
       #
       # As a compromise, run every N hours, or if a build dependency changes
       # (e.g.  we update the LLVM hash).
+      #
+      # Note: The name here is load-bearing; elsewhere in this file we use the
+      # success of a step with this name to establish that we kicked off CI on
+      # branch `main`.
       - name: Decide whether to run integration tests post-submit
         if: |
           github.event_name == 'push' &&
@@ -179,6 +195,20 @@ jobs:
         with:
           submodules: "true"
 
+      - name: Install apt dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ccache clang lld
+
+      - name: Update PATH
+        run: |
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install pip dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install wheel cmake==3.24 ninja pytest-xdist lit
+
       - &compute-cache-keys-step
         name: Compute cache keys
         id: cache-key
@@ -220,31 +250,22 @@ jobs:
             ~/.triton/cache
             ~/.cache/ccache
           # Restore the most recent cache entry.
-          restore-keys: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-
+          restore-keys: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner[1] }}-llvm-${{ steps.cache-key.outputs.llvm }}-
           # We expect this cache key never to hit and for us to fall back
           # unconditionally to the restore-key, so it doesn't actually matter
           # what we put here (so long as it doesn't hit an existing key).
-          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner[1] }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
 
       - &inspect-cache-directory-step
         name: Inspect cache directory
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
+          du -h --max-depth=1 ~/.triton
 
-      - name: Update PATH
-        run: |
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-
-      - name: Install apt dependencies
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y ccache clang lld
-
-      - name: Install pip dependencies
-        run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install wheel cmake==3.24 ninja pytest-xdist lit
+          if [ -x "$(command -v ccache)" ]; then
+            ccache --zero-stats
+          fi
 
       - name: Install Triton
         env:
@@ -302,29 +323,37 @@ jobs:
           cd third_party/proton
           python3 -m pytest -vvv test
 
-      # If we're on branch `main`, save the ccache Triton compilation artifacts
-      # to the cache so they can be used by other (non-main) CI runs.
+      # Save the ccache Triton compilation artifacts to the cache so they can be
+      # used by other CI runs.
       #
-      # (It wouldn't be a problem to save the cache on every run, because github
-      # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
+      # If we're on branch main, this cache can be used by any branch.  OTOH if
+      # we're on a PR's branch, this cache can only be used by future pushes
+      # from that PR.  This is still useful, because most PRs run CI more than
+      # once.  Github expires caches LRU, so the cache from `main` should not
+      # get evicted (unless we have a ton of PRs in progress without any new
+      # ones being made).
       - &save-build-artifacts-step
         name: Save ccache and Triton compilation artifacts to cache
-        if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
         with:
-          path: ~/.triton/cache ~/.cache/ccache
-          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
+          path: |
+            ~/.triton/cache
+            ~/.cache/ccache
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner[1] }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
 
       - &inspect-cache-directories-step
         name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
-          du -sh ~/.triton/**
+          du -h --max-depth=1 ~/.triton
 
           mkdir -p ~/.cache/ccache
-          ls -alh ~/.cache/ccache
           du -sh ~/.cache/ccache
+
+          if [ -x "$(command -v ccache)" ]; then
+            ccache --show-stats
+          fi
 
   Integration-Tests-AMD:
     needs: Runner-Preparation
@@ -349,7 +378,19 @@ jobs:
 
       - *compute-cache-keys-step
       - *cache-build-dependencies-step
-      - *restore-build-artifacts-step
+
+      # Don't save/restore build artifacts on AMD.  Even in the 100% cache hit
+      # case, there seems to be no speedup.  Perhaps the C++ build is
+      # nondeterministic so we don't get cache hits, or perhaps there's some
+      # other problem.
+      #
+      # No cache: https://github.com/openai/triton/actions/runs/8754816940/job/24027526029
+      # Cache: https://github.com/openai/triton/actions/runs/8754623461/job/24026850886
+      #
+      # TODO(antiagainst): Enable this caching on AMD.
+      #
+      #- *restore-build-artifacts-step
+
       - *inspect-cache-directory-step
 
       - name: Update PATH
@@ -387,5 +428,10 @@ jobs:
           python3 -m pytest -vvv runtime
 
       - *run-cpp-unittests-step
-      - *save-build-artifacts-step
+
+      # Don't build artifacts on AMD; it doesn't help.  (See commented-out
+      # restore-build-artifacts-step.)
+      #
+      #- *save-build-artifacts-step
+
       - *inspect-cache-directories-step
