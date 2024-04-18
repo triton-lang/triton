@@ -144,8 +144,8 @@ def static_persistent_tma_matmul_kernel(  #
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
 def test_user_defined_persistent_non_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS,
                                                            TRANS_A, TRANS_B, USE_TMA):
-    if is_hip() and USE_TMA:
-        pytest.skip("HIP backend does not support USE_TMA")
+    # if is_hip() and USE_TMA:
+    #     pytest.skip("HIP backend does not support USE_TMA")
 
     if (TRANS_A):
         a = .1 * torch.randn((K, M), device='cuda', dtype=torch.float16).T
@@ -166,7 +166,7 @@ def test_user_defined_persistent_non_warp_specialized_gemm(M, N, K, BLOCK_M, BLO
                                                   stride_ak=a.stride(1), stride_bk=b.stride(0), stride_bn=b.stride(1),
                                                   stride_cm=c.stride(0), stride_cn=c.stride(1), BLOCK_M=BLOCK_M,
                                                   BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K, NUM_SMS=NUM_SMS,
-                                                  num_warps=NUM_WARPS, num_ctas=NUM_CTAS)
+                                                  num_warps=NUM_WARPS, num_ctas=NUM_CTAS, num_stages=1)
     else:
         static_persistent_matmul_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c, M=M, N=N, K=K, stride_am=a.stride(0),
                                               stride_ak=a.stride(1), stride_bk=b.stride(0), stride_bn=b.stride(1),
@@ -285,8 +285,8 @@ def tma_warp_specialized_matmul_kernel(  #
                          ] for use_tma in [False, True]])
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
 def test_non_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_CTAS, TRANS_A, TRANS_B, USE_TMA):
-    if is_hip() and USE_TMA:
-        pytest.skip("HIP backend does not support USE_TMA")
+    # if is_hip() and USE_TMA:
+    #     pytest.skip("HIP backend does not support USE_TMA")
     if is_hip() and NUM_CTAS > 1:
         pytest.skip("HIP backend does not support NUM_CTAS > 1")
 
@@ -313,7 +313,8 @@ def test_non_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K
             c.stride(0), c.stride(1),  #
             BLOCK_M, BLOCK_N, BLOCK_K,  #
             num_warps=4,  #
-            num_ctas=NUM_CTAS)
+            num_ctas=NUM_CTAS,
+            num_stages=1)
     else:
         warp_specialized_matmul_kernel[grid](
             a, b, c,  #
@@ -447,8 +448,8 @@ def static_persistent_tma_warp_specialized_matmul_kernel(  #
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
 def test_user_defined_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_CTAS, TRANS_A, TRANS_B,
                                                        USE_TMA):
-    if is_hip() and USE_TMA:
-        pytest.skip("HIP backend does not support USE_TMA")
+    # if is_hip() and USE_TMA:
+    #     pytest.skip("HIP backend does not support USE_TMA")
     if is_hip() and NUM_CTAS > 1:
         pytest.skip("HIP backend does not support NUM_CTAS > 1")
 
@@ -470,7 +471,7 @@ def test_user_defined_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N
         static_persistent_tma_warp_specialized_matmul_kernel[grid](a, b, c, M, N, K, a.stride(0), a.stride(1),
                                                                    b.stride(0), b.stride(1), c.stride(0), c.stride(1),
                                                                    BLOCK_M, BLOCK_N, BLOCK_K, NUM_SMS, num_warps=4,
-                                                                   num_ctas=NUM_CTAS)
+                                                                   num_ctas=NUM_CTAS, num_stages=1)
     else:
         static_persistent_warp_specialized_matmul_kernel[grid](
             a, b, c,  #
@@ -571,8 +572,8 @@ def static_persistent_matmul_no_scf_kernel(a_ptr, b_ptr, c_ptr,  #
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
 def test_static_persistent_matmul_no_scf_kernel(M, N, K, NUM_CTAS, NUM_WARPS, TRANS_A, TRANS_B, OUTPUT_TYPE,
                                                 USE_TMA_EPILOGUE, USE_TMA_LOAD):
-    if is_hip() and (USE_TMA_LOAD):
-        pytest.skip("HIP backend does not support USE_TMA")
+    # if is_hip() and (USE_TMA_LOAD):
+    #     pytest.skip("HIP backend does not support USE_TMA")
     if is_hip() and NUM_CTAS > 1:
         pytest.skip("HIP backend does not support NUM_CTAS > 1")
 
@@ -591,7 +592,6 @@ def test_static_persistent_matmul_no_scf_kernel(M, N, K, NUM_CTAS, NUM_WARPS, TR
         c = torch.empty((M, N), device=a.device, dtype=torch.float32)
 
     NUM_SMS = torch.cuda.get_device_properties('cuda').multi_processor_count
-    print(f"NUM_SMS = {NUM_SMS}")
 
     # TODO: set `enable_warp_specialization=False` will lead to compilation error.
     static_persistent_matmul_no_scf_kernel[(NUM_SMS, )](
@@ -842,8 +842,8 @@ def test_full_static_persistent_matmul_kernel(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WAR
             '16-32-64-8-2-256-256-256-True',
     ]:
         pytest.skip('Known legacy issue, ldmatrix can only support x4')
-    if is_hip() and USE_TMA_STORE:
-        pytest.skip("HIP backend does not support USE_TMA")
+    # if is_hip() and USE_TMA_STORE:
+    #     pytest.skip("HIP backend does not support USE_TMA")
     if is_hip() and NUM_CTAS > 1:
         pytest.skip("HIP backend does not support NUM_CTAS > 1")
 
