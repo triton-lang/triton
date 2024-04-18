@@ -309,7 +309,8 @@ class CMakeBuild(build_ext):
     def get_proton_cmake_args(self):
         cmake_args = ["-DTRITON_BUILD_PROTON=ON"]
         cmake_args += get_thirdparty_packages([get_json_package_info(), get_pybind11_package_info()])
-        if cuda_root := get_env_with_keys(["CUDA_HOME", "CUDA_ROOT"]):
+        cuda_root = get_env_with_keys(["CUDA_HOME", "CUDA_ROOT"])
+        if cuda_root != "":
             cmake_args += ["-DCUDAToolkit_ROOT=" + cuda_root]
         return cmake_args
 
