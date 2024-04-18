@@ -210,7 +210,7 @@ void init_triton_amd(py::module &&m) {
     }
   });
 
-  m.def("check_extern_lib", [](llvm::Module *module, const std::string &lib) {
+  m.def("need_extern_lib", [](llvm::Module *module, const std::string &lib) {
     for (llvm::Function &f : module->functions()) {
       if (f.hasExternalLinkage() && f.hasName() && !f.hasExactDefinition()) {
         llvm::StringRef funcName = f.getName();
@@ -221,7 +221,7 @@ void init_triton_amd(py::module &&m) {
           //    not be needed. But we add it here and will try to remove
           //    it in the future.
           // 2. if the function name includes ocml or ockl, only link
-          //    ocml or ockl
+          //    ocml or ockl accordingly
           return true;
       }
     }
