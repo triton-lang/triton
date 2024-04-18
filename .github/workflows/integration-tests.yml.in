@@ -3,6 +3,7 @@
 # (https://github.com/actions/runner/issues/1182).  pre-commit will do this for
 # you automatically.
 
+
 name: Integration Tests
 
 on:
@@ -69,7 +70,7 @@ jobs:
           LAST_RUN=$(curl -s \
             -H "Authorization: token $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/$REPO_NAME/actions/workflows/$WORKFLOW_ID/runs?status=success&per_page=1" \
+            "https://api.github.com/repos/$REPO_NAME/actions/workflows/$WORKFLOW_ID/runs?branch=main&status=success&per_page=1" \
             | jq -r '.workflow_runs[0].updated_at')
 
           # Convert to timestamp
@@ -163,6 +164,7 @@ jobs:
 
   Integration-Tests:
     needs: Runner-Preparation
+    if: needs.Runner-Preparation.outputs.matrix-CUDA != ''
 
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
@@ -326,6 +328,7 @@ jobs:
 
   Integration-Tests-AMD:
     needs: Runner-Preparation
+    if: needs.Runner-Preparation.outputs.matrix-HIP != ''
 
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
