@@ -62,7 +62,8 @@ jobs:
         run: |
           GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
           REPO_NAME="${{ github.repository }}"
-          WORKFLOW_ID="$(basename ${{ github.workflow }})"
+          # ID of integration-tests workflow
+          WORKFLOW_ID="11678186"
 
           # Fetch the last run time of this workflow
           LAST_RUN=$(curl -s \
@@ -79,11 +80,12 @@ jobs:
           echo "Last run was $DIFF hours ago."
 
           if [ "$DIFF" -ge 4 ]; then
-            echo "Run allowed."
+            echo "Will run CI; last build was long enough ago."
             echo "n_hours_since_last_run=true" >> $GITHUB_ENV
           else
-            echo "Run not allowed. Last run was less than 4hr ago."
+            echo "Will not run CI; last build was too recent."
             echo "n_hours_since_last_run=false" >> $GITHUB_ENV
+          fi
 
       # We want to run integration tests on the main branch (i.e. post-submit)
       # occasionally, because pre-submit CI caches will only read from caches
@@ -153,6 +155,11 @@ jobs:
           # If first run of yapf worked and made changes reset the tree to the original state
           git reset --hard
           python3 -m pre_commit run --all-files --verbose
+
+      - name: Print diff of changes if pre-commit failed
+        if: failure()
+        run: |
+          git diff
 
   Integration-Tests:
     needs: Runner-Preparation

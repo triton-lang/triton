@@ -56,7 +56,8 @@ jobs:
         run: |
           GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
           REPO_NAME="${{ github.repository }}"
-          WORKFLOW_ID="$(basename ${{ github.workflow }})"
+          # ID of integration-tests workflow
+          WORKFLOW_ID="11678186"
 
           # Fetch the last run time of this workflow
           LAST_RUN=$(curl -s \
@@ -73,11 +74,12 @@ jobs:
           echo "Last run was $DIFF hours ago."
 
           if [ "$DIFF" -ge 4 ]; then
-            echo "Run allowed."
+            echo "Will run CI; last build was long enough ago."
             echo "n_hours_since_last_run=true" >> $GITHUB_ENV
           else
-            echo "Run not allowed. Last run was less than 4hr ago."
+            echo "Will not run CI; last build was too recent."
             echo "n_hours_since_last_run=false" >> $GITHUB_ENV
+          fi
       # We want to run integration tests on the main branch (i.e. post-submit)
       # occasionally, because pre-submit CI caches will only read from caches
       # generated from the main branch (or the PR's branch), and we want these
@@ -139,6 +141,10 @@ jobs:
           # If first run of yapf worked and made changes reset the tree to the original state
           git reset --hard
           python3 -m pre_commit run --all-files --verbose
+      - name: Print diff of changes if pre-commit failed
+        if: failure()
+        run: |
+          git diff
   Integration-Tests:
     needs: Runner-Preparation
     runs-on: ${{ matrix.runner }}
@@ -361,8 +367,7 @@ jobs:
           cd python/test/unit
           pytest --capture=tee-sys -rfs -vvv -n 32 language operators \
                  --ignore=language/test_conversions.py \
-                 --ignore=language/test_line_info.py \
-                 --ignore=operators/test_blocksparse.py
+                 --ignore=language/test_line_info.py
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -vvv -n 8 language/test_line_info.py
 
@@ -370,7 +375,9 @@ jobs:
           python3 -m pytest -vvv runtime
           # Run hopper tests
           python3 -m pytest -vs hopper/test_mixed_io.py \
-                                hopper/test_tma_store_gemm.py
+                                hopper/test_gemm.py \
+                                hopper/test_tma_store_gemm.py \
+                                hopper/test_persistent_warp_specialized_fused-attention.py
       - name: Run C++ unittests
         run: |
           cd python
