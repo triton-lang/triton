@@ -209,4 +209,22 @@ void init_triton_amd(py::module &&m) {
       arg.addAttr(llvm::Attribute::InReg);
     }
   });
+
+  m.def("need_extern_lib", [](llvm::Module *module, const std::string &lib) {
+    for (llvm::Function &f : module->functions()) {
+      if (f.hasExternalLinkage() && f.hasName() && !f.hasExactDefinition()) {
+        llvm::StringRef funcName = f.getName();
+        if (funcName.contains(lib) || funcName.contains("__nv_"))
+          // Rules for linking the extern lib
+          // 1. if __nv_ is found in the module, we'll link all four libs:
+          //    cuda2gcn, opencl, ocml, and ockl. Note that opencl might
+          //    not be needed. But we add it here and will try to remove
+          //    it in the future.
+          // 2. if the function name includes ocml or ockl, only link
+          //    ocml or ockl accordingly
+          return true;
+      }
+    }
+    return false;
+  });
 }
