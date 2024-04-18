@@ -7,7 +7,7 @@ import triton
 import triton.language as tl
 
 
-def test_chained_matmul():
+def test_chained_matmul(device):
     # Regression test for issue #1601
     def chained_matmul_reference(a, b, c):
         intermediate = torch.einsum('MK,NK->MN', a, b)
@@ -52,8 +52,8 @@ def test_chained_matmul():
     block_m, block_n, block_k = 16, 32, k
 
     grid = (triton.cdiv(m, block_m), )
-    a = torch.randint(low=0, high=2, size=(m, k), dtype=torch.float16, device='cuda')
-    b = torch.randint(low=0, high=2, size=(n, k), dtype=torch.float16, device='cuda')
+    a = torch.randint(low=0, high=2, size=(m, k), dtype=torch.float16, device=device)
+    b = torch.randint(low=0, high=2, size=(n, k), dtype=torch.float16, device=device)
     c = torch.randint_like(b, low=0, high=2)
     triton_result = torch.zeros_like(a)
 
@@ -65,7 +65,7 @@ def test_chained_matmul():
     assert (torch_result == triton_result).all()
 
 
-def test_vecmat():
+def test_vecmat(device):
 
     @triton.jit
     def batched_vecmat(
@@ -113,9 +113,9 @@ def test_vecmat():
     A = A_vec
     B = B_vec
 
-    A_tri = torch.tensor(A, device='cuda')
-    B_tri = torch.tensor(B, device='cuda')
-    C_tri = torch.zeros((M, N), dtype=torch.float32, device='cuda')
+    A_tri = torch.tensor(A, device=device)
+    B_tri = torch.tensor(B, device=device)
+    C_tri = torch.zeros((M, N), dtype=torch.float32, device=device)
 
     grid = (M // block_m, N // block_n)
 
@@ -134,7 +134,7 @@ def test_vecmat():
 
 @pytest.mark.parametrize("type",
                          ["pre_load", "post_load", "post_pre_mixed", "post_load_two_iters", "post_load_three_iters"])
-def test_iv_dependent_matmul(type):
+def test_iv_dependent_matmul(type, device):
 
     @triton.jit
     def kernel(a_ptr, b_ptr, c_ptr,  #
@@ -207,8 +207,8 @@ def test_iv_dependent_matmul(type):
     BLOCK_SIZE_N = 32
     BLOCK_SIZE_M = 32
 
-    a = torch.rand((M, K), device='cuda')
-    b = torch.rand((K, N), device='cuda')
+    a = torch.rand((M, K), device=device)
+    b = torch.rand((K, N), device=device)
 
     torch_output = torch.mm(a, b)
     triton_output = torch.empty_like(torch_output, device=torch_output.device)
