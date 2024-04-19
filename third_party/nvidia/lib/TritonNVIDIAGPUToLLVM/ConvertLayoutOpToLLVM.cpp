@@ -251,7 +251,7 @@ private:
     }
     auto elemTy = type.getElementType();
     bool isInt1 = elemTy.isInteger(1);
-    bool isPtr = elemTy.isa<triton::PointerType>();
+    bool isPtr = isa<triton::PointerType>(elemTy);
     auto llvmElemTyOrig = getTypeConverter()->convertType(elemTy);
     if (isInt1)
       elemTy = IntegerType::get(elemTy.getContext(), 8);
@@ -695,7 +695,7 @@ private:
       // instructions to pack & unpack sub-word integers. A workaround is to
       // store the results of ldmatrix in i32
       auto elemSize = elemTy.getIntOrFloatBitWidth();
-      if (auto intTy = elemTy.dyn_cast<IntegerType>() && elemSize <= 16) {
+      if (auto intTy = dyn_cast<IntegerType>(elemTy) && elemSize <= 16) {
         auto fold = 32 / elemSize;
         for (unsigned i = 0; i < elems; i += fold) {
           Value val = i32_val(0);

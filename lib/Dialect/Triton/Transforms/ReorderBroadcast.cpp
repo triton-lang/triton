@@ -84,7 +84,7 @@ struct MoveSplatAfterElementwisePattern
     auto resultTypes = op->getResultTypes();
     llvm::SmallVector<Type, 4> scalarResultTys;
     for (auto resultTy : resultTypes) {
-      auto elemTy = resultTy.dyn_cast<TensorType>().getElementType();
+      auto elemTy = dyn_cast<TensorType>(resultTy).getElementType();
       scalarResultTys.push_back(elemTy);
     }
 
@@ -166,7 +166,7 @@ struct MoveBroadcastAfterElementwisePattern
         continue;
       }
       auto elemTy =
-          operand.getType().dyn_cast<RankedTensorType>().getElementType();
+          dyn_cast<RankedTensorType>(operand.getType()).getElementType();
       auto newTy = RankedTensorType::get(srcShape, elemTy, srcEncoding);
       if (auto splatOp = llvm::dyn_cast<SplatOp>(definingOp)) {
         auto newSplat = rewriter.create<SplatOp>(loc, newTy, splatOp.getSrc());
@@ -190,7 +190,7 @@ struct MoveBroadcastAfterElementwisePattern
     llvm::SmallVector<Type, 4> newResultTypes;
     auto resultTypes = op->getResultTypes();
     for (auto resultTy : resultTypes) {
-      auto elemTy = resultTy.dyn_cast<RankedTensorType>().getElementType();
+      auto elemTy = dyn_cast<RankedTensorType>(resultTy).getElementType();
       newResultTypes.push_back(
           RankedTensorType::get(srcShape, elemTy, srcEncoding));
     }

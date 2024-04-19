@@ -38,7 +38,7 @@ bool isBroadcastConstantCombinable(Attribute value) {
 
 DenseElementsAttr getConstantValue(Builder &builder, Attribute value,
                                    Value bcast_res) {
-  auto resType = bcast_res.getType().cast<ShapedType>();
+  auto resType = cast<ShapedType>(bcast_res.getType());
   DenseElementsAttr res;
   if (auto denseValue = value.dyn_cast<DenseElementsAttr>()) {
     res =
@@ -203,14 +203,14 @@ public:
     if (expandLhsAxis != 2 || expandRhsAxis != 0)
       return failure();
     auto broadcastLhsShape =
-        broadcastLhsOp.getType().cast<ShapedType>().getShape();
+        cast<ShapedType>(broadcastLhsOp.getType()).getShape();
     auto broadcastRhsShape =
-        broadcastLhsOp.getType().cast<ShapedType>().getShape();
+        cast<ShapedType>(broadcastLhsOp.getType()).getShape();
     if (broadcastLhsShape[2] < 16 || broadcastRhsShape[0] < 16)
       return failure();
     Type newAccType = RankedTensorType::get(
         {broadcastLhsShape[0], broadcastRhsShape[2]},
-        broadcastLhsOp.getSrc().getType().cast<ShapedType>().getElementType());
+        cast<ShapedType>(broadcastLhsOp.getSrc().getType()).getElementType());
     rewriter.setInsertionPoint(op);
     auto newAcc = rewriter.create<SplatOp>(
         op->getLoc(), newAccType,

@@ -205,7 +205,7 @@ private:
     SmallVector<Value> results(op.getNumOperands());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       if (auto resultTy =
-              op.getResult()[i].getType().dyn_cast<RankedTensorType>()) {
+              dyn_cast<RankedTensorType>(op.getResult()[i].getType())) {
         auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
         unsigned resultElems = getTotalElemsPerThread(resultTy);
         SmallVector<SmallVector<unsigned>> resultOffset =
@@ -373,7 +373,7 @@ private:
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       auto elemTy = getElementType(op, i);
       if (auto resultTy =
-              op.getResult()[i].getType().dyn_cast<RankedTensorType>()) {
+              dyn_cast<RankedTensorType>(op.getResult()[i].getType())) {
         // nd-tensor where n >= 1
         auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
         unsigned resultElems = getTotalElemsPerThread(resultTy);

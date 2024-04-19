@@ -102,7 +102,7 @@ class TritonGPUOptimizeThreadLocalityPass
 
     DenseSet<triton::ReduceOp> reduceOps;
     mod.walk([&](triton::ReduceOp reduce) -> void {
-      auto srcType = reduce.getOperands()[0].getType().cast<RankedTensorType>();
+      auto srcType = cast<RankedTensorType>(reduce.getOperands()[0].getType());
       auto rank = srcType.getShape().size();
       auto srcEncoding = srcType.getEncoding();
       auto reductionOp = getReductionOp(reduce);
@@ -151,7 +151,7 @@ class TritonGPUOptimizeThreadLocalityPass
     IRRewriter builder(&getContext());
     for (auto reduce : reduceOps) {
       builder.setInsertionPoint(reduce);
-      auto srcType = reduce.getOperands()[0].getType().cast<RankedTensorType>();
+      auto srcType = cast<RankedTensorType>(reduce.getOperands()[0].getType());
       auto srcShape = srcType.getShape();
       auto srcEncoding = srcType.getEncoding();
       assert(srcEncoding.isa<triton::gpu::BlockedEncodingAttr>() &&
@@ -299,7 +299,7 @@ private:
 
   Operation *createReduce(OpBuilder &builder, triton::ReduceOp reduce,
                           Type viewOpTensorType) const {
-    auto srcType = reduce.getOperands()[0].getType().cast<RankedTensorType>();
+    auto srcType = cast<RankedTensorType>(reduce.getOperands()[0].getType());
     auto rank = srcType.getShape().size();
     builder.setInsertionPointAfter(reduce);
     IRMapping mapping;
@@ -356,8 +356,7 @@ private:
                          Attribute &slice2d) const {
     // Drop the last dimension (thread locality dimension)
     SmallVector<int64_t> accumShape(shape.begin(), shape.end() - 1);
-    auto elemType =
-        oldAccum.getType().cast<RankedTensorType>().getElementType();
+    auto elemType = cast<RankedTensorType>(oldAccum.getType()).getElementType();
     // Create tensor type for the new accumulator
     auto accumType = RankedTensorType::get(accumShape, elemType, slice2d);
     // Create new accumulator
@@ -374,7 +373,7 @@ private:
 
   SmallVector<int64_t>
   getThreadLocalityOptimizedShape(triton::ReduceOp reduce) const {
-    auto srcType = reduce.getOperands()[0].getType().cast<RankedTensorType>();
+    auto srcType = cast<RankedTensorType>(reduce.getOperands()[0].getType());
     auto srcShape = srcType.getShape();
     auto rank = srcShape.size();
     auto elemsPerThread =
@@ -386,7 +385,7 @@ private:
   }
 
   Attribute getThreadLocalityOptimizedEncoding(triton::ReduceOp reduce) const {
-    auto srcType = reduce.getOperands()[0].getType().cast<RankedTensorType>();
+    auto srcType = cast<RankedTensorType>(reduce.getOperands()[0].getType());
     auto rank = srcType.getShape().size();
     auto srcEncoding = srcType.getEncoding();
     auto blocked = srcEncoding.dyn_cast<triton::gpu::BlockedEncodingAttr>();

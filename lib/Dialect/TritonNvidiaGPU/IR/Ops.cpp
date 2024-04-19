@@ -37,12 +37,12 @@ mlir::LogicalResult DotAsyncOp::inferReturnTypes(
     DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // type is the same as the accumulator
-  auto accTy = operands[2].getType().cast<RankedTensorType>();
+  auto accTy = cast<RankedTensorType>(operands[2].getType());
   inferredReturnTypes.push_back(accTy);
 
   // verify encodings
-  auto aEnc = operands[0].getType().cast<TensorOrMemDesc>().getEncoding();
-  auto bEnc = operands[1].getType().cast<TensorOrMemDesc>().getEncoding();
+  auto aEnc = cast<TensorOrMemDesc>(operands[0].getType()).getEncoding();
+  auto bEnc = cast<TensorOrMemDesc>(operands[1].getType()).getEncoding();
   auto retEnc = accTy.getEncoding();
   if (aEnc) {
     assert(bEnc);
