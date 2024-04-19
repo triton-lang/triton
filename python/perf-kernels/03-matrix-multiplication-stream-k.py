@@ -153,7 +153,7 @@ class matmul(torch.autograd.Function):
         matmul._debug = debug
 
     @staticmethod
-    def _call(a: torch.Tensor, b: torch.Tensor, total_programs_streamk: int, BLK_M: int, BLK_N: int, BLK_K: int, two_tiles: bool, num_stages: int, num_warps: int, waves_per_eu: int):
+    def _call(a: torch.Tensor, b: torch.Tensor, total_programs_streamk: int, BLK_M: int, BLK_N: int, BLK_K: int, two_tiles: bool, num_stages: int, num_warps: int, waves_per_eu: int, mfmaInstrSize: int, kpack: int):
         device = a.device
 
         assert a.is_contiguous() and b.is_contiguous(), "non-contiguous inputs are not supported"
@@ -167,7 +167,7 @@ class matmul(torch.autograd.Function):
         total_blocks_M = triton.cdiv(M, BLK_M)
         total_blocks_N = triton.cdiv(N, BLK_N)
         iters_per_tile = triton.cdiv(K, BLK_K)
-        GROUP_M = 0  # 0 to disable swizzling
+        GROUP_M = 4  # 0 to disable swizzling
         total_tiles = total_blocks_M * total_blocks_N
 
         if total_programs_streamk > 0:  # Stream-K
@@ -232,6 +232,8 @@ class matmul(torch.autograd.Function):
             num_stages=num_stages,
             num_warps=num_warps,
             waves_per_eu = waves_per_eu,
+            matrix_instr_nonkdim = mfmaInstrSize,
+            kpack = kpack,
         )
         if matmul._debug:
             print(f"{kk.n_regs} registers used, {kk.n_spills} spills")
@@ -241,8 +243,8 @@ class matmul(torch.autograd.Function):
         return c
 
     @staticmethod
-    def forward(ctx, a: torch.Tensor, b: torch.Tensor, grid: int, BLK_M=128, BLK_N=128, BLK_K=32, two_tiles=True, num_stages=3, num_warps=4,  waves_per_eu = 2):
-        return matmul._call(a=a, b=b, total_programs_streamk=grid, BLK_M=BLK_M, BLK_N=BLK_N, BLK_K=BLK_K, two_tiles=two_tiles, num_warps=num_warps, num_stages=num_stages,  waves_per_eu = waves_per_eu)
+    def forward(ctx, a: torch.Tensor, b: torch.Tensor, grid: int, BLK_M=128, BLK_N=128, BLK_K=32, two_tiles=True, num_stages=3, num_warps=4,  waves_per_eu = 2, mfmaInstrSize = 16, kpack = 1):
+        return matmul._call(a=a, b=b, total_programs_streamk=grid, BLK_M=BLK_M, BLK_N=BLK_N, BLK_K=BLK_K, two_tiles=two_tiles, num_warps=num_warps, num_stages=num_stages,  waves_per_eu = waves_per_eu, mfmaInstrSize = mfmaInstrSize, kpack = kpack)
 
 # ---------------------------------------------------------------------------
 # Example and Benchmark
@@ -250,20 +252,24 @@ class matmul(torch.autograd.Function):
 
 perf = lambda ms: 2 * m * n * k * 1e-12 / (ms * 1e-3)
 
-m, n, k = 4864, 4096, 8256  # some problem size to test
+#m, n, k = 4864, 4096, 8256  # some problem size to test
+#m, n, k = 4096, 4096, 8192  # some problem size to test
 #m, n, k = 8192, 8192, 8192  # some problem size to test
+m, n, k = 6912, 768, 256  # some problem size to test
 A = torch.randn(m, k, device="cuda", dtype=torch.float16)
 B = torch.randn(k, n, device="cuda", dtype=torch.float16)
-BLK_M = 256
-BLK_N = 128
-BLK_K = 32
+BLK_M = 64
+BLK_N = 64
+BLK_K = 64
 two_tiles = 'True'
 num_stages = 0
-num_warps = 8
+num_warps = 4
 waves_per_eu = 0
+mfmaInstrSize = 16
+kpack = 2
 
 matmul.set_debug(True)
-C = matmul.apply(A, B, total_sm, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu)
+C = matmul.apply(A, B, total_sm, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack)
 #exit(0)
 matmul.set_debug(False)
 expected = A @ B
@@ -277,13 +283,13 @@ print("pass validation test")
 triton_ms = triton.testing.do_bench(lambda: torch.matmul(A, B))
 print(f"PyTorch: {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
-triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, total_sm, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu))
+triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, total_sm, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack))
 print(f"hybrid stream-k (grid={total_sm}): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
-triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, total_sm * 2, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu))
+triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, total_sm * 2, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack))
 print(f"hybrid stream-k (grid={total_sm * 2}): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
-triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, 0, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu))
+triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, 0, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack))
 print(f"tile matmul (grid=0): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
 exit(0)
