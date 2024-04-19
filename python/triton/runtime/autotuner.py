@@ -3,6 +3,7 @@ from __future__ import annotations
 import builtins
 import os
 import time
+import inspect
 from typing import Dict
 
 from ..testing import do_bench, do_bench_cudagraph
@@ -77,6 +78,9 @@ class Autotuner(KernelInterface):
             self.early_config_prune = prune_configs_by.get("early_config_prune", self.early_config_prune)
 
         self.fn = fn
+        self.base_fn = fn
+        while not inspect.isfunction(self.base_fn):
+            self.base_fn = self.base_fn.fn
         self.num_warmups = warmup
         self.num_reps = rep
         import torch
@@ -147,7 +151,7 @@ class Autotuner(KernelInterface):
             config = self.configs[0]
         self.best_config = config
         if os.getenv("TRITON_PRINT_AUTOTUNING", None) == "1" and not used_cached_result:
-            print(f"Triton autotuning for function {self.fn} finished after "
+            print(f"Triton autotuning for function {self.base_fn.__name__} finished after "
                   f"{self.bench_time:.2f}s; best config selected: {self.best_config};")
         full_nargs = {**self.nargs, **kwargs, **self.best_config.kwargs}
         if config.pre_hook is not None:

@@ -173,7 +173,7 @@ $ ninja -C build && ( cd build ; lit test )
   An alternative way to reduce output noisiness is running with
   `LLVM_IR_ENABLE_DUMP=1`, extract the IR before the LLVM pass of interest, and
   then run LLVM's `opt` standalone, perhaps passing `-debug-only=foo` on the
-  command-line.
+  command line.
 - `TRITON_LLVM_DEBUG_ONLY=<comma-separated>` is the equivalent of LLVM's
   `-debug-only` command-line option. This limits the LLVM debug output to
   specific pass or component names (which are specified using `#define
@@ -182,10 +182,12 @@ $ ninja -C build && ( cd build ; lit test )
   separated values to be specified (eg
   `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions` or
   `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions,regalloc"`).
-- `USE_TTGIR_LOC` reparses the ttgir such that the location information will
+- `USE_TTGIR_LOC=1` reparses the ttgir such that the location information will
   be the line number of the ttgir instead of line number of the python file.
   This can provide a direct mapping from ttgir to llir/ptx. When used with
   performance tools, it can provide a breakdown on ttgir instructions.
+- `TRITON_PRINT_AUTOTUNING=1` prints out the best autotuning config and total time
+  spent for each kernel after autotuning is complete.
 
 # Changelog
 
