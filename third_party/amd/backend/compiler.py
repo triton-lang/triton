@@ -42,6 +42,18 @@ class HIPOptions:
         print("Warning: Unexpected device. Wave Size is set to 64.")
         return 64  # Default value
 
+    @staticmethod
+    def get_compute_capability(arch: str) -> int:
+        arch_dict = {
+            'gfx940': 300,
+            'gfx941': 300,
+            'gfx942': 300,
+            'gfx90a': 200,
+            'gfx908': 100,
+            'gfx906': 60,
+        }
+        return arch_dict.get(arch, 0)
+
     def has_amd_mma_instr(self) -> bool:
         is_RDNA3 = 'gfx11' in self.arch
         is_CDNA1 = self.arch in ['gfx908']
@@ -82,6 +94,7 @@ class HIPBackend(BaseBackend):
     def parse_options(self, opts) -> Any:
         args = {'arch': self.target[1]}
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts})
+        args['capability'] = HIPOptions.get_compute_capability(args['arch'])
         return HIPOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -95,7 +108,7 @@ class HIPBackend(BaseBackend):
         )
 
     def get_codegen_implementation(self):
-        codegen_fns = {}
+        codegen_fns = dict()
         return codegen_fns
 
     def load_dialects(self, ctx):
@@ -170,7 +183,7 @@ class HIPBackend(BaseBackend):
         passes.convert.add_index_to_llvmir(pm)
 
         passes.ttgpuir.add_allocate_shared_memory(pm)
-        amd.passes.ttgpuir.add_to_llvmir(pm)
+        amd.passes.ttgpuir.add_to_llvmir(pm, capability)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
 
@@ -254,7 +267,7 @@ class HIPBackend(BaseBackend):
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
         stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options)
-        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, 90)
+        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, options.capability)
         stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)
         stages["hsaco"] = lambda src, metadata: self.make_hsaco(src, metadata, options)
 

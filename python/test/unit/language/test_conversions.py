@@ -1,11 +1,24 @@
 # fmt: off
 
 
+import os
 import numpy as np
 import torch
 import pytest
 import triton
 import triton.language as tl
+
+def is_interpreter():
+    return os.environ.get('TRITON_INTERPRET', '0') == '1'
+
+def is_cuda():
+    return not is_interpreter() and triton.runtime.driver.active.get_current_target()[0] == "cuda"
+
+def is_hip():
+    return not is_interpreter() and triton.runtime.driver.active.get_current_target()[0] == "hip"
+
+def is_on_mi300():
+    return is_hip() and triton.runtime.driver.active.get_current_target()[1] in ('gfx940', 'gfx941', 'gfx942')
 
 def matching_int(dtype):
     if dtype.primitive_bitwidth == 8:
@@ -76,6 +89,10 @@ def launch_exhaustive_populate(dst_dtype, offset, numel, force_odd, output_bits,
     assert(numel % BLOCK_SIZE == 0)
     dst = torch.empty((numel,), dtype=matching_int(dst_dtype), device=device)
     exhaustive_populate[(numel // BLOCK_SIZE,)](triton.reinterpret(dst, dst_dtype), offset, BLOCK_SIZE, force_odd, output_bits, max_repr)
+    # 0x80 in float8e4b8 or float8e5b16 represents inf/nan. We don't need to have that
+    # as input to the conversion kernels.
+    if dst_dtype == tl.float8e4b8 or dst_dtype == tl.float8e5b16:
+        dst = torch.where(dst == 0x80, 0, dst)
     return dst
 
 
@@ -151,6 +168,10 @@ def launch_downcast_emulated(src, src_dtype, dst_dtype, rounding, exponent_bits,
     dst = torch.empty(src.shape, dtype=matching_int(dst_dtype), device=device)
     downcast_emulated[(src.shape[0] // BLOCK_SIZE,)](
         triton.reinterpret(src, src_dtype), triton.reinterpret(dst, dst_dtype), rounding, BLOCK_SIZE, exponent_bits, mantissa_bits, exponent_bias)
+    # 0x80 in float8e4b8 or float8e5b16 represents inf/nan. downcast_emulated kernel will
+    # convert -0. in higher precision to 0x80 and thus need to fix the result to 0.
+    if dst_dtype == tl.float8e4b8 or dst_dtype == tl.float8e5b16:
+        dst = torch.where(dst == 0x80, 0, dst)
     return dst
 
 
@@ -207,7 +228,6 @@ def downcast_test(src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, 
     dst2 = launch_upcast_emulated(dst2, exponent_bits, mantissa_bits, exponent_bias, device=device)
 
     if not (torch.equal(dst, dst2)):
-
         print('Error!!!')
 
         dst = dst.cpu().detach().numpy()
@@ -253,17 +273,31 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
     ('float8e4nv', 'float16'),
     ('float8e4nv', 'bfloat16'),
     ('float8e4nv', 'float32'),
+
+    ('float8e4b8', 'float32'),
+    ('float8e4b8', 'float16'),
+
+    ('float8e5b16', 'float32'),
+    ('float8e5b16', 'float16'),
 ])
 def test_typeconvert_upcast(src_dtype, dst_dtype, device):
 
-    if src_dtype == 'float8e4nv' and torch.cuda.get_device_capability(0) < (9, 0):
-        pytest.skip("float8e4nv upcast tests only supported on compute capability 9.0+")
+    if src_dtype == 'float8e4nv' and is_cuda() and torch.cuda.get_device_capability(0) < (9, 0):
+        pytest.skip("float8e4nv upcast tests only supported on NVGPU with compute capability 9.0+")
+
+    if src_dtype in ('float8e4nv', 'float8e4b15') and is_hip():
+        pytest.skip(f"{src_dtype} upcast tests not supported on ROCm")
+
+    if src_dtype in ('float8e4b8', 'float8e5b16') and (is_cuda() or not is_on_mi300()):
+        pytest.skip("{src_dtype} upcast tests only supported on AMDGPU MI300")
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias, max_repr)
     stuff = {
         'float8e4b15': (4, 3, 15, 0x7e),
         'float8e4nv': (4, 3, 7, 0x7e),
         'float8e5': (5, 2, 15, 0x7b),
+        'float8e4b8': (4, 3, 8, 0x7f),
+        'float8e5b16': (5, 2, 16, 0x7f),
         'float16': (5, 10, 15, 0x7bff),
         'bfloat16': (8, 7, 127, 0x7f7f),
     }[src_dtype]
@@ -278,6 +312,8 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
     ('float32', 'float8e5', 'rtne', 0x47600000),
     ('float32', 'float8e5', 'rtz', 0x47600000),
     ('float32', 'float8e4nv', 'rtne', 0x43e00000),
+    ('float32', 'float8e4b8', 'rtne', 0x43700000),
+    ('float32', 'float8e5b16', 'rtne', 0x47600000),
     # ('float32', 'float8e4b15', 'rtne', 0x3fe00000), # Skip, no HW rtne conversion from f32 to f8e4b15
 
     ('bfloat16', 'float8e5', 'rtne', 0x4760),
@@ -285,14 +321,23 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
 
     ('float16', 'float8e5', 'rtne', 0x7b00),
     ('float16', 'float8e4nv', 'rtne', 0x5f00),
+
+    ('bfloat16', 'float8e5b16', 'rtne', 0x4760),
+    ('bfloat16', 'float8e4b8', 'rtne', 0x4370),
+
+    ('float16', 'float8e5b16', 'rtne', 0x7b00),
+    ('float16', 'float8e4b8', 'rtne', 0x5b80),
 ])
 def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
 
-    if src_dtype != 'float32' and torch.cuda.get_device_capability(0) < (9, 0):
-        pytest.skip("non-float32 downcast tests only supported on compute capability 9.0+")
+    if src_dtype != 'float32' and is_cuda() and torch.cuda.get_device_capability(0) < (9, 0):
+        pytest.skip("non-float32 downcast tests only supported on NVGPU with compute capability 9.0+")
 
-    if dst_dtype.startswith('float8') and rounding == 'rtne' and torch.cuda.get_device_capability(0) < (9, 0):
-        pytest.skip("float8 downcast with RTNE rounding tests only supported on compute capability 9.0+")
+    if dst_dtype in ('float8e5', 'float8e4nv') and rounding == 'rtne' and (is_hip() or torch.cuda.get_device_capability(0) < (9, 0)):
+        pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on NVGPU with compute capability 9.0+")
+
+    if dst_dtype in ('float8e5b16', 'float8e4b8') and rounding == 'rtne' and (is_cuda() or not is_on_mi300()):
+        pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU MI300")
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias)
     stuff = {
@@ -301,6 +346,8 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
         'float8e5': (5, 2, 15),
         'float8e4b15': (4, 3, 15),
         'float8e4nv': (4, 3, 7),
+        'float8e4b8': (4, 3, 8),
+        'float8e5b16': (5, 2, 16),
     }[dst_dtype]
 
     for i in range(256):

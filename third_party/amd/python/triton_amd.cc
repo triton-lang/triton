@@ -35,8 +35,8 @@ namespace py = pybind11;
 namespace {
 void init_triton_amd_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton;
-  m.def("add_to_llvmir", [](mlir::PassManager &pm) {
-    pm.addPass(createConvertTritonAMDGPUToLLVMPass());
+  m.def("add_to_llvmir", [](mlir::PassManager &pm, int computeCapability) {
+    pm.addPass(createConvertTritonAMDGPUToLLVMPass(computeCapability));
   });
   m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm) {
     pm.addPass(mlir::triton::AMD::createDecomposeUnsupportedConversionsPass());

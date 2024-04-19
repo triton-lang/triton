@@ -721,12 +721,14 @@ void init_triton_ir(py::module &&m) {
              return self.getBuilder().getI64Type();
            })
       .def("get_fp8e4nv_ty",
+           // TODO: fp8e4nv is using Float8E4M3FNUZType, which
+           // does not seem right. It should use FloatE4M3FNType
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getType<Float8E4M3FNUZType>();
            })
       .def("get_fp8e4b8_ty",
-           [](TritonOpBuilder &self) -> mlir::Type {
-             return self.getBuilder().getType<mlir::Float8E4M3FNUZType>();
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getType<Float8E4M3FNUZType>();
            })
       .def("get_fp8e4b15_ty",
            [](TritonOpBuilder &self) -> Type {
@@ -737,8 +739,8 @@ void init_triton_ir(py::module &&m) {
              return self.getBuilder().getType<Float8E5M2Type>();
            })
       .def("get_fp8e5b16_ty",
-           [](TritonOpBuilder &self) -> mlir::Type {
-             return self.getBuilder().getType<mlir::Float8E5M2FNUZType>();
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getType<Float8E5M2FNUZType>();
            })
       .def("get_half_ty",
            [](TritonOpBuilder &self) -> Type {
