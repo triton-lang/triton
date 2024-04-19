@@ -912,6 +912,7 @@ struct FpToFpOpConversion
       assert(roundingMode.has_value() &&
              "rounding mode must be specified for fp32->fp16 conversion");
       SmallVector<Value> outVals;
+      outVals.reserve(operands[0].size());
       for (Value v : operands[0]) {
         outVals.push_back(
             cvtFp32ToFp16(loc, rewriter, v, roundingMode.value()));
@@ -923,6 +924,7 @@ struct FpToFpOpConversion
       assert(roundingMode.has_value() &&
              "rounding mode must be specified for fp32->bf16 conversion");
       SmallVector<Value> outVals;
+      outVals.reserve(operands[0].size());
       for (Value v : operands[0]) {
         outVals.push_back(
             convertFp32ToBf16(loc, rewriter, v, roundingMode.value()));
@@ -945,6 +947,7 @@ struct FpToFpOpConversion
     Type srcType = useFP16IntermediateSrc ? f16_ty : srcElementType;
     Type dstType = isDstFP32 ? f16_ty : dstElementType;
     SmallVector<Value> inVals;
+    inVals.reserve(std::min(numElements, operands.size()));
     for (unsigned i = 0; i < std::min(numElements, operands.size()); i++) {
       inVals.push_back(operands[i][0]);
     }
@@ -957,15 +960,13 @@ struct FpToFpOpConversion
     if (srcType != dstType) {
       auto getCvtFunc = getConversionFunc(srcType, dstType, roundingMode);
       if (failed(getCvtFunc)) {
-        std::string err_msg;
-        llvm::raw_string_ostream errs(err_msg);
-        errs << "Unsupported conversion from " << srcType << " to " << dstType;
-        if (roundingMode.has_value())
-          errs << " with rounding mode "
-               << stringifyRoundingMode(roundingMode.value());
-        errs << "\n";
-        mlir::emitError(loc, err_msg);
-        llvm::report_fatal_error("Unsupported rounding mode for conversion.");
+        mlir::emitError(loc, "Unsupported conversion from ")
+            << srcType << " to " << dstType
+            << (roundingMode.has_value()
+                    ? " with rounding mode " +
+                          stringifyRoundingMode(roundingMode.value())
+                    : "");
+        return outVals;
       } else {
         auto cvtFunc = getCvtFunc.value();
         outVals = cvtFunc(loc, rewriter, inVals);
