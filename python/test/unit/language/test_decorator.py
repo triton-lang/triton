@@ -45,4 +45,4 @@ def test_triton_heuristic(device):
     _kernel[grid](dst, src, N=N)
     assert dst[0].item() == 0.0
     assert dst[1].item() == 1.0
-    assert _kernel.jit_fn.__name__ == "_kernel"
+    assert _kernel.base_fn.__name__ == "_kernel"
