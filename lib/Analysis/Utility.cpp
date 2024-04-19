@@ -911,7 +911,7 @@ MakeTensorPtrOp getMakeTensorPtrOp(Value v) {
   if (auto forOp = dyn_cast<scf::ForOp>(argOwner))
     return getMakeTensorPtrOp(
         forOp.getOperand(argNum + forOp.getNumControlOperands() - 1));
-  if (auto funcOp = dyn_cast<FuncOp>(argOwner)) {
+  if (auto funcOp = dyn_cast<FunctionOpInterface>(argOwner)) {
     Block *block = arg.getOwner();
     Operation *op;
     int tOrF;
