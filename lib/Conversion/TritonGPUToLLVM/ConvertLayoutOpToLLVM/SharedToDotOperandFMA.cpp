@@ -91,7 +91,7 @@ ValueTable getValueTableFromStruct(Value val, int K, int n0, int shapePerCTA,
 Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
                Location loc, const LLVMTypeConverter *typeConverter,
                ConversionPatternRewriter &rewriter) {
-  auto aTensorTy = A.getType().cast<MemDescType>();
+  auto aTensorTy = cast<MemDescType>(A.getType());
   auto aLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
   auto aShapePerCTA = getShapePerCTA(aTensorTy);
 
@@ -157,7 +157,7 @@ Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
 Value loadBFMA(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
                Location loc, const LLVMTypeConverter *typeConverter,
                ConversionPatternRewriter &rewriter) {
-  auto bTensorTy = B.getType().cast<MemDescType>();
+  auto bTensorTy = cast<MemDescType>(B.getType());
   auto bLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
   auto bShapePerCTA = getShapePerCTA(bTensorTy);
 

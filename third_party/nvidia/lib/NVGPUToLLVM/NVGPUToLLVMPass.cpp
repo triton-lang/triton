@@ -98,7 +98,7 @@ public:
     auto isConstraintNumber = isNumber(constraint);
     if (!isConstraintNumber) {
       auto ty = getTypeFromConstraint(constraint[0], rewriter);
-      if (val.getType().isa<LLVM::LLVMPointerType>()) {
+      if (isa<LLVM::LLVMPointerType>(val.getType())) {
         return ptrtoint(ty, val);
       } else {
         assert(val.getType().getIntOrFloatBitWidth() <=
@@ -479,7 +479,7 @@ public:
 
   std::vector<std::string>
   getOutputConstraints(ttn::WGMMAWaitGroupOp op) const {
-    auto outputStructType = op.getType().cast<LLVM::LLVMStructType>();
+    auto outputStructType = cast<LLVM::LLVMStructType>(op.getType());
     uint32_t numOutputRegs = outputStructType.getBody().size();
     std::string output =
         outputStructType.getBody().front().isF32() ? "=f" : "=r";
@@ -495,7 +495,7 @@ public:
   }
 
   std::string getPtxAsm(ttn::WGMMAWaitGroupOp op) const {
-    auto outputStructType = op.getType().dyn_cast<LLVM::LLVMStructType>();
+    auto outputStructType = dyn_cast<LLVM::LLVMStructType>(op.getType());
     uint32_t numCRegs = outputStructType.getBody().size();
     std::string args = "";
     uint32_t asmOpIdx = 0;
@@ -519,7 +519,7 @@ public:
     // the output is a struct or not. We should find a way to pass this info
     auto resultType = op.getType();
 
-    auto outputStructType = resultType.dyn_cast<LLVM::LLVMStructType>();
+    auto outputStructType = dyn_cast<LLVM::LLVMStructType>(resultType);
     uint32_t numOutputRegs = outputStructType.getBody().size();
     std::string output =
         outputStructType.getBody().front().isF32() ? "=f" : "=r";
@@ -533,7 +533,7 @@ public:
     auto opC = op.getOpC();
     auto typeA = opA.getType();
 
-    auto structTypeA = typeA.dyn_cast<LLVM::LLVMStructType>();
+    auto structTypeA = dyn_cast<LLVM::LLVMStructType>(typeA);
 
     // TODO (zahi): is this the best way to tie inputs/outputs ?
     if (opC)
@@ -567,9 +567,9 @@ public:
     auto typeA = opA.getType();
     auto typeB = opB.getType();
     auto typeOutput = op.getType();
-    auto structTypeA = typeA.dyn_cast<LLVM::LLVMStructType>();
-    auto structTypeB = typeB.dyn_cast<LLVM::LLVMStructType>();
-    auto structTypeOutput = typeOutput.dyn_cast<LLVM::LLVMStructType>();
+    auto structTypeA = dyn_cast<LLVM::LLVMStructType>(typeA);
+    auto structTypeB = dyn_cast<LLVM::LLVMStructType>(typeB);
+    auto structTypeOutput = dyn_cast<LLVM::LLVMStructType>(typeOutput);
     assert(!structTypeB && "Operand B can not be registers");
     assert(structTypeOutput && "Output and C operand must be registers");
 

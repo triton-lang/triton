@@ -50,8 +50,7 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
     unsigned K = AShapePerCTA[reduceAxis];
     bool isOuter = K == 1;
 
-    NvidiaMmaEncodingAttr mmaLayout = D.getType()
-                                          .cast<RankedTensorType>()
+    NvidiaMmaEncodingAttr mmaLayout = cast<RankedTensorType>(D.getType())
                                           .getEncoding()
                                           .dyn_cast<NvidiaMmaEncodingAttr>();
     if (!isOuter && mmaLayout && supportMMA(op, mmaLayout.getVersionMajor())) {
@@ -69,8 +68,7 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
           "Unsupported MMA kind found when converting DotOp to LLVM.");
     }
 
-    if (D.getType()
-            .cast<RankedTensorType>()
+    if (cast<RankedTensorType>(D.getType())
             .getEncoding()
             .isa<BlockedEncodingAttr>())
       return convertFMADot(op, adaptor, getTypeConverter(), rewriter);
@@ -99,8 +97,7 @@ struct DotAsyncOpConversion
     unsigned K = AShapePerCTA[reduceAxis];
     bool isOuter = K == 1;
 
-    NvidiaMmaEncodingAttr mmaLayout = D.getType()
-                                          .cast<RankedTensorType>()
+    NvidiaMmaEncodingAttr mmaLayout = cast<RankedTensorType>(D.getType())
                                           .getEncoding()
                                           .dyn_cast<NvidiaMmaEncodingAttr>();
     if (!isOuter && mmaLayout &&
@@ -139,7 +136,7 @@ struct DotWaitOpConversion
     std::vector<Type> types;
     // Pack the inputs into a single struct.
     for (Value input : adaptor.getInputs()) {
-      auto structType = input.getType().dyn_cast<LLVM::LLVMStructType>();
+      auto structType = dyn_cast<LLVM::LLVMStructType>(input.getType());
       if (!structType)
         return failure();
       for (Type type : structType.getBody())
@@ -150,7 +147,7 @@ struct DotWaitOpConversion
     Value packed = rewriter.create<LLVM::UndefOp>(loc, packedType);
     unsigned outputStructIndex = 0;
     for (Value input : adaptor.getInputs()) {
-      auto structType = input.getType().dyn_cast<LLVM::LLVMStructType>();
+      auto structType = dyn_cast<LLVM::LLVMStructType>(input.getType());
       for (unsigned i = 0; i < structType.getBody().size(); ++i) {
         Value value = rewriter.create<LLVM::ExtractValueOp>(
             loc, structType.getBody()[i], input, i);
@@ -164,7 +161,7 @@ struct DotWaitOpConversion
     SmallVector<Value> outputs;
     outputStructIndex = 0;
     for (Value input : adaptor.getInputs()) {
-      auto structType = input.getType().cast<LLVM::LLVMStructType>();
+      auto structType = cast<LLVM::LLVMStructType>(input.getType());
       Value unpacked = rewriter.create<LLVM::UndefOp>(loc, structType);
       for (unsigned i = 0; i < structType.getBody().size(); ++i) {
         Value value = rewriter.create<LLVM::ExtractValueOp>(

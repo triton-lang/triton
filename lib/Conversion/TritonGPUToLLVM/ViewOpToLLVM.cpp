@@ -19,7 +19,7 @@ struct SplatOpConversion : public ConvertOpToLLVMPattern<triton::SplatOp> {
                                   const LLVMTypeConverter *typeConverter,
                                   ConversionPatternRewriter &rewriter,
                                   Location loc) {
-    auto tensorTy = resType.cast<RankedTensorType>();
+    auto tensorTy = cast<RankedTensorType>(resType);
     // Check the converted type for the tensor as depending on the encoding the
     // converter may pick different element types.
     auto srcType = typeConverter->convertType(tensorTy);
@@ -99,7 +99,7 @@ struct CatOpConversion : public ConvertOpToLLVMPattern<CatOp> {
   matchAndRewrite(CatOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto resultTy = op.getType().template cast<RankedTensorType>();
+    auto resultTy = cast<RankedTensorType>(op.getType());
     unsigned elems = getTotalElemsPerThread(resultTy);
     auto typeConverter = getTypeConverter();
     Type elemTy = typeConverter->convertType(resultTy.getElementType());
@@ -139,7 +139,7 @@ struct JoinOpConversion : public ConvertOpToLLVMPattern<JoinOp> {
     // With these invariants, join is trivial: We just return the i'th element
     // from lhs, followed by the i'th elem from rhs.
     Location loc = op->getLoc();
-    auto resultTy = op.getType().cast<RankedTensorType>();
+    auto resultTy = cast<RankedTensorType>(op.getType());
     auto typeConverter = getTypeConverter();
     SmallVector<Value> lhsVals =
         unpackLLElements(loc, adaptor.getLhs(), rewriter);
@@ -183,7 +183,7 @@ struct SplitOpConversion : public ConvertOpToLLVMPattern<SplitOp> {
       outLhsVals.push_back(srcVals[i]);
       outRhsVals.push_back(srcVals[i + 1]);
     }
-    auto resultTy = op.getResult(0).getType().cast<RankedTensorType>();
+    auto resultTy = cast<RankedTensorType>(op.getResult(0).getType());
     Value retLhs =
         packLLElements(loc, typeConverter, outLhsVals, rewriter, resultTy);
     Value retRhs =
@@ -205,8 +205,8 @@ struct ReshapeOpConversion : public ConvertOpToLLVMPattern<ReshapeOp> {
       return emitOptionalError(loc,
                                "expensive view not supported on reshape op");
     }
-    auto resultTy = op.getType().template cast<RankedTensorType>();
-    auto srcTy = op.getSrc().getType().template cast<RankedTensorType>();
+    auto resultTy = cast<RankedTensorType>(op.getType());
+    auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
     auto typeConverter = getTypeConverter();
     auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     Value ret = packLLElements(loc, typeConverter, vals, rewriter, resultTy);
@@ -226,8 +226,8 @@ struct ExpandDimsOpConversion : public ConvertOpToLLVMPattern<ExpandDimsOp> {
     Location loc = op->getLoc();
     auto typeConverter = getTypeConverter();
     auto srcVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
-    auto resultTy = op.getType().template cast<RankedTensorType>();
+    auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
+    auto resultTy = cast<RankedTensorType>(op.getType());
     auto srcLayout = srcTy.getEncoding().dyn_cast<SliceEncodingAttr>();
     if (!srcLayout) {
       return emitOptionalError(
@@ -258,7 +258,7 @@ struct TransOpConversion : public ConvertOpToLLVMPattern<TransOp> {
   matchAndRewrite(TransOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto resultTy = op.getType().cast<TensorOrMemDesc>();
+    auto resultTy = cast<TensorOrMemDesc>(op.getType());
     if (auto enc = resultTy.getEncoding().dyn_cast<SharedEncodingAttr>()) {
       auto llvmElemTy =
           getTypeConverter()->convertType(resultTy.getElementType());
@@ -310,8 +310,8 @@ struct BroadcastOpConversion
     Location loc = op->getLoc();
     Value src = adaptor.getSrc();
     Value result = op.getResult();
-    auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
-    auto resultTy = result.getType().cast<RankedTensorType>();
+    auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
+    auto resultTy = cast<RankedTensorType>(result.getType());
     auto srcLayout = srcTy.getEncoding();
     auto resultLayout = resultTy.getEncoding();
     auto srcShape = srcTy.getShape();

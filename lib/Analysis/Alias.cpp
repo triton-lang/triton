@@ -37,7 +37,7 @@ void SharedMemoryAliasAnalysis::visitOperation(
     aliasInfo = AliasInfo(operands[0]->getValue());
     pessimistic = false;
   } else {
-    assert(!result.getType().isa<triton::MemDescType>() &&
+    assert(!isa<triton::MemDescType>(result.getType()) &&
            "unknown operation creating memory descriptor");
   }
 
