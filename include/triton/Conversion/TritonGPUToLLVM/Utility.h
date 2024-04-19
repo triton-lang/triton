@@ -216,7 +216,7 @@ Value createNaNConstant(Location loc, OpBuilder &rewriter, Type type);
 
 /// Create an index type constant.
 Value createIndexConstant(OpBuilder &builder, Location loc,
-                          TypeConverter *converter, int64_t value);
+                          const TypeConverter *converter, int64_t value);
 
 /// Create an integer constant of \param width bits.
 Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
