@@ -1575,6 +1575,27 @@ void init_triton_ir(py::module &&m) {
         if (triton::tools::getBoolEnv("TRITON_ENABLE_LLVM_DEBUG")) {
           ::llvm::DebugFlag = true;
         }
+
+        if (auto debugOnly = triton::tools::getenv("TRITON_LLVM_DEBUG_ONLY");
+            !debugOnly.empty()) {
+          llvm::SmallVector<StringRef, 3> split;
+          llvm::SmallVector<std::string, 3> storage;
+          llvm::SmallVector<const char *, 3> debugTypes;
+
+          StringRef(debugOnly.c_str()).split(split, ',');
+          llvm::transform(split, std::back_inserter(debugTypes),
+                          [&storage](StringRef str) {
+                            // StringRefs are not always null-terminated.
+                            // The purpose for this storage pattern is to
+                            // produce a collection of C-strings that are.
+                            storage.push_back(str.str());
+                            return storage.back().c_str();
+                          });
+
+          ::llvm::DebugFlag = true;
+          ::llvm::setCurrentDebugTypes(debugTypes.data(), debugTypes.size());
+        }
+
         if (failed(self.run(mod.getOperation())))
           throw std::runtime_error("PassManager::run failed");
       });

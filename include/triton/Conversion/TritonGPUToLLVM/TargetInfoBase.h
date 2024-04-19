@@ -14,7 +14,8 @@ public:
   virtual Value storeShared(ConversionPatternRewriter &rewriter, Location loc,
                             Value ptr, Value val, Value pred) const = 0;
   virtual Value loadShared(ConversionPatternRewriter &rewriter, Location loc,
-                           Value ptr, Type elemTy, Value pred) const = 0;
+                           const TypeConverter *converter, Value ptr,
+                           Type elemTy, Value pred) const = 0;
 
   virtual Value shuffleXor(ConversionPatternRewriter &rewriter, Location loc,
                            Value val, int i) const = 0;

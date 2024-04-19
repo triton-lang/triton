@@ -154,7 +154,7 @@ Value createNaNConstant(Location loc, OpBuilder &rewriter, Type type) {
 
 // Create an index type constant.
 Value createIndexConstant(OpBuilder &builder, Location loc,
-                          TypeConverter *converter, int64_t value) {
+                          const TypeConverter *converter, int64_t value) {
   Type ty = converter->convertType(builder.getIndexType());
   return builder.create<LLVM::ConstantOp>(loc, ty,
                                           builder.getIntegerAttr(ty, value));

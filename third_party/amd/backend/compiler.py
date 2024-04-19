@@ -29,6 +29,7 @@ class HIPOptions:
     capability: int = None
     matrix_instr_nonkdim: int = 0
     kpack: int = 1
+    allow_flush_denorm: bool = False
     max_num_imprecise_acc_default: int = 0
 
     @staticmethod
@@ -173,7 +174,6 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
 
-        passes.convert.add_scf_to_cf(pm)
         passes.convert.add_cf_to_llvmir(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
@@ -193,7 +193,6 @@ class HIPBackend(BaseBackend):
         amd.set_isa_version(llvm_mod, options.arch)
         amd.set_abi_version(llvm_mod, 400)
         amd.set_bool_control_constant(llvm_mod, "__oclc_finite_only_opt", False)
-        amd.set_bool_control_constant(llvm_mod, "__oclc_daz_opt", False)
         amd.set_bool_control_constant(llvm_mod, "__oclc_correctly_rounded_sqrt32", True)
         amd.set_bool_control_constant(llvm_mod, "__oclc_unsafe_math_opt", False)
         amd.set_bool_control_constant(llvm_mod, "__oclc_wavefrontsize64", options.warp_size == 64)
@@ -204,7 +203,8 @@ class HIPBackend(BaseBackend):
         kernels[0].set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
         kernels[0].add_fn_attr("amdgpu-flat-work-group-size", f"1,{options.num_warps*options.warp_size}")
         kernels[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
-        kernels[0].add_fn_attr("denormal-fp-math-f32", "preserve-sign")
+        denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
+        kernels[0].add_fn_attr("denormal-fp-math-f32", denormal_mode)
         # Hint the compiler that we'd like the firmware to set the kernel arguments
         # to user SGPRs so that the kernel does not need to s_load its arguments
         # from memory.
