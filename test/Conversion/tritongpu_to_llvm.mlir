@@ -1644,3 +1644,20 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     tt.return
   }
 }
+
+// -----
+#blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
+  // CHECK-LABEL: test_l2_hint
+  // CHECK: %[[policy:[0-9]*]] = {{.*}}createpolicy.fractional.L2::evict_last.b64
+  // CHECK: ld.global.L1::evict_last.L2::cache_hint.b32 {{.*}} %{{[0-9]+}}, %[[policy]]
+  // CHECK: ld.global.L1::evict_last.L2::cache_hint.b32
+  // CHECK: st.global.L1::evict_last.L2::cache_hint.b32
+  tt.func public @test_l2_hint(%a_ptr : tensor<512x!tt.ptr<f32>, #blocked>, %b_ptr : tensor<512x!tt.ptr<f32>, #blocked>, %mask : tensor<512xi1, #blocked>, %c_ptr : tensor<512x!tt.ptr<f32>, #blocked>) {
+    %9 = tt.load %a_ptr, %mask {cache = 1 : i32, evict = 3 : i32, isVolatile = false} : tensor<512x!tt.ptr<f32>, #blocked>
+    %12 = tt.load %b_ptr, %mask {cache = 1 : i32, evict = 3 : i32, isVolatile = false} : tensor<512x!tt.ptr<f32>, #blocked>
+    %13 = arith.addf %9, %12 : tensor<512xf32, #blocked>
+    tt.store %c_ptr, %13, %mask {cache = 1 : i32, evict = 3 : i32} : tensor<512x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
