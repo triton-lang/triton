@@ -161,22 +161,74 @@ An encoding for tensors whose elements may be simultaneously accessed by
 different cuda threads in the programs, via shared memory. In other words,
 for all indices i \in R^d, \mathcal{L}(i) = {0, 1, ..., 32*num_warps - 1}.
 
-In order to avoid shared memory bank conflicts, elements may be swizzled
-in memory. Swizzling is defined with three parameters: vec, perPhase and
-maxPhase. Vec defines group of the elements that are accessed contiguously.
-Every perPhase number of rows of data the elements will be rotated right by
-vec, so in phase P the 0th element of the row is at the position P*vec.
-maxPhase defines after how many phases the rotation is reset.
-For example, a swizzled row-major layout could store its data
-as follows:
+In order to avoid shared memory bank conflicts, elements may be swizzled.  Here
+are some examples.  In all cases, the input tensor is [0, 1, ..., n-1].
 
-A_{0, 0}  A_{0, 1}  A_{0, 2}  A_{0, 3} ...   [phase 0] \ per_phase = 2
-A_{1, 0}  A_{1, 1}  A_{1, 2}  A_{1, 3} ...   [phase 0] /
-groups of vec=2 elements
-are stored contiguously
-_ _ _ _ /\_ _ _ _
-A_{2, 2}  A_{2, 3}  A_{2, 0}  A_{2, 1} ...   [phase 1] \ per phase = 2
-A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
+1. Basic swizzling
+
+  #shared<{vec=1, perPhase=1, maxPhase=4, order=[1,0]}>
+  [ 0,  1,  2,  3],  // xor with 0
+  [ 5,  4,  7,  6],  // xor with 1
+  [10, 11,  8,  9],  // xor with 2
+  [15, 14, 13, 12]   // xor with 3
+
+Here elements of row r are xor'ed with r (or more properly, in[r][c] ->
+out[r][c^r]).
+
+2. Multiple rows per phase
+
+  #shared<{vec=1, perPhase=2, maxPhase=4, order=[1,0]}>
+  [ 0,  1,  2,  3],  // phase 0 (xor with 0)
+  [ 4,  5,  6,  7],
+  [ 9,  8, 11, 10],  // phase 1 (xor with 1)
+  [13, 12, 15, 14]
+
+Elements of row r are xor'ed with r/2.  In other words, perPhase=2
+means that pairs of 2 rows get the same swizzling.
+
+3. Max-phase applied
+
+  $shared<{vec=1, perPhase=1, maxPhase=2, order=[1,0]}>
+  [ 0,  1,  2,  3],  // phase 0 (xor with 0)
+  [ 5,  4,  7,  6],  // phase 1 (xor with 1)
+  [ 8,  9, 10, 11],  // phase 0
+  [13, 12, 15, 14],  // phase 1
+  [16, 17, 18, 19],  // ...
+  [21, 20, 23, 22],
+  [24, 25, 26, 27],
+  [29, 28, 31, 30]
+
+Elements of row r are xor'ed with (r/2) % 2.  In other words, maxPhase=m has the
+effect of limiting the maximum value of the xor to m-1.
+
+4. Max-phase and per-phase
+
+  #shared<{vec=1, perPhase=2, maxPhase=2, order=[1,0]}>
+  [ 0,  1,  2,  3],  // phase 0 (xor with 0)
+  [ 4,  5,  6,  7],  // phase 0
+  [ 9,  8, 11, 10],  // phase 1 (xor with 1)
+  [13, 12, 15, 14],  // phase 1
+  [16, 17, 18, 19],  // phase 0
+  [20, 21, 22, 23],  // phase 0
+  [25, 24, 27, 26],  // phase 1
+  [29, 28, 31, 30]]  // phase 1
+
+Here the xor value (the "phase", I guess?) changes every perPhase rows, up to a
+maximum value of maxPhase-1.  In other words, elements of row r are xor'ed with
+(r/2) % 2.
+
+5. Adding vec
+
+  #shared<{vec=2, perPhase=1, maxPhase=4, order=[1,0]}>
+  [ 0,  1,  2,  3,  4,  5,  6,  7],
+  [10, 11,  8,  9, 14, 15, 12, 13],
+  [20, 21, 22, 23, 16, 17, 18, 19],
+  [30, 31, 28, 29, 26, 27, 24, 25]
+
+When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
+(r,c) has value
+
+  ((c / 2) ^ r) * 2 + (c % 2).
 
 For MMAv3 eg Hopper GMMA, hasLeadingOffset should be true. In this case,
 when the matrix is stored in shared memory, there will be an offset not
