@@ -14,13 +14,13 @@ You can install the latest stable release of Triton from pip:
 
       pip install triton
 
-Binary wheels are available for CPython 3.7-3.11 and PyPy 3.8-3.9.
+Binary wheels are available for CPython 3.7-3.12 and PyPy 3.8-3.9.
 
 And the latest nightly release:
 
 .. code-block:: bash
 
-      pip install -U --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/triton-nightly
+      pip install -U --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/ triton-nightly
 
 
 -----------
