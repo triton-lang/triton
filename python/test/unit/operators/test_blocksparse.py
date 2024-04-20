@@ -7,7 +7,7 @@ import triton.ops
 
 def is_hip_mi200():
     target = triton.runtime.driver.active.get_current_target()
-    return target[0] == 'hip' and target[1] == 'gfx90a'
+    return target.backend == 'hip' and target.target == 'gfx90a'
 
 
 def sparsify_tensor(x, mask, block):

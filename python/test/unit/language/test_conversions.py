@@ -12,13 +12,13 @@ def is_interpreter():
     return os.environ.get('TRITON_INTERPRET', '0') == '1'
 
 def is_cuda():
-    return not is_interpreter() and triton.runtime.driver.active.get_current_target()[0] == "cuda"
+    return not is_interpreter() and triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 def is_hip():
-    return not is_interpreter() and triton.runtime.driver.active.get_current_target()[0] == "hip"
+    return not is_interpreter() and triton.runtime.driver.active.get_current_target().backend == "hip"
 
 def is_on_mi300():
-    return is_hip() and triton.runtime.driver.active.get_current_target()[1] in ('gfx940', 'gfx941', 'gfx942')
+    return is_hip() and triton.runtime.driver.active.get_current_target().target in ('gfx940', 'gfx941', 'gfx942')
 
 def matching_int(dtype):
     if dtype.primitive_bitwidth == 8:

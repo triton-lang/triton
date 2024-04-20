@@ -1,12 +1,21 @@
-from abc import ABCMeta, abstractmethod, abstractclassmethod
 import os
-import subprocess
 import re
+import subprocess
+
+from abc import ABCMeta, abstractmethod, abstractclassmethod
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class GPUTarget(object):
+    backend: str
+    target: str
+    warp_size: int
 
 
 class BaseBackend(metaclass=ABCMeta):
 
-    def __init__(self, target: tuple) -> None:
+    def __init__(self, target: GPUTarget) -> None:
         self.target = target
         assert self.supports_target(target)
 
@@ -28,7 +37,7 @@ class BaseBackend(metaclass=ABCMeta):
         raise RuntimeError(f"Cannot find {binary}")
 
     @abstractclassmethod
-    def supports_target(target: tuple):
+    def supports_target(target: GPUTarget):
         raise NotImplementedError
 
     @abstractmethod
