@@ -4,6 +4,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include <vector>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -144,15 +145,29 @@ private:
     triton::ReduceOp op = helper.getOperation();
     RankedTensorType operandType = op.getInputTypes()[0];
     // Assumes offsets don't actually depend on type
-    SmallVector<SmallVector<unsigned>> offset =
+    SmallVector<SmallVector<unsigned>> offsets =
         emitOffsetForLayout(helper.getSrcLayout(), operandType);
+
+    // Thread X might hold the same input value in two registers.  Get the
+    // indices in `offsets` that hold unique values, and only accumualte over
+    // those.
+    //
+    // TODO(jlebar): This issue exists not just for the register level, but for
+    // every level of the hierarchy.  For example, registers in two different
+    // threads can also contain the same value.  As far as I can tell, this code
+    // does not take that into account anywhere.
+    llvm::MapVector<ArrayRef<unsigned>, int> uniqueOffsets;
+    for (int i = 0; i < offsets.size(); ++i) {
+      uniqueOffsets.insert({offsets[i], i});
+    }
+
     unsigned srcElems = getTotalElemsPerThread(operandType);
     auto *combineOp = &op.getCombineOp();
     auto srcIndices = emitIndices(op.getLoc(), rewriter, targetInfo,
                                   helper.getSrcLayout(), operandType, true);
     // reduce within threads
-    for (unsigned i = 0; i < srcElems; ++i) {
-      SmallVector<unsigned> key = offset[i];
+    for (const auto &[_, i] : uniqueOffsets) {
+      SmallVector<unsigned> key = offsets[i];
       key[op.getAxis()] = 0;
       bool isFirst = accs.find(key) == accs.end();
       accumulate(rewriter, *combineOp, accs[key], srcValues[i], isFirst);

@@ -1,15 +1,23 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_UTILITY_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_UTILITY_H
 
+#include <set>
+
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LinearLayout.h"
+#include "triton/Tools/StrUtil.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/ErrorHandling.h"
-#include <set>
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -128,6 +136,7 @@ using namespace mlir::triton;
 // Attributes
 #define i32_arr_attr(...) rewriter.getI32ArrayAttr({__VA_ARGS__})
 #define i64_arr_attr(...) rewriter.getI64ArrayAttr({__VA_ARGS__})
+#define str_attr(str) ::mlir::StringAttr::get(ctx, (str))
 
 namespace mlir {
 namespace triton {
@@ -429,11 +438,21 @@ inline Value dot(RewriterBase &rewriter, Location loc, ArrayRef<Value> offsets,
 // Blocked layout indices
 // -----------------------------------------------------------------------
 
-// Get an index-base for each dimension for a \param blockedLayout.
+// "Applies" the given layout by computing layout(indices) and returning the
+// resulting Values.
+//
+// In other words, this generates LLVM-dialect MLIR code to "run" the layout
+// function.
+SmallVector<std::pair<StringAttr, Value>>
+applyLinearLayout(Location loc, RewriterBase &rewriter,
+                  const LinearLayout &layout,
+                  ArrayRef<std::pair<StringAttr, Value>> indices);
+
 inline SmallVector<Value>
 emitBaseIndexWithinCTAForBlockedLayout(Location loc, RewriterBase &rewriter,
                                        const BlockedEncodingAttr &blockedLayout,
                                        RankedTensorType type) {
+  MLIRContext *ctx = rewriter.getContext();
   auto shape = type.getShape();
   Value threadId = getThreadId(rewriter, loc);
   Value warpSize = i32_val(triton::gpu::getWarpSize(blockedLayout));
@@ -470,12 +489,14 @@ emitBaseIndexWithinCTAForBlockedLayout(Location loc, RewriterBase &rewriter,
         mul(sizePerThreadK,
             add(multiDimThreadId[k], mul(multiDimWarpId[k], threadsPerWarpK)));
   }
+
   return multiDimBase;
 }
 
 inline SmallVector<SmallVector<unsigned>>
 emitOffsetForBlockedLayout(const BlockedEncodingAttr &blockedLayout,
                            RankedTensorType type) {
+  auto ctx = type.getContext();
   auto shape = type.getShape();
   auto sizePerThread = blockedLayout.getSizePerThread();
   auto threadsPerWarp = blockedLayout.getThreadsPerWarp();
@@ -501,12 +522,15 @@ emitOffsetForBlockedLayout(const BlockedEncodingAttr &blockedLayout,
         getMultiDimIndex<unsigned>(linearNanoTileElemId, sizePerThread, order);
     for (unsigned k = 0; k < rank; ++k) {
       unsigned reorderedMultiDimId =
-          multiDimNanoTileId[k] *
-              (sizePerThread[k] * threadsPerWarp[k] * warpsPerCTA[k]) +
-          multiDimNanoTileElemId[k];
+          (multiDimNanoTileId[k] *
+               (sizePerThread[k] * threadsPerWarp[k] * warpsPerCTA[k]) +
+           multiDimNanoTileElemId[k]) %
+          shapePerCTA[k];
+
       reorderedOffset[n].push_back(reorderedMultiDimId);
     }
   }
+
   return reorderedOffset;
 }
 
@@ -978,23 +1002,36 @@ emitOffsetForSliceLayout(const SliceEncodingAttr &sliceLayout,
   RankedTensorType parentTy =
       RankedTensorType::get(parentShape, type.getElementType(), parentEncoding);
   auto parentOffsets = emitOffsetForLayout(parentEncoding, parentTy);
+  if (parentOffsets.empty())
+    return {};
 
-  unsigned numOffsets = parentOffsets.size();
   SmallVector<SmallVector<unsigned>> resultOffsets;
   std::set<SmallVector<unsigned>> uniqueOffsets;
 
-  for (unsigned i = 0; i < numOffsets; ++i) {
-    SmallVector<unsigned> offsets = parentOffsets[i];
+  for (unsigned i = 0; i < parentOffsets.size(); ++i) {
+    SmallVector<unsigned> offsets(parentOffsets[i].begin(),
+                                  parentOffsets[i].end());
     offsets.erase(offsets.begin() + dim);
-    if (uniqueOffsets.find(offsets) == uniqueOffsets.end()) {
+    if (auto [it, inserted] = uniqueOffsets.insert(offsets); inserted) {
       resultOffsets.push_back(offsets);
-      uniqueOffsets.insert(offsets);
     }
   }
-  return resultOffsets;
-}
 
-//
+  // It can happen that after deduplicating elements above, resultOffsets has
+  // fewer than getTotalElementsPerThread() elements.  In that case repeat the
+  // sequence.
+  int elemsPerThread = triton::gpu::getTotalElemsPerThread(type);
+  assert(resultOffsets.size() > 0);
+  assert(elemsPerThread % resultOffsets.size() == 0);
+  int numRepeats = elemsPerThread / resultOffsets.size();
+  SmallVector<SmallVector<unsigned>> ret;
+  for (int i = 0; i < numRepeats; ++i) {
+    for (unsigned j = 0; j < resultOffsets.size(); ++j) {
+      ret.push_back(SmallVector<unsigned>(resultOffsets[j]));
+    }
+  }
+  return ret;
+}
 
 // -----------------------------------------------------------------------
 // Get offsets / indices for any layout
@@ -1129,11 +1166,28 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
   llvm_unreachable("unsupported emitOffsetForLayout");
 }
 
+// Eventually this will become the only emitIndices function.
+std::optional<SmallVector<SmallVector<Value>>>
+emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
+                              const TargetInfoBase &target, Attribute layout,
+                              RankedTensorType type, bool withCTAOffset);
+
 // Emit indices calculation within each ConversionPattern, and returns a
 // [elemsPerThread X rank] index matrix.
 inline SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
-            Attribute layout, RankedTensorType type, bool withCTAOffset) {
+            Attribute layout, RankedTensorType type, bool withCTAOffset,
+            bool allowLL = true) {
+  // Eventually the LinearLayout path will be the only one.  For now we allow
+  // both paths so we can test that they produce the same results.
+  if (allowLL) {
+    std::optional<SmallVector<SmallVector<Value>>> llOffsets =
+        emitIndicesUsingLinearLayouts(loc, rewriter, target, layout, type,
+                                      withCTAOffset);
+    if (llOffsets.has_value())
+      return *llOffsets;
+  }
+
   // step 1, delinearize threadId to get the base index
   auto multiDimBase = emitBaseIndexForLayout(loc, rewriter, target, layout,
                                              type, withCTAOffset);
@@ -1150,6 +1204,7 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   for (unsigned n = 0; n < elemsPerThread; ++n)
     for (unsigned k = 0; k < rank; ++k)
       multiDimIdx[n][k] = add(multiDimBase[k], i32_val(offset[n][k]));
+
   return multiDimIdx;
 }
 
@@ -1205,8 +1260,8 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
          outVec * maxPhase <= srcShape[outOrder[0]] &&
              "Swizzling would generate out of bounds memory accesses");
   // Tensor indices held by the current thread, as LLVM values
-  auto srcIndices =
-      emitIndices(loc, rewriter, target, srcEncoding, srcTy, false);
+  auto srcIndices = emitIndices(loc, rewriter, target, srcEncoding, srcTy,
+                                /*withCTAOffset=*/false);
   // Swizzling with leading offsets (e.g. Hopper GMMA)
   unsigned swizzlingByteWidth = 0;
   if (resSharedLayout.getHasLeadingOffset()) {
