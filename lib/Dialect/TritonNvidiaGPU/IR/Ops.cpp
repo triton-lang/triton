@@ -67,6 +67,27 @@ LogicalResult DotWaitOp::inferReturnTypes(
   return mlir::success();
 }
 
+// -- InitBarrierOp --
+LogicalResult InitBarrierOp::verify() {
+  if (!getAlloc().getType().getElementType().isInteger(64))
+    return emitOpError("barrier allocation must be of i64 type");
+  return success();
+}
+
+// -- WaitBarrierOp --
+LogicalResult WaitBarrierOp::verify() {
+  if (!getAlloc().getType().getElementType().isInteger(64))
+    return emitOpError("barrier allocation must be of i64 type");
+  return success();
+}
+
+// -- AsyncTMACopyGlobalToLocalOp --
+LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
+  if (!getBarrier().getType().getElementType().isInteger(64))
+    return emitOpError("barrier allocation must be of i64 type");
+  return success();
+}
+
 } // namespace nvidia_gpu
 } // namespace triton
 } // namespace mlir

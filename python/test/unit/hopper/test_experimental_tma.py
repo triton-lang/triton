@@ -40,7 +40,7 @@ def test_descriptor_load_ttgir():
 
     x = torch.randn(SIZE, dtype=torch.float32, device=device)
     desc = np.empty(SIZE, dtype=np.int8)
-    triton.runtime.driver.active.utils.fill1DTMADescriptor(x.data_ptr(), SIZE, 4, desc)
+    triton.runtime.driver.active.utils.fill_1d_tma_descriptor(x.data_ptr(), SIZE, 4, desc)
     desc = torch.tensor(desc, device=device)
     z_tri = torch.empty_like(x)
     kernel[(1, 1, 1)](z_tri, desc)

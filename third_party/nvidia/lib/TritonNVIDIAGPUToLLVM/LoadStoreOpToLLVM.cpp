@@ -909,8 +909,7 @@ struct AsyncCopyGlobalToLocalOpConversion
 struct AsyncTMACopyGlobalToLocalOpConversion
     : public ConvertOpToLLVMPattern<
           triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp> {
-  using ConvertOpToLLVMPattern<
-      triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>::ConvertOpToLLVMPattern;
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp op,

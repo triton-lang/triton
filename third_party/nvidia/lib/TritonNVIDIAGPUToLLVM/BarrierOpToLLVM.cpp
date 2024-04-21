@@ -35,7 +35,7 @@ using namespace mlir::triton;
 namespace {
 struct BarrierOpConversion
     : public ConvertOpToLLVMPattern<mlir::gpu::BarrierOp> {
-  using ConvertOpToLLVMPattern<mlir::gpu::BarrierOp>::ConvertOpToLLVMPattern;
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(mlir::gpu::BarrierOp op, OpAdaptor adaptor,
@@ -72,8 +72,7 @@ struct FenceAsyncSharedOpConversion
 
 struct InitBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::InitBarrierOp> {
-  using ConvertOpToLLVMPattern<
-      triton::nvidia_gpu::InitBarrierOp>::ConvertOpToLLVMPattern;
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::InitBarrierOp op, OpAdaptor adaptor,
@@ -102,8 +101,7 @@ struct InitBarrierOpConversion
 
 struct WaitBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::WaitBarrierOp> {
-  using ConvertOpToLLVMPattern<
-      triton::nvidia_gpu::WaitBarrierOp>::ConvertOpToLLVMPattern;
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::WaitBarrierOp op, OpAdaptor adaptor,
@@ -116,7 +114,7 @@ struct WaitBarrierOpConversion
         "{                                                           \n\t"
         ".reg .pred P1;                                              \n\t"
         "waitLoop:                                                   \n\t"
-        "mbarrier.try_wait.parity.shared.b64 P1, [$0], $1, 0x989680; \n\t"
+        "mbarrier.try_wait.parity.shared.b64 P1, [$0], $1;           \n\t"
         "@!P1 bra.uni waitLoop;                                      \n\t"
         "}                                                           \n\t";
     ::mlir::triton::PTXBuilder ptxBuilder;
