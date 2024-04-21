@@ -99,7 +99,7 @@ class CUDABackend(BaseBackend):
 
     def __init__(self, target: GPUTarget) -> None:
         super().__init__(target)
-        self.capability = target.target
+        self.capability = target.arch
         assert isinstance(self.capability, int)
         self.binary_ext = "cubin"
 

@@ -4,12 +4,15 @@ import subprocess
 
 from abc import ABCMeta, abstractmethod, abstractclassmethod
 from dataclasses import dataclass
+from typing import Union
 
 
 @dataclass(frozen=True)
 class GPUTarget(object):
+    # Target backend, e.g., cuda, hip
     backend: str
-    target: str
+    # Target architecture, e.g., 90 (for cuda compute capability), gfx940 (for hip)
+    arch: Union[int, str]
     warp_size: int
 
 

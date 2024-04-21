@@ -87,11 +87,11 @@ class HIPBackend(BaseBackend):
 
     def __init__(self, target: GPUTarget) -> None:
         super().__init__(target)
-        assert isinstance(target.target, str)
+        assert isinstance(target.arch, str)
         self.binary_ext = "hsaco"
 
     def parse_options(self, opts) -> Any:
-        args = {'arch': self.target.target}
+        args = {'arch': self.target.arch}
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts})
         args['capability'] = HIPOptions.get_compute_capability(args['arch'])
         return HIPOptions(**args)
