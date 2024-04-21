@@ -123,7 +123,8 @@ class Package(NamedTuple):
 
 # pybind11
 def get_pybind11_package_info():
-    with open("../cmake/pybind11-version.txt", "r") as pybind11_version_file:
+    pybind11_version_path = os.path.join(get_base_dir(), "cmake", "pybind11-version.txt")
+    with open(pybind11_version_path, "r") as pybind11_version_file:
         version = pybind11_version_file.read().strip()
     name = f"pybind11-{version}"
     url = f"https://github.com/pybind/pybind11/archive/refs/tags/v{version}.tar.gz"
@@ -172,7 +173,8 @@ def get_llvm_package_info():
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     # use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
     # release_suffix = "assert" if use_assert_enabled_llvm else "release"
-    with open("../cmake/llvm-hash.txt", "r") as llvm_hash_file:
+    llvm_hash_path = os.path.join(get_base_dir(), "cmake", "llvm-hash.txt")
+    with open(llvm_hash_path, "r") as llvm_hash_file:
         rev = llvm_hash_file.read(8)
     name = f"llvm-{rev}-{system_suffix}"
     url = f"https://tritonlang.blob.core.windows.net/llvm-builds/{name}.tar.gz"
@@ -402,7 +404,8 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
 
 
-with open("../cmake/nvidia-toolchain-version.txt", "r") as nvidia_version_file:
+nvidia_version_path = os.path.join(get_base_dir(), "cmake", "nvidia-toolchain-version.txt")
+with open(nvidia_version_path, "r") as nvidia_version_file:
     NVIDIA_TOOLCHAIN_VERSION = nvidia_version_file.read().strip()
 
 download_and_copy(
