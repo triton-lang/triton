@@ -112,13 +112,14 @@
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.erf.html">triton.language.erf</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.exp.html">triton.language.exp</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.exp2.html">triton.language.exp2</a></li>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.fma.html">triton.language.fma</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.fdiv.html">triton.language.fdiv</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.floor.html">triton.language.floor</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.fma.html">triton.language.fma</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.log.html">triton.language.log</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.log2.html">triton.language.log2</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.maximum.html">triton.language.maximum</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.minimum.html">triton.language.minimum</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.rsqrt.html">triton.language.rsqrt</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.sigmoid.html">triton.language.sigmoid</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.sin.html">triton.language.sin</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.softmax.html">triton.language.softmax</a></li>
@@ -377,14 +378,14 @@
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.exp2.html#triton.language.exp2" title="triton.language.exp2"><code class="xref py py-obj docutils literal notranslate"><span class="pre">exp2</span></code></a></p></td>
 <td><p>Computes the element-wise exponential (base 2) of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.fma.html#triton.language.fma" title="triton.language.fma"><code class="xref py py-obj docutils literal notranslate"><span class="pre">fma</span></code></a></p></td>
-<td><p>Computes the element-wise fused multiply-add of <code class="code docutils literal notranslate"><span class="pre">x</span></code>, <code class="code docutils literal notranslate"><span class="pre">y</span></code>, and <code class="code docutils literal notranslate"><span class="pre">z</span></code>.</p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.fdiv.html#triton.language.fdiv" title="triton.language.fdiv"><code class="xref py py-obj docutils literal notranslate"><span class="pre">fdiv</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.fdiv.html#triton.language.fdiv" title="triton.language.fdiv"><code class="xref py py-obj docutils literal notranslate"><span class="pre">fdiv</span></code></a></p></td>
 <td><p>Computes the element-wise fast division of <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.floor.html#triton.language.floor" title="triton.language.floor"><code class="xref py py-obj docutils literal notranslate"><span class="pre">floor</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.floor.html#triton.language.floor" title="triton.language.floor"><code class="xref py py-obj docutils literal notranslate"><span class="pre">floor</span></code></a></p></td>
 <td><p>Computes the element-wise floor of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.fma.html#triton.language.fma" title="triton.language.fma"><code class="xref py py-obj docutils literal notranslate"><span class="pre">fma</span></code></a></p></td>
+<td><p>Computes the element-wise fused multiply-add of <code class="code docutils literal notranslate"><span class="pre">x</span></code>, <code class="code docutils literal notranslate"><span class="pre">y</span></code>, and <code class="code docutils literal notranslate"><span class="pre">z</span></code>.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.log.html#triton.language.log" title="triton.language.log"><code class="xref py py-obj docutils literal notranslate"><span class="pre">log</span></code></a></p></td>
 <td><p>Computes the element-wise natural logarithm of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
@@ -398,22 +399,25 @@
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.minimum.html#triton.language.minimum" title="triton.language.minimum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">minimum</span></code></a></p></td>
 <td><p>Computes the element-wise minimum of <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.sigmoid.html#triton.language.sigmoid" title="triton.language.sigmoid"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sigmoid</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.rsqrt.html#triton.language.rsqrt" title="triton.language.rsqrt"><code class="xref py py-obj docutils literal notranslate"><span class="pre">rsqrt</span></code></a></p></td>
+<td><p>Computes the element-wise inverse square root of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.sigmoid.html#triton.language.sigmoid" title="triton.language.sigmoid"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sigmoid</span></code></a></p></td>
 <td><p>Computes the element-wise sigmoid of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.sin.html#triton.language.sin" title="triton.language.sin"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sin</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.sin.html#triton.language.sin" title="triton.language.sin"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sin</span></code></a></p></td>
 <td><p>Computes the element-wise sine of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.softmax.html#triton.language.softmax" title="triton.language.softmax"><code class="xref py py-obj docutils literal notranslate"><span class="pre">softmax</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.softmax.html#triton.language.softmax" title="triton.language.softmax"><code class="xref py py-obj docutils literal notranslate"><span class="pre">softmax</span></code></a></p></td>
 <td><p>Computes the element-wise softmax of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.sqrt.html#triton.language.sqrt" title="triton.language.sqrt"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sqrt</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.sqrt.html#triton.language.sqrt" title="triton.language.sqrt"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sqrt</span></code></a></p></td>
 <td><p>Computes the element-wise fast square root of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.sqrt_rn.html#triton.language.sqrt_rn" title="triton.language.sqrt_rn"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sqrt_rn</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.sqrt_rn.html#triton.language.sqrt_rn" title="triton.language.sqrt_rn"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sqrt_rn</span></code></a></p></td>
 <td><p>Computes the element-wise precise square root (rounding to nearest) of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.umulhi.html#triton.language.umulhi" title="triton.language.umulhi"><code class="xref py py-obj docutils literal notranslate"><span class="pre">umulhi</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.umulhi.html#triton.language.umulhi" title="triton.language.umulhi"><code class="xref py py-obj docutils literal notranslate"><span class="pre">umulhi</span></code></a></p></td>
 <td><p>Computes the element-wise most significant N bits of the 2N-bit product of <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code>.</p></td>
 </tr>
 </tbody>

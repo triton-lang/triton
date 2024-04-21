@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>triton.language.cdiv &mdash; Triton  documentation</title>
+  <title>triton.language.rsqrt &mdash; Triton  documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=fa44fd50" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=19f00094" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=61a4c737" />
@@ -24,8 +24,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="triton.language.clamp" href="triton.language.clamp.html" />
-    <link rel="prev" title="triton.language.abs" href="triton.language.abs.html" /> 
+    <link rel="next" title="triton.language.sigmoid" href="triton.language.sigmoid.html" />
+    <link rel="prev" title="triton.language.minimum" href="triton.language.minimum.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -65,10 +65,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#indexing-ops">Indexing Ops</a></li>
 <li class="toctree-l2 current"><a class="reference internal" href="../triton.language.html#math-ops">Math Ops</a><ul class="current">
 <li class="toctree-l3"><a class="reference internal" href="triton.language.abs.html">triton.language.abs</a></li>
-<li class="toctree-l3 current"><a class="current reference internal" href="#">triton.language.cdiv</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#triton.language.cdiv"><code class="docutils literal notranslate"><span class="pre">cdiv()</span></code></a></li>
-</ul>
-</li>
+<li class="toctree-l3"><a class="reference internal" href="triton.language.cdiv.html">triton.language.cdiv</a></li>
 <li class="toctree-l3"><a class="reference internal" href="triton.language.clamp.html">triton.language.clamp</a></li>
 <li class="toctree-l3"><a class="reference internal" href="triton.language.cos.html">triton.language.cos</a></li>
 <li class="toctree-l3"><a class="reference internal" href="triton.language.div_rn.html">triton.language.div_rn</a></li>
@@ -82,7 +79,10 @@
 <li class="toctree-l3"><a class="reference internal" href="triton.language.log2.html">triton.language.log2</a></li>
 <li class="toctree-l3"><a class="reference internal" href="triton.language.maximum.html">triton.language.maximum</a></li>
 <li class="toctree-l3"><a class="reference internal" href="triton.language.minimum.html">triton.language.minimum</a></li>
-<li class="toctree-l3"><a class="reference internal" href="triton.language.rsqrt.html">triton.language.rsqrt</a></li>
+<li class="toctree-l3 current"><a class="current reference internal" href="#">triton.language.rsqrt</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#triton.language.rsqrt"><code class="docutils literal notranslate"><span class="pre">rsqrt()</span></code></a></li>
+</ul>
+</li>
 <li class="toctree-l3"><a class="reference internal" href="triton.language.sigmoid.html">triton.language.sigmoid</a></li>
 <li class="toctree-l3"><a class="reference internal" href="triton.language.sin.html">triton.language.sin</a></li>
 <li class="toctree-l3"><a class="reference internal" href="triton.language.softmax.html">triton.language.softmax</a></li>
@@ -128,9 +128,9 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../triton.language.html">triton.language</a></li>
-      <li class="breadcrumb-item active">triton.language.cdiv</li>
+      <li class="breadcrumb-item active">triton.language.rsqrt</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/python-api/generated/triton.language.cdiv.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/python-api/generated/triton.language.rsqrt.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -138,24 +138,17 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="triton-language-cdiv">
-<h1>triton.language.cdiv<a class="headerlink" href="#triton-language-cdiv" title="Link to this heading">¶</a></h1>
+  <section id="triton-language-rsqrt">
+<h1>triton.language.rsqrt<a class="headerlink" href="#triton-language-rsqrt" title="Link to this heading">¶</a></h1>
 <dl class="py function">
-<dt class="sig sig-object py" id="triton.language.cdiv">
-<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">cdiv</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">div</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.cdiv" title="Link to this definition">¶</a></dt>
-<dd><p>Computes the ceiling division of <code class="code docutils literal notranslate"><span class="pre">x</span></code> by <code class="code docutils literal notranslate"><span class="pre">div</span></code></p>
+<dt class="sig sig-object py" id="triton.language.rsqrt">
+<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">rsqrt</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.rsqrt" title="Link to this definition">¶</a></dt>
+<dd><p>Computes the element-wise inverse square root of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>x</strong> (<em>Block</em>) – the input number</p></li>
-<li><p><strong>div</strong> – the divisor</p></li>
-<li><p><strong>div</strong> – Block</p></li>
-</ul>
+<dd class="field-odd"><p><strong>x</strong> (<em>Block</em>) – the input values</p>
 </dd>
 </dl>
-<p>This function can also be called as a member function on <a class="reference internal" href="triton.language.tensor.html#triton.language.tensor" title="triton.language.tensor"><code class="xref py py-class docutils literal notranslate"><span class="pre">tensor</span></code></a>,
-as <code class="code docutils literal notranslate"><span class="pre">x.cdiv(...)</span></code> instead of
-<code class="code docutils literal notranslate"><span class="pre">cdiv(x,</span> <span class="pre">...)</span></code>.</p>
 </dd></dl>
 
 </section>
@@ -164,8 +157,8 @@ as <code class="code docutils literal notranslate"><span class="pre">x.cdiv(...)
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="triton.language.abs.html" class="btn btn-neutral float-left" title="triton.language.abs" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="triton.language.clamp.html" class="btn btn-neutral float-right" title="triton.language.clamp" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="triton.language.minimum.html" class="btn btn-neutral float-left" title="triton.language.minimum" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="triton.language.sigmoid.html" class="btn btn-neutral float-right" title="triton.language.sigmoid" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
