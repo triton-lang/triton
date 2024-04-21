@@ -67,24 +67,34 @@ LogicalResult DotWaitOp::inferReturnTypes(
   return mlir::success();
 }
 
+static LogicalResult verifyBarrierType(Operation *op, MemDescType barrierType) {
+  if (!barrierType.getElementType().isInteger(64) ||
+      barrierType.getShape() != ArrayRef<int64_t>({1}))
+    return op->emitOpError(
+        "barrier allocation must be a descriptor of 1xi64 type");
+  return success();
+}
+
 // -- InitBarrierOp --
 LogicalResult InitBarrierOp::verify() {
-  if (!getAlloc().getType().getElementType().isInteger(64))
-    return emitOpError("barrier allocation must be of i64 type");
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
   return success();
 }
 
 // -- WaitBarrierOp --
 LogicalResult WaitBarrierOp::verify() {
-  if (!getAlloc().getType().getElementType().isInteger(64))
-    return emitOpError("barrier allocation must be of i64 type");
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
   return success();
 }
 
 // -- AsyncTMACopyGlobalToLocalOp --
 LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
-  if (!getBarrier().getType().getElementType().isInteger(64))
-    return emitOpError("barrier allocation must be of i64 type");
+  if (failed(verifyBarrierType(*this, getBarrier().getType())))
+    return failure();
+  if (getCoord().size() > 5)
+    return emitOpError("coord must have at most 5 elements");
   return success();
 }
 
