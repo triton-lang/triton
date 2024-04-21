@@ -745,7 +745,7 @@ public:
   ConvertTritonToTritonGPU() = default;
   // constructor with some parameters set explicitly.
   ConvertTritonToTritonGPU(int numWarps, int threadsPerWarp, int numCTAs,
-                           int computeCapability) {
+                           std::optional<int> computeCapability) {
     this->numWarps = numWarps;
     this->threadsPerWarp = threadsPerWarp;
     this->numCTAs = numCTAs;
@@ -783,9 +783,10 @@ public:
     mod->setAttr(AttrNumCTAsName,
                  IntegerAttr::get(i32_ty, llvm::APInt(32, numCTAs.getValue())));
 
-    mod->setAttr(AttrComputeCapabilityName,
-                 IntegerAttr::get(
-                     i32_ty, llvm::APInt(32, computeCapability.getValue())));
+    if (std::optional<int> cc = computeCapability.getValue()) {
+      mod->setAttr(AttrComputeCapabilityName,
+                   IntegerAttr::get(i32_ty, llvm::APInt(32, cc.value())));
+    }
 
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
       return signalPassFailure();
@@ -800,10 +801,9 @@ public:
 } // namespace
 
 std::unique_ptr<OperationPass<ModuleOp>>
-mlir::triton::createConvertTritonToTritonGPUPass(int numWarps,
-                                                 int threadsPerWarp,
-                                                 int numCTAs,
-                                                 int computeCapability) {
+mlir::triton::createConvertTritonToTritonGPUPass(
+    int numWarps, int threadsPerWarp, int numCTAs,
+    std::optional<int> computeCapability) {
   return std::make_unique<::ConvertTritonToTritonGPU>(
       numWarps, threadsPerWarp, numCTAs, computeCapability);
 }

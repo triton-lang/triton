@@ -3,34 +3,6 @@
 
 include "mlir/Pass/PassBase.td"
 
-def TritonAMDGPUPipeline : Pass<"tritonamdgpu-pipeline", "mlir::ModuleOp"> {
-  let summary = "pipeline";
-
-  let description = [{
-    Applies software pipelining to loops in the module based on number of stages.
-    This may convert some load into asynchronous loads, and multi-buffer the data.
-  }];
-
-  let constructor = "mlir::createTritonAMDGPUPipelinePass()";
-
-  let dependentDialects = [];
-
-  let options = [
-    Option<"numStages", "num-stages",
-           "int32_t", /*default*/"3",
-           "number of pipeline stages">,
-    Option<"numWarps", "num-warps",
-           "int32_t", /*default*/"4",
-           "number of warps per block">,
-    Option<"numCTAs", "num-ctas",
-           "int32_t", /*default*/"1",
-           "number of CTAs per CGA">,
-    Option<"computeCapability", "compute-capability",
-           "int32_t", /*default*/"80",
-           "device compute capability">
-  ];
-}
-
 def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::ModuleOp"> {
   let summary = "pipeline";
 

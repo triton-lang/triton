@@ -1,11 +1,16 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOAMD_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOAMD_H
+
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include <string>
+
 namespace mlir::triton::AMD {
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
-  TargetInfo(std::string arch) : arch(std::move(arch)) {}
+  explicit TargetInfo(std::string arch) : arch(std::move(arch)) {}
+
+  ISAFamily getISAFamily() const { return deduceISAFamily(arch); }
 
   bool supportMaximumMinimum() const override;
 
@@ -55,4 +60,5 @@ private:
   std::string arch;
 };
 } // namespace mlir::triton::AMD
+
 #endif // TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOAMD_H

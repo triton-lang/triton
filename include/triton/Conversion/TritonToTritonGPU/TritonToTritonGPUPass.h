@@ -2,6 +2,7 @@
 #define TRITON_CONVERSION_TRITONTOTRITONGPU_TRITONTOTRITONGPUPASS_H
 
 #include <memory>
+#include <optional>
 
 namespace mlir {
 
@@ -21,9 +22,9 @@ constexpr static char AttrNumThreadsPerWarp[] = "triton_gpu.threads-per-warp";
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonToTritonGPUPass();
 
 // Create the pass with numWarps set explicitly.
-std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonToTritonGPUPass(int numWarps, int threadsPerWarp = 32,
-                                   int numCTAs = 1, int computeCapability = 80);
+std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonToTritonGPUPass(
+    int numWarps, int threadsPerWarp = 32, int numCTAs = 1,
+    std::optional<int> computeCapability = std::nullopt);
 
 } // namespace triton
 } // namespace mlir

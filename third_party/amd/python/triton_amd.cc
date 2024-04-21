@@ -1,4 +1,5 @@
 ﻿#include "TritonAMDGPUToLLVM/Passes.h"
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
@@ -35,8 +36,8 @@ namespace py = pybind11;
 namespace {
 void init_triton_amd_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton;
-  m.def("add_to_llvmir", [](mlir::PassManager &pm, int computeCapability) {
-    pm.addPass(createConvertTritonAMDGPUToLLVMPass(computeCapability));
+  m.def("add_to_llvmir", [](mlir::PassManager &pm, const std::string &arch) {
+    pm.addPass(createConvertTritonAMDGPUToLLVMPass(arch));
   });
   m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm) {
     pm.addPass(mlir::triton::AMD::createDecomposeUnsupportedConversionsPass());
@@ -78,6 +79,10 @@ void init_triton_amd(py::module &&m) {
   auto passes = m.def_submodule("passes");
   init_triton_amd_passes_ttgpuir(passes.def_submodule("ttgpuir"));
 
+  m.attr("TARGET_TRIPLE") = "amdgcn-amd-amdhsa";
+  m.attr("CALLING_CONV_AMDGPU_KERNEL") =
+      (unsigned)llvm::CallingConv::AMDGPU_KERNEL;
+
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
     // registry.insert<mlir::ROCDL::ROCDLDialect>();
@@ -86,12 +91,9 @@ void init_triton_amd(py::module &&m) {
     context.loadAllAvailableDialects();
   });
 
-  m.attr("CALLING_CONV_AMDGPU_KERNEL") =
-      py::int_((unsigned)llvm::CallingConv::AMDGPU_KERNEL);
-
-  // Set target chip ISA version
-  m.def("set_isa_version", [](llvm::Module *module, const std::string &target) {
-    llvm::AMDGPU::IsaVersion version = llvm::AMDGPU::getIsaVersion(target);
+  // Set target architecture ISA version
+  m.def("set_isa_version", [](llvm::Module *module, const std::string &arch) {
+    llvm::AMDGPU::IsaVersion version = llvm::AMDGPU::getIsaVersion(arch);
     addControlConstant(module, "__oclc_ISA_version", /*bitwidth=*/32,
                        version.Major * 1000 + version.Minor * 100 +
                            version.Stepping);
@@ -136,7 +138,7 @@ void init_triton_amd(py::module &&m) {
 
   m.def(
       "assemble_amdgcn",
-      [](const std::string &assembly, const std::string &chip,
+      [](const std::string &assembly, const std::string &arch,
          const std::string &features) {
         std::string error;
 
@@ -157,7 +159,7 @@ void init_triton_amd(py::module &&m) {
         std::unique_ptr<llvm::MCAsmInfo> mai(
             target->createMCAsmInfo(*mri, targetTriple, mcOptions));
         std::unique_ptr<llvm::MCSubtargetInfo> sti(
-            target->createMCSubtargetInfo(targetTriple, chip, features));
+            target->createMCSubtargetInfo(targetTriple, arch, features));
 
         llvm::MCContext ctx(triple, mai.get(), mri.get(), sti.get(), &srcMgr,
                             &mcOptions);
@@ -214,17 +216,30 @@ void init_triton_amd(py::module &&m) {
     for (llvm::Function &f : module->functions()) {
       if (f.hasExternalLinkage() && f.hasName() && !f.hasExactDefinition()) {
         llvm::StringRef funcName = f.getName();
+        // Rules for linking the extern lib:
+        // 1. if __nv_ is found in the module, we'll link all four libs:
+        //    cuda2gcn, opencl, ocml, and ockl. Note that opencl might
+        //    not be needed. But we add it here and will try to remove
+        //    it in the future.
+        // 2. if the function name includes ocml or ockl, only link
+        //    ocml or ockl accordingly.
         if (funcName.contains(lib) || funcName.contains("__nv_"))
-          // Rules for linking the extern lib
-          // 1. if __nv_ is found in the module, we'll link all four libs:
-          //    cuda2gcn, opencl, ocml, and ockl. Note that opencl might
-          //    not be needed. But we add it here and will try to remove
-          //    it in the future.
-          // 2. if the function name includes ocml or ockl, only link
-          //    ocml or ockl accordingly
           return true;
       }
     }
     return false;
+  });
+
+  m.def("has_matrix_core_feature", [](const std::string &arch) {
+    using mlir::triton::AMD::ISAFamily;
+    switch (mlir::triton::AMD::deduceISAFamily(arch)) {
+    case ISAFamily::CDNA3:
+    case ISAFamily::CDNA2:
+    case ISAFamily::CDNA1:
+    case ISAFamily::RDNA3:
+      return true;
+    default:
+      return false;
+    }
   });
 }
