@@ -122,8 +122,6 @@ class Package(NamedTuple):
 
 
 # pybind11
-
-
 def get_pybind11_package_info():
     pybind11_version_path = os.path.join(get_base_dir(), "cmake", "pybind11-version.txt")
     with open(pybind11_version_path, "r") as pybind11_version_file:
@@ -142,23 +140,35 @@ def get_json_package_info():
 
 # llvm
 def get_llvm_package_info():
-    # added statement for Apple Silicon
     system = platform.system()
-    arch = platform.machine()
-    if arch == 'aarch64':
-        arch = 'arm64'
+    arch = {"x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
     if system == "Darwin":
-        arch = platform.machine()
-        if arch == "x86_64":
-            arch = "x64"
         system_suffix = f"macos-{arch}"
     elif system == "Linux":
         if arch == 'arm64':
             system_suffix = 'ubuntu-arm64'
         else:
-            vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
-            vglibc = vglibc[0] * 100 + vglibc[1]
-            system_suffix = 'ubuntu-x64' if vglibc > 217 else 'centos-x64'
+            target_libcxx_found = False
+            if os.path.isfile("/usr/lib/" + platform.machine() + "-linux-gnu/libstdc++.so.6"):
+                check_libcxx_version = \
+                    subprocess.run(
+                        "strings /usr/lib/"+platform.machine()+"-linux-gnu/libstdc++.so.6 | grep GLIBCXX_3.4.30", \
+                        check=False, shell=True
+                    )
+                target_libcxx_found = check_libcxx_version.returncode == 0
+            elif os.path.isfile("/usr/lib64/libstdc++.so.6"):
+                check_libcxx_version = \
+                    subprocess.run(
+                        "strings /usr/lib64/libstdc++.so.6 | grep GLIBCXX_3.4.30",
+                        check=False, shell=True
+                    )
+                target_libcxx_found = check_libcxx_version.returncode == 0
+            if target_libcxx_found:
+                system_suffix = "ubuntu-x64"
+            else:
+                vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
+                vglibc = vglibc[0] * 100 + vglibc[1]
+                system_suffix = 'almalinux-x64' if vglibc > 217 else 'centos-x64'
     else:
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     # use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
@@ -177,7 +187,7 @@ def open_url(url):
         'User-Agent': user_agent,
     }
     request = urllib.request.Request(url, None, headers)
-    # Set timeout to 300 seconds to prevent the request from hanging forver
+    # Set timeout to 300 seconds to prevent the request from hanging forever.
     return urllib.request.urlopen(request, timeout=300)
 
 
@@ -552,6 +562,7 @@ setup(
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
     ],
     test_suite="tests",
     extras_require={
