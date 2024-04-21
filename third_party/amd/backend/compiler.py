@@ -33,16 +33,6 @@ class HIPOptions:
     max_num_imprecise_acc_default: int = 0
 
     @staticmethod
-    def get_warp_size(arch: str) -> int:
-        # 64 is not supported for RDNA for now
-        if 'gfx10' in arch or 'gfx11' in arch:
-            return 32
-        if 'gfx9' in arch:
-            return 64
-        print("Warning: Unexpected device. Wave Size is set to 64.")
-        return 64  # Default value
-
-    @staticmethod
     def get_compute_capability(arch: str) -> int:
         arch_dict = {
             'gfx940': 300,
@@ -243,7 +233,7 @@ class HIPBackend(BaseBackend):
         assert len(names) == 1
         metadata["name"] = names[0]
         # llvm -> hsaco
-        amdgcn = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion, False)
+        amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, '', [], options.enable_fp_fusion, False)
         if os.environ.get("AMDGCN_ENABLE_DUMP", "0") == "1":
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
