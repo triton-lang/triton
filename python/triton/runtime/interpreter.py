@@ -949,6 +949,9 @@ def _patch_lang_core(lang):
         assert cond, msg
 
     def _set_attr(input, values, name):
+        # skip non tensor types. This may happen for induction variables.
+        if not isinstance(input, tl.tensor):
+            return input
         # Unwrap constexpr
         values = [values] if not isinstance(values, (list, tuple)) else values
         values = [v.value if isinstance(v, tl.constexpr) else v for v in values]
