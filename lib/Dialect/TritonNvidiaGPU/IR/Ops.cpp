@@ -93,8 +93,8 @@ LogicalResult WaitBarrierOp::verify() {
 LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
   if (failed(verifyBarrierType(*this, getBarrier().getType())))
     return failure();
-  if (getCoord().size() > 5)
-    return emitOpError("coord must have at most 5 elements");
+  if (getCoord().size() < 1 || getCoord().size() > 5)
+    return emitOpError("TMA copies must have between 1 and 5 coordinates");
   return success();
 }
 
