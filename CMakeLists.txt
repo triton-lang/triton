@@ -220,7 +220,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
           LLVMAArch64CodeGen
           LLVMAArch64AsmParser
       )
-    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86-64")
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
       list(APPEND TRITON_LIBRARIES
           LLVMX86CodeGen
           LLVMX86AsmParser
