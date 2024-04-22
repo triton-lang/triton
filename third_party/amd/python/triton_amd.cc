@@ -1,4 +1,5 @@
 ﻿#include "TritonAMDGPUToLLVM/Passes.h"
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
@@ -35,8 +36,8 @@ namespace py = pybind11;
 namespace {
 void init_triton_amd_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton;
-  m.def("add_to_llvmir", [](mlir::PassManager &pm, int computeCapability) {
-    pm.addPass(createConvertTritonAMDGPUToLLVMPass(computeCapability));
+  m.def("add_to_llvmir", [](mlir::PassManager &pm, const std::string &arch) {
+    pm.addPass(createConvertTritonAMDGPUToLLVMPass(arch));
   });
   m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm) {
     pm.addPass(mlir::triton::AMD::createDecomposeUnsupportedConversionsPass());
@@ -227,5 +228,18 @@ void init_triton_amd(py::module &&m) {
       }
     }
     return false;
+  });
+
+  m.def("has_matrix_core_feature", [](const std::string &arch) {
+    using mlir::triton::AMD::ISAFamily;
+    switch (mlir::triton::AMD::deduceISAFamily(arch)) {
+    case ISAFamily::CDNA3:
+    case ISAFamily::CDNA2:
+    case ISAFamily::CDNA1:
+    case ISAFamily::RDNA3:
+      return true;
+    default:
+      return false;
+    }
   });
 }

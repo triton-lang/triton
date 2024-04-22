@@ -29,8 +29,8 @@ def ConvertTritonToTritonGPU: Pass<"convert-triton-to-tritongpu", "mlir::ModuleO
               "int32_t", /*default*/"1",
               "number of ctas in a cga">,
         Option<"computeCapability", "compute-capability",
-              "int32_t", /*default*/"80",
-              "compute capability">
+              "int32_t", /*default*/"0",
+              "optional compute capability for cuda; 0 means missing">
    ];
 }
 

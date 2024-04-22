@@ -11,6 +11,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Target/LLVMIR/Passes.h"
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
 namespace py = pybind11;
 
@@ -39,7 +40,8 @@ void init_triton_passes_ttir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_rewrite_tensor_pointer",
                      createRewriteTensorPointerPass);
   ADD_PASS_WRAPPER_4("add_convert_to_ttgpuir",
-                     createConvertTritonToTritonGPUPass, int, int, int, int);
+                     createConvertTritonToTritonGPUPass, int, int, int,
+                     std::optional<int>);
 }
 
 void init_triton_passes_ttgpuir(py::module &&m) {

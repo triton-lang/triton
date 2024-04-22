@@ -327,7 +327,10 @@ public:
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<SwizzleShmemConvert>(context);
-    if (triton::gpu::TritonGPUDialect::getComputeCapability(m) >= 80)
+    // TODO: compute capability is CUDA specific; change it to backend agnostic.
+    std::optional<int> cc =
+        triton::gpu::TritonGPUDialect::getComputeCapability(m);
+    if (cc.value_or(0) >= 80)
       patterns.add<HoistLayoutConversion>(context);
     patterns.add<FuseTransHopper>(context);
     patterns.add<MMAV3UseRegOperand>(context);

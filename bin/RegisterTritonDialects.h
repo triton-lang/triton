@@ -58,7 +58,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   // List of undefined symbols:
   // createTritonAMDGPUCoalesce is not defined
   // createTritonAMDGPUOptimizeDotOperands is not defined
-  // createTritonAMDGPUPipeline is not defined
   // createTritonAMDGPUPrefetch is not defined
 
   // mlir::registerTritonAMDGPUPasses();

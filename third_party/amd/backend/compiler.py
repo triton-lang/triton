@@ -26,30 +26,10 @@ class HIPOptions:
     default_dot_input_precision: str = "ieee"
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     enable_fp_fusion: bool = True
-    capability: int = None
     matrix_instr_nonkdim: int = 0
     kpack: int = 1
     allow_flush_denorm: bool = False
     max_num_imprecise_acc_default: int = 0
-
-    @staticmethod
-    def get_compute_capability(arch: str) -> int:
-        arch_dict = {
-            'gfx940': 300,
-            'gfx941': 300,
-            'gfx942': 300,
-            'gfx90a': 200,
-            'gfx908': 100,
-            'gfx906': 60,
-        }
-        return arch_dict.get(arch, 0)
-
-    def has_amd_mma_instr(self) -> bool:
-        is_RDNA3 = 'gfx11' in self.arch
-        is_CDNA1 = self.arch in ['gfx908']
-        is_CDNA2 = self.arch in ['gfx90a']
-        is_CDNA3 = self.arch in ['gfx940', 'gfx941', 'gfx942']
-        return is_RDNA3 or is_CDNA1 or is_CDNA2 or is_CDNA3
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -83,7 +63,6 @@ class HIPBackend(BaseBackend):
     def parse_options(self, opts) -> Any:
         args = {'arch': self.target.arch}
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts})
-        args['capability'] = HIPOptions.get_compute_capability(args['arch'])
         return HIPOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -118,7 +97,7 @@ class HIPBackend(BaseBackend):
         raise Exception("ROCm linker /opt/rocm/llvm/bin/ld.lld not found")
 
     @staticmethod
-    def make_ttir(mod, metadata, opt):
+    def make_ttir(mod, metadata, options):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
@@ -133,28 +112,27 @@ class HIPBackend(BaseBackend):
         return mod
 
     @staticmethod
-    def make_ttgir(mod, metadata, opt):
+    def make_ttgir(mod, metadata, options):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        # TODO: capability
-        passes.ttir.add_convert_to_ttgpuir(pm, opt.num_warps, opt.warp_size, opt.num_ctas, 90)
+        passes.ttir.add_convert_to_ttgpuir(pm, options.num_warps, options.warp_size, options.num_ctas, None)
         pm.run(mod)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttgpuir.add_coalesce(pm)
         amd.passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
-        amd.passes.ttgpuir.add_accelerate_matmul(pm, opt.arch, opt.matrix_instr_nonkdim, opt.kpack)
+        amd.passes.ttgpuir.add_accelerate_matmul(pm, options.arch, options.matrix_instr_nonkdim, options.kpack)
         amd.passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm)
-        if opt.num_stages == 0 and opt.has_amd_mma_instr():
+        if options.num_stages == 0 and amd.has_matrix_core_feature(options.arch):
             amd.passes.ttgpuir.add_stream_pipeline(pm)
             passes.common.add_canonicalizer(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm)
         amd.passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
-        if opt.num_stages != 0:
+        if options.num_stages != 0:
             amd.passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
@@ -162,7 +140,7 @@ class HIPBackend(BaseBackend):
         return mod
 
     @staticmethod
-    def make_llir(src, metadata, options, capability):
+    def make_llir(src, metadata, options):
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
@@ -172,7 +150,7 @@ class HIPBackend(BaseBackend):
         passes.convert.add_index_to_llvmir(pm)
 
         passes.ttgpuir.add_allocate_shared_memory(pm)
-        amd.passes.ttgpuir.add_to_llvmir(pm, capability)
+        amd.passes.ttgpuir.add_to_llvmir(pm, options.arch)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
 
@@ -256,7 +234,7 @@ class HIPBackend(BaseBackend):
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
         stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options)
-        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, options.capability)
+        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)
         stages["hsaco"] = lambda src, metadata: self.make_hsaco(src, metadata, options)
 
