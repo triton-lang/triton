@@ -6,7 +6,7 @@ INDUCTOR="$ROOT"/.github/workflows/torch-inductor
 MODEL_SPEC=$1
 
 # shellcheck source=/dev/null
-source /opt/torchinductor_venv/bin/activate
+source /tmp/torchinductor_venv/bin/activate
 # shellcheck source=/dev/null
 source "$INDUCTOR"/scripts/common.sh
 
