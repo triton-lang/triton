@@ -23,11 +23,13 @@ def is_interpreter():
 
 
 def is_cuda():
-    return not is_interpreter() and triton.runtime.driver.active.get_current_target()[0] == "cuda"
+    return not is_interpreter() and \
+        triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 
 def is_hip():
-    return not is_interpreter() and triton.runtime.driver.active.get_current_target()[0] == "hip"
+    return not is_interpreter() and \
+        triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
@@ -46,7 +48,7 @@ GPU_DIALECT = "triton_gpu"
 if is_interpreter():
     THREADS_PER_WARP = 1
 elif is_hip():
-    THREADS_PER_WARP = triton.runtime.driver.active.get_current_target()[2]
+    THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 else:
     THREADS_PER_WARP = 32
 

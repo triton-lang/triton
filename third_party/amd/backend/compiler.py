@@ -1,4 +1,4 @@
-from triton.backends.compiler import BaseBackend
+from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, amd
 from dataclasses import dataclass
 from typing import Any, Tuple
@@ -82,17 +82,16 @@ class HIPOptions:
 class HIPBackend(BaseBackend):
 
     @staticmethod
-    def supports_target(target: list):
-        return target[0] == 'hip'
+    def supports_target(target: GPUTarget):
+        return target.backend == 'hip'
 
-    def __init__(self, target: list) -> None:
+    def __init__(self, target: GPUTarget) -> None:
         super().__init__(target)
-        assert isinstance(target, list) and len(target) == 3
-        assert isinstance(target[1], str)
+        assert isinstance(target.arch, str)
         self.binary_ext = "hsaco"
 
     def parse_options(self, opts) -> Any:
-        args = {'arch': self.target[1]}
+        args = {'arch': self.target.arch}
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts})
         args['capability'] = HIPOptions.get_compute_capability(args['arch'])
         return HIPOptions(**args)
