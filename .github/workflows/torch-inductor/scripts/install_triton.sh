@@ -4,7 +4,7 @@
 ROOT="$(pwd)"
 
 # shellcheck source=/dev/null
-source /opt/torchinductor_venv/bin/activate
+source /tmp/torchinductor_venv/bin/activate
 # shellcheck source=/dev/null
 source ./.github/workflows/torch-inductor/scripts/common.sh
 

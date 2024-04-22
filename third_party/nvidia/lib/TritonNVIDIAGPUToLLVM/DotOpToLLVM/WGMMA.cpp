@@ -33,7 +33,7 @@ using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 triton::nvgpu::WGMMAEltType getMmaRetType(Value d) {
-  auto dTy = d.getType().cast<RankedTensorType>().getElementType();
+  auto dTy = cast<RankedTensorType>(d.getType()).getElementType();
   if (dTy.isF32()) {
     return triton::nvgpu::WGMMAEltType::f32;
   } else if (dTy.isF16()) {
@@ -46,7 +46,7 @@ triton::nvgpu::WGMMAEltType getMmaRetType(Value d) {
 }
 
 triton::nvgpu::WGMMAEltType getMmaOperandType(Value a, bool allowTF32) {
-  auto aTy = a.getType().cast<TensorOrMemDesc>().getElementType();
+  auto aTy = cast<TensorOrMemDesc>(a.getType()).getElementType();
   if (aTy.isF16()) {
     return triton::nvgpu::WGMMAEltType::f16;
   } else if (aTy.isBF16()) {
@@ -139,7 +139,7 @@ public:
                        ConversionPatternRewriter &rewriter, Location loc)
       : base(base), shape(shape), warpId(warpId), dimWpt(dimWpt), trans(trans),
         instrShape(instrShape) {
-    auto ty = tensor.getType().cast<MemDescType>();
+    auto ty = cast<MemDescType>(tensor.getType());
     auto sharedLayout = ty.getEncoding().cast<SharedEncodingAttr>();
     ord = sharedLayout.getOrder();
     const int perPhase = sharedLayout.getPerPhase();
@@ -196,7 +196,7 @@ DotOpMmaV3SmemLoader loadA(const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Location loc,
                            const NvidiaMmaEncodingAttr &mmaEncoding,
                            Value tensor, Value smemObjBase, Value thread) {
-  auto aTy = tensor.getType().cast<TensorOrMemDesc>();
+  auto aTy = cast<TensorOrMemDesc>(tensor.getType());
   auto aSharedLayout = aTy.getEncoding().dyn_cast<SharedEncodingAttr>();
   assert(aSharedLayout && "only support load dot operand from shared.");
   auto instrShape = mmaEncoding.getInstrShape();
@@ -233,7 +233,7 @@ DotOpMmaV3SmemLoader loadB(const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Location loc,
                            NvidiaMmaEncodingAttr &mmaEncoding, Value tensor,
                            Value base, Value thread) {
-  auto bTy = tensor.getType().cast<MemDescType>();
+  auto bTy = cast<MemDescType>(tensor.getType());
   auto bSharedLayout = bTy.getEncoding().cast<SharedEncodingAttr>();
   assert(bSharedLayout && "only support load B from shared.");
   auto instrShape = mmaEncoding.getInstrShape();
@@ -322,7 +322,7 @@ static bool isFP8(triton::nvgpu::WGMMAEltType eltType) {
 
 static Value faddAccumulate(ConversionPatternRewriter &rewriter, Location loc,
                             Value a, Value b) {
-  int numEl = a.getType().cast<LLVM::LLVMStructType>().getBody().size();
+  int numEl = cast<LLVM::LLVMStructType>(a.getType()).getBody().size();
   Value newStruct = rewriter.create<LLVM::UndefOp>(loc, a.getType());
   for (int i = 0; i < numEl; ++i) {
     Value lhs = rewriter.create<LLVM::ExtractValueOp>(loc, a, i);
@@ -371,9 +371,9 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          Value loadedA, Value loadedB, Value loadedC,
                          bool allowTF32, uint32_t maxNumImpreciseAcc, bool sync,
                          Value thread) {
-  auto aTensorTy = a.getType().cast<TensorOrMemDesc>();
-  auto bTensorTy = b.getType().cast<TensorOrMemDesc>();
-  auto dTensorTy = d.getType().cast<RankedTensorType>();
+  auto aTensorTy = cast<TensorOrMemDesc>(a.getType());
+  auto bTensorTy = cast<TensorOrMemDesc>(b.getType());
+  auto dTensorTy = cast<RankedTensorType>(d.getType());
   auto aSharedLayout = aTensorTy.getEncoding().dyn_cast<SharedEncodingAttr>();
   auto bSharedLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
   auto mmaEncoding = dTensorTy.getEncoding().cast<NvidiaMmaEncodingAttr>();

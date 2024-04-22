@@ -140,7 +140,7 @@ int evalGEPOp(mlir::LLVM::GEPOp gepOp, int ctaid, int tid) {
   assert(gepOp.getNumOperands() == 2 && "Unrecognized format of GEPOp");
   int base = eval(gepOp.getBase(), ctaid, tid);
   int offset = eval(gepOp.getOperand(1), ctaid, tid);
-  auto llPtrTy = gepOp.getRes().getType().cast<LLVM::LLVMPointerType>();
+  auto llPtrTy = cast<LLVM::LLVMPointerType>(gepOp.getRes().getType());
   int bytesPerElem = llPtrTy.getIntOrFloatBitWidth() / 8;
   return base + offset * bytesPerElem;
 }

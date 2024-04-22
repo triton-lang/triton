@@ -9,7 +9,7 @@ import triton.language as tl
 
 
 def get_current_target_warp_size():
-    return triton.runtime.driver.active.get_current_target()[2]
+    return triton.runtime.driver.active.get_current_target().warp_size
 
 
 @triton.jit

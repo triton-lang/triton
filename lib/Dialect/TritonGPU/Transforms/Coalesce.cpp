@@ -24,7 +24,7 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
                        int numWarps, int threadsPerWarp,
                        llvm::MapVector<Operation *, Attribute> &layoutMap) {
     Value ptr = getMemAccessPtr(op);
-    auto refTensorType = ptr.getType().cast<RankedTensorType>();
+    auto refTensorType = cast<RankedTensorType>(ptr.getType());
 
     LDBG("Considering op: " << *op);
     LLVM_DEBUG({
@@ -38,7 +38,7 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     LDBG("order=[" << triton::join(order, ", ") << "]");
 
     auto matchesShape = [&refTensorType](const Value &val) {
-      auto rttType = val.getType().dyn_cast<RankedTensorType>();
+      auto rttType = dyn_cast<RankedTensorType>(val.getType());
       return rttType && rttType.getShape() == refTensorType.getShape();
     };
 
@@ -102,7 +102,7 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
   }
 
   static Type getNewType(Type type, Attribute encoding) {
-    RankedTensorType tensorType = type.cast<RankedTensorType>();
+    RankedTensorType tensorType = cast<RankedTensorType>(type);
     return RankedTensorType::get(tensorType.getShape(),
                                  tensorType.getElementType(), encoding);
   }
@@ -115,7 +115,7 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     // `make_tensor_ptr`
     SmallVector<Value, 4> newArgs;
     for (auto operand : op->getOperands()) {
-      auto tensorType = operand.getType().dyn_cast<RankedTensorType>();
+      auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
       if (tensorType &&
           !tensorType.getEncoding().isa<triton::gpu::SharedEncodingAttr>()) {
         Type newType = getNewType(tensorType, encoding);
@@ -164,10 +164,10 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
         return;
       // We only convert `tensor<tt.ptr<>>` or `tt.ptr<tensor<>>` load/store
       bool isPtrTensor = false, isTensorPointer = false;
-      if (auto tensorType = ptr.getType().dyn_cast<RankedTensorType>())
-        isPtrTensor = tensorType.getElementType().isa<PointerType>();
-      if (auto ptrType = ptr.getType().dyn_cast<PointerType>())
-        isTensorPointer = ptrType.getPointeeType().isa<RankedTensorType>();
+      if (auto tensorType = dyn_cast<RankedTensorType>(ptr.getType()))
+        isPtrTensor = isa<PointerType>(tensorType.getElementType());
+      if (auto ptrType = dyn_cast<PointerType>(ptr.getType()))
+        isTensorPointer = isa<RankedTensorType>(ptrType.getPointeeType());
       if (!isPtrTensor && !isTensorPointer)
         return;
       auto mod = curr->getParentOfType<ModuleOp>();

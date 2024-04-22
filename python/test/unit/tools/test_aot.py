@@ -7,6 +7,7 @@ import tempfile
 import numpy as np
 
 import triton
+from triton.backends.compiler import GPUTarget
 from triton.backends.nvidia.driver import include_dir, library_dirs
 
 kernel_utils_src = """
@@ -435,7 +436,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
         kernel_path = os.path.join(tmp_dir, "empty_kernel.ttgir")
         with open(kernel_path, "w") as fp:
             fp.write(src)
-        k = triton.compile(kernel_path, target=("cuda", 80))
+        k = triton.compile(kernel_path, target=GPUTarget("cuda", 80, 32))
         ptx = k.asm["ptx"]
         assert ".target sm_80" in ptx
         assert ".address_size 64" in ptx

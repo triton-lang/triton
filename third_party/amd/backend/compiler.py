@@ -1,4 +1,4 @@
-from triton.backends.compiler import BaseBackend
+from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, amd
 from dataclasses import dataclass
 from typing import Any, Tuple
@@ -22,23 +22,27 @@ class HIPOptions:
     debug: bool = False
     arch: str = None
     allow_fp8e4nv: bool = False
+    allow_fp8e4b15: bool = False
     default_dot_input_precision: str = "ieee"
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     enable_fp_fusion: bool = True
     capability: int = None
     matrix_instr_nonkdim: int = 0
     kpack: int = 1
+    allow_flush_denorm: bool = False
     max_num_imprecise_acc_default: int = 0
 
     @staticmethod
-    def get_warp_size(arch: str) -> int:
-        # 64 is not supported for RDNA for now
-        if 'gfx10' in arch or 'gfx11' in arch:
-            return 32
-        if 'gfx9' in arch:
-            return 64
-        print("Warning: Unexpected device. Wave Size is set to 64.")
-        return 64  # Default value
+    def get_compute_capability(arch: str) -> int:
+        arch_dict = {
+            'gfx940': 300,
+            'gfx941': 300,
+            'gfx942': 300,
+            'gfx90a': 200,
+            'gfx908': 100,
+            'gfx906': 60,
+        }
+        return arch_dict.get(arch, 0)
 
     def has_amd_mma_instr(self) -> bool:
         is_RDNA3 = 'gfx11' in self.arch
@@ -49,11 +53,11 @@ class HIPOptions:
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
-        extern_libs = dict() if self.extern_libs is None else dict(self.extern_libs)
+        extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         # Ignore user-defined warp size for gfx9
         warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch else 64
         object.__setattr__(self, 'warp_size', warp_size)
-        libs = ["cuda2gcn", "ocml", "ockl"]
+        libs = ["cuda2gcn", "opencl", "ocml", "ockl"]
         for lib in libs:
             extern_libs[lib] = str(default_libdir / f'{lib}.bc')
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
@@ -68,22 +72,29 @@ class HIPOptions:
 class HIPBackend(BaseBackend):
 
     @staticmethod
-    def supports_target(target: list):
-        return target[0] == 'hip'
+    def supports_target(target: GPUTarget):
+        return target.backend == 'hip'
 
-    def __init__(self, target: list) -> None:
+    def __init__(self, target: GPUTarget) -> None:
         super().__init__(target)
-        assert isinstance(target, list) and len(target) == 3
-        assert isinstance(target[1], str)
+        assert isinstance(target.arch, str)
         self.binary_ext = "hsaco"
 
     def parse_options(self, opts) -> Any:
-        args = {'arch': self.target[1]}
+        args = {'arch': self.target.arch}
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts})
+        args['capability'] = HIPOptions.get_compute_capability(args['arch'])
         return HIPOptions(**args)
 
     def pack_metadata(self, metadata):
-        return metadata
+        return (
+            metadata.num_warps,
+            metadata.num_ctas,
+            metadata.shared,
+            metadata.cluster_dims[0],
+            metadata.cluster_dims[1],
+            metadata.cluster_dims[2],
+        )
 
     def get_codegen_implementation(self):
         codegen_fns = dict()
@@ -94,6 +105,10 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def path_to_rocm_lld():
+        # First check backend for ld.lld (used for pytorch wheels)
+        lld = Path(__file__).parent / "llvm/bin/ld.lld"
+        if lld.is_file():
+            return lld
         lld = Path("/opt/rocm/llvm/bin/ld.lld")
         if lld.is_file():
             return lld
@@ -157,11 +172,10 @@ class HIPBackend(BaseBackend):
         passes.convert.add_index_to_llvmir(pm)
 
         passes.ttgpuir.add_allocate_shared_memory(pm)
-        amd.passes.ttgpuir.add_to_llvmir(pm)
+        amd.passes.ttgpuir.add_to_llvmir(pm, capability)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
 
-        passes.convert.add_scf_to_cf(pm)
         passes.convert.add_cf_to_llvmir(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
@@ -181,7 +195,6 @@ class HIPBackend(BaseBackend):
         amd.set_isa_version(llvm_mod, options.arch)
         amd.set_abi_version(llvm_mod, 400)
         amd.set_bool_control_constant(llvm_mod, "__oclc_finite_only_opt", False)
-        amd.set_bool_control_constant(llvm_mod, "__oclc_daz_opt", False)
         amd.set_bool_control_constant(llvm_mod, "__oclc_correctly_rounded_sqrt32", True)
         amd.set_bool_control_constant(llvm_mod, "__oclc_unsafe_math_opt", False)
         amd.set_bool_control_constant(llvm_mod, "__oclc_wavefrontsize64", options.warp_size == 64)
@@ -192,10 +205,15 @@ class HIPBackend(BaseBackend):
         kernels[0].set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
         kernels[0].add_fn_attr("amdgpu-flat-work-group-size", f"1,{options.num_warps*options.warp_size}")
         kernels[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
-        kernels[0].add_fn_attr("denormal-fp-math-f32", "preserve-sign")
+        denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
+        kernels[0].add_fn_attr("denormal-fp-math-f32", denormal_mode)
+        # Hint the compiler that we'd like the firmware to set the kernel arguments
+        # to user SGPRs so that the kernel does not need to s_load its arguments
+        # from memory.
+        amd.set_all_fn_arg_inreg(kernels[0])
 
         if options.extern_libs:
-            paths = [path for (name, path) in options.extern_libs]
+            paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
             llvm.link_extern_libs(llvm_mod, paths)
 
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
@@ -207,7 +225,7 @@ class HIPBackend(BaseBackend):
         return str(llvm_mod)
 
     @staticmethod
-    def make_hsaco(src, metadata, options):
+    def make_amdgcn(src, metadata, options):
         # Find kernel names (there should only be one)
         # We get the name at the last possible step to accomodate `triton.compile`
         # on user-provided LLVM
@@ -215,13 +233,16 @@ class HIPBackend(BaseBackend):
         assert len(names) == 1
         metadata["name"] = names[0]
         # llvm -> hsaco
-        hsaco = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion, True)
+        amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, '', [], options.enable_fp_fusion, False)
         if os.environ.get("AMDGCN_ENABLE_DUMP", "0") == "1":
-            hsaco_str = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion,
-                                              False)
             print("// -----// AMDGCN Dump //----- //")
-            print(hsaco_str)
-        import subprocess
+            print(amdgcn)
+        return amdgcn
+
+    @staticmethod
+    def make_hsaco(src, metadata, options):
+        hsaco = amd.assemble_amdgcn(src, options.arch, '')
+
         rocm_path = HIPBackend.path_to_rocm_lld()
         with tempfile.NamedTemporaryFile() as tmp_out:
             with tempfile.NamedTemporaryFile() as tmp_in:
@@ -235,9 +256,8 @@ class HIPBackend(BaseBackend):
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
         stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options)
-        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, 90)
-        # TODO: first amdgcn, then hsaco
-        # stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)
+        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, options.capability)
+        stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)
         stages["hsaco"] = lambda src, metadata: self.make_hsaco(src, metadata, options)
 
     @functools.lru_cache()

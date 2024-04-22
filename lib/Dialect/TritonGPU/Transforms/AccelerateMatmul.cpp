@@ -160,7 +160,7 @@ class BlockedToMMA : public mlir::RewritePattern {
     getBackwardSlice(x, &slice, opt);
     for (auto op : slice) {
       if (Value arg = op->getOperand(0))
-        if (auto argTy = arg.getType().dyn_cast<RankedTensorType>()) {
+        if (auto argTy = dyn_cast<RankedTensorType>(arg.getType())) {
           auto argBitWidth = argTy.getElementType().getIntOrFloatBitWidth();
           if (argBitWidth != origBitWidth) {
             origBitWidth = std::min<int>(origBitWidth, argBitWidth);
@@ -196,7 +196,7 @@ public:
     Value arg = v;
     if (auto cvtOp = v.getDefiningOp<ttg::ConvertLayoutOp>())
       arg = cvtOp.getSrc();
-    auto argType = arg.getType().cast<RankedTensorType>();
+    auto argType = cast<RankedTensorType>(arg.getType());
     auto eltType = argType.getElementType();
     assert(argType.getEncoding() && "unexpected tensor type");
     auto newOrder = ttg::getOrder(argType.getEncoding());
@@ -340,9 +340,8 @@ public:
 
 static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
                             Type promotedType) {
-  Type tensorPromotedType =
-      operand.getType().cast<RankedTensorType>().cloneWith(std::nullopt,
-                                                           promotedType);
+  Type tensorPromotedType = cast<RankedTensorType>(operand.getType())
+                                .cloneWith(std::nullopt, promotedType);
   return builder.create<tt::FpToFpOp>(loc, tensorPromotedType, operand);
 }
 

@@ -3,6 +3,7 @@ import hashlib
 import json
 from .._C.libtriton import get_env_vars, ir
 from ..backends import backends
+from ..backends.compiler import GPUTarget
 from .. import __version__
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
@@ -151,11 +152,15 @@ def triton_key():
     with open(__file__, "rb") as f:
         contents += [hashlib.sha256(f.read()).hexdigest()]
     # compiler
-    compiler_path = os.path.join(TRITON_PATH, 'compiler')
-    backends_path = os.path.join(TRITON_PATH, 'compiler', 'backends')
-    for lib in pkgutil.iter_modules([compiler_path, backends_path]):
-        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
-            contents += [hashlib.sha256(f.read()).hexdigest()]
+    path_prefixes = [
+        (os.path.join(TRITON_PATH, "compiler"), "triton.compiler."),
+        (os.path.join(TRITON_PATH, "backends"), "triton.backends."),
+    ]
+    for path, prefix in path_prefixes:
+        for lib in pkgutil.walk_packages([path], prefix=prefix):
+            with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+                contents += [hashlib.sha256(f.read()).hexdigest()]
+
     # backend
     libtriton_hash = hashlib.sha256()
     with open(os.path.join(TRITON_PATH, "_C/libtriton.so"), "rb") as f:
@@ -221,6 +226,7 @@ def filter_traceback(e: BaseException):
 def compile(src, target=None, options=None):
     if target is None:
         target = driver.active.get_current_target()
+    assert isinstance(target, GPUTarget), "target must be of GPUTarget type"
     backend = make_backend(target)
     ir_source = not isinstance(src, ASTSource)
     # create backend
@@ -298,7 +304,7 @@ def make_backend(target):
     actives = [x.compiler for x in backends.values() if x.compiler.supports_target(target)]
     if len(actives) != 1:
         raise RuntimeError(
-            f"{len(actives)} compatible backends for target ({target[0]}) ({actives}). There should only be one.")
+            f"{len(actives)} compatible backends for target ({target.backend}) ({actives}). There should only be one.")
     return actives[0](target)
 
 
@@ -330,6 +336,9 @@ class CompiledKernel:
         metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
         metadata = json.loads(metadata_path.read_text())
         metadata['cluster_dims'] = tuple(metadata['cluster_dims'])
+        # JSON serialization dumps the target as a dict. Restore it to a GPUTarget.
+        target = metadata['target']
+        metadata['target'] = GPUTarget(target['backend'], target['arch'], target['warp_size'])
         KernelMetadata = namedtuple('KernelMetadata', sorted(list(metadata.keys())))
         self.metadata = KernelMetadata(**metadata)
         backend = make_backend(self.metadata.target)
@@ -376,8 +385,15 @@ class CompiledKernel:
         ret = LazyDict({"name": self.name, "function": self.function, "stream": stream})
         if not isinstance(self.src, ASTSource) or self.src.fn.launch_metadata is None:
             return ret
-        args = {k: v for k, v in zip(self.src.fn.arg_names, args)}
-        ret.add(self.src.fn.launch_metadata, (grid, self.metadata, args))
+        arg_dict = {}
+        arg_idx = 0
+        for arg_name in self.src.fn.arg_names:
+            if arg_name in self.src.constants:
+                arg_dict[arg_name] = self.src.constants[arg_name]
+            else:
+                arg_dict[arg_name] = args[arg_idx]
+                arg_idx += 1
+        ret.add(self.src.fn.launch_metadata, (grid, self.metadata, arg_dict))
         return ret
 
     def __getitem__(self, grid):

@@ -35,7 +35,7 @@ using namespace mlir::triton::nvgpu;
 void LoadDSmemOp::build(OpBuilder &builder, OperationState &state,
                         Type resultTy, Value addr, Value ctaId) {
   unsigned vec, bitwidth;
-  if (auto structTy = resultTy.dyn_cast<LLVM::LLVMStructType>()) {
+  if (auto structTy = dyn_cast<LLVM::LLVMStructType>(resultTy)) {
     auto types = structTy.getBody();
     assert(types.size() > 0 && "Invalid result type of LoadDSmemOp");
     vec = types.size();
@@ -72,7 +72,7 @@ void StoreDSmemOp::build(OpBuilder &builder, OperationState &state, Value addr,
 
 unsigned StoreDSmemOp::getBitwidth() {
   auto addrTy = getAddr().getType();
-  assert(addrTy.isa<LLVM::LLVMPointerType>() && "addr must be a pointer type");
+  assert(isa<LLVM::LLVMPointerType>(addrTy) && "addr must be a pointer type");
   if (getValues().empty())
     return 0;
   auto elemTy = getValues().back().getType();

@@ -56,7 +56,7 @@ public:
   matchAndRewrite(arith::ConstantOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type retType = getTypeConverter()->convertType(op.getType());
-    auto retShapedType = retType.cast<ShapedType>();
+    auto retShapedType = cast<ShapedType>(retType);
     auto value = adaptor.getValue().dyn_cast<DenseElementsAttr>();
     if (dyn_cast<RankedTensorType>(retShapedType)) {
       assert(value);
@@ -145,7 +145,7 @@ struct TritonExpandDimsPattern
                   ConversionPatternRewriter &rewriter) const override {
     // Type retType = op.getType());
     RankedTensorType argType =
-        adaptor.getSrc().getType().cast<RankedTensorType>();
+        cast<RankedTensorType>(adaptor.getSrc().getType());
     Attribute _argEncoding = argType.getEncoding();
     if (!_argEncoding)
       return failure();
@@ -242,8 +242,8 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
     RankedTensorType retType =
         RankedTensorType::get(origShape, origType.getElementType(), dEncoding);
     // a & b must be of smem layout
-    auto aType = adaptor.getA().getType().cast<RankedTensorType>();
-    auto bType = adaptor.getB().getType().cast<RankedTensorType>();
+    auto aType = cast<RankedTensorType>(adaptor.getA().getType());
+    auto bType = cast<RankedTensorType>(adaptor.getB().getType());
     Type aEltType = aType.getElementType();
     Type bEltType = bType.getElementType();
     Attribute aEncoding = aType.getEncoding();
@@ -289,9 +289,8 @@ struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
     // next_power_of_2(lhs.total_elems_per_thread + rhs.total_elems_per_thread)
     // For now, this behaves like generic, but this
     // will evolve when we add support for `can_reorder=False`.
-    auto retType = this->getTypeConverter()
-                       ->convertType(op.getType())
-                       .cast<RankedTensorType>();
+    auto retType = cast<RankedTensorType>(
+        this->getTypeConverter()->convertType(op.getType()));
     auto retEncoding =
         retType.getEncoding().cast<triton::gpu::BlockedEncodingAttr>();
     auto lhsType = adaptor.getLhs().getType();
@@ -346,7 +345,7 @@ struct TritonSplitOpPattern : public OpConversionPattern<triton::SplitOp> {
   LogicalResult matchAndRewrite(SplitOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const {
     auto src = adaptor.getSrc();
-    auto srcTy = src.getType().cast<RankedTensorType>();
+    auto srcTy = cast<RankedTensorType>(src.getType());
     auto srcEnc = srcTy.getEncoding().dyn_cast<BlockedEncodingAttr>();
     int rank = srcEnc.getOrder().size();
     auto typeConverter = getTypeConverter<TritonGPUTypeConverter>();
@@ -365,7 +364,7 @@ struct TritonSplitOpPattern : public OpConversionPattern<triton::SplitOp> {
       // it'll get fixed by RemoveLayoutConversions.
       auto defaultEnc = getDefaultBlockedEncoding(
           getContext(),
-          op.getResult(0).getType().cast<RankedTensorType>().getShape(),
+          cast<RankedTensorType>(op.getResult(0).getType()).getShape(),
           typeConverter->getNumWarps(), typeConverter->getThreadsPerWarp(),
           typeConverter->getNumCTAs());
 
@@ -408,7 +407,7 @@ struct TritonTransPattern : public OpConversionPattern<TransOp> {
   matchAndRewrite(TransOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Value src = adaptor.getSrc();
-    auto srcTy = src.getType().cast<RankedTensorType>();
+    auto srcTy = cast<RankedTensorType>(src.getType());
     auto srcEnc = srcTy.getEncoding();
     if (!srcEnc)
       return failure();
@@ -426,7 +425,7 @@ struct TritonBroadcastPattern
   LogicalResult
   matchAndRewrite(BroadcastOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto srcType = adaptor.getSrc().getType().cast<RankedTensorType>();
+    auto srcType = cast<RankedTensorType>(adaptor.getSrc().getType());
     auto srcEncoding = srcType.getEncoding();
     if (!srcEncoding)
       return failure();

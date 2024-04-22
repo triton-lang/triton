@@ -92,14 +92,11 @@ void Prefetcher::cloneElementwiseOps(Value &ret, const SmallVector<Value> &vals,
   for (int i = 2; i < vals.size(); i++) {
     Value v = vals[i];
     Value curr = builder.clone(*v.getDefiningOp(), mapping)->getResult(0);
-    if (curr.getType().isa<RankedTensorType>()) {
+    if (isa<RankedTensorType>(curr.getType())) {
       auto retType = RankedTensorType::get(
-          ret.getType().cast<RankedTensorType>().getShape(),
-          curr.getType().cast<RankedTensorType>().getElementType(),
-          curr.getDefiningOp()
-              ->getOperand(0)
-              .getType()
-              .cast<RankedTensorType>()
+          cast<RankedTensorType>(ret.getType()).getShape(),
+          cast<RankedTensorType>(curr.getType()).getElementType(),
+          cast<RankedTensorType>(curr.getDefiningOp()->getOperand(0).getType())
               .getEncoding());
       curr.setType(retType);
     }
@@ -114,7 +111,7 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
                                    std::optional<int64_t> offsetK,
                                    std::optional<int64_t> shapeK) {
   // opIdx: 0 => a, 1 => b
-  auto type = v.getType().cast<triton::MemDescType>();
+  auto type = cast<triton::MemDescType>(v.getType());
   SmallVector<int64_t> shape{type.getShape().begin(), type.getShape().end()};
   SmallVector<int64_t> offset{0, 0};
   Type elementType = type.getElementType();

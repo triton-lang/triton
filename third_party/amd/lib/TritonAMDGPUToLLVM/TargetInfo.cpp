@@ -64,31 +64,14 @@ Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
 
 Value TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
                               Value ptr, Value val, Value pred) const {
-  rewriter.create<scf::IfOp>(
-      loc, pred,
-      [&](OpBuilder &builder, Location loc) {
-        auto storeOp = builder.create<LLVM::StoreOp>(loc, val, ptr);
-        builder.create<scf::YieldOp>(loc);
-      },
-      nullptr);
-  return val;
+  return mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
 }
 
 Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
-                             Value ptr, Type elemTy, Value pred) const {
-  auto width = elemTy.getIntOrFloatBitWidth();
-  auto loaded = rewriter.create<scf::IfOp>(
-      loc, pred,
-      [&](OpBuilder &builder, Location loc) {
-        auto loadVal = builder.create<LLVM::LoadOp>(loc, elemTy, ptr);
-        builder.create<mlir::scf::YieldOp>(loc, ValueRange({loadVal}));
-      },
-      [&](OpBuilder &builder, Location loc) {
-        Value falseVal = builder.create<arith::ConstantOp>(
-            loc, elemTy, builder.getZeroAttr(elemTy));
-        builder.create<mlir::scf::YieldOp>(loc, ValueRange({falseVal}));
-      });
-  return loaded.getResult(0);
+                             const TypeConverter *converter, Value ptr,
+                             Type elemTy, Value pred) const {
+  return mlir::LLVM::AMD::llLoad(rewriter, loc, converter, ptr, elemTy, pred,
+                                 0 /*vecStart*/, {} /*otherElems*/);
 }
 
 Value TargetInfo::shuffleXor(ConversionPatternRewriter &rewriter, Location loc,

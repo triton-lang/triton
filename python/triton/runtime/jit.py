@@ -174,14 +174,8 @@ dtype2str = {}
 
 def mangle_type(arg, is_const=False):
 
-    if hasattr(arg, "dtype"):
-        # dtypes are hashable so we can memoize this mapping:
-        dsk = (arg.dtype, is_const)
-        res = dtype2str.get(dsk, None)
-        if res is None:
-            res = ("*k" if dsk[1] else "*") + type_canonicalisation_dict[str(dsk[0]).split('.')[-1]]
-            dtype2str[dsk] = res
-        return res
+    if arg is None:
+        return "none"
     elif isinstance(arg, bool):
         return "i1"
     elif isinstance(arg, int):
@@ -193,10 +187,14 @@ def mangle_type(arg, is_const=False):
             return "i64"
     elif isinstance(arg, float):
         return "fp32"
-    elif arg is None:
-        return "none"
     else:
-        raise TypeError(f"Unsupported type {type(arg)} for {arg}")
+        # dtypes are hashable so we can memoize this mapping:
+        dsk = (arg.dtype, is_const)
+        res = dtype2str.get(dsk, None)
+        if res is None:
+            res = ("*k" if dsk[1] else "*") + type_canonicalisation_dict[str(dsk[0]).split('.')[-1]]
+            dtype2str[dsk] = res
+        return res
 
 
 class KernelInterface(Generic[T]):
@@ -223,7 +221,7 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
     return serialized_obj
 
 
-def create_function_from_signature(sig):
+def create_function_from_signature(sig, kparams):
     """
     Equivalent to sig.bind followed by apply_defaults. This generates a
     native Python function (using exec) which can be memoized on a per-kernel
@@ -231,22 +229,45 @@ def create_function_from_signature(sig):
     much of the kernel launch overhead -- every time we run the kernel.
     """
 
+    assert len(sig.parameters) == len(kparams)
+
     # Create the function argument list and the dict entries for the return statement
     func_args = []
     dict_entries = []
-    for name, param in sig.parameters.items():
-        if param.default is inspect.Parameter.empty:
+    constexpr_vals = []
+    non_constexpr_vals = []
+    signature_types = []
+    specialisations = []
+
+    for ((name, sp), kp) in zip(sig.parameters.items(), kparams):
+        if sp.default is inspect.Parameter.empty:
             func_args.append(name)
             dict_entries.append(f"'{name}': {name}")
         else:
             func_args.append(f"{name}=default_{name}")
             dict_entries.append(f"'{name}': {name}")
+        if kp.is_constexpr:
+            constexpr_vals.append(name)
+        else:
+            non_constexpr_vals.append(name)
+            if not kp.do_not_specialize:
+                specialisations.append('compute_spec_key(%s)' % name)
+            if kp.annotation_type:
+                signature_types.append('"%s"' % kp.annotation_type)
+            else:
+                signature_types.append('mangle_type(%s, %s)' % (name, 'True' if kp.is_const else 'False'))
+
+    cache_key = ''.join([x + ', ' for x in signature_types + specialisations])
+    constexpr_vals = ''.join([x + ', ' for x in constexpr_vals])
+    non_constexpr_vals = ''.join([x + ', ' for x in non_constexpr_vals])
+
     func_args.append('**excess_kwargs')
 
     # Join all arguments into a function definition string
     args_str = ', '.join(func_args)
     dict_str = ', '.join(dict_entries)
-    func_body = "def dynamic_func(%s):\n    return {%s}, excess_kwargs" % (args_str, dict_str)
+    func_body = "def dynamic_func(%s):\n    return {%s}, (%s), (%s), (%s), excess_kwargs" % (
+        args_str, dict_str, cache_key, constexpr_vals, non_constexpr_vals)
 
     # Prepare defaults to be inserted into function namespace
     func_namespace = {
@@ -254,6 +275,9 @@ def create_function_from_signature(sig):
         for name, param in sig.parameters.items()
         if param.default is not inspect.Parameter.empty
     }
+
+    func_namespace['mangle_type'] = mangle_type
+    func_namespace['compute_spec_key'] = compute_spec_key
 
     # Execute the function string in func_namespace to create the function
     exec(func_body, func_namespace)
@@ -426,69 +450,65 @@ class JITFunction(KernelInterface[T]):
         assert callable(hook)
         self.pre_run_hooks.append(hook)
 
-    def run(self, *args, grid, warmup, **kwargs):
+    def create_binder(self):
+        """
+        Precompute as much as possible.
+        """
         from ..compiler import CompiledKernel, compile, ASTSource, make_backend
-        # deprecated arguments
-        assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
-        assert "device" not in kwargs, "device option is deprecated; current device will be used"
-        assert "stream" not in kwargs, "stream option is deprecated; current stream will be used"
+        self.CompiledKernel = CompiledKernel
+        self.compile = compile
+        self.ASTSource = ASTSource
+        self.make_backend = make_backend
+        self.binder = create_function_from_signature(self.signature, self.params)
+        self.constexpr_indices = [i for (i, p) in enumerate(self.params) if p.is_constexpr]
+        self.non_constexpr_indices = [i for (i, p) in enumerate(self.params) if not p.is_constexpr]
+        self.specialised_indices = [
+            i for (i, p) in enumerate(self.params) if (not p.do_not_specialize) and (not p.is_constexpr)
+        ]
+
+    def run(self, *args, grid, warmup, **kwargs):
         # parse options
         device = driver.active.get_current_device()
         stream = driver.active.get_current_stream(device)
-        target = driver.active.get_current_target()
         kwargs["debug"] = self.debug
 
         # Execute pre run hooks with args and kwargs
         for hook in self.pre_run_hooks:
             hook(*args, **kwargs)
 
-        # bind non-reserved keyword args and set defaults
         if self.binder is None:
-            self.binder = create_function_from_signature(self.signature)
-            self.constexpr_indices = [i for (i, p) in enumerate(self.params) if p.is_constexpr]
-            self.non_constexpr_indices = [i for (i, p) in enumerate(self.params) if not p.is_constexpr]
-            self.specialised_indices = [
-                i for (i, p) in enumerate(self.params) if (not p.do_not_specialize) and (not p.is_constexpr)
-            ]
+            self.create_binder()
 
-        bound_args, excess_kwargs = self.binder(*args, **kwargs)
-        assert len(bound_args) == len(self.params)
-        # canonicalize grid
-        assert grid is not None
-        if callable(grid):
-            # Arguments are passed as a dict to `grid`, by contract.
-            # TODO(jlebar): In the new launch API, pass the compiler flags as a
-            # second parameter to `grid`.
-            grid = grid(dict(bound_args))
-        grid_size = len(grid)
-        grid_0 = grid[0]
-        grid_1 = grid[1] if grid_size > 1 else 1
-        grid_2 = grid[2] if grid_size > 2 else 1
+        bound_args, sig_and_spec, constexpr_vals, non_constexpr_vals, excess_kwargs = self.binder(*args, **kwargs)
 
         # compute cache key
-        bound_vals = tuple(bound_args.values())
-        sigvals = tuple((self.params[i].annotation_type or mangle_type(bound_vals[i], self.params[i].is_const))
-                        for i in self.non_constexpr_indices)
-        spec_key = ''.join(compute_spec_key(bound_vals[i]) for i in self.specialised_indices)
-        constexpr_key = tuple(bound_vals[i] for i in self.constexpr_indices)
+        key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs))
+        kernel = self.cache[device].get(key, None)
 
-        key = (sigvals, constexpr_key, spec_key, excess_kwargs, target)
-        key = str(key)
-        # Kernel is not cached; we have to compile.
-        if key not in self.cache[device]:
+        if kernel is None:
+            # Kernel is not cached; we have to compile.
+            target = driver.active.get_current_target()
+            backend = self.make_backend(target)
+            options = backend.parse_options(kwargs)
+
+            # deprecated arguments
+            assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
+            assert "device" not in kwargs, "device option is deprecated; current device will be used"
+            assert "stream" not in kwargs, "stream option is deprecated; current stream will be used"
+            for k in excess_kwargs:
+                if k not in options.__dict__:
+                    raise KeyError("Keyword argument %s was specified but unrecognised" % k)
+
+            bound_vals = tuple(bound_args.values())
 
             # `None` is nullptr. Implicitly convert to *i8. This needs to be
             # done here rather than when we build the signature as otherwise
             # the kernel cache key could not distinguish between byte pointers
             # and None arguments, resulting in a downstream mismatch:
             sigkeys = [self.params[i].name for i in self.non_constexpr_indices]
+            sigvals = sig_and_spec[:len(sigkeys)]
             signature = {k: ('*i8' if (v == 'none') else v) for (k, v) in zip(sigkeys, sigvals)}
 
-            backend = make_backend(target)
-            options = backend.parse_options(kwargs)
-            for k in excess_kwargs:
-                if k not in options.__dict__:
-                    raise KeyError("Keyword argument %s was specified but unrecognised" % k)
             configs = (self._get_config(*bound_vals), )
             constants = {
                 p.name: v
@@ -502,20 +522,31 @@ class JITFunction(KernelInterface[T]):
             if self._call_hook(key, signature, device, constants, options, configs):
                 return None
             # compile the kernel
-            src = ASTSource(self, signature, constants, configs[0])
-            self.cache[device][key] = compile(
+            src = self.ASTSource(self, signature, constants, configs[0])
+            kernel = self.compile(
                 src,
                 target=target,
                 options=options.__dict__,
             )
-
-        kernel = self.cache[device][key]
+            self.cache[device][key] = kernel
 
         if not warmup:
-            args = [bound_vals[i] for i in self.non_constexpr_indices]
-            launch_metadata = kernel.launch_metadata(grid, stream, *args)
+            # canonicalize grid
+            assert grid is not None
+            if callable(grid):
+                # Arguments are passed as a dict to `grid`, by contract.
+                # TODO(jlebar): In the new launch API, pass the compiler flags as a
+                # second parameter to `grid`.
+                grid = grid(bound_args)
+            grid_size = len(grid)
+            grid_0 = grid[0]
+            grid_1 = grid[1] if grid_size > 1 else 1
+            grid_2 = grid[2] if grid_size > 2 else 1
+
+            # launch kernel
+            launch_metadata = kernel.launch_metadata(grid, stream, *non_constexpr_vals)
             kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
-                       CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, *args)
+                       self.CompiledKernel.launch_enter_hook, self.CompiledKernel.launch_exit_hook, *non_constexpr_vals)
         return kernel
 
     def __init__(self, fn, version=None, do_not_specialize=None, debug=None, noinline=None, repr=None,
@@ -728,6 +759,7 @@ class TensorWrapper:
     def __init__(self, base, dtype):
         self.dtype = dtype
         self.base = base
+        self.data = base.data
         self.device = base.device
         self.shape = self.base.shape
 

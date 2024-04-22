@@ -156,7 +156,7 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
 // TODO: extend beyond scalars
 SmallVector<unsigned> getScratchConfigForAtomicRMW(triton::AtomicRMWOp op) {
   SmallVector<unsigned> smemShape;
-  if (op.getPtr().getType().isa<RankedTensorType>()) {
+  if (isa<RankedTensorType>(op.getPtr().getType())) {
     // do nothing or just assert because shared memory is not used in tensor up
     // to now
   } else {
@@ -284,7 +284,7 @@ private:
       unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
                                        std::multiplies{});
       auto bytes =
-          srcTy.getElementType().isa<triton::PointerType>()
+          isa<triton::PointerType>(srcTy.getElementType())
               ? elems * kPtrBitWidth / 8
               : elems * std::max<int>(8, srcTy.getElementTypeBitWidth()) / 8;
       maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
@@ -293,16 +293,16 @@ private:
       auto value = op->getOperand(0);
       // only scalar requires scratch memory
       // make it explicit for readability
-      if (value.getType().dyn_cast<RankedTensorType>()) {
+      if (dyn_cast<RankedTensorType>(value.getType())) {
         // nothing to do
       } else {
         auto smemShape = getScratchConfigForAtomicRMW(atomicRMWOp);
         unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
                                          std::multiplies{});
         auto elemTy =
-            value.getType().cast<triton::PointerType>().getPointeeType();
+            cast<triton::PointerType>(value.getType()).getPointeeType();
         auto bytes =
-            elemTy.isa<triton::PointerType>()
+            isa<triton::PointerType>(elemTy)
                 ? elems * kPtrBitWidth / 8
                 : elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
         maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
@@ -312,15 +312,15 @@ private:
       // only scalar requires scratch memory
       // make it explicit for readability
       auto value = op->getOperand(0);
-      if (value.getType().dyn_cast<RankedTensorType>()) {
+      if (dyn_cast<RankedTensorType>(value.getType())) {
         // nothing to do
       } else {
         auto smemShape = getScratchConfigForAtomicCAS(atomicCASOp);
         unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
                                          std::multiplies{});
         auto elemTy =
-            value.getType().cast<triton::PointerType>().getPointeeType();
-        auto bytes = elemTy.isa<triton::PointerType>()
+            cast<triton::PointerType>(value.getType()).getPointeeType();
+        auto bytes = isa<triton::PointerType>(elemTy)
                          ? elems * kPtrBitWidth / 8
                          : elems * elemTy.getIntOrFloatBitWidth() / 8;
         maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,

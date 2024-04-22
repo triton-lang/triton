@@ -453,8 +453,8 @@ bool supportMFMATypes(Type a, Type b) {
 }
 
 bool supportMFMA(triton::DotOp op) {
-  auto aTy = op.getA().getType().cast<RankedTensorType>();
-  auto bTy = op.getB().getType().cast<RankedTensorType>();
+  auto aTy = cast<RankedTensorType>(op.getA().getType());
+  auto bTy = cast<RankedTensorType>(op.getB().getType());
 
   auto aElemTy = aTy.getElementType();
   auto bElemTy = bTy.getElementType();
@@ -491,7 +491,7 @@ static bool supportWMMATypes(Type a, Type b, Type c, Type d) {
     bool aValid = a.isUnsignedInteger() && aWidth <= 8;
     bool cValid = cWidth <= 32;
     return aValid && cValid;
-  } else if (a.isa<FloatType>()) {
+  } else if (isa<FloatType>(a)) {
     if (a.isBF16())
       return c.isBF16() || c.isF32();
     if (a.isF16())
@@ -501,10 +501,10 @@ static bool supportWMMATypes(Type a, Type b, Type c, Type d) {
 }
 
 bool supportWMMA(triton::DotOp op) {
-  auto aTy = op.getA().getType().cast<RankedTensorType>();
-  auto bTy = op.getB().getType().cast<RankedTensorType>();
-  auto cTy = op.getC().getType().cast<RankedTensorType>();
-  auto dTy = op.getResult().getType().cast<RankedTensorType>();
+  auto aTy = cast<RankedTensorType>(op.getA().getType());
+  auto bTy = cast<RankedTensorType>(op.getB().getType());
+  auto cTy = cast<RankedTensorType>(op.getC().getType());
+  auto dTy = cast<RankedTensorType>(op.getResult().getType());
 
   auto aElemTy = aTy.getElementType();
   auto bElemTy = bTy.getElementType();
@@ -548,7 +548,7 @@ bool supportMMA(triton::DotOp op, int version) {
     // We cannot use MMA_V3 if we need to accumulate in F32 within the MMA op.
     if (op.getMaxNumImpreciseAcc() < 32 &&
         (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FNUZ()) &&
-        op.getType().cast<RankedTensorType>().getElementType().isF32()) {
+        cast<RankedTensorType>(op.getType()).getElementType().isF32()) {
       return false;
     }
   }
@@ -564,7 +564,7 @@ bool supportMMA(Value value, int version) {
   // types of both the operands are identical here.
   assert((version == 1 || version == 2 || version == 3) &&
          "Unexpected MMA layout version found");
-  auto elemTy = value.getType().cast<TensorOrMemDesc>().getElementType();
+  auto elemTy = cast<TensorOrMemDesc>(value.getType()).getElementType();
   // FP8 is not natively supported on all mma versions but it can always be
   // promoted to fp16 therefore we can always support it.
   bool isFP8 = elemTy.isFloat8E5M2() || elemTy.isFloat8E4M3FN() ||
@@ -911,7 +911,7 @@ MakeTensorPtrOp getMakeTensorPtrOp(Value v) {
   if (auto forOp = dyn_cast<scf::ForOp>(argOwner))
     return getMakeTensorPtrOp(
         forOp.getOperand(argNum + forOp.getNumControlOperands() - 1));
-  if (auto funcOp = dyn_cast<FuncOp>(argOwner)) {
+  if (auto funcOp = dyn_cast<FunctionOpInterface>(argOwner)) {
     Block *block = arg.getOwner();
     Operation *op;
     int tOrF;
