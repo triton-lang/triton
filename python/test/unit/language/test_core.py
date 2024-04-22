@@ -32,6 +32,11 @@ def is_hip():
         triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
+def is_xpu():
+    return not is_interpreter() and \
+        triton.runtime.driver.active.get_current_target().backend == "xpu"
+
+
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
 uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
 float_dtypes = ['float16', 'float32', 'float64']
@@ -1009,6 +1014,8 @@ def test_precise_math(expr_prec, expr_ref, num_ctas, device):
     kernel = patch_kernel(kernel, {'PREC_CALC': expr_prec, 'REF_CALC': expr_ref})
 
     kernel[(1, )](x, y, out, out_ref, BLOCK=shape[0], num_ctas=num_ctas)
+    if is_xpu() and expr_prec == 'tl.math.div_rn(x,y)':
+        out_ref = torch.div(x.cpu().to(torch.float64), y.cpu().to(torch.float64)).to(torch.float32).to(device=device)
     assert torch.all(out == out_ref)  # bitwise exact
 
 
