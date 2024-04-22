@@ -4,6 +4,7 @@ on:
   workflow_run:
     workflows: ["Wheels"]
     types: [completed]
+  workflow_dispatch:
 
 permissions: read-all
 
@@ -33,7 +34,7 @@ jobs:
           ./.github/workflows/torch-inductor/scripts/install_torchinductor.sh torchbench
       - name: Environment
         run: |
-          source /opt/torchinductor_venv/bin/activate
+          source /tmp/torchinductor_venv/bin/activate
           ./.github/workflows/torch-inductor/scripts/install_triton.sh
       - name: Performance
         run: |

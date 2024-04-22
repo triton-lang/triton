@@ -208,9 +208,8 @@ private:
 
   static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
                               Type promotedType) {
-    Type tensorPromotedType =
-        operand.getType().cast<RankedTensorType>().cloneWith(std::nullopt,
-                                                             promotedType);
+    Type tensorPromotedType = cast<RankedTensorType>(operand.getType())
+                                  .cloneWith(std::nullopt, promotedType);
     return builder.create<triton::FpToFpOp>(loc, tensorPromotedType, operand);
   }
 };

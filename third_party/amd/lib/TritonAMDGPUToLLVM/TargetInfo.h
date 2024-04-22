@@ -14,8 +14,9 @@ public:
 
   Value storeShared(ConversionPatternRewriter &rewriter, Location loc,
                     Value ptr, Value val, Value pred) const override;
-  Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                   Type elemTy, Value pred) const override;
+  Value loadShared(ConversionPatternRewriter &rewriter, Location loc,
+                   const TypeConverter *converter, Value ptr, Type elemTy,
+                   Value pred) const override;
 
   Value shuffleXor(ConversionPatternRewriter &rewriter, Location loc, Value val,
                    int i) const override;

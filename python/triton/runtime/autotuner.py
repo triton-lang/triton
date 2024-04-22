@@ -3,6 +3,7 @@ from __future__ import annotations
 import builtins
 import os
 import time
+import inspect
 from typing import Dict
 
 from ..testing import do_bench, do_bench_cudagraph
@@ -31,7 +32,6 @@ class Autotuner(KernelInterface):
             'top_k': number of configs to bench
             'prune_num_stages_by'(optional): a function used to prune num_stages. It takes configs:List[Config] as its input, and returns pruned configs.
         """
-        import torch
         if not configs:
             self.configs = [Config({}, num_warps=4, num_stages=2, num_ctas=1)]
         else:
@@ -78,8 +78,12 @@ class Autotuner(KernelInterface):
             self.early_config_prune = prune_configs_by.get("early_config_prune", self.early_config_prune)
 
         self.fn = fn
+        self.base_fn = fn
+        while not inspect.isfunction(self.base_fn):
+            self.base_fn = self.base_fn.fn
         self.num_warmups = warmup
         self.num_reps = rep
+        import torch
         self.use_cuda_graph = use_cuda_graph and torch.cuda.is_available()
         self.benchmarkig_stream = torch.cuda.Stream() if self.use_cuda_graph else None
 
@@ -109,12 +113,13 @@ class Autotuner(KernelInterface):
 
         try:
             if self.use_cuda_graph:
+                import torch
                 with torch.cuda.stream(self.benchmarkig_stream):
                     bench_res = do_bench_cudagraph(kernel_call, rep=self.num_reps, return_mode="median")
                 return bench_res
             return do_bench(kernel_call, warmup=self.num_warmups, rep=self.num_reps, quantiles=(0.5, 0.2, 0.8))
         except OutOfResources:
-            return [float("inf"), float("inf"), float("inf")]
+            return float("inf") if self.use_cuda_graph else [float("inf"), float("inf"), float("inf")]
 
     def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
@@ -146,7 +151,7 @@ class Autotuner(KernelInterface):
             config = self.configs[0]
         self.best_config = config
         if os.getenv("TRITON_PRINT_AUTOTUNING", None) == "1" and not used_cached_result:
-            print(f"Triton autotuning for function {self.fn} finished after "
+            print(f"Triton autotuning for function {self.base_fn.__name__} finished after "
                   f"{self.bench_time:.2f}s; best config selected: {self.best_config};")
         full_nargs = {**self.nargs, **kwargs, **self.best_config.kwargs}
         if config.pre_hook is not None:
@@ -207,8 +212,8 @@ class Config:
     """
     An object that represents a possible kernel configuration for the auto-tuner to try.
 
-    :ivar meta: a dictionary of meta-parameters to pass to the kernel as keyword arguments.
-    :type meta: dict[Str, Any]
+    :ivar kwargs: a dictionary of meta-parameters to pass to the kernel as keyword arguments.
+    :type kwargs: dict[Str, Any]
     :ivar num_warps: the number of warps to use for the kernel when compiled for GPUs. For example, if
                       `num_warps=8`, then each kernel instance will be automatically parallelized to
                       cooperatively execute using `8 * 32 = 256` threads.
@@ -247,8 +252,8 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     .. code-block:: python
 
         @triton.autotune(configs=[
-            triton.Config(meta={'BLOCK_SIZE': 128}, num_warps=4),
-            triton.Config(meta={'BLOCK_SIZE': 1024}, num_warps=8),
+            triton.Config(kwargs={'BLOCK_SIZE': 128}, num_warps=4),
+            triton.Config(kwargs={'BLOCK_SIZE': 1024}, num_warps=8),
           ],
           key=['x_size'] # the two above configs will be evaluated anytime
                          # the value of x_size changes

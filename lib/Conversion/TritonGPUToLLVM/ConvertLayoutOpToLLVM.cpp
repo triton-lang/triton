@@ -154,7 +154,7 @@ private:
     }
     auto elemTy = type.getElementType();
     bool isInt1 = elemTy.isInteger(1);
-    bool isPtr = elemTy.isa<triton::PointerType>();
+    bool isPtr = isa<triton::PointerType>(elemTy);
     auto llvmElemTyOrig = getTypeConverter()->convertType(elemTy);
     if (isInt1)
       elemTy = IntegerType::get(elemTy.getContext(), 8);

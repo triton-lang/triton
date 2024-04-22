@@ -216,7 +216,7 @@ Value createNaNConstant(Location loc, OpBuilder &rewriter, Type type);
 
 /// Create an index type constant.
 Value createIndexConstant(OpBuilder &builder, Location loc,
-                          TypeConverter *converter, int64_t value);
+                          const TypeConverter *converter, int64_t value);
 
 /// Create an integer constant of \param width bits.
 Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
@@ -1340,10 +1340,10 @@ inline SmallVector<Value>
 loadSharedToDistributed(Value dst, Value src, SharedMemoryObject smemObj,
                         Type elemTy, Location loc,
                         ConversionPatternRewriter &rewriter) {
-  auto dstTy = dst.getType().cast<RankedTensorType>();
+  auto dstTy = cast<RankedTensorType>(dst.getType());
   auto dstShape = dstTy.getShape();
   assert(dstShape.size() <= 2 && "Unexpected rank of loadSharedToDistributed");
-  auto srcTy = src.getType().cast<MemDescType>();
+  auto srcTy = cast<MemDescType>(src.getType());
   auto dstDistributedLayout = dstTy.getEncoding();
   if (auto mmaLayout = dstDistributedLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
     assert((!mmaLayout.isVolta()) &&
@@ -1396,12 +1396,12 @@ inline void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
                                      ArrayRef<Value> dstStrides, Value dst,
                                      Value smemBase, Type elemTy, Location loc,
                                      ConversionPatternRewriter &rewriter) {
-  auto srcTy = src.getType().cast<RankedTensorType>();
+  auto srcTy = cast<RankedTensorType>(src.getType());
   auto srcShape = srcTy.getShape();
   auto rank = srcShape.size();
   assert(rank == 2 ||
          rank == 3 && "Unexpected rank of storeDistributedToShared");
-  auto dstTy = dst.getType().cast<MemDescType>();
+  auto dstTy = cast<MemDescType>(dst.getType());
   auto srcDistributedLayout = srcTy.getEncoding();
   if (auto mmaLayout = srcDistributedLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
     assert((!mmaLayout.isVolta()) &&
@@ -1470,11 +1470,11 @@ unpackLLElements(Location loc, Value llvmStruct,
                  ConversionPatternRewriter &rewriter) {
   assert(bool(llvmStruct) && "can not unpack null values");
   if (llvmStruct.getType().isIntOrIndexOrFloat() ||
-      llvmStruct.getType().isa<triton::PointerType>() ||
-      llvmStruct.getType().isa<LLVM::LLVMPointerType>())
+      isa<triton::PointerType>(llvmStruct.getType()) ||
+      isa<LLVM::LLVMPointerType>(llvmStruct.getType()))
     return {llvmStruct};
   ArrayRef<Type> types =
-      llvmStruct.getType().cast<LLVM::LLVMStructType>().getBody();
+      cast<LLVM::LLVMStructType>(llvmStruct.getType()).getBody();
   SmallVector<Value> results(types.size());
   for (unsigned i = 0; i < types.size(); ++i) {
     Type type = types[i];
@@ -1488,7 +1488,7 @@ inline Value packLLElements(Location loc,
                             ValueRange resultVals,
                             ConversionPatternRewriter &rewriter, Type type) {
   auto structType =
-      typeConverter->convertType(type).dyn_cast<LLVM::LLVMStructType>();
+      dyn_cast<LLVM::LLVMStructType>(typeConverter->convertType(type));
   if (!structType) {
     assert(resultVals.size() == 1);
     return *resultVals.begin();

@@ -21,12 +21,12 @@ namespace triton {
 
 static Type getI1SameShapeFromTensorOrTensorPtr(Type type) {
   auto i1Type = IntegerType::get(type.getContext(), 1);
-  if (auto tensorType = type.dyn_cast<RankedTensorType>()) {
+  if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
     return RankedTensorType::get(tensorType.getShape(), i1Type,
                                  tensorType.getEncoding());
-  } else if (auto ptrType = type.dyn_cast<triton::PointerType>()) {
+  } else if (auto ptrType = dyn_cast<triton::PointerType>(type)) {
     Type pointeeType = ptrType.getPointeeType();
-    if (auto tensorType = pointeeType.dyn_cast<RankedTensorType>()) {
+    if (auto tensorType = dyn_cast<RankedTensorType>(pointeeType)) {
       return RankedTensorType::get(tensorType.getShape(), i1Type,
                                    tensorType.getEncoding());
     }
@@ -61,17 +61,17 @@ SmallVector<unsigned> getElemsPerThread(Attribute layout,
 }
 
 SmallVector<unsigned> getElemsPerThread(Type type) {
-  if (type.isIntOrIndexOrFloat() || type.isa<triton::PointerType>())
+  if (type.isIntOrIndexOrFloat() || isa<triton::PointerType>(type))
     return SmallVector<unsigned>(1, 1);
-  auto tensorType = type.cast<RankedTensorType>();
+  auto tensorType = cast<RankedTensorType>(type);
   return getElemsPerThread(tensorType.getEncoding(), tensorType.getShape(),
                            tensorType.getElementType());
 }
 
 unsigned getTotalElemsPerThread(Type type) {
-  if (type.isIntOrIndexOrFloat() || type.isa<triton::PointerType>())
+  if (type.isIntOrIndexOrFloat() || isa<triton::PointerType>(type))
     return 1;
-  auto tensorType = type.cast<RankedTensorType>();
+  auto tensorType = cast<RankedTensorType>(type);
   return getTotalElemsPerThread(tensorType.getEncoding(), tensorType.getShape(),
                                 tensorType.getElementType());
 }
@@ -369,7 +369,7 @@ SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
 }
 
 SmallVector<int64_t> getShapePerCTA(Type type) {
-  auto tensorType = type.cast<TensorOrMemDesc>();
+  auto tensorType = cast<TensorOrMemDesc>(type);
   return getShapePerCTA(tensorType.getEncoding(), tensorType.getShape());
 }
 
@@ -407,7 +407,7 @@ bool isaDistributedLayout(Attribute layout) {
 
 template <typename T> bool hasEncoding(Value value) {
   auto type = value.getType();
-  if (auto tensorType = type.dyn_cast<TensorOrMemDesc>()) {
+  if (auto tensorType = dyn_cast<TensorOrMemDesc>(type)) {
     auto encoding = tensorType.getEncoding();
     return encoding && encoding.isa<T>();
   }
@@ -2755,7 +2755,7 @@ struct CanonicalizeConvertFromConvert
     // cvt(type, constant) -> constant
     if (auto cst = llvm::dyn_cast<arith::ConstantOp>(arg))
       if (auto ret = cst.getValue().dyn_cast<SplatElementsAttr>()) {
-        auto ty = op->getResultTypes().front().cast<ShapedType>();
+        auto ty = cast<ShapedType>(op->getResultTypes().front());
         auto newRet =
             SplatElementsAttr::get(ty, ret.getSplatValue<Attribute>());
         rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, newRet);

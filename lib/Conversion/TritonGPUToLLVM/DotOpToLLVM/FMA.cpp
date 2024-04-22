@@ -37,9 +37,9 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   auto C = op.getC();
   auto D = op.getResult();
 
-  auto aTensorTy = A.getType().cast<RankedTensorType>();
-  auto bTensorTy = B.getType().cast<RankedTensorType>();
-  auto dTensorTy = D.getType().cast<RankedTensorType>();
+  auto aTensorTy = cast<RankedTensorType>(A.getType());
+  auto bTensorTy = cast<RankedTensorType>(B.getType());
+  auto dTensorTy = cast<RankedTensorType>(D.getType());
 
   auto aShapePerCTA = getShapePerCTA(aTensorTy);
   auto bShapePerCTA = getShapePerCTA(bTensorTy);

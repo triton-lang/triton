@@ -96,7 +96,7 @@ static void createAsyncCopy(
     // we want to use optimal layout for the data.
     ttg::BlockedEncodingAttr encoding = loadToInfo[loadOp].blockedEncoding;
     auto convertBlockLayout = [&](Value src) {
-      auto ty = src.getType().cast<RankedTensorType>();
+      auto ty = cast<RankedTensorType>(src.getType());
       auto newTy =
           RankedTensorType::get(ty.getShape(), ty.getElementType(), encoding);
       auto cvt =
@@ -108,7 +108,7 @@ static void createAsyncCopy(
       mask = convertBlockLayout(mask);
   }
 
-  tt::MemDescType allocTy = alloc.getType().cast<tt::MemDescType>();
+  tt::MemDescType allocTy = cast<tt::MemDescType>(alloc.getType());
   SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
   copyOffsets[0] = insertIdx;
   tt::MemDescType subviewTy = tt::MemDescType::get(
@@ -174,7 +174,7 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
     if (user->getNumResults() != 1)
       return std::nullopt;
     if (auto memDesc =
-            user->getResult(0).getType().dyn_cast<triton::MemDescType>()) {
+            dyn_cast<triton::MemDescType>(user->getResult(0).getType())) {
       // First time we find a shared encoding in the chain, save it and try to
       // use it if it is compatible with the other users.
       tempAttr = memDesc.getEncoding().cast<ttg::SharedEncodingAttr>();
@@ -211,7 +211,7 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
 static ttg::BlockedEncodingAttr
 getBlockedEncoding(tt::LoadOp loadOp, tt::ModuleAxisInfoAnalysis &axisInfo) {
   Value src = loadOp.getPtr();
-  auto ty = src.getType().cast<RankedTensorType>();
+  auto ty = cast<RankedTensorType>(src.getType());
   auto mod = loadOp->getParentOfType<ModuleOp>();
   int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
   int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -229,7 +229,7 @@ getBlockedEncoding(tt::LoadOp loadOp, tt::ModuleAxisInfoAnalysis &axisInfo) {
 
 static std::optional<ttg::SharedEncodingAttr>
 getSharedEncoding(tt::LoadOp loadOp, bool isMMAV3) {
-  auto ty = loadOp.getType().cast<RankedTensorType>();
+  auto ty = cast<RankedTensorType>(loadOp.getType());
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
   auto blockedOrder = ttg::getOrder(ty.getEncoding());
   SmallVector<unsigned> order;
@@ -337,7 +337,7 @@ static bool loadIsMMAv3(tt::LoadOp loadOp) {
 
   // MMA V3 case.
   auto newOrder = sharedEnc.getOrder();
-  auto ty = loadOp.getType().cast<RankedTensorType>();
+  auto ty = cast<RankedTensorType>(loadOp.getType());
   auto oldOrder = ttg::getOrder(ty.getEncoding());
 
   // The operand of MMAv3 is in SharedEncoding and its order should not
@@ -580,7 +580,7 @@ static bool createCoarseSchedule(
 static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
                          ttg::SharedEncodingAttr sharedEnc, unsigned distance) {
   OpBuilder builder(forOp);
-  auto ty = loadOp.getType().cast<RankedTensorType>();
+  auto ty = cast<RankedTensorType>(loadOp.getType());
   SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
   bufferShape.insert(bufferShape.begin(), distance);
   Type memdescType = mlir::triton::MemDescType::get(
@@ -744,15 +744,6 @@ static std::vector<std::pair<Operation *, unsigned>> createSchedule(
     }
   });
 
-  /*LLVM_DEBUG({
-    for (int order = 0; order < numOrders; order++) {
-      for (int stage = 0; stage < numStages; stage++) {
-        LDBG("- anchorOpsAndDeps " << order << stage);
-        printDenseSet(anchorOpsAndDeps[order][stage]);
-      }
-    }
-  });*/
-
   auto getNestedOperands = [](Operation *op) -> SmallVector<Value> {
     SmallVector<Value> operands;
     op->walk([&](Operation *nestedOp) {
@@ -786,23 +777,24 @@ static std::vector<std::pair<Operation *, unsigned>> createSchedule(
             DenseSet<Operation *> distanceOneUsers;
             tt::addDep(defOp, distanceOneUsers, true);
             if (isa<tt::LoadOp>(defOp)) {
-              for (auto user : distanceOneUsers)
-                if (opToStageAndOrder.count(user) == 0)
+              // Schedule loads with a distance of 1 together with the anchor
+              // ops.
+              for (auto user : distanceOneUsers) {
+                if (opToStageAndOrder.count(user) == 0) {
                   opToStageAndOrder[user] = {stage, order};
+                }
+              }
             } else {
-              for (auto user : distanceOneUsers)
+              for (auto user : distanceOneUsers) {
                 if (opToStageAndOrder.count(user) == 0) {
                   opToStageAndOrder[user] = {stage + 1, order - 1};
                 }
+              }
             }
           }
         }
       }
     }
-    /*LLVM_DEBUG({
-      LDBG("- distanceOneUsers " << order << stage);
-      printDenseSet(distanceOneUsers[order][stage]);
-    });*/
   }
 
   minOrder = *llvm::min_element(
@@ -822,42 +814,6 @@ static std::vector<std::pair<Operation *, unsigned>> createSchedule(
       }
     }
   });
-
-  // Schedule loads with a distance of 1 together with the anchor ops.
-  /*for (unsigned order = 0; order < numOrders; order++) {
-  for (unsigned i = 0; i < distanceOneUsers[order].size(); i++) {
-    for (auto op : distanceOneUsers[order][i]) {
-      if (isa<tt::LoadOp>(op))
-        tt::addDep(op, anchorOpsAndDeps[order][i], true);
-    }
-  }
-  }*/
-
-  /*DenseSet<Operation *> allAnchorsAndDeps;
-  for (auto &order : anchorOpsAndDeps) {
-    for (auto &set : order)
-      allAnchorsAndDeps.insert(set.begin(), set.end());
-  }*/
-
-  // Rest of the distance 1 dependencies will be scheduled one
-  // stage after the anchor ops, but *ahead* of them in the op order.
-  /*SmallVector<DenseSet<Operation *>> stage1deps(numStages);
-  for (unsigned i = 0; i < distanceOneUsers.size() - 1; i++) {
-    auto &group = distanceOneUsers[i];
-    for (auto op : group) {
-      if (!isa<tt::LoadOp>(op))
-        tt::addDep(op, stage1deps[i + 1], true, &allAnchorsAndDeps);
-    }
-    LLVM_DEBUG({
-      LDBG("- stage1deps " << i);
-      printDenseSet(stage1deps[i]);
-    });
-  }*/
-
-  /*DenseSet<Operation *> allStage1Deps;
-  for (auto &set : stage1deps) {
-    allStage1Deps.insert(set.begin(), set.end());
-  }*/
 
   // Assign the rest of the ops to the last stage, main block of the loop (order
   // 0)
@@ -883,7 +839,6 @@ static std::vector<std::pair<Operation *, unsigned>> createSchedule(
   // Create the actual schedule
   std::vector<std::pair<Operation *, unsigned>> schedule;
 
-  // Schedule dependencies with distance of 1 into stage 1 to reduce pressure.
   // Insert the ops in the reverse order of the stages. This helps with saving
   // the number of required buffers.
   // TODO pawel: this causes liveranges to be longer than necessary:
@@ -906,31 +861,6 @@ static std::vector<std::pair<Operation *, unsigned>> createSchedule(
       }
     }
   }
-  /*for (int i = numStages - 1; i >= 0; i--) {
-    auto &group = stage1deps[i];
-    tt::addOps(forOp, i, schedule,
-               [&](Operation *op) { return group.count(op); });
-  }
-
-  for (int i = numStages - 1; i >= 0; i--) {
-    auto &group = anchorOpsAndDeps[i];
-    tt::addOps(forOp, i, schedule,
-               [&](Operation *op) { return group.count(op); });
-
-    if (i == numStages - 1) {
-      // Schedule everything still without stage to `numStage - 1`.
-      tt::addOps(forOp, numStages - 1, schedule, [&](Operation *op) {
-        return (allAnchorsAndDeps.count(op) == 0 &&
-                allStage1Deps.count(op) == 0);
-      });
-    }
-  }*/
-
-  /*
-    // Finally schedule the extract ops in stage `numStage - 2` so that they get
-    // pre-fetched and play well with pretech pass.
-    tt::addOps(forOp, numStages - 2, schedule,
-               [&](Operation *op) { return useMemAndDeps.count(op); });*/
 
   LLVM_DEBUG(printSchedule(schedule, numStages));
 
@@ -1169,7 +1099,7 @@ static void threadValuesThroughWait(ttng::DotWaitOp wait,
 
   for (ttng::DotAsyncOp dot : asyncDots) {
     for (Value operand : dot.getOperands()) {
-      if (operand.getType().isa<tt::MemDescType>()) {
+      if (isa<tt::MemDescType>(operand.getType())) {
         newOperands.insert(operand);
       }
     }
@@ -1181,12 +1111,12 @@ static void threadValuesThroughWait(ttng::DotWaitOp wait,
       wait.getLoc(), llvm::to_vector(newOperands), wait.getPendings());
   for (int i = 0; i < origNumOperands; i++) {
     Value operand = wait.getResult(i);
-    if (!operand.getType().isa<tt::MemDescType>())
+    if (!isa<tt::MemDescType>(operand.getType()))
       operand.replaceAllUsesWith(newWait.getResult(i));
   }
   for (int i = origNumOperands; i < newOperands.size(); i++) {
     Value operand = newWait.getOperand(i);
-    if (!operand.getType().isa<tt::MemDescType>())
+    if (!isa<tt::MemDescType>(operand.getType()))
       operand.replaceAllUsesExcept(newWait.getResult(i), newWait);
   }
   wait->erase();
@@ -1238,7 +1168,7 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::DotAsyncOp dotOp,
   // Rule 1: All shmem operands are multi-buffered.
   auto checkOperand = [&](Value operand) {
     if (!isa<ttg::SharedEncodingAttr>(
-            operand.getType().cast<TensorOrMemDesc>().getEncoding())) {
+            cast<TensorOrMemDesc>(operand.getType()).getEncoding())) {
       return true;
     }
 

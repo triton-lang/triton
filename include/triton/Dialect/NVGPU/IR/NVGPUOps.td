@@ -116,10 +116,6 @@ def NVGPU_FenceAsyncSharedOp : NVGPU_Op<"fence_async_shared", []> {
   let assemblyFormat = "attr-dict";
 }
 
-def NVGPU_FenceMBarrierInitOp : NVGPU_Op<"fence_mbarrier_init", []> {
-  let assemblyFormat = "attr-dict";
-}
-
 def NVGPU_ClusterArriveOp : NVGPU_Op<"cluster_arrive", []> {
   let arguments = (ins I1Attr:$relaxed);
 

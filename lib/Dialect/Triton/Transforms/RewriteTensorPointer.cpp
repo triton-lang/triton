@@ -92,7 +92,7 @@ public:
            tensorShape.size() == strides.size());
     auto indexTensorType =
         RankedTensorType::get(tensorShape, builder.getI64Type());
-    auto ptrType = base.getType().cast<triton::PointerType>();
+    auto ptrType = cast<triton::PointerType>(base.getType());
     auto ptrTensorType = RankedTensorType::get(tensorShape, ptrType);
 
     // Generate offsets per dimension
@@ -166,7 +166,7 @@ public:
 
     // Create element attribute
     auto elementType =
-        base.getType().cast<triton::PointerType>().getPointeeType();
+        cast<triton::PointerType>(base.getType()).getPointeeType();
     auto otherTensorType = RankedTensorType::get(tensorShape, elementType);
 
     // Set zero padding value
@@ -226,8 +226,8 @@ public:
                                     triton::MakeTensorPtrOp op,
                                     std::stack<Operation *> &eraser) {
     // Save info for later use
-    auto ptrType = op.getType().cast<triton::PointerType>();
-    auto tensorType = ptrType.getPointeeType().cast<RankedTensorType>();
+    auto ptrType = cast<triton::PointerType>(op.getType());
+    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
 
     // Cast I32 offsets into I64
     SmallVector<Value> i64Offsets;

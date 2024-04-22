@@ -194,47 +194,6 @@ bool isColMajor(::llvm::ArrayRef<unsigned> order) {
   return order[0] == (rank - 2);
 }
 
-bool isKMajor(::llvm::ArrayRef<unsigned> order, int opIdx) {
-  auto rank = order.size();
-  int kdim = opIdx == 0 ? rank - 1 : rank - 2;
-  return order[0] == kdim;
-}
-
-/**
- * @brief test if swizzle pattern is compatible with "normal" path of offset
- * computation
- *
- * This function checks that swizzle pattern fits into one warp block
- * and block size is a multiple of swizzle size along non-K dimension
- *
- * @param sharedLayout
- * @param opIdx operand id 0 or 1
- * @param shape tensor shape
- * @param mfmaInstrNonK size of one instruction along non-k Dim (tile size)
- * @param warpsPerBlockNonK number of warps along non-k Dim
- * @return bool
- */
-bool isSwizzlePatternNormalPathCompatible(const SharedEncodingAttr sharedLayout,
-                                          int opIdx, ArrayRef<int64_t> shape,
-                                          unsigned mfmaInstrNonK,
-                                          unsigned warpsPerBlockNonK) {
-  auto order = sharedLayout.getOrder();
-  auto rank = shape.size();
-  const auto swizzleFastDimSize =
-      sharedLayout.getMaxPhase() * sharedLayout.getVec();
-  const auto swizzleSlowDimSize =
-      sharedLayout.getMaxPhase() * sharedLayout.getPerPhase();
-  const auto swizzlePatternSizeK =
-      isKMajor(order, opIdx) ? swizzleFastDimSize : swizzleSlowDimSize;
-  const auto swizzlePatternSizeNonK =
-      !isKMajor(order, opIdx) ? swizzleFastDimSize : swizzleSlowDimSize;
-
-  const auto blockSizeK = opIdx == 0 ? shape[rank - 1] : shape[rank - 2];
-  const auto blockSizeNonK = mfmaInstrNonK * warpsPerBlockNonK;
-  return blockSizeK % swizzlePatternSizeK == 0 &&
-         blockSizeNonK % swizzlePatternSizeNonK == 0;
-}
-
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor, DotOperandEncodingAttr encoding,
                     const SharedMemoryObject &smemObj,
@@ -312,7 +271,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   SmallVector<Value> loadedValues;
   SmallVector<Value> offsets;
   Value smemBase;
-  bool isFastPath = !isKMajor(order, opIdx) && !hasSwizzleEnabled(sharedLayout);
+  bool isFastPath =
+      !AMD::isKMajor(order, opIdx) && !hasSwizzleEnabled(sharedLayout);
   if (isFastPath) {
     // fast path handles tensors that are not k-major and have swizzling
     // disabled, in which case offsets computation can be simplified
@@ -348,8 +308,6 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     //   performant case
     //   2. k-major + swizzling is disabled <-- for testing purpose only
     //   3. non k-major + swizzling is enabled <-- for testing purpose only
-    assert(isSwizzlePatternNormalPathCompatible(
-        sharedLayout, opIdx, shape, mfmaInstrNonK, warpsPerBlockNonK));
     if (opIdx == 0) {
       offsets = AMD::computeOffsetsAType(
           rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,

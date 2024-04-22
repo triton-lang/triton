@@ -14,10 +14,10 @@ from test_core import _test_binary, int_dtypes, uint_dtypes, float_dtypes, numpy
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype", int_dtypes + uint_dtypes + float_dtypes + ["bfloat16"])
 @pytest.mark.parametrize("op", ["maximum", "minimum"])
-def test_maximum_minium(dtype, op):
+def test_maximum_minium(dtype, op, device):
     expr = f'tl.{op}(x, y)'
     numpy_expr = f'np.{op}(x, y)'
-    _test_binary(dtype, dtype, expr, numpy_expr)
+    _test_binary(dtype, dtype, expr, numpy_expr, device=device)
 
 
 # ---------------
@@ -41,7 +41,7 @@ def test_sort(M, N, descending, dtype_str, device):
         tl.store(Z + off2d, x)
 
     x = numpy_random((N, M), dtype_str=dtype_str)
-    x = torch.from_numpy(x).to("cuda")
+    x = torch.from_numpy(x).to(device)
     y = torch.sort(x, descending=descending)[0]
     z = torch.empty_like(x)
     sort_kernel[(1, )](x, z, N, M, descending, num_warps=8)
@@ -68,8 +68,8 @@ def test_flip(M, N, dtype_str, device):
         tl.store(Z + off2d, x)
 
     x = numpy_random((N, M), dtype_str=dtype_str)
-    x = torch.from_numpy(x).to("cuda")
+    x = torch.from_numpy(x).to(device)
     y = torch.flip(x, (1, ))
-    z = torch.empty_like(x)
+    z = torch.empty_like(x, device=device)
     flip_kernel[(1, )](x, z, N, M, num_warps=8)
     assert (y == z).all(), (y, z)

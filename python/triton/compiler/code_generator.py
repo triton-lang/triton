@@ -243,7 +243,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.dereference_name: Callable[[str], Any] = self._define_name_lookup()
         self.fn = None
 
-    builtin_namespace: Dict[str, Any] = {_.__name__: _ for _ in (len, range, float, int, isinstance, getattr)}
+    builtin_namespace: Dict[str, Any] = {_.__name__: _ for _ in (len, list, range, float, int, isinstance, getattr)}
     builtin_namespace.update((
         ('print', language.core.device_print),
         ('min', language.minimum),
@@ -987,7 +987,7 @@ class CodeGenerator(ast.NodeVisitor):
         if not self.debug:
             return
         test = self.visit(node.test)
-        msg = self.visit(node.msg)
+        msg = self.visit(node.msg) if node.msg is not None else ""
         # Convert assert to triton's device_assert which happens on the device
         return language.core.device_assert(test, msg, _builder=self.builder)
 

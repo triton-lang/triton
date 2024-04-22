@@ -53,20 +53,6 @@ def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
   }];
 }
 
-def TTG_AsyncBulkWaitOp : TTG_Op<"async_bulk_wait"> {
-  let summary = "async bulk wait";
-
-  let arguments = (ins I32Attr:$num);
-
-  let assemblyFormat = "attr-dict";
-
-  let extraClassDeclaration = [{
-    static bool isSupported(int computeCapability) {
-      return computeCapability >= 90;
-    }
-  }];
-}
-
 def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
   let summary = "async commit group";
 
@@ -80,18 +66,6 @@ def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
   let extraClassDeclaration = [{
     static bool isSupported(int computeCapability) {
       return computeCapability >= 80;
-    }
-  }];
-}
-
-def TTG_AsyncBulkCommitGroupOp : TTG_Op<"async_bulk_commit_group"> {
-  let summary = "async bulk commit group";
-
-  let assemblyFormat = "attr-dict";
-
-  let extraClassDeclaration = [{
-    static bool isSupported(int computeCapability) {
-      return computeCapability >= 90;
     }
   }];
 }
