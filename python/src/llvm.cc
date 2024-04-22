@@ -56,6 +56,13 @@ std::string translateLLVMIRToASM(llvm::Module &module,
       *optPtr = true;
     }
   }
+  if (triton::tools::getBoolEnv("DISABLE_LLVM_LSR")) {
+    auto optIt = options.find("disable-lsr");
+    if (optIt != options.end()) {
+      auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+      *optPtr = true;
+    }
+  }
 
   // inline everything
   for (llvm::Function &f : module.functions())

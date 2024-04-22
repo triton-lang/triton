@@ -44,6 +44,7 @@ inline const std::set<std::string> ENV_VARS = {
     "MLIR_ENABLE_DIAGNOSTICS",
     "TRITON_ENABLE_LLVM_DEBUG",
     "USE_TTGIR_LOC",
+    "DISABLE_LLVM_LSR",
 };
 
 namespace tools {
