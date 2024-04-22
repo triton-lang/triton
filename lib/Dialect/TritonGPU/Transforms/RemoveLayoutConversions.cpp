@@ -904,6 +904,8 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
         Value oldArg = loopBody.getArgument(m.first + numIndVars);
         addRematValue(newForOp.getResult(m.first), layout[oldArg],
                       newForOp.getResult(m.second));
+        addRematValue(oldArg, layout[oldArg],
+                      loopBody.getArgument(m.second + numIndVars));
       }
       continue;
     }
