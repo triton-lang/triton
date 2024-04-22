@@ -1020,15 +1020,16 @@ static void threadValuesThroughWait(ttng::DotWaitOp wait,
   // values in the operation.
   auto newWait = builder.create<ttng::DotWaitOp>(
       wait.getLoc(), llvm::to_vector(newOperands), wait.getPendings());
-  for (int i = 0; i < origNumOperands; i++) {
-    Value operand = wait.getResult(i);
-    if (!operand.getType().isa<tt::MemDescType>())
-      operand.replaceAllUsesWith(newWait.getResult(i));
-  }
-  for (int i = origNumOperands; i < newOperands.size(); i++) {
+
+  auto dominatedByNewWait = [&](OpOperand &operand) {
+    auto opInThisBlock =
+        newWait->getBlock()->findAncestorOpInBlock(*operand.getOwner());
+    return opInThisBlock && newWait->isBeforeInBlock(opInThisBlock);
+  };
+  for (int i = 0; i < newOperands.size(); i++) {
     Value operand = newWait.getOperand(i);
     if (!operand.getType().isa<tt::MemDescType>())
-      operand.replaceAllUsesExcept(newWait.getResult(i), newWait);
+      operand.replaceUsesWithIf(newWait.getResult(i), dominatedByNewWait);
   }
   wait->erase();
 }
@@ -1047,8 +1048,8 @@ static void threadValuesThroughWait(ttng::DotWaitOp wait,
 //  1. All operands that touch shared memory are multi-buffered, i.e. can't read
 //     an incomplete value while it's being written asynchronously by a load.
 //
-//  2. During iteration i, nothing other than the loop's `yield` reads the
-//     result of the dot.
+//  2. If the dot is used by any op in the loop, it must be used under an `if`,
+//     and will be synced with a `wait 0` at the beginning of the `if` block.
 //
 //  3. During iteration i, between the start of the loop up until the first
 //     `ttng.dot_wait {pendings=0}` op, the result of the dot from iteration i-1
@@ -1103,36 +1104,42 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::DotAsyncOp dotOp,
     return std::nullopt;
   }
 
-  // Rule 2: The dot should only be used by the for loop's `yield`.
-  /*if (!dotOp->hasOneUse() ||
-      *dotOp->getUsers().begin() != forOp.getBody()->getTerminator()) {
-    LDBG("Can't make dot async because it is not used only by the loop's "
-         "`yield`.");
-    return std::nullopt;
-  }*/
-
-  // The result of the dot becomes this loop carry value.
+  // TODO pawel: update the comment above
+  // Rule 2: The dot cannot be unconditionally used by any op in the loop.
+  // Uses under `if` are allowed, as can be explicitly synced with a `wait 0`.
   int iterArgIdx = -1;
   Value iterArg = nullptr;
+  SmallVector<std::pair<Operation *, int>> queue;
   for (auto &use : dotOp->getUses()) {
-    if (auto yieldOp = dyn_cast<scf::YieldOp>(use.getOwner())) {
-      // is this yield of an if or for?
-      if (auto ifOp = dyn_cast<scf::IfOp>(yieldOp->getParentOp())) {
-        auto &ifUse = *ifOp.getResult(0).getUses().begin();
-        assert(isa<scf::YieldOp>(ifUse.getOwner()));
-        iterArgIdx = ifUse.getOperandNumber();
-        iterArg = forOp.getRegionIterArg(iterArgIdx);
-      } else {
-        assert(isa<scf::ForOp>(yieldOp->getParentOp()));
-        iterArgIdx = use.getOperandNumber();
-        iterArg = forOp.getRegionIterArg(iterArgIdx);
+    queue.push_back({use.getOwner(), use.getOperandNumber()});
+  }
+  while (!queue.empty()) {
+    auto [user, argIdx] = queue.pop_back_val();
+    if (user->getParentOp() == forOp) {
+      if (isa<scf::YieldOp>(user)) {
+        if (iterArg) {
+          // The dot is used by the loop's yield, but we can't have any other
+          // uses.
+          return std::nullopt;
+        }
+        iterArgIdx = argIdx;
+        iterArg = forOp.getRegionIterArg(argIdx);
+        continue;
       }
+      return std::nullopt;
+    }
+    if (auto ifOp = dyn_cast<scf::IfOp>(user->getParentOp())) {
+      if (isa<scf::YieldOp>(user)) {
+        // The result is returned by the if, follow it further.
+        auto uses = ifOp.getResult(argIdx).getUses();
+        for (auto &use : uses) {
+          queue.push_back({use.getOwner(), use.getOperandNumber()});
+        }
+      }
+    } else {
+      return std::nullopt;
     }
   }
-  assert(iterArg && "Dot result not used by loop's yield.");
-  assert(iterArgIdx != -1 && "Dot result not used by loop's yield.");
-
-  return iterArgIdx;
 
   // Rule 3a: Are the only users of the dot's result from iteration i-1 other
   // MMAv3 dots?  If so, we're done, this dot can be properly async.
@@ -1198,6 +1205,32 @@ static void insertAsyncDotWaitInLoop(
   if (llvm::any_of(forOp.getBody()->getOps<ttng::DotWaitOp>(),
                    [](auto wait) { return wait.getPendings() == 0; })) {
     return;
+  }
+
+  // Insert waits before the users of the properly async dots other than loop
+  // yield.
+  for (auto [asyncDot, iterArgIdx] : properlyAsyncDots) {
+    SmallVector<OpOperand *> uses;
+    for (auto &use : asyncDot->getUses()) {
+      if (auto yieldOp = dyn_cast<scf::YieldOp>(use.getOwner())) {
+        continue;
+      }
+      uses.push_back(&use);
+    }
+
+    DenseMap<Block *, SmallVector<Value>> blockToUsers;
+    for (auto use : uses) {
+      auto block = use->getOwner()->getBlock();
+      blockToUsers[block].push_back(use->get());
+    }
+
+    for (auto [block, users] : blockToUsers) {
+      OpBuilder builder(block, block->begin());
+      auto newWait = builder.create<ttng::DotWaitOp>(asyncDot->getLoc(),
+                                                     ArrayRef<Value>{}, 0);
+
+      threadValuesThroughWait(newWait, users);
+    }
   }
 
   // Add the wait right after the last properly-async dot.  This only needs to
@@ -1280,38 +1313,6 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
   // from global to shmem) can't start until the first iteration's set has
   // completed.
   insertAsyncDotWaitInLoop(forOp, properlyAsyncDots);
-
-  for (auto waitOp : forOp.getBody()->getOps<ttng::DotWaitOp>()) {
-    // If dot_wait is being used in an op other than yield, insert a wait
-    // pending=0 right before the use
-    SmallVector<OpOperand *> uses;
-    for (auto &use : waitOp->getUses()) {
-      if (auto yieldOp = dyn_cast<scf::YieldOp>(use.getOwner())) {
-        continue;
-      }
-      uses.push_back(&use);
-    }
-
-    // block -> earliest use
-    DenseMap<Block *, OpOperand *> blockToEarliestUse;
-    for (auto use : uses) {
-      auto block = use->getOwner()->getBlock();
-      if (!blockToEarliestUse.count(block) ||
-          !blockToEarliestUse[block]->getOwner()->isBeforeInBlock(
-              use->getOwner())) {
-        blockToEarliestUse[block] = use; // HACK: the other use in the block
-                                         // should use the def of this op too
-      }
-    }
-
-    for (auto [block, use] : blockToEarliestUse) {
-      OpBuilder builder(use->getOwner());
-      auto newWait = builder.create<ttng::DotWaitOp>(
-          waitOp.getLoc(), ArrayRef<Value>{use->get()}, 0);
-
-      use->getOwner()->replaceUsesOfWith(use->get(), newWait.getResult(0));
-    }
-  }
 
   // Finally, insert a wait after the loop, waiting for dots from the final
   // iteration of the loop.
