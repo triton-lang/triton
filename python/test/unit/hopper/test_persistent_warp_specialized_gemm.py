@@ -660,7 +660,7 @@ def full_static_persistent_matmul_kernel(a_ptr, b_ptr, w_ptr, bias_ptr, z_ptr,  
         offs_n = block_offset_n + tl.arange(0, BLOCK_N)
         z_ptrs = z_ptr + offs_m[:, None] * stride_zm + offs_n[None, :] * stride_zn
         bias_ptrs = bias_ptr + offs_m[:, None] * stride_zm + offs_n[None, :] * stride_zn
-        mask = (offs_m < M)[:, None] & (offs_n < N)[None, :]
+        mask = (offs_m < M)[:, None] and (offs_n < N)[None, :]
 
         # TODO: lib/Dialect/TritonGPU/Transforms/RewriteTensorPointer.cpp does not support scf.if yet.
         # if tile_id >= NUM_SMS:
@@ -720,6 +720,7 @@ def full_static_persistent_matmul_kernel(a_ptr, b_ptr, w_ptr, bias_ptr, z_ptr,  
             [4096, 1, 1024, False, False],
             [2048, 204, 1000, True, False],
             [16, 524288, 32, False, True],
+            # [16, 1048576, 32, False, True],
         ] for out_dtype in ['float16', 'float32'] for use_tma_store in [False, True]
     ] + [
         # softmax epilogue
@@ -928,6 +929,7 @@ def test_full_static_persistent_matmul_kernel(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WAR
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K, GROUP_SIZE_M=8,  #
         out_dtype=out_dtype,  #
         USE_TMA_STORE=USE_TMA_STORE,  #
+        # USE_TMA_STORE=True,  #
         ADD_MATRIX=epilogue == 'add-matrix',  #
         ADD_ROWS=epilogue == 'add-rows',  #
         ADD_COLS=epilogue == 'add-cols',  #
@@ -935,8 +937,8 @@ def test_full_static_persistent_matmul_kernel(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WAR
         CHAIN_DOT=epilogue == 'chain-dot',  #
         A_ORDER_0=a_order[0], A_ORDER_1=a_order[1],  #
         B_ORDER_0=b_order[0], B_ORDER_1=b_order[1],  #
-        num_warps=NUM_WARPS, num_ctas=NUM_CTAS, num_stages=NUM_STAGES,  #
-        NUM_SMS=NUM_SMS, matrix_instr_nonkdim=16)
+        num_warps=1, num_ctas=NUM_CTAS, num_stages=NUM_STAGES,  #
+        NUM_SMS=NUM_SMS, matrix_instr_nonkdim=32)
 
     torch.set_printoptions(profile="full")
     golden = torch.nn.functional.normalize(golden)
