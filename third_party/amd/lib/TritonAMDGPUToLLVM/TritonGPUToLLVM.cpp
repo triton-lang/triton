@@ -99,7 +99,7 @@ struct ConvertTritonAMDGPUToLLVM
 
     AMD::TargetInfo targetInfo(this->arch.getValue());
     if (targetInfo.getISAFamily() == AMD::ISAFamily::Unknown) {
-      mod.emitError("unknown target: ") << this->arch.getValue();
+      mod.emitError("unsupported target: '") << this->arch.getValue() << "'";
       return signalPassFailure();
     }
 

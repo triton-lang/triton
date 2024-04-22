@@ -13,7 +13,7 @@ def ConvertTritonAMDGPUToLLVM : Pass<"convert-triton-amdgpu-to-llvm", "mlir::Mod
     let description = [{
 
     }];
-    let constructor = "mlir::triton::createConvertTritonAMDGPUToLLVMPass(\"gfx940\")";
+    let constructor = "mlir::triton::createConvertTritonAMDGPUToLLVMPass(\"\")";
 
     let dependentDialects = ["mlir::arith::ArithDialect",
                              "mlir::math::MathDialect",
@@ -27,7 +27,7 @@ def ConvertTritonAMDGPUToLLVM : Pass<"convert-triton-amdgpu-to-llvm", "mlir::Mod
 
     let options = [
         Option<"arch", "arch",
-               "std::string", /*default*/"\"gfx940\"",
+               "std::string", /*default*/"\"\"",
                "target device architecture">,
     ];
 }
