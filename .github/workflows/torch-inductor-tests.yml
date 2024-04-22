@@ -4,6 +4,7 @@ on:
   workflow_run:
     workflows: ["Wheels"]
     types: [completed]
+  workflow_dispatch:
 
 permissions: read-all
 
