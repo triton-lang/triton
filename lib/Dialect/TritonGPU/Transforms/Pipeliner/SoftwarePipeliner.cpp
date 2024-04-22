@@ -72,6 +72,9 @@ static bool pipelineLoop(scf::ForOp forOp, int numStages) {
   if (!preCondition(forOp))
     return false;
 
+  if (numStages < 2)
+    return false;
+
   bool foundSchedule = false;
   foundSchedule = preProcessLoopAndGetSchedule(forOp, numStages, options);
 
