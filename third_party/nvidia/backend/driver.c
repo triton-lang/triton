@@ -249,6 +249,45 @@ static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
   return Py_None;
 }
 
+// Simple helper to experiment creating TMA descriptors on the host.
+// This is a useful to test TMA operations independently.
+static PyObject *fill1DTMADescriptor(PyObject *self, PyObject *args) {
+  unsigned long long global_address;
+  uint64_t dim;
+  int elementSize;
+  Py_buffer desc_buffer;
+  if (!PyArg_ParseTuple(args, "KKiy*", &global_address, &dim, &elementSize,
+                        &desc_buffer)) {
+    return NULL;
+  }
+  char *desc = (char *)desc_buffer.buf;
+  uint64_t dims[1] = {dim};
+  uint64_t globalStrides[1] = {1};
+  uint32_t boxDim[1] = {dim};
+  uint32_t elementStrides[1] = {1};
+  CUtensorMapDataType type;
+  switch (elementSize) {
+  case 1:
+    type = CU_TENSOR_MAP_DATA_TYPE_UINT8;
+    break;
+  case 2:
+    type = CU_TENSOR_MAP_DATA_TYPE_UINT16;
+    break;
+  case 4:
+    type = CU_TENSOR_MAP_DATA_TYPE_UINT32;
+    break;
+  default:
+    PyErr_SetString(PyExc_ValueError, "elementSize must be 1, 2, or 4");
+  }
+  CUresult result = cuTensorMapEncodeTiled(
+      (CUtensorMap *)desc, type, 1, (void *)global_address, dims, globalStrides,
+      boxDim, elementStrides, CU_TENSOR_MAP_INTERLEAVE_NONE,
+      CU_TENSOR_MAP_SWIZZLE_NONE, CU_TENSOR_MAP_L2_PROMOTION_NONE,
+      CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+  assert(result == CUDA_SUCCESS);
+  return Py_None;
+}
+
 static PyMethodDef ModuleMethods[] = {
     {"load_binary", loadBinary, METH_VARARGS,
      "Load provided cubin into CUDA driver"},
@@ -262,6 +301,7 @@ static PyMethodDef ModuleMethods[] = {
      "being dropped.  This inherits all the limitations of this call; in "
      "particular it's an error to change this value after launching any kernel "
      "that calls printf()."},
+    {"fill_1d_tma_descriptor", fill1DTMADescriptor, METH_VARARGS, "doc"},
     {NULL, NULL, 0, NULL} // sentinel
 };
 

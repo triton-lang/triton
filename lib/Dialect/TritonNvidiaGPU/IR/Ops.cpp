@@ -37,12 +37,12 @@ mlir::LogicalResult DotAsyncOp::inferReturnTypes(
     DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // type is the same as the accumulator
-  auto accTy = operands[2].getType().cast<RankedTensorType>();
+  auto accTy = cast<RankedTensorType>(operands[2].getType());
   inferredReturnTypes.push_back(accTy);
 
   // verify encodings
-  auto aEnc = operands[0].getType().cast<TensorOrMemDesc>().getEncoding();
-  auto bEnc = operands[1].getType().cast<TensorOrMemDesc>().getEncoding();
+  auto aEnc = cast<TensorOrMemDesc>(operands[0].getType()).getEncoding();
+  auto bEnc = cast<TensorOrMemDesc>(operands[1].getType()).getEncoding();
   auto retEnc = accTy.getEncoding();
   if (aEnc) {
     assert(bEnc);
@@ -65,6 +65,37 @@ LogicalResult DotWaitOp::inferReturnTypes(
   for (Value operand : operands)
     inferredReturnTypes.push_back(operand.getType());
   return mlir::success();
+}
+
+static LogicalResult verifyBarrierType(Operation *op, MemDescType barrierType) {
+  if (!barrierType.getElementType().isInteger(64) ||
+      barrierType.getShape() != ArrayRef<int64_t>({1}))
+    return op->emitOpError(
+        "barrier allocation must be a descriptor of 1xi64 type");
+  return success();
+}
+
+// -- InitBarrierOp --
+LogicalResult InitBarrierOp::verify() {
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  return success();
+}
+
+// -- WaitBarrierOp --
+LogicalResult WaitBarrierOp::verify() {
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  return success();
+}
+
+// -- AsyncTMACopyGlobalToLocalOp --
+LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
+  if (failed(verifyBarrierType(*this, getBarrier().getType())))
+    return failure();
+  if (getCoord().size() < 1 || getCoord().size() > 5)
+    return emitOpError("TMA copies must have between 1 and 5 coordinates");
+  return success();
 }
 
 } // namespace nvidia_gpu

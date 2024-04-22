@@ -24,31 +24,11 @@ namespace {
 using OperandsAndConstraints = std::vector<std::pair<mlir::Value, std::string>>;
 typedef std::vector<std::string> Constraints;
 
-const std::string Reg_Alloc_Op = "setmaxnreg.inc.sync.aligned.u32 #regCount;";
 const std::string Wgmma_Fence_Op = "wgmma.fence.sync.aligned;";
-const std::string Cga_Barrier_Sync_op = "barrier.cluster.sync.aligned;";
 const std::string Wgmma_Commit_Group_Op = "wgmma.commit_group.sync.aligned;";
 const std::string Cluster_Wait_Op = "barrier.cluster.wait.aligned;";
 const std::string Fence_Mbarrier_Init_Op =
     "fence.mbarrier_init.release.cluster;";
-const std::string Cga_Barrier_Arrive_Op = "barrier.cluster.arrive;";
-const std::string Cga_Barrier_Wait_Op = "barrier.cluster.wait;";
-const std::string Reg_Dealloc_Op = "setmaxnreg.dec.sync.aligned.u32 #regCount;";
-
-const std::string Mbarrier_Init_Op =
-    "@$1 mbarrier.init.shared.b64 [$0], #count;";
-const std::string Mbarrier_Wait_Op =
-    "{                                                           \n"
-    ".reg .pred P1;                                              \n"
-    "LAB_WAIT:                                                   \n"
-    "mbarrier.try_wait.parity.shared.b64 P1, [$0], $1, 0x989680; \n"
-    "@P1 bra.uni DONE;                                           \n"
-    "bra.uni LAB_WAIT;                                           \n"
-    "DONE:                                                       \n"
-    "}                                                           \n";
-const std::string Named_Barrier_Arrive_Op = "bar.arrive $0, $1;";
-const std::string Named_Barrier_Wait_Op = "bar.sync $0, $1;";
-const std::string Sts64_Op = "st.shared.v2.b32 [$0], {$1, $2};";
 const std::string Cluster_Cta_Id_Op = "{\n"
                                       ".reg .u32 a<5>;              \n"
                                       "mov.u32 a0, %cluster_ctaid.x;\n"  // x
@@ -118,7 +98,7 @@ public:
     auto isConstraintNumber = isNumber(constraint);
     if (!isConstraintNumber) {
       auto ty = getTypeFromConstraint(constraint[0], rewriter);
-      if (val.getType().isa<LLVM::LLVMPointerType>()) {
+      if (isa<LLVM::LLVMPointerType>(val.getType())) {
         return ptrtoint(ty, val);
       } else {
         assert(val.getType().getIntOrFloatBitWidth() <=
@@ -499,7 +479,7 @@ public:
 
   std::vector<std::string>
   getOutputConstraints(ttn::WGMMAWaitGroupOp op) const {
-    auto outputStructType = op.getType().cast<LLVM::LLVMStructType>();
+    auto outputStructType = cast<LLVM::LLVMStructType>(op.getType());
     uint32_t numOutputRegs = outputStructType.getBody().size();
     std::string output =
         outputStructType.getBody().front().isF32() ? "=f" : "=r";
@@ -515,7 +495,7 @@ public:
   }
 
   std::string getPtxAsm(ttn::WGMMAWaitGroupOp op) const {
-    auto outputStructType = op.getType().dyn_cast<LLVM::LLVMStructType>();
+    auto outputStructType = dyn_cast<LLVM::LLVMStructType>(op.getType());
     uint32_t numCRegs = outputStructType.getBody().size();
     std::string args = "";
     uint32_t asmOpIdx = 0;
@@ -539,7 +519,7 @@ public:
     // the output is a struct or not. We should find a way to pass this info
     auto resultType = op.getType();
 
-    auto outputStructType = resultType.dyn_cast<LLVM::LLVMStructType>();
+    auto outputStructType = dyn_cast<LLVM::LLVMStructType>(resultType);
     uint32_t numOutputRegs = outputStructType.getBody().size();
     std::string output =
         outputStructType.getBody().front().isF32() ? "=f" : "=r";
@@ -553,7 +533,7 @@ public:
     auto opC = op.getOpC();
     auto typeA = opA.getType();
 
-    auto structTypeA = typeA.dyn_cast<LLVM::LLVMStructType>();
+    auto structTypeA = dyn_cast<LLVM::LLVMStructType>(typeA);
 
     // TODO (zahi): is this the best way to tie inputs/outputs ?
     if (opC)
@@ -587,9 +567,9 @@ public:
     auto typeA = opA.getType();
     auto typeB = opB.getType();
     auto typeOutput = op.getType();
-    auto structTypeA = typeA.dyn_cast<LLVM::LLVMStructType>();
-    auto structTypeB = typeB.dyn_cast<LLVM::LLVMStructType>();
-    auto structTypeOutput = typeOutput.dyn_cast<LLVM::LLVMStructType>();
+    auto structTypeA = dyn_cast<LLVM::LLVMStructType>(typeA);
+    auto structTypeB = dyn_cast<LLVM::LLVMStructType>(typeB);
+    auto structTypeOutput = dyn_cast<LLVM::LLVMStructType>(typeOutput);
     assert(!structTypeB && "Operand B can not be registers");
     assert(structTypeOutput && "Output and C operand must be registers");
 
@@ -704,14 +684,14 @@ public:
     POPULATE_NVGPU_OP(ttn::WGMMAFenceOp, Wgmma_Fence_Op)
     POPULATE_NVGPU_OP(ttn::WGMMACommitGroupOp, Wgmma_Commit_Group_Op)
     POPULATE_NVGPU_OP(ttn::ClusterWaitOp, Cluster_Wait_Op)
-    POPULATE_NVGPU_OP(ttn::FenceMBarrierInitOp, Fence_Mbarrier_Init_Op)
 #undef POPULATE_NVGPU_OP
     patterns.add<NVGPUOpGenericPattern<ttn::ClusterCTAIdOp>>(
         context, Cluster_Cta_Id_Op, Constraints({"=r"}), Constraints());
 
-    patterns.add<FenceAsyncSharedOpPattern, StoreMatrixOpPattern,
-                 ClusterArriveOpPattern, LoadDSmemOpPattern, WGMMAOpPattern,
-                 WGMMAWaitGroupOpPattern, StoreDSmemOpPattern>(context);
+    patterns
+        .add<FenceAsyncSharedOpPattern, StoreMatrixOpPattern,
+             ClusterArriveOpPattern, WGMMAOpPattern, WGMMAWaitGroupOpPattern>(
+            context);
 
     if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();

@@ -73,7 +73,7 @@ def get_disassembler_command_and_debug_line_format():
     Returns a tuple: (object file kind, disassembler tool command,
     debug line anchor, debug line file and line number separator).
     """
-    backend = triton.runtime.driver.active.get_current_target()[0]
+    backend = triton.runtime.driver.active.get_current_target().backend
 
     if backend == "cuda":
         from triton.backends.nvidia.compiler import _path_to_binary

@@ -4,20 +4,39 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "passes.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Module.h"
+#include "llvm/MC/MCAsmBackend.h"
+#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCCodeEmitter.h"
+#include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCObjectFileInfo.h"
+#include "llvm/MC/MCObjectWriter.h"
+#include "llvm/MC/MCParser/MCAsmParser.h"
+#include "llvm/MC/MCParser/MCTargetAsmParser.h"
+#include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/MC/MCSection.h"
+#include "llvm/MC/MCStreamer.h"
+#include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/MC/MCTargetOptions.h"
+#include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/TargetParser.h"
 #include <mutex>
 #include <pybind11/pybind11.h>
+#include <stdexcept>
 
 namespace py = pybind11;
 
 namespace {
 void init_triton_amd_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton;
-  m.def("add_to_llvmir", [](mlir::PassManager &pm) {
-    pm.addPass(createConvertTritonAMDGPUToLLVMPass());
+  m.def("add_to_llvmir", [](mlir::PassManager &pm, int computeCapability) {
+    pm.addPass(createConvertTritonAMDGPUToLLVMPass(computeCapability));
   });
   m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm) {
     pm.addPass(mlir::triton::AMD::createDecomposeUnsupportedConversionsPass());
@@ -59,6 +78,10 @@ void init_triton_amd(py::module &&m) {
   auto passes = m.def_submodule("passes");
   init_triton_amd_passes_ttgpuir(passes.def_submodule("ttgpuir"));
 
+  m.attr("TARGET_TRIPLE") = "amdgcn-amd-amdhsa";
+  m.attr("CALLING_CONV_AMDGPU_KERNEL") =
+      (unsigned)llvm::CallingConv::AMDGPU_KERNEL;
+
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
     // registry.insert<mlir::ROCDL::ROCDLDialect>();
@@ -67,12 +90,9 @@ void init_triton_amd(py::module &&m) {
     context.loadAllAvailableDialects();
   });
 
-  m.attr("CALLING_CONV_AMDGPU_KERNEL") =
-      py::int_((unsigned)llvm::CallingConv::AMDGPU_KERNEL);
-
-  // Set target chip ISA version
-  m.def("set_isa_version", [](llvm::Module *module, const std::string &target) {
-    llvm::AMDGPU::IsaVersion version = llvm::AMDGPU::getIsaVersion(target);
+  // Set target architecture ISA version
+  m.def("set_isa_version", [](llvm::Module *module, const std::string &arch) {
+    llvm::AMDGPU::IsaVersion version = llvm::AMDGPU::getIsaVersion(arch);
     addControlConstant(module, "__oclc_ISA_version", /*bitwidth=*/32,
                        version.Major * 1000 + version.Minor * 100 +
                            version.Stepping);
@@ -113,5 +133,99 @@ void init_triton_amd(py::module &&m) {
     // Also various OpenCL version details.
     if (auto *openclVersion = module->getNamedMetadata("opencl.ocl.version"))
       module->eraseNamedMetadata(openclVersion);
+  });
+
+  m.def(
+      "assemble_amdgcn",
+      [](const std::string &assembly, const std::string &arch,
+         const std::string &features) {
+        std::string error;
+
+        const char *targetTriple = "amdgcn-amd-amdhsa";
+        llvm::Triple triple(targetTriple);
+        const llvm::Target *target =
+            llvm::TargetRegistry::lookupTarget(triple.normalize(), error);
+        if (!target)
+          throw std::runtime_error("target lookup error: " + error);
+
+        llvm::SourceMgr srcMgr;
+        srcMgr.AddNewSourceBuffer(llvm::MemoryBuffer::getMemBuffer(assembly),
+                                  llvm::SMLoc());
+
+        const llvm::MCTargetOptions mcOptions;
+        std::unique_ptr<llvm::MCRegisterInfo> mri(
+            target->createMCRegInfo(targetTriple));
+        std::unique_ptr<llvm::MCAsmInfo> mai(
+            target->createMCAsmInfo(*mri, targetTriple, mcOptions));
+        std::unique_ptr<llvm::MCSubtargetInfo> sti(
+            target->createMCSubtargetInfo(targetTriple, arch, features));
+
+        llvm::MCContext ctx(triple, mai.get(), mri.get(), sti.get(), &srcMgr,
+                            &mcOptions);
+        std::unique_ptr<llvm::MCObjectFileInfo> mofi(
+            target->createMCObjectFileInfo(ctx, /*PIC=*/false,
+                                           /*LargeCodeModel=*/false));
+        ctx.setObjectFileInfo(mofi.get());
+
+        llvm::SmallString<128> cwd;
+        if (!llvm::sys::fs::current_path(cwd))
+          ctx.setCompilationDir(cwd);
+
+        llvm::SmallVector<char, 0> result;
+        llvm::raw_svector_ostream svos(result);
+
+        std::unique_ptr<llvm::MCStreamer> mcStreamer;
+        std::unique_ptr<llvm::MCInstrInfo> mcii(target->createMCInstrInfo());
+
+        std::unique_ptr<llvm::MCCodeEmitter> ce(
+            target->createMCCodeEmitter(*mcii, ctx));
+        std::unique_ptr<llvm::MCAsmBackend> mab(
+            target->createMCAsmBackend(*sti, *mri, mcOptions));
+        mcStreamer.reset(target->createMCObjectStreamer(
+            triple, ctx, std::move(mab), mab->createObjectWriter(svos),
+            std::move(ce), *sti, mcOptions.MCRelaxAll,
+            mcOptions.MCIncrementalLinkerCompatible,
+            /*DWARFMustBeAtTheEnd=*/false));
+        mcStreamer->setUseAssemblerInfoForParsing(true);
+
+        std::unique_ptr<llvm::MCAsmParser> parser(
+            createMCAsmParser(srcMgr, ctx, *mcStreamer, *mai));
+        std::unique_ptr<llvm::MCTargetAsmParser> tap(
+            target->createMCAsmParser(*sti, *parser, *mcii, mcOptions));
+        if (!tap)
+          throw std::runtime_error("assembler initializtion error");
+
+        parser->setTargetParser(*tap);
+        parser->Run(/*NoInitialTextSection=*/false);
+
+        return py::bytes(std::string(result.begin(), result.end()));
+      },
+      py::return_value_policy::take_ownership);
+
+  m.def("set_all_fn_arg_inreg", [](llvm::Function *fn) {
+    for (llvm::Argument &arg : fn->args()) {
+      // Check for incompatible attributes.
+      if (arg.hasByRefAttr() || arg.hasNestAttr())
+        continue;
+      arg.addAttr(llvm::Attribute::InReg);
+    }
+  });
+
+  m.def("need_extern_lib", [](llvm::Module *module, const std::string &lib) {
+    for (llvm::Function &f : module->functions()) {
+      if (f.hasExternalLinkage() && f.hasName() && !f.hasExactDefinition()) {
+        llvm::StringRef funcName = f.getName();
+        // Rules for linking the extern lib:
+        // 1. if __nv_ is found in the module, we'll link all four libs:
+        //    cuda2gcn, opencl, ocml, and ockl. Note that opencl might
+        //    not be needed. But we add it here and will try to remove
+        //    it in the future.
+        // 2. if the function name includes ocml or ockl, only link
+        //    ocml or ockl accordingly.
+        if (funcName.contains(lib) || funcName.contains("__nv_"))
+          return true;
+      }
+    }
+    return false;
   });
 }

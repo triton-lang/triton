@@ -14,14 +14,14 @@ Value loadC(Value tensor, Value llTensor,
             const LLVMTypeConverter *typeConverter, Location loc,
             ConversionPatternRewriter &rewriter) {
   MLIRContext *ctx = tensor.getContext();
-  auto tensorTy = tensor.getType().cast<RankedTensorType>();
+  auto tensorTy = cast<RankedTensorType>(tensor.getType());
   size_t fcSize = triton::gpu::getTotalElemsPerThread(tensor.getType());
 
   assert(tensorTy.getEncoding().isa<NvidiaMmaEncodingAttr>() &&
          "Currently, we only support $c with a mma layout.");
   // Load a normal C tensor with mma layout, that should be a
   // LLVM::struct with fcSize elements.
-  auto structTy = llTensor.getType().cast<LLVM::LLVMStructType>();
+  auto structTy = cast<LLVM::LLVMStructType>(llTensor.getType());
   assert(structTy.getBody().size() == fcSize &&
          "DotOp's $c operand should pass the same number of values as $d in "
          "mma layout.");
@@ -307,9 +307,9 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          Value loadedB, Value loadedC, DotOp op,
                          DotOpAdaptor adaptor, bool isTuring) {
   MLIRContext *ctx = c.getContext();
-  auto aTensorTy = a.getType().cast<RankedTensorType>();
-  auto bTensorTy = b.getType().cast<RankedTensorType>();
-  auto dTensorTy = d.getType().cast<RankedTensorType>();
+  auto aTensorTy = cast<RankedTensorType>(a.getType());
+  auto bTensorTy = cast<RankedTensorType>(b.getType());
+  auto dTensorTy = cast<RankedTensorType>(d.getType());
 
   auto aShapePerCTA = triton::gpu::getShapePerCTA(aTensorTy);
   auto bShapePerCTA = triton::gpu::getShapePerCTA(bTensorTy);
@@ -371,7 +371,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
     Value mmaOut =
         builder.launch(rewriter, loc, getMmaRetType(mmaType, op.getContext()));
 
-    Type elemTy = mmaOut.getType().cast<LLVM::LLVMStructType>().getBody()[0];
+    Type elemTy = cast<LLVM::LLVMStructType>(mmaOut.getType()).getBody()[0];
     for (int i = 0; i < numMmaRets; ++i) {
       fc[(m * colsPerThread + 4 * n) / numCPackedElem + i + batchOffset * b] =
           extract_val(elemTy, mmaOut, i);

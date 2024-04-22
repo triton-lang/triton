@@ -319,15 +319,15 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
   Value ptr = getPtr(ptrIdx);
 
   // The struct should have exactly the same element types.
-  auto resTy = matTy.cast<LLVM::LLVMStructType>();
-  Type elemTy = matTy.cast<LLVM::LLVMStructType>().getBody()[0];
+  auto resTy = cast<LLVM::LLVMStructType>(matTy);
+  Type elemTy = cast<LLVM::LLVMStructType>(matTy).getBody()[0];
 
   // For some reasons, LLVM's NVPTX backend inserts unnecessary (?) integer
   // instructions to pack & unpack sub-word integers. A workaround is to
   // store the results of ldmatrix in i32
-  if (auto vecElemTy = elemTy.dyn_cast<VectorType>()) {
+  if (auto vecElemTy = dyn_cast<VectorType>(elemTy)) {
     Type elemElemTy = vecElemTy.getElementType();
-    if (auto intTy = elemElemTy.dyn_cast<IntegerType>()) {
+    if (auto intTy = dyn_cast<IntegerType>(elemElemTy)) {
       if (intTy.getWidth() <= 16) {
         elemTy = rewriter.getI32Type();
         resTy =
@@ -763,7 +763,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread) {
   // Expand shared/dotOp to 3D before calling loadArg.
-  auto descTy = tensor.getType().cast<MemDescType>();
+  auto descTy = cast<MemDescType>(tensor.getType());
   auto expandedDescTy = getExpandedDesc(descTy);
   auto expandedEncoding =
       getExpandedEncoding(encoding).cast<DotOperandEncodingAttr>();
