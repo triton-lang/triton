@@ -31,13 +31,6 @@ class HIPOptions:
     allow_flush_denorm: bool = False
     max_num_imprecise_acc_default: int = 0
 
-    def has_amd_mma_instr(self) -> bool:
-        is_RDNA3 = 'gfx11' in self.arch
-        is_CDNA1 = self.arch in ['gfx908']
-        is_CDNA2 = self.arch in ['gfx90a']
-        is_CDNA3 = self.arch in ['gfx940', 'gfx941', 'gfx942']
-        return is_RDNA3 or is_CDNA1 or is_CDNA2 or is_CDNA3
-
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)

@@ -749,7 +749,7 @@ public:
     this->numWarps = numWarps;
     this->threadsPerWarp = threadsPerWarp;
     this->numCTAs = numCTAs;
-    this->computeCapability = computeCapability;
+    this->computeCapability = computeCapability.value_or(0);
   }
 
   void runOnOperation() override {
@@ -784,8 +784,10 @@ public:
                  IntegerAttr::get(i32_ty, llvm::APInt(32, numCTAs.getValue())));
 
     if (std::optional<int> cc = computeCapability.getValue()) {
-      mod->setAttr(AttrComputeCapabilityName,
-                   IntegerAttr::get(i32_ty, llvm::APInt(32, cc.value())));
+      if (cc.value() != 0) {
+        mod->setAttr(AttrComputeCapabilityName,
+                     IntegerAttr::get(i32_ty, llvm::APInt(32, cc.value())));
+      }
     }
 
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
