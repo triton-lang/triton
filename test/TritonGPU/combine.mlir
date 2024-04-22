@@ -2239,48 +2239,35 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 
 // -----
 
-#blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [1, 0]}>                                                                                                                                                                                                 #blocked2 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 8], order = [1, 0]}>                                                                                                                                                                                                #blocked5 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
-#blocked6 = #triton_gpu.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
-#blocked7 = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [8, 1], order = [1, 0]}>                                                                                                                                                                                                #blocked8 = #triton_gpu.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>                                                                                                                                                                                                module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @rematerialize_loop_arg
-  tt.func public @rematerialize_loop_arg(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32, %arg7: i32, %arg8: i32, %arg9: i32 , %arg10: i32 , %arg11: i32 , %arg12: i32 ) attributes {noinline = false} {                                                                                                  %cst = arith.constant dense<256> : tensor<128x1xi32, #blocked>                                                                                                                                                                                                                                                           %c255_i32 = arith.constant 255 : i32
-    // Verify that rewrite slice propagate layout for both yield results and loop arguments
-    // Otherwise it will crash the compiler
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 8], order = [1, 0]}>
+module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: rematerialize_loop_arg
+  tt.func public @rematerialize_loop_arg(%arg0: !tt.ptr<f16>) {
+    // CHECK-NOT: triton_gpu.convert_layout
     %c1_i32 = arith.constant 1 : i32
     %c0_i32 = arith.constant 0 : i32
-    %cst_3 = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #blocked2>
-    %cst_4 = arith.constant dense<64> : tensor<128x1xi32, #blocked>
-    %cst_5 = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #blocked8>                                                                                                                                                                                                                                             %c256_i32 = arith.constant 256 : i32
-    %39 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<64x256x!tt.ptr<f16>, #blocked2>
-    %46 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x1x!tt.ptr<f16>, #blocked>
-    %50 = arith.addi %arg5, %c255_i32 : i32
-    %51 = arith.divsi %50, %c256_i32 : i32
-    %57:4 = scf.for %arg13 = %c0_i32 to %51 step %c1_i32 iter_args(%arg14 = %arg9, %arg15 = %46, %arg16 = %cst_3, %arg17 = %39) -> (i32, tensor<128x1x!tt.ptr<f16>, #blocked>, tensor<128x256xf32, #blocked2>, tensor<64x256x!tt.ptr<f16>, #blocked2>)  : i32 {
-      %84 = arith.addi %arg14, %arg11 : i32
-      %93 = tt.broadcast %arg15 : tensor<128x1x!tt.ptr<f16>, #blocked> -> tensor<128x64x!tt.ptr<f16>, #blocked>
-      %94 = triton_gpu.convert_layout %93 : tensor<128x64x!tt.ptr<f16>, #blocked> -> tensor<128x64x!tt.ptr<f16>, #blocked5>                                                                                                                                                                                                    %100 = tt.addptr %arg15, %cst_4 : tensor<128x1x!tt.ptr<f16>, #blocked>, tensor<128x1xi32, #blocked>
-      %109 = tt.broadcast %100 : tensor<128x1x!tt.ptr<f16>, #blocked> -> tensor<128x64x!tt.ptr<f16>, #blocked>
-      %110 = triton_gpu.convert_layout %109 : tensor<128x64x!tt.ptr<f16>, #blocked> -> tensor<128x64x!tt.ptr<f16>, #blocked5>
-      %111 = arith.constant dense<256> : tensor<128x64xi32, #blocked5>
-      %114 = tt.load %110 : tensor<128x64x!tt.ptr<f16>, #blocked5>
-      %128 = tt.addptr %94, %111 : tensor<128x64x!tt.ptr<f16>, #blocked5>, tensor<128x64xi32, #blocked5>
-      %129 = triton_gpu.convert_layout %128 : tensor<128x64x!tt.ptr<f16>, #blocked5> -> tensor<128x64x!tt.ptr<f16>, #blocked6>                                                                                                                                                                                                 %130 = tt.load %129 : tensor<128x64x!tt.ptr<f16>, #blocked6>
-      %131 = triton_gpu.convert_layout %130 : tensor<128x64xf16, #blocked6> -> tensor<128x64xf16, #blocked5>
-      %148 = tt.addptr %arg15, %cst : tensor<128x1x!tt.ptr<f16>, #blocked>, tensor<128x1xi32, #blocked>
-      %150 = arith.addf %114, %131 : tensor<128x64xf16, #blocked5>
-      %152 = triton_gpu.convert_layout %arg17 : tensor<64x256x!tt.ptr<f16>, #blocked2> -> tensor<64x256x!tt.ptr<f16>, #blocked7>                                                                                                                                                                                               %153 = tt.load %152 : tensor<64x256x!tt.ptr<f16>, #blocked7>
-      %154 = triton_gpu.convert_layout %153 : tensor<64x256xf16, #blocked7> -> tensor<64x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked8}>>
-      %155 = triton_gpu.convert_layout %150 : tensor<128x64xf16, #blocked5> -> tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked8}>>
-      %158 = tt.dot %155, %154, %cst_5 : tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked8}>> * tensor<64x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked8}>> -> tensor<128x256xf32, #blocked8>
-      %159 = triton_gpu.convert_layout %158 : tensor<128x256xf32, #blocked8> -> tensor<128x256xf32, #blocked2>
-      scf.yield %84, %148, %159, %arg17 : i32, tensor<128x1x!tt.ptr<f16>, #blocked>, tensor<128x256xf32, #blocked2>, tensor<64x256x!tt.ptr<f16>, #blocked2>
+    %c128_i32 = arith.constant 128 : i32
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x64xf16, #blocked1>
+    %cst_1 = arith.constant dense<64> : tensor<128x64xi32, #blocked>
+    %cst_2 = arith.constant dense<128> : tensor<128x64xi32, #blocked>
+    %0 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #blocked>
+    // CHECK: scf.for %{{.*}} iter_args(%{{.*}} = %0) -> (tensor<128x64x!tt.ptr<f16>, #blocked>)
+    // CHECK-NOT: triton_gpu.convert_layout
+    // CHECK: scf.yield %{{.*}} : tensor<128x64x!tt.ptr<f16>, #blocked>
+    %1 = scf.for %arg1 = %c0_i32 to %c128_i32 step %c1_i32 iter_args(%arg2 = %0) -> (tensor<128x64x!tt.ptr<f16>, #blocked>)  : i32 {
+      %2 = tt.addptr %arg2, %cst_1 : tensor<128x64x!tt.ptr<f16>, #blocked>, tensor<128x64xi32, #blocked>
+      %3 = triton_gpu.convert_layout %2 : tensor<128x64x!tt.ptr<f16>, #blocked> -> tensor<128x64x!tt.ptr<f16>, #blocked1>
+      tt.store %3, %cst_0 : tensor<128x64x!tt.ptr<f16>, #blocked1>
+      %4 = tt.addptr %arg2, %cst_2 : tensor<128x64x!tt.ptr<f16>, #blocked>, tensor<128x64xi32, #blocked>
+      %5 = triton_gpu.convert_layout %4 : tensor<128x64x!tt.ptr<f16>, #blocked> -> tensor<128x64x!tt.ptr<f16>, #blocked1>
+      tt.store %5, %cst_0 : tensor<128x64x!tt.ptr<f16>, #blocked1>
+      scf.yield %2 : tensor<128x64x!tt.ptr<f16>, #blocked>
     }
-    %58 = arith.truncf %57#2 : tensor<128x256xf32, #blocked2> to tensor<128x256xf16, #blocked2>
-    %64 = tt.splat %arg2 : !tt.ptr<f16> -> tensor<128x256x!tt.ptr<f16>, #blocked2>
-    tt.store %64, %58 : tensor<128x256x!tt.ptr<f16>, #blocked2>
     tt.return
   }
 }
+
 
 // -----
 
