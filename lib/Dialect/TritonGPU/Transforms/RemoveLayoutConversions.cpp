@@ -832,7 +832,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
                                            ConvertLayoutOp convertOp,
                                            IRMapping &mapping) {
   SetVector<Operation *> opsToRewrite;
-  // Keep track of yield operands than need to be duplicated.
+  // Keep track of yield operands that need to be duplicated.
   DenseMap<Operation *, SmallVector<int>> yieldOperandsMap;
   for (Value v : slice) {
     auto layoutIt = layout.find(v);
