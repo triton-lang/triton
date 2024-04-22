@@ -12,6 +12,8 @@ using namespace mlir;
 
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryBase;
+using ::mlir::LLVM::AMD::llLoad;
+using ::mlir::LLVM::AMD::llStore;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 namespace {
@@ -203,35 +205,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
       auto vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
-      auto loaded = rewriter.create<scf::IfOp>(
-          loc, pred,
-          [&](OpBuilder &builder, Location loc) {
-            Value ptr = addrspacecast(ptr_ty(getContext()), ptrElems[vecStart]);
-            auto loadVal = rewriter.create<LLVM::LoadOp>(loc, vecTy, ptr);
-            builder.create<mlir::scf::YieldOp>(loc, ValueRange({loadVal}));
-          },
-          [&](OpBuilder &builder, Location loc) {
-            mlir::Attribute zero = builder.getZeroAttr(valueElemTy);
-            auto denseValue =
-                DenseElementsAttr::get(vecTy.cast<mlir::ShapedType>(), zero);
-            Value zeroVal =
-                rewriter.create<LLVM::ConstantOp>(loc, vecTy, denseValue);
-            Value otherVal;
-            if (other) {
-              Value v = undef(vecTy);
-              for (size_t s = 0; s < vec; ++s) {
-                Value falseVal = otherElems[vecStart + s];
-                Value sVal = createIndexAttrConstant(
-                    rewriter, loc, this->getTypeConverter()->getIndexType(), s);
-                v = insert_element(vecTy, v, falseVal, sVal);
-              }
-              otherVal = v;
-            }
-            Value falseVal = other ? otherVal : zeroVal;
-            builder.create<mlir::scf::YieldOp>(loc, ValueRange({falseVal}));
-          });
-
-      Value loadVal = bitcast(loaded->getResult(0), vecTy);
+      Value ptr = addrspacecast(ptr_ty(getContext()), ptrElems[vecStart]);
+      auto loadVal = llLoad(rewriter, loc, getTypeConverter(), ptr, vecTy, pred,
+                            vecStart, otherElems);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, this->getTypeConverter()->getIndexType(), ii % vec);
@@ -332,21 +308,9 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
           llWord = insert_element(wordTy, llWord, elem, i32_val(elemIdx));
         }
         llWord = bitcast(llWord, valArgTy);
-#ifdef USE_ROCM
         Value maskVal = llMask ? and_(mask, maskElems[vecStart]) : mask;
-        rewriter.create<scf::IfOp>(
-            loc, maskVal,
-            [&](OpBuilder &builder, Location loc) {
-              auto storeOp = builder.create<LLVM::StoreOp>(
-                  loc, llWord, ptrElems[vecStart + wordIdx * wordNElems]);
-              builder.create<scf::YieldOp>(loc);
-            },
-            nullptr);
-#else
-        std::string constraint =
-            (width == 64) ? "l" : ((width == 32) ? "r" : "c");
-        asmArgs.emplace_back(llWord, constraint);
-#endif
+        llStore(rewriter, loc, ptrElems[vecStart + wordIdx * wordNElems],
+                llWord, maskVal);
       }
     }
     rewriter.eraseOp(op);

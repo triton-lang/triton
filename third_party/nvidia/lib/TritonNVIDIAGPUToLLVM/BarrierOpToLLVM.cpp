@@ -25,6 +25,7 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 #include "Utility.h"
 
@@ -34,7 +35,7 @@ using namespace mlir::triton;
 namespace {
 struct BarrierOpConversion
     : public ConvertOpToLLVMPattern<mlir::gpu::BarrierOp> {
-  using ConvertOpToLLVMPattern<mlir::gpu::BarrierOp>::ConvertOpToLLVMPattern;
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(mlir::gpu::BarrierOp op, OpAdaptor adaptor,
@@ -68,6 +69,65 @@ struct FenceAsyncSharedOpConversion
     return success();
   }
 };
+
+struct InitBarrierOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::InitBarrierOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::InitBarrierOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getAlloc(),
+        typeConverter->convertType(op.getAlloc().getType().getElementType()),
+        rewriter);
+
+    auto id = getThreadId(rewriter, loc);
+    auto pred = icmp_eq(id, i32_val(0));
+    ::mlir::triton::PTXBuilder ptxBuilder;
+    const std::string ptx = "@$0 mbarrier.init.shared::cta.b64 [$1], " +
+                            std::to_string(op.getCount()) + ";";
+    auto &barSyncOp = *ptxBuilder.create<>(ptx);
+    barSyncOp({ptxBuilder.newOperand(pred, "b"),
+               ptxBuilder.newOperand(smemObj.getBase(), "r")},
+              /*onlyAttachMLIRArgs=*/true);
+    auto voidTy = void_ty(op->getContext());
+    ptxBuilder.launch(rewriter, loc, voidTy);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct WaitBarrierOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::WaitBarrierOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::WaitBarrierOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        op.getLoc(), adaptor.getAlloc(),
+        typeConverter->convertType(op.getAlloc().getType().getElementType()),
+        rewriter);
+    const std::string ptx =
+        "{                                                           \n\t"
+        ".reg .pred P1;                                              \n\t"
+        "waitLoop:                                                   \n\t"
+        "mbarrier.try_wait.parity.shared.b64 P1, [$0], $1;           \n\t"
+        "@!P1 bra.uni waitLoop;                                      \n\t"
+        "}                                                           \n\t";
+    ::mlir::triton::PTXBuilder ptxBuilder;
+    auto &waitLoop = *ptxBuilder.create<>(ptx);
+    waitLoop({ptxBuilder.newOperand(smemObj.getBase(), "r"),
+              ptxBuilder.newOperand(adaptor.getPhase(), "r")},
+             /*onlyAttachMLIRArgs=*/true);
+    auto voidTy = void_ty(op->getContext());
+    ptxBuilder.launch(rewriter, op->getLoc(), voidTy);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
 } // namespace
 
 void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
@@ -75,4 +135,6 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
     PatternBenefit benefit) {
   patterns.add<BarrierOpConversion>(typeConverter, benefit);
   patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
+  patterns.add<InitBarrierOpConversion>(typeConverter, benefit);
+  patterns.add<WaitBarrierOpConversion>(typeConverter, benefit);
 }

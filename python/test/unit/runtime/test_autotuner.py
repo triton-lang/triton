@@ -5,14 +5,15 @@ import triton.language as tl
 import pytest
 
 
-def test_kwargs():
+@pytest.mark.parametrize('use_cuda_graph', [False, True])
+def test_kwargs(use_cuda_graph: bool):
     N = 1024
     src = torch.empty(N, device='cuda')
     dst = torch.empty(N, device='cuda')
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
 
-    @triton.autotune(configs=configs, key=['N'], warmup=1, rep=1)
+    @triton.autotune(configs=configs, key=['N'], warmup=1, rep=1, use_cuda_graph=use_cuda_graph)
     @triton.jit
     def _kernel(dst, src, N, BLOCK_SIZE: tl.constexpr):
         offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)

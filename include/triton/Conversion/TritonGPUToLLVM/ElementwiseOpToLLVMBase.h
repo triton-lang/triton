@@ -85,7 +85,7 @@ public:
     Type type = result.getType();
     if (!type)
       return resultVals;
-    RankedTensorType rtType = type.dyn_cast<RankedTensorType>();
+    RankedTensorType rtType = dyn_cast<RankedTensorType>(type);
     if (!rtType)
       // the result must be a tensor
       return resultVals;

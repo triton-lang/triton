@@ -16,7 +16,7 @@ from .. import language as tl
 
 
 def is_hip():
-    return triton.runtime.driver.active.get_current_target()[0] == "hip"
+    return triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
 @jit

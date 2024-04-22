@@ -17,7 +17,7 @@ static Value getPredMask(RewriterBase &rewriter, Type typeLike,
   Type maskType = tt::getI1SameShape(typeLike);
   Location loc = pred.getLoc();
   Value mask = pred;
-  if (maskType.isa<RankedTensorType>()) {
+  if (isa<RankedTensorType>(maskType)) {
     mask = rewriter.create<tt::SplatOp>(loc, maskType, pred);
   }
   if (currentMask) {

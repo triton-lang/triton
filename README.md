@@ -24,7 +24,7 @@ You can install the latest stable release of Triton from pip:
 ```bash
 pip install triton
 ```
-Binary wheels are available for CPython 3.7-3.11 and PyPy 3.8-3.9.
+Binary wheels are available for CPython 3.7-3.12 and PyPy 3.8-3.9.
 
 And the latest nightly release:
 
@@ -168,13 +168,26 @@ $ ninja -C build && ( cd build ; lit test )
   GPU.  You can insert Python breakpoints in your kernel code!
 - `TRITON_ENABLE_LLVM_DEBUG=1` passes `-debug` to LLVM, printing a lot of
   debugging information to stdout.  If this is too noisy, run with just
+  `TRITON_LLVM_DEBUG_ONLY` instead to limit the output.
+
+  An alternative way to reduce output noisiness is running with
   `LLVM_IR_ENABLE_DUMP=1`, extract the IR before the LLVM pass of interest, and
   then run LLVM's `opt` standalone, perhaps passing `-debug-only=foo` on the
   command line.
-- `USE_TTGIR_LOC` reparses the ttgir such that the location information will
+- `TRITON_LLVM_DEBUG_ONLY=<comma-separated>` is the equivalent of LLVM's
+  `-debug-only` command-line option. This limits the LLVM debug output to
+  specific pass or component names (which are specified using `#define
+  DEBUG_TYPE` throughout LLVM and Triton) in order to allow the debug output to
+  be less noisy. `TRITON_LLVM_DEBUG_ONLY` allows for one or more comma
+  separated values to be specified (eg
+  `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions` or
+  `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions,regalloc"`).
+- `USE_TTGIR_LOC=1` reparses the ttgir such that the location information will
   be the line number of the ttgir instead of line number of the python file.
   This can provide a direct mapping from ttgir to llir/ptx. When used with
   performance tools, it can provide a breakdown on ttgir instructions.
+- `TRITON_PRINT_AUTOTUNING=1` prints out the best autotuning config and total time
+  spent for each kernel after autotuning is complete.
 
 # Changelog
 

@@ -85,7 +85,7 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
     // we want to use optimal layout for the data.
     ttg::BlockedEncodingAttr encoding = opToInfo[loadOp].blockedEncoding;
     auto convertBlockLayout = [&](Value src) {
-      auto ty = src.getType().cast<RankedTensorType>();
+      auto ty = cast<RankedTensorType>(src.getType());
       auto newTy =
           RankedTensorType::get(ty.getShape(), ty.getElementType(), encoding);
       auto cvt =
@@ -97,7 +97,7 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
       mask = convertBlockLayout(mask);
   }
 
-  tt::MemDescType allocTy = alloc.getType().cast<tt::MemDescType>();
+  tt::MemDescType allocTy = cast<tt::MemDescType>(alloc.getType());
   SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
   copyOffsets[0] = insertIdx;
   tt::MemDescType subviewTy = tt::MemDescType::get(
@@ -156,7 +156,7 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
     if (user->getNumResults() != 1)
       return std::nullopt;
     if (auto memDesc =
-            user->getResult(0).getType().dyn_cast<triton::MemDescType>()) {
+            dyn_cast<triton::MemDescType>(user->getResult(0).getType())) {
       // First time we find a shared encoding in the chain, save it and try to
       // use it if it is compatible with the other users.
       tempAttr = memDesc.getEncoding().cast<ttg::SharedEncodingAttr>();
@@ -193,7 +193,7 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
 static ttg::BlockedEncodingAttr
 getBlockedEncoding(tt::LoadOp loadOp, tt::ModuleAxisInfoAnalysis &axisInfo) {
   Value src = loadOp.getPtr();
-  auto ty = src.getType().cast<RankedTensorType>();
+  auto ty = cast<RankedTensorType>(src.getType());
   auto mod = loadOp->getParentOfType<ModuleOp>();
   int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
   int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -211,7 +211,7 @@ getBlockedEncoding(tt::LoadOp loadOp, tt::ModuleAxisInfoAnalysis &axisInfo) {
 
 static std::optional<ttg::SharedEncodingAttr>
 getSharedEncoding(tt::LoadOp loadOp, bool isMMAV3) {
-  auto ty = loadOp.getType().cast<RankedTensorType>();
+  auto ty = cast<RankedTensorType>(loadOp.getType());
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
   auto blockedOrder = ttg::getOrder(ty.getEncoding());
   SmallVector<unsigned> order;
@@ -275,11 +275,10 @@ loadOpsToDistanceAndUse(scf::ForOp forOp) {
     if (auto mask = loadOp.getMask())
       vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
 
-    auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
+    auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
     if (!tensorTy)
       return false;
-    auto ty =
-        tensorTy.getElementType().cast<tt::PointerType>().getPointeeType();
+    auto ty = cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
     unsigned width = vec * ty.getIntOrFloatBitWidth();
 
     // We do not pipeline all loads for the following reasons:
@@ -343,7 +342,7 @@ static bool loadIsMMAv3(tt::LoadOp loadOp) {
 
   // MMA V3 case.
   auto newOrder = sharedEnc.getOrder();
-  auto ty = loadOp.getType().cast<RankedTensorType>();
+  auto ty = cast<RankedTensorType>(loadOp.getType());
   auto oldOrder = ttg::getOrder(ty.getEncoding());
 
   // The operand of MMAv3 is in SharedEncoding and its order should not
@@ -486,7 +485,7 @@ collectOpsToPipeline(scf::ForOp forOp,
 static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
                          ttg::SharedEncodingAttr sharedEnc, unsigned distance) {
   OpBuilder builder(forOp);
-  auto ty = loadOp.getType().cast<RankedTensorType>();
+  auto ty = cast<RankedTensorType>(loadOp.getType());
   SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
   bufferShape.insert(bufferShape.begin(), distance);
   Type memdescType = mlir::triton::MemDescType::get(
@@ -1010,7 +1009,7 @@ static void threadValuesThroughWait(ttng::DotWaitOp wait,
 
   for (ttng::DotAsyncOp dot : asyncDots) {
     for (Value operand : dot.getOperands()) {
-      if (operand.getType().isa<tt::MemDescType>()) {
+      if (isa<tt::MemDescType>(operand.getType())) {
         newOperands.insert(operand);
       }
     }
@@ -1022,12 +1021,12 @@ static void threadValuesThroughWait(ttng::DotWaitOp wait,
       wait.getLoc(), llvm::to_vector(newOperands), wait.getPendings());
   for (int i = 0; i < origNumOperands; i++) {
     Value operand = wait.getResult(i);
-    if (!operand.getType().isa<tt::MemDescType>())
+    if (!isa<tt::MemDescType>(operand.getType()))
       operand.replaceAllUsesWith(newWait.getResult(i));
   }
   for (int i = origNumOperands; i < newOperands.size(); i++) {
     Value operand = newWait.getOperand(i);
-    if (!operand.getType().isa<tt::MemDescType>())
+    if (!isa<tt::MemDescType>(operand.getType()))
       operand.replaceAllUsesExcept(newWait.getResult(i), newWait);
   }
   wait->erase();
@@ -1079,7 +1078,7 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::DotAsyncOp dotOp,
   // Rule 1: All shmem operands are multi-buffered.
   auto checkOperand = [&](Value operand) {
     if (!isa<ttg::SharedEncodingAttr>(
-            operand.getType().cast<TensorOrMemDesc>().getEncoding())) {
+            cast<TensorOrMemDesc>(operand.getType()).getEncoding())) {
       return true;
     }
 
