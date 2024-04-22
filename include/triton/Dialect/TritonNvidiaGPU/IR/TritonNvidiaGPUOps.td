@@ -106,4 +106,72 @@ def TTNG_DotWaitOp : TTNG_Op<"dot_wait", [DeclareOpInterfaceMethods<InferTypeOpI
   let assemblyFormat = "$inputs attr-dict `:` type($inputs)";
 }
 
+def TTNG_InitBarrierOp : TTNG_Op<"init_barrier", [MemoryEffects<[MemWrite<SharedMemory>]>]> {
+    let summary = "Initialize a barrier in the given shared memory allocation.";
+
+    let description = [{
+        Initializes a shared memory allocation with mbarrier information.
+        `alloc` is a descriptor to the shared memory allocation. `count` is the
+        number of arrives expected by the barrier.
+
+        This lowers to PTX mbarrier.init.shared::cta.b64.
+    }];
+
+    let hasVerifier = 1;
+    let arguments = (ins TT_MemDescType:$alloc,
+                         I32Attr:$count);
+    let assemblyFormat = "$alloc `,` $count attr-dict `:` type($alloc)";
+}
+
+def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", []> {
+    let summary = "wait until the mbarrier phase completes.";
+
+    let description = [{
+      Blocks the program progress until the mbarrier object in `alloc` completes
+      its current phase.
+
+      This lowers a waitloop using PTX instruction
+      mbarrier.try_wait.parity.shared.b64.
+
+      The barrier behavior is described here:
+      https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-and-conversion-instructions-asynchronous-copy-completion-mechanisms
+    }];
+
+    let hasVerifier = 1;
+    let arguments = (ins TT_MemDescType:$alloc,
+                         I32:$phase);
+    let assemblyFormat = "$alloc `,` $phase attr-dict `:` type($alloc)";
+}
+
+
+def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local", [
+  MemoryEffects<[MemRead<GlobalMemory>, MemWrite<SharedMemory>]>]> {
+  let summary = "copy data based on descriptor from global memory to local memory asynchronously";
+
+  let description = [{
+    This operation copies data from global memory to local memory
+    asynchronously.  This is analogue to tt.load except the data are copied to
+    local memory pointed by the memory descriptor instread of a distributed
+    tensor. The data copied depends on the global memory descriptor pointed to
+    by `desc_ptr`.
+  }];
+
+  let hasVerifier = 1;
+  let arguments = (
+    ins TT_PtrType:$desc_ptr,
+    Variadic<I32>:$coord,
+    TT_MemDescType:$barrier,
+    TT_MemDescType:$result,
+    DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
+    DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
+    DefaultValuedAttr<BoolAttr, "false">:$isVolatile
+  );
+
+  let assemblyFormat = [{
+    $desc_ptr `[` $coord `]` $result `,` $barrier
+    oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
+    attr-dict `:` type($desc_ptr) `,` type($barrier) `->` type($result)
+  }];
+}
+
 #endif

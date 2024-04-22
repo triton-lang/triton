@@ -67,6 +67,37 @@ LogicalResult DotWaitOp::inferReturnTypes(
   return mlir::success();
 }
 
+static LogicalResult verifyBarrierType(Operation *op, MemDescType barrierType) {
+  if (!barrierType.getElementType().isInteger(64) ||
+      barrierType.getShape() != ArrayRef<int64_t>({1}))
+    return op->emitOpError(
+        "barrier allocation must be a descriptor of 1xi64 type");
+  return success();
+}
+
+// -- InitBarrierOp --
+LogicalResult InitBarrierOp::verify() {
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  return success();
+}
+
+// -- WaitBarrierOp --
+LogicalResult WaitBarrierOp::verify() {
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  return success();
+}
+
+// -- AsyncTMACopyGlobalToLocalOp --
+LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
+  if (failed(verifyBarrierType(*this, getBarrier().getType())))
+    return failure();
+  if (getCoord().size() < 1 || getCoord().size() > 5)
+    return emitOpError("TMA copies must have between 1 and 5 coordinates");
+  return success();
+}
+
 } // namespace nvidia_gpu
 } // namespace triton
 } // namespace mlir
