@@ -1,4 +1,4 @@
-from triton.backends.compiler import BaseBackend
+from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, amd
 from dataclasses import dataclass
 from typing import Any, Tuple
@@ -31,16 +31,6 @@ class HIPOptions:
     kpack: int = 1
     allow_flush_denorm: bool = False
     max_num_imprecise_acc_default: int = 0
-
-    @staticmethod
-    def get_warp_size(arch: str) -> int:
-        # 64 is not supported for RDNA for now
-        if 'gfx10' in arch or 'gfx11' in arch:
-            return 32
-        if 'gfx9' in arch:
-            return 64
-        print("Warning: Unexpected device. Wave Size is set to 64.")
-        return 64  # Default value
 
     @staticmethod
     def get_compute_capability(arch: str) -> int:
@@ -82,17 +72,16 @@ class HIPOptions:
 class HIPBackend(BaseBackend):
 
     @staticmethod
-    def supports_target(target: list):
-        return target[0] == 'hip'
+    def supports_target(target: GPUTarget):
+        return target.backend == 'hip'
 
-    def __init__(self, target: list) -> None:
+    def __init__(self, target: GPUTarget) -> None:
         super().__init__(target)
-        assert isinstance(target, list) and len(target) == 3
-        assert isinstance(target[1], str)
+        assert isinstance(target.arch, str)
         self.binary_ext = "hsaco"
 
     def parse_options(self, opts) -> Any:
-        args = {'arch': self.target[1]}
+        args = {'arch': self.target.arch}
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts})
         args['capability'] = HIPOptions.get_compute_capability(args['arch'])
         return HIPOptions(**args)
@@ -244,7 +233,7 @@ class HIPBackend(BaseBackend):
         assert len(names) == 1
         metadata["name"] = names[0]
         # llvm -> hsaco
-        amdgcn = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion, False)
+        amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, '', [], options.enable_fp_fusion, False)
         if os.environ.get("AMDGCN_ENABLE_DUMP", "0") == "1":
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)

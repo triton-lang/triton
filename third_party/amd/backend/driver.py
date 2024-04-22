@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
+from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
 
 dirname = os.path.dirname(os.path.realpath(__file__))
@@ -434,4 +435,4 @@ class HIPDriver(GPUDriver):
         device_properties = self.utils.get_device_properties(device)
         arch = device_properties['arch']
         warp_size = device_properties['warpSize']
-        return ["hip", arch.split(':')[0], warp_size]
+        return GPUTarget("hip", arch.split(':')[0], warp_size)

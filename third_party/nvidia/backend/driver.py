@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
+from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
 
 dirname = os.path.dirname(os.path.realpath(__file__))
@@ -374,7 +375,7 @@ class CudaDriver(GPUDriver):
         capability = self.get_device_capability(device)
         capability = capability[0] * 10 + capability[1]
         warp_size = 32
-        return ("cuda", capability, warp_size)
+        return GPUTarget("cuda", capability, warp_size)
 
     @staticmethod
     def is_active():

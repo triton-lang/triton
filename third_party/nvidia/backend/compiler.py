@@ -1,4 +1,4 @@
-from triton.backends.compiler import BaseBackend
+from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, nvidia
 from triton.backends.nvidia.driver import CudaUtils
 
@@ -94,12 +94,12 @@ class CUDAOptions:
 class CUDABackend(BaseBackend):
 
     @staticmethod
-    def supports_target(target: tuple):
-        return target[0] == 'cuda'
+    def supports_target(target: GPUTarget):
+        return target.backend == 'cuda'
 
-    def __init__(self, target: tuple) -> None:
+    def __init__(self, target: GPUTarget) -> None:
         super().__init__(target)
-        self.capability = target[1]
+        self.capability = target.arch
         assert isinstance(self.capability, int)
         self.binary_ext = "cubin"
 
