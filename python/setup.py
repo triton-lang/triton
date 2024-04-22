@@ -171,7 +171,7 @@ def get_llvm_package_info():
                 system_suffix = 'almalinux-x64' if vglibc > 217 else 'centos-x64'
         else:
             print(
-                "LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user config'ed LLVM from source build."
+                f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user config'ed LLVM from source build."
             )
             return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     else:
