@@ -147,7 +147,7 @@ def get_llvm_package_info():
     elif system == "Linux":
         if arch == 'arm64':
             system_suffix = 'ubuntu-arm64'
-        else:
+        elif arch == 'x64':
             target_libcxx_found = False
             if os.path.isfile("/usr/lib/" + platform.machine() + "-linux-gnu/libstdc++.so.6"):
                 check_libcxx_version = \
@@ -169,7 +169,15 @@ def get_llvm_package_info():
                 vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
                 vglibc = vglibc[0] * 100 + vglibc[1]
                 system_suffix = 'almalinux-x64' if vglibc > 217 else 'centos-x64'
+        else:
+            print(
+                "LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user config'ed LLVM from source build."
+            )
+            return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     else:
+        print(
+            "LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user config'ed LLVM from source build."
+        )
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     # use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
     # release_suffix = "assert" if use_assert_enabled_llvm else "release"
