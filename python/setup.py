@@ -148,18 +148,22 @@ def get_llvm_package_info():
         if arch == 'arm64':
             system_suffix = 'ubuntu-arm64'
         else:
+            # Ubuntu 22.04 has GLIBCXX support up to GLIBCXX_3.4.30.
+            # Ubuntu 20.04 has GLIBCXX support up to GLIBCXX_3.4.28.
+            # Almalinux 8 (and other RHEL8 derivatives) have GLIBCXX
+            # support up to GLIBCXX_3.4.25.
             target_libcxx_found = False
             if os.path.isfile("/usr/lib/" + platform.machine() + "-linux-gnu/libstdc++.so.6"):
                 check_libcxx_version = \
                     subprocess.run(
-                        "strings /usr/lib/"+platform.machine()+"-linux-gnu/libstdc++.so.6 | grep GLIBCXX_3.4.30", \
+                        "strings /usr/lib/"+platform.machine()+"-linux-gnu/libstdc++.so.6 | grep GLIBCXX_3.4.26", \
                         check=False, shell=True
                     )
                 target_libcxx_found = check_libcxx_version.returncode == 0
             elif os.path.isfile("/usr/lib64/libstdc++.so.6"):
                 check_libcxx_version = \
                     subprocess.run(
-                        "strings /usr/lib64/libstdc++.so.6 | grep GLIBCXX_3.4.30",
+                        "strings /usr/lib64/libstdc++.so.6 | grep GLIBCXX_3.4.26",
                         check=False, shell=True
                     )
                 target_libcxx_found = check_libcxx_version.returncode == 0
