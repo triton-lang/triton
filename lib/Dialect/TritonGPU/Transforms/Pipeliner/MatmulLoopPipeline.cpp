@@ -156,8 +156,8 @@ static void createAsyncCopy(
 
     // Prefetch load if is not MMAV3 and is used by the dot.
     if (loadToInfo[loadOp].usedByDot) {
-      opToStageAndOrder[wait] = {numStages - 2, 1};
-      opToStageAndOrder[viewLoad] = {numStages - 2, 1};
+      opToStageAndOrder[wait] = {numStages - 2, numStages * 2};
+      opToStageAndOrder[viewLoad] = {numStages - 2, numStages * 2};
     }
   }
   loadOp.erase();
@@ -466,8 +466,7 @@ assignMemoryLayouts(llvm::MapVector<tt::LoadOp, LoadInfo> &loadToInfo,
 /// Collect ops to pipeline. Returns true if any ops are found to pipeline.
 static bool createCoarseSchedule(
     scf::ForOp forOp,
-    llvm::DenseMap<Operation *, std::pair<int, int>>
-        &opToStageAndOrder, // TODO pawel: opToStageAndOrder may be a vector?
+    llvm::DenseMap<Operation *, std::pair<int, int>> &opToStageAndOrder,
     llvm::MapVector<tt::LoadOp, LoadInfo> &loadToInfo, int numStages) {
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
   tt::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
@@ -522,7 +521,8 @@ static bool createCoarseSchedule(
     if (loadsToPipeline.count(loadOp) == 0)
       continue;
     int stage = (maxIndirectionLevel - indLevel) * stagesBetweenLoads;
-    opToStageAndOrder[loadOp] = std::make_pair(stage, 0);
+    opToStageAndOrder[loadOp] =
+        std::make_pair(stage, (numStages - 1 - stage) * 2);
   }
 
   // Distance from the load to the use.
@@ -568,7 +568,8 @@ static bool createCoarseSchedule(
         }
       }
       if (ifOp && !opToStageAndOrder.count(ifOp)) {
-        opToStageAndOrder[ifOp] = {stage, 2}; // 2 will be even after extracts
+        opToStageAndOrder[ifOp] = {
+            stage, numStages * 2 + 2}; // 2 will be even after extracts
       }
     }
   }
@@ -702,28 +703,42 @@ static std::vector<std::pair<Operation *, unsigned>> createSchedule(
   int maxOrder = *llvm::max_element(
       llvm::make_second_range(llvm::make_second_range(opToStageAndOrder)));
 
-  for (int stage = 0; stage < numStages; stage++) {
-    for (int order = minOrder; order <= maxOrder; order++) {
+  llvm::DenseMap<Operation *, std::pair<int, int>> newOpToStageAndOrder;
 
-      DenseSet<Operation *> anchorOpsAndDeps;
-      for (auto &[op, stageAndOrder] : opToStageAndOrder) {
-        if (stageAndOrder.first == stage && stageAndOrder.second == order) {
-          tt::addDep(op, anchorOpsAndDeps, false);
-        }
+  DenseSet<Operation *> anchorOps;
+  for (auto &[op, stage] : opToStageAndOrder) {
+    if (stage.second == minOrder) {
+      anchorOps.insert(op);
+    }
+  }
+
+  for (auto &op : forOp.getBody()->without_terminator()) {
+    if (opToStageAndOrder.count(&op) == 0)
+      continue;
+    auto [stage, order] = opToStageAndOrder[&op];
+    DenseSet<Operation *> anchorOpsAndDeps;
+    tt::addDep(&op, anchorOpsAndDeps, false,
+               &anchorOps); // don't go through anchorOps - they are what they
+                            // have to be
+    for (auto dep : anchorOpsAndDeps) {
+      int depStage = stage;
+      int depOrder = order;
+      if (newOpToStageAndOrder.count(dep) > 0) {
+        depStage = std::min(newOpToStageAndOrder[dep].first, depStage);
+        depOrder = std::min(newOpToStageAndOrder[dep].second, depOrder);
       }
 
-      for (auto op : anchorOpsAndDeps) {
-        if (opToStageAndOrder.count(op) == 0) {
-          opToStageAndOrder[op] = {stage, order};
-        }
+      if (opToStageAndOrder.count(dep) == 0) {
+        newOpToStageAndOrder[dep] = {depStage, depOrder};
       }
     }
   }
 
-  minOrder = *llvm::min_element(
-      llvm::make_second_range(llvm::make_second_range(opToStageAndOrder)));
-  maxOrder = *llvm::max_element(
-      llvm::make_second_range(llvm::make_second_range(opToStageAndOrder)));
+  for (auto &[op, stageAndOrder] : newOpToStageAndOrder) {
+    if (opToStageAndOrder.count(op) == 0) {
+      opToStageAndOrder[op] = stageAndOrder;
+    }
+  }
 
   LLVM_DEBUG({
     LDBG("Scheduled dependencies:");
@@ -750,8 +765,6 @@ static std::vector<std::pair<Operation *, unsigned>> createSchedule(
   };
 
   // Find dependencies with distance of 1.
-  // SmallVector<SmallVector<DenseSet<Operation *>>> distanceOneUsers(numOrders,
-  // SmallVector<DenseSet<Operation *>>(numStages));
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (opToStageAndOrder.count(&op) == 0)
       continue;
@@ -809,8 +822,7 @@ static std::vector<std::pair<Operation *, unsigned>> createSchedule(
     }
   });
 
-  // Assign the rest of the ops to the last stage, main block of the loop (order
-  // 0)
+  // Assign the rest of the ops to the last stage.
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (opToStageAndOrder.count(&op) == 0) {
       opToStageAndOrder[&op] = {numStages - 1, 0};
@@ -844,15 +856,12 @@ static std::vector<std::pair<Operation *, unsigned>> createSchedule(
   // be live through all of stage 1. Previously we were scheduling stage n-1,
   // and then dist1uses followed by inserts/deps.
   for (int ord = minOrder; ord <= maxOrder; ord++) {
-    for (int stage = numStages - 1; stage >= 0; stage--) {
-      for (auto &op : forOp.getBody()->without_terminator()) {
-        assert(opToStageAndOrder.count(&op) && "Op not in schedule!");
-        assert(opToStageAndOrder[&op].first < numStages &&
-               "Op with invalid stage!");
-        if (opToStageAndOrder[&op].second == ord &&
-            opToStageAndOrder[&op].first == stage)
-          schedule.push_back({&op, opToStageAndOrder[&op].first});
-      }
+    for (auto &op : forOp.getBody()->without_terminator()) {
+      assert(opToStageAndOrder.count(&op) && "Op not in schedule!");
+      assert(opToStageAndOrder[&op].first < numStages &&
+             "Op with invalid stage!");
+      if (opToStageAndOrder[&op].second == ord)
+        schedule.push_back({&op, opToStageAndOrder[&op].first});
     }
   }
 
