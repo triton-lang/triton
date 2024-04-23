@@ -125,39 +125,39 @@ Credits: OpenAI kernel team</p>
 </ul>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>fused-attention-batch4-head48-d64-fwd-causal=True-fp8=False:
      N_CTX      Triton
-0   1024.0  119.669783
-1   2048.0  144.188183
-2   4096.0  158.242961
-3   8192.0  167.279026
-4  16384.0  174.710524
+0   1024.0  119.206084
+1   2048.0  144.871453
+2   4096.0  159.909932
+3   8192.0  167.641200
+4  16384.0  174.429071
 fused-attention-batch4-head48-d64-fwd-causal=True-fp8=True:
      N_CTX      Triton
-0   1024.0   97.841593
-1   2048.0  118.592549
-2   4096.0  128.373857
-3   8192.0  134.766619
-4  16384.0  137.955454
+0   1024.0   97.935566
+1   2048.0  118.464398
+2   4096.0  129.836466
+3   8192.0  135.540660
+4  16384.0  139.367046
 fused-attention-batch4-head48-d64-fwd-causal=False-fp8=False:
      N_CTX      Triton
-0   1024.0  159.936951
-1   2048.0  168.093110
-2   4096.0  173.389246
-3   8192.0  175.415514
-4  16384.0  178.069091
+0   1024.0  159.831233
+1   2048.0  168.729718
+2   4096.0  172.959292
+3   8192.0  176.582915
+4  16384.0  178.061720
 fused-attention-batch4-head48-d64-fwd-causal=False-fp8=True:
      N_CTX      Triton
-0   1024.0  136.384634
-1   2048.0  145.916934
-2   4096.0  149.443367
-3   8192.0  150.338396
-4  16384.0  150.981381
+0   1024.0  136.423484
+1   2048.0  145.983053
+2   4096.0  150.701838
+3   8192.0  150.322597
+4  16384.0  150.974303
 fused-attention-batch4-head48-d64-bwd-causal=True-fp8=False:
      N_CTX      Triton
-0   1024.0   75.670963
-1   2048.0  100.743894
-2   4096.0  118.626589
-3   8192.0  130.168054
-4  16384.0  136.342399
+0   1024.0   75.679716
+1   2048.0  100.916129
+2   4096.0  119.581008
+3   8192.0  130.659435
+4  16384.0  136.833528
 </pre></div>
 </div>
 <div class="line-block">
@@ -724,7 +724,7 @@ fused-attention-batch4-head48-d64-bwd-causal=True-fp8=False:
     <span class="n">rtol</span> <span class="o">=</span> <span class="mf">0.0</span>
     <span class="c1"># Relative tolerance workaround for known hardware limitation of MI200 GPU.</span>
     <span class="c1"># For detailss see https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices</span>
-    <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">version</span><span class="o">.</span><span class="n">hip</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">()[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;gfx90a&quot;</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">version</span><span class="o">.</span><span class="n">hip</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">()</span><span class="o">.</span><span class="n">arch</span> <span class="o">==</span> <span class="s2">&quot;gfx90a&quot;</span><span class="p">:</span>
         <span class="n">rtol</span> <span class="o">=</span> <span class="mf">1e-2</span>
     <span class="k">assert</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">ref_dv</span><span class="p">,</span> <span class="n">tri_dv</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="n">rtol</span><span class="p">)</span>
     <span class="k">assert</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">ref_dk</span><span class="p">,</span> <span class="n">tri_dk</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="n">rtol</span><span class="p">)</span>
@@ -816,7 +816,7 @@ fused-attention-batch4-head48-d64-bwd-causal=True-fp8=False:
     <span class="n">bench_flash_attention</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s2">&quot;.&quot;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 27.528 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 30.067 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-06-fused-attention-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/3176accb6c7288b0e45f41d94eebacb9/06-fused-attention.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">06-fused-attention.ipynb</span></code></a></p>
