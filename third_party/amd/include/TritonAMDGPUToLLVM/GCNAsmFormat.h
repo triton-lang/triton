@@ -245,6 +245,22 @@ private:
     return modArchive.back().get();
   }
 
+  // Make the operands in argArchive follow the provided \param order.
+  void reorderArgArchive(ArrayRef<Operand *> order) {
+    assert(order.size() == argArchive.size());
+    // The order in argArchive is unnecessary when onlyAttachMLIRArgs=false, but
+    // it does necessary when onlyAttachMLIRArgs is true for the $0, $1... are
+    // determined by PTX code snippet passed from external.
+    sort(argArchive.begin(), argArchive.end(),
+         [&](std::unique_ptr<Operand> &a, std::unique_ptr<Operand> &b) {
+           auto ida = std::find(order.begin(), order.end(), a.get());
+           auto idb = std::find(order.begin(), order.end(), b.get());
+           assert(ida != order.end());
+           assert(idb != order.end());
+           return ida < idb;
+         });
+  }
+
   friend class GCNInstr;
   friend class GCNInstrCommon;
 
@@ -277,11 +293,13 @@ struct GCNInstrCommon {
 
   // Set operands of this instruction.
   GCNInstrExecution &operator()(llvm::ArrayRef<Operand *> oprs,
-                                llvm::ArrayRef<Modifier *> mods);
+                                llvm::ArrayRef<Modifier *> mods,
+                                bool onlyAttachMLIRArgs = false);
 
 protected:
   GCNInstrExecution &call(llvm::ArrayRef<Operand *> oprs,
-                          ArrayRef<Modifier *> mods);
+                          ArrayRef<Modifier *> mods,
+                          bool onlyAttachMLIRArgs = false);
 
   GCNBuilder *builder{};
   llvm::SmallVector<std::string, 4> instrParts;
@@ -341,15 +359,18 @@ struct GCNInstrExecution {
   GCNInstrExecution() = default;
   explicit GCNInstrExecution(GCNInstrCommon *instr,
                              llvm::ArrayRef<Operand *> oprs,
-                             llvm::ArrayRef<Modifier *> modifiers)
+                             llvm::ArrayRef<Modifier *> modifiers,
+                             bool onlyAttachMLIRArgs)
       : instr(instr), argsInOrder(oprs.begin(), oprs.end()),
-        mods(modifiers.begin(), modifiers.end()) {}
+        mods(modifiers.begin(), modifiers.end()),
+        onlyAttachMLIRArgs(onlyAttachMLIRArgs) {}
 
   std::string dump() const;
 
   SmallVector<Operand *> getArgList() const;
 
   GCNInstrCommon *instr{};
+  bool onlyAttachMLIRArgs{};
 };
 
 struct GCNMemInstr : public GCNInstrBase<GCNMemInstr> {
