@@ -82,7 +82,7 @@ static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
 static void createAsyncCopy(
     scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc, Value insertIdx,
     Value extractIdx,
-    llvm::MapVector<Operation *, std::pair<int, int>> &opToStageAndOrder,
+    llvm::DenseMap<Operation *, std::pair<int, int>> &opToStageAndOrder,
     llvm::MapVector<tt::LoadOp, LoadInfo> &loadToInfo, int numStages) {
   OpBuilder builder(forOp);
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
@@ -466,7 +466,7 @@ assignMemoryLayouts(llvm::MapVector<tt::LoadOp, LoadInfo> &loadToInfo,
 /// Collect ops to pipeline. Returns true if any ops are found to pipeline.
 static bool createCoarseSchedule(
     scf::ForOp forOp,
-    llvm::MapVector<Operation *, std::pair<int, int>>
+    llvm::DenseMap<Operation *, std::pair<int, int>>
         &opToStageAndOrder, // TODO pawel: opToStageAndOrder may be a vector?
     llvm::MapVector<tt::LoadOp, LoadInfo> &loadToInfo, int numStages) {
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
@@ -594,7 +594,7 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
 // the required number of buffers.
 static SmallVector<Value> createAsyncOps(
     scf::ForOp &forOp,
-    llvm::MapVector<Operation *, std::pair<int, int>> &opToStageAndOrder,
+    llvm::DenseMap<Operation *, std::pair<int, int>> &opToStageAndOrder,
     llvm::MapVector<tt::LoadOp, LoadInfo> &loadToInfo, int numBuffers,
     int numStages) {
   struct AsyncLoad {
@@ -679,7 +679,7 @@ printSchedule(std::vector<std::pair<Operation *, unsigned>> &schedule,
 // matmul loops should be pipelined and is not a generic scheduler.
 static std::vector<std::pair<Operation *, unsigned>> createSchedule(
     scf::ForOp forOp, int numStages,
-    llvm::MapVector<Operation *, std::pair<int, int>> &opToStageAndOrder,
+    llvm::DenseMap<Operation *, std::pair<int, int>> &opToStageAndOrder,
     llvm::MapVector<tt::LoadOp, LoadInfo> &loadToInfo, bool prefetchExtract) {
   LLVM_DEBUG({
     LDBG("For loop:");
@@ -696,12 +696,6 @@ static std::vector<std::pair<Operation *, unsigned>> createSchedule(
       }
     }
   });
-
-  auto printDenseSet = [](DenseSet<Operation *> &set) {
-    for (auto op : set) {
-      op->dump();
-    }
-  };
 
   int minOrder = *llvm::min_element(
       llvm::make_second_range(llvm::make_second_range(opToStageAndOrder)));
@@ -873,7 +867,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     scf::ForOp &forOp, int numStages, mlir::triton::PipeliningOption &options) {
   // 1. First collect "interesting" operations with a stage where to schedule
   // them. This gives a coarse scheduling for the loop.
-  llvm::MapVector<Operation *, std::pair<int, int>> opToStageAndOrder;
+  llvm::DenseMap<Operation *, std::pair<int, int>> opToStageAndOrder;
   llvm::MapVector<tt::LoadOp, LoadInfo> loadToInfo;
   if (!createCoarseSchedule(forOp, opToStageAndOrder, loadToInfo, numStages))
     return false;
