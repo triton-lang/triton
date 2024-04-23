@@ -53,15 +53,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerConvertTritonAMDGPUToLLVM();
   mlir::triton::registerDecomposeUnsupportedAMDConversions();
 
-  // TODO: Uncomment when fixed undefined symbols and
-  // remove section below
-  // List of undefined symbols:
-  // createTritonAMDGPUCoalesce is not defined
-  // createTritonAMDGPUOptimizeDotOperands is not defined
-  // createTritonAMDGPUPrefetch is not defined
-
-  // mlir::registerTritonAMDGPUPasses();
-
   mlir::registerTritonAMDGPUAccelerateMatmul();
   mlir::registerTritonAMDGPUOptimizeEpilogue();
   mlir::registerTritonAMDGPURemoveLayoutConversions();

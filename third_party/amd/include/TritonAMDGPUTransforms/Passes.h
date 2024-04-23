@@ -13,19 +13,13 @@ createTritonAMDGPUAccelerateMatmulPass(std::string archGenName = std::string(),
                                        int matrixInstructionSize = 0,
                                        int kpack = 1);
 
-std::unique_ptr<Pass> createTritonAMDGPUPrefetchPass();
-
 std::unique_ptr<Pass> createTritonAMDGPUCanonicalizeLoopsPass();
-
-std::unique_ptr<Pass> createTritonAMDGPUCoalescePass();
 
 std::unique_ptr<Pass> createTritonAMDGPUReorderInstructionsPass();
 
 std::unique_ptr<Pass> createTritonAMDGPURemoveLayoutConversionsPass();
 
 std::unique_ptr<Pass> createTritonAMDGPUVerifier();
-
-std::unique_ptr<Pass> createTritonAMDGPUOptimizeDotOperandsPass();
 
 std::unique_ptr<Pass> createTritonAMDGPUOptimizeEpiloguePass();
 

@@ -16,19 +16,6 @@ def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::Mod
   let dependentDialects = [];
 }
 
-def TritonAMDGPUPrefetch : Pass<"tritonamdgpu-prefetch", "mlir::ModuleOp"> {
-  let summary = "prefetch";
-
-  let description = [{
-    Decompose `DotOp` instructions in loops into several finer-grained `DotOp`
-    that may have their operands constructed at the end of the previous iteration
-  }];
-
-  let constructor = "mlir::createTritonAMDGPUPrefetchPass()";
-
-  let dependentDialects = [];
-}
-
 def TritonAMDGPUAccelerateMatmul : Pass<"tritonamdgpu-accelerate-matmul", "mlir::ModuleOp"> {
   let summary = "accelerate matmul";
 
@@ -53,32 +40,6 @@ def TritonAMDGPUAccelerateMatmul : Pass<"tritonamdgpu-accelerate-matmul", "mlir:
            "KWidth / kBase">
   ];
 }
-
-def TritonAMDGPUOptimizeDotOperands : Pass<"tritonamdgpu-optimize-dot-operands", "mlir::ModuleOp"> {
-  let summary = "fuse transpositions";
-
-  let description = [{
-    Re-arranged layouts of tensors used as matrix multiplication operands so as to promote the use of
-    hardware-accelerated transpositions.
-  }];
-
-  let constructor = "mlir::createTritonAMDGPUOptimizeDotOperandsPass()";
-
-  let dependentDialects = [];
-}
-
-def TritonAMDGPUCoalesce: Pass<"tritonamdgpu-coalesce", "mlir::ModuleOp"> {
-  let summary = "coalesce";
-
-  let description = [{
-    TODO
-  }];
-
-  let constructor = "mlir::createTritonAMDGPUCoalescePass()";
-
-  let dependentDialects = [];
-}
-
 
 def TritonAMDGPURemoveLayoutConversions : Pass<"tritonamdgpu-remove-layout-conversions", "mlir::ModuleOp"> {
   let summary = "remove superfluous layout conversions";
