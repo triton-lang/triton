@@ -6,6 +6,9 @@ MODEL_SPEC=$1
 
 # torchinductor venv
 whoami
+
+sudo apt-get update && sudo apt-get install -y python3-venv libgl1
+
 # clean up old venv
 rm -rf /tmp/torchinductor_venv
 python3 -m venv /tmp/torchinductor_venv
@@ -14,8 +17,10 @@ source /tmp/torchinductor_venv/bin/activate
 # shellcheck source=/dev/null
 source ./.github/workflows/torch-inductor/scripts/common.sh
 
+pip3 install --upgrade pip
+
 # pytorch nightly
-pip3 install --force-reinstall --pre torch torchtext torchvision torchaudio torchrec --extra-index-url https://download.pytorch.org/whl/nightly/cu121
+pip3 install --force-reinstall --pre torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cu121
 # pytorch source to get torchbench for dynamo
 cd /tmp || exit
 # cleanup old pytorch
@@ -30,7 +35,6 @@ cd ..
 # required packages
 # https://github.com/pytorch/benchmark/blob/main/docker/gcp-a100-runner-dind.dockerfile#L17
 sudo apt-get install --yes libpango-1.0-0 libpangoft2-1.0-0
-pip3 install --upgrade pip
 pip3 install expecttest psutil lightning-utilities pyre_extensions
 
 # torchbench

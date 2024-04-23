@@ -20,6 +20,8 @@ BASE_TEST_REPORTS_DIR=$TEST_REPORTS_DIR/acc
 mkdir -p "$TRITON_TEST_REPORTS_DIR"
 mkdir -p "$BASE_TEST_REPORTS_DIR"
 
+# Packages invoked in 'pytorch/benchmarks/dynamo/common.py' and not already installed in venv.
+pip3 install pandas scipy
 
 echo "Running with Triton Nightly"
 for model in "${MODELS[@]}"; do
