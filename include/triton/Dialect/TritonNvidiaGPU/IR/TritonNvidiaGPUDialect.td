@@ -56,12 +56,6 @@ def TritonNvidiaGPU_Dialect : Dialect {
             "TritonGPU module should contain a triton_gpu.num-ctas attribute");
       return mod->getAttr("triton_gpu.num-ctas").cast<IntegerAttr>().getInt();
     }
-    static int getComputeCapability(ModuleOp mod) {
-      if(!mod->hasAttr("triton_gpu.compute-capability"))
-        llvm::report_fatal_error(
-            "TritonGPU module should contain a triton_gpu.compute-capability attribute");
-      return mod->getAttrOfType<IntegerAttr>("triton_gpu.compute-capability").getInt();
-    }
     void registerTypes();
   }];
 

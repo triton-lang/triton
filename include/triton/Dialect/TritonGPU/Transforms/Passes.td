@@ -94,11 +94,17 @@ def TritonGPUOptimizeDotOperands : Pass<"tritongpu-optimize-dot-operands", "mlir
     hardware-accelerated transpositions.
   }];
 
-  let constructor = "mlir::triton::gpu::createOptimizeDotOperandsPass()";
+  let constructor = "mlir::triton::gpu::createOptimizeDotOperandsPass(/*hostLayoutConversion=*/true)";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
                            "mlir::triton::TritonDialect"];
+
+  let options = [
+    Option<"hoistLayoutConversion", "hoist-layout-conversion",
+           "bool", /*default*/"true",
+           "whether to move conver to dot operand earlier pass elementwise ops">
+  ];
 }
 
 def TritonGPUCoalesce: Pass<"tritongpu-coalesce", "mlir::ModuleOp"> {
