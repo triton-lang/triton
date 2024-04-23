@@ -17,10 +17,17 @@ source /tmp/torchinductor_venv/bin/activate
 # shellcheck source=/dev/null
 source ./.github/workflows/torch-inductor/scripts/common.sh
 
-pip3 install --upgrade pip
+pip3 install --upgrade pip wheel setuptools
+
+# Install torchtext stable first. Bundling it in the same install as torch
+# nightly forces torch stable release to be installed instead.
+# From https://github.com/pytorch/text?tab=readme-ov-file#torchtext,
+# "WARNING: TorchText development is stopped and the 0.18 release (April 2024)
+# will be the last stable release of the library."
+pip3 install --force-reinstall torchtext
 
 # pytorch nightly
-pip3 install --force-reinstall --pre torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cu121
+pip3 install --force-reinstall --pre torch torchvision torchaudio torchrec --extra-index-url https://download.pytorch.org/whl/nightly/cu121
 # pytorch source to get torchbench for dynamo
 cd /tmp || exit
 # cleanup old pytorch
@@ -66,7 +73,7 @@ pip3 install -e .
 pip3 uninstall pytorch-triton -y
 
 # clean up cache
-rm -rf /tmp/torchinductor_root/
+rm -rf /tmp/torchinductor_"$(whoami)"/
 rm -rf ~/.triton/cache
 rm -rf "$TEST_REPORTS_DIR"
 
