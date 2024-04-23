@@ -94,4 +94,9 @@ def test_cast_matmul(M, K, N, w_dtype, x_dtype, out_dtype):
         BLOCK_N=BLOCK_N,  #
         BLOCK_K=BLOCK_K)
 
-    torch.testing.assert_close(out_torch, out_triton, atol=0.3, rtol=0.01)
+    # Torch can compute reference result on CPU using fp32 arithmetics for fp16
+    # test. Such reference requires increased tolerance for big K values.
+    if out_dtype == "float16" and K > 128:
+        torch.testing.assert_close(out_torch, out_triton, atol=2, rtol=0.1)
+    else:
+        torch.testing.assert_close(out_torch, out_triton, atol=0.3, rtol=0.01)

@@ -17,9 +17,10 @@ import triton.ops
 @pytest.mark.parametrize('causal', [True, False])
 @pytest.mark.parametrize('seq_par', [True, False])
 def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par, device):
-    capability = torch.cuda.get_device_capability()
-    if capability[0] < 8:
-        pytest.skip("Flash attention only supported for compute capability >= 80")
+    if torch.cuda.is_available():
+        capability = torch.cuda.get_device_capability()
+        if capability[0] < 8:
+            pytest.skip("Flash attention only supported for compute capability >= 80")
     if dtype == torch.bfloat16 and os.environ.get("TRITON_INTERPRET", "0") == "1":
         pytest.skip("Flash attention bfloat16 not supported in interpreter mode")
     torch.manual_seed(20)
