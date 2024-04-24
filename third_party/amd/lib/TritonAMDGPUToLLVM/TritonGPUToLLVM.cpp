@@ -84,24 +84,31 @@ public:
 struct ConvertTritonAMDGPUToLLVM
     : public triton::impl::ConvertTritonAMDGPUToLLVMBase<
           ConvertTritonAMDGPUToLLVM> {
-  using ConvertTritonAMDGPUToLLVMBase<
-      ConvertTritonAMDGPUToLLVM>::ConvertTritonAMDGPUToLLVMBase;
+  explicit ConvertTritonAMDGPUToLLVM(StringRef targetArch) {
+    this->arch = targetArch.str();
+  }
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<triton::nvgpu::NVGPUDialect, LLVM::LLVMDialect,
                     NVVM::NVVMDialect, mlir::ROCDL::ROCDLDialect>();
   }
 
-  ConvertTritonAMDGPUToLLVM(int32_t computeCapability)
-      : ConvertTritonAMDGPUToLLVMBase({computeCapability}) {}
-
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
+
+    AMD::TargetInfo targetInfo(this->arch.getValue());
+    if (targetInfo.getISAFamily() == AMD::ISAFamily::Unknown) {
+      mod.emitError("unsupported target: '") << this->arch.getValue() << "'";
+      return signalPassFailure();
+    }
+
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
+
     TritonGPUToLLVMTypeConverter typeConverter(context, option);
     TritonLLVMConversionTarget convTarget(*context);
+
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -159,26 +166,10 @@ struct ConvertTritonAMDGPUToLLVM
     OpBuilder::InsertPoint indexInsertPoint;
 
     RewritePatternSet patterns(context);
-    AMD::TargetInfo targetInfo("gfx1200");
     int benefit = patternBenefitPrioritizeOverLLVMConversions;
     auto populatePatterns1 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
                    allocation, benefit);
-    };
-
-    auto populatePatterns2 = [&](auto populateFunc) {
-      populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, benefit);
-    };
-
-    auto populatePatterns3 = [&](auto populateFunc) {
-      populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, benefit);
-    };
-
-    auto populatePatterns4 = [&](auto populateFunc) {
-      populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, computeCapability, benefit);
     };
 
     auto populatePatterns5 = [&](auto populateFunc) {
@@ -187,7 +178,7 @@ struct ConvertTritonAMDGPUToLLVM
 
     auto populatePatterns6 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, computeCapability, targetInfo, benefit);
+                   allocation, targetInfo, benefit);
     };
 
     auto populatePatterns7 = [&](auto populateFunc) {
@@ -271,15 +262,9 @@ private:
 namespace mlir {
 namespace triton {
 
-// TODO: Clean up the code regarding usage of computeCapability
-// We need to converge on how we define that for AMDGPU
-std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonAMDGPUToLLVMPass() {
-  return std::make_unique<ConvertTritonAMDGPUToLLVM>(90);
-}
-
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonAMDGPUToLLVMPass(int computeCapability) {
-  return std::make_unique<ConvertTritonAMDGPUToLLVM>(computeCapability);
+createConvertTritonAMDGPUToLLVMPass(StringRef targetArch) {
+  return std::make_unique<ConvertTritonAMDGPUToLLVM>(targetArch);
 }
 
 } // namespace triton

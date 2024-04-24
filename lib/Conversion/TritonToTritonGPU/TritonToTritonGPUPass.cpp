@@ -4,6 +4,7 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Analysis/Utility.h"
@@ -744,12 +745,12 @@ class ConvertTritonToTritonGPU
 public:
   ConvertTritonToTritonGPU() = default;
   // constructor with some parameters set explicitly.
-  ConvertTritonToTritonGPU(int numWarps, int threadsPerWarp, int numCTAs,
-                           int computeCapability) {
+  ConvertTritonToTritonGPU(const std::string &target, int numWarps,
+                           int threadsPerWarp, int numCTAs) {
     this->numWarps = numWarps;
     this->threadsPerWarp = threadsPerWarp;
     this->numCTAs = numCTAs;
-    this->computeCapability = computeCapability;
+    this->target = target;
   }
 
   void runOnOperation() override {
@@ -783,9 +784,12 @@ public:
     mod->setAttr(AttrNumCTAsName,
                  IntegerAttr::get(i32_ty, llvm::APInt(32, numCTAs.getValue())));
 
-    mod->setAttr(AttrComputeCapabilityName,
-                 IntegerAttr::get(
-                     i32_ty, llvm::APInt(32, computeCapability.getValue())));
+    if (this->target.getValue().empty()) {
+      mod.emitError("expected target specification to attach to the module op");
+      return signalPassFailure();
+    }
+    mod->setAttr(AttrTargetName,
+                 StringAttr::get(context, this->target.getValue()));
 
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
       return signalPassFailure();
@@ -800,12 +804,12 @@ public:
 } // namespace
 
 std::unique_ptr<OperationPass<ModuleOp>>
-mlir::triton::createConvertTritonToTritonGPUPass(int numWarps,
+mlir::triton::createConvertTritonToTritonGPUPass(const std::string &target,
+                                                 int numWarps,
                                                  int threadsPerWarp,
-                                                 int numCTAs,
-                                                 int computeCapability) {
-  return std::make_unique<::ConvertTritonToTritonGPU>(
-      numWarps, threadsPerWarp, numCTAs, computeCapability);
+                                                 int numCTAs) {
+  return std::make_unique<::ConvertTritonToTritonGPU>(target, numWarps,
+                                                      threadsPerWarp, numCTAs);
 }
 
 std::unique_ptr<OperationPass<ModuleOp>>

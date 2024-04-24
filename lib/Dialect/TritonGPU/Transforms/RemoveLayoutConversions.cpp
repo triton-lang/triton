@@ -942,7 +942,10 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
     builder.setInsertionPoint(op);
     if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
       auto yieldOperands = llvm::to_vector(yieldOp.getOperands());
-      SmallVector<int> &operandsToRewrite = yieldOperandsMap[op];
+      SmallVector<int> operandsToRewrite = yieldOperandsMap[op];
+      // Sort so that operands are added in the same order as the new scf
+      // results/arguments.
+      std::sort(operandsToRewrite.begin(), operandsToRewrite.end());
       for (int operandIdx : operandsToRewrite) {
         yieldOperands.push_back(mapping.lookup(yieldOp.getOperand(operandIdx)));
       }

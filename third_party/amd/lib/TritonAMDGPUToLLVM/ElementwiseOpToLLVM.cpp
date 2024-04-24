@@ -9,7 +9,10 @@
 
 using namespace mlir;
 using namespace mlir::triton;
-using namespace mlir::triton::gpu;
+
+using mlir::triton::gpu::ElementwiseOpConversionBase;
+using mlir::triton::gpu::getElementType;
+using mlir::triton::gpu::MultipleOperandsRange;
 
 typedef std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
                                          const SmallVector<Value> &)>
@@ -261,9 +264,9 @@ Fp16_to_Fp8E5M2FNUZ_HW(Location loc, ConversionPatternRewriter &rewriter,
   return convert_val_Fp16_to_Fp8(loc, rewriter, v[0], v[1], "bf8");
 }
 
-ConverterT Fp16_to_Fp8E5M2FNUZ(int computeCapability) {
-  return computeCapability >= 300 ? Fp16_to_Fp8E5M2FNUZ_HW
-                                  : Fp16_to_Fp8E5M2FNUZ_SW;
+ConverterT Fp16_to_Fp8E5M2FNUZ(AMD::ISAFamily isaFamily) {
+  return isaFamily == AMD::ISAFamily::CDNA3 ? Fp16_to_Fp8E5M2FNUZ_HW
+                                            : Fp16_to_Fp8E5M2FNUZ_SW;
 }
 
 static SmallVector<Value> Fp8E5M2_to_Fp16(Location loc,
@@ -385,9 +388,9 @@ Fp8E5M2FNUZ_to_Fp16_HW(Location loc, ConversionPatternRewriter &rewriter,
   return convert_val_Fp8_to_Fp16(loc, rewriter, v[0], v[1], "bf8");
 }
 
-ConverterT Fp8E5M2FNUZ_to_Fp16(int computeCapability) {
-  return (computeCapability >= 300) ? Fp8E5M2FNUZ_to_Fp16_HW
-                                    : Fp8E5M2FNUZ_to_Fp16_SW;
+ConverterT Fp8E5M2FNUZ_to_Fp16(AMD::ISAFamily isaFamily) {
+  return isaFamily == AMD::ISAFamily::CDNA3 ? Fp8E5M2FNUZ_to_Fp16_HW
+                                            : Fp8E5M2FNUZ_to_Fp16_SW;
 }
 
 static SmallVector<Value> Fp8E5M2_to_Bf16(Location loc,
@@ -622,9 +625,9 @@ Fp8E4M3FNUZ_to_Fp16_HW(Location loc, ConversionPatternRewriter &rewriter,
   return convert_val_Fp8_to_Fp16(loc, rewriter, v[0], v[1], "fp8");
 }
 
-static ConverterT Fp8E4M3FNUZ_to_Fp16(int computeCapability) {
-  return computeCapability >= 300 ? Fp8E4M3FNUZ_to_Fp16_HW
-                                  : Fp8E4M3FNUZ_to_Fp16_SW;
+static ConverterT Fp8E4M3FNUZ_to_Fp16(AMD::ISAFamily isaFamily) {
+  return isaFamily == AMD::ISAFamily::CDNA3 ? Fp8E4M3FNUZ_to_Fp16_HW
+                                            : Fp8E4M3FNUZ_to_Fp16_SW;
 }
 
 // Fp16 -> Fp8E4M3 (packed)
@@ -677,9 +680,9 @@ Fp16_to_Fp8E4M3FNUZ_HW(Location loc, ConversionPatternRewriter &rewriter,
   return convert_val_Fp16_to_Fp8(loc, rewriter, v[0], v[1], "fp8");
 }
 
-static ConverterT Fp16_to_Fp8E4M3FNUZ(int computeCapability) {
-  return computeCapability >= 300 ? Fp16_to_Fp8E4M3FNUZ_HW
-                                  : Fp16_to_Fp8E4M3FNUZ_SW;
+static ConverterT Fp16_to_Fp8E4M3FNUZ(AMD::ISAFamily isaFamily) {
+  return isaFamily == AMD::ISAFamily::CDNA3 ? Fp16_to_Fp8E4M3FNUZ_HW
+                                            : Fp16_to_Fp8E4M3FNUZ_SW;
 }
 
 // WARN: subnormal (0bs0000xxx) are not handled
@@ -831,10 +834,10 @@ struct FpToFpOpConversion
 
   explicit FpToFpOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                              int computeCapability,
+                              AMD::ISAFamily isaFamily,
                               PatternBenefit benefit = patternBenefitDefault)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
-        computeCapability(computeCapability) {}
+        isaFamily(isaFamily) {}
 
   static Value convertFp16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
@@ -861,15 +864,15 @@ struct FpToFpOpConversion
         srcMap = {
             // F8 -> F16
             {{F8E4M3FNUZTyID, F16TyID, undefRounding},
-             Fp8E4M3FNUZ_to_Fp16(computeCapability)},
+             Fp8E4M3FNUZ_to_Fp16(isaFamily)},
             {{F8E5M2FNUZTyID, F16TyID, undefRounding},
-             Fp8E5M2FNUZ_to_Fp16(computeCapability)},
+             Fp8E5M2FNUZ_to_Fp16(isaFamily)},
             {{F8E5M2TyID, F16TyID, undefRounding}, Fp8E5M2_to_Fp16},
             // F16 -> F8
             {{F16TyID, F8E5M2FNUZTyID, RoundingMode::RTNE},
-             Fp16_to_Fp8E5M2FNUZ(computeCapability)},
+             Fp16_to_Fp8E5M2FNUZ(isaFamily)},
             {{F16TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},
-             Fp16_to_Fp8E4M3FNUZ(computeCapability)},
+             Fp16_to_Fp8E4M3FNUZ(isaFamily)},
             {{F16TyID, F8E5M2TyID, RoundingMode::RTNE}, Fp16_to_Fp8E5M2_RTNE},
             {{F16TyID, F8E5M2TyID, RoundingMode::RTZ}, Fp16_to_Fp8E5M2_RTZ},
             // F8 -> BF16
@@ -940,9 +943,9 @@ struct FpToFpOpConversion
       numElements = 2;
     }
     bool useFP16IntermediateSrc =
-        srcElementType.isF32() &&
-        !(computeCapability >= 300 && (dstElementType.isFloat8E4M3FNUZ() ||
-                                       dstElementType.isFloat8E5M2FNUZ()));
+        srcElementType.isF32() && !(isaFamily == AMD::ISAFamily::CDNA3 &&
+                                    (dstElementType.isFloat8E4M3FNUZ() ||
+                                     dstElementType.isFloat8E5M2FNUZ()));
     bool isDstFP32 = dstElementType.isF32();
     Type srcType = useFP16IntermediateSrc ? f16_ty : srcElementType;
     Type dstType = isDstFP32 ? f16_ty : dstElementType;
@@ -985,7 +988,7 @@ struct FpToFpOpConversion
   }
 
 private:
-  int computeCapability;
+  AMD::ISAFamily isaFamily;
 };
 
 template <typename OP>
@@ -1228,8 +1231,8 @@ namespace mlir::triton::AMD {
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
-    int computeCapability, const TargetInfo &targetInfo,
-    PatternBenefit benefit) {
+    const TargetInfo &targetInfo, PatternBenefit benefit) {
+
   // fmin (return NaN if either op is NaN)
   patterns.add<ElementwiseOpConversion<arith::MinimumFOp, LLVM::MinimumOp>>(
       typeConverter, axisInfoAnalysis, benefit);
@@ -1252,7 +1255,7 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
-                                   computeCapability, benefit);
+                                   targetInfo.getISAFamily(), benefit);
 
   // ExpOpConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
