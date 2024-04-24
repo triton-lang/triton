@@ -1,14 +1,12 @@
-﻿#include "NVGPUToLLVM/Passes.h"
+﻿#include "Dialect/NVGPU/IR/Dialect.h"
+#include "NVGPUToLLVM/NVGPUToLLVMPass.h"
 #include "TritonNVIDIAGPUToLLVM/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "passes.h"
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/IR/Constants.h"
-#include "llvm/Support/TargetSelect.h"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>

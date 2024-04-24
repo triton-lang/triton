@@ -14,6 +14,8 @@ public:
 
   bool supportMaximumMinimum() const override;
 
+  Value getClusterCTAId(RewriterBase &rewriter, Location loc) const override;
+
   Value ballot(ConversionPatternRewriter &rewriter, Location loc, Type type,
                Value cmp) const override;
 

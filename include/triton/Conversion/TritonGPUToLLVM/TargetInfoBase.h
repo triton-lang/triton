@@ -1,12 +1,15 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOBASE_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOBASE_H
 
+#include "mlir/IR/PatternMatch.h"
 #include "triton/Conversion/MLIRTypes.h"
 
 namespace mlir::triton {
 class TargetInfoBase {
 public:
   virtual bool supportMaximumMinimum() const = 0;
+
+  virtual Value getClusterCTAId(RewriterBase &rewriter, Location loc) const = 0;
 
   virtual Value ballot(ConversionPatternRewriter &rewriter, Location loc,
                        Type type, Value cmp) const = 0;
