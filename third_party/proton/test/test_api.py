@@ -51,6 +51,10 @@ def test_profile_decorator():
 
 
 def test_scope():
+    # Scope can be annotated even when profiling is off
+    with proton.scope("test"):
+        pass
+
     with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
         proton.start(f.name.split(".")[0])
         with proton.scope("test"):

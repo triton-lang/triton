@@ -33,11 +33,6 @@ def TritonGPU_Dialect : Dialect {
         return 1;
       return mod->getAttr("triton_gpu.num-ctas").cast<IntegerAttr>().getInt();
     }
-    static std::optional<int> getComputeCapability(ModuleOp mod) {
-      auto attr = mod->getAttrOfType<IntegerAttr>("triton_gpu.compute-capability");
-      if (attr) return attr.getInt();
-      return std::nullopt;
-    }
     void registerTypes();
 
     static std::string getThreadsPerWarpAttrName() { return "triton_gpu.threads-per-warp"; }
