@@ -271,7 +271,6 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
 
     unsigned vec = getVectorSize(ptr);
     unsigned elemsPerThread = getTotalElemsPerThread(ptr.getType());
-    llvm::outs() << "elemsPerThread = " << elemsPerThread << "\n";
 
     auto ptrElems = unpackLLElements(loc, llPtr, rewriter);
     auto valueElems = unpackLLElements(loc, llValue, rewriter);
@@ -294,7 +293,6 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     const size_t valueElemNBits = dtsize * 8;
 
     const int numVecs = elemsPerThread / vec;
-    llvm::outs() << "numVecs = " << numVecs << ", vec = " << vec << "\n";
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
       // TODO: optimization when ptr is AddPtr with constant offset
       size_t in_off = 0;
@@ -305,8 +303,6 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       const size_t nWords = std::max<size_t>(1, totalWidth / width);
       const size_t wordNElems = width / valueElemNBits;
       assert(wordNElems * nWords * numVecs == elemsPerThread);
-
-      llvm::outs() << "maxWordWidth = " << maxWordWidth << ", totalWidth = " << totalWidth << ", width = " << width << ", nWords = " << nWords << ", wordNElems = " << wordNElems << "\n";
 
       // TODO(Superjomn) Add cache policy fields to StoreOp.
       // TODO(Superjomn) Deal with cache policy here.
