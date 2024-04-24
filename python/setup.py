@@ -550,8 +550,7 @@ def get_entry_points():
 
 
 def get_install_requires():
-    install_requires = ["filelock"]
-    install_requires.append("llnl-hatchet")
+    install_requires = ["filelock", "llnl-hatchet"]
     return install_requires
 
 
