@@ -1108,7 +1108,6 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::DotAsyncOp dotOp,
     return std::nullopt;
   }
 
-  // TODO pawel: update the comment above
   // Rule 2: The dot cannot be unconditionally used by any op in the loop.
   // Uses under `if` are allowed, as can be explicitly synced with a `wait 0`.
   int iterArgIdx = -1;
