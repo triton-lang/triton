@@ -213,24 +213,19 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   )
 
-  if(CMAKE_SYSTEM_NAME MATCHES "Linux" OR
-      CMAKE_SYSTEM_NAME MATCHES "Darwin")
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR # Linux arm64
-        CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")     # macOS arm64
-      list(APPEND TRITON_LIBRARIES
-          LLVMAArch64CodeGen
-          LLVMAArch64AsmParser
-      )
-    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
-      list(APPEND TRITON_LIBRARIES
-          LLVMX86CodeGen
-          LLVMX86AsmParser
-      )
-    else()
-        message(FATAL_ERROR "LLVM codegen/ASM parser libs: This HW architecture is not configured in cmake lib dependencies.")
-    endif()
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR # Linux arm64
+      CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")     # macOS arm64
+    list(APPEND TRITON_LIBRARIES
+        LLVMAArch64CodeGen
+        LLVMAArch64AsmParser
+    )
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
+    list(APPEND TRITON_LIBRARIES
+        LLVMX86CodeGen
+        LLVMX86AsmParser
+    )
   else()
-    message(FATAL_ERROR "LLVM codegen/ASM parser libs: This OS is not configured in cmake lib dependencies.")
+      message(FATAL_ERROR "LLVM codegen/ASM parser libs: This HW architecture is not configured in cmake lib dependencies.")
   endif()
 
   # Define triton library
