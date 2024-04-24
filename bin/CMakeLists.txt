@@ -75,6 +75,7 @@ mlir_check_all_link_libraries(triton-lsp)
 add_llvm_executable(triton-llvm-opt
   triton-llvm-opt.cpp
 
+  PARTIAL_SOURCES_INTENDED
   DEPENDS
   intrinsics_gen
   SUPPORT_PLUGINS
