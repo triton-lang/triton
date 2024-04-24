@@ -56,8 +56,8 @@ class scope:
             if get_profiling_on():
                 id = libproton.record_scope()
                 libproton.enter_scope(id, self._name)
-            if self._metrics:
-                libproton.add_metrics(id, self._metrics)
+                if self._metrics:
+                    libproton.add_metrics(id, self._metrics)
             ret = func(*args, **kwargs)
             if get_profiling_on():
                 libproton.exit_scope(id, self._name)
