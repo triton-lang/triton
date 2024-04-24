@@ -13,11 +13,15 @@ source "$INDUCTOR"/scripts/common.sh
 # Dependency of 'torch/fx/experimental/validator.py'.
 pip3 install --upgrade z3-solver
 
-# Build our own triton.
+# Install our own triton.
 pip3 uninstall pytorch-triton -y
 cd $ROOT/python || exit
-rm -rf build
-pip3 install -e .
+if [ -d "./dist" ]; then
+  pip3 install dist/triton*.whl
+else
+  rm -rf build
+  pip3 install -e .
+fi
 
 cd "$PYTORCH_DIR" || exit
 TEST_REPORTS_DIR=$TEST_REPORTS_DIR/acc

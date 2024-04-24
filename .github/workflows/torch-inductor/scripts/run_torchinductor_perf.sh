@@ -35,7 +35,7 @@ done
 
 # install pytorch-triton
 pip3 uninstall triton -y
-pip3 install --pre torch --extra-index-url https://download.pytorch.org/whl/nightly/cu121
+pip3 install --pre pytorch-triton --extra-index-url https://download.pytorch.org/whl/nightly/cu121
 
 echo "Running with pytorch-triton"
 for model in "${MODELS[@]}"; do

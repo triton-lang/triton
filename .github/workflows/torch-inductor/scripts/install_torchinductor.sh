@@ -65,13 +65,6 @@ if [ "$MODEL_SPEC" == "timm_models" ] || [ "$MODEL_SPEC" != "all" ]; then
 	cd ..
 fi
 
-# build our own triton
-cd "$ROOT" || exit
-cd python || exit
-rm -rf build
-pip3 install -e .
-pip3 uninstall pytorch-triton -y
-
 # clean up cache
 rm -rf /tmp/torchinductor_"$(whoami)"/
 rm -rf ~/.triton/cache
