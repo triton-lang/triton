@@ -72,6 +72,12 @@ public:
     opToStageAndCluster[op] = {stage, cluster};
   }
 
+  void insertIfAbsent(Operation *op, int stage, int cluster) {
+    if (opToStageAndCluster.count(op))
+      return;
+    insert(op, stage, cluster);
+  }
+
   void erase(Operation *op) { opToStageAndCluster.erase(op); }
 
   int count(Operation *op) { return opToStageAndCluster.count(op); }
@@ -80,7 +86,7 @@ public:
     return opToStageAndCluster[op];
   }
 
-  void debug_print(int numStages) {
+  void dump(int numStages) {
     for (int i = 0; i < numStages; i++) {
       LDBG("- Ops in stage " << i);
       for (auto &[op, stageAndCluster] : opToStageAndCluster) {
@@ -600,9 +606,9 @@ createCoarseSchedule(scf::ForOp forOp, CoarseSchedule &schedule,
           ifOp = dyn_cast<scf::IfOp>(parentOp);
         }
       }
-      if (ifOp && !schedule.count(ifOp)) {
-        schedule.insert(ifOp, stage,
-                        numStages * 2 + 2); // after prefetch extracts
+      if (ifOp) {
+        schedule.insertIfAbsent(ifOp, stage,
+                                numStages * 2 + 2); // after prefetch extracts
       }
     }
   }
@@ -719,47 +725,49 @@ createSchedule(scf::ForOp forOp, int numStages, CoarseSchedule &coarseSchedule,
     forOp.dump();
 
     LDBG("Initial coarse schedule:");
-    coarseSchedule.debug_print(numStages);
+    coarseSchedule.dump(numStages);
   });
 
-  llvm::DenseMap<Operation *, std::pair<int, int>> newOpToStageAndOrder;
-
-  DenseSet<Operation *> anchorOps;
-
+  // Add dependencies of anchor ops to the coarse schedule. Schedule them to
+  // the same stage and ordering cluster as the anchor op.
+  // We may visit non-anchor ops multiple times, their final stage and ordering
+  // cluster will be the minimum of all the visits (i.e. the earliest possible,
+  // to satisfy dependencies)
+  llvm::DenseMap<Operation *, std::pair<int, int>> opToStageAndOrder;
+  DenseSet<Operation *> visitedAnchorOps;
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (coarseSchedule.count(&op) == 0)
       continue;
     auto [stage, order] = coarseSchedule[&op];
-    DenseSet<Operation *> anchorOpsAndDeps;
-    tt::addDep(&op, anchorOpsAndDeps, false,
-               &anchorOps); // don't go through anchorOps - they are where they
-                            // have to be
-    for (auto dep : anchorOpsAndDeps) {
+    DenseSet<Operation *> anchorOpDeps;
+    tt::addDep(&op, anchorOpDeps, false,
+               &visitedAnchorOps); // don't go through visitedAnchorOps - they
+                                   // are where they have to be
+    for (auto dep : anchorOpDeps) {
       int depStage = stage;
       int depOrder = order;
-      if (newOpToStageAndOrder.count(dep) > 0) {
-        depStage = std::min(newOpToStageAndOrder[dep].first, depStage);
-        depOrder = std::min(newOpToStageAndOrder[dep].second, depOrder);
+      if (opToStageAndOrder.count(dep) > 0) {
+        // Figure out the earliest stage and order for the dependency.
+        depStage = std::min(opToStageAndOrder[dep].first, depStage);
+        depOrder = std::min(opToStageAndOrder[dep].second, depOrder);
       }
 
       if (coarseSchedule.count(dep) == 0) {
-        newOpToStageAndOrder[dep] = {depStage, depOrder};
+        opToStageAndOrder[dep] = {depStage, depOrder};
       }
     }
-
-    anchorOps.insert(&op); // Don't go through that anchor op again, leave its
-                           // dependencies as they are.
+    visitedAnchorOps.insert(&op); // Don't go through that anchor op again,
+                                  // leave its dependencies as they are.
   }
 
-  for (auto &[op, stageAndOrder] : newOpToStageAndOrder) {
-    if (coarseSchedule.count(op) == 0) {
-      coarseSchedule.insert(op, stageAndOrder.first, stageAndOrder.second);
-    }
+  for (auto &[op, stageAndOrder] : opToStageAndOrder) {
+    coarseSchedule.insertIfAbsent(op, stageAndOrder.first,
+                                  stageAndOrder.second);
   }
 
   LLVM_DEBUG({
     LDBG("Coarse schedule with dependencies:");
-    coarseSchedule.debug_print(numStages);
+    coarseSchedule.dump(numStages);
   });
 
   auto getNestedOperands = [](Operation *op) -> SmallVector<Value> {
@@ -773,7 +781,8 @@ createSchedule(scf::ForOp forOp, int numStages, CoarseSchedule &coarseSchedule,
     return operands;
   };
 
-  // Find dependencies with distance of 1.
+  // Find dependencies with distance of 1. They will go to the next stage,
+  // but in the cluster before the current op.
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (coarseSchedule.count(&op) == 0)
       continue;
@@ -788,23 +797,17 @@ createSchedule(scf::ForOp forOp, int numStages, CoarseSchedule &coarseSchedule,
           Value v = yieldOp->getOperand(arg.getArgNumber() - 1);
           Operation *defOp = v.getDefiningOp();
           if (defOp && coarseSchedule.count(defOp) == 0) {
-            // Schedule distance 1 users in the next stage, but before them in
-            // order.
             DenseSet<Operation *> distanceOneUsers;
             tt::addDep(defOp, distanceOneUsers, true);
             if (isa<tt::LoadOp>(defOp)) {
-              // Schedule loads with a distance of 1 together with the anchor
-              // ops.
+              // Exception: Schedule loads with a distance of 1 together
+              // with the current op.
               for (auto user : distanceOneUsers) {
-                if (coarseSchedule.count(user) == 0) {
-                  coarseSchedule.insert(user, stage, order);
-                }
+                coarseSchedule.insertIfAbsent(user, stage, order);
               }
             } else {
               for (auto user : distanceOneUsers) {
-                if (coarseSchedule.count(user) == 0) {
-                  coarseSchedule.insert(user, stage + 1, order - 1);
-                }
+                coarseSchedule.insertIfAbsent(user, stage + 1, order - 1);
               }
             }
           }
@@ -815,19 +818,17 @@ createSchedule(scf::ForOp forOp, int numStages, CoarseSchedule &coarseSchedule,
 
   LLVM_DEBUG({
     LDBG("Coarse schedule with dist 1:");
-    coarseSchedule.debug_print(numStages);
+    coarseSchedule.dump(numStages);
   });
 
   // Assign the rest of the ops to the last stage.
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (coarseSchedule.count(&op) == 0) {
-      coarseSchedule.insert(&op, numStages - 1, 0);
-    }
+    coarseSchedule.insertIfAbsent(&op, numStages - 1, 0);
   }
 
   LLVM_DEBUG({
     LDBG("Final coarse schedule:");
-    coarseSchedule.debug_print(numStages);
+    coarseSchedule.dump(numStages);
   });
 
   // Create the actual schedule
