@@ -26,7 +26,7 @@ computeOffsets(Value threadId, bool isARow, bool isBRow, ArrayRef<int> fpw,
                ConversionPatternRewriter &rewriter, Location loc,
                Type resultTy) {
   auto *ctx = rewriter.getContext();
-  auto wpt = resultTy.cast<RankedTensorType>()
+  auto wpt = cast<RankedTensorType>(resultTy)
                  .getEncoding()
                  .cast<DotOperandEncodingAttr>()
                  .getParent()
@@ -92,7 +92,7 @@ static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
                    const LLVMTypeConverter *typeConverter,
                    ConversionPatternRewriter &rewriter, Type resultTy) {
   static constexpr std::array<int, 3> fpw{{2, 2, 1}};
-  auto mmaEncoding = resultTy.cast<RankedTensorType>()
+  auto mmaEncoding = cast<RankedTensorType>(resultTy)
                          .getEncoding()
                          .cast<DotOperandEncodingAttr>()
                          .getParent()
@@ -100,7 +100,7 @@ static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
   auto wpt = mmaEncoding.getWarpsPerCTA();
 
   auto *ctx = rewriter.getContext();
-  auto tensorTy = tensor.getType().cast<MemDescType>();
+  auto tensorTy = cast<MemDescType>(tensor.getType());
   auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
   auto shape = tensorTy.getShape();
   auto order = sharedLayout.getOrder();
@@ -109,7 +109,7 @@ static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
   Value smemBase = smemObj.getBaseBeforeSlice(order[0], loc, rewriter);
 
   bool isARow = order[0] != 0;
-  auto resultEncoding = resultTy.cast<RankedTensorType>()
+  auto resultEncoding = cast<RankedTensorType>(resultTy)
                             .getEncoding()
                             .cast<DotOperandEncodingAttr>();
   auto [offsetAM, offsetAK, _3, _4] = computeOffsets(
@@ -219,7 +219,7 @@ static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
                    const LLVMTypeConverter *typeConverter,
                    ConversionPatternRewriter &rewriter, Type resultTy) {
   static constexpr std::array<int, 3> fpw{{2, 2, 1}};
-  auto mmaEncoding = resultTy.cast<RankedTensorType>()
+  auto mmaEncoding = cast<RankedTensorType>(resultTy)
                          .getEncoding()
                          .cast<DotOperandEncodingAttr>()
                          .getParent()
@@ -229,7 +229,7 @@ static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
   auto strides = smemObj.strides;
 
   auto *ctx = rewriter.getContext();
-  auto tensorTy = tensor.getType().cast<MemDescType>();
+  auto tensorTy = cast<MemDescType>(tensor.getType());
   auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
 
   auto shape = tensorTy.getShape();
@@ -238,7 +238,7 @@ static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
   Value smem = smemObj.getBaseBeforeSlice(order[0], loc, rewriter);
   bool isBRow = order[0] != 0; // is row-major in shared memory layout
   // isBRow_ indicates whether B is row-major in DotOperand layout
-  auto resultEncoding = resultTy.cast<RankedTensorType>()
+  auto resultEncoding = cast<RankedTensorType>(resultTy)
                             .getEncoding()
                             .cast<DotOperandEncodingAttr>();
 

@@ -7,17 +7,17 @@ MODEL_SPEC=$1
 # torchinductor venv
 whoami
 # clean up old venv
-rm -rf /opt/torchinductor_venv
-python3 -m venv /opt/torchinductor_venv
+rm -rf /tmp/torchinductor_venv
+python3 -m venv /tmp/torchinductor_venv
 # shellcheck source=/dev/null
-source /opt/torchinductor_venv/bin/activate
+source /tmp/torchinductor_venv/bin/activate
 # shellcheck source=/dev/null
 source ./.github/workflows/torch-inductor/scripts/common.sh
 
 # pytorch nightly
 pip3 install --force-reinstall --pre torch torchtext torchvision torchaudio torchrec --extra-index-url https://download.pytorch.org/whl/nightly/cu121
 # pytorch source to get torchbench for dynamo
-cd /opt || exit
+cd /tmp || exit
 # cleanup old pytorch
 rm -rf pytorch
 git clone --recursive https://github.com/pytorch/pytorch

@@ -1,0 +1,5 @@
+build/
+proton.egg-info
+proton/_C/libproton.so
+
+*.hatchet

@@ -31,12 +31,12 @@ public:
     if (!trans || trans.getOrder() != ArrayRef<int32_t>{1, 0})
       return failure();
 
-    auto srcTy = trans.getSrc().getType().dyn_cast<RankedTensorType>();
+    auto srcTy = dyn_cast<RankedTensorType>(trans.getSrc().getType());
 
     if (auto srcCvt = trans.getSrc().getDefiningOp<ConvertLayoutOp>()) {
       srcTy = srcCvt.getSrc().getType();
     }
-    auto sharedLoadTy = cvtOp.getType().cast<RankedTensorType>();
+    auto sharedLoadTy = cast<RankedTensorType>(cvtOp.getType());
     auto cvtEncoding =
         sharedLoadTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
     if (!cvtEncoding)
@@ -110,7 +110,7 @@ public:
   LogicalResult matchAndRewrite(ConvertLayoutOp cvt,
                                 PatternRewriter &rewriter) const override {
     // Only consider conversions to dot operand.
-    auto cvtTy = cvt.getType().cast<RankedTensorType>();
+    auto cvtTy = cast<RankedTensorType>(cvt.getType());
     if (!cvtTy.getEncoding().isa<DotOperandEncodingAttr>())
       return failure();
 
@@ -118,12 +118,12 @@ public:
     if (!src || src->getNumOperands() == 0 || src->getNumResults() != 1)
       return failure();
 
-    auto srcTy = src->getResult(0).getType().dyn_cast<RankedTensorType>();
+    auto srcTy = dyn_cast<RankedTensorType>(src->getResult(0).getType());
     if (!srcTy)
       return failure();
 
     if (!all_of(src->getOperandTypes(),
-                [](Type ty) { return ty.isa<RankedTensorType>(); }))
+                [](Type ty) { return isa<RankedTensorType>(ty); }))
       return failure();
 
     // Only consider custom conversions or arith ops.
@@ -180,7 +180,7 @@ public:
     SmallVector<ConvertLayoutOp> newOperands;
     for (auto operand : src->getOperands()) {
       // We checked earlier that all operands are ranked tensors.
-      auto operandTy = operand.getType().cast<RankedTensorType>();
+      auto operandTy = cast<RankedTensorType>(operand.getType());
       Type newCvtTy = RankedTensorType::get(
           srcTy.getShape(), operandTy.getElementType(), cvtTy.getEncoding());
       newOperands.push_back(
@@ -214,9 +214,7 @@ public:
       return failure();
 
     auto dot = *allocOp->getUsers().begin();
-    auto dotEnc = dot->getResult(0)
-                      .getType()
-                      .cast<RankedTensorType>()
+    auto dotEnc = cast<RankedTensorType>(dot->getResult(0).getType())
                       .getEncoding()
                       .dyn_cast<NvidiaMmaEncodingAttr>();
     if (!dotEnc || dotEnc.getVersionMajor() != 3)
@@ -280,7 +278,7 @@ struct MMAV3UseRegOperand : public OpRewritePattern<DotOp> {
       return failure();
 
     auto getEncoding = [](Value v) {
-      return v.getType().cast<TensorOrMemDesc>().getEncoding();
+      return cast<TensorOrMemDesc>(v.getType()).getEncoding();
     };
 
     if (!getEncoding(dotOp.getOperand(0)).isa<SharedEncodingAttr>())
@@ -291,7 +289,7 @@ struct MMAV3UseRegOperand : public OpRewritePattern<DotOp> {
     if (!srcEnc || srcEnc.getVersionMajor() != 3 || !dstEnc ||
         dstEnc.getVersionMajor() != 3)
       return failure();
-    auto srcTy = alloc.getSrc().getType().cast<RankedTensorType>();
+    auto srcTy = cast<RankedTensorType>(alloc.getSrc().getType());
     auto dotOperandEnc = DotOperandEncodingAttr::get(
         dotOp.getContext(), /*opIdx=*/0, srcEnc, /*kWidth=*/0);
     auto newTy = RankedTensorType::get(srcTy.getShape(), srcTy.getElementType(),

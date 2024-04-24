@@ -35,12 +35,12 @@ namespace triton {
 
 //-- LoadOp --
 static Type getLoadOpResultType(OpBuilder &builder, Type ptrType) {
-  auto ptrTensorType = ptrType.dyn_cast<RankedTensorType>();
+  auto ptrTensorType = dyn_cast<RankedTensorType>(ptrType);
   if (!ptrTensorType)
-    return ptrType.cast<PointerType>().getPointeeType();
+    return cast<PointerType>(ptrType).getPointeeType();
   auto shape = ptrTensorType.getShape();
   Type elementType =
-      ptrTensorType.getElementType().cast<PointerType>().getPointeeType();
+      cast<PointerType>(ptrTensorType.getElementType()).getPointeeType();
   return RankedTensorType::get(shape, elementType);
 }
 
@@ -217,7 +217,7 @@ LogicalResult TransOp::inferReturnTypes(
     DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // type is the same as the input
-  auto argTy = operands[0].getType().cast<TensorOrMemDesc>();
+  auto argTy = cast<TensorOrMemDesc>(operands[0].getType());
   auto order = properties.as<Properties *>()->order.asArrayRef();
   SmallVector<int64_t> retShape = applyPermutation(argTy.getShape(), order);
 
@@ -233,7 +233,7 @@ LogicalResult TransOp::inferReturnTypes(
       return failure();
     }
   }
-  if (argTy.isa<MemDescType>()) {
+  if (isa<MemDescType>(argTy)) {
     inferredReturnTypes.push_back(
         MemDescType::get(retShape, retEltTy, retEncoding));
   } else {
@@ -271,12 +271,12 @@ DotOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
                         OpaqueProperties properties, RegionRange regions,
                         SmallVectorImpl<Type> &inferredReturnTypes) {
   // type is the same as the accumulator
-  auto accTy = operands[2].getType().cast<RankedTensorType>();
+  auto accTy = cast<RankedTensorType>(operands[2].getType());
   inferredReturnTypes.push_back(accTy);
 
   // verify encodings
-  auto aEnc = operands[0].getType().cast<TensorOrMemDesc>().getEncoding();
-  auto bEnc = operands[1].getType().cast<TensorOrMemDesc>().getEncoding();
+  auto aEnc = cast<TensorOrMemDesc>(operands[0].getType()).getEncoding();
+  auto bEnc = cast<TensorOrMemDesc>(operands[1].getType()).getEncoding();
   auto retEnc = accTy.getEncoding();
   if (aEnc) {
     assert(bEnc);
@@ -314,7 +314,7 @@ LogicalResult DotOp::verify() {
 OpFoldResult MakeRangeOp::fold(FoldAdaptor adaptor) {
   // make_range(start, start + 1) -> constant(start)
   if (adaptor.getStart() + 1 == adaptor.getEnd()) {
-    auto shapedType = getType().cast<ShapedType>();
+    auto shapedType = cast<ShapedType>(getType());
     return SplatElementsAttr::get(shapedType, adaptor.getStartAttr());
   }
   return {};
@@ -378,7 +378,7 @@ void ReduceOp::build(OpBuilder &builder, OperationState &state,
                      ValueRange operands, int axis) {
   SmallVector<Type> inferredReturnTypes;
   for (unsigned i = 0; i < operands.size(); ++i) {
-    auto argTy = operands[i].getType().cast<RankedTensorType>();
+    auto argTy = cast<RankedTensorType>(operands[i].getType());
     auto retEltTy = argTy.getElementType();
     (void)inferReduceReturnShape(argTy, retEltTy, axis, inferredReturnTypes);
   }
@@ -393,7 +393,7 @@ LogicalResult ReduceOp::inferReturnTypes(
   Properties *prop = properties.as<Properties *>();
   int axis = prop->axis.getInt();
   for (auto arg : operands) {
-    auto argTy = arg.getType().cast<RankedTensorType>();
+    auto argTy = cast<RankedTensorType>(arg.getType());
     auto retEltTy = argTy.getElementType();
     if (inferReduceReturnShape(argTy, retEltTy, axis, inferredReturnTypes)
             .failed()) {
@@ -413,7 +413,7 @@ template <class Op> LogicalResult verifyReduceScan(Op &op) {
   }
 
   auto getElementType = [](Type ty) {
-    if (auto tensorType = ty.dyn_cast<RankedTensorType>()) {
+    if (auto tensorType = dyn_cast<RankedTensorType>(ty)) {
       return tensorType.getElementType();
     }
     return ty;
@@ -480,7 +480,7 @@ getInputTypesImpl(const Operation::operand_range &operands) {
   llvm::SmallVector<RankedTensorType> srcTys;
   srcTys.reserve(operands.size());
   for (const auto &ty : operands.getTypes()) {
-    srcTys.push_back(ty.cast<RankedTensorType>());
+    srcTys.push_back(cast<RankedTensorType>(ty));
   }
   return srcTys;
 }
@@ -490,8 +490,7 @@ getElementTypesImpl(const Operation::operand_range &operands) {
   llvm::SmallVector<Type> srcElemTys;
   srcElemTys.reserve(operands.size());
   for (const auto &op : operands) {
-    srcElemTys.push_back(
-        op.getType().cast<RankedTensorType>().getElementType());
+    srcElemTys.push_back(cast<RankedTensorType>(op.getType()).getElementType());
   }
   return srcElemTys;
 }
@@ -553,7 +552,7 @@ OpFoldResult SplatOp::fold(FoldAdaptor adaptor) {
   auto value = adaptor.getSrc();
   if (!value)
     return {};
-  auto shapedType = getType().cast<ShapedType>();
+  auto shapedType = cast<ShapedType>(getType());
   auto ret = SplatElementsAttr::get(shapedType, ArrayRef<Attribute>(value));
   return ret;
 }
@@ -565,7 +564,7 @@ LogicalResult ExpandDimsOp::inferReturnTypes(
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // infer shape
   auto arg = operands[0];
-  auto argTy = arg.getType().cast<RankedTensorType>();
+  auto argTy = cast<RankedTensorType>(arg.getType());
   auto retShape = argTy.getShape().vec();
   Properties *prop = properties.as<Properties *>();
   int axis = prop->axis.getInt();
@@ -641,7 +640,7 @@ static OpFoldResult foldViewLikeOp(ViewLikeOp op, Attribute value) {
   if (!value)
     return {};
 
-  auto shapedType = op.getType().template cast<ShapedType>();
+  auto shapedType = cast<ShapedType>(op.getType());
   if (auto denseElemsAttr = value.dyn_cast<DenseElementsAttr>()) {
     if (denseElemsAttr.isSplat()) {
       return denseElemsAttr.resizeSplat(shapedType);
@@ -760,7 +759,7 @@ OpFoldResult BroadcastOp::fold(FoldAdaptor adaptor) {
     return {};
 
   if (auto denseElemsAttr = value.dyn_cast<SplatElementsAttr>()) {
-    auto shapedType = getType().cast<ShapedType>();
+    auto shapedType = cast<ShapedType>(getType());
     return denseElemsAttr.resizeSplat(shapedType);
   }
   return {};
@@ -772,7 +771,7 @@ void MakeTensorPtrOp::build(OpBuilder &builder, OperationState &state,
                             ValueRange offsets, ArrayRef<int32_t> tensorShape,
                             ArrayRef<int32_t> order) {
   // Get pointer type from `base`
-  auto pointerType = base.getType().cast<PointerType>();
+  auto pointerType = cast<PointerType>(base.getType());
   assert(pointerType != nullptr);
 
   // Build type `tt.ptr<tensor<tensorShape, base.pointeeType>>`
@@ -892,12 +891,12 @@ JoinOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
   // These should have been checked by tablegen-generated code.
   assert(operands.size() == 2);
   assert(operands[0].getType() == operands[1].getType());
-  assert(operands[0].getType().isa<RankedTensorType>());
-  assert(operands[1].getType().isa<RankedTensorType>());
+  assert(isa<RankedTensorType>(operands[0].getType()));
+  assert(isa<RankedTensorType>(operands[1].getType()));
 
   Value lhs = operands[0];
   Value rhs = operands[1];
-  auto srcTy = lhs.getType().cast<RankedTensorType>();
+  auto srcTy = cast<RankedTensorType>(lhs.getType());
 
   SmallVector<int64_t> retShape(srcTy.getShape());
   retShape.push_back(2);
@@ -923,10 +922,10 @@ LogicalResult SplitOp::inferReturnTypes(
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // These should have been checked by tablegen-generated code.
   assert(operands.size() == 1);
-  assert(operands[0].getType().isa<RankedTensorType>());
+  assert(isa<RankedTensorType>(operands[0].getType()));
 
   Value src = operands[0];
-  auto srcTy = src.getType().cast<RankedTensorType>();
+  auto srcTy = cast<RankedTensorType>(src.getType());
   auto srcShape = srcTy.getShape();
 
   if (srcShape.empty() || srcShape.back() != 2) {
@@ -964,7 +963,7 @@ void ElementwiseInlineAsmOp::getEffects(
 
 LogicalResult ElementwiseInlineAsmOp::verify() {
   if (getNumOperands() >= 1) {
-    auto tensorType = getOperand(0).getType().dyn_cast<RankedTensorType>();
+    auto tensorType = dyn_cast<RankedTensorType>(getOperand(0).getType());
     size_t numInputElems = tensorType ? tensorType.getNumElements() : 0;
     if (numInputElems % this->getPackedElement() != 0) {
       return emitError("number of input elements ")

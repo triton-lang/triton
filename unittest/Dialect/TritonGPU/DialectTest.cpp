@@ -345,11 +345,11 @@ TEST_P(InferReshapeOpNoReorderEncodingTest, DoIt) {
     FAIL() << "Could not parse destination type: " << dstTyStr;
 
   std::optional<BlockedEncodingAttr> expectedDstEnc;
-  if (auto dstEnc = dst.cast<RankedTensorType>().getEncoding()) {
+  if (auto dstEnc = cast<RankedTensorType>(dst).getEncoding()) {
     expectedDstEnc = dstEnc.cast<BlockedEncodingAttr>();
   }
 
-  testReshape(src.cast<RankedTensorType>(), dst.cast<RankedTensorType>(),
+  testReshape(cast<RankedTensorType>(src), cast<RankedTensorType>(dst),
               expectedDstEnc, expectSuccess, inferLayout, /*longErrors=*/true);
 }
 

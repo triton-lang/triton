@@ -190,7 +190,7 @@ static std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op,
   if (!reduceOp || reduceOp->getNumOperands() != 2 ||
       reduceOp->getNumResults() != 1)
     return std::nullopt;
-  auto intType = reduceOp->getResultTypes()[0].dyn_cast<IntegerType>();
+  auto intType = dyn_cast<IntegerType>(reduceOp->getResultTypes()[0]);
   if (!intType || intType.getWidth() > 32)
     return std::nullopt;
   if (reduceOp->getOperand(0) != block->getArgument(0) ||
@@ -238,9 +238,10 @@ Value TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
 }
 
 Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
-                             Value ptr, Type elemTy, Value pred) const {
+                             const TypeConverter *converter, Value ptr,
+                             Type elemTy, Value pred) const {
   MLIRContext *ctx = rewriter.getContext();
-  auto ptrTy = ptr.getType().cast<LLVM::LLVMPointerType>();
+  auto ptrTy = cast<LLVM::LLVMPointerType>(ptr.getType());
   assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for loadShared");
   unsigned bitwidth = std::max(8u, elemTy.getIntOrFloatBitWidth());
 
@@ -300,7 +301,7 @@ bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                    and_(laneId, i32_val(~(numLaneToReduce - 1))));
       }
       for (unsigned i = 0; i < acc.size(); ++i) {
-        unsigned bitwidth = acc[i].getType().cast<IntegerType>().getWidth();
+        unsigned bitwidth = cast<IntegerType>(acc[i].getType()).getWidth();
         if (bitwidth < 32) {
           if (*kind == NVVM::ReduxKind::MIN || *kind == NVVM::ReduxKind::MAX)
             acc[i] = sext(i32_ty, acc[i]);

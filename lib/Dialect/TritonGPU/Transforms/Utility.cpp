@@ -100,8 +100,8 @@ Value getMemAccessPtr(Operation *op) {
 
 unsigned getElementBitWidth(RankedTensorType type) {
   auto typeForMem =
-      type.getElementType().isa<PointerType>()
-          ? type.getElementType().cast<PointerType>().getPointeeType()
+      isa<PointerType>(type.getElementType())
+          ? cast<PointerType>(type.getElementType()).getPointeeType()
           : type.getElementType();
   return typeForMem.getIntOrFloatBitWidth();
 }
@@ -109,7 +109,7 @@ unsigned getElementBitWidth(RankedTensorType type) {
 unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   Value val = getMemAccessPtr(op);
-  auto ty = val.getType().cast<RankedTensorType>();
+  auto ty = cast<RankedTensorType>(val.getType());
   auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
   AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
   unsigned elemNumBits = getElementBitWidth(ty);
@@ -187,7 +187,7 @@ void GraphDumper::dumpToFile(triton::FuncOp func,
 std::string GraphDumper::getShapeStr(const Type &type) const {
   std::ostringstream oss;
   oss << "[";
-  if (auto tensorTy = type.dyn_cast<RankedTensorType>()) {
+  if (auto tensorTy = dyn_cast<RankedTensorType>(type)) {
     auto shape = tensorTy.getShape();
     for (unsigned i = 0; i < shape.size(); ++i) {
       if (i > 0)
@@ -261,7 +261,7 @@ GraphDumper::NodeInfo GraphLayoutMarker::onValue(Value value) const {
 }
 
 std::string GraphLayoutMarker::getColor(const Type &type) const {
-  if (auto tensorTy = type.dyn_cast<RankedTensorType>()) {
+  if (auto tensorTy = dyn_cast<RankedTensorType>(type)) {
     auto layout = tensorTy.getEncoding();
     if (layout.isa<triton::gpu::BlockedEncodingAttr>())
       return "green";
@@ -489,7 +489,7 @@ std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
 
 bool isSingleValue(Value value) {
   // Don't consider load as expensive if it is loading a scalar.
-  if (auto tensorTy = value.getType().dyn_cast<RankedTensorType>())
+  if (auto tensorTy = dyn_cast<RankedTensorType>(value.getType()))
     return tensorTy.getNumElements() == 1;
   // TODO: Handle other cases.
   // For example, when ptr is a tensor of single value.
@@ -511,7 +511,7 @@ bool isExpensiveLoadOrStore(Operation *op) {
     return false;
   // Case 2b: Tensor of pointers has more threads than elements
   // we can presume a high hit-rate that makes it cheap to load
-  auto ptrType = op->getOperand(0).getType().cast<RankedTensorType>();
+  auto ptrType = cast<RankedTensorType>(op->getOperand(0).getType());
   auto mod = op->getParentOfType<ModuleOp>();
   int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
   int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -638,8 +638,8 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
 
   if (newOp->getNumResults() == 0)
     return newOp;
-  auto origType = op->getResult(0).getType().dyn_cast<RankedTensorType>();
-  auto argType = newOp->getOperand(0).getType().dyn_cast<RankedTensorType>();
+  auto origType = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+  auto argType = dyn_cast<RankedTensorType>(newOp->getOperand(0).getType());
   if (!origType || !argType)
     return newOp;
   auto newType = RankedTensorType::get(
@@ -680,7 +680,7 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
     queue.pop_back();
     if (!visited.insert(currentValue).second)
       continue;
-    if (!currentValue.getType().isa<RankedTensorType>())
+    if (!isa<RankedTensorType>(currentValue.getType()))
       continue;
     // Skip propagating through for op results for now.
     // TODO: enable this based on needs.
@@ -708,7 +708,7 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
     if (auto *definingOp = currentValue.getDefiningOp()) {
       // If the op has multiple results we need to update all results layout.
       for (Value result : definingOp->getResults()) {
-        if (result == currentValue || !result.getType().isa<RankedTensorType>())
+        if (result == currentValue || !isa<RankedTensorType>(result.getType()))
           continue;
         if (layout.find(result) != layout.end()) {
           if (layout[result] != encoding)

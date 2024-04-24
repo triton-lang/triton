@@ -49,9 +49,7 @@ public:
       OpBuilder builder(op);
       auto a = op->getOperand(0);
       auto b = op->getOperand(1);
-      auto mmaEncoding = op->getResult(0)
-                             .getType()
-                             .cast<RankedTensorType>()
+      auto mmaEncoding = cast<RankedTensorType>(op->getResult(0).getType())
                              .getEncoding()
                              .dyn_cast<ttg::NvidiaMmaEncodingAttr>();
       if (!mmaEncoding || !mmaEncoding.isHopper())

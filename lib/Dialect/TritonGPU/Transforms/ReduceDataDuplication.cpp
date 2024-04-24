@@ -31,8 +31,8 @@ public:
     ModuleOp mod = getOperation();
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
-      auto srcType = cvtOp.getSrc().getType().cast<RankedTensorType>();
-      auto dstType = cvtOp.getType().cast<RankedTensorType>();
+      auto srcType = cast<RankedTensorType>(cvtOp.getSrc().getType());
+      auto dstType = cast<RankedTensorType>(cvtOp.getType());
       auto srcEncoding = srcType.getEncoding();
       if (srcEncoding.isa<triton::gpu::SharedEncodingAttr>())
         return;

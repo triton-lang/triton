@@ -145,16 +145,16 @@ Value createConstantF64(Location loc, OpBuilder &rewriter, double v) {
 }
 
 Value createNaNConstant(Location loc, OpBuilder &rewriter, Type type) {
-  if (!type.isa<FloatType>()) {
+  if (!isa<FloatType>(type)) {
     llvm::report_fatal_error("Creating NaN constant for non-float type!");
   }
   return rewriter.create<LLVM::ConstantOp>(
-      loc, type, APFloat::getNaN(type.cast<FloatType>().getFloatSemantics()));
+      loc, type, APFloat::getNaN(cast<FloatType>(type).getFloatSemantics()));
 }
 
 // Create an index type constant.
 Value createIndexConstant(OpBuilder &builder, Location loc,
-                          TypeConverter *converter, int64_t value) {
+                          const TypeConverter *converter, int64_t value) {
   Type ty = converter->convertType(builder.getIndexType());
   return builder.create<LLVM::ConstantOp>(loc, ty,
                                           builder.getIntegerAttr(ty, value));
@@ -174,9 +174,8 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 // (3) Bitcast result from dataTy (u16/u32/u64) back to elemTy
 Value createLoadDSmem(Location loc, PatternRewriter &rewriter, Value addr,
                       Value ctaId, Type elemTy) {
-  assert(addr.getType().isa<LLVMPointerType>() &&
-         "addr must be a pointer type");
-  auto ptrTy = addr.getType().cast<LLVMPointerType>();
+  assert(isa<LLVMPointerType>(addr.getType()) && "addr must be a pointer type");
+  auto ptrTy = cast<LLVMPointerType>(addr.getType());
   assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
   unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
   Value ret =
@@ -191,9 +190,8 @@ Value createLoadDSmem(Location loc, PatternRewriter &rewriter, Value addr,
 SmallVector<Value> createLoadDSmem(Location loc, PatternRewriter &rewriter,
                                    Value addr, Value ctaId, unsigned vec,
                                    Type elemTy) {
-  assert(addr.getType().isa<LLVMPointerType>() &&
-         "addr must be a pointer type");
-  auto ptrTy = addr.getType().cast<LLVMPointerType>();
+  assert(isa<LLVMPointerType>(addr.getType()) && "addr must be a pointer type");
+  auto ptrTy = cast<LLVMPointerType>(addr.getType());
   assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
   unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
   Value retStruct = rewriter.create<triton::nvgpu::LoadDSmemOp>(
@@ -213,9 +211,8 @@ SmallVector<Value> createLoadDSmem(Location loc, PatternRewriter &rewriter,
 // (3) Create StoreDSmemOp
 void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
                       Value ctaId, Value value, Value pred) {
-  assert(addr.getType().isa<LLVMPointerType>() &&
-         "addr must be a pointer type");
-  auto ptrTy = addr.getType().cast<LLVMPointerType>();
+  assert(isa<LLVMPointerType>(addr.getType()) && "addr must be a pointer type");
+  auto ptrTy = cast<LLVMPointerType>(addr.getType());
   assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
   unsigned bitwidth = value.getType().getIntOrFloatBitWidth();
   auto dataTy = rewriter.getIntegerType(bitwidth);
@@ -236,9 +233,8 @@ void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
 // (3) Create StoreDSmemOp
 void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
                       Value ctaId, ArrayRef<Value> values, Value pred) {
-  assert(addr.getType().isa<LLVMPointerType>() &&
-         "addr must be a pointer type");
-  auto ptrTy = addr.getType().cast<LLVMPointerType>();
+  assert(isa<LLVMPointerType>(addr.getType()) && "addr must be a pointer type");
+  auto ptrTy = cast<LLVMPointerType>(addr.getType());
   assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
   unsigned bitwidth = 0;
   if (!values.empty()) {
@@ -262,7 +258,7 @@ SharedMemoryObject
 getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct, Type elemTy,
                                 ConversionPatternRewriter &rewriter) {
   ArrayRef<Type> types =
-      llvmStruct.getType().cast<LLVM::LLVMStructType>().getBody();
+      cast<LLVM::LLVMStructType>(llvmStruct.getType()).getBody();
   SmallVector<Value> elems(types.size());
   for (unsigned i = 0; i < types.size(); ++i) {
     Type type = types[i];

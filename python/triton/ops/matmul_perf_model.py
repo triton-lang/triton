@@ -1,3 +1,4 @@
+import functools
 import heapq
 
 import torch
@@ -7,8 +8,16 @@ from ..runtime import driver
 from ..testing import (get_dram_gbps, get_max_simd_tflops, get_max_tensorcore_tflops, nvsmi)
 
 
+@functools.lru_cache()
 def get_clock_rate_in_khz():
-    return nvsmi(['clocks.max.sm'])[0] * 1e3
+    try:
+        return nvsmi(['clocks.max.sm'])[0] * 1e3
+    except FileNotFoundError:
+        import pynvml
+
+        pynvml.nvmlInit()
+        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        return pynvml.nvmlDeviceGetMaxClockInfo(handle, pynvml.NVML_CLOCK_SM) * 1e3
 
 
 def get_tensorcore_tflops(device, num_ctas, num_warps, dtype):

@@ -12,7 +12,7 @@ class ReduceOpHelper {
 public:
   explicit ReduceOpHelper(triton::ReduceOp op)
       : op(op.getOperation()), axis(op.getAxis()) {
-    auto firstTy = op.getOperands()[0].getType().cast<RankedTensorType>();
+    auto firstTy = cast<RankedTensorType>(op.getOperands()[0].getType());
     srcShape = firstTy.getShape();
     srcEncoding = firstTy.getEncoding();
     srcElementTypes = op.getElementTypes();
@@ -72,7 +72,7 @@ private:
 class ScanLoweringHelper {
 public:
   explicit ScanLoweringHelper(triton::ScanOp op) : scanOp(op) {
-    auto firstTy = op.getOperands()[0].getType().cast<RankedTensorType>();
+    auto firstTy = cast<RankedTensorType>(op.getOperands()[0].getType());
     srcShape = firstTy.getShape();
     srcEncoding = firstTy.getEncoding();
     srcElementTypes = op.getElementTypes();

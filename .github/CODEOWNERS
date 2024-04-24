@@ -41,3 +41,8 @@ lib/Dialect/TritonGPU/Transforms/Combine.cpp @ptillet
 # TritonToTritonGPU
 include/triton/Conversion/TritonToTritonGPU/ @ptillet
 lib/Dialect/TritonGPU/Transforms/TritonGPUConversion.cpp @ptillet
+
+# -----------
+# third_party
+# -----------
+third_party/amd/ @antiagainst @zhanglx13
