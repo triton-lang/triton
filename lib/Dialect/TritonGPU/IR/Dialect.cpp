@@ -159,29 +159,11 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
 }
 
 SmallVector<unsigned> getContigPerThread(Attribute layout) {
-  if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
-    assert(mmaLayout.isVolta() || mmaLayout.isAmpere() || mmaLayout.isHopper());
-    auto rank = triton::gpu::getOrder(mmaLayout).size();
-    SmallVector<unsigned> contigPerThread(rank, 1);
-    contigPerThread[rank - 1] = 2;
-    return contigPerThread;
-  } else if (auto wmmaLayout = layout.dyn_cast<AMDWmmaEncodingAttr>()) {
-    auto rank = triton::gpu::getOrder(wmmaLayout).size();
-    SmallVector<unsigned> contigPerThread(rank, 1);
-    return contigPerThread;
-  } else if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
-    auto rank = triton::gpu::getOrder(mfmaLayout).size();
-    SmallVector<unsigned> contigPerThread(rank, 1);
-    if (mfmaLayout.getIsTransposed())
-      contigPerThread[rank - 1] = 4;
-    else
-      contigPerThread[rank - 2] = 4;
-    return contigPerThread;
-  } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-    auto parentLayout = sliceLayout.getParent();
-    return getContigPerThread(parentLayout);
+  if (auto distributedLayout = layout.dyn_cast<DistributedEncodingTrait>()) {
+    return distributedLayout.getContigPerThread();
   } else {
-    return getSizePerThread(layout);
+    llvm::report_fatal_error("getContigPerThread not implemented");
+    return {};
   }
 }
 
