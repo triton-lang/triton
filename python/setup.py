@@ -254,7 +254,7 @@ def download_and_copy(name, src_path, variable, version, url_func):
         file.extractall(path=tmp_path)
     os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
     print(f'copy {src_path} to {dst_path} ...')
-    if os.path.isdir(dst_path):
+    if os.path.isdir(src_path):
         shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
     else:
         shutil.copy(src_path, dst_path)
