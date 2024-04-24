@@ -29,6 +29,7 @@
 
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
+#include <functional>
 
 using namespace mlir;
 namespace tt = triton;
@@ -163,7 +164,9 @@ public:
     return false;
   }
 
-  bool isLDSWrite(Operation *op) {
+  bool checkConvertLayoutOpEncoding(Operation *op,
+                                    std::function<bool(Attribute)> srcCheck,
+                                    std::function<bool(Attribute)> dstCheck) {
     auto cvtLayoutOp = dyn_cast<ttg::ConvertLayoutOp>(op);
     if (!cvtLayoutOp) {
       return false;
@@ -172,79 +175,78 @@ public:
     auto dstType = cvtLayoutOp.getResult().getType().cast<RankedTensorType>();
     auto srcEncoding = srcType.getEncoding();
     auto dstEncoding = dstType.getEncoding();
-    if (srcEncoding.isa<triton::gpu::BlockedEncodingAttr>() &&
-        dstEncoding.isa<triton::gpu::SharedEncodingAttr>())
-      return true;
-    return false;
+    return srcCheck(srcEncoding) && dstCheck(dstEncoding);
+  }
+
+  bool isLDSWrite(Operation *op) {
+    return checkConvertLayoutOpEncoding(
+        op,
+        [](Attribute srcEnc) {
+          return srcEnc.isa<triton::gpu::BlockedEncodingAttr>();
+        },
+        [](Attribute dstEnc) {
+          return dstEnc.isa<triton::gpu::SharedEncodingAttr>();
+        });
   }
 
   bool isLDSRead(Operation *op) {
-    auto cvtLayoutOp = dyn_cast<ttg::ConvertLayoutOp>(op);
-    if (!cvtLayoutOp) {
-      return false;
-    }
-    auto srcType = cvtLayoutOp.getOperand().getType().cast<RankedTensorType>();
-    auto dstType = cvtLayoutOp.getResult().getType().cast<RankedTensorType>();
-    auto srcEncoding = srcType.getEncoding();
-    auto dstEncoding = dstType.getEncoding();
-    if (srcEncoding.isa<triton::gpu::SharedEncodingAttr>() &&
-        dstEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
-      return true;
-    return false;
+    return checkConvertLayoutOpEncoding(
+        op,
+        [](Attribute srcEnc) {
+          return srcEnc.isa<triton::gpu::SharedEncodingAttr>();
+        },
+        [](Attribute dstEnc) {
+          return dstEnc.isa<triton::gpu::DotOperandEncodingAttr>();
+        });
   }
 
-  void moveLoadStoreBeforeDot(Operation *currDot, Operation *moveBeforeDot,
-                              SmallVector<Operation *> &operations,
-                              int operandIdx) {
-    auto operandB = currDot->getOperand(operandIdx).getDefiningOp();
-    Operation *currOp = operandB;
-    Operation *moveBeforeOp = moveBeforeDot;
+  // This function rearranges two matching subgraphs of instructions. Each
+  // subgraph starts with the currOp and moveBeforeOp operators,
+  // respectively, and concludes with viewSlice instructions, with a recursive
+  // visitation of operands. The function will reposition all instructions from
+  // the currOp subgraph to come before the analogous instructions in the
+  // moveBeforeOp subgraph.
+  void orderLoadToDotChainOps(Operation *currOp, Operation *moveBeforeOp,
+                              SmallVector<Operation *> &movedOperations) {
 
-    auto moveOp = [&](Operation *op, Operation *&opType) {
-      if (opType) {
-        moveAfter(op, opType);
-      } else {
-        moveBefore(op, moveBeforeOp);
+    if (std::find(movedOperations.begin(), movedOperations.end(), currOp) !=
+        movedOperations.end()) {
+      return;
+    }
+
+    if (isa<ttg::ViewSliceOp>(currOp)) {
+      moveBefore(currOp, moveBeforeOp);
+      movedOperations.push_back(currOp);
+      return;
+    }
+
+    auto operands = currOp->getOperands();
+    if (operands.empty()) {
+      return;
+    }
+
+    for (int i = 0; i < operands.size(); i++) {
+      auto operandVal = operands[i];
+      Operation *argOp = operandVal.getDefiningOp();
+      if (!argOp) {
+        continue;
       }
-      opType = op;
-    };
+      auto moveBeforeOpNew = moveBeforeOp->getOperands()[i].getDefiningOp();
+      assert(moveBeforeOpNew);
+      orderLoadToDotChainOps(argOp, moveBeforeOpNew, movedOperations);
+    }
 
-    for (int i = 0; !isa<ttg::ViewSliceOp>(currOp); i++) {
-      moveOp(currOp, operations[i]);
-      moveBeforeOp = currOp;
-      currOp = currOp->getOperand(0).getDefiningOp();
-    }
-    moveOp(currOp, operations[operations.size() - 1]);
-  }
-
-  void initOperations(Operation *currOp, SmallVector<Operation *> &vec,
-                      int operandIdx) {
-    while (!isa<ttg::ViewSliceOp>(currOp)) {
-      if (operandIdx == 0) {
-        vec.push_back(currOp);
-      } else {
-        vec.push_back(nullptr);
-      }
-      currOp = currOp->getOperand(0).getDefiningOp();
-    }
-    if (operandIdx == 0) {
-      vec.push_back(currOp);
-    } else {
-      vec.push_back(nullptr);
-    }
+    moveBefore(currOp, moveBeforeOp);
+    movedOperations.push_back(currOp);
   }
 
   void processStage(Operation *currDot, Operation *moveBeforeDot,
-                    SmallVector<Operation *> &operations, bool init,
                     int operandIdx) {
-    if (init) {
-      initOperations(currDot->getOperand(operandIdx).getDefiningOp(),
-                     operations, operandIdx);
-      if (operandIdx == 0) {
-        return;
-      }
-    }
-    moveLoadStoreBeforeDot(currDot, moveBeforeDot, operations, operandIdx);
+    auto operand = currDot->getOperand(operandIdx).getDefiningOp();
+    auto moveBeforeOperand =
+        moveBeforeDot->getOperand(operandIdx).getDefiningOp();
+    SmallVector<Operation *> movedOperations;
+    orderLoadToDotChainOps(operand, moveBeforeOperand, movedOperations);
   }
 
   unsigned getNumUsers(Value value) {
@@ -283,27 +285,21 @@ public:
                     int pipelineStages) {
     for (auto chain : dotChains) {
       for (int i = 0; i < (chain.size() - 1) / pipelineStages; i++) {
-        SmallVector<Operation *> operations;
-        SmallVector<Operation *> operationsIdx0;
         int startStageIdx = i == 0 ? 0 : 1;
         for (int j = startStageIdx; j <= pipelineStages; j++) {
           processStage(/*currDot*/ chain[i * pipelineStages + j],
                        /*moveBeforeDot*/ chain[i * pipelineStages],
-                       operationsIdx0, j == startStageIdx, /*operandIdx*/ 0);
+                       /*operandIdx*/ 0);
           processStage(/*currDot*/ chain[i * pipelineStages + j],
-                       /*moveBeforeDot*/ chain[i * pipelineStages], operations,
-                       j == startStageIdx, /*operandIdx*/ 1);
+                       /*moveBeforeDot*/ chain[i * pipelineStages],
+                       /*operandIdx*/ 1);
         }
       }
 
       int startDotIdx = ((chain.size() - 1) / pipelineStages) * pipelineStages;
-      SmallVector<Operation *> operations;
-      SmallVector<Operation *> operationsIdx0;
       for (int i = 1; i <= (chain.size() - 1) % pipelineStages; i++) {
-        processStage(chain[startDotIdx + i], chain[startDotIdx], operationsIdx0,
-                     i == 1, 0);
-        processStage(chain[startDotIdx + i], chain[startDotIdx], operations,
-                     i == 1, 1);
+        processStage(chain[startDotIdx + i], chain[startDotIdx], 0);
+        processStage(chain[startDotIdx + i], chain[startDotIdx], 1);
       }
     }
   }
@@ -376,6 +372,10 @@ public:
 
     findDotChains(m, dotChains);
 
+    if (dotChains.empty()) {
+      return;
+    }
+
     if (stages > 1)
       doPipelining(dotChains, pipelineLoads);
 
@@ -387,7 +387,7 @@ public:
     // k0_shared = cvt(k0, blocked, shared)
     // k1 = load k1_ptrs
     // k0_dot = cvt(k0, shared, dot)
-    // dot0 = dot(q0_dot, k0_dot, 0
+    // dot0 = dot(q0_dot, k0_dot, 0)
     //
     // k1_shared = cvt(k1, blocked, shared)
     // k2 = load k2_ptrs
