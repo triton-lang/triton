@@ -34,16 +34,6 @@ namespace mlir {
 namespace triton {
 
 //-- LoadOp --
-static Type getLoadOpResultType(OpBuilder &builder, Type ptrType) {
-  auto ptrTensorType = dyn_cast<RankedTensorType>(ptrType);
-  if (!ptrTensorType)
-    return cast<PointerType>(ptrType).getPointeeType();
-  auto shape = ptrTensorType.getShape();
-  Type elementType =
-      cast<PointerType>(ptrTensorType.getElementType()).getPointeeType();
-  return RankedTensorType::get(shape, elementType);
-}
-
 void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                    CacheModifier cache, EvictionPolicy evict, bool isVolatile) {
   LoadOp::build(builder, state, ptr, /*mask=*/{}, /*other=*/{},

@@ -9,7 +9,7 @@
 #A_DOT = #triton_gpu.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
 #B_DOT = #triton_gpu.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
 
-module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.compute-capability" = 80} {
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.target" = "cuda:80"} {
 
 // CHECK-LABEL: matmul_loop
 // CHECK-NOT: ->
