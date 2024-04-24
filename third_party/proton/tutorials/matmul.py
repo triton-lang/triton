@@ -293,8 +293,7 @@ def benchmark(M, N, K, provider):
             def enter_autotune(args, reset_only=False):
                 if reset_only:
                     return
-                else:
-                    proton.enter_scope("<autotune>")
+                proton.enter_scope("<autotune>")
 
             def exit_autotune(args):
                 proton.exit_scope()
