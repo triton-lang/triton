@@ -112,10 +112,15 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
   }
 
   void runOnOperation() override {
-    if (this->numStages <= 1)
-      return;
     SmallVector<scf::ForOp> loops;
-    getOperation()->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
+    getOperation()->walk([&](scf::ForOp forOp) {
+      // Bail out for loops with num_stage <= 1.
+      if (getNumStagesOrDefault(forOp) > 1)
+        loops.push_back(forOp);
+    });
+
+    if (loops.empty())
+      return;
 
     llvm::SmallSetVector<scf::ForOp, 8> outerLoops;
     for (scf::ForOp forOp : loops) {

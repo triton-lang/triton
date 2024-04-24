@@ -52,6 +52,7 @@ Value printfPromoteValue(ConversionPatternRewriter &rewriter, Value value) {
 } // namespace
 
 bool TargetInfo::supportMaximumMinimum() const { return false; }
+
 Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
                          Type type, Value cmp) const {
   auto stringAttr = rewriter.getStringAttr("llvm.amdgcn.ballot");

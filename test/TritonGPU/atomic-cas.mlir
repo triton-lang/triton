@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu 2>&1 | FileCheck %s --check-prefix=GPU
-// RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu -convert-triton-gpu-to-llvm 2>&1 | FileCheck %s --check-prefix=LLVM
+// RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu=target=cuda:80 2>&1 | FileCheck %s --check-prefix=GPU
+// RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu=target=cuda:80 -convert-triton-gpu-to-llvm 2>&1 | FileCheck %s --check-prefix=LLVM
 
 // GPU: %9 = tt.atomic_cas acq_rel, cta, %8, %cst_0, %cst : (tensor<2x!tt.ptr<i64>, #blocked>, tensor<2xi64, #blocked>, tensor<2xi64, #blocked>) -> tensor<2xi64, #blocked>
 // LLVM: llvm.inline_asm {{.*}} "mov.u64 $0, 0x0;\0A\09@$4 atom.global.acq_rel.cta.cas.b64 $0, [ $1 + 0 ], $2, $3;", "=l,l,l,l,b"
