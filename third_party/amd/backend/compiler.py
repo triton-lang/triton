@@ -158,6 +158,7 @@ class HIPBackend(BaseBackend):
         passes.convert.add_cf_to_llvmir(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
+        amd.passes.ttgpuir.add_extern_to_llvmir(pm, options.arch)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":

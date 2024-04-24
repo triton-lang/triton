@@ -4,6 +4,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using namespace mlir;
+using namespace mlir::triton::gpu;
 
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryBase;
@@ -204,8 +205,16 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
       auto vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
       Value ptr = addrspacecast(ptr_ty(getContext()), ptrElems[vecStart]);
-      auto loadVal = llLoad(rewriter, loc, getTypeConverter(), ptr, vecTy, pred,
-                            vecStart, otherElems);
+      // auto loadVal = llLoad(rewriter, loc, getTypeConverter(), ptr, vecTy,
+      // pred,
+      //                       vecStart, otherElems);
+
+      Type funcType = getFunctionType(vecTy, ValueRange({ptr, pred}));
+      LLVM::LLVMFuncOp funcOp =
+          appendOrGetExternFuncOp(rewriter, op, "__predicated_load", funcType);
+      auto loadVal =
+          rewriter.create<LLVM::CallOp>(loc, funcOp, ValueRange({ptr, pred}))
+              .getResult();
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, this->getTypeConverter()->getIndexType(), ii % vec);

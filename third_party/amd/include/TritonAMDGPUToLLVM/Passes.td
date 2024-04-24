@@ -32,4 +32,28 @@ def ConvertTritonAMDGPUToLLVM : Pass<"convert-triton-amdgpu-to-llvm", "mlir::Mod
     ];
 }
 
+def ConvertExternToLLVM : Pass<"convert-extern-to-llvm", "mlir::ModuleOp"> {
+    let summary = "Convert Extern Func to LLVM";
+    let description = [{
+
+    }];
+    let constructor = "mlir::triton::createConvertExternToLLVMPass(\"\")";
+
+    let dependentDialects = ["mlir::arith::ArithDialect",
+                             "mlir::math::MathDialect",
+                             "mlir::gpu::GPUDialect",
+                             "mlir::scf::SCFDialect",
+                             "mlir::LLVM::LLVMDialect",
+                             "mlir::tensor::TensorDialect",
+                             "mlir::triton::TritonDialect",
+                             "mlir::triton::gpu::TritonGPUDialect",
+                             "mlir::ROCDL::ROCDLDialect"];
+
+    let options = [
+        Option<"arch", "arch",
+               "std::string", /*default*/"\"\"",
+               "target device architecture">,
+    ];
+}
+
 #endif

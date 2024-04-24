@@ -26,6 +26,8 @@ createDecomposeUnsupportedConversionsPass();
 
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonAMDGPUToLLVMPass(StringRef targetArch);
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertExternToLLVMPass(StringRef targetArch);
 
 #define GEN_PASS_REGISTRATION
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
