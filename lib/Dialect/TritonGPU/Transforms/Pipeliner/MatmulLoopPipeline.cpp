@@ -1025,7 +1025,12 @@ static void threadValuesThroughWait(ttng::DotWaitOp wait,
         newWait->getBlock()->findAncestorOpInBlock(*operand.getOwner());
     return opInThisBlock && newWait->isBeforeInBlock(opInThisBlock);
   };
-  for (int i = 0; i < newOperands.size(); i++) {
+  for (int i = 0; i < origNumOperands; i++) {
+    Value operand = wait.getResult(i);
+    if (!isa<tt::MemDescType>(operand.getType()))
+      operand.replaceAllUsesWith(newWait.getResult(i));
+  }
+  for (int i = origNumOperands; i < newOperands.size(); i++) {
     Value operand = newWait.getOperand(i);
     if (!isa<tt::MemDescType>(operand.getType()))
       operand.replaceUsesWithIf(newWait.getResult(i), dominatedByNewWait);
