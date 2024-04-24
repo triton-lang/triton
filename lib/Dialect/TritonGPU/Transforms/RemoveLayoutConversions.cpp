@@ -216,12 +216,11 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
             tensorType.getEncoding().isa<NvidiaMmaEncodingAttr>()) {
           auto mmaInstrShape =
               encoding.cast<NvidiaMmaEncodingAttr>().getInstrShape();
-          for (size_t i = 0;
-               i < std::min((size_t)tensorType.getRank(), mmaInstrShape.size());
-               i++) {
-            if (tensorType.getShape()[i] < mmaInstrShape[i]) {
-              return false;
-            }
+          if (tensorType.getShape()[tensorType.getRank() - 2] <
+                  mmaInstrShape[0] ||
+              tensorType.getShape()[tensorType.getRank() - 1] <
+                  mmaInstrShape[1]) {
+            return false;
           }
         }
       }
