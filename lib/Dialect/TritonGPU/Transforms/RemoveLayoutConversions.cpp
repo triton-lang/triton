@@ -832,6 +832,8 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
                                            ConvertLayoutOp convertOp,
                                            IRMapping &mapping) {
   SetVector<Operation *> opsToRewrite;
+  // Keep track of yield operands that need to be duplicated.
+  DenseMap<Operation *, SmallVector<int>> yieldOperandsMap;
   for (Value v : slice) {
     auto layoutIt = layout.find(v);
     assert(layoutIt != layout.end());
@@ -843,13 +845,22 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
     if (v.getDefiningOp()) {
       opsToRewrite.insert(v.getDefiningOp());
       if (auto ifOp = v.getDefiningOp<scf::IfOp>()) {
+        unsigned operandIdx = v.cast<OpResult>().getResultNumber();
         opsToRewrite.insert(ifOp.thenYield().getOperation());
+        yieldOperandsMap[ifOp.thenYield()].push_back(operandIdx);
         opsToRewrite.insert(ifOp.elseYield().getOperation());
+        yieldOperandsMap[ifOp.elseYield()].push_back(operandIdx);
       }
     } else {
-      opsToRewrite.insert(v.cast<BlockArgument>().getOwner()->getParentOp());
-      // We also need to rewrite the yield op.
-      opsToRewrite.insert(v.cast<BlockArgument>().getOwner()->getTerminator());
+      BlockArgument blockArg = v.cast<BlockArgument>();
+      Operation *parentOp = blockArg.getOwner()->getParentOp();
+      if (auto loopOp = cast<LoopLikeOpInterface>(parentOp)) {
+        opsToRewrite.insert(loopOp.getOperation());
+        OpOperand *operand = loopOp.getTiedLoopYieldedValue(blockArg);
+        auto yieldOp = blockArg.getOwner()->getTerminator();
+        yieldOperandsMap[yieldOp].push_back(operand->getOperandNumber());
+        opsToRewrite.insert(yieldOp);
+      }
     }
   }
   opsToRewrite = multiRootTopologicalSort(opsToRewrite);
@@ -893,6 +904,8 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
         Value oldArg = loopBody.getArgument(m.first + numIndVars);
         addRematValue(newForOp.getResult(m.first), layout[oldArg],
                       newForOp.getResult(m.second));
+        addRematValue(oldArg, layout[oldArg],
+                      loopBody.getArgument(m.second + numIndVars));
       }
       continue;
     }
@@ -929,10 +942,12 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
     builder.setInsertionPoint(op);
     if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
       auto yieldOperands = llvm::to_vector(yieldOp.getOperands());
-      for (Value operand : yieldOp.getOperands()) {
-        if (slice.count(operand) == 0)
-          continue;
-        yieldOperands.push_back(mapping.lookup(operand));
+      SmallVector<int> operandsToRewrite = yieldOperandsMap[op];
+      // Sort so that operands are added in the same order as the new scf
+      // results/arguments.
+      std::sort(operandsToRewrite.begin(), operandsToRewrite.end());
+      for (int operandIdx : operandsToRewrite) {
+        yieldOperands.push_back(mapping.lookup(yieldOp.getOperand(operandIdx)));
       }
       builder.create<scf::YieldOp>(op->getLoc(), yieldOperands);
       op->erase();

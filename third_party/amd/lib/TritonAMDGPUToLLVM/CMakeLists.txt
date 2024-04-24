@@ -12,6 +12,7 @@ add_triton_library(TritonAMDGPUToLLVM
     TritonGPUToLLVM.cpp
     Utility.cpp
     TargetInfo.cpp
+    TargetUtils.cpp
     DecomposeUnsupportedConversions.cpp
     SPMDOpToLLVM.cpp
 

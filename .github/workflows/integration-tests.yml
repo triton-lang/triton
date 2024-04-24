@@ -246,7 +246,8 @@ jobs:
         run: |
           cd python/test/unit
           python3 -m pytest -vvv -n 16 -m interpreter language/test_core.py language/test_standard.py \
-           language/test_random.py language/test_block_pointer.py operators/test_flash_attention.py::test_op \
+           language/test_random.py language/test_block_pointer.py language/test_subprocess.py \
+           operators/test_flash_attention.py::test_op \
            ../../tutorials/06-fused-attention.py::test_op --device cpu
       - name: Run C++ unittests
         run: |

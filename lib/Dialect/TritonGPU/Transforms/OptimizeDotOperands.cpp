@@ -315,7 +315,9 @@ class TritonGPUOptimizeDotOperandsPass
     : public TritonGPUOptimizeDotOperandsBase<
           TritonGPUOptimizeDotOperandsPass> {
 public:
-  TritonGPUOptimizeDotOperandsPass() = default;
+  explicit TritonGPUOptimizeDotOperandsPass(bool hoistLayoutConversion) {
+    this->hoistLayoutConversion = hoistLayoutConversion;
+  }
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -327,16 +329,18 @@ public:
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<SwizzleShmemConvert>(context);
-    if (triton::gpu::TritonGPUDialect::getComputeCapability(m) >= 80)
+    if (this->hoistLayoutConversion.getValue())
       patterns.add<HoistLayoutConversion>(context);
     patterns.add<FuseTransHopper>(context);
     patterns.add<MMAV3UseRegOperand>(context);
     ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
-    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
+    if (failed(applyPatternsAndFoldGreedily(m, std::move(patterns))))
       signalPassFailure();
   }
 };
 
-std::unique_ptr<Pass> mlir::triton::gpu::createOptimizeDotOperandsPass() {
-  return std::make_unique<TritonGPUOptimizeDotOperandsPass>();
+std::unique_ptr<Pass>
+mlir::triton::gpu::createOptimizeDotOperandsPass(bool hoistLayoutConversion) {
+  return std::make_unique<TritonGPUOptimizeDotOperandsPass>(
+      hoistLayoutConversion);
 }

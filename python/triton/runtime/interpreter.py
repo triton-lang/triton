@@ -615,13 +615,17 @@ class InterpreterBuilder:
     def create_inline_asm(self, inlineAsm, constraints, values, type, isPure, pack):
         raise NotImplementedError("inline_asm not supported in interpreter mode")
 
-    def create_print(self, prefix, values):
+    def create_print(self, prefix, hex, values):
         # Interpreter's device_print function has a different format than Triton's device_print
         msg = f"({self.grid_idx[0]}, {self.grid_idx[1]}, {self.grid_idx[2]})"
         if prefix:
             msg += f" {prefix}"
+        if hex:
+            np.set_printoptions(formatter={'all': lambda x: f"0x{x:02x}"})
         for value in values:
             print(msg + f" {value.data}")
+        if hex:
+            np.set_printoptions(formatter=None)
 
     def create_assert(self, condition, message, fileName, funcName, lineNo):
         # Interpreter's device_assert function has a different format than Triton's device_assert

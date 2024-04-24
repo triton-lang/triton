@@ -16,7 +16,14 @@ nested_types = [(caller, callee) for caller in ["true", "false", "none"] for cal
 torch_types = ["int8", "uint8", "int16", "int32", "long", "float16", "float32", "float64"]
 
 
+def is_interpreter():
+    return os.environ.get('TRITON_INTERPRET', '0') == '1'
+
+
 # TODO: Print with multiple operands
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("func_type, data_type", [("device_print", data_type) for data_type in torch_types] + [
     ("print", "int32"),
     ("static_print", "int32"),
@@ -30,8 +37,16 @@ torch_types = ["int8", "uint8", "int16", "int32", "long", "float16", "float32", 
     ("device_print_hex", "int64"),
 ])
 def test_print(func_type: str, data_type: str):
-    proc = subprocess.Popen([sys.executable, print_path, func_type, data_type], stdout=subprocess.PIPE, shell=False)
-    outs, _ = proc.communicate()
+    proc = subprocess.Popen([sys.executable, print_path, func_type, data_type], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, shell=False)
+    outs, err = proc.communicate()
+
+    if is_interpreter() and func_type != "static_assert":
+        # Interpreter uses a different format for device_print
+        # Only check if there's no error
+        assert err == b''
+        return
+
     outs = [line for line in outs.decode("UTF-8").split("\n") if line]
     # The total number of elements in the 1-D tensor to print.
     N = 128

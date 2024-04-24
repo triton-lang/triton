@@ -4,7 +4,7 @@
 // CHECK: #[[WMMA:.+]] = #triton_gpu.amd_wmma<{{.*}}>
 // CHECK: #[[SHARED:.+]] = #triton_gpu.shared<{{.*}}>
 #mma = #triton_gpu.amd_wmma<{warpsPerCTA = [2, 2]}>
-module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
   tt.func @wmma_to_wmma_dot_op(%arg0: tensor<16x16xf16, #mma>) {
     // CHECK: %[[SRC_BLOCKED:.+]] = triton_gpu.convert_layout %{{.*}} : tensor<16x16xf16, #[[WMMA]]> -> tensor<16x16xf16, #[[BLOCKED]]>
     // CHECK-NEXT: %[[INT_SHARED:.+]] = triton_gpu.local_alloc %[[SRC_BLOCKED]] : {{.*}} -> !tt.memdesc<16x16xf16, #[[SHARED]]>
