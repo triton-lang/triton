@@ -20,6 +20,8 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Debug.h"
 
+#include <set>
+
 #define DEBUG_TYPE "triton-matmul-loop-pipeline"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
@@ -59,6 +61,38 @@ struct LoadInfo {
 
 } // namespace
 
+class CoarseSchedule {
+public:
+  std::set<int> orderClusters;
+
+  DenseMap<Operation *, std::pair<int, int>> opToStageAndCluster;
+
+  void insert(Operation *op, int stage, int cluster) {
+    orderClusters.insert(cluster);
+    opToStageAndCluster[op] = {stage, cluster};
+  }
+
+  void erase(Operation *op) { opToStageAndCluster.erase(op); }
+
+  int count(Operation *op) { return opToStageAndCluster.count(op); }
+
+  std::pair<int, int> operator[](Operation *op) {
+    return opToStageAndCluster[op];
+  }
+
+  void debug_print(int numStages) {
+    for (int i = 0; i < numStages; i++) {
+      LDBG("- Ops in stage " << i);
+      for (auto &[op, stageAndCluster] : opToStageAndCluster) {
+        if (i == stageAndCluster.first) {
+          llvm::outs() << " ord: " << stageAndCluster.second << " ";
+          op->dump();
+        }
+      }
+    }
+  }
+};
+
 static bool isMMAv3Dot(Operation *op) {
   auto dot = dyn_cast<tt::DotOp>(op);
   if (!dot)
@@ -79,11 +113,11 @@ static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
   yieldOp->erase();
 }
 
-static void createAsyncCopy(
-    scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc, Value insertIdx,
-    Value extractIdx,
-    llvm::DenseMap<Operation *, std::pair<int, int>> &opToStageAndOrder,
-    llvm::MapVector<tt::LoadOp, LoadInfo> &loadToInfo, int numStages) {
+static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
+                            Value insertIdx, Value extractIdx,
+                            CoarseSchedule &schedule,
+                            llvm::MapVector<tt::LoadOp, LoadInfo> &loadToInfo,
+                            int numStages) {
   OpBuilder builder(forOp);
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
   // Replace the load with insert/extract slice.
@@ -124,11 +158,11 @@ static void createAsyncCopy(
   Operation *wait =
       builder.create<ttg::AsyncWaitOp>(loc, commmit->getResult(0), 0);
 
-  auto [stage, order] = opToStageAndOrder[loadOp];
   bool isMMV3Load = loadToInfo[loadOp].loadIsMMAV3;
-  opToStageAndOrder[copy] = {stage, order};
-  opToStageAndOrder[commmit] = {stage, order};
-  opToStageAndOrder.erase(loadOp);
+  auto [stage, cluster] = schedule[loadOp];
+  schedule.erase(loadOp);
+  schedule.insert(copy, stage, cluster);
+  schedule.insert(commmit, stage, cluster);
 
   // Extract part.
   SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
@@ -156,8 +190,8 @@ static void createAsyncCopy(
 
     // Prefetch load if is not MMAV3 and is used by the dot.
     if (loadToInfo[loadOp].usedByDot) {
-      opToStageAndOrder[wait] = {numStages - 2, numStages * 2};
-      opToStageAndOrder[viewLoad] = {numStages - 2, numStages * 2};
+      schedule.insert(wait, numStages - 2, numStages * 2);
+      schedule.insert(viewLoad, numStages - 2, numStages * 2);
     }
   }
   loadOp.erase();
@@ -464,10 +498,10 @@ assignMemoryLayouts(llvm::MapVector<tt::LoadOp, LoadInfo> &loadToInfo,
 }
 
 /// Collect ops to pipeline. Returns true if any ops are found to pipeline.
-static bool createCoarseSchedule(
-    scf::ForOp forOp,
-    llvm::DenseMap<Operation *, std::pair<int, int>> &opToStageAndOrder,
-    llvm::MapVector<tt::LoadOp, LoadInfo> &loadToInfo, int numStages) {
+static bool
+createCoarseSchedule(scf::ForOp forOp, CoarseSchedule &schedule,
+                     llvm::MapVector<tt::LoadOp, LoadInfo> &loadToInfo,
+                     int numStages) {
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
   tt::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
@@ -511,7 +545,7 @@ static bool createCoarseSchedule(
     // Non-LoadOp(s) are the root uses of all LoadOp(s) and should be
     // always present in the opInfo
     if (!isa<tt::LoadOp>(use)) {
-      opToStageAndOrder[use] = std::make_pair(numStages - 1, 0);
+      schedule.insert(use, numStages - 1, 0);
       rootUsers.insert(use);
     }
   }
@@ -521,16 +555,16 @@ static bool createCoarseSchedule(
     if (loadsToPipeline.count(loadOp) == 0)
       continue;
     int stage = (maxIndirectionLevel - indLevel) * stagesBetweenLoads;
-    opToStageAndOrder[loadOp] =
-        std::make_pair(stage, (numStages - 1 - stage) * 2);
+    // Make space between order clusters: dependencies of distance 1 will
+    // go there
+    schedule.insert(loadOp, stage, (numStages - 1 - stage) * 2);
   }
 
   // Distance from the load to the use.
   for (auto [loadOp, _, use] : loadOpToIndLevelAndUse) {
     if (loadsToPipeline.count(loadOp) == 0)
       continue;
-    loadToInfo[loadOp].distToUse =
-        opToStageAndOrder[use].first - opToStageAndOrder[loadOp].first;
+    loadToInfo[loadOp].distToUse = schedule[use].first - schedule[loadOp].first;
   }
 
   // Look for the IfOp that is in the backward slice of the loads and put it in
@@ -541,11 +575,10 @@ static bool createCoarseSchedule(
     opt.omitBlockArguments = true;
     getBackwardSlice((Operation *)loadOp, &backwardSlice, opt);
 
-    int loadStage = opToStageAndOrder[loadOp].first;
+    int loadStage = schedule[loadOp].first;
     for (auto op : backwardSlice) {
       if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-        opToStageAndOrder[ifOp] = {
-            loadStage, -2}; // -2 will be even before regular dist1uses
+        schedule.insert(ifOp, loadStage, -2);
       }
     }
   }
@@ -556,7 +589,7 @@ static bool createCoarseSchedule(
     SetVector<Operation *> forwardSlice;
     getForwardSlice(rootUser, &forwardSlice);
 
-    int stage = opToStageAndOrder[rootUser].first;
+    int stage = schedule[rootUser].first;
     for (auto op : forwardSlice) {
       scf::IfOp ifOp = dyn_cast<scf::IfOp>(op);
       if (ifOp == nullptr) {
@@ -567,9 +600,9 @@ static bool createCoarseSchedule(
           ifOp = dyn_cast<scf::IfOp>(parentOp);
         }
       }
-      if (ifOp && !opToStageAndOrder.count(ifOp)) {
-        opToStageAndOrder[ifOp] = {
-            stage, numStages * 2 + 2}; // 2 will be even after extracts
+      if (ifOp && !schedule.count(ifOp)) {
+        schedule.insert(ifOp, stage,
+                        numStages * 2 + 2); // after prefetch extracts
       }
     }
   }
@@ -593,11 +626,10 @@ static Value createAlloc(scf::ForOp &forOp, tt::LoadOp loadOp,
 
 // Convert load ops into their asyn version and apply multi-buffering based on
 // the required number of buffers.
-static SmallVector<Value> createAsyncOps(
-    scf::ForOp &forOp,
-    llvm::DenseMap<Operation *, std::pair<int, int>> &opToStageAndOrder,
-    llvm::MapVector<tt::LoadOp, LoadInfo> &loadToInfo, int numBuffers,
-    int numStages) {
+static SmallVector<Value>
+createAsyncOps(scf::ForOp &forOp, CoarseSchedule &schedule,
+               llvm::MapVector<tt::LoadOp, LoadInfo> &loadToInfo,
+               int numBuffers, int numStages) {
   struct AsyncLoad {
     AsyncLoad(tt::LoadOp loadOp, Value alloc) : loadOp(loadOp), alloc(alloc) {}
     tt::LoadOp loadOp;
@@ -653,7 +685,7 @@ static SmallVector<Value> createAsyncOps(
 
   for (AsyncLoad &asyncLoad : asyncLoads) {
     createAsyncCopy(forOp, asyncLoad.loadOp, asyncLoad.alloc, insertIdx,
-                    extractIdx, opToStageAndOrder, loadToInfo, numStages);
+                    extractIdx, schedule, loadToInfo, numStages);
   }
   SmallVector<Value> newYieldOperands = {insertIdx, extractIdx};
   // Patch the yield with the updated counters.
@@ -678,47 +710,29 @@ printSchedule(std::vector<std::pair<Operation *, unsigned>> &schedule,
 
 // Create the schedule for a matmul loop. This is ad hoc based on how we know
 // matmul loops should be pipelined and is not a generic scheduler.
-static std::vector<std::pair<Operation *, unsigned>> createSchedule(
-    scf::ForOp forOp, int numStages,
-    llvm::DenseMap<Operation *, std::pair<int, int>> &opToStageAndOrder,
-    llvm::MapVector<tt::LoadOp, LoadInfo> &loadToInfo, bool prefetchExtract) {
+static std::vector<std::pair<Operation *, unsigned>>
+createSchedule(scf::ForOp forOp, int numStages, CoarseSchedule &coarseSchedule,
+               llvm::MapVector<tt::LoadOp, LoadInfo> &loadToInfo,
+               bool prefetchExtract) {
   LLVM_DEBUG({
     LDBG("For loop:");
     forOp.dump();
 
-    LDBG("Initial schedule:");
-    for (int i = 0; i < numStages; i++) {
-      LDBG("- Ops in stage " << i);
-      for (auto &[op, stage] : opToStageAndOrder) {
-        if (i == stage.first) {
-          llvm::outs() << " ord: " << stage.second << " ";
-          op->dump();
-        }
-      }
-    }
+    LDBG("Initial coarse schedule:");
+    coarseSchedule.debug_print(numStages);
   });
-
-  int minOrder = *llvm::min_element(
-      llvm::make_second_range(llvm::make_second_range(opToStageAndOrder)));
-  int maxOrder = *llvm::max_element(
-      llvm::make_second_range(llvm::make_second_range(opToStageAndOrder)));
 
   llvm::DenseMap<Operation *, std::pair<int, int>> newOpToStageAndOrder;
 
   DenseSet<Operation *> anchorOps;
-  for (auto &[op, stage] : opToStageAndOrder) {
-    if (stage.second == minOrder) {
-      anchorOps.insert(op);
-    }
-  }
 
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (opToStageAndOrder.count(&op) == 0)
+    if (coarseSchedule.count(&op) == 0)
       continue;
-    auto [stage, order] = opToStageAndOrder[&op];
+    auto [stage, order] = coarseSchedule[&op];
     DenseSet<Operation *> anchorOpsAndDeps;
     tt::addDep(&op, anchorOpsAndDeps, false,
-               &anchorOps); // don't go through anchorOps - they are what they
+               &anchorOps); // don't go through anchorOps - they are where they
                             // have to be
     for (auto dep : anchorOpsAndDeps) {
       int depStage = stage;
@@ -728,29 +742,24 @@ static std::vector<std::pair<Operation *, unsigned>> createSchedule(
         depOrder = std::min(newOpToStageAndOrder[dep].second, depOrder);
       }
 
-      if (opToStageAndOrder.count(dep) == 0) {
+      if (coarseSchedule.count(dep) == 0) {
         newOpToStageAndOrder[dep] = {depStage, depOrder};
       }
     }
+
+    anchorOps.insert(&op); // Don't go through that anchor op again, leave its
+                           // dependencies as they are.
   }
 
   for (auto &[op, stageAndOrder] : newOpToStageAndOrder) {
-    if (opToStageAndOrder.count(op) == 0) {
-      opToStageAndOrder[op] = stageAndOrder;
+    if (coarseSchedule.count(op) == 0) {
+      coarseSchedule.insert(op, stageAndOrder.first, stageAndOrder.second);
     }
   }
 
   LLVM_DEBUG({
-    LDBG("Scheduled dependencies:");
-    for (int i = 0; i < numStages; i++) {
-      LDBG("- Ops in stage " << i);
-      for (auto &[op, stage] : opToStageAndOrder) {
-        if (i == stage.first) {
-          llvm::outs() << " ord: " << stage.second << " ";
-          op->dump();
-        }
-      }
-    }
+    LDBG("Coarse schedule with dependencies:");
+    coarseSchedule.debug_print(numStages);
   });
 
   auto getNestedOperands = [](Operation *op) -> SmallVector<Value> {
@@ -766,9 +775,9 @@ static std::vector<std::pair<Operation *, unsigned>> createSchedule(
 
   // Find dependencies with distance of 1.
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (opToStageAndOrder.count(&op) == 0)
+    if (coarseSchedule.count(&op) == 0)
       continue;
-    auto [stage, order] = opToStageAndOrder[&op];
+    auto [stage, order] = coarseSchedule[&op];
     // Can't schedule past the last stage.
     if (stage == numStages - 1)
       continue;
@@ -778,7 +787,7 @@ static std::vector<std::pair<Operation *, unsigned>> createSchedule(
           auto yieldOp = op.getBlock()->getTerminator();
           Value v = yieldOp->getOperand(arg.getArgNumber() - 1);
           Operation *defOp = v.getDefiningOp();
-          if (defOp && opToStageAndOrder.count(defOp) == 0) {
+          if (defOp && coarseSchedule.count(defOp) == 0) {
             // Schedule distance 1 users in the next stage, but before them in
             // order.
             DenseSet<Operation *> distanceOneUsers;
@@ -787,14 +796,14 @@ static std::vector<std::pair<Operation *, unsigned>> createSchedule(
               // Schedule loads with a distance of 1 together with the anchor
               // ops.
               for (auto user : distanceOneUsers) {
-                if (opToStageAndOrder.count(user) == 0) {
-                  opToStageAndOrder[user] = {stage, order};
+                if (coarseSchedule.count(user) == 0) {
+                  coarseSchedule.insert(user, stage, order);
                 }
               }
             } else {
               for (auto user : distanceOneUsers) {
-                if (opToStageAndOrder.count(user) == 0) {
-                  opToStageAndOrder[user] = {stage + 1, order - 1};
+                if (coarseSchedule.count(user) == 0) {
+                  coarseSchedule.insert(user, stage + 1, order - 1);
                 }
               }
             }
@@ -804,64 +813,31 @@ static std::vector<std::pair<Operation *, unsigned>> createSchedule(
     }
   }
 
-  minOrder = *llvm::min_element(
-      llvm::make_second_range(llvm::make_second_range(opToStageAndOrder)));
-  maxOrder = *llvm::max_element(
-      llvm::make_second_range(llvm::make_second_range(opToStageAndOrder)));
-
   LLVM_DEBUG({
-    LDBG("Scheduled dependencies with dist 1:");
-    for (int i = 0; i < numStages; i++) {
-      LDBG("- Ops in stage " << i);
-      for (auto &[op, stage] : opToStageAndOrder) {
-        if (i == stage.first) {
-          llvm::outs() << " ord: " << stage.second << " ";
-          op->dump();
-        }
-      }
-    }
+    LDBG("Coarse schedule with dist 1:");
+    coarseSchedule.debug_print(numStages);
   });
 
   // Assign the rest of the ops to the last stage.
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (opToStageAndOrder.count(&op) == 0) {
-      opToStageAndOrder[&op] = {numStages - 1, 0};
+    if (coarseSchedule.count(&op) == 0) {
+      coarseSchedule.insert(&op, numStages - 1, 0);
     }
   }
 
   LLVM_DEBUG({
-    LDBG("Remaining ops to the last stage:");
-    for (int i = 0; i < numStages; i++) {
-      LDBG("- Ops in stage " << i);
-      for (auto &[op, stage] : opToStageAndOrder) {
-        if (i == stage.first) {
-          llvm::outs() << " ord: " << stage.second << " ";
-          op->dump();
-        }
-      }
-    }
+    LDBG("Final coarse schedule:");
+    coarseSchedule.debug_print(numStages);
   });
 
   // Create the actual schedule
   std::vector<std::pair<Operation *, unsigned>> schedule;
-
-  // Insert the ops in the reverse order of the stages. This helps with saving
-  // the number of required buffers.
-  // TODO pawel: this causes liveranges to be longer than necessary:
-  // order 0:
-  //  stage n-1, n-2, ..., 1, 0
-  // order 1:
-  //  stage n-1, n-2, ..., 1, 0
-  // Stuff from order 0 stage 1 for example used in order 1 stage 0 needs to
-  // be live through all of stage 1. Previously we were scheduling stage n-1,
-  // and then dist1uses followed by inserts/deps.
-  for (int ord = minOrder; ord <= maxOrder; ord++) {
+  for (int ord : coarseSchedule.orderClusters) {
     for (auto &op : forOp.getBody()->without_terminator()) {
-      assert(opToStageAndOrder.count(&op) && "Op not in schedule!");
-      assert(opToStageAndOrder[&op].first < numStages &&
-             "Op with invalid stage!");
-      if (opToStageAndOrder[&op].second == ord)
-        schedule.push_back({&op, opToStageAndOrder[&op].first});
+      assert(coarseSchedule.count(&op) && "Op not in schedule!");
+      assert(coarseSchedule[&op].first < numStages && "Op with invalid stage!");
+      if (coarseSchedule[&op].second == ord)
+        schedule.push_back({&op, coarseSchedule[&op].first});
     }
   }
 
@@ -876,9 +852,9 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     scf::ForOp &forOp, int numStages, mlir::triton::PipeliningOption &options) {
   // 1. First collect "interesting" operations with a stage where to schedule
   // them. This gives a coarse scheduling for the loop.
-  llvm::DenseMap<Operation *, std::pair<int, int>> opToStageAndOrder;
   llvm::MapVector<tt::LoadOp, LoadInfo> loadToInfo;
-  if (!createCoarseSchedule(forOp, opToStageAndOrder, loadToInfo, numStages))
+  CoarseSchedule coarseSchedule;
+  if (!createCoarseSchedule(forOp, coarseSchedule, loadToInfo, numStages))
     return false;
 
   bool hasMMAV3 =
@@ -900,13 +876,13 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   };
 
   // 2. Convert the loads into async loads and create the allocs.
-  SmallVector<Value> allocs = createAsyncOps(
-      forOp, opToStageAndOrder, loadToInfo, maxNumBuffers, numStages);
+  SmallVector<Value> allocs = createAsyncOps(forOp, coarseSchedule, loadToInfo,
+                                             maxNumBuffers, numStages);
 
   // 3. Create the final schedule for the kernel loop. This will dictate the
   // stages and order of operations to the pipeline expander.
   std::vector<std::pair<Operation *, unsigned>> schedule =
-      createSchedule(forOp, numStages, opToStageAndOrder, loadToInfo,
+      createSchedule(forOp, numStages, coarseSchedule, loadToInfo,
                      /*prefetchExtract=*/!hasMMAV3);
 
   // 4. Fill out the pipeline options.
