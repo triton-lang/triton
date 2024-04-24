@@ -28,11 +28,11 @@ for model in "${MODELS[@]}"; do
     continue
   fi
   echo "Running accuracy test for $model"
-  python3 benchmarks/dynamo/"$model".py --ci --accuracy --timing --explain --inductor --inference --device='cuda' \
+  python3 benchmarks/dynamo/"$model".py --ci --accuracy --timing --explain --inductor --inference --device cuda \
     --output "$TEST_REPORTS_DIR"/inference_"$model".csv
-  python3 benchmarks/dynamo/"$model".py --ci --accuracy --timing --explain --inductor --training --amp --device='cuda' \
+  python3 benchmarks/dynamo/"$model".py --ci --accuracy --timing --explain --inductor --training --amp --device cuda \
     --output "$TEST_REPORTS_DIR"/training_"$model".csv
-  python3 benchmarks/dynamo/"$model".py --ci --accuracy --timing --explain --inductor --training --dynamic-shapes --device='cuda' \
+  python3 benchmarks/dynamo/"$model".py --ci --accuracy --timing --explain --inductor --training --dynamic-shapes --device cuda \
     --output "$TEST_REPORTS_DIR"/dynamic_shapes_"$model".csv
 done
 

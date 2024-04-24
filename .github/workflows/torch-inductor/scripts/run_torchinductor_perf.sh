@@ -29,7 +29,7 @@ for model in "${MODELS[@]}"; do
     continue
   fi
   echo "Running performance test for $model"
-  python3 benchmarks/dynamo/"$model".py --ci --float32 --training --inductor --performance --device='cuda' \
+  python3 benchmarks/dynamo/"$model".py --ci --float32 --training --inductor --performance --device cuda \
     --output "$TRITON_TEST_REPORTS_DIR"/"$model".csv
 done
 
@@ -43,7 +43,7 @@ for model in "${MODELS[@]}"; do
     continue
   fi
   echo "Running performance test for $model"
-  python3 benchmarks/dynamo/"$model".py --ci --float32 --training --inductor --performance --device='cuda' \
+  python3 benchmarks/dynamo/"$model".py --ci --float32 --training --inductor --performance --device cuda \
     --output "$BASE_TEST_REPORTS_DIR"/"$model".csv
 done
 
