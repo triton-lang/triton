@@ -156,7 +156,7 @@ def get_llvm_package_info():
             if os.path.isfile("/usr/lib/" + platform.machine() + "-linux-gnu/libstdc++.so.6"):
                 check_libcxx_version = \
                     subprocess.run(
-                        "strings /usr/lib/"+platform.machine()+"-linux-gnu/libstdc++.so.6 | grep GLIBCXX_3.4.26", \
+                        "strings /usr/lib/" + platform.machine() + "-linux-gnu/libstdc++.so.6 | grep GLIBCXX_3.4.26",
                         check=False, shell=True
                     )
                 target_libcxx_found = check_libcxx_version.returncode == 0
@@ -232,7 +232,7 @@ def get_thirdparty_packages(packages: list):
     return thirdparty_cmake_args
 
 
-def download_and_copy(src_path, variable, version, url_func):
+def download_and_copy(name, src_path, variable, version, url_func):
     triton_cache_path = get_triton_cache_path()
     if variable in os.environ:
         return
@@ -240,11 +240,11 @@ def download_and_copy(src_path, variable, version, url_func):
     system = platform.system()
     arch = {"x86_64": "64", "arm64": "aarch64", "aarch64": "aarch64"}[platform.machine()]
     url = url_func(arch, version)
-    tmp_path = os.path.join(triton_cache_path, "nvidia")  # path to cache the download
+    tmp_path = os.path.join(triton_cache_path, "nvidia", name)  # path to cache the download
     dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", src_path)  # final binary path
     src_path = os.path.join(tmp_path, src_path)
     download = not os.path.exists(src_path)
-    if os.path.exists(dst_path) and system == "Linux":
+    if os.path.exists(dst_path) and system == "Linux" and shutil.which(dst_path) is not None:
         curr_version = subprocess.check_output([dst_path, "--version"]).decode("utf-8").strip()
         curr_version = re.search(r"V([.|\d]+)", curr_version).group(1)
         download = download or curr_version != version
@@ -252,9 +252,12 @@ def download_and_copy(src_path, variable, version, url_func):
         print(f'downloading and extracting {url} ...')
         file = tarfile.open(fileobj=open_url(url), mode="r|*")
         file.extractall(path=tmp_path)
-    print(f'copy {src_path} to {dst_path} ...')
     os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
-    shutil.copy(src_path, dst_path)
+    print(f'copy {src_path} to {dst_path} ...')
+    if os.path.isdir(dst_path):
+        shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
+    else:
+        shutil.copy(src_path, dst_path)
 
 
 # ---- cmake extension ----
@@ -323,11 +326,11 @@ class CMakeBuild(build_ext):
             self.build_extension(ext)
 
     def get_proton_cmake_args(self):
-        cmake_args = ["-DTRITON_BUILD_PROTON=ON"]
-        cmake_args += get_thirdparty_packages([get_json_package_info(), get_pybind11_package_info()])
-        cuda_root = get_env_with_keys(["CUDA_HOME", "CUDA_ROOT"])
-        if cuda_root != "":
-            cmake_args += ["-DCUDAToolkit_ROOT=" + cuda_root]
+        cmake_args = get_thirdparty_packages([get_json_package_info(), get_pybind11_package_info()])
+        cupti_include_dir = get_env_with_keys(["CUPTI_INCLUDE_PATH"])
+        if cupti_include_dir == "":
+            cupti_include_dir = os.path.join(get_base_dir(), "third_party", "nvidia", "backend", "include")
+        cmake_args += ["-DCUPTI_INCLUDE_DIR=" + cupti_include_dir]
         return cmake_args
 
     def build_extension(self, ext):
@@ -398,8 +401,7 @@ class CMakeBuild(build_ext):
                 "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
             ]
 
-        if check_env_flag("TRITON_BUILD_PROTON"):
-            cmake_args += self.get_proton_cmake_args()
+        cmake_args += self.get_proton_cmake_args()
 
         env = os.environ.copy()
         cmake_dir = get_cmake_dir()
@@ -413,6 +415,7 @@ with open(nvidia_version_path, "r") as nvidia_version_file:
     NVIDIA_TOOLCHAIN_VERSION = nvidia_version_file.read().strip()
 
 download_and_copy(
+    name="ptxas",
     src_path="bin/ptxas",
     variable="TRITON_PTXAS_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION,
@@ -420,6 +423,7 @@ download_and_copy(
     f"https://anaconda.org/nvidia/cuda-nvcc/{version}/download/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2",
 )
 download_and_copy(
+    name="cuobjdump",
     src_path="bin/cuobjdump",
     variable="TRITON_CUOBJDUMP_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION,
@@ -427,11 +431,36 @@ download_and_copy(
     f"https://anaconda.org/nvidia/cuda-cuobjdump/{version}/download/linux-{arch}/cuda-cuobjdump-{version}-0.tar.bz2",
 )
 download_and_copy(
+    name="nvdisasm",
     src_path="bin/nvdisasm",
     variable="TRITON_NVDISASM_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION,
     url_func=lambda arch, version:
     f"https://anaconda.org/nvidia/cuda-nvdisasm/{version}/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
+)
+download_and_copy(
+    name="cudacrt",
+    src_path="include",
+    variable="TRITON_CUDACRT_PATH",
+    version=NVIDIA_TOOLCHAIN_VERSION,
+    url_func=lambda arch, version:
+    f"https://anaconda.org/nvidia/cuda-nvcc/{version}/download/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2",
+)
+download_and_copy(
+    name="cudart",
+    src_path="include",
+    variable="TRITON_CUDART_PATH",
+    version=NVIDIA_TOOLCHAIN_VERSION,
+    url_func=lambda arch, version:
+    f"https://anaconda.org/nvidia/cuda-cudart-dev/{version}/download/linux-{arch}/cuda-cudart-dev-{version}-0.tar.bz2",
+)
+download_and_copy(
+    name="cupti",
+    src_path="include",
+    variable="TRITON_CUPTI_PATH",
+    version=NVIDIA_TOOLCHAIN_VERSION,
+    url_func=lambda arch, version:
+    f"https://anaconda.org/nvidia/cuda-cupti/{version}/download/linux-{arch}/cuda-cupti-{version}-0.tar.bz2",
 )
 
 backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
@@ -511,22 +540,18 @@ def get_packages():
         "triton/tools",
     ]
     packages += [f'triton/backends/{backend.name}' for backend in backends]
-    if check_env_flag("TRITON_BUILD_PROTON"):
-        packages += ["triton/profiler"]
+    packages += ["triton/profiler"]
     return packages
 
 
 def get_entry_points():
-    entry_points = {}
-    if check_env_flag("TRITON_BUILD_PROTON"):
-        entry_points["console_scripts"] = ["proton-viewer = triton.profiler.viewer:main"]
+    entry_points = {"console_scripts": ["proton-viewer = triton.profiler.viewer:main"]}
     return entry_points
 
 
 def get_install_requires():
     install_requires = ["filelock"]
-    if check_env_flag("TRITON_BUILD_PROTON"):
-        install_requires.append("llnl-hatchet")
+    install_requires.append("llnl-hatchet")
     return install_requires
 
 
