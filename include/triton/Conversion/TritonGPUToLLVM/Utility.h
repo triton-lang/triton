@@ -1337,8 +1337,62 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
 }
 
 inline SmallVector<Value>
-loadSharedToDistributed(Value dst, Value src, SharedMemoryObject smemObj,
-                        Type elemTy, Location loc,
+unpackLLElements(Location loc, Value llvmStruct,
+                 ConversionPatternRewriter &rewriter) {
+  assert(bool(llvmStruct) && "can not unpack null values");
+  if (llvmStruct.getType().isIntOrIndexOrFloat() ||
+      isa<triton::PointerType>(llvmStruct.getType()) ||
+      isa<LLVM::LLVMPointerType>(llvmStruct.getType()))
+    return {llvmStruct};
+  ArrayRef<Type> types =
+      cast<LLVM::LLVMStructType>(llvmStruct.getType()).getBody();
+  SmallVector<Value> results(types.size());
+  for (unsigned i = 0; i < types.size(); ++i) {
+    Type type = types[i];
+    results[i] = extract_val(type, llvmStruct, i);
+  }
+  return results;
+}
+
+inline Value packLLElements(Location loc,
+                            const LLVMTypeConverter *typeConverter,
+                            ValueRange resultVals,
+                            ConversionPatternRewriter &rewriter, Type type) {
+  auto structType =
+      dyn_cast<LLVM::LLVMStructType>(typeConverter->convertType(type));
+  if (!structType) {
+    assert(resultVals.size() == 1);
+    return *resultVals.begin();
+  }
+
+  auto elementTypes = structType.getBody();
+  if (elementTypes.size() != resultVals.size()) {
+    emitError(loc) << " size mismatch when packing elements for LLVM struct"
+                   << " expected " << elementTypes.size() << " but got "
+                   << resultVals.size();
+  }
+  Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
+  for (const auto &v : llvm::enumerate(resultVals)) {
+    if (!v.value()) {
+      emitError(loc)
+          << "cannot insert null values into struct, but tried to insert"
+          << v.value();
+    }
+    if (v.value().getType() != elementTypes[v.index()]) {
+      LDBG("type " << type << " structType " << structType);
+      LDBG("value " << v.value());
+      emitError(loc) << "invalid element type in packLLEElements. Expected "
+                     << elementTypes[v.index()] << " but got "
+                     << v.value().getType();
+    }
+    llvmStruct = insert_val(structType, llvmStruct, v.value(), v.index());
+  }
+  return llvmStruct;
+}
+
+inline SmallVector<Value>
+loadSharedToDistributed(Value dst, Value src, Value llMask, Value llOther,
+                        SharedMemoryObject smemObj, Type elemTy, Location loc,
                         ConversionPatternRewriter &rewriter) {
   auto dstTy = cast<RankedTensorType>(dst.getType());
   auto dstShape = dstTy.getShape();
@@ -1379,6 +1433,19 @@ loadSharedToDistributed(Value dst, Value src, SharedMemoryObject smemObj,
   unsigned numVecs = outElems / minVec;
   auto wordTy = vec_ty(elemTy, minVec);
   SmallVector<Value> outVals(outElems);
+
+  // %mask
+  SmallVector<Value> maskElems;
+  if (llMask) {
+    maskElems = unpackLLElements(loc, llMask, rewriter);
+  }
+
+  // %other
+  SmallVector<Value> otherElems;
+  if (llOther) {
+    otherElems = unpackLLElements(loc, llOther, rewriter);
+  }
+
   for (unsigned i = 0; i < numVecs; ++i) {
     Value smemAddr = sharedPtrs[i * minVec];
     smemAddr = bitcast(smemAddr, ptr_ty(rewriter.getContext(), 3));
@@ -1386,7 +1453,14 @@ loadSharedToDistributed(Value dst, Value src, SharedMemoryObject smemObj,
     valVec.setAlignment(minVec * elemTy.getIntOrFloatBitWidth() / 8);
     for (unsigned v = 0; v < minVec; ++v) {
       Value currVal = extract_element(elemTy, valVec, i32_val(v));
-      outVals[i * minVec + v] = currVal;
+      Value outVal = currVal;
+      auto elemIdx = i * minVec + v;
+      if (llOther) {
+        auto selectOp =
+            select(maskElems[elemIdx], currVal, otherElems[elemIdx]);
+        outVal = selectOp.getResult();
+      }
+      outVals[elemIdx] = outVal;
     }
   }
   return outVals;
@@ -1461,60 +1535,6 @@ getStructFromSharedMemoryObject(Location loc, const SharedMemoryObject &smemObj,
   for (const auto &v : llvm::enumerate(elems)) {
     assert(v.value() && "can not insert null values");
     llvmStruct = insert_val(structTy, llvmStruct, v.value(), v.index());
-  }
-  return llvmStruct;
-}
-
-inline SmallVector<Value>
-unpackLLElements(Location loc, Value llvmStruct,
-                 ConversionPatternRewriter &rewriter) {
-  assert(bool(llvmStruct) && "can not unpack null values");
-  if (llvmStruct.getType().isIntOrIndexOrFloat() ||
-      isa<triton::PointerType>(llvmStruct.getType()) ||
-      isa<LLVM::LLVMPointerType>(llvmStruct.getType()))
-    return {llvmStruct};
-  ArrayRef<Type> types =
-      cast<LLVM::LLVMStructType>(llvmStruct.getType()).getBody();
-  SmallVector<Value> results(types.size());
-  for (unsigned i = 0; i < types.size(); ++i) {
-    Type type = types[i];
-    results[i] = extract_val(type, llvmStruct, i);
-  }
-  return results;
-}
-
-inline Value packLLElements(Location loc,
-                            const LLVMTypeConverter *typeConverter,
-                            ValueRange resultVals,
-                            ConversionPatternRewriter &rewriter, Type type) {
-  auto structType =
-      dyn_cast<LLVM::LLVMStructType>(typeConverter->convertType(type));
-  if (!structType) {
-    assert(resultVals.size() == 1);
-    return *resultVals.begin();
-  }
-
-  auto elementTypes = structType.getBody();
-  if (elementTypes.size() != resultVals.size()) {
-    emitError(loc) << " size mismatch when packing elements for LLVM struct"
-                   << " expected " << elementTypes.size() << " but got "
-                   << resultVals.size();
-  }
-  Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
-  for (const auto &v : llvm::enumerate(resultVals)) {
-    if (!v.value()) {
-      emitError(loc)
-          << "cannot insert null values into struct, but tried to insert"
-          << v.value();
-    }
-    if (v.value().getType() != elementTypes[v.index()]) {
-      LDBG("type " << type << " structType " << structType);
-      LDBG("value " << v.value());
-      emitError(loc) << "invalid element type in packLLEElements. Expected "
-                     << elementTypes[v.index()] << " but got "
-                     << v.value().getType();
-    }
-    llvmStruct = insert_val(structType, llvmStruct, v.value(), v.index());
   }
   return llvmStruct;
 }

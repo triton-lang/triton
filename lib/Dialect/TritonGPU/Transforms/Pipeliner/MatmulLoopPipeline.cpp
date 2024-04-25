@@ -138,8 +138,27 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
     for (auto alloc : allocsToErase) {
       alloc.erase();
     }
-    auto sharedLoad =
-        builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewLoad);
+
+    // Create a masked LocalLoadOp for non-zero other values as they are not
+    // handled by AsyncCopyGlobalToLocalOp for now.
+    Value other = loadOp.getOther();
+    if (other) {
+      if (auto constOp = other.getDefiningOp<arith::ConstantOp>()) {
+        if (auto attr =
+                constOp.getValueAttr().dyn_cast<DenseIntOrFPElementsAttr>()) {
+          if (attr.isSplat()) {
+            auto value = attr.getSplatValue<APFloat>().convertToDouble();
+            if (value == 0.0) {
+              mask = Value();
+              other = Value();
+            }
+          }
+        }
+      }
+    }
+
+    auto sharedLoad = builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(),
+                                                       viewLoad, mask, other);
     loadOp->replaceAllUsesWith(sharedLoad->getResults());
   }
   loadOp.erase();

@@ -93,8 +93,14 @@ private:
     auto srcStrides =
         getStridesFromShapeAndOrder(srcTy.getShape(), inOrd, loc, rewriter);
 
-    SmallVector<Value> outVals = loadSharedToDistributed(
-        op.getResult(), op.getSrc(), smemObj, elemTy, loc, rewriter);
+    Value mask = op.getMask();
+    Value other = op.getOther();
+    Value llMask = adaptor.getMask();
+    Value llOther = adaptor.getOther();
+
+    SmallVector<Value> outVals =
+        loadSharedToDistributed(op.getResult(), op.getSrc(), llMask, llOther,
+                                smemObj, elemTy, loc, rewriter);
 
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
