@@ -1386,6 +1386,10 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::FloorOp>(val);
            })
+      .def("create_ceil",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::CeilOp>(val);
+           })
       .def("create_exp",
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::ExpOp>(val);
