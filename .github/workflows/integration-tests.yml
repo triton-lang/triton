@@ -345,6 +345,7 @@ jobs:
           echo "/opt/rocm/llvm/bin" >> $GITHUB_PATH
       - name: Install pip dependencies
         run: |
+          python3 -m pip install --grade pip
           python3 -m pip install lit
       - name: Install Triton
         run: |
