@@ -60,7 +60,6 @@ SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
   // reorder elements
   auto parentEncoding = dyn_cast<NvidiaMmaEncodingAttr>(ouEncoding.getParent());
   if (!parentEncoding) {
-    llvm::outs() << "loc1\n";
     return values;
   }
   size_t inBitWidth = inTensorTy.getElementType().getIntOrFloatBitWidth();
@@ -79,7 +78,6 @@ SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
       ret.push_back(values[i + 3]);
       ret.push_back(values[i + 6]);
       ret.push_back(values[i + 7]);
-    llvm::outs() << "loc2\n";
     }
     return ret;
   }
@@ -102,7 +100,6 @@ SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
       ret.push_back(values[i + 13]);
       ret.push_back(values[i + 14]);
       ret.push_back(values[i + 15]);
-    llvm::outs() << "loc3\n";
     }
     return ret;
   }
@@ -115,11 +112,9 @@ SmallVector<Value> unpackI32(const SmallVector<Value> &inValues, Type srcTy,
   auto tensorTy = dyn_cast<RankedTensorType>(srcTy);
   if (!tensorTy)
     return inValues;
-llvm::outs() << "loc4\n";
   auto encoding = tensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
   if (!(encoding && encoding.getParent().isa<NvidiaMmaEncodingAttr>()))
     return inValues;
-llvm::outs() << "loc5\n";
   SmallVector<Value> outValues;
   for (auto v : inValues) {
     // cast i32 to appropriate eltType vector and extract elements
@@ -139,11 +134,9 @@ SmallVector<Value> packI32(const SmallVector<Value> &inValues, Type srcTy,
   auto tensorTy = dyn_cast<RankedTensorType>(srcTy);
   if (!tensorTy)
     return inValues;
-llvm::outs() << "loc6\n";
   auto encoding = tensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
   if (!(encoding && encoding.getParent().isa<NvidiaMmaEncodingAttr>()))
     return inValues;
-llvm::outs() << "loc7\n";
   SmallVector<Value> outValues;
   auto eltType = typeConverter->convertType(tensorTy.getElementType());
   int vecWidth = 32 / eltType.getIntOrFloatBitWidth();
@@ -164,18 +157,14 @@ int getNumElementsPerThreads(Type type,
   auto tensorTy = type.dyn_cast<RankedTensorType>();
   if (!tensorTy)
     return numElemsPerThread;
-llvm::outs() << "loc8\n";
   auto structType =
       typeConverter->convertType(type).dyn_cast<LLVM::LLVMStructType>();
-llvm::outs() << "loc9\n";
   if (structType) {
     numElemsPerThread = structType.getBody().size();
   }
-llvm::outs() << "loc10\n";
   auto encoding = tensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
   if (!(encoding && encoding.getParent().isa<NvidiaMmaEncodingAttr>()))
     return numElemsPerThread;
-llvm::outs() << "loc11\n";
   auto eltType = tensorTy.getElementType();
   assert(eltType.getIntOrFloatBitWidth() <= 32 &&
          "Only support element type with bit width <= 32 in dot operand mma "
