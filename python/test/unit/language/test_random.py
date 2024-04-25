@@ -109,7 +109,7 @@ class CustomPhilox(CustomPhilox4x):
 # Unit Tests
 #####################################
 
-BLOCK = 1024
+BLOCK: tl.constexpr = 1024
 
 # test generation of random uint32
 
