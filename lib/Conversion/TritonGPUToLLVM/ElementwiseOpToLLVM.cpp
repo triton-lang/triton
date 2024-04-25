@@ -21,14 +21,14 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(ConversionPatternRewriter &rewriter,
                                          StringRef libname /*= ""*/,
                                          StringRef libpath /*= ""*/) {
   using LLVM::LLVMFuncOp;
+  appendOrGetExternFuncOp
 
-  auto funcAttr = StringAttr::get(op->getContext(), funcName);
+      auto funcAttr = StringAttr::get(op->getContext(), funcName);
   Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(op, funcAttr);
   if (funcOp)
     return cast<LLVMFuncOp>(*funcOp);
 
-  auto parent = op->getParentOfType<LLVM::LLVMFuncOp>();
-  OpBuilder b(parent);
+  OpBuilder b(op);
   auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
   ret.getOperation()->setAttr("libname",
                               StringAttr::get(op->getContext(), libname));
@@ -322,8 +322,9 @@ struct MulhiUIOpConversion
 
     auto funcName = targetInfo.getMulhiFuncName(resultElementTy);
     Type funcType = getFunctionType(elemTy, operands[0]);
+    auto parent = op->getParentOfType<LLVM::LLVMFuncOp>();
     LLVM::LLVMFuncOp funcOp =
-        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+        appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
     return {
         rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
   }
@@ -350,8 +351,9 @@ struct ExternElementwiseOpConversion
       llvm::errs() << "ExternElementwiseOpConversion";
 
     Type funcType = getFunctionType(elemTy, operands[0]);
+    auto parent = op->getParentOfType<LLVM::LLVMFuncOp>();
     LLVM::LLVMFuncOp funcOp = appendOrGetExternFuncOp(
-        rewriter, op, funcName, funcType, op.getLibname(), op.getLibpath());
+        rewriter, parent, funcName, funcType, op.getLibname(), op.getLibpath());
     return {
         rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
   }

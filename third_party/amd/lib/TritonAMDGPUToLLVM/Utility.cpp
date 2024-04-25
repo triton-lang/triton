@@ -164,10 +164,10 @@ Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
 Value llLoad(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
              Type elemTy, Value pred, Value falseVal) {
   Type funcType = getFunctionType(elemTy, ValueRange({ptr, pred, falseVal}));
-  auto parentOp = ptr.getParentRegion()->getParentOp();
+  auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
   auto funcName = mangleFunc(mlir::LLVM::AMD::Predicated_Load, funcType);
   LLVM::LLVMFuncOp funcOp =
-      appendOrGetExternFuncOp(rewriter, parentOp, funcName, funcType);
+      appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
   auto loadVal =
       rewriter
           .create<LLVM::CallOp>(loc, funcOp, ValueRange({ptr, pred, falseVal}))
@@ -179,10 +179,10 @@ void llStore(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
              Value val, Value pred) {
   auto ctx = ptr.getContext();
   Type funcType = getFunctionType(void_ty(ctx), ValueRange({ptr, val, pred}));
-  auto parentOp = ptr.getParentRegion()->getParentOp();
+  auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
   auto funcName = mangleFunc(mlir::LLVM::AMD::Predicated_Store, funcType);
   LLVM::LLVMFuncOp funcOp =
-      appendOrGetExternFuncOp(rewriter, parentOp, funcName, funcType);
+      appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
   rewriter.create<LLVM::CallOp>(loc, funcOp, ValueRange({ptr, val, pred}));
 }
 
