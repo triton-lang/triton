@@ -226,3 +226,30 @@ def test_power_of_two_shapes_2():
     with pytest.raises(CompilationError) as e:
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constants={}))
     assert str(e.value.__cause__) == "Shape element 0 must be a power of 2"
+
+
+def test_captured_var_access():
+
+    CAPTURED = 42
+
+    @triton.jit
+    def kernel():
+        a = CAPTURED  # noqa
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constants={}))
+    assert "CAPTURED is not defined" in str(e.value)
+
+
+GLOBAL = 42
+
+
+def test_global_var_access():
+
+    @triton.jit
+    def kernel():
+        a = GLOBAL  # noqa
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constants={}))
+    assert "global variable" in str(e.value)

@@ -1,6 +1,7 @@
 import ast
 import inspect
 import re
+import os
 import sys
 import warnings
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
@@ -10,6 +11,8 @@ from ..language import constexpr, tensor, str_to_ty
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
+from types import ModuleType
+import textwrap
 
 
 def mangle_ty(ty):
@@ -239,7 +242,6 @@ class CodeGenerator(ast.NodeVisitor):
         # SSA-construction
         # name => language.tensor
         self.local_defs: Dict[str, tensor] = {}
-        self.global_uses: Dict[str, tensor] = {}
         self.dereference_name: Callable[[str], Any] = self._define_name_lookup()
         self.fn = None
 
@@ -257,16 +259,38 @@ class CodeGenerator(ast.NodeVisitor):
 
         def local_lookup(name: str, absent):
             # this needs to be re-fetched from `self` every time, because it gets switched occasionally
-            value = self.lscope.get(name, absent)
-            if value is not absent and name not in self.local_defs:
-                self.global_uses[name] = value
-            return value
+            return self.lscope.get(name, absent)
+
+        def global_lookup(name: str, absent):
+            val = self.gscope.get(name, absent)
+
+            # Some global variables are allowed, otherwise Triton is unusable.
+            if val is absent or type(val) == ModuleType or isinstance(val, JITFunction) or \
+                    name in self.builtin_namespace or os.environ.get("TRITON_ALLOW_GLOBAL_VARS") == 1:
+                return val
+
+            raise NameError(
+                textwrap.dedent(f"""\
+                Accessing global variables (in this case, "{name}") from within a
+                Triton kernel is not allowed.
+
+                This is because the value of the global may end up baked into
+                the compiled Triton kernel, but if you then change its value,
+                Triton will not recompile the kernel.  As a result, the global
+                will effectively have a stale value.
+
+                Instead, pass globals as arguments to your top-level @triton.jit
+                function (perhaps annotated as triton.language.constexpr).
+
+                If you really want to use globals, set the envvar
+                TRITON_ALLOW_GLOBAL_VARS=1, but note that we may not support
+                this forever."""))
 
         absent_marker = object()
 
         def name_lookup(name: str) -> Any:
             absent = absent_marker
-            for lookup_function in local_lookup, self.gscope.get, self.builtin_namespace.get:
+            for lookup_function in [local_lookup, global_lookup, self.builtin_namespace.get]:
                 value = lookup_function(name, absent)
                 if value is not absent:
                     return value
