@@ -243,7 +243,6 @@ jobs:
 
       - name: Install Triton
         env:
-          TRITON_BUILD_PROTON: "true"
           TRITON_BUILD_WITH_CCACHE: "true"
           CUDA_HOME: "/usr/local/cuda"
         run: |
@@ -354,6 +353,7 @@ jobs:
 
       - name: Install pip dependencies
         run: |
+          python3 -m pip install --upgrade pip
           python3 -m pip install lit
 
       - name: Install Triton
