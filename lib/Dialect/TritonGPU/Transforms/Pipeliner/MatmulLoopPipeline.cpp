@@ -8,6 +8,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -139,27 +140,20 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
       alloc.erase();
     }
 
-    // Create a masked LocalLoadOp for non-zero other values as they are not
-    // handled by AsyncCopyGlobalToLocalOp for now.
+    auto sharedLoad =
+        builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewLoad);
+    auto result = sharedLoad->getResults();
+
+    // Create a select for non-zero other values as they are not handled by
+    // AsyncCopyGlobalToLocalOp for now.
     Value other = loadOp.getOther();
-    if (other) {
-      if (auto constOp = other.getDefiningOp<arith::ConstantOp>()) {
-        if (auto attr =
-                constOp.getValueAttr().dyn_cast<DenseIntOrFPElementsAttr>()) {
-          if (attr.isSplat()) {
-            auto value = attr.getSplatValue<APFloat>().convertToDouble();
-            if (value == 0.0) {
-              mask = Value();
-              other = Value();
-            }
-          }
-        }
-      }
+    if (other && !isZeroConst(other)) {
+      auto select = builder.create<arith::SelectOp>(
+          loc, loadOp.getType(), mask, sharedLoad.getResult(), other);
+      result = select->getResults();
     }
 
-    auto sharedLoad = builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(),
-                                                       viewLoad, mask, other);
-    loadOp->replaceAllUsesWith(sharedLoad->getResults());
+    loadOp->replaceAllUsesWith(result);
   }
   loadOp.erase();
 }

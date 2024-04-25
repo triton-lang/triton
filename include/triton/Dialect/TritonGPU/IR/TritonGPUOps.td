@@ -196,32 +196,17 @@ def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
   let hasVerifier = 1;
 }
 
-
-def TTG_LocalLoadOp : TTG_Op<"local_load", [
-  AttrSizedOperandSegments,
-  MemoryEffects<[MemRead<SharedMemory>]>,
-  TypesMatchWith<"infer mask type from src type",
-                  "result", "mask", "getI1SameShape($_self)",
-                  "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
-  TypesMatchWith<"infer other type from src type",
-                  "result", "other", "$_self",
-                  "($_op.getOperands().size() <= 4) || std::equal_to<>()">
-]> {
+def TTG_LocalLoadOp : TTG_Op<"local_load", [MemoryEffects<[MemRead<SharedMemory>]>]> {
   let summary = "Load a buffer from local memory into a distributed tensor";
+
   let description = [{
     Load a tensor from the local memory descriptor into a distributed tensor.
   }];
-  let arguments = (ins
-    TT_MemDescType:$src,
-    Optional<I1Tensor>:$mask,
-    Optional<TT_Type>:$other
-  );
-  let builders = [
-      OpBuilder<(ins "Type":$result, "Value":$src)>,
-  ];
+  let arguments = (ins TT_MemDescType:$src);
 
   // Use qualified() otherwise "!tt.memdesc<X>" is printed as "<X>".
-  let assemblyFormat = [{$src (`,` $mask^)? (`,` $other^)? attr-dict `:` qualified(type($src)) `->` type($result)}];
+  let assemblyFormat = [{$src attr-dict `:` qualified(type($src)) `->` type($result)}];
+
   let results = (outs TT_Tensor:$result);
 }
 

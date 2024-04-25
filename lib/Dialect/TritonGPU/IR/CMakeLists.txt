@@ -1,7 +1,6 @@
 add_triton_library(TritonGPUIR
   Dialect.cpp
   Types.cpp
-  Ops.cpp
 
   DEPENDS
   TritonGPUTableGen
