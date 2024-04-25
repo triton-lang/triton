@@ -85,7 +85,7 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
   let description = [{
     This operation copies data from global memory to local memory asynchronously.
     This is analogue to tt.load except the data are copied to local memory pointed
-    by by the memory descriptor instread of a distributed tensor. The rest of the
+    by by the memory descriptor instead of a distributed tensor. The rest of the
     operands are the same as tt.load.
   }];
 
