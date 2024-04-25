@@ -156,8 +156,8 @@ import triton
 import triton.language as tl
 
 
-def is_hip():
-    return triton.runtime.driver.active.get_current_target().backend == "hip"
+def is_cuda():
+    return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 
 def is_hip_mi200():
@@ -165,13 +165,8 @@ def is_hip_mi200():
     return target.backend == 'hip' and target.arch == 'gfx90a'
 
 
-# `triton.jit`'ed functions can be auto-tuned by using the `triton.autotune` decorator, which consumes:
-#   - A list of `triton.Config` objects that define different configurations of
-#       meta-parameters (e.g., `BLOCK_SIZE_M`) and compilation options (e.g., `num_warps`) to try
-#   - An auto-tuning *key* whose change in values will trigger evaluation of all the
-#       provided configs
-@triton.autotune(
-    configs=[
+def get_cuda_autotune_config():
+    return [
         triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3,
                       num_warps=8),
         triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
@@ -204,8 +199,12 @@ def is_hip_mi200():
         triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
                       num_warps=4),
         triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-    ] if not is_hip() else [
+                      num_warps=4)
+    ]
+
+
+def get_hip_autotune_config():
+    return [
         triton.Config(
             {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 1, 'waves_per_eu': 2},
             num_warps=4, num_stages=0),
@@ -221,7 +220,24 @@ def is_hip_mi200():
         triton.Config(
             {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 1, 'waves_per_eu': 8},
             num_warps=4, num_stages=0),
-    ],
+    ]
+
+
+def get_autotune_config():
+    target = triton.runtime.driver.active.get_current_target()
+    if target.backend == 'cuda':
+        return get_cuda_autotune_config()
+    else:
+        return get_hip_autotune_config()
+
+
+# `triton.jit`'ed functions can be auto-tuned by using the `triton.autotune` decorator, which consumes:
+#   - A list of `triton.Config` objects that define different configurations of
+#       meta-parameters (e.g., `BLOCK_SIZE_M`) and compilation options (e.g., `num_warps`) to try
+#   - An auto-tuning *key* whose change in values will trigger evaluation of all the
+#       provided configs
+@triton.autotune(
+    configs=get_autotune_config(),
     key=['M', 'N', 'K'],
 )
 @triton.jit
@@ -358,7 +374,7 @@ else:
     print("❌ Triton and Torch differ")
 
 TORCH_HAS_FP8 = hasattr(torch, "float8_e5m2")
-if TORCH_HAS_FP8 and not is_hip():
+if TORCH_HAS_FP8 and is_cuda():
     torch.manual_seed(0)
     a = torch.randn((512, 512), device="cuda", dtype=torch.float16)
     b = torch.randn((512, 512), device="cuda", dtype=torch.float16)
@@ -385,11 +401,11 @@ if TORCH_HAS_FP8 and not is_hip():
 # We can now compare the performance of our kernel against that of cuBLAS or rocBLAS. Here we focus on square matrices,
 # but feel free to arrange this script as you wish to benchmark any other matrix shape.
 
-ref_lib = 'rocBLAS' if is_hip() else 'cuBLAS'
+ref_lib = 'cuBLAS' if is_cuda() else 'rocBLAS'
 
 configs = []
 for fp8_inputs in [False, True]:
-    if fp8_inputs and (not TORCH_HAS_FP8 or is_hip()):
+    if fp8_inputs and (not TORCH_HAS_FP8 or not is_cuda()):
         continue
     configs.append(
         triton.testing.Benchmark(
