@@ -66,4 +66,5 @@ def main():
     compare(baseline, new, args.threshold, args.geomean_threshold)
 
 
-main()
+if __name__ == "__main__":
+    main()

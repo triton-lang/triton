@@ -8,17 +8,18 @@ source /tmp/torchinductor_venv/bin/activate
 # shellcheck source=/dev/null
 source ./.github/workflows/torch-inductor/scripts/common.sh
 
-# build our own triton
+# Triton build-time dependencies
+pip3 install --upgrade cmake ninja lit
+
+# build our own triton and preserve the wheel build for later re-use in this test run.
 cd python || exit
-pip3 install --pre pytorch-triton --extra-index-url https://download.pytorch.org/whl/nightly/cu118
-rm -rf build
-pip3 install -e .
 pip3 uninstall pytorch-triton -y
+rm -rf build dist
+python3 setup.py bdist_wheel
+pip3 install dist/triton*.whl
 
 # clean up cache
-rm -rf /tmp/torchinductor_root/
 rm -rf ~/.triton/cache
-rm -rf "$TEST_REPORTS_DIR"
 
 # go back to where we started
 cd "$ROOT" || exit
