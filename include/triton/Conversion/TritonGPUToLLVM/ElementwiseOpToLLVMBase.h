@@ -86,12 +86,20 @@ public:
     if (!encoding)
       // encoding not available
       return resultVals;
+
     if (!encoding.dyn_cast<BlockedEncodingAttr>() &&
         !encoding.dyn_cast<SliceEncodingAttr>()) {
       // TODO: constraining the ecndoing type here is necessary for avoiding
       // crashes in the getElemsPerThread call below happening in the
       // test_core::test_fp8_dot_acc
       return resultVals;
+    }
+
+    // cannot utilize duplication with parent mfma layout
+    if (auto slice = encoding.dyn_cast<SliceEncodingAttr>()) {
+      if(slice.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
+        return resultVals;
+      }
     }
 
     SmallVector<unsigned> elemsPerThread = getElemsPerThread(rtType);
