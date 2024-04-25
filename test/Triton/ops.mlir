@@ -236,3 +236,11 @@ tt.func @histogram(%0: tensor<512xi32>) {
   %1 = tt.histogram %0 : tensor<512xi32> -> tensor<16xi32>
   tt.return
 }
+
+// CHECK-LABEL: experimental_descriptor_load
+tt.func @experimental_descriptor_load(%0: !tt.ptr<i8>) {
+  // CHECK: tt.experimental_descriptor_load %{{.+}}[%{{.+}}] : !tt.ptr<i8> -> tensor<128xf32>
+  %c0_i32 = arith.constant 0 : i32
+  %1 = tt.experimental_descriptor_load %0[%c0_i32] : !tt.ptr<i8> -> tensor<128xf32>
+  tt.return
+}

@@ -230,6 +230,15 @@ def floor(x, _builder=None):
 
 
 @core.builtin
+@_check_dtype(dtypes=["fp32", "fp64"])
+@_add_math_1arg_docstr("ceil")
+@core._tensor_member_fn
+def ceil(x, _builder=None):
+    x = core._to_tensor(x, _builder)
+    return core.tensor(_builder.create_ceil(x.handle), x.type)
+
+
+@core.builtin
 @_add_math_3arg_docstr("fused multiply-add")
 def fma(x, y, z, _builder=None):
     x = core._to_tensor(x, _builder)

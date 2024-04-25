@@ -4,6 +4,7 @@ import torch
 import tempfile
 
 import triton
+import triton.language as tl
 
 
 def test_descriptor_load_ttgir():
@@ -44,4 +45,27 @@ def test_descriptor_load_ttgir():
     desc = torch.tensor(desc, device=device)
     z_tri = torch.empty_like(x)
     kernel[(1, 1, 1)](z_tri, desc)
+    assert torch.equal(x, z_tri)
+
+
+def test_experimetal_descriptor_load():
+    if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] == 9:
+        pytest.skip("Test requires Hopper target.")
+        return
+    device = "cuda"
+    SIZE = 128
+
+    @triton.jit
+    def kernel(Z, desc, SIZE: tl.constexpr):
+        off_desc = 0
+        off = tl.arange(0, SIZE)
+        x = tl._experimental_descriptor_load(desc, [off_desc], [SIZE], Z.dtype)
+        tl.store(Z + off, x)
+
+    x = torch.randn(SIZE, dtype=torch.float32, device=device)
+    desc = np.empty(SIZE, dtype=np.int8)
+    triton.runtime.driver.active.utils.fill_1d_tma_descriptor(x.data_ptr(), SIZE, 4, desc)
+    desc = torch.tensor(desc, device=device)
+    z_tri = torch.empty_like(x)
+    kernel[(1, )](z_tri, desc, SIZE=SIZE, num_warps=4)
     assert torch.equal(x, z_tri)
