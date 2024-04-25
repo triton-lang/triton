@@ -25,6 +25,7 @@ import torch
 
 import triton
 import triton.language as tl
+from triton.runtime import driver
 
 
 @torch.jit.script
@@ -62,7 +63,7 @@ def naive_softmax(x):
 # Compute Kernel
 # --------------
 #
-# Our softmax kernel works as follows: each program loads a row of the input matrix X,
+# Our softmax kernel works as follows: each program loads a chunk of consecutive row of the input matrix X,
 # normalizes it and writes back the result to the output Y.
 #
 # Note that one important limitation of Triton is that each block must have a
@@ -71,58 +72,85 @@ def naive_softmax(x):
 
 
 @triton.jit
-def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n_cols, BLOCK_SIZE: tl.constexpr):
-    # The rows of the softmax are independent, so we parallelize across those
-    row_idx = tl.program_id(0)
-    # The stride represents how much we need to increase the pointer to advance 1 row
-    row_start_ptr = input_ptr + row_idx * input_row_stride
-    # The block size is the next power of two greater than n_cols, so we can fit each
-    # row in a single block
-    col_offsets = tl.arange(0, BLOCK_SIZE)
-    input_ptrs = row_start_ptr + col_offsets
-    # Load the row into SRAM, using a mask since BLOCK_SIZE may be > than n_cols
-    row = tl.load(input_ptrs, mask=col_offsets < n_cols, other=-float('inf'))
-    # Subtract maximum for numerical stability
-    row_minus_max = row - tl.max(row, axis=0)
-    # Note that exponentiation in Triton is fast but approximate (i.e., think __expf in CUDA)
-    numerator = tl.exp(row_minus_max)
-    denominator = tl.sum(numerator, axis=0)
-    softmax_output = numerator / denominator
-    # Write back output to DRAM
-    output_row_start_ptr = output_ptr + row_idx * output_row_stride
-    output_ptrs = output_row_start_ptr + col_offsets
-    tl.store(output_ptrs, softmax_output, mask=col_offsets < n_cols)
+def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n_rows, n_cols, XBLOCK: tl.constexpr,
+                   RBLOCK: tl.constexpr, NUM_REMAINDER_ROWS: tl.constexpr, num_stages: tl.constexpr):
+    pid = tl.program_id(0)
+    # starting row of the program
+    row_start = pid * (XBLOCK - 1) + min(pid, NUM_REMAINDER_ROWS)
+
+    for i in tl.range(0, XBLOCK, num_stages=num_stages):
+        row_idx = row_start + i
+        # The stride represents how much we need to increase the pointer to advance 1 row
+        row_start_ptr = input_ptr + row_idx * input_row_stride
+        # The block size is the next power of two greater than n_cols, so we can fit each
+        # row in a single block
+        col_offsets = tl.arange(0, RBLOCK)
+        input_ptrs = row_start_ptr + col_offsets
+        # Load the row into SRAM, using a mask since BLOCK_SIZE may be > than n_cols
+        mask = (i < XBLOCK - 1 or pid < NUM_REMAINDER_ROWS) and col_offsets < n_cols
+        row = tl.load(input_ptrs, mask=mask, other=-float('inf'))
+        # Subtract maximum for numerical stability
+        row_minus_max = row - tl.max(row, axis=0)
+        # Note that exponentiation in Triton is fast but approximate (i.e., think __expf in CUDA)
+        numerator = tl.exp(row_minus_max)
+        denominator = tl.sum(numerator, axis=0)
+        softmax_output = numerator / denominator
+        # Write back output to DRAM
+        output_row_start_ptr = output_ptr + row_idx * output_row_stride
+        output_ptrs = output_row_start_ptr + col_offsets
+        tl.store(output_ptrs, softmax_output, mask=mask)
 
 
 # %%
 # We can create a helper function that enqueues the kernel and its (meta-)arguments for any given input tensor.
 
+device = torch.cuda.current_device()
+NUM_SM = driver.active.utils.get_device_properties(device)["multiprocessor_count"]
+
 
 def softmax(x):
     n_rows, n_cols = x.shape
-    # The block size is the smallest power of two greater than the number of columns in `x`
-    BLOCK_SIZE = triton.next_power_of_2(n_cols)
+    num_programs = NUM_SM
+
+    # Create a number of persistent programs as many as SMs.
+    grid = lambda meta: (num_programs, )
+
+    # Each program handle a chunk of consecutive rows in a loop. If the number of rows is not a multiple of
+    # the number of programs, the remainder number of rows (R) are distributed evenly to the first R number
+    # of programs. Here the chunk size (XBLOCK) is to the number of rows handled by that portion of programs.
+    # The rest of programs will be masked off when accessing the XBLOCK-th row. When R=0, XBLOCK is always set
+    # to the size of the chunk plus one for universal handling in the kernel.
+    XBLOCK = (n_rows + num_programs) // num_programs
+    R = n_rows % num_programs
+
+    # The block size of each loop iteration is the smallest power of two greater than the number of columns in `x`
+    RBLOCK = triton.next_power_of_2(n_cols)
+
     # Another trick we can use is to ask the compiler to use more threads per row by
     # increasing the number of warps (`num_warps`) over which each row is distributed.
     # You will see in the next tutorial how to auto-tune this value in a more natural
     # way so you don't have to come up with manual heuristics yourself.
-    num_warps = 4
-    if BLOCK_SIZE >= 2048:
-        num_warps = 8
-    if BLOCK_SIZE >= 4096:
-        num_warps = 16
+    num_warps = 8
+
+    # Number of software piepling stages.
+    num_stages = 4
     # Allocate output
     y = torch.empty_like(x)
-    # Enqueue kernel. The 1D launch grid is simple: we have one kernel instance per row o
-    # f the input matrix
-    softmax_kernel[(n_rows, )](
+
+    # Enqueue kernel. The 1D launch grid is simple: we have one kernel instance per chunk of rows of
+    # the input matrix
+    softmax_kernel[grid](
         y,
         x,
         x.stride(0),
         y.stride(0),
+        n_rows,
         n_cols,
         num_warps=num_warps,
-        BLOCK_SIZE=BLOCK_SIZE,
+        XBLOCK=XBLOCK,
+        RBLOCK=RBLOCK,
+        NUM_REMAINDER_ROWS=R,
+        num_stages=num_stages,
     )
     return y
 
