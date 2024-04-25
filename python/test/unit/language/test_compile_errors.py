@@ -226,3 +226,79 @@ def test_power_of_two_shapes_2():
     with pytest.raises(CompilationError) as e:
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constants={}))
     assert str(e.value.__cause__) == "Shape element 0 must be a power of 2"
+
+
+def test_captured_var_access():
+
+    CAPTURED = 42
+
+    @triton.jit
+    def kernel():
+        a = CAPTURED  # noqa
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constants={}))
+    assert "CAPTURED is not defined" in str(e.value)
+
+
+GLOBAL = 42
+
+
+def test_global_var_access():
+
+    @triton.jit
+    def kernel():
+        a = GLOBAL  # noqa
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constants={}))
+    assert "global variable" in str(e.value)
+
+
+CONSTEXPR_ANNOTATED_GLOBAL: tl.constexpr = 42
+
+
+def test_constexpr_annotated_global_var_access():
+
+    @triton.jit
+    def kernel():
+        a = CONSTEXPR_ANNOTATED_GLOBAL  # noqa
+
+    # No error.
+    triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constants={}))
+
+
+CONSTEXPR_GLOBAL = tl.constexpr(42)
+
+
+def test_constexpr_global_var_access():
+
+    @triton.jit
+    def kernel():
+        a = CONSTEXPR_GLOBAL  # noqa
+
+    # No error.
+    triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constants={}))
+
+
+TYPE_ALIAS = tl.pointer_type(tl.int32)
+
+
+def test_global_type_alias_access():
+
+    @triton.jit
+    def kernel():
+        a = TYPE_ALIAS  # noqa
+
+    # No error.
+    triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constants={}))
+
+
+def test_global_access_in_fn_default_arg():
+
+    @triton.jit
+    def kernel(a=GLOBAL):
+        pass
+
+    # No error.
+    triton.compile(triton.compiler.ASTSource(fn=kernel, signature={0: "i32"}, constants={}))
