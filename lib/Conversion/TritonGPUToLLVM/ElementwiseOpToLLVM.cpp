@@ -32,9 +32,8 @@ SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
   // If the parent of the dot operand is in block encoding, we don't need to
   // reorder elements
   auto parentEncoding = dyn_cast<NvidiaMmaEncodingAttr>(ouEncoding.getParent());
-  if (!parentEncoding) {
+  if (!parentEncoding)
     return values;
-  }
   size_t inBitWidth = inTensorTy.getElementType().getIntOrFloatBitWidth();
   size_t ouBitWidth = ouTensorTy.getElementType().getIntOrFloatBitWidth();
   auto ouEltTy = ouTensorTy.getElementType();

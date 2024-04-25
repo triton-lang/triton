@@ -86,7 +86,6 @@ public:
     if (!encoding)
       // encoding not available
       return resultVals;
-
     if (!encoding.dyn_cast<BlockedEncodingAttr>() &&
         !encoding.dyn_cast<SliceEncodingAttr>()) {
       // TODO: constraining the ecndoing type here is necessary for avoiding
