@@ -21,9 +21,8 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(ConversionPatternRewriter &rewriter,
                                          StringRef libname /*= ""*/,
                                          StringRef libpath /*= ""*/) {
   using LLVM::LLVMFuncOp;
-  appendOrGetExternFuncOp
 
-      auto funcAttr = StringAttr::get(op->getContext(), funcName);
+  auto funcAttr = StringAttr::get(op->getContext(), funcName);
   Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(op, funcAttr);
   if (funcOp)
     return cast<LLVMFuncOp>(*funcOp);
