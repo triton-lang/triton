@@ -404,19 +404,17 @@ static bool loadIsMMAv3(tt::LoadOp loadOp) {
   return oldOrder == newOrder;
 }
 
-static llvm::DenseSet<tt::LoadOp>
-assignMemoryLayouts(llvm::MapVector<tt::LoadOp, LoadInfo> &loadToInfo,
-                    llvm::SmallVector<std::tuple<tt::LoadOp, int, Operation *>>
+static llvm::MapVector<tt::LoadOp, LoadInfo>
+assignMemoryLayouts(llvm::SmallVector<std::tuple<tt::LoadOp, int, Operation *>>
                         &loadOpToIndLevelAndUse,
                     tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
-
-  llvm::DenseSet<tt::LoadOp> loadsToPipeline;
+  llvm::MapVector<tt::LoadOp, LoadInfo> loadToInfo;
 
   for (auto &[loadOp, dist, use] : loadOpToIndLevelAndUse) {
     assert(!isLoadFromTensorPtr(loadOp) &&
            "Block ptr should have been lowered before this pass.");
 
-    if (loadsToPipeline.count(loadOp))
+    if (loadToInfo.count(loadOp))
       // TODO pawel: err, we'd need to verify that the distance is the same
       continue;
 
@@ -494,7 +492,7 @@ assignMemoryLayouts(llvm::MapVector<tt::LoadOp, LoadInfo> &loadToInfo,
       // loadOp) has already be processed in a previous loop iteration. This
       // assumption is held by how loadOpsToIndirectionLevelAndUse recursively
       // collects loadOpToIndLevelAndUse using DFS.
-      if (loadsToPipeline.count(loadOp) == 0) {
+      if (loadToInfo.count(loadOp) == 0) {
         continue;
       }
     }
@@ -512,17 +510,15 @@ assignMemoryLayouts(llvm::MapVector<tt::LoadOp, LoadInfo> &loadToInfo,
     if (!loadInfo.sharedEncoding) {
       continue;
     }
-
-    loadsToPipeline.insert(loadOp);
     loadToInfo[loadOp] = loadInfo;
   }
 
-  return loadsToPipeline;
+  return loadToInfo;
 }
 
-static bool scheduleLoads(scf::ForOp forOp, CoarseSchedule &schedule,
-                          llvm::MapVector<tt::LoadOp, LoadInfo> &loadToInfo,
-                          DenseSet<Operation *> &rootUsers, int numStages) {
+static llvm::MapVector<tt::LoadOp, LoadInfo>
+scheduleLoads(scf::ForOp forOp, CoarseSchedule &schedule,
+              DenseSet<Operation *> &rootUsers, int numStages) {
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
   tt::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
@@ -539,20 +535,20 @@ static bool scheduleLoads(scf::ForOp forOp, CoarseSchedule &schedule,
     }
   });
   if (loadOpToIndLevelAndUse.empty())
-    return false;
+    return {};
 
   // Check which loads are good for pipelining, and assign them
   // memory layouts.
-  DenseSet<tt::LoadOp> loadsToPipeline =
-      assignMemoryLayouts(loadToInfo, loadOpToIndLevelAndUse, axisInfoAnalysis);
+  llvm::MapVector<tt::LoadOp, LoadInfo> loadToInfo =
+      assignMemoryLayouts(loadOpToIndLevelAndUse, axisInfoAnalysis);
 
-  if (loadsToPipeline.empty())
-    return false;
+  if (loadToInfo.empty())
+    return {};
 
   // Calculate the stage distance between applicable loads.
   int maxIndirectionLevel = -1;
   for (auto [loadOp, dist, use] : loadOpToIndLevelAndUse) {
-    if (loadsToPipeline.count(loadOp) == 0)
+    if (loadToInfo.count(loadOp) == 0)
       continue;
     maxIndirectionLevel = std::max(maxIndirectionLevel, dist);
   }
@@ -571,7 +567,7 @@ static bool scheduleLoads(scf::ForOp forOp, CoarseSchedule &schedule,
 
   // Assign stages to the loads.
   for (auto [loadOp, indLevel, _] : loadOpToIndLevelAndUse) {
-    if (loadsToPipeline.count(loadOp) == 0)
+    if (loadToInfo.count(loadOp) == 0)
       continue;
     int stage = (maxIndirectionLevel - indLevel) * stagesBetweenLoads;
     // Make space between order clusters: dependencies of distance 1 will
@@ -581,12 +577,12 @@ static bool scheduleLoads(scf::ForOp forOp, CoarseSchedule &schedule,
 
   // Distance from the load to the use.
   for (auto [loadOp, _, use] : loadOpToIndLevelAndUse) {
-    if (loadsToPipeline.count(loadOp) == 0)
+    if (loadToInfo.count(loadOp) == 0)
       continue;
     loadToInfo[loadOp].distToUse = schedule[use].first - schedule[loadOp].first;
   }
 
-  return true;
+  return loadToInfo;
 }
 
 static void schedulePrologueAndEpilogue(scf::ForOp forOp,
@@ -844,10 +840,12 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     scf::ForOp &forOp, int numStages, mlir::triton::PipeliningOption &options) {
   // Schedule the loads and root ops (dot ops) in the loop. This will give us
   // a scaffold for the final schedule.
-  llvm::MapVector<tt::LoadOp, LoadInfo> loadToInfo;
+  ;
   DenseSet<Operation *> rootUsers;
   CoarseSchedule coarseSchedule(numStages);
-  if (!scheduleLoads(forOp, coarseSchedule, loadToInfo, rootUsers, numStages))
+  llvm::MapVector<tt::LoadOp, LoadInfo> loadToInfo =
+      scheduleLoads(forOp, coarseSchedule, rootUsers, numStages);
+  if (loadToInfo.empty())
     return false;
 
   // Convert the loads into async loads and create the allocs.
