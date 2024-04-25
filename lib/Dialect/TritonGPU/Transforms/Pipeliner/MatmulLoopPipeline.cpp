@@ -103,7 +103,7 @@ public:
     return schedule;
   }
 
-  void dump(int numStages) {
+  void dump() {
     for (int i = 0; i < numStages; i++) {
       LDBG("- Ops in stage " << i);
       for (auto &[op, stageAndCluster] : opToStageAndCluster) {
@@ -838,138 +838,6 @@ printSchedule(std::vector<std::pair<Operation *, unsigned>> &schedule,
   }
 }
 
-// Create the schedule for a matmul loop. This is ad hoc based on how we know
-// matmul loops should be pipelined and is not a generic scheduler.
-static std::vector<std::pair<Operation *, unsigned>>
-createSchedule(scf::ForOp forOp, int numStages, CoarseSchedule &coarseSchedule,
-               llvm::MapVector<tt::LoadOp, LoadInfo> &loadToInfo) {
-  LLVM_DEBUG({
-    LDBG("For loop:");
-    forOp.dump();
-
-    LDBG("Initial coarse schedule:");
-    coarseSchedule.dump(numStages);
-  });
-
-  // Add dependencies of anchor ops to the coarse schedule. Schedule them to
-  // the same stage and ordering cluster as the anchor op.
-  // We may visit non-anchor ops multiple times, their final stage and ordering
-  // cluster will be the minimum of all the visits (i.e. the earliest possible,
-  // to satisfy dependencies)
-  llvm::DenseMap<Operation *, std::pair<int, int>> opToStageAndOrder;
-  DenseSet<Operation *> visitedAnchorOps;
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    if (coarseSchedule.count(&op) == 0)
-      continue;
-    auto [stage, order] = coarseSchedule[&op];
-    DenseSet<Operation *> anchorOpDeps;
-    tt::addDep(&op, anchorOpDeps, false,
-               &visitedAnchorOps); // don't go through visitedAnchorOps - they
-                                   // are where they have to be
-    for (auto dep : anchorOpDeps) {
-      int depStage = stage;
-      int depOrder = order;
-      if (opToStageAndOrder.count(dep) > 0) {
-        // Figure out the earliest stage and order for the dependency.
-        depStage = std::min(opToStageAndOrder[dep].first, depStage);
-        depOrder = std::min(opToStageAndOrder[dep].second, depOrder);
-      }
-
-      if (coarseSchedule.count(dep) == 0) {
-        opToStageAndOrder[dep] = {depStage, depOrder};
-      }
-    }
-    visitedAnchorOps.insert(&op); // Don't go through that anchor op again,
-                                  // leave its dependencies as they are.
-  }
-
-  for (auto &[op, stageAndOrder] : opToStageAndOrder) {
-    coarseSchedule.insertIfAbsent(op, stageAndOrder.first,
-                                  stageAndOrder.second);
-  }
-
-  LLVM_DEBUG({
-    LDBG("Coarse schedule with dependencies:");
-    coarseSchedule.dump(numStages);
-  });
-
-  auto getNestedOperands = [](Operation *op) -> SmallVector<Value> {
-    SmallVector<Value> operands;
-    op->walk([&](Operation *nestedOp) {
-      for (Value operand : nestedOp->getOperands()) {
-        if (operand.getParentBlock()->getParentOp()->isAncestor(nestedOp))
-          operands.push_back(operand);
-      }
-    });
-    return operands;
-  };
-
-  // Find dependencies with distance of 1. They will go to the next stage,
-  // but in the cluster before the current op.
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    if (coarseSchedule.count(&op) == 0)
-      continue;
-    auto [stage, order] = coarseSchedule[&op];
-    // Can't schedule past the last stage.
-    if (stage == numStages - 1)
-      continue;
-    for (Value operand : getNestedOperands(&op)) {
-      if (auto arg = operand.dyn_cast<BlockArgument>()) {
-        if (arg.getArgNumber() > 0 && arg.getOwner() == op.getBlock()) {
-          auto yieldOp = op.getBlock()->getTerminator();
-          Value v = yieldOp->getOperand(arg.getArgNumber() - 1);
-          Operation *defOp = v.getDefiningOp();
-          if (defOp && coarseSchedule.count(defOp) == 0) {
-            DenseSet<Operation *> distanceOneUsers;
-            tt::addDep(defOp, distanceOneUsers, true);
-            if (isa<tt::LoadOp>(defOp)) {
-              // Exception: Schedule loads with a distance of 1 together
-              // with the current op.
-              for (auto user : distanceOneUsers) {
-                coarseSchedule.insertIfAbsent(user, stage, order);
-              }
-            } else {
-              for (auto user : distanceOneUsers) {
-                coarseSchedule.insertIfAbsent(user, stage + 1, order - 1);
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-
-  LLVM_DEBUG({
-    LDBG("Coarse schedule with dist 1:");
-    coarseSchedule.dump(numStages);
-  });
-
-  // Assign the rest of the ops to the last stage.
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    coarseSchedule.insertIfAbsent(&op, numStages - 1, 0);
-  }
-
-  LLVM_DEBUG({
-    LDBG("Final coarse schedule:");
-    coarseSchedule.dump(numStages);
-  });
-
-  // Create the actual schedule
-  std::vector<std::pair<Operation *, unsigned>> schedule;
-  for (int ord : coarseSchedule.orderClusters) {
-    for (auto &op : forOp.getBody()->without_terminator()) {
-      assert(coarseSchedule.count(&op) && "Op not in schedule!");
-      assert(coarseSchedule[&op].first < numStages && "Op with invalid stage!");
-      if (coarseSchedule[&op].second == ord)
-        schedule.push_back({&op, coarseSchedule[&op].first});
-    }
-  }
-
-  LLVM_DEBUG(printSchedule(schedule, numStages));
-
-  return schedule;
-}
-
 constexpr static char kNeedWaitAttrName[] = "triton.pipeline.needs_wait";
 
 bool mlir::triton::preProcessLoopAndGetSchedule(
@@ -989,19 +857,19 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   schedulePrologueAndEpilogue(forOp, coarseSchedule, rootUsers, numStages);
   LLVM_DEBUG({
     LDBG("Coarse schedule with prologue and epilogue:");
-    coarseSchedule.dump(numStages);
+    coarseSchedule.dump();
   });
 
   scheduleDependencies(forOp, coarseSchedule);
   LLVM_DEBUG({
     LDBG("Coarse schedule with dependencies:");
-    coarseSchedule.dump(numStages);
+    coarseSchedule.dump();
   });
 
   scheduleDistanceOneDependencies(forOp, coarseSchedule, numStages);
   LLVM_DEBUG({
     LDBG("Coarse schedule with dist 1:");
-    coarseSchedule.dump(numStages);
+    coarseSchedule.dump();
   });
 
   // Assign the rest of the ops to the last stage.
@@ -1010,13 +878,15 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   }
   LLVM_DEBUG({
     LDBG("Final coarse schedule:");
-    coarseSchedule.dump(numStages);
+    coarseSchedule.dump();
   });
 
   // 3. Create the final schedule for the kernel loop. This will dictate the
   // stages and order of operations to the pipeline expander.
   std::vector<std::pair<Operation *, unsigned>> schedule =
       coarseSchedule.createFinalSchedule(forOp);
+
+  LLVM_DEBUG(printSchedule(schedule, numStages));
 
   // 4. Fill out the pipeline options.
   options.getScheduleFn =
