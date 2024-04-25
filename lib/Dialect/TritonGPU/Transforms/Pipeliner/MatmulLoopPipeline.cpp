@@ -8,6 +8,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -138,9 +139,21 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
     for (auto alloc : allocsToErase) {
       alloc.erase();
     }
+
     auto sharedLoad =
         builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewLoad);
-    loadOp->replaceAllUsesWith(sharedLoad->getResults());
+    auto result = sharedLoad->getResults();
+
+    // Create a select for non-zero other values as they are not handled by
+    // AsyncCopyGlobalToLocalOp for now.
+    Value other = loadOp.getOther();
+    if (other && !isZeroConst(other)) {
+      auto select = builder.create<arith::SelectOp>(
+          loc, loadOp.getType(), mask, sharedLoad.getResult(), other);
+      result = select->getResults();
+    }
+
+    loadOp->replaceAllUsesWith(result);
   }
   loadOp.erase();
 }

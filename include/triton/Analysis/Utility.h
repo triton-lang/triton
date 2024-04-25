@@ -8,6 +8,18 @@
 
 namespace mlir {
 
+inline bool isZeroConst(Value v) {
+  auto constantOp = v.getDefiningOp<arith::ConstantOp>();
+  if (!constantOp)
+    return false;
+  if (auto denseAttr = dyn_cast<DenseFPElementsAttr>(constantOp.getValueAttr()))
+    return denseAttr.isSplat() && denseAttr.getSplatValue<APFloat>().isZero();
+  if (auto denseAttr =
+          dyn_cast<DenseIntElementsAttr>(constantOp.getValueAttr()))
+    return denseAttr.isSplat() && denseAttr.getSplatValue<APInt>().isZero();
+  return false;
+}
+
 class ReduceOpHelper {
 public:
   explicit ReduceOpHelper(triton::ReduceOp op)
