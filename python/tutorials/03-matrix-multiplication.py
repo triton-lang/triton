@@ -160,6 +160,11 @@ def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
+def is_hip_mi200():
+    target = triton.runtime.driver.active.get_current_target()
+    return target.backend == 'hip' and target.arch == 'gfx90a'
+
+
 # `triton.jit`'ed functions can be auto-tuned by using the `triton.autotune` decorator, which consumes:
 #   - A list of `triton.Config` objects that define different configurations of
 #       meta-parameters (e.g., `BLOCK_SIZE_M`) and compilation options (e.g., `num_warps`) to try
@@ -343,7 +348,11 @@ triton_output = matmul(a, b)
 torch_output = torch.matmul(a, b)
 print(f"triton_output_with_fp16_inputs={triton_output}")
 print(f"torch_output_with_fp16_inputs={torch_output}")
-if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0):
+# Bigger tolerance for AMD MI200 devices.
+# MI200 devices use reduced precision fp16 and bf16 and flush input and
+# output denormal values to zero. Detailed info is at: https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
+rtol = 1e-2 if is_hip_mi200() else 0
+if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=rtol):
     print("✅ Triton and Torch match")
 else:
     print("❌ Triton and Torch differ")
