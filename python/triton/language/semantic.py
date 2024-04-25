@@ -1036,6 +1036,15 @@ def load(ptr: tl.tensor, mask: Optional[tl.tensor], other: Optional[tl.tensor], 
         return _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder)
 
 
+def descriptor_load(desc_ptr: tl.tensor, offsets, cache_modifier: str, eviction_policy: str, type,
+                    builder: ir.builder) -> tl.tensor:
+    offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
+    x = builder.create_descriptor_load(desc_ptr.handle, offsets, type.to_ir(builder),
+                                       _str_to_load_cache_modifier(cache_modifier),
+                                       _str_to_eviction_policy(eviction_policy))
+    return tl.tensor(x, type)
+
+
 def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builder):
     # Store by a block pointer: `pointer_type<block_type<>>`
     # Block pointers can not have the `mask` argument

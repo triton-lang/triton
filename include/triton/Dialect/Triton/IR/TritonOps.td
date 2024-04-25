@@ -1090,4 +1090,36 @@ def ReturnOp : TT_Op<"return", [Pure, HasParent<"FuncOp">, /*MemRefsNormalizable
   let hasVerifier = 1;
 }
 
+
+def TT_ExperimentalDescriptorLoadOp : TT_Op<"experimental_descriptor_load", [
+  MemoryEffects<[MemRead<GlobalMemory>]>]> {
+    let summary = "Load from descriptor";
+    let description = [{
+      This operation will be lowered to Nvidia TMA load operation on targets supporting it.
+      `desc_ptr` is a pointer to the TMA descriptor allocated in global memory.
+      The destination tensor type and shape must match the descriptor otherwise the result is undefined.
+
+      This is an escape hatch and is only there for testing/experimenting.
+      This op will be removed in the future.
+    }];
+    let arguments = (
+      ins
+      TT_PtrType:$desc_ptr,
+      Variadic<I32>:$indices,
+      DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
+      DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict
+    );
+
+    let results = (outs TT_Tensor:$result);
+
+    let assemblyFormat = [{
+      $desc_ptr `[` $indices `]`
+      oilist(
+        `cacheModifier` `=` $cache |
+        `evictionPolicy` `=` $evict
+      )
+      attr-dict `:` qualified(type($desc_ptr)) `->` type($result)
+    }];
+}
+
 #endif // Triton_OPS
