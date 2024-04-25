@@ -1,16 +1,6 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 
-#include "PatternTritonGPUOpToLLVM.h"
-#include "TargetInfo.h"
 #include "Utility.h"
-#include "mlir/Analysis/DataFlowFramework.h"
-#include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
-#include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
-#include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
-#include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
-#include "mlir/Conversion/LLVMCommon/VectorPattern.h"
-#include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
-#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/Index/IR/IndexOps.h"
@@ -19,16 +9,10 @@
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "triton/Analysis/Allocation.h"
-#include "triton/Analysis/AxisInfo.h"
-#include "triton/Analysis/Membar.h"
-#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
-#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Tools/Sys/GetPlatform.hpp"
 
 namespace mlir {
 namespace triton {
@@ -39,69 +23,103 @@ namespace triton {
 
 using namespace mlir;
 
-class TritonLLVMConversionTarget : public ConversionTarget {
-public:
-  explicit TritonLLVMConversionTarget(MLIRContext &ctx)
-      : ConversionTarget(ctx) {
-    addLegalDialect<LLVM::LLVMDialect>();
-    addLegalDialect<ROCDL::ROCDLDialect>();
-    addLegalDialect<mlir::scf::SCFDialect>();
-    addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
-    addIllegalDialect<triton::TritonDialect>();
-    addIllegalDialect<triton::gpu::TritonGPUDialect>();
-    addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
-    addIllegalDialect<mlir::gpu::GPUDialect>();
-    addLegalOp<mlir::UnrealizedConversionCastOp>();
-  }
-};
-
 namespace {
 
-struct CallOpConversion : public ConvertOpToLLVMPattern<LLVM::CallOp> {
-  using ConvertOpToLLVMPattern<LLVM::CallOp>::ConvertOpToLLVMPattern;
+class CallOpConversion : public mlir::RewritePattern {
+public:
+  CallOpConversion(mlir::MLIRContext *context)
+      : mlir::RewritePattern(LLVM::CallOp::getOperationName(), 1, context) {}
 
   LogicalResult
-  matchAndRewrite(LLVM::CallOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    return success();
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto callOp = cast<LLVM::CallOp>(op);
+    if (isPredicatedLoad(callOp)) {
+      return convertPredicatedLoad(callOp, rewriter);
+    } else if (isPredicatedStore(callOp)) {
+      return convertPredicatedStore(callOp, rewriter);
+    } else {
+      return failure();
+    }
+  }
+
+private:
+  bool isPredicatedLoad(LLVM::CallOp callOp) const {
+    return callOp.getCallee().value().find(mlir::LLVM::AMD::Predicated_Load) !=
+           llvm::StringRef::npos;
+  }
+
+  bool isPredicatedStore(LLVM::CallOp callOp) const {
+    return callOp.getCallee().value().find(mlir::LLVM::AMD::Predicated_Store) !=
+           llvm::StringRef::npos;
+  }
+
+  LogicalResult convertPredicatedStore(LLVM::CallOp callOp,
+                                       mlir::PatternRewriter &rewriter) const {
+    auto operands = callOp.getOperands();
+
+    auto loc = callOp.getLoc();
+    auto ptr = operands[0];
+    auto val = operands[1];
+    auto pred = operands[2];
+
+    Block *currentBlock = rewriter.getInsertionBlock();
+    Block *afterStore =
+        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+    Block *trueBlock = rewriter.createBlock(afterStore);
+    rewriter.setInsertionPointToEnd(currentBlock);
+    rewriter.create<LLVM::CondBrOp>(loc, pred, trueBlock, afterStore);
+    rewriter.setInsertionPointToStart(trueBlock);
+    auto storeOp = rewriter.create<LLVM::StoreOp>(loc, val, ptr);
+    rewriter.create<LLVM::BrOp>(loc, afterStore);
+    rewriter.setInsertionPointToStart(afterStore);
+    rewriter.eraseOp(callOp);
+    return mlir::success();
+  }
+
+  LogicalResult convertPredicatedLoad(LLVM::CallOp callOp,
+                                      mlir::PatternRewriter &rewriter) const {
+    auto operands = callOp.getOperands();
+    auto result = callOp.getResult();
+
+    auto loc = callOp.getLoc();
+    auto elemTy = result.getType();
+    auto ptr = operands[0];
+    auto pred = operands[1];
+    auto falseVal = operands[2];
+
+    Block *currentBlock = rewriter.getInsertionBlock();
+    Block *afterLoad =
+        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+    afterLoad->addArgument({elemTy}, {loc});
+    Block *trueBlock = rewriter.createBlock(afterLoad);
+    Block *falseBlock =
+        rewriter.splitBlock(trueBlock, rewriter.getInsertionPoint());
+    rewriter.setInsertionPointToEnd(currentBlock);
+    rewriter.create<LLVM::CondBrOp>(loc, pred, trueBlock, falseBlock);
+    rewriter.setInsertionPointToStart(trueBlock);
+    auto loadOp = rewriter.create<LLVM::LoadOp>(loc, elemTy, ptr);
+    rewriter.create<LLVM::BrOp>(loc, loadOp->getResult(0), afterLoad);
+    rewriter.setInsertionPointToStart(falseBlock);
+    rewriter.create<LLVM::BrOp>(loc, falseVal, afterLoad);
+    rewriter.setInsertionPointToStart(afterLoad);
+    Value loadVal = afterLoad->getArgument(0);
+    rewriter.replaceOp(callOp, loadVal);
+    return mlir::success();
   }
 };
-
-} // namespace
-
-void mlir::triton::AMD::populateExternToLLVM(LLVMTypeConverter &typeConverter,
-                                             RewritePatternSet &patterns,
-                                             PatternBenefit benefit) {
-  patterns.add<CallOpConversion>(typeConverter, benefit);
-}
-
-namespace {
 
 struct ConvertExternToLLVM
     : public triton::impl::ConvertExternToLLVMBase<ConvertExternToLLVM> {
-  explicit ConvertExternToLLVM(StringRef targetArch) {
-    this->arch = targetArch.str();
-  }
-
-  void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<triton::nvgpu::NVGPUDialect, LLVM::LLVMDialect,
-                    NVVM::NVVMDialect, mlir::ROCDL::ROCDLDialect>();
-  }
-
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
 
-    mlir::LowerToLLVMOptions option(context);
-    option.overrideIndexBitwidth(32);
-
-    TritonGPUToLLVMTypeConverter typeConverter(context, option);
-    TritonLLVMConversionTarget convTarget(*context);
     RewritePatternSet patterns(context);
-    AMD::populateExternToLLVM(typeConverter, patterns, patternBenefitDefault);
+    patterns.add<CallOpConversion>(context);
 
-    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {
-      return signalPassFailure();
+    if (mlir::applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed()) {
+      signalPassFailure();
     }
   }
 };
@@ -111,9 +129,8 @@ struct ConvertExternToLLVM
 namespace mlir {
 namespace triton {
 
-std::unique_ptr<OperationPass<ModuleOp>>
-createConvertExternToLLVMPass(StringRef targetArch) {
-  return std::make_unique<ConvertExternToLLVM>(targetArch);
+std::unique_ptr<OperationPass<ModuleOp>> createConvertExternToLLVMPass() {
+  return std::make_unique<ConvertExternToLLVM>();
 }
 
 } // namespace triton

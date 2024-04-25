@@ -205,16 +205,26 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
       auto vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
       Value ptr = addrspacecast(ptr_ty(getContext()), ptrElems[vecStart]);
-      // auto loadVal = llLoad(rewriter, loc, getTypeConverter(), ptr, vecTy,
-      // pred,
-      //                       vecStart, otherElems);
 
-      Type funcType = getFunctionType(vecTy, ValueRange({ptr, pred}));
-      LLVM::LLVMFuncOp funcOp =
-          appendOrGetExternFuncOp(rewriter, op, "__predicated_load", funcType);
-      auto loadVal =
-          rewriter.create<LLVM::CallOp>(loc, funcOp, ValueRange({ptr, pred}))
-              .getResult();
+      mlir::Attribute zeroAttr = rewriter.getZeroAttr(valueElemTy);
+      auto denseValue =
+          DenseElementsAttr::get(vecTy.cast<mlir::ShapedType>(), zeroAttr);
+      Value zeroVal = rewriter.create<LLVM::ConstantOp>(loc, vecTy, denseValue);
+
+      Value falseVal = zeroVal;
+      // If we need to mask the loaded value with other elements
+      if (otherElems.size() != 0) {
+        Value v = undef(vecTy);
+        for (size_t s = 0; s < vec; ++s) {
+          Value otherElem = otherElems[vecStart + s];
+          Value indexVal = createIndexAttrConstant(
+              rewriter, loc, this->getTypeConverter()->getIndexType(), s);
+          v = insert_element(vecTy, v, otherElem, indexVal);
+        }
+        falseVal = v;
+      }
+
+      auto loadVal = llLoad(rewriter, loc, ptr, vecTy, pred, falseVal);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, this->getTypeConverter()->getIndexType(), ii % vec);
@@ -317,8 +327,8 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
         }
         llWord = bitcast(llWord, valArgTy);
         Value maskVal = llMask ? and_(mask, maskElems[vecStart]) : mask;
-        llStore(rewriter, loc, ptrElems[vecStart + wordIdx * wordNElems],
-                llWord, maskVal);
+        auto address = ptrElems[vecStart + wordIdx * wordNElems];
+        llStore(rewriter, loc, address, llWord, maskVal);
       }
     }
     rewriter.eraseOp(op);

@@ -37,7 +37,7 @@ def ConvertExternToLLVM : Pass<"convert-extern-to-llvm", "mlir::ModuleOp"> {
     let description = [{
 
     }];
-    let constructor = "mlir::triton::createConvertExternToLLVMPass(\"\")";
+    let constructor = "mlir::triton::createConvertExternToLLVMPass()";
 
     let dependentDialects = ["mlir::arith::ArithDialect",
                              "mlir::math::MathDialect",
@@ -49,11 +49,6 @@ def ConvertExternToLLVM : Pass<"convert-extern-to-llvm", "mlir::ModuleOp"> {
                              "mlir::triton::gpu::TritonGPUDialect",
                              "mlir::ROCDL::ROCDLDialect"];
 
-    let options = [
-        Option<"arch", "arch",
-               "std::string", /*default*/"\"\"",
-               "target device architecture">,
-    ];
 }
 
 #endif
