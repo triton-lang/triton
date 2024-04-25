@@ -664,7 +664,7 @@ def full_static_persistent_matmul_kernel(a_ptr, b_ptr, w_ptr, bias_ptr, z_ptr,  
         offs_n = block_offset_n + tl.arange(0, BLOCK_N)
         z_ptrs = z_ptr + offs_m[:, None] * stride_zm + offs_n[None, :] * stride_zn
         bias_ptrs = bias_ptr + offs_m[:, None] * stride_zm + offs_n[None, :] * stride_zn
-        mask = (offs_m < M * N // N)[:, None] & (offs_n < N)[None, :]
+        mask = (offs_m < M)[:, None] & (offs_n < N)[None, :]
 
         # TODO: lib/Dialect/TritonGPU/Transforms/RewriteTensorPointer.cpp does not support scf.if yet.
         # if tile_id >= NUM_SMS:
