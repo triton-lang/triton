@@ -210,22 +210,21 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
     queue.pop_back();
     getForwardSlice(currentValue, &forwardSlice);
     for (Operation *op : forwardSlice) {
-      // HACK: Stop propagation if the op is using mma layout but is producing
-      // tensor smaller than the layout we would like to propagate. This is to
-      // avoid stepping into the known bug.
-      if (isa<tt::ReduceOp>(op)) {
-        for (auto result : op->getResults()) {
-          auto tensorType = result.getType().dyn_cast<RankedTensorType>();
-          if (tensorType &&
-              tensorType.getEncoding().isa<NvidiaMmaEncodingAttr>()) {
-            auto mmaInstrShape =
-                encoding.cast<NvidiaMmaEncodingAttr>().getInstrShape();
-            if (tensorType.getShape()[tensorType.getRank() - 2] <
-                    mmaInstrShape[0] ||
-                tensorType.getShape()[tensorType.getRank() - 1] <
-                    mmaInstrShape[1]) {
-              return false;
-            }
+      // HACK: Stop propagation if the ReduceOp is using mma layout but is
+      // producing tensor smaller than the layout we would like to propagate.
+      // This is to avoid stepping into the known bug.
+      if (isa<mlir::triton::ReduceOp>(op)) {
+        auto tensorType =
+            op->getOperand(0).getType().dyn_cast<RankedTensorType>();
+        if (tensorType &&
+            tensorType.getEncoding().isa<NvidiaMmaEncodingAttr>()) {
+          auto mmaInstrShape =
+              encoding.cast<NvidiaMmaEncodingAttr>().getInstrShape();
+          if (tensorType.getShape()[tensorType.getRank() - 2] <
+                  mmaInstrShape[0] ||
+              tensorType.getShape()[tensorType.getRank() - 1] <
+                  mmaInstrShape[1]) {
+            return false;
           }
         }
       }
