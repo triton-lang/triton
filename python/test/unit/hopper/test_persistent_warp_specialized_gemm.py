@@ -159,7 +159,7 @@ def test_user_defined_persistent_non_warp_specialized_gemm(M, N, K, BLOCK_M, BLO
     grid = lambda META: (min(META['NUM_SMS'], triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N'])), )
 
     if USE_TMA:
-        num_stages = {"num_stages":1} if is_hip() else {}
+        num_stages = {"num_stages": 1} if is_hip() else {}
         static_persistent_tma_matmul_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c, M=M, N=N, K=K, stride_am=a.stride(0),
                                                   stride_ak=a.stride(1), stride_bk=b.stride(0), stride_bn=b.stride(1),
                                                   stride_cm=c.stride(0), stride_cn=c.stride(1), BLOCK_M=BLOCK_M,
@@ -300,7 +300,7 @@ def test_non_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K
 
     grid = lambda META: (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), )
 
-    num_stages = {"num_stages":1} if is_hip() else {}
+    num_stages = {"num_stages": 1} if is_hip() else {}
     if USE_TMA:
         tma_warp_specialized_matmul_kernel[grid](
             a, b, c,  #
@@ -310,8 +310,7 @@ def test_non_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K
             c.stride(0), c.stride(1),  #
             BLOCK_M, BLOCK_N, BLOCK_K,  #
             num_warps=4,  #
-            num_ctas=NUM_CTAS,
-            **num_stages)
+            num_ctas=NUM_CTAS, **num_stages)
     else:
         warp_specialized_matmul_kernel[grid](
             a, b, c,  #
@@ -321,8 +320,7 @@ def test_non_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K
             c.stride(0), c.stride(1),  #
             BLOCK_M, BLOCK_N, BLOCK_K,  #
             num_warps=4,  #
-            num_ctas=NUM_CTAS, 
-            **num_stages)
+            num_ctas=NUM_CTAS, **num_stages)
 
     th_c = torch.matmul(a, b)
     torch.testing.assert_close(th_c, c, atol=1e-2, rtol=0, check_dtype=False)
@@ -462,7 +460,7 @@ def test_user_defined_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N
     NUM_SMS = torch.cuda.get_device_properties('cuda').multi_processor_count
     grid = lambda META: (min(META['NUM_SMS'], triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N'])), )
 
-    num_stages = {"num_stages":1} if is_hip() else {}
+    num_stages = {"num_stages": 1} if is_hip() else {}
     if USE_TMA:
         static_persistent_tma_warp_specialized_matmul_kernel[grid](a, b, c, M, N, K, a.stride(0), a.stride(1),
                                                                    b.stride(0), b.stride(1), c.stride(0), c.stride(1),
@@ -587,7 +585,7 @@ def test_static_persistent_matmul_no_scf_kernel(M, N, K, NUM_CTAS, NUM_WARPS, TR
 
     NUM_SMS = torch.cuda.get_device_properties('cuda').multi_processor_count
 
-    num_stages = {"num_stages":1} if is_hip() else {}
+    num_stages = {"num_stages": 1} if is_hip() else {}
     # TODO: set `enable_warp_specialization=False` will lead to compilation error.
     static_persistent_matmul_no_scf_kernel[(NUM_SMS, )](
         a_ptr=a, b_ptr=b, c_ptr=c,  #
