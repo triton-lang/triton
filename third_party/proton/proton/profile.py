@@ -54,13 +54,13 @@ def start(
     return libproton.start(name, backend, context, data)
 
 
-def activate(session: int) -> None:
+def activate(session: Optional[int] = 0) -> None:
     """
     Activate the specified session.
     The profiling session will be active and data will be recorded.
 
     Args:
-        session (int): The session ID of the profiling session.
+        session (int): The session ID of the profiling session. Defaults to 0 (the first session started.)
 
     Returns:
         None
@@ -68,13 +68,13 @@ def activate(session: int) -> None:
     libproton.activate(session)
 
 
-def deactivate(session: int) -> None:
+def deactivate(session: Optional[int] = 0) -> None:
     """
     Stop the specified session.
     The profiling session's data will still be in the memory, but no more data will be recorded.
 
     Args:
-        session (int): The session ID of the profiling session.
+        session (int): The session ID of the profiling session. Defaults to 0 (the first session started.)
 
     Returns:
         None
