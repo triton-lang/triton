@@ -1,6 +1,7 @@
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "amd/include/TritonAMDGPUToLLVM/GCNAsmFormat.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -52,6 +53,13 @@ Value printfPromoteValue(ConversionPatternRewriter &rewriter, Value value) {
 } // namespace
 
 bool TargetInfo::supportMaximumMinimum() const { return false; }
+
+Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
+  // On AMD hardware we don't have CTA clusters like NVIDIA. So this will always
+  // be zero. Whoever calling into this should make sure the whole program does
+  // not try to utilize CTA clusters.
+  return rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
+}
 
 Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
                          Type type, Value cmp) const {

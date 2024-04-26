@@ -1,7 +1,7 @@
 #include "TargetInfo.h"
+#include "Dialect/NVGPU/IR/Dialect.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
-#include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -218,6 +218,12 @@ static std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op,
 bool TargetInfo::supportMaximumMinimum() const {
   return computeCapability >= 80;
 }
+
+Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
+  return rewriter.create<triton::nvgpu::ClusterCTAIdOp>(loc,
+                                                        rewriter.getI32Type());
+}
+
 Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
                          Type type, Value cmp) const {
   Value threadMask = int_val(type.getIntOrFloatBitWidth(), -1);

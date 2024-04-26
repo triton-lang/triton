@@ -1,12 +1,12 @@
 #include "NVGPUToLLVM/NVGPUToLLVMPass.h"
 
+#include "Dialect/NVGPU/IR/Dialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
 
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
 

@@ -22,5 +22,10 @@ else()
   include_directories(${Python3_INCLUDE_DIRS})
 endif()
 
+# Check if the platform is MacOS
+if(APPLE)
+  set(PROTON_PYTHON_LDFLAGS "-undefined dynamic_lookup -flto")
+endif()
+
 include_directories(${CUPTI_INCLUDE_DIR})
-target_link_libraries(proton ${Python_LIBRARIES})
+target_link_libraries(proton PRIVATE ${Python_LIBRARIES} ${PROTON_PYTHON_LDFLAGS})
