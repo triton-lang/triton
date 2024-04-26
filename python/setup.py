@@ -7,7 +7,9 @@ import subprocess
 import sys
 import sysconfig
 import tarfile
+import zipfile
 import urllib.request
+from io import BytesIO
 from distutils.command.clean import clean
 from pathlib import Path
 from typing import NamedTuple
@@ -133,9 +135,8 @@ def get_pybind11_package_info():
 
 # json
 def get_json_package_info():
-    name = "json"
-    url = "https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz"
-    return Package("json", name, url, "JSON_INCLUDE_DIR", "", "JSON_SYSPATH")
+    url = "https://github.com/nlohmann/json/releases/download/v3.11.3/include.zip"
+    return Package("json", "", url, "JSON_INCLUDE_DIR", "", "JSON_SYSPATH")
 
 
 # llvm
@@ -220,8 +221,14 @@ def get_thirdparty_packages(packages: list):
                 shutil.rmtree(package_root_dir)
             os.makedirs(package_root_dir, exist_ok=True)
             print(f'downloading and extracting {p.url} ...')
-            file = tarfile.open(fileobj=open_url(p.url), mode="r|*")
-            file.extractall(path=package_root_dir)
+            with open_url(p.url) as response:
+                if p.url.endswith(".zip"):
+                    file_bytes = BytesIO(response.read())
+                    with zipfile.ZipFile(file_bytes, "r") as file:
+                        file.extractall(path=package_root_dir)
+                else:
+                    with tarfile.open(fileobj=response, mode="r|*") as file:
+                        file.extractall(path=package_root_dir)
             # write version url to package_dir
             with open(os.path.join(package_dir, "version.txt"), "w") as f:
                 f.write(p.url)
