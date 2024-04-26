@@ -477,7 +477,6 @@ public:
         !isa<ttg::BlockedEncodingAttr>(oldRetType.getEncoding()))
       return failure();
 
-    // TODO: Support different operand types
     if (!supportWMMA(dotOp))
       return failure();
 
@@ -508,15 +507,22 @@ public:
     Type wmmaAccType;
     auto oldRetElemType = oldRetType.getElementType();
     auto aElemType = oldAType.getElementType();
-    if (oldRetElemType.isIntOrIndex())
+    auto bElemType = oldBType.getElementType();
+    if (oldRetElemType.isIntOrIndex()) {
       wmmaAccType = rewriter.getIntegerType(32);
-    else if (isa<mlir::Float16Type, mlir::BFloat16Type>(oldRetElemType) &&
-             aElemType == oldRetElemType)
+    } else if (isa<mlir::Float16Type, mlir::BFloat16Type>(oldRetElemType) &&
+               aElemType == oldRetElemType) {
       wmmaAccType = oldRetElemType;
-    else
+    } else if (isa<mlir::FloatType>(oldRetElemType) &&
+               aElemType.getIntOrFloatBitWidth() < 16) {
+      aElemType = rewriter.getF16Type();
+      bElemType = rewriter.getF16Type();
+      wmmaAccType = rewriter.getF16Type();
+    } else {
       wmmaAccType = rewriter.getF32Type();
+    }
 
-    auto newRetType = RankedTensorType::get(retShape, oldRetElemType, wmmaEnc);
+    auto newRetType = RankedTensorType::get(retShape, wmmaAccType, wmmaEnc);
 
     // convert accumulator
     auto oldAcc = dotOp.getOperand(2);
@@ -526,13 +532,16 @@ public:
         oldAType.getShape(), aElemType,
         ttg::DotOperandEncodingAttr::get(ctx, 0, wmmaEnc, mnkDim[2]));
     auto newBType = RankedTensorType::get(
-        oldBType.getShape(), oldBType.getElementType(),
+        oldBType.getShape(), bElemType,
         ttg::DotOperandEncodingAttr::get(ctx, 1, wmmaEnc, mnkDim[2]));
-    a = rewriter.create<ttg::ConvertLayoutOp>(a.getLoc(), newAType, a);
-    b = rewriter.create<ttg::ConvertLayoutOp>(b.getLoc(), newBType, b);
-    auto newDot = rewriter.create<tt::DotOp>(dotOp.getLoc(), newRetType, a, b,
-                                             newAcc, dotOp.getInputPrecision(),
-                                             dotOp.getMaxNumImpreciseAcc());
+
+    Value castedA =
+        convertAndCastTensor(rewriter, a, newAType.getEncoding(), aElemType);
+    Value castedB =
+        convertAndCastTensor(rewriter, b, newBType.getEncoding(), bElemType);
+    auto newDot = rewriter.create<tt::DotOp>(
+        dotOp.getLoc(), newRetType, castedA, castedB, newAcc,
+        dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
 
     Value dotOutput = convertAndCastTensor(
         rewriter, newDot, oldRetType.getEncoding(), oldRetElemType);
