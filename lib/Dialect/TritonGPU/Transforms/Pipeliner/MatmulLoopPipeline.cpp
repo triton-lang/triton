@@ -699,6 +699,32 @@ static void scheduleDependencies(scf::ForOp forOp, CoarseSchedule &schedule) {
   }
 }
 
+static void addDepsToSchedule(Operation *op, CoarseSchedule &schedule,
+                              int stage, CoarseSchedule::Cluster cluster,
+                              bool includeArg) {
+  for (Value operand : op->getOperands()) {
+    Value v = operand;
+    llvm::SmallDenseSet<Value> seen;
+    while (auto arg = v.dyn_cast<BlockArgument>()) {
+      if (!includeArg)
+        break;
+      if (!seen.insert(v).second)
+        break;
+      if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
+        auto yieldOp = op->getBlock()->getTerminator();
+        v = yieldOp->getOperand(arg.getArgNumber() - 1);
+        continue;
+      }
+      break;
+    }
+    Operation *defOp = v.getDefiningOp();
+    if (defOp && defOp->getBlock() == op->getBlock()) {
+      schedule.insertIfAbsent(defOp, schedule[op].first, schedule[op].second);
+      addDepsToSchedule(defOp, schedule, stage, cluster, includeArg);
+    }
+  }
+}
+
 // Find dependencies with distance of 1. They will go to the next stage,
 // but in the cluster before the current op.
 static void scheduleDistanceOneDependencies(scf::ForOp forOp,
@@ -731,22 +757,18 @@ static void scheduleDistanceOneDependencies(scf::ForOp forOp,
           Value v = yieldOp->getOperand(arg.getArgNumber() - 1);
           Operation *defOp = v.getDefiningOp();
           if (defOp && schedule.count(defOp) == 0) {
-            DenseSet<Operation *> distanceOneUsers;
-            tt::addDep(defOp, distanceOneUsers, true);
             if (isa<tt::LoadOp>(defOp)) {
               // Exception: Schedule loads with a distance of 1 together
               // with the current op.
-              for (auto user : distanceOneUsers) {
-                schedule.insertIfAbsent(user, stage, cluster);
-              }
+              schedule.insertIfAbsent(defOp, stage, cluster);
+              addDepsToSchedule(defOp, schedule, stage, cluster, true);
             } else {
               if (dist1Cluster.count(&cluster) == 0) {
                 dist1Cluster[&cluster] = schedule.newClusterBefore(cluster);
               }
-              for (auto user : distanceOneUsers) {
-                schedule.insertIfAbsent(user, stage + 1,
-                                        dist1Cluster[&cluster]);
-              }
+              schedule.insertIfAbsent(defOp, stage + 1, dist1Cluster[&cluster]);
+              addDepsToSchedule(defOp, schedule, stage + 1,
+                                dist1Cluster[&cluster], true);
             }
           }
         }
