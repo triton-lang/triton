@@ -103,7 +103,7 @@ public:
 
     // cannot utilize duplication with parent mfma layout
     if (auto slice = encoding.dyn_cast<SliceEncodingAttr>()) {
-      if(slice.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
+      if (slice.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
         return resultVals;
       }
     }
