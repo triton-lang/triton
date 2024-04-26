@@ -39,15 +39,7 @@ def ConvertExternToLLVM : Pass<"convert-extern-to-llvm", "mlir::ModuleOp"> {
     }];
     let constructor = "mlir::triton::createConvertExternToLLVMPass()";
 
-    let dependentDialects = ["mlir::arith::ArithDialect",
-                             "mlir::math::MathDialect",
-                             "mlir::gpu::GPUDialect",
-                             "mlir::scf::SCFDialect",
-                             "mlir::LLVM::LLVMDialect",
-                             "mlir::tensor::TensorDialect",
-                             "mlir::triton::TritonDialect",
-                             "mlir::triton::gpu::TritonGPUDialect",
-                             "mlir::ROCDL::ROCDLDialect"];
+    let dependentDialects = ["mlir::LLVM::LLVMDialect"];
 
 }
 
