@@ -191,6 +191,185 @@ def test_annotation():
     assert len(kernel.cache[device]) == 3
 
 
+GLOBAL_DEFAULT_ARG = 1
+
+
+def test_kernel_default_arg():
+    global GLOBAL_DEFAULT_ARG
+
+    @triton.jit
+    def kernel(X, i: tl.constexpr = GLOBAL_DEFAULT_ARG):
+        tl.store(X, i)
+
+    x = torch.empty(1, dtype=torch.int32, device='cuda')
+    kernel[(1, )](x)
+    assert x == torch.ones_like(x)
+
+    # Changing the global variable should not change the default argument in
+    # `kernel`.  That value gets set at the time the function is declared.
+    GLOBAL_DEFAULT_ARG = 2
+    kernel[(1, )](x)
+    assert x == torch.ones_like(x)
+
+    device = torch.cuda.current_device()
+    assert len(kernel.cache[device]) == 1
+
+
+GLOBAL_VAR: tl.constexpr = 1
+
+
+def test_kernel_global_var_change():
+    global GLOBAL_VAR
+
+    @triton.jit
+    def kernel(X):
+        tl.store(X, GLOBAL_VAR)
+
+    x = torch.empty(1, dtype=torch.int32, device='cuda')
+    kernel[(1, )](x)
+    assert x == torch.ones_like(x)
+
+    GLOBAL_VAR = 2
+    with pytest.raises(RuntimeError) as e:
+        kernel[(1, )](x)
+
+    assert "global variable" in str(e.value).lower()
+
+
+GLOBAL = 42  # noqa
+
+
+def test_local_shadows_global():
+    global GLOBAL
+
+    @triton.jit
+    def kernel():
+        _, GLOBAL = 0, 0  # noqa
+        a = GLOBAL  # noqa
+
+    # No error because the `GLOBAL` we're modifying is not the same `GLOBAL` as
+    # inside the kernel.
+    GLOBAL = 42
+    kernel[(1, )]()
+    GLOBAL = 43
+    kernel[(1, )]()
+
+
+CONSTEXPR_GLOBAL: tl.constexpr = 42
+
+
+def test_local_does_not_shadow_global():
+    global CONSTEXPR_GLOBAL
+
+    @triton.jit
+    def kernel():
+        a = CONSTEXPR_GLOBAL  # noqa
+        _, CONSTEXPR_GLOBAL = 0, 0  # noqa
+
+    CONSTEXPR_GLOBAL = 42
+    kernel[(1, )]()
+    CONSTEXPR_GLOBAL = 43
+
+    # Error because the `CONSTEXPR_GLOBAL` we're modifying is the same
+    # `CONSTEXPR_GLOBAL` that's read inside `kernel`.  (Alternatively, we could
+    # make this kernel an error altogether, as it is if it's a pure Python
+    # function -- the fact that we store to `CONSTEXPR_GLOBAL` inside the kernel
+    # makes the first read a read of the local variable, which doesn't exist
+    # yet.)
+    with pytest.raises(RuntimeError):
+        kernel[(1, )]()
+
+
+CONFLICTING_GLOBAL: tl.constexpr = 0
+
+
+@triton.jit
+def conflicting_global_inner():
+    a = CONFLICTING_GLOBAL  # noqa
+
+
+def test_conflicting_global_in_inner_function():
+    global CONFLICTING_GLOBAL
+
+    @triton.jit
+    def kernel1():
+        a = CONFLICTING_GLOBAL  # noqa
+        conflicting_global_inner()
+
+    @triton.jit
+    def kernel2():
+        a = CONFLICTING_GLOBAL  #noqa
+        conflicting_global_inner()
+
+    kernel1[(1, )]()
+
+    # This should be an error because kernel2 calls conflicting_global_inner,
+    # which saw a value for 42 for the global when it was first compiled.
+    CONFLICTING_GLOBAL = 1
+
+    with pytest.raises(RuntimeError) as e:
+        kernel2[(1, )]()
+
+    assert "Global variable CONFLICTING_GLOBAL has value" in str(e.value)
+
+
+def test_use_builtin():
+
+    @triton.jit
+    def kernel():
+        a = float(0)  # noqa
+
+    # No error about the value of `float` changing.
+    kernel[(1, )]()
+    kernel[(1, )]()
+
+
+def test_no_cache_module_as_global():
+
+    @triton.jit
+    def kernel():
+        tl.arange(0, 16)
+
+    kernel[(1, )]()
+    # `tl` should not be entered into used_global_vals
+    assert not kernel.used_global_vals
+
+
+BUILTIN_AS_GLOBAL = tl.int32
+
+
+def test_cache_builtin_as_global():
+    global BUILTIN_AS_GLOBAL
+
+    @triton.jit
+    def kernel():
+        x = BUILTIN_AS_GLOBAL  # noqa
+
+    kernel[(1, )]()
+
+    BUILTIN_AS_GLOBAL = tl.int64
+    with pytest.raises(RuntimeError) as e:
+        kernel[(1, )]()
+
+    assert "global variable" in str(e.value).lower()
+
+
+@triton.jit
+def no_cache_callable_inner():
+    pass
+
+
+def test_no_cache_callable():
+
+    @triton.jit
+    def kernel():
+        no_cache_callable_inner()
+
+    kernel[(1, )]()
+    # `no_cache_callable_inner` should not be entered into used_global_vals.
+    assert not kernel.used_global_vals
+
+
 def test_constexpr_not_callable() -> None:
 
     @triton.jit
