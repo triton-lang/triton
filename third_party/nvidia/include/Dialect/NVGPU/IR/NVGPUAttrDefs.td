@@ -22,8 +22,8 @@
 #ifndef NVGPU_ATTRDEFS
 #define NVGPU_ATTRDEFS
 
-include "triton/Dialect/NVGPU/IR/NVGPUDialect.td"
 include "mlir/IR/AttrTypeBase.td"
+include "NVGPUDialect.td"
 
 class NVGPU_Attr<string name, list<Trait> traits = [],
                      string baseCppClass = "::mlir::Attribute">

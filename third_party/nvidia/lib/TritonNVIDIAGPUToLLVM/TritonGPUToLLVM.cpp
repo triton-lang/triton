@@ -1,3 +1,4 @@
+#include "Dialect/NVGPU/IR/Dialect.h"
 #include "TritonNVIDIAGPUToLLVM/Passes.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
@@ -16,7 +17,6 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -138,8 +138,8 @@ struct ConvertTritonGPUToLLVM
     populateClampFOpToLLVMPattern(typeConverter, patterns, axisInfoAnalysis,
                                   computeCapability,
                                   patternBenefitClampOptimizedPattern);
-    populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,
-                                      benefit);
+    populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
+                                      axisInfoAnalysis, benefit);
     mlir::triton::populateReduceOpToLLVMPatterns(typeConverter, patterns,
                                                  targetInfo, benefit);
     mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
@@ -169,10 +169,10 @@ struct ConvertTritonGPUToLLVM
                                                benefit);
     mlir::triton::populateAssertOpToLLVMPattern(typeConverter, patterns,
                                                 targetInfo, benefit);
-    mlir::triton::populateMemoryOpToLLVMPattern(typeConverter, patterns,
-                                                benefit);
-    mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, patterns,
-                                                   benefit);
+    mlir::triton::populateMemoryOpToLLVMPattern(typeConverter, targetInfo,
+                                                patterns, benefit);
+    mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
+                                                   patterns, benefit);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
 

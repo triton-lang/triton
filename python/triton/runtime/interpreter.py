@@ -1029,32 +1029,45 @@ class GridExecutor:
         __annotations__ = {name: _normalize_ty(ty) for name, ty in fn.__annotations__.items()}
         self.constexprs = [name for name in arg_names if __annotations__.get(name) == "constexpr"]
 
-    def _init_args_hst(self, args_dev):
+    def _init_args_hst(self, args_dev, kwargs):
         args_hst = []
         for arg in args_dev:
             if hasattr(arg, "data_ptr"):
                 args_hst.append(arg.cpu())
             else:
                 args_hst.append(arg)
-        return args_hst
+        # Process keyword arguments
+        kwargs_hst = {}
+        for key, value in kwargs.items():
+            if hasattr(value, "data_ptr"):
+                kwargs_hst[key] = value.cpu()
+            else:
+                kwargs_hst[key] = value
+        return args_hst, kwargs_hst
 
-    def _restore_args_dev(self, args_dev, args_hst):
+    def _restore_args_dev(self, args_dev, args_hst, kwargs, kwargs_hst):
         for arg_dev, arg_hst in zip(args_dev, args_hst):
             if hasattr(arg_dev, "data_ptr"):
                 arg_dev.data.copy_(arg_hst.to(arg_dev.device).data)
 
+        # Restore keyword arguments
+        for key, kwarg_dev in kwargs.items():
+            kwarg_hst = kwargs_hst[key]
+            if hasattr(kwarg_dev, "data_ptr"):
+                kwarg_dev.data.copy_(kwarg_hst.to(kwarg_dev.device).data)
+
     def __call__(self, *args_dev, **kwargs):
-        # copy arguments to the host
-        args_hst = self._init_args_hst(args_dev)
         # removes reserved keywords from kwargs
         kwargs = {k: v for k, v in kwargs.items() if k not in RESERVED_KWS}
         if kwargs.pop("warmup", False):
             return
+        # copy arguments to the host
+        args_hst, kwargs_hst = self._init_args_hst(args_dev, kwargs)
         # remaps core language functions to interpreted ones
         _patch_lang(self.fn)
         # we need to copy arguments to the host for the interpreter
         # implicitly convert tensor arguments to their base pointers
-        args = inspect.getcallargs(self.fn, *args_hst, **kwargs)
+        args = inspect.getcallargs(self.fn, *args_hst, **kwargs_hst)
         args = {name: arg if name in self.constexprs else _implicit_cvt(arg) for name, arg in args.items()}
         # iterate through grid
         grid = self.grid(args) if callable(self.grid) else self.grid
@@ -1070,7 +1083,7 @@ class GridExecutor:
         except Exception as e:
             raise InterpreterError(repr(e)) from e
         # copy arguments back to propagate side-effects
-        self._restore_args_dev(args_dev, args_hst)
+        self._restore_args_dev(args_dev, args_hst, kwargs, kwargs_hst)
 
 
 class InterpretedFunction:

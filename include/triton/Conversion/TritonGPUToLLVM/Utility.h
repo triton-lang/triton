@@ -5,7 +5,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
+#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -59,8 +59,6 @@ using namespace mlir::triton;
   rewriter.create<LLVM::ExtractElementOp>(loc, __VA_ARGS__)
 #define load(...) rewriter.create<LLVM::LoadOp>(loc, __VA_ARGS__)
 #define store(...) rewriter.create<LLVM::StoreOp>(loc, __VA_ARGS__)
-#define load_dsmem(...) LLVM::createLoadDSmem(loc, rewriter, __VA_ARGS__)
-#define store_dsmem(...) LLVM::createStoreDSmem(loc, rewriter, __VA_ARGS__)
 #define fcmp_ogt(lhs, rhs)                                                     \
   rewriter.create<LLVM::FCmpOp>(loc, rewriter.getI1Type(),                     \
                                 LLVM::FCmpPredicate::ogt, lhs, rhs)
@@ -222,29 +220,6 @@ Value createIndexConstant(OpBuilder &builder, Location loc,
 Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
                                 int64_t value);
 
-/// Usage of macro load_dsmem
-/// (1) load_dsmem(addr, ctaId)
-/// (2) load_dsmem(addr, ctaId, vec)
-Value createLoadDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId, Type elemTy);
-SmallVector<Value> createLoadDSmem(Location loc, PatternRewriter &rewriter,
-                                   Value addr, Value ctaId, unsigned vec,
-                                   Type elemTy);
-
-/// Usage of macro store_dsmem
-/// (1) store_dsmem(addr, ctaId, value, pred)
-/// (2) store_dsmem(addr, ctaId, value)
-/// (3) store_dsmem(addr, ctaId, values, pred)
-/// (4) store_dsmem(addr, ctaId, values)
-void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId, Value value, Value pred);
-void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId, Value value);
-void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId, ArrayRef<Value> values, Value pred);
-void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId, ArrayRef<Value> values);
-
 /// Helper function to get strides from a given shape and its order
 SmallVector<Value> getStridesFromShapeAndOrder(ArrayRef<int64_t> shape,
                                                ArrayRef<unsigned> order,
@@ -354,6 +329,7 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
 // smallest CTA tile that is common between input and output layouts.
 SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
                                      ConversionPatternRewriter &rewriter,
+                                     const TargetInfoBase &targetInfo,
                                      unsigned elemId, RankedTensorType type,
                                      ArrayRef<unsigned> multiDimCTAInRepId,
                                      ArrayRef<unsigned> shapePerCTATile);
@@ -414,11 +390,6 @@ inline Value getThreadId(RewriterBase &rewriter, Location loc) {
   Value tid = getThreadIdInCTA(rewriter, loc);
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   return tid;
-}
-
-inline Value getClusterCTAId(RewriterBase &rewriter, Location loc) {
-  return rewriter.create<triton::nvgpu::ClusterCTAIdOp>(loc,
-                                                        rewriter.getI32Type());
 }
 
 // -----------------------------------------------------------------------
@@ -1023,6 +994,7 @@ emitOffsetForSliceLayout(const SliceEncodingAttr &sliceLayout,
 
 inline SmallVector<Value> emitCTAOffsetForLayout(Location loc,
                                                  RewriterBase &rewriter,
+                                                 const TargetInfoBase &target,
                                                  Attribute layout,
                                                  ArrayRef<int64_t> shape) {
   unsigned rank = shape.size();
@@ -1033,7 +1005,7 @@ inline SmallVector<Value> emitCTAOffsetForLayout(Location loc,
       triton::gpu::getShapePerCTA(CTASplitNum, shape);
 
   // Delinearize clusterCTAId
-  Value clusterCTAId = getClusterCTAId(rewriter, loc);
+  Value clusterCTAId = target.getClusterCTAId(rewriter, loc);
   SmallVector<Value> multiDimClusterCTAId =
       delinearize(rewriter, loc, clusterCTAId, CTAsPerCGA, CTAOrder);
 
@@ -1051,11 +1023,10 @@ inline SmallVector<Value> emitCTAOffsetForLayout(Location loc,
   return CTAOffset;
 }
 
-inline SmallVector<Value> emitBaseIndexForLayoutImpl(Location loc,
-                                                     RewriterBase &rewriter,
-                                                     Attribute layout,
-                                                     RankedTensorType type,
-                                                     bool withCTAOffset) {
+inline SmallVector<Value>
+emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
+                           const TargetInfoBase &target, Attribute layout,
+                           RankedTensorType type, bool withCTAOffset) {
   auto shape = type.getShape();
 
   SmallVector<Value> baseIndex;
@@ -1080,8 +1051,8 @@ inline SmallVector<Value> emitBaseIndexForLayoutImpl(Location loc,
     auto parentShape = sliceLayout.paddedShape(type.getShape());
     RankedTensorType parentTy =
         RankedTensorType::get(parentShape, type.getElementType(), parentLayout);
-    result = emitBaseIndexForLayoutImpl(loc, rewriter, parentLayout, parentTy,
-                                        withCTAOffset);
+    result = emitBaseIndexForLayoutImpl(loc, rewriter, target, parentLayout,
+                                        parentTy, withCTAOffset);
     result.erase(result.begin() + sliceLayout.getDim());
     // CTAOffset has been added in emitBaseIndexForLayout of parentLayout
     return result;
@@ -1089,7 +1060,8 @@ inline SmallVector<Value> emitBaseIndexForLayoutImpl(Location loc,
     llvm_unreachable("unsupported emitBaseIndexForLayout");
   }
   if (withCTAOffset) {
-    auto CTAOffset = emitCTAOffsetForLayout(loc, rewriter, layout, shape);
+    auto CTAOffset =
+        emitCTAOffsetForLayout(loc, rewriter, target, layout, shape);
     assert(CTAOffset.size() == result.size() && "Rank mismatch");
     for (unsigned k = 0; k < result.size(); ++k) {
       // Individual elements of `result` may be null.  In the caller
@@ -1104,10 +1076,11 @@ inline SmallVector<Value> emitBaseIndexForLayoutImpl(Location loc,
 }
 
 inline SmallVector<Value>
-emitBaseIndexForLayout(Location loc, RewriterBase &rewriter, Attribute layout,
+emitBaseIndexForLayout(Location loc, RewriterBase &rewriter,
+                       const TargetInfoBase &target, Attribute layout,
                        RankedTensorType type, bool withCTAOffset) {
-  SmallVector<Value> idx =
-      emitBaseIndexForLayoutImpl(loc, rewriter, layout, type, withCTAOffset);
+  SmallVector<Value> idx = emitBaseIndexForLayoutImpl(
+      loc, rewriter, target, layout, type, withCTAOffset);
 
   // Check that any null values were sliced out.
   for (Value v : idx) {
@@ -1151,11 +1124,11 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
 // Emit indices calculation within each ConversionPattern, and returns a
 // [elemsPerThread X rank] index matrix.
 inline SmallVector<SmallVector<Value>>
-emitIndices(Location loc, RewriterBase &rewriter, Attribute layout,
-            RankedTensorType type, bool withCTAOffset) {
+emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
+            Attribute layout, RankedTensorType type, bool withCTAOffset) {
   // step 1, delinearize threadId to get the base index
-  auto multiDimBase =
-      emitBaseIndexForLayout(loc, rewriter, layout, type, withCTAOffset);
+  auto multiDimBase = emitBaseIndexForLayout(loc, rewriter, target, layout,
+                                             type, withCTAOffset);
   // step 2, get offset of each element
   auto offset = emitOffsetForLayout(layout, type);
   // step 3, add offset to base, and reorder the sequence
@@ -1175,9 +1148,9 @@ emitIndices(Location loc, RewriterBase &rewriter, Attribute layout,
 /* ---------------- */
 /* ---------------- */
 inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
-    Location loc, unsigned inVec, RankedTensorType srcTy,
-    triton::gpu::SharedEncodingAttr resSharedLayout, Type resElemTy,
-    SharedMemoryObject smemObj, RewriterBase &rewriter,
+    Location loc, const TargetInfoBase &target, unsigned inVec,
+    RankedTensorType srcTy, triton::gpu::SharedEncodingAttr resSharedLayout,
+    Type resElemTy, SharedMemoryObject smemObj, RewriterBase &rewriter,
     SmallVectorImpl<Value> &offsetVals, SmallVectorImpl<Value> &srcStrides) {
   // This utility computes the pointers for accessing the provided swizzled
   // shared memory layout `resSharedLayout`. More specifically, it computes,
@@ -1224,7 +1197,8 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
          outVec * maxPhase <= srcShape[outOrder[0]] &&
              "Swizzling would generate out of bounds memory accesses");
   // Tensor indices held by the current thread, as LLVM values
-  auto srcIndices = emitIndices(loc, rewriter, srcEncoding, srcTy, false);
+  auto srcIndices =
+      emitIndices(loc, rewriter, target, srcEncoding, srcTy, false);
   // Swizzling with leading offsets (e.g. Hopper GMMA)
   unsigned swizzlingByteWidth = 0;
   if (resSharedLayout.getHasLeadingOffset()) {
@@ -1336,10 +1310,9 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
   return ret;
 }
 
-inline SmallVector<Value>
-loadSharedToDistributed(Value dst, Value src, SharedMemoryObject smemObj,
-                        Type elemTy, Location loc,
-                        ConversionPatternRewriter &rewriter) {
+inline SmallVector<Value> loadSharedToDistributed(
+    Value dst, Value src, SharedMemoryObject smemObj, Type elemTy, Location loc,
+    ConversionPatternRewriter &rewriter, const TargetInfoBase &target) {
   auto dstTy = cast<RankedTensorType>(dst.getType());
   auto dstShape = dstTy.getShape();
   assert(dstShape.size() <= 2 && "Unexpected rank of loadSharedToDistributed");
@@ -1373,7 +1346,7 @@ loadSharedToDistributed(Value dst, Value src, SharedMemoryObject smemObj,
   SmallVector<Value> offsetVals = {smemObj.strides.size(), i32_val(0)};
 
   DenseMap<unsigned, Value> sharedPtrs =
-      getSwizzledSharedPtrs(loc, outVec, dstTy, srcSharedLayout, elemTy,
+      getSwizzledSharedPtrs(loc, target, outVec, dstTy, srcSharedLayout, elemTy,
                             smemObj, rewriter, offsetVals, smemObj.strides);
   assert(outElems % minVec == 0 && "Unexpected number of elements");
   unsigned numVecs = outElems / minVec;
@@ -1395,7 +1368,8 @@ loadSharedToDistributed(Value dst, Value src, SharedMemoryObject smemObj,
 inline void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
                                      ArrayRef<Value> dstStrides, Value dst,
                                      Value smemBase, Type elemTy, Location loc,
-                                     ConversionPatternRewriter &rewriter) {
+                                     ConversionPatternRewriter &rewriter,
+                                     const TargetInfoBase &target) {
   auto srcTy = cast<RankedTensorType>(src.getType());
   auto srcShape = srcTy.getShape();
   auto rank = srcShape.size();
@@ -1432,8 +1406,8 @@ inline void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
   SharedMemoryObject smemObj(smemBase, elemTy, srcStrides, offsetVals);
 
   DenseMap<unsigned, Value> sharedPtrs =
-      getSwizzledSharedPtrs(loc, inVec, srcTy, dstSharedLayout, elemTy, smemObj,
-                            rewriter, offsetVals, srcStrides);
+      getSwizzledSharedPtrs(loc, target, inVec, srcTy, dstSharedLayout, elemTy,
+                            smemObj, rewriter, offsetVals, srcStrides);
   LDBG("storeDistributedToShared: numElems = " << numElems << " minVec = "
                                                << minVec << " " << wordTy);
   for (unsigned i = 0; i < numElems; ++i) {
