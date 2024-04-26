@@ -243,7 +243,6 @@ jobs:
 
       - name: Install Triton
         env:
-          TRITON_BUILD_PROTON: "true"
           TRITON_BUILD_WITH_CCACHE: "true"
           CUDA_HOME: "/usr/local/cuda"
         run: |
@@ -280,7 +279,8 @@ jobs:
         run: |
           cd python/test/unit
           python3 -m pytest -vvv -n 16 -m interpreter language/test_core.py language/test_standard.py \
-           language/test_random.py language/test_block_pointer.py operators/test_flash_attention.py::test_op \
+           language/test_random.py language/test_block_pointer.py language/test_subprocess.py \
+           operators/test_flash_attention.py::test_op \
            ../../tutorials/06-fused-attention.py::test_op --device cpu
 
       - &run-cpp-unittests-step
@@ -353,6 +353,7 @@ jobs:
 
       - name: Install pip dependencies
         run: |
+          python3 -m pip install --upgrade pip
           python3 -m pip install lit
 
       - name: Install Triton

@@ -522,6 +522,10 @@ For the Threads Per Warp and Values Per Thread level, the linear id distribution
                     "SmallVector<unsigned>",
                     "getShapePerCTATile",
                      (ins "ArrayRef<int64_t>":$tensorShape)>,
+
+    InterfaceMethod<"Gets the number of contiguous elements per thread.",
+                    "SmallVector<unsigned>",
+                    "getContigPerThread">,
   ];
 }
 
@@ -736,6 +740,11 @@ for
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
     SliceEncodingAttr squeeze(int axis);
+
+    SmallVector<unsigned> getContigPerThread() {
+      // Block encoding is dense stride layout. The elements per thread are contiguous.
+      return getSizePerThread();
+    };
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -885,6 +894,15 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
     SmallVector<int64_t> getMFMAInstrShapeForOperands(int kWidth, int opIdx) const;
     SmallVector<int64_t> getMFMARepForOperands(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
 
+    SmallVector<unsigned> getContigPerThread() {
+      auto rank = getWarpsPerCTA().size();
+      SmallVector<unsigned> contigPerThread(rank, 1);
+      if (getIsTransposed())
+        contigPerThread[rank - 1] = 4;
+      else
+        contigPerThread[rank - 2] = 4;
+      return contigPerThread;
+    };
 
   }];
 
@@ -944,6 +962,12 @@ Suppose we have a tensor with shape [32, 48], `warpsPerCTA` set to [2, 3].
     SmallVector<int64_t> getWMMARepForOperands(ArrayRef<int64_t> operandShape,
                                       Type elemType, int kWidth, int opIdx) const;
     static SmallVector<unsigned> getMNKDimPerWMMAInstr();
+
+    SmallVector<unsigned> getContigPerThread() {
+      auto rank = getWarpsPerCTA().size();
+      SmallVector<unsigned> contigPerThread(rank, 1);
+      return contigPerThread;
+    };
   }];
 }
 
@@ -1136,6 +1160,15 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx) const;
     SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int opIdx) const;
     unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
+
+    SmallVector<unsigned> getContigPerThread() {
+      assert(isVolta() || isAmpere() || isHopper());
+      auto rank = getWarpsPerCTA().size();
+      SmallVector<unsigned> contigPerThread(rank, 1);
+      contigPerThread[rank - 1] = 2;
+      return contigPerThread;
+    };
+
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -1172,6 +1205,11 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding"> {
   let extraClassDeclaration = extraDistributedDeclaration # [{
     template<class T>
     SmallVector<T> paddedShape(ArrayRef<T> shape) const;
+
+    SmallVector<unsigned> getContigPerThread() {
+      auto parentLayout = getParent().cast<DistributedEncodingTrait>();
+      return parentLayout.getContigPerThread();
+    };
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -1217,7 +1255,11 @@ section 9.7.13.4.1 for more details.
   ];
 
   let hasCustomAssemblyFormat = 1;
-  let extraClassDeclaration = extraDistributedDeclaration;
+  let extraClassDeclaration = extraDistributedDeclaration # [{
+    SmallVector<unsigned> getContigPerThread() {
+      return getSizePerThread();
+    };
+  }];
 }
 
 #endif

@@ -266,7 +266,7 @@ def _test_unary(dtype_x, expr, numpy_expr=None, device='cuda', num_ctas=1):
     # triton result
     x_tri = to_triton(x, device=device, dst_type=dtype_x)
     z_tri = to_triton(np.empty_like(x), device=device, dst_type=dtype_x)
-    kernel[(1, )](z_tri, x_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
+    kernel[(1, )](Z=z_tri, X=x_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
     # compare
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
 
@@ -911,10 +911,11 @@ def test_unary_op(dtype_x, expr, num_ctas, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("dtype_x, expr, x", [(dtype_x, expr, x)
-                                              for dtype_x in ["float32", "float64"]
-                                              for expr in ['exp', 'log', 'cos', 'sin', 'exp2', 'log2', 'sqrt', 'floor']
-                                              for x in ['x', '3.0']])
+@pytest.mark.parametrize("dtype_x, expr, x",
+                         [(dtype_x, expr, x)
+                          for dtype_x in ["float32", "float64"]
+                          for expr in ['exp', 'log', 'cos', 'sin', 'exp2', 'log2', 'sqrt', 'floor', 'ceil']
+                          for x in ['x', '3.0']])
 def test_math_op(dtype_x, expr, x, device):
     _test_unary(dtype_x, f'tl.{expr}({x})', f'np.{expr}({x}) ', device=device)
 

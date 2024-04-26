@@ -4,7 +4,7 @@
 #include "TargetInfoBase.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+
 using namespace mlir;
 using namespace mlir::triton;
 
@@ -33,6 +33,7 @@ void populateElementwiseOpToLLVMPatterns(
     PatternBenefit benefit);
 
 void populateMemoryOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                   const TargetInfoBase &targetInfo,
                                    RewritePatternSet &patterns,
                                    PatternBenefit benefit);
 
@@ -42,6 +43,7 @@ void populateAssertOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    PatternBenefit benefit);
 
 void populateMakeRangeOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                      const TargetInfoBase &targetInfo,
                                       RewritePatternSet &patterns,
                                       PatternBenefit benefit);
 

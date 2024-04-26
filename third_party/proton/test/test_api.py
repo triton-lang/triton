@@ -7,9 +7,10 @@ import pathlib
 def test_profile():
     with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
         session_id0 = proton.start(f.name.split(".")[0])
-        proton.activate(session_id0)
-        proton.deactivate(session_id0)
+        proton.activate()
+        proton.deactivate()
         proton.finalize()
+        assert session_id0 == 0
 
     with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
         session_id1 = proton.start(f.name.split(".")[0])
@@ -51,6 +52,10 @@ def test_profile_decorator():
 
 
 def test_scope():
+    # Scope can be annotated even when profiling is off
+    with proton.scope("test"):
+        pass
+
     with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
         proton.start(f.name.split(".")[0])
         with proton.scope("test"):

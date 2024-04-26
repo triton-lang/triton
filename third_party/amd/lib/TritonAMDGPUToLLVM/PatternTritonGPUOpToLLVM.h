@@ -19,9 +19,9 @@ void populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
-    int computeCapability, const TargetInfo &targetInfo,
-    PatternBenefit benefit);
+    const TargetInfo &targetInfo, PatternBenefit benefit);
 void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                       const TargetInfo &targetInfo,
                                        RewritePatternSet &patterns,
                                        int numWarps,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,

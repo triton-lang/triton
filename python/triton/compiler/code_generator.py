@@ -3,13 +3,17 @@ import inspect
 import re
 import sys
 import warnings
+import os
+import textwrap
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 from .. import language
 from .._C.libtriton import ir
 from ..language import constexpr, tensor, str_to_ty
+from ..runtime.jit import _normalize_ty
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
+from types import ModuleType
 
 
 def mangle_ty(ty):
@@ -239,9 +243,11 @@ class CodeGenerator(ast.NodeVisitor):
         # SSA-construction
         # name => language.tensor
         self.local_defs: Dict[str, tensor] = {}
-        self.global_uses: Dict[str, tensor] = {}
         self.dereference_name: Callable[[str], Any] = self._define_name_lookup()
         self.fn = None
+        # Are we currently visiting an ast.arg's default value?  These have some
+        # special handling.
+        self.visiting_arg_default_value = False
 
     builtin_namespace: Dict[str, Any] = {_.__name__: _ for _ in (len, list, range, float, int, isinstance, getattr)}
     builtin_namespace.update((
@@ -253,20 +259,59 @@ class CodeGenerator(ast.NodeVisitor):
     def _unsupported(self, node, message):
         return UnsupportedLanguageConstruct(self.jit_fn.src, node, message)
 
+    def _is_constexpr_global(self, name):
+        absent_marker = object()
+        val = self.gscope.get(name, absent_marker)
+        if val is absent_marker:
+            return False
+
+        if _is_constexpr(val):
+            return True
+
+        if a := self.gscope.get("__annotations__", {}).get(name):
+            return _normalize_ty(a) == "constexpr"
+
+        return False
+
     def _define_name_lookup(self):
 
         def local_lookup(name: str, absent):
             # this needs to be re-fetched from `self` every time, because it gets switched occasionally
-            value = self.lscope.get(name, absent)
-            if value is not absent and name not in self.local_defs:
-                self.global_uses[name] = value
-            return value
+            return self.lscope.get(name, absent)
+
+        def global_lookup(name: str, absent):
+            val = self.gscope.get(name, absent)
+            # The high-level rule is that only constexpr globals are allowed.
+            # But actually a bunch of other things, such as module imports, are
+            # technically Python globals. We have to allow these too!
+            if (val is absent  #
+                    or name in self.builtin_namespace  #
+                    or type(val) == ModuleType  #
+                    or isinstance(val, JITFunction)  #
+                    or getattr(val, "__triton_builtin__", False)  #
+                    or getattr(val, "__module__", "").startswith("triton.language")  #
+                    or isinstance(val, language.dtype)  #
+                    or self._is_constexpr_global(name)  #
+                    # Allow accesses to globals while visiting an ast.arg
+                    # because you should be able to do
+                    #   @triton.jit def fn(x: tl.constexpr = GLOBAL): ...
+                    or self.visiting_arg_default_value  #
+                    or os.environ.get("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS", "0") == "1"):
+                return val
+            raise NameError(
+                textwrap.dedent(f"""\
+                Cannot access global variable {name} from within @jit'ed
+                function. Triton kernels can only access global variables that
+                are annotated as constexpr (`x: triton.language.constexpr = 42`
+                or `x = triton.language.constexpr(42)`).  Alternatively, set the
+                envvar TRITON_ALLOW_NON_CONSTEXPR_GLOBALS=1, but we do not
+                promise to support this forever.""").replace("\n", " "))
 
         absent_marker = object()
 
         def name_lookup(name: str) -> Any:
             absent = absent_marker
-            for lookup_function in local_lookup, self.gscope.get, self.builtin_namespace.get:
+            for lookup_function in local_lookup, global_lookup, self.builtin_namespace.get:
                 value = lookup_function(name, absent)
                 if value is not absent:
                     return value
@@ -360,7 +405,14 @@ class CodeGenerator(ast.NodeVisitor):
                 init_node = ast.Assign(targets=[st_target], value=default_value)
             else:
                 init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation)
-            self.visit(init_node)
+
+            try:
+                assert not self.visiting_arg_default_value
+                self.visiting_arg_default_value = True
+                self.visit(init_node)
+            finally:
+                self.visiting_arg_default_value = False
+
         # initialize function
         visibility = "public" if self.is_kernel else "private"
         self.fn = self.builder.get_or_insert_function(self.module, self.function_name,
@@ -774,7 +826,7 @@ class CodeGenerator(ast.NodeVisitor):
             for name in loop_defs:
                 if name in liveins:
                     # We should not def new constexpr
-                    assert _is_triton_tensor(loop_defs[name]), f'cannoe reassign constxpr {name} in the loop'
+                    assert _is_triton_tensor(loop_defs[name]), f'cannot reassign constxpr {name} in the loop'
                     assert _is_triton_tensor(liveins[name]), f'cannot reasign constexpr {name} in the loop'
                     assert loop_defs[name].type == liveins[name].type, \
                         f'Loop-carried variable {name} has initial type {liveins[name].type} '\

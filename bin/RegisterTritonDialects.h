@@ -1,5 +1,5 @@
 #pragma once
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
+#include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -22,7 +22,6 @@
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/InitAllPasses.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace mlir {
 namespace test {
@@ -52,16 +51,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
 #ifdef USE_ROCM
   mlir::triton::registerConvertTritonAMDGPUToLLVM();
   mlir::triton::registerDecomposeUnsupportedAMDConversions();
-
-  // TODO: Uncomment when fixed undefined symbols and
-  // remove section below
-  // List of undefined symbols:
-  // createTritonAMDGPUCoalesce is not defined
-  // createTritonAMDGPUOptimizeDotOperands is not defined
-  // createTritonAMDGPUPipeline is not defined
-  // createTritonAMDGPUPrefetch is not defined
-
-  // mlir::registerTritonAMDGPUPasses();
 
   mlir::registerTritonAMDGPUAccelerateMatmul();
   mlir::registerTritonAMDGPUOptimizeEpilogue();

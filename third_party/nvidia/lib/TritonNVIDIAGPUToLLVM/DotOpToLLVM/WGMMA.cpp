@@ -333,18 +333,6 @@ static Value faddAccumulate(ConversionPatternRewriter &rewriter, Location loc,
   return newStruct;
 }
 
-static bool isZero(Value v) {
-  auto constantOp = v.getDefiningOp<arith::ConstantOp>();
-  if (!constantOp)
-    return false;
-  if (auto denseAttr = dyn_cast<DenseFPElementsAttr>(constantOp.getValueAttr()))
-    return denseAttr.isSplat() && denseAttr.getSplatValue<APFloat>().isZero();
-  if (auto denseAttr =
-          dyn_cast<DenseIntElementsAttr>(constantOp.getValueAttr()))
-    return denseAttr.isSplat() && denseAttr.getSplatValue<APInt>().isZero();
-  return false;
-}
-
 static SmallVector<Value> emitWait(ConversionPatternRewriter &rewriter,
                                    Location loc, SmallVector<Value> acc,
                                    int pendings) {
@@ -402,7 +390,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   int M = 4 * instrShape[0];
   int N = instrShape[1];
   int K = instrShape[2];
-  bool zeroAcc = isZero(c);
+  bool zeroAcc = isZeroConst(c);
   auto shapePerCTATile = getShapePerCTATile(mmaEncoding);
   int numRepM = ceil<unsigned>(dShapePerCTA[0], shapePerCTATile[0]);
   int numRepN = ceil<unsigned>(dShapePerCTA[1], shapePerCTATile[1]);

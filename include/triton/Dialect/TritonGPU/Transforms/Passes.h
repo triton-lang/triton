@@ -28,7 +28,7 @@ std::unique_ptr<Pass> createRemoveLayoutConversionsPass();
 
 std::unique_ptr<Pass> createVerifier();
 
-std::unique_ptr<Pass> createOptimizeDotOperandsPass();
+std::unique_ptr<Pass> createOptimizeDotOperandsPass(bool hoistLayoutConversion);
 
 std::unique_ptr<Pass> createOptimizeThreadLocalityPass();
 
