@@ -29,6 +29,7 @@
       ~tensor.atomic_xor
       ~tensor.broadcast_to
       ~tensor.cdiv
+      ~tensor.ceil
       ~tensor.cos
       ~tensor.cumprod
       ~tensor.cumsum

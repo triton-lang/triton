@@ -615,6 +615,65 @@ Effects: `MemoryEffects::Effect{}`
 | :----: | ----------- |
 | `result` | ranked tensor of floating-point or integer or ptr values
 
+### `tt.experimental_descriptor_load` (triton::ExperimentalDescriptorLoadOp)
+
+_Load from descriptor_
+
+
+Syntax:
+
+```
+operation ::= `tt.experimental_descriptor_load` $desc_ptr `[` $indices `]`
+              oilist(
+              `cacheModifier` `=` $cache |
+              `evictionPolicy` `=` $evict
+              )
+              attr-dict `:` qualified(type($desc_ptr)) `->` type($result)
+```
+
+This operation will be lowered to Nvidia TMA load operation on targets supporting it.
+`desc_ptr` is a pointer to the TMA descriptor allocated in global memory.
+The destination tensor type and shape must match the descriptor otherwise the result is undefined.
+
+This is an escape hatch and is only there for testing/experimenting.
+This op will be removed in the future.
+
+Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6</summary>{{% markdown %}}Enum cases:
+* none (`NONE`)
+* ca (`CA`)
+* cg (`CG`)
+* wb (`WB`)
+* cs (`CS`)
+* wt (`WT`){{% /markdown %}}</details></td></tr>
+<tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3</summary>{{% markdown %}}Enum cases:
+* evict_normal (`NORMAL`)
+* evict_first (`EVICT_FIRST`)
+* evict_last (`EVICT_LAST`){{% /markdown %}}</details></td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `desc_ptr` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system
+| `indices` | variadic of 32-bit signless integer
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | ranked tensor of floating-point or integer or ptr values
+
 ### `tt.extern_elementwise` (triton::ExternElementwiseOp)
 
 Syntax:

@@ -94,6 +94,7 @@ Math Ops
 
     abs
     cdiv
+    ceil
     clamp
     cos
     div_rn
