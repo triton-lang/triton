@@ -63,7 +63,7 @@ def naive_softmax(x):
 # Compute Kernel
 # --------------
 #
-# Our softmax kernel works as follows: each program loads a chunk of consecutive row of the input matrix X,
+# Our softmax kernel works as follows: each program loads a set of rows of the input matrix X strided by number of programs,
 # normalizes it and writes back the result to the output Y.
 #
 # Note that one important limitation of Triton is that each block must have a
@@ -72,22 +72,20 @@ def naive_softmax(x):
 
 
 @triton.jit
-def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n_rows, n_cols, XBLOCK: tl.constexpr,
-                   RBLOCK: tl.constexpr, NUM_REMAINDER_ROWS: tl.constexpr, num_stages: tl.constexpr):
-    pid = tl.program_id(0)
+def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n_rows, n_cols, BLOCK_SIZE: tl.constexpr,
+                   num_stages: tl.constexpr):
     # starting row of the program
-    row_start = pid * (XBLOCK - 1) + min(pid, NUM_REMAINDER_ROWS)
-
-    for i in tl.range(0, XBLOCK, num_stages=num_stages):
-        row_idx = row_start + i
+    row_start = tl.program_id(0)
+    row_step = tl.num_programs(0)
+    for row_idx in tl.range(row_start, n_rows, row_step, num_stages=num_stages):
         # The stride represents how much we need to increase the pointer to advance 1 row
         row_start_ptr = input_ptr + row_idx * input_row_stride
         # The block size is the next power of two greater than n_cols, so we can fit each
         # row in a single block
-        col_offsets = tl.arange(0, RBLOCK)
+        col_offsets = tl.arange(0, BLOCK_SIZE)
         input_ptrs = row_start_ptr + col_offsets
         # Load the row into SRAM, using a mask since BLOCK_SIZE may be > than n_cols
-        mask = (i < XBLOCK - 1 or pid < NUM_REMAINDER_ROWS) and col_offsets < n_cols
+        mask = col_offsets < n_cols
         row = tl.load(input_ptrs, mask=mask, other=-float('inf'))
         # Subtract maximum for numerical stability
         row_minus_max = row - tl.max(row, axis=0)
@@ -115,16 +113,8 @@ def softmax(x):
     # Create a number of persistent programs as many as SMs.
     grid = lambda meta: (num_programs, )
 
-    # Each program handle a chunk of consecutive rows in a loop. If the number of rows is not a multiple of
-    # the number of programs, the remainder number of rows (R) are distributed evenly to the first R number
-    # of programs. Here the chunk size (XBLOCK) is to the number of rows handled by that portion of programs.
-    # The rest of programs will be masked off when accessing the XBLOCK-th row. When R=0, XBLOCK is always set
-    # to the size of the chunk plus one for universal handling in the kernel.
-    XBLOCK = (n_rows + num_programs) // num_programs
-    R = n_rows % num_programs
-
     # The block size of each loop iteration is the smallest power of two greater than the number of columns in `x`
-    RBLOCK = triton.next_power_of_2(n_cols)
+    BLOCK_SIZE = triton.next_power_of_2(n_cols)
 
     # Another trick we can use is to ask the compiler to use more threads per row by
     # increasing the number of warps (`num_warps`) over which each row is distributed.
@@ -147,9 +137,7 @@ def softmax(x):
         n_rows,
         n_cols,
         num_warps=num_warps,
-        XBLOCK=XBLOCK,
-        RBLOCK=RBLOCK,
-        NUM_REMAINDER_ROWS=R,
+        BLOCK_SIZE=BLOCK_SIZE,
         num_stages=num_stages,
     )
     return y
