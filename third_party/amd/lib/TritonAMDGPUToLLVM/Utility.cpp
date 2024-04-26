@@ -2,7 +2,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
-#include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 
 using mlir::triton::gpu::appendOrGetExternFuncOp;
