@@ -134,7 +134,7 @@ def get_pybind11_package_info():
 # json
 def get_json_package_info():
     name = "json"
-    url = "https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz"
+    url = "https://github.com/nlohmann/json/releases/download/v3.11.3/include.zip"
     return Package("json", name, url, "JSON_INCLUDE_DIR", "", "JSON_SYSPATH")
 
 
