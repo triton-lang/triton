@@ -136,25 +136,15 @@ std::string GCNBuilder::dump() const {
 }
 
 GCNInstrExecution &GCNInstrCommon::call(ArrayRef<Operand *> oprs,
-                                        ArrayRef<Modifier *> mods,
-                                        bool onlyAttachMLIRArgs) {
-  if (onlyAttachMLIRArgs) {
-    // Nearly impossible to make the $0,$1 in two PTX code snippets to point to
-    // the same MLIR values in onlyAttachMLIRArgs mode.
-    assert(builder->executions.empty() &&
-           "builder can only hold a single execution when onlyAttachMIIRArgs "
-           "is true.");
-    builder->reorderArgArchive(oprs);
-  }
-  builder->executions.emplace_back(std::make_unique<GCNInstrExecution>(
-      this, oprs, mods, onlyAttachMLIRArgs));
+                                        ArrayRef<Modifier *> mods) {
+  builder->executions.emplace_back(
+      std::make_unique<GCNInstrExecution>(this, oprs, mods));
   return *builder->executions.back();
 }
 
 GCNInstrExecution &GCNInstrCommon::operator()(ArrayRef<Operand *> oprs,
-                                              ArrayRef<Modifier *> mods,
-                                              bool onlyAttachMLIRArgs) {
-  return call(oprs, mods, onlyAttachMLIRArgs);
+                                              ArrayRef<Modifier *> mods) {
+  return call(oprs, mods);
 }
 
 std::string GCNInstrExecution::dump() const {
@@ -162,8 +152,6 @@ std::string GCNInstrExecution::dump() const {
   llvm::raw_string_ostream os(osStr);
 
   std::string instrRepr = strJoin(instr->instrParts, "_");
-  if (onlyAttachMLIRArgs)
-    return instrRepr;
 
   llvm::SmallVector<std::string, 4> argReprs;
   for (auto *arg : argsInOrder) {
