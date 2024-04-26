@@ -1,8 +1,13 @@
 #include "PatternTritonGPUOpToLLVM.h"
+#include "TargetInfo.h"
 #include "Utility.h"
+#include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/IR/PatternMatch.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using mlir::isLayoutMmaV1;
@@ -203,8 +208,11 @@ private:
 struct ConvertLayoutOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
 public:
-  using ConvertOpToLLVMPattern<
-      triton::gpu::ConvertLayoutOp>::ConvertOpToLLVMPattern;
+  ConvertLayoutOpConversion(const LLVMTypeConverter &typeConverter,
+                            const NVIDIA::TargetInfo &targetInfo,
+                            PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
   matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
@@ -276,7 +284,7 @@ private:
       //       of performance issue observed.
       for (unsigned elemId = 0; elemId < accumSizePerThread; elemId += vec) {
         SmallVector<Value> multiDimOffset =
-            getMultiDimOffset(layout, loc, rewriter, elemId, type,
+            getMultiDimOffset(layout, loc, rewriter, targetInfo, elemId, type,
                               multiDimCTAInRepId, shapePerCTATile);
         SmallVector<Value> multiDimOffsetWrapped = getWrappedMultiDimOffset(
             rewriter, loc, multiDimOffset, origRepShape, shapePerCTATile,
@@ -370,7 +378,7 @@ private:
         // TODO[Superjomn]: Move the coordinate computation out of loop, it is
         // duplicate in Volta.
         SmallVector<Value> multiDimOffset =
-            getMultiDimOffset(layout, loc, rewriter, elemId, type,
+            getMultiDimOffset(layout, loc, rewriter, targetInfo, elemId, type,
                               multiDimCTAInRepId, shapePerCTATile);
         coord2val[elemId] = std::make_pair(multiDimOffset, vals[elemId]);
       }
@@ -442,8 +450,8 @@ private:
     // Store to local shared memory
     {
       auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-      auto inIndices =
-          emitIndices(loc, rewriter, srcLayout, srcTy, /*withCTAOffset*/ false);
+      auto inIndices = emitIndices(loc, rewriter, targetInfo, srcLayout, srcTy,
+                                   /*withCTAOffset*/ false);
 
       assert(inIndices.size() == inVals.size() &&
              "Unexpected number of indices emitted");
@@ -466,8 +474,8 @@ private:
         srcShapePerCTACache.push_back(i32_val(srcShapePerCTA[i]));
 
       SmallVector<Value> outVals;
-      auto outIndices =
-          emitIndices(loc, rewriter, dstLayout, dstTy, /*withCTAOffset*/ true);
+      auto outIndices = emitIndices(loc, rewriter, targetInfo, dstLayout, dstTy,
+                                    /*withCTAOffset*/ true);
 
       for (unsigned i = 0; i < outIndices.size(); ++i) {
         auto coord = outIndices[i];
@@ -740,6 +748,9 @@ private:
     }
     return failure();
   }
+
+private:
+  const NVIDIA::TargetInfo &targetInfo;
 };
 } // namespace
 
@@ -754,7 +765,7 @@ void mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMPatterns(
     RewritePatternSet &patterns, PatternBenefit benefit) {
   // For now give ConvertLayoutOpConversion higher benefit, I can split before
   // merging
-  patterns.add<ConvertLayoutOpConversion>(typeConverter, benefit);
+  patterns.add<ConvertLayoutOpConversion>(typeConverter, targetInfo, benefit);
   // Same default benefit
   patterns.add<LocalLoadOpConversion>(typeConverter, benefit);
   mlir::triton::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,

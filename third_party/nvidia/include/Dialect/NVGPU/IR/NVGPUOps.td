@@ -22,12 +22,12 @@
 #ifndef NVGPU_OPS
 #define NVGPU_OPS
 
-include "triton/Dialect/NVGPU/IR/NVGPUDialect.td"
-include "triton/Dialect/NVGPU/IR/NVGPUAttrDefs.td"
 include "mlir/IR/OpBase.td"
 include "mlir/IR/EnumAttr.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
+include "NVGPUDialect.td"
+include "NVGPUAttrDefs.td"
 
 def LLVM_PointerGlobal : LLVM_PointerInAddressSpace<1>;
 def LLVM_PointerShared : LLVM_PointerInAddressSpace<3>;

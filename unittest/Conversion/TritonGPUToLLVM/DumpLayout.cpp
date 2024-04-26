@@ -23,8 +23,10 @@
 
 #include "DumpLayout.h"
 #ifdef AMD_TARGET
+#include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #else
+#include "nvidia/lib/TritonNVIDIAGPUToLLVM/TargetInfo.h"
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
 #endif
 namespace mlir {
@@ -57,7 +59,13 @@ class IndexEmitter {
 public:
   IndexEmitter(MLIRContext *context_)
       : context(context_), option(context), rewriter(context),
-        loc(UnknownLoc::get(context)) {
+        loc(UnknownLoc::get(context)),
+#ifdef AMD_TARGET
+        targetInfo("gfx942")
+#else
+        targetInfo(90)
+#endif
+  {
     mlir::OpBuilder builder(context);
     std::vector<mlir::Type> inTypes{};
     std::vector<mlir::Type> outTypes{};
@@ -73,7 +81,8 @@ public:
   emitIndices(Attribute layout, llvm::ArrayRef<int64_t> shape,
               bool withCTAOffset) {
     auto type = RankedTensorType::get(shape, rewriter.getF16Type(), layout);
-    return mlir::emitIndices(loc, rewriter, layout, type, withCTAOffset);
+    return mlir::emitIndices(loc, rewriter, targetInfo, layout, type,
+                             withCTAOffset);
   }
 
   llvm::DenseMap<unsigned, Value>
@@ -83,9 +92,9 @@ public:
     auto srcTy = RankedTensorType::get(shape, elemTy, srcLayout);
     SharedMemoryObject smemObj(getMockSmemBaseImpl(rewriter, loc), elemTy,
                                shape, sharedLayout.getOrder(), loc, rewriter);
-    return getSwizzledSharedPtrs(loc, /*inVec=*/1, srcTy, sharedLayout, elemTy,
-                                 smemObj, rewriter, smemObj.offsets,
-                                 smemObj.strides);
+    return getSwizzledSharedPtrs(loc, targetInfo, /*inVec=*/1, srcTy,
+                                 sharedLayout, elemTy, smemObj, rewriter,
+                                 smemObj.offsets, smemObj.strides);
   }
 
 private:
@@ -94,6 +103,11 @@ private:
   LowerToLLVMOptions option;
   IRRewriter rewriter;
   Location loc;
+#ifdef AMD_TARGET
+  AMD::TargetInfo targetInfo;
+#else
+  NVIDIA::TargetInfo targetInfo;
+#endif
 };
 
 //===----------------------------------------------------------------------===//

@@ -21,6 +21,7 @@ void populateElementwiseOpToLLVMPatterns(
     ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
     const TargetInfo &targetInfo, PatternBenefit benefit);
 void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                       const TargetInfo &targetInfo,
                                        RewritePatternSet &patterns,
                                        int numWarps,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
