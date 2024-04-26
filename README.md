@@ -188,9 +188,12 @@ $ ninja -C build && ( cd build ; lit test )
   performance tools, it can provide a breakdown on ttgir instructions.
 - `TRITON_PRINT_AUTOTUNING=1` prints out the best autotuning config and total time
   spent for each kernel after autotuning is complete.
-- `DISABLE_LLVM_LSR` will disable llvm's loop strength reduction. This pass is
-  known to cause up to 10% performance changes for certain kernels with register
-  pressure.
+- `DISABLE_LLVM_OPT` will disable llvm optimizations for make_llir and make_ptx
+  if its value is true when parsing as Bool. Otherwise, it will be parsed as a list
+  of flags to disable llvm optimizations. One usage case is
+  `DISABLE_LLVM_OPT="disable-lsr"`
+  Loop strength reduction is known to cause up to 10% performance changes for
+  certain kernels with register pressure.
 
 # Changelog
 
