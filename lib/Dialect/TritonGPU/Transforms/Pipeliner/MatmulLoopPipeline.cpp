@@ -608,10 +608,12 @@ scheduleLoads(scf::ForOp forOp, CoarseSchedule &schedule,
   return loadToInfo;
 }
 
-static void schedulePrologueAndEpilogue(scf::ForOp forOp,
-                                        CoarseSchedule &schedule,
-                                        DenseSet<Operation *> &rootUsers,
-                                        int numStages) {
+static CoarseSchedule::Cluster
+schedulePrologueAndEpilogue(scf::ForOp forOp, CoarseSchedule &schedule,
+                            DenseSet<Operation *> &rootUsers, int numStages) {
+  // TODO pawel: add proper API for this maybe?
+  CoarseSchedule::Cluster afterPrologue = schedule.orderClusters.begin();
+
   // Look for the IfOp that is in the backward slice any of the currently
   // scheduled ops and put it at the beginning of the loop.
   DenseMap<scf::IfOp, int> ifsToStage;
@@ -657,6 +659,7 @@ static void schedulePrologueAndEpilogue(scf::ForOp forOp,
       }
     }
   }
+  return afterPrologue;
 }
 
 // Add dependencies of anchor ops to the coarse schedule. Schedule them to
@@ -713,7 +716,7 @@ static void scheduleDistanceOneDependencies(scf::ForOp forOp,
   };
 
   // Mapping from the cluster to the cluster before it.
-  DenseMap<CoarseSchedule::Cluster, CoarseSchedule::Cluster> dist1Cluster;
+  DenseMap<CoarseSchedule::Cluster *, CoarseSchedule::Cluster> dist1Cluster;
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (schedule.count(&op) == 0)
       continue;
@@ -737,11 +740,12 @@ static void scheduleDistanceOneDependencies(scf::ForOp forOp,
                 schedule.insertIfAbsent(user, stage, cluster);
               }
             } else {
-              if (dist1Cluster.count(cluster) == 0) {
-                dist1Cluster[cluster] = schedule.newClusterBefore(cluster);
+              if (dist1Cluster.count(&cluster) == 0) {
+                dist1Cluster[&cluster] = schedule.newClusterBefore(cluster);
               }
               for (auto user : distanceOneUsers) {
-                schedule.insertIfAbsent(user, stage + 1, dist1Cluster[cluster]);
+                schedule.insertIfAbsent(user, stage + 1,
+                                        dist1Cluster[&cluster]);
               }
             }
           }
@@ -871,8 +875,6 @@ printSchedule(std::vector<std::pair<Operation *, unsigned>> &schedule,
   }
 }
 
-constexpr static char kNeedWaitAttrName[] = "triton.pipeline.needs_wait";
-
 bool mlir::triton::preProcessLoopAndGetSchedule(
     scf::ForOp &forOp, int numStages, mlir::triton::PipeliningOption &options) {
   // Schedule the loads and root ops (dot ops) in the loop. This will give us
@@ -889,7 +891,8 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   SmallVector<Value> allocs =
       createAsyncOps(forOp, coarseSchedule, loadToInfo, numStages);
 
-  schedulePrologueAndEpilogue(forOp, coarseSchedule, rootUsers, numStages);
+  CoarseSchedule::Cluster afterPrologue =
+      schedulePrologueAndEpilogue(forOp, coarseSchedule, rootUsers, numStages);
   LLVM_DEBUG({
     LDBG("Coarse schedule with prologue and epilogue:");
     coarseSchedule.dump();
@@ -909,7 +912,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
 
   // Assign the rest of the ops to the last stage.
   for (auto &op : forOp.getBody()->without_terminator()) {
-    coarseSchedule.insertIfAbsent(&op, numStages - 1, 0);
+    coarseSchedule.insertIfAbsent(&op, numStages - 1, afterPrologue);
   }
   LLVM_DEBUG({
     LDBG("Final coarse schedule:");
