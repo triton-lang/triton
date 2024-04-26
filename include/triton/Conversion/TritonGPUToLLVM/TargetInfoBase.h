@@ -1,7 +1,6 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOBASE_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOBASE_H
 
-#include "mlir/IR/PatternMatch.h"
 #include "triton/Conversion/MLIRTypes.h"
 
 namespace mlir::triton {

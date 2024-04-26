@@ -1,8 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "Utility.h"
-#include "mlir/IR/Matchers.h"
-#include "mlir/IR/TypeUtilities.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using namespace mlir;
