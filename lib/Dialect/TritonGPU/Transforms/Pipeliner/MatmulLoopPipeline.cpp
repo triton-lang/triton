@@ -85,10 +85,11 @@ public:
     opToStageAndCluster[op] = {stage, cluster};
   }
 
-  void insertIfAbsent(Operation *op, int stage, Cluster cluster) {
+  bool insertIfAbsent(Operation *op, int stage, Cluster cluster) {
     if (opToStageAndCluster.count(op))
-      return;
+      return false;
     insert(op, stage, cluster);
+    return true;
   }
 
   void erase(Operation *op) { opToStageAndCluster.erase(op); }
@@ -719,8 +720,10 @@ static void addDepsToSchedule(Operation *op, CoarseSchedule &schedule,
     }
     Operation *defOp = v.getDefiningOp();
     if (defOp && defOp->getBlock() == op->getBlock()) {
-      schedule.insertIfAbsent(defOp, schedule[op].first, schedule[op].second);
-      addDepsToSchedule(defOp, schedule, stage, cluster, includeArg);
+      if (schedule.insertIfAbsent(defOp, schedule[op].first,
+                                  schedule[op].second)) {
+        addDepsToSchedule(defOp, schedule, stage, cluster, includeArg);
+      }
     }
   }
 }
