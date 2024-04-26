@@ -25,8 +25,8 @@
 #include "mlir/IR/OpImplementation.h"
 
 // clang-format off
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
-#include "triton/Dialect/NVGPU/IR/Dialect.cpp.inc"
+#include "Dialect/NVGPU/IR/Dialect.h"
+#include "Dialect/NVGPU/IR/Dialect.cpp.inc"
 // clang-format on
 
 using namespace mlir;
@@ -88,15 +88,15 @@ static LogicalResult verify(mlir::triton::nvgpu::WGMMAOp op) {
 void mlir::triton::nvgpu::NVGPUDialect::initialize() {
   addAttributes<
 #define GET_ATTRDEF_LIST
-#include "triton/Dialect/NVGPU/IR/NVGPUAttrDefs.cpp.inc"
+#include "Dialect/NVGPU/IR/NVGPUAttrDefs.cpp.inc"
       >();
 
   addOperations<
 #define GET_OP_LIST
-#include "triton/Dialect/NVGPU/IR/Ops.cpp.inc"
+#include "Dialect/NVGPU/IR/Ops.cpp.inc"
       >();
 }
 
 #define GET_OP_CLASSES
-#include "triton/Dialect/NVGPU/IR/Ops.cpp.inc"
-#include "triton/Dialect/NVGPU/IR/OpsEnums.cpp.inc"
+#include "Dialect/NVGPU/IR/Ops.cpp.inc"
+#include "Dialect/NVGPU/IR/OpsEnums.cpp.inc"

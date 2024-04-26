@@ -19,7 +19,7 @@ jobs:
         run: |
           echo '::set-output name=matrix::[["self-hosted", "A100"]]'
 
-  Integration-Tests:
+  Torch-Inductor-Tests:
     needs: Runner-Preparation
     timeout-minutes: 240  # 4 hours
     runs-on: ${{ matrix.runner }}
@@ -42,4 +42,4 @@ jobs:
       # Runs too long time
       #- name: Accuracy
       #  run: |
-      #    ./.github/workflows/torch-inductor/scripts/run_torchinductor_acc.sh
+      #    ./.github/workflows/torch-inductor/scripts/run_torchinductor_acc.sh torchbench

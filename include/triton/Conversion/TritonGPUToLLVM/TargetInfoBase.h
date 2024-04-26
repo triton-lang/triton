@@ -8,6 +8,8 @@ class TargetInfoBase {
 public:
   virtual bool supportMaximumMinimum() const = 0;
 
+  virtual Value getClusterCTAId(RewriterBase &rewriter, Location loc) const = 0;
+
   virtual Value ballot(ConversionPatternRewriter &rewriter, Location loc,
                        Type type, Value cmp) const = 0;
 

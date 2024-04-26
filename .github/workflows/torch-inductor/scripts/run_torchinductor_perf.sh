@@ -20,6 +20,8 @@ BASE_TEST_REPORTS_DIR=$TEST_REPORTS_DIR/acc
 mkdir -p "$TRITON_TEST_REPORTS_DIR"
 mkdir -p "$BASE_TEST_REPORTS_DIR"
 
+# Dependency of 'pytorch/benchmarks/dynamo/common.py'.
+pip3 install pandas scipy
 
 echo "Running with Triton Nightly"
 for model in "${MODELS[@]}"; do
@@ -27,13 +29,13 @@ for model in "${MODELS[@]}"; do
     continue
   fi
   echo "Running performance test for $model"
-  python3 benchmarks/dynamo/"$model".py --float32 -dcuda --training --inductor --performance \
+  python3 benchmarks/dynamo/"$model".py --ci --float32 --training --inductor --performance --device cuda \
     --output "$TRITON_TEST_REPORTS_DIR"/"$model".csv
 done
 
 # install pytorch-triton
 pip3 uninstall triton -y
-pip3 install --pre torch --extra-index-url https://download.pytorch.org/whl/nightly/cu121
+pip3 install --pre pytorch-triton --extra-index-url https://download.pytorch.org/whl/nightly/cu121
 
 echo "Running with pytorch-triton"
 for model in "${MODELS[@]}"; do
@@ -41,7 +43,7 @@ for model in "${MODELS[@]}"; do
     continue
   fi
   echo "Running performance test for $model"
-  python3 benchmarks/dynamo/"$model".py --float32 -dcuda --training --inductor --performance \
+  python3 benchmarks/dynamo/"$model".py --ci --float32 --training --inductor --performance --device cuda \
     --output "$BASE_TEST_REPORTS_DIR"/"$model".csv
 done
 
