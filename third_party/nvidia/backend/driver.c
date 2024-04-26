@@ -254,16 +254,17 @@ static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
 static PyObject *fill1DTMADescriptor(PyObject *self, PyObject *args) {
   unsigned long long global_address;
   uint64_t dim;
+  uint32_t tensorDim;
   int elementSize;
   Py_buffer desc_buffer;
-  if (!PyArg_ParseTuple(args, "KKiy*", &global_address, &dim, &elementSize,
-                        &desc_buffer)) {
+  if (!PyArg_ParseTuple(args, "KKiiy*", &global_address, &dim, &tensorDim,
+                        &elementSize, &desc_buffer)) {
     return NULL;
   }
   char *desc = (char *)desc_buffer.buf;
   uint64_t dims[1] = {dim};
-  uint64_t globalStrides[1] = {1};
-  uint32_t boxDim[1] = {dim};
+  uint64_t globalStrides[1] = {dim * elementSize};
+  uint32_t boxDim[1] = {tensorDim};
   uint32_t elementStrides[1] = {1};
   CUtensorMapDataType type;
   switch (elementSize) {
@@ -279,9 +280,51 @@ static PyObject *fill1DTMADescriptor(PyObject *self, PyObject *args) {
   default:
     PyErr_SetString(PyExc_ValueError, "elementSize must be 1, 2, or 4");
   }
+  int rank = 1;
   CUresult result = cuTensorMapEncodeTiled(
-      (CUtensorMap *)desc, type, 1, (void *)global_address, dims, globalStrides,
-      boxDim, elementStrides, CU_TENSOR_MAP_INTERLEAVE_NONE,
+      (CUtensorMap *)desc, type, rank, (void *)global_address, dims,
+      globalStrides, boxDim, elementStrides, CU_TENSOR_MAP_INTERLEAVE_NONE,
+      CU_TENSOR_MAP_SWIZZLE_NONE, CU_TENSOR_MAP_L2_PROMOTION_NONE,
+      CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+  assert(result == CUDA_SUCCESS);
+  return Py_None;
+}
+
+// Simple helper to experiment creating TMA descriptors on the host.
+// This is a useful to test TMA operations independently.
+static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
+  unsigned long long global_address;
+  uint64_t dims[2];
+  uint32_t tensorDims[2];
+  int elementSize;
+  Py_buffer desc_buffer;
+  if (!PyArg_ParseTuple(args, "KKKiiiy*", &global_address, &dims[1], &dims[0],
+                        &tensorDims[1], &tensorDims[0], &elementSize,
+                        &desc_buffer)) {
+    return NULL;
+  }
+  char *desc = (char *)desc_buffer.buf;
+  uint64_t globalStrides[2] = {dims[0] * elementSize,
+                               dims[0] * dims[1] * elementSize};
+  uint32_t elementStrides[2] = {1, 1};
+  CUtensorMapDataType type;
+  switch (elementSize) {
+  case 1:
+    type = CU_TENSOR_MAP_DATA_TYPE_UINT8;
+    break;
+  case 2:
+    type = CU_TENSOR_MAP_DATA_TYPE_UINT16;
+    break;
+  case 4:
+    type = CU_TENSOR_MAP_DATA_TYPE_UINT32;
+    break;
+  default:
+    PyErr_SetString(PyExc_ValueError, "elementSize must be 1, 2, or 4");
+  }
+  int rank = 2;
+  CUresult result = cuTensorMapEncodeTiled(
+      (CUtensorMap *)desc, type, rank, (void *)global_address, dims,
+      globalStrides, tensorDims, elementStrides, CU_TENSOR_MAP_INTERLEAVE_NONE,
       CU_TENSOR_MAP_SWIZZLE_NONE, CU_TENSOR_MAP_L2_PROMOTION_NONE,
       CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
   assert(result == CUDA_SUCCESS);
@@ -302,6 +345,8 @@ static PyMethodDef ModuleMethods[] = {
      "particular it's an error to change this value after launching any kernel "
      "that calls printf()."},
     {"fill_1d_tma_descriptor", fill1DTMADescriptor, METH_VARARGS, "doc"},
+    {"fill_2d_tma_descriptor", fill2DTMADescriptor, METH_VARARGS, "doc"},
+
     {NULL, NULL, 0, NULL} // sentinel
 };
 

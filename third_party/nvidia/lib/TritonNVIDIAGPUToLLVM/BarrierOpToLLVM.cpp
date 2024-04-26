@@ -110,6 +110,7 @@ struct WaitBarrierOpConversion
         op.getLoc(), adaptor.getAlloc(),
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
+    auto loc = op.getLoc();
     const std::string ptx =
         "{                                                           \n\t"
         ".reg .pred P1;                                              \n\t"
@@ -124,6 +125,7 @@ struct WaitBarrierOpConversion
              /*onlyAttachMLIRArgs=*/true);
     auto voidTy = void_ty(op->getContext());
     ptxBuilder.launch(rewriter, op->getLoc(), voidTy);
+    barrier();
     rewriter.eraseOp(op);
     return success();
   }
