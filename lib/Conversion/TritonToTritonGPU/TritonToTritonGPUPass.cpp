@@ -126,12 +126,13 @@ void populateMathPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
   MLIRContext *context = patterns.getContext();
   // Rewrite rule
   patterns.add<GenericOpPattern<math::ExpOp>, GenericOpPattern<math::Exp2Op>,
-               GenericOpPattern<math::FloorOp>, GenericOpPattern<math::CosOp>,
-               GenericOpPattern<math::SinOp>, GenericOpPattern<math::LogOp>,
-               GenericOpPattern<math::Log2Op>, GenericOpPattern<math::ErfOp>,
-               GenericOpPattern<math::AbsFOp>, GenericOpPattern<math::AbsIOp>,
-               GenericOpPattern<math::SqrtOp>, GenericOpPattern<math::RsqrtOp>,
-               GenericOpPattern<math::FmaOp>>(typeConverter, context);
+               GenericOpPattern<math::FloorOp>, GenericOpPattern<math::CeilOp>,
+               GenericOpPattern<math::CosOp>, GenericOpPattern<math::SinOp>,
+               GenericOpPattern<math::LogOp>, GenericOpPattern<math::Log2Op>,
+               GenericOpPattern<math::ErfOp>, GenericOpPattern<math::AbsFOp>,
+               GenericOpPattern<math::AbsIOp>, GenericOpPattern<math::SqrtOp>,
+               GenericOpPattern<math::RsqrtOp>, GenericOpPattern<math::FmaOp>>(
+      typeConverter, context);
 }
 
 //
@@ -548,6 +549,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::PrintOp>, GenericOpPattern<triton::AssertOp>,
       GenericOpPattern<triton::AtomicCASOp>,
       GenericOpPattern<triton::AtomicRMWOp>, GenericOpPattern<ReturnOp>,
+      GenericOpPattern<triton::ExperimentalDescriptorLoadOp>,
       GenericOpPattern<triton::CallOp>, TritonFuncOpPattern>(typeConverter,
                                                              context);
 }

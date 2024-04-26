@@ -387,8 +387,8 @@ class CompiledKernel:
             return ret
         arg_dict = {}
         arg_idx = 0
-        for arg_name in self.src.fn.arg_names:
-            if arg_name in self.src.constants:
+        for i, arg_name in enumerate(self.src.fn.arg_names):
+            if i in self.src.fn.constexprs:
                 arg_dict[arg_name] = self.src.constants[arg_name]
             else:
                 arg_dict[arg_name] = args[arg_idx]

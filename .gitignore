@@ -42,6 +42,9 @@ cuobjdump
 nvdisasm
 ptxas
 
+# Third-party include
+third_party/nvidia/backend/include
+
 # Docs
 docs/_build/
 docs/python-api/generated/

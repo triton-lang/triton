@@ -32,6 +32,8 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      mlir::triton::nvidia_gpu::ClusterInfo *);
   ADD_PASS_WRAPPER_0("add_fence_insertion",
                      mlir::createTritonNvidiaGPUFenceInsertionPass);
+  ADD_PASS_WRAPPER_0("add_tma_lowering",
+                     mlir::createTritonNvidiaGPUTMALoweringPass);
   ADD_PASS_WRAPPER_0("add_nvgpu_to_llvm",
                      mlir::triton::createConvertNVGPUToLLVMPass);
 }

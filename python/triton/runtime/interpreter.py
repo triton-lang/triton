@@ -503,6 +503,7 @@ class InterpreterBuilder:
     create_exp2 = lambda self, arg: self.unary_op(arg, np.exp2)
     create_iabs = lambda self, arg: self.unary_op(arg, np.abs)
     create_floor = lambda self, arg: self.unary_op(arg, np.floor)
+    create_ceil = lambda self, arg: self.unary_op(arg, np.ceil)
     create_log = lambda self, arg: self.unary_op(arg, np.log)
     create_log2 = lambda self, arg: self.unary_op(arg, np.log2)
     create_precise_sqrt = lambda self, arg: self.unary_op(arg, np.sqrt)
