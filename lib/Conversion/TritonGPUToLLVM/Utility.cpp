@@ -127,7 +127,10 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(ConversionPatternRewriter &rewriter,
   if (funcOp)
     return cast<LLVMFuncOp>(*funcOp);
 
-  OpBuilder b(op);
+  Operation *parent = op;
+  if (!isa<LLVM::LLVMFuncOp>(op))
+    parent = op->getParentOfType<LLVM::LLVMFuncOp>();
+  OpBuilder b(parent);
   auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
   ret.getOperation()->setAttr("libname",
                               StringAttr::get(op->getContext(), libname));

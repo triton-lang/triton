@@ -295,9 +295,8 @@ struct MulhiUIOpConversion
 
     auto funcName = targetInfo.getMulhiFuncName(resultElementTy);
     Type funcType = getFunctionType(elemTy, operands[0]);
-    auto parent = op->getParentOfType<LLVM::LLVMFuncOp>();
     LLVM::LLVMFuncOp funcOp =
-        appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
     return {
         rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
   }
@@ -324,9 +323,8 @@ struct ExternElementwiseOpConversion
       llvm::errs() << "ExternElementwiseOpConversion";
 
     Type funcType = getFunctionType(elemTy, operands[0]);
-    auto parent = op->getParentOfType<LLVM::LLVMFuncOp>();
     LLVM::LLVMFuncOp funcOp = appendOrGetExternFuncOp(
-        rewriter, parent, funcName, funcType, op.getLibname(), op.getLibpath());
+        rewriter, op, funcName, funcType, op.getLibname(), op.getLibpath());
     return {
         rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
   }
