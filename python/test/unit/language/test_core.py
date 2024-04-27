@@ -266,7 +266,7 @@ def _test_unary(dtype_x, expr, numpy_expr=None, device='cuda', num_ctas=1):
     # triton result
     x_tri = to_triton(x, device=device, dst_type=dtype_x)
     z_tri = to_triton(np.empty_like(x), device=device, dst_type=dtype_x)
-    kernel[(1, )](z_tri, x_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
+    kernel[(1, )](Z=z_tri, X=x_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
     # compare
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
 

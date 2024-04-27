@@ -1,3 +1,4 @@
+#include "TargetInfo.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 
@@ -6,8 +7,6 @@
 
 #include "Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-
-#include <numeric>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -25,11 +24,11 @@ namespace {
 // Return the mask for the unique data accessed by given tensor type.
 // Used to mask out the redundant data accessed by threads.
 Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
-                        Location loc) {
+                        Location loc, const NVIDIA::TargetInfo &targetInfo) {
   auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
   Value mask = int_val(1, 1);
   auto tid = tid_val();
-  auto clusterCTAId = getClusterCTAId(rewriter, loc);
+  auto clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
   if (tensorTy) {
     auto layout = tensorTy.getEncoding();
     auto shape = tensorTy.getShape();
@@ -98,8 +97,9 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
 
 // Contains some helper functions for both Load and Store conversions.
 struct LoadStoreConversionBase {
-  explicit LoadStoreConversionBase(ModuleAxisInfoAnalysis &axisAnalysisPass)
-      : axisAnalysisPass(axisAnalysisPass) {}
+  explicit LoadStoreConversionBase(const NVIDIA::TargetInfo &targetInfo,
+                                   ModuleAxisInfoAnalysis &axisAnalysisPass)
+      : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass) {}
 
   unsigned getContiguity(Value ptr) const {
     auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
@@ -125,18 +125,18 @@ struct LoadStoreConversionBase {
   }
 
 protected:
+  const NVIDIA::TargetInfo &targetInfo;
   ModuleAxisInfoAnalysis &axisAnalysisPass;
 };
 
 struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                           public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<triton::LoadOp>::ConvertOpToLLVMPattern;
-
   LoadOpConversion(LLVMTypeConverter &converter,
+                   const NVIDIA::TargetInfo &targetInfo,
                    ModuleAxisInfoAnalysis &axisAnalysisPass,
                    PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::LoadOp>(converter, benefit),
-        LoadStoreConversionBase(axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
@@ -343,13 +343,12 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
 struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
                            public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<triton::StoreOp>::ConvertOpToLLVMPattern;
-
   StoreOpConversion(LLVMTypeConverter &converter,
+                    const NVIDIA::TargetInfo &targetInfo,
                     ModuleAxisInfoAnalysis &axisAnalysisPass,
                     PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::StoreOp>(converter, benefit),
-        LoadStoreConversionBase(axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
@@ -386,7 +385,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       vec = std::min(vec, maskAlign);
     }
 
-    Value mask = redundantDataMask(valueTy, rewriter, loc);
+    Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
     const size_t valueElemNBits = dtsize * 8;
@@ -480,13 +479,12 @@ void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
 struct AtomicCASOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicCASOp>,
       public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<triton::AtomicCASOp>::ConvertOpToLLVMPattern;
-
   AtomicCASOpConversion(LLVMTypeConverter &converter,
+                        const NVIDIA::TargetInfo &targetInfo,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
                         PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::AtomicCASOp>(converter, benefit),
-        LoadStoreConversionBase(axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
@@ -521,7 +519,7 @@ struct AtomicCASOpConversion
       vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
     }
 
-    Value mask = redundantDataMask(valueTy, rewriter, loc);
+    Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
 
@@ -595,13 +593,12 @@ struct AtomicCASOpConversion
 struct AtomicRMWOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicRMWOp>,
       public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<triton::AtomicRMWOp>::ConvertOpToLLVMPattern;
-
   AtomicRMWOpConversion(LLVMTypeConverter &converter,
+                        const NVIDIA::TargetInfo &targetInfo,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
                         PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::AtomicRMWOp>(converter, benefit),
-        LoadStoreConversionBase(axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
@@ -645,7 +642,7 @@ struct AtomicRMWOpConversion
       // mask
       numElems = tensorTy.getNumElements();
     }
-    Value mask = redundantDataMask(valueTy, rewriter, loc);
+    Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
 
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
@@ -761,15 +758,12 @@ struct AtomicRMWOpConversion
 struct AsyncCopyGlobalToLocalOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::AsyncCopyGlobalToLocalOp>,
       public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<
-      triton::gpu::AsyncCopyGlobalToLocalOp>::ConvertOpToLLVMPattern;
-
   AsyncCopyGlobalToLocalOpConversion(LLVMTypeConverter &converter,
+                                     const NVIDIA::TargetInfo &targetInfo,
                                      ModuleAxisInfoAnalysis &axisAnalysisPass,
                                      PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::gpu::AsyncCopyGlobalToLocalOp>(converter,
-                                                                      benefit),
-        LoadStoreConversionBase(axisAnalysisPass) {}
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::gpu::AsyncCopyGlobalToLocalOp op, OpAdaptor adaptor,
@@ -832,9 +826,9 @@ struct AsyncCopyGlobalToLocalOpConversion
     unsigned perPhase = resSharedLayout.getPerPhase();
     unsigned maxPhase = resSharedLayout.getMaxPhase();
     SmallVector<Value> offsetVals = {smemObj.strides.size(), i32_val(0)};
-    DenseMap<unsigned, Value> sharedPtrs =
-        getSwizzledSharedPtrs(loc, inVec, srcTy, resSharedLayout, resElemTy,
-                              smemObj, rewriter, offsetVals, smemObj.strides);
+    DenseMap<unsigned, Value> sharedPtrs = getSwizzledSharedPtrs(
+        loc, targetInfo, inVec, srcTy, resSharedLayout, resElemTy, smemObj,
+        rewriter, offsetVals, smemObj.strides);
 
     // A sharedLayout encoding has a "vec" parameter.
     // On the column dimension, if inVec > outVec, it means we have to divide
@@ -882,7 +876,7 @@ struct AsyncCopyGlobalToLocalOpConversion
         // When 'other != 0' is supported, we will need to fold the op.getMask()
         // and redundantDataMask() into the same predicate, the way it is done
         // for LoadOp.
-        Value maskVal = redundantDataMask(srcTy, rewriter, loc);
+        Value maskVal = redundantDataMask(srcTy, rewriter, loc, targetInfo);
 
         // TODO: Masking does not work for CTA multicast with cp.async. This is
         // a quick and dirty workaround to avoid the issue.
@@ -1021,14 +1015,12 @@ struct AsyncCommitGroupOpConversion
 } // namespace
 
 void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
-  patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<StoreOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<AtomicCASOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<AtomicRMWOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<AsyncCopyGlobalToLocalOpConversion>(typeConverter,
-                                                   axisInfoAnalysis, benefit);
+    LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
+    RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    PatternBenefit benefit) {
+  patterns.add<AsyncCopyGlobalToLocalOpConversion, AtomicCASOpConversion,
+               AtomicRMWOpConversion, LoadOpConversion, StoreOpConversion>(
+      typeConverter, targetInfo, axisInfoAnalysis, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
   patterns.add<AsyncTMACopyGlobalToLocalOpConversion>(typeConverter, benefit);

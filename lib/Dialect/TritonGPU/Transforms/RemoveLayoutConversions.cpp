@@ -13,6 +13,7 @@
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
@@ -207,6 +208,25 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
     queue.pop_back();
     getForwardSlice(currentValue, &forwardSlice);
     for (Operation *op : forwardSlice) {
+      // HACK: Stop propagation if the ReduceOp is using mma layout but is
+      // producing tensor smaller than the layout we would like to propagate.
+      // This is to avoid stepping into the known bug.
+      if (isa<mlir::triton::ReduceOp>(op)) {
+        auto tensorType =
+            op->getOperand(0).getType().dyn_cast<RankedTensorType>();
+        if (tensorType &&
+            tensorType.getEncoding().isa<NvidiaMmaEncodingAttr>()) {
+          auto mmaInstrShape =
+              encoding.cast<NvidiaMmaEncodingAttr>().getInstrShape();
+          if (tensorType.getShape()[tensorType.getRank() - 2] <
+                  mmaInstrShape[0] ||
+              tensorType.getShape()[tensorType.getRank() - 1] <
+                  mmaInstrShape[1]) {
+            return false;
+          }
+        }
+      }
+
       if (auto convertOp = dyn_cast<ConvertLayoutOp>(op)) {
         Attribute dstEncoding = convertOp.getType().getEncoding();
         if (auto mmaLayout = dstEncoding.dyn_cast<NvidiaMmaEncodingAttr>())
@@ -220,12 +240,21 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
       auto yield = dyn_cast<scf::YieldOp>(op);
       if (!yield)
         continue;
+      if (auto ifOp = dyn_cast<scf::IfOp>(yield->getParentOp())) {
+        for (OpOperand &operand : yield->getOpOperands()) {
+          Operation *def = operand.get().getDefiningOp();
+          if (def &&
+              (forwardSlice.count(def) || operand.get() == currentValue) &&
+              (seen.insert(operand.get()).second == true))
+            queue.push_back(ifOp.getResult(operand.getOperandNumber()));
+        }
+      }
       auto forOp = dyn_cast<scf::ForOp>(yield.getOperation()->getParentOp());
       if (!forOp)
         continue;
       for (OpOperand &operand : yield->getOpOperands()) {
         Operation *def = operand.get().getDefiningOp();
-        if (def && forwardSlice.count(def) &&
+        if (def && (forwardSlice.count(def) || operand.get() == currentValue) &&
             (seen.insert(operand.get()).second == true))
           queue.push_back(forOp.getRegionIterArg(operand.getOperandNumber()));
       }

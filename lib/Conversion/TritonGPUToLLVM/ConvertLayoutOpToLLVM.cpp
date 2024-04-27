@@ -1,3 +1,5 @@
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 #include "triton/Analysis/Allocation.h"
@@ -25,8 +27,11 @@ namespace {
 struct LocalLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::LocalLoadOp> {
 public:
-  using ConvertOpToLLVMPattern<
-      triton::gpu::LocalLoadOp>::ConvertOpToLLVMPattern;
+  LocalLoadOpConversion(LLVMTypeConverter &typeConverter,
+                        const TargetInfoBase &targetInfo,
+                        PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
   matchAndRewrite(triton::gpu::LocalLoadOp op, OpAdaptor adaptor,
@@ -93,25 +98,28 @@ private:
     auto srcStrides =
         getStridesFromShapeAndOrder(srcTy.getShape(), inOrd, loc, rewriter);
 
-    SmallVector<Value> outVals = loadSharedToDistributed(
-        op.getResult(), op.getSrc(), smemObj, elemTy, loc, rewriter);
+    SmallVector<Value> outVals =
+        loadSharedToDistributed(op.getResult(), op.getSrc(), smemObj, elemTy,
+                                loc, rewriter, targetInfo);
 
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
 
     return success();
   }
+
+private:
+  const TargetInfoBase &targetInfo;
 };
 
 struct ConvertLayoutOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
 public:
-  explicit ConvertLayoutOpConversion(LLVMTypeConverter &typeConverter,
-                                     const TargetInfoBase &targetInfo,
-                                     PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp>(typeConverter,
-                                                             benefit),
-        targetInfo(targetInfo) {}
+  ConvertLayoutOpConversion(LLVMTypeConverter &typeConverter,
+                            const TargetInfoBase &targetInfo,
+                            PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
   matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
@@ -179,7 +187,7 @@ private:
       //       of performance issue observed.
       for (unsigned elemId = 0; elemId < accumSizePerThread; elemId += vec) {
         SmallVector<Value> multiDimOffset =
-            getMultiDimOffset(layout, loc, rewriter, elemId, type,
+            getMultiDimOffset(layout, loc, rewriter, targetInfo, elemId, type,
                               multiDimCTAInRepId, shapePerCTATile);
         SmallVector<Value> multiDimOffsetWrapped = getWrappedMultiDimOffset(
             rewriter, loc, multiDimOffset, origRepShape, shapePerCTATile,
@@ -315,5 +323,5 @@ void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
   patterns.add<ConvertLayoutOpConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<LocalLoadOpConversion>(typeConverter, benefit);
+  patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
 }
