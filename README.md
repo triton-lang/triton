@@ -128,7 +128,7 @@ follow the following recipe.
 ```shell
 # One-time setup.  Note we have to reinstall local Triton because torch
 # overwrites it with the public version.
-$ pip install scipy numpy torch pytest lit && pip install -e python
+$ pip install scipy numpy torch pytest lit pandas matplotlib && pip install -e python
 
 # Run Python tests using your local GPU.
 $ python3 -m pytest python/test/unit
