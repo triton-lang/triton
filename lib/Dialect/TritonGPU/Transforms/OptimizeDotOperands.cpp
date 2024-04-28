@@ -68,7 +68,8 @@ public:
         trans.getSrc());
     auto newTrans = rewriter.create<TransOp>(trans.getLoc(), alloc,
                                              ArrayRef<int32_t>({1, 0}));
-    rewriter.replaceOpWithNewOp<LocalLoadOp>(trans, sharedLoadTy, newTrans);
+    rewriter.replaceOpWithNewOp<LocalLoadOp>(trans, sharedLoadTy, newTrans,
+                                             nullptr);
     return success();
   }
 };
