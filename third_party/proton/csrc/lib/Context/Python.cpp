@@ -42,7 +42,7 @@ PyCodeObject *getFrameCodeObject(PyFrameObject *frame) {
 #if PY_VERSION_HEX < 0x030900B1
 PyFrameObject *getFrameBack(PyFrameObject *frame) {
   assert(frame != nullptr);
-  return (PyFrameObject *)(Py_NewRef(frame->f_back));
+  return (PyFrameObject *)(Py_XNewRef(frame->f_back));
 }
 #else
 PyFrameObject *getFrameBack(PyFrameObject *frame) {
