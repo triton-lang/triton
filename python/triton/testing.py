@@ -491,3 +491,15 @@ def get_max_simd_tflops(dtype, clock_rate, device=None):
             raise RuntimeError("dtype not supported")
     tflops = num_subcores * clock_rate * ops_per_sub_core * 1e-9
     return tflops
+
+
+def cuda_device_capability(min_capability):
+    """
+    Creates a decorator that checks that a cuda device with minimum capability exists.
+    """
+    import torch
+    import pytest
+    return pytest.mark.skipif(
+        not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < min_capability,
+        reason="cuda device does not support the required capabilities"
+    )

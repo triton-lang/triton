@@ -28,8 +28,11 @@ import triton
 import triton.language as tl
 from triton.runtime import driver
 
+skip_pre_hopper = triton.testing.cuda_device_capability(9)
 
 # kernel used to query max clusters for persistent kernel when NUM_CTAS > 1
+
+
 @triton.jit
 def empty_kernel(null, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
     pass
@@ -137,7 +140,7 @@ def static_persistent_tma_matmul_kernel(  #
     # [4096, 4096, 64, 128, 128, 16, 8, 1, False, True],
     # [4096, 4096, 64, 128, 256, 16, 8, 1, False, True],
 ] for use_tma in [False, True]])
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
+@skip_pre_hopper
 def test_user_defined_persistent_non_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS,
                                                            TRANS_A, TRANS_B, USE_TMA):
     if (TRANS_A):
@@ -276,7 +279,7 @@ def tma_warp_specialized_matmul_kernel(  #
                              [4096, 4096, 256, 128, 256, 64, 4, False, True],
                              [4096, 4096, 256, 256, 256, 64, 4, False, True],
                          ] for use_tma in [False, True]])
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
+@skip_pre_hopper
 def test_non_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_CTAS, TRANS_A, TRANS_B, USE_TMA):
     if (TRANS_A):
         a = .1 * torch.randn((K, M), device='cuda', dtype=torch.float16).T
@@ -431,7 +434,7 @@ def static_persistent_tma_warp_specialized_matmul_kernel(  #
                              [4096, 4096, 256, 128, 256, 64, 4, False, True],
                              [4096, 4096, 256, 256, 256, 64, 4, False, True],
                          ] for use_tma in [False, True]])
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
+@skip_pre_hopper
 def test_user_defined_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_CTAS, TRANS_A, TRANS_B,
                                                        USE_TMA):
     if (TRANS_A):
@@ -550,7 +553,7 @@ def static_persistent_matmul_no_scf_kernel(a_ptr, b_ptr, c_ptr,  #
         [32, 16, 16, 1, 4, False, True, "float32", USE_TMA_EPILOGUE, USE_TMA_LOAD],
         [32, 32, 16, 1, 4, False, True, "float32", USE_TMA_EPILOGUE, USE_TMA_LOAD],
     ] for USE_TMA_EPILOGUE in [True, False] for USE_TMA_LOAD in [True, False]]))
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
+@skip_pre_hopper
 def test_static_persistent_matmul_no_scf_kernel(M, N, K, NUM_CTAS, NUM_WARPS, TRANS_A, TRANS_B, OUTPUT_TYPE,
                                                 USE_TMA_EPILOGUE, USE_TMA_LOAD):
     if (TRANS_A):
@@ -790,7 +793,7 @@ def full_static_persistent_matmul_kernel(a_ptr, b_ptr, w_ptr, bias_ptr, z_ptr,  
         [128, 1024, 64, 4, 8, 800, 30000, 10000, True, True, 'none', 'float16', True, 5],
         [512, 256, 64, 4, 8, 1800, 10000, 15000, True, True, 'none', 'float16', True, 5],
     ])
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
+@skip_pre_hopper
 def test_full_static_persistent_matmul_kernel(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, TRANS_B,
                                               epilogue, out_dtype, USE_TMA_STORE, NUM_STAGES):
     if '-'.join(

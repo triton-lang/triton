@@ -25,6 +25,8 @@ import torch
 import triton
 import triton.language as tl
 
+skip_pre_hopper = triton.testing.cuda_device_capability(9)
+
 
 @triton.jit
 def gemm_fusion_kernel(A, B, C, E,  #
@@ -57,7 +59,7 @@ def gemm_fusion_kernel(A, B, C, E,  #
     tl.store(e_tile_ptr, acc_e)
 
 
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="not passed on ampere")
+@skip_pre_hopper
 def test_gemm_fusion():
     M, N, K = 4096, 4096, 64
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 128, 64

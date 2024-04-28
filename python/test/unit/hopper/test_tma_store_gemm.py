@@ -26,7 +26,10 @@ from torch.testing import assert_close
 import triton
 import triton.language as tl
 
+skip_pre_hopper = triton.testing.cuda_device_capability(9)
 
+
+@skip_pre_hopper
 @triton.jit
 def matmul_tma_load_store(  #
         a_ptr, b_ptr, c_ptr,  #
@@ -53,6 +56,7 @@ def matmul_tma_load_store(  #
     tl.store(c_block_ptr, c)
 
 
+@skip_pre_hopper
 @pytest.mark.parametrize('M,N,K,NUM_CTAS,NUM_WARPS,TRANS_A,TRANS_B,OUTPUT_F16', [
     [64, 64, 16, 1, 4, False, True, False],
     [64, 64, 16, 1, 4, False, True, True],

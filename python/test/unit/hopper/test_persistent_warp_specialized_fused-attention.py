@@ -31,6 +31,8 @@ import torch
 import triton
 import triton.language as tl
 
+skip_pre_hopper = triton.testing.cuda_device_capability(9)
+
 
 def is_hip_mi200():
     target = triton.runtime.driver.active.get_current_target()
@@ -294,8 +296,8 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 
+@skip_pre_hopper
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(4, 48, 1024, 64)])
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
 def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     torch.manual_seed(20)
     q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.1, std=0.2).requires_grad_()
@@ -358,6 +360,7 @@ configs = [
 ]
 
 
+@skip_pre_hopper
 @triton.testing.perf_report(configs)
 def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.float16, device="cuda"):
     assert mode in ['fwd', 'bwd']

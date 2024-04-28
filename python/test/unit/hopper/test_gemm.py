@@ -35,6 +35,9 @@ def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
+skip_pre_hopper = triton.testing.cuda_device_capability(9)
+
+
 @triton.jit
 def matmul_no_scf_kernel(a_ptr, b_ptr, c_ptr,  #
                          M, N, K,  #
@@ -103,7 +106,7 @@ def matmul_no_scf_kernel(a_ptr, b_ptr, c_ptr,  #
         [32, 16, 16, 1, 4, False, True, "float32", USE_TMA_EPILOGUE],
         [32, 32, 16, 1, 4, False, True, "float32", USE_TMA_EPILOGUE],
     ] for USE_TMA_EPILOGUE in [True, False]]))
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
+@skip_pre_hopper
 def test_gemm_no_scf(M, N, K, NUM_CTAS, NUM_WARPS, TRANS_A, TRANS_B, OUTPUT_TYPE, USE_TMA_EPILOGUE):
     if is_hip() and NUM_CTAS > 1:
         pytest.skip("NUM_CTAS > 1 is not supported in HIP backend")
@@ -319,7 +322,7 @@ def matmul_kernel(a_ptr, b_ptr, w_ptr, bias_ptr, z_ptr,  #
         ] for trans_output in [False] for out_dtype in ['float32'] for use_tma_store in [False, True] for num_stages in
         [3, 4]
     ])
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
+@skip_pre_hopper
 def test_gemm(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, TRANS_B, TRANS_OUTPUT, epilogue,
               out_dtype, USE_TMA_STORE, NUM_STAGES):
     if '-'.join(map(str, [BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, TRANS_B])) in [

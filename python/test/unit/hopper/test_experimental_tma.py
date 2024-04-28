@@ -6,11 +6,11 @@ import tempfile
 import triton
 import triton.language as tl
 
+skip_pre_hopper = triton.testing.cuda_device_capability(9)
 
+
+@skip_pre_hopper
 def test_descriptor_load_ttgir():
-    if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] == 9:
-        pytest.skip("Test requires Hopper target.")
-        return
     device = "cuda"
     SIZE = 128
 
@@ -48,10 +48,8 @@ def test_descriptor_load_ttgir():
     assert torch.equal(x, z_tri)
 
 
+@skip_pre_hopper
 def test_experimetal_descriptor_load():
-    if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] == 9:
-        pytest.skip("Test requires Hopper target.")
-        return
     device = "cuda"
     SIZE = 128
 

@@ -5,6 +5,8 @@ from torch.testing import assert_close
 import triton
 import triton.language as tl
 
+skip_pre_hopper = triton.testing.cuda_device_capability(9)
+
 dtype_mapping = {
     'float16': torch.float16,
     'float32': torch.float32,
@@ -68,6 +70,7 @@ def load_reduce_kernel(
     tl.store(y_ptr + tl.arange(0, BLOCK_M), y)
 
 
+@skip_pre_hopper
 @pytest.mark.parametrize('BLOCK_M,BLOCK_N,dtype_str', [(128, 64, dtype_str) for dtype_str in ['float16']])
 def test_load_reduce(BLOCK_M, BLOCK_N, dtype_str):
     dtype = dtype_mapping[dtype_str]
