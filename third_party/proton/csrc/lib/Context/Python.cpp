@@ -8,8 +8,7 @@ namespace {
 
 // bpo-42262 added Py_NewRef() to Python 3.10.0a3
 #if PY_VERSION_HEX < 0x030A00A3 && !defined(Py_NewRef)
-PYCAPI_COMPAT_STATIC_INLINE(PyObject *)
-_Py_NewRef(PyObject *obj) {
+PyObject *_Py_NewRef(PyObject *obj) {
   Py_INCREF(obj);
   return obj;
 }
@@ -18,8 +17,7 @@ _Py_NewRef(PyObject *obj) {
 
 // bpo-42262 added Py_XNewRef() to Python 3.10.0a3
 #if PY_VERSION_HEX < 0x030A00A3 && !defined(Py_XNewRef)
-PYCAPI_COMPAT_STATIC_INLINE(PyObject *)
-_Py_XNewRef(PyObject *obj) {
+PyObject *_Py_XNewRef(PyObject *obj) {
   Py_XINCREF(obj);
   return obj;
 }
