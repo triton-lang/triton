@@ -12,7 +12,7 @@ PyObject *_Py_NewRef(PyObject *obj) {
   Py_INCREF(obj);
   return obj;
 }
-#define Py_NewRef(obj) _Py_NewRef(static_cast<PyObject *>(obj))
+#define Py_NewRef(obj) _Py_NewRef((PyObject *)(obj))
 #endif
 
 // bpo-42262 added Py_XNewRef() to Python 3.10.0a3
@@ -21,7 +21,7 @@ PyObject *_Py_XNewRef(PyObject *obj) {
   Py_XINCREF(obj);
   return obj;
 }
-#define Py_XNewRef(obj) _Py_XNewRef(static_cast<PyObject *>(obj))
+#define Py_XNewRef(obj) _Py_XNewRef((PyObject *)(obj))
 #endif
 
 // bpo-40421 added PyFrame_GetCode() to Python 3.9.0b1
@@ -29,7 +29,7 @@ PyObject *_Py_XNewRef(PyObject *obj) {
 PyCodeObject *getFrameCodeObject(PyFrameObject *frame) {
   assert(frame != nullptr);
   assert(frame->f_code != nullptr);
-  return static_cast<PyCodeObject *>(Py_NewRef(frame->f_code));
+  return (PyCodeObject *)(Py_NewRef(frame->f_code));
 }
 #else
 PyCodeObject *getFrameCodeObject(PyFrameObject *frame) {
@@ -42,7 +42,7 @@ PyCodeObject *getFrameCodeObject(PyFrameObject *frame) {
 #if PY_VERSION_HEX < 0x030900B1
 PyFrameObject *getFrameBack(PyFrameObject *frame) {
   assert(frame != nullptr);
-  return static_cast<PyFrameObject *>(Py_NewRef(frame->f_back));
+  return (PyFrameObject *)(Py_NewRef(frame->f_back));
 }
 #else
 PyFrameObject *getFrameBack(PyFrameObject *frame) {
