@@ -28,7 +28,7 @@ std::string unpackPyobject(PyObject *pyObject) {
 PyCodeObject *getFrameCodeObject(PyFrameObject *frame) {
   assert(frame != nullptr);
   assert(frame->f_code != nullptr);
-  return _Py_CAST(PyCodeObject *, Py_NewRef(frame->f_code));
+  return static_cast<PyCodeObject *>(Py_NewRef(frame->f_code));
 }
 #else
 PyCodeObject *getFrameCodeObject(PyFrameObject *frame) {
@@ -41,7 +41,7 @@ PyCodeObject *getFrameCodeObject(PyFrameObject *frame) {
 #if PY_VERSION_HEX < 0x030900B1
 PyFrameObject *getFrameBack(PyFrameObject *frame) {
   assert(frame != nullptr);
-  return _Py_CAST(PyFrameObject *, Py_XNewRef(frame->f_back));
+  return static_cast<PyFrameObject *>(Py_NewRef(frame->f_back));
 }
 #else
 PyFrameObject *getFrameBack(PyFrameObject *frame) {
