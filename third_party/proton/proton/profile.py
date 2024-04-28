@@ -2,7 +2,7 @@ import functools
 
 from triton._C.libproton import proton as libproton
 from .hook import register_triton_hook, unregister_triton_hook
-from .flags import set_profiling_off, set_profiling_on
+from .flags import set_profiling_off, set_profiling_on, is_command_line
 from typing import Optional
 
 DEFAULT_PROFILE_NAME = "proton"
@@ -45,6 +45,10 @@ def start(
     Returns:
         session (int): The session ID of the profiling session.
     """
+    if is_command_line():
+        # Ignore the start() call if the script is run from the command line.
+        return
+
     if name is None:
         name = DEFAULT_PROFILE_NAME
 
@@ -65,6 +69,8 @@ def activate(session: Optional[int] = 0) -> None:
     Returns:
         None
     """
+    if is_command_line() and session != 0:
+        raise ValueError("Only one session can be activated when running from the command line.")
     libproton.activate(session)
 
 
@@ -79,6 +85,8 @@ def deactivate(session: Optional[int] = 0) -> None:
     Returns:
         None
     """
+    if is_command_line() and session != 0:
+        raise ValueError("Only one session can be deactivated when running from the command line.")
     libproton.deactivate(session)
 
 
@@ -100,6 +108,8 @@ def finalize(session: Optional[int] = None, output_format: str = "hatchet") -> N
         libproton.finalize_all(output_format)
         unregister_triton_hook()
     else:
+        if is_command_line() and session != 0:
+            raise ValueError("Only one session can be finalized when running from the command line.")
         libproton.finalize(session, output_format)
 
 
