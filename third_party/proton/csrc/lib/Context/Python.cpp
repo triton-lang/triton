@@ -6,22 +6,25 @@ namespace proton {
 
 namespace {
 
-std::string unpackPyobject(PyObject *pyObject) {
-  if (PyBytes_Check(pyObject)) {
-    size_t size = PyBytes_GET_SIZE(pyObject);
-    return std::string(PyBytes_AS_STRING(pyObject), size);
-  }
-  if (PyUnicode_Check(pyObject)) {
-    // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-    Py_ssize_t size;
-    const char *data = PyUnicode_AsUTF8AndSize(pyObject, &size);
-    if (!data) {
-      return "";
-    }
-    return std::string(data, (size_t)size);
-  }
-  return "";
+// bpo-42262 added Py_NewRef() to Python 3.10.0a3
+#if PY_VERSION_HEX < 0x030A00A3 && !defined(Py_NewRef)
+PYCAPI_COMPAT_STATIC_INLINE(PyObject *)
+_Py_NewRef(PyObject *obj) {
+  Py_INCREF(obj);
+  return obj;
 }
+#define Py_NewRef(obj) _Py_NewRef(static_cast<PyObject *>(obj))
+#endif
+
+// bpo-42262 added Py_XNewRef() to Python 3.10.0a3
+#if PY_VERSION_HEX < 0x030A00A3 && !defined(Py_XNewRef)
+PYCAPI_COMPAT_STATIC_INLINE(PyObject *)
+_Py_XNewRef(PyObject *obj) {
+  Py_XINCREF(obj);
+  return obj;
+}
+#define Py_XNewRef(obj) _Py_XNewRef(static_cast<PyObject *>(obj))
+#endif
 
 // bpo-40421 added PyFrame_GetCode() to Python 3.9.0b1
 #if PY_VERSION_HEX < 0x030900B1
@@ -49,6 +52,23 @@ PyFrameObject *getFrameBack(PyFrameObject *frame) {
   return PyFrame_GetBack(frame);
 }
 #endif
+
+std::string unpackPyobject(PyObject *pyObject) {
+  if (PyBytes_Check(pyObject)) {
+    size_t size = PyBytes_GET_SIZE(pyObject);
+    return std::string(PyBytes_AS_STRING(pyObject), size);
+  }
+  if (PyUnicode_Check(pyObject)) {
+    // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
+    Py_ssize_t size;
+    const char *data = PyUnicode_AsUTF8AndSize(pyObject, &size);
+    if (!data) {
+      return "";
+    }
+    return std::string(data, (size_t)size);
+  }
+  return "";
+}
 
 } // namespace
 
