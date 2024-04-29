@@ -206,6 +206,12 @@ def TTG_LocalLoadOp : TTG_Op<"local_load", [MemoryEffects<[MemRead<SharedMemory>
   }];
   let arguments = (ins TT_MemDescType:$src, Optional<TTG_AsyncToken> :$token);
 
+  let builders = [
+      OpBuilder<(ins "Type":$retType, "Value":$src),
+      [{
+      build($_builder, $_state, retType, src, /*token=*/static_cast<mlir::Value>(nullptr));
+      }]>];
+
   // Use qualified() otherwise "!tt.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src (`token` $token^)? attr-dict `:` qualified(type($src)) `->` type($result)}];
 

@@ -104,8 +104,8 @@ void decomposeBlockedToDotLayoutConversion(ModuleOp module) {
       auto tmp = builder.create<triton::gpu::LocalAllocOp>(
           cvtOp.getLoc(), tmpType, cvtOp.getSrc());
       addAttrs(tmp, cvtOp->getAttrs());
-      auto newConvert = builder.create<triton::gpu::LocalLoadOp>(
-          cvtOp.getLoc(), dstType, tmp, nullptr);
+      auto newConvert = builder.create<triton::gpu::LocalLoadOp>(cvtOp.getLoc(),
+                                                                 dstType, tmp);
       addAttrs(newConvert, cvtOp->getAttrs());
       cvtOp.replaceAllUsesWith(newConvert.getResult());
       cvtOp.erase();
