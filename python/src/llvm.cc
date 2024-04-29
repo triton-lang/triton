@@ -202,6 +202,20 @@ void init_triton_llvm(py::module &&m) {
                               const llvm::OptimizationLevel &opt) {
     if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
       return;
+    // Check to see if we are passing a list of flags to disable optimizations.
+    auto flagList = mlir::triton::tools::getenv("DISABLE_LLVM_OPT");
+    if (!flagList.empty()) {
+      auto options = llvm::cl::getRegisteredOptions();
+      llvm::SmallVector<StringRef, 3> split;
+      StringRef(flagList.c_str()).split(split, ',');
+      for (auto flag : split) {
+        auto optIt = options.find(flag);
+        if (optIt != options.end()) {
+          auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+          *optPtr = true;
+        }
+      }
+    }
     using namespace llvm;
     LoopAnalysisManager lam;
     FunctionAnalysisManager fam;
