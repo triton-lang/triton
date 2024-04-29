@@ -1,5 +1,5 @@
 // XFAIL: *
-// RUN: triton-opt %s --convert-triton-amdgpu-to-llvm=arch="gfx90a" | FileCheck %s
+// RUN: triton-opt %s --decompose-unsupported-amd-conversions --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch="gfx90a" -split-input-file | FileCheck %s
 
 #mfma = #triton_gpu.amd_mfma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16], isTransposed = true}>
 #dotop = #triton_gpu.dot_op<{opIdx = 0, parent = #mfma, kWidth=4}>
@@ -16,7 +16,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 // -----
 
 #mfma = #triton_gpu.amd_mfma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16], isTransposed = true}>
-#dotop = #triton_gpu.dot_op<{opIdx = 0, parent = #mfma, kWidth=2}>
+#dotop = #triton_gpu.dot_op<{opIdx = 0, parent = #mfma, kWidth=8}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: no_shortcut_mfma16
   tt.func public @no_shortcut_mfma16(%arg0: tensor<16x16xf16, #mfma>) {
