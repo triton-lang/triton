@@ -11,7 +11,7 @@
         :class: sphx-glr-download-link-note
 
         :ref:`Go to the end <sphx_glr_download_getting-started_tutorials_06-fused-attention.py>`
-        to download the full example code
+        to download the full example code.
 
 .. rst-class:: sphx-glr-example-title
 
@@ -77,39 +77,39 @@ Extra Credits:
 
     fused-attention-batch4-head48-d64-fwd-causal=True-fp8=False:
          N_CTX      Triton
-    0   1024.0  119.105430
-    1   2048.0  142.551376
-    2   4096.0  157.586496
-    3   8192.0  167.242579
-    4  16384.0  172.548714
+    0   1024.0  119.348051
+    1   2048.0  143.973602
+    2   4096.0  157.982208
+    3   8192.0  167.122820
+    4  16384.0  174.708159
     fused-attention-batch4-head48-d64-fwd-causal=True-fp8=True:
          N_CTX      Triton
-    0   1024.0   98.122527
-    1   2048.0  117.175592
-    2   4096.0  128.591160
-    3   8192.0  134.482498
-    4  16384.0  137.858041
+    0   1024.0   97.929432
+    1   2048.0  118.532700
+    2   4096.0  129.083077
+    3   8192.0  134.461439
+    4  16384.0  138.091477
     fused-attention-batch4-head48-d64-fwd-causal=False-fp8=False:
          N_CTX      Triton
-    0   1024.0  158.926692
-    1   2048.0  166.800919
-    2   4096.0  171.106801
-    3   8192.0  174.895516
-    4  16384.0  175.946327
+    0   1024.0  159.352075
+    1   2048.0  168.174858
+    2   4096.0  172.825992
+    3   8192.0  176.158024
+    4  16384.0  178.061720
     fused-attention-batch4-head48-d64-fwd-causal=False-fp8=True:
          N_CTX      Triton
-    0   1024.0  136.319142
-    1   2048.0  144.982692
-    2   4096.0  147.565138
-    3   8192.0  148.695390
-    4  16384.0  149.350341
+    0   1024.0  136.289899
+    1   2048.0  145.124761
+    2   4096.0  149.083713
+    3   8192.0  148.703957
+    4  16384.0  149.728678
     fused-attention-batch4-head48-d64-bwd-causal=True-fp8=False:
          N_CTX      Triton
-    0   1024.0   75.616606
-    1   2048.0  100.071291
-    2   4096.0  118.601180
-    3   8192.0  129.193533
-    4  16384.0  135.800939
+    0   1024.0   75.326524
+    1   2048.0   99.996291
+    2   4096.0  118.650758
+    3   8192.0  129.257125
+    4  16384.0  135.790634
 
 
 
@@ -776,7 +776,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 26.832 seconds)
+   **Total running time of the script:** (0 minutes 27.838 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:
