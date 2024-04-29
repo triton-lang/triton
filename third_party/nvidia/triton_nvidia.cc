@@ -78,7 +78,7 @@ void init_triton_nvidia(py::module &&m) {
     Type *i32 = Type::getInt32Ty(ctx);
     auto *mdFour = ConstantAsMetadata::get(ConstantInt::getSigned(i32, 4));
     auto *mdName = MDString::get(ctx, "nvvm-reflect-ftz");
-    auto *mdOne = ConstantAsMetadata::get(ConstantInt::getSigned(i32, 1));
+    auto *mdOne = ConstantAsMetadata::get(ConstantInt::getSigned(i32, 0));
     auto *reflect = MDNode::get(ctx, {mdFour, mdName, mdOne});
     mod->addModuleFlag(reflect);
   });
