@@ -71,16 +71,17 @@ Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
   return asmResult;
 }
 
-Value TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
-                              Value ptr, Value val, Value pred) const {
-  return mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
+void TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
+                             Value ptr, Value val, Value pred) const {
+  mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
 }
 
 Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
                              const TypeConverter *converter, Value ptr,
                              Type elemTy, Value pred) const {
-  return mlir::LLVM::AMD::llLoad(rewriter, loc, converter, ptr, elemTy, pred,
-                                 0 /*vecStart*/, {} /*otherElems*/);
+  Value falseVal = rewriter.create<arith::ConstantOp>(
+      loc, elemTy, rewriter.getZeroAttr(elemTy));
+  return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal);
 }
 
 Value TargetInfo::shuffleXor(ConversionPatternRewriter &rewriter, Location loc,

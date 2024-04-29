@@ -10,33 +10,6 @@ using namespace mlir::triton::gpu;
 
 namespace mlir::triton::gpu {
 
-Type getFunctionType(Type resultType, ValueRange operands) {
-  SmallVector<Type> operandTypes(operands.getTypes());
-  return LLVM::LLVMFunctionType::get(resultType, operandTypes);
-}
-
-LLVM::LLVMFuncOp appendOrGetExternFuncOp(ConversionPatternRewriter &rewriter,
-                                         Operation *op, StringRef funcName,
-                                         Type funcType,
-                                         StringRef libname /*= ""*/,
-                                         StringRef libpath /*= ""*/) {
-  using LLVM::LLVMFuncOp;
-
-  auto funcAttr = StringAttr::get(op->getContext(), funcName);
-  Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(op, funcAttr);
-  if (funcOp)
-    return cast<LLVMFuncOp>(*funcOp);
-
-  auto parent = op->getParentOfType<LLVM::LLVMFuncOp>();
-  OpBuilder b(parent);
-  auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
-  ret.getOperation()->setAttr("libname",
-                              StringAttr::get(op->getContext(), libname));
-  ret.getOperation()->setAttr("libpath",
-                              StringAttr::get(op->getContext(), libpath));
-  return ret;
-}
-
 Type getElementType(Value value) {
   auto type = value.getType();
   if (auto tensorType = dyn_cast<RankedTensorType>(type))
