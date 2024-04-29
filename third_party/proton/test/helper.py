@@ -3,6 +3,7 @@ import triton.profiler as proton
 import triton.language as tl
 
 import torch
+import sys
 
 
 @triton.jit
@@ -21,4 +22,5 @@ def test_main():
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1] == "test":
+        main()

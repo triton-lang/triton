@@ -1,3 +1,4 @@
+import pytest
 import subprocess
 import tempfile
 import json
@@ -9,17 +10,20 @@ def test_help():
     assert ret == 0
 
 
-def test_python():
+@pytest.mark.parametrize("mode", ["script", "python", "pytest"])
+def test_exec(mode):
     with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
         name = f.name.split(".")[0]
-        ret = subprocess.check_call(["proton", "-n", name, "helper.py"])
+        if mode == "script":
+            ret = subprocess.check_call(["proton", "-n", name, "helper.py", "test"], stdout=subprocess.DEVNULL)
+        elif mode == "python":
+            ret = subprocess.check_call(["proton", "-n", name, "python", "helper.py", "test"],
+                                        stdout=subprocess.DEVNULL)
+        elif mode == "pytest":
+            ret = subprocess.check_call(["proton", "-n", name, "pytest", "helper.py", "test"],
+                                        stdout=subprocess.DEVNULL)
         assert ret == 0
         data = json.load(f, )
         kernels = data[0]["children"]
         assert len(kernels) == 2
         assert kernels[1]["frame"]["name"] == "test"
-
-
-def test_pytest():
-    ret = subprocess.check_call(["proton", "-n", "test", "pytest", "helper.py"], stdout=subprocess.DEVNULL)
-    assert ret == 0
