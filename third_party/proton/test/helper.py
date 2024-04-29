@@ -11,7 +11,7 @@ def custom_add(a_ptr):
 
 
 def main():
-    a = torch.zeros(1)
+    a = torch.zeros(1, device="cuda")
     with proton.scope("test"):
         custom_add[(1, )](a)
 
