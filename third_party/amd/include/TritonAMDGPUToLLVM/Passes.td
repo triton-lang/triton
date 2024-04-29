@@ -32,12 +32,12 @@ def ConvertTritonAMDGPUToLLVM : Pass<"convert-triton-amdgpu-to-llvm", "mlir::Mod
     ];
 }
 
-def ConvertExternToLLVM : Pass<"convert-extern-to-llvm", "mlir::ModuleOp"> {
-    let summary = "Convert Extern Func to LLVM";
+def ConvertBuiltinFuncToLLVM : Pass<"convert-builtin-func-to-llvm", "mlir::ModuleOp"> {
+    let summary = "Convert Builtin Func to LLVM";
     let description = [{
 
     }];
-    let constructor = "mlir::triton::createConvertExternToLLVMPass()";
+    let constructor = "mlir::triton::createConvertBuiltinFuncToLLVMPass()";
 
     let dependentDialects = ["mlir::LLVM::LLVMDialect"];
 

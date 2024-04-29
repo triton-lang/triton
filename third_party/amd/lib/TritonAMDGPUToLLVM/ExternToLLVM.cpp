@@ -7,7 +7,7 @@
 
 namespace mlir {
 namespace triton {
-#define GEN_PASS_DEF_CONVERTEXTERNTOLLVM
+#define GEN_PASS_DEF_CONVERTBUILTINFUNCTOLLVM
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
 } // namespace triton
 } // namespace mlir
@@ -100,8 +100,9 @@ private:
   }
 };
 
-struct ConvertExternToLLVM
-    : public triton::impl::ConvertExternToLLVMBase<ConvertExternToLLVM> {
+struct ConvertBuiltinFuncToLLVM
+    : public triton::impl::ConvertBuiltinFuncToLLVMBase<
+          ConvertBuiltinFuncToLLVM> {
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
@@ -120,8 +121,8 @@ struct ConvertExternToLLVM
 namespace mlir {
 namespace triton {
 
-std::unique_ptr<OperationPass<ModuleOp>> createConvertExternToLLVMPass() {
-  return std::make_unique<ConvertExternToLLVM>();
+std::unique_ptr<OperationPass<ModuleOp>> createConvertBuiltinFuncToLLVMPass() {
+  return std::make_unique<ConvertBuiltinFuncToLLVM>();
 }
 
 } // namespace triton
