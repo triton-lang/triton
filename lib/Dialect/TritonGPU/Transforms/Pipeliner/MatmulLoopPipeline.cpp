@@ -81,6 +81,7 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   Location loc = loadOp.getLoc();
   Value src = loadOp.getPtr();
   Value mask = loadOp.getMask();
+  Value other = loadOp.getOther();
   if (!isExpensiveLoadOrStore(loadOp) && opToInfo[loadOp].blockedEncoding) {
     // For inexpensive loads that do not directly feed into dot ops
     // we want to use optimal layout for the data.
@@ -96,6 +97,8 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
     src = convertBlockLayout(src);
     if (mask)
       mask = convertBlockLayout(mask);
+    if (other)
+      other = convertBlockLayout(other);
   }
 
   tt::MemDescType allocTy = cast<tt::MemDescType>(alloc.getType());
@@ -107,11 +110,12 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   auto view =
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, copyOffsets);
   Operation *copy = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
-      loc, src, view, mask, loadOp.getOther(), loadOp.getCache(),
-      loadOp.getEvict(), loadOp.getIsVolatile());
+      loc, src, view, mask, other, loadOp.getCache(), loadOp.getEvict(),
+      loadOp.getIsVolatile());
   Operation *commmit =
       builder.create<ttg::AsyncCommitGroupOp>(loc, copy->getResult(0));
-  builder.create<ttg::AsyncWaitOp>(loc, commmit->getResult(0), 0);
+  Operation *wait =
+      builder.create<ttg::AsyncWaitOp>(loc, commmit->getResult(0), 0);
 
   int stage = opToInfo[loadOp].stage;
   bool isMMV3Load = opToInfo[loadOp].loadIsMMAV3;
@@ -140,8 +144,8 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
       alloc.erase();
     }
 
-    auto sharedLoad =
-        builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewLoad);
+    auto sharedLoad = builder.create<ttg::LocalLoadOp>(
+        loc, loadOp.getType(), viewLoad, wait->getResult(0));
     auto result = sharedLoad->getResults();
 
     // Create a select for non-zero other values as they are not handled by
@@ -917,7 +921,7 @@ static int minNumInterleavedCommitOps(Operation *waitOp) {
 // Look for consecutive wait ops and combine them into a single wait op.
 static void
 combineRedundantWaitOps(llvm::SmallSetVector<ttg::AsyncWaitOp, 8> &waitOps) {
-  llvm::SmallSetVector<ttg::AsyncWaitOp, 8> toDelete;
+  llvm::MapVector<ttg::AsyncWaitOp, ttg::AsyncWaitOp> toDelete;
   for (auto waitOp : waitOps) {
     if (toDelete.count(waitOp))
       continue;
@@ -939,10 +943,13 @@ combineRedundantWaitOps(llvm::SmallSetVector<ttg::AsyncWaitOp, 8> &waitOps) {
     OpBuilder builder(waitGroup.back());
     auto newWaitOp = builder.create<ttg::AsyncWaitOp>(waitOp.getLoc(),
                                                       depTokens, minWaitNumber);
-    toDelete.insert(waitGroup.begin(), waitGroup.end());
+    for (auto waitOp : waitGroup) {
+      toDelete[waitOp] = newWaitOp;
+    }
   }
   for (auto waitOp : toDelete) {
-    waitOp->erase();
+    waitOp.first->replaceAllUsesWith(waitOp.second);
+    waitOp.first->erase();
   }
 }
 

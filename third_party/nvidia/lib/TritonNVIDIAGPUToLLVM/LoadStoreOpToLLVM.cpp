@@ -984,8 +984,11 @@ struct AsyncWaitOpConversion
     auto voidTy = void_ty(ctx);
     ptxBuilder.launch(rewriter, loc, voidTy);
 
-    // Safe to remove the op since it doesn't have any return value.
-    rewriter.eraseOp(op);
+    // Drop the result token.
+    Value zero = rewriter.create<LLVM::ConstantOp>(
+        op.getLoc(), IntegerType::get(op.getContext(), 32),
+        rewriter.getI32IntegerAttr(0));
+    rewriter.replaceOp(op, zero);
     return success();
   }
 };
