@@ -27,27 +27,55 @@ def is_pytest(script):
     return os.path.basename(script) == 'pytest'
 
 
-def run_profiling(args, target_args):
-    script = target_args[0]
-    script_args = target_args[1:] if len(target_args) > 1 else []
-    sys.argv = target_args
+def is_python(script):
+    return os.path.basename(script) == 'python' or os.path.basename(script) == 'python3'
 
-    # Init ROCM and CUDA
-    torch.cuda.init()
+
+def execute_as_main(script, args):
+    script_path = os.path.abspath(script)
+    # Prepare a clean global environment
+    clean_globals = {
+        "__name__": "__main__",
+        "__file__": script_path,
+        "__builtins__": __builtins__,
+        sys.__name__: sys,
+    }
+
+    original_argv = sys.argv
+    sys.argv = [script] + args
+
+    # Execute in the isolated environment
+    try:
+        with open(script_path, 'rb') as file:
+            code = compile(file.read(), script_path, 'exec')
+        exec(code, clean_globals)
+    except Exception as e:
+        print(f"An error occurred while executing the script: {e}")
+    finally:
+        sys.argv = original_argv
+
+
+def run_profiling(args, target_args):
+    # Init ROCM and CUDA eargly to allow cupti or roctracer to work properly.
+    # XXX: This may be not necessary if we do lazy initialization of cupti
+    if (args.backend == 'cupti' or args.backend == 'roctracer') and torch.cuda.is_available():
+        torch.cuda.init()
 
     start(args.name, backend=args.backend, context=args.context, data=args.data, hook=args.hook)
 
     # Set the command line mode to avoid any `start` calls in the script.
     set_command_line()
 
+    script = target_args[0]
+    script_args = target_args[1:] if len(target_args) > 1 else []
     if is_pytest(script):
         import pytest
-        pytest.main([script] + script_args)
+        pytest.main(script_args)
     else:
-        with open(script, 'rb') as file:
-            code = compile(file.read(), script, 'exec')
-
-        exec(code, globals())
+        if is_python(script):
+            script = target_args[1]
+            script_args = target_args[2:] if len(target_args) > 2 else []
+        execute_as_main(script, script_args)
 
     finalize()
 

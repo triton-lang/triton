@@ -1,4 +1,5 @@
 import triton
+import triton.profiler as proton
 import triton.language as tl
 
 import torch
@@ -11,7 +12,8 @@ def custom_add(a_ptr):
 
 def main():
     a = torch.zeros(1)
-    custom_add(a)
+    with proton.scope("test"):
+        custom_add[(1, )](a)
 
 
 def test_main():
