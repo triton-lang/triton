@@ -51,17 +51,16 @@ class Autotuner(KernelInterface):
             self.restore_idx = [arg_names.index(k) for k in restore_value]
 
         # Hook to reset or restore for required tensors
-        self.pre_hook = lambda args, reset_only=False: 0
+        self.pre_hook = lambda args: 0
         self.post_hook = lambda args, exception: 0
         if pre_hook:
             self.pre_hook = pre_hook
         elif (len(self.reset_idx) > 0 or len(self.restore_idx) > 0):
 
-            def _pre_hook(args, reset_only=False):
+            def _pre_hook(args):
                 for i in self.reset_idx:
                     args[i].zero_()
-                if not reset_only:
-                    self.restore_copies = [args[i].clone() for i in self.restore_idx]
+                self.restore_copies = [args[i].clone() for i in self.restore_idx]
 
             self.pre_hook = _pre_hook
 
@@ -159,7 +158,7 @@ class Autotuner(KernelInterface):
                 bench_end = time.time()
                 self.bench_time = bench_end - bench_start
                 self.cache[key] = builtins.min(timings, key=timings.get)
-                self.pre_hook(args, reset_only=True)
+                self.pre_hook(args)
                 self.configs_timings = timings
             config = self.cache[key]
         else:
@@ -297,9 +296,14 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     :type reset_to_zero: list[str]
     :param restore_value: a list of argument names whose value will be restored after evaluating any configs.
     :type restore_value: list[str]
-    :param pre_hook: a function that will be called before the kernel is called. This overrides the default pre_hook used for 'reset_to_zero' and 'restore_value'.
-    :type pre_hook: lambda args, reset_only=False
-    :param post_hook: a function that will be called after the kernel is called. This overrides the default post_hook used for 'restore_value'.
+    :param pre_hook: a function that will be called before the kernel is called.
+        This overrides the default pre_hook used for 'reset_to_zero' and 'restore_value'.
+        'args': a list of arguments passed to the kernel.
+    :type pre_hook: lambda args
+    :param post_hook: a function that will be called after the kernel is called.
+        This overrides the default post_hook used for 'restore_value'.
+        'args': a list of arguments passed to the kernel.
+        'exception': the exception raised by the kernel in case of a compilation or runtime error.
     :type post_hook: lambda args, exception
     :param warmup: Warmup time (in ms) to pass to benchmarking, defaults to 25.
     :type warmup: int
