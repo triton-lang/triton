@@ -43,6 +43,40 @@ def test_restore():
     triton.testing.assert_close(src, torch.ones_like(src))
 
 
+def test_hooks():
+    N = 4096
+    src = torch.zeros(N, device='cuda')
+
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': 4096}), triton.Config(kwargs={'BLOCK_SIZE': 32})]
+
+    @triton.autotune(configs=configs, key=['N'], warmup=1, rep=1)
+    @triton.heuristics({"N_STAGES": lambda nargs: 100 if nargs['N'] == 4096 else 4})
+    @triton.jit
+    def _kernel(src, N, N_STAGES: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.arange(0, BLOCK_SIZE)
+        max_iters = tl.cdiv(N, BLOCK_SIZE)
+        # This will cause out of resources when N_STAGES = 100
+        # shared memory bytes = N_STAGES * BLOCK_SIZE * sizeof(float)
+        for _ in tl.range(max_iters, num_stages=N_STAGES):
+            x = tl.load(src + offsets, mask=offsets < N)
+            tl.store(src + offsets, x, mask=offsets < N)
+            offsets += BLOCK_SIZE
+
+    # Custom hooks will be called before and after the kernel execution
+    values = {"counter": 0}
+
+    def _pre_hook(*args, **kwargs):
+        values["counter"] += 1
+
+    def _post_hook(*args, **kwargs):
+        values["counter"] -= 1
+        assert values["counter"] == 0
+
+    _kernel.pre_hook = _pre_hook
+    _kernel.post_hook = _post_hook
+    _kernel[(1, )](src, N)
+
+
 @pytest.mark.parametrize('with_perf_model', [False, True])
 def test_prune_configs(with_perf_model: bool):
     N = 1024

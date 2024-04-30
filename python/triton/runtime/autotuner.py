@@ -102,14 +102,18 @@ class Autotuner(KernelInterface):
             if config.pre_hook:
                 config.pre_hook(full_nargs)
             self.pre_hook(args)
-            self.fn.run(
-                *args,
-                num_warps=config.num_warps,
-                num_stages=config.num_stages,
-                num_ctas=config.num_ctas,
-                **current,
-            )
-            self.post_hook(args)
+            try:
+                self.fn.run(
+                    *args,
+                    num_warps=config.num_warps,
+                    num_stages=config.num_stages,
+                    num_ctas=config.num_ctas,
+                    **current,
+                )
+            except OutOfResources as e:
+                raise e
+            finally:
+                self.post_hook(args)
 
         try:
             if self.use_cuda_graph:
