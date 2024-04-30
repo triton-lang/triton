@@ -910,7 +910,6 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     scf::ForOp &forOp, int numStages, mlir::triton::PipeliningOption &options) {
   // Schedule the loads and root ops (dot ops) in the loop. This will give us
   // a scaffold for the final schedule.
-  ;
   DenseSet<Operation *> rootUsers;
   CoarseSchedule coarseSchedule(numStages);
   llvm::MapVector<tt::LoadOp, LoadInfo> loadToInfo =
