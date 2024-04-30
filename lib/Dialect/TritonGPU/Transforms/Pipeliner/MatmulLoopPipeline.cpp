@@ -675,6 +675,9 @@ scheduleLoads(scf::ForOp forOp, CoarseSchedule &schedule,
   return loadToInfo;
 }
 
+// Schedule the prologue and epilogue `if` ops in the loop, pushing them as
+// close to the loop boundaries as possible. Return the cluster after the
+// prologue (or the beginning of the loop if there is no prologue).
 static CoarseSchedule::Cluster
 schedulePrologueAndEpilogue(scf::ForOp forOp, CoarseSchedule &schedule,
                             DenseSet<Operation *> &rootUsers, int numStages) {
@@ -732,18 +735,6 @@ schedulePrologueAndEpilogue(scf::ForOp forOp, CoarseSchedule &schedule,
 // the same stage and ordering cluster as the anchor op.
 static void scheduleDependencies(scf::ForOp forOp, CoarseSchedule &schedule,
                                  int numStages) {
-  // schedule.populateClusters(forOp);
-
-  // // TODO pawel: clean this mess up
-  // for (int s=0; s < schedule.numStages; s++)
-  // for (SmallVector<Operation *> cluster : schedule.clusters) {
-  //   for (Operation *op : cluster) {
-  //     auto [stage, cluster] = schedule[op];
-  //     if (stage != s)
-  //       continue;
-  //     addDepsToSchedule(op, schedule, stage, cluster, false);
-  //   }
-  // }
   SmallVector<std::tuple<Operation *, int, CoarseSchedule::Cluster>>
       opsInOrder = schedule.getOpsInOrder(forOp);
   // Schedule dependencies stage by stage.
