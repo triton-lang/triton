@@ -1411,7 +1411,8 @@ module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 1 : 
     %14 = tt.broadcast %10 : tensor<1x16x!tt.ptr<f16>, #blocked> -> tensor<64x16x!tt.ptr<f16>, #blocked>
     %15 = tt.broadcast %13 : tensor<64x1xi32, #blocked> -> tensor<64x16xi32, #blocked>
     %16 = tt.addptr %14, %15 : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
-    // CHECK: scf.for %[[IND_VAR:.*]] = %c0_i32
+    // CHECK: %[[C0:.*]] = arith.constant 0 : i32
+    // CHECK: scf.for %[[IND_VAR:.*]] = %[[C0]]
     // CHECK-NOT load
     // CHECK: %[[CND:.*]] = arith.cmpi slt, %[[IND_VAR]], %[[EXT]]
     // CHECK: scf.if %[[CND]]
