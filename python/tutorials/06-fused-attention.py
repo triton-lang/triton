@@ -18,6 +18,10 @@ import triton
 import triton.language as tl
 
 
+def is_hip():
+    return triton.runtime.driver.active.get_current_target().backend == "hip"
+
+
 @triton.jit
 def _attn_fwd_inner(acc, l_i, m_i, q,  #
                     K_block_ptr, V_block_ptr,  #
@@ -449,13 +453,18 @@ class _attention(torch.autograd.Function):
         assert Lq == Lk and (Lk == Lv or v.dtype == torch.float8_e5m2)
         assert Lk in {16, 32, 64, 128, 256}
         o = torch.empty_like(q)
-        BLOCK_M = 128
-        BLOCK_N = 64 if Lk <= 64 else 32
-        num_stages = 4 if Lk <= 64 else 3
-        num_warps = 4
         stage = 3 if causal else 1
+        extra_kern_args = {}
+        # Tuning for AMD target
+        if is_hip():
+            BLOCK_M = 128
+            BLOCK_N = 64 if Lk <= 64 else 128
+            num_warps = 4
+            num_stages = 1
+            waves_per_eu = 3 if Lk <= 64 else 2
+            extra_kern_args = {"waves_per_eu": waves_per_eu, "allow_flush_denorm": True}
         # Tuning for H100
-        if torch.cuda.get_device_capability()[0] == 9:
+        elif torch.cuda.get_device_capability()[0] == 9:
             num_warps = 8
             num_stages = 7 if Lk >= 64 else 3
             if v.dtype == torch.float8_e5m2:
@@ -469,6 +478,13 @@ class _attention(torch.autograd.Function):
                     BLOCK_N = 128
                     num_stages = 3
                     num_warps = 8
+        # Tuning for other cuda targets
+        else:
+            BLOCK_M = 128
+            BLOCK_N = 64 if Lk <= 64 else 32
+            num_stages = 4 if Lk <= 64 else 3
+            num_warps = 4
+
         grid = (triton.cdiv(q.shape[2], BLOCK_M), q.shape[0] * q.shape[1], 1)
         M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         _attn_fwd[grid](
@@ -484,8 +500,8 @@ class _attention(torch.autograd.Function):
             BLOCK_DMODEL=Lk,  #
             STAGE=stage,  #
             num_warps=num_warps,  #
-            num_stages=num_stages  #
-        )
+            num_stages=num_stages,  #
+            **extra_kern_args)
 
         ctx.save_for_backward(q, k, v, o, M)
         ctx.grid = grid
@@ -593,7 +609,7 @@ configs = []
 for mode in ["fwd", "bwd"]:
     for causal in [True, False]:
         for fp8_inputs in [False, True]:
-            if fp8_inputs and ((not TORCH_HAS_FP8) or mode == "bwd"):
+            if fp8_inputs and ((not TORCH_HAS_FP8) or mode == "bwd" or is_hip()):
                 continue
             if mode == "bwd" and not causal:
                 continue
