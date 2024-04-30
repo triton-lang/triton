@@ -937,7 +937,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
         "d.shared::cluster.global.mbarrier::complete_tx::bytes [$1], [$2, {";
     int operandIdx = 3;
     for (int i = 0; i < rank; i++) {
-      operands.push_back(ptxBuilderTMA.newOperand(adaptor.getCoord()[i], "r"));
+      operands.push_back(
+          ptxBuilderTMA.newOperand(adaptor.getCoord()[rank - i - 1], "r"));
       tmaInst += "$" + std::to_string(operandIdx++);
       if (i != rank - 1)
         tmaInst += ", ";

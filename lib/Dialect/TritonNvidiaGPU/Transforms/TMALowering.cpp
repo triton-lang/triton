@@ -32,8 +32,13 @@ public:
         MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
                          encoding, /*mutableMemory=*/true);
     Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType, Value());
+    auto barrierCTALayout = CTALayoutAttr::get(
+        /*context=*/tensorType.getContext(), /*CTAsPerCGA=*/{1},
+        /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
+    auto barrierEncoding = SharedEncodingAttr::get(tensorType.getContext(), 1,
+                                                   1, 1, {0}, barrierCTALayout);
     MemDescType barrierMemDescType = MemDescType::get(
-        {1}, rewriter.getI64Type(), encoding, /*mutableMemory=*/true);
+        {1}, rewriter.getI64Type(), barrierEncoding, /*mutableMemory=*/true);
     Value barrierAlloc =
         rewriter.create<LocalAllocOp>(loc, barrierMemDescType, Value());
     rewriter.create<InitBarrierOp>(loc, barrierAlloc, 1);
