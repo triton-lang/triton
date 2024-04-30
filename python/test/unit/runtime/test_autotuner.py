@@ -43,6 +43,49 @@ def test_restore():
     triton.testing.assert_close(src, torch.ones_like(src))
 
 
+def test_hooks():
+    # Autotuner's pre- and post- hooks should be called the same number of times
+    N = 4096
+    src = torch.zeros(N, device='cuda')
+
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': 4096}), triton.Config(kwargs={'BLOCK_SIZE': 32})]
+
+    values = {"counter": 0, "has_exception": False}
+
+    def _pre_hook(*args, **kwargs):
+        values["counter"] += 1
+
+    def _post_hook(*args, exception):
+        values["counter"] -= 1
+        if exception is not None:
+            values["has_exception"] = True
+        assert values["counter"] == 0
+
+    @triton.autotune(configs=configs, key=['N'], warmup=1, rep=1, pre_hook=_pre_hook, post_hook=_post_hook)
+    @triton.heuristics({"N_STAGES": lambda nargs: 100 if nargs['N'] == 4096 else 4})
+    @triton.jit
+    def _kernel(src, N, N_STAGES: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.arange(0, BLOCK_SIZE)
+        max_iters = tl.cdiv(N, BLOCK_SIZE)
+        for _ in tl.range(max_iters, num_stages=N_STAGES):
+            x = tl.load(src + offsets, mask=offsets < N)
+            tl.store(src + offsets, x, mask=offsets < N)
+            offsets += BLOCK_SIZE
+
+    _kernel[(1, )](src, N)
+
+    # On NVIDIA GPUs:
+    # The tunning knob `num_stages` can be set by users.
+    # This will cause out of resources when N_STAGES = 100
+    # shared memory bytes = N_STAGES * BLOCK_SIZE * sizeof(float)
+    # On AMD GPUs:
+    # `num_stages` is a fixed value of 2, so it won't cause out of resources
+    if triton.runtime.driver.active.get_current_target().backend == "cuda":
+        assert values["has_exception"] is True
+    else:
+        assert values["has_exception"] is False
+
+
 @pytest.mark.parametrize('with_perf_model', [False, True])
 def test_prune_configs(with_perf_model: bool):
     N = 1024

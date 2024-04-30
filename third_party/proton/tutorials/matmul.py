@@ -295,7 +295,7 @@ def benchmark(M, N, K, provider):
                     return
                 proton.enter_scope("<autotune>")
 
-            def exit_autotune(args):
+            def exit_autotune(args, exception):
                 proton.exit_scope()
 
             matmul_kernel.pre_hook = enter_autotune
