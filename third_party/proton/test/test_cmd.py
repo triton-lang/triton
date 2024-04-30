@@ -17,7 +17,7 @@ def test_exec(mode):
         if mode == "script":
             ret = subprocess.check_call(["proton", "-n", name, "helper.py", "test"], stdout=subprocess.DEVNULL)
         elif mode == "python":
-            ret = subprocess.check_call(["proton", "-n", name, "python", "helper.py", "test"],
+            ret = subprocess.check_call(["python", "-m", "triton.profiler.proton", "-n", name, "helper.py", "test"],
                                         stdout=subprocess.DEVNULL)
         elif mode == "pytest":
             ret = subprocess.check_call(["proton", "-n", name, "pytest", "helper.py", "test"],
