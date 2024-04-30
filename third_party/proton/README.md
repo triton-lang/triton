@@ -116,12 +116,12 @@ bytes: int  # The number of bytes expected to be transferred
 ### Command Line
 
 Proton can be used as a command-line tool to profile Python scripts and Pytest tests.
-The following examples demonstrate how to use Proton as a command-line tool.
+The following examples demonstrate how to use Proton command-line.
 
 ```bash
 proton [options] script.py [script_args] [script_options]
 proton [options] pytest [pytest_args] [script_options]
-python [options] python script.py [script_args] [script_options]
+python -m triton.profiler.proton [options] script.py [script_args] [script_options]
 ```
 
 When profiling in the command line mode, the `proton.start` and `proton.finalize` functions are automatically called before and after the script execution. Any `proton.start` and `proton.finalize` functions in the script are ignored. Also, in the command line mode, only a single *session* is supported. Therefore, `proton.deactivate(session_id=1)` is invalid, while `proton.deactivate(session_id=0)` is valid.
