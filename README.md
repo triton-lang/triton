@@ -24,7 +24,7 @@ You can install the latest stable release of Triton from pip:
 ```bash
 pip install triton
 ```
-Binary wheels are available for CPython 3.7-3.12 and PyPy 3.8-3.9.
+Binary wheels are available for CPython 3.8-3.12 and PyPy 3.8-3.9.
 
 And the latest nightly release:
 
@@ -78,7 +78,7 @@ arbitrary LLVM version.
        $ cd $HOME/llvm-project  # your clone of LLVM.
        $ mkdir build
        $ cd build
-       $ cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON  ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm"
+       $ cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm" -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
        $ ninja
 
 4. Grab a snack, this will take a while.
@@ -128,7 +128,7 @@ follow the following recipe.
 ```shell
 # One-time setup.  Note we have to reinstall local Triton because torch
 # overwrites it with the public version.
-$ pip install scipy numpy torch pytest lit && pip install -e python
+$ pip install scipy numpy torch pytest lit pandas matplotlib && pip install -e python
 
 # Run Python tests using your local GPU.
 $ python3 -m pytest python/test/unit

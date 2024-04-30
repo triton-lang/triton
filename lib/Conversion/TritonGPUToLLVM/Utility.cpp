@@ -109,6 +109,37 @@ getMNCoords(Value thread, Location loc, ConversionPatternRewriter &rewriter,
 } // namespace SharedToDotOperandMMAv1
 namespace mlir {
 
+namespace triton::gpu {
+Type getFunctionType(Type resultType, ValueRange operands) {
+  SmallVector<Type> operandTypes(operands.getTypes());
+  return LLVM::LLVMFunctionType::get(resultType, operandTypes);
+}
+
+LLVM::LLVMFuncOp appendOrGetExternFuncOp(ConversionPatternRewriter &rewriter,
+                                         Operation *op, StringRef funcName,
+                                         Type funcType,
+                                         StringRef libname /*= ""*/,
+                                         StringRef libpath /*= ""*/) {
+  using LLVM::LLVMFuncOp;
+
+  auto funcAttr = StringAttr::get(op->getContext(), funcName);
+  Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(op, funcAttr);
+  if (funcOp)
+    return cast<LLVMFuncOp>(*funcOp);
+
+  Operation *parent = op;
+  if (!isa<LLVM::LLVMFuncOp>(op))
+    parent = op->getParentOfType<LLVM::LLVMFuncOp>();
+  OpBuilder b(parent);
+  auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
+  ret.getOperation()->setAttr("libname",
+                              StringAttr::get(op->getContext(), libname));
+  ret.getOperation()->setAttr("libpath",
+                              StringAttr::get(op->getContext(), libpath));
+  return ret;
+}
+} // namespace triton::gpu
+
 namespace LLVM {
 using namespace mlir::triton;
 using mlir::triton::gpu::getOrder;

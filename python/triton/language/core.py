@@ -1598,7 +1598,7 @@ def _experimental_descriptor_load(desc_pointer, offsets, shape, dtype, _builder=
 
     This loads a tensor of data based on the descriptor and offsets.
     """
-    type = block_type(dtype.element_ty, shape)
+    type = block_type(dtype, shape)
     return semantic.descriptor_load(desc_pointer, offsets, "", "", type, _builder)
 
 

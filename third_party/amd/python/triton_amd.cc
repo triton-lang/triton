@@ -39,6 +39,9 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   m.def("add_to_llvmir", [](mlir::PassManager &pm, const std::string &arch) {
     pm.addPass(createConvertTritonAMDGPUToLLVMPass(arch));
   });
+  m.def("add_builtin_func_to_llvmir", [](mlir::PassManager &pm) {
+    pm.addPass(createConvertBuiltinFuncToLLVMPass());
+  });
   m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm) {
     pm.addPass(mlir::triton::AMD::createDecomposeUnsupportedConversionsPass());
   });

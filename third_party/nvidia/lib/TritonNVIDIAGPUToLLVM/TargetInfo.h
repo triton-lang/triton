@@ -16,8 +16,8 @@ public:
   Value ballot(ConversionPatternRewriter &rewriter, Location loc, Type type,
                Value cmp) const override;
 
-  Value storeShared(ConversionPatternRewriter &rewriter, Location loc,
-                    Value ptr, Value val, Value pred) const override;
+  void storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
+                   Value val, Value pred) const override;
   Value loadShared(ConversionPatternRewriter &rewriter, Location loc,
                    const TypeConverter *converter, Value ptr, Type elemTy,
                    Value pred) const override;

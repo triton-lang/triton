@@ -14,13 +14,6 @@ namespace mlir::triton {
 
 namespace gpu {
 
-Type getFunctionType(Type resultType, ValueRange operands);
-
-LLVM::LLVMFuncOp appendOrGetExternFuncOp(ConversionPatternRewriter &rewriter,
-                                         Operation *op, StringRef funcName,
-                                         Type funcType, StringRef libname = "",
-                                         StringRef libpath = "");
-
 SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
                                  Type ouType);
 

@@ -190,6 +190,15 @@ T getLinearIndex(llvm::ArrayRef<T> multiDimIndex, llvm::ArrayRef<T> shape,
                                applyPermutation(shape, order));
 }
 
+namespace gpu {
+Type getFunctionType(Type resultType, ValueRange operands);
+
+LLVM::LLVMFuncOp appendOrGetExternFuncOp(ConversionPatternRewriter &rewriter,
+                                         Operation *op, StringRef funcName,
+                                         Type funcType, StringRef libname = "",
+                                         StringRef libpath = "");
+} // namespace gpu
+
 } // namespace triton
 
 namespace LLVM {

@@ -937,7 +937,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
         "d.shared::cluster.global.mbarrier::complete_tx::bytes [$1], [$2, {";
     int operandIdx = 3;
     for (int i = 0; i < rank; i++) {
-      operands.push_back(ptxBuilderTMA.newOperand(adaptor.getCoord()[i], "r"));
+      operands.push_back(
+          ptxBuilderTMA.newOperand(adaptor.getCoord()[rank - i - 1], "r"));
       tmaInst += "$" + std::to_string(operandIdx++);
       if (i != rank - 1)
         tmaInst += ", ";
@@ -984,8 +985,11 @@ struct AsyncWaitOpConversion
     auto voidTy = void_ty(ctx);
     ptxBuilder.launch(rewriter, loc, voidTy);
 
-    // Safe to remove the op since it doesn't have any return value.
-    rewriter.eraseOp(op);
+    // Drop the result token.
+    Value zero = rewriter.create<LLVM::ConstantOp>(
+        op.getLoc(), IntegerType::get(op.getContext(), 32),
+        rewriter.getI32IntegerAttr(0));
+    rewriter.replaceOp(op, zero);
     return success();
   }
 };

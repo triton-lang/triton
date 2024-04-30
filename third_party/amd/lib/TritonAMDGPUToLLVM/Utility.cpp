@@ -4,6 +4,9 @@
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 
+using mlir::triton::gpu::appendOrGetExternFuncOp;
+using mlir::triton::gpu::getFunctionType;
+
 namespace {
 enum class ShflKind : uint32_t {
   bfly = 0,
@@ -11,7 +14,28 @@ enum class ShflKind : uint32_t {
   down = 2,
   idx = 3,
 };
+
+std::string getTypeString(Type ty) {
+  std::string str;
+  llvm::raw_string_ostream rso(str);
+  ty.print(rso);
+  rso.flush();
+  return str;
 }
+
+std::string mangleFunc(std::string name, Type type) {
+  auto funcType = type.dyn_cast<LLVM::LLVMFunctionType>();
+  assert(funcType && "Expecting an LLVMFunctionType");
+  std::string mangled = name + "_";
+  auto retTy = funcType.getReturnType();
+  mangled += getTypeString(retTy) + "_";
+  auto params = funcType.getParams();
+  for (auto paramType : params) {
+    mangled += getTypeString(paramType) + "_";
+  }
+  return mangled;
+}
+} // namespace
 
 namespace mlir::LLVM::AMD {
 static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
@@ -136,66 +160,29 @@ Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
 }
 
-Value llLoad(ConversionPatternRewriter &rewriter, Location loc,
-             const TypeConverter *converter, Value ptr, Type elemTy, Value pred,
-             unsigned vecStart, SmallVector<Value> otherElems) {
-  Block *currentBlock = rewriter.getInsertionBlock();
-  Block *afterLoad =
-      rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
-  afterLoad->addArgument({elemTy}, {loc});
-  Block *trueBlock = rewriter.createBlock(afterLoad);
-  Block *falseBlock =
-      rewriter.splitBlock(trueBlock, rewriter.getInsertionPoint());
-  rewriter.setInsertionPointToEnd(currentBlock);
-  rewriter.create<LLVM::CondBrOp>(loc, pred, trueBlock, falseBlock);
-  rewriter.setInsertionPointToStart(trueBlock);
-  auto loadOp = rewriter.create<LLVM::LoadOp>(loc, elemTy, ptr);
-  rewriter.create<LLVM::BrOp>(loc, loadOp->getResult(0), afterLoad);
-  rewriter.setInsertionPointToStart(falseBlock);
-  auto valueElemTy = getElementTypeOrSelf(elemTy);
-  mlir::Attribute zero = rewriter.getZeroAttr(valueElemTy);
-  Value zeroVal;
-  if (auto shapedTy = elemTy.dyn_cast<mlir::ShapedType>()) {
-    auto denseValue = DenseElementsAttr::get(shapedTy, zero);
-    zeroVal = rewriter.create<LLVM::ConstantOp>(loc, elemTy, denseValue);
-  } else {
-    zeroVal = rewriter.create<LLVM::ConstantOp>(loc, elemTy, zero);
-  }
-  Value falseVal = zeroVal;
-  // If we need to mask the loaded value with other elements
-  if (otherElems.size() != 0) {
-    auto vecTy = dyn_cast<VectorType>(elemTy);
-    assert(vecTy && "Expected vector type");
-    assert(ptr.getType().cast<LLVMPointerType>().getAddressSpace() == 0 &&
-           "Expected to only mask global memory loads");
-    auto vec = vecTy.getNumElements();
-    Value v = undef(elemTy);
-    for (size_t s = 0; s < vec; ++s) {
-      Value otherElem = otherElems[vecStart + s];
-      Value indexVal = createIndexConstant(rewriter, loc, converter, s);
-      v = insert_element(elemTy, v, otherElem, indexVal);
-    }
-    falseVal = v;
-  }
-  rewriter.create<LLVM::BrOp>(loc, falseVal, afterLoad);
-  rewriter.setInsertionPointToStart(afterLoad);
-  Value loadVal = afterLoad->getArgument(0);
+Value llLoad(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
+             Type elemTy, Value pred, Value falseVal) {
+  Type funcType = getFunctionType(elemTy, ValueRange({ptr, pred, falseVal}));
+  auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
+  auto funcName = mangleFunc(mlir::LLVM::AMD::Predicated_Load, funcType);
+  LLVM::LLVMFuncOp funcOp =
+      appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
+  auto loadVal =
+      rewriter
+          .create<LLVM::CallOp>(loc, funcOp, ValueRange({ptr, pred, falseVal}))
+          .getResult();
   return loadVal;
 }
 
-Value llStore(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-              Value val, Value pred) {
-  Block *currentBlock = rewriter.getInsertionBlock();
-  Block *afterStore =
-      rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
-  Block *trueBlock = rewriter.createBlock(afterStore);
-  rewriter.setInsertionPointToEnd(currentBlock);
-  rewriter.create<LLVM::CondBrOp>(loc, pred, trueBlock, afterStore);
-  rewriter.setInsertionPointToStart(trueBlock);
-  auto storeOp = rewriter.create<LLVM::StoreOp>(loc, val, ptr);
-  rewriter.create<LLVM::BrOp>(loc, afterStore);
-  rewriter.setInsertionPointToStart(afterStore);
-  return val;
+void llStore(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
+             Value val, Value pred) {
+  auto ctx = ptr.getContext();
+  Type funcType = getFunctionType(void_ty(ctx), ValueRange({ptr, val, pred}));
+  auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
+  auto funcName = mangleFunc(mlir::LLVM::AMD::Predicated_Store, funcType);
+  LLVM::LLVMFuncOp funcOp =
+      appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
+  rewriter.create<LLVM::CallOp>(loc, funcOp, ValueRange({ptr, val, pred}));
 }
 
 } // namespace mlir::LLVM::AMD

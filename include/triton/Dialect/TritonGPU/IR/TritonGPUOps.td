@@ -44,6 +44,8 @@ def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
 
   let arguments = (ins Variadic<TTG_AsyncToken>:$asyncToken, I32Attr:$num);
 
+  let results = (outs TTG_AsyncToken:$retToken);
+
   let assemblyFormat = "$asyncToken attr-dict";
 
   let extraClassDeclaration = [{
@@ -202,10 +204,16 @@ def TTG_LocalLoadOp : TTG_Op<"local_load", [MemoryEffects<[MemRead<SharedMemory>
   let description = [{
     Load a tensor from the local memory descriptor into a distributed tensor.
   }];
-  let arguments = (ins TT_MemDescType:$src);
+  let arguments = (ins TT_MemDescType:$src, Optional<TTG_AsyncToken> :$token);
+
+  let builders = [
+      OpBuilder<(ins "Type":$retType, "Value":$src),
+      [{
+      build($_builder, $_state, retType, src, /*token=*/static_cast<mlir::Value>(nullptr));
+      }]>];
 
   // Use qualified() otherwise "!tt.memdesc<X>" is printed as "<X>".
-  let assemblyFormat = [{$src attr-dict `:` qualified(type($src)) `->` type($result)}];
+  let assemblyFormat = [{$src (`token` $token^)? attr-dict `:` qualified(type($src)) `->` type($result)}];
 
   let results = (outs TT_Tensor:$result);
 }

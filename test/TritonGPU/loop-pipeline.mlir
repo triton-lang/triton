@@ -349,16 +349,21 @@ tt.func @indirect_bmm_scalar_dist_one(%77: i64 {tt.divisibility=16: i32},
 // CHECK: triton_gpu.async_copy_global_to_local
 // CHECK: triton_gpu.async_copy_global_to_local
 // CHECK: triton_gpu.async_commit_group
+// CHECK: triton_gpu.async_wait {{.*}} {num = 1 : i32}
+// CHECK: scf.for
+// CHECK: tt.dot
 // CHECK: %[[NEXT_BUFFER_1:.*]] = tt.addptr %{{.*}}, {{.*}}
 // CHECK: triton_gpu.async_copy_global_to_local %[[NEXT_BUFFER_1]]
-// CHECK: %[[IND_BUFFER_0:.*]] = triton_gpu.memdesc_subview
-// CHECK: %[[IND_BUFFER_1:.*]] = triton_gpu.local_load %[[IND_BUFFER_0]]
+// CHECK-DAG: %[[IND_BUFFER_WAIT_TOKEN:.*]] = triton_gpu.async_wait {{.*}} {num = 1 : i32}
+// CHECK-DAG: %[[IND_BUFFER_0:.*]] = triton_gpu.memdesc_subview
+// CHECK: %[[IND_BUFFER_1:.*]] = triton_gpu.local_load %[[IND_BUFFER_0]] token %[[IND_BUFFER_WAIT_TOKEN]]
 // CHECK: %[[IND_BUFFER_2:.*]] = tt.expand_dims %[[IND_BUFFER_1]] {axis = 1 : i32}
 // CHECK: %[[IND_BUFFER_3:.*]] = tt.broadcast %[[IND_BUFFER_2]]
 // CHECK: %[[IND_BUFFER_4:.*]] = arith.muli {{.*}}, %[[IND_BUFFER_3]]
 // CHECK: %[[NEXT_BUFFER_0:.*]] = tt.addptr {{.*}}, %[[IND_BUFFER_4]]
 // CHECK: triton_gpu.async_copy_global_to_local %[[NEXT_BUFFER_0]]
 // CHECK: triton_gpu.async_wait {{.*}} {num = 1 : i32}
+// CHECK: scf.yield
 tt.func @indirect_bmm_vector(%77: tensor<16x16xi64, #BL> {tt.divisibility=16: i32, tt.constancy=16: i32},
                    %76: index,
                    %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility=16: i32, tt.contiguity=2 : i32},

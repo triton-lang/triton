@@ -50,6 +50,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
 
 #ifdef USE_ROCM
   mlir::triton::registerConvertTritonAMDGPUToLLVM();
+  mlir::triton::registerConvertBuiltinFuncToLLVM();
   mlir::triton::registerDecomposeUnsupportedAMDConversions();
 
   mlir::registerTritonAMDGPUAccelerateMatmul();
