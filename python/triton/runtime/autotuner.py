@@ -158,7 +158,9 @@ class Autotuner(KernelInterface):
                 bench_end = time.time()
                 self.bench_time = bench_end - bench_start
                 self.cache[key] = builtins.min(timings, key=timings.get)
-                self.pre_hook(args)
+                for i in self.reset_idx:
+                    args[i].zero_()
+                self.post_hook(args, exception=None)
                 self.configs_timings = timings
             config = self.cache[key]
         else:
