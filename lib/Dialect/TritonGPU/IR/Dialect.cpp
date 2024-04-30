@@ -1554,7 +1554,7 @@ AMDMfmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
 SmallVector<unsigned>
 AMDMfmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
                                                       int opIdx) const {
-  assert(getMDim() == 32);
+  assert(getMDim() == 32 || getMDim() == 16);
   auto parentShapePerCTATile = getShapePerCTATile(shape);
   auto rank = parentShapePerCTATile.size();
   if (opIdx == 0) {
