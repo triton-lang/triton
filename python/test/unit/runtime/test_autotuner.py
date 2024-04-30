@@ -44,6 +44,7 @@ def test_restore():
 
 
 def test_hooks():
+    # Autotuner's pre- and post- hooks should be called the same number of times
     N = 4096
     src = torch.zeros(N, device='cuda')
 
@@ -62,7 +63,6 @@ def test_hooks():
             tl.store(src + offsets, x, mask=offsets < N)
             offsets += BLOCK_SIZE
 
-    # Custom hooks will be called before and after the kernel execution
     values = {"counter": 0}
 
     def _pre_hook(*args, **kwargs):

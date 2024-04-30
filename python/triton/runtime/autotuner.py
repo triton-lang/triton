@@ -50,7 +50,7 @@ class Autotuner(KernelInterface):
 
         # Hook to reset or restore for required tensors
         self.pre_hook = lambda args, reset_only=False: 0
-        self.post_hook = lambda args: 0
+        self.post_hook = lambda args, from_exception=False: 0
         if len(self.reset_idx) > 0 or len(self.restore_idx) > 0:
 
             def _pre_hook(args, reset_only=False):
@@ -62,9 +62,10 @@ class Autotuner(KernelInterface):
             self.pre_hook = _pre_hook
         if len(self.restore_idx) > 0:
 
-            def _post_hook(args):
-                for i, j in enumerate(self.restore_idx):
-                    args[j].copy_(self.restore_copies[i])
+            def _post_hook(args, from_exception=False):
+                if not from_exception:
+                    for i, j in enumerate(self.restore_idx):
+                        args[j].copy_(self.restore_copies[i])
                 self.restore_copies = []
 
             self.post_hook = _post_hook
@@ -113,7 +114,7 @@ class Autotuner(KernelInterface):
             except OutOfResources as e:
                 raise e
             finally:
-                self.post_hook(args)
+                self.post_hook(args, from_exception=True)
 
         try:
             if self.use_cuda_graph:
