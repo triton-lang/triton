@@ -290,7 +290,9 @@ def benchmark(M, N, K, provider):
             ms, min_ms, max_ms = triton.testing.do_bench(lambda: cublas_matmul(a, b), quantiles=quantiles)
         if provider == "triton":
 
-            def enter_autotune(args):
+            def enter_autotune(args, reset_only=False):
+                if reset_only:
+                    return
                 proton.enter_scope("<autotune>")
 
             def exit_autotune(args, exception):

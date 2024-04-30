@@ -51,16 +51,17 @@ class Autotuner(KernelInterface):
             self.restore_idx = [arg_names.index(k) for k in restore_value]
 
         # Hook to reset or restore for required tensors
-        self.pre_hook = lambda args: 0
+        self.pre_hook = lambda args, reset_only=False: 0
         self.post_hook = lambda args, exception: 0
         if pre_hook:
             self.pre_hook = pre_hook
         elif (len(self.reset_idx) > 0 or len(self.restore_idx) > 0):
 
-            def _pre_hook(args):
+            def _pre_hook(args, reset_only=False):
                 for i in self.reset_idx:
                     args[i].zero_()
-                self.restore_copies = [args[i].clone() for i in self.restore_idx]
+                if not reset_only:
+                    self.restore_copies = [args[i].clone() for i in self.restore_idx]
 
             self.pre_hook = _pre_hook
 
@@ -158,9 +159,7 @@ class Autotuner(KernelInterface):
                 bench_end = time.time()
                 self.bench_time = bench_end - bench_start
                 self.cache[key] = builtins.min(timings, key=timings.get)
-                for i in self.reset_idx:
-                    args[i].zero_()
-                self.post_hook(args, exception=None)
+                self.pre_hook(args, reset_only=True)
                 self.configs_timings = timings
             config = self.cache[key]
         else:
@@ -301,7 +300,8 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     :param pre_hook: a function that will be called before the kernel is called.
         This overrides the default pre_hook used for 'reset_to_zero' and 'restore_value'.
         'args': a list of arguments passed to the kernel.
-    :type pre_hook: lambda args
+        'reset_only': a boolean indicating whether the pre_hook is called to reset the values only, without a corresponding post_hook.
+    :type pre_hook: lambda args, reset_only
     :param post_hook: a function that will be called after the kernel is called.
         This overrides the default post_hook used for 'restore_value'.
         'args': a list of arguments passed to the kernel.
