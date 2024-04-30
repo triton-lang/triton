@@ -280,7 +280,7 @@ jobs:
         docker rm "${CONTAINER_ID}"
 
     - name: Upload Build Artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: llvm-${{ matrix.config.target-os }}-${{ matrix.config.arch }}
         path: |
@@ -288,7 +288,7 @@ jobs:
 
     - name: Azure Login
       if: ${{ (github.repository == 'openai/triton') }}
-      uses: azure/login@v1
+      uses: azure/login@v2
       with:
         client-id: ${{ secrets.AZURE_CLIENT_ID }}
         tenant-id: ${{ secrets.AZURE_TENANT_ID }}
