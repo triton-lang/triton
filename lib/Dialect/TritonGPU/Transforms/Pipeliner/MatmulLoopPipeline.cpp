@@ -45,7 +45,7 @@ struct LoadInfo {
   // Blocked encoding is used for loads not used by the dot.
   ttg::BlockedEncodingAttr blockedEncoding = nullptr;
   bool loadIsMMAV3 = false;
-  int distToUse = -1;
+  int distToUse = 0;
   bool usedByDot = false;
 };
 
