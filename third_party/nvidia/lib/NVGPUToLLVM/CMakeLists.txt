@@ -3,4 +3,5 @@ add_triton_library(NVGPUToLLVM
 
     DEPENDS
     NVGPUConversionPassIncGen
+    NVGPUIR
 )
