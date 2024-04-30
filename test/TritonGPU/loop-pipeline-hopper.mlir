@@ -433,12 +433,12 @@ module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : 
     // CHECK:   triton_gpu.async_wait {{.*}} {num = 2 : i32}
     // CHECK:   triton_nvidia_gpu.dot_async
     // CHECK-NEXT: triton_nvidia_gpu.dot_wait {{.*}} {pendings = 1 : i32}
+    // CHECK:   triton_gpu.async_copy_global_to_local
+    // CHECK:   triton_gpu.async_commit_group
     // CHECK:   scf.if
     // CHECK:     triton_nvidia_gpu.dot_wait {{.*}} {pendings = 0 : i32}
     // CHECK:     arith.mulf
     // CHECK:     scf.yield
-    // CHECK:   triton_gpu.async_copy_global_to_local
-    // CHECK:   triton_gpu.async_commit_group
     // CHECK:   scf.yield
     // CHECK:   triton_nvidia_gpu.dot_wait {{.*}} {pendings = 0 : i32}
     %17:3 = scf.for %arg3 = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%arg4 = %cst_2, %arg5 = %16, %arg6 = %8) -> (tensor<128x16xf32, #mma1>, tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<128x64x!tt.ptr<f16>, #blocked1>)  : i32 {
