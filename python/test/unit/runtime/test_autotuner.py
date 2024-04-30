@@ -77,10 +77,11 @@ def test_hooks():
     _kernel[(1, )](src, N)
 
     # On NVIDIA GPUs:
+    # The tunning knob `num_stages` can be set by users.
     # This will cause out of resources when N_STAGES = 100
     # shared memory bytes = N_STAGES * BLOCK_SIZE * sizeof(float)
     # On AMD GPUs:
-    # The num_stage is a fixed value of 2, so it won't cause out of resources
+    # `num_stages` is a fixed value of 2, so it won't cause out of resources
     if triton.runtime.driver.active.get_current_target().backend == "cuda":
         assert values["has_exception"] is True
     else:
