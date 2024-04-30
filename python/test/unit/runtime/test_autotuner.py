@@ -76,10 +76,10 @@ def test_hooks():
     _kernel.post_hook = _post_hook
     _kernel[(1, )](src, N)
 
-    # On nvidia GPUs:
+    # On NVIDIA GPUs:
     # This will cause out of resources when N_STAGES = 100
     # shared memory bytes = N_STAGES * BLOCK_SIZE * sizeof(float)
-    # On amd GPUs:
+    # On AMD GPUs:
     # The num_stage is a fixed value of 2, so it won't cause out of resources
     if triton.runtime.driver.active.get_current_target().backend == "cuda":
         assert values["has_exception"] is True
