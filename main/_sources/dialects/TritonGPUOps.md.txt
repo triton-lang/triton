@@ -98,6 +98,8 @@ operation ::= `triton_gpu.async_wait` $asyncToken attr-dict
 
 Traits: `VerifyTensorLayoutsTrait`
 
+Interfaces: `InferTypeOpInterface`
+
 #### Attributes:
 
 <table>
@@ -110,6 +112,12 @@ Traits: `VerifyTensorLayoutsTrait`
 | Operand | Description |
 | :-----: | ----------- |
 | `asyncToken` | variadic of async token type
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `retToken` | async token type
 
 ### `triton_gpu.convert_layout` (triton::gpu::ConvertLayoutOp)
 
@@ -216,7 +224,7 @@ _Load a buffer from local memory into a distributed tensor_
 Syntax:
 
 ```
-operation ::= `triton_gpu.local_load` $src attr-dict `:` qualified(type($src)) `->` type($result)
+operation ::= `triton_gpu.local_load` $src (`token` $token^)? attr-dict `:` qualified(type($src)) `->` type($result)
 ```
 
 Load a tensor from the local memory descriptor into a distributed tensor.
@@ -232,6 +240,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::gpu::Shar
 | Operand | Description |
 | :-----: | ----------- |
 | `src` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+| `token` | async token type
 
 #### Results:
 
