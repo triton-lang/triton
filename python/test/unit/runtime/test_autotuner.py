@@ -63,18 +63,21 @@ def test_hooks():
             tl.store(src + offsets, x, mask=offsets < N)
             offsets += BLOCK_SIZE
 
-    values = {"counter": 0}
+    values = {"counter": 0, "has_exception": False}
 
     def _pre_hook(*args, **kwargs):
         values["counter"] += 1
 
     def _post_hook(*args, **kwargs):
         values["counter"] -= 1
+        if kwargs.get("from_exception", False):
+            values["has_exception"] = True
         assert values["counter"] == 0
 
     _kernel.pre_hook = _pre_hook
     _kernel.post_hook = _post_hook
     _kernel[(1, )](src, N)
+    assert values["has_exception"] is True
 
 
 @pytest.mark.parametrize('with_perf_model', [False, True])
