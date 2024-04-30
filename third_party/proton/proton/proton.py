@@ -11,7 +11,7 @@ def parse_arguments():
         description="The proton command utility for profiling scripts and pytest tests.", usage="""
     proton [options] script.py [script_args] [script_options]
     proton [options] pytest [pytest_args] [script_options]
-    python [options] python script.py [script_args] [script_options]
+    python -m triton.profiler.proton [options] script.py [script_args] [script_options]
 """, formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("-n", "--name", type=str, help="Name of the profiling session")
     parser.add_argument("-b", "--backend", type=str, help="Profiling backend", default="cupti", choices=["cupti"])
@@ -25,10 +25,6 @@ def parse_arguments():
 
 def is_pytest(script):
     return os.path.basename(script) == 'pytest'
-
-
-def is_python(script):
-    return os.path.basename(script) == 'python' or os.path.basename(script) == 'python3'
 
 
 def execute_as_main(script, args):
@@ -72,9 +68,6 @@ def run_profiling(args, target_args):
         import pytest
         pytest.main(script_args)
     else:
-        if is_python(script):
-            script = target_args[1]
-            script_args = target_args[2:] if len(target_args) > 2 else []
         execute_as_main(script, script_args)
 
     finalize()
