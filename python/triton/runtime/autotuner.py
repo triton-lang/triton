@@ -103,7 +103,6 @@ class Autotuner(KernelInterface):
             if config.pre_hook:
                 config.pre_hook(full_nargs)
             self.pre_hook(args)
-            from_exception = False
             try:
                 self.fn.run(
                     *args,
@@ -113,10 +112,10 @@ class Autotuner(KernelInterface):
                     **current,
                 )
             except Exception:
-                from_exception = True
+                self.post_hook(args, from_exception=True)
                 raise
-            finally:
-                self.post_hook(args, from_exception=from_exception)
+
+            self.post_hook(args, from_exception=False)
 
         try:
             if self.use_cuda_graph:
