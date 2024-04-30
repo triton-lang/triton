@@ -50,7 +50,7 @@ class Autotuner(KernelInterface):
 
         # Hook to reset or restore for required tensors
         self.pre_hook = lambda args, reset_only=False: 0
-        self.post_hook = lambda args, from_exception: 0
+        self.post_hook = lambda args, exception: 0
         if len(self.reset_idx) > 0 or len(self.restore_idx) > 0:
 
             def _pre_hook(args, reset_only=False):
