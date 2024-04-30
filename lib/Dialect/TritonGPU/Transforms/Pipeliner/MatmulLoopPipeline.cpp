@@ -100,6 +100,32 @@ public:
     return true;
   }
 
+  void insertDepsOfOp(Operation *op, int stage, CoarseSchedule::Cluster cluster,
+                      bool includeArg) {
+    for (Value operand : op->getOperands()) {
+      Value v = operand;
+      llvm::SmallDenseSet<Value> seen;
+      while (auto arg = v.dyn_cast<BlockArgument>()) {
+        if (!includeArg)
+          break;
+        if (!seen.insert(v).second)
+          break;
+        if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
+          auto yieldOp = op->getBlock()->getTerminator();
+          v = yieldOp->getOperand(arg.getArgNumber() - 1);
+          continue;
+        }
+        break;
+      }
+      Operation *defOp = v.getDefiningOp();
+      if (defOp && defOp->getBlock() == op->getBlock()) {
+        if (insertIfAbsent(defOp, stage, cluster)) {
+          insertDepsOfOp(defOp, stage, cluster, includeArg);
+        }
+      }
+    }
+  }
+
   void erase(Operation *op) { opToStageAndCluster.erase(op); }
 
   int count(Operation *op) { return opToStageAndCluster.count(op); }
@@ -575,34 +601,6 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<tt::LoadOp, int, Operation *>>
   return loadToInfo;
 }
 
-static void addDepsToSchedule(Operation *op, CoarseSchedule &schedule,
-                              int stage, CoarseSchedule::Cluster cluster,
-                              bool includeArg) {
-  for (Value operand : op->getOperands()) {
-    Value v = operand;
-    llvm::SmallDenseSet<Value> seen;
-    while (auto arg = v.dyn_cast<BlockArgument>()) {
-      if (!includeArg)
-        break;
-      if (!seen.insert(v).second)
-        break;
-      if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
-        auto yieldOp = op->getBlock()->getTerminator();
-        v = yieldOp->getOperand(arg.getArgNumber() - 1);
-        continue;
-      }
-      break;
-    }
-    Operation *defOp = v.getDefiningOp();
-    if (defOp && defOp->getBlock() == op->getBlock()) {
-      if (schedule.insertIfAbsent(defOp, schedule[op].first,
-                                  schedule[op].second)) {
-        addDepsToSchedule(defOp, schedule, stage, cluster, includeArg);
-      }
-    }
-  }
-}
-
 static llvm::MapVector<tt::LoadOp, LoadInfo>
 scheduleLoads(scf::ForOp forOp, CoarseSchedule &schedule,
               DenseSet<Operation *> &rootUsers, int numStages) {
@@ -742,7 +740,7 @@ static void scheduleDependencies(scf::ForOp forOp, CoarseSchedule &schedule,
     for (auto [op, stage_, cluster] : opsInOrder) {
       if (stage_ != stage)
         continue;
-      addDepsToSchedule(op, schedule, stage, cluster, false);
+      schedule.insertDepsOfOp(op, stage, cluster, false);
     }
   }
 }
@@ -783,14 +781,14 @@ static void scheduleDistanceOneDependencies(scf::ForOp forOp,
               // Exception: Schedule loads with a distance of 1 together
               // with the current op.
               schedule.insertIfAbsent(defOp, stage, cluster);
-              addDepsToSchedule(defOp, schedule, stage, cluster, true);
+              schedule.insertDepsOfOp(defOp, stage, cluster, true);
             } else {
               if (dist1Cluster.count(&cluster) == 0) {
                 dist1Cluster[&cluster] = schedule.clusters.newBefore(cluster);
               }
               schedule.insertIfAbsent(defOp, stage + 1, dist1Cluster[&cluster]);
-              addDepsToSchedule(defOp, schedule, stage + 1,
-                                dist1Cluster[&cluster], true);
+              schedule.insertDepsOfOp(defOp, stage + 1, dist1Cluster[&cluster],
+                                      true);
             }
           }
         }
