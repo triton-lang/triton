@@ -56,8 +56,6 @@ def test_hooks():
     def _kernel(src, N, N_STAGES: tl.constexpr, BLOCK_SIZE: tl.constexpr):
         offsets = tl.arange(0, BLOCK_SIZE)
         max_iters = tl.cdiv(N, BLOCK_SIZE)
-        # This will cause out of resources when N_STAGES = 100
-        # shared memory bytes = N_STAGES * BLOCK_SIZE * sizeof(float)
         for _ in tl.range(max_iters, num_stages=N_STAGES):
             x = tl.load(src + offsets, mask=offsets < N)
             tl.store(src + offsets, x, mask=offsets < N)
@@ -70,14 +68,23 @@ def test_hooks():
 
     def _post_hook(*args, **kwargs):
         values["counter"] -= 1
-        if kwargs.get("from_exception", False):
+        if kwargs.get("exception", None):
             values["has_exception"] = True
         assert values["counter"] == 0
 
     _kernel.pre_hook = _pre_hook
     _kernel.post_hook = _post_hook
     _kernel[(1, )](src, N)
-    assert values["has_exception"] is True
+
+    # On nvidia GPUs:
+    # This will cause out of resources when N_STAGES = 100
+    # shared memory bytes = N_STAGES * BLOCK_SIZE * sizeof(float)
+    # On amd GPUs:
+    # The num_stage is a fixed value of 2, so it won't cause out of resources
+    if triton.runtime.driver.active.get_current_target().backend == "cuda":
+        assert values["has_exception"] is True
+    else:
+        assert values["has_exception"] is False
 
 
 @pytest.mark.parametrize('with_perf_model', [False, True])

@@ -62,10 +62,9 @@ class Autotuner(KernelInterface):
             self.pre_hook = _pre_hook
         if len(self.restore_idx) > 0:
 
-            def _post_hook(args, from_exception):
-                if not from_exception:
-                    for i, j in enumerate(self.restore_idx):
-                        args[j].copy_(self.restore_copies[i])
+            def _post_hook(args, exception):
+                for i, j in enumerate(self.restore_idx):
+                    args[j].copy_(self.restore_copies[i])
                 self.restore_copies = []
 
             self.post_hook = _post_hook
@@ -111,11 +110,11 @@ class Autotuner(KernelInterface):
                     num_ctas=config.num_ctas,
                     **current,
                 )
-            except Exception:
-                self.post_hook(args, from_exception=True)
+            except Exception as e:
+                self.post_hook(args, exception=e)
                 raise
 
-            self.post_hook(args, from_exception=False)
+            self.post_hook(args, exception=None)
 
         try:
             if self.use_cuda_graph:
