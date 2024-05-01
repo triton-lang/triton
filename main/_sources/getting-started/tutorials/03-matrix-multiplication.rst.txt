@@ -21,7 +21,7 @@
 Matrix Multiplication
 =====================
 In this tutorial, you will write a very short high-performance FP16 matrix multiplication kernel that achieves
-performance on par with cuBLAS.
+performance on par with cuBLAS or rocBLAS.
 
 You will specifically learn about:
 
@@ -170,7 +170,7 @@ more than 10\% on some hardware architecture (e.g., 220 to 245 TFLOPS on A100).
 Final Result
 ------------
 
-.. GENERATED FROM PYTHON SOURCE LINES 152-287
+.. GENERATED FROM PYTHON SOURCE LINES 152-328
 
 .. code-block:: Python
 
@@ -181,13 +181,17 @@ Final Result
     import triton.language as tl
 
 
-    # `triton.jit`'ed functions can be auto-tuned by using the `triton.autotune` decorator, which consumes:
-    #   - A list of `triton.Config` objects that define different configurations of
-    #       meta-parameters (e.g., `BLOCK_SIZE_M`) and compilation options (e.g., `num_warps`) to try
-    #   - An auto-tuning *key* whose change in values will trigger evaluation of all the
-    #       provided configs
-    @triton.autotune(
-        configs=[
+    def is_cuda():
+        return triton.runtime.driver.active.get_current_target().backend == "cuda"
+
+
+    def is_hip_mi200():
+        target = triton.runtime.driver.active.get_current_target()
+        return target.backend == 'hip' and target.arch == 'gfx90a'
+
+
+    def get_cuda_autotune_config():
+        return [
             triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3,
                           num_warps=8),
             triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
@@ -220,8 +224,45 @@ Final Result
             triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
                           num_warps=4),
             triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
-                          num_warps=4),
-        ],
+                          num_warps=4)
+        ]
+
+
+    def get_hip_autotune_config():
+        return [
+            triton.Config(
+                {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 1, 'waves_per_eu': 2},
+                num_warps=4, num_stages=0),
+            triton.Config(
+                {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2},
+                num_warps=8, num_stages=0),
+            triton.Config(
+                {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 1, 'waves_per_eu': 2},
+                num_warps=8, num_stages=0),
+            triton.Config(
+                {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'waves_per_eu': 3},
+                num_warps=4, num_stages=0),
+            triton.Config(
+                {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 1, 'waves_per_eu': 8},
+                num_warps=4, num_stages=0),
+        ]
+
+
+    def get_autotune_config():
+        target = triton.runtime.driver.active.get_current_target()
+        if target.backend == 'cuda':
+            return get_cuda_autotune_config()
+        else:
+            return get_hip_autotune_config()
+
+
+    # `triton.jit`'ed functions can be auto-tuned by using the `triton.autotune` decorator, which consumes:
+    #   - A list of `triton.Config` objects that define different configurations of
+    #       meta-parameters (e.g., `BLOCK_SIZE_M`) and compilation options (e.g., `num_warps`) to try
+    #   - An auto-tuning *key* whose change in values will trigger evaluation of all the
+    #       provided configs
+    @triton.autotune(
+        configs=get_autotune_config(),
         key=['M', 'N', 'K'],
     )
     @triton.jit
@@ -316,12 +357,12 @@ Final Result
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 288-290
+.. GENERATED FROM PYTHON SOURCE LINES 329-331
 
 We can now create a convenience wrapper function that only takes two input tensors,
 and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel.
 
-.. GENERATED FROM PYTHON SOURCE LINES 290-313
+.. GENERATED FROM PYTHON SOURCE LINES 331-354
 
 .. code-block:: Python
 
@@ -355,14 +396,14 @@ and (1) checks any shape constraint; (2) allocates the output; (3) launches the 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 314-318
+.. GENERATED FROM PYTHON SOURCE LINES 355-359
 
 Unit Test
 ---------
 
 We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).
 
-.. GENERATED FROM PYTHON SOURCE LINES 318-349
+.. GENERATED FROM PYTHON SOURCE LINES 359-394
 
 .. code-block:: Python
 
@@ -374,13 +415,17 @@ We can test our custom matrix multiplication operation against a native torch im
     torch_output = torch.matmul(a, b)
     print(f"triton_output_with_fp16_inputs={triton_output}")
     print(f"torch_output_with_fp16_inputs={torch_output}")
-    if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0):
+    # Bigger tolerance for AMD MI200 devices.
+    # MI200 devices use reduced precision fp16 and bf16 and flush input and
+    # output denormal values to zero. Detailed info is at: https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
+    rtol = 1e-2 if is_hip_mi200() else 0
+    if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=rtol):
         print("✅ Triton and Torch match")
     else:
         print("❌ Triton and Torch differ")
 
     TORCH_HAS_FP8 = hasattr(torch, "float8_e5m2")
-    if TORCH_HAS_FP8:
+    if TORCH_HAS_FP8 and is_cuda():
         torch.manual_seed(0)
         a = torch.randn((512, 512), device="cuda", dtype=torch.float16)
         b = torch.randn((512, 512), device="cuda", dtype=torch.float16)
@@ -443,7 +488,7 @@ We can test our custom matrix multiplication operation against a native torch im
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 350-358
+.. GENERATED FROM PYTHON SOURCE LINES 395-403
 
 Benchmark
 ---------
@@ -451,17 +496,19 @@ Benchmark
 Square Matrix Performance
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-We can now compare the performance of our kernel against that of cuBLAS. Here we focus on square matrices,
+We can now compare the performance of our kernel against that of cuBLAS or rocBLAS. Here we focus on square matrices,
 but feel free to arrange this script as you wish to benchmark any other matrix shape.
 
-.. GENERATED FROM PYTHON SOURCE LINES 358-398
+.. GENERATED FROM PYTHON SOURCE LINES 403-445
 
 .. code-block:: Python
 
 
+    ref_lib = 'cuBLAS' if is_cuda() else 'rocBLAS'
+
     configs = []
     for fp8_inputs in [False, True]:
-        if fp8_inputs and not TORCH_HAS_FP8:
+        if fp8_inputs and (not TORCH_HAS_FP8 or not is_cuda()):
             continue
         configs.append(
             triton.testing.Benchmark(
@@ -470,8 +517,8 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
                 line_arg="provider",  # Argument name whose value corresponds to a different line in the plot
                 # Possible values for `line_arg`
                 # Don't compare to cublas for fp8 cases as torch.matmul doesn't support fp8 at the moment.
-                line_vals=["triton"] if fp8_inputs else ["cublas", "triton"],  # Label name for the lines
-                line_names=["Triton"] if fp8_inputs else ["cuBLAS", "Triton"],  # Line styles
+                line_vals=["triton"] if fp8_inputs else [ref_lib.lower(), "triton"],  # Label name for the lines
+                line_names=["Triton"] if fp8_inputs else [ref_lib, "Triton"],  # Line styles
                 styles=[("green", "-"), ("blue", "-")],
                 ylabel="TFLOPS",  # Label name for the y-axis
                 plot_name="matmul-performance-" +
@@ -489,7 +536,7 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
             b = b.T
             b = b.to(torch.float8_e5m2)
         quantiles = [0.5, 0.2, 0.8]
-        if provider == 'cublas':
+        if provider == ref_lib.lower():
             ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
         if provider == 'triton':
             ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), quantiles=quantiles)
@@ -531,31 +578,31 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
     3    640.0   640.0   640.0   42.666665   42.666665
     4    768.0   768.0   768.0   63.195428   68.056616
     5    896.0   896.0   896.0   78.051553   93.661869
-    6   1024.0  1024.0  1024.0  110.376426  104.857603
-    7   1152.0  1152.0  1152.0  135.726544  129.825388
-    8   1280.0  1280.0  1280.0  163.840004  163.840004
+    6   1024.0  1024.0  1024.0  110.376426   99.864382
+    7   1152.0  1152.0  1152.0  135.726544  135.726544
+    8   1280.0  1280.0  1280.0  157.538463  163.840004
     9   1408.0  1408.0  1408.0  155.765024  132.970149
     10  1536.0  1536.0  1536.0  181.484314  157.286398
-    11  1664.0  1664.0  1664.0  183.651271  179.978245
-    12  1792.0  1792.0  1792.0  172.914215  212.064605
+    11  1664.0  1664.0  1664.0  183.651271  183.651271
+    12  1792.0  1792.0  1792.0  175.616000  208.137481
     13  1920.0  1920.0  1920.0  200.347822  170.666670
     14  2048.0  2048.0  2048.0  226.719125  192.841562
-    15  2176.0  2176.0  2176.0  214.081356  214.081356
-    16  2304.0  2304.0  2304.0  229.691080  231.921091
-    17  2432.0  2432.0  2432.0  203.583068  203.583068
-    18  2560.0  2560.0  2560.0  227.555548  219.919464
-    19  2688.0  2688.0  2688.0  200.704002  200.704002
-    20  2816.0  2816.0  2816.0  212.752230  212.752230
-    21  2944.0  2944.0  2944.0  222.482283  226.527416
-    22  3072.0  3072.0  3072.0  210.494802  212.868821
-    23  3200.0  3200.0  3200.0  219.931269  222.222214
-    24  3328.0  3328.0  3328.0  208.670419  211.118166
-    25  3456.0  3456.0  3456.0  218.486642  219.677297
-    26  3584.0  3584.0  3584.0  220.380867  213.069643
-    27  3712.0  3712.0  3712.0  213.455857  218.116474
-    28  3840.0  3840.0  3840.0  211.456969  209.454544
-    29  3968.0  3968.0  3968.0  211.479948  219.467517
-    30  4096.0  4096.0  4096.0  225.197531  216.480204
+    15  2176.0  2176.0  2176.0  211.827867  211.827867
+    16  2304.0  2304.0  2304.0  229.691080  236.513589
+    17  2432.0  2432.0  2432.0  206.576938  203.583068
+    18  2560.0  2560.0  2560.0  225.986210  219.919464
+    19  2688.0  2688.0  2688.0  198.083840  199.123658
+    20  2816.0  2816.0  2816.0  211.719459  213.795141
+    21  2944.0  2944.0  2944.0  224.486628  226.527416
+    22  3072.0  3072.0  3072.0  210.494802  221.184001
+    23  3200.0  3200.0  3200.0  216.216207  221.453296
+    24  3328.0  3328.0  3328.0  206.278780  211.118166
+    25  3456.0  3456.0  3456.0  219.677297  222.097984
+    26  3584.0  3584.0  3584.0  216.663602  210.574693
+    27  3712.0  3712.0  3712.0  212.096269  217.641271
+    28  3840.0  3840.0  3840.0  211.053446  211.456969
+    29  3968.0  3968.0  3968.0  211.479948  217.124452
+    30  4096.0  4096.0  4096.0  222.583299  218.240199
     matmul-performance-fp8:
              M       N       K      Triton
     0    256.0   256.0   256.0    3.276800
@@ -567,28 +614,28 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
     6   1024.0  1024.0  1024.0   63.550060
     7   1152.0  1152.0  1152.0   82.943997
     8   1280.0  1280.0  1280.0  102.400003
-    9   1408.0  1408.0  1408.0   82.602666
+    9   1408.0  1408.0  1408.0   83.873477
     10  1536.0  1536.0  1536.0   99.688560
     11  1664.0  1664.0  1664.0  116.868992
-    12  1792.0  1792.0  1792.0  135.414749
+    12  1792.0  1792.0  1792.0  137.066149
     13  1920.0  1920.0  1920.0  101.647057
-    14  2048.0  2048.0  2048.0  115.704939
-    15  2176.0  2176.0  2176.0  121.226797
+    14  2048.0  2048.0  2048.0  116.508440
+    15  2176.0  2176.0  2176.0  121.961499
     16  2304.0  2304.0  2304.0  135.726544
-    17  2432.0  2432.0  2432.0  134.423269
+    17  2432.0  2432.0  2432.0  133.783163
     18  2560.0  2560.0  2560.0  148.271497
-    19  2688.0  2688.0  2688.0  118.540803
+    19  2688.0  2688.0  2688.0  118.171514
     20  2816.0  2816.0  2816.0  129.804192
-    21  2944.0  2944.0  2944.0  140.779756
+    21  2944.0  2944.0  2944.0  140.383190
     22  3072.0  3072.0  3072.0  145.935840
     23  3200.0  3200.0  3200.0  139.737993
-    24  3328.0  3328.0  3328.0  131.370982
+    24  3328.0  3328.0  3328.0  131.852184
     25  3456.0  3456.0  3456.0  140.211419
-    26  3584.0  3584.0  3584.0  150.864752
-    27  3712.0  3712.0  3712.0  141.497650
-    28  3840.0  3840.0  3840.0  139.989870
-    29  3968.0  3968.0  3968.0  147.728736
-    30  4096.0  4096.0  4096.0  157.347868
+    26  3584.0  3584.0  3584.0  150.360184
+    27  3712.0  3712.0  3712.0  142.710497
+    28  3840.0  3840.0  3840.0  139.460280
+    29  3968.0  3968.0  3968.0  149.173516
+    30  4096.0  4096.0  4096.0  156.979800
 
 
 
@@ -596,7 +643,7 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (2 minutes 16.166 seconds)
+   **Total running time of the script:** (2 minutes 16.315 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_03-matrix-multiplication.py:

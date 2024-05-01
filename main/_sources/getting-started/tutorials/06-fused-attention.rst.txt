@@ -28,7 +28,7 @@ Extra Credits:
 - Original flash attention paper (https://arxiv.org/abs/2205.14135)
 - Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
 
-.. GENERATED FROM PYTHON SOURCE LINES 13-665
+.. GENERATED FROM PYTHON SOURCE LINES 13-681
 
 
 
@@ -77,39 +77,39 @@ Extra Credits:
 
     fused-attention-batch4-head48-d64-fwd-causal=True-fp8=False:
          N_CTX      Triton
-    0   1024.0  118.919840
-    1   2048.0  141.916907
-    2   4096.0  157.679056
-    3   8192.0  167.110675
-    4  16384.0  172.745338
+    0   1024.0  119.194819
+    1   2048.0  143.411623
+    2   4096.0  157.833583
+    3   8192.0  167.237339
+    4  16384.0  173.067854
     fused-attention-batch4-head48-d64-fwd-causal=True-fp8=True:
          N_CTX      Triton
-    0   1024.0   98.102066
-    1   2048.0  118.595404
-    2   4096.0  128.513184
-    3   8192.0  134.593463
-    4  16384.0  137.832968
+    0   1024.0   97.825134
+    1   2048.0  118.116876
+    2   4096.0  128.909525
+    3   8192.0  134.806107
+    4  16384.0  137.872791
     fused-attention-batch4-head48-d64-fwd-causal=False-fp8=False:
          N_CTX      Triton
-    0   1024.0  158.887049
-    1   2048.0  168.804936
-    2   4096.0  171.725432
-    3   8192.0  175.984768
-    4  16384.0  178.022348
+    0   1024.0  158.693049
+    1   2048.0  168.821052
+    2   4096.0  172.570151
+    3   8192.0  175.802291
+    4  16384.0  177.953507
     fused-attention-batch4-head48-d64-fwd-causal=False-fp8=True:
          N_CTX      Triton
-    0   1024.0  136.320421
-    1   2048.0  144.730268
-    2   4096.0  149.264129
-    3   8192.0  150.327863
-    4  16384.0  150.979615
+    0   1024.0  136.419589
+    1   2048.0  145.057773
+    2   4096.0  149.093456
+    3   8192.0  150.170175
+    4  16384.0  149.716507
     fused-attention-batch4-head48-d64-bwd-causal=True-fp8=False:
          N_CTX      Triton
-    0   1024.0   75.396450
-    1   2048.0  100.099483
-    2   4096.0  118.448957
-    3   8192.0  129.211495
-    4  16384.0  135.770029
+    0   1024.0   75.344009
+    1   2048.0  100.222317
+    2   4096.0  117.270997
+    3   8192.0  129.207348
+    4  16384.0  135.725412
 
 
 
@@ -126,6 +126,10 @@ Extra Credits:
 
     import triton
     import triton.language as tl
+
+
+    def is_hip():
+        return triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
     @triton.jit
@@ -559,13 +563,18 @@ Extra Credits:
             assert Lq == Lk and (Lk == Lv or v.dtype == torch.float8_e5m2)
             assert Lk in {16, 32, 64, 128, 256}
             o = torch.empty_like(q)
-            BLOCK_M = 128
-            BLOCK_N = 64 if Lk <= 64 else 32
-            num_stages = 4 if Lk <= 64 else 3
-            num_warps = 4
             stage = 3 if causal else 1
+            extra_kern_args = {}
+            # Tuning for AMD target
+            if is_hip():
+                BLOCK_M = 128
+                BLOCK_N = 64 if Lk <= 64 else 128
+                num_warps = 4
+                num_stages = 1
+                waves_per_eu = 3 if Lk <= 64 else 2
+                extra_kern_args = {"waves_per_eu": waves_per_eu, "allow_flush_denorm": True}
             # Tuning for H100
-            if torch.cuda.get_device_capability()[0] == 9:
+            elif torch.cuda.get_device_capability()[0] == 9:
                 num_warps = 8
                 num_stages = 7 if Lk >= 64 else 3
                 if v.dtype == torch.float8_e5m2:
@@ -579,6 +588,13 @@ Extra Credits:
                         BLOCK_N = 128
                         num_stages = 3
                         num_warps = 8
+            # Tuning for other cuda targets
+            else:
+                BLOCK_M = 128
+                BLOCK_N = 64 if Lk <= 64 else 32
+                num_stages = 4 if Lk <= 64 else 3
+                num_warps = 4
+
             grid = (triton.cdiv(q.shape[2], BLOCK_M), q.shape[0] * q.shape[1], 1)
             M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
             _attn_fwd[grid](
@@ -594,8 +610,8 @@ Extra Credits:
                 BLOCK_DMODEL=Lk,  #
                 STAGE=stage,  #
                 num_warps=num_warps,  #
-                num_stages=num_stages  #
-            )
+                num_stages=num_stages,  #
+                **extra_kern_args)
 
             ctx.save_for_backward(q, k, v, o, M)
             ctx.grid = grid
@@ -703,7 +719,7 @@ Extra Credits:
     for mode in ["fwd", "bwd"]:
         for causal in [True, False]:
             for fp8_inputs in [False, True]:
-                if fp8_inputs and ((not TORCH_HAS_FP8) or mode == "bwd"):
+                if fp8_inputs and ((not TORCH_HAS_FP8) or mode == "bwd" or is_hip()):
                     continue
                 if mode == "bwd" and not causal:
                     continue
@@ -776,7 +792,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 26.986 seconds)
+   **Total running time of the script:** (0 minutes 27.126 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:
