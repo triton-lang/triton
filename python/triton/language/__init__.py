@@ -26,8 +26,6 @@ from .standard import (
 from .core import (
     PropagateNan,
     TRITON_MAX_TENSOR_NUMEL,
-    _experimental_join,
-    _experimental_split,
     _experimental_descriptor_load,
     advance,
     arange,
@@ -121,8 +119,6 @@ from .random import (
 __all__ = [
     "PropagateNan",
     "TRITON_MAX_TENSOR_NUMEL",
-    "_experimental_join",
-    "_experimental_split",
     "_experimental_descriptor_load",
     "abs",
     "advance",

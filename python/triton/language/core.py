@@ -1360,10 +1360,6 @@ def join(a, b, _builder=None):
     return semantic.join(a, b, _builder)
 
 
-# For temporary backwards compat.
-_experimental_join = join
-
-
 @jit
 def _take_first(a, b):
     return a
@@ -1402,10 +1398,6 @@ def split(a, _builder=None, _generator=None) -> tuple[tensor, tensor]:
         out_rhs = cast(tensor, reduce(out_rhs, None, _take_first, _builder=_builder, _generator=_generator))
 
     return out_lhs, out_rhs
-
-
-# For temporary backwards compat.
-_experimental_split = split
 
 
 @_tensor_member_fn
