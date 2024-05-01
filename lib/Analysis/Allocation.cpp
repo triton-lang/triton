@@ -1,4 +1,13 @@
 #include "triton/Analysis/Allocation.h"
+// #include "mlir/Analysis/DataFlowFramework.h"
+// #include "mlir/Analysis/Liveness.h"
+// #include "mlir/Analysis/SliceAnalysis.h"
+// #include "mlir/Dialect/Tensor/IR/Tensor.h"
+// #include "triton/Analysis/Alias.h"
+// #include "triton/Dialect/Triton/IR/Utility.h"
+// #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+// #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Debug.h"
 
 #include <algorithm>
 #include <limits>
@@ -27,7 +36,31 @@ using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 
+#define DEBUG_TYPE "allocate-shared-memory"
+
 namespace mlir {
+
+template <typename T>
+llvm::raw_ostream &operator<<(llvm::raw_ostream &ostr,
+                              const Interval<T> &range) {
+  ostr << "[" << range.start() << "," << range.end() << ")";
+  return ostr;
+}
+
+void PrintValue(Value v) {
+  if (auto arg = dyn_cast<BlockArgument>(v)) {
+    Block *block = arg.getOwner();
+    const auto &blks = block->getParent()->getBlocks();
+    int32_t blockIdx = 0;
+    auto itr = llvm::find_if(blks, [&](const Block &blk) {
+      blockIdx++;
+      return block == &blk;
+    });
+    if (itr != blks.end())
+      llvm::dbgs() << "^bb" << blockIdx << ": ";
+  }
+  v.print(llvm::dbgs());
+}
 
 //===----------------------------------------------------------------------===//
 // Shared Memory Allocation Analysis
@@ -187,15 +220,56 @@ private:
   using BufferT = Allocation::BufferT;
 
   /// Value -> Liveness Range
+  using IntervalT = Interval<size_t>;
   /// Use MapVector to ensure determinism.
-  using BufferRangeMapT = llvm::MapVector<BufferT *, Interval<size_t>>;
+  using BufferRangeMapT = llvm::MapVector<BufferT *, IntervalT>;
   /// Nodes -> Nodes
   using GraphT = DenseMap<BufferT *, DenseSet<BufferT *>>;
 
+  /// Set of Liveness Intervals
+  class LiveIntervals : public SmallVector<IntervalT, 4> {
+  public:
+    LiveIntervals() = default;
+    LiveIntervals(const LiveIntervals &) = default;
+
+    void sortAndJoin() {
+      if (size() > 1) {
+        llvm::sort(*this, [](const auto &lhs, const auto &rhs) {
+          return lhs.start() <= rhs.start();
+        });
+        LiveIntervals ranges;
+        IntervalT range = front();
+        for (auto nrng : *this) {
+          if (range.adjacent(nrng) || range.intersects(nrng))
+            range = range.merge(nrng);
+          else {
+            ranges.push_back(range);
+            range = nrng;
+          }
+        }
+        ranges.push_back(range);
+        assign(ranges);
+      }
+    }
+    IntervalT merge() const {
+      assert(!empty());
+      IntervalT res = front();
+      for (auto &I : *this)
+        res = res.merge(I);
+      return res;
+    }
+  };
+
+  typedef function_ref<LiveIntervals(Value value)> LivenessF;
+
   void run() {
+    auto func = cast<triton::FuncOp>(operation);
+    LLVM_DEBUG(llvm::dbgs() << "ALLOCATION: " << func.getName() << "\n");
     getValuesAndSizes();
     resolveLiveness();
+    LLVM_DEBUG(allocation->dump());
     computeOffsets();
+    LLVM_DEBUG(dump());
   }
 
   /// Initializes explicitly defined shared memory values for a given operation.
@@ -376,35 +450,81 @@ private:
     });
   }
 
+  void updateBufferRange(BufferT *buffer, IntervalT interval) {
+    if (bufferRange.contains(buffer))
+      interval = interval.merge(bufferRange[buffer]);
+    bufferRange[buffer] = interval;
+    LLVM_DEBUG(llvm::dbgs() << "    UPDATE BUFFER: " << buffer->id << " -> "
+                            << interval << "\n");
+  }
+
   /// Computes the liveness range of the allocated value.
   /// Each buffer is allocated only once.
-  void resolveExplicitBufferLiveness(
-      function_ref<Interval<size_t>(Value value)> getLiveness) {
+  void resolveExplicitBufferLiveness(LivenessF getLiveness) {
     for (auto valueBufferIter : allocation->valueBuffer) {
       auto value = valueBufferIter.first;
       auto *buffer = valueBufferIter.second;
-      bufferRange[buffer] = getLiveness(value);
+      auto ranges = getLiveness(value);
+      // TODO(SJW): bufferRange should support disjoint intervals
+      // This is only a problem for scf loops; cf branches handle
+      // this with aliases
+      updateBufferRange(buffer, ranges.merge());
     }
   }
 
-  /// Extends the liveness range by unionizing the liveness range of the aliased
-  /// values because each allocated buffer could be an alias of others, if block
-  /// arguments are involved.
-  void resolveAliasBufferLiveness(
-      function_ref<Interval<size_t>(Value value)> getLiveness) {
+  void dumpAliasRanges(Value value, const llvm::SetVector<BufferT *> &buffers,
+                       const LiveIntervals &ranges) const {
+    llvm::dbgs() << "    RESOLVE ALIAS: "
+                 << "\n\t";
+    PrintValue(value);
+    llvm::dbgs() << "\n\tRANGES:   ";
+    llvm::for_each(ranges, [cnt = 0](auto interval) mutable {
+      llvm::dbgs() << (cnt++ ? ", " : "") << interval;
+    });
+    llvm::dbgs() << "\n\tBUFFERS:  ";
+    llvm::for_each(buffers, [cnt = 0](auto *buf) mutable {
+      llvm::dbgs() << (cnt++ ? ", " : "") << buf->id;
+    });
+    llvm::dbgs() << "\n";
+  }
+
+  /// Following the alias lattice, an alias that only references a single
+  /// buffer, can simply update the live range of that buffer.
+  /// When an alias references multiple buffers as in the case of loop-
+  /// carried variables, create a new Buffer<Alias> for each disjoint range.
+  /// This new Buffer<Alias> will represent the live-range for all referenced
+  /// buffers.
+  /// Example:
+  ///  3    %b0 = convert_layout %g0                  -- Buffer #0
+  ///  4    %fr = for (.., %arg0 = %b0) {             -+ Alias #1
+  ///  5        %gn = load %pc                         |  Buffers #0,#1
+  ///  6        %bc = convert_layout %arg0            -+
+  ///  7        %v = add %bc, ...
+  ///  8        %bn = convert_layout %gn              -+ Buffer #1
+  ///  9        %pn = addptr %pc, %cst                 |  loop carried
+  ///  10       yeild ... %bn                         -+  does not overlap #0
+  ///  10   }
+  ///  11   %be = convert_layout %fr#1                -- Alias #2: Buffer #0,#1
+  ///  12   %ve = add %be
+  void resolveAliasBufferLiveness(LivenessF getLiveness) {
     for (auto aliasBufferIter : allocation->aliasBuffer) {
       auto value = aliasBufferIter.first;
       auto buffers = aliasBufferIter.second;
-      auto range = getLiveness(value);
-      for (auto *buffer : buffers) {
-        auto minId = range.start();
-        auto maxId = range.end();
-        if (bufferRange.count(buffer)) {
-          // Extend the allocated buffer's range
-          minId = std::min(minId, bufferRange[buffer].start());
-          maxId = std::max(maxId, bufferRange[buffer].end());
+      auto ranges = getLiveness(value);
+      LLVM_DEBUG(dumpAliasRanges(value, buffers, ranges));
+      auto *buffer = buffers.front();
+      if (buffers.size() == 1) {
+        for (auto interval : ranges)
+          updateBufferRange(buffer, interval);
+      } else {
+        for (auto interval : ranges) {
+          // Create Alias Buffer for each disjoint interval
+          BufferT *aliasBuf = allocation->addBuffer<BufferT::BufferKind::Alias>(
+              value, buffer->size, buffer->alignment);
+          updateBufferRange(aliasBuf, interval);
+          for (auto buffer : buffers)
+            aliasBuf->aliases.push_back(buffer);
         }
-        bufferRange[buffer] = Interval(minId, maxId);
       }
     }
   }
@@ -421,8 +541,7 @@ private:
         // range.
         auto *op = opScratchIter.first;
         auto *buffer = opScratchIter.second;
-        bufferRange.insert({buffer, Interval(operationId.lookup(op),
-                                             operationId.lookup(op) + 1)});
+        updateBufferRange(buffer, operationId.lookup(op));
       }
     };
     processScratchMemory(allocation->opScratch);
@@ -453,24 +572,18 @@ private:
 
     // Analyze liveness of explicit buffers
     Liveness liveness(operation);
-    auto getValueLivenessRange = [&](Value value) {
+    auto getValueLiveRanges = [&](Value value) {
+      LiveIntervals intervals;
       auto liveOperations = liveness.resolveLiveness(value);
-      auto minId = std::numeric_limits<size_t>::max();
-      auto maxId = std::numeric_limits<size_t>::min();
-      std::for_each(liveOperations.begin(), liveOperations.end(),
-                    [&](Operation *liveOp) {
-                      if (operationId[liveOp] < minId) {
-                        minId = operationId[liveOp];
-                      }
-                      if ((operationId[liveOp] + 1) > maxId) {
-                        maxId = operationId[liveOp] + 1;
-                      }
-                    });
-      return Interval(minId, maxId);
+      llvm::for_each(liveOperations, [&](Operation *liveOp) {
+        intervals.push_back(operationId[liveOp]);
+      });
+      intervals.sortAndJoin();
+      return intervals;
     };
 
-    resolveExplicitBufferLiveness(getValueLivenessRange);
-    resolveAliasBufferLiveness(getValueLivenessRange);
+    resolveExplicitBufferLiveness(getValueLiveRanges);
+    resolveAliasBufferLiveness(getValueLiveRanges);
     resolveScratchBufferLiveness(operationId);
   }
 
@@ -521,17 +634,22 @@ private:
     // If the available triple's range is less than a given buffer range,
     // we won't know if there has been an overlap without using graph coloring.
     // Start -> Liveness Range
-    using TripleMapT = std::multimap<size_t, Interval<size_t>>;
+    using TripleMapT = std::multimap<size_t, IntervalT>;
     TripleMapT tripleMap;
-    tripleMap.insert(std::make_pair(0, Interval<size_t>()));
-    SmallVector<BufferT *> xBuffers = buffers;
+    tripleMap.insert(std::make_pair(0, IntervalT()));
+    SmallVector<BufferT *> xBuffers;
+    for (auto *buf : buffers) {
+      if (buf->kind != BufferT::BufferKind::Alias)
+        xBuffers.push_back(buf);
+    }
+
     while (!xBuffers.empty()) {
       auto tripleIt = tripleMap.begin();
       auto size = tripleIt->first;
       auto range = tripleIt->second;
       tripleMap.erase(tripleIt);
       auto bufferIt =
-          std::find_if(xBuffers.begin(), xBuffers.end(), [&](auto *buffer) {
+          llvm::find_if(xBuffers, [&](auto *buffer) {
             auto xRange = bufferRange[buffer];
             bool res = xRange.intersects(range);
             for (auto val : tripleMap)
@@ -548,6 +666,8 @@ private:
         size_t alignment = buffer->alignment;
         size_t alignSize = ((size + alignment - 1) / alignment) * alignment;
         bufferStart[buffer] = alignSize;
+        LLVM_DEBUG(llvm::dbgs() << "    CSTART: " << buffer->id << " <-> "
+                                << alignSize << "\n");
         tripleMap.insert({alignSize + xSize,
                           Interval{std::max(range.start(), xRange.start()),
                                    std::min(range.end(), xRange.end())}});
@@ -572,20 +692,28 @@ private:
     // Reset interference graph
     interference.clear();
     for (auto x : buffers) {
-      for (auto y : buffers) {
-        if (x == y)
-          continue;
-        auto xStart = bufferStart.lookup(x);
-        auto yStart = bufferStart.lookup(y);
-        auto xSize = x->size;
-        auto ySize = y->size;
-        Interval xSizeRange = {xStart, xStart + xSize};
-        Interval ySizeRange = {yStart, yStart + ySize};
-        auto xOpRange = bufferRange.lookup(x);
-        auto yOpRange = bufferRange.lookup(y);
-        if (xOpRange.intersects(yOpRange) &&
-            xSizeRange.intersects(ySizeRange)) {
-          interference[x].insert(y);
+      if (x->kind != BufferT::BufferKind::Alias) {
+        for (auto y : buffers) {
+          if (x == y)
+            continue;
+          y->apply([&](BufferT *yr) {
+            if (yr != x) {
+              auto xStart = bufferStart.lookup(x);
+              auto yStart = bufferStart.lookup(yr);
+              auto xSize = x->size;
+              auto ySize = yr->size;
+              Interval xSizeRange = {xStart, xStart + xSize};
+              Interval ySizeRange = {yStart, yStart + ySize};
+              auto xOpRange = bufferRange.lookup(x);
+              auto yOpRange = bufferRange.lookup(y);
+              if (xOpRange.intersects(yOpRange) &&
+                  xSizeRange.intersects(ySizeRange)) {
+                LLVM_DEBUG(llvm::dbgs() << "    INTERFERENCE: " << x->id
+                                        << " <-> " << y->id << "\n");
+                interference[x].insert(y);
+              }
+            }
+          });
         }
       }
     }
@@ -597,6 +725,13 @@ private:
                 DenseMap<BufferT *, size_t> &bufferStart) {
     // Reset shared memory size
     allocation->sharedMemorySize = 0;
+
+    SmallVector<BufferT *> xBuffers;
+    for (auto *buf : buffers) {
+      if (buf->kind != BufferT::BufferKind::Alias)
+        xBuffers.push_back(buf);
+    }
+
     // First-fit graph coloring
     // Neighbors are nodes that interfere with each other.
     // We color a node by finding the index of the first available
@@ -604,19 +739,24 @@ private:
     // Nodes with the same color do not interfere with each other.
     DenseMap<BufferT *, int> colors;
     for (auto value : buffers) {
-      colors[value] = (value == buffers[0]) ? 0 : -1;
+      colors[value] = (value == buffers.front()) ? 0 : -1;
     }
     SmallVector<bool> available(buffers.size());
-    for (auto x : buffers) {
+    for (auto x : xBuffers) {
       std::fill(available.begin(), available.end(), true);
       for (auto y : interference.lookup(x)) {
-        int color = colors[y];
-        if (color >= 0) {
-          available[color] = false;
-        }
+        y->apply([&](BufferT *buf) {
+          if (buf != x) {
+            int color = colors[buf];
+            if (color >= 0)
+              available[color] = false;
+          }
+        });
       }
-      auto it = std::find(available.begin(), available.end(), true);
+      auto it = llvm::find(available, true);
       colors[x] = std::distance(available.begin(), it);
+      LLVM_DEBUG(llvm::dbgs()
+                 << "    COLOR: " << x->id << " -> " << colors[x] << "\n");
     }
     // Finalize allocation
     // color0: [0, 7), [0, 8), [0, 15) -> [0, 7), [0, 8), [0, 15)
@@ -624,15 +764,31 @@ private:
     // color2: [8, 12) -> [8 + 2 * 15, 12 + 2 * 15) -> [38, 42)
     // TODO(Keren): We are wasting memory here.
     // Nodes with color2 can actually start with 24.
-    for (auto x : buffers) {
+    for (auto x : xBuffers) {
       size_t adj = 0;
       for (auto y : interference.lookup(x)) {
-        adj = std::max(adj, bufferStart.lookup(y) + y->size);
+        y->apply([&](BufferT *buf) {
+          if (buf != x)
+            adj = std::max(adj, buf->size);
+        });
       }
+      // TODO(SJW): does not take alignment into account
       x->offset = bufferStart.lookup(x) + colors.lookup(x) * adj;
+      assert(x->offset % x->alignment == 0);
       bufferStart[x] = x->offset;
+      LLVM_DEBUG(llvm::dbgs()
+                 << "    START: " << x->id << " -> " << x->offset << "\n");
       allocation->sharedMemorySize =
           std::max(allocation->sharedMemorySize, x->offset + x->size);
+    }
+  }
+
+  void dump() const {
+    for (auto pair : bufferRange) {
+      llvm::dbgs() << "    BUFFER RANGE:"
+                   << "\n";
+      pair.first->dump();
+      llvm::dbgs() << "\tINTERVAL: " << pair.second << "\n";
     }
   }
 
@@ -644,6 +800,55 @@ private:
 };
 
 } // namespace triton
+
+void Allocation::BufferT::dump() const {
+  llvm::dbgs() << "\tID:       " << (int)id << "\n";
+  llvm::dbgs() << "\tKIND:     " << (int)kind << "\n";
+  llvm::dbgs() << "\tSIZE:     " << size << "\n";
+  llvm::dbgs() << "\tOFFSET:   " << offset << "\n";
+  llvm::dbgs() << "\tALIGN:    " << alignment << "\n";
+  if (!aliases.empty()) {
+    llvm::dbgs() << "\tALIASES:  ";
+    llvm::for_each(aliases, [cnt = 0](auto *buf) mutable {
+      llvm::dbgs() << (cnt++ ? ", " : "") << buf->id;
+    });
+    llvm::dbgs() << "\n";
+  }
+}
+
+void Allocation::dump() const {
+  for (auto pair : opScratch) {
+    llvm::dbgs() << "    SCRATCH: "
+                 << "\n\t";
+    pair.first->print(llvm::dbgs());
+    llvm::dbgs() << "\n";
+    pair.second->dump();
+  }
+  for (auto pair : opVirtual) {
+    llvm::dbgs() << "    VIRTUAL: "
+                 << "\n\t";
+    pair.first->print(llvm::dbgs());
+    llvm::dbgs() << "\n";
+    pair.second->dump();
+  }
+  for (auto pair : valueBuffer) {
+    llvm::dbgs() << "    VALUE: "
+                 << "\n\t";
+    PrintValue(pair.first);
+    llvm::dbgs() << "\n";
+    pair.second->dump();
+  }
+  for (auto pair : aliasBuffer) {
+    llvm::dbgs() << "    ALIAS: "
+                 << "\n\t";
+    PrintValue(pair.first);
+    llvm::dbgs() << "\n\tIDS:      ";
+    llvm::for_each(pair.second, [cnt = 0](auto *buf) mutable {
+      llvm::dbgs() << (cnt++ ? ", " : "") << buf->id;
+    });
+    llvm::dbgs() << "\n";
+  }
+}
 
 void Allocation::run(FuncAllocMapT &funcAllocMap) {
   triton::AllocationAnalysis(getOperation(), &funcAllocMap, this);

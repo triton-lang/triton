@@ -38,7 +38,8 @@ struct TestAllocationPass
           return;
         for (Value result : op->getResults()) {
           auto bufferId = allocation->getBufferId(result);
-          if (bufferId != Allocation::InvalidBufferId) {
+          if (bufferId != Allocation::InvalidBufferId &&
+              !allocation->isAliasBuffer(bufferId)) {
             size_t offset = allocation->getOffset(bufferId);
             size_t size = allocation->getAllocatedSize(bufferId);
             os << "offset = " << offset << ", size = " << size << "\n";

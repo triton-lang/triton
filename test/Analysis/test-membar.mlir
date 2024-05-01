@@ -219,7 +219,7 @@ tt.func @multi_blocks_entry_no_shared(%i1 : i1) {
     %1 = triton_gpu.local_alloc %0 : (tensor<16x16xf16, #AL>) -> !tt.memdesc<16x16xf16, #A_SHARED>
     scf.yield %1 : !tt.memdesc<16x16xf16, #A_SHARED>
   } else {
-    // CHECK-NOT: gpu.barrier
+    // CHECK: gpu.barrier
     // CHECK: triton_gpu.local_alloc
     %cst1 = triton_gpu.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !tt.memdesc<16x16xf16, #A_SHARED>
     scf.yield %cst1 : !tt.memdesc<16x16xf16, #A_SHARED>
