@@ -1551,9 +1551,13 @@ def test_tensor_atomic_cas(sem, num_ctas, device):
                               for size in [1024, 32]]) if torch.__version__ >= "2.1" else []))
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
-    # bfloat16 on cc < 80 will not be tested
-    check_type_supported(dtype_x, device)
-    check_type_supported(dtype_z, device)
+    # CUDA: bfloat16 on cc < 80 will not be tested
+    # Interpreter: Only bfloat16 <-> float32 is supported
+    if not is_interpreter() or \
+        (is_interpreter() and not ((dtype_z == 'bfloat16' and dtype_x == 'float32')
+                                   or (dtype_z == 'float32' and dtype_x == 'bfloat16'))):
+        check_type_supported(dtype_x, device)
+        check_type_supported(dtype_z, device)
 
     if is_hip() and (dtype_z in ("bfloat16", "float8_e4m3fn") or dtype_x == "float8_e4m3fn"):
         pytest.skip(f'test_cast{(dtype_x, dtype_z)} cast to bfloat16 not supported on HIP.')
