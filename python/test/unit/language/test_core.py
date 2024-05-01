@@ -1934,6 +1934,24 @@ def deserialize_fp8(np_data, in_dtype):
 # ---------------
 
 
+@pytest.mark.interpreter
+def test_max_returns_zero(device):
+    # Simple test with a tl.max call that returns 0.  The interpreter had a bug
+    # where it didn't handle this correctly.
+    @triton.jit
+    def kernel(X, Z, BLOCK: tl.constexpr):
+        x = tl.load(X + tl.arange(0, BLOCK))
+        z = tl.max(x)
+        tl.store(Z, z)
+
+    BLOCK = 128
+    x = torch.zeros((BLOCK, ), device=device)
+    z = torch.ones((1, ), device=device)
+
+    kernel[(1, )](x, z, BLOCK=BLOCK)
+    assert z[0] == 0
+
+
 def get_reduced_dtype(dtype_str, op):
     if op in ('argmin', 'argmax'):
         return 'int32'
