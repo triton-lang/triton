@@ -949,6 +949,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     tma(operands, /*onlyAttachMLIRArgs=*/true);
     ptxBuilderTMA.launch(rewriter, loc, voidTy);
 
+    barrier();
+
     int64_t size =
         (product(op.getResult().getType().getShape()) *
          op.getResult().getType().getElementType().getIntOrFloatBitWidth()) /
