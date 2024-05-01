@@ -698,7 +698,7 @@ def broadcast_impl_value(lhs: tl.tensor, rhs: tl.tensor, builder: ir.builder) ->
 #######
 
 
-def _str_to_rounding_mode(rounding_mode: str):
+def _str_to_rounding_mode(rounding_mode: Optional[str]):
     if rounding_mode is None:
         return None
     if rounding_mode == 'rtne':
@@ -727,7 +727,8 @@ def bitcast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder) -> tl.tenso
     return tl.tensor(builder.create_bitcast(input.handle, dst_ty.to_ir(builder)), dst_ty)
 
 
-def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder, fp_downcast_rounding: str = None) -> tl.tensor:
+def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder,
+         fp_downcast_rounding: Optional[str] = None) -> tl.tensor:
     src_ty = input.type
     if isinstance(dst_ty, tl.constexpr):
         dst_ty = dst_ty.value
