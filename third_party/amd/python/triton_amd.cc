@@ -1,7 +1,6 @@
 ﻿#include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "passes.h"
@@ -27,7 +26,6 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/TargetParser.h"
-#include <mutex>
 #include <pybind11/pybind11.h>
 #include <stdexcept>
 
@@ -42,8 +40,10 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   m.def("add_builtin_func_to_llvmir", [](mlir::PassManager &pm) {
     pm.addPass(createConvertBuiltinFuncToLLVMPass());
   });
-  m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm) {
-    pm.addPass(mlir::triton::AMD::createDecomposeUnsupportedConversionsPass());
+  m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm,
+                                                    const std::string &arch) {
+    pm.addPass(
+        mlir::triton::AMD::createDecomposeUnsupportedConversionsPass(arch));
   });
   ADD_PASS_WRAPPER_3("add_accelerate_matmul",
                      mlir::createTritonAMDGPUAccelerateMatmulPass,

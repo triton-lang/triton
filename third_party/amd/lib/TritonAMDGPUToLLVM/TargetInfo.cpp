@@ -3,7 +3,6 @@
 #include "amd/include/TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace mlir::triton::AMD {
@@ -51,6 +50,8 @@ Value printfPromoteValue(ConversionPatternRewriter &rewriter, Value value) {
   return value;
 }
 } // namespace
+
+int TargetInfo::getSharedMemorySize() const { return 64 * 1024; }
 
 bool TargetInfo::supportMaximumMinimum() const { return false; }
 

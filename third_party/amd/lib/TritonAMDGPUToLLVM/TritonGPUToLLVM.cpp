@@ -33,18 +33,6 @@ using namespace mlir;
 
 namespace {
 
-// pass ws related named attrs.
-static void addWSNamedAttrs(Operation *op,
-                            ArrayRef<mlir::NamedAttribute> attrs) {
-  for (const NamedAttribute attr : attrs)
-    if (attr.getName() == "async_agent" || attr.getName() == "agent.mutex_role")
-      op->setAttr(attr.getName(), attr.getValue());
-}
-
-#ifdef USE_ROCM
-constexpr int LDSSize = 65536;
-constexpr int kPtrBitWidth = 64;
-#endif
 class TritonLLVMFunctionConversionTarget : public ConversionTarget {
 public:
   explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx)
