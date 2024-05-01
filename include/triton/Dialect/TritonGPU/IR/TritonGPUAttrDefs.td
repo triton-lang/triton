@@ -1142,6 +1142,9 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     // Here 5 bits can hold 32 IDs in a single module.
     static constexpr int numBitsToHoldMmaV1ID{5};
 
+    // For MMA v1, an additional attribute `isMMAv1Row` determines whether e.g. the a operand is used
+    // in the context of an mma.884.row.col or an mma.884.col.col operation. See the PTX ISA documentation
+    // section 9.7.13.4.1 for more details.
     bool getMMAv1IsRow(int opIdx) const;
     bool getMMAv1IsVec4(int opIdx) const;
     int getMMAv1NumOuter(ArrayRef<int64_t> shape, int opIdx) const;
@@ -1227,17 +1230,13 @@ encoding, but sometimes the LHS is also a dot-operand enc.
 a's opIdx is 0, b's opIdx is 1.
 
 The parend field in DotOperandEncodingAttr is the layout of d.
-
-For MMA v1, an additional attribute `isMMAv1Row` determines whether e.g. the a operand is used
-in the context of an mma.884.row.col or an mma.884.col.col operation. See the PTX ISA documentation
-section 9.7.13.4.1 for more details.
   }];
 
   let parameters = (
     ins
     "unsigned":$opIdx,
     "Attribute":$parent,
-    "unsigned":$kWidth
+    DefaultValuedParameter<"unsigned", "0">:$kWidth
   );
 
   let builders = [
@@ -1254,7 +1253,8 @@ section 9.7.13.4.1 for more details.
     }]>
   ];
 
-  let hasCustomAssemblyFormat = 1;
+  let assemblyFormat = "`<` `{` struct(params) `}` `>`";
+  let genVerifyDecl = 1;
   let extraClassDeclaration = extraDistributedDeclaration # [{
     SmallVector<unsigned> getContigPerThread() {
       return getSizePerThread();

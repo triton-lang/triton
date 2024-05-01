@@ -998,6 +998,41 @@ SmallVector<unsigned> DotOperandEncodingAttr::getShapePerCTATile(
   }
 }
 
+LogicalResult DotOperandEncodingAttr::verify(
+    ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
+    unsigned opIdx, Attribute parent, unsigned kWidth) {
+  if (opIdx != 0 && opIdx != 1)
+    return emitError() << "DotOperandEncoding::opIdx can be 0 or 1, got "
+                       << opIdx;
+  if (!parent)
+    return emitError()
+           << "DotOperandEncoding::parent is manadatory parameter, got nullptr";
+  if (kWidth != 0) {
+    // general confines on parent layouts
+    if (!parent.isa<NvidiaMmaEncodingAttr, AMDWmmaEncodingAttr,
+                    AMDMfmaEncodingAttr>())
+      return emitError()
+             << "DotOperandEncoding::kWidth is not supported for given parent: "
+             << parent;
+    // additional confines
+    if (parent.isa<NvidiaMmaEncodingAttr>() &&
+        !parent.cast<NvidiaMmaEncodingAttr>().isAmpere())
+      return emitError()
+             << "DotOperandEncoding::kWidth is non zero only for Ampere";
+    // TODO: remove this condition if new values are supported
+    if (parent.isa<AMDWmmaEncodingAttr>() && kWidth != 16)
+      return emitError()
+             << "DotOperandEncoding::kWidth currently supports only 16";
+  } else {
+    if (parent.isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>() ||
+        (parent.isa<NvidiaMmaEncodingAttr>() &&
+         parent.cast<NvidiaMmaEncodingAttr>().isAmpere()))
+      return emitError() << "DotOperandEncoding::kWidth is mandatory parent: "
+                         << parent;
+  }
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // Blocked Encoding
 //===----------------------------------------------------------------------===//
@@ -1983,50 +2018,6 @@ SmallVector<unsigned> DotOperandEncodingAttr::getSizePerThread() const {
         "supported yet");
     return {};
   }
-}
-
-Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
-  if (parser.parseLess().failed())
-    return {};
-  NamedAttrList attrs;
-  if (parser.parseOptionalAttrDict(attrs).failed())
-    return {};
-  if (parser.parseGreater().failed())
-    return {};
-  unsigned opIdx = mlir::cast<IntegerAttr>(attrs.get("opIdx")).getInt();
-  Attribute parent = attrs.get("parent");
-  auto mmaParent = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent);
-  unsigned kWidth = 0;
-  Attribute _kWidth = attrs.get("kWidth");
-  if (_kWidth) {
-    bool isAmdWithKWidth =
-        parent.isa<AMDMfmaEncodingAttr>() || parent.isa<AMDWmmaEncodingAttr>();
-    bool isNvidiaWithKWidth = mmaParent && !mmaParent.isVolta();
-    if (!isAmdWithKWidth && !isNvidiaWithKWidth) {
-      auto loc = parser.getNameLoc();
-      parser.emitError(loc, "kWidth only supported for MMAv2+ parent");
-      return Attribute();
-    }
-    kWidth = mlir::cast<IntegerAttr>(_kWidth).getInt();
-  }
-  if (mlir::isa<AMDWmmaEncodingAttr>(parent)) {
-    kWidth = AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr()[2];
-  }
-  return parser.getChecked<DotOperandEncodingAttr>(parser.getContext(), opIdx,
-                                                   parent, kWidth);
-}
-
-void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
-  auto parent = getParent();
-  auto mmaParent = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent);
-  printer << "<{"
-          << "opIdx = " << getOpIdx() << ", parent = " << getParent();
-  bool isAmdWithKWidth =
-      parent.isa<AMDMfmaEncodingAttr>() || parent.isa<AMDWmmaEncodingAttr>();
-  bool isNvidiaWithKWidth = mmaParent && mmaParent.isAmpere();
-  if (isAmdWithKWidth || isNvidiaWithKWidth)
-    printer << ", kWidth = " << getKWidth();
-  printer << "}>";
 }
 
 //===----------------------------------------------------------------------===//
