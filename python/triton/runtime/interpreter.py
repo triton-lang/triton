@@ -795,9 +795,9 @@ class ReduceOps(ReduceScanOpIneterface):
             idx = self.to_tensor(idx_reduce_op(input.handle.data, axis=self.axis, keepdims=self.keep_dims), tl.int32)
         if val is not None and idx is not None:
             return val, idx
-        elif val:
+        elif val is not None:
             return val
-        elif idx:
+        elif idx is not None:
             return idx
         else:
             raise ValueError("val_reduce_op and idx_reduce_op are both None")
