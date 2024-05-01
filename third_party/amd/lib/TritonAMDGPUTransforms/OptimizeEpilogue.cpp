@@ -131,7 +131,7 @@ public:
     Value newPtr = rewriter.create<triton::gpu::ConvertLayoutOp>(
         ptr.getLoc(), newPtrType, ptr);
 
-    for (auto chainedOp : chainedOps) {
+    for (auto chainedOp : llvm::reverse(chainedOps)) {
       auto oldType =
           chainedOp->getResult(0).getType().cast<mlir::RankedTensorType>();
       chainedOp->setOperand(0, newVal);
