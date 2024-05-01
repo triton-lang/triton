@@ -1,4 +1,4 @@
-// RUN: triton-opt %s --split-input-file --decompose-unsupported-amd-conversions | FileCheck %s
+// RUN: triton-opt %s --split-input-file --decompose-unsupported-amd-conversions=arch=gfx942 | FileCheck %s
 
 // CHECK: #[[BLOCKED:.+]] = #triton_gpu.blocked<{{.*}}>
 // CHECK: #[[WMMA:.+]] = #triton_gpu.amd_wmma<{{.*}}>

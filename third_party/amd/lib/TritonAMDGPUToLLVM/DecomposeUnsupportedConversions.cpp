@@ -1,3 +1,4 @@
+#include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Allocation.h"
@@ -18,7 +19,6 @@ namespace triton {
 
 namespace {
 
-constexpr int LDSSize = 65536;
 constexpr int kPtrBitWidth = 64;
 
 static void addAttrs(Operation *op, ArrayRef<mlir::NamedAttribute> attrs) {
@@ -129,7 +129,14 @@ createNewConvertOps(ModuleOp &mod, OpBuilder &builder,
 struct DecomposeUnsupportedAMDConversions
     : public mlir::triton::impl::DecomposeUnsupportedAMDConversionsBase<
           DecomposeUnsupportedAMDConversions> {
+  explicit DecomposeUnsupportedAMDConversions(StringRef targetArch) {
+    this->arch = targetArch.str();
+  }
+
   void runOnOperation() override {
+    triton::AMD::TargetInfo targetInfo(this->arch.getValue());
+    int sharedMemoryLimit = targetInfo.getSharedMemorySize();
+
     ModuleOp mod = getOperation();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
@@ -199,7 +206,7 @@ struct DecomposeUnsupportedAMDConversions
       }
 
       auto currLDSUsage = getCvtOpLDSUsage(cvtOp);
-      if (currLDSUsage <= LDSSize) {
+      if (currLDSUsage <= sharedMemoryLimit) {
         return;
       }
 
@@ -210,9 +217,9 @@ struct DecomposeUnsupportedAMDConversions
 
       // Find all possible shapes of WarpsPerCTA by finding all possible
       // factorizations of numWarps. Pick shape for which both conversions in
-      // decomposition use LDS less than LDSSize and for which sum of LDS usage
+      // decomposition use LDS less than limit and for which sum of LDS usage
       // is minimal. If no such shape exists, do not decompose.
-      unsigned minLDSUsage = 2 * LDSSize;
+      unsigned minLDSUsage = 2 * sharedMemoryLimit;
       int minIdx = -1;
       auto factorizedNumWarps = factorizePowerOf2(numWarps);
 
@@ -223,7 +230,7 @@ struct DecomposeUnsupportedAMDConversions
 
         int tmpCvtLDS = getCvtOpLDSUsage(tmpCvt);
         int newCvtLDS = getCvtOpLDSUsage(newEpilogueCvt);
-        if (tmpCvtLDS <= LDSSize && newCvtLDS <= LDSSize) {
+        if (tmpCvtLDS <= sharedMemoryLimit && newCvtLDS <= sharedMemoryLimit) {
           int LDSUsage = tmpCvtLDS + newCvtLDS;
           if (LDSUsage < minLDSUsage) {
             minLDSUsage = LDSUsage;
@@ -340,19 +347,11 @@ struct DecomposeUnsupportedAMDConversions
 
 } // namespace
 
-namespace mlir {
-
-namespace triton {
-
-namespace AMD {
+namespace mlir::triton::AMD {
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createDecomposeUnsupportedConversionsPass() {
-  return std::make_unique<DecomposeUnsupportedAMDConversions>();
+createDecomposeUnsupportedConversionsPass(StringRef targetArch) {
+  return std::make_unique<DecomposeUnsupportedAMDConversions>(targetArch);
 }
 
-} // namespace AMD
-
-} // namespace triton
-
-} // namespace mlir
+} // namespace mlir::triton::AMD

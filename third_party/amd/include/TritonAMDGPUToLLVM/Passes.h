@@ -20,7 +20,7 @@ namespace triton {
 
 namespace AMD {
 std::unique_ptr<OperationPass<ModuleOp>>
-createDecomposeUnsupportedConversionsPass();
+createDecomposeUnsupportedConversionsPass(StringRef targetArch);
 
 } // namespace AMD
 

@@ -12,6 +12,8 @@ public:
 
   ISAFamily getISAFamily() const { return deduceISAFamily(arch); }
 
+  int getSharedMemorySize() const;
+
   bool supportMaximumMinimum() const override;
 
   Value getClusterCTAId(RewriterBase &rewriter, Location loc) const override;
