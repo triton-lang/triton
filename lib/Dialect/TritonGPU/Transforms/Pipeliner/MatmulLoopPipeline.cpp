@@ -308,16 +308,16 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   loadOp.erase();
 }
 
-static void createTMAAsyncCopy(
-    scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp, Value alloc,
-    Value insertIdx, Value extractIdx, Value barrier, Value phase,
-    CoarseSchedule &schedule, CoarseSchedule::Cluster prefetchCluster,
-    llvm::MapVector<Operation *, LoadInfo> &loadToInfo, int numStages) {
+static void
+createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
+                   Value alloc, Value insertIdx, Value extractIdx,
+                   Value barrier, Value phase, CoarseSchedule &schedule,
+                   llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
+                   int numStages) {
   assert(phase && "Phase value is required for TMA async copy.");
   OpBuilder builder(forOp);
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
   builder.setInsertionPoint(loadOp);
-  // TODO merge subview part with async cp.
   Location loc = loadOp.getLoc();
   tt::MemDescType allocTy = cast<tt::MemDescType>(alloc.getType());
   SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
@@ -1016,7 +1016,7 @@ createAsyncOps(scf::ForOp &forOp, CoarseSchedule &schedule,
       auto descLoad = cast<tt::ExperimentalDescriptorLoadOp>(asyncLoad.loadOp);
       createTMAAsyncCopy(forOp, descLoad, asyncLoad.alloc, insertIdx,
                          extractIdx, asyncLoad.barrier, phase, schedule,
-                         prefetchCluster, loadToInfo, numStages);
+                         loadToInfo, numStages);
     }
   }
   SmallVector<Value> newYieldOperands = {insertIdx, extractIdx};
