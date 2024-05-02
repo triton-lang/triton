@@ -404,7 +404,9 @@ def test_gemm_fusion():
         BLOCK_M, BLOCK_N, BLOCK_K,  #
         num_warps=num_warps)
 
-    torch.testing.assert_close(ref_out, E, atol=1e-2, rtol=0)
+    rtol = 1e-2 if is_hip() else 0
+
+    torch.testing.assert_close(ref_out, E, atol=1e-2, rtol=rtol)
 
 
 @triton.jit

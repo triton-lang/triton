@@ -263,14 +263,14 @@ jobs:
       - name: Run python tests on CUDA
         run: |
           cd python/test/unit
-          python3 -m pytest -vvv -n 8 --ignore=hopper/test_flashattention.py --ignore=runtime --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+          python3 -m pytest -vvv -n 8 --ignore=language/test_flashattention.py --ignore=runtime --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
           python3 -m pytest -vvv -n 8 language/test_subprocess.py
           # Run runtime tests serially to avoid race condition with cache handling
           python3 -m pytest -vvv runtime/
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -vvv language/test_line_info.py
           # Run hopper/test_flashattention.py separately to avoid out of gpu memory
-          python3 -m pytest -vs hopper/test_flashattention.py
+          python3 -m pytest -vs language/test_flashattention.py
 
       - name: Run interpreter tests
         if: ${{matrix.runner[0] == 'self-hosted' && matrix.runner[1] == 'H100'}}
@@ -369,10 +369,9 @@ jobs:
         run: |
           pytest --capture=tee-sys -rfs -vvv python/tutorials/06-fused-attention.py
           cd python/test/unit
-          pytest --capture=tee-sys -rfs -vvv -n 32 language operators hopper \
-                 --ignore=hopper/test_flashattention.py \
-                 --ignore=hopper/test_gemm_fusion.py \
-                 --ignore=hopper/test_experimental_tma.py \
+          pytest --capture=tee-sys -rfs -vvv -n 32 language operators \
+                 --ignore=language/test_flashattention.py \
+                 --ignore=language/test_persistent_warp_specialized_gemm.py \
                  --ignore=language/test_line_info.py
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -vvv -n 8 language/test_line_info.py
