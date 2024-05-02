@@ -1215,15 +1215,22 @@ struct ExpOpConversionApprox
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    // For non-FP32 input, call __nv_expf for higher-precision calculation
+    // For non-FP32 input, call __ocml_exp_f64 for higher-precision calculation
     if (elemTy.getIntOrFloatBitWidth() != 32)
       return {};
 
     const double log2e = 1.4426950408889634;
     Value prod = fmul(f32_ty, operands[0][0], f32_val(log2e));
 
-    return {rewriter.create<math::Exp2Op>(loc, f32_ty, prod,
-                                          adaptor.getAttributes().getValue())};
+    // Here we use __ocml_exp2_f32 instead of math::Exp2Op. The latter
+    // flushes denorms by default, but we want to preserve denorms by default
+    // for expOp.
+    StringRef funcName = "__ocml_exp2_f32";
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+
+    return {rewriter.create<LLVM::CallOp>(loc, funcOp, prod).getResult()};
   }
 };
 
@@ -1291,10 +1298,10 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
                                    targetInfo.getISAFamily(), benefit);
 
-  // ExpOpConversionApprox will try using ex2.approx if the input type is
+  // ExpOpConversionApprox will try using __ocml_exp2_f32 if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
-  // __nv_expf for higher-precision calculation
+  // __ocml_exp_f64 for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
   // Exp2OpConversion will use __ocml_exp2_f32 or __ocml_native_exp2_f32
   // based on the __HIP_FTZ flag if the input type if FP32. For FP64 input,
