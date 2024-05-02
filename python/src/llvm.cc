@@ -3,6 +3,8 @@
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
@@ -21,6 +23,7 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/TargetParser/Host.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include <csignal>
@@ -387,6 +390,70 @@ void init_triton_llvm(py::module &&m) {
       py::arg("arch") = "", py::arg("features") = "",
       py::arg("flags") = std::vector<std::string>{},
       py::arg("enable_fp_fusion") = false);
+
+  m.def("set_host_target", [](llvm::Module *mod) {
+    mod->setTargetTriple(llvm::sys::getDefaultTargetTriple());
+    std::string error;
+    auto target =
+        llvm::TargetRegistry::lookupTarget(mod->getTargetTriple(), error);
+    std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
+        mod->getTargetTriple(), llvm::sys::getHostCPUName(), "", {},
+        llvm::Reloc::PIC_)};
+    mod->setDataLayout(machine->createDataLayout());
+  });
+
+  m.def(
+      "translate_to_host_asm",
+      [](std::string llvmIR) -> py::object {
+        std::string res;
+        {
+          // when allow_threads goes out of scope, gil will be released
+          py::gil_scoped_release allow_threads;
+          // create LLVM module from C++
+          llvm::LLVMContext context;
+          std::unique_ptr<llvm::MemoryBuffer> buffer =
+              llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
+          llvm::SMDiagnostic error;
+          std::unique_ptr<llvm::Module> module =
+              llvm::parseIR(buffer->getMemBufferRef(), error, context);
+          if (!module) {
+            llvm::report_fatal_error(
+                "failed to parse IR: " + error.getMessage() +
+                "lineno: " + std::to_string(error.getLineNo()));
+          }
+          res = translateLLVMIRToASM(
+              *module, llvm::sys::getDefaultTargetTriple(),
+              llvm::sys::getHostCPUName().str(), "", {}, false, false);
+        }
+        return py::str(res);
+      },
+      ret::take_ownership);
+
+  m.def(
+      "translate_to_bc",
+      [](const std::string llvmIR) -> py::object {
+        py::gil_scoped_release allow_threads;
+        // create LLVM module
+        llvm::LLVMContext context;
+        std::unique_ptr<llvm::MemoryBuffer> buffer =
+            llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
+        llvm::SMDiagnostic error;
+        std::unique_ptr<llvm::Module> module =
+            llvm::parseIR(buffer->getMemBufferRef(), error, context);
+        if (!module) {
+          llvm::report_fatal_error(
+              "failed to parse IR: " + error.getMessage() +
+              "lineno: " + std::to_string(error.getLineNo()));
+        }
+        // Write bitcode to a buffer.
+        llvm::SmallVector<char, 0> buf;
+        llvm::BitcodeWriter writer(buf);
+        writer.writeModule(*module);
+        writer.writeStrtab();
+        std::string bitcode(buf.begin(), buf.end());
+        return py::bytes(bitcode);
+      },
+      ret::take_ownership);
 
   m.def(
       "translate_to_asm",

@@ -1,0 +1,2 @@
+add_subdirectory(TritonCPUToLLVM)
+add_subdirectory(TritonToTritonCPU)
