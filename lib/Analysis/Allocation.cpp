@@ -40,6 +40,8 @@ using ::mlir::triton::gpu::SliceEncodingAttr;
 
 namespace mlir {
 
+namespace {
+// Debug utilities
 template <typename T>
 llvm::raw_ostream &operator<<(llvm::raw_ostream &ostr,
                               const Interval<T> &range) {
@@ -47,7 +49,7 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &ostr,
   return ostr;
 }
 
-void PrintValue(Value v) {
+void printValue(Value v) {
   if (auto arg = dyn_cast<BlockArgument>(v)) {
     Block *block = arg.getOwner();
     const auto &blks = block->getParent()->getBlocks();
@@ -61,6 +63,7 @@ void PrintValue(Value v) {
   }
   v.print(llvm::dbgs());
 }
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // Shared Memory Allocation Analysis
@@ -227,37 +230,47 @@ private:
   using GraphT = DenseMap<BufferT *, DenseSet<BufferT *>>;
 
   /// Set of Liveness Intervals
-  class LiveIntervals : public SmallVector<IntervalT, 4> {
+  /// - Helper to capture and track disjoint intervals
+  class LiveIntervals {
   public:
     LiveIntervals() = default;
     LiveIntervals(const LiveIntervals &) = default;
 
+    void push_back(const IntervalT &ival) { intervals.push_back(ival); }
+    auto begin() const { return intervals.begin(); }
+    auto end() const { return intervals.end(); }
+    auto size() const { return intervals.size(); }
+    auto empty() const { return intervals.empty(); }
+
     void sortAndJoin() {
-      if (size() > 1) {
-        llvm::sort(*this, [](const auto &lhs, const auto &rhs) {
-          return lhs.start() <= rhs.start();
-        });
-        LiveIntervals ranges;
-        IntervalT range = front();
-        for (auto nrng : *this) {
-          if (range.adjacent(nrng) || range.intersects(nrng))
-            range = range.merge(nrng);
-          else {
-            ranges.push_back(range);
-            range = nrng;
-          }
+      if (size() <= 1)
+        return;
+      llvm::sort(intervals, [](const auto &lhs, const auto &rhs) {
+        return lhs.start() <= rhs.start();
+      });
+      SmallVector<IntervalT> newIntervals;
+      IntervalT interval = intervals.front();
+      for (auto &I : *this) {
+        if (interval.adjacent(I) || interval.intersects(I))
+          interval = interval.merge(I);
+        else {
+          newIntervals.push_back(interval);
+          interval = I;
         }
-        ranges.push_back(range);
-        assign(ranges);
       }
+      newIntervals.push_back(interval);
+      intervals.assign(newIntervals);
     }
-    IntervalT merge() const {
+    IntervalT span() const {
       assert(!empty());
-      IntervalT res = front();
-      for (auto &I : *this)
-        res = res.merge(I);
-      return res;
+      IntervalT interval = intervals.front();
+      for (auto &I : intervals)
+        interval = interval.merge(I);
+      return interval;
     }
+
+  private:
+    SmallVector<IntervalT> intervals;
   };
 
   typedef function_ref<LiveIntervals(Value value)> LivenessF;
@@ -267,7 +280,6 @@ private:
     LLVM_DEBUG(llvm::dbgs() << "ALLOCATION: " << func.getName() << "\n");
     getValuesAndSizes();
     resolveLiveness();
-    LLVM_DEBUG(allocation->dump());
     computeOffsets();
     LLVM_DEBUG(dump());
   }
@@ -468,7 +480,8 @@ private:
       // TODO(SJW): bufferRange should support disjoint intervals
       // This is only a problem for scf loops; cf branches handle
       // this with aliases
-      updateBufferRange(buffer, ranges.merge());
+      if (!ranges.empty())
+        updateBufferRange(buffer, ranges.span());
     }
   }
 
@@ -476,7 +489,7 @@ private:
                        const LiveIntervals &ranges) const {
     llvm::dbgs() << "    RESOLVE ALIAS: "
                  << "\n\t";
-    PrintValue(value);
+    printValue(value);
     llvm::dbgs() << "\n\tRANGES:   ";
     llvm::for_each(ranges, [cnt = 0](auto interval) mutable {
       llvm::dbgs() << (cnt++ ? ", " : "") << interval;
@@ -494,16 +507,16 @@ private:
   /// carried variables, create a new Buffer<Alias> for each disjoint range.
   /// This new Buffer<Alias> will represent the live-range for all referenced
   /// buffers.
-  /// Example:
+  /// Example: (numbers represent op liveness index)
   ///  3    %b0 = convert_layout %g0                  -- Buffer #0
   ///  4    %fr = for (.., %arg0 = %b0) {             -+ Alias #1
-  ///  5        %gn = load %pc                         |  Buffers #0,#1
+  ///  5        %gn = load %pc                         |   Buffers #0,#1
   ///  6        %bc = convert_layout %arg0            -+
   ///  7        %v = add %bc, ...
   ///  8        %bn = convert_layout %gn              -+ Buffer #1
-  ///  9        %pn = addptr %pc, %cst                 |  loop carried
-  ///  10       yeild ... %bn                         -+  does not overlap #0
-  ///  10   }
+  ///  9        %pn = addptr %pc, %cst                 |   loop-carried
+  ///  10       yield ... %bn                         -+   does not overlap #0
+  ///       }
   ///  11   %be = convert_layout %fr#1                -- Alias #2: Buffer #0,#1
   ///  12   %ve = add %be
   void resolveAliasBufferLiveness(LivenessF getLiveness) {
@@ -695,12 +708,12 @@ private:
         for (auto y : buffers) {
           if (x == y)
             continue;
-          y->apply([&](BufferT *yr) {
-            if (yr != x) {
+          y->applyToActuals([&](BufferT *yActual) {
+            if (yActual != x) {
               auto xStart = bufferStart.lookup(x);
-              auto yStart = bufferStart.lookup(yr);
+              auto yStart = bufferStart.lookup(yActual);
               auto xSize = x->size;
-              auto ySize = yr->size;
+              auto ySize = yActual->size;
               Interval xSizeRange = {xStart, xStart + xSize};
               Interval ySizeRange = {yStart, yStart + ySize};
               auto xOpRange = bufferRange.lookup(x);
@@ -744,9 +757,9 @@ private:
     for (auto x : xBuffers) {
       std::fill(available.begin(), available.end(), true);
       for (auto y : interference.lookup(x)) {
-        y->apply([&](BufferT *buf) {
-          if (buf != x) {
-            int color = colors[buf];
+        y->applyToActuals([&](BufferT *actual) {
+          if (actual != x) {
+            int color = colors[actual];
             if (color >= 0)
               available[color] = false;
           }
@@ -766,9 +779,9 @@ private:
     for (auto x : xBuffers) {
       size_t adj = 0;
       for (auto y : interference.lookup(x)) {
-        y->apply([&](BufferT *buf) {
-          if (buf != x)
-            adj = std::max(adj, buf->size);
+        y->applyToActuals([&](BufferT *actual) {
+          if (actual != x)
+            adj = std::max(adj, actual->size);
         });
       }
       // TODO(SJW): does not take alignment into account
@@ -783,6 +796,8 @@ private:
   }
 
   void dump() const {
+    allocation->dump();
+
     for (auto pair : bufferRange) {
       llvm::dbgs() << "    BUFFER RANGE:"
                    << "\n";
@@ -833,14 +848,14 @@ void Allocation::dump() const {
   for (auto pair : valueBuffer) {
     llvm::dbgs() << "    VALUE: "
                  << "\n\t";
-    PrintValue(pair.first);
+    printValue(pair.first);
     llvm::dbgs() << "\n";
     pair.second->dump();
   }
   for (auto pair : aliasBuffer) {
     llvm::dbgs() << "    ALIAS: "
                  << "\n\t";
-    PrintValue(pair.first);
+    printValue(pair.first);
     llvm::dbgs() << "\n\tIDS:      ";
     llvm::for_each(pair.second, [cnt = 0](auto *buf) mutable {
       llvm::dbgs() << (cnt++ ? ", " : "") << buf->id;

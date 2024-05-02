@@ -171,18 +171,26 @@ private:
     bool operator==(const BufferT &other) const { return id == other.id; }
     bool operator<(const BufferT &other) const { return id < other.id; }
 
-    BufferT() : BufferT(BufferKind::Explicit, 0, 0) {}
-    BufferT(BufferKind kind, BufferId id, size_t size, size_t alignment = 4,
+    BufferT() : BufferT(BufferKind::Explicit, 0) {}
+    BufferT(BufferKind kind, size_t size, size_t alignment = 4,
             size_t offset = 0)
-        : kind(kind), id(id), size(size), alignment(alignment), offset(offset) {
-    }
+        : kind(kind), id(nextId++), size(size), alignment(alignment),
+          offset(offset) {}
 
-    void apply(const std::function<void(BufferT *)> &f) {
+    void _applyToActuals(llvm::SetVector<BufferT *> &visited,
+                         const std::function<void(BufferT *)> &f) {
+      visited.insert(this);
       if (kind == BufferKind::Alias) {
-        for (auto *buf : aliases)
-          f(buf);
+        for (auto *buf : aliases) {
+          if (!visited.contains(buf))
+            buf->_applyToActuals(visited, f);
+        }
       } else
         f(this);
+    }
+    void applyToActuals(const std::function<void(BufferT *)> &f) {
+      llvm::SetVector<BufferT *> visited;
+      _applyToActuals(visited, f);
     }
 
     void dump() const;
@@ -203,20 +211,18 @@ public:
 private:
   template <BufferT::BufferKind Kind, typename KeyType, typename... Args>
   BufferT *addBuffer(KeyType &key, Args &&...args) {
-    BufferId id = BufferT::nextId.fetch_add(1);
-    auto pair =
-        bufferSet.emplace(id, BufferT(Kind, id, std::forward<Args>(args)...));
-    assert(pair.second);
-    auto *buffer = &pair.first->second;
+    auto buffer = BufferT(Kind, std::forward<Args>(args)...);
+    bufferSet[buffer.id] = std::move(buffer);
+    auto *bufP = &bufferSet[buffer.id];
     if constexpr (Kind == BufferT::BufferKind::Explicit ||
                   Kind == BufferT::BufferKind::Alias) {
-      valueBuffer[key] = buffer;
+      valueBuffer[key] = bufP;
     } else if constexpr (Kind == BufferT::BufferKind::Virtual) {
-      opVirtual[key] = buffer;
+      opVirtual[key] = bufP;
     } else {
-      opScratch[key] = buffer;
+      opScratch[key] = bufP;
     }
-    return buffer;
+    return bufP;
   }
 
   void addAlias(Value value, Value alloc) {
