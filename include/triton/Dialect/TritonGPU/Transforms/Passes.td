@@ -171,4 +171,17 @@ def TritonGPUReduceDataDuplication: Pass<"tritongpu-reduce-data-duplication", "m
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonGPUFoldTensorSelectIntoIf: Pass<"tritongpu-fold-tensor-select-into-if", "mlir::ModuleOp"> {
+  let summary = "Fold tensor select into if";
+
+  let description = "For select instruction that uses the same condidtion as the if instruction in the same block "
+                    "this pass folds the select into the if instruction, making the select operands returned by the "
+                    "then/else yields.";
+
+  let constructor = "mlir::triton::gpu::createFoldTensorSelectIntoIfPass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
 #endif

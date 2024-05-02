@@ -32,6 +32,8 @@ std::unique_ptr<Pass> createOptimizeDotOperandsPass(bool hoistLayoutConversion);
 
 std::unique_ptr<Pass> createOptimizeThreadLocalityPass();
 
+std::unique_ptr<Pass> createFoldTensorSelectIntoIfPass();
+
 } // namespace gpu
 } // namespace triton
 
