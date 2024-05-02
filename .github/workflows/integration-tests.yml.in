@@ -269,7 +269,7 @@ jobs:
           python3 -m pytest -vvv runtime/
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -vvv language/test_line_info.py
-          # Run hopper/test_flashattention.py separately to avoid out of gpu memory
+          # Run language/test_flashattention.py separately to avoid out of gpu memory
           python3 -m pytest -vs language/test_flashattention.py
 
       - name: Run interpreter tests
