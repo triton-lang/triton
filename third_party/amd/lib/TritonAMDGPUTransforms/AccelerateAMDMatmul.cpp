@@ -134,7 +134,7 @@ Value convertAndCastTensor(mlir::PatternRewriter &rewriter, Value value,
   assert(newElemType.isIntOrFloat());
 
   auto loc = value.getLoc();
-  auto oldType = value.getType().cast<RankedTensorType>();
+  auto oldType = cast<RankedTensorType>(value.getType());
   auto oldElemType = oldType.getElementType();
 
   assert(oldElemType.isIntOrFloat());
@@ -234,12 +234,12 @@ public:
   chooseMfmaDimensions(tt::DotOp dot) const {
     // number of matrix elements along k dim per one MFMA intruction
     unsigned kDim = 0;
-    auto opType = dot.getA().getType().cast<RankedTensorType>();
+    auto opType = cast<RankedTensorType>(dot.getA().getType());
     auto dataTypeA = opType.getElementType();
     auto dataTypeB =
-        dot.getB().getType().cast<RankedTensorType>().getElementType();
+        cast<RankedTensorType>(dot.getB().getType()).getElementType();
 
-    auto resType = dot.getD().getType().cast<RankedTensorType>();
+    auto resType = cast<RankedTensorType>(dot.getD().getType());
     auto resShape = resType.getShape();
     auto rank = resShape.size();
     auto M = resShape[rank - 2];
@@ -299,7 +299,7 @@ public:
 
     RankedTensorType oldRetType = dotOp.getType();
     if (!oldRetType.getEncoding() ||
-        !oldRetType.getEncoding().isa<ttg::BlockedEncodingAttr>())
+        !isa<ttg::BlockedEncodingAttr>(oldRetType.getEncoding()))
       return failure();
 
     if (!supportMFMA(dotOp))
@@ -315,8 +315,8 @@ public:
     // operands
     Value a = dotOp.getA();
     Value b = dotOp.getB();
-    auto oldAType = a.getType().cast<RankedTensorType>();
-    auto oldBType = b.getType().cast<RankedTensorType>();
+    auto oldAType = cast<RankedTensorType>(a.getType());
+    auto oldBType = cast<RankedTensorType>(b.getType());
     auto ctx = oldAType.getContext();
 
     ttg::AMDMfmaEncodingAttr mfmaEnc;
@@ -405,9 +405,8 @@ public:
 };
 static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
                             Type promotedType) {
-  Type tensorPromotedType =
-      operand.getType().cast<RankedTensorType>().cloneWith(std::nullopt,
-                                                           promotedType);
+  Type tensorPromotedType = cast<RankedTensorType>(operand.getType())
+                                .cloneWith(std::nullopt, promotedType);
   return builder.create<triton::FpToFpOp>(loc, tensorPromotedType, operand);
 }
 
@@ -419,7 +418,7 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
     OpBuilder builder(dotOp);
     Type AElType = dotOp.getA().getType().getElementType();
     Type promoteType;
-    if (D.getType().getEncoding().isa<AMDMfmaEncodingAttr>()) {
+    if (isa<AMDMfmaEncodingAttr>(D.getType().getEncoding())) {
       Type BElType = dotOp.getB().getType().getElementType();
 
       auto maxBitWidth = std::max(AElType.getIntOrFloatBitWidth(),
@@ -436,7 +435,7 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
         promoteType = builder.getF16Type();
       else if (maxBitWidth <= 32)
         promoteType = builder.getF32Type();
-    } else if (D.getType().getEncoding().isa<AMDWmmaEncodingAttr>()) {
+    } else if (isa<AMDWmmaEncodingAttr>(D.getType().getEncoding())) {
       Type BElType = dotOp.getB().getType().getElementType();
 
       if (AElType == BElType)
@@ -473,9 +472,9 @@ public:
                   mlir::PatternRewriter &rewriter) const override {
     auto dotOp = cast<tt::DotOp>(op);
 
-    auto oldRetType = dotOp.getResult().getType().cast<RankedTensorType>();
+    auto oldRetType = cast<RankedTensorType>(dotOp.getResult().getType());
     if (!oldRetType.getEncoding() ||
-        !oldRetType.getEncoding().isa<ttg::BlockedEncodingAttr>())
+        !isa<ttg::BlockedEncodingAttr>(oldRetType.getEncoding()))
       return failure();
 
     // TODO: Support different operand types
@@ -490,8 +489,8 @@ public:
     // operands
     Value a = dotOp.getA();
     Value b = dotOp.getB();
-    auto oldAType = a.getType().cast<RankedTensorType>();
-    auto oldBType = b.getType().cast<RankedTensorType>();
+    auto oldAType = cast<RankedTensorType>(a.getType());
+    auto oldBType = cast<RankedTensorType>(b.getType());
     auto ctx = oldAType.getContext();
 
     AMDWmmaEncodingAttr wmmaEnc;
@@ -511,7 +510,7 @@ public:
     auto aElemType = oldAType.getElementType();
     if (oldRetElemType.isIntOrIndex())
       wmmaAccType = rewriter.getIntegerType(32);
-    else if (oldRetElemType.isa<mlir::Float16Type, mlir::BFloat16Type>() &&
+    else if (isa<mlir::Float16Type, mlir::BFloat16Type>(oldRetElemType) &&
              aElemType == oldRetElemType)
       wmmaAccType = oldRetElemType;
     else

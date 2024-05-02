@@ -1,3 +1,4 @@
+#include "mlir/Support/LLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.cpp.inc"
@@ -66,11 +67,11 @@ struct ArithConstantSplatOpConversion
   matchAndRewrite(arith::ConstantOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto value = op.getValue();
-    if (!value.dyn_cast<SplatElementsAttr>())
+    if (!mlir::dyn_cast<SplatElementsAttr>(value))
       return failure();
     auto loc = op->getLoc();
     LLVM::ConstantOp arithConstantOp;
-    auto values = op.getValue().dyn_cast<SplatElementsAttr>();
+    auto values = mlir::dyn_cast<SplatElementsAttr>(op.getValue());
     auto elemType = values.getElementType();
     Attribute val;
     if (elemType.isBF16() || type::isFloat(elemType)) {
@@ -228,7 +229,7 @@ struct ExpandDimsOpConversion : public ConvertOpToLLVMPattern<ExpandDimsOp> {
     auto srcVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
     auto resultTy = cast<RankedTensorType>(op.getType());
-    auto srcLayout = srcTy.getEncoding().dyn_cast<SliceEncodingAttr>();
+    auto srcLayout = dyn_cast<SliceEncodingAttr>(srcTy.getEncoding());
     if (!srcLayout) {
       return emitOptionalError(
           loc, "ExpandDimsOp only supports SliceEncodingAttr as its input");
@@ -259,7 +260,7 @@ struct TransOpConversion : public ConvertOpToLLVMPattern<TransOp> {
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto resultTy = cast<TensorOrMemDesc>(op.getType());
-    if (auto enc = resultTy.getEncoding().dyn_cast<SharedEncodingAttr>()) {
+    if (auto enc = dyn_cast<SharedEncodingAttr>(resultTy.getEncoding())) {
       auto llvmElemTy =
           getTypeConverter()->convertType(resultTy.getElementType());
       auto srcSmemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
@@ -271,8 +272,8 @@ struct TransOpConversion : public ConvertOpToLLVMPattern<TransOp> {
       auto retVal = getStructFromSharedMemoryObject(loc, dstSmemObj, rewriter);
       rewriter.replaceOp(op, retVal);
       return success();
-    } else if (auto enc =
-                   resultTy.getEncoding().dyn_cast<BlockedEncodingAttr>()) {
+    } else if (auto enc = mlir::dyn_cast<BlockedEncodingAttr>(
+                   resultTy.getEncoding())) {
       // If the dst encoding is blocked, then TransOp::inferReturnTypes
       // ensures that:
       //  - the src encoding is also blocked, and

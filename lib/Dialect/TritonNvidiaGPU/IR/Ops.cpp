@@ -22,6 +22,7 @@
  */
 
 #include "mlir/IR/Builders.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 #define GET_OP_CLASSES

@@ -1,16 +1,18 @@
 #include "triton/Analysis/Allocation.h"
-#include "mlir/Analysis/DataFlowFramework.h"
-#include "mlir/Analysis/Liveness.h"
-#include "mlir/Analysis/SliceAnalysis.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "triton/Analysis/Alias.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
 #include <limits>
 #include <numeric>
+
+#include "mlir/Analysis/DataFlowFramework.h"
+#include "mlir/Analysis/Liveness.h"
+#include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Support/LLVM.h"
+#include "triton/Analysis/Alias.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/SmallVector.h"
 
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
@@ -37,10 +39,10 @@ constexpr int kPtrBitWidth = 64;
 
 static std::pair<SmallVector<unsigned>, SmallVector<unsigned>>
 getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
-  auto srcMmaLayout = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>();
-  auto srcDotLayout = srcLayout.dyn_cast<DotOperandEncodingAttr>();
-  auto dstMmaLayout = dstLayout.dyn_cast<NvidiaMmaEncodingAttr>();
-  auto dstDotLayout = dstLayout.dyn_cast<DotOperandEncodingAttr>();
+  auto srcMmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(srcLayout);
+  auto srcDotLayout = mlir::dyn_cast<DotOperandEncodingAttr>(srcLayout);
+  auto dstMmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(dstLayout);
+  auto dstDotLayout = mlir::dyn_cast<DotOperandEncodingAttr>(dstLayout);
 
   assert(!(srcMmaLayout && dstMmaLayout && !srcMmaLayout.isAmpere()) &&
          "mma -> mma layout conversion is only supported on Ampere");
@@ -67,13 +69,13 @@ SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
   }
 
   // MmaToDotShortcut and MmaToMmaShortcut doesn't use shared mem
-  if (auto srcMmaLayout = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
-    if (dstLayout.isa<DotOperandEncodingAttr>()) {
+  if (auto srcMmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(srcLayout)) {
+    if (mlir::isa<DotOperandEncodingAttr>(dstLayout)) {
       if (isMmaToDotShortcut(srcTy, dstTy)) {
         return {};
       }
     } else if (auto dstMmaLayout =
-                   dstLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+                   mlir::dyn_cast<NvidiaMmaEncodingAttr>(dstLayout)) {
       if (isMmaToMmaShortcut(srcTy, dstTy)) {
         return {};
       }
@@ -109,9 +111,9 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
 
-  if (srcLayout.isa<AMDMfmaEncodingAttr>() &&
-      srcLayout.dyn_cast<AMDMfmaEncodingAttr>().getIsTransposed() &&
-      dstLayout.isa<DotOperandEncodingAttr>())
+  if (mlir::isa<AMDMfmaEncodingAttr>(srcLayout) &&
+      mlir::dyn_cast<AMDMfmaEncodingAttr>(srcLayout).getIsTransposed() &&
+      mlir::isa<DotOperandEncodingAttr>(dstLayout))
     if (isMfmaToDotShortcut(srcTy, dstTy))
       return {};
 
@@ -130,10 +132,10 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
 
   // For conversions to MmaV1 (Nvidia V100), this inVec is hardcoded in the
   // codegen.
-  if (auto mma = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+  if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(srcLayout)) {
     if (mma.getVersionMajor() == 1) {
       inVec = srcContigPerThread;
-    } else if (dstLayout.isa<BlockedEncodingAttr>()) {
+    } else if (mlir::isa<BlockedEncodingAttr>(dstLayout)) {
       // when storing from mma layout and loading in blocked layout vectorizing
       // the load back gives better performance even if there is a
       // transposition.
@@ -145,7 +147,7 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
     return repShape;
   // pad the last dimension
   unsigned paddedDim = rank - 1;
-  if (auto dstBlockedLayout = dstLayout.dyn_cast<BlockedEncodingAttr>()) {
+  if (auto dstBlockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(dstLayout)) {
     paddedDim = dstBlockedLayout.getOrder()[0];
   }
   unsigned pad = std::max(inVec, outVec);
@@ -269,8 +271,8 @@ private:
       auto dstTy = cvtLayout.getType();
       auto srcEncoding = srcTy.getEncoding();
       auto dstEncoding = dstTy.getEncoding();
-      if (srcEncoding.isa<SharedEncodingAttr>() ||
-          dstEncoding.isa<SharedEncodingAttr>()) {
+      if (mlir::isa<SharedEncodingAttr>(srcEncoding) ||
+          mlir::isa<SharedEncodingAttr>(dstEncoding)) {
         // Conversions from/to shared memory do not need scratch memory.
         return;
       }

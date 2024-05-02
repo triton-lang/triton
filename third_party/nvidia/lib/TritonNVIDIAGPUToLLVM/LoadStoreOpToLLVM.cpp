@@ -778,9 +778,9 @@ struct AsyncCopyGlobalToLocalOpConversion
     auto dstTy = op.getResult().getType();
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     auto srcLayout = srcTy.getEncoding();
-    assert((srcLayout.isa<BlockedEncodingAttr, SliceEncodingAttr>() &&
+    assert((isa<BlockedEncodingAttr, SliceEncodingAttr>(srcLayout) &&
             "Unexpected srcLayout in AsyncCopyGlobalToLocalOpConversion"));
-    auto resSharedLayout = dstTy.getEncoding().cast<SharedEncodingAttr>();
+    auto resSharedLayout = cast<SharedEncodingAttr>(dstTy.getEncoding());
     auto srcShape = srcTy.getShape();
     assert((srcShape.size() <= 3) &&
            "insert_slice_async: Unexpected rank of %src");

@@ -280,7 +280,7 @@ compared to 1*64 when the hasLeadingOffset is false.
                      "bool":$needTrans), [{
 
         // ---- begin GFX908/GFX90A ----
-        if (auto mfmaEnc = dotOpEnc.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
+        if (auto mfmaEnc = mlir::dyn_cast<AMDMfmaEncodingAttr>(dotOpEnc.getParent())) {
           int kDimNum = dotOpEnc.getOpIdx() == 0 ? 1 : 0;
           if (needTrans)
             kDimNum = 1 - kDimNum;
@@ -312,7 +312,7 @@ compared to 1*64 when the hasLeadingOffset is false.
         }
 
         // ---- begin GFX11 ----
-        if (dotOpEnc.getParent().isa<AMDWmmaEncodingAttr>()) {
+        if (mlir::isa<AMDWmmaEncodingAttr>(dotOpEnc.getParent())) {
           if (dotOpEnc.getOpIdx() == 0) {
             const int numBanks = 32;
             const int bankBitWidth = 32;
@@ -334,7 +334,7 @@ compared to 1*64 when the hasLeadingOffset is false.
         }
 
 
-        auto mmaEnc = dotOpEnc.getParent().dyn_cast<NvidiaMmaEncodingAttr>();
+        auto mmaEnc = mlir::dyn_cast<NvidiaMmaEncodingAttr>(dotOpEnc.getParent());
 
         if(!mmaEnc)
           return get(context, 1, 1, 1, order, CTALayout);
@@ -1207,7 +1207,7 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding"> {
     SmallVector<T> paddedShape(ArrayRef<T> shape) const;
 
     SmallVector<unsigned> getContigPerThread() {
-      auto parentLayout = getParent().cast<DistributedEncodingTrait>();
+      auto parentLayout = mlir::cast<DistributedEncodingTrait>(getParent());
       return parentLayout.getContigPerThread();
     };
   }];
@@ -1245,7 +1245,7 @@ section 9.7.13.4.1 for more details.
     AttrBuilder<(ins "unsigned":$opIdx,
                      "Attribute":$parent,
                      "Type":$eltTy), [{
-      NvidiaMmaEncodingAttr parentAttr = parent.dyn_cast<NvidiaMmaEncodingAttr>();
+      NvidiaMmaEncodingAttr parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent);
       if (!parentAttr || !parentAttr.isAmpere())
         return $_get(context, opIdx, parent, 0);
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();

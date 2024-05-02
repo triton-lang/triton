@@ -299,11 +299,11 @@ void testReshape(RankedTensorType srcTy, RankedTensorType dstTy,
 
   std::vector<std::unique_ptr<MultiIdx>> srcMultiIdxs =
       getMultiIdxs(SmallVector<unsigned>(srcTy.getShape()),
-                   srcTy.getEncoding().cast<BlockedEncodingAttr>());
+                   mlir::cast<BlockedEncodingAttr>(srcTy.getEncoding()));
 
   std::vector<std::unique_ptr<MultiIdx>> dstMultiIdxs =
       getMultiIdxs(SmallVector<unsigned>(dstTy.getShape()),
-                   inferredEnc.cast<BlockedEncodingAttr>());
+                   mlir::cast<BlockedEncodingAttr>(inferredEnc));
 
   if (srcMultiIdxs.size() != dstMultiIdxs.size() ||
       !llvm::all_of(llvm::zip_equal(srcMultiIdxs, dstMultiIdxs),
@@ -346,7 +346,7 @@ TEST_P(InferReshapeOpNoReorderEncodingTest, DoIt) {
 
   std::optional<BlockedEncodingAttr> expectedDstEnc;
   if (auto dstEnc = cast<RankedTensorType>(dst).getEncoding()) {
-    expectedDstEnc = dstEnc.cast<BlockedEncodingAttr>();
+    expectedDstEnc = cast<BlockedEncodingAttr>(dstEnc);
   }
 
   testReshape(cast<RankedTensorType>(src), cast<RankedTensorType>(dst),

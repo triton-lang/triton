@@ -1,12 +1,14 @@
+#include <iterator>
+#include <numeric>
+
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/Support/Debug.h"
-#include <iterator>
-#include <numeric>
 
 #define DEBUG_TYPE "tritongpu-coalesce"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -117,7 +119,7 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     for (auto operand : op->getOperands()) {
       auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
       if (tensorType &&
-          !tensorType.getEncoding().isa<triton::gpu::SharedEncodingAttr>()) {
+          !isa<triton::gpu::SharedEncodingAttr>(tensorType.getEncoding())) {
         Type newType = getNewType(tensorType, encoding);
         newArgs.push_back(builder.create<triton::gpu::ConvertLayoutOp>(
             op->getLoc(), newType, operand));

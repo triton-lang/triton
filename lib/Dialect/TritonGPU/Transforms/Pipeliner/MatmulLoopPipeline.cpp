@@ -105,7 +105,7 @@ public:
     for (Value operand : op->getOperands()) {
       Value v = operand;
       llvm::SmallDenseSet<Value> seen;
-      while (auto arg = v.dyn_cast<BlockArgument>()) {
+      while (auto arg = dyn_cast<BlockArgument>(v)) {
         if (!includeArg)
           break;
         if (!seen.insert(v).second)
@@ -192,7 +192,8 @@ static bool isMMAv3Dot(Operation *op) {
   auto dot = dyn_cast<tt::DotOp>(op);
   if (!dot)
     return false;
-  auto enc = dot.getType().getEncoding().dyn_cast<ttg::NvidiaMmaEncodingAttr>();
+  auto enc =
+      mlir::dyn_cast<ttg::NvidiaMmaEncodingAttr>(dot.getType().getEncoding());
   return enc && enc.isHopper();
 }
 
@@ -330,7 +331,7 @@ createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
 
   tt::MemDescType barrierTy = tt::MemDescType::get(
       {1}, builder.getI64Type(),
-      barrier.getType().cast<tt::MemDescType>().getEncoding(),
+      cast<tt::MemDescType>(barrier.getType()).getEncoding(),
       /*mutableMemory=*/true);
   Value barrierViewCopy = builder.create<ttg::MemDescSubviewOp>(
       loc, barrierTy, barrier, ArrayRef<Value>({insertIdx}));
@@ -392,20 +393,17 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
             dyn_cast<triton::MemDescType>(user->getResult(0).getType())) {
       // First time we find a shared encoding in the chain, save it and try to
       // use it if it is compatible with the other users.
-      tempAttr = memDesc.getEncoding().cast<ttg::SharedEncodingAttr>();
+      tempAttr = cast<ttg::SharedEncodingAttr>(memDesc.getEncoding());
       if (!getSharedEncIfAllUsersAreDotEnc(user->getResult(0)).has_value())
         return std::nullopt;
     } else {
       if (!isa<ttg::LocalLoadOp, ttg::ConvertLayoutOp>(user))
         return std::nullopt;
-      auto dotOpEnc = user->getResult(0)
-                          .getType()
-                          .cast<TensorOrMemDesc>()
-                          .getEncoding()
-                          .dyn_cast<ttg::DotOperandEncodingAttr>();
+      auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(
+          cast<TensorOrMemDesc>(user->getResult(0).getType()).getEncoding());
       if (!dotOpEnc)
         return std::nullopt;
-      auto srcTy = val.getType().cast<TensorOrMemDesc>();
+      auto srcTy = cast<TensorOrMemDesc>(val.getType());
       auto CTALayout = ttg::getCTALayout(srcTy.getEncoding());
       auto order = ttg::getOrder(srcTy.getEncoding());
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
@@ -473,8 +471,8 @@ getSharedEncoding(Operation *loadOp, bool isMMAV3) {
       auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user);
       if (!localAlloc)
         continue;
-      auto enc =
-          localAlloc.getType().getEncoding().cast<ttg::SharedEncodingAttr>();
+      auto enc = mlir::cast<ttg::SharedEncodingAttr>(
+          localAlloc.getType().getEncoding());
       if (!localAllocEnc) {
         localAllocEnc = enc;
       }
@@ -544,8 +542,7 @@ static bool loadIsMMAv3(Operation *loadOp) {
   auto alloc = dyn_cast<ttg::LocalAllocOp>(*loadOp->getUsers().begin());
   if (!alloc)
     return false;
-  auto sharedEnc =
-      alloc.getType().getEncoding().cast<ttg::SharedEncodingAttr>();
+  auto sharedEnc = cast<ttg::SharedEncodingAttr>(alloc.getType().getEncoding());
   if (!sharedEnc.getHasLeadingOffset())
     return false;
 
@@ -581,11 +578,11 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
       if (auto mask = loadOp.getMask())
         vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
 
-      auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
+      auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
       if (!tensorTy)
         continue;
       auto ty =
-          tensorTy.getElementType().cast<tt::PointerType>().getPointeeType();
+          cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
       unsigned width = vec * ty.getIntOrFloatBitWidth();
 
       // We do not pipeline all loads for the following reasons:
@@ -618,11 +615,9 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
         // fixed it, feel free to delete this code and see if the assert still
         // fails.  :)
         if (!loadInfo.sharedEncoding) {
-          if (auto dotEnc = dot.getResult()
-                                .getType()
-                                .getEncoding()
-                                .dyn_cast<ttg::NvidiaMmaEncodingAttr>()) {
-            auto loadTy = op->getResultTypes()[0].cast<RankedTensorType>();
+          if (auto dotEnc = dyn_cast<ttg::NvidiaMmaEncodingAttr>(
+                  dot.getResult().getType().getEncoding())) {
+            auto loadTy = cast<RankedTensorType>(op->getResultTypes()[0]);
             auto mmaInstrShape = dotEnc.getInstrShape();
             if (loadTy.getRank() < mmaInstrShape.size())
               continue;
@@ -845,7 +840,7 @@ static void scheduleDistanceOneDependencies(scf::ForOp forOp,
     if (stage == numStages - 1)
       continue;
     for (Value operand : getNestedOperands(&op)) {
-      if (auto arg = operand.dyn_cast<BlockArgument>()) {
+      if (auto arg = dyn_cast<BlockArgument>(operand)) {
         if (arg.getArgNumber() > 0 && arg.getOwner() == op.getBlock()) {
           auto yieldOp = op.getBlock()->getTerminator();
           Value v = yieldOp->getOperand(arg.getArgNumber() - 1);
@@ -1171,7 +1166,7 @@ static int minNumInterleavedCommitOps(Operation *waitOp) {
       minCommitNumber = std::min(minCommitNumber, thisHistorySum);
       return minCommitNumber;
     }
-    if (auto arg = val.dyn_cast<BlockArgument>()) {
+    if (auto arg = mlir::dyn_cast<BlockArgument>(val)) {
       Block *block = arg.getOwner();
       auto forOp = dyn_cast<scf::ForOp>(block->getParentOp());
 

@@ -1,11 +1,12 @@
+#include <memory>
+#include <stack>
+
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
-
-#include <memory>
-#include <stack>
 
 using namespace mlir;
 
@@ -172,14 +173,14 @@ public:
     // Set zero padding value
     TypedAttr attr =
         elementType.isIntOrIndex()
-            ? builder.getIntegerAttr(elementType, 0).cast<TypedAttr>()
-            : builder.getFloatAttr(elementType, 0).cast<TypedAttr>();
+            ? cast<TypedAttr>(builder.getIntegerAttr(elementType, 0))
+            : cast<TypedAttr>(builder.getFloatAttr(elementType, 0));
 
     // Float NaN padding case
     if (padding.value() == triton::PaddingOption::PAD_NAN) {
       assert(!elementType.isIntOrIndex());
       auto apNaN = llvm::APFloat::getNaN(
-          attr.cast<FloatAttr>().getValue().getSemantics());
+          cast<FloatAttr>(attr).getValue().getSemantics());
       attr = builder.getFloatAttr(elementType, apNaN);
     }
 

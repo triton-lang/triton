@@ -30,8 +30,8 @@ static void promoteReduceOpResult(OpBuilder &builder, triton::ReduceOp op,
                                   Value result, Type promotedType) {
   // save original type
   auto originalType = result.getType();
-  auto elemType = originalType.isa<RankedTensorType>()
-                      ? originalType.cast<RankedTensorType>().getElementType()
+  auto elemType = isa<RankedTensorType>(originalType)
+                      ? cast<RankedTensorType>(originalType).getElementType()
                       : originalType;
 
   // promote result type
@@ -65,7 +65,7 @@ static int getCvtOpLDSUsage(triton::gpu::ConvertLayoutOp &cvtOp) {
       std::accumulate(smemShape.begin(), smemShape.end(), 1, std::multiplies{});
   auto srcType = cvtOp.getSrc().getType();
   auto bytes =
-      srcType.getElementType().isa<triton::PointerType>()
+      isa<triton::PointerType>(srcType.getElementType())
           ? elems * kPtrBitWidth / 8
           : elems * std::max<int>(8, srcType.getElementTypeBitWidth()) / 8;
 
@@ -101,7 +101,7 @@ createNewConvertOps(ModuleOp &mod, OpBuilder &builder,
       dstType.getShape(), dstType.getElementType(), dstType.getEncoding());
   RankedTensorType newSrcType;
   if (auto srcMfma =
-          srcType.getEncoding().dyn_cast<triton::gpu::AMDMfmaEncodingAttr>()) {
+          dyn_cast<triton::gpu::AMDMfmaEncodingAttr>(srcType.getEncoding())) {
     auto newMfmaEnc = triton::gpu::AMDMfmaEncodingAttr::get(
         mod.getContext(), srcMfma.getVersionMajor(), srcMfma.getVersionMinor(),
         {warpsPerCtaX, warpsPerCtaY}, srcMfma.getMDim(), srcMfma.getNDim(),
@@ -109,8 +109,8 @@ createNewConvertOps(ModuleOp &mod, OpBuilder &builder,
 
     newSrcType = RankedTensorType::get(srcType.getShape(),
                                        srcType.getElementType(), newMfmaEnc);
-  } else if (auto srcWmma = srcType.getEncoding()
-                                .dyn_cast<triton::gpu::AMDWmmaEncodingAttr>()) {
+  } else if (auto srcWmma = dyn_cast<triton::gpu::AMDWmmaEncodingAttr>(
+                 srcType.getEncoding())) {
     auto newWmmaEnc = triton::gpu::AMDWmmaEncodingAttr::get(
         mod.getContext(), {warpsPerCtaX, warpsPerCtaY}, srcWmma.getCTALayout());
 
@@ -155,9 +155,9 @@ struct DecomposeUnsupportedAMDConversions
       auto srcType = cvtOp.getSrc().getType();
       auto dstType = cvtOp.getType();
       auto srcWmma =
-          srcType.getEncoding().dyn_cast<triton::gpu::AMDWmmaEncodingAttr>();
+          dyn_cast<triton::gpu::AMDWmmaEncodingAttr>(srcType.getEncoding());
       auto dstDotOp =
-          dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+          dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
       if (srcWmma && dstDotOp) {
         auto tmpType = RankedTensorType::get(
             dstType.getShape(), dstType.getElementType(),
@@ -198,10 +198,10 @@ struct DecomposeUnsupportedAMDConversions
 
       auto srcEnc = srcType.getEncoding();
       auto dstBlocked =
-          dstType.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
+          dyn_cast<triton::gpu::BlockedEncodingAttr>(dstType.getEncoding());
 
       // TODO: Reduce LDS usage for WMMA dots
-      if (!srcEnc.isa<triton::gpu::AMDMfmaEncodingAttr>() || !dstBlocked) {
+      if (!isa<triton::gpu::AMDMfmaEncodingAttr>(srcEnc) || !dstBlocked) {
         return;
       }
 
@@ -264,7 +264,7 @@ struct DecomposeUnsupportedAMDConversions
       SmallVector<Value> newOperands;
       for (OpOperand &operand : op->getOpOperands()) {
         auto val = operand.get();
-        auto oldType = val.getType().cast<RankedTensorType>();
+        auto oldType = cast<RankedTensorType>(val.getType());
         auto elemType = oldType.getElementType();
         if (elemType.isInteger(16) || elemType.isInteger(8)) {
           auto newType =
@@ -291,8 +291,8 @@ struct DecomposeUnsupportedAMDConversions
                                 builder.getIntegerType(32));
         } else if (type.isF16()) {
           promoteReduceOpResult(builder, op, result, builder.getF32Type());
-        } else if (type.isa<RankedTensorType>()) {
-          auto oldType = type.cast<RankedTensorType>();
+        } else if (isa<RankedTensorType>(type)) {
+          auto oldType = cast<RankedTensorType>(type);
           auto elemType = oldType.getElementType();
           if (elemType.isInteger(16) || elemType.isInteger(8)) {
             promoteReduceOpResult(
