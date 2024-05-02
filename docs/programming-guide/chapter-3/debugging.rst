@@ -17,15 +17,15 @@ Triton includes four debugging operators that allow users to check and inspect t
 - `device_print` and `device_assert` are used for runtime debugging.
 
 `device_assert` executes only when `TRITON_DEBUG` is set to `1`.
-Other debugging operators executes regardless of the value of `TRITON_DEBUG`.
+Other debugging operators execute regardless of the value of `TRITON_DEBUG`.
 
 ----------------------------
 Using the Interpreter
 ----------------------------
 
-The interpreter is an easy yet useful tool for debugging Triton programs.
+The interpreter is a straightforward and helpful tool for debugging Triton programs.
 It allows Triton users to run Triton programs on the CPU and inspect the intermediate results of each operation.
-To enable interpreter mode, set the environment variable `TRITON_INTERPRET` to `1`.
+To enable the interpreter mode, set the environment variable `TRITON_INTERPRET` to `1`.
 This setting causes all Triton kernels to bypass compilation and be simulated by the interpreter using numpy equivalents of Triton operations.
 The interpreter processes each Triton program instance sequentially, executing operations one at a time.
 
