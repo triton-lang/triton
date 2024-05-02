@@ -198,6 +198,7 @@ class CUDABackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         nvidia.passes.ttgpuir.add_decompose_unsupported_conversions(pm)
+        passes.ttgpuir.add_fold_tensor_select_into_if(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         passes.ttgpuir.add_allocate_shared_memory(pm)
