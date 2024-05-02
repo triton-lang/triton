@@ -32,3 +32,14 @@ class GPUDriver(DriverBase):
     # TODO: remove once TMA is cleaned up
     def assemble_tensormap_to_arg(self, tensormaps_info, args):
         return args
+
+
+class CPUDriverBase(DriverBase):
+
+    def __init__(self):
+        # Right now, we just provide dummy functions.
+        # TODO: Consider better engineering the code only intended for GPU in jit.py.
+        self.get_device_capability = lambda idx: (0, 0)
+        self.get_current_stream = lambda idx: 0
+        self.get_current_device = lambda: 0
+        self.set_current_device = lambda idx: None
