@@ -871,6 +871,45 @@ static void scheduleDistanceOneDependencies(scf::ForOp forOp,
   }
 }
 
+static void scheduleRemainingToLastStage(scf::ForOp forOp,
+                                         CoarseSchedule &schedule,
+                                         CoarseSchedule::Cluster afterPrologue,
+                                         int numStages) {
+  // Assign the rest of the ops to the last stage.
+  // Take care of the ordering of the ops - uses cannot be scheduled to the
+  // cluster before the definition.
+  DenseMap<Operation *, CoarseSchedule::Cluster> opToCluster;
+  for (auto &op : forOp.getBody()->without_terminator()) {
+    if (schedule.count(&op) == 0) {
+      opToCluster[&op] = afterPrologue;
+    }
+  }
+  SmallVector<Operation *> queue;
+  for (auto [op, stage, cluster] : schedule.getOpsInOrder(forOp)) {
+    // We really only care about the producers from the last stage.
+    // Others will be scheduled before these ops anyway.
+    if (stage == numStages - 1) {
+      queue.push_back(op);
+    }
+  }
+  while (!queue.empty()) {
+    Operation *op = queue.pop_back_val();
+    for (auto user : op->getUsers()) {
+      if (opToCluster.count(user)) {
+        CoarseSchedule::Cluster userCluster = opToCluster[user];
+        CoarseSchedule::Cluster opCluster = schedule[op].second;
+        if (*userCluster < *opCluster) {
+          opToCluster[user] = opCluster;
+          queue.push_back(user);
+        }
+      }
+    }
+  }
+  for (auto [op, cluster] : opToCluster) {
+    schedule.insert(op, numStages - 1, cluster);
+  }
+}
+
 // Create an allocation that can hold distance number of loadOp shapes.
 static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
                          ttg::SharedEncodingAttr sharedEnc, unsigned distance) {
@@ -1039,9 +1078,19 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   if (loadToInfo.empty())
     return false;
 
+  LLVM_DEBUG({
+    LDBG("Coarse schedule loads only:");
+    coarseSchedule.dump();
+  });
+
   // Convert the loads into async loads and create the allocs.
   SmallVector<Value> allocs =
       createAsyncOps(forOp, coarseSchedule, loadToInfo, numStages);
+
+  LLVM_DEBUG({
+    LDBG("Coarse schedule with async loads:");
+    coarseSchedule.dump();
+  });
 
   CoarseSchedule::Cluster afterPrologue =
       schedulePrologueAndEpilogue(forOp, coarseSchedule, rootUsers, numStages);
@@ -1062,10 +1111,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     coarseSchedule.dump();
   });
 
-  // Assign the rest of the ops to the last stage, main cluster of the loop
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    coarseSchedule.insertIfAbsent(&op, numStages - 1, afterPrologue);
-  }
+  scheduleRemainingToLastStage(forOp, coarseSchedule, afterPrologue, numStages);
   LLVM_DEBUG({
     LDBG("Final coarse schedule:");
     coarseSchedule.dump();
