@@ -322,10 +322,30 @@ static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
     PyErr_SetString(PyExc_ValueError, "elementSize must be 1, 2, or 4");
   }
   int rank = 2;
+  // Swizzling should be picked in codegen but since we need to set it on the
+  // descriptor we rely on a convention between this function and codegen.
+  CUtensorMapSwizzle swizzle = CU_TENSOR_MAP_SWIZZLE_128B;
+  uint32_t contigDimSizeInByte = elementSize * tensorDims[0];
+  if (contigDimSizeInByte >= 128) {
+    swizzle = CU_TENSOR_MAP_SWIZZLE_128B;
+  } else if (contigDimSizeInByte >= 64) {
+    swizzle = CU_TENSOR_MAP_SWIZZLE_64B;
+  } else if (contigDimSizeInByte >= 32) {
+    swizzle = CU_TENSOR_MAP_SWIZZLE_32B;
+  } else {
+    assert(false && "block size too small.");
+  }
+  // The bounding box inner dimension must be less than or equal to the swizzle
+  // size.
+  // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html#group__CUDA__TENSOR__MEMORY_1ga7c7d2aaac9e49294304e755e6f341d7
+  // We clamp the block size and the codegen will emit multiple copy operations.
+  if (contigDimSizeInByte > 128) {
+    tensorDims[0] = 128 / elementSize;
+  }
   CUresult result = cuTensorMapEncodeTiled(
       (CUtensorMap *)desc, type, rank, (void *)global_address, dims,
       globalStrides, tensorDims, elementStrides, CU_TENSOR_MAP_INTERLEAVE_NONE,
-      CU_TENSOR_MAP_SWIZZLE_NONE, CU_TENSOR_MAP_L2_PROMOTION_NONE,
+      CU_TENSOR_MAP_SWIZZLE_128B, CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
       CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
   assert(result == CUDA_SUCCESS);
   return Py_None;
