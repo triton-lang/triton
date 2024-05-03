@@ -7,8 +7,12 @@ import triton
 import triton.language as tl
 
 
+def is_cuda():
+    return triton.runtime.driver.active.get_current_target().backend == "cuda"
+
+
 def test_descriptor_load_ttgir():
-    if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] == 9:
+    if not is_cuda() or not torch.cuda.get_device_capability()[0] == 9:
         pytest.skip("Test requires Hopper target.")
         return
     device = "cuda"
@@ -50,7 +54,7 @@ def test_descriptor_load_ttgir():
 
 
 def test_experimetal_descriptor_load():
-    if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] == 9:
+    if not is_cuda() or not torch.cuda.get_device_capability()[0] == 9:
         pytest.skip("Test requires Hopper target.")
         return
     device = "cuda"
@@ -98,7 +102,7 @@ def matmul_kernel_tma(a_desc_ptr, b_desc_ptr, c_ptr,  #
 
 @pytest.mark.parametrize("num_stages", [1, 4])
 def test_experimental_tma_matmul(num_stages):
-    if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] == 9:
+    if not is_cuda() or not torch.cuda.get_device_capability()[0] == 9:
         pytest.skip("Test requires Hopper target.")
         return
     device = "cuda"

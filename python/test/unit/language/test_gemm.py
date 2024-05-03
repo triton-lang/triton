@@ -35,6 +35,156 @@ def is_hip():
 
 
 @triton.jit
+def warp_specialized_matmul_kernel(  #
+        a_ptr, b_ptr, c_ptr,  #
+        M, N, K,  #
+        stride_am, stride_ak,  #
+        stride_bk, stride_bn,  #
+        stride_cm, stride_cn,  #
+        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
+):
+    tid = tl.program_id(axis=0)
+    n_tiles = tl.cdiv(N, BLOCK_N)
+    pid_m = tid // n_tiles
+    pid_n = tid % n_tiles
+
+    offs_k = tl.arange(0, BLOCK_K)
+    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_am = tl.max_contiguous(tl.multiple_of(rm % M, BLOCK_M), BLOCK_M)
+    offs_bn = tl.max_contiguous(tl.multiple_of(rn % N, BLOCK_N), BLOCK_N)
+    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+    b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+
+    accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+
+    for k in range(0, K, BLOCK_K):
+        a = tl.load(a_ptrs)
+        b = tl.load(b_ptrs)
+        accumulator += tl.dot(a, b)
+        a_ptrs += BLOCK_K * stride_ak
+        b_ptrs += BLOCK_K * stride_bk
+    accumulator = accumulator.to(c_ptr.dtype.element_ty)
+
+    offs_cm = tl.arange(0, BLOCK_M) + pid_m * BLOCK_M
+    offs_cn = tl.arange(0, BLOCK_N) + pid_n * BLOCK_N
+
+    c_ptrs = c_ptr + offs_cm[:, None] * stride_cm + offs_cn[None, :] * stride_cn
+    mask = (offs_cm < M)[:, None] & (offs_cn < N)[None, :]
+    tl.store(c_ptrs, accumulator, mask=mask)
+
+
+@triton.jit
+def tma_warp_specialized_matmul_kernel(  #
+        a_ptr, b_ptr, c_ptr,  #
+        M, N, K,  #
+        stride_am, stride_ak,  #
+        stride_bk, stride_bn,  #
+        stride_cm, stride_cn,  #
+        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
+):
+    tid = tl.program_id(axis=0)
+    n_tiles = tl.cdiv(N, BLOCK_N)
+    pid_m = tid // n_tiles
+    pid_n = tid % n_tiles
+
+    block_offset_m = pid_m * BLOCK_M
+    block_offset_n = pid_n * BLOCK_N
+    a_tile_ptr = tl.make_block_ptr(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
+                                   offsets=(block_offset_m, 0), block_shape=(BLOCK_M, BLOCK_K), order=(1, 0))
+    b_tile_ptr = tl.make_block_ptr(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
+                                   offsets=(0, block_offset_n), block_shape=(BLOCK_K, BLOCK_N), order=(0, 1))
+
+    accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+
+    for k in range(0, K, BLOCK_K):
+        a = tl.load(a_tile_ptr)
+        b = tl.load(b_tile_ptr)
+        accumulator += tl.dot(a, b)
+        a_tile_ptr = tl.advance(a_tile_ptr, [0, BLOCK_K])
+        b_tile_ptr = tl.advance(b_tile_ptr, [BLOCK_K, 0])
+    accumulator = accumulator.to(c_ptr.dtype.element_ty)
+
+    offs_cm = tl.arange(0, BLOCK_M) + pid_m * BLOCK_M
+    offs_cn = tl.arange(0, BLOCK_N) + pid_n * BLOCK_N
+
+    c_ptrs = c_ptr + offs_cm[:, None] * stride_cm + offs_cn[None, :] * stride_cn
+    mask = (offs_cm < M)[:, None] & (offs_cn < N)[None, :]
+    tl.store(c_ptrs, accumulator, mask=mask)
+
+
+@pytest.mark.parametrize('M,N,K,BLOCK_M,BLOCK_N,BLOCK_K,NUM_CTAS,TRANS_A,TRANS_B,USE_TMA',
+                         [(*shape, use_tma) for shape in [
+                             [2048, 2048, 64, 64, 64, 16, 1, False, True],
+                             [4096, 4096, 64, 64, 64, 16, 1, False, True],
+                             [128, 4096, 64, 64, 64, 16, 1, False, True],
+                             [4096, 128, 64, 64, 64, 16, 1, False, True],
+                             [4096, 4096, 64, 64, 64, 32, 1, False, True],
+                             [4096, 4096, 256, 128, 128, 16, 1, False, True],
+                             [4096, 4096, 320, 128, 64, 64, 1, False, True],
+                             [4096, 4096, 320, 64, 128, 64, 1, False, True],
+                             [4096, 4096, 320, 128, 128, 64, 1, False, True],
+                             [4096, 4096, 256, 256, 64, 16, 1, False, True],
+                             [4096, 4096, 256, 256, 64, 64, 1, False, True],
+                             [4096, 4096, 256, 64, 256, 16, 1, False, True],
+                             [4096, 4096, 256, 64, 256, 64, 1, False, True],
+                             [4096, 4096, 256, 256, 128, 16, 1, False, True],
+                             [4096, 4096, 256, 256, 128, 64, 1, False, True],
+                             [4096, 4096, 256, 128, 256, 16, 1, False, True],
+                             [4096, 4096, 256, 128, 256, 64, 1, False, True],
+                             # numCTAs > 1
+                             [2048, 2048, 64, 128, 128, 64, 2, False, True],
+                             [2048, 2048, 128, 256, 128, 64, 4, False, True],
+                             [4096, 4096, 128, 256, 128, 64, 4, False, True],
+                             [4096, 4096, 256, 128, 256, 64, 4, False, True],
+                             [4096, 4096, 256, 256, 256, 64, 4, False, True],
+                         ] for use_tma in [False, True]])
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
+def test_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_CTAS, TRANS_A, TRANS_B, USE_TMA):
+    if is_hip() and NUM_CTAS > 1:
+        pytest.skip("HIP backend does not support NUM_CTAS > 1")
+
+    if (TRANS_A):
+        a = .1 * torch.randn((K, M), device='cuda', dtype=torch.float16).T
+    else:
+        a = .1 * torch.randn((M, K), device='cuda', dtype=torch.float16)
+
+    if (TRANS_B):
+        b = .1 * torch.randn((N, K), device='cuda', dtype=torch.float16).T
+    else:
+        b = .1 * torch.randn((K, N), device='cuda', dtype=torch.float16)
+
+    c = torch.empty((M, N), device=a.device, dtype=torch.float32)
+
+    grid = lambda META: (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), )
+
+    num_stages = {"num_stages": 1} if is_hip() else {}
+    if USE_TMA:
+        tma_warp_specialized_matmul_kernel[grid](
+            a, b, c,  #
+            M, N, K,  #
+            a.stride(0), a.stride(1),  #
+            b.stride(0), b.stride(1),  #
+            c.stride(0), c.stride(1),  #
+            BLOCK_M, BLOCK_N, BLOCK_K,  #
+            num_warps=4,  #
+            num_ctas=NUM_CTAS, **num_stages)
+    else:
+        warp_specialized_matmul_kernel[grid](
+            a, b, c,  #
+            M, N, K,  #
+            a.stride(0), a.stride(1),  #
+            b.stride(0), b.stride(1),  #
+            c.stride(0), c.stride(1),  #
+            BLOCK_M, BLOCK_N, BLOCK_K,  #
+            num_warps=4,  #
+            num_ctas=NUM_CTAS, **num_stages)
+
+    th_c = torch.matmul(a, b)
+    torch.testing.assert_close(th_c, c, atol=1e-2, rtol=0, check_dtype=False)
+
+
+@triton.jit
 def matmul_kernel(a_ptr, b_ptr, w_ptr, bias_ptr, z_ptr,  #
                   M, N, K,  #
                   stride_am, stride_ak,  #
