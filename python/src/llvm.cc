@@ -59,7 +59,7 @@ std::string translateLLVMIRToASM(llvm::Module &module,
   bool disableLLVMOpt = triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
   if (!disableLLVMOpt) {
     // Check to see if we are passing a list of flags to disable optimizations.
-    auto flagList = triton::tools::getenv("DISABLE_LLVM_OPT");
+    auto flagList = triton::tools::getStrEnv("DISABLE_LLVM_OPT");
     if (!flagList.empty()) {
       llvm::SmallVector<StringRef, 3> split;
       StringRef(flagList.c_str()).split(split, ',');
@@ -203,7 +203,7 @@ void init_triton_llvm(py::module &&m) {
     if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
       return;
     // Check to see if we are passing a list of flags to disable optimizations.
-    auto flagList = mlir::triton::tools::getenv("DISABLE_LLVM_OPT");
+    auto flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
     if (!flagList.empty()) {
       auto options = llvm::cl::getRegisteredOptions();
       llvm::SmallVector<StringRef, 3> split;
