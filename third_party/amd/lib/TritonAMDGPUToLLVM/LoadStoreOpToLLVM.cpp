@@ -336,13 +336,6 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
   }
 };
 
-namespace {
-void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
-                   int numCTAs) {
-  barrier();
-}
-} // namespace
-
 static LLVM::AtomicOrdering getMemoryOrdering(MemSemantic memOrdering) {
   switch (memOrdering) {
   case MemSemantic::RELAXED:
@@ -463,7 +456,7 @@ struct AtomicCASOpConversion
         auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
             loc, casPtr, casCmp, casVal, successOrdering, failureOrdering,
             StringRef("agent"));
-
+        barrier();
         // Extract the new_loaded value from the pair.
         Value newLoaded = extract_val(valueElemTy, cmpxchg, 0);
 
@@ -479,6 +472,7 @@ struct AtomicCASOpConversion
         BuilderMemfenceLDS.launch(rewriter, loc, void_ty(ctx));
         barrier();
         Value ret = load(valueElemTy, atomPtr);
+        barrier();
         rewriter.replaceOp(op, {ret});
       }
     }
@@ -638,7 +632,9 @@ struct AtomicRMWOpConversion
       } else {
         Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
         store(retVal, atomPtr);
+        barrier();
         Value ret = load(valueElemTy, atomPtr);
+        barrier();
         rewriter.replaceOp(op, {ret});
       }
     }
