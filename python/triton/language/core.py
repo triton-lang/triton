@@ -2214,8 +2214,9 @@ def device_print(prefix, *args, hex=False, _builder=None):
     GPUs and CUDA versions).  If you notice some printfs are being dropped, you
     can increase the buffer size by calling
 
-        .. highlight:: python
-        .. code-block:: python
+    .. highlight:: python
+    .. code-block:: python
+
         triton.runtime.driver.active.utils.set_printf_fifo_size(size_bytes)
 
     CUDA may raise an error if you try to change this value after running a
