@@ -26,6 +26,7 @@ import torch
 import triton
 import triton.language as tl
 from triton.runtime import driver
+import triton.compiler as tc
 
 
 @torch.jit.script
@@ -103,15 +104,17 @@ def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n
 # We can create a helper function that enqueues the kernel and its (meta-)arguments for any given input tensor.
 
 device = torch.cuda.current_device()
-NUM_SM = driver.active.utils.get_device_properties(device)["multiprocessor_count"]
+properties = driver.active.utils.get_device_properties(device)
+NUM_SM = properties["multiprocessor_count"]
+NUM_REGS = properties["max_num_regs"]
+SIZE_SMEM = properties["max_shared_mem"]
+WARP_SIZE = properties["warpSize"]
+target = triton.runtime.driver.active.get_current_target()
+kernels = {}
 
 
 def softmax(x):
     n_rows, n_cols = x.shape
-    num_programs = NUM_SM
-
-    # Create a number of persistent programs as many as SMs.
-    grid = lambda meta: (num_programs, )
 
     # The block size of each loop iteration is the smallest power of two greater than the number of columns in `x`
     BLOCK_SIZE = triton.next_power_of_2(n_cols)
@@ -124,21 +127,38 @@ def softmax(x):
 
     # Number of software piepling stages.
     num_stages = 4
+
+    # pre-compile kernel to get register usage and compute thread occupancy.
+    kernel, num_programs = kernels.get(BLOCK_SIZE, (None, 0))
+    if kernel is None:
+        opts = {"num_warps": 8, "num_stages": 4}
+        attrs = triton.compiler.AttrsDescriptor(tuple(range(6)), ()) if n_cols % 16 == 0 else None
+        src = tc.ASTSource(
+            fn=softmax_kernel,
+            constants={"BLOCK_SIZE": BLOCK_SIZE, "num_stages": num_stages},
+            signature="*fp32,*fp32,i32,i32,i32,i32",
+            attrs=attrs,
+        )
+        kernel = triton.compile(src=src, target=target, options=opts)
+        kernel._init_handles()
+        n_regs = kernel.n_regs
+        size_smem = kernel.metadata.shared
+        occupancy = NUM_REGS // (n_regs * WARP_SIZE * num_warps)
+        occupancy = min(occupancy, SIZE_SMEM // size_smem)
+        num_programs = NUM_SM * occupancy
+        kernels[BLOCK_SIZE] = (kernel, num_programs)
+
     # Allocate output
     y = torch.empty_like(x)
 
-    # Enqueue kernel. The 1D launch grid is simple: we have one kernel instance per chunk of rows of
-    # the input matrix
-    softmax_kernel[grid](
+    # Create a number of persistent programs.
+    kernel[(num_programs, 1, 1)](
         y,
         x,
         x.stride(0),
         y.stride(0),
         n_rows,
         n_cols,
-        num_warps=num_warps,
-        BLOCK_SIZE=BLOCK_SIZE,
-        num_stages=num_stages,
     )
     return y
 
