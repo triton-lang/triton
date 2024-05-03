@@ -32,17 +32,17 @@ inline const std::set<std::string> CACHE_NEUTRAL_ENV_VARS = {
 
 namespace tools {
 
-inline void assertIsRecognized(const std::string& env) {
-  bool is_invalidating = CACHE_INVALIDATING_ENV_VARS.find(env.c_str()) != 
+inline void assertIsRecognized(const std::string &env) {
+  bool is_invalidating = CACHE_INVALIDATING_ENV_VARS.find(env.c_str()) !=
                          CACHE_INVALIDATING_ENV_VARS.end();
-  bool is_neutral = CACHE_NEUTRAL_ENV_VARS.find(env.c_str()) != 
-                    CACHE_NEUTRAL_ENV_VARS.end();
+  bool is_neutral =
+      CACHE_NEUTRAL_ENV_VARS.find(env.c_str()) != CACHE_NEUTRAL_ENV_VARS.end();
   std::string errmsg = env + "is not recognized. "
-                       "Please add it to triton/tools/sys/getenv.hpp";
+                             "Please add it to triton/tools/sys/getenv.hpp";
   assert((is_invalidating || is_neutral) && errmsg.c_str());
 }
 
-inline std::string getStrEnv(const std::string& env){
+inline std::string getStrEnv(const std::string &env) {
   assertIsRecognized(env);
   const char *cstr = std::getenv(env.c_str());
   if (!cstr)
