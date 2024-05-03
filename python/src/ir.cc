@@ -1578,7 +1578,8 @@ void init_triton_ir(py::module &&m) {
       .def("run", [](PassManager &self, ModuleOp &mod) {
         // TODO: maybe dump module to file and print error for better
         // diagnostics
-        auto reproducerPath = triton::tools::getStrEnv("TRITON_REPRODUCER_PATH");
+        auto reproducerPath =
+            triton::tools::getStrEnv("TRITON_REPRODUCER_PATH");
         if (!reproducerPath.empty()) {
           auto anchorName = self.getOpAnchorName();
           auto passes = self.getPasses();
