@@ -8,8 +8,10 @@
 // #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 // #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/Format.h"
 
 #include <algorithm>
+#include <iomanip>
 #include <limits>
 #include <numeric>
 
@@ -38,14 +40,35 @@ using ::mlir::triton::gpu::SliceEncodingAttr;
 
 #define DEBUG_TYPE "allocate-shared-memory"
 
+// Debug defines
+#define LLDBG_L0(TAG, VAL)                                                     \
+  LLVM_DEBUG(llvm::dbgs() << TAG << ": " << VAL << "\n")
+#define LLDBG_L1(TAG) llvm::dbgs() << "    " << TAG << ":\n"
+
+#define LLDBG_L1P(TAG)                                                         \
+  llvm::dbgs() << "    " << TAG << llvm::left_justify(": ", 20 - strlen(TAG))
+#define LLDBG_L2(TAG, VAL)                                                     \
+  llvm::dbgs() << "        " << TAG                                            \
+               << llvm::left_justify(": ", 16 - strlen(TAG)) << VAL << "\n"
+#define LLDBG_L2V(TAG, VAL) LLVM_DEBUG(LLDBG_L2(TAG, VAL))
+
 namespace mlir {
 
 namespace {
 // Debug utilities
+template <typename T> std::string intervalToString(const Interval<T> &range) {
+  std::string s = "[";
+  s += std::to_string(range.start());
+  s += ",";
+  s += std::to_string(range.end());
+  s += ")";
+  return s;
+}
+
 template <typename T>
 llvm::raw_ostream &operator<<(llvm::raw_ostream &ostr,
                               const Interval<T> &range) {
-  ostr << "[" << range.start() << "," << range.end() << ")";
+  ostr << intervalToString(range);
   return ostr;
 }
 
@@ -62,6 +85,7 @@ void printValue(Value v) {
       llvm::dbgs() << "^bb" << blockIdx << ": ";
   }
   v.print(llvm::dbgs());
+  llvm::dbgs() << "\n";
 }
 } // namespace
 
@@ -252,7 +276,7 @@ private:
       IntervalT interval = intervals.front();
       for (auto &I : *this) {
         if (interval.adjacent(I) || interval.intersects(I))
-          interval = interval.merge(I);
+          interval = interval.span(I);
         else {
           newIntervals.push_back(interval);
           interval = I;
@@ -265,7 +289,7 @@ private:
       assert(!empty());
       IntervalT interval = intervals.front();
       for (auto &I : intervals)
-        interval = interval.merge(I);
+        interval = interval.span(I);
       return interval;
     }
 
@@ -277,7 +301,7 @@ private:
 
   void run() {
     auto func = cast<triton::FuncOp>(operation);
-    LLVM_DEBUG(llvm::dbgs() << "ALLOCATION: " << func.getName() << "\n");
+    LLDBG_L0("ALLOCATION", func.getName());
     getValuesAndSizes();
     resolveLiveness();
     computeOffsets();
@@ -464,10 +488,9 @@ private:
 
   void updateBufferRange(BufferT *buffer, IntervalT interval) {
     if (bufferRange.contains(buffer))
-      interval = interval.merge(bufferRange[buffer]);
+      interval = interval.span(bufferRange[buffer]);
     bufferRange[buffer] = interval;
-    LLVM_DEBUG(llvm::dbgs() << "    UPDATE BUFFER: " << buffer->id << " -> "
-                            << interval << "\n");
+    LLDBG_L2V("UPDATE BUFFER", buffer->id << " -> " << interval);
   }
 
   /// Computes the liveness range of the allocated value.
@@ -477,9 +500,6 @@ private:
       auto value = valueBufferIter.first;
       auto *buffer = valueBufferIter.second;
       auto ranges = getLiveness(value);
-      // TODO(SJW): bufferRange should support disjoint intervals
-      // This is only a problem for scf loops; cf branches handle
-      // this with aliases
       if (!ranges.empty())
         updateBufferRange(buffer, ranges.span());
     }
@@ -487,26 +507,30 @@ private:
 
   void dumpAliasRanges(Value value, const llvm::SetVector<BufferT *> &buffers,
                        const LiveIntervals &ranges) const {
-    llvm::dbgs() << "    RESOLVE ALIAS: "
-                 << "\n\t";
+    LLDBG_L1P("RESOLVE ALIAS");
     printValue(value);
-    llvm::dbgs() << "\n\tRANGES:   ";
-    llvm::for_each(ranges, [cnt = 0](auto interval) mutable {
-      llvm::dbgs() << (cnt++ ? ", " : "") << interval;
+    std::string srngs;
+    llvm::for_each(ranges, [&srngs, cnt = 0](auto interval) mutable {
+      srngs += (cnt++ ? " " : "");
+      srngs += intervalToString(interval);
     });
-    llvm::dbgs() << "\n\tBUFFERS:  ";
-    llvm::for_each(buffers, [cnt = 0](auto *buf) mutable {
-      llvm::dbgs() << (cnt++ ? ", " : "") << buf->id;
+    LLDBG_L2("RANGES", srngs);
+    std::string sbufs;
+    llvm::for_each(buffers, [&sbufs, cnt = 0](auto *buf) mutable {
+      sbufs += (cnt++ ? ", " : "");
+      sbufs += std::to_string(buf->id);
     });
-    llvm::dbgs() << "\n";
+    LLDBG_L2("BUFFERS", sbufs);
   }
 
-  /// Following the alias lattice, an alias that only references a single
-  /// buffer, can simply update the live range of that buffer.
-  /// When an alias references multiple buffers as in the case of loop-
-  /// carried variables, create a new Buffer<Alias> for each disjoint range.
-  /// This new Buffer<Alias> will represent the live-range for all referenced
-  /// buffers.
+  /// Following the alias lattice, an alias that:
+  ///   - References a single buffer, will simply update the live range of
+  ///     that buffer. Note that this will cover gaps also.
+  ///   - References multiple buffers as in the case of loop-carried variables,
+  ///     creates a new Buffer<Alias> for each disjoint range. The new Alias
+  ///     Buffer will represent the live-range for all referenced buffers and
+  ///     apply the real buffers allocation during interference graphing.
+  ///
   /// Example: (numbers represent op liveness index)
   ///  3    %b0 = convert_layout %g0                  -- Buffer #0
   ///  4    %fr = for (.., %arg0 = %b0) {             -+ Alias #1
@@ -514,7 +538,7 @@ private:
   ///  6        %bc = convert_layout %arg0            -+
   ///  7        %v = add %bc, ...
   ///  8        %bn = convert_layout %gn              -+ Buffer #1
-  ///  9        %pn = addptr %pc, %cst                 |   loop-carried
+  ///  9        %pn = addptr %pc, %cst                 |   #1 is loop-carried
   ///  10       yield ... %bn                         -+   does not overlap #0
   ///       }
   ///  11   %be = convert_layout %fr#1                -- Alias #2: Buffer #0,#1
@@ -604,13 +628,14 @@ private:
   /// Paper: Algorithms for Compile-Time Memory Optimization
   /// (https://dl.acm.org/doi/pdf/10.5555/314500.315082)
   void computeOffsets() {
+    LLDBG_L0("ALLOCATE", "");
+
     SmallVector<BufferT *> buffers;
     for (auto bufferIter : bufferRange) {
       buffers.emplace_back(bufferIter.first);
     }
 
-    DenseMap<BufferT *, size_t> bufferStart;
-    calculateStarts(buffers, bufferStart);
+    calculateStarts(buffers);
 
     // NOTE: The original paper doesn't consider interference between
     // the bumped ranges. Buffers that previously do not interfere with
@@ -620,16 +645,15 @@ private:
     // increase the buffer offset and keep reducing conflicts, we will
     // eventually reach a fixed point.
     GraphT interference;
-    buildInterferenceGraph(buffers, bufferStart, interference);
+    buildInterferenceGraph(buffers, interference);
     do {
-      allocate(buffers, interference, bufferStart);
-      buildInterferenceGraph(buffers, bufferStart, interference);
+      allocate(buffers, interference);
+      buildInterferenceGraph(buffers, interference);
     } while (!interference.empty());
   }
 
   /// Computes the initial shared memory offsets.
-  void calculateStarts(const SmallVector<BufferT *> &buffers,
-                       DenseMap<BufferT *, size_t> &bufferStart) {
+  void calculateStarts(const SmallVector<BufferT *> &buffers) {
     //  v = values in shared memory
     //  t = triplet of (size, start, end)
     //  shared memory space
@@ -675,14 +699,14 @@ private:
         auto xRange = bufferRange.lookup(buffer);
         // TODO(Keren): A buffer's size shouldn't be determined here, have to
         // clean it up
-        size_t alignment = buffer->alignment;
-        size_t alignSize = ((size + alignment - 1) / alignment) * alignment;
-        bufferStart[buffer] = alignSize;
-        LLVM_DEBUG(llvm::dbgs() << "    CSTART: " << buffer->id << " <-> "
-                                << alignSize << "\n");
-        tripleMap.insert({alignSize + xSize,
-                          Interval{std::max(range.start(), xRange.start()),
-                                   std::min(range.end(), xRange.end())}});
+        size_t offset = size;
+        if (size_t diff = offset % buffer->alignment)
+          offset += buffer->alignment - diff;
+        buffer->offset = offset;
+        LLDBG_L2V("INIT OFFSET", buffer->id << " <-> " << buffer->offset);
+        tripleMap.insert(
+            {offset + xSize, Interval{std::max(range.start(), xRange.start()),
+                                      std::min(range.end(), xRange.end())}});
         // We could either insert (range.start, xRange.start) or (range.start,
         // xRange.end), both are correct and determine the potential buffer
         // offset, and the graph coloring algorithm will solve the interference,
@@ -699,7 +723,6 @@ private:
   /// Builds a graph of all shared memory values. Edges are created between
   /// shared memory values that are overlapping.
   void buildInterferenceGraph(const SmallVector<BufferT *> &buffers,
-                              const DenseMap<BufferT *, size_t> &bufferStart,
                               GraphT &interference) {
     // Reset interference graph
     interference.clear();
@@ -708,10 +731,10 @@ private:
         for (auto y : buffers) {
           if (x == y)
             continue;
-          y->applyToActuals([&](BufferT *yActual) {
+          y->applyToBufferAndAliases([&](BufferT *yActual) {
             if (yActual != x) {
-              auto xStart = bufferStart.lookup(x);
-              auto yStart = bufferStart.lookup(yActual);
+              auto xStart = x->offset;
+              auto yStart = yActual->offset;
               auto xSize = x->size;
               auto ySize = yActual->size;
               Interval xSizeRange = {xStart, xStart + xSize};
@@ -720,8 +743,7 @@ private:
               auto yOpRange = bufferRange.lookup(y);
               if (xOpRange.intersects(yOpRange) &&
                   xSizeRange.intersects(ySizeRange)) {
-                LLVM_DEBUG(llvm::dbgs() << "    INTERFERENCE: " << x->id
-                                        << " <-> " << y->id << "\n");
+                LLDBG_L2V("INTERFERENCE", x->id << " <-> " << y->id);
                 interference[x].insert(y);
               }
             }
@@ -733,8 +755,7 @@ private:
 
   /// Finalizes shared memory offsets considering interference.
   void allocate(const SmallVector<BufferT *> &buffers,
-                const GraphT &interference,
-                DenseMap<BufferT *, size_t> &bufferStart) {
+                const GraphT &interference) {
     // Reset shared memory size
     allocation->sharedMemorySize = 0;
 
@@ -757,7 +778,7 @@ private:
     for (auto x : xBuffers) {
       std::fill(available.begin(), available.end(), true);
       for (auto y : interference.lookup(x)) {
-        y->applyToActuals([&](BufferT *actual) {
+        y->applyToBufferAndAliases([&](BufferT *actual) {
           if (actual != x) {
             int color = colors[actual];
             if (color >= 0)
@@ -767,8 +788,7 @@ private:
       }
       auto it = llvm::find(available, true);
       colors[x] = std::distance(available.begin(), it);
-      LLVM_DEBUG(llvm::dbgs()
-                 << "    COLOR: " << x->id << " -> " << colors[x] << "\n");
+      LLDBG_L2V("COLOR", x->id << " -> " << colors[x]);
     }
     // Finalize allocation
     // color0: [0, 7), [0, 8), [0, 15) -> [0, 7), [0, 8), [0, 15)
@@ -777,19 +797,21 @@ private:
     // TODO(Keren): We are wasting memory here.
     // Nodes with color2 can actually start with 24.
     for (auto x : xBuffers) {
-      size_t adj = 0;
+      size_t newOffset = 0;
       for (auto y : interference.lookup(x)) {
-        y->applyToActuals([&](BufferT *actual) {
+        y->applyToBufferAndAliases([&](BufferT *actual) {
           if (actual != x)
-            adj = std::max(adj, actual->size);
+            newOffset = std::max(newOffset, actual->offset + actual->size);
         });
       }
-      // TODO(SJW): does not take alignment into account
-      x->offset = bufferStart.lookup(x) + colors.lookup(x) * adj;
-      assert(x->offset % x->alignment == 0);
-      bufferStart[x] = x->offset;
-      LLVM_DEBUG(llvm::dbgs()
-                 << "    START: " << x->id << " -> " << x->offset << "\n");
+      if (colors.lookup(x) != 0) {
+        if (size_t diff = newOffset % x->alignment) {
+          // fix alignment
+          newOffset += x->alignment - diff;
+        }
+        x->offset = newOffset;
+        LLDBG_L2V("NEW OFFSET", x->id << " -> " << x->offset);
+      }
       allocation->sharedMemorySize =
           std::max(allocation->sharedMemorySize, x->offset + x->size);
     }
@@ -799,10 +821,9 @@ private:
     allocation->dump();
 
     for (auto pair : bufferRange) {
-      llvm::dbgs() << "    BUFFER RANGE:"
-                   << "\n";
+      LLDBG_L1("BUFFER RANGE");
       pair.first->dump();
-      llvm::dbgs() << "\tINTERVAL: " << pair.second << "\n";
+      LLDBG_L2("INTERVAL", pair.second);
     }
   }
 
@@ -816,51 +837,49 @@ private:
 } // namespace triton
 
 void Allocation::BufferT::dump() const {
-  llvm::dbgs() << "\tID:       " << (int)id << "\n";
-  llvm::dbgs() << "\tKIND:     " << (int)kind << "\n";
-  llvm::dbgs() << "\tSIZE:     " << size << "\n";
-  llvm::dbgs() << "\tOFFSET:   " << offset << "\n";
-  llvm::dbgs() << "\tALIGN:    " << alignment << "\n";
+  LLDBG_L2("ID", (int)id);
+  LLDBG_L2("KIND", (int)kind);
+  LLDBG_L2("SIZE", size);
+  LLDBG_L2("OFFSET", offset);
+  LLDBG_L2("ALIGN", alignment);
   if (!aliases.empty()) {
-    llvm::dbgs() << "\tALIASES:  ";
-    llvm::for_each(aliases, [cnt = 0](auto *buf) mutable {
-      llvm::dbgs() << (cnt++ ? ", " : "") << buf->id;
+    std::string astr;
+    llvm::for_each(aliases, [&astr, cnt = 0](auto *buf) mutable {
+      astr += (cnt++ ? ", " : "");
+      astr += std::to_string(buf->id);
     });
-    llvm::dbgs() << "\n";
+    LLDBG_L2("ALIASES", astr);
   }
 }
 
 void Allocation::dump() const {
+  LLDBG_L0("ALLOCATION STATE", "");
   for (auto pair : opScratch) {
-    llvm::dbgs() << "    SCRATCH: "
-                 << "\n\t";
+    LLDBG_L1P("SCRATCH");
     pair.first->print(llvm::dbgs());
     llvm::dbgs() << "\n";
     pair.second->dump();
   }
   for (auto pair : opVirtual) {
-    llvm::dbgs() << "    VIRTUAL: "
-                 << "\n\t";
+    LLDBG_L1P("VIRTUAL");
     pair.first->print(llvm::dbgs());
     llvm::dbgs() << "\n";
     pair.second->dump();
   }
   for (auto pair : valueBuffer) {
-    llvm::dbgs() << "    VALUE: "
-                 << "\n\t";
+    LLDBG_L1P("VALUE");
     printValue(pair.first);
-    llvm::dbgs() << "\n";
     pair.second->dump();
   }
   for (auto pair : aliasBuffer) {
-    llvm::dbgs() << "    ALIAS: "
-                 << "\n\t";
+    LLDBG_L1P("ALIAS");
     printValue(pair.first);
-    llvm::dbgs() << "\n\tIDS:      ";
-    llvm::for_each(pair.second, [cnt = 0](auto *buf) mutable {
-      llvm::dbgs() << (cnt++ ? ", " : "") << buf->id;
+    std::string astr;
+    llvm::for_each(pair.second, [&astr, cnt = 0](auto *buf) mutable {
+      astr += (cnt++ ? ", " : "");
+      astr += std::to_string(buf->id);
     });
-    llvm::dbgs() << "\n";
+    LLDBG_L2("IDS", astr);
   }
 }
 

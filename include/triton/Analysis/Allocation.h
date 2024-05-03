@@ -53,7 +53,7 @@ public:
   bool adjacent(const Interval &R) const {
     return R.End == Start || R.Start == End;
   }
-  Interval merge(const Interval &R) const {
+  Interval span(const Interval &R) const {
     return Interval(std::min(Start, R.Start), std::max(End, R.End));
   }
 
@@ -177,20 +177,12 @@ private:
         : kind(kind), id(nextId++), size(size), alignment(alignment),
           offset(offset) {}
 
-    void _applyToActuals(llvm::SetVector<BufferT *> &visited,
-                         const std::function<void(BufferT *)> &f) {
-      visited.insert(this);
+    void applyToBufferAndAliases(const std::function<void(BufferT *)> &f) {
       if (kind == BufferKind::Alias) {
-        for (auto *buf : aliases) {
-          if (!visited.contains(buf))
-            buf->_applyToActuals(visited, f);
-        }
+        for (auto *buf : aliases)
+          f(buf);
       } else
         f(this);
-    }
-    void applyToActuals(const std::function<void(BufferT *)> &f) {
-      llvm::SetVector<BufferT *> visited;
-      _applyToActuals(visited, f);
     }
 
     void dump() const;
