@@ -1,12 +1,4 @@
 #include "triton/Analysis/Allocation.h"
-// #include "mlir/Analysis/DataFlowFramework.h"
-// #include "mlir/Analysis/Liveness.h"
-// #include "mlir/Analysis/SliceAnalysis.h"
-// #include "mlir/Dialect/Tensor/IR/Tensor.h"
-// #include "triton/Analysis/Alias.h"
-// #include "triton/Dialect/Triton/IR/Utility.h"
-// #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-// #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
 
@@ -42,9 +34,9 @@ using ::mlir::triton::gpu::SliceEncodingAttr;
 
 // Debug defines
 #define LLDBG_L0(TAG, VAL)                                                     \
-  LLVM_DEBUG(llvm::dbgs() << TAG << ": " << VAL << "\n")
+  llvm::dbgs() << TAG << ": " << VAL << "\n"
+#define LLDBG_L0V(TAG, VAL) LLVM_DEBUG(LLDBG_L0(TAG, VAL))
 #define LLDBG_L1(TAG) llvm::dbgs() << "    " << TAG << ":\n"
-
 #define LLDBG_L1P(TAG)                                                         \
   llvm::dbgs() << "    " << TAG << llvm::left_justify(": ", 20 - strlen(TAG))
 #define LLDBG_L2(TAG, VAL)                                                     \
@@ -301,7 +293,7 @@ private:
 
   void run() {
     auto func = cast<triton::FuncOp>(operation);
-    LLDBG_L0("ALLOCATION", func.getName());
+    LLDBG_L0V("ALLOCATION", func.getName());
     getValuesAndSizes();
     resolveLiveness();
     computeOffsets();
@@ -628,7 +620,7 @@ private:
   /// Paper: Algorithms for Compile-Time Memory Optimization
   /// (https://dl.acm.org/doi/pdf/10.5555/314500.315082)
   void computeOffsets() {
-    LLDBG_L0("ALLOCATE", "");
+    LLDBG_L0V("ALLOCATE", "");
 
     SmallVector<BufferT *> buffers;
     for (auto bufferIter : bufferRange) {
@@ -853,7 +845,7 @@ void Allocation::BufferT::dump() const {
 }
 
 void Allocation::dump() const {
-  LLDBG_L0("ALLOCATION STATE", "");
+  LLDBG_L0("ALLOCATION SIZE", sharedMemorySize);
   for (auto pair : opScratch) {
     LLDBG_L1P("SCRATCH");
     pair.first->print(llvm::dbgs());
