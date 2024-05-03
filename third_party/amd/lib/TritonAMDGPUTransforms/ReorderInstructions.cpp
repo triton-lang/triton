@@ -29,7 +29,7 @@ static bool willIncreaseRegisterPressure(Operation *op) {
   auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
   if (!cvt)
     return false;
-  if (cvt.getType().getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
+  if (isa<triton::gpu::DotOperandEncodingAttr>(cvt.getType().getEncoding()))
     return true;
   return false;
 }

@@ -112,14 +112,14 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   int kDimIdx = opIdx == 0 ? 1 : 0;
   int nonKDimIdx = opIdx == 0 ? 0 : 1;
 
-  auto wmmaLayout = encoding.getParent().cast<AMDWmmaEncodingAttr>();
+  auto wmmaLayout = cast<AMDWmmaEncodingAttr>(encoding.getParent());
   auto nonKDim = wmmaLayout.getMNKDimPerWMMAInstr()[nonKDimIdx];
   assert(nonKDim == 16);
   auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
 
-  auto aTensorTy = tensor.getType().cast<MemDescType>();
+  auto aTensorTy = cast<MemDescType>(tensor.getType());
   ArrayRef<int64_t> shape = aTensorTy.getShape();
-  auto sharedLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto sharedLayout = cast<SharedEncodingAttr>(aTensorTy.getEncoding());
   auto order = sharedLayout.getOrder();
 
   auto elemTy = aTensorTy.getElementType();

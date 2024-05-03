@@ -1,7 +1,9 @@
 #include "PipeliningUtility.h"
+
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -74,7 +76,7 @@ void mlir::triton::addDep(Operation *op, DenseSet<Operation *> &deps,
   for (Value operand : op->getOperands()) {
     Value v = operand;
     llvm::SmallDenseSet<Value> seen;
-    while (auto arg = v.dyn_cast<BlockArgument>()) {
+    while (auto arg = mlir::dyn_cast<BlockArgument>(v)) {
       if (!includeArg)
         break;
       if (!seen.insert(v).second)

@@ -1,9 +1,8 @@
-#include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
-
 #include "PatternTritonGPUOpToLLVM.h"
-#include "Utility.h"
-
 #include "TargetInfo.h"
+#include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
+#include "Utility.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
@@ -798,8 +797,8 @@ struct ClampFOpConversion
 
     auto getSplatInitializer = [](Value v) -> std::optional<double> {
       if (auto constOp = v.getDefiningOp<arith::ConstantOp>()) {
-        if (auto attr =
-                constOp.getValueAttr().dyn_cast<DenseIntOrFPElementsAttr>()) {
+        if (auto attr = mlir::dyn_cast<DenseIntOrFPElementsAttr>(
+                constOp.getValueAttr())) {
           if (attr.isSplat()) {
             return attr.getSplatValue<APFloat>().convertToDouble();
           }

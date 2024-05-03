@@ -58,10 +58,9 @@ public:
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    if (dstLayout.isa<DotOperandEncodingAttr>() &&
-        dstLayout.cast<DotOperandEncodingAttr>()
-            .getParent()
-            .isa<NvidiaMmaEncodingAttr>()) {
+    if (isa<DotOperandEncodingAttr>(dstLayout) &&
+        isa<NvidiaMmaEncodingAttr>(
+            cast<DotOperandEncodingAttr>(dstLayout).getParent())) {
       return lowerSharedToDotOperand(op, adaptor, getTypeConverter(), rewriter);
     }
     return failure();
@@ -93,7 +92,7 @@ private:
     } else if (!isOuter && mmaLayout.isVolta() && isMMA) { // tensor core v1
       bool isMMAv1Row = mmaLayout.getMMAv1IsRow(dotOperandLayout.getOpIdx());
       auto srcSharedLayout =
-          src.getType().getEncoding().cast<SharedEncodingAttr>();
+          cast<SharedEncodingAttr>(src.getType().getEncoding());
 
       // Can only convert [1, 0] to row or [0, 1] to col for now
       if ((srcSharedLayout.getOrder()[0] == 1 && !isMMAv1Row) ||
@@ -118,9 +117,9 @@ private:
                           const LLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
-    auto dstEnc = op.getType().getEncoding().cast<DotOperandEncodingAttr>();
+    auto dstEnc = cast<DotOperandEncodingAttr>(op.getType().getEncoding());
     auto sharedLayout =
-        op.getSrc().getType().getEncoding().cast<SharedEncodingAttr>();
+        cast<SharedEncodingAttr>(op.getSrc().getType().getEncoding());
 
     int K;
     if (dstEnc.getOpIdx() == 0) // $a
@@ -128,7 +127,7 @@ private:
     else // $b
       K = op.getType().getShape()[sharedLayout.getOrder()[1]];
     bool isOuter = K == 1;
-    auto mmaLayout = dstEnc.getParent().cast<NvidiaMmaEncodingAttr>();
+    auto mmaLayout = cast<NvidiaMmaEncodingAttr>(dstEnc.getParent());
     Value res = lowerSharedToDotOperandMMA(op, adaptor, typeConverter, rewriter,
                                            mmaLayout, dstEnc, isOuter);
 
@@ -150,8 +149,8 @@ public:
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
     // forwarding on mma->mma shortcut, lower distributed->distributed otherwise
-    if (srcLayout.isa<NvidiaMmaEncodingAttr>() &&
-        dstLayout.isa<NvidiaMmaEncodingAttr>()) {
+    if (isa<NvidiaMmaEncodingAttr>(srcLayout) &&
+        isa<NvidiaMmaEncodingAttr>(dstLayout)) {
       if (isMmaToMmaShortcut(srcTy, dstTy)) {
         return lowerMmaToMma(op, adaptor, rewriter);
       }
@@ -172,8 +171,8 @@ private:
       rewriter.replaceOp(op, adaptor.getSrc());
       return success();
     }
-    auto dstMmaLayout = dstTy.getEncoding().cast<NvidiaMmaEncodingAttr>();
-    auto srcMmaLayout = srcTy.getEncoding().cast<NvidiaMmaEncodingAttr>();
+    auto dstMmaLayout = cast<NvidiaMmaEncodingAttr>(dstTy.getEncoding());
+    auto srcMmaLayout = cast<NvidiaMmaEncodingAttr>(srcTy.getEncoding());
     assert(dstMmaLayout.isHopper() && srcMmaLayout.isHopper() &&
            "only MMAV3 layout is supported");
     auto dstShape = dstTy.getShape();
@@ -227,8 +226,8 @@ public:
       if (isLayoutMmaV1(srcLayout) || isLayoutMmaV1(dstLayout))
         return lowerDistributedToDistributed(op, adaptor, rewriter);
     }
-    if (srcLayout.isa<NvidiaMmaEncodingAttr>() &&
-        dstLayout.isa<DotOperandEncodingAttr>()) {
+    if (isa<NvidiaMmaEncodingAttr>(srcLayout) &&
+        isa<DotOperandEncodingAttr>(dstLayout)) {
       return lowerMmaToDotOperand(op, adaptor, rewriter);
     }
 
@@ -337,10 +336,10 @@ private:
     unsigned accumNumCTAsEachRep = 1;
     auto typeConverter = getTypeConverter();
     auto layout = type.getEncoding();
-    NvidiaMmaEncodingAttr mma = layout.dyn_cast<NvidiaMmaEncodingAttr>();
-    auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>();
+    NvidiaMmaEncodingAttr mma = dyn_cast<NvidiaMmaEncodingAttr>(layout);
+    auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout);
     if (sliceLayout)
-      mma = sliceLayout.getParent().cast<NvidiaMmaEncodingAttr>();
+      mma = cast<NvidiaMmaEncodingAttr>(sliceLayout.getParent());
 
     auto order = getOrder(layout);
     auto rank = type.getRank();

@@ -164,7 +164,7 @@ int eval(Value value, int ctaid, int tid) {
   assert(op && "Unrecognized source value in the index expression");
   if (auto constantOp = llvm::dyn_cast<mlir::LLVM::ConstantOp>(op)) {
     auto attr = constantOp.getValue();
-    return attr.cast<mlir::IntegerAttr>().getInt();
+    return mlir::cast<mlir::IntegerAttr>(attr).getInt();
   } else if (auto addOp = llvm::dyn_cast<mlir::LLVM::AddOp>(op)) {
     return eval(addOp.getLhs(), ctaid, tid) + eval(addOp.getRhs(), ctaid, tid);
   } else if (auto mulOp = llvm::dyn_cast<mlir::LLVM::MulOp>(op)) {
@@ -323,7 +323,7 @@ std::string dumpSharedLayout(Attribute layout, llvm::ArrayRef<int64_t> shape,
   if (!multiCTA)
     assert(numCTAs == 1 && "numCTAs must be 1 when multiCTA is false");
 
-  auto sharedLayout = layout.cast<SharedEncodingAttr>();
+  auto sharedLayout = mlir::cast<SharedEncodingAttr>(layout);
   auto blockedLayout = BlockedEncodingAttr::get(
       /*context=*/layout.getContext(), /*shape=*/shape,
       /*sizePerThread=*/{1, 1}, /*order=*/sharedLayout.getOrder(),

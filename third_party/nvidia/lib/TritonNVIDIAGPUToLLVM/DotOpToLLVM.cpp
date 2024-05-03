@@ -50,9 +50,8 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
     unsigned K = AShapePerCTA[reduceAxis];
     bool isOuter = K == 1;
 
-    NvidiaMmaEncodingAttr mmaLayout = cast<RankedTensorType>(D.getType())
-                                          .getEncoding()
-                                          .dyn_cast<NvidiaMmaEncodingAttr>();
+    NvidiaMmaEncodingAttr mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(
+        cast<RankedTensorType>(D.getType()).getEncoding());
     if (!isOuter && mmaLayout && supportMMA(op, mmaLayout.getVersionMajor())) {
       if (mmaLayout.isVolta())
         return convertMMA884(op, adaptor, getTypeConverter(), rewriter);
@@ -68,9 +67,8 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
           "Unsupported MMA kind found when converting DotOp to LLVM.");
     }
 
-    if (cast<RankedTensorType>(D.getType())
-            .getEncoding()
-            .isa<BlockedEncodingAttr>())
+    if (isa<BlockedEncodingAttr>(
+            cast<RankedTensorType>(D.getType()).getEncoding()))
       return convertFMADot(op, adaptor, getTypeConverter(), rewriter);
 
     llvm::report_fatal_error(
@@ -97,9 +95,8 @@ struct DotAsyncOpConversion
     unsigned K = AShapePerCTA[reduceAxis];
     bool isOuter = K == 1;
 
-    NvidiaMmaEncodingAttr mmaLayout = cast<RankedTensorType>(D.getType())
-                                          .getEncoding()
-                                          .dyn_cast<NvidiaMmaEncodingAttr>();
+    NvidiaMmaEncodingAttr mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(
+        cast<RankedTensorType>(D.getType()).getEncoding());
     if (!isOuter && mmaLayout &&
         supportMMA(op.getOperand(0), mmaLayout.getVersionMajor())) {
       if (mmaLayout.isHopper()) {
