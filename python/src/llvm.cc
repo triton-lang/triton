@@ -16,6 +16,7 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Support/CodeGen.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
@@ -126,6 +127,12 @@ void init_triton_llvm(py::module &&m) {
 
   py::class_<llvm::LLVMContext>(m, "context", py::module_local())
       .def(py::init<>());
+  py::class_<llvm::SourceMgr>(m, "source_mgr", py::module_local())
+      .def(py::init<>())
+      .def("add_buffer", [](llvm::SourceMgr *mgr, std::string &ir) {
+        mgr->AddNewSourceBuffer(llvm::MemoryBuffer::getMemBuffer(ir),
+                                llvm::SMLoc());
+      });
 
   py::class_<llvm::Module::FunctionListType>(m, "function_list")
       .def(

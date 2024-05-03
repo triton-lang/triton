@@ -194,6 +194,12 @@ class CUDABackend(BaseBackend):
         if num_warp_groups is not None:
             metadata["num_warps"] *= num_warp_groups
         mod = src
+        # Set up Diagnostic
+        if os.environ.get("MLIR_ENABLE_REMARK"):
+            srcMgr = llvm.source_mgr()
+            diag = ir.source_mgr_diag(srcMgr, mod.context)
+            mod.context.printOpOnDiagnostic(False)
+            srcMgr.add_buffer(mod.__str__())
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()

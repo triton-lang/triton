@@ -203,6 +203,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         std::max(8u, valueElemTy.getIntOrFloatBitWidth());
     const int numVecs = numElems / vec;
 
+    op.emitRemark() << "vec = " << vec;
     LDBG("LoadOp numElems = " << numElems << " vec = " << vec
                               << " valueElemNBits = " << valueElemNBits << " "
                               << op.getType());
