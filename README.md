@@ -160,6 +160,8 @@ $ ninja -C build && ( cd build ; lit test )
 
 # Tips for hacking
 
+For detailed instructions on how to debug Triton's frontend, please refer to this [tutorial](https://triton-lang.org/main/programming-guide/chapter-3/debugging.html). The following includes additional tips for hacking on Triton's backend.
+
 **Helpful environment variables**
 
 - `MLIR_ENABLE_DUMP=1` dumps the IR before every MLIR pass Triton runs.
