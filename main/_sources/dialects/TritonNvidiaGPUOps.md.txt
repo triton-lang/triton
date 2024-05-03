@@ -7,7 +7,7 @@ _Copy data based on descriptor from global memory to local memory asynchronously
 Syntax:
 
 ```
-operation ::= `triton_nvidia_gpu.async_tma_copy_global_to_local` $desc_ptr `[` $coord `]` $result `,` $barrier
+operation ::= `triton_nvidia_gpu.async_tma_copy_global_to_local` $desc_ptr `[` $coord `]` $result `,` $barrier `,` $pred
               oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
               attr-dict `:` type($desc_ptr) `,` type($barrier) `->` type($result)
 ```
@@ -50,6 +50,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMem
 | `coord` | variadic of 32-bit signless integer
 | `barrier` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
 | `result` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+| `pred` | 1-bit signless integer
 
 ### `triton_nvidia_gpu.cluster_arrive` (triton::nvidia_gpu::ClusterArriveOp)
 

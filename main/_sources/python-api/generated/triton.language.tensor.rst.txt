@@ -28,6 +28,7 @@
       ~tensor.atomic_xchg
       ~tensor.atomic_xor
       ~tensor.broadcast_to
+      ~tensor.cast
       ~tensor.cdiv
       ~tensor.ceil
       ~tensor.cos
