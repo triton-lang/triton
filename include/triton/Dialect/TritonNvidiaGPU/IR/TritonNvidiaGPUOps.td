@@ -162,13 +162,14 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
     Variadic<I32>:$coord,
     TT_MemDescType:$barrier,
     TT_MemDescType:$result,
+    I1:$pred,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
     DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
     DefaultValuedAttr<BoolAttr, "false">:$isVolatile
   );
 
   let assemblyFormat = [{
-    $desc_ptr `[` $coord `]` $result `,` $barrier
+    $desc_ptr `[` $coord `]` $result `,` $barrier `,` $pred
     oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
     attr-dict `:` type($desc_ptr) `,` type($barrier) `->` type($result)
   }];

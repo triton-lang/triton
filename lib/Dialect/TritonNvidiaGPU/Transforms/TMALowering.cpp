@@ -26,8 +26,13 @@ public:
     auto tensorType = op.getResult().getType();
     auto order = getOrder(tensorType.getEncoding());
     auto ctaLayout = getCTALayout(tensorType.getEncoding());
-    auto encoding = SharedEncodingAttr::get(tensorType.getContext(), 1, 1, 1,
-                                            order, ctaLayout);
+    Attribute encoding = SharedEncodingAttr::get(tensorType.getContext(), 1, 1,
+                                                 1, order, ctaLayout);
+    if (tensorType.getRank() > 1) {
+      encoding = SharedEncodingAttr::get(
+          tensorType.getContext(), tensorType.getShape(), order, ctaLayout,
+          tensorType.getElementType());
+    }
     MemDescType memDescType =
         MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
                          encoding, /*mutableMemory=*/true);
@@ -43,8 +48,9 @@ public:
         rewriter.create<LocalAllocOp>(loc, barrierMemDescType, Value());
     rewriter.create<InitBarrierOp>(loc, barrierAlloc, 1);
 
+    Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
     rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
-        loc, op.getDescPtr(), op.getIndices(), barrierAlloc, alloc);
+        loc, op.getDescPtr(), op.getIndices(), barrierAlloc, alloc, pred);
     Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
     rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase);
     rewriter.replaceOpWithNewOp<LocalLoadOp>(op, op.getType(), alloc);
