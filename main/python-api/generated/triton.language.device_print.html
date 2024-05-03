@@ -138,12 +138,9 @@ this function (not the normal requirements for <code class="code docutils litera
 we measured the default as 6912 KiB, but this may not be consistent across
 GPUs and CUDA versions).  If you notice some printfs are being dropped, you
 can increase the buffer size by calling</p>
-<blockquote>
-<div><div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">set_printf_fifo_size</span><span class="p">(</span><span class="n">size_bytes</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>triton.runtime.driver.active.utils.set_printf_fifo_size(size_bytes)</p>
-</div></blockquote>
 <p>CUDA may raise an error if you try to change this value after running a
 kernel that uses printfs.  The value set here may only affect the current
 device (so if you have multiple GPUs, you’d need to call it multiple times).</p>

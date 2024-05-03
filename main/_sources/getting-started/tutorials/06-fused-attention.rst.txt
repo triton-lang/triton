@@ -28,7 +28,7 @@ Extra Credits:
 - Original flash attention paper (https://arxiv.org/abs/2205.14135)
 - Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
 
-.. GENERATED FROM PYTHON SOURCE LINES 13-681
+.. GENERATED FROM PYTHON SOURCE LINES 13-678
 
 
 
@@ -77,39 +77,39 @@ Extra Credits:
 
     fused-attention-batch4-head48-d64-fwd-causal=True-fp8=False:
          N_CTX      Triton
-    0   1024.0  118.794652
-    1   2048.0  143.880543
-    2   4096.0  157.867600
-    3   8192.0  167.289479
-    4  16384.0  173.405588
+    0   1024.0  118.810510
+    1   2048.0  142.209439
+    2   4096.0  157.818114
+    3   8192.0  167.320749
+    4  16384.0  173.695434
     fused-attention-batch4-head48-d64-fwd-causal=True-fp8=True:
          N_CTX      Triton
-    0   1024.0   98.171432
-    1   2048.0  118.499254
-    2   4096.0  128.820166
-    3   8192.0  134.374493
-    4  16384.0  137.900825
+    0   1024.0   98.108343
+    1   2048.0  118.565458
+    2   4096.0  128.608947
+    3   8192.0  134.649727
+    4  16384.0  137.776965
     fused-attention-batch4-head48-d64-fwd-causal=False-fp8=False:
          N_CTX      Triton
-    0   1024.0  159.291250
-    1   2048.0  168.846138
-    2   4096.0  171.121667
-    3   8192.0  174.899302
-    4  16384.0  174.753177
+    0   1024.0  159.388953
+    1   2048.0  168.683176
+    2   4096.0  172.790611
+    3   8192.0  175.532134
+    4  16384.0  177.034177
     fused-attention-batch4-head48-d64-fwd-causal=False-fp8=True:
          N_CTX      Triton
-    0   1024.0  136.411744
-    1   2048.0  144.845790
-    2   4096.0  149.086965
-    3   8192.0  148.714276
-    4  16384.0  149.447345
+    0   1024.0  136.288922
+    1   2048.0  144.658780
+    2   4096.0  148.167241
+    3   8192.0  148.702256
+    4  16384.0  149.350341
     fused-attention-batch4-head48-d64-bwd-causal=True-fp8=False:
          N_CTX      Triton
-    0   1024.0   75.553595
-    1   2048.0  100.115635
-    2   4096.0  118.134278
-    3   8192.0  129.217025
-    4  16384.0  135.787205
+    0   1024.0   75.610031
+    1   2048.0   99.807066
+    2   4096.0  118.209976
+    3   8192.0  129.215650
+    4  16384.0  135.748288
 
 
 
@@ -550,9 +550,6 @@ Extra Credits:
         tl.store(dq_ptrs, dq)
 
 
-    empty = torch.empty(128, device="cuda")
-
-
     class _attention(torch.autograd.Function):
 
         @staticmethod
@@ -792,7 +789,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 26.518 seconds)
+   **Total running time of the script:** (0 minutes 27.534 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:
