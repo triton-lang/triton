@@ -250,6 +250,9 @@ class CUDABackend(BaseBackend):
         ret = re.sub(r'\.version \d+\.\d+', f'.version {ptx_version}', ret, flags=re.MULTILINE)
         # Remove the debug flag that prevents ptxas from optimizing the code
         ret = re.sub(r",\s*debug|debug,\s*", "", ret)
+        if os.environ.get("NVPTX_ENABLE_DUMP", "0") == "1":
+            print("// -----// NVPTX Dump //----- //")
+            print(ret)
         return ret
 
     @staticmethod
