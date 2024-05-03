@@ -20,8 +20,6 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#ifdef USE_ROCM
-
 #include "../PatternTritonGPUOpToLLVM.h"
 #include "TritonAMDGPUTransforms/MfmaGroup.h"
 #include "Utility.h"
@@ -382,5 +380,3 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   return helper.convertDot(op, adaptor);
 }
 } // namespace mlir::triton::AMD
-
-#endif // ifdef USE_ROCM

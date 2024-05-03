@@ -20,8 +20,6 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#ifdef USE_ROCM
-
 #include "../PatternTritonGPUOpToLLVM.h"
 #include "SharedToDotOperandHelper.h"
 #include "Utility.h"
@@ -366,5 +364,3 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 }
 
 } // namespace SharedToDotOperandMFMA
-
-#endif // ifdef USE_ROCM
