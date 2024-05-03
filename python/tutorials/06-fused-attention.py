@@ -439,6 +439,7 @@ def _attn_bwd(Q, K, V, sm_scale,  #
     dq *= LN2
     tl.store(dq_ptrs, dq)
 
+
 class _attention(torch.autograd.Function):
 
     @staticmethod
