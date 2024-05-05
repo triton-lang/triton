@@ -249,7 +249,8 @@ def compile(src, target=None, options=None):
     metadata_filename = f"{src.name}.json"
     metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
     metadata_path = metadata_group.get(metadata_filename)
-    if metadata_path is not None:
+    always_compile = os.environ.get("TRITON_ALWAYS_COMPILE", "0") == "1"
+    if not always_compile and metadata_path is not None:
         # cache hit!
         metadata = json.loads(Path(metadata_path).read_text())
         return CompiledKernel(src, metadata_group, hash)
