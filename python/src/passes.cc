@@ -6,6 +6,7 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Membar.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
+#include "triton/Conversion/TritonToTritonCPU/Passes.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -43,6 +44,8 @@ void init_triton_passes_ttir(py::module &&m) {
   ADD_PASS_WRAPPER_4("add_convert_to_ttgpuir",
                      createConvertTritonToTritonGPUPass, const std::string &,
                      int, int, int);
+  ADD_PASS_WRAPPER_0("add_convert_to_ttcpuir",
+                     createConvertTritonToTritonCPUPass);
 }
 
 void init_triton_passes_ttgpuir(py::module &&m) {
@@ -76,6 +79,8 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createTritonGPUCoalesceAsyncCopy);
 }
 
+void init_triton_passes_ttcpuir(py::module &&m) {}
+
 void init_triton_passes_convert(py::module &&m) {
   using namespace mlir;
   ADD_PASS_WRAPPER_0("add_scf_to_cf", createConvertSCFToCFPass);
@@ -94,6 +99,7 @@ void init_triton_passes(py::module &&m) {
   init_triton_passes_common(m.def_submodule("common"));
   init_triton_passes_convert(m.def_submodule("convert"));
   init_triton_passes_ttir(m.def_submodule("ttir"));
+  init_triton_passes_ttcpuir(m.def_submodule("ttcpuir"));
   init_triton_passes_ttgpuir(m.def_submodule("ttgpuir"));
   init_triton_passes_llvmir(m.def_submodule("llvmir"));
 }

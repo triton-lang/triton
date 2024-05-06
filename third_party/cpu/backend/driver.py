@@ -48,7 +48,6 @@ class CPULauncher(object):
         self.launch = lambda *args, **kwargs: None
 
     def __call__(self, *args, **kwargs):
-        print("CPULauncher.__call__")
         self.launch(*args, **kwargs)
 
 
