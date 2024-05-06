@@ -4,11 +4,11 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
-#ifdef USE_ROCM
+// Below headers will allow registration to ROCm passes
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "TritonAMDGPUTransforms/TritonGPUConversion.h"
-#endif
+
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
@@ -48,17 +48,16 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerDecomposeUnsupportedNVIDIAConversions();
   mlir::registerLLVMDIScope();
 
-#ifdef USE_ROCM
+  // TritonAMDGPUToLLVM passes
   mlir::triton::registerConvertTritonAMDGPUToLLVM();
   mlir::triton::registerConvertBuiltinFuncToLLVM();
   mlir::triton::registerDecomposeUnsupportedAMDConversions();
 
+  // TritonAMDGPUTransforms passes
   mlir::registerTritonAMDGPUAccelerateMatmul();
   mlir::registerTritonAMDGPUOptimizeEpilogue();
   mlir::registerTritonAMDGPUReorderInstructions();
   mlir::registerTritonAMDGPUStreamPipeline();
-
-#endif // USE_ROCM
 
   // TODO: register Triton & TritonGPU passes
   registry.insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
