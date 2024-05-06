@@ -206,3 +206,7 @@ There are two modes:
         show_metrics(file_name)
     elif metrics:
         parse(metrics, file_name, include, exclude, threshold, depth)
+
+
+if __name__ == "__main__":
+    main()
