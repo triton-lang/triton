@@ -33,38 +33,42 @@ using ::mlir::triton::gpu::SliceEncodingAttr;
 #define DEBUG_TYPE "allocate-shared-memory"
 
 // Debug defines
-#define LLDBG_L0(TAG, VAL)                                                     \
-  llvm::dbgs() << TAG << ": " << VAL << "\n"
+#define LLDBG_TAG(DEPTH, TAG)                                                  \
+  llvm::dbgs() << llvm::right_justify("", DEPTH * 4) << TAG                    \
+               << llvm::left_justify(": ", 24 - (DEPTH * 4) - strlen(TAG))
+
+#define LLDBG_L0(TAG, VAL) LLDBG_TAG(0, TAG) << VAL << "\n"
 #define LLDBG_L0V(TAG, VAL) LLVM_DEBUG(LLDBG_L0(TAG, VAL))
-#define LLDBG_L1(TAG) llvm::dbgs() << "    " << TAG << ":\n"
-#define LLDBG_L1P(TAG)                                                         \
-  llvm::dbgs() << "    " << TAG << llvm::left_justify(": ", 20 - strlen(TAG))
-#define LLDBG_L2(TAG, VAL)                                                     \
-  llvm::dbgs() << "        " << TAG                                            \
-               << llvm::left_justify(": ", 16 - strlen(TAG)) << VAL << "\n"
+
+#define LLDBG_L1(TAG) LLDBG_TAG(1, TAG) << "\n"
+#define LLDBG_L1V(TAG, VAL) LLDBG_TAG(1, TAG) << VAL << "\n"
+#define LLDBG_L1P(TAG) LLDBG_TAG(1, TAG)
+
+#define LLDBG_L2(TAG, VAL) LLDBG_TAG(2, TAG) << VAL << "\n"
 #define LLDBG_L2V(TAG, VAL) LLVM_DEBUG(LLDBG_L2(TAG, VAL))
+#define LLDBG_L2C(TAG, CONTAINER)                                              \
+  LLDBG_TAG(2, TAG);                                                           \
+  llvm::interleaveComma(CONTAINER, llvm::dbgs(),                               \
+                        [](const auto &r) { llvm::dbgs() << r; });             \
+  llvm::dbgs() << "\n"
+#define LLDBG_L2C_ID(TAG, CONTAINER)                                           \
+  LLDBG_TAG(2, TAG);                                                           \
+  llvm::interleaveComma(CONTAINER, llvm::dbgs(),                               \
+                        [](const auto &b) { llvm::dbgs() << b->id; });         \
+  llvm::dbgs() << "\n"
 
 namespace mlir {
 
 namespace {
 // Debug utilities
-template <typename T> std::string intervalToString(const Interval<T> &range) {
-  std::string s = "[";
-  s += std::to_string(range.start());
-  s += ",";
-  s += std::to_string(range.end());
-  s += ")";
-  return s;
-}
-
 template <typename T>
 llvm::raw_ostream &operator<<(llvm::raw_ostream &ostr,
                               const Interval<T> &range) {
-  ostr << intervalToString(range);
+  ostr << "[" << range.start() << "," << range.end() << ")";
   return ostr;
 }
 
-void printValue(Value v) {
+void printValue(mlir::Value v) {
   if (auto arg = dyn_cast<BlockArgument>(v)) {
     Block *block = arg.getOwner();
     const auto &blks = block->getParent()->getBlocks();
@@ -501,18 +505,8 @@ private:
                        const LiveIntervals &ranges) const {
     LLDBG_L1P("RESOLVE ALIAS");
     printValue(value);
-    std::string srngs;
-    llvm::for_each(ranges, [&srngs, cnt = 0](auto interval) mutable {
-      srngs += (cnt++ ? " " : "");
-      srngs += intervalToString(interval);
-    });
-    LLDBG_L2("RANGES", srngs);
-    std::string sbufs;
-    llvm::for_each(buffers, [&sbufs, cnt = 0](auto *buf) mutable {
-      sbufs += (cnt++ ? ", " : "");
-      sbufs += std::to_string(buf->id);
-    });
-    LLDBG_L2("BUFFERS", sbufs);
+    LLDBG_L2C("RANGES", ranges);
+    LLDBG_L2C_ID("BUFFERS", buffers);
   }
 
   /// Following the alias lattice, an alias that:
@@ -813,9 +807,8 @@ private:
     allocation->dump();
 
     for (auto pair : bufferRange) {
-      LLDBG_L1("BUFFER RANGE");
+      LLDBG_L1V("BUFFER RANGE", pair.second);
       pair.first->dump();
-      LLDBG_L2("INTERVAL", pair.second);
     }
   }
 
@@ -835,12 +828,7 @@ void Allocation::BufferT::dump() const {
   LLDBG_L2("OFFSET", offset);
   LLDBG_L2("ALIGN", alignment);
   if (!aliases.empty()) {
-    std::string astr;
-    llvm::for_each(aliases, [&astr, cnt = 0](auto *buf) mutable {
-      astr += (cnt++ ? ", " : "");
-      astr += std::to_string(buf->id);
-    });
-    LLDBG_L2("ALIASES", astr);
+    LLDBG_L2C_ID("ALIASES", aliases);
   }
 }
 
