@@ -1,11 +1,12 @@
 import functools
 import hashlib
+import os
 import re
 
 from dataclasses import dataclass
 from typing import Any
 
-from triton._C.libtriton import cpu, ir, passes
+from triton._C.libtriton import cpu, ir, llvm, passes
 from triton.backends.compiler import BaseBackend
 
 
@@ -17,6 +18,7 @@ class CPUOptions:
     num_stages: int = 0
     num_ctas: int = 0
     cluster_dims: tuple = (1, 1, 1)
+    extern_libs: dict = None
     debug: bool = False
 
     # TODO: We may introduce CPU-specific options like # of cores.
@@ -72,14 +74,66 @@ class CPUBackend(BaseBackend):
 
     @staticmethod
     def make_ttcir(mod, metadata, opt):
+        # TTIR -> TTCIR
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+        passes.ttir.add_convert_to_ttcpuir(pm)
+
+        #
         # TODO:
+        #
+
+        passes.common.add_cse(pm)
+        passes.common.add_symbol_dce(pm)
+        pm.run(mod)
         return mod
 
     @staticmethod
     def make_llir(src, metadata, options):
+        mod = src
+        # TritonCPU -> LLVM-IR (MLIR)
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+        passes.convert.add_scf_to_cf(pm)
+        passes.convert.add_index_to_llvmir(pm)
+
+        cpu.passes.ttcpuir.add_to_llvmir(pm)
+        passes.common.add_canonicalizer(pm)
+        passes.common.add_cse(pm)
+
+        passes.convert.add_scf_to_cf(pm)
+        passes.convert.add_cf_to_llvmir(pm)
+        passes.convert.add_arith_to_llvmir(pm)
+        passes.common.add_canonicalizer(pm)
+        passes.common.add_cse(pm)
+        passes.common.add_symbol_dce(pm)
+        if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
+            passes.llvmir.add_di_scope(pm)
+        pm.run(mod)
+
+        # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
+        llvm.init_targets()
+        context = llvm.context()
+        llvm_mod = llvm.to_module(mod, context)
+
         # TODO:
+        if not llvm_mod:
+            metadata["shared"] = 0
+            return src
+
+        if options.extern_libs:
+            paths = [path for (name, path) in options.extern_libs]
+            llvm.link_extern_libs(llvm_mod, paths)
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
+
+        # CPU doesn't have SMEM, but just to make it work for now.
         metadata["shared"] = 0
-        return src
+
+        # Cleanup
+        ret = str(llvm_mod)
+        del llvm_mod
+        del context
+        return ret
 
     @staticmethod
     def make_exe(src, metadata, options):

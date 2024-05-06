@@ -1,5 +1,5 @@
-#ifndef TRITON_CONVERSION_PASSES_H
-#define TRITON_CONVERSION_PASSES_H
+#ifndef TRITON_CONVERSION_TO_GPU_PASSES_H
+#define TRITON_CONVERSION_TO_GPU_PASSES_H
 
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 
