@@ -11,6 +11,9 @@ from .errors import InterpreterError
 from functools import partial
 from .._C.libtriton import interpreter as _interpreter
 from .._C.libtriton import ir as _ir
+from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload, Dict, Any, Tuple
+
+T = TypeVar("T")
 
 
 class TensorHandle:
@@ -1125,3 +1128,25 @@ class InterpretedFunction:
             return self.fn(*args, **kwargs)
         except Exception as e:
             raise InterpreterError(repr(e)) from e
+
+
+# -----------------------------------------------------------------------------
+# `interpret` decorator
+# -----------------------------------------------------------------------------
+
+
+def interpret(fn: Optional[T] = None, ) -> InterpretedFunction:
+    """
+    :param fn: the function to be interpreted
+    :type fn: Callable
+    """
+
+    def decorator(fn: T) -> InterpretedFunction:
+        assert callable(fn)
+        return InterpretedFunction(fn)
+
+    if fn is not None:
+        return decorator(fn)
+
+    else:
+        return decorator

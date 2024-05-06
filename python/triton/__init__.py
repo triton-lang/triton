@@ -18,6 +18,7 @@ from .runtime import (
     MockTensor,
 )
 from .runtime.jit import jit
+from .runtime.interpreter import interpret
 from .compiler import compile, CompilationError
 from .errors import TritonError
 
@@ -36,6 +37,8 @@ __all__ = [
     "InterpreterError",
     "jit",
     "JITFunction",
+    "interpret",
+    "InterpretedFunction",
     "KernelInterface",
     "language",
     "MockTensor",

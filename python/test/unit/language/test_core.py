@@ -271,6 +271,34 @@ def _test_unary(dtype_x, expr, numpy_expr=None, device='cuda', num_ctas=1):
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
 
 
+# generic test functions
+def _test_unary_interpret(dtype_x, expr, numpy_expr=None, device='cuda', num_ctas=1):
+    check_type_supported(dtype_x, device)  # early return if dtype_x is not supported
+    SIZE = 128
+    # define the kernel / launch-grid
+
+    @triton.interpret
+    def kernel(Z, X, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        x = tl.load(X + off)
+        z = GENERATE_TEST_HERE
+        tl.store(Z + off, z)
+
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': expr})
+    # inputs
+    x = numpy_random(SIZE, dtype_str=dtype_x)
+    if 'log' in expr:
+        x = np.abs(x) + 0.01
+    # reference result
+    z_ref = eval(expr if numpy_expr is None else numpy_expr)
+    # triton result
+    x_tri = to_triton(x, device=device, dst_type=dtype_x)
+    z_tri = to_triton(np.empty_like(x), device=device, dst_type=dtype_x)
+    kernel[(1, )](Z=z_tri, X=x_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
+    # compare
+    np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
+
+
 def _binary_op_dtype_override(a: str, b: str) -> Optional[np.dtype]:
     """
     Given two dtype strings, returns the numpy dtype Triton thinks binary
@@ -903,6 +931,14 @@ def test_where_broadcast(num_ctas, device):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_unary_op(dtype_x, expr, num_ctas, device):
     _test_unary(dtype_x, expr, device=device, num_ctas=num_ctas)
+
+
+@pytest.mark.parametrize("dtype_x, expr",
+                         [(dtype_x, ' -x') for dtype_x in dtypes_with_bfloat16] + [(dtype_x, ' ~x')
+                                                                                   for dtype_x in int_dtypes])
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+def test_unary_op_interpret(dtype_x, expr, num_ctas, device):
+    _test_unary_interpret(dtype_x, expr, device=device, num_ctas=num_ctas)
 
 
 # ----------------
