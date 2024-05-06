@@ -1,3 +1,7 @@
+#include <pybind11/functional.h>
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
 #include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -12,6 +16,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/FileUtilities.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Transforms/Passes.h"
@@ -20,9 +25,6 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
-#include <pybind11/functional.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
 
 namespace {
 
@@ -242,7 +244,7 @@ void init_triton_ir(py::module &&m) {
              if (Operation *definingOp = self.getDefiningOp())
                definingOp->setAttr(name, attr);
              else {
-               auto arg = self.cast<BlockArgument>();
+               auto arg = mlir::cast<BlockArgument>(self);
                int id = arg.getArgNumber();
                std::string attrName = name + "_arg" + std::to_string(id);
                Block *owner = arg.getOwner();
@@ -478,11 +480,10 @@ void init_triton_ir(py::module &&m) {
            });
 
   m.def("make_attr", [](const std::vector<int> &values, MLIRContext &context) {
-    return DenseIntElementsAttr::get(
-               RankedTensorType::get({static_cast<int64_t>(values.size())},
-                                     IntegerType::get(&context, 32)),
-               values)
-        .cast<Attribute>();
+    return mlir::cast<Attribute>(DenseIntElementsAttr::get(
+        RankedTensorType::get({static_cast<int64_t>(values.size())},
+                              IntegerType::get(&context, 32)),
+        values));
   });
 
   m.def(
@@ -1578,7 +1579,8 @@ void init_triton_ir(py::module &&m) {
       .def("run", [](PassManager &self, ModuleOp &mod) {
         // TODO: maybe dump module to file and print error for better
         // diagnostics
-        auto reproducerPath = triton::tools::getenv("TRITON_REPRODUCER_PATH");
+        auto reproducerPath =
+            triton::tools::getStrEnv("TRITON_REPRODUCER_PATH");
         if (!reproducerPath.empty()) {
           auto anchorName = self.getOpAnchorName();
           auto passes = self.getPasses();
@@ -1590,7 +1592,7 @@ void init_triton_ir(py::module &&m) {
           ::llvm::DebugFlag = true;
         }
 
-        if (auto debugOnly = triton::tools::getenv("TRITON_LLVM_DEBUG_ONLY");
+        if (auto debugOnly = triton::tools::getStrEnv("TRITON_LLVM_DEBUG_ONLY");
             !debugOnly.empty()) {
           llvm::SmallVector<StringRef, 3> split;
           llvm::SmallVector<std::string, 3> storage;
@@ -1616,11 +1618,11 @@ void init_triton_ir(py::module &&m) {
 }
 
 void init_triton_env_vars(py::module &m) {
-  m.def("get_env_vars", []() -> std::map<std::string, bool> {
-    std::map<std::string, bool> envVars;
-    for (const auto &envVar : ENV_VARS) {
-      envVars[envVar] = triton::tools::getBoolEnv(envVar);
+  m.def("get_cache_invalidating_env_vars", []() -> std::map<std::string, bool> {
+    std::map<std::string, bool> ret;
+    for (const auto &envVar : CACHE_INVALIDATING_ENV_VARS) {
+      ret[envVar] = triton::tools::getBoolEnv(envVar);
     }
-    return envVars;
+    return ret;
   });
 }

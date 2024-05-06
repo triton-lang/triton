@@ -53,7 +53,7 @@ void storeDistributedToSharedWithStMatrix(
     ArrayRef<unsigned> origRepShape, Location loc,
     ConversionPatternRewriter &rewriter) {
   auto shapePerCTA = getShapePerCTA(tensorTy);
-  auto mmaLayout = tensorTy.getEncoding().cast<NvidiaMmaEncodingAttr>();
+  auto mmaLayout = mlir::cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
   auto order = triton::gpu::getOrder(mmaLayout);
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
   auto shapePerCTATile = getShapePerCTATile(mmaLayout);
@@ -101,7 +101,8 @@ void storeDistributedToSharedWithStMatrix(
 }
 
 bool isStMatrixCompatible(RankedTensorType tensorTy) {
-  auto mmaLayout = tensorTy.getEncoding().dyn_cast<NvidiaMmaEncodingAttr>();
+  auto mmaLayout =
+      mlir::dyn_cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
   if (!mmaLayout || !mmaLayout.isHopper())
     return false;
   if (tensorTy.getElementType().getIntOrFloatBitWidth() != 16)

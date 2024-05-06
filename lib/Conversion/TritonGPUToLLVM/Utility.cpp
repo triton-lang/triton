@@ -241,8 +241,9 @@ SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
   auto reordered = applyPermutation(shape, order);
   SmallVector<Value> reorderedMultiDim(rank);
   if (auto constantOp = linear.getDefiningOp<arith::ConstantOp>()) {
-    unsigned intVal =
-        constantOp.getValue().cast<IntegerAttr>().getValue().getSExtValue();
+    unsigned intVal = mlir::cast<IntegerAttr>(constantOp.getValue())
+                          .getValue()
+                          .getSExtValue();
     reorderedMultiDim = delinearize(rewriter, loc, intVal, reordered);
   } else {
     reorderedMultiDim = delinearize(rewriter, loc, linear, reordered);
@@ -346,7 +347,7 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
                                      ArrayRef<unsigned> shapePerCTATile) {
   auto shape = type.getShape();
   unsigned rank = shape.size();
-  if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
+  if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout)) {
     auto multiDimOffsetFirstElem = emitBaseIndexForLayout(
         loc, rewriter, targetInfo, blockedLayout, type, false);
     SmallVector<Value> multiDimOffset(rank);
@@ -360,7 +361,7 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
     }
     return multiDimOffset;
   }
-  if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+  if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
     unsigned dim = sliceLayout.getDim();
     auto parentEncoding = sliceLayout.getParent();
     auto parentSizePerThread = getSizePerThread(parentEncoding);
@@ -388,7 +389,7 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
     }
     return multiDimOffset;
   }
-  if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+  if (auto mmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
     assert(rank == 2 ||
            (rank == 3 && mmaLayout.isAmpere()) && "Unexpected rank");
     auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
@@ -477,16 +478,16 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
     }
     return multiDimOffset;
   }
-  if (layout.isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>()) {
+  if (isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(layout)) {
     auto multiDimBase =
         emitBaseIndexForLayout(loc, rewriter, targetInfo, layout, type, false);
     SmallVector<SmallVector<unsigned>> offsets;
     assert(rank == 2);
     SmallVector<Value> multiDimOffset(rank);
-    if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
+    if (auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(layout)) {
       emitMfmaOffsetForCTA(mfmaLayout, offsets, 0, multiDimCTAInRepId[0],
                            multiDimCTAInRepId[1]);
-    } else if (auto wmmaLayout = layout.dyn_cast<AMDWmmaEncodingAttr>()) {
+    } else if (auto wmmaLayout = dyn_cast<AMDWmmaEncodingAttr>(layout)) {
       emitWmmaOffsetForCTA(wmmaLayout, offsets, multiDimCTAInRepId[0],
                            multiDimCTAInRepId[1]);
     }

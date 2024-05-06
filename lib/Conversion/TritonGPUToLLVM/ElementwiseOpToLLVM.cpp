@@ -1,5 +1,6 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
@@ -84,8 +85,8 @@ SmallVector<Value> unpackI32(const SmallVector<Value> &inValues, Type srcTy,
   auto tensorTy = dyn_cast<RankedTensorType>(srcTy);
   if (!tensorTy)
     return inValues;
-  auto encoding = tensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
-  if (!(encoding && encoding.getParent().isa<NvidiaMmaEncodingAttr>()))
+  auto encoding = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
+  if (!(encoding && isa<NvidiaMmaEncodingAttr>(encoding.getParent())))
     return inValues;
   SmallVector<Value> outValues;
   for (auto v : inValues) {
@@ -106,8 +107,8 @@ SmallVector<Value> packI32(const SmallVector<Value> &inValues, Type srcTy,
   auto tensorTy = dyn_cast<RankedTensorType>(srcTy);
   if (!tensorTy)
     return inValues;
-  auto encoding = tensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
-  if (!(encoding && encoding.getParent().isa<NvidiaMmaEncodingAttr>()))
+  auto encoding = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
+  if (!(encoding && isa<NvidiaMmaEncodingAttr>(encoding.getParent())))
     return inValues;
   SmallVector<Value> outValues;
   auto eltType = typeConverter->convertType(tensorTy.getElementType());
@@ -126,16 +127,16 @@ SmallVector<Value> packI32(const SmallVector<Value> &inValues, Type srcTy,
 int getNumElementsPerThreads(Type type,
                              const LLVMTypeConverter *typeConverter) {
   int numElemsPerThread = 1;
-  auto tensorTy = type.dyn_cast<RankedTensorType>();
+  auto tensorTy = dyn_cast<RankedTensorType>(type);
   if (!tensorTy)
     return numElemsPerThread;
   auto structType =
-      typeConverter->convertType(type).dyn_cast<LLVM::LLVMStructType>();
+      dyn_cast<LLVM::LLVMStructType>(typeConverter->convertType(type));
   if (structType) {
     numElemsPerThread = structType.getBody().size();
   }
-  auto encoding = tensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
-  if (!(encoding && encoding.getParent().isa<NvidiaMmaEncodingAttr>()))
+  auto encoding = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
+  if (!(encoding && isa<NvidiaMmaEncodingAttr>(encoding.getParent())))
     return numElemsPerThread;
   auto eltType = tensorTy.getElementType();
   assert(eltType.getIntOrFloatBitWidth() <= 32 &&

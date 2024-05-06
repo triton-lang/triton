@@ -35,19 +35,17 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
     bool isOuter = K == 1;
 
     if (!isOuter) {
-      auto dEncoding = D.getType().cast<RankedTensorType>().getEncoding();
-      if (dEncoding.isa<AMDMfmaEncodingAttr>() && supportMFMA(op)) {
+      auto dEncoding = cast<RankedTensorType>(D.getType()).getEncoding();
+      if (isa<AMDMfmaEncodingAttr>(dEncoding) && supportMFMA(op)) {
         return AMD::convertMFMA(op, adaptor, getTypeConverter(), rewriter);
       }
-      if (dEncoding.isa<AMDWmmaEncodingAttr>()) {
+      if (isa<AMDWmmaEncodingAttr>(dEncoding)) {
         return AMD::convertWMMA(op, adaptor, getTypeConverter(), rewriter);
       }
     }
 
-    if (D.getType()
-            .cast<RankedTensorType>()
-            .getEncoding()
-            .isa<BlockedEncodingAttr>())
+    if (isa<BlockedEncodingAttr>(
+            cast<RankedTensorType>(D.getType()).getEncoding()))
       return convertFMADot(op, adaptor, getTypeConverter(), rewriter);
 
     llvm::report_fatal_error(

@@ -376,8 +376,7 @@ inline Value getSharedMemoryBase(Location loc,
   FunctionOpInterface func =
       op->template getParentOfType<FunctionOpInterface>();
   assert(op->hasAttr("allocation.offset"));
-  size_t offset = op->getAttr("allocation.offset")
-                      .cast<IntegerAttr>()
+  size_t offset = cast<IntegerAttr>(op->getAttr("allocation.offset"))
                       .getValue()
                       .getZExtValue();
   Value offVal = i32_val(offset);
@@ -1041,21 +1040,21 @@ emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
   SmallVector<Value> baseIndex;
   RewriterBase::InsertionGuard guard(rewriter);
   SmallVector<Value> result;
-  if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
+  if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(layout)) {
     result = emitBaseIndexWithinCTAForBlockedLayout(loc, rewriter,
                                                     blockedLayout, type);
-  } else if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+  } else if (auto mmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
     if (mmaLayout.isVolta())
       result =
           emitBaseIndexWithinCTAForMmaLayoutV1(loc, rewriter, mmaLayout, type);
     if (mmaLayout.isAmpere() || mmaLayout.isHopper())
       result = emitBaseIndexWithinCTAForMmaLayoutV2V3(loc, rewriter, mmaLayout,
                                                       type);
-  } else if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
+  } else if (auto mfmaLayout = mlir::dyn_cast<AMDMfmaEncodingAttr>(layout)) {
     result = emitBaseIndexForMfmaLayout(loc, rewriter, mfmaLayout, type);
-  } else if (auto wmmaLayout = layout.dyn_cast<AMDWmmaEncodingAttr>()) {
+  } else if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(layout)) {
     result = emitBaseIndexForWmmaLayout(loc, rewriter, wmmaLayout, type);
-  } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+  } else if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
     auto parentLayout = sliceLayout.getParent();
     auto parentShape = sliceLayout.paddedShape(type.getShape());
     RankedTensorType parentTy =
@@ -1109,9 +1108,9 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter,
 
 inline SmallVector<SmallVector<unsigned>>
 emitOffsetForLayout(Attribute layout, RankedTensorType type) {
-  if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>())
+  if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout))
     return emitOffsetForBlockedLayout(blockedLayout, type);
-  if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+  if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
     if (mmaLayout.isVolta())
       return emitOffsetForMmaLayoutV1(mmaLayout, type);
     if (mmaLayout.isAmpere())
@@ -1119,13 +1118,13 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
     if (mmaLayout.isHopper())
       return emitOffsetForMmaLayoutV3(mmaLayout, type);
   }
-  if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
+  if (auto mfmaLayout = mlir::dyn_cast<AMDMfmaEncodingAttr>(layout)) {
     return emitOffsetForMfmaLayout(mfmaLayout, type);
   }
-  if (auto wmmaLayout = layout.dyn_cast<AMDWmmaEncodingAttr>()) {
+  if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(layout)) {
     return emitOffsetForWmmaLayout(wmmaLayout, type);
   }
-  if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>())
+  if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout))
     return emitOffsetForSliceLayout(sliceLayout, type);
   llvm_unreachable("unsupported emitOffsetForLayout");
 }
@@ -1270,7 +1269,7 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
       if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
               add.getRhs().getDefiningOp())) {
         unsigned cst =
-            _cst.getValue().cast<IntegerAttr>().getValue().getSExtValue();
+            cast<IntegerAttr>(_cst.getValue()).getValue().getSExtValue();
         unsigned key = cst % (outVec * maxPhase);
         cacheCol.insert({key, idxCol});
         idxCol = cacheCol[key];
@@ -1281,7 +1280,7 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
       if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
               add.getRhs().getDefiningOp())) {
         unsigned cst =
-            _cst.getValue().cast<IntegerAttr>().getValue().getSExtValue();
+            mlir::cast<IntegerAttr>(_cst.getValue()).getValue().getSExtValue();
         unsigned key = cst % (perPhase * maxPhase);
         cacheRow.insert({key, idxRow});
         idxRow = cacheRow[key];
@@ -1327,12 +1326,12 @@ inline SmallVector<Value> loadSharedToDistributed(
   assert(dstShape.size() <= 2 && "Unexpected rank of loadSharedToDistributed");
   auto srcTy = cast<MemDescType>(src.getType());
   auto dstDistributedLayout = dstTy.getEncoding();
-  if (auto mmaLayout = dstDistributedLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+  if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(dstDistributedLayout)) {
     assert((!mmaLayout.isVolta()) &&
            "ConvertLayout Shared->MMAv1 is not supported yet");
   }
   auto srcSharedLayout =
-      srcTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
+      cast<triton::gpu::SharedEncodingAttr>(srcTy.getEncoding());
   auto srcElemTy = srcTy.getElementType();
   auto dstElemTy = dstTy.getElementType();
   LDBG("loadSharedToDistributed elemTy " << elemTy << " srcElemTy " << srcElemTy
@@ -1386,12 +1385,12 @@ inline void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
          rank == 3 && "Unexpected rank of storeDistributedToShared");
   auto dstTy = cast<MemDescType>(dst.getType());
   auto srcDistributedLayout = srcTy.getEncoding();
-  if (auto mmaLayout = srcDistributedLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+  if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(srcDistributedLayout)) {
     assert((!mmaLayout.isVolta()) &&
            "ConvertLayout MMAv1->Shared is not supported yet");
   }
   auto dstSharedLayout =
-      dstTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
+      cast<triton::gpu::SharedEncodingAttr>(dstTy.getEncoding());
   auto dstElemTy = dstTy.getElementType();
   auto inOrd = triton::gpu::getOrder(srcDistributedLayout);
   auto outOrd = dstSharedLayout.getOrder();
@@ -1504,12 +1503,12 @@ inline Value packLLElements(Location loc,
 
 inline bool isLayoutMmaV1(Attribute layout) {
   bool isMmaV1 = false;
-  if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+  if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
     isMmaV1 = mmaLayout.isVolta();
   }
-  if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-    isMmaV1 = sliceLayout.getParent().isa<NvidiaMmaEncodingAttr>() &&
-              sliceLayout.getParent().cast<NvidiaMmaEncodingAttr>().isVolta();
+  if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
+    isMmaV1 = isa<NvidiaMmaEncodingAttr>(sliceLayout.getParent()) &&
+              cast<NvidiaMmaEncodingAttr>(sliceLayout.getParent()).isVolta();
   }
   return isMmaV1;
 }

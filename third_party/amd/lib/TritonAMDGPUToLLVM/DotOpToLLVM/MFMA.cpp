@@ -20,8 +20,6 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#ifdef USE_ROCM
-
 #include "../PatternTritonGPUOpToLLVM.h"
 #include "TritonAMDGPUTransforms/MfmaGroup.h"
 #include "Utility.h"
@@ -176,9 +174,9 @@ struct DotOpMFMAConversionHelper {
     Value a = op.getA();
     Value b = op.getB();
     Value d = op.getD();
-    auto aTensorTy = a.getType().cast<RankedTensorType>();
-    auto bTensorTy = b.getType().cast<RankedTensorType>();
-    auto dTensorTy = d.getType().cast<RankedTensorType>();
+    auto aTensorTy = cast<RankedTensorType>(a.getType());
+    auto bTensorTy = cast<RankedTensorType>(b.getType());
+    auto dTensorTy = cast<RankedTensorType>(d.getType());
     auto elemTyA = aTensorTy.getElementType();
     auto elemTyB = bTensorTy.getElementType();
 
@@ -191,8 +189,8 @@ struct DotOpMFMAConversionHelper {
     mfmaInsnName = maybeMfmaInsn->getInsnName();
     unsigned kBase = maybeMfmaInsn->getKBase();
 
-    auto aEncoding = aTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-    auto bEncoding = bTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+    auto aEncoding = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
+    auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
     int kWidth = aEncoding.getKWidth();
     auto rank = aTensorTy.getShape().size();
 
@@ -354,16 +352,16 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           const LLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) {
   auto rankedTType = [](Value tensor) {
-    return tensor.getType().cast<RankedTensorType>();
+    return cast<RankedTensorType>(tensor.getType());
   };
 
-  assert(rankedTType(op.getA()).getEncoding().isa<DotOperandEncodingAttr>() &&
-         rankedTType(op.getB()).getEncoding().isa<DotOperandEncodingAttr>() &&
+  assert(isa<DotOperandEncodingAttr>(rankedTType(op.getA()).getEncoding()) &&
+         isa<DotOperandEncodingAttr>(rankedTType(op.getB()).getEncoding()) &&
          "Both $a and %b should be DotOperand layout.");
 
   auto cTensorTy = rankedTType(op.getC());
   auto dTensorTy = rankedTType(op.getD());
-  assert(cTensorTy.getEncoding().isa<AMDMfmaEncodingAttr>() &&
+  assert(isa<AMDMfmaEncodingAttr>(cTensorTy.getEncoding()) &&
          "Currently, we only support $c with a mfma layout.");
 
   assert(cTensorTy.getShape()[0] == dTensorTy.getShape()[0] &&
@@ -371,16 +369,11 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
          "DotOp's $c operand should pass the same number of values as $d");
 
   auto loc = op.getLoc();
-  auto mfmaLayout = op.getResult()
-                        .getType()
-                        .cast<RankedTensorType>()
-                        .getEncoding()
-                        .cast<AMDMfmaEncodingAttr>();
+  auto mfmaLayout = cast<AMDMfmaEncodingAttr>(
+      cast<RankedTensorType>(op.getResult().getType()).getEncoding());
 
   DotOpMFMAConversionHelper helper(mfmaLayout, rewriter, typeConverter, loc);
 
   return helper.convertDot(op, adaptor);
 }
 } // namespace mlir::triton::AMD
-
-#endif // ifdef USE_ROCM
