@@ -9,6 +9,18 @@ subdirectory (similar to how GPU vendors are supported today).  We're starting
 with a clone to give ourselves maximum development flexibility as this project
 gets off the ground!
 
+# How to use it?
+
+Build it like a normal Triton, but just pass TRITON_CPU_BACKEND=1 to use the CPU backend over a GPU backend, if any.
+
+```
+TRITON_CPU_BACKEND=1 python3 tutorials/01-vector-add.py
+```
+
+**NOTE: It's still work in progress.**
+
+---
+
 # Upstream README
 
 <div align="center">
