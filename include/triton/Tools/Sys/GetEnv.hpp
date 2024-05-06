@@ -62,6 +62,18 @@ inline bool getBoolEnv(const std::string &env) {
   return str == "on" || str == "true" || str == "1";
 }
 
+inline std::optional<bool> isBoolEnv(const std::string &env) {
+  assertIsRecognized(env);
+  const char *s = std::getenv(env.c_str());
+  std::string str(s ? s : "");
+  std::transform(str.begin(), str.end(), str.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+  if (str == "on" || str == "true" || str == "1")
+    return true;
+  if (str == "off" || str == "false" || str == "0")
+    return false;
+  return std::nullopt;
+}
 } // namespace tools
 } // namespace mlir::triton
 
