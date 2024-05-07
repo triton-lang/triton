@@ -71,7 +71,7 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
       &mem_bus_width, CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH, device));
 
-  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i}", "max_shared_mem",
+  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:i}", "max_shared_mem",
                        max_shared_mem, "max_num_regs", max_num_regs,
                        "multiprocessor_count", multiprocessor_count, "warpSize",
                        warp_size, "sm_clock_rate", sm_clock_rate,
