@@ -30,3 +30,17 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
     tt.return
   }
 }
+
+// -----
+
+#mfma = #triton_gpu.amd_mfma<{warpsPerCTA=[1,1], instrShape=[32,32], isTranspose=false}>
+#blocked = #triton_gpu.blocked<{sizePerThread = [4, 4], threadsPerWarp = [4, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
+  tt.func public @mfma_epilogue_chained_elementwise(%data: tensor<64x64xbf16, #mfma>, %ptr: tensor<64x64x!tt.ptr<f16>, #blocked>) {
+    %converted_data = triton_gpu.convert_layout %data : tensor<64x64xbf16, #mfma> -> tensor<64x64xbf16, #blocked>
+    %ext = arith.extf %converted_data : tensor<64x64xbf16, #blocked> to tensor<64x64xf32, #blocked>
+    %trunc = arith.truncf %ext : tensor<64x64xf32, #blocked> to tensor<64x64xf16, #blocked>
+    tt.store %ptr, %trunc : tensor<64x64x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
