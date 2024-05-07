@@ -203,7 +203,26 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         std::max(8u, valueElemTy.getIntOrFloatBitWidth());
     const int numVecs = numElems / vec;
 
-    op.emitRemark() << "vec = " << vec;
+    bool recognized = false;
+    if (auto tType = dyn_cast<RankedTensorType>(op.getPtr().getType())) {
+      if (auto blocked =
+              dyn_cast<triton::gpu::BlockedEncodingAttr>(tType.getEncoding())) {
+        auto sizePerThread = blocked.getSizePerThread();
+        unsigned cont = getContiguity(op.getPtr());
+        op.emitRemark() << "vec = " << vec << " expand to "
+                        << ceil<int>(numElems, vec)
+                        << " instructions with sizePerThread = "
+                        << sizePerThread << " contiguity = " << cont
+                        << " numElems = " << numElems;
+        // Check to see if this op is coalesced. Depending on vectorization, we
+        // can have varying number of instructions to perform the load. Each
+        // instruction handles vec elements. Each thread handles numElems, and
+        // next thread handles vec elements starting with sizePerThread.
+        recognized = true;
+      }
+    }
+    if (!recognized)
+      op.emitRemark() << "vec = " << vec;
     LDBG("LoadOp numElems = " << numElems << " vec = " << vec
                               << " valueElemNBits = " << valueElemNBits << " "
                               << op.getType());
