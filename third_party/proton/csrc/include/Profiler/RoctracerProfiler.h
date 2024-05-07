@@ -1,5 +1,5 @@
-#ifndef PROTON_PROFILER_CUPTI_PROFILER_H_
-#define PROTON_PROFILER_CUPTI_PROFILER_H_
+#ifndef PROTON_PROFILER_ROCTRACER_PROFILER_H_
+#define PROTON_PROFILER_ROCTRACER_PROFILER_H_
 
 #include "Context/Context.h"
 #include "Driver/GPU/Roctracer.h"
@@ -86,4 +86,4 @@ private:
 
 } // namespace proton
 
-#endif // PROTON_PROFILER_CUPTI_PROFILER_H_
+#endif // PROTON_PROFILER_ROCTRACER_PROFILER_H_
