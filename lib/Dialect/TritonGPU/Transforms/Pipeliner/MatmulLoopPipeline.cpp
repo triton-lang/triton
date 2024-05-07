@@ -712,6 +712,8 @@ scheduleLoads(scf::ForOp forOp, CoarseSchedule &schedule,
   CoarseSchedule::Cluster rootUsersCluster = schedule.clusters.newAtFront();
   // Put the root uses of the loads in the last stage.
   for (auto &[loadOp, dist, use] : loadOpToIndLevelAndUse) {
+    if (loadToInfo.count(loadOp) == 0)
+      continue;
     // Non-LoadOp(s) are the root uses of all LoadOp(s) and should be
     // always present in the opInfo
     if (!isa<tt::LoadOp>(use)) {
