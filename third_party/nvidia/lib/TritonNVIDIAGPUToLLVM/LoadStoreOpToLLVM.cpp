@@ -1010,6 +1010,9 @@ struct AsyncTMACopyLocalToGlobalOpConversion
     auto voidTy = void_ty(op->getContext());
     auto id = getThreadId(rewriter, loc);
     Value pred = icmp_eq(id, i32_val(0));
+    // Select just one thread for the TMA copy. This also helps the compiler to
+    // figure out that the op is uniform.
+    pred = and_(pred, LLVM::NVIDIA::createElectPredicate(loc, rewriter));
     int elementSizeInBytes =
         op.getSrc().getType().getElementType().getIntOrFloatBitWidth() / 8;
     int totalNumElements = product(op.getSrc().getType().getShape());

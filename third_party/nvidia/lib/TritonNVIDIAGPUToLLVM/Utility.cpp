@@ -195,7 +195,10 @@ Value createElectPredicate(Location loc, PatternRewriter &rewriter) {
   PTXBuilder ptxBuilder;
   auto &elect = *ptxBuilder.create<>("elect.sync _|$0, 0xffffffff;");
   elect({ptxBuilder.newOperand("=b")}, /*onlyAttachMLIRArgs=*/true);
-  return ptxBuilder.launch(rewriter, loc, i1_ty);
+  // The instruction is technically not pure as it depends on simt control flow
+  // however since we it outside of simt control flow in triton we can consider
+  // it as pure to allow cse to work on it.
+  return ptxBuilder.launch(rewriter, loc, i1_ty, /*hasSideEffect=*/false);
 }
 
 } // namespace NVIDIA
