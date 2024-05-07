@@ -993,6 +993,82 @@ struct AsyncTMACopyGlobalToLocalOpConversion
   }
 };
 
+struct AsyncTMACopyLocalToGlobalOpConversion
+    : public ConvertOpToLLVMPattern<
+          triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Type llvmElemTy =
+        typeConverter->convertType(op.getSrc().getType().getElementType());
+    auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getSrc(), llvmElemTy, rewriter);
+    auto voidTy = void_ty(op->getContext());
+    auto id = getThreadId(rewriter, loc);
+    Value pred = icmp_eq(id, i32_val(0));
+    int elementSizeInBytes =
+        op.getSrc().getType().getElementType().getIntOrFloatBitWidth() / 8;
+    int totalNumElements = product(op.getSrc().getType().getShape());
+    int64_t size = totalNumElements * elementSizeInBytes;
+
+    int innerBlockSize = op.getSrc().getType().getShape().back();
+    int contigDimSizeInByte = innerBlockSize * elementSizeInBytes;
+    int numCopies = 1;
+    int rank = op.getCoord().size();
+    if (rank > 1)
+      numCopies = ceil<int>(contigDimSizeInByte, 128);
+
+    // The bounding box inner dimension must be less than or equal to the
+    // swizzle size.
+    // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html#group__CUDA__TENSOR__MEMORY_1ga7c7d2aaac9e49294304e755e6f341d7
+    // We clamp the block size and the codegen will emit multiple copy
+    // operations.
+    for (int copyIdx = 0; copyIdx < numCopies; copyIdx++) {
+      ::mlir::triton::PTXBuilder ptxBuilderTMA;
+      Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+      Value shMemPtr = gep(elemPtrTy, llvmElemTy, dstMemObj.getBase(),
+                           i32_val(copyIdx * (totalNumElements / numCopies)));
+      SmallVector<PTXBuilder::Operand *> operands = {
+          ptxBuilderTMA.newOperand(pred, "b"),
+          ptxBuilderTMA.newOperand(adaptor.getDescPtr(), "l")};
+      std::string tmaInst = "@$0 cp.async.bulk.tensor." + std::to_string(rank) +
+                            "d.global.shared::cta.bulk_group [$1, {";
+      int operandIdx = 2;
+      for (int i = 0; i < rank; i++) {
+        Value coord = adaptor.getCoord()[rank - i - 1];
+        if (i == 0) {
+          int offset = copyIdx * (128 / elementSizeInBytes);
+          coord = add(coord, i32_val(offset));
+        }
+        operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
+        tmaInst += "$" + std::to_string(operandIdx++);
+        if (i != rank - 1)
+          tmaInst += ", ";
+      }
+      operands.push_back(ptxBuilderTMA.newOperand(shMemPtr, "r"));
+      tmaInst += "}], [$" + std::to_string(operandIdx++) + "];";
+      auto &tma = *ptxBuilderTMA.create<>(tmaInst);
+      tma(operands, /*onlyAttachMLIRArgs=*/true);
+      ptxBuilderTMA.launch(rewriter, loc, voidTy);
+    }
+
+    // TODO: Separate the syncronizations operations into separate TTGIR ops to
+    // be able to schedule them at the high level.
+    const std::string ptx = "cp.async.bulk.commit_group; \n\t"
+                            "cp.async.bulk.wait_group 0";
+    PTXBuilder ptxBuilderSync;
+    ptxBuilderSync.create<>(ptx)->operator()();
+    ptxBuilderSync.launch(rewriter, op.getLoc(), void_ty(op.getContext()));
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct AsyncWaitOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::AsyncWaitOp> {
   using ConvertOpToLLVMPattern<
@@ -1053,5 +1129,6 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
       typeConverter, targetInfo, axisInfoAnalysis, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
-  patterns.add<AsyncTMACopyGlobalToLocalOpConversion>(typeConverter, benefit);
+  patterns.add<AsyncTMACopyGlobalToLocalOpConversion,
+               AsyncTMACopyLocalToGlobalOpConversion>(typeConverter, benefit);
 }

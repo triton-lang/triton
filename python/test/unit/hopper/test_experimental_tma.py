@@ -73,10 +73,8 @@ def test_experimetal_descriptor_load():
 
 
 @triton.jit
-def matmul_kernel_tma(a_desc_ptr, b_desc_ptr, c_ptr,  #
-                      M, N, K,  #
-                      stride_cm, stride_cn,  #
-                      BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr):
+def matmul_kernel_tma(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
+                      M, N, K, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr):
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     pid_m = pid % num_pid_m
@@ -90,10 +88,7 @@ def matmul_kernel_tma(a_desc_ptr, b_desc_ptr, c_ptr,  #
         b = tl._experimental_descriptor_load(b_desc_ptr, [offs_k, offs_bn], [BLOCK_SIZE_K, BLOCK_SIZE_N], tl.float16)
         accumulator = tl.dot(a, b, acc=accumulator)
         offs_k += BLOCK_SIZE_K
-    offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-    c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
-    tl.store(c_ptrs, accumulator)
+    tl._experimental_descriptor_store(c_desc_ptr, accumulator, [offs_am, offs_bn])
 
 
 @pytest.mark.parametrize("num_stages", [1, 4])
@@ -111,16 +106,19 @@ def test_experimental_tma_matmul(num_stages):
     TMA_SIZE = 128
     desc_a = np.empty(TMA_SIZE, dtype=np.int8)
     desc_b = np.empty(TMA_SIZE, dtype=np.int8)
+    desc_c = np.empty(TMA_SIZE, dtype=np.int8)
     triton.runtime.driver.active.utils.fill_2d_tma_descriptor(A.data_ptr(), M, K, BLOCK_M, BLOCK_K, A.element_size(),
                                                               desc_a)
     triton.runtime.driver.active.utils.fill_2d_tma_descriptor(B.data_ptr(), K, N, BLOCK_K, BLOCK_N, B.element_size(),
                                                               desc_b)
+    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(C.data_ptr(), M, N, BLOCK_M, BLOCK_N, C.element_size(),
+                                                              desc_c)
 
     desc_a = torch.tensor(desc_a, device=device)
     desc_b = torch.tensor(desc_b, device=device)
-    matmul_kernel_tma[(triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1, 1)](desc_a,
-                                                                                 desc_b, C, M, N, K, C.stride(0),
-                                                                                 C.stride(1), BLOCK_M, BLOCK_N, BLOCK_K,
-                                                                                 num_warps=4, num_stages=num_stages)
+    desc_c = torch.tensor(desc_c, device=device)
+    matmul_kernel_tma[(triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1, 1)](desc_a, desc_b, desc_c, M, N, K,
+                                                                                 BLOCK_M, BLOCK_N, BLOCK_K, num_warps=4,
+                                                                                 num_stages=num_stages)
     ref_out = torch.matmul(A.to(torch.float32), B.to(torch.float32))
     torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
