@@ -190,6 +190,14 @@ void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
   createStoreDSmem(loc, rewriter, addr, ctaId, values, pred);
 }
 
+/// Create a predicate with just single active thread.
+Value createElectPredicate(Location loc, PatternRewriter &rewriter) {
+  PTXBuilder ptxBuilder;
+  auto &elect = *ptxBuilder.create<>("elect.sync _|$0, 0xffffffff;");
+  elect({ptxBuilder.newOperand("=b")}, /*onlyAttachMLIRArgs=*/true);
+  return ptxBuilder.launch(rewriter, loc, i1_ty);
+}
+
 } // namespace NVIDIA
 } // namespace LLVM
 } // namespace mlir
