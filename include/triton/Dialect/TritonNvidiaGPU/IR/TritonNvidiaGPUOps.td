@@ -175,4 +175,27 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
   }];
 }
 
+def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global", [
+  MemoryEffects<[MemRead<SharedMemory>, MemWrite<GlobalMemory>]>]> {
+  let summary = "copy data based on descriptor from local memory to global memory asynchronously";
+
+  let description = [{
+    This operation copies data from local memory to global memory
+    asynchronously.  This is analogue to tt.store except the data are copied from
+    local memory pointed by the memory descriptor instread of a distributed
+    tensor. The data copied depends on the global memory descriptor pointed to
+    by `desc_ptr`.
+  }];
+
+  let arguments = (
+    ins TT_PtrType:$desc_ptr,
+    Variadic<I32>:$coord,
+    TT_MemDescType:$src);
+
+  let assemblyFormat = [{
+    $desc_ptr `[` $coord `]` $src
+    attr-dict `:` type($desc_ptr) `,` type($src)
+  }];
+}
+
 #endif

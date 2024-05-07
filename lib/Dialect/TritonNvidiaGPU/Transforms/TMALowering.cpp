@@ -58,6 +58,36 @@ public:
   }
 };
 
+class TMAStoreLowering
+    : public OpRewritePattern<ExperimentalDescriptorStoreOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ExperimentalDescriptorStoreOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto tensorType = op.getSrc().getType();
+    auto order = getOrder(tensorType.getEncoding());
+    auto ctaLayout = getCTALayout(tensorType.getEncoding());
+    Attribute encoding = SharedEncodingAttr::get(tensorType.getContext(), 1, 1,
+                                                 1, order, ctaLayout);
+    if (tensorType.getRank() > 1) {
+      encoding = SharedEncodingAttr::get(
+          tensorType.getContext(), tensorType.getShape(), order, ctaLayout,
+          tensorType.getElementType());
+    }
+    MemDescType memDescType =
+        MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
+                         encoding, /*mutableMemory=*/true);
+    Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType, op.getSrc());
+    rewriter.create<triton::nvidia_gpu::FenceAsyncSharedOp>(loc, false);
+    rewriter.create<triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp>(
+        loc, op.getDescPtr(), op.getIndices(), alloc);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 class TritonNvidiaGPUTMALoweringPass
     : public TritonNvidiaGPUTMALoweringPassBase<
           TritonNvidiaGPUTMALoweringPass> {
@@ -67,7 +97,7 @@ public:
     ModuleOp m = getOperation();
 
     mlir::RewritePatternSet patterns(context);
-    patterns.add<TMALoadLowering>(context);
+    patterns.add<TMALoadLowering, TMAStoreLowering>(context);
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
   }
