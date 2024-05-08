@@ -52,6 +52,38 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMem
 | `result` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
 | `pred` | 1-bit signless integer
 
+### `triton_nvidia_gpu.async_tma_copy_local_to_global` (triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp)
+
+_Copy data based on descriptor from local memory to global memory asynchronously_
+
+
+Syntax:
+
+```
+operation ::= `triton_nvidia_gpu.async_tma_copy_local_to_global` $desc_ptr `[` $coord `]` $src
+              attr-dict `:` type($desc_ptr) `,` type($src)
+```
+
+This operation copies data from local memory to global memory
+asynchronously.  This is analogue to tt.store except the data are copied from
+local memory pointed by the memory descriptor instread of a distributed
+tensor. The data copied depends on the global memory descriptor pointed to
+by `desc_ptr`.
+
+Traits: `VerifyTensorLayoutsTrait`
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::gpu::SharedMemory, MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `desc_ptr` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system
+| `coord` | variadic of 32-bit signless integer
+| `src` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+
 ### `triton_nvidia_gpu.cluster_arrive` (triton::nvidia_gpu::ClusterArriveOp)
 
 Syntax:
