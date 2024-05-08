@@ -118,7 +118,7 @@ def test_experimental_tma_matmul(num_stages):
     desc_b = torch.tensor(desc_b, device=device)
     desc_c = torch.tensor(desc_c, device=device)
     matmul_kernel_tma[(triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1, 1)](desc_a, desc_b, desc_c, M, N, K,
-                                                                                 BLOCK_M, BLOCK_N, BLOCK_K, num_warps=4,
+                                                                                 BLOCK_M, BLOCK_N, BLOCK_K, num_warps=8,
                                                                                  num_stages=num_stages)
     ref_out = torch.matmul(A.to(torch.float32), B.to(torch.float32))
     torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
