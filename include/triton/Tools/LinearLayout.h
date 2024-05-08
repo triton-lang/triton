@@ -115,36 +115,19 @@ namespace mlir::triton {
 //    [0, 0, 0].
 //
 // 3. A 2D -> 2D identity layout.  Our basis vectors are the values of L(x,0)
-//    and L(0,y) where x and y are powers of two.
+//    and L(0,y) where x and y are powers of two.  The bases are
 //
 //    - L(0,1) = (0,1)
 //    - L(0,2) = (0,2)
 //    - L(1,0) = (1,0)
-//    - L(2,0) = (2,0)
-//
-//    We could write the basis vectors as [[(0,1), (0,2)], [(1,0), (2,0)]], but
-//    because in and out dimensions have string labels, we'd usually write them
-//    as an explicit table.  This also matches the format of the
-//    LinearLayout::basis member variable.
-//
-//      (in_dim0, out_dim0): [L(1,0)[0], L(2,0)[0]] = [1,2]
-//      (in_dim0, out_dim1): [L(1,0)[1], L(2,0)[1]] = [0,0]
-//      (in_dim1, out_dim0): [L(0,1)[0], L(0,2)[0]] = [0,0]
-//      (in_dim1, out_dim1): [L(0,1)[1], L(0,2)[1]] = [1,2].
+//    - L(2,0) = (2,0).
 //
 // 4. A 2D -> 2D transpose layout.  For a 4x4 layout, we have:
 //
 //    - L(0,1) = (1,0)
 //    - L(0,2) = (2,0)
 //    - L(1,0) = (0,1)
-//    - L(2,0) = (0,2)
-//
-//    Therefore the bases are
-//
-//      (in_dim0, out_dim0): [L(1,0)[0], L(2,0)[0]] = [0,0]
-//      (in_dim0, out_dim1): [L(1,0)[1], L(2,0)[1]] = [1,2]
-//      (in_dim1, out_dim0): [L(0,1)[0], L(0,2)[0]] = [1,2]
-//      (in_dim1, out_dim1): [L(0,1)[1], L(0,2)[1]] = [0,0].
+//    - L(2,0) = (0,2).
 //
 // 5. A 1D -> 1D "transpose" layout.  Consider the 16-element layout that maps
 //
@@ -157,8 +140,10 @@ namespace mlir::triton {
 // 6. A 2D -> 1D broadcasted layout.  L(x,y) = x.  For a 4x4 -> 4 layout, our
 //    bases are
 //
-//      (in_dim0, out_dim): [L(1,0), L(2,0)] = [1,2]
-//      (in_dim1, out_dim): [L(0,1), L(0,2)] = [0,0].
+//    - L(0,1) = 0
+//    - L(0,2) = 0
+//    - L(1,0) = 1
+//    - L(2,0) = 2.
 //
 // # Implementation notes
 //
