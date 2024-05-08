@@ -460,27 +460,26 @@ class _attention(torch.autograd.Function):
             num_stages = 1
             waves_per_eu = 3 if Lk <= 64 else 2
             extra_kern_args = {"waves_per_eu": waves_per_eu, "allow_flush_denorm": True}
-        # Tuning for H100
-        elif torch.cuda.get_device_capability()[0] == 9:
-            num_warps = 8
-            num_stages = 7 if Lk >= 64 else 3
-            if v.dtype == torch.float8_e5m2:
-                if Lk < 256:
-                    BLOCK_M = 64 if not causal else 128
-                    BLOCK_N = 128
-                    num_stages = 3 if Lk == 128 else 4
-                    num_warps = 4
-                else:
-                    BLOCK_M = 128
-                    BLOCK_N = 128
-                    num_stages = 3
-                    num_warps = 8
-        # Tuning for other cuda targets
         else:
             BLOCK_M = 128
             BLOCK_N = 64 if Lk <= 64 else 32
             num_stages = 4 if Lk <= 64 else 3
             num_warps = 4
+            # Tuning for H100
+            if torch.cuda.get_device_capability()[0] == 9:
+                num_warps = 8
+                num_stages = 7 if Lk >= 64 else 3
+                if v.dtype == torch.float8_e5m2:
+                    if Lk < 256:
+                        BLOCK_M = 64 if not causal else 128
+                        BLOCK_N = 128
+                        num_stages = 3 if Lk == 128 else 4
+                        num_warps = 4
+                    else:
+                        BLOCK_M = 128
+                        BLOCK_N = 128
+                        num_stages = 3
+                        num_warps = 8
 
         grid = (triton.cdiv(q.shape[2], BLOCK_M), q.shape[0] * q.shape[1], 1)
         M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
