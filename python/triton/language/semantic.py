@@ -1046,6 +1046,11 @@ def descriptor_load(desc_ptr: tl.tensor, offsets, cache_modifier: str, eviction_
     return tl.tensor(x, type)
 
 
+def descriptor_store(desc_ptr: tl.tensor, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+    offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
+    return tl.tensor(builder.create_descriptor_store(desc_ptr.handle, value.handle, offsets), tl.void)
+
+
 def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builder):
     # Store by a block pointer: `pointer_type<block_type<>>`
     # Block pointers can not have the `mask` argument

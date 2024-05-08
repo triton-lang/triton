@@ -1610,6 +1610,17 @@ def _experimental_descriptor_load(desc_pointer, offsets, shape, dtype, _builder=
     return semantic.descriptor_load(desc_pointer, offsets, "", "", type, _builder)
 
 
+@builtin
+def _experimental_descriptor_store(desc_pointer, value, offsets, _builder=None):
+    """
+    Experimental feature to access TMA descriptors stores. This is an escape hatch to easily exercise TTGIR operations.
+    This will be removed in the future and shouldn't be used in production code.
+
+    This stores a tensor of data based on the descriptor and offsets.
+    """
+    return semantic.descriptor_store(desc_pointer, value, offsets, _builder)
+
+
 @_tensor_member_fn
 @builtin
 def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="", _builder=None):
