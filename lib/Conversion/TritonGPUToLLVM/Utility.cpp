@@ -1,4 +1,5 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
@@ -151,19 +152,41 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
     assert(layout.hasInDim(inDimName) && "Invalid inDimName");
   }
 
-  // TODO(jlebar): For reasons not yet understood, our TTGPUIR -> LLVM-dialect
-  // lowering is slow in proportion to the number of instructions we have.  It's
-  // not that applyLinearLayout() is slow, but creating additional instructions
-  // here slows down something else.  For now, we make a small effort to create
-  // fewer instructions in this function.
-  Value zero = i32_val(0);
+  // This function can emit a lot of MLIR code, which ultimately makes
+  // compilation slow.  (We think this shouldn't be the case -- it's not *that*
+  // much code -- but we're not clear on how to fix the slowness, which happens
+  // in the bowels of MLIR.)
+  //
+  // As a result we go through some contortions to avoid emitting code where
+  // possible.
 
+  // Manually constant-fold the layout where possible.
+  SmallVector<std::pair<StringAttr, int32_t>> constantIns;
+  for (auto [inDimName, idx] : indices) {
+    if (auto constant = dyn_cast<LLVM::ConstantOp>(idx.getDefiningOp())) {
+      constantIns.push_back(
+          {inDimName, constant.getValue().cast<IntegerAttr>().getInt()});
+    } else {
+      constantIns.push_back({inDimName, 0});
+    }
+  }
+  SmallVector<int32_t> constantComponent =
+      llvm::to_vector(llvm::make_second_range(layout.apply(constantIns)));
+
+  Value zero = i32_val(0);
   SmallVector<std::pair<StringAttr, Value>> outIndices;
-  for (auto outDimName : layout.getOutDimNames()) {
-    outIndices.push_back({outDimName, zero});
+  for (auto [i, outDimName] : llvm::enumerate(layout.getOutDimNames())) {
+    if (constantComponent[i] == 0)
+      outIndices.push_back({outDimName, zero});
+    else
+      outIndices.push_back({outDimName, i32_val(constantComponent[i])});
   }
 
   for (auto [inDimName, idx] : indices) {
+    if (isa<LLVM::ConstantOp>(idx.getDefiningOp())) {
+      continue;
+    }
+
     int nBits = layout.getInDimSizeLog2(inDimName);
     for (int i = 0; i < nBits; i++) {
       Value bit = and_(idx, i32_val(1 << i));
