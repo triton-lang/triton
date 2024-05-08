@@ -525,7 +525,7 @@ private:
     SmallVector<BufferT *> xBuffers = buffers;
     while (!xBuffers.empty()) {
       auto tripleIt = tripleMap.begin();
-      auto size = tripleIt->first;
+      auto offset = tripleIt->first;
       auto range = tripleIt->second;
       tripleMap.erase(tripleIt);
       auto bufferIt =
@@ -543,21 +543,18 @@ private:
         auto xRange = bufferRange.lookup(buffer);
         // TODO(Keren): A buffer's size shouldn't be determined here, have to
         // clean it up
-        size_t offset = size;
-        if (size_t diff = offset % buffer->alignment)
-          offset += buffer->alignment - diff;
-        buffer->offset = offset;
+        size_t alignOffset = buffer->setOffsetAligned(offset);
         tripleMap.insert(
-            {offset + xSize, Interval{std::max(range.start(), xRange.start()),
+            {alignOffset + xSize, Interval{std::max(range.start(), xRange.start()),
                                       std::min(range.end(), xRange.end())}});
         // We could either insert (range.start, xRange.start) or (range.start,
         // xRange.end), both are correct and determine the potential buffer
         // offset, and the graph coloring algorithm will solve the interference,
         // if any
         if (range.start() < xRange.start())
-          tripleMap.insert({size, Interval{range.start(), xRange.end()}});
+          tripleMap.insert({offset, Interval{range.start(), xRange.end()}});
         if (xRange.end() < range.end())
-          tripleMap.insert({size, Interval{xRange.start(), range.end()}});
+          tripleMap.insert({offset, Interval{xRange.start(), range.end()}});
         xBuffers.erase(bufferIt);
       }
     }
@@ -626,13 +623,8 @@ private:
       for (auto y : interference.lookup(x)) {
         newOffset = std::max(newOffset, y->offset + y->size);
       }
-      if (colors.lookup(x) != 0) {
-        if (size_t diff = newOffset % x->alignment) {
-          // fix alignment
-          newOffset += x->alignment - diff;
-        }
-        x->offset = newOffset;
-      }
+      if (colors.lookup(x) != 0)
+        x->setOffsetAligned(newOffset);
       allocation->sharedMemorySize =
           std::max(allocation->sharedMemorySize, x->offset + x->size);
     }

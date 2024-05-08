@@ -160,6 +160,15 @@ private:
             size_t offset = 0)
         : kind(kind), id(nextId++), size(size), alignment(alignment),
           offset(offset) {}
+
+    size_t setOffsetAligned(size_t newOffset) {
+      if (size_t diff = newOffset % alignment) {
+        // fix alignment
+        newOffset += alignment - diff;
+      }
+      offset = newOffset;
+      return offset;
+    }
   };
 
   /// Op -> Scratch Buffer
