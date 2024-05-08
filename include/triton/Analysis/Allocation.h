@@ -162,12 +162,7 @@ private:
           offset(offset) {}
 
     size_t setOffsetAligned(size_t newOffset) {
-      if (size_t diff = newOffset % alignment) {
-        // fix alignment
-        newOffset += alignment - diff;
-      }
-      offset = newOffset;
-      return offset;
+      return offset = llvm::alignTo(newOffset, alignment);
     }
   };
 

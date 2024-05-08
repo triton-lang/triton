@@ -544,9 +544,9 @@ private:
         // TODO(Keren): A buffer's size shouldn't be determined here, have to
         // clean it up
         size_t alignOffset = buffer->setOffsetAligned(offset);
-        tripleMap.insert(
-            {alignOffset + xSize, Interval{std::max(range.start(), xRange.start()),
-                                      std::min(range.end(), xRange.end())}});
+        tripleMap.insert({alignOffset + xSize,
+                          Interval{std::max(range.start(), xRange.start()),
+                                   std::min(range.end(), xRange.end())}});
         // We could either insert (range.start, xRange.start) or (range.start,
         // xRange.end), both are correct and determine the potential buffer
         // offset, and the graph coloring algorithm will solve the interference,
