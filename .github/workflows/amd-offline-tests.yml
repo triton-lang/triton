@@ -3,54 +3,84 @@ name: AMD Offline Tests
 on:
   workflow_dispatch:
   pull_request:
-    branches:
-      - main
-      - triton-mlir
+    branches: [main, triton-mlir]
+  merge_group:
+    branches: [main, triton-mlir]
+    types: [checks_requested]
+  push:
+    branches: [main, triton-mlir]
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions: read-all
+
+env:
+  TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
+  TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
+  TRITON_DISABLE_LINE_INFO: 1
 
 jobs:
-  Integration-Tests:
-    runs-on: "ubuntu-latest"
+  Runner-Preparation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      matrix-HIP: ${{ steps.set-matrix.outputs.matrix-HIP }}
+    steps:
+      - name: Prepare runner matrix
+        id: set-matrix
+        run: |
+          if [ x"${{ github.repository }}" == x"ROCm/triton" ]; then
+            echo '::set-output name=matrix-HIP::[["self-hosted", "rocm.gfx90a"]]'
+          else
+            echo '::set-output name=matrix-HIP::["ubuntu-latest"]'
+          fi
 
+  Integration-Tests-AMD:
+    needs: Runner-Preparation
+    if: needs.Runner-Preparation.outputs.matrix-HIP != ''
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-HIP)}}
     container:
-      image: ubuntu:22.04
-      options: --user root
-
+      image: rocm/pytorch:rocm6.0.2_ubuntu22.04_py3.10_pytorch_2.1.2
+      options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
-
+        uses: actions/checkout@v4
       - name: Clear cache
         run: |
           rm -rf ~/.triton
-
+          mkdir -p ~/.triton
+          ls -alh ~/.triton
       - name: Update PATH
         run: |
-          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
-
-      - name: Prerequisite
+          echo "/opt/rocm/llvm/bin" >> $GITHUB_PATH
+      - name: Install pip dependencies
         run: |
-          apt update
-          apt install -y libpython3-dev python3-pip git wget
-          # get rocm related utilities
-          wget https://repo.radeon.com/amdgpu-install/5.5/ubuntu/jammy/amdgpu-install_5.5.50500-1_all.deb
-          apt-get install -y ./amdgpu-install_5.5.50500-1_all.deb
-          amdgpu-install -y --usecase=rocm --no-dkms
-          # remove unused packages to free some disk space
-          cp /opt/rocm/llvm/bin/ld.lld .
-          apt purge -y rocblas rocm-llvm
-          mkdir -p /opt/rocm/llvm/bin
-          mv ld.lld /opt/rocm/llvm/bin/ld.lld
-          # install pytorch
-          pip3 install torch==2.0.1 --index-url https://download.pytorch.org/whl/rocm5.4.2
-          # uninstall system triton to eliminate conflicts with testing version
-          pip3 uninstall -y pytorch-triton-rocm
-
+          python3 -m pip install --upgrade pip
+          python3 -m pip install lit matplotlib pandas
       - name: Install Triton
         run: |
+          echo "PATH is '$PATH'"
+          pip uninstall -y triton
           cd python
-          pip3 install ninja
-          # Install in system, because need to override system triton. Otherwise lit tests will use wrong version
-          DEBUG=TRUE TRITON_USE_ROCM=TRUE TRITON_USE_ASSERT_ENABLED_LLVM=TRUE python3 -m pip install --no-build-isolation -vvv -e .
+          pip install -v -e .
+ 
+      - name: Run Perf Kernels Unit Tests
+        run: |
+          pytest -vvv ./python/perf-kernels/flash-attention.py
+      
+      - name: Run Perf Kernels Benchmark
+        run: |
+          python ./python/perf-kernels/flash-attention.py
+
+      - name: Run Core Tests
+        run: |
+            pytest -n 32 ./python/test/unit/language/test_core_amd.py
 
       - name: Run lit tests
         run: |
