@@ -145,16 +145,15 @@ void TreeData::dumpHatchet(std::ostream &os) const {
   // Note that this is done from the application thread,
   // query device information from the tool thread (e.g., CUPTI) will have
   // problems
-  // for (auto [deviceType, deviceIds] : deviceIds) {
-  //  for (auto deviceId : deviceIds) {
-  //    Device device = getDevice(static_cast<DeviceType>(deviceType),
-  //    deviceId);
-  //    output[Tree::TreeNode::RootId]["DEVICE"][deviceType][deviceId] = {
-  //        {"clock_rate", device.clockRate},
-  //        {"memory_clock_rate", device.memoryClockRate},
-  //        {"bus_width", device.busWidth}};
-  //  }
-  //}
+  for (auto [deviceType, deviceIds] : deviceIds) {
+    for (auto deviceId : deviceIds) {
+      Device device = getDevice(static_cast<DeviceType>(deviceType), deviceId);
+      output[Tree::TreeNode::RootId]["DEVICE"][deviceType][deviceId] = {
+          {"clock_rate", device.clockRate},
+          {"memory_clock_rate", device.memoryClockRate},
+          {"bus_width", device.busWidth}};
+    }
+  }
   os << std::endl << output.dump(4) << std::endl;
 }
 
