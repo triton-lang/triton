@@ -151,11 +151,6 @@ private:
     // Thread X might hold the same input value in two registers.  Get the
     // indices in `offsets` that hold unique values, and only accumualte over
     // those.
-    //
-    // TODO(jlebar): This issue exists not just for the register level, but for
-    // every level of the hierarchy.  For example, registers in two different
-    // threads can also contain the same value.  As far as I can tell, this code
-    // does not take that into account anywhere.
     llvm::MapVector<ArrayRef<unsigned>, int> uniqueOffsets;
     for (int i = 0; i < offsets.size(); ++i) {
       uniqueOffsets.insert({offsets[i], i});
