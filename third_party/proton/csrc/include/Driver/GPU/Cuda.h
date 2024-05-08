@@ -18,6 +18,11 @@ CUresult deviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev);
 
 template <bool CheckSuccess> CUresult deviceGet(CUdevice *device, int ordinal);
 
+template <bool CheckSuccess>
+CUresult devicePrimaryCtxRetain(CUcontext *pctx, CUdevice dev);
+
+template <bool CheckSuccess> CUresult ctxSetCurrent(CUcontext ctx);
+
 } // namespace cuda
 
 } // namespace proton

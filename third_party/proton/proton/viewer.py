@@ -6,6 +6,13 @@ import hatchet as ht
 import triton._C.libproton.proton as libproton
 from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME
 
+# Reserved keywords
+ROOT = "ROOT"
+DEVICE = "DEVICE"
+
+# Hardcoded, because we can't get max tensor core clock from cuDeviceGetAttribute
+cuda_arch_flops = {(8, 0): 610e12, (9, 0): 1960e12}
+
 
 def match_available_metrics(metrics, raw_metrics):
     ret = []

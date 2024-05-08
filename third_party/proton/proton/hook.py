@@ -8,15 +8,15 @@ class TritonHook:
     metrics = ["flops8", "flops16", "flops32", "flops64", "bytes"]
 
     @staticmethod
-    def enter(metadata: LazyDict) -> None:
+    def enter(lazy_dict: LazyDict) -> None:
         enter_scope(COMPUTE_METADATA_SCOPE_NAME)
-        metadata = metadata.get()
+        metadata = lazy_dict.get()
         exit_scope()
         fn_metrics = {k: metadata[k] for k in TritonHook.metrics if k in metadata}
         enter_scope(metadata["name"], triton_op=True, metrics=fn_metrics)
 
     @staticmethod
-    def exit(metadata: LazyDict) -> None:
+    def exit(lazy_dict: LazyDict) -> None:
         exit_scope(triton_op=True)
 
 

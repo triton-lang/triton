@@ -11,7 +11,7 @@ import triton.language as tl
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_torch(context):
-    with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
+    with open("test.hatchet", "w+") as f:
         proton.start(f.name.split(".")[0], context=context)
         proton.enter_scope("test")
         torch.ones((2, 2), device="cuda")
