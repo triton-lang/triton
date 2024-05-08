@@ -22,6 +22,7 @@
  */
 
 #include "mlir/IR/Builders.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 #define GET_OP_CLASSES
@@ -77,6 +78,13 @@ static LogicalResult verifyBarrierType(Operation *op, MemDescType barrierType) {
 
 // -- InitBarrierOp --
 LogicalResult InitBarrierOp::verify() {
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  return success();
+}
+
+// -- InvalBarrierOp --
+LogicalResult InvalBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
   return success();

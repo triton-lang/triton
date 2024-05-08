@@ -4,7 +4,8 @@ from warnings import warn
 from contextlib import contextmanager
 from enum import Enum
 from functools import partial, wraps
-from typing import Union, Callable, List, Sequence, TypeVar, cast, Optional
+import typing
+from typing import Union, Callable, List, Sequence, TypeVar, Optional
 import builtins
 from ..runtime.jit import jit
 import inspect
@@ -718,14 +719,10 @@ class tensor:
 
     Most of the named member functions here are duplicates of the free functions
     in :code:`triton.language`.  For example, :code:`triton.language.sqrt(x)` is
-    equivalent to :code:`x.sqrt()`.  An exception is :py:meth:`to()`, which has
-    no equivalent free function.
+    equivalent to :code:`x.sqrt()`.
 
     :code:`tensor` also defines most of the magic/dunder methods, so you can
     write :code:`x+y`, :code:`x << 2`, etc.
-
-    .. rubric:: Nontrivial methods
-    .. automethod:: to
 
     .. rubric:: Constructors
     ..
@@ -985,17 +982,10 @@ class tensor:
     @builtin
     def to(self, dtype: dtype, fp_downcast_rounding: Optional[str] = None, bitcast: bool = False, _builder=None):
         """
-        Casts the tensor to the given :code:`dtype`.
-
-        :param dtype: The target data type.
-        :param fp_downcast_rounding: The rounding mode for downcasting
-            floating-point values.  This parameter is only used when self is a
-            floating-point tensor and dtype is a floating-point type with a
-            smaller bitwidth. Supported values are :code:`"rtne"` (round to
-            nearest, ties to even) and :code:`"rtz"` (round towards zero).
-        :param bitcast: If true, the tensor is bitcasted to the given
-            :code:`dtype`, instead of being casted.
+        Alias for :py:func:`tensor.cast`.
         """
+        # Triton doesn't like core functions calling other core functions, so we
+        # just copy-paste the implementation of cast here.  It's not too bad.
         if isinstance(bitcast, constexpr):
             bitcast = bitcast.value
         if bitcast:
@@ -1026,6 +1016,9 @@ class tensor:
         ...
 
     def expand_dims(self, axis) -> tensor:
+        ...
+
+    def cast(self, dtype, fp_downcast_rounding=None, bitcast=False) -> tensor:
         ...
 
     def store(self, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="") -> tensor:
@@ -1394,8 +1387,8 @@ def split(a, _builder=None, _generator=None) -> tuple[tensor, tensor]:
 
     if was_rank_1:
         # Currently `reduce` is the best way to convert a tensor of shape [1] to a scalar.
-        out_lhs = cast(tensor, reduce(out_lhs, None, _take_first, _builder=_builder, _generator=_generator))
-        out_rhs = cast(tensor, reduce(out_rhs, None, _take_first, _builder=_builder, _generator=_generator))
+        out_lhs = typing.cast(tensor, reduce(out_lhs, None, _take_first, _builder=_builder, _generator=_generator))
+        out_rhs = typing.cast(tensor, reduce(out_rhs, None, _take_first, _builder=_builder, _generator=_generator))
 
     return out_lhs, out_rhs
 
@@ -1478,6 +1471,29 @@ def expand_dims(input, axis, _builder=None):
     for a in sorted(axes):
         ret = semantic.expand_dims(ret, a, _builder)
     return ret
+
+
+@_tensor_member_fn
+@builtin
+def cast(input, dtype: dtype, fp_downcast_rounding: Optional[str] = None, bitcast: bool = False, _builder=None):
+    """
+    Casts a tensor to the given :code:`dtype`.
+
+    :param dtype: The target data type.
+    :param fp_downcast_rounding: The rounding mode for downcasting
+        floating-point values.  This parameter is only used when self is a
+        floating-point tensor and dtype is a floating-point type with a
+        smaller bitwidth. Supported values are :code:`"rtne"` (round to
+        nearest, ties to even) and :code:`"rtz"` (round towards zero).
+    :param bitcast: If true, the tensor is bitcasted to the given
+        :code:`dtype`, instead of being numerically casted.
+    """
+    input = _to_tensor(input, _builder)
+    if isinstance(bitcast, constexpr):
+        bitcast = bitcast.value
+    if bitcast:
+        return semantic.bitcast(input, dtype, _builder)
+    return semantic.cast(input, dtype, _builder, fp_downcast_rounding)
 
 
 # -----------------------
@@ -1592,6 +1608,17 @@ def _experimental_descriptor_load(desc_pointer, offsets, shape, dtype, _builder=
     """
     type = block_type(dtype, shape)
     return semantic.descriptor_load(desc_pointer, offsets, "", "", type, _builder)
+
+
+@builtin
+def _experimental_descriptor_store(desc_pointer, value, offsets, _builder=None):
+    """
+    Experimental feature to access TMA descriptors stores. This is an escape hatch to easily exercise TTGIR operations.
+    This will be removed in the future and shouldn't be used in production code.
+
+    This stores a tensor of data based on the descriptor and offsets.
+    """
+    return semantic.descriptor_store(desc_pointer, value, offsets, _builder)
 
 
 @_tensor_member_fn
@@ -2198,8 +2225,9 @@ def device_print(prefix, *args, hex=False, _builder=None):
     GPUs and CUDA versions).  If you notice some printfs are being dropped, you
     can increase the buffer size by calling
 
-        .. highlight:: python
-        .. code-block:: python
+    .. highlight:: python
+    .. code-block:: python
+
         triton.runtime.driver.active.utils.set_printf_fifo_size(size_bytes)
 
     CUDA may raise an error if you try to change this value after running a
@@ -2369,7 +2397,7 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
         has_multiple_outputs = False
         dtype = (dtype, )  # type: ignore
 
-    dtype = cast(Sequence[_DtypeClass], dtype)
+    dtype = typing.cast(Sequence[_DtypeClass], dtype)
 
     res_tys = dtype
     if dispatch_args := [_to_tensor(arg, _builder) for arg in args]:

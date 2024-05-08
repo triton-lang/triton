@@ -1551,9 +1551,13 @@ def test_tensor_atomic_cas(sem, num_ctas, device):
                               for size in [1024, 32]]) if torch.__version__ >= "2.1" else []))
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
-    # bfloat16 on cc < 80 will not be tested
-    check_type_supported(dtype_x, device)
-    check_type_supported(dtype_z, device)
+    # CUDA: bfloat16 on cc < 80 will not be tested
+    # Interpreter: Only bfloat16 <-> float32 is supported
+    if not is_interpreter() or \
+        (is_interpreter() and not ((dtype_z == 'bfloat16' and dtype_x == 'float32')
+                                   or (dtype_z == 'float32' and dtype_x == 'bfloat16'))):
+        check_type_supported(dtype_x, device)
+        check_type_supported(dtype_z, device)
 
     if is_hip() and (dtype_z in ("bfloat16", "float8_e4m3fn") or dtype_x == "float8_e4m3fn"):
         pytest.skip(f'test_cast{(dtype_x, dtype_z)} cast to bfloat16 not supported on HIP.')
@@ -1578,12 +1582,25 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
     # triton kernel
 
     @triton.jit
-    def kernel(X, Z, BITCAST: tl.constexpr, SIZE: tl.constexpr):
+    def kernel(X, Z, BITCAST: tl.constexpr, SIZE: tl.constexpr, ARG_HASH: tl.constexpr):
         x_ptr = X + tl.arange(0, SIZE)
         z_ptr = Z + tl.arange(0, SIZE)
         x = tl.load(x_ptr)
-        z = x.to(Z.dtype.element_ty, bitcast=BITCAST)
+
+        # Depending on the value of ARG_HASH (a "random" number determined by
+        # the test parameters), spell the cast one of three different ways.
+        if ARG_HASH % 3 == 0:
+            z = x.to(Z.dtype.element_ty, bitcast=BITCAST)
+        elif ARG_HASH % 3 == 1:
+            z = x.cast(Z.dtype.element_ty, bitcast=BITCAST)
+        else:
+            z = tl.cast(x, Z.dtype.element_ty, bitcast=BITCAST)
+
         tl.store(z_ptr, z)
+
+    # "Random" number used inside the kernel to determine how we spell the cast.
+    # This way we don't have to increase the number of tests.
+    arg_hash = hash((dtype_x, dtype_z, bitcast, size, num_ctas))
 
     dtype_z_np = dtype_z if dtype_z != 'int1' else 'bool_'
     # triton result
@@ -1593,7 +1610,7 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
         z_tri = torch.empty((size, ), dtype=torch.half, device=device).to(dtype=getattr(torch, dtype_z))
     else:
         z_tri = to_triton(np.empty((size, ), dtype=getattr(np, dtype_z_np)), device=device)
-    kernel[(1, )](x_tri, z_tri, BITCAST=bitcast, SIZE=size, num_warps=1, num_ctas=num_ctas)
+    kernel[(1, )](x_tri, z_tri, BITCAST=bitcast, SIZE=size, ARG_HASH=arg_hash, num_warps=1, num_ctas=num_ctas)
     # torch result
     if dtype_z.startswith('bfloat') or dtype_x.startswith('bfloat') or dtype_z.startswith(
             'float8') or dtype_x.startswith('float8'):
@@ -1919,6 +1936,24 @@ def deserialize_fp8(np_data, in_dtype):
 # ---------------
 # test reduce
 # ---------------
+
+
+@pytest.mark.interpreter
+def test_max_returns_zero(device):
+    # Simple test with a tl.max call that returns 0.  The interpreter had a bug
+    # where it didn't handle this correctly.
+    @triton.jit
+    def kernel(X, Z, BLOCK: tl.constexpr):
+        x = tl.load(X + tl.arange(0, BLOCK))
+        z = tl.max(x)
+        tl.store(Z, z)
+
+    BLOCK = 128
+    x = torch.zeros((BLOCK, ), device=device)
+    z = torch.ones((1, ), device=device)
+
+    kernel[(1, )](x, z, BLOCK=BLOCK)
+    assert z[0] == 0
 
 
 def get_reduced_dtype(dtype_str, op):

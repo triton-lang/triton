@@ -154,7 +154,7 @@ class DependenciesFinder(ast.NodeVisitor):
                         f"Global variable {var_name} has value {v1} when compiling {self.name}, but inner kernel {func.__name__} has conflicting value {v2} from when it was first compiled.  This is not allowed."
                     )
 
-            self.used_global_vals |= obj.used_global_vals
+            self.used_global_vals.update(obj.used_global_vals)
 
             noinline = str(getattr(obj, "noinline", False))
 

@@ -20,8 +20,6 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#ifdef USE_ROCM
-
 #include "../PatternTritonGPUOpToLLVM.h"
 #include "SharedToDotOperandHelper.h"
 #include "Utility.h"
@@ -199,20 +197,20 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread) {
   assert((opIdx == 0 || opIdx == 1) && "unexpected operand idx");
-  auto aTensorTy = tensor.getType().cast<MemDescType>();
+  auto aTensorTy = cast<MemDescType>(tensor.getType());
   ArrayRef<int64_t> shape = aTensorTy.getShape();
   auto rank = shape.size();
   int kDimIdx = opIdx == 0 ? rank - 1 : rank - 2;
   int nonKDimIdx = opIdx == 0 ? rank - 2 : rank - 1;
 
-  auto mfmaLayout = encoding.getParent().cast<AMDMfmaEncodingAttr>();
+  auto mfmaLayout = cast<AMDMfmaEncodingAttr>(encoding.getParent());
   auto mDim = mfmaLayout.getMDim();
   auto nDim = mfmaLayout.getNDim();
   assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
          (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 
-  auto sharedLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto sharedLayout = cast<SharedEncodingAttr>(aTensorTy.getEncoding());
   auto order = sharedLayout.getOrder();
 
   auto elemTy = aTensorTy.getElementType();
@@ -366,5 +364,3 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 }
 
 } // namespace SharedToDotOperandMFMA
-
-#endif // ifdef USE_ROCM

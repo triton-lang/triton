@@ -1122,4 +1122,28 @@ def TT_ExperimentalDescriptorLoadOp : TT_Op<"experimental_descriptor_load", [
     }];
 }
 
+def TT_ExperimentalDescriptorStoreOp : TT_Op<"experimental_descriptor_store", [
+  MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+    let summary = "store value based on descriptor";
+    let description = [{
+      This operation will be lowered to Nvidia TMA store operation on targets supporting it.
+      `desc_ptr` is a pointer to the TMA descriptor allocated in global memory.
+      The shape and types of `src` must match the descriptor otherwise the result is undefined.
+
+      This is an escape hatch and is only there for testing/experimenting.
+      This op will be removed in the future.
+    }];
+    let arguments = (
+      ins
+      TT_PtrType:$desc_ptr,
+      TT_Tensor:$src,
+      Variadic<I32>:$indices
+    );
+
+    let assemblyFormat = [{
+      $desc_ptr `[` $indices `]` `,` $src
+      attr-dict `:` qualified(type($desc_ptr)) `,` type($src)
+    }];
+}
+
 #endif // Triton_OPS

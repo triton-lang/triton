@@ -24,7 +24,7 @@ std::string getTypeString(Type ty) {
 }
 
 std::string mangleFunc(std::string name, Type type) {
-  auto funcType = type.dyn_cast<LLVM::LLVMFunctionType>();
+  auto funcType = dyn_cast<LLVM::LLVMFunctionType>(type);
   assert(funcType && "Expecting an LLVMFunctionType");
   std::string mangled = name + "_";
   auto retTy = funcType.getReturnType();

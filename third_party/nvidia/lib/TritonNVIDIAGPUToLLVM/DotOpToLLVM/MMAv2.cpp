@@ -1,6 +1,6 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
-
 #include "Utility.h"
+#include "mlir/Support/LLVM.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -17,7 +17,7 @@ Value loadC(Value tensor, Value llTensor,
   auto tensorTy = cast<RankedTensorType>(tensor.getType());
   size_t fcSize = triton::gpu::getTotalElemsPerThread(tensor.getType());
 
-  assert(tensorTy.getEncoding().isa<NvidiaMmaEncodingAttr>() &&
+  assert(isa<NvidiaMmaEncodingAttr>(tensorTy.getEncoding()) &&
          "Currently, we only support $c with a mma layout.");
   // Load a normal C tensor with mma layout, that should be a
   // LLVM::struct with fcSize elements.
@@ -316,12 +316,12 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   auto dShapePerCTA = triton::gpu::getShapePerCTA(dTensorTy);
 
   int bitwidth = aTensorTy.getElementType().getIntOrFloatBitWidth();
-  auto dotOpA = aTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-  auto repA = dotOpA.getParent().cast<NvidiaMmaEncodingAttr>().getMMAv2Rep(
-      aShapePerCTA, bitwidth, dotOpA.getOpIdx());
-  auto dotOpB = bTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-  auto repB = dotOpB.getParent().cast<NvidiaMmaEncodingAttr>().getMMAv2Rep(
-      bShapePerCTA, bitwidth, dotOpB.getOpIdx());
+  auto dotOpA = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
+  auto repA = cast<NvidiaMmaEncodingAttr>(dotOpA.getParent())
+                  .getMMAv2Rep(aShapePerCTA, bitwidth, dotOpA.getOpIdx());
+  auto dotOpB = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
+  auto repB = cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
+                  .getMMAv2Rep(bShapePerCTA, bitwidth, dotOpB.getOpIdx());
 
   assert(repA[2] == repB[1]);
   assert(repA[0] == repB[0]);
@@ -408,8 +408,8 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
 LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                          const LLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, bool isTuring) {
-  assert(op.getA().getType().getEncoding().isa<DotOperandEncodingAttr>() &&
-         op.getB().getType().getEncoding().isa<DotOperandEncodingAttr>() &&
+  assert(mlir::isa<DotOperandEncodingAttr>(op.getA().getType().getEncoding()) &&
+         mlir::isa<DotOperandEncodingAttr>(op.getB().getType().getEncoding()) &&
          "Both $a and %b should be DotOperand layout.");
 
   Value loadedC =

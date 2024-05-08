@@ -542,7 +542,9 @@ def get_packages():
 
 
 def get_entry_points():
-    entry_points = {"console_scripts": ["proton-viewer = triton.profiler.viewer:main"]}
+    entry_points = {
+        "console_scripts": ["proton-viewer = triton.profiler.viewer:main", "proton = triton.profiler.proton:main"]
+    }
     return entry_points
 
 

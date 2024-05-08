@@ -56,6 +56,22 @@ std::string translateLLVMIRToASM(llvm::Module &module,
       *optPtr = true;
     }
   }
+  bool disableLLVMOpt = triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
+  if (!disableLLVMOpt) {
+    // Check to see if we are passing a list of flags to disable optimizations.
+    auto flagList = triton::tools::getStrEnv("DISABLE_LLVM_OPT");
+    if (!flagList.empty()) {
+      llvm::SmallVector<StringRef, 3> split;
+      StringRef(flagList.c_str()).split(split, ',');
+      for (auto flag : split) {
+        auto optIt = options.find(flag);
+        if (optIt != options.end()) {
+          auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+          *optPtr = true;
+        }
+      }
+    }
+  }
 
   // inline everything
   for (llvm::Function &f : module.functions())
@@ -82,7 +98,9 @@ std::string translateLLVMIRToASM(llvm::Module &module,
   opt.TrapUnreachable = true;
   std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
       module.getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
-      std::nullopt, llvm::CodeGenOptLevel::Aggressive)};
+      std::nullopt,
+      disableLLVMOpt ? llvm::CodeGenOptLevel::None
+                     : llvm::CodeGenOptLevel::Aggressive)};
   // set data layout
   module.setDataLayout(machine->createDataLayout());
   // emit machine code
@@ -184,6 +202,20 @@ void init_triton_llvm(py::module &&m) {
                               const llvm::OptimizationLevel &opt) {
     if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
       return;
+    // Check to see if we are passing a list of flags to disable optimizations.
+    auto flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
+    if (!flagList.empty()) {
+      auto options = llvm::cl::getRegisteredOptions();
+      llvm::SmallVector<StringRef, 3> split;
+      StringRef(flagList.c_str()).split(split, ',');
+      for (auto flag : split) {
+        auto optIt = options.find(flag);
+        if (optIt != options.end()) {
+          auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+          *optPtr = true;
+        }
+      }
+    }
     using namespace llvm;
     LoopAnalysisManager lam;
     FunctionAnalysisManager fam;

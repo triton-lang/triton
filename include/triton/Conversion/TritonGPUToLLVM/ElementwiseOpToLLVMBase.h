@@ -3,6 +3,7 @@
 
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -86,8 +87,8 @@ public:
     if (!encoding)
       // encoding not available
       return resultVals;
-    if (!encoding.dyn_cast<BlockedEncodingAttr>() &&
-        !encoding.dyn_cast<SliceEncodingAttr>()) {
+    if (!dyn_cast<BlockedEncodingAttr>(encoding) &&
+        !dyn_cast<SliceEncodingAttr>(encoding)) {
       // TODO: constraining the ecndoing type here is necessary for avoiding
       // crashes in the getElemsPerThread call below happening in the
       // test_core::test_fp8_dot_acc

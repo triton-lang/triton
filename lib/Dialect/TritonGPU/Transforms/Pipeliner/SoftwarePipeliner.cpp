@@ -5,6 +5,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
@@ -106,8 +107,8 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
     // global control.
     if (!forOp->hasAttr(mlir::triton::kNumStagesAttrName))
       return numStages;
-    return forOp->getAttr(mlir::triton::kNumStagesAttrName)
-        .cast<IntegerAttr>()
+    return mlir::cast<IntegerAttr>(
+               forOp->getAttr(mlir::triton::kNumStagesAttrName))
         .getInt();
   }
 
