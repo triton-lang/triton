@@ -123,6 +123,22 @@ def TTNG_InitBarrierOp : TTNG_Op<"init_barrier", [MemoryEffects<[MemWrite<Shared
     let assemblyFormat = "$alloc `,` $count attr-dict `:` type($alloc)";
 }
 
+def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [MemoryEffects<[MemWrite<SharedMemory>]>]> {
+    let summary = "Invalidate a barrier allocation.";
+
+    let description = [{
+      Invalidate a barrier allocation so that it can be re-used. According to PTX
+      spec this has to be done before any re-use of the memory used by mbarrier.
+
+      https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier-inval
+    }];
+
+    let hasVerifier = 1;
+    let arguments = (ins TT_MemDescType:$alloc);
+    let assemblyFormat = "$alloc attr-dict `:` type($alloc)";
+}
+
+
 def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", []> {
     let summary = "wait until the mbarrier phase completes.";
 

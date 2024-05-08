@@ -950,7 +950,7 @@ static Value createBarrierAlloc(scf::ForOp &forOp, unsigned distance) {
 static SmallVector<Value>
 createAsyncOps(scf::ForOp &forOp, CoarseSchedule &schedule,
                llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
-               int numStages) {
+               SmallVector<Value> &barriers, int numStages) {
   struct AsyncLoad {
     AsyncLoad(Operation *loadOp, Value alloc) : loadOp(loadOp), alloc(alloc) {}
     Operation *loadOp;
@@ -986,6 +986,7 @@ createAsyncOps(scf::ForOp &forOp, CoarseSchedule &schedule,
     if (isa<tt::ExperimentalDescriptorLoadOp>(loadOp)) {
       hasTMALoad = true;
       asyncLoads.back().barrier = createBarrierAlloc(forOp, numBuffers);
+      barriers.push_back(asyncLoads.back().barrier);
     }
   }
 
@@ -1062,6 +1063,23 @@ createAsyncOps(scf::ForOp &forOp, CoarseSchedule &schedule,
   return allocs;
 }
 
+static void invalidateBarriers(OpBuilder &builder,
+                               SmallVector<Value> &barriers) {
+  for (Value barrier : barriers) {
+    int numBarriers = barrier.getType().cast<tt::MemDescType>().getShape()[0];
+    for (int i = 0; i < numBarriers; i++) {
+      Value idx = builder.create<arith::ConstantIntOp>(barrier.getLoc(), i, 32);
+      tt::MemDescType barrierTy = tt::MemDescType::get(
+          {1}, builder.getI64Type(),
+          cast<tt::MemDescType>(barrier.getType()).getEncoding(),
+          /*mutableMemory=*/true);
+      Value barrierView = builder.create<ttg::MemDescSubviewOp>(
+          barrier.getLoc(), barrierTy, barrier, idx);
+      builder.create<ttng::InvalBarrierOp>(barrier.getLoc(), barrierView);
+    }
+  }
+}
+
 bool mlir::triton::preProcessLoopAndGetSchedule(
     scf::ForOp &forOp, int numStages, mlir::triton::PipeliningOption &options) {
   // Schedule the loads and root ops (dot ops) in the loop. This will give us
@@ -1078,9 +1096,10 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     coarseSchedule.dump();
   });
 
+  SmallVector<Value> barriers;
   // Convert the loads into async loads and create the allocs.
   SmallVector<Value> allocs =
-      createAsyncOps(forOp, coarseSchedule, loadToInfo, numStages);
+      createAsyncOps(forOp, coarseSchedule, loadToInfo, barriers, numStages);
 
   LLVM_DEBUG({
     LDBG("Coarse schedule with async loads:");
@@ -1133,6 +1152,8 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   OpBuilder builder(forOp);
   builder.setInsertionPointAfter(forOp);
   builder.create<ttg::AsyncWaitOp>(forOp.getLoc(), ValueRange({}), 0);
+  // Invalidate any mbarrier create
+  invalidateBarriers(builder, barriers);
   // Explicitly deallocate allocated tensors after the wait op
   for (auto alloc : allocs)
     builder.create<ttg::LocalDeallocOp>(forOp.getLoc(), alloc);
