@@ -182,11 +182,11 @@ void SessionManager::exitOp(const Scope &scope) {
 
 void SessionManager::addMetrics(
     size_t scopeId, const std::map<std::string, MetricValueType> &metrics,
-    bool aggregatable) {
+    bool aggregable) {
   std::shared_lock<std::shared_mutex> lock(mutex);
   for (auto [sessionId, active] : activeSessions) {
     if (active) {
-      sessions[sessionId]->data->addMetrics(scopeId, metrics, aggregatable);
+      sessions[sessionId]->data->addMetrics(scopeId, metrics, aggregable);
     }
   }
 }

@@ -16,7 +16,7 @@ using MetricValueType = std::variant<uint64_t, int64_t, double, std::string>;
 /// `Metric` is the base class for all metrics.
 /// Each `Metric` has a name and a set of values.
 /// Each value could be of type `uint64_t`, `int64_t`, or `double`,
-/// Each value also has its own name and is either aggregatable or not.
+/// Each value also has its own name and is either aggregable or not.
 /// Currently the only aggregation operation is `addition`.
 class Metric {
 public:
@@ -28,7 +28,7 @@ public:
 
   virtual const std::string getValueName(int valueId) const = 0;
 
-  virtual bool isAggregatable(int valueId) const = 0;
+  virtual bool isAggregable(int valueId) const = 0;
 
   std::vector<MetricValueType> getValues() const { return values; }
 
@@ -45,7 +45,7 @@ public:
             using CurrentType = std::decay_t<decltype(currentValue)>;
             using ValueType = std::decay_t<decltype(otherValue)>;
             if constexpr (std::is_same_v<ValueType, CurrentType>) {
-              if (isAggregatable(valueId)) {
+              if (isAggregable(valueId)) {
                 currentValue += otherValue;
               } else {
                 currentValue = otherValue;
@@ -82,15 +82,15 @@ protected:
 
 /// A flexible metric is provided by users but not the backend profiling API.
 /// Each flexible metric has a single value.
-/// When aggregatable = true, the value can be aggregated over time.
-/// When aggregatable = false, the value is a property that doesn't change over
+/// When aggregable = true, the value can be aggregated over time.
+/// When aggregable = false, the value is a property that doesn't change over
 /// time.
 class FlexibleMetric : public Metric {
 public:
   FlexibleMetric(const std::string &valueName,
-                 std::variant<MetricValueType> value, bool aggregatable)
+                 std::variant<MetricValueType> value, bool aggregable)
       : valueName(valueName), Metric(MetricKind::Flexible, 1),
-        aggregatable(aggregatable) {
+        aggregable(aggregable) {
     std::visit([&](auto &&v) { this->values[0] = v; }, value);
   }
 
@@ -100,10 +100,10 @@ public:
     return valueName;
   }
 
-  bool isAggregatable(int valueId) const override { return aggregatable; }
+  bool isAggregable(int valueId) const override { return aggregable; }
 
 private:
-  const bool aggregatable;
+  const bool aggregable;
   const std::string valueName;
 };
 
@@ -133,13 +133,11 @@ public:
     return VALUE_NAMES[valueId];
   }
 
-  virtual bool isAggregatable(int valueId) const {
-    return AGGREGATABLE[valueId];
-  }
+  virtual bool isAggregable(int valueId) const { return AGGREGABLE[valueId]; }
 
 private:
-  const static inline bool AGGREGATABLE[kernelMetricKind::Count] = {
-      false, false, true, true};
+  const static inline bool AGGREGABLE[kernelMetricKind::Count] = {false, false,
+                                                                  true, true};
   const static inline std::string VALUE_NAMES[kernelMetricKind::Count] = {
       "StartTime (ns)",
       "EndTime (ns)",
