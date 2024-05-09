@@ -46,7 +46,7 @@ struct CuptiState {
   }
 };
 
-static inline thread_local CuptiState cuptiState;
+static thread_local CuptiState cuptiState;
 
 std::shared_ptr<Metric> convertActivityToMetric(CUpti_Activity *activity) {
   std::shared_ptr<Metric> metric;
