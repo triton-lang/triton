@@ -28,11 +28,6 @@ DEFINE_DISPATCH(ExternLibCuda, deviceGet, cuDeviceGet, CUdevice *, int)
 DEFINE_DISPATCH(ExternLibCuda, deviceGetAttribute, cuDeviceGetAttribute, int *,
                 CUdevice_attribute, CUdevice)
 
-DEFINE_DISPATCH(ExternLibCuda, devicePrimaryCtxRetain, cuDevicePrimaryCtxRetain,
-                CUcontext *, CUdevice)
-
-DEFINE_DISPATCH(ExternLibCuda, ctxSetCurrent, cuCtxSetCurrent, CUcontext)
-
 } // namespace cuda
 
 } // namespace proton

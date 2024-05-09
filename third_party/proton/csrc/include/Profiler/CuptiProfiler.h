@@ -43,7 +43,6 @@ private:
   const inline static size_t AlignSize = 8;
   const inline static size_t BufferSize = 64 * 1024 * 1024;
 
-  std::set<size_t> deviceIds;
   std::map<uint32_t, size_t> correlation;
   CUpti_SubscriberHandle subscriber{};
   struct CuptiState {

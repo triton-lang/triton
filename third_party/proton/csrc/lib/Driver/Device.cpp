@@ -11,14 +11,8 @@ namespace proton {
 namespace {
 
 Device getCudaDevice(uint64_t index) {
-  CUcontext context;
   CUdevice device;
-  cuda::ctxGetCurrent<true>(&context);
   cuda::deviceGet<true>(&device, index);
-  if (!context) {
-    cuda::devicePrimaryCtxRetain<true>(&context, device);
-    cuda::ctxSetCurrent<true>(context);
-  }
   int clockRate;
   cuda::deviceGetAttribute<true>(&clockRate, CU_DEVICE_ATTRIBUTE_CLOCK_RATE,
                                  device);
@@ -28,7 +22,15 @@ Device getCudaDevice(uint64_t index) {
   int busWidth;
   cuda::deviceGetAttribute<true>(
       &busWidth, CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH, device);
-  return Device(DeviceType::CUDA, index, clockRate, memoryClockRate, busWidth);
+  int major;
+  cuda::deviceGetAttribute<true>(
+      &major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device);
+  int minor;
+  cuda::deviceGetAttribute<true>(
+      &minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device);
+  auto arch = major * 10 + minor;
+  return Device(DeviceType::CUDA, index, clockRate, memoryClockRate, busWidth,
+                arch);
 }
 
 } // namespace

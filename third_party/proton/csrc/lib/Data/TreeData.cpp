@@ -105,14 +105,10 @@ void TreeData::dumpHatchet(std::ostream &os) const {
         (*jsonNode)["metrics"]
                    [kernelMetric->getValueName(KernelMetric::DeviceId)] =
                        deviceId;
-        (*jsonNode)["metrics"]
-                   [kernelMetric->getValueName(KernelMetric::DeviceType)] =
-                       deviceType;
         valueNames.insert(kernelMetric->getValueName(KernelMetric::Duration));
         valueNames.insert(
             kernelMetric->getValueName(KernelMetric::Invocations));
         valueNames.insert(kernelMetric->getValueName(KernelMetric::DeviceId));
-        valueNames.insert(kernelMetric->getValueName(KernelMetric::DeviceType));
         deviceIds.insert({deviceType, {deviceId}});
       } else {
         throw std::runtime_error("MetricKind not supported");
@@ -145,13 +141,20 @@ void TreeData::dumpHatchet(std::ostream &os) const {
   // Note that this is done from the application thread,
   // query device information from the tool thread (e.g., CUPTI) will have
   // problems
+  output.push_back(json::object());
+  auto &deviceJson = output.back();
   for (auto [deviceType, deviceIds] : deviceIds) {
+    auto deviceTypeName =
+        getDeviceTypeString(static_cast<DeviceType>(deviceType));
+    if (!deviceJson.contains(deviceTypeName))
+      deviceJson[deviceTypeName] = json::object();
     for (auto deviceId : deviceIds) {
       Device device = getDevice(static_cast<DeviceType>(deviceType), deviceId);
-      output[Tree::TreeNode::RootId]["DEVICE"][deviceType][deviceId] = {
+      deviceJson[deviceTypeName][std::to_string(deviceId)] = {
           {"clock_rate", device.clockRate},
           {"memory_clock_rate", device.memoryClockRate},
-          {"bus_width", device.busWidth}};
+          {"bus_width", device.busWidth},
+          {"arch", device.arch}};
     }
   }
   os << std::endl << output.dump(4) << std::endl;

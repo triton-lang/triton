@@ -3,9 +3,11 @@ from triton.compiler import CompiledKernel, LazyDict
 
 COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata"
 
+flops_width = [8, 16, 32, 64]
+metrics = [f"flops{width}" for width in flops_width] + "bytes"
+
 
 class TritonHook:
-    metrics = ["flops8", "flops16", "flops32", "flops64", "bytes"]
 
     @staticmethod
     def enter(lazy_dict: LazyDict) -> None:
