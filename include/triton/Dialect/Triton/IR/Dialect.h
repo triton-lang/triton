@@ -20,6 +20,9 @@
 #define GET_OP_CLASSES
 #include "triton/Dialect/Triton/IR/Ops.h.inc"
 
+#define GET_ATTRDEF_CLASSES
+#include "triton/Dialect/Triton/IR/AttrDefs.h.inc"
+
 namespace mlir {
 namespace triton {
 
