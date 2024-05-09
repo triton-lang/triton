@@ -22,6 +22,7 @@ import torch
 
 import triton
 import triton.language as tl
+from triton.runtime import driver
 
 
 @triton.jit
@@ -31,26 +32,37 @@ def add_kernel(x_ptr,  # *Pointer* to first input vector.
                n_elements,  # Size of the vector.
                BLOCK_SIZE: tl.constexpr,  # Number of elements each program should process.
                # NOTE: `constexpr` so it can be used as a shape value.
+               num_stages: tl.constexpr,  # Number of software piepling stages.
                ):
     # There are multiple 'programs' processing different data. We identify which program
     # we are here:
-    pid = tl.program_id(axis=0)  # We use a 1D launch grid so axis is 0.
-    # This program will process inputs that are offset from the initial data.
-    # For instance, if you had a vector of length 256 and block_size of 64, the programs
-    # would each access the elements [0:64, 64:128, 128:192, 192:256].
-    # Note that offsets is a list of pointers:
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    # Create a mask to guard memory operations against out-of-bounds accesses.
-    mask = offsets < n_elements
-    # Load x and y from DRAM, masking out any extra elements in case the input is not a
-    # multiple of the block size.
-    x = tl.load(x_ptr + offsets, mask=mask)
-    y = tl.load(y_ptr + offsets, mask=mask)
-    output = x + y
-    # Write x + y back to DRAM.
-    tl.store(output_ptr + offsets, output, mask=mask)
+    block_start = tl.program_id(0) * BLOCK_SIZE
+    block_step = tl.num_programs(0) * BLOCK_SIZE
+    for block_idx in tl.range(block_start, n_elements, block_step, num_stages=num_stages):
+        # This program will process inputs that are offset from the initial data.
+        # For instance, if you had a vector of length 256 and block_size of 64, with two programs
+        # each would access the elements [0:64, 128:192] and [64:128, 192:256], respectively.
+        # Note that offsets is a list of pointers:
+        offsets = block_idx + tl.arange(0, BLOCK_SIZE)
+        # Create a mask to guard memory operations against out-of-bounds accesses.
+        mask = offsets < n_elements
+        # Load x and y from DRAM, masking out any extra elements in case the input is not a
+        # multiple of the block size.
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = tl.load(y_ptr + offsets, mask=mask)
+        output = x + y
+        # Write x + y back to DRAM.
+        tl.store(output_ptr + offsets, output, mask=mask)
 
+
+device = torch.cuda.current_device()
+properties = driver.active.utils.get_device_properties(device)
+NUM_SM = properties["multiprocessor_count"]
+NUM_REGS = properties["max_num_regs"]
+SIZE_SMEM = properties["max_shared_mem"]
+WARP_SIZE = properties["warpSize"]
+target = triton.runtime.driver.active.get_current_target()
+kernels = {}
 
 # %%
 # Let's also declare a helper function to (1) allocate the `z` tensor
@@ -62,15 +74,42 @@ def add(x: torch.Tensor, y: torch.Tensor):
     output = torch.empty_like(x)
     assert x.is_cuda and y.is_cuda and output.is_cuda
     n_elements = output.numel()
-    # The SPMD launch grid denotes the number of kernel instances that run in parallel.
-    # It is analogous to CUDA launch grids. It can be either Tuple[int], or Callable(metaparameters) -> Tuple[int].
-    # In this case, we use a 1D grid where the size is the number of blocks:
-    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
+
+    BLOCK_SIZE = 2048
+
+    # pre-compile kernel to get register usage and compute thread occupancy.
+    # cache the pre-compiled kernel to avoid recompilation
+    kernel, num_programs = kernels.get(BLOCK_SIZE, (None, 0))
+    if kernel is None:
+        num_warps = 8
+        num_stages = 1
+        kernel = add_kernel.warmup(x, y, output, n_elements, BLOCK_SIZE=BLOCK_SIZE, num_stages=num_stages,
+                                   num_warps=num_warps, grid=(1, ))
+        kernel._init_handles()
+        n_regs = kernel.n_regs
+        size_smem = kernel.metadata.shared
+        occupancy = NUM_REGS // (n_regs * WARP_SIZE * num_warps)
+        if size_smem > 0:
+            occupancy = min(occupancy, SIZE_SMEM // size_smem)
+        num_programs = NUM_SM * occupancy
+        # Create more threads to saturate the GPU thread occupancy. The GPU may dynamically manage
+        # how many programs are active based on the actual usage of these resources instead of
+        # strictly statically predicted
+        num_programs *= 16
+        kernels[BLOCK_SIZE] = (kernel, num_programs)
+
+    num_programs = min(num_programs, (n_elements + BLOCK_SIZE - 1) // BLOCK_SIZE)
+
     # NOTE:
     #  - Each torch.tensor object is implicitly converted into a pointer to its first element.
     #  - `triton.jit`'ed functions can be indexed with a launch grid to obtain a callable GPU kernel.
     #  - Don't forget to pass meta-parameters as keywords arguments.
-    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+
+    # The SPMD launch grid denotes the number of kernel instances that run in parallel.
+    # It is analogous to CUDA launch grids. It can be either Tuple[int], or Callable(metaparameters) -> Tuple[int].
+    # In this case, we use a 1D grid where the size is the number of blocks:
+
+    kernel[(num_programs, 1, 1)](x, y, output, n_elements)
     # We return a handle to z but, since `torch.cuda.synchronize()` hasn't been called, the kernel is still
     # running asynchronously at this point.
     return output
