@@ -39,11 +39,12 @@ void TreeData::addMetric(size_t scopeId, std::shared_ptr<Metric> metric) {
   if (node.metrics.find(metric->getKind()) == node.metrics.end())
     node.metrics.emplace(metric->getKind(), metric);
   else
-    node.metrics[metric->getKind()]->updateValue(*metric);
+    node.metrics[metric->getKind()]->updateMetric(*metric);
 }
 
-void TreeData::addMetrics(
-    size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
+void TreeData::addMetrics(size_t scopeId,
+                          const std::map<std::string, MetricValueType> &metrics,
+                          bool aggregatable) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto scopeIdIt = scopeIdToContextId.find(scopeId);
   auto contextId = Tree::TreeNode::DummyId;
@@ -59,10 +60,11 @@ void TreeData::addMetrics(
   auto &node = tree->getNode(contextId);
   for (auto [metricName, metricValue] : metrics) {
     if (node.flexibleMetrics.find(metricName) == node.flexibleMetrics.end())
-      node.flexibleMetrics.emplace(metricName,
-                                   FlexibleMetric(metricName, metricValue));
-    else
+      node.flexibleMetrics.emplace(
+          metricName, FlexibleMetric(metricName, metricValue, aggregatable));
+    else {
       node.flexibleMetrics.at(metricName).updateValue(metricValue);
+    }
   }
 }
 
@@ -82,10 +84,10 @@ void TreeData::dumpHatchet(std::ostream &os) const {
         for (auto [metricKind, metric] : treeNode.metrics) {
           if (metricKind == MetricKind::Kernel) {
             auto kernelMetric = std::dynamic_pointer_cast<KernelMetric>(metric);
-            auto duration =
-                kernelMetric->getValue<uint64_t>(KernelMetric::Duration);
-            auto invocations =
-                kernelMetric->getValue<uint64_t>(KernelMetric::Invocations);
+            auto duration = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::Duration));
+            auto invocations = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::Invocations));
             (*jsonNode)["metrics"]
                        [kernelMetric->getValueName(KernelMetric::Duration)] =
                            duration;
