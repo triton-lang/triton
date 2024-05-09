@@ -3334,13 +3334,8 @@ def test_dot_optimize_epilogue(device):
 
     # triton kernel
     @triton.jit
-    def kernel(X, stride_xm, stride_xk, 
-               Y, stride_yk, stride_yn,
-               M, N, K,
-               BLOCK_M:tl.constexpr, 
-               BLOCK_N:tl.constexpr, 
-               BLOCK_K:tl.constexpr,
-               Out, stride_om, stride_on):
+    def kernel(X, stride_xm, stride_xk, Y, stride_yk, stride_yn, M, N, K, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+               BLOCK_K: tl.constexpr, Out, stride_om, stride_on):
         off_m = tl.arange(0, BLOCK_M)
         off_n = tl.arange(0, BLOCK_N)
         off_k = tl.arange(0, BLOCK_K)
@@ -3367,15 +3362,13 @@ def test_dot_optimize_epilogue(device):
     out = np.ones((2 * M, N), dtype='float16')
 
     x_tri = to_triton(x, device=device)
-    y_tri = to_triton(y, device=device)    
+    y_tri = to_triton(y, device=device)
     out_tri = to_triton(out, device=device)
-    kernel[(1, 1)](x_tri, x_tri.stride(0), x_tri.stride(1),
-                   y_tri, y_tri.stride(0), y_tri.stride(1),
-                   M, N, K, BLOCK_M, BLOCK_N, BLOCK_K,
-                   out_tri, out_tri.stride(0), out_tri.stride(1))
+    kernel[(1, 1)](x_tri, x_tri.stride(0), x_tri.stride(1), y_tri, y_tri.stride(0), y_tri.stride(1), M, N, K, BLOCK_M,
+                   BLOCK_N, BLOCK_K, out_tri, out_tri.stride(0), out_tri.stride(1))
     out_ref = np.matmul(x, y)
-    out_ref_ones = np.ones((M, N), dtype = 'float16')
-    np.testing.assert_allclose(out_ref, to_numpy(out_tri[0:M,:]), rtol=0.01, atol=1e-3)
+    out_ref_ones = np.ones((M, N), dtype='float16')
+    np.testing.assert_allclose(out_ref, to_numpy(out_tri[0:M, :]), rtol=0.01, atol=1e-3)
     np.testing.assert_allclose(out_ref_ones, to_numpy(out_tri[M:]), rtol=0.01, atol=1e-3)
 
 
