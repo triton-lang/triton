@@ -3369,6 +3369,7 @@ def test_dot_optimize_epilogue(device):
     out_ref = np.matmul(x, y)
     out_ref_ones = np.ones((M, N), dtype='float16')
     np.testing.assert_allclose(out_ref, to_numpy(out_tri[0:M, :]), rtol=0.01, atol=1e-3)
+    # check output is not written out of bound
     np.testing.assert_allclose(out_ref_ones, to_numpy(out_tri[M:]), rtol=0.01, atol=1e-3)
 
 
