@@ -4,8 +4,7 @@ import json
 import pandas as pd
 
 import hatchet as ht
-import triton._C.libproton.proton as libproton
-from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME, flops_width
+from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME, TritonHook
 
 # Reserved keywords
 ROOT = "ROOT"
@@ -43,7 +42,7 @@ def get_min_time_flops(df, device_info):
     for device_type in device_info:
         for device_index in device_info[device_type]:
             arch = device_info[device_type][device_index]["arch"]
-            for width in flops_width:
+            for width in TritonHook.flops_width:
                 idx = df["device_index"] == device_index
                 device_frames = df[idx]
                 max_flops = gpu_flops_8bits[arch] / (width / 8)

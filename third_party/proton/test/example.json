@@ -1,0 +1,56 @@
+ [
+  {
+    "children": [
+      {
+        "DeviceId": "CUDA",
+        "children": [],
+        "frame": {
+          "name": "foo",
+          "type": "function"
+        },
+        "metrics": {
+          "Count": 1,
+          "DeviceId": 0,
+          "Time (ns)": 2048,
+          "flops8": 1e9,
+          "bytes": 1e9
+        }
+      },
+      {
+        "DeviceId": "ROCM",
+        "children": [],
+        "frame": {
+          "name": "foo",
+          "type": "function"
+        },
+        "metrics": {
+          "Count": 1,
+          "DeviceId": 1,
+          "Time (ns)": 2048,
+          "flops16": 1e8,
+          "bytes": 1e8
+        }
+      }
+    ],
+    "frame": {
+      "name": "ROOT",
+      "type": "function"
+    },
+    "metrics": {
+      "Count": 0,
+      "DeviceId": 0,
+      "Time (ns)": 0,
+      "flops32": 0
+    }
+  },
+  {
+    "CUDA": {
+      "0": {
+        "arch": 86,
+        "bus_width": 128,
+        "clock_rate": 1140000,
+        "memory_clock_rate": 5501000
+      }
+    }
+  }
+]

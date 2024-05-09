@@ -99,7 +99,7 @@ void CuptiProfiler::doStart() {
 
 void CuptiProfiler::doFlush() {
   CUcontext cuContext = nullptr;
-  cuda::ctxGetCurrent<true>(&cuContext);
+  cuda::ctxGetCurrent<false>(&cuContext);
   if (cuContext) {
     cuda::ctxSynchronize<true>();
   }
