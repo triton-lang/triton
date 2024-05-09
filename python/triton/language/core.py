@@ -2521,7 +2521,7 @@ class range:
 
 
 def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, ret_shape: tuple,
-             is_pure: bool, _builder=None):
+             is_pure: bool, _builder=None, use_llvm_intrinsic: bool = False):
     '''
         Dispatch a function to a library
         :param func: the function to dispatch
@@ -2560,12 +2560,13 @@ def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dic
         ret_type = arg_type_symbol_dict[arg_types][1]
         if ret_shape:
             ret_type = block_type(ret_type, ret_shape)
-        return tensor(func(lib_name, lib_path, symbol, arg_list, ret_type.to_ir(_builder), is_pure), ret_type)
+        return tensor(func(lib_name, lib_path, symbol, arg_list, ret_type.to_ir(_builder), is_pure, use_llvm_intrinsic),
+                      ret_type)
 
 
 @builtin
 def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, is_pure: bool,
-                       _builder=None):
+                       _builder=None, use_llvm_intrinsic: bool = False):
     '''
         Dispatch an elementwise function to a library
         :param lib_name: the name of the library
@@ -2603,7 +2604,8 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
         if not all_scalar:
             ret_shape = broadcast_arg.shape
     func = _builder.create_extern_elementwise
-    return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_shape, is_pure, _builder)
+    return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_shape, is_pure, _builder,
+                    use_llvm_intrinsic)
 
 
 def binary_op_type_legalization(lhs, rhs, builder):

@@ -1365,9 +1365,15 @@ void init_triton_ir(py::module &&m) {
       .def("create_extern_elementwise",
            [](TritonOpBuilder &self, const std::string &libName,
               const std::string &libPath, const std::string &symbol,
-              std::vector<Value> &argList, Type retType, bool isPure) -> Value {
-             return self.create<ExternElementwiseOp>(retType, argList, libName,
-                                                     libPath, symbol, isPure);
+              std::vector<Value> &argList, Type retType, bool isPure,
+              bool useLLVMIntrinsic) -> Value {
+             auto op = self.create<ExternElementwiseOp>(
+                 retType, argList, libName, libPath, symbol, isPure);
+             if (useLLVMIntrinsic) {
+               op->setAttr(UseLLVMIntrinsicAttr::getMnemonic(),
+                           UnitAttr::get(self.getBuilder().getContext()));
+             }
+             return op;
            })
       // Built-in instruction
       .def("create_get_program_id",

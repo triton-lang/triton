@@ -1,26 +1,24 @@
 from triton.language import core
 
 
-@core.builtin
-@core._tensor_member_fn
-def abs(x, _builder=None):
-    x = core._to_tensor(x, _builder)
-    if x.dtype.is_floating():
-        return core.tensor(_builder.create_fabs(x.handle), x.type)
-    elif x.dtype.is_int_signed():
-        return core.tensor(_builder.create_iabs(x.handle), x.type)
-    else:
-        assert False, f"Unexpected dtype {x.dtype}"
+@core.extern
+def abs(arg0, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("llvm.abs.i32", core.dtype("int32")),
+            (core.dtype("int64"), ): ("llvm.abs.i64", core.dtype("int64")),
+            (core.dtype("fp32"), ): ("llvm.fabs.f32", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("llvm.fabs.f64", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder, use_llvm_intrinsic=True)
 
 
-@core.builtin
-@core._tensor_member_fn
-def floor(x, _builder=None):
-    x = core._to_tensor(x, _builder)
-    if x.dtype.is_floating():
-      return core.tensor(_builder.create_floor(x.handle), x.type)
-    else:
-      assert False, f"Unexpected dtype {x.dtype}"
+@core.extern
+def floor(arg0, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("fp32"), ): ("__ocml_floor_f32", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__ocml_floor_f64", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
 
 
 @core.extern
@@ -68,16 +66,15 @@ def sqrt(arg0, _builder=None):
         }, is_pure=True, _builder=_builder)
 
 
-# TODO: take from MLIR
 @core.extern
 def llrint(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [
             arg0,
         ], {
-            (core.dtype("fp32"), ): ("__nv_llrintf", core.dtype("int64")),
-            (core.dtype("fp64"), ): ("__nv_llrint", core.dtype("int64")),
-        }, is_pure=True, _builder=_builder)
+            (core.dtype("fp32"), ): ("llvm.rint.f32", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("llvm.rint.f64", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder, use_llvm_intrinsic=True)
 
 
 @core.extern
@@ -91,15 +88,14 @@ def nearbyint(arg0, _builder=None):
         }, is_pure=True, _builder=_builder)
 
 
-# TODO: take from MLIR
 @core.extern
 def isnan(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [
             arg0,
         ], {
-            (core.dtype("fp32"), ): ("__nv_isnanf", core.dtype("int32")),
-            (core.dtype("fp64"), ): ("__nv_isnand", core.dtype("int32")),
+            (core.dtype("fp32"), ): ("__ocml_isnan_f32", core.dtype("int32")),
+            (core.dtype("fp64"), ): ("__ocml_isnan_f64", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
 
 
@@ -123,13 +119,12 @@ def copysign(arg0, arg1, _builder=None):
         }, is_pure=True, _builder=_builder)
 
 
-# TODO: take from MLIR
 @core.extern
 def isinf(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__nv_isinff", core.dtype("int32")),
-            (core.dtype("fp64"), ): ("__nv_isinfd", core.dtype("int32")),
+            (core.dtype("fp32"), ): ("__ocml_isinf_f32", core.dtype("int32")),
+            (core.dtype("fp64"), ): ("__ocml_isinf_f64", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
 
 
@@ -306,26 +301,29 @@ def hypot(arg0, arg1, _builder=None):
 
 @core.extern
 def j0(arg0, _builder=None):
-    return core.extern_elementwise("", "", [arg0], {
-        (core.dtype("fp32"), ): ("__ocml_j0_f32", core.dtype("fp32")),
-        (core.dtype("fp64"), ): ("__ocml_j0_f64", core.dtype("fp64")),
-    }, is_pure=True, _builder=_builder)
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("fp32"), ): ("__ocml_j0_f32", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__ocml_j0_f64", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
 
 
 @core.extern
 def y0(arg0, _builder=None):
-    return core.extern_elementwise("", "", [arg0], {
-        (core.dtype("fp32"), ): ("__ocml_y0_f32", core.dtype("fp32")),
-        (core.dtype("fp64"), ): ("__ocml_y0_f64", core.dtype("fp64")),
-    }, is_pure=True, _builder=_builder)
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("fp32"), ): ("__ocml_y0_f32", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__ocml_y0_f64", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
 
 
 @core.extern
 def y1(arg0, _builder=None):
-    return core.extern_elementwise("", "", [arg0], {
-        (core.dtype("fp32"), ): ("__ocml_y1_f32", core.dtype("fp32")),
-        (core.dtype("fp64"), ): ("__ocml_y1_f64", core.dtype("fp64")),
-    }, is_pure=True, _builder=_builder)
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("fp32"), ): ("__ocml_y1_f32", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__ocml_y1_f64", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
 
 
 @core.extern
