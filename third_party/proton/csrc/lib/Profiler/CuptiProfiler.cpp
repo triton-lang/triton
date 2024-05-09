@@ -1,6 +1,7 @@
 #include "Profiler/CuptiProfiler.h"
 #include "Context/Context.h"
 #include "Data/Metric.h"
+#include "Driver/Device.h"
 #include "Driver/GPU/Cuda.h"
 #include "Driver/GPU/Cupti.h"
 
@@ -95,9 +96,9 @@ void CuptiProfiler::doStart() {
 }
 
 void CuptiProfiler::doFlush() {
-  CUcontext cu_context = nullptr;
-  cuda::ctxGetCurrent<false>(&cu_context);
-  if (cu_context) {
+  CUcontext cuContext = nullptr;
+  cuda::ctxGetCurrent<true>(&cuContext);
+  if (cuContext) {
     cuda::ctxSynchronize<true>();
   }
   cupti::activityFlushAll<true>(CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
