@@ -1061,8 +1061,7 @@ struct AsyncTMACopyLocalToGlobalOpConversion
 
     // TODO: Separate the syncronizations operations into separate TTGIR ops to
     // be able to schedule them at the high level.
-    const std::string ptx = "cp.async.bulk.commit_group; \n\t"
-                            "cp.async.bulk.wait_group 0";
+    const std::string ptx = "cp.async.bulk.commit_group";
     PTXBuilder ptxBuilderSync;
     ptxBuilderSync.create<>(ptx)->operator()();
     ptxBuilderSync.launch(rewriter, op.getLoc(), void_ty(op.getContext()));
@@ -1121,6 +1120,26 @@ struct AsyncCommitGroupOpConversion
   }
 };
 
+struct AsyncStoreOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMAStoreWait> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::TMAStoreWait op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    PTXBuilder ptxBuilder;
+    auto &asyncWaitOp = *ptxBuilder.create<>("cp.async.bulk.wait_group.read");
+    auto num = op.getPendings();
+    asyncWaitOp(ptxBuilder.newConstantOperand(num));
+
+    auto ctx = op.getContext();
+    auto loc = op.getLoc();
+    auto voidTy = void_ty(ctx);
+    ptxBuilder.launch(rewriter, loc, voidTy);
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
@@ -1133,5 +1152,6 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
   patterns.add<AsyncTMACopyGlobalToLocalOpConversion,
-               AsyncTMACopyLocalToGlobalOpConversion>(typeConverter, benefit);
+               AsyncTMACopyLocalToGlobalOpConversion, AsyncStoreOpConversion>(
+      typeConverter, benefit);
 }

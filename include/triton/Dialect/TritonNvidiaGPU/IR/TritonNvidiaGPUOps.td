@@ -34,6 +34,7 @@ include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 include "mlir/Interfaces/DestinationStyleOpInterface.td"
 include "mlir/Interfaces/ViewLikeInterface.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
@@ -203,6 +204,9 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global",
     by `desc_ptr`.
   }];
 
+
+  let results = (outs TTG_AsyncToken:$token);
+
   let arguments = (
     ins TT_PtrType:$desc_ptr,
     Variadic<I32>:$coord,
@@ -213,5 +217,17 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global",
     attr-dict `:` type($desc_ptr) `,` type($src)
   }];
 }
+
+def TTNG_TMAStoreWait : TTNG_Op<"store_wait", []> {
+  let summary = "wait until all the inputs are read.";
+  let arguments = (ins Variadic<TT_TensorOrMemDesc>:$inputs, I32Attr:$pendings);
+  let description = [{
+    Wait until all the read operations are done from the associated store operations.
+    This is needed before the shared memory can be written to.
+  }];
+
+  let assemblyFormat = "$inputs attr-dict `:` type($inputs)";
+}
+
 
 #endif
