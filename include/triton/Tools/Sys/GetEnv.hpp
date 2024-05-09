@@ -62,10 +62,7 @@ inline bool getBoolEnv(const std::string &env) {
   return str == "on" || str == "true" || str == "1";
 }
 
-inline std::optional<bool> isBoolEnv(const std::string &env) {
-  assertIsRecognized(env);
-  const char *s = std::getenv(env.c_str());
-  std::string str(s ? s : "");
+inline std::optional<bool> isEnvValueBool(std::string str) {
   std::transform(str.begin(), str.end(), str.begin(),
                  [](unsigned char c) { return std::tolower(c); });
   if (str == "on" || str == "true" || str == "1")

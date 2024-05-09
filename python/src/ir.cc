@@ -1631,7 +1631,7 @@ void init_triton_env_vars(py::module &m) {
             auto strVal = triton::tools::getStrEnv(envVar);
             if (strVal.empty())
               continue;
-            auto boolV = triton::tools::isBoolEnv(envVar);
+            auto boolV = triton::tools::isEnvValueBool(strVal);
             if (boolV.has_value())
               ret[envVar] = boolV.value() ? "true" : "false";
             else
