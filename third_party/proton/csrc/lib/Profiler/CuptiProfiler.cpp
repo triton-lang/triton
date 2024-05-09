@@ -1,7 +1,6 @@
 #include "Profiler/CuptiProfiler.h"
 #include "Context/Context.h"
 #include "Data/Metric.h"
-#include "Driver/Device.h"
 #include "Driver/GPU/Cuda.h"
 #include "Driver/GPU/Cupti.h"
 
