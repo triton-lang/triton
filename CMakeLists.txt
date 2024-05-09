@@ -270,6 +270,7 @@ if(NOT TRITON_BUILD_PYTHON_MODULE)
   endforeach()
 endif()
 
+add_subdirectory(third_party/f2reduce)
 add_subdirectory(bin)
 add_subdirectory(test)
 

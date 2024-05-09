@@ -1,7 +1,10 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "llvm/ADT/STLExtras.h"
 
 namespace SharedToDotOperandMMAv1 {
 using CoordTy = SmallVector<Value>;
@@ -139,6 +142,113 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(ConversionPatternRewriter &rewriter,
   return ret;
 }
 } // namespace triton::gpu
+
+SmallVector<std::pair<StringAttr, Value>>
+applyLinearLayout(Location loc, RewriterBase &rewriter,
+                  const LinearLayout &layout,
+                  ArrayRef<std::pair<StringAttr, Value>> indices) {
+  assert(layout.getNumInDims() == indices.size());
+  for (auto [inDimName, idx] : indices) {
+    assert(layout.hasInDim(inDimName) && "Invalid inDimName");
+  }
+
+  // This function can emit a lot of MLIR code, which ultimately makes
+  // compilation slow.  (We think this shouldn't be the case -- it's not *that*
+  // much code -- but we're not clear on how to fix the slowness, which happens
+  // in the bowels of MLIR.)
+  //
+  // As a result we go through some contortions to avoid emitting code where
+  // possible.
+
+  // Manually constant-fold the layout where possible.
+  SmallVector<std::pair<StringAttr, int32_t>> constantIns;
+  for (auto [inDimName, idx] : indices) {
+    if (auto constant = dyn_cast<LLVM::ConstantOp>(idx.getDefiningOp())) {
+      constantIns.push_back(
+          {inDimName, constant.getValue().cast<IntegerAttr>().getInt()});
+    } else {
+      constantIns.push_back({inDimName, 0});
+    }
+  }
+  SmallVector<int32_t> constantComponent =
+      llvm::to_vector(llvm::make_second_range(layout.apply(constantIns)));
+
+  Value zero = i32_val(0);
+  SmallVector<std::pair<StringAttr, Value>> outIndices;
+  for (auto [i, outDimName] : llvm::enumerate(layout.getOutDimNames())) {
+    if (constantComponent[i] == 0)
+      outIndices.push_back({outDimName, zero});
+    else
+      outIndices.push_back({outDimName, i32_val(constantComponent[i])});
+  }
+
+  for (auto [inDimName, idx] : indices) {
+    if (isa<LLVM::ConstantOp>(idx.getDefiningOp())) {
+      continue;
+    }
+
+    int nBits = layout.getInDimSizeLog2(inDimName);
+    for (int i = 0; i < nBits; i++) {
+      Value bit = and_(idx, i32_val(1 << i));
+      Value bit_is_zero = icmp_eq(bit, zero);
+      for (auto &[outDimName, outIdx] : outIndices) {
+        int32_t basis = layout.getBasis(inDimName, outDimName, i);
+        if (basis == 0)
+          continue;
+        outIdx = xor_(outIdx, select(bit_is_zero, zero, i32_val(basis)));
+      }
+    }
+  }
+
+  return outIndices;
+}
+
+std::optional<SmallVector<SmallVector<Value>>>
+emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
+                              const TargetInfoBase &target, Attribute layout,
+                              RankedTensorType type, bool withCTAOffset) {
+  if (isa<BlockedEncodingAttr>(layout)) {
+    MLIRContext *ctx = rewriter.getContext();
+    auto shape = type.getShape();
+    Value threadId = getThreadId(rewriter, loc);
+    Value warpSize = i32_val(triton::gpu::getWarpSize(layout));
+    Value laneId = urem(threadId, warpSize);
+    Value warpId = udiv(threadId, warpSize);
+    Value blockId =
+        withCTAOffset ? target.getClusterCTAId(rewriter, loc) : i32_val(0);
+    unsigned rank = shape.size();
+
+    SmallVector<StringAttr> outDimsLogicalOrder;
+    for (unsigned k = 0; k < rank; ++k) {
+      outDimsLogicalOrder.push_back(str_attr("dim" + Twine(k)));
+    }
+    LinearLayout ll = triton::gpu::toLinearLayout(shape, layout);
+
+    // TODO(jlebar): We could add strong typing if we wanted; for now this is
+    // "stringly typed".
+    StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+    SmallVector<SmallVector<Value>> ret;
+    for (unsigned reg = 0; reg < ll.getInDimSize(str_attr("register")); reg++) {
+      auto idxs = applyLinearLayout(loc, rewriter, ll,
+                                    {{kRegister, i32_val(reg)},
+                                     {kLane, laneId},
+                                     {kWarp, warpId},
+                                     {kBlock, blockId}});
+      assert(idxs.size() == rank);
+      for (unsigned k = 0; k < rank; ++k) {
+        assert(idxs[k].first == str_attr("dim" + std::to_string(k)));
+      }
+      ret.push_back(llvm::to_vector(llvm::make_second_range(idxs)));
+    }
+
+    return ret;
+  }
+
+  return std::nullopt;
+}
 
 namespace LLVM {
 using namespace mlir::triton;
