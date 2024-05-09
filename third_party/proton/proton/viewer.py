@@ -38,25 +38,25 @@ def get_raw_metrics(file):
     return gf, gf.show_metric_columns(), device_info
 
 
-def get_min_time_flops(gf, device_info):
-    min_time_flops = pd.DataFrame(0, index=range(len(gf.dataframe)), columns=range(1))
+def get_min_time_flops(df, device_info):
+    min_time_flops = pd.DataFrame(0, index=range(len(df)), columns=range(1))
     for device_type in device_info:
         for device_index in device_info[device_type]:
             arch = device_info[device_type][device_index]["arch"]
             for width in flops_width:
-                idx = gf.dataframe["device_index"] == device_index
-                device_frames = gf.dataframe[idx]
+                idx = df["device_index"] == device_index
+                device_frames = df[idx]
                 max_flops = gpu_flops_8bits[arch] / (width / 8)
                 min_time_flops[idx] += device_frames[f"flops{width} (inc)"].fillna(0) / max_flops
     return min_time_flops
 
 
-def get_min_time_bytes(gf, device_info):
-    min_time_bytes = pd.DataFrame(0, index=range(len(gf.dataframe)), columns=range(1))
+def get_min_time_bytes(df, device_info):
+    min_time_bytes = pd.DataFrame(0, index=range(len(df)), columns=range(1))
     for device_type in device_info:
         for device_index in device_info[device_type]:
-            idx = gf.dataframe["device_index"] == device_index
-            device_frames = gf.dataframe[idx]
+            idx = df["device_index"] == device_index
+            device_frames = df[idx]
             memory_clock_rate = device_info[device_type][device_index]["memory_clock_rate"]
             bus_width = device_info[device_type][device_index]["bus_width"]
             peak_bandwidth = 2 * bus_width * memory_clock_rate * 1e3
@@ -82,8 +82,8 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
     original_metrics = []
     for metric in metrics:
         if metric == "util":
-            min_time_bytes = get_min_time_bytes(gf, device_info)
-            min_time_flops = get_min_time_flops(gf, device_info)
+            min_time_bytes = get_min_time_bytes(gf.dataframe, device_info)
+            min_time_flops = get_min_time_flops(gf.dataframe, device_info)
             gf.dataframe["util (inc)"] = min_time_flops.combine(min_time_bytes, max) / gf.dataframe["Time (ns) (inc)"]
             derived_metrics.append("util (inc)")
         elif metric in derivable_metrics:
