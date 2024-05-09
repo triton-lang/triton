@@ -1,6 +1,6 @@
 ﻿#include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
-#include "mlir/Target/LLVMIR/ModuleTranslation.h"
+#include "triton/Target/LLVMIR/ModuleTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/LLVMContext.h"
@@ -194,7 +194,7 @@ void init_triton_llvm(py::module &&m) {
   m.def(
       "to_module",
       [](mlir::ModuleOp &mod, llvm::LLVMContext &ctx) {
-        return mlir::translateModuleToLLVMIR(mod, ctx);
+        return mlir::triton::translateModuleToLLVMIR(mod, ctx);
       },
       py::keep_alive<0, 2>());
 
