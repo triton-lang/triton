@@ -2,11 +2,12 @@
 #define PROTON_PROFILER_CUPTI_PROFILER_H_
 
 #include "Context/Context.h"
-#include "Driver/GPU/Cuda.h"
 #include "Profiler.h"
 
 #include <atomic>
 #include <map>
+
+struct CUctx_st;
 
 namespace proton {
 
@@ -32,7 +33,7 @@ protected:
 private:
   static void allocBuffer(uint8_t **buffer, size_t *bufferSize,
                           size_t *maxNumRecords);
-  static void completeBuffer(CUcontext context, uint32_t streamId,
+  static void completeBuffer(struct CUctx_st *context, uint32_t streamId,
                              uint8_t *buffer, size_t size, size_t validSize);
 
   const inline static size_t AlignSize = 8;
