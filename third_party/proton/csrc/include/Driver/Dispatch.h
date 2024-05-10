@@ -58,7 +58,12 @@ public:
 
   static void init(const char *name, void **lib) {
     if (*lib == nullptr) {
-      *lib = dlopen(name, RTLD_LAZY);
+      // First reuse the existing handle
+      *lib = dlopen(name, RTLD_NOLOAD);
+    }
+    if (*lib == nullptr) {
+      // If not found, try to load it
+      *lib = dlopen(name, RTLD_LOCAL | RTLD_LAZY);
     }
     if (*lib == nullptr) {
       throw std::runtime_error("Could not find `" + std::string(name) +
