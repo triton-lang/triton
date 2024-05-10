@@ -3,16 +3,16 @@ name: AMD Offline Tests
 on:
   workflow_dispatch:
   pull_request:
-    branches: [main, triton-mlir]
+    branches: [triton-mlir]
   merge_group:
-    branches: [main, triton-mlir]
+    branches: [triton-mlir]
     types: [checks_requested]
   push:
-    branches: [main, triton-mlir]
+    branches: [triton-mlir]
 
 concurrency:
   group: ${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/triton-mlir' }}
 
 permissions: read-all
 
@@ -22,7 +22,7 @@ env:
   TRITON_DISABLE_LINE_INFO: 1
 
 jobs:
-  Runner-Preparation:
+  Runner-Preparation-AMD:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
@@ -38,13 +38,13 @@ jobs:
           fi
 
   Integration-Tests-AMD:
-    needs: Runner-Preparation
-    if: needs.Runner-Preparation.outputs.matrix-HIP != ''
+    needs: Runner-Preparation-AMD
+    if: needs.Runner-Preparation-AMD.outputs.matrix-HIP != ''
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
       matrix:
-        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-HIP)}}
+        runner: ${{fromJson(needs.Runner-Preparation-AMD.outputs.matrix-HIP)}}
     container:
       image: rocm/pytorch:rocm6.0.2_ubuntu22.04_py3.10_pytorch_2.1.2
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
