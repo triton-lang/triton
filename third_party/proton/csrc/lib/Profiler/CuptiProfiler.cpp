@@ -95,9 +95,11 @@ void CuptiProfiler::doStart() {
 }
 
 void CuptiProfiler::doFlush() {
-  CUcontext cu_context = nullptr;
-  cuda::ctxGetCurrent<false>(&cu_context);
-  if (cu_context) {
+  CUcontext cuContext = nullptr;
+  // If the device is not initialized, cuda::ctxGetCurrent will fail.
+  // So we don't throw an error here, but instead just skip the synchronization.
+  cuda::ctxGetCurrent<false>(&cuContext);
+  if (cuContext) {
     cuda::ctxSynchronize<true>();
   }
   cupti::activityFlushAll<true>(CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
