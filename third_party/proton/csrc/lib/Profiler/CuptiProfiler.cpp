@@ -301,6 +301,11 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
   cupti::finalize<true>();
 }
 
+CuptiProfiler::CuptiProfiler()
+    : pImpl(std::make_unique<CuptiProfilerPimpl>()) {}
+
+CuptiProfiler::~CuptiProfiler() = default;
+
 void CuptiProfiler::startOp(const Scope &scope) { pImpl->startOp(scope); }
 
 void CuptiProfiler::stopOp(const Scope &scope) { pImpl->stopOp(scope); }
