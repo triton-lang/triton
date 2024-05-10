@@ -9,6 +9,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/StrUtil.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -2326,7 +2327,7 @@ struct TritonGPUInferLayoutInterface
         return emitOptionalError(loc,
                                  "Cannot do a non-reordering reshape given "
                                  "this src encoding order.  Dimensions [",
-                                 join(srcDims, ","),
+                                 join(srcDims),
                                  "] must be physically consecutive.");
       }
     }

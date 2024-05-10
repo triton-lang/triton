@@ -24,9 +24,9 @@ public:
 
   /// Add multiple metrics to the data.
   /// [MT] The implementation must be thread-safe.
-  virtual void
-  addMetrics(size_t scopeId,
-             const std::map<std::string, MetricValueType> &metrics) = 0;
+  virtual void addMetrics(size_t scopeId,
+                          const std::map<std::string, MetricValueType> &metrics,
+                          bool aggregable) = 0;
 
   /// Dump the data to the given output format.
   /// [MT] Thread-safe.

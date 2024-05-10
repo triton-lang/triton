@@ -62,6 +62,15 @@ inline bool getBoolEnv(const std::string &env) {
   return str == "on" || str == "true" || str == "1";
 }
 
+inline std::optional<bool> isEnvValueBool(std::string str) {
+  std::transform(str.begin(), str.end(), str.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+  if (str == "on" || str == "true" || str == "1")
+    return true;
+  if (str == "off" || str == "false" || str == "0")
+    return false;
+  return std::nullopt;
+}
 } // namespace tools
 } // namespace mlir::triton
 
