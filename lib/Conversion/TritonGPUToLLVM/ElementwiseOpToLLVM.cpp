@@ -325,11 +325,15 @@ struct ExternElementwiseOpConversion
       llvm::errs() << "ExternElementwiseOpConversion";
 
     if (op->hasAttr(UseLLVMIntrinsicAttr::getMnemonic())) {
-      auto symbolName = StringAttr::get(op.getContext(), funcName);
-      LLVM::FastmathFlagsAttr flags{};
-      auto op = rewriter.create<LLVM::CallIntrinsicOp>(loc, elemTy, symbolName,
-                                                       operands[0], flags);
-      return {op->getResults()};
+      if (funcName == "fptosi") {
+        return {rewriter.create<LLVM::FPToSIOp>(loc, elemTy, operands[0])};
+      } else {
+        auto symbolName = StringAttr::get(op.getContext(), funcName);
+        LLVM::FastmathFlagsAttr flags{};
+        auto op = rewriter.create<LLVM::CallIntrinsicOp>(
+            loc, elemTy, symbolName, operands[0], flags);
+        return {op->getResults()};
+      }
     } else {
       Type funcType = getFunctionType(elemTy, operands[0]);
       LLVM::LLVMFuncOp funcOp = appendOrGetExternFuncOp(

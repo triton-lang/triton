@@ -68,13 +68,19 @@ def sqrt(arg0, _builder=None):
 
 @core.extern
 def llrint(arg0, _builder=None):
-    return core.extern_elementwise(
-        "", "", [
-            arg0,
-        ], {
+    is_pure = True
+    use_llvm_intrinsic = True
+    pack = [
+        ("", "", {
             (core.dtype("fp32"), ): ("llvm.rint.f32", core.dtype("fp32")),
             (core.dtype("fp64"), ): ("llvm.rint.f64", core.dtype("fp64")),
-        }, is_pure=True, _builder=_builder, use_llvm_intrinsic=True)
+        }, is_pure, _builder, use_llvm_intrinsic),
+        ("", "", {
+            (core.dtype("fp32"), ): ("fptosi", core.dtype("int64")),
+            (core.dtype("fp64"), ): ("fptosi", core.dtype("int64")),
+        }, is_pure, _builder, use_llvm_intrinsic),
+    ]
+    return core.extern_elementwise_instruction_pack(pack, [arg0])
 
 
 @core.extern
