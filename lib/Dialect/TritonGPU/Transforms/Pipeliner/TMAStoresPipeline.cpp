@@ -17,11 +17,9 @@ getTMAStores(scf::ForOp forOp) {
       tmaStores.push_back(storeOp);
     }
     for (Region &region : op->getRegions()) {
-      for (Block &block : region) {
-        for (Operation &op : block) {
-          if (!isa<scf::ForOp>(op))
-            collectTMAStores(&op);
-        }
+      for (Operation &op : region.getOps()) {
+        if (!isa<scf::ForOp>(op))
+          collectTMAStores(&op);
       }
     }
   };
@@ -87,6 +85,7 @@ bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
   // Deallocate shared memory buffers.
   OpBuilder builder(forOp);
   builder.setInsertionPointAfter(forOp);
+  builder.create<ttng::TMAStoreWait>(forOp->getLoc(), 0);
   for (auto it : storeToAlloc) {
     builder.create<ttg::LocalDeallocOp>(forOp->getLoc(), it.second);
   }
