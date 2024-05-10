@@ -235,7 +235,8 @@ class CUDABackend(BaseBackend):
     @staticmethod
     def make_ptx(src, metadata, opt, capability):
         proc = 'sm_90a' if capability == 90 else f'sm_{capability}'
-        ret = llvm.translate_to_asm(src, 'nvptx64-nvidia-cuda', proc, '', ['nvptx-short-ptr'], opt.enable_fp_fusion,
+        features = '+ptx60' if capability == 60 or capability == 61 else ''
+        ret = llvm.translate_to_asm(src, 'nvptx64-nvidia-cuda', proc, features, ['nvptx-short-ptr'], opt.enable_fp_fusion,
                                     False)
         # Find kernel names (there should only be one)
         names = re.findall(r".visible .entry ([a-zA-Z_][a-zA-Z0-9_]*)", ret)
