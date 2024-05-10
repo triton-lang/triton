@@ -11,7 +11,6 @@
 namespace proton {
 
 namespace {
-
 struct CuptiState {
   CuptiProfiler *profiler;
   std::set<Data *> dataSet;
@@ -149,8 +148,66 @@ std::pair<bool, bool> matchKernelCbId(CUpti_CallbackId cbId) {
   return std::make_pair(isRuntimeApi, isDriverApi);
 }
 
-void callback(void *userData, CUpti_CallbackDomain domain,
-              CUpti_CallbackId cbId, const void *cbData) {
+} // namespace
+
+struct CuptiProfiler::CuptiCallback {
+  CuptiCallback() = default;
+  ~CuptiCallback() = default;
+
+  static void allocBuffer(uint8_t **buffer, size_t *bufferSize,
+                          size_t *maxNumRecords);
+  static void completeBuffer(CUcontext context, uint32_t streamId,
+                             uint8_t *buffer, size_t size, size_t validSize);
+  static void callbackFn(void *userData, CUpti_CallbackDomain domain,
+                         CUpti_CallbackId cbId, const void *cbData);
+
+  const inline static size_t AlignSize = 8;
+  const inline static size_t BufferSize = 64 * 1024 * 1024;
+
+  std::map<uint32_t, size_t> correlation;
+  CUpti_SubscriberHandle subscriber{};
+};
+
+void CuptiProfiler::CuptiCallback::allocBuffer(uint8_t **buffer,
+                                               size_t *bufferSize,
+                                               size_t *maxNumRecords) {
+  *buffer = reinterpret_cast<uint8_t *>(aligned_alloc(AlignSize, BufferSize));
+  if (*buffer == nullptr) {
+    throw std::runtime_error("aligned_alloc failed");
+  }
+  *bufferSize = BufferSize;
+  *maxNumRecords = 0;
+}
+
+void CuptiProfiler::CuptiCallback::completeBuffer(CUcontext ctx,
+                                                  uint32_t streamId,
+                                                  uint8_t *buffer, size_t size,
+                                                  size_t validSize) {
+  CuptiProfiler &profiler =
+      dynamic_cast<CuptiProfiler &>(CuptiProfiler::instance());
+  auto &correlation = profiler.cuptiCallback->correlation;
+  auto &dataSet = profiler.dataSet;
+
+  CUptiResult status;
+  CUpti_Activity *activity = nullptr;
+  do {
+    status = cupti::activityGetNextRecord<false>(buffer, validSize, &activity);
+    if (status == CUPTI_SUCCESS) {
+      processActivity(correlation, dataSet, activity);
+    } else if (status == CUPTI_ERROR_MAX_LIMIT_REACHED) {
+      break;
+    } else {
+      throw std::runtime_error("cupti::activityGetNextRecord failed");
+    }
+  } while (true);
+
+  free(buffer);
+}
+
+void CuptiProfiler::CuptiCallback::callbackFn(void *userData,
+                                              CUpti_CallbackDomain domain,
+                                              CUpti_CallbackId cbId,
+                                              const void *cbData) {
   auto [isRuntimeAPI, isDriverAPI] = matchKernelCbId(cbId);
   if (!(isRuntimeAPI || isDriverAPI)) {
     return;
@@ -179,7 +236,9 @@ void callback(void *userData, CUpti_CallbackDomain domain,
   }
 }
 
-} // namespace
+CuptiProfiler::CuptiProfiler() : cuptiCallback(new CuptiCallback()) {}
+
+CuptiProfiler::~CuptiProfiler() = default;
 
 void CuptiProfiler::startOp(const Scope &scope) {
   cupti::activityPushExternalCorrelationId<true>(
@@ -199,7 +258,8 @@ void CuptiProfiler::setOpInProgress(bool value) {
 bool CuptiProfiler::isOpInProgress() { return cuptiState.isRecording; }
 
 void CuptiProfiler::doStart() {
-  cupti::activityRegisterCallbacks<true>(allocBuffer, completeBuffer);
+  cupti::activityRegisterCallbacks<true>(CuptiCallback::allocBuffer,
+                                         CuptiCallback::completeBuffer);
   cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_EXTERNAL_CORRELATION);
   // Enable driver and runtime activities after external correlation so that
   // external correlation id returned is not 0
@@ -208,12 +268,11 @@ void CuptiProfiler::doStart() {
   cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_FUNCTION);
   cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
   // TODO: switch to directly subscribe the APIs and measure overhead
-  cupti::subscribe<true>(
-      reinterpret_cast<CUpti_SubscriberHandle *>(&subscriber), callback,
-      nullptr);
-  cupti::enableDomain<true>(1, static_cast<CUpti_SubscriberHandle>(subscriber),
+  cupti::subscribe<true>(&(cuptiCallback->subscriber),
+                         cuptiCallback->callbackFn, nullptr);
+  cupti::enableDomain<true>(1, cuptiCallback->subscriber,
                             CUPTI_CB_DOMAIN_DRIVER_API);
-  cupti::enableDomain<true>(1, static_cast<CUpti_SubscriberHandle>(subscriber),
+  cupti::enableDomain<true>(1, cuptiCallback->subscriber,
                             CUPTI_CB_DOMAIN_RUNTIME_API);
 }
 
@@ -232,46 +291,12 @@ void CuptiProfiler::doStop() {
   cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_RUNTIME);
   cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_FUNCTION);
   cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
-  cupti::enableDomain<true>(0, static_cast<CUpti_SubscriberHandle>(subscriber),
+  cupti::enableDomain<true>(0, cuptiCallback->subscriber,
                             CUPTI_CB_DOMAIN_DRIVER_API);
-  cupti::enableDomain<true>(0, static_cast<CUpti_SubscriberHandle>(subscriber),
+  cupti::enableDomain<true>(0, cuptiCallback->subscriber,
                             CUPTI_CB_DOMAIN_RUNTIME_API);
-  cupti::unsubscribe<true>((CUpti_SubscriberHandle)subscriber);
+  cupti::unsubscribe<true>(cuptiCallback->subscriber);
   cupti::finalize<true>();
-}
-
-void CuptiProfiler::allocBuffer(uint8_t **buffer, size_t *bufferSize,
-                                size_t *maxNumRecords) {
-  *buffer = reinterpret_cast<uint8_t *>(aligned_alloc(AlignSize, BufferSize));
-  if (*buffer == nullptr) {
-    throw std::runtime_error("aligned_alloc failed");
-  }
-  *bufferSize = BufferSize;
-  *maxNumRecords = 0;
-}
-
-void CuptiProfiler::completeBuffer(CUcontext ctx, uint32_t streamId,
-                                   uint8_t *buffer, size_t size,
-                                   size_t validSize) {
-  CuptiProfiler &profiler =
-      dynamic_cast<CuptiProfiler &>(CuptiProfiler::instance());
-  auto &correlation = profiler.correlation;
-  auto &dataSet = profiler.dataSet;
-
-  CUptiResult status;
-  CUpti_Activity *activity = nullptr;
-  do {
-    status = cupti::activityGetNextRecord<false>(buffer, validSize, &activity);
-    if (status == CUPTI_SUCCESS) {
-      processActivity(correlation, dataSet, activity);
-    } else if (status == CUPTI_ERROR_MAX_LIMIT_REACHED) {
-      break;
-    } else {
-      throw std::runtime_error("cupti::activityGetNextRecord failed");
-    }
-  } while (true);
-
-  free(buffer);
 }
 
 } // namespace proton

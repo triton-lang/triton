@@ -7,16 +7,14 @@
 #include <atomic>
 #include <map>
 
-struct CUctx_st;
-
 namespace proton {
 
 class CuptiProfiler : public Profiler,
                       public OpInterface,
                       public Singleton<CuptiProfiler> {
 public:
-  CuptiProfiler() = default;
-  virtual ~CuptiProfiler() = default;
+  CuptiProfiler();
+  virtual ~CuptiProfiler();
 
 protected:
   // OpInterface
@@ -31,16 +29,9 @@ protected:
   void doStop() override;
 
 private:
-  static void allocBuffer(uint8_t **buffer, size_t *bufferSize,
-                          size_t *maxNumRecords);
-  static void completeBuffer(struct CUctx_st *context, uint32_t streamId,
-                             uint8_t *buffer, size_t size, size_t validSize);
-
-  const inline static size_t AlignSize = 8;
-  const inline static size_t BufferSize = 64 * 1024 * 1024;
-
-  std::map<uint32_t, size_t> correlation;
-  void *subscriber{};
+  // pimpl-idiom to hide the implementation details
+  struct CuptiCallback;
+  std::unique_ptr<CuptiCallback> cuptiCallback;
 };
 
 } // namespace proton
