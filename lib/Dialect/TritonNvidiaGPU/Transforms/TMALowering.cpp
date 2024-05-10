@@ -80,10 +80,12 @@ public:
     MemDescType memDescType =
         MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
                          encoding, /*mutableMemory=*/true);
-    Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType, op.getSrc());
+    Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType, Value());
+    rewriter.create<LocalStoreOp>(loc, op.getSrc(), alloc);
     rewriter.create<triton::nvidia_gpu::FenceAsyncSharedOp>(loc, false);
     rewriter.create<triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp>(
         loc, op.getDescPtr(), op.getIndices(), alloc);
+    rewriter.create<triton::nvidia_gpu::TMAStoreWait>(loc, 0);
     rewriter.eraseOp(op);
     return success();
   }

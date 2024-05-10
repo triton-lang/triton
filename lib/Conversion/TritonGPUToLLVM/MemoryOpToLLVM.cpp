@@ -103,6 +103,53 @@ struct LocalDeallocOpConversion
   }
 };
 
+struct LocalStoreOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::LocalStoreOp> {
+public:
+  using ConvertOpToLLVMPattern<
+      triton::gpu::LocalStoreOp>::ConvertOpToLLVMPattern;
+
+  LocalStoreOpConversion(const LLVMTypeConverter &converter,
+                         const TargetInfoBase &targetInfo,
+                         PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<triton::gpu::LocalStoreOp>(converter, benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::LocalStoreOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+
+    Location loc = op->getLoc();
+    // TODO pawel: getDefiningOp() below can return nullptr. How do we find
+    // shmem base?
+    Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter,
+                                               op.getResult().getDefiningOp());
+    auto srcTy = op.getSrc().getType();
+    auto resultTy = cast<MemDescType>(op.getResult().getType());
+    auto resultShapePerCTA = triton::gpu::getShapePerCTA(resultTy);
+    auto typeConverter = getTypeConverter();
+    auto sharedLayout =
+        cast<triton::gpu::SharedEncodingAttr>(resultTy.getEncoding());
+    auto order = sharedLayout.getOrder();
+
+    auto elemTy = typeConverter->convertType(srcTy.getElementType());
+
+    int32_t elemSize = elemTy.getIntOrFloatBitWidth();
+    unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
+    auto dstStrides = LLVM::getStridesFromShapeAndOrder(resultShapePerCTA,
+                                                        order, loc, rewriter);
+    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    storeDistributedToShared(op.getSrc(), inVals, dstStrides, op.getResult(),
+                             smemBase, elemTy, loc, rewriter, targetInfo);
+    rewriter.eraseOp(op);
+
+    return success();
+  }
+
+private:
+  const TargetInfoBase &targetInfo;
+};
+
 } // namespace
 
 void mlir::triton::populateMemoryOpToLLVMPattern(
@@ -110,4 +157,5 @@ void mlir::triton::populateMemoryOpToLLVMPattern(
     RewritePatternSet &patterns, PatternBenefit benefit) {
   patterns.add<LocalAllocOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalDeallocOpConversion>(typeConverter, benefit);
+  patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
 }

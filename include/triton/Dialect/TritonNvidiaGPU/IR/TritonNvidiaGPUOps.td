@@ -205,7 +205,7 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global",
   }];
 
 
-  let results = (outs TTG_AsyncToken:$token);
+  //let results = (outs TTG_AsyncToken:$token);
 
   let arguments = (
     ins TT_PtrType:$desc_ptr,
@@ -220,13 +220,14 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global",
 
 def TTNG_TMAStoreWait : TTNG_Op<"store_wait", []> {
   let summary = "wait until all the inputs are read.";
-  let arguments = (ins Variadic<TT_TensorOrMemDesc>:$inputs, I32Attr:$pendings);
+  //let arguments = (ins Variadic<TT_TensorOrMemDesc>:$inputs, I32Attr:$pendings);
+  let arguments = (ins I32Attr:$pendings);
   let description = [{
     Wait until all the read operations are done from the associated store operations.
     This is needed before the shared memory can be written to.
   }];
 
-  let assemblyFormat = "$inputs attr-dict `:` type($inputs)";
+  //let assemblyFormat = "$inputs attr-dict `:` type($inputs)";
 }
 
 

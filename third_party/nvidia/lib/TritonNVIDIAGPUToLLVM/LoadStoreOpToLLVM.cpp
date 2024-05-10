@@ -1136,6 +1136,7 @@ struct AsyncStoreOpConversion
     auto loc = op.getLoc();
     auto voidTy = void_ty(ctx);
     ptxBuilder.launch(rewriter, loc, voidTy);
+    rewriter.eraseOp(op);
     return success();
   }
 };
