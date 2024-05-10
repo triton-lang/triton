@@ -150,9 +150,18 @@ std::pair<bool, bool> matchKernelCbId(CUpti_CallbackId cbId) {
 
 } // namespace
 
-struct CuptiProfiler::CuptiCallback {
-  CuptiCallback() = default;
-  ~CuptiCallback() = default;
+struct CuptiProfiler::CuptiProfilerPimpl {
+  CuptiProfilerPimpl() = default;
+  virtual ~CuptiProfilerPimpl() = default;
+
+  void startOp(const Scope &scope);
+  void stopOp(const Scope &scope);
+  void setOpInProgress(bool value);
+  bool isOpInProgress();
+
+  void doStart();
+  void doFlush();
+  void doStop();
 
   static void allocBuffer(uint8_t **buffer, size_t *bufferSize,
                           size_t *maxNumRecords);
@@ -168,9 +177,9 @@ struct CuptiProfiler::CuptiCallback {
   CUpti_SubscriberHandle subscriber{};
 };
 
-void CuptiProfiler::CuptiCallback::allocBuffer(uint8_t **buffer,
-                                               size_t *bufferSize,
-                                               size_t *maxNumRecords) {
+void CuptiProfiler::CuptiProfilerPimpl::allocBuffer(uint8_t **buffer,
+                                                    size_t *bufferSize,
+                                                    size_t *maxNumRecords) {
   *buffer = reinterpret_cast<uint8_t *>(aligned_alloc(AlignSize, BufferSize));
   if (*buffer == nullptr) {
     throw std::runtime_error("aligned_alloc failed");
@@ -179,13 +188,14 @@ void CuptiProfiler::CuptiCallback::allocBuffer(uint8_t **buffer,
   *maxNumRecords = 0;
 }
 
-void CuptiProfiler::CuptiCallback::completeBuffer(CUcontext ctx,
-                                                  uint32_t streamId,
-                                                  uint8_t *buffer, size_t size,
-                                                  size_t validSize) {
+void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
+                                                       uint32_t streamId,
+                                                       uint8_t *buffer,
+                                                       size_t size,
+                                                       size_t validSize) {
   CuptiProfiler &profiler =
       dynamic_cast<CuptiProfiler &>(CuptiProfiler::instance());
-  auto &correlation = profiler.cuptiCallback->correlation;
+  auto &correlation = profiler.pImpl->correlation;
   auto &dataSet = profiler.dataSet;
 
   CUptiResult status;
@@ -204,10 +214,10 @@ void CuptiProfiler::CuptiCallback::completeBuffer(CUcontext ctx,
   free(buffer);
 }
 
-void CuptiProfiler::CuptiCallback::callbackFn(void *userData,
-                                              CUpti_CallbackDomain domain,
-                                              CUpti_CallbackId cbId,
-                                              const void *cbData) {
+void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
+                                                   CUpti_CallbackDomain domain,
+                                                   CUpti_CallbackId cbId,
+                                                   const void *cbData) {
   auto [isRuntimeAPI, isDriverAPI] = matchKernelCbId(cbId);
   if (!(isRuntimeAPI || isDriverAPI)) {
     return;
@@ -236,30 +246,27 @@ void CuptiProfiler::CuptiCallback::callbackFn(void *userData,
   }
 }
 
-CuptiProfiler::CuptiProfiler() : cuptiCallback(new CuptiCallback()) {}
-
-CuptiProfiler::~CuptiProfiler() = default;
-
-void CuptiProfiler::startOp(const Scope &scope) {
+void CuptiProfiler::CuptiProfilerPimpl::startOp(const Scope &scope) {
   cupti::activityPushExternalCorrelationId<true>(
       CUPTI_EXTERNAL_CORRELATION_KIND_CUSTOM0, scope.scopeId);
 }
 
-void CuptiProfiler::stopOp(const Scope &scope) {
+void CuptiProfiler::CuptiProfilerPimpl::stopOp(const Scope &scope) {
   uint64_t correlationId;
   cupti::activityPopExternalCorrelationId<true>(
       CUPTI_EXTERNAL_CORRELATION_KIND_CUSTOM0, &correlationId);
 }
 
-void CuptiProfiler::setOpInProgress(bool value) {
+void CuptiProfiler::CuptiProfilerPimpl::setOpInProgress(bool value) {
   cuptiState.isRecording = value;
 }
 
-bool CuptiProfiler::isOpInProgress() { return cuptiState.isRecording; }
+bool CuptiProfiler::CuptiProfilerPimpl::isOpInProgress() {
+  return cuptiState.isRecording;
+}
 
-void CuptiProfiler::doStart() {
-  cupti::activityRegisterCallbacks<true>(CuptiCallback::allocBuffer,
-                                         CuptiCallback::completeBuffer);
+void CuptiProfiler::CuptiProfilerPimpl::doStart() {
+  cupti::activityRegisterCallbacks<true>(allocBuffer, completeBuffer);
   cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_EXTERNAL_CORRELATION);
   // Enable driver and runtime activities after external correlation so that
   // external correlation id returned is not 0
@@ -268,15 +275,12 @@ void CuptiProfiler::doStart() {
   cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_FUNCTION);
   cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
   // TODO: switch to directly subscribe the APIs and measure overhead
-  cupti::subscribe<true>(&(cuptiCallback->subscriber),
-                         cuptiCallback->callbackFn, nullptr);
-  cupti::enableDomain<true>(1, cuptiCallback->subscriber,
-                            CUPTI_CB_DOMAIN_DRIVER_API);
-  cupti::enableDomain<true>(1, cuptiCallback->subscriber,
-                            CUPTI_CB_DOMAIN_RUNTIME_API);
+  cupti::subscribe<true>(&subscriber, callbackFn, nullptr);
+  cupti::enableDomain<true>(1, subscriber, CUPTI_CB_DOMAIN_DRIVER_API);
+  cupti::enableDomain<true>(1, subscriber, CUPTI_CB_DOMAIN_RUNTIME_API);
 }
 
-void CuptiProfiler::doFlush() {
+void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
   CUcontext cu_context = nullptr;
   cuda::ctxGetCurrent<false>(&cu_context);
   if (cu_context) {
@@ -285,18 +289,32 @@ void CuptiProfiler::doFlush() {
   cupti::activityFlushAll<true>(CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
 }
 
-void CuptiProfiler::doStop() {
+void CuptiProfiler::CuptiProfilerPimpl::doStop() {
   cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_EXTERNAL_CORRELATION);
   cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_DRIVER);
   cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_RUNTIME);
   cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_FUNCTION);
   cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
-  cupti::enableDomain<true>(0, cuptiCallback->subscriber,
-                            CUPTI_CB_DOMAIN_DRIVER_API);
-  cupti::enableDomain<true>(0, cuptiCallback->subscriber,
-                            CUPTI_CB_DOMAIN_RUNTIME_API);
-  cupti::unsubscribe<true>(cuptiCallback->subscriber);
+  cupti::enableDomain<true>(0, subscriber, CUPTI_CB_DOMAIN_DRIVER_API);
+  cupti::enableDomain<true>(0, subscriber, CUPTI_CB_DOMAIN_RUNTIME_API);
+  cupti::unsubscribe<true>(subscriber);
   cupti::finalize<true>();
 }
+
+void CuptiProfiler::startOp(const Scope &scope) { pImpl->startOp(scope); }
+
+void CuptiProfiler::stopOp(const Scope &scope) { pImpl->stopOp(scope); }
+
+void CuptiProfiler::setOpInProgress(bool value) {
+  pImpl->setOpInProgress(value);
+}
+
+bool CuptiProfiler::isOpInProgress() { return pImpl->isOpInProgress(); }
+
+void CuptiProfiler::doStart() { pImpl->doStart(); }
+
+void CuptiProfiler::doFlush() { pImpl->doFlush(); }
+
+void CuptiProfiler::doStop() { pImpl->doStop(); }
 
 } // namespace proton

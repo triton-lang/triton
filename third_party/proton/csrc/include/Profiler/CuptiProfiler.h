@@ -29,9 +29,12 @@ protected:
   void doStop() override;
 
 private:
-  // Use the pimpl idiom to hide the implementation details.  This lets us avoid including the cupti header from this header.  The cupti header and the equivalent header from AMD define conflicting macros, so we want to use those headers only within cc files.
-  struct CuptiCallback;
-  std::unique_ptr<CuptiCallback> cuptiCallback;
+  // Use the pimpl idiom to hide the implementation details. This lets us avoid
+  // including the cupti header from this header. The cupti header and the
+  // equivalent header from AMD define conflicting macros, so we want to use
+  // those headers only within cc files.
+  struct CuptiProfilerPimpl;
+  std::unique_ptr<CuptiProfilerPimpl> pImpl;
 };
 
 } // namespace proton
