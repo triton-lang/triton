@@ -46,16 +46,10 @@
   {
     "CUDA": {
       "0": {
-        "arch": 80,
-        "bus_width": 128,
-        "clock_rate": 1140000,
-        "memory_clock_rate": 5501000
-      },
-      "1": {
         "arch": 90,
-        "bus_width": 128,
-        "clock_rate": 1140000,
-        "memory_clock_rate": 5501000
+        "bus_width": 6144,
+        "clock_rate": 1980000,
+        "memory_clock_rate": 2619000
       }
     }
   }
