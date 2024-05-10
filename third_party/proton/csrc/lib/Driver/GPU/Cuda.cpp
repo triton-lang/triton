@@ -40,9 +40,9 @@ Device getDevice(uint64_t index) {
   int busWidth;
   cuda::deviceGetAttribute<true>(
       &busWidth, CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH, device);
-  int numMultiprocessors;
+  int numSms;
   cuda::deviceGetAttribute<true>(
-      &numMultiprocessors, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device);
+      &numSms, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device);
   int major;
   cuda::deviceGetAttribute<true>(
       &major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device);
@@ -51,7 +51,7 @@ Device getDevice(uint64_t index) {
       &minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device);
   auto arch = major * 10 + minor;
   return Device(DeviceType::CUDA, index, clockRate, memoryClockRate, busWidth,
-                numMultiprocessors, arch);
+                numSms, arch);
 }
 
 } // namespace cuda

@@ -26,7 +26,7 @@ struct Device {
   uint64_t clockRate;
   uint64_t memoryClockRate;
   uint64_t busWidth;
-  uint64_t numMultiprocessors;
+  uint64_t numSms;
   uint64_t arch;
 
   Device() = default;
@@ -35,8 +35,8 @@ struct Device {
          uint64_t memoryClockRate, uint64_t busWidth,
          uint64_t numMultipleprocessors, uint64_t arch)
       : type(type), id(id), clockRate(clockRate),
-        memoryClockRate(memoryClockRate), busWidth(busWidth),
-        numMultipleProcessors(numMultipleProcessors), arch(arch) {}
+        memoryClockRate(memoryClockRate), busWidth(busWidth), numSms(numSms),
+        arch(arch) {}
 };
 
 Device getDevice(DeviceType type, uint64_t index);
