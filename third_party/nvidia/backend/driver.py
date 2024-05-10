@@ -174,7 +174,7 @@ typedef CUresult (*cuLaunchKernelEx_t)(const CUlaunchConfig* config, CUfunction 
 
 static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
   // Open the shared library
-  void* handle = dlopen("libcuda.so", RTLD_LAZY);
+  void* handle = dlopen("libcuda.so.1", RTLD_LAZY);
   if (!handle) {{
     PyErr_SetString(PyExc_RuntimeError, "Failed to open libcuda.so");
     return NULL;

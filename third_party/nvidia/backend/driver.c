@@ -146,7 +146,7 @@ typedef CUresult (*cuOccupancyMaxActiveClusters_t)(
 #define defineGetFunctionHandle(name, symbolName)                              \
   static symbolName##_t name() {                                               \
     /* Open the shared library */                                              \
-    void *libHandle = dlopen("libcuda.so", RTLD_LAZY);                         \
+    void *libHandle = dlopen("libcuda.so.1", RTLD_LAZY);                       \
     if (!libHandle) {                                                          \
       PyErr_SetString(PyExc_RuntimeError, "Failed to open libcuda.so");        \
       return NULL;                                                             \
