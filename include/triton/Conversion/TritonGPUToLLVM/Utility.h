@@ -1381,7 +1381,7 @@ inline void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
   auto srcTy = cast<RankedTensorType>(src.getType());
   auto srcShape = srcTy.getShape();
   auto rank = srcShape.size();
-  assert(rank < 3 && "Unexpected rank of storeDistributedToShared");
+  assert(rank <= 3 && "Unexpected rank of storeDistributedToShared");
   auto dstTy = cast<MemDescType>(dst.getType());
   auto srcDistributedLayout = srcTy.getEncoding();
   if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(srcDistributedLayout)) {
