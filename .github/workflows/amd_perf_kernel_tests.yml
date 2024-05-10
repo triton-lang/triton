@@ -1,0 +1,133 @@
+name: AMD Perf Kernel Tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main_perf]
+    merge_group:
+      branches: [main_perf]
+      types: [checks_requested]
+  push:
+    branches: [main_perf]
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main_perf' }}
+
+permissions: read-all
+
+env:
+  TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
+  TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
+  TRITON_DISABLE_LINE_INFO: 1
+
+jobs:
+  Check-File-Changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check file changes
+        run: |
+          git fetch origin ${{ github.base_ref }}
+          changed_files=$(git diff --name-only origin/${{ github.base_ref }} ${{ github.sha }})
+          echo "Changed files:"
+          echo "$changed_files"
+          if echo "$changed_files" | grep -v "^python/perf-kernels/"; then
+            echo "Changes detected outside of the python/perf-kernels directory. Failing the workflow."
+            exit 1
+          fi
+
+  Runner-Preparation-AMD:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      matrix-HIP: ${{ steps.set-matrix.outputs.matrix-HIP }}
+    steps:
+      - name: Prepare runner matrix
+        id: set-matrix
+        run: |
+          if [ x"${{ github.repository }}" == x"ROCm/triton" ]; then
+            echo '::set-output name=matrix-HIP::[["self-hosted", "rocm.gfx90a"]]'
+          else
+            echo '::set-output name=matrix-HIP::[["ubuntu-latest"]]'
+          fi
+
+  pre-commit:
+    name: pre-commit (code formatting)
+    needs: Runner-Preparation-AMD
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - name: Compute hash of pre-commit config
+        id: cache-key
+        run: |
+          echo "pre_commit_hash=$(sha256sum .pre-commit-config.yaml)" >> $GITHUB_OUTPUT
+        shell: bash
+      - name: Cache pre-commit's cache dir
+        uses: actions/cache@v4
+        with:
+          # Note that we cannot use environment variables here given there is
+          # no shell to interpret them in the paths.
+          path: |
+            ~/.cache/pre-commit
+          key: ${{ runner.os }}-${{ steps.cache-key.outputs.pre_commit_hash }}
+      - name: Check pre-commit
+        run: |
+          python3 -m pip install --upgrade pre-commit
+          # TODO: ignore the first yapf failure until https://github.com/google/yapf/issues/1164 is fixed
+          python3 -m pre_commit run --all-files --verbose yapf &> /dev/null || true
+          # If first run of yapf worked and made changes reset the tree to the original state
+          git reset --hard
+          python3 -m pre_commit run --all-files --verbose
+      - name: Print diff of changes if pre-commit failed
+        if: failure()
+        run: |
+          git diff
+
+  Integration-Tests-AMD:
+    needs: Runner-Preparation-AMD
+    if: needs.Runner-Preparation-AMD.outputs.matrix-HIP != ''
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        runner: ${{fromJson(needs.Runner-Preparation-AMD.outputs.matrix-HIP)}}
+    container:
+      image: rocm/pytorch:rocm6.0.2_ubuntu22.04_py3.10_pytorch_2.1.2
+      options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Clear cache
+        run: |
+          rm -rf ~/.triton
+          mkdir -p ~/.triton
+          ls -alh ~/.triton
+      - name: Update PATH
+        run: |
+          echo "/opt/rocm/llvm/bin" >> $GITHUB_PATH
+      - name: Install pip dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install lit matplotlib pandas
+      - name: Install Triton
+        run: |
+          echo "PATH is '$PATH'"
+          pip uninstall -y triton
+          cd python
+          pip install -v -e .
+      - name: Run Perf Kernels Unit Tests
+        run: |
+          pytest -vvv ./python/perf-kernels/flash-attention.py
+      - name: Run Perf Kernels Benchmark
+        run: |
+          python ./python/perf-kernels/flash-attention.py
