@@ -2608,6 +2608,16 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
                     use_llvm_intrinsic)
 
 
+def extern_elementwise_instruction_pack(pack: list, args: list):
+    input_args = args
+    for element in pack:
+        lib_name, lib_path, arg_type_symbol_dict, is_pure, _builder, use_llvm_intrinsic = element
+        output = extern_elementwise(lib_name, lib_path, input_args, arg_type_symbol_dict, is_pure, _builder=_builder,
+                                    use_llvm_intrinsic=use_llvm_intrinsic)
+        input_args = output if isinstance(output, list) else [output]
+    return output
+
+
 def binary_op_type_legalization(lhs, rhs, builder):
     '''
         Convert both operands to a single common type
