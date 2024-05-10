@@ -148,6 +148,8 @@ def softmax(x):
         num_programs = NUM_SM * occupancy
         kernels[BLOCK_SIZE] = (kernel, num_programs)
 
+    num_programs = min(num_programs, n_rows)
+
     # Allocate output
     y = torch.empty_like(x)
 
