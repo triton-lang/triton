@@ -149,6 +149,52 @@ def load_fn(block_ptr, first, second, pad):
     return tensor
 
 @triton.jit
+def print_gpu(prefix, val=None):
+    if (tl.program_id(0) == 0) and ((tl.program_id(1) == 0) and (tl.program_id(2) == 0)):
+        if val is not None:
+            tl.device_print(prefix, val)
+        else:
+            tl.device_print(prefix)
+
+@triton.jit
+def compute_alibi_block(alibi_slope, seqlen_q, seqlen_k, offs_m, offs_n, transpose = False):
+    # when seqlen_k and seqlen_q are different we want the diagonal to stick to the bottom right of the attention matrix
+    # for casual mask we want something like this where (1 is kept and 0 is masked)
+    # seqlen_q = 2 and seqlen_k = 5
+    #   1 1 1 1 0
+    #   1 1 1 1 1
+    # seqlen_q = 5 and seqlen_k = 2
+    #        0 0
+    #        0 0
+    #        0 0
+    #        1 0
+    #        1 1
+    # for alibi the diagonal is 0 indicating no penalty for attending to that spot and increasing penalty for attending further from the diagonal
+    # e.g. alibi_slope = 1, seqlen_q = 2, seqlen_k = 5, offs_m = [0, 1, 2, 3], offs_n = [0, 1, 2, 3, 4], transpose = False
+    # 1. offs_m[:,None] = [[0],
+    #                       [1],
+    # 2. offs_m[:,None] + seqlen_k = [[5],
+    #                                  [6],
+    # 3. offs_m[:,None] + seqlen_k - seqlen_q = [[3],
+    #                                             [4],
+    # 4. offs_m[:,None] + seqlen_k - seqlen_q - offs_n[None,:] = [[3], - [[0, 1, 2, 3, 4]] =  [[ 3, 2, 1, 0,-1],
+    #                                                            [4],                           [ 4, 3, 2, 1, 0]]
+    # 5. -1 * alibi_slope * tl.abs(relative_pos_block) = [[ -3, -2, -1, 0,-1],
+    #                                                     [ -4, -3, -2, -1, 0]],
+    relative_pos_block = offs_m[:,None] + seqlen_k - seqlen_q - offs_n[None,:]
+    alibi_block = -1 * alibi_slope * tl.abs(relative_pos_block)
+    if transpose:
+        return alibi_block.T
+    else:
+        return alibi_block
+
+def compute_alibi_tensor(alibi_slopes, seqlen_q, seqlen_k):
+    q_idx = torch.arange(seqlen_q, dtype=torch.int32, device="cuda").unsqueeze(-1) # (N_CTX_Q, 1)
+    k_idx = torch.arange(seqlen_k, dtype=torch.int32, device="cuda").unsqueeze(0) # (1, N_CTX_K)
+    relative_pos = torch.abs(q_idx + seqlen_k - seqlen_q - k_idx) # (N_CTX_Q, N_CTX_K)
+    return -1 * alibi_slopes.unsqueeze(-1).unsqueeze(-1) * relative_pos # (Z, H, N_CTX_Q, N_CTX_K)
+
+@triton.jit
 def _attn_fwd_inner(
     acc, l_i, m_i, q,
     K_block_ptr, V_block_ptr,
@@ -217,12 +263,7 @@ def _attn_fwd_inner(
             global_m_positions = start_m*BLOCK_M + tl.arange(0, BLOCK_M)
             global_n_positions = start_n + tl.arange(0, BLOCK_N)
 
-            # Compute the relative position using the global positions
-            relative_pos_block = global_m_positions[:,None] + actual_seqlen_k - global_n_positions[None,:] - actual_seqlen_q
-            relative_pos_block = tl.abs(relative_pos_block)
-
-
-            alibi_block = -1 * alibi_slope  * relative_pos_block
+            alibi_block = compute_alibi_block(alibi_slope, actual_seqlen_q, actual_seqlen_k, global_m_positions, global_n_positions)
 
             qk += (alibi_block * 1.44269504089) # scale factor of log2(e)
 
@@ -424,7 +465,7 @@ def attn_fwd(
     else:
         bias_ptr = None
 
-    if USE_ALIBI != 0:
+    if USE_ALIBI:
         a_offset = off_z * stride_az +  off_h_q * stride_ah 
         alibi_slope = tl.load(alibi_slopes + a_offset)
     else:
@@ -620,7 +661,7 @@ def _attn_bwd_preprocess(
 @triton.jit
 def _bwd_kernel_dk_dv(
                    dk, dv,
-                   Q, k, v, sm_scale,
+                   Q, k, v, sm_scale, alibi_slope,
                    DO,
                    M, D,
                    # shared by Q/K/V/DO.
@@ -659,8 +700,12 @@ def _bwd_kernel_dk_dv(
         # Load m before computing qk to reduce pipeline stall.
         offs_m = curr_m + tl.arange(0, BLOCK_M1)
         m = tl.load(M + offs_m)
-        qkT = tl.dot(k, qT)
-        pT = tl.math.exp2(qkT - m[None, :])
+        kqT = tl.dot(k, qT)
+        if alibi_slope is not None:
+            alibi_block = compute_alibi_block(alibi_slope, N_CTX, N_CTX, offs_m, offs_n, True)
+            kqT += alibi_block * 1.44269504089
+
+        pT = tl.math.exp2(kqT - m[None, :])
         # Autoregressive masking.
         if MASK:
             mask = (offs_m[None, :] >= offs_n[:, None])
@@ -685,7 +730,7 @@ def _bwd_kernel_dk_dv(
 
 @triton.jit
 def _bwd_kernel_dq(dq, q, K, V,
-                 do, m, D,
+                 do, m, D, alibi_slope,
                  # shared by Q/K/V/DO.
                  stride_tok, stride_d,
                  H, N_CTX,
@@ -723,6 +768,10 @@ def _bwd_kernel_dq(dq, q, K, V,
     for blk_idx in range(num_steps):
         kT = tl.load(KT_block_ptr)
         qk = tl.dot(q, kT)
+        if alibi_slope is not None:  
+            alibi_block = compute_alibi_block(alibi_slope, N_CTX, N_CTX, offs_m, offs_n)
+            qk += alibi_block * 1.44269504089
+
         p = tl.math.exp2(qk - m)
         # Autoregressive masking.
         if MASK:
@@ -744,7 +793,7 @@ def _bwd_kernel_dq(dq, q, K, V,
     return dq
 
 @triton.jit
-def _attn_bwd(Q, K, V, sm_scale,
+def _attn_bwd(Q, K, V, sm_scale, alibi_slopes,
               DO,
               DQ, DK, DV,
               M, D,
@@ -757,7 +806,8 @@ def _attn_bwd(Q, K, V, sm_scale,
               BLOCK_N1: tl.constexpr,
               BLOCK_M2: tl.constexpr,
               BLOCK_N2: tl.constexpr,
-              BLK_SLICE_FACTOR: tl.constexpr):
+              BLK_SLICE_FACTOR: tl.constexpr,
+              USE_ALIBI: tl.constexpr):
     LN2: tl.constexpr = 0.6931471824645996  # = ln(2)
 
     bhid = tl.program_id(2)
@@ -811,11 +861,17 @@ def _attn_bwd(Q, K, V, sm_scale,
     k = tl.load(K_block_ptr)
     v = tl.load(V_block_ptr)
 
+    if USE_ALIBI:
+        a_offset = bhid
+        alibi_slope = tl.load(alibi_slopes + a_offset)
+    else:
+        alibi_slope = None
+
+    # compute dK and dV for blocks close to the diagonal that need to be masked
     num_steps = BLOCK_N1 // MASK_BLOCK_M1
-    
     dk, dv = _bwd_kernel_dk_dv(
                             dk, dv,
-                            Q, k, v, sm_scale,
+                            Q, k, v, sm_scale, alibi_slope,
                             DO,
                             M, D,
                             stride_tok, stride_d,
@@ -825,13 +881,13 @@ def _attn_bwd(Q, K, V, sm_scale,
                             MASK=True
                             )
 
+    # compute dK and dV for blocks that don't need masking further from the diagonal
     start_m += num_steps * MASK_BLOCK_M1
     num_steps = (N_CTX - start_m) // BLOCK_M1
 
-    # Compute dK and dV for non-masked blocks.
     dk, dv = _bwd_kernel_dk_dv(
         dk, dv,
-        Q, k, v, sm_scale,
+        Q, k, v, sm_scale, alibi_slope,
         DO,
         M, D,
         stride_tok, stride_d,
@@ -901,7 +957,7 @@ def _attn_bwd(Q, K, V, sm_scale,
     # structure for dK & dV above as much as possible.
     num_steps = BLOCK_M2 // MASK_BLOCK_N2
     dq = _bwd_kernel_dq(dq, q, K, V,
-                      do, m, D,
+                      do, m, D, alibi_slope,
                       stride_tok, stride_d,
                       H, N_CTX,
                       BLOCK_M2, MASK_BLOCK_N2, BLOCK_DMODEL,
@@ -912,7 +968,7 @@ def _attn_bwd(Q, K, V, sm_scale,
     # stage 2
     num_steps = end_n // BLOCK_N2
     dq = _bwd_kernel_dq(dq, q, K, V,
-                      do, m, D,
+                      do, m, D, alibi_slope,
                       stride_tok, stride_d,
                       H, N_CTX,
                       BLOCK_M2, BLOCK_N2, BLOCK_DMODEL,
@@ -1013,7 +1069,7 @@ class _attention(torch.autograd.Function):
             VARLEN=metadata.varlen,
             BLOCK_DMODEL=padded_d_model,
             BIAS_TYPE=0 if metadata.bias is None else 1,
-            USE_ALIBI=0 if metadata.alibi_slopes is None else 1,
+            USE_ALIBI=False if metadata.alibi_slopes is None else True,
             ENABLE_DROPOUT=metadata.dropout_p > 0.0,
             RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax,
             BATCH_SIZE= q.shape[0]
@@ -1024,6 +1080,7 @@ class _attention(torch.autograd.Function):
         ctx.sm_scale = metadata.sm_scale
         ctx.BLOCK_DMODEL = head_size
         ctx.causal = metadata.causal
+        ctx.alibi_slopes = metadata.alibi_slopes
         ctx.dropout_p = metadata.dropout_p
         ctx.philox_seed = philox_seed
         ctx.philox_offset = philox_offset
@@ -1071,13 +1128,14 @@ class _attention(torch.autograd.Function):
             BATCH * N_HEAD
         )
         _attn_bwd[grid](
-            q, arg_k, v, ctx.sm_scale, do, dq, dk, dv,
+            q, arg_k, v, ctx.sm_scale, ctx.alibi_slopes, do, dq, dk, dv,
             M, delta,
             q.stride(0), q.stride(1), q.stride(2), q.stride(3),
             N_HEAD, N_CTX,
             BLOCK_DMODEL=ctx.BLOCK_DMODEL,
             BLOCK_M1=BLOCK_M1, BLOCK_N1=BLOCK_N1, BLOCK_M2=BLOCK_M2, BLOCK_N2=BLOCK_N2,
             BLK_SLICE_FACTOR=BLK_SLICE_FACTOR,
+            USE_ALIBI= False if ctx.alibi_slopes is None else True,
         )
 
         return dq, dk, dv, None, None
@@ -1183,11 +1241,7 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, dtype=to
                           diagonal=N_CTX_K-N_CTX_Q)
         scores[:, :, mask==0] = float("-inf")
     if use_alibi:
-        q_idx = torch.arange(N_CTX_Q, dtype=torch.int32, device="cuda").unsqueeze(-1)
-        k_idx = torch.arange(N_CTX_K, dtype=torch.int32, device="cuda").unsqueeze(0)
-        relative_pos = torch.abs(q_idx + N_CTX_K - N_CTX_Q - k_idx)
-        alibi = -1 * alibi_slopes.unsqueeze(-1).unsqueeze(-1) * relative_pos # (Z, HQ, N_CTX_Q, N_CTX_K)
-        scores+= alibi
+        scores+= compute_alibi_tensor(alibi_slopes, N_CTX_Q, N_CTX_K)
 
     p = torch.softmax(scores, dim=-1)
     if causal:
@@ -1335,16 +1389,17 @@ def test_op_varlen_mqa_fwd(Z, HQ, HK, N_CTX, D_HEAD, causal, dtype=torch.float16
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD',
                          [(4, 48, 1024, 64),
                           (4, 48, 2048, 64),
-                          (4, 48, 4096, 64),
+                          (2, 48, 4096, 64),
                           (1, 16, 1024, 64),
                           (1, 16, 1024, 128),
                           #(1, 16, 8192, 63),
                           #(1, 16, 1022, 64),
                           ])
 @pytest.mark.parametrize('qseqlen_not_equal_kseqlen', [None])
-@pytest.mark.parametrize('torch_sdpa_test', [True])
+@pytest.mark.parametrize('torch_sdpa_test', [False, True])
 @pytest.mark.parametrize('causal', [True])
-def test_op_bwd(Z, H, N_CTX, D_HEAD, qseqlen_not_equal_kseqlen, causal, torch_sdpa_test, dtype=torch.float16):
+@pytest.mark.parametrize('use_alibi', [False, True])
+def test_op_bwd(Z, H, N_CTX, D_HEAD, qseqlen_not_equal_kseqlen, causal, torch_sdpa_test, use_alibi, dtype=torch.float16):
     torch.manual_seed(20)
     if qseqlen_not_equal_kseqlen is not None:
         seqlen_q = qseqlen_not_equal_kseqlen
@@ -1367,10 +1422,14 @@ def test_op_bwd(Z, H, N_CTX, D_HEAD, qseqlen_not_equal_kseqlen, causal, torch_sd
     k = (torch.empty((Z, H, seqlen_k, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.0, std=0.5).requires_grad_())
     v = (torch.empty((Z, H, seqlen_k, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.0, std=0.5).requires_grad_())
     o = torch.empty_like(q)
-    
+
     if causal:
         input_metadata.need_causal()
 
+    if use_alibi and not torch_sdpa_test:
+        # for n heads the set of slopes is the geometric sequence that starts 2^(-8/n)
+        alibi_slopes = torch.tensor([2**(-8/H*i) for i in range(1, H+1)], dtype=torch.float32, device="cuda").repeat(Z, 1)
+        input_metadata.need_alibi(alibi_slopes, Z, H)
     dout = torch.randn_like(q)
     # reference implementation
     if torch_sdpa_test:
@@ -1386,8 +1445,11 @@ def test_op_bwd(Z, H, N_CTX, D_HEAD, qseqlen_not_equal_kseqlen, causal, torch_sd
     else:
         M = torch.tril(torch.ones((seqlen_q, seqlen_k), device="cuda"))
         p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
+        if use_alibi:
+            p+= compute_alibi_tensor(alibi_slopes, N_CTX, N_CTX) 
         if causal:
             p[:, :, M == 0] = float("-inf")
+        
         p = torch.softmax(p.float(), dim=-1).type(dtype=p.dtype)
         ref_out = torch.matmul(p, v)
         ref_out.backward(dout)
