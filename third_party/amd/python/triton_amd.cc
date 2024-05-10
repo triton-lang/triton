@@ -204,15 +204,6 @@ void init_triton_amd(py::module &&m) {
       },
       py::return_value_policy::take_ownership);
 
-  m.def("set_all_fn_arg_inreg", [](llvm::Function *fn) {
-    for (llvm::Argument &arg : fn->args()) {
-      // Check for incompatible attributes.
-      if (arg.hasByRefAttr() || arg.hasNestAttr())
-        continue;
-      arg.addAttr(llvm::Attribute::InReg);
-    }
-  });
-
   m.def("need_extern_lib", [](llvm::Module *module, const std::string &lib) {
     for (llvm::Function &f : module->functions()) {
       if (f.hasExternalLinkage() && f.hasName() && !f.hasExactDefinition()) {
