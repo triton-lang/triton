@@ -67,21 +67,16 @@ public:
     return this;
   }
 
-  /// Get the number of data objects registered to the profiler.
-  size_t getDataCount() const {
+  /// Get the set of data objects registered to the profiler.
+  std::set<Data *> getDataSet() const {
     std::shared_lock<std::shared_mutex> lock(mutex);
-    return dataSet.size();
+    return dataSet;
   }
 
 protected:
   virtual void doStart() = 0;
   virtual void doFlush() = 0;
   virtual void doStop() = 0;
-
-  std::set<Data *> getDataSetSnapshot() const {
-    std::shared_lock<std::shared_mutex> lock(mutex);
-    return dataSet;
-  }
 
   mutable std::shared_mutex mutex;
   std::set<Data *> dataSet;

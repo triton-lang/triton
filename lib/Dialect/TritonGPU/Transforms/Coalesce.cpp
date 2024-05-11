@@ -8,6 +8,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "tritongpu-coalesce"
