@@ -32,8 +32,8 @@ struct Device {
   Device() = default;
 
   Device(DeviceType type, uint64_t id, uint64_t clockRate,
-         uint64_t memoryClockRate, uint64_t busWidth,
-         uint64_t numMultipleprocessors, uint64_t arch)
+         uint64_t memoryClockRate, uint64_t busWidth, uint64_t numSms,
+         uint64_t arch)
       : type(type), id(id), clockRate(clockRate),
         memoryClockRate(memoryClockRate), busWidth(busWidth), numSms(numSms),
         arch(arch) {}
