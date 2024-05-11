@@ -9,6 +9,7 @@ add_triton_library(TritonGPUTransforms
   Pipeliner/OuterLoopPipeline.cpp
   Pipeliner/PipelineExpander.cpp
   Pipeliner/SoftwarePipeliner.cpp
+  Pipeliner/TMAStoresPipeline.cpp
   Pipeliner/PipeliningUtility.cpp
   Prefetch.cpp
   RemoveLayoutConversions.cpp

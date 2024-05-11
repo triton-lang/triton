@@ -249,7 +249,7 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
       bool isMMAV3 =
           isa<NvidiaMmaEncodingAttr>(encoding) &&
           cast<NvidiaMmaEncodingAttr>(encoding).getVersionMajor() == 3;
-      if (isMMAV3 && isa<LocalAllocOp>(op))
+      if (isMMAV3 && (isa<LocalAllocOp>(op) || isa<LocalStoreOp>(op)))
         return true;
       auto yield = dyn_cast<scf::YieldOp>(op);
       if (!yield)

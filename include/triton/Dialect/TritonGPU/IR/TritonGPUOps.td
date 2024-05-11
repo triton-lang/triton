@@ -218,4 +218,18 @@ def TTG_LocalLoadOp : TTG_Op<"local_load", [MemoryEffects<[MemRead<SharedMemory>
   let results = (outs TT_Tensor:$result);
 }
 
+def TTG_LocalStoreOp : TTG_Op<"local_store", [MemoryEffects<[MemWrite<SharedMemory>]>]> {
+  let summary = "Store a distributed tensor into a buffer in local memory";
+
+  let description = [{
+    Store a distributed tensor into a buffer in local memory.
+  }];
+  let arguments = (ins TT_Tensor:$src, TT_MemDescType:$result);
+
+  // Use qualified() otherwise "!tt.memdesc<X>" is printed as "<X>".
+  let assemblyFormat = [{
+    $src `,` $result attr-dict `:` type($src) `->` qualified(type($result))
+  }];
+}
+
 #endif
