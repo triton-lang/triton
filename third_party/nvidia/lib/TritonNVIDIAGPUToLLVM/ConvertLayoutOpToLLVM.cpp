@@ -789,8 +789,7 @@ struct LocalAllocOpConversion
 
     Location loc = op->getLoc();
     RankedTensorType srcTy = op.getSrc().getType();
-    Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
+    Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, op);
     auto srcs = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     SmallVector<unsigned> shape;
     for (int64_t dim : srcTy.getShape())
