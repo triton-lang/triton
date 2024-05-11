@@ -526,6 +526,32 @@ For the Threads Per Warp and Values Per Thread level, the linear id distribution
     InterfaceMethod<"Gets the number of contiguous elements per thread.",
                     "SmallVector<unsigned>",
                     "getContigPerThread">,
+
+    InterfaceMethod<[{
+                      Emit base index of the values owned by the thread with in the CTA.
+                      The base index should have the same rank as the tensor's shape.
+                    }],
+                    "SmallVector<Value>",
+                    "emitBaseIndexWithinCTAForLayout",
+                     (ins "Location":$loc,
+                          "OpBuilder&":$rewriter,
+                          "RankedTensorType":$type),
+                     /*methodBody=*/[{}],
+                     /*defaultImplementation=*/[{
+                       llvm_unreachable("unsupported emitBaseIndexWithinCTAForLayout");
+                     }]>,
+
+    InterfaceMethod<[{
+                      Get the offsets to the thread base index of each value owned by the threads.
+                      The offset should have the same rank as the tensor's shape.
+                    }],
+                    "SmallVector<SmallVector<unsigned>>",
+                    "emitOffsetForLayout",
+                     (ins "RankedTensorType":$type),
+                     /*methodBody=*/[{}],
+                     /*defaultImplementation=*/[{
+                       llvm_unreachable("unsupported emitOffsetForLayout");
+                     }]>,
   ];
 }
 

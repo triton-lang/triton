@@ -12,6 +12,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
@@ -1101,6 +1102,11 @@ emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
     result.erase(result.begin() + sliceLayout.getDim());
     // CTAOffset has been added in emitBaseIndexForLayout of parentLayout
     return result;
+  } else if (auto distributedLayout =
+                 mlir::dyn_cast<triton::gpu::DistributedEncodingTrait>(
+                     layout)) {
+    result =
+        distributedLayout.emitBaseIndexWithinCTAForLayout(loc, rewriter, type);
   } else {
     llvm_unreachable("unsupported emitBaseIndexForLayout");
   }
@@ -1163,6 +1169,9 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
   }
   if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout))
     return emitOffsetForSliceLayout(sliceLayout, type);
+  if (auto distributedLayout =
+          mlir::dyn_cast<triton::gpu::DistributedEncodingTrait>(layout))
+    return distributedLayout.emitOffsetForLayout(type);
   llvm_unreachable("unsupported emitOffsetForLayout");
 }
 
