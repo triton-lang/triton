@@ -218,7 +218,8 @@ def try_config_{configStr}(M, N, K, am, ak, bk, bn, cm, cn):
 
 
 def generated_kernel_name(M, N, K, gpu_id):
-    return f"generated_kernel{M}-{N}-{K}-{gpu_id}.py"
+    path = os.path.dirname(os.path.abspath(__file__))
+    return f"{path}/generated_kernel{M}-{N}-{K}-{gpu_id}.py"
 
 
 # Open {len(gpus)} files
@@ -250,7 +251,7 @@ from tune_gemm import gen_input
 
     # write definitions of matmul_kernel_xxx
     # and matmul_xxx and try_config
-    with open("matmul_kernel.py") as file:
+    with open(os.path.dirname(os.path.abspath(__file__))+"/matmul_kernel.py") as file:
         matmul_kernel_code = file.read()
     idx = 0
     for config in configs:
