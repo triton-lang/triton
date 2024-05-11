@@ -3,6 +3,7 @@
 #include "Context/Shadow.h"
 #include "Data/TreeData.h"
 #include "Profiler/CuptiProfiler.h"
+#include "Profiler/RoctracerProfiler.h"
 #include "Utility/String.h"
 
 namespace proton {
@@ -11,6 +12,9 @@ namespace {
 Profiler *getProfiler(const std::string &profilerName) {
   if (proton::toLower(profilerName) == "cupti") {
     return &CuptiProfiler::instance();
+  }
+  if (proton::toLower(profilerName) == "roctracer") {
+    return &RoctracerProfiler::instance();
   }
   throw std::runtime_error("Unknown profiler: " + profilerName);
 }
