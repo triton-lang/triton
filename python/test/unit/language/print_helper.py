@@ -84,7 +84,7 @@ def kernel_print_pointer(X, Y, BLOCK: tl.constexpr):
 
 
 def test_print(func: str, data_type: str):
-    N = 128 # This value should match with test_print in test_subprocess.py.
+    N = 128  # This value should match with test_print in test_subprocess.py.
     # TODO(antiagainst): Currently the warp count is chosen to make sure wedon't have multiple
     # threads printing duplicated messages due to broadcasting. Improve print op lowering logic
     # to filter out duplicated data range.
