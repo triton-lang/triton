@@ -207,8 +207,12 @@ private:
 
   static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
                               Type promotedType) {
-    Type tensorPromotedType = cast<RankedTensorType>(operand.getType())
-                                  .cloneWith(std::nullopt, promotedType);
+    RankedTensorType tensor = cast<RankedTensorType>(operand.getType());
+    Type tensorElementType = tensor.getElementType();
+    Type tensorPromotedType = tensor.cloneWith(std::nullopt, promotedType);
+    if (tensorElementType.isF16() && promotedType.isF32()) {
+      return builder.create<arith::ExtFOp>(loc, tensorPromotedType, operand);
+    }
     return builder.create<triton::FpToFpOp>(loc, tensorPromotedType, operand);
   }
 };
