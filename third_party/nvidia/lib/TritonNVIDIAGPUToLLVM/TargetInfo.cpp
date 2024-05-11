@@ -160,9 +160,11 @@ std::pair<Type, Value> printfPromoteValue(ConversionPatternRewriter &rewriter,
 LLVM::LLVMFuncOp getAssertfailDeclaration(ConversionPatternRewriter &rewriter) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   StringRef funcName("__assertfail");
-  Operation *funcOp = moduleOp.lookupSymbol(funcName);
-  if (funcOp)
-    return cast<LLVM::LLVMFuncOp>(*funcOp);
+  {
+    Operation *funcOp = moduleOp.lookupSymbol(funcName);
+    if (funcOp)
+      return cast<LLVM::LLVMFuncOp>(*funcOp);
+  }
   // void __assert_fail(const char * assertion, const char * file, unsigned
   // int line, const char * function);
   auto *ctx = rewriter.getContext();
@@ -171,8 +173,12 @@ LLVM::LLVMFuncOp getAssertfailDeclaration(ConversionPatternRewriter &rewriter) {
   auto funcType = LLVM::LLVMFunctionType::get(void_ty(ctx), argsType);
   ConversionPatternRewriter::InsertionGuard guard(rewriter);
   rewriter.setInsertionPointToStart(moduleOp.getBody());
-  return rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(ctx), funcName,
-                                           funcType);
+  auto funcOp = rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(ctx),
+                                                  funcName, funcType);
+
+  funcOp.setPassthroughAttr(
+      ArrayAttr::get(ctx, StringAttr::get(ctx, "noreturn")));
+  return funcOp;
 }
 } // namespace
 

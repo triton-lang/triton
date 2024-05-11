@@ -63,14 +63,14 @@ void initProton(pybind11::module &&m) {
         [](size_t scopeId,
            const std::map<std::string, MetricValueType> &metrics) {
           SessionManager::instance().addMetrics(scopeId, metrics,
-                                                /*aggregatable=*/true);
+                                                /*aggregable=*/true);
         });
 
   m.def("set_properties",
         [](size_t scopeId,
            const std::map<std::string, MetricValueType> &metrics) {
           SessionManager::instance().addMetrics(scopeId, metrics,
-                                                /*aggregatable=*/false);
+                                                /*aggregable=*/false);
         });
 
   pybind11::bind_map<std::map<std::string, MetricValueType>>(m, "MetricMap");

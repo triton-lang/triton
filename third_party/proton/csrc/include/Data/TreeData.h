@@ -20,7 +20,7 @@ public:
 
   void addMetrics(size_t scopeId,
                   const std::map<std::string, MetricValueType> &metrics,
-                  bool aggregatable) override;
+                  bool aggregable) override;
 
 protected:
   // OpInterface

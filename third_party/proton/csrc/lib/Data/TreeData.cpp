@@ -45,7 +45,7 @@ void TreeData::addMetric(size_t scopeId, std::shared_ptr<Metric> metric) {
 
 void TreeData::addMetrics(size_t scopeId,
                           const std::map<std::string, MetricValueType> &metrics,
-                          bool aggregatable) {
+                          bool aggregable) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto scopeIdIt = scopeIdToContextId.find(scopeId);
   auto contextId = Tree::TreeNode::DummyId;
@@ -62,7 +62,7 @@ void TreeData::addMetrics(size_t scopeId,
   for (auto [metricName, metricValue] : metrics) {
     if (node.flexibleMetrics.find(metricName) == node.flexibleMetrics.end())
       node.flexibleMetrics.emplace(
-          metricName, FlexibleMetric(metricName, metricValue, aggregatable));
+          metricName, FlexibleMetric(metricName, metricValue, aggregable));
     else {
       node.flexibleMetrics.at(metricName).updateValue(metricValue);
     }

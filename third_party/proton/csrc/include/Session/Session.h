@@ -89,7 +89,7 @@ public:
 
   void addMetrics(size_t scopeId,
                   const std::map<std::string, MetricValueType> &metrics,
-                  bool aggregatable);
+                  bool aggregable);
 
 private:
   std::unique_ptr<Session> makeSession(size_t id, const std::string &path,

@@ -8,3 +8,8 @@ add_triton_ut(
 	SRCS DialectTest.cpp
 	LIBS TritonGPUIR
 )
+add_triton_ut(
+	NAME LinearLayoutConversions
+	SRCS LinearLayoutConversionsTest.cpp
+	LIBS TritonGPUIR
+)
