@@ -125,7 +125,8 @@ def test_hook():
     y = torch.zeros_like(x)
     with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
         proton.start(f.name.split(".")[0], hook="triton")
-        foo[(1, )](x, 1, y, num_warps=4)
+        with proton.scope("test0"):
+            foo[(1, )](x, 1, y, num_warps=4)
         proton.finalize()
         data = json.load(f)
         assert len(data[0]["children"]) == 1
