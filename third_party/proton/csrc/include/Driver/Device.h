@@ -23,8 +23,8 @@ template <> struct DeviceTraits<DeviceType::ROCM> {
 struct Device {
   DeviceType type;
   uint64_t id;
-  uint64_t clockRate;
-  uint64_t memoryClockRate;
+  uint64_t clockRate;       // khz
+  uint64_t memoryClockRate; // khz
   uint64_t busWidth;
   uint64_t numSms;
   uint64_t arch;

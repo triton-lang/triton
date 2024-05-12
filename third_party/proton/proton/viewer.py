@@ -6,14 +6,6 @@ import pandas as pd
 import hatchet as ht
 from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME, TritonHook
 
-# Reserved keywords
-ROOT = "ROOT"
-DEVICE = "DEVICE"
-
-# Hardcoded, because we can't get max tensor core clock from cuDeviceGetAttribute
-# TODO(Keren): AMD
-gpu_flops_8bits = {80: 610e12, 90: 1960e12}
-
 
 def match_available_metrics(metrics, raw_metrics):
     ret = []
@@ -42,10 +34,23 @@ def get_min_time_flops(df, device_info):
     for device_type in device_info:
         for device_index in device_info[device_type]:
             arch = device_info[device_type][device_index]["arch"]
+            num_sms = device_info[device_type][device_index]["num_sms"]
+            clock_rate = device_info[device_type][device_index]["frequency"]
             for width in TritonHook.flops_width:
                 idx = df["device_index"] == device_index
                 device_frames = df[idx]
-                max_flops = gpu_flops_8bits[arch] / (width / 8)
+                max_flops = 0
+                if device_type == "CUDA":
+                    if arch == 80:
+                        max_flops = 624e12 / (width / 8)
+                    elif arch == 89:
+                        # TODO(Keren): Implement fp16 acc-> 660.6 fp8
+                        max_flops = (330.3 * 1e12) / (width / 8)
+                    elif arch == 90:
+                        # 114 sms and 1755mhz is the base number of sms and clock rate of H100 pcie
+                        max_flops = ((num_sms / 114 * clock_rate / (1755 * 1e3) * 3026) * 1e12) / (width / 8)
+                else:
+                    raise ValueError(f"Unsupported device type: {device_type}")
                 min_time_flops[idx] += device_frames[f"flops{width}"].fillna(0) / max_flops
     return min_time_flops
 
@@ -80,10 +85,11 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
     derived_metrics = []
     original_metrics = []
     for metric in metrics:
-        if metric == "util":
+        if metric == "util":  # Tensor core only
             min_time_bytes = get_min_time_bytes(gf.dataframe, device_info)
             min_time_flops = get_min_time_flops(gf.dataframe, device_info)
-            gf.dataframe["util (inc)"] = min_time_flops.combine(min_time_bytes, max) / gf.dataframe["Time (ns) (inc)"]
+            time_metric_name = match_available_metrics([time_factor_dict.name], raw_metrics)[0]
+            gf.dataframe["util (inc)"] = min_time_flops.combine(min_time_bytes, max) / gf.dataframe[time_metric_name]
             derived_metrics.append("util (inc)")
         elif metric in derivable_metrics:
             deriveable_metric = derivable_metrics[metric]
@@ -155,6 +161,7 @@ Derived metrics can be created when source metrics are available.
 - time/s, time/ms, time/us, time/ns: time
 - flop/s, tflop/s, gflop/s: flops / time
 - byte/s, tbyte/s, gbyte/s: bytes / time
+- util: max(sum(flops<width>) / peak_flops<width>_time, bytes / peak_bandwidth_time))
 """,
     )
     argparser.add_argument(
