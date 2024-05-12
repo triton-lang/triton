@@ -11,7 +11,7 @@ import triton.language as tl
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_torch(context):
-    with open("test.hatchet", "w+") as f:
+    with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
         proton.start(f.name.split(".")[0], context=context)
         proton.enter_scope("test")
         torch.ones((2, 2), device="cuda")
@@ -123,7 +123,7 @@ def test_hook():
 
     x = torch.tensor([2], device="cuda", dtype=torch.float32)
     y = torch.zeros_like(x)
-    with open("test.hatchet", "w+") as f:
+    with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
         proton.start(f.name.split(".")[0], hook="triton")
         foo[(1, )](x, 1, y, num_warps=4)
         proton.finalize()
