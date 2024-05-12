@@ -30,15 +30,17 @@ def get_raw_metrics(file):
 
 
 def get_min_time_flops(df, device_info):
-    min_time_flops = pd.DataFrame(0, index=df.index, columns=range(1))
+    min_time_flops = pd.DataFrame(0.0, index=df.index, columns=["min_time"])
     for device_type in device_info:
         for device_index in device_info[device_type]:
             arch = device_info[device_type][device_index]["arch"]
             num_sms = device_info[device_type][device_index]["num_sms"]
-            clock_rate = device_info[device_type][device_index]["frequency"]
+            clock_rate = device_info[device_type][device_index]["clock_rate"]
             for width in TritonHook.flops_width:
-                idx = df["device_index"] == device_index
+                idx = df["DeviceId"] == device_index
                 device_frames = df[idx]
+                if f"flops{width}" not in device_frames.columns:
+                    continue
                 max_flops = 0
                 if device_type == "CUDA":
                     if arch == 80:
@@ -51,12 +53,12 @@ def get_min_time_flops(df, device_info):
                         max_flops = ((num_sms / 114 * clock_rate / (1755 * 1e3) * 3026) * 1e12) / (width / 8)
                 else:
                     raise ValueError(f"Unsupported device type: {device_type}")
-                min_time_flops[idx] += device_frames[f"flops{width}"].fillna(0) / max_flops
+                min_time_flops.loc[idx, "min_time"] += device_frames[f"flops{width}"].fillna(0) / max_flops
     return min_time_flops
 
 
 def get_min_time_bytes(df, device_info):
-    min_time_bytes = pd.DataFrame(0, index=df.index, columns=range(1))
+    min_time_bytes = pd.DataFrame(0.0, index=df.index, columns=["min_time"])
     for device_type in device_info:
         for device_index in device_info[device_type]:
             idx = df["DeviceId"] == device_index
@@ -64,14 +66,14 @@ def get_min_time_bytes(df, device_info):
             memory_clock_rate = device_info[device_type][device_index]["memory_clock_rate"]  # in khz
             bus_width = device_info[device_type][device_index]["bus_width"]  # in bits
             peak_bandwidth = 2 * bus_width * memory_clock_rate * 1e3 / 8
-            min_time_bytes[idx] = device_frames["bytes"] / peak_bandwidth
+            min_time_bytes.loc[idx, "min_time"] += device_frames["bytes"] / peak_bandwidth
     return min_time_bytes
 
 
 FactorDict = namedtuple("FactorDict", ["name", "factor"])
 time_factor_dict = FactorDict("time", {"time/s": 1, "time/ms": 1e-3, "time/us": 1e-6, "time/ns": 1e-9})
-flops_factor_dict = FactorDict("flops", {"flop/s": 1, "tflop/s": 1e12, "gflop/s": 1e9})
-bytes_factor_dict = FactorDict("bytes", {"byte/s": 1, "tbyte/s": 1e12, "gbyte/s": 1e9})
+flops_factor_dict = FactorDict("flops", {"flop/s": 1, "gflop/s": 1e9, "tflop/s": 1e12})
+bytes_factor_dict = FactorDict("bytes", {"byte/s": 1, "gbyte/s": 1e9, "tbyte/s": 1e12})
 
 derivable_metrics = {
     **{key: flops_factor_dict
@@ -84,30 +86,29 @@ derivable_metrics = {
 def derive_metrics(gf, metrics, raw_metrics, device_info):
     derived_metrics = []
     original_metrics = []
+    time_metric_name = match_available_metrics([time_factor_dict.name], raw_metrics)[0]
+    time_unit = (time_factor_dict.name + "/" + time_metric_name.split("(")[1].split(")")[0])
     for metric in metrics:
         if metric == "util":  # Tensor core only
             min_time_bytes = get_min_time_bytes(gf.dataframe, device_info)
             min_time_flops = get_min_time_flops(gf.dataframe, device_info)
-            time_metric_name = match_available_metrics([time_factor_dict.name], raw_metrics)[0]
-            gf.dataframe["util (inc)"] = min_time_flops.combine(min_time_bytes, max) / gf.dataframe[time_metric_name]
+            time_sec = gf.dataframe[time_metric_name] * (time_factor_dict.factor[time_unit] /
+                                                         time_factor_dict.factor["time/s"])
+            gf.dataframe["util (inc)"] = min_time_flops["min_time"].combine(min_time_bytes["min_time"], max) / time_sec
             derived_metrics.append("util (inc)")
         elif metric in derivable_metrics:
             deriveable_metric = derivable_metrics[metric]
             metric_name = deriveable_metric.name
             metric_factor_dict = deriveable_metric.factor
             matched_metric_name = match_available_metrics([metric_name], raw_metrics)[0]
-            time_metric_name = match_available_metrics([time_factor_dict.name], raw_metrics)[0]
-            time_unit = (time_factor_dict.name + "/" + time_metric_name.split("(")[1].split(")")[0])
             gf.dataframe[f"{metric} (inc)"] = (gf.dataframe[matched_metric_name] /
                                                (gf.dataframe[time_metric_name] * time_factor_dict.factor[time_unit]) /
                                                metric_factor_dict[metric])
             derived_metrics.append(f"{metric} (inc)")
         elif metric in time_factor_dict.factor:
-            time_metric_name = match_available_metrics([time_factor_dict.name], raw_metrics)[0]
-            original_time_unit = (time_factor_dict.name + "/" + time_metric_name.split("(")[1].split(")")[0])
             metric_time_unit = time_factor_dict.name + "/" + metric.split("/")[1]
             gf.dataframe[f"{metric} (inc)"] = gf.dataframe[time_metric_name] * (
-                time_factor_dict.factor[original_time_unit] / time_factor_dict.factor[metric_time_unit])
+                time_factor_dict.factor[time_unit] / time_factor_dict.factor[metric_time_unit])
             derived_metrics.append(f"{metric} (inc)")
         else:
             original_metrics.append(metric)
@@ -143,7 +144,9 @@ def show_metrics(file_name):
         _, raw_metrics, _ = get_raw_metrics(f)
         print("Available metrics:")
         if raw_metrics:
-            print("\n".join(raw_metrics))
+            for raw_metric in raw_metrics:
+                raw_metric_no_unit = raw_metric.split("(")[0].strip().lower()
+                print(f"- {raw_metric_no_unit}")
         return
 
 
@@ -159,8 +162,8 @@ def main():
         help="""List available metrics. Metric names are case insensitive and ignore units.
 Derived metrics can be created when source metrics are available.
 - time/s, time/ms, time/us, time/ns: time
-- flop/s, tflop/s, gflop/s: flops / time
-- byte/s, tbyte/s, gbyte/s: bytes / time
+- flop/s, gflop/s, tflop/s: flops / time
+- byte/s, gbyte/s, tbyte/s: bytes / time
 - util: max(sum(flops<width>) / peak_flops<width>_time, bytes / peak_bandwidth_time))
 """,
     )

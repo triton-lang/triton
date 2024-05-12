@@ -12,7 +12,7 @@
           "DeviceId": "1",
           "DeviceType": "CUDA",
           "Time (ns)": 204800,
-          "flops8": 1e8,
+          "flops8": 1e11,
           "bytes": 1e8
         }
       },
@@ -27,7 +27,7 @@
           "DeviceId": "0",
           "DeviceType": "CUDA",
           "Time (ns)": 204800,
-          "flops8": 1e7,
+          "flops8": 1e10,
           "bytes": 1e7
         }
       }
