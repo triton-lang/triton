@@ -120,7 +120,8 @@ bool TargetInfo::processReplicaUsingStMatrix(
     ConversionPatternRewriter &rewriter, Location loc, Value smemBase,
     SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
-    ArrayRef<unsigned> outOrd, unsigned accumNumReplicates) const {
+    ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
+    int swizzleByteWidth) const {
   return false;
 }
 
