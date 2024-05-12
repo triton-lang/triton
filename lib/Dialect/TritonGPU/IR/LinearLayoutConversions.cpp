@@ -80,11 +80,13 @@ LinearLayout blockedToLinearLayout(ArrayRef<int64_t> shape,
       layoutForDim(kBlock, blocked.getCTASplitNum(), blocked.getCTAOrder(),
                    /*extraZeros=*/ctgDupes);
 
-  // Split the shape among the register+lane+warp.
-  LinearLayout ctaLayout =
-      layoutForDim(kRegister, blocked.getSizePerThread(), blocked.getOrder()) *
-      layoutForDim(kLane, blocked.getThreadsPerWarp(), blocked.getOrder()) *
+  LinearLayout registerLayout =
+      layoutForDim(kRegister, blocked.getSizePerThread(), blocked.getOrder());
+  LinearLayout laneLayout =
+      layoutForDim(kLane, blocked.getThreadsPerWarp(), blocked.getOrder());
+  LinearLayout warpLayout =
       layoutForDim(kWarp, blocked.getWarpsPerCTA(), blocked.getOrder());
+  LinearLayout ctaLayout = registerLayout * laneLayout * warpLayout;
 
   // If the shape per CTA is larger than the layout, we repeat the layout by
   // having each lane hold multiple elements, i.e. adding to the register
