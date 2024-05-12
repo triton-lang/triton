@@ -4,31 +4,31 @@
       {
         "children": [],
         "frame": {
-          "name": "foo",
+          "name": "foo0",
           "type": "function"
         },
         "metrics": {
           "Count": 1,
-          "DeviceId": 1,
+          "DeviceId": "1",
           "DeviceType": "CUDA",
-          "Time (ns)": 2048,
-          "flops8": 1e9,
-          "bytes": 1e9
+          "Time (ns)": 204800,
+          "flops8": 1e8,
+          "bytes": 1e8
         }
       },
       {
-        "DeviceId": "CUDA",
         "children": [],
         "frame": {
-          "name": "foo",
+          "name": "foo1",
           "type": "function"
         },
         "metrics": {
           "Count": 1,
-          "DeviceId": 2,
-          "Time (ns)": 2048,
-          "flops8": 1e9,
-          "bytes": 1e9
+          "DeviceId": "0",
+          "DeviceType": "CUDA",
+          "Time (ns)": 204800,
+          "flops8": 1e7,
+          "bytes": 1e7
         }
       }
     ],
@@ -38,18 +38,26 @@
     },
     "metrics": {
       "Count": 0,
-      "DeviceId": 0,
       "Time (ns)": 0,
-      "flops32": 0
+      "flops8": 0,
+      "bytes": 0
     }
   },
   {
     "CUDA": {
+      "0": {
+        "arch": 89,
+        "bus_width": 384,
+        "clock_rate": 2625000,
+        "memory_clock_rate": 10501000,
+        "num_sms": 128
+      },
       "1": {
         "arch": 90,
         "bus_width": 6144,
         "clock_rate": 1980000,
-        "memory_clock_rate": 2619000
+        "memory_clock_rate": 2619000,
+        "num_sms": 132
       }
     }
   }
