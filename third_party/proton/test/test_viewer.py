@@ -1,5 +1,5 @@
 import subprocess
-from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes
+from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, get_raw_metrics
 
 
 def test_help():
@@ -10,3 +10,10 @@ def test_help():
 
 def test_min_time_flops():
     pass
+
+
+def test_min_time_bytes():
+    with open("example.json", "r") as f:
+        gf, _, device_info = get_raw_metrics(f)
+        ret = get_min_time_bytes(gf.dataframe, device_info)
+        print(ret)

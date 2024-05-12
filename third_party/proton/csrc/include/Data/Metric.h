@@ -144,10 +144,8 @@ private:
   const static inline bool AGGREGABLE[kernelMetricKind::Count] = {false, false,
                                                                   true, true};
   const static inline std::string VALUE_NAMES[kernelMetricKind::Count] = {
-      "StartTime (ns)",
-      "EndTime (ns)",
-      "Count",
-      "Time (ns)",
+      "StartTime (ns)", "EndTime (ns)", "Count",
+      "Time (ns)",      "DeviceId",     "DeviceType",
   };
 };
 

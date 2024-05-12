@@ -104,10 +104,10 @@ void TreeData::dumpHatchet(std::ostream &os) const {
                        invocations;
         (*jsonNode)["metrics"]
                    [kernelMetric->getValueName(KernelMetric::DeviceId)] =
-                       deviceId;
-        // Device type is not a metric
-        (*jsonNode)[kernelMetric->getValueName(KernelMetric::DeviceId)] =
-            deviceTypeName;
+                       std::to_string(deviceId);
+        (*jsonNode)["metrics"]
+                   [kernelMetric->getValueName(KernelMetric::DeviceType)] =
+                       deviceTypeName;
         valueNames.insert(kernelMetric->getValueName(KernelMetric::Duration));
         valueNames.insert(
             kernelMetric->getValueName(KernelMetric::Invocations));

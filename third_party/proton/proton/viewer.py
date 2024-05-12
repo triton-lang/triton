@@ -38,7 +38,7 @@ def get_raw_metrics(file):
 
 
 def get_min_time_flops(df, device_info):
-    min_time_flops = pd.DataFrame(0, index=range(len(df)), columns=range(1))
+    min_time_flops = pd.DataFrame(0, index=df.index, columns=range(1))
     for device_type in device_info:
         for device_index in device_info[device_type]:
             arch = device_info[device_type][device_index]["arch"]
@@ -46,20 +46,20 @@ def get_min_time_flops(df, device_info):
                 idx = df["device_index"] == device_index
                 device_frames = df[idx]
                 max_flops = gpu_flops_8bits[arch] / (width / 8)
-                min_time_flops[idx] += device_frames[f"flops{width} (inc)"].fillna(0) / max_flops
+                min_time_flops[idx] += device_frames[f"flops{width}"].fillna(0) / max_flops
     return min_time_flops
 
 
 def get_min_time_bytes(df, device_info):
-    min_time_bytes = pd.DataFrame(0, index=range(len(df)), columns=range(1))
+    min_time_bytes = pd.DataFrame(0, index=df.index, columns=range(1))
     for device_type in device_info:
         for device_index in device_info[device_type]:
-            idx = df["device_index"] == device_index
+            idx = df["DeviceId"] == int(device_index)
             device_frames = df[idx]
-            memory_clock_rate = device_info[device_type][device_index]["memory_clock_rate"]
-            bus_width = device_info[device_type][device_index]["bus_width"]
-            peak_bandwidth = 2 * bus_width * memory_clock_rate * 1e3
-            min_time_bytes[idx] = device_frames["bytes (inc)"] / peak_bandwidth
+            memory_clock_rate = device_info[device_type][device_index]["memory_clock_rate"]  # in khz
+            bus_width = device_info[device_type][device_index]["bus_width"]  # in bits
+            peak_bandwidth = 2 * bus_width * memory_clock_rate * 1e3 / 8
+            min_time_bytes[idx] = device_frames["bytes"] / peak_bandwidth
     return min_time_bytes
 
 
