@@ -2,6 +2,9 @@ import subprocess
 from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, get_raw_metrics
 import numpy as np
 
+file_path = __file__
+example_file = file_path.replace("test_viewer.py", "example.json")
+
 
 def test_help():
     # Only check if the viewer can be invoked
@@ -10,7 +13,7 @@ def test_help():
 
 
 def test_min_time_flops():
-    with open("example.json", "r") as f:
+    with open(example_file, "r") as f:
         gf, _, device_info = get_raw_metrics(f)
         ret = get_min_time_flops(gf.dataframe, device_info)
         device0_idx = gf.dataframe["DeviceId"] == "0"
@@ -22,7 +25,7 @@ def test_min_time_flops():
 
 
 def test_min_time_bytes():
-    with open("example.json", "r") as f:
+    with open(example_file, "r") as f:
         gf, _, device_info = get_raw_metrics(f)
         ret = get_min_time_bytes(gf.dataframe, device_info)
         device0_idx = gf.dataframe["DeviceId"] == "0"
