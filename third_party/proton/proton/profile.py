@@ -1,4 +1,5 @@
 import functools
+import triton
 
 from triton._C.libproton import proton as libproton
 from .hook import register_triton_hook, unregister_triton_hook
@@ -8,10 +9,27 @@ from typing import Optional
 DEFAULT_PROFILE_NAME = "proton"
 
 
+def _is_cuda():
+    return triton.runtime.driver.active.get_current_target().backend == "cuda"
+
+
+def _is_hip():
+    return triton.runtime.driver.active.get_current_target().backend == "hip"
+
+
+def select_backend() -> str:
+    if _is_cuda():
+        return "cupti"
+    elif _is_hip():
+        return "roctracer"
+    else:
+        raise ValueError("No backend is available for the current target.")
+
+
 def start(
     name: Optional[str] = None,
     *,
-    backend: str = "cupti",
+    backend: str = None,
     context: str = "shadow",
     data: str = "tree",
     hook: Optional[str] = None,
@@ -32,7 +50,7 @@ def start(
                     If not provided, the default name is "~/proton".
         backend (str): The backend to use for profiling.
                        Available options are ["cupti"].
-                       Defaults to "cupti".
+                       Defaults to None, which automatically selects the backend.
         context (str): The context to use for profiling.
                        Available options are ["shadow", "python"].
                        Defaults to "shadow".
@@ -51,6 +69,9 @@ def start(
 
     if name is None:
         name = DEFAULT_PROFILE_NAME
+
+    if backend is None:
+        backend = select_backend()
 
     set_profiling_on()
     if hook and hook == "triton":
