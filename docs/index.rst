@@ -67,4 +67,4 @@ Check out the following documents to learn more about Triton and how it compares
    programming-guide/chapter-2/related-work
    programming-guide/chapter-3/debugging
 
-.. _Triton: https://github.com/openai/triton
+.. _Triton: https://github.com/triton-lang/triton

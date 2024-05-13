@@ -1146,7 +1146,7 @@ module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 1 : 
     %51 = tt.addptr %50, %47 : tensor<64x256x!tt.ptr<i8>, #blocked>, tensor<64x256xi32, #blocked>
 
     // Check that both loads in the loop are pipelined.
-    // TODO(jlebar): https://github.com/openai/triton/pull/3472 disables the
+    // TODO(jlebar): https://github.com/triton-lang/triton/pull/3472 disables the
     // relevant optimization.  Once we've reenabled it, we can uncomment this test.
     // CHECK: scf.for
     // COM: CHECK-NOT: tt.load
