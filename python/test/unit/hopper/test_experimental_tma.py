@@ -93,13 +93,13 @@ def matmul_kernel_tma(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
 
 
 @pytest.mark.parametrize("num_stages", [1, 4])
-def test_experimental_tma_matmul(num_stages):
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(32, 32, 32), (128, 64, 64), (128, 128, 64), (128, 256, 64)])
+def test_experimental_tma_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K):
     if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] == 9:
         pytest.skip("Test requires Hopper target.")
         return
     device = "cuda"
     M, N, K = 8192, 8192, 1024
-    BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 64
     torch.manual_seed(42)
     A = torch.randn((M, K), dtype=torch.float16, device=device)
     B = torch.randn((K, N), dtype=torch.float16, device=device)
@@ -123,4 +123,5 @@ def test_experimental_tma_matmul(num_stages):
                                     num_stages=num_stages)
     ref_out = torch.matmul(A.to(torch.float32), B.to(torch.float32)).to(torch.float16)
     torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
-    assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm["ptx"]
+    if BLOCK_M >= 64 and BLOCK_N >= 64:
+        assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm["ptx"]
