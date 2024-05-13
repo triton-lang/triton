@@ -46,7 +46,7 @@ def start(
 
     Args:
         name (str, optional): The name (with path) of the profiling session.
-                    If not provided, the default name is "~/proton.<profile-format>".
+                              If not provided, the default name is "~/proton.<profile-format>".
         backend (str, optional): The backend to use for profiling.
                                  Available options are ["cupti"].
                                  Defaults to None, which automatically selects the backend.
