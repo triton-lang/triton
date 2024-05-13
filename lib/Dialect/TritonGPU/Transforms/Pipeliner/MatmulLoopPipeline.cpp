@@ -601,6 +601,9 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
         loadInfo.loadIsMMAV3 = true;
         loadInfo.sharedEncoding =
             getSharedEncoding(op, /*loadIsMMAv3=*/true).value_or(nullptr);
+      } else if (isa<tt::ExperimentalDescriptorLoadOp>(op)) {
+        loadInfo.sharedEncoding =
+            getSharedEncoding(op, /*loadIsMMAv3=*/true).value_or(nullptr);
       } else {
         loadInfo.sharedEncoding =
             getSharedEncIfAllUsersAreDotEnc(op->getResult(0)).value_or(nullptr);

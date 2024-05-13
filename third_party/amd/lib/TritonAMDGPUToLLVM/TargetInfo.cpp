@@ -28,6 +28,12 @@ Value printfPromoteValue(ConversionPatternRewriter &rewriter, Value value) {
   auto *context = rewriter.getContext();
   auto loc = UnknownLoc::get(context);
   auto type = value.getType();
+
+  if (isa<LLVM::LLVMPointerType>(type)) {
+    // The llvm.ptrtoint op requires signless integer types.
+    return ptrtoint(i64_ty, value);
+  }
+
   assert(type.getIntOrFloatBitWidth() <= 64);
 
   if (auto floatType = dyn_cast<FloatType>(type)) {
@@ -120,7 +126,8 @@ bool TargetInfo::processReplicaUsingStMatrix(
     ConversionPatternRewriter &rewriter, Location loc, Value smemBase,
     SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
-    ArrayRef<unsigned> outOrd, unsigned accumNumReplicates) const {
+    ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
+    int swizzleByteWidth) const {
   return false;
 }
 
