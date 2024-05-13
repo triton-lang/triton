@@ -1,7 +1,7 @@
 import argparse
 import sys
 import os
-from .profile import start, finalize, select_backend
+from .profile import start, finalize, _select_backend
 from .flags import set_command_line
 
 
@@ -51,7 +51,7 @@ def execute_as_main(script, args):
 
 
 def run_profiling(args, target_args):
-    backend = args.backend if args.backend else select_backend()
+    backend = args.backend if args.backend else _select_backend()
 
     start(args.name, backend=backend, context=args.context, data=args.data, hook=args.hook)
 

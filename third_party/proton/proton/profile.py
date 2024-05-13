@@ -17,7 +17,7 @@ def _is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
-def select_backend() -> str:
+def _select_backend() -> str:
     if _is_cuda():
         return "cupti"
     elif _is_hip():
@@ -28,10 +28,9 @@ def select_backend() -> str:
 
 def start(
     name: Optional[str] = None,
-    *,
-    backend: str = None,
-    context: str = "shadow",
-    data: str = "tree",
+    context: Optional[str] = "shadow",
+    data: Optional[str] = "tree",
+    backend: Optional[str] = None,
     hook: Optional[str] = None,
 ):
     """
@@ -46,17 +45,17 @@ def start(
         ```
 
     Args:
-        name (str): The name (with path) of the profiling session.
-                    If not provided, the default name is "~/proton".
-        backend (str): The backend to use for profiling.
-                       Available options are ["cupti"].
-                       Defaults to None, which automatically selects the backend.
-        context (str): The context to use for profiling.
-                       Available options are ["shadow", "python"].
-                       Defaults to "shadow".
-        data (str): The data structure to use for profiling.
-                    Available options are ["tree"].
-                    Defaults to "tree".
+        name (str, optional): The name (with path) of the profiling session.
+                    If not provided, the default name is "~/proton.<profile-format>".
+        backend (str, optional): The backend to use for profiling.
+                                 Available options are ["cupti"].
+                                 Defaults to None, which automatically selects the backend.
+        context (str, optional): The context to use for profiling.
+                                 Available options are ["shadow", "python"].
+                                 Defaults to "shadow".
+        data (str, optional): The data structure to use for profiling.
+                              Available options are ["tree"].
+                              Defaults to "tree".
         hook (str, optional): The hook to use for profiling.
                               Available options are [None, "triton"].
                               Defaults to None.
@@ -71,7 +70,7 @@ def start(
         name = DEFAULT_PROFILE_NAME
 
     if backend is None:
-        backend = select_backend()
+        backend = _select_backend()
 
     set_profiling_on()
     if hook and hook == "triton":
@@ -137,9 +136,9 @@ def finalize(session: Optional[int] = None, output_format: str = "hatchet") -> N
 def _profiling(
     func,
     name: Optional[str] = None,
-    backend: str = "cupti",
-    context: str = "shadow",
-    data: str = "tree",
+    backend: Optional[str] = None,
+    context: Optional[str] = "shadow",
+    data: Optional[str] = "tree",
     hook: Optional[str] = None,
 ):
     """
@@ -166,9 +165,9 @@ def profile(
     func=None,
     *,
     name: Optional[str] = None,
-    backend: str = "cupti",
-    context: str = "shadow",
-    data: str = "tree",
+    backend: Optional[str] = None,
+    context: Optional[str] = "shadow",
+    data: Optional[str] = "tree",
     hook: Optional[str] = None,
 ):
     """
@@ -191,9 +190,9 @@ def profile(
     if func is None:
         # It's being used with parentheses, so return a decorator
         def decorator(f):
-            return _profiling(f, name=name, backend=backend, context=context, data=data)
+            return _profiling(f, name=name, backend=backend, context=context, data=data, hook=hook)
 
         return decorator
     else:
         # It's being used without parentheses, so apply the decorator directly
-        return _profiling(func, name=name, backend=backend, context=context, data=data)
+        return _profiling(func, name=name, backend=backend, context=context, data=data, hook=hook)
