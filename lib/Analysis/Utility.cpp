@@ -491,7 +491,7 @@ static bool supportWMMATypes(Type a, Type b, Type c, Type d) {
   if (a.isIntOrIndex()) {
     if (!c.isIntOrIndex())
       return false;
-    bool aValid = a.isUnsignedInteger() && aWidth <= 8;
+    bool aValid = aWidth <= 8;
     bool cValid = cWidth <= 32;
     return aValid && cValid;
   } else if (isa<FloatType>(a) && isa<FloatType>(c)) {
@@ -499,7 +499,7 @@ static bool supportWMMATypes(Type a, Type b, Type c, Type d) {
       return c.isBF16() || c.isF32();
     if (a.isF16())
       return c.isF16() || c.isF32();
-    return aWidth <= cWidth;
+    return aWidth <= cWidth && aWidth <= 16;
   }
   return false;
 }

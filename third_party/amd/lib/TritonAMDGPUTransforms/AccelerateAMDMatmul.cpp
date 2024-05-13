@@ -450,6 +450,56 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
       // FMA case.
       Type AElType = dotOp.getA().getType().getElementType();
       Type DElType = D.getType().getElementType();
+
+      // Convert int operands to FP32 to apply FMA case
+      // Do it here instead of introducing new pattern because the pass is more
+      // about MMA dots.
+      // TODO: Introduce new pass for FMA dots legalization.
+      if (AElType.isIntOrIndex()) {
+        assert(dotOp.getB().getType().getElementType().isIntOrIndex() &&
+               dotOp.getC().getType().getElementType().isIntOrIndex() &&
+               DElType.isIntOrIndex());
+        auto convertTensorIToFP = [&](Value v) -> Value {
+          RankedTensorType vTy = cast<RankedTensorType>(v.getType());
+          Type dstType = vTy.cloneWith(std::nullopt, builder.getF32Type());
+          Type srcElType = vTy.getElementType();
+          return !srcElType.isUnsignedInteger()
+                     ? builder
+                           .create<mlir::arith::SIToFPOp>(dotOp.getLoc(),
+                                                          dstType, v)
+                           .getResult()
+                     : builder
+                           .create<mlir::arith::UIToFPOp>(dotOp.getLoc(),
+                                                          dstType, v)
+                           .getResult();
+        };
+        auto convertTensorFPToI = [&](Type dstElType, Value v) -> Value {
+          RankedTensorType vTy = cast<RankedTensorType>(v.getType());
+          Type dstType = vTy.cloneWith(std::nullopt, dstElType);
+          return !dstElType.isUnsignedInteger()
+                     ? builder
+                           .create<mlir::arith::FPToSIOp>(dotOp.getLoc(),
+                                                          dstType, v)
+                           .getResult()
+                     : builder
+                           .create<mlir::arith::FPToUIOp>(dotOp.getLoc(),
+                                                          dstType, v)
+                           .getResult();
+        };
+
+        auto newAOperand = convertTensorIToFP(dotOp.getA());
+        auto newBOperand = convertTensorIToFP(dotOp.getB());
+        auto newCOperand = convertTensorIToFP(dotOp.getC());
+        auto newDot = builder.create<tt::DotOp>(
+            dotOp.getLoc(), newCOperand.getType(), newAOperand, newBOperand,
+            newCOperand, dotOp.getInputPrecision(),
+            dotOp.getMaxNumImpreciseAcc());
+        auto newD = convertTensorFPToI(DElType, newDot.getResult());
+        D.replaceAllUsesWith(newD);
+        dotOp.erase();
+        return;
+      }
+
       if (AElType == DElType)
         return;
       promoteType = DElType;
