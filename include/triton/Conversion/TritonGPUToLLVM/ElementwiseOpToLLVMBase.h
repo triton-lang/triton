@@ -95,13 +95,6 @@ public:
       return resultVals;
     }
 
-    // cannot utilize duplication with parent mfma layout
-    if (auto slice = encoding.dyn_cast<SliceEncodingAttr>()) {
-      if (slice.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
-        return resultVals;
-      }
-    }
-
     SmallVector<unsigned> elemsPerThread = getElemsPerThread(rtType);
     int rank = elemsPerThread.size();
     if (product<unsigned>(elemsPerThread) != resultVals.size())
@@ -110,8 +103,8 @@ public:
     if (!axisInfo)
       // axis info (e.g., constancy) not available
       return resultVals;
-    SmallVector<unsigned> sizePerThread = getSizePerThread(encoding);
-    if (rank != sizePerThread.size())
+    SmallVector<unsigned> contigPerThread = getContigPerThread(encoding);
+    if (rank != contigPerThread.size())
       return resultVals;
 
     SmallVector<int64_t> constancy = axisInfo->getConstancy();
@@ -119,13 +112,13 @@ public:
       return resultVals;
     bool hasConstancy = false;
     for (int i = 0; i < rank; ++i) {
-      if (constancy[i] > sizePerThread[i]) {
-        if (constancy[i] % sizePerThread[i] != 0)
-          // constancy is not evenly covered by sizePerThread
+      if (constancy[i] > contigPerThread[i]) {
+        if (constancy[i] % contigPerThread[i] != 0)
+          // constancy is not evenly covered by contigPerThread
           return resultVals;
         // can't move the values across different
-        // "sizePerThread"-sized blocks
-        constancy[i] = sizePerThread[i];
+        // "contigPerThread"-sized blocks
+        constancy[i] = contigPerThread[i];
       }
       if (elemsPerThread[i] < 1 || constancy[i] < 1)
         return resultVals;
