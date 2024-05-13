@@ -14,6 +14,7 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
 #include "triton/Conversion/TritonCPUToLLVM/Passes.h"
+#include "triton/Conversion/TritonCPUToLLVM/PatternTritonCPUOpToLLVM.h"
 #include "triton/Conversion/TritonCPUToLLVM/TypeConverter.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonCPU/IR/Dialect.h"
@@ -71,7 +72,30 @@ struct ConvertTritonCPUToLLVM
     TritonCPUToLLVMTypeConverter typeConverter(context, option);
     TritonLLVMConversionTarget convTarget(*context);
 
-    // TODO:
+    // Lower functions
+    {
+      mlir::LowerToLLVMOptions option(context);
+      TritonCPUToLLVMTypeConverter typeConverter(context, option);
+      TritonLLVMFunctionConversionTarget funcTarget(*context);
+      RewritePatternSet funcPatterns(context);
+      mlir::triton::cpu::populateFuncOpConversionPattern(
+          typeConverter, funcPatterns,
+          mlir::triton::cpu::patternBenefitDefault);
+      mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
+                                                            funcPatterns);
+      if (failed(
+              applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
+        return signalPassFailure();
+    }
+
+    RewritePatternSet patterns(context);
+    int benefit =
+        mlir::triton::cpu::patternBenefitPrioritizeOverLLVMConversions;
+    mlir::triton::cpu::populateControlFlowOpToLLVMPattern(typeConverter,
+                                                          patterns, benefit);
+
+    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
+      return signalPassFailure();
   }
 };
 
