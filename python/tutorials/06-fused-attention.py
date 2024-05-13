@@ -95,7 +95,7 @@ def keep(conf):
     return True
 
 
-@triton.autotune(list(filter(keep, configs)), key=["N_CTX"], warmup=10, rep=10)
+@triton.autotune(list(filter(keep, configs)), key=["N_CTX"])
 @triton.jit
 def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
               stride_qz, stride_qh, stride_qm, stride_qk,  #
@@ -567,7 +567,7 @@ except BaseException:
     HAS_FLASH = False
 
 TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
-BATCH, N_HEADS, HEAD_DIM = 4, 32, 128
+BATCH, N_HEADS, HEAD_DIM = 4, 32, 64
 # vary seq length for fixed head and batch=4
 configs = []
 for mode in ["fwd", "bwd"]:
@@ -579,8 +579,10 @@ for mode in ["fwd", "bwd"]:
                 x_names=["N_CTX"],
                 x_vals=[2**i for i in range(10, 15)],
                 line_arg="provider",
-                line_vals=["triton-fp16", "triton-fp8"] + (["flash"] if HAS_FLASH else []),
-                line_names=["Triton [FP16]", "Triton [FP8]"] + (["Flash-2"] if HAS_FLASH else []),
+                line_vals=["triton-fp16"] + (["triton-fp8"] if TORCH_HAS_FP8 else []) +
+                (["flash"] if HAS_FLASH else []),
+                line_names=["Triton [FP16]"] + (["Triton [FP8]"] if TORCH_HAS_FP8 else []) +
+                (["Flash-2"] if HAS_FLASH else []),
                 styles=[("red", "-"), ("blue", "-")],
                 ylabel="ms",
                 plot_name=f"fused-attention-batch{BATCH}-head{N_HEADS}-d{HEAD_DIM}-{mode}-causal={causal}",
@@ -588,7 +590,6 @@ for mode in ["fwd", "bwd"]:
                     "H": N_HEADS,
                     "BATCH": BATCH,
                     "HEAD_DIM": HEAD_DIM,
-                    "dtype": torch.float16,
                     "mode": mode,
                     "causal": causal,
                 },
@@ -596,16 +597,16 @@ for mode in ["fwd", "bwd"]:
 
 
 @triton.testing.perf_report(configs)
-def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dtype=torch.float16, device="cuda"):
+def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, device="cuda"):
     assert mode in ["fwd", "bwd"]
     warmup = 25
     rep = 100
+    dtype = torch.float16
     if "triton" in provider:
-        fp8_inputs = "fp8" in provider
         q = torch.randn((BATCH, H, N_CTX, HEAD_DIM), dtype=dtype, device="cuda", requires_grad=True)
         k = torch.randn((BATCH, H, N_CTX, HEAD_DIM), dtype=dtype, device="cuda", requires_grad=True)
         v = torch.randn((BATCH, H, N_CTX, HEAD_DIM), dtype=dtype, device="cuda", requires_grad=True)
-        if mode == "fwd" and TORCH_HAS_FP8 and fp8_inputs:
+        if mode == "fwd" and "fp8" in provider:
             q = q.to(torch.float8_e5m2)
             k = k.to(torch.float8_e5m2)
             v = v.permute(0, 1, 3, 2)
