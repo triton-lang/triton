@@ -137,8 +137,8 @@ class CPUBackend(BaseBackend):
 
     @staticmethod
     def make_exe(src, metadata, options):
-        # Right now, src is just TTIR. Extract kernel name from tt.func.
-        names = re.findall(r"\s+tt.func public @([a-zA-Z_][a-zA-Z0-9_]*)\(", str(src))
+        # Just a quick hack while developing the backend.
+        names = re.findall(r"\s+define void @([a-zA-Z_][a-zA-Z0-9_]*)\(", str(src))
         assert len(names) == 1
         metadata["name"] = names[0]
 

@@ -1,4 +1,6 @@
 add_triton_library(TritonCPUToLLVM
+    ControlFlowOpToLLVM.cpp
+    FuncOpToLLVM.cpp
     TypeConverter.cpp
     TritonCPUToLLVM.cpp
 
