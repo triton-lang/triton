@@ -2,7 +2,7 @@
 Installation
 ============
 
-For supported platform/OS and supported hardware, review the `Compatibility <https://github.com/openai/triton?tab=readme-ov-file#compatibility>`_ section on Github.
+For supported platform/OS and supported hardware, review the `Compatibility <https://github.com/triton-lang/triton?tab=readme-ov-file#compatibility>`_ section on Github.
 
 --------------------
 Binary Distributions
@@ -35,14 +35,14 @@ You can install the Python package from source by running the following commands
 
 .. code-block:: bash
 
-      git clone https://github.com/openai/triton.git;
+      git clone https://github.com/triton-lang/triton.git;
       cd triton/python;
       pip install ninja cmake wheel; # build-time dependencies
       pip install -e .
 
 Note that, if llvm is not present on your system, the setup.py script will download the official LLVM static libraries and link against that.
 
-For building with a custom LLVM, review the `Building with a custom LLVM <https://github.com/openai/triton?tab=readme-ov-file#building-with-a-custom-llvm>`_ section on Github.
+For building with a custom LLVM, review the `Building with a custom LLVM <https://github.com/triton-lang/triton?tab=readme-ov-file#building-with-a-custom-llvm>`_ section on Github.
 
 You can then test your installation by running the unit tests:
 

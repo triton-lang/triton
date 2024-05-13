@@ -64,4 +64,4 @@ We are committed to accepting functional bug fixes that meet our quality standar
 
 ## Controversial Changes
 
-More controversial design changes (e.g., changes in our IRs/APIs/Passes) are evaluated on a case-by-case basis under the subjective judgment of core maintainers. While it is possible for contributors to propose and land deep design changes upstream (see https://github.com/openai/triton/pull/1305), the community should expect such occurrences to be relatively rare.
+More controversial design changes (e.g., changes in our IRs/APIs/Passes) are evaluated on a case-by-case basis under the subjective judgment of core maintainers. While it is possible for contributors to propose and land deep design changes upstream (see https://github.com/triton-lang/triton/pull/1305), the community should expect such occurrences to be relatively rare.
