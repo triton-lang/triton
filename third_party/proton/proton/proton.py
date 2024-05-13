@@ -53,7 +53,7 @@ def execute_as_main(script, args):
 def run_profiling(args, target_args):
     backend = args.backend if args.backend else _select_backend()
 
-    start(args.name, backend=backend, context=args.context, data=args.data, hook=args.hook)
+    start(args.name, context=args.context, data=args.data, backend=backend, hook=args.hook)
 
     # Set the command line mode to avoid any `start` calls in the script.
     set_command_line()

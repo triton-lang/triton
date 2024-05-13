@@ -28,6 +28,7 @@ def _select_backend() -> str:
 
 def start(
     name: Optional[str] = None,
+    *,
     context: Optional[str] = "shadow",
     data: Optional[str] = "tree",
     backend: Optional[str] = None,
@@ -75,7 +76,7 @@ def start(
     set_profiling_on()
     if hook and hook == "triton":
         register_triton_hook()
-    return libproton.start(name, backend, context, data)
+    return libproton.start(name, context, data, backend)
 
 
 def activate(session: Optional[int] = 0) -> None:
@@ -136,9 +137,9 @@ def finalize(session: Optional[int] = None, output_format: str = "hatchet") -> N
 def _profiling(
     func,
     name: Optional[str] = None,
-    backend: Optional[str] = None,
     context: Optional[str] = "shadow",
     data: Optional[str] = "tree",
+    backend: Optional[str] = None,
     hook: Optional[str] = None,
 ):
     """
@@ -153,7 +154,7 @@ def _profiling(
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        session = start(name, backend=backend, context=context, data=data, hook=hook)
+        session = start(name, context=context, data=data, backend=backend, hook=hook)
         ret = func(*args, **kwargs)
         deactivate(session)
         return ret
@@ -165,9 +166,9 @@ def profile(
     func=None,
     *,
     name: Optional[str] = None,
-    backend: Optional[str] = None,
     context: Optional[str] = "shadow",
     data: Optional[str] = "tree",
+    backend: Optional[str] = None,
     hook: Optional[str] = None,
 ):
     """
@@ -190,9 +191,9 @@ def profile(
     if func is None:
         # It's being used with parentheses, so return a decorator
         def decorator(f):
-            return _profiling(f, name=name, backend=backend, context=context, data=data, hook=hook)
+            return _profiling(f, name=name, context=context, data=data, backend=backend, hook=hook)
 
         return decorator
     else:
         # It's being used without parentheses, so apply the decorator directly
-        return _profiling(func, name=name, backend=backend, context=context, data=data, hook=hook)
+        return _profiling(func, name=name, context=context, data=data, backend=backend, hook=hook)
