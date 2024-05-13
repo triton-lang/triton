@@ -26,8 +26,8 @@ void lowerDistributedToShared(Operation *op, Value src, Value dst,
   auto dstShapePerCTA = triton::gpu::getShapePerCTA(dstTy);
   auto srcLayout = srcTy.getEncoding();
   auto outOrd = mlir::cast<SharedEncodingAttr>(dstTy.getEncoding()).getOrder();
-  assert(srcTy.getShape().size() == 2 ||
-         (srcTy.getShape().size() <= 3 && outOrd[2] == 0) &&
+  assert(srcTy.getShape().size() <= 2 ||
+         (srcTy.getShape().size() == 3 && outOrd[2] == 0) &&
              "Unexpected rank of ConvertLayout(blocked->shared)");
   Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, op);
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
