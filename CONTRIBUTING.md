@@ -15,17 +15,17 @@ We aim to make the Triton codebase as modular as possible, such that different c
 What constitutes (or not) a module is up to the core maintainers. Core maintainers also reserve the right to decide whether the development of a module should happen – or keep happening – in-tree or not.
 
 **List of in-tree modules (as of 05/12/2024, alphabetical order):**
-AMD backend (Lei Zhang)
-Interpreter (Keren Zhou)
-Profiler (Keren Zhou)
+* AMD backend (Lei Zhang)
+* Interpreter (Keren Zhou)
+* Profiler (Keren Zhou)
 
 Note: Parts of Triton that are not listed above (e.g., Nvidia backend) are assumed to be owned by core maintainers.
 
 Note: Some important parts of the Triton eco-system (e.g., Intel XPU backend) may be maintained out-of-tree and advertised in our repository. The governance rules described in this document do not carry over to these modules.
 
 __List of out-of-tree modules (as of 05/12/2024, alphabetical order):__
-CPU backend (Bert Maher)
-Intel backend (Jianhui Li)
+* CPU backend (Bert Maher)
+* Intel backend (Jianhui Li)
 
 
 ## Core maintainers
@@ -36,23 +36,25 @@ The core maintainers drive the development of Triton at large and set the roadma
 
 
 The core maintainers as a group have the power to veto any decision made at a Module maintainer level.
+
 The core maintainers should publicly articulate their decision-making, and share the reasoning behind their decisions, vetoes, and dispute resolution.
 
 __List of core maintainers (as of 05/12/2024, alphabetical order):__
-Justin Lebar
-Keren Zhou
-Phil Tillet
-Thomas Raoux
-Zahi Moudallal
+* Justin Lebar
+* Keren Zhou
+* Phil Tillet
+* Thomas Raoux
+* Zahi Moudallal
 
 ## Lead core maintainer
 When core maintainers cannot come to a consensus, a publicly declared lead maintainer is expected to settle the debate and make executive decisions.
 
 The Lead Core Maintainer should publicly articulate their decision-making, and give a clear reasoning for their decisions.
+
 The Lead Core Maintainer is also responsible for confirming or removing core maintainers.
 
 **Lead maintainer (as of 05/12/2024)**
-Phil Tillet
+* Phil Tillet
 
 # Decision Making
 
