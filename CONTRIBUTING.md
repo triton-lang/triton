@@ -24,8 +24,8 @@ Note: Parts of Triton that are not listed above (e.g., Nvidia backend) are assum
 Note: Some important parts of the Triton eco-system (e.g., Intel XPU backend) may be maintained out-of-tree and advertised in our repository. The governance rules described in this document do not carry over to these modules.
 
 __List of out-of-tree modules (as of 05/12/2024, alphabetical order):__
-* CPU backend (Bert Maher)
-* Intel backend (Jianhui Li)
+* CPU backend (Bert Maher, Ilya Enkovich)
+* Intel backend (Ettore Tiotto, Whitney Tsang)
 
 
 ## Core maintainers
