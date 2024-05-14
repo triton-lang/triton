@@ -287,6 +287,7 @@ static PyObject *fill1DTMADescriptor(PyObject *self, PyObject *args) {
   default:
     PyErr_SetString(PyExc_ValueError, "elementSize must be 1, 2, or 4");
   }
+  assert((elementSize * tensorDim) >= 32 && "block size too small.");
   int rank = 1;
   CUresult result = cuTensorMapEncodeTiled(
       (CUtensorMap *)desc, type, rank, (void *)global_address, dims,
