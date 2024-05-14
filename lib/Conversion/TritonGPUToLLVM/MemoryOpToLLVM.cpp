@@ -15,12 +15,11 @@ using namespace mlir::triton::gpu;
 // blocked -> shared.
 // Swizzling in shared memory to avoid bank conflict. Normally used for
 // A/B operands of dots.
-void lowerDistributedToShared(Operation *op, Value src, Value dst,
-                              Value adaptorSrc, Value smemBase,
+void lowerDistributedToShared(Location loc, Value src, Value dst,
+                              Value adaptorSrc, SharedMemoryObject smemObj,
                               const LLVMTypeConverter *typeConverter,
                               ConversionPatternRewriter &rewriter,
                               const TargetInfoBase &targetInfo) {
-  auto loc = op->getLoc();
   auto srcTy = cast<RankedTensorType>(src.getType());
   auto dstTy = cast<MemDescType>(dst.getType());
   auto dstShapePerCTA = triton::gpu::getShapePerCTA(dstTy);
@@ -31,10 +30,10 @@ void lowerDistributedToShared(Operation *op, Value src, Value dst,
              "Unexpected rank of ConvertLayout(blocked->shared)");
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
+  auto smemBase = smemObj.getBase();
   int32_t elemSize = elemTy.getIntOrFloatBitWidth();
   unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
-  auto dstStrides =
-      LLVM::getStridesFromShapeAndOrder(dstShapePerCTA, outOrd, loc, rewriter);
+  auto dstStrides = smemObj.getStrides();
   auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);
   storeDistributedToShared(src, inVals, dstStrides, dst, smemBase, elemTy, loc,
                            rewriter, targetInfo);
@@ -71,18 +70,16 @@ struct LocalAllocOpConversion
       newOrder = SmallVector<unsigned>(order.begin(), order.end());
     }
 
-    // If there is an initial tensor, store it into the shared memory.
-    if (op.getSrc()) {
-      Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, op);
-      lowerDistributedToShared(op, op.getSrc(), op.getResult(),
-                               adaptor.getSrc(), smemBase, typeConverter,
-                               rewriter, targetInfo);
-    }
-
     auto llvmElemTy = typeConverter->convertType(resultTy.getElementType());
     auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
     auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, shapePerCTA,
                                       newOrder, loc, rewriter);
+    // If there is an initial tensor, store it into the shared memory.
+    if (op.getSrc()) {
+      lowerDistributedToShared(loc, op.getSrc(), op.getResult(),
+                               adaptor.getSrc(), smemObj, typeConverter,
+                               rewriter, targetInfo);
+    }
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
@@ -120,13 +117,15 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::LocalStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Value smemBase = LLVM::getSharedMemoryBase(op.getLoc(), rewriter,
-                                               op.getDst().getDefiningOp());
-    lowerDistributedToShared(op, op.getSrc(), op.getDst(), adaptor.getSrc(),
-                             smemBase, getTypeConverter(), rewriter,
-                             targetInfo);
+    Value memDescVal = op.getDst();
+    auto llvmElemTy =
+        getTypeConverter()->convertType(op.getDst().getType().getElementType());
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        op.getLoc(), adaptor.getDst(), llvmElemTy, rewriter);
+    lowerDistributedToShared(op.getLoc(), op.getSrc(), op.getDst(),
+                             adaptor.getSrc(), smemObj, getTypeConverter(),
+                             rewriter, targetInfo);
     rewriter.eraseOp(op);
-
     return success();
   }
 
