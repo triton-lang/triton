@@ -16,7 +16,8 @@ using namespace mlir::triton::gpu;
 // Swizzling in shared memory to avoid bank conflict. Normally used for
 // A/B operands of dots.
 void lowerDistributedToShared(Location loc, Value src, Value dst,
-                              Value adaptorSrc, SharedMemoryObject smemObj,
+                              Value adaptorSrc,
+                              const SharedMemoryObject &smemObj,
                               const LLVMTypeConverter *typeConverter,
                               ConversionPatternRewriter &rewriter,
                               const TargetInfoBase &targetInfo) {
