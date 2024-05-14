@@ -149,6 +149,18 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
     // the inner loop.
     for (scf::ForOp outerLoop : outerLoops)
       tryAndPipelineOuterLoop(outerLoop);
+
+    // Re-collect loop ops
+    loops.clear();
+    getOperation()->walk([&](scf::ForOp forOp) {
+      // Bail out for loops with num_stage <= 1.
+      if (getNumStagesOrDefault(forOp) > 1)
+        loops.push_back(forOp);
+    });
+
+    for (scf::ForOp forOp : loops) {
+      mlir::triton::pipelineTMAStores(forOp);
+    }
   }
 };
 } // anonymous namespace

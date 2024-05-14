@@ -601,6 +601,9 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
         loadInfo.loadIsMMAV3 = true;
         loadInfo.sharedEncoding =
             getSharedEncoding(op, /*loadIsMMAv3=*/true).value_or(nullptr);
+      } else if (isa<tt::ExperimentalDescriptorLoadOp>(op)) {
+        loadInfo.sharedEncoding =
+            getSharedEncoding(op, /*loadIsMMAv3=*/true).value_or(nullptr);
       } else {
         loadInfo.sharedEncoding =
             getSharedEncIfAllUsersAreDotEnc(op->getResult(0)).value_or(nullptr);
@@ -1068,7 +1071,7 @@ createAsyncOps(scf::ForOp &forOp, CoarseSchedule &schedule,
 static void invalidateBarriers(OpBuilder &builder,
                                SmallVector<Value> &barriers) {
   for (Value barrier : barriers) {
-    int numBarriers = barrier.getType().cast<tt::MemDescType>().getShape()[0];
+    int numBarriers = cast<tt::MemDescType>(barrier.getType()).getShape()[0];
     for (int i = 0; i < numBarriers; i++) {
       Value idx = builder.create<arith::ConstantIntOp>(barrier.getLoc(), i, 32);
       tt::MemDescType barrierTy = tt::MemDescType::get(

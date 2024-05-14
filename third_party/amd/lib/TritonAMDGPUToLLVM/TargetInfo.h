@@ -47,7 +47,8 @@ public:
       ConversionPatternRewriter &rewriter, Location loc, Value smemBase,
       SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
       ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
-      ArrayRef<unsigned> outOrd, unsigned accumNumReplicates) const override;
+      ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
+      int swizzleByteWidth) const override;
 
   std::string getMulhiFuncName(Type resultElementTy) const override;
 
