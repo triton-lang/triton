@@ -218,7 +218,7 @@ class CUDABackend(BaseBackend):
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, "")
         # Set kernel attributes
         # kernels = [fn for fn in llvm_mod.get_functions() if fn.has_public_visibility() and not fn.is_declaration()]
         # assert len(kernels) == 1

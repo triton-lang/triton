@@ -199,7 +199,8 @@ void init_triton_llvm(py::module &&m) {
       py::keep_alive<0, 2>());
 
   m.def("optimize_module", [](llvm::Module *mod,
-                              const llvm::OptimizationLevel &opt) {
+                              const llvm::OptimizationLevel &opt,
+                              const std::string triple = "") {
     if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
       return;
     // Check to see if we are passing a list of flags to disable optimizations.
@@ -248,6 +249,9 @@ void init_triton_llvm(py::module &&m) {
     // using NVPTX target instead and address the performance regressions with
     // some scheduling solution.
     tuningOptions.SLPVectorization = true;
+
+    if (!triple.empty())
+      mod->setTargetTriple(triple.c_str());
 
     PassBuilder pb(nullptr /*targetMachine*/, tuningOptions, std::nullopt,
                    instrCbPtr);
