@@ -123,6 +123,22 @@ def TTNG_InitBarrierOp : TTNG_Op<"init_barrier", [MemoryEffects<[MemWrite<Shared
     let assemblyFormat = "$alloc `,` $count attr-dict `:` type($alloc)";
 }
 
+def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [MemoryEffects<[MemWrite<SharedMemory>]>]> {
+    let summary = "Invalidate a barrier allocation.";
+
+    let description = [{
+      Invalidate a barrier allocation so that it can be re-used. According to PTX
+      spec this has to be done before any re-use of the memory used by mbarrier.
+
+      https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier-inval
+    }];
+
+    let hasVerifier = 1;
+    let arguments = (ins TT_MemDescType:$alloc);
+    let assemblyFormat = "$alloc attr-dict `:` type($alloc)";
+}
+
+
 def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", []> {
     let summary = "wait until the mbarrier phase completes.";
 
@@ -162,16 +178,52 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
     Variadic<I32>:$coord,
     TT_MemDescType:$barrier,
     TT_MemDescType:$result,
+    I1:$pred,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
     DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
     DefaultValuedAttr<BoolAttr, "false">:$isVolatile
   );
 
   let assemblyFormat = [{
-    $desc_ptr `[` $coord `]` $result `,` $barrier
+    $desc_ptr `[` $coord `]` $result `,` $barrier `,` $pred
     oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
     attr-dict `:` type($desc_ptr) `,` type($barrier) `->` type($result)
   }];
 }
+
+def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global", [
+  MemoryEffects<[MemRead<SharedMemory>, MemWrite<GlobalMemory>]>]> {
+  let summary = "copy data based on descriptor from local memory to global memory asynchronously";
+
+  let description = [{
+    This operation copies data from local memory to global memory
+    asynchronously.  This is analogue to tt.store except the data are copied from
+    local memory pointed by the memory descriptor instread of a distributed
+    tensor. The data copied depends on the global memory descriptor pointed to
+    by `desc_ptr`.
+  }];
+
+  let arguments = (
+    ins TT_PtrType:$desc_ptr,
+    Variadic<I32>:$coord,
+    TT_MemDescType:$src);
+
+  let assemblyFormat = [{
+    $desc_ptr `[` $coord `]` $src
+    attr-dict `:` type($desc_ptr) `,` type($src)
+  }];
+}
+
+def TTNG_TMAStoreWait : TTNG_Op<"async_tma_store_wait"> {
+  let summary = "wait until all the inputs are read.";
+  let arguments = (ins I32Attr:$pendings);
+  let description = [{
+    Wait until all the read operations are done from the associated store operations.
+    This is needed before the shared memory can be written to.
+  }];
+
+  let assemblyFormat = "attr-dict";
+}
+
 
 #endif

@@ -77,6 +77,9 @@ void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
 void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
                       Value ctaId, ArrayRef<Value> values);
 
+/// Create a predicate with just single active thread.
+Value createElectPredicate(Location loc, PatternRewriter &rewriter);
+
 } // namespace NVIDIA
 } // namespace LLVM
 

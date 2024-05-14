@@ -23,9 +23,9 @@ void decomposeSplatOpToSharedLayoutConversion(ModuleOp module) {
   int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(module);
   int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(module);
   module.walk([&](triton::SplatOp splatOp) -> void {
-    auto dstType = splatOp.getType().cast<RankedTensorType>();
+    auto dstType = cast<RankedTensorType>(splatOp.getType());
     auto shared =
-        dstType.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
+        dyn_cast<triton::gpu::SharedEncodingAttr>(dstType.getEncoding());
     if (shared) {
       OpBuilder builder(splatOp);
       SmallVector<unsigned, 4> sizePerThread(dstType.getRank(), 1);
@@ -53,11 +53,11 @@ void decomposeTensorCoreToDotLayoutConversion(ModuleOp module,
 
   module.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
     OpBuilder builder(cvtOp);
-    auto srcType = cvtOp.getSrc().getType().cast<RankedTensorType>();
-    auto dstType = cvtOp.getType().cast<RankedTensorType>();
-    auto srcMma = srcType.getEncoding().dyn_cast<TensorCoreEncodingAttr>();
+    auto srcType = cast<RankedTensorType>(cvtOp.getSrc().getType());
+    auto dstType = cast<RankedTensorType>(cvtOp.getType());
+    auto srcMma = dyn_cast<TensorCoreEncodingAttr>(srcType.getEncoding());
     auto dstDotOp =
-        dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+        dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
     if (srcMma && dstDotOp && !shortcutFn(srcType, dstType)) {
       auto tmpType = RankedTensorType::get(
           dstType.getShape(), dstType.getElementType(),
@@ -88,12 +88,12 @@ void decomposeBlockedToDotLayoutConversion(ModuleOp module) {
   int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(module);
   module.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
     OpBuilder builder(cvtOp);
-    auto srcType = cvtOp.getSrc().getType().cast<RankedTensorType>();
-    auto dstType = cvtOp.getType().cast<RankedTensorType>();
+    auto srcType = cast<RankedTensorType>(cvtOp.getSrc().getType());
+    auto dstType = cast<RankedTensorType>(cvtOp.getType());
     auto srcBlocked =
-        srcType.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
+        dyn_cast<triton::gpu::BlockedEncodingAttr>(srcType.getEncoding());
     auto dstDotOp =
-        dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+        dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
     if (srcBlocked && dstDotOp) {
       auto tmpType = MemDescType::get(
           dstType.getShape(), dstType.getElementType(),

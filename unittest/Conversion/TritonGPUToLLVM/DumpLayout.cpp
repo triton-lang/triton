@@ -22,6 +22,8 @@
  */
 
 #include "DumpLayout.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #ifdef AMD_TARGET
 #include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "amd/lib/TritonAMDGPUToLLVM/Utility.h"
@@ -164,7 +166,7 @@ int eval(Value value, int ctaid, int tid) {
   assert(op && "Unrecognized source value in the index expression");
   if (auto constantOp = llvm::dyn_cast<mlir::LLVM::ConstantOp>(op)) {
     auto attr = constantOp.getValue();
-    return attr.cast<mlir::IntegerAttr>().getInt();
+    return mlir::cast<mlir::IntegerAttr>(attr).getInt();
   } else if (auto addOp = llvm::dyn_cast<mlir::LLVM::AddOp>(op)) {
     return eval(addOp.getLhs(), ctaid, tid) + eval(addOp.getRhs(), ctaid, tid);
   } else if (auto mulOp = llvm::dyn_cast<mlir::LLVM::MulOp>(op)) {
@@ -175,6 +177,8 @@ int eval(Value value, int ctaid, int tid) {
   } else if (auto uremOp = llvm::dyn_cast<mlir::LLVM::URemOp>(op)) {
     return eval(uremOp.getLhs(), ctaid, tid) %
            eval(uremOp.getRhs(), ctaid, tid);
+  } else if (auto andOp = llvm::dyn_cast<mlir::LLVM::AndOp>(op)) {
+    return eval(andOp.getLhs(), ctaid, tid) & eval(andOp.getRhs(), ctaid, tid);
   } else if (auto xorOp = llvm::dyn_cast<mlir::LLVM::XOrOp>(op)) {
     return eval(xorOp.getLhs(), ctaid, tid) ^ eval(xorOp.getRhs(), ctaid, tid);
   } else if (auto trunciOp = llvm::dyn_cast<arith::TruncIOp>(op)) {
@@ -185,17 +189,37 @@ int eval(Value value, int ctaid, int tid) {
     return eval(castOp.getOperand(0), ctaid, tid);
   } else if (auto threadOp = llvm::dyn_cast<mlir::gpu::ThreadIdOp>(op)) {
     return evalThreadIdOp(threadOp, ctaid, tid);
+  } else if (auto ctaIdOp =
+                 llvm::dyn_cast<mlir::triton::nvgpu::ClusterCTAIdOp>(op)) {
+    return ctaid;
   } else if (auto asmOp = llvm::dyn_cast<mlir::LLVM::InlineAsmOp>(op)) {
     return evalInlineAsmOp(asmOp, ctaid, tid);
   } else if (auto gepOp = llvm::dyn_cast<mlir::LLVM::GEPOp>(op)) {
     return evalGEPOp(gepOp, ctaid, tid);
+  } else if (auto selectOp = llvm::dyn_cast<mlir::LLVM::SelectOp>(op)) {
+    return eval(selectOp.getCondition(), ctaid, tid)
+               ? eval(selectOp.getTrueValue(), ctaid, tid)
+               : eval(selectOp.getFalseValue(), ctaid, tid);
+  } else if (auto icmpOp = llvm::dyn_cast<mlir::LLVM::ICmpOp>(op)) {
+    switch (icmpOp.getPredicate()) {
+    case mlir::LLVM::ICmpPredicate::eq:
+      return eval(icmpOp.getLhs(), ctaid, tid) ==
+             eval(icmpOp.getRhs(), ctaid, tid);
+    default:
+      llvm::report_fatal_error("Unsupported ICmp predicate");
+    }
   } else {
+    llvm::errs() << "Unrecognized op: " << *op << "\n";
     llvm::report_fatal_error("Unrecognized op type in the index expression");
     return 0;
   }
 }
 
 } // namespace
+
+int evalValue(Value value, int ctaid, int tid) {
+  return eval(value, ctaid, tid);
+}
 
 //===----------------------------------------------------------------------===//
 // Dump Distributed Layout
@@ -323,7 +347,7 @@ std::string dumpSharedLayout(Attribute layout, llvm::ArrayRef<int64_t> shape,
   if (!multiCTA)
     assert(numCTAs == 1 && "numCTAs must be 1 when multiCTA is false");
 
-  auto sharedLayout = layout.cast<SharedEncodingAttr>();
+  auto sharedLayout = mlir::cast<SharedEncodingAttr>(layout);
   auto blockedLayout = BlockedEncodingAttr::get(
       /*context=*/layout.getContext(), /*shape=*/shape,
       /*sizePerThread=*/{1, 1}, /*order=*/sharedLayout.getOrder(),

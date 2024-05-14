@@ -280,22 +280,22 @@ jobs:
         docker rm "${CONTAINER_ID}"
 
     - name: Upload Build Artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: llvm-${{ matrix.config.target-os }}-${{ matrix.config.arch }}
         path: |
           ${{ github.workspace }}/llvm-*-${{ matrix.config.target-os }}-${{ matrix.config.arch }}.tar.gz
 
     - name: Azure Login
-      if: ${{ (github.repository == 'openai/triton') }}
-      uses: azure/login@v1
+      if: ${{ (github.repository == 'triton-lang/triton') }}
+      uses: azure/login@v2
       with:
         client-id: ${{ secrets.AZURE_CLIENT_ID }}
         tenant-id: ${{ secrets.AZURE_TENANT_ID }}
         subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
     - name: Upload LLVM Artifacts to Azure
-      if: ${{ (github.repository == 'openai/triton') }}
+      if: ${{ (github.repository == 'triton-lang/triton') }}
       run: |
         az storage blob upload --account-name tritonlang --auth-mode login --container-name llvm-builds --file "${{ env.llvm_install_dir }}.tar.gz" --name "${{ env.llvm_install_dir }}.tar.gz" --overwrite
 
@@ -303,7 +303,7 @@ jobs:
         echo "Blob URL: ${URL}"
 
     - name: Azure Logout
-      if: ${{ (github.repository == 'openai/triton') }}
+      if: ${{ (github.repository == 'triton-lang/triton') }}
       run: |
         az logout
         az cache purge

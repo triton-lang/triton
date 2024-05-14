@@ -12,6 +12,8 @@ public:
 
   ISAFamily getISAFamily() const { return deduceISAFamily(arch); }
 
+  int getSharedMemorySize() const;
+
   bool supportMaximumMinimum() const override;
 
   Value getClusterCTAId(RewriterBase &rewriter, Location loc) const override;
@@ -19,8 +21,8 @@ public:
   Value ballot(ConversionPatternRewriter &rewriter, Location loc, Type type,
                Value cmp) const override;
 
-  Value storeShared(ConversionPatternRewriter &rewriter, Location loc,
-                    Value ptr, Value val, Value pred) const override;
+  void storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
+                   Value val, Value pred) const override;
   Value loadShared(ConversionPatternRewriter &rewriter, Location loc,
                    const TypeConverter *converter, Value ptr, Type elemTy,
                    Value pred) const override;
@@ -45,7 +47,8 @@ public:
       ConversionPatternRewriter &rewriter, Location loc, Value smemBase,
       SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
       ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
-      ArrayRef<unsigned> outOrd, unsigned accumNumReplicates) const override;
+      ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
+      int swizzleByteWidth) const override;
 
   std::string getMulhiFuncName(Type resultElementTy) const override;
 

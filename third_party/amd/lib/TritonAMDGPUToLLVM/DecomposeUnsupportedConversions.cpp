@@ -1,3 +1,4 @@
+#include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Allocation.h"
@@ -18,7 +19,6 @@ namespace triton {
 
 namespace {
 
-constexpr int LDSSize = 65536;
 constexpr int kPtrBitWidth = 64;
 
 static void addAttrs(Operation *op, ArrayRef<mlir::NamedAttribute> attrs) {
@@ -30,8 +30,8 @@ static void promoteReduceOpResult(OpBuilder &builder, triton::ReduceOp op,
                                   Value result, Type promotedType) {
   // save original type
   auto originalType = result.getType();
-  auto elemType = originalType.isa<RankedTensorType>()
-                      ? originalType.cast<RankedTensorType>().getElementType()
+  auto elemType = isa<RankedTensorType>(originalType)
+                      ? cast<RankedTensorType>(originalType).getElementType()
                       : originalType;
 
   // promote result type
@@ -65,7 +65,7 @@ static int getCvtOpLDSUsage(triton::gpu::ConvertLayoutOp &cvtOp) {
       std::accumulate(smemShape.begin(), smemShape.end(), 1, std::multiplies{});
   auto srcType = cvtOp.getSrc().getType();
   auto bytes =
-      srcType.getElementType().isa<triton::PointerType>()
+      isa<triton::PointerType>(srcType.getElementType())
           ? elems * kPtrBitWidth / 8
           : elems * std::max<int>(8, srcType.getElementTypeBitWidth()) / 8;
 
@@ -101,7 +101,7 @@ createNewConvertOps(ModuleOp &mod, OpBuilder &builder,
       dstType.getShape(), dstType.getElementType(), dstType.getEncoding());
   RankedTensorType newSrcType;
   if (auto srcMfma =
-          srcType.getEncoding().dyn_cast<triton::gpu::AMDMfmaEncodingAttr>()) {
+          dyn_cast<triton::gpu::AMDMfmaEncodingAttr>(srcType.getEncoding())) {
     auto newMfmaEnc = triton::gpu::AMDMfmaEncodingAttr::get(
         mod.getContext(), srcMfma.getVersionMajor(), srcMfma.getVersionMinor(),
         {warpsPerCtaX, warpsPerCtaY}, srcMfma.getMDim(), srcMfma.getNDim(),
@@ -109,8 +109,8 @@ createNewConvertOps(ModuleOp &mod, OpBuilder &builder,
 
     newSrcType = RankedTensorType::get(srcType.getShape(),
                                        srcType.getElementType(), newMfmaEnc);
-  } else if (auto srcWmma = srcType.getEncoding()
-                                .dyn_cast<triton::gpu::AMDWmmaEncodingAttr>()) {
+  } else if (auto srcWmma = dyn_cast<triton::gpu::AMDWmmaEncodingAttr>(
+                 srcType.getEncoding())) {
     auto newWmmaEnc = triton::gpu::AMDWmmaEncodingAttr::get(
         mod.getContext(), {warpsPerCtaX, warpsPerCtaY}, srcWmma.getCTALayout());
 
@@ -129,7 +129,14 @@ createNewConvertOps(ModuleOp &mod, OpBuilder &builder,
 struct DecomposeUnsupportedAMDConversions
     : public mlir::triton::impl::DecomposeUnsupportedAMDConversionsBase<
           DecomposeUnsupportedAMDConversions> {
+  explicit DecomposeUnsupportedAMDConversions(StringRef targetArch) {
+    this->arch = targetArch.str();
+  }
+
   void runOnOperation() override {
+    triton::AMD::TargetInfo targetInfo(this->arch.getValue());
+    int sharedMemoryLimit = targetInfo.getSharedMemorySize();
+
     ModuleOp mod = getOperation();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
@@ -148,9 +155,9 @@ struct DecomposeUnsupportedAMDConversions
       auto srcType = cvtOp.getSrc().getType();
       auto dstType = cvtOp.getType();
       auto srcWmma =
-          srcType.getEncoding().dyn_cast<triton::gpu::AMDWmmaEncodingAttr>();
+          dyn_cast<triton::gpu::AMDWmmaEncodingAttr>(srcType.getEncoding());
       auto dstDotOp =
-          dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+          dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
       if (srcWmma && dstDotOp) {
         auto tmpType = RankedTensorType::get(
             dstType.getShape(), dstType.getElementType(),
@@ -191,15 +198,15 @@ struct DecomposeUnsupportedAMDConversions
 
       auto srcEnc = srcType.getEncoding();
       auto dstBlocked =
-          dstType.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
+          dyn_cast<triton::gpu::BlockedEncodingAttr>(dstType.getEncoding());
 
       // TODO: Reduce LDS usage for WMMA dots
-      if (!srcEnc.isa<triton::gpu::AMDMfmaEncodingAttr>() || !dstBlocked) {
+      if (!isa<triton::gpu::AMDMfmaEncodingAttr>(srcEnc) || !dstBlocked) {
         return;
       }
 
       auto currLDSUsage = getCvtOpLDSUsage(cvtOp);
-      if (currLDSUsage <= LDSSize) {
+      if (currLDSUsage <= sharedMemoryLimit) {
         return;
       }
 
@@ -210,9 +217,9 @@ struct DecomposeUnsupportedAMDConversions
 
       // Find all possible shapes of WarpsPerCTA by finding all possible
       // factorizations of numWarps. Pick shape for which both conversions in
-      // decomposition use LDS less than LDSSize and for which sum of LDS usage
+      // decomposition use LDS less than limit and for which sum of LDS usage
       // is minimal. If no such shape exists, do not decompose.
-      unsigned minLDSUsage = 2 * LDSSize;
+      unsigned minLDSUsage = 2 * sharedMemoryLimit;
       int minIdx = -1;
       auto factorizedNumWarps = factorizePowerOf2(numWarps);
 
@@ -223,7 +230,7 @@ struct DecomposeUnsupportedAMDConversions
 
         int tmpCvtLDS = getCvtOpLDSUsage(tmpCvt);
         int newCvtLDS = getCvtOpLDSUsage(newEpilogueCvt);
-        if (tmpCvtLDS <= LDSSize && newCvtLDS <= LDSSize) {
+        if (tmpCvtLDS <= sharedMemoryLimit && newCvtLDS <= sharedMemoryLimit) {
           int LDSUsage = tmpCvtLDS + newCvtLDS;
           if (LDSUsage < minLDSUsage) {
             minLDSUsage = LDSUsage;
@@ -257,7 +264,7 @@ struct DecomposeUnsupportedAMDConversions
       SmallVector<Value> newOperands;
       for (OpOperand &operand : op->getOpOperands()) {
         auto val = operand.get();
-        auto oldType = val.getType().cast<RankedTensorType>();
+        auto oldType = cast<RankedTensorType>(val.getType());
         auto elemType = oldType.getElementType();
         if (elemType.isInteger(16) || elemType.isInteger(8)) {
           auto newType =
@@ -284,8 +291,8 @@ struct DecomposeUnsupportedAMDConversions
                                 builder.getIntegerType(32));
         } else if (type.isF16()) {
           promoteReduceOpResult(builder, op, result, builder.getF32Type());
-        } else if (type.isa<RankedTensorType>()) {
-          auto oldType = type.cast<RankedTensorType>();
+        } else if (isa<RankedTensorType>(type)) {
+          auto oldType = cast<RankedTensorType>(type);
           auto elemType = oldType.getElementType();
           if (elemType.isInteger(16) || elemType.isInteger(8)) {
             promoteReduceOpResult(
@@ -340,19 +347,11 @@ struct DecomposeUnsupportedAMDConversions
 
 } // namespace
 
-namespace mlir {
-
-namespace triton {
-
-namespace AMD {
+namespace mlir::triton::AMD {
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createDecomposeUnsupportedConversionsPass() {
-  return std::make_unique<DecomposeUnsupportedAMDConversions>();
+createDecomposeUnsupportedConversionsPass(StringRef targetArch) {
+  return std::make_unique<DecomposeUnsupportedAMDConversions>(targetArch);
 }
 
-} // namespace AMD
-
-} // namespace triton
-
-} // namespace mlir
+} // namespace mlir::triton::AMD

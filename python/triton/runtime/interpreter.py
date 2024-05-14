@@ -109,6 +109,8 @@ def _get_np_dtype(tt_dtype):
         tl.uint32: np.dtype(np.uint32),
         tl.int64: np.dtype(np.int64),
         tl.uint64: np.dtype(np.uint64),
+        # bfloat16 types are stored as uint16
+        tl.bfloat16: np.dtype(np.uint16),
         # float8 types are stored as uint8
         tl.float8e5: np.dtype(np.uint8),
         tl.float8e5b16: np.dtype(np.uint8),
@@ -254,6 +256,9 @@ class InterpreterBuilder:
     def get_half_ty(self):
         return tl.float16
 
+    def get_bf16_ty(self):
+        return tl.bfloat16
+
     def get_float_ty(self):
         return tl.float32
 
@@ -376,7 +381,14 @@ class InterpreterBuilder:
 
     # casting ops
     def cast_impl(self, src, dst_type):
-        return TensorHandle(src.data.astype(_get_np_dtype(dst_type)), dst_type.scalar)
+        src_element_type = src.dtype.scalar
+        dst_element_type = dst_type.scalar
+        if (src_element_type == tl.bfloat16 and dst_element_type == tl.float32) or \
+           (src_element_type == tl.float32 and dst_element_type == tl.bfloat16):
+            data = _convert_float(src.data, src_element_type, dst_element_type, None).view(_get_np_dtype(dst_type))
+            return TensorHandle(data, dst_type.scalar)
+        else:
+            return TensorHandle(src.data.astype(_get_np_dtype(dst_type)), dst_type.scalar)
 
     create_si_to_fp = lambda self, src, dst_type: self.cast_impl(src, dst_type)
     create_ui_to_fp = lambda self, src, dst_type: self.cast_impl(src, dst_type)
@@ -795,9 +807,9 @@ class ReduceOps(ReduceScanOpIneterface):
             idx = self.to_tensor(idx_reduce_op(input.handle.data, axis=self.axis, keepdims=self.keep_dims), tl.int32)
         if val is not None and idx is not None:
             return val, idx
-        elif val:
+        elif val is not None:
             return val
-        elif idx:
+        elif idx is not None:
             return idx
         else:
             raise ValueError("val_reduce_op and idx_reduce_op are both None")

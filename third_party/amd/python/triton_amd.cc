@@ -1,7 +1,6 @@
 ﻿#include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "passes.h"
@@ -27,7 +26,6 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/TargetParser.h"
-#include <mutex>
 #include <pybind11/pybind11.h>
 #include <stdexcept>
 
@@ -39,16 +37,19 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   m.def("add_to_llvmir", [](mlir::PassManager &pm, const std::string &arch) {
     pm.addPass(createConvertTritonAMDGPUToLLVMPass(arch));
   });
-  m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm) {
-    pm.addPass(mlir::triton::AMD::createDecomposeUnsupportedConversionsPass());
+  m.def("add_builtin_func_to_llvmir", [](mlir::PassManager &pm) {
+    pm.addPass(createConvertBuiltinFuncToLLVMPass());
+  });
+  m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm,
+                                                    const std::string &arch) {
+    pm.addPass(
+        mlir::triton::AMD::createDecomposeUnsupportedConversionsPass(arch));
   });
   ADD_PASS_WRAPPER_3("add_accelerate_matmul",
                      mlir::createTritonAMDGPUAccelerateMatmulPass,
                      const std::string, int, int);
   ADD_PASS_WRAPPER_0("add_optimize_epilogue",
                      mlir::createTritonAMDGPUOptimizeEpiloguePass);
-  ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
-                     mlir::createTritonAMDGPURemoveLayoutConversionsPass);
   ADD_PASS_WRAPPER_0("add_reorder_instructions",
                      mlir::createTritonAMDGPUReorderInstructionsPass);
   ADD_PASS_WRAPPER_0("add_stream_pipeline",
@@ -202,15 +203,6 @@ void init_triton_amd(py::module &&m) {
         return py::bytes(std::string(result.begin(), result.end()));
       },
       py::return_value_policy::take_ownership);
-
-  m.def("set_all_fn_arg_inreg", [](llvm::Function *fn) {
-    for (llvm::Argument &arg : fn->args()) {
-      // Check for incompatible attributes.
-      if (arg.hasByRefAttr() || arg.hasNestAttr())
-        continue;
-      arg.addAttr(llvm::Attribute::InReg);
-    }
-  });
 
   m.def("need_extern_lib", [](llvm::Module *module, const std::string &lib) {
     for (llvm::Function &f : module->functions()) {

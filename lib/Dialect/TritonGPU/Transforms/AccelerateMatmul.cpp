@@ -1,4 +1,7 @@
+#include <memory>
+
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Utility.h"
@@ -7,7 +10,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/Debug.h"
-#include <memory>
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -63,7 +65,7 @@ warpsPerTileV2(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
         continue;
       }
       if (auto mmaEncoding =
-              resTy.getEncoding().dyn_cast<NvidiaMmaEncodingAttr>()) {
+              dyn_cast<NvidiaMmaEncodingAttr>(resTy.getEncoding())) {
         return ttg::getWarpsPerCTA(mmaEncoding);
       }
       hasChainedDot = true;
@@ -83,7 +85,7 @@ warpsPerTileV2(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
   shapePerWarp[rank - 2] = 16;
   // TODO (@daadaada): double-check.
   // original logic in
-  // https://github.com/openai/triton/blob/master/lib/codegen/analysis/layout.cc#L252
+  // https://github.com/triton-lang/triton/blob/master/lib/codegen/analysis/layout.cc#L252
   // seems buggy for shape = [32, 16] ?
   do {
     if (ret[0] * ret[1] >= numWarps)
@@ -231,7 +233,7 @@ public:
     // TODO: Check data-types and SM compatibility
     RankedTensorType oldRetType = dotOp.getType();
     if (!oldRetType.getEncoding() ||
-        oldRetType.getEncoding().isa<ttg::NvidiaMmaEncodingAttr>())
+        mlir::isa<ttg::NvidiaMmaEncodingAttr>(oldRetType.getEncoding()))
       return failure();
 
     // get MMA encoding for the given number of warps
@@ -263,11 +265,8 @@ public:
       getBackwardSlice(b, &bBwdSlices, opt);
       // get the source of the first conversion found in slices
       auto getCvtArgOrder = [](Operation *op) {
-        return cast<ConvertLayoutOp>(op)
-            .getSrc()
-            .getType()
-            .getEncoding()
-            .cast<BlockedEncodingAttr>()
+        return mlir::cast<BlockedEncodingAttr>(
+                   cast<ConvertLayoutOp>(op).getSrc().getType().getEncoding())
             .getOrder();
       };
       bool isARow = true;
@@ -354,7 +353,7 @@ static void decomposeMixedModeDotOp(ModuleOp mod, int computeCapability) {
     Type AElType = dotOp.getA().getType().getElementType();
     Type promoteType;
     NvidiaMmaEncodingAttr mmaLayout =
-        D.getType().getEncoding().dyn_cast<NvidiaMmaEncodingAttr>();
+        dyn_cast<NvidiaMmaEncodingAttr>(D.getType().getEncoding());
     if (mmaLayout) {
       bool isNativeFP8 = AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
       // promote operands for sm < 89 since fp8 mma is not natively supported

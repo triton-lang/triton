@@ -3,7 +3,6 @@
 #include "amd/include/TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace mlir::triton::AMD {
@@ -29,6 +28,12 @@ Value printfPromoteValue(ConversionPatternRewriter &rewriter, Value value) {
   auto *context = rewriter.getContext();
   auto loc = UnknownLoc::get(context);
   auto type = value.getType();
+
+  if (isa<LLVM::LLVMPointerType>(type)) {
+    // The llvm.ptrtoint op requires signless integer types.
+    return ptrtoint(i64_ty, value);
+  }
+
   assert(type.getIntOrFloatBitWidth() <= 64);
 
   if (auto floatType = dyn_cast<FloatType>(type)) {
@@ -52,6 +57,8 @@ Value printfPromoteValue(ConversionPatternRewriter &rewriter, Value value) {
 }
 } // namespace
 
+int TargetInfo::getSharedMemorySize() const { return 64 * 1024; }
+
 bool TargetInfo::supportMaximumMinimum() const { return false; }
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
@@ -71,16 +78,17 @@ Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
   return asmResult;
 }
 
-Value TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
-                              Value ptr, Value val, Value pred) const {
-  return mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
+void TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
+                             Value ptr, Value val, Value pred) const {
+  mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
 }
 
 Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
                              const TypeConverter *converter, Value ptr,
                              Type elemTy, Value pred) const {
-  return mlir::LLVM::AMD::llLoad(rewriter, loc, converter, ptr, elemTy, pred,
-                                 0 /*vecStart*/, {} /*otherElems*/);
+  Value falseVal = rewriter.create<arith::ConstantOp>(
+      loc, elemTy, rewriter.getZeroAttr(elemTy));
+  return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal);
 }
 
 Value TargetInfo::shuffleXor(ConversionPatternRewriter &rewriter, Location loc,
@@ -118,7 +126,8 @@ bool TargetInfo::processReplicaUsingStMatrix(
     ConversionPatternRewriter &rewriter, Location loc, Value smemBase,
     SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
-    ArrayRef<unsigned> outOrd, unsigned accumNumReplicates) const {
+    ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
+    int swizzleByteWidth) const {
   return false;
 }
 

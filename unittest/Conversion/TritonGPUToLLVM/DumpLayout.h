@@ -30,6 +30,9 @@ namespace mlir {
 namespace triton {
 namespace gpu {
 
+// Try to "interpret" the MLIR Value into an integer.
+int evalValue(Value value, int ctaid, int tid);
+
 std::string dumpDistributedLayout(Attribute layout,
                                   llvm::ArrayRef<int64_t> shape, bool multiCTA);
 

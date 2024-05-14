@@ -66,7 +66,7 @@ LogicalResult OpTrait::impl::verifySameOperandsAndResultEncoding(
 
 LogicalResult OpTrait::impl::verifyTensorSize(Operation *op) {
   for (auto opType : op->getOperandTypes()) {
-    if (auto tensorType = opType.dyn_cast<RankedTensorType>()) {
+    if (auto tensorType = dyn_cast<RankedTensorType>(opType)) {
       int64_t numElements = 1;
       for (int64_t s : tensorType.getShape())
         numElements *= s;
@@ -81,7 +81,7 @@ LogicalResult OpTrait::impl::verifyTensorSize(Operation *op) {
     }
   }
   for (auto opType : op->getResultTypes()) {
-    if (auto tensorType = opType.dyn_cast<RankedTensorType>()) {
+    if (auto tensorType = dyn_cast<RankedTensorType>(opType)) {
       int64_t numElements = 1;
       for (int64_t s : tensorType.getShape())
         numElements *= s;
@@ -110,7 +110,7 @@ LogicalResult OpTrait::impl::verifyTensorLayouts(Operation *op) {
   auto module = op->getParentOfType<ModuleOp>();
   auto checkLayout = [&](Value val, auto makeErr) -> LogicalResult {
     // Only ranked tensors can have layouts.
-    auto rankedTy = val.getType().dyn_cast<RankedTensorType>();
+    auto rankedTy = dyn_cast<RankedTensorType>(val.getType());
     if (!rankedTy)
       return success();
 
@@ -124,7 +124,7 @@ LogicalResult OpTrait::impl::verifyTensorLayouts(Operation *op) {
     // layouts also have invariants!
 
     // TODO(jlebar): Handle the case when the encoding is nested within tt.ptr.
-    if (auto blocked = layout.dyn_cast<ttg::BlockedEncodingAttr>()) {
+    if (auto blocked = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
       // A different verifier should have checked that the layout itself is
       // valid, including that threads-per-warp has the same rank as
       // warps-per-block etc.
@@ -205,9 +205,9 @@ LogicalResult OpTrait::impl::verifyTensorLayouts(Operation *op) {
 }
 
 static ArrayRef<int64_t> getTypeShape(Type type) {
-  auto rankedType = type.dyn_cast<RankedTensorType>();
-  if (auto ptrType = type.dyn_cast<triton::PointerType>())
-    rankedType = ptrType.getPointeeType().dyn_cast<RankedTensorType>();
+  auto rankedType = dyn_cast<RankedTensorType>(type);
+  if (auto ptrType = dyn_cast<triton::PointerType>(type))
+    rankedType = dyn_cast<RankedTensorType>(ptrType.getPointeeType());
   return rankedType ? rankedType.getShape() : ArrayRef<int64_t>();
 }
 

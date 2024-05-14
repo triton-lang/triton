@@ -21,13 +21,19 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-
-#include "DumpLayout.h"
-
+#include "gtest/gtest.h"
 #include <fstream>
 #include <gtest/gtest.h>
+
+#include "DumpLayout.h"
+#include "nvidia/include/Dialect/NVGPU/IR/Dialect.h"
+#include "nvidia/lib/TritonNVIDIAGPUToLLVM/TargetInfo.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "llvm/Support/raw_ostream.h"
 
 namespace mlir {
 namespace triton {
@@ -37,15 +43,22 @@ namespace gpu {
 // EmitIndicesTest
 //===----------------------------------------------------------------------===//
 
-class EmitIndicesTest : public ::testing::Test {
-public:
-  void SetUp() {
-    context.getOrLoadDialect<TritonGPUDialect>();
-    context.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
-    context.getOrLoadDialect<mlir::gpu::GPUDialect>();
-  }
+MLIRContext *getContext() {
+  static MLIRContext *context = [] {
+    MLIRContext *context = new MLIRContext();
+    context->getOrLoadDialect<TritonGPUDialect>();
+    context->getOrLoadDialect<mlir::LLVM::LLVMDialect>();
+    context->getOrLoadDialect<mlir::gpu::GPUDialect>();
+    context->getOrLoadDialect<mlir::triton::nvgpu::NVGPUDialect>();
+    return context;
+  }();
+  return context;
+}
 
+class EmitIndicesTest : public ::testing::Test {
 protected:
+  EmitIndicesTest() : context(*getContext()) {}
+
   void runBlocked1dSingleCTA(int size, unsigned sizePerThread,
                              unsigned warpsPerCTA, const std::string &refStr) {
     // If we pass initializer lists to the constructor of BlockedEncodingAttr,
@@ -221,7 +234,7 @@ private:
   }
 
 protected:
-  MLIRContext context;
+  MLIRContext &context;
 };
 
 //===----------------------------------------------------------------------===//
@@ -718,6 +731,204 @@ TEST_F(EmitIndicesTest, LayoutVisualizer_Wmma) {
   std::ofstream ofs("WmmaLayout.csv");
   ofs << dumpDistributedLayout(wmmaLayout, shape, /*multiCTA=*/false);
 }
+
+struct BlockedLegacyVsLinearLayoutsTestParams {
+  std::vector<int64_t> shape;
+  std::vector<unsigned> sizePerThread;
+  std::vector<unsigned> threadsPerWarp;
+  std::vector<unsigned> warpsPerCTA;
+  std::vector<unsigned> order;
+  std::vector<unsigned> CTAsPerCGA;
+  std::vector<unsigned> CTASplitNum;
+  std::vector<unsigned> CTAOrder;
+
+  BlockedEncodingAttr getEncoding() const {
+    return BlockedEncodingAttr::get(
+        getContext(), sizePerThread, threadsPerWarp, warpsPerCTA, order,
+        CTALayoutAttr::get(getContext(), CTAsPerCGA, CTASplitNum, CTAOrder));
+  }
+};
+
+std::ostream &operator<<(std::ostream &os,
+                         const BlockedLegacyVsLinearLayoutsTestParams &params) {
+  std::string str;
+  llvm::raw_string_ostream llvm_os(str);
+  llvm_os << "shape=" << triton::join(params.shape, "x")
+          << ", encoding=" << params.getEncoding();
+  os << str;
+  return os;
+}
+
+class BlockedLegacyVsLinearLayoutsTest
+    : public EmitIndicesTest,
+      public ::testing::WithParamInterface<
+          BlockedLegacyVsLinearLayoutsTestParams> {};
+
+TEST_P(BlockedLegacyVsLinearLayoutsTest, DoIt) {
+  BlockedLegacyVsLinearLayoutsTestParams params = GetParam();
+  BlockedEncodingAttr blockedLayout = params.getEncoding();
+  auto type = RankedTensorType::get(params.shape, FloatType::getF16(&context),
+                                    blockedLayout);
+
+  int numThreads = product(blockedLayout.getThreadsPerWarp()) *
+                   product(blockedLayout.getWarpsPerCTA());
+  int numCTAs = product(blockedLayout.getCTAsPerCGA());
+
+  mlir::OpBuilder builder(&context);
+  Location loc = UnknownLoc::get(&context);
+  auto mlirModule = mlir::ModuleOp::create(loc);
+  auto func = builder.create<mlir::triton::FuncOp>(
+      loc, "test_func", builder.getFunctionType({}, {}));
+  mlirModule.push_back(func);
+  auto *block = func.addEntryBlock();
+  IRRewriter rewriter(&context);
+  rewriter.setInsertionPointToStart(block);
+
+  NVIDIA::TargetInfo target(90);
+  auto llIndices = emitIndicesUsingLinearLayouts(
+      loc, rewriter, target, blockedLayout, type, /*withCTAOffset=*/true);
+  auto legacyIndices = emitIndices(loc, rewriter, target, blockedLayout, type,
+                                   /*withCTAOffset=*/true, /*allowLL=*/false);
+
+  // This test takes a long time if we check all indices.  But for linear
+  // layouts, we really should only need to check powers of 2.  We wrap the
+  // loops in this `iterate` function so we can easily change between checking
+  // all indices and just the powers of 2.
+  constexpr bool checkAllElems = false;
+  bool stopIterating = false;
+  auto iterate = [&](int n, auto fn) {
+    if (checkAllElems) {
+      for (int i = 0; i < n && !stopIterating; i++) {
+        fn(i);
+      }
+    } else {
+      if (n > 0) {
+        fn(0);
+      }
+      for (int i = 0; (1 << i) < n && !stopIterating; i++) {
+        fn(1 << i);
+      }
+    }
+  };
+
+  constexpr int kMaxFailures = 1024;
+  int64_t numFailures = 0;
+  ASSERT_TRUE(llIndices.has_value());
+  ASSERT_EQ(llIndices->size(), legacyIndices.size());
+  iterate(llIndices->size(), [&](int i) {
+    SCOPED_TRACE("Register " + std::to_string(i));
+    ASSERT_EQ((*llIndices)[i].size(), legacyIndices[i].size());
+    iterate((*llIndices)[i].size(), [&](int j) {
+      SCOPED_TRACE("Dimension " + std::to_string(j));
+      iterate(numCTAs, [&](int ctaId) {
+        SCOPED_TRACE("CTA " + std::to_string(ctaId));
+        iterate(numThreads, [&](int tid) {
+          SCOPED_TRACE("Thread " + std::to_string(tid));
+          int llValue = evalValue((*llIndices)[i][j], ctaId, tid);
+          int legacyValue = evalValue(legacyIndices[i][j], ctaId, tid);
+          EXPECT_EQ(llValue, legacyValue);
+          if (llValue != legacyValue) {
+            ++numFailures;
+          }
+          if (numFailures > kMaxFailures) {
+            llvm::errs() << "Too many failures, aborting\n";
+            stopIterating = true;
+          }
+        });
+      });
+    });
+  });
+
+  if (numFailures > 0) {
+    llvm::errs() << "Linear layout:\n"
+                 << toLinearLayout(params.shape, params.getEncoding());
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    TestCases, BlockedLegacyVsLinearLayoutsTest,
+    ::testing::ValuesIn(std::vector<BlockedLegacyVsLinearLayoutsTestParams>({
+        {
+            .shape = {128, 16},
+            .sizePerThread = {1, 4},
+            .threadsPerWarp = {8, 4},
+            .warpsPerCTA = {4, 1},
+            .order = {1, 0},
+            .CTAsPerCGA = {2, 2},
+            .CTASplitNum = {2, 1},
+            .CTAOrder = {1, 0},
+        },
+        {
+            .shape = {1, 128},
+            .sizePerThread = {8, 1},
+            .threadsPerWarp = {8, 4},
+            .warpsPerCTA = {1, 4},
+            .order = {0, 1},
+            .CTAsPerCGA = {1, 2},
+            .CTASplitNum = {1, 2},
+            .CTAOrder = {1, 0},
+        },
+        {
+            .shape = {64, 1},
+            .sizePerThread = {8, 1},
+            .threadsPerWarp = {8, 4},
+            .warpsPerCTA = {1, 4},
+            .order = {0, 1},
+            .CTAsPerCGA = {1, 2},
+            .CTASplitNum = {1, 2},
+            .CTAOrder = {1, 0},
+        },
+        {
+            .shape = {128, 1},
+            .sizePerThread = {1, 8},
+            .threadsPerWarp = {4, 8},
+            .warpsPerCTA = {4, 1},
+            .order = {1, 0},
+            .CTAsPerCGA = {1, 2},
+            .CTASplitNum = {1, 1},
+            .CTAOrder = {1, 0},
+        },
+        {
+            .shape = {1, 64},
+            .sizePerThread = {1, 8},
+            .threadsPerWarp = {4, 8},
+            .warpsPerCTA = {4, 1},
+            .order = {1, 0},
+            .CTAsPerCGA = {1, 2},
+            .CTASplitNum = {1, 1},
+            .CTAOrder = {1, 0},
+        },
+        {
+            .shape = {128, 1},
+            .sizePerThread = {1, 1},
+            .threadsPerWarp = {1, 32},
+            .warpsPerCTA = {2, 2},
+            .order = {1, 0},
+            .CTAsPerCGA = {1, 2},
+            .CTASplitNum = {1, 2},
+            .CTAOrder = {1, 0},
+        },
+        {
+            .shape = {1, 128},
+            .sizePerThread = {1, 1},
+            .threadsPerWarp = {1, 32},
+            .warpsPerCTA = {2, 2},
+            .order = {1, 0},
+            .CTAsPerCGA = {1, 2},
+            .CTASplitNum = {1, 2},
+            .CTAOrder = {1, 0},
+        },
+        {
+            .shape = {1},
+            .sizePerThread = {1},
+            .threadsPerWarp = {32},
+            .warpsPerCTA = {4},
+            .order = {0},
+            .CTAsPerCGA = {2},
+            .CTASplitNum = {2},
+            .CTAOrder = {0},
+        },
+    })));
 
 } // namespace gpu
 } // namespace triton

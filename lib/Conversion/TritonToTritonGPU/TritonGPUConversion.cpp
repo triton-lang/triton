@@ -1,10 +1,13 @@
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
+
+#include <algorithm>
+#include <numeric>
+
 #include "mlir/IR/IRMapping.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include <algorithm>
-#include <numeric>
 
 using namespace mlir;
 using namespace mlir::triton::gpu;
@@ -112,8 +115,8 @@ TritonGPUConversionTarget::TritonGPUConversionTarget(
         cast<RankedTensorType>(dotOp.getA().getType()).getEncoding();
     Attribute bEncoding =
         cast<RankedTensorType>(dotOp.getB().getType()).getEncoding();
-    if (aEncoding && aEncoding.isa<triton::gpu::DotOperandEncodingAttr>() &&
-        bEncoding && bEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
+    if (aEncoding && isa<triton::gpu::DotOperandEncodingAttr>(aEncoding) &&
+        bEncoding && isa<triton::gpu::DotOperandEncodingAttr>(bEncoding))
       return true;
     return false;
   });

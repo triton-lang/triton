@@ -4,6 +4,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using namespace mlir;
+using namespace mlir::triton::gpu;
 
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryBase;
@@ -16,7 +17,7 @@ namespace {
 // Used to mask out the redundant data accessed by threads.
 Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
                         Location loc, const AMD::TargetInfo &targetInfo) {
-  auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
+  auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
   Value mask = int_val(1, 1);
   auto tid = tid_val();
   auto clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
@@ -92,14 +93,14 @@ struct LoadStoreConversionBase {
       : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass) {}
 
   unsigned getContiguity(Value ptr) const {
-    auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
+    auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
     if (!tensorTy)
       return 1;
     return axisAnalysisPass.getPtrContiguity(ptr);
   }
 
   unsigned getVectorSize(Value ptr) const {
-    auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
+    auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
     if (!tensorTy)
       return 1;
     auto contiguity = getContiguity(ptr);
@@ -172,9 +173,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     bool otherIsSplatConstInt = false;
     DenseElementsAttr constAttr;
     int64_t splatVal = 0;
-    if (other && valueElemTy.isa<IntegerType>() &&
+    if (other && isa<IntegerType>(valueElemTy) &&
         matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat() &&
-        constAttr.getElementType().isa<IntegerType>()) {
+        isa<IntegerType>(constAttr.getElementType())) {
       otherIsSplatConstInt = true;
       splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
     }
@@ -204,8 +205,26 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
       auto vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
       Value ptr = addrspacecast(ptr_ty(getContext()), ptrElems[vecStart]);
-      auto loadVal = llLoad(rewriter, loc, getTypeConverter(), ptr, vecTy, pred,
-                            vecStart, otherElems);
+
+      mlir::Attribute zeroAttr = rewriter.getZeroAttr(valueElemTy);
+      auto denseValue =
+          DenseElementsAttr::get(cast<mlir::ShapedType>(vecTy), zeroAttr);
+      Value zeroVal = rewriter.create<LLVM::ConstantOp>(loc, vecTy, denseValue);
+
+      Value falseVal = zeroVal;
+      // If we need to mask the loaded value with other elements
+      if (otherElems.size() != 0) {
+        Value v = undef(vecTy);
+        for (size_t s = 0; s < vec; ++s) {
+          Value otherElem = otherElems[vecStart + s];
+          Value indexVal = createIndexAttrConstant(
+              rewriter, loc, this->getTypeConverter()->getIndexType(), s);
+          v = insert_element(vecTy, v, otherElem, indexVal);
+        }
+        falseVal = v;
+      }
+
+      auto loadVal = llLoad(rewriter, loc, ptr, vecTy, pred, falseVal);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, this->getTypeConverter()->getIndexType(), ii % vec);
@@ -308,21 +327,14 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
         }
         llWord = bitcast(llWord, valArgTy);
         Value maskVal = llMask ? and_(mask, maskElems[vecStart]) : mask;
-        llStore(rewriter, loc, ptrElems[vecStart + wordIdx * wordNElems],
-                llWord, maskVal);
+        auto address = ptrElems[vecStart + wordIdx * wordNElems];
+        llStore(rewriter, loc, address, llWord, maskVal);
       }
     }
     rewriter.eraseOp(op);
     return success();
   }
 };
-
-namespace {
-void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
-                   int numCTAs) {
-  barrier();
-}
-} // namespace
 
 static LLVM::AtomicOrdering getMemoryOrdering(MemSemantic memOrdering) {
   switch (memOrdering) {
@@ -373,7 +385,7 @@ struct AtomicCASOpConversion
 
     // deal with tensor or scalar
     auto valueTy = op.getResult().getType();
-    auto TensorTy = valueTy.dyn_cast<RankedTensorType>();
+    auto TensorTy = dyn_cast<RankedTensorType>(valueTy);
     Type valueElemTy =
         TensorTy ? getTypeConverter()->convertType(TensorTy.getElementType())
                  : valueTy;
@@ -383,7 +395,7 @@ struct AtomicCASOpConversion
     auto vec = getVectorSize(op.getPtr());
     // tensor
     if (TensorTy) {
-      auto valTy = op.getVal().getType().cast<RankedTensorType>();
+      auto valTy = cast<RankedTensorType>(op.getVal().getType());
       vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
     }
 
@@ -444,7 +456,6 @@ struct AtomicCASOpConversion
         auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
             loc, casPtr, casCmp, casVal, successOrdering, failureOrdering,
             StringRef("agent"));
-
         // Extract the new_loaded value from the pair.
         Value newLoaded = extract_val(valueElemTy, cmpxchg, 0);
 
@@ -460,6 +471,7 @@ struct AtomicCASOpConversion
         BuilderMemfenceLDS.launch(rewriter, loc, void_ty(ctx));
         barrier();
         Value ret = load(valueElemTy, atomPtr);
+        barrier();
         rewriter.replaceOp(op, {ret});
       }
     }
@@ -537,7 +549,7 @@ struct AtomicRMWOpConversion
       maskElements = unpackLLElements(loc, llMask, rewriter);
 
     Value opResult = op.getResult();
-    auto tensorTy = opResult.getType().dyn_cast<RankedTensorType>();
+    auto tensorTy = dyn_cast<RankedTensorType>(opResult.getType());
     Type valueElemTy =
         tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
                  : opResult.getType();
@@ -548,7 +560,7 @@ struct AtomicRMWOpConversion
     int numElems = 1;
     // tensor
     if (tensorTy) {
-      auto valTy = val.getType().cast<RankedTensorType>();
+      auto valTy = cast<RankedTensorType>(val.getType());
       vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
       // mask
       numElems = tensorTy.getNumElements();
@@ -606,6 +618,10 @@ struct AtomicRMWOpConversion
         auto tmp = insert_element(vecTy, undef(vecTy), atom, i32_val(0));
         atom = insert_element(vecTy, tmp, atom2, i32_val(1)).getResult();
       }
+      if (!tensorTy) {
+        Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+        store(atom, atomPtr);
+      }
       rewriter.create<LLVM::BrOp>(loc, atom, endBlock);
 
       rewriter.setInsertionPointToStart(endBlock);
@@ -618,8 +634,9 @@ struct AtomicRMWOpConversion
         }
       } else {
         Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
-        store(retVal, atomPtr);
+        barrier();
         Value ret = load(valueElemTy, atomPtr);
+        barrier();
         rewriter.replaceOp(op, {ret});
       }
     }

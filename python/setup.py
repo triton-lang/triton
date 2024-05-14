@@ -152,31 +152,21 @@ def get_llvm_package_info():
         if arch == 'arm64':
             system_suffix = 'ubuntu-arm64'
         elif arch == 'x64':
-            # Ubuntu 22.04 has GLIBCXX support up to GLIBCXX_3.4.30.
-            # Ubuntu 20.04 has GLIBCXX support up to GLIBCXX_3.4.28.
-            # Almalinux 8 (and other RHEL8 derivatives) have GLIBCXX
-            # support up to GLIBCXX_3.4.25.
-            target_libcxx_found = False
-            if os.path.isfile("/usr/lib/" + platform.machine() + "-linux-gnu/libstdc++.so.6"):
-                check_libcxx_version = \
-                    subprocess.run(
-                        "strings /usr/lib/" + platform.machine() + "-linux-gnu/libstdc++.so.6 | grep GLIBCXX_3.4.26",
-                        check=False, shell=True
-                    )
-                target_libcxx_found = check_libcxx_version.returncode == 0
-            elif os.path.isfile("/usr/lib64/libstdc++.so.6"):
-                check_libcxx_version = \
-                    subprocess.run(
-                        "strings /usr/lib64/libstdc++.so.6 | grep GLIBCXX_3.4.26",
-                        check=False, shell=True
-                    )
-                target_libcxx_found = check_libcxx_version.returncode == 0
-            if target_libcxx_found:
+            vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
+            vglibc = vglibc[0] * 100 + vglibc[1]
+            if vglibc > 228:
+                # Ubuntu 24 LTS (v2.39)
+                # Ubuntu 22 LTS (v2.35)
+                # Ubuntu 20 LTS (v2.31)
                 system_suffix = "ubuntu-x64"
+            elif vglibc > 217:
+                # Manylinux_2.28 (v2.28)
+                # AlmaLinux 8 (v2.28)
+                system_suffix = "almalinux-x64"
             else:
-                vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
-                vglibc = vglibc[0] * 100 + vglibc[1]
-                system_suffix = 'almalinux-x64' if vglibc > 217 else 'centos-x64'
+                # Manylinux_2014 (v2.17)
+                # CentOS 7 (v2.17)
+                system_suffix = "centos-x64"
         else:
             print(
                 f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
@@ -566,7 +556,9 @@ def get_packages():
 
 
 def get_entry_points():
-    entry_points = {"console_scripts": ["proton-viewer = triton.profiler.viewer:main"]}
+    entry_points = {
+        "console_scripts": ["proton-viewer = triton.profiler.viewer:main", "proton = triton.profiler.proton:main"]
+    }
     return entry_points
 
 
@@ -600,7 +592,7 @@ setup(
     zip_safe=False,
     # for PyPI
     keywords=["Compiler", "Deep Learning"],
-    url="https://github.com/openai/triton/",
+    url="https://github.com/triton-lang/triton/",
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",

@@ -78,9 +78,13 @@ def kernel_print_no_arg():
     print("no arg")
 
 
+@triton.jit
+def kernel_print_pointer(X, Y, BLOCK: tl.constexpr):
+    tl.device_print("ptr ", X + tl.arange(0, BLOCK))
+
+
 def test_print(func: str, data_type: str):
-    # This value should match with test_print in test_subprocess.py.
-    N = 128
+    N = 128  # This value should match with test_print in test_subprocess.py.
     # TODO(antiagainst): Currently the warp count is chosen to make sure wedon't have multiple
     # threads printing duplicated messages due to broadcasting. Improve print op lowering logic
     # to filter out duplicated data range.
@@ -106,11 +110,14 @@ def test_print(func: str, data_type: str):
         kernel_print_no_arg[(1, )](num_warps=num_warps)
     elif func == "device_print_hex":
         kernel_device_print_hex[(1, )](x, y, num_warps=num_warps, BLOCK=N)
+    elif func == "device_print_pointer":
+        kernel_print_pointer[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     else:
         assert f"Unknown kernel: {func}"
 
     if func != "print_no_arg" and func != "no_arg_print" and func != "device_print_large" and \
-       func != "print_multiple_args" and func != "device_print_multiple_args":
+       func != "print_multiple_args" and func != "device_print_multiple_args" and \
+       func != "device_print_pointer":
         assert_close(y, x)
 
 

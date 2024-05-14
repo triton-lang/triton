@@ -13,8 +13,8 @@ public:
   virtual Value ballot(ConversionPatternRewriter &rewriter, Location loc,
                        Type type, Value cmp) const = 0;
 
-  virtual Value storeShared(ConversionPatternRewriter &rewriter, Location loc,
-                            Value ptr, Value val, Value pred) const = 0;
+  virtual void storeShared(ConversionPatternRewriter &rewriter, Location loc,
+                           Value ptr, Value val, Value pred) const = 0;
   virtual Value loadShared(ConversionPatternRewriter &rewriter, Location loc,
                            const TypeConverter *converter, Value ptr,
                            Type elemTy, Value pred) const = 0;
@@ -39,7 +39,8 @@ public:
       ConversionPatternRewriter &rewriter, Location loc, Value smemBase,
       SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
       ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
-      ArrayRef<unsigned> outOrd, unsigned accumNumReplicates) const = 0;
+      ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
+      int swizzleByteWidth = 0) const = 0;
 
   virtual std::string getMulhiFuncName(Type resultElementTy) const = 0;
   // Emits LLVM code with |rewriter| to print a message following the given

@@ -15,8 +15,8 @@ void initProton(pybind11::module &&m) {
   using namespace pybind11::literals;
 
   m.def("start",
-        [](const std::string &path, const std::string &profilerName,
-           const std::string &contextSourceName, const std::string &dataName) {
+        [](const std::string &path, const std::string &contextSourceName,
+           const std::string &dataName, const std::string &profilerName) {
           auto sessionId = SessionManager::instance().addSession(
               path, profilerName, contextSourceName, dataName);
           SessionManager::instance().activateSession(sessionId);
@@ -62,7 +62,15 @@ void initProton(pybind11::module &&m) {
   m.def("add_metrics",
         [](size_t scopeId,
            const std::map<std::string, MetricValueType> &metrics) {
-          SessionManager::instance().addMetrics(scopeId, metrics);
+          SessionManager::instance().addMetrics(scopeId, metrics,
+                                                /*aggregable=*/true);
+        });
+
+  m.def("set_properties",
+        [](size_t scopeId,
+           const std::map<std::string, MetricValueType> &metrics) {
+          SessionManager::instance().addMetrics(scopeId, metrics,
+                                                /*aggregable=*/false);
         });
 
   m.def("device_info", [](int device_id) {

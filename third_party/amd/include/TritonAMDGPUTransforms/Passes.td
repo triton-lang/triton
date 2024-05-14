@@ -41,18 +41,6 @@ def TritonAMDGPUAccelerateMatmul : Pass<"tritonamdgpu-accelerate-matmul", "mlir:
   ];
 }
 
-def TritonAMDGPURemoveLayoutConversions : Pass<"tritonamdgpu-remove-layout-conversions", "mlir::ModuleOp"> {
-  let summary = "remove superfluous layout conversions";
-
-  let description = [{
-  }];
-
-  let constructor = "mlir::createTritonAMDGPURemoveLayoutConversionsPass()";
-
-  let dependentDialects = [];
-
-}
-
 def TritonAMDGPUOptimizeEpilogue : Pass<"tritonamdgpu-optimize-epilogue", "mlir::ModuleOp"> {
   let summary = "Optimize epilogue: (1) Store accumulators directly without going thorough SMEM in epilogue.";
 

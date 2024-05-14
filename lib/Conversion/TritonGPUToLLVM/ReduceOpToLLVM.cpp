@@ -1,8 +1,10 @@
 #include "ReduceScanCommon.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include <vector>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -143,15 +145,24 @@ private:
     triton::ReduceOp op = helper.getOperation();
     RankedTensorType operandType = op.getInputTypes()[0];
     // Assumes offsets don't actually depend on type
-    SmallVector<SmallVector<unsigned>> offset =
+    SmallVector<SmallVector<unsigned>> offsets =
         emitOffsetForLayout(helper.getSrcLayout(), operandType);
+
+    // Thread X might hold the same input value in two registers.  Get the
+    // indices in `offsets` that hold unique values, and only accumualte over
+    // those.
+    llvm::MapVector<ArrayRef<unsigned>, int> uniqueOffsets;
+    for (int i = 0; i < offsets.size(); ++i) {
+      uniqueOffsets.insert({offsets[i], i});
+    }
+
     unsigned srcElems = getTotalElemsPerThread(operandType);
     auto *combineOp = &op.getCombineOp();
     auto srcIndices = emitIndices(op.getLoc(), rewriter, targetInfo,
                                   helper.getSrcLayout(), operandType, true);
     // reduce within threads
-    for (unsigned i = 0; i < srcElems; ++i) {
-      SmallVector<unsigned> key = offset[i];
+    for (const auto &[_, i] : uniqueOffsets) {
+      SmallVector<unsigned> key = offsets[i];
       key[op.getAxis()] = 0;
       bool isFirst = accs.find(key) == accs.end();
       accumulate(rewriter, *combineOp, accs[key], srcValues[i], isFirst);
@@ -206,7 +217,7 @@ private:
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       if (auto resultTy =
               dyn_cast<RankedTensorType>(op.getResult()[i].getType())) {
-        auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
+        auto resultLayout = cast<SliceEncodingAttr>(resultTy.getEncoding());
         unsigned resultElems = getTotalElemsPerThread(resultTy);
         SmallVector<SmallVector<unsigned>> resultOffset =
             emitOffsetForLayout(resultLayout, resultTy);
@@ -235,7 +246,7 @@ private:
     // 2x2 warps with slice dim = 0, warpId = 2 ends up writing at the same
     // address as warpId = 0 since the warpsPerCTA is [1, 2], need to figure out
     // a way to properly delinearize warpId in the slice case
-    if (auto sliceLayout = srcLayout.dyn_cast<SliceEncodingAttr>()) {
+    if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(srcLayout)) {
       auto parentLayout = sliceLayout.getParent();
       auto parentWarpsPerCTA = triton::gpu::getWarpsPerCTA(parentLayout);
       auto parentOrder = triton::gpu::getOrder(parentLayout);
@@ -375,7 +386,7 @@ private:
       if (auto resultTy =
               dyn_cast<RankedTensorType>(op.getResult()[i].getType())) {
         // nd-tensor where n >= 1
-        auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
+        auto resultLayout = cast<SliceEncodingAttr>(resultTy.getEncoding());
         unsigned resultElems = getTotalElemsPerThread(resultTy);
         auto resultIndices = emitIndices(loc, rewriter, targetInfo,
                                          resultLayout, resultTy, true);

@@ -121,17 +121,17 @@ class HIPBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttgpuir.add_coalesce(pm)
-        amd.passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
         amd.passes.ttgpuir.add_accelerate_matmul(pm, options.arch, options.matrix_instr_nonkdim, options.kpack)
-        amd.passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         if options.num_stages == 0 and amd.has_matrix_core_feature(options.arch):
             amd.passes.ttgpuir.add_stream_pipeline(pm)
             passes.common.add_canonicalizer(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
-        amd.passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         if options.num_stages != 0:
             amd.passes.ttgpuir.add_reorder_instructions(pm)
@@ -146,7 +146,7 @@ class HIPBackend(BaseBackend):
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        amd.passes.ttgpuir.add_decompose_unsupported_conversions(pm)
+        amd.passes.ttgpuir.add_decompose_unsupported_conversions(pm, options.arch)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
 
@@ -162,6 +162,12 @@ class HIPBackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
+        # This pass (`add_builtin_func_to_llvmir`) serves as a temporary workaround to address the issue of excessive basic block
+        # count caused by predicated loads/stores. In certain kernels, the addition of these blocks can cause the MLIR
+        # canonicalizer to never finish when attempting to merge blocks. The permanent solution under consideration
+        # involves using MUBUF instructions that have built-in out-of-bounds checks, which would eliminate the need
+        # for conditional branching around memory accesses.
+        amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm)
         pm.run(mod)
 
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
@@ -186,16 +192,12 @@ class HIPBackend(BaseBackend):
         kernels[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
         kernels[0].add_fn_attr("denormal-fp-math-f32", denormal_mode)
-        # Hint the compiler that we'd like the firmware to set the kernel arguments
-        # to user SGPRs so that the kernel does not need to s_load its arguments
-        # from memory.
-        amd.set_all_fn_arg_inreg(kernels[0])
 
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
             llvm.link_extern_libs(llvm_mod, paths)
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, amd.TARGET_TRIPLE)
 
         # Get some metadata
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")
