@@ -9,18 +9,11 @@ from typing import Optional
 DEFAULT_PROFILE_NAME = "proton"
 
 
-def _is_cuda():
-    return triton.runtime.driver.active.get_current_target().backend == "cuda"
-
-
-def _is_hip():
-    return triton.runtime.driver.active.get_current_target().backend == "hip"
-
-
 def _select_backend() -> str:
-    if _is_cuda():
+    backend = triton.runtime.driver.active.get_current_target().backend
+    if backend == "cuda":
         return "cupti"
-    elif _is_hip():
+    elif backend == "hip":
         return "roctracer"
     else:
         raise ValueError("No backend is available for the current target.")
@@ -47,10 +40,10 @@ def start(
 
     Args:
         name (str, optional): The name (with path) of the profiling session.
-                              If not provided, the default name is "~/proton.<profile-format>".
+                              If not provided, the default name is "~/proton.hatchet".
         backend (str, optional): The backend to use for profiling.
                                  Available options are ["cupti"].
-                                 Defaults to None, which automatically selects the backend.
+                                 Defaults to None, which automatically selects the backend matching the current active runtime.
         context (str, optional): The context to use for profiling.
                                  Available options are ["shadow", "python"].
                                  Defaults to "shadow".
