@@ -9,7 +9,7 @@ Proton is a lightweight profiler for Triton, designed to be used for code writte
 The following command installs the latest version of Proton.
 
 ```bash
-git clone https://github.com/openai/triton
+git clone https://github.com/triton-lang/triton
 cd triton/python
 pip install .
 ```
