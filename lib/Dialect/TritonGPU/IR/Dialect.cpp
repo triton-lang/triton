@@ -2647,7 +2647,7 @@ struct CanonicalizeConvertFromLocalStore
     if (!convert)
       return failure();
     rewriter.replaceOpWithNewOp<triton::gpu::LocalStoreOp>(op, convert.getSrc(),
-                                                           op.getResult());
+                                                           op.getDst());
     return mlir::success();
   }
 };
