@@ -837,36 +837,42 @@ void DistributedLegacyVsLinearLayoutsTest<LayoutT, ParamsT>::DoIt() {
     llvm::errs() << "Linear layout was\n"
                  << toLinearLayout(params.shape, params.getEncoding()) << "\n";
 
-    llvm::errs() << "But based on the legacy layout, the linear layout's bases "
-                    "should be:\n";
+    llvm::errs() << "But based on the legacy layout, the LL should be:\n\n";
+
+    llvm::errs() << "LinearLayout({\n";
+    llvm::errs() << "  {S(\"register\"), {\n";
     for (int reg = 1; reg < legacyIndices.size(); reg *= 2) {
-      llvm::errs() << "  L(reg=" << reg << ") = "
-                   << "("
-                   << join(legacyIndices[reg], ", ",
-                           [](Value v) {
-                             return evalValue(v, /*ctaId=*/0, /*tid=*/0);
-                           })
-                   << ")\n";
+      llvm::errs() << "    {" << join(legacyIndices[reg], ", ", [](Value v) {
+        return evalValue(v, /*ctaId=*/0, /*tid=*/0);
+      }) << "},\n";
     }
+    llvm::errs() << "  }},\n";
+
+    llvm::errs() << "  {S(\"lane\"), {\n";
     for (int tid = 1; tid < numThreads; tid *= 2) {
-      if (tid < threadsPerWarp) {
-        llvm::errs() << "  L(laneId=" << tid << ")";
-      } else {
-        llvm::errs() << "  L(warpId=" << tid / threadsPerWarp << ")";
+      if (tid == threadsPerWarp) {
+        llvm::errs() << "  }},\n";
+        llvm::errs() << "  {S(\"warp\"), {\n";
       }
-      llvm::errs() << " = (" << join(legacyIndices[0], ", ", [&](Value v) {
+      llvm::errs() << "    {" << join(legacyIndices[0], ", ", [&](Value v) {
         return evalValue(v, /*ctaId=*/0, tid);
-      }) << ")\n";
+      }) << "},\n";
     }
+    llvm::errs() << "  }},\n";
+    llvm::errs() << "  {S(\"block\"), {\n";
     for (int ctaId = 1; ctaId < numCTAs; ctaId *= 2) {
-      llvm::errs() << "  L(ctaId=" << ctaId << ") = "
-                   << "("
-                   << join(legacyIndices[0], ", ",
-                           [&](Value v) {
-                             return evalValue(v, ctaId, /*tid=*/0);
-                           })
-                   << ")\n";
+      llvm::errs() << "    {" << join(legacyIndices[0], ", ", [&](Value v) {
+        return evalValue(v, ctaId, /*tid=*/0);
+      }) << "},\n";
     }
+    llvm::errs() << "  }}\n";
+    llvm::errs() << "}, {"
+                 << triton::join(llvm::seq(type.getRank()), ", ",
+                                 [](int dim) {
+                                   return "S(\"dim" + std::to_string(dim) +
+                                          "\")";
+                                 })
+                 << "})\n";
   }
 }
 
@@ -1043,7 +1049,7 @@ class NvidiaMmaVsLinearLayoutsTest
 TEST_P(NvidiaMmaVsLinearLayoutsTest, DoIt) { DoIt(); }
 
 INSTANTIATE_TEST_SUITE_P(
-    TestCases, NvidiaMmaVsLinearLayoutsTest,
+    MMAv2, NvidiaMmaVsLinearLayoutsTest,
     ::testing::ValuesIn(std::vector<NvidiaMmaVsLinearLayoutsTestParams>({
         {
             .shape = {16, 8},
@@ -1172,6 +1178,64 @@ INSTANTIATE_TEST_SUITE_P(
             .CTAOrder = {2, 1, 0},
         },
     })));
+
+std::vector<NvidiaMmaVsLinearLayoutsTestParams> makeNvidiaMmaV3TestCases() {
+  std::vector<NvidiaMmaVsLinearLayoutsTestParams> testCases;
+  auto addTests = [&](ArrayRef<unsigned> instrShape,
+                      ArrayRef<unsigned> warpsPerCGA,
+                      ArrayRef<std::vector<int64_t>> shapes) {
+    for (const auto &shape : shapes) {
+      testCases.push_back({
+          .shape = shape,
+          .versionMajor = 3,
+          .versionMinor = 0,
+          .warpsPerCTA = warpsPerCGA,
+          .instrShape = instrShape,
+          .CTAsPerCGA = {1, 1},
+          .CTASplitNum = {1, 1},
+          .CTAOrder = {1, 0},
+      });
+    }
+  };
+
+  addTests({16, 16, 8}, {4, 1}, {{64, 16}, {128, 16}, {1024, 1024}});
+  addTests({16, 16, 16}, {4, 1}, {{64, 16}, {128, 16}});
+  addTests({16, 16, 32}, {4, 1}, {{64, 16}, {128, 16}});
+
+  addTests({16, 32, 8}, {4, 1}, {{64, 32}, {128, 32}});
+
+  addTests({16, 64, 8}, {4, 1}, {{64, 64}, {128, 64}});
+  addTests({16, 64, 16}, {4, 1}, {{64, 64}, {128, 64}});
+  addTests({16, 64, 32}, {4, 1}, {{64, 64}});
+
+  addTests({16, 128, 8}, {4, 1}, {{64, 128}, {128, 128}});
+  addTests({16, 128, 16}, {4, 1}, {{64, 128}, {128, 128}});
+  addTests({16, 128, 16}, {8, 1}, {{64, 128}, {128, 128}});
+  addTests({16, 128, 32}, {8, 1}, {{64, 128}, {128, 128}});
+
+  addTests({16, 256, 8}, {8, 1}, {{128, 256}});
+  addTests({16, 256, 16}, {8, 1}, {{128, 256}});
+  addTests({16, 256, 32}, {8, 1}, {{128, 256}});
+
+  // Shapes 1x64 and 64x1 appear in IR, but legacy emitIndices cannot handle
+  // them.  They appear in code like the following.
+  //
+  //   #mma = #nvidia_mma<{versionMajor=3, versionMinor=0,
+  //                       warpsPerCTA=[4, 1], instrShape=[16, 64, 16]}>
+  //   %a : tensor<64xf16, #slice<dim=0, parent=#mma>>
+  //   %b = tt.expand_dims %a : tensor<1x64xf16, #mma>
+  //   %c = arith.extf %b : tensor<1x64xf32, #mma>
+  //   %d = tt.broadcast %c : tensor<64x64xf32, #mma>
+  //
+  // TODO(jlebar): For now we don't test these layouts.  Once we have slice
+  // layout working, we can add support, since their layouts should match that
+  // of emitIndices for the corresponding slice layout.
+
+  return testCases;
+}
+
+INSTANTIATE_TEST_SUITE_P(MMAv3, NvidiaMmaVsLinearLayoutsTest,
+                         ::testing::ValuesIn(makeNvidiaMmaV3TestCases()));
 
 } // namespace gpu
 } // namespace triton

@@ -209,7 +209,8 @@ emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
                               const TargetInfoBase &target, Attribute layout,
                               RankedTensorType type, bool withCTAOffset) {
   auto mma = dyn_cast<NvidiaMmaEncodingAttr>(layout);
-  if (isa<BlockedEncodingAttr>(layout) || (mma && mma.isAmpere())) {
+  if (isa<BlockedEncodingAttr>(layout) ||
+      (mma && (mma.isAmpere() || mma.isHopper()))) {
     MLIRContext *ctx = rewriter.getContext();
     auto shape = type.getShape();
     Value threadId = getThreadId(rewriter, loc);

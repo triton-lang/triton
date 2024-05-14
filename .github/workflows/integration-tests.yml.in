@@ -288,7 +288,7 @@ jobs:
         run: |
           cd python
           cd "build/$(ls build | grep -i cmake)"
-          ctest
+          ctest -j32
 
       - name: Run Proton tests
         env:

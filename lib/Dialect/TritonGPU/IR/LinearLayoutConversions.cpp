@@ -1,5 +1,6 @@
 #include <vector>
 
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Tools/LinearLayout.h"
@@ -344,16 +345,50 @@ LinearLayout ampereMmaToLinearLayout(ArrayRef<int64_t> shape,
   MLIRContext *ctx = mma.getContext();
   SmallVector<StringAttr> dimNames = standardOutDimNames(ctx, rank);
 
-  LinearLayout ret(
+  LinearLayout ctaLayout(
       {{S("register"), {{1, 0}, {0, 8}}},
        {S("lane"), {{2, 0}, {4, 0}, {0, 1}, {0, 2}, {0, 4}}}},
       llvm::to_vector(llvm::reverse(ArrayRef(dimNames).take_back(2))));
 
-  ret *= identityND(S("warp"), mma.getWarpsPerCTA(),
-                    llvm::to_vector(llvm::reverse(llvm::seq<unsigned>(rank))),
-                    dimNames);
+  ctaLayout *= identityND(
+      S("warp"), mma.getWarpsPerCTA(),
+      llvm::to_vector(llvm::reverse(llvm::seq<unsigned>(rank))), dimNames);
 
-  return combineCtaAndCgaAndEnsureExpectedShape(ret, mma.getCTALayout(), shape);
+  return combineCtaAndCgaAndEnsureExpectedShape(ctaLayout, mma.getCTALayout(),
+                                                shape);
+}
+
+LinearLayout hopperMmaToLinearLayout(ArrayRef<int64_t> shape,
+                                     NvidiaMmaEncodingAttr mma) {
+  int rank = shape.size();
+  assert(mma.isHopper());
+  assert(rank == 2);
+
+  // wgmma operates on groups of 4 warps.
+  assert(product(mma.getWarpsPerCTA()) % 4 == 0);
+
+  // instrShape is MxKxN.  The MMA layout is the MxN part.
+#define A(...) mma.getInstrShape() == ArrayRef<unsigned>({__VA_ARGS__})
+  assert(A(16, 16, 8) || A(16, 16, 16) || A(16, 16, 32) ||    //
+         A(16, 32, 8) ||                                      //
+         A(16, 64, 8) || A(16, 64, 16) || A(16, 64, 32) ||    //
+         A(16, 128, 8) || A(16, 128, 16) || A(16, 128, 32) || //
+         A(16, 256, 8) || A(16, 256, 16) || A(16, 256, 32)    //
+  );
+#undef A
+
+  MLIRContext *ctx = mma.getContext();
+  SmallVector<StringAttr> dimNames = standardOutDimNames(ctx, rank);
+  LinearLayout ctaLayout(
+      {{S("register"), {{1, 0}, {0, 8}}},
+       {S("lane"), {{2, 0}, {4, 0}, {0, 1}, {0, 2}, {0, 4}}}},
+      {S("dim1"), S("dim0")});
+  ctaLayout *= identityND(
+      S("warp"), mma.getWarpsPerCTA(),
+      llvm::to_vector(llvm::reverse(llvm::seq<unsigned>(rank))), dimNames);
+
+  return combineCtaAndCgaAndEnsureExpectedShape(ctaLayout, mma.getCTALayout(),
+                                                shape);
 }
 
 } // anonymous namespace
@@ -366,10 +401,14 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
     if (mma.isAmpere()) {
       return ampereMmaToLinearLayout(shape, mma);
     }
+    if (mma.isHopper()) {
+      return hopperMmaToLinearLayout(shape, mma);
+    }
   }
 
   // TODO(jlebar): Other layouts
-  llvm::llvm_unreachable_internal("Unsupported layout");
+  llvm::errs() << "Unsupported layout: " << layout << "\n";
+  llvm_unreachable("Unsupported layout");
 }
 
 } // namespace mlir::triton::gpu

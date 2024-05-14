@@ -311,5 +311,51 @@ TEST_F(LinearLayoutConversionsTest, MMAv2_Small3D) {
                 {S("dim0"), S("dim1"), S("dim2")}));
 }
 
+TEST_F(LinearLayoutConversionsTest, MMAv3_64x16) {
+  EXPECT_EQ(toLinearLayout({64, 16}, mma(3, 0, {16, 16, 8}, {4, 1}, {1, 1},
+                                         {1, 1}, {1, 0})),
+            LinearLayout(
+                {
+                    {S("register"), {{0, 1}, {8, 0}, {0, 8}}},
+                    {S("lane"), {{0, 2}, {0, 4}, {1, 0}, {2, 0}, {4, 0}}},
+                    {S("warp"), {{16, 0}, {32, 0}}},
+                    {S("block"), {}},
+                },
+                {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, MMAv3_128x16) {
+  EXPECT_EQ(toLinearLayout({128, 16}, mma(3, 0, {16, 16, 8}, {4, 1}, {1, 1},
+                                          {1, 1}, {1, 0})),
+            LinearLayout({{S("register"), {{0, 1}, {8, 0}, {0, 8}, {64, 0}}},
+                          {S("lane"), {{0, 2}, {0, 4}, {1, 0}, {2, 0}, {4, 0}}},
+                          {S("warp"), {{16, 0}, {32, 0}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, MMAv3_1024x1024) {
+  EXPECT_EQ(toLinearLayout({1024, 1024}, mma(3, 0, {16, 16, 8}, {4, 1}, {1, 1},
+                                             {1, 1}, {1, 0})),
+            LinearLayout({{S("register"),
+                           {{0, 1},
+                            {8, 0},
+                            {0, 8},
+                            {0, 16},
+                            {0, 32},
+                            {0, 64},
+                            {0, 128},
+                            {0, 256},
+                            {0, 512},
+                            {64, 0},
+                            {128, 0},
+                            {256, 0},
+                            {512, 0}}},
+                          {S("lane"), {{0, 2}, {0, 4}, {1, 0}, {2, 0}, {4, 0}}},
+                          {S("warp"), {{16, 0}, {32, 0}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1")}));
+}
+
 } // anonymous namespace
 } // namespace mlir::triton::gpu
