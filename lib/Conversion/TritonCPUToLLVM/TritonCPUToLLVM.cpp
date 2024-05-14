@@ -89,10 +89,15 @@ struct ConvertTritonCPUToLLVM
     }
 
     RewritePatternSet patterns(context);
+    mlir::triton::cpu::CPUTargetInfo targetInfo;
     int benefit =
         mlir::triton::cpu::patternBenefitPrioritizeOverLLVMConversions;
     mlir::triton::cpu::populateControlFlowOpToLLVMPattern(typeConverter,
                                                           patterns, benefit);
+    mlir::triton::cpu::populatePrintOpToLLVMPattern(typeConverter, patterns,
+                                                    targetInfo, benefit);
+    mlir::triton::cpu::populateSPMDOpToLLVMPattern(typeConverter, patterns,
+                                                   targetInfo, benefit);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();

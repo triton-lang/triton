@@ -12,15 +12,10 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-namespace mlir {
-namespace LLVM {
+// TODO: Do better refactoring.
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
-// TODO: Not sure we need this for CPU backends.
-inline bool isKernel(FunctionOpInterface funcOp) {
-  return funcOp.getVisibility() == SymbolTable::Visibility::Public;
-}
-
-} // namespace LLVM
-} // namespace mlir
+#undef DEBUG_TYPE
+#define DEBUG_TYPE "ttcpu_to_llvm"
 
 #endif
