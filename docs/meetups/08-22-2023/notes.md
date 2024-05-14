@@ -31,11 +31,11 @@ Recording link [here](https://drive.google.com/file/d/19Nnc0i7zUyn-ni2RSFHbPHHiP
    - Community can start with the latest stable branch and rebase 3rd party plugin on top of that. OAI has no resources to commit to, but community can contribute.
 3. Linalg updates
    - Discussion on Github for Linalg as a middle layer between the language and target hardware. Includes support for block pointers and modulo operators.
-   - Please join the conversation [here](https://github.com/openai/triton/discussions/1842)
+   - Please join the conversation [here](https://github.com/triton-lang/triton/discussions/1842)
    - Branch pushed is behind the tip, will work on getting it caught up on the tip.
 4. Intel GPU Backend status update.
-   - Please refer to slides [here](https://github.com/openai/triton/blob/main/docs/meetups/Intel%20XPU%20Backend%20for%20Triton%20-%20Update%20-%200823.pptx)
+   - Please refer to slides [here](https://github.com/triton-lang/triton/blob/main/docs/meetups/Intel%20XPU%20Backend%20for%20Triton%20-%20Update%20-%200823.pptx)
 5. Intel working on the CPU backend for Triton.
-   - Please refer to slides [here](https://github.com/openai/triton/blob/main/docs/meetups/Intel%20XPU%20Backend%20for%20Triton%20-%20Update%20-%200823.pptx)
+   - Please refer to slides [here](https://github.com/triton-lang/triton/blob/main/docs/meetups/Intel%20XPU%20Backend%20for%20Triton%20-%20Update%20-%200823.pptx)
 6. AMD updates
-   - Please refer to slides [here](https://github.com/openai/triton/blob/main/docs/meetups/Triton_AMD_update_0823.pdf).
+   - Please refer to slides [here](https://github.com/triton-lang/triton/blob/main/docs/meetups/Triton_AMD_update_0823.pdf).
