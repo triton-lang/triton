@@ -121,37 +121,13 @@ tt.func public @load_tensors_two_types(%arg0: !tt.ptr<f32> {tt.divisibility = 16
 
 // -----
 
-#mma = #triton_gpu.nvidia_mma<{warpsPerCTA = [8, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0], instrShape = [16, 256, 16]}>
-
-// CHECK-LABEL: @fwd_kernel
+// COM: Reproducer for issue #3866
+// CHECK-LABEL: @test_3866
+// CHECK: tt.load {{.*}} : !tt.ptr<tensor<64x16xf16>
 module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
-  tt.func public @fwd_kernel(%arg0: !tt.ptr<f16> , %arg1: !tt.ptr<f16> , %arg2: !tt.ptr<f16> , %arg3: f32, %arg4: !tt.ptr<f32> , %arg5: !tt.ptr<f16> , %arg6: i32 , %arg7: i32 , %arg8: i32 , %arg9: i32 , %arg10: i32 , %arg11: i32 , %arg12: i32 , %arg13: i32 , %arg14: i32 , %arg15: i32 , %arg16: i32 , %arg17: i32 , %arg18: i32, %arg19: i32, %arg20: i32 , %arg21: i32) {
-    %cst = arith.constant dense<0.000000e+00> : tensor<128x16xf32, #mma> 
-    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>> 
-    %cst_1 = arith.constant dense<0xFF800000> : tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>> 
-    %c16_i64 = arith.constant 16 : i64 
-    %c1_i64 = arith.constant 1 : i64 
-    %c0_i32 = arith.constant 0 : i32 
-    %c128_i32 = arith.constant 128 : i32 
-    %c64_i32 = arith.constant 64 : i32 
-    %4 = arith.extsi %arg21 : i32 to i64 
-    %5 = arith.extsi %arg11 : i32 to i64 
-    %6 = tt.make_tensor_ptr %arg1, [%c16_i64, %4], [%c1_i64, %5], [%c0_i32, %arg7] {order = array<i32: 0, 1>} : <tensor<16x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma}>>> 
-    %7 = arith.extsi %arg14 : i32 to i64 
-    %8 = tt.make_tensor_ptr %arg2, [%4, %c16_i64], [%7, %c1_i64], [%arg7, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x16xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma}>>> 
-    %42:5 = scf.for %arg22 = %c0_i32 to %c128_i32 step %c64_i32 iter_args(%arg23 = %cst, %arg24 = %cst_0, %arg25 = %cst_1, %arg26 = %6, %arg27 = %8) -> (tensor<128x16xf32, #mma>, tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>, tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>, !tt.ptr<tensor<16x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma}>>>, !tt.ptr<tensor<64x16xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma}>>>)  : i32 {
-      %79 = tt.load %arg27 : !tt.ptr<tensor<64x16xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma}>>> 
-      %91 = tt.expand_dims %arg25 {axis = 1 : i32} : tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>> -> tensor<128x1xf32, #mma> 
-      %92 = tt.broadcast %91 : tensor<128x1xf32, #mma> -> tensor<128x64xf32, #mma> 
-      %98 = arith.truncf %92 : tensor<128x64xf32, #mma> to tensor<128x64xf16, #mma> 
-      %99 = triton_gpu.convert_layout %98 : tensor<128x64xf16, #mma> -> tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>> 
-      %100 = tt.dot %99, %79, %arg23, inputPrecision = tf32 : tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>> * tensor<64x16xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma}>> -> tensor<128x16xf32, #mma> 
-      %101 = arith.mulf %arg24, %arg25 : tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>> 
-      %103 = arith.addf %101, %101 : tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>> 
-      %104 = tt.advance %arg26, [%c0_i32, %c64_i32] : <tensor<16x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma}>>> 
-      %105 = tt.advance %arg27, [%c64_i32, %c0_i32] : <tensor<64x16xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma}>>> 
-      scf.yield %100, %103, %arg25, %104, %105 : tensor<128x16xf32, #mma>, tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>, tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>, !tt.ptr<tensor<16x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma}>>>, !tt.ptr<tensor<64x16xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma}>>> 
-    } 
-    tt.return 
+  tt.func public @test_3866(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i64) {
+    %0 = tt.make_tensor_ptr %arg0, [%arg2, %arg2], [%arg2, %arg2], [%arg1, %arg1] {order = array<i32: 1, 0>} : <tensor<64x16xf16>>
+    %1 = tt.load %0 : !tt.ptr<tensor<64x16xf16>>
+    tt.return
   }
-} 
+}
