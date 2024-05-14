@@ -5,10 +5,10 @@ from triton.language import core
 def abs(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
-            (core.dtype("int32"), ): ("__ocml_trition_abs", core.dtype("int32")),
-            (core.dtype("int64"), ): ("__ocml_trition_abs", core.dtype("int64")),
-            (core.dtype("fp32"), ): ("__ocml_trition_abs", core.dtype("fp32")),
-            (core.dtype("fp64"), ): ("__ocml_trition_abs", core.dtype("fp64")),
+            (core.dtype("int32"), ): ("__triton_hip_iabs", core.dtype("int32")),
+            (core.dtype("int64"), ): ("__triton_hip_iabs", core.dtype("int64")),
+            (core.dtype("fp32"), ): ("__triton_hip_fabs", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__triton_hip_fabs", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
 
 
@@ -34,8 +34,8 @@ def rsqrt(arg0, _builder=None):
 def ceil(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
-            (core.dtype("fp64"), ): ("__ocml_ceil_f64", core.dtype("fp64")),
             (core.dtype("fp32"), ): ("__ocml_ceil_f32", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__ocml_ceil_f64", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
 
 
@@ -43,8 +43,8 @@ def ceil(arg0, _builder=None):
 def trunc(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
-            (core.dtype("fp64"), ): ("__ocml_trunc_f64", core.dtype("fp64")),
             (core.dtype("fp32"), ): ("__ocml_trunc_f32", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__ocml_trunc_f64", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
 
 
@@ -70,9 +70,10 @@ def sqrt(arg0, _builder=None):
 def llrint(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__ocml_trition_llrint", core.dtype("int64")),
-            (core.dtype("fp64"), ): ("__ocml_trition_llrint", core.dtype("int64")),
+            (core.dtype("fp32"), ): ("__triton_hip_llrint", core.dtype("int64")),
+            (core.dtype("fp64"), ): ("__triton_hip_llrint", core.dtype("int64")),
         }, is_pure=True, _builder=_builder)
+
 
 @core.extern
 def nearbyint(arg0, _builder=None):

@@ -48,12 +48,10 @@ private:
   }
 
   bool isWrappedLLVMIntrinsic(LLVM::CallOp callOp) const {
-    if (!callOp.getCallee().has_value()) {
-      return false;
-    }
-    StringRef calleeName = callOp.getCallee().value();
-    if (calleeName.starts_with("__ocml_trition_")) {
-      return true;
+    if (std::optional<StringRef> callee = callOp.getCallee()) {
+      if (callee.value().starts_with("__triton_hip_")) {
+        return true;
+      }
     }
     return false;
   }
@@ -126,16 +124,15 @@ private:
     auto loc = callOp.getLoc();
 
     Operation *replacementOp = nullptr;
-    if (calleeName == "__ocml_trition_abs") {
+    if (calleeName == "__triton_hip_iabs") {
       assert(operands.size() == 1);
-      if (type::isInt(returnType)) {
-        replacementOp = rewriter.create<LLVM::AbsOp>(
-            loc, returnType, operands[0], /*is_int_min_poison=*/false);
-      } else if (type::isFloat(returnType)) {
-        replacementOp =
-            rewriter.create<LLVM::FAbsOp>(loc, returnType, operands[0], flags);
-      }
-    } else if (calleeName == "__ocml_trition_llrint") {
+      replacementOp = rewriter.create<LLVM::AbsOp>(loc, returnType, operands[0],
+                                                   /*is_int_min_poison=*/false);
+    } else if (calleeName == "__triton_hip_fabs") {
+      assert(operands.size() == 1);
+      replacementOp =
+          rewriter.create<LLVM::FAbsOp>(loc, returnType, operands[0], flags);
+    } else if (calleeName == "__triton_hip_llrint") {
       assert(operands.size() == 1);
       // Note, LrintOp and LlrintOp result in a code-gen error
       Operation *op = rewriter.create<LLVM::RintOp>(loc, operands[0].getType(),
@@ -144,10 +141,12 @@ private:
           rewriter.create<LLVM::FPToSIOp>(loc, returnType, op->getResult(0));
     }
 
-    if (replacementOp)
+    if (replacementOp) {
       rewriter.replaceOp(callOp, replacementOp);
+      return mlir::success();
+    }
 
-    return mlir::success();
+    return mlir::failure();
   }
 };
 
