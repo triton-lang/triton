@@ -16,7 +16,7 @@ using namespace mlir::triton::gpu;
 // Swizzling in shared memory to avoid bank conflict. Normally used for
 // A/B operands of dots.
 void lowerDistributedToShared(Operation *op, Value src, Value dst,
-                              Value adaptorSrc,
+                              Value adaptorSrc, Value smemBase,
                               const LLVMTypeConverter *typeConverter,
                               ConversionPatternRewriter &rewriter,
                               const TargetInfoBase &targetInfo) {
@@ -29,7 +29,6 @@ void lowerDistributedToShared(Operation *op, Value src, Value dst,
   assert(srcTy.getShape().size() <= 2 ||
          (srcTy.getShape().size() == 3 && outOrd[2] == 0) &&
              "Unexpected rank of ConvertLayout(blocked->shared)");
-  Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, op);
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
   int32_t elemSize = elemTy.getIntOrFloatBitWidth();
@@ -74,9 +73,10 @@ struct LocalAllocOpConversion
 
     // If there is an initial tensor, store it into the shared memory.
     if (op.getSrc()) {
+      Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, op);
       lowerDistributedToShared(op, op.getSrc(), op.getResult(),
-                               adaptor.getSrc(), typeConverter, rewriter,
-                               targetInfo);
+                               adaptor.getSrc(), smemBase, typeConverter,
+                               rewriter, targetInfo);
     }
 
     auto llvmElemTy = typeConverter->convertType(resultTy.getElementType());
@@ -120,8 +120,11 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::LocalStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    lowerDistributedToShared(op, op.getSrc(), op.getResult(), adaptor.getSrc(),
-                             getTypeConverter(), rewriter, targetInfo);
+    Value smemBase = LLVM::getSharedMemoryBase(op.getLoc(), rewriter,
+                                               op.getDst().getDefiningOp());
+    lowerDistributedToShared(op, op.getSrc(), op.getDst(), adaptor.getSrc(),
+                             smemBase, getTypeConverter(), rewriter,
+                             targetInfo);
     rewriter.eraseOp(op);
 
     return success();
