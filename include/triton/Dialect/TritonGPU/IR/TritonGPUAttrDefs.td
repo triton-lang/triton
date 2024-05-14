@@ -1208,7 +1208,9 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding"> {
 
     SmallVector<unsigned> getContigPerThread() {
       auto parentLayout = mlir::cast<DistributedEncodingTrait>(getParent());
-      return parentLayout.getContigPerThread();
+      auto parentContigPerThread = parentLayout.getContigPerThread();
+      parentContigPerThread.erase(parentContigPerThread.begin() + getDim());
+      return parentContigPerThread;
     };
   }];
 
