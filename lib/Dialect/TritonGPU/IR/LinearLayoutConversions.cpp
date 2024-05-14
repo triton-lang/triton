@@ -367,15 +367,14 @@ LinearLayout hopperMmaToLinearLayout(ArrayRef<int64_t> shape,
   // wgmma operates on groups of 4 warps.
   assert(product(mma.getWarpsPerCTA()) % 4 == 0);
 
-  // instrShape is MxKxN.  The MMA layout is the MxN part.
-#define A(...) mma.getInstrShape() == ArrayRef<unsigned>({__VA_ARGS__})
-  assert(A(16, 16, 8) || A(16, 16, 16) || A(16, 16, 32) ||    //
-         A(16, 32, 8) ||                                      //
-         A(16, 64, 8) || A(16, 64, 16) || A(16, 64, 32) ||    //
-         A(16, 128, 8) || A(16, 128, 16) || A(16, 128, 32) || //
-         A(16, 256, 8) || A(16, 256, 16) || A(16, 256, 32)    //
-  );
-#undef A
+  // Check that it's a known MMA layout.
+  assert(mma.getInstrShape().size() == 3);
+  int m = mma.getInstrShape()[0];
+  int k = mma.getInstrShape()[1];
+  int n = mma.getInstrShape()[2];
+  assert(m == 16);
+  assert(k == 16 || k == 32 || k == 64 || k == 128);
+  assert(n == 8 || n == 16 || n == 32);
 
   MLIRContext *ctx = mma.getContext();
   SmallVector<StringAttr> dimNames = standardOutDimNames(ctx, rank);
