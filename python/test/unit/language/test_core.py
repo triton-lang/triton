@@ -5124,7 +5124,7 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
 def test_enable_fp_fusion(enable_fp_fusion, device):
     if is_hip():
         pytest.skip(
-            'test_enable_fp_fusion for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
+            'test_enable_fp_fusion for HIP currently broken in https://github.com/triton-lang/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
         )
 
     # Sequential multiply add can be fused by backend

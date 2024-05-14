@@ -1,5 +1,5 @@
 """
-issue: https://github.com/openai/triton/issues/2523
+issue: https://github.com/triton-lang/triton/issues/2523
 fused type convert and matmul, base on triton matmul, the different with matmul:
 1. force C's dtype=dot_out_dtype to ["float16", "float32"]
 2. accept A and B with dtype=["float32", "float64"]
