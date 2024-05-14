@@ -178,6 +178,15 @@ class MfmaLayout:
         return f"#{GPU_DIALECT}.amd_mfma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA = {self.warps_per_cta}, instrShape={self.instr_shape}, isTransposed = {str(self.is_transposed).lower()}}}>"
 
 
+class WmmaLayout:
+
+    def __init__(self, warps_per_cta):
+        self.warps_per_cta = warps_per_cta
+
+    def __str__(self):
+        return f"#{GPU_DIALECT}.amd_wmma<{{warpsPerCTA = {self.warps_per_cta}}}>"
+
+
 class MmaLayout:
 
     def __init__(self, version, warps_per_cta, ctas_per_cga, cta_split_num, cta_order, instr_shape):
@@ -222,13 +231,28 @@ class SharedLayout:
         return f"#{GPU_DIALECT}.shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
 
 
-def filter_layouts(layouts):
-    if is_cuda():
-        return [l for l in layouts if not isinstance(l, MfmaLayout)]
+def is_layout_applicable(layout) -> bool:
+    common_layouts = [BlockedLayout, SharedLayout]
+    if layout in common_layouts:
+        return True
+    elif is_cuda():
+        return isinstance(layout, MmaLayout)
     elif is_hip():
-        return [l for l in layouts if not isinstance(l, MmaLayout)]
+        target_arch = triton.runtime.driver.active.get_current_target().arch
+        if "gfx11" in target_arch:
+            # RDNA 3
+            return isinstance(layout, WmmaLayout)
+        elif any(arch for arch in ["gfx8", "gfx9"] if arch in target_arch):
+            # CDNA 1, 2, 3
+            return isinstance(layout, MfmaLayout)
+        else:
+            return False
     else:
-        return layouts
+        return True
+
+
+def filter_layouts(layouts):
+    return [l for l in layouts if is_layout_applicable(l)]
 
 
 @pytest.mark.interpreter
@@ -2510,6 +2534,9 @@ layouts = [
     MfmaLayout(version=(2, 0), warps_per_cta=[2, 2], instr_shape=[32, 32], is_transposed=True),
     MfmaLayout(version=(2, 0), warps_per_cta=[4, 1], instr_shape=[32, 32], is_transposed=True),
     MfmaLayout(version=(2, 0), warps_per_cta=[1, 4], instr_shape=[32, 32], is_transposed=True),
+    WmmaLayout(warps_per_cta=[2, 2]),
+    WmmaLayout(warps_per_cta=[4, 1]),
+    WmmaLayout(warps_per_cta=[1, 4]),
 ]
 
 
