@@ -208,7 +208,8 @@ std::optional<SmallVector<SmallVector<Value>>>
 emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
                               const TargetInfoBase &target, Attribute layout,
                               RankedTensorType type, bool withCTAOffset) {
-  if (isa<BlockedEncodingAttr, NvidiaMmaEncodingAttr>(layout)) {
+  auto mma = dyn_cast<NvidiaMmaEncodingAttr>(layout);
+  if (isa<BlockedEncodingAttr>(layout) || (mma && mma.isAmpere())) {
     MLIRContext *ctx = rewriter.getContext();
     auto shape = type.getShape();
     Value threadId = getThreadId(rewriter, loc);
