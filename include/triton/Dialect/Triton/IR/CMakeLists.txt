@@ -5,8 +5,6 @@ mlir_tablegen(Ops.h.inc -gen-op-decls)
 mlir_tablegen(Ops.cpp.inc -gen-op-defs)
 mlir_tablegen(OpsEnums.h.inc -gen-enum-decls)
 mlir_tablegen(OpsEnums.cpp.inc -gen-enum-defs)
-mlir_tablegen(AttrDefs.h.inc -gen-attrdef-decls)
-mlir_tablegen(AttrDefs.cpp.inc -gen-attrdef-defs)
 add_mlir_doc(TritonOps TritonOps dialects/ -gen-op-doc)
 
 set(LLVM_TARGET_DEFINITIONS TritonDialect.td)

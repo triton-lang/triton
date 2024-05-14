@@ -5,7 +5,6 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 using namespace mlir::triton::gpu;
@@ -324,23 +323,11 @@ struct ExternElementwiseOpConversion
     if (funcName.empty())
       llvm::errs() << "ExternElementwiseOpConversion";
 
-    if (op->hasAttr(UseLLVMIntrinsicAttr::getMnemonic())) {
-      if (funcName == "fptosi") {
-        return {rewriter.create<LLVM::FPToSIOp>(loc, elemTy, operands[0])};
-      } else {
-        auto symbolName = StringAttr::get(op.getContext(), funcName);
-        LLVM::FastmathFlagsAttr flags{};
-        auto op = rewriter.create<LLVM::CallIntrinsicOp>(
-            loc, elemTy, symbolName, operands[0], flags);
-        return {op->getResults()};
-      }
-    } else {
-      Type funcType = getFunctionType(elemTy, operands[0]);
-      LLVM::LLVMFuncOp funcOp = appendOrGetExternFuncOp(
-          rewriter, op, funcName, funcType, op.getLibname(), op.getLibpath());
-      return {
-          rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
-    }
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp = appendOrGetExternFuncOp(
+        rewriter, op, funcName, funcType, op.getLibname(), op.getLibpath());
+    return {
+        rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
   }
 };
 

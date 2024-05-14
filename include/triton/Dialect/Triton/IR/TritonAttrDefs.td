@@ -2,7 +2,6 @@
 #define TRITON_ATTR_DEFS
 
 include "mlir/IR/EnumAttr.td"
-include "triton/Dialect/Triton/IR/TritonDialect.td"
 
 // Attributes for LoadOp and StoreOp
 def TT_CacheModifierAttr : I32EnumAttr<
@@ -117,13 +116,6 @@ def TT_InputPrecisionAttr : I32EnumAttr<
       I32EnumAttrCase<"IEEE", 2, "ieee">
     ]>{
   let cppNamespace = "::mlir::triton";
-}
-
-class TT_Attr<string name, list<Trait> traits = []> :
-    AttrDef<Triton_Dialect, name, traits>;
-
-def TT_UseLLVMIntrinsic : TT_Attr<"UseLLVMIntrinsic"> {
-  let mnemonic = "use_llvm_intrinsic";
 }
 
 #endif

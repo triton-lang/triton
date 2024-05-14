@@ -5,11 +5,11 @@ from triton.language import core
 def abs(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
-            (core.dtype("int32"), ): ("llvm.abs.i32", core.dtype("int32")),
-            (core.dtype("int64"), ): ("llvm.abs.i64", core.dtype("int64")),
-            (core.dtype("fp32"), ): ("llvm.fabs.f32", core.dtype("fp32")),
-            (core.dtype("fp64"), ): ("llvm.fabs.f64", core.dtype("fp64")),
-        }, is_pure=True, _builder=_builder, use_llvm_intrinsic=True)
+            (core.dtype("int32"), ): ("__ocml_trition_abs", core.dtype("int32")),
+            (core.dtype("int64"), ): ("__ocml_trition_abs", core.dtype("int64")),
+            (core.dtype("fp32"), ): ("__ocml_trition_abs", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__ocml_trition_abs", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
 
 
 @core.extern
@@ -68,20 +68,11 @@ def sqrt(arg0, _builder=None):
 
 @core.extern
 def llrint(arg0, _builder=None):
-    is_pure = True
-    use_llvm_intrinsic = True
-    pack = [
-        ("", "", {
-            (core.dtype("fp32"), ): ("llvm.rint.f32", core.dtype("fp32")),
-            (core.dtype("fp64"), ): ("llvm.rint.f64", core.dtype("fp64")),
-        }, is_pure, _builder, use_llvm_intrinsic),
-        ("", "", {
-            (core.dtype("fp32"), ): ("fptosi", core.dtype("int64")),
-            (core.dtype("fp64"), ): ("fptosi", core.dtype("int64")),
-        }, is_pure, _builder, use_llvm_intrinsic),
-    ]
-    return core.extern_elementwise_instruction_pack(pack, [arg0])
-
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("fp32"), ): ("__ocml_trition_llrint", core.dtype("int64")),
+            (core.dtype("fp64"), ): ("__ocml_trition_llrint", core.dtype("int64")),
+        }, is_pure=True, _builder=_builder)
 
 @core.extern
 def nearbyint(arg0, _builder=None):
