@@ -1046,9 +1046,18 @@ def descriptor_load(desc_ptr: tl.tensor, offsets, cache_modifier: str, eviction_
     return tl.tensor(x, type)
 
 
-def descriptor_store(desc_ptr: tl.tensor, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+def _str_to_reduction_op(accumulator_fn: str):
+    if accumulator_fn == "":
+        return ir.DESC_STORE_REDCUTION.NONE
+    if accumulator_fn == "add":
+        return ir.DESC_STORE_REDCUTION.ADD
+    raise ValueError(f"Invalid accumulation mode: {accumulator_fn}.")
+
+
+def descriptor_store(desc_ptr: tl.tensor, value: tl.tensor, offsets, accumulator_fn, builder: ir.builder) -> tl.tensor:
+    reduction_op = _str_to_reduction_op(accumulator_fn)
     offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
-    return tl.tensor(builder.create_descriptor_store(desc_ptr.handle, value.handle, offsets), tl.void)
+    return tl.tensor(builder.create_descriptor_store(desc_ptr.handle, value.handle, offsets, reduction_op), tl.void)
 
 
 def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builder):

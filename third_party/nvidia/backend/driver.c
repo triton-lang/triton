@@ -256,37 +256,51 @@ static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
   return Py_None;
 }
 
+static void getTensorTypeAndSize(const char *type_name, int *elementSize,
+                                 CUtensorMapDataType *type) {
+  if (strcmp(type_name, "uint8") == 0) {
+    *type = CU_TENSOR_MAP_DATA_TYPE_UINT8;
+    *elementSize = 1;
+  } else if (strcmp(type_name, "uint16") == 0) {
+    *type = CU_TENSOR_MAP_DATA_TYPE_UINT16;
+    *elementSize = 2;
+  } else if (strcmp(type_name, "uint32") == 0) {
+    *type = CU_TENSOR_MAP_DATA_TYPE_UINT32;
+    *elementSize = 4;
+  } else if (strcmp(type_name, "int32") == 0) {
+    *type = CU_TENSOR_MAP_DATA_TYPE_INT32;
+    *elementSize = 4;
+  } else if (strcmp(type_name, "float16") == 0) {
+    *type = CU_TENSOR_MAP_DATA_TYPE_FLOAT16;
+    *elementSize = 2;
+  } else if (strcmp(type_name, "float32") == 0) {
+    *type = CU_TENSOR_MAP_DATA_TYPE_FLOAT32;
+    *elementSize = 4;
+  } else {
+    PyErr_SetString(PyExc_ValueError, "unsupported tensor type.");
+  }
+}
+
 // Simple helper to experiment creating TMA descriptors on the host.
 // This is a useful to test TMA operations independently.
 static PyObject *fill1DTMADescriptor(PyObject *self, PyObject *args) {
   unsigned long long global_address;
   uint64_t dim;
   uint32_t tensorDim;
-  int elementSize;
+  const char *type_str;
   Py_buffer desc_buffer;
-  if (!PyArg_ParseTuple(args, "KKiiy*", &global_address, &dim, &tensorDim,
-                        &elementSize, &desc_buffer)) {
+  if (!PyArg_ParseTuple(args, "KKisy*", &global_address, &dim, &tensorDim,
+                        &type_str, &desc_buffer)) {
     return NULL;
   }
+  int elementSize;
+  CUtensorMapDataType type;
+  getTensorTypeAndSize(type_str, &elementSize, &type);
   char *desc = (char *)desc_buffer.buf;
   uint64_t dims[1] = {dim};
   uint64_t globalStrides[1] = {dim * elementSize};
   uint32_t boxDim[1] = {tensorDim};
   uint32_t elementStrides[1] = {1};
-  CUtensorMapDataType type;
-  switch (elementSize) {
-  case 1:
-    type = CU_TENSOR_MAP_DATA_TYPE_UINT8;
-    break;
-  case 2:
-    type = CU_TENSOR_MAP_DATA_TYPE_UINT16;
-    break;
-  case 4:
-    type = CU_TENSOR_MAP_DATA_TYPE_UINT32;
-    break;
-  default:
-    PyErr_SetString(PyExc_ValueError, "elementSize must be 1, 2, or 4");
-  }
   int rank = 1;
   CUresult result = cuTensorMapEncodeTiled(
       (CUtensorMap *)desc, type, rank, (void *)global_address, dims,
@@ -303,31 +317,21 @@ static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
   unsigned long long global_address;
   uint64_t dims[2];
   uint32_t tensorDims[2];
-  int elementSize;
+  const char *type_str;
   Py_buffer desc_buffer;
-  if (!PyArg_ParseTuple(args, "KKKiiiy*", &global_address, &dims[1], &dims[0],
-                        &tensorDims[1], &tensorDims[0], &elementSize,
+  if (!PyArg_ParseTuple(args, "KKKiisy*", &global_address, &dims[1], &dims[0],
+                        &tensorDims[1], &tensorDims[0], &type_str,
                         &desc_buffer)) {
     return NULL;
   }
+  int elementSize;
+  CUtensorMapDataType type;
+  getTensorTypeAndSize(type_str, &elementSize, &type);
   char *desc = (char *)desc_buffer.buf;
   uint64_t globalStrides[2] = {dims[0] * elementSize,
                                dims[0] * dims[1] * elementSize};
   uint32_t elementStrides[2] = {1, 1};
-  CUtensorMapDataType type;
-  switch (elementSize) {
-  case 1:
-    type = CU_TENSOR_MAP_DATA_TYPE_UINT8;
-    break;
-  case 2:
-    type = CU_TENSOR_MAP_DATA_TYPE_UINT16;
-    break;
-  case 4:
-    type = CU_TENSOR_MAP_DATA_TYPE_UINT32;
-    break;
-  default:
-    PyErr_SetString(PyExc_ValueError, "elementSize must be 1, 2, or 4");
-  }
+
   int rank = 2;
   // Swizzling should be picked in codegen but since we need to set it on the
   // descriptor we rely on a convention between this function and codegen.

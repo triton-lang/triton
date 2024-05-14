@@ -705,7 +705,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
       // CHECK-NEXT: triton_gpu.local_store
       // CHECK-NEXT: triton_nvidia_gpu.fence_async_shared
       // CHECK-NEXT: triton_nvidia_gpu.async_tma_copy_local_to_global
-      tt.experimental_descriptor_store %arg1[%1], %arg0 : !tt.ptr<i8>, tensor<1xf32, #blocked>
+      tt.experimental_descriptor_store %arg1[%1], %arg0, reduction_op = none : !tt.ptr<i8>, tensor<1xf32, #blocked>
     }
     tt.return
   }

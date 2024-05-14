@@ -7,6 +7,10 @@ import triton
 import triton.language as tl
 
 
+def get_type_name(dtype):
+    return str(dtype).split('.')[-1]
+
+
 def test_descriptor_load_ttgir():
     if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] == 9:
         pytest.skip("Test requires Hopper target.")
@@ -42,7 +46,7 @@ def test_descriptor_load_ttgir():
 
     x = torch.randn(SIZE, dtype=torch.float32, device=device)
     desc = np.empty(SIZE, dtype=np.int8)
-    triton.runtime.driver.active.utils.fill_1d_tma_descriptor(x.data_ptr(), SIZE, SIZE, x.element_size(), desc)
+    triton.runtime.driver.active.utils.fill_1d_tma_descriptor(x.data_ptr(), SIZE, SIZE, get_type_name(x.dtype), desc)
     desc = torch.tensor(desc, device=device)
     z_tri = torch.empty_like(x)
     kernel[(1, 1, 1)](z_tri, desc)
@@ -65,7 +69,7 @@ def test_experimetal_descriptor_load():
 
     x = torch.randn(SIZE, dtype=torch.float32, device=device)
     desc = np.empty(SIZE, dtype=np.int8)
-    triton.runtime.driver.active.utils.fill_1d_tma_descriptor(x.data_ptr(), SIZE, SIZE, x.element_size(), desc)
+    triton.runtime.driver.active.utils.fill_1d_tma_descriptor(x.data_ptr(), SIZE, SIZE, get_type_name(x.dtype), desc)
     desc = torch.tensor(desc, device=device)
     z_tri = torch.empty_like(x)
     kernel[(1, )](z_tri, desc, SIZE=SIZE, num_warps=4)
@@ -74,7 +78,8 @@ def test_experimetal_descriptor_load():
 
 @triton.jit
 def matmul_kernel_tma(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
-                      M, N, K, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr):
+                      M, N, K, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
+                      initial_accumulator: tl.constexpr):
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     pid_m = pid % num_pid_m
@@ -89,39 +94,47 @@ def matmul_kernel_tma(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
         accumulator = tl.dot(a, b, acc=accumulator)
         offs_k += BLOCK_SIZE_K
     accumulator = accumulator.to(tl.float16)
-    tl._experimental_descriptor_store(c_desc_ptr, accumulator, [offs_am, offs_bn])
+    if initial_accumulator:
+        tl._experimental_descriptor_store(c_desc_ptr, accumulator, [offs_am, offs_bn], accumulator_fn="add")
+    else:
+        tl._experimental_descriptor_store(c_desc_ptr, accumulator, [offs_am, offs_bn])
 
 
 @pytest.mark.parametrize("num_stages", [1, 4])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(32, 32, 32), (128, 64, 64), (128, 128, 64), (128, 256, 64)])
-def test_experimental_tma_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K):
+@pytest.mark.parametrize("initial_accumulator", [False, True])
+def test_experimental_tma_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K, initial_accumulator):
     if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] == 9:
         pytest.skip("Test requires Hopper target.")
         return
     device = "cuda"
-    M, N, K = 8192, 8192, 1024
+    M, N, K = 32, 32, 32
     torch.manual_seed(42)
     A = torch.randn((M, K), dtype=torch.float16, device=device)
     B = torch.randn((K, N), dtype=torch.float16, device=device)
-    C = torch.empty((M, N), dtype=torch.float16, device=device)
+    C = torch.zeros((M, N), dtype=torch.float16, device=device)
+    if initial_accumulator:
+        C = C + 1
     TMA_SIZE = 128
     desc_a = np.empty(TMA_SIZE, dtype=np.int8)
     desc_b = np.empty(TMA_SIZE, dtype=np.int8)
     desc_c = np.empty(TMA_SIZE, dtype=np.int8)
-    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(A.data_ptr(), M, K, BLOCK_M, BLOCK_K, A.element_size(),
-                                                              desc_a)
-    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(B.data_ptr(), K, N, BLOCK_K, BLOCK_N, B.element_size(),
-                                                              desc_b)
-    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(C.data_ptr(), M, N, BLOCK_M, BLOCK_N, C.element_size(),
-                                                              desc_c)
+    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(A.data_ptr(), M, K, BLOCK_M, BLOCK_K,
+                                                              get_type_name(A.dtype), desc_a)
+    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(B.data_ptr(), K, N, BLOCK_K, BLOCK_N,
+                                                              get_type_name(B.dtype), desc_b)
+    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(C.data_ptr(), M, N, BLOCK_M, BLOCK_N,
+                                                              get_type_name(C.dtype), desc_c)
 
     desc_a = torch.tensor(desc_a, device=device)
     desc_b = torch.tensor(desc_b, device=device)
     desc_c = torch.tensor(desc_c, device=device)
     kernel = matmul_kernel_tma[(triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1,
-                                1)](desc_a, desc_b, desc_c, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_warps=8,
-                                    num_stages=num_stages)
+                                1)](desc_a, desc_b, desc_c, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, initial_accumulator,
+                                    num_warps=8, num_stages=num_stages)
     ref_out = torch.matmul(A.to(torch.float32), B.to(torch.float32)).to(torch.float16)
+    if initial_accumulator:
+        ref_out = ref_out + 1
     torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
     if BLOCK_M >= 64 and BLOCK_N >= 64:
         assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm["ptx"]

@@ -1137,11 +1137,12 @@ def TT_ExperimentalDescriptorStoreOp : TT_Op<"experimental_descriptor_store", [
       ins
       TT_PtrType:$desc_ptr,
       TT_Tensor:$src,
-      Variadic<I32>:$indices
+      Variadic<I32>:$indices,
+      TT_DescStoreReductionAttr:$reduction_op
     );
 
     let assemblyFormat = [{
-      $desc_ptr `[` $indices `]` `,` $src
+      $desc_ptr `[` $indices `]` `,` $src `,` `reduction_op` `=` $reduction_op
       attr-dict `:` qualified(type($desc_ptr)) `,` type($src)
     }];
 }

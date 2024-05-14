@@ -1,4 +1,4 @@
-#include <pybind11/functional.h>
+﻿#include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -198,6 +198,15 @@ void init_triton_ir(py::module &&m) {
       .value("TF32x3", InputPrecision::TF32x3)
       .value("IEEE", InputPrecision::IEEE)
       .export_values();
+
+  py::enum_<DescStoreReduction>(m, "DESC_STORE_REDCUTION", py::module_local())
+      .value("NONE", DescStoreReduction::NONE)
+      .value("ADD", DescStoreReduction::ADD)
+      .value("MIN", DescStoreReduction::MIN)
+      .value("MAX", DescStoreReduction::MAX)
+      .value("AND", DescStoreReduction::AND)
+      .value("OR", DescStoreReduction::OR)
+      .value("XOR", DescStoreReduction::XOR);
 
   py::class_<MLIRContext>(m, "context", py::module_local()).def(py::init<>());
 
@@ -1255,9 +1264,10 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_descriptor_store",
            [](TritonOpBuilder &self, Value &desc_ptr, Value value,
-              std::vector<Value> &indices) -> void {
+              std::vector<Value> &indices,
+              DescStoreReduction reductionOp) -> void {
              self.create<ExperimentalDescriptorStoreOp>(desc_ptr, value,
-                                                        indices);
+                                                        indices, reductionOp);
            })
       .def("create_reshape",
            [](TritonOpBuilder &self, Value &arg, std::vector<int64_t> &shape,

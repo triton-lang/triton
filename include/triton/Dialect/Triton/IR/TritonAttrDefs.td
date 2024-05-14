@@ -118,4 +118,19 @@ def TT_InputPrecisionAttr : I32EnumAttr<
   let cppNamespace = "::mlir::triton";
 }
 
+// Store reduction operations.
+def TT_DescStoreReductionAttr : I32EnumAttr<
+    "DescStoreReduction", "",
+    [
+      I32EnumAttrCase<"NONE", 0, "none">,
+      I32EnumAttrCase<"ADD", 1, "add">,
+      I32EnumAttrCase<"MIN", 2, "min">,
+      I32EnumAttrCase<"MAX", 3, "max">,
+      I32EnumAttrCase<"AND", 4, "and">,
+      I32EnumAttrCase<"OR", 5, "or">,
+      I32EnumAttrCase<"XOR", 6, "xor">,
+    ]>{
+  let cppNamespace = "::mlir::triton";
+}
+
 #endif

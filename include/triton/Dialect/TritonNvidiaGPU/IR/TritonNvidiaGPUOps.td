@@ -206,10 +206,11 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global",
   let arguments = (
     ins TT_PtrType:$desc_ptr,
     Variadic<I32>:$coord,
-    TT_MemDescType:$src);
+    TT_MemDescType:$src,
+    TT_DescStoreReductionAttr:$reduction_op);
 
   let assemblyFormat = [{
-    $desc_ptr `[` $coord `]` $src
+    $desc_ptr `[` $coord `]` $src `,` `reduction_op` `=` $reduction_op
     attr-dict `:` type($desc_ptr) `,` type($src)
   }];
 }

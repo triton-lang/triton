@@ -83,7 +83,7 @@ public:
     Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType, op.getSrc());
     rewriter.create<triton::nvidia_gpu::FenceAsyncSharedOp>(loc, false);
     rewriter.create<triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp>(
-        loc, op.getDescPtr(), op.getIndices(), alloc);
+        loc, op.getDescPtr(), op.getIndices(), alloc, op.getReductionOp());
     rewriter.create<triton::nvidia_gpu::TMAStoreWait>(loc, 0);
     rewriter.eraseOp(op);
     return success();

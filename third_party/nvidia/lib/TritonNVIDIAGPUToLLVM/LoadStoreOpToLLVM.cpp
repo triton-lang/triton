@@ -998,6 +998,25 @@ struct AsyncTMACopyLocalToGlobalOpConversion
           triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
+  // Convert to the proper PTX string for the reduction operation.
+  static std::string toPTXString(triton::DescStoreReduction reductionOp) {
+    switch (reductionOp) {
+    case triton::DescStoreReduction::ADD:
+      return "add";
+    case triton::DescStoreReduction::MIN:
+      return "min";
+    case triton::DescStoreReduction::MAX:
+      return "max";
+    case triton::DescStoreReduction::AND:
+      return "and";
+    case triton::DescStoreReduction::OR:
+      return "or";
+    case triton::DescStoreReduction::XOR:
+      return "xor";
+    default:
+      llvm_unreachable("Unknown reduction operation");
+    }
+  }
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp op,
                   OpAdaptor adaptor,
@@ -1038,8 +1057,16 @@ struct AsyncTMACopyLocalToGlobalOpConversion
       SmallVector<PTXBuilder::Operand *> operands = {
           ptxBuilderTMA.newOperand(pred, "b"),
           ptxBuilderTMA.newOperand(adaptor.getDescPtr(), "l")};
-      std::string tmaInst = "@$0 cp.async.bulk.tensor." + std::to_string(rank) +
-                            "d.global.shared::cta.bulk_group [$1, {";
+
+      std::string tmaInst;
+      if (op.getReductionOp() == triton::DescStoreReduction::NONE) {
+        tmaInst = "@$0 cp.async.bulk.tensor." + std::to_string(rank) +
+                  "d.global.shared::cta.bulk_group [$1, {";
+      } else {
+        tmaInst = "@$0 cp.reduce.async.bulk.tensor." + std::to_string(rank) +
+                  "d.global.shared::cta." + toPTXString(op.getReductionOp()) +
+                  ".bulk_group [$1, {";
+      }
       int operandIdx = 2;
       for (int i = 0; i < rank; i++) {
         Value coord = adaptor.getCoord()[rank - i - 1];

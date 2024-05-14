@@ -23,9 +23,9 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 // CHECK-LABEL: tma_store
 //       CHECK: triton_gpu.local_alloc
 //       CHECK: triton_nvidia_gpu.fence_async_shared {bCluster = false}
-//       CHECK: triton_nvidia_gpu.async_tma_copy_local_to_global
+//       CHECK: triton_nvidia_gpu.async_tma_copy_local_to_global {{.*}} reduction_op = none
   tt.func public @tma_store(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: tensor<128x256xf32, #blocked>) {
-    tt.experimental_descriptor_store %arg0[%arg1, %arg1], %arg2 : !tt.ptr<i8>, tensor<128x256xf32, #blocked>
+    tt.experimental_descriptor_store %arg0[%arg1, %arg1], %arg2, reduction_op = none : !tt.ptr<i8>, tensor<128x256xf32, #blocked>
     tt.return
   }
 }

@@ -61,8 +61,9 @@ static void createTMAAsyncCopy(scf::ForOp &forOp,
   builder.create<ttng::TMAStoreWait>(loc, 0);
   builder.create<ttg::LocalStoreOp>(loc, storeOp.getSrc(), alloc);
   builder.create<ttng::FenceAsyncSharedOp>(loc, false);
-  builder.create<ttng::AsyncTMACopyLocalToGlobalOp>(
-      loc, storeOp.getDescPtr(), storeOp.getIndices(), alloc);
+  builder.create<ttng::AsyncTMACopyLocalToGlobalOp>(loc, storeOp.getDescPtr(),
+                                                    storeOp.getIndices(), alloc,
+                                                    storeOp.getReductionOp());
 
   storeOp->erase();
 }

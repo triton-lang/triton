@@ -1611,14 +1611,16 @@ def _experimental_descriptor_load(desc_pointer, offsets, shape, dtype, _builder=
 
 
 @builtin
-def _experimental_descriptor_store(desc_pointer, value, offsets, _builder=None):
+def _experimental_descriptor_store(desc_pointer, value, offsets, accumulator_fn="", _builder=None):
     """
     Experimental feature to access TMA descriptors stores. This is an escape hatch to easily exercise TTGIR operations.
     This will be removed in the future and shouldn't be used in production code.
 
-    This stores a tensor of data based on the descriptor and offsets.
+    This stores a tensor of data based on the descriptor and offsets. If accumulator_fn is provided the store will combine
+    the value with the existing memory using the provided function.
+    accumulator_fn supported are `add`, `max`, `min`, `and`, `or`, `xor`.
     """
-    return semantic.descriptor_store(desc_pointer, value, offsets, _builder)
+    return semantic.descriptor_store(desc_pointer, value, offsets, accumulator_fn, _builder)
 
 
 @_tensor_member_fn
