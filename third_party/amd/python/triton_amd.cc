@@ -216,7 +216,7 @@ void init_triton_amd(py::module &&m) {
         if (funcName.contains("__nv_")) {
           std::stringstream message;
           message << "Implicit conversion of CUDA " << funcName.str()
-                  << " intrinsics has been dropped; "
+                  << " device function has been dropped; "
                   << "please, update your source program to use "
                      "triton.language.extra.<op> "
                   << "to replace triton.language.extra.cuda.<op>";

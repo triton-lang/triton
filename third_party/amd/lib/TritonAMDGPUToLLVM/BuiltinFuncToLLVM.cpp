@@ -120,7 +120,6 @@ private:
     LLVM::LLVMFunctionType calleeType = callOp.getCalleeType().value();
     Type returnType = calleeType.getReturnType();
 
-    LLVM::FastmathFlagsAttr flags;
     auto loc = callOp.getLoc();
 
     Operation *replacementOp = nullptr;
@@ -131,7 +130,7 @@ private:
     } else if (calleeName == "__triton_hip_fabs") {
       assert(operands.size() == 1);
       replacementOp =
-          rewriter.create<LLVM::FAbsOp>(loc, returnType, operands[0], flags);
+          rewriter.create<LLVM::FAbsOp>(loc, returnType, operands[0]);
     } else if (calleeName == "__triton_hip_llrint") {
       assert(operands.size() == 1);
       // Note, LrintOp and LlrintOp result in a code-gen error
