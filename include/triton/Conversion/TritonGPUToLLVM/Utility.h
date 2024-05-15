@@ -392,6 +392,25 @@ inline Value getSharedMemoryBase(Location loc,
   Value base = gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func), offVal);
   return base;
 }
+
+// Returns a Value for the format string, which you can reuse. Writes the byte
+// count for the string to |formatStrByteCount| if not null.
+inline Value llPrintf(StringRef msg, ValueRange args,
+                      ConversionPatternRewriter &rewriter,
+                      const TargetInfoBase &targetInfo,
+                      int *formatStrByteCount = nullptr) {
+  assert(!msg.empty() && "printf with empty string not supported");
+  llvm::SmallString<64> msgNewline(msg);
+  msgNewline.push_back('\n');
+  msgNewline.push_back('\0');
+  Value msgValue =
+      LLVM::addStringToModule(UnknownLoc::get(rewriter.getContext()), rewriter,
+                              "printfFormat_", msgNewline);
+  targetInfo.printf(rewriter, msgValue, msgNewline.size_in_bytes(), args);
+  if (formatStrByteCount)
+    *formatStrByteCount = msgNewline.size_in_bytes();
+  return msgValue;
+}
 } // namespace LLVM
 
 /* ------------------------------------ */

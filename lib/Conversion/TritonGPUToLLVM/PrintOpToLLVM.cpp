@@ -6,6 +6,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
+using mlir::LLVM::llPrintf;
 namespace {
 
 // The input print op contains:
@@ -39,7 +40,7 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
       os << "pid (" << getFormatSubstr(pid[0]) << ", "
          << getFormatSubstr(pid[1]) << ", " << getFormatSubstr(pid[2]) << ")"
          << op.getPrefix();
-      llPrintf(formatStr, {pid[0], pid[1], pid[2]}, rewriter);
+      llPrintf(formatStr, {pid[0], pid[1], pid[2]}, rewriter, targetInfo);
       rewriter.eraseOp(op);
       return success();
     }
@@ -159,8 +160,8 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
       // printfOperands.  But we don't want to create BLOCK_SIZE duplicate
       // strings, so we cache the Value.
       if (i == 0) {
-        formatStrValue =
-            llPrintf(formatStr, printfOperands, rewriter, &formatStrByteCount);
+        formatStrValue = llPrintf(formatStr, printfOperands, rewriter,
+                                  targetInfo, &formatStrByteCount);
       } else {
         targetInfo.printf(rewriter, formatStrValue, formatStrByteCount,
                           printfOperands);
@@ -210,24 +211,6 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
     }
     assert(false && "not supported type");
     return "";
-  }
-
-  // Returns a Value for the format string, which you can reuse. Writes the byte
-  // count for the string to |formatStrByteCount| if not null.
-  Value llPrintf(StringRef msg, ValueRange args,
-                 ConversionPatternRewriter &rewriter,
-                 int *formatStrByteCount = nullptr) const {
-    assert(!msg.empty() && "printf with empty string not supported");
-    llvm::SmallString<64> msgNewline(msg);
-    msgNewline.push_back('\n');
-    msgNewline.push_back('\0');
-    Value msgValue =
-        LLVM::addStringToModule(UnknownLoc::get(rewriter.getContext()),
-                                rewriter, "printfFormat_", msgNewline);
-    targetInfo.printf(rewriter, msgValue, msgNewline.size_in_bytes(), args);
-    if (formatStrByteCount)
-      *formatStrByteCount = msgNewline.size_in_bytes();
-    return msgValue;
   }
 
 protected:
