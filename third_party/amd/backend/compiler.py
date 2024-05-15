@@ -30,6 +30,7 @@ class HIPOptions:
     kpack: int = 1
     allow_flush_denorm: bool = False
     max_num_imprecise_acc_default: int = 0
+    backend_name: str = 'hip'
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
