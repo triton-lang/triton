@@ -1001,36 +1001,48 @@ SmallVector<unsigned> DotOperandEncodingAttr::getShapePerCTATile(
 LogicalResult DotOperandEncodingAttr::verify(
     ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
     unsigned opIdx, Attribute parent, unsigned kWidth) {
-  if (opIdx != 0 && opIdx != 1)
-    return emitError() << "DotOperandEncoding::opIdx can be 0 or 1, got "
+  if (opIdx != 0 && opIdx != 1) {
+    return emitError() << "DotOperandEncodingAttr::opIdx can be 0 or 1, got: "
                        << opIdx;
-  if (!parent)
-    return emitError()
-           << "DotOperandEncoding::parent is manadatory parameter, got nullptr";
-  if (kWidth != 0) {
-    // general confines on parent layouts
-    if (!parent.isa<NvidiaMmaEncodingAttr, AMDWmmaEncodingAttr,
-                    AMDMfmaEncodingAttr>())
-      return emitError()
-             << "DotOperandEncoding::kWidth is not supported for given parent: "
-             << parent;
-    // additional confines
-    if (parent.isa<NvidiaMmaEncodingAttr>() &&
-        !parent.cast<NvidiaMmaEncodingAttr>().isAmpere())
-      return emitError()
-             << "DotOperandEncoding::kWidth is non zero only for Ampere";
-    // TODO: remove this condition if new values are supported
-    if (parent.isa<AMDWmmaEncodingAttr>() && kWidth != 16)
-      return emitError()
-             << "DotOperandEncoding::kWidth currently supports only 16";
-  } else {
-    if (parent.isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>() ||
-        (parent.isa<NvidiaMmaEncodingAttr>() &&
-         parent.cast<NvidiaMmaEncodingAttr>().isAmpere()))
-      return emitError() << "DotOperandEncoding::kWidth is mandatory parent: "
-                         << parent;
   }
-  return success();
+  if (!parent) {
+    return emitError()
+           << "DotOperandEncodingAttr::parent attribute cannot be null";
+  }
+  if (auto parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
+    if (kWidth != 0 && !parentAttr.isAmpere())
+      return emitError() << "DotOperandEncodingAttr::kWidth can only be "
+                            "non-zero for Ampere MMA parent";
+    if (kWidth == 0 && parentAttr.isAmpere())
+      return emitError() << "DotOperandEncodingAttr::kWidth is mandatory for "
+                            "Ampere MMA parent";
+    return success();
+  }
+
+  if (auto parentAttr = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
+    // TODO: remove this condition if new values are supported
+    if (kWidth != 16)
+      return emitError() << "DotOperandEncodingAttr::kWidth currently supports "
+                            "only 16 for WMMA parent";
+    return success();
+  }
+
+  if (auto parentAttr = mlir::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
+    if (kWidth == 0)
+      return emitError() << "DotOperandEncodingAttr::kWidth is mandatory for "
+                            "the MFMA parent";
+    return success();
+  }
+
+  if (auto parentAttr = mlir::dyn_cast<BlockedEncodingAttr>(parent)) {
+    if (kWidth != 0)
+      return emitError() << "DotOperandEncodingAttr::kWidth is not supported "
+                            "for Blocked layout";
+    return success();
+  }
+
+  return emitError() << "DotOperandEncodingAttr unexpected parent layout: "
+                     << parent;
 }
 
 //===----------------------------------------------------------------------===//
