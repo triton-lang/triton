@@ -219,11 +219,13 @@ if(TRITON_BUILD_PYTHON_MODULE)
           LLVMAArch64CodeGen
           LLVMAArch64AsmParser
       )
-  else()
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
       list(APPEND TRITON_LIBRARIES
           LLVMX86CodeGen
           LLVMX86AsmParser
       )
+  else()
+      message(FATAL_ERROR "LLVM codegen/ASM parser libs: This HW architecture is not configured in cmake lib dependencies.")
   endif()
 
   # Define triton library
