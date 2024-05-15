@@ -240,16 +240,16 @@ class CUDABackend(BaseBackend):
             _, cuda_version = _path_to_binary("ptxas")
             ptx_version = ptx_get_version(cuda_version)
 
-            # PTX 8.3 is the max version supported by llvm 3a83162168.
-            #
-            # To check if a newer PTX version is supported, increase this value
-            # and run a test.  If it's not supported, LLVM will print a warning
-            # like "+ptx8.4 is not a recognized feature for this target".
-            ptx_version = min(83, ptx_version)
+        # PTX 8.3 is the max version supported by llvm 3a83162168.
+        #
+        # To check if a newer PTX version is supported, increase this value
+        # and run a test.  If it's not supported, LLVM will print a warning
+        # like "+ptx8.4 is not a recognized feature for this target".
+        llvm_ptx_version = min(83, ptx_version)
 
         triple = 'nvptx64-nvidia-cuda'
         proc = 'sm_90a' if capability == 90 else f'sm_{capability}'
-        features = f'+ptx{ptx_version}'
+        features = f'+ptx{llvm_ptx_version}'
         ret = llvm.translate_to_asm(src, triple, proc, features, ['nvptx-short-ptr'], opt.enable_fp_fusion, False)
         # Find kernel names (there should only be one)
         names = re.findall(r".visible .entry ([a-zA-Z_][a-zA-Z0-9_]*)", ret)
