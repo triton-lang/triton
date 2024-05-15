@@ -372,29 +372,25 @@ LinearLayout hopperMmaToLinearLayout(ArrayRef<int64_t> shape,
 
   // Check that it's a known MMA layout.
   assert(mma.getInstrShape().size() == 3);
-
-  // TODO(jlebar): I'm not sure the names m/k/n are in the right order.  It
-  // doesn't make much sense to me that `k` would affect regBases, since an #mma
-  // layout is for the *output* of the gemm.
   int m = mma.getInstrShape()[0];
-  int k = mma.getInstrShape()[1];
-  int n = mma.getInstrShape()[2];
+  int n = mma.getInstrShape()[1];
+  int k = mma.getInstrShape()[2];
   assert(m == 16);
-  assert(k == 16 || k == 32 || k == 64 || k == 128 || k == 256);
-  assert(n == 8 || n == 16 || n == 32);
+  assert(n == 16 || n == 32 || n == 64 || n == 128 || n == 256);
+  assert(k == 8 || k == 16 || k == 32);
 
   MLIRContext *ctx = mma.getContext();
-
-  // Please don't ask me to explain this.  This was determined experimentally.
-  std::vector<std::vector<int32_t>> regBases = {{1, 0}, {0, 8}};
-  for (int i = 16; i <= k; i *= 2) {
-    regBases.push_back({i / 2, 0});
-  }
   LinearLayout ctaLayout(
-      {{S("register"), regBases},
+      {{S("register"), {{1, 0}, {0, 8}}},
        {S("lane"), {{2, 0}, {4, 0}, {0, 1}, {0, 2}, {0, 4}}}},
       {S("dim1"), S("dim0")});
 
+  // Expand the `register` dimension so the size of dim1 matches `n`.
+  ctaLayout *= LinearLayout::identity1D(n / ctaLayout.getOutDimSize(S("dim1")),
+                                        S("register"), S("dim1"));
+
+  // Expand the `warp` dimension according to warpsPerCTA.
+  //
   // It's weird that this is order [0,1] when MMAv2's warpsPerCTA is [1,0], but
   // this really does seem to be correct.
   ctaLayout *= identityND(S("warp"), mma.getWarpsPerCTA(), /*order=*/{0, 1},
