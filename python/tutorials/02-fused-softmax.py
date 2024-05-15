@@ -125,7 +125,7 @@ def softmax(x):
     num_warps = 8
 
     # Number of software piepling stages.
-    num_stages = 2
+    num_stages = 4 if SIZE_SMEM > 200000 else 2
 
     # Allocate output
     y = torch.empty_like(x)
