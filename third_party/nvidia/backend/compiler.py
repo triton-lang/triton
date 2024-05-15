@@ -170,6 +170,7 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         passes.common.add_cse(pm)
         if capability // 10 >= 8:
+            passes.ttgpuir.add_fold_tensor_select_into_if(pm)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.num_warps, opt.num_ctas, capability)
         if capability // 10 <= 8:
             passes.ttgpuir.add_prefetch(pm)
