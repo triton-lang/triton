@@ -357,5 +357,78 @@ TEST_F(LinearLayoutConversionsTest, MMAv3_1024x1024) {
                          {S("dim0"), S("dim1")}));
 }
 
+TEST_F(LinearLayoutConversionsTest, MMAv3_4x2Warps) {
+  auto legacy = mma(3, 0, {16, 32, 16}, {4, 2}, {1, 1}, {1, 1}, {1, 0});
+
+  EXPECT_EQ(toLinearLayout({64, 32}, legacy),
+            LinearLayout({{S("register"), {{0, 1}, {8, 0}, {0, 8}, {0, 16}}},
+                          {S("lane"), {{0, 2}, {0, 4}, {1, 0}, {2, 0}, {4, 0}}},
+                          {S("warp"), {{16, 0}, {32, 0}, {0, 0}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1")}));
+  EXPECT_EQ(toLinearLayout({64, 64}, legacy),
+            LinearLayout({{S("register"), {{0, 1}, {8, 0}, {0, 8}, {0, 16}}},
+                          {S("lane"), {{0, 2}, {0, 4}, {1, 0}, {2, 0}, {4, 0}}},
+                          {S("warp"), {{16, 0}, {32, 0}, {0, 32}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1")}));
+  EXPECT_EQ(
+      toLinearLayout({128, 64}, legacy),
+      LinearLayout({{S("register"), {{0, 1}, {8, 0}, {0, 8}, {0, 16}, {64, 0}}},
+                    {S("lane"), {{0, 2}, {0, 4}, {1, 0}, {2, 0}, {4, 0}}},
+                    {S("warp"), {{16, 0}, {32, 0}, {0, 32}}},
+                    {S("block"), {}}},
+                   {S("dim0"), S("dim1")}));
+  EXPECT_EQ(
+      toLinearLayout({256, 64}, legacy),
+      LinearLayout({{S("register"),
+                     {{0, 1}, {8, 0}, {0, 8}, {0, 16}, {64, 0}, {128, 0}}},
+                    {S("lane"), {{0, 2}, {0, 4}, {1, 0}, {2, 0}, {4, 0}}},
+                    {S("warp"), {{16, 0}, {32, 0}, {0, 32}}},
+                    {S("block"), {}}},
+                   {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, MMAv3_4x4Warps) {
+  auto legacy = mma(3, 0, {16, 16, 8}, {4, 4}, {1, 1}, {1, 1}, {1, 0});
+
+  EXPECT_EQ(toLinearLayout({16, 16}, legacy),
+            LinearLayout({{S("register"), {{0, 1}, {8, 0}, {0, 8}}},
+                          {S("lane"), {{0, 2}, {0, 4}, {1, 0}, {2, 0}, {4, 0}}},
+                          {S("warp"), {{0, 0}, {0, 0}, {0, 0}, {0, 0}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1")}));
+  EXPECT_EQ(toLinearLayout({32, 16}, legacy),
+            LinearLayout({{S("register"), {{0, 1}, {8, 0}, {0, 8}}},
+                          {S("lane"), {{0, 2}, {0, 4}, {1, 0}, {2, 0}, {4, 0}}},
+                          {S("warp"), {{16, 0}, {0, 0}, {0, 0}, {0, 0}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1")}));
+  EXPECT_EQ(toLinearLayout({64, 16}, legacy),
+            LinearLayout({{S("register"), {{0, 1}, {8, 0}, {0, 8}}},
+                          {S("lane"), {{0, 2}, {0, 4}, {1, 0}, {2, 0}, {4, 0}}},
+                          {S("warp"), {{16, 0}, {32, 0}, {0, 0}, {0, 0}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1")}));
+  EXPECT_EQ(toLinearLayout({128, 16}, legacy),
+            LinearLayout({{S("register"), {{0, 1}, {8, 0}, {0, 8}, {64, 0}}},
+                          {S("lane"), {{0, 2}, {0, 4}, {1, 0}, {2, 0}, {4, 0}}},
+                          {S("warp"), {{16, 0}, {32, 0}, {0, 0}, {0, 0}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1")}));
+  EXPECT_EQ(toLinearLayout({32, 32}, legacy),
+            LinearLayout({{S("register"), {{0, 1}, {8, 0}, {0, 8}}},
+                          {S("lane"), {{0, 2}, {0, 4}, {1, 0}, {2, 0}, {4, 0}}},
+                          {S("warp"), {{16, 0}, {0, 0}, {0, 16}, {0, 0}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1")}));
+  EXPECT_EQ(toLinearLayout({64, 32}, legacy),
+            LinearLayout({{S("register"), {{0, 1}, {8, 0}, {0, 8}}},
+                          {S("lane"), {{0, 2}, {0, 4}, {1, 0}, {2, 0}, {4, 0}}},
+                          {S("warp"), {{16, 0}, {32, 0}, {0, 16}, {0, 0}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1")}));
+}
+
 } // anonymous namespace
 } // namespace mlir::triton::gpu

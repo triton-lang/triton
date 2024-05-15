@@ -277,9 +277,9 @@ LinearLayout ensureLayoutNotSmallerThan(
 //
 // See the nomenclature note at the top of the file for why the variable with
 // type CTALayoutAttr is called cgaLayoutAttr.
-LinearLayout combineCtaAndCgaAndEnsureExpectedShape(LinearLayout ctaLayout,
-                                                    CTALayoutAttr cgaLayoutAttr,
-                                                    ArrayRef<int64_t> shape) {
+LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
+                                    CTALayoutAttr cgaLayoutAttr,
+                                    ArrayRef<int64_t> shape) {
   int rank = shape.size();
   assert(ctaLayout.getNumOutDims() == rank);
   assert(cgaLayoutAttr.getCTAOrder().size() == rank);
@@ -307,7 +307,12 @@ LinearLayout combineCtaAndCgaAndEnsureExpectedShape(LinearLayout ctaLayout,
 
   ctaLayout = ensureLayoutNotSmallerThan(ctaLayout, ctaShape);
   ctaLayout = ensureLayoutNotLargerThan(ctaLayout, ctaShape);
-  return (ctaLayout * cgaLayout).transposeOuts(outDimNames);
+
+  LinearLayout ret = (ctaLayout * cgaLayout).transposeOuts(outDimNames);
+  for (auto dim : ret.getOutDimNames()) {
+    assert(ret.getOutDimSize(dim) == labeledShape[dim]);
+  }
+  return ret;
 }
 
 LinearLayout blockedToLinearLayout(ArrayRef<int64_t> shape,
@@ -325,8 +330,7 @@ LinearLayout blockedToLinearLayout(ArrayRef<int64_t> shape,
       identityND(S("lane"), blocked.getThreadsPerWarp(), order, outDimNames) *
       identityND(S("warp"), blocked.getWarpsPerCTA(), order, outDimNames);
 
-  return combineCtaAndCgaAndEnsureExpectedShape(ctaLayout,
-                                                blocked.getCTALayout(), shape);
+  return combineCtaCgaWithShape(ctaLayout, blocked.getCTALayout(), shape);
 }
 
 LinearLayout ampereMmaToLinearLayout(ArrayRef<int64_t> shape,
@@ -354,8 +358,7 @@ LinearLayout ampereMmaToLinearLayout(ArrayRef<int64_t> shape,
       S("warp"), mma.getWarpsPerCTA(),
       llvm::to_vector(llvm::reverse(llvm::seq<unsigned>(rank))), dimNames);
 
-  return combineCtaAndCgaAndEnsureExpectedShape(ctaLayout, mma.getCTALayout(),
-                                                shape);
+  return combineCtaCgaWithShape(ctaLayout, mma.getCTALayout(), shape);
 }
 
 LinearLayout hopperMmaToLinearLayout(ArrayRef<int64_t> shape,
@@ -369,25 +372,36 @@ LinearLayout hopperMmaToLinearLayout(ArrayRef<int64_t> shape,
 
   // Check that it's a known MMA layout.
   assert(mma.getInstrShape().size() == 3);
+
+  // TODO(jlebar): I'm not sure the names m/k/n are in the right order.  It
+  // doesn't make much sense to me that `k` would affect regBases, since an #mma
+  // layout is for the *output* of the gemm.
   int m = mma.getInstrShape()[0];
   int k = mma.getInstrShape()[1];
   int n = mma.getInstrShape()[2];
   assert(m == 16);
-  assert(k == 16 || k == 32 || k == 64 || k == 128);
+  assert(k == 16 || k == 32 || k == 64 || k == 128 || k == 256);
   assert(n == 8 || n == 16 || n == 32);
 
   MLIRContext *ctx = mma.getContext();
-  SmallVector<StringAttr> dimNames = standardOutDimNames(ctx, rank);
+
+  // Please don't ask me to explain this.  This was determined experimentally.
+  std::vector<std::vector<int32_t>> regBases = {{1, 0}, {0, 8}};
+  for (int i = 16; i <= k; i *= 2) {
+    regBases.push_back({i / 2, 0});
+  }
   LinearLayout ctaLayout(
-      {{S("register"), {{1, 0}, {0, 8}}},
+      {{S("register"), regBases},
        {S("lane"), {{2, 0}, {4, 0}, {0, 1}, {0, 2}, {0, 4}}}},
       {S("dim1"), S("dim0")});
-  ctaLayout *= identityND(
-      S("warp"), mma.getWarpsPerCTA(),
-      llvm::to_vector(llvm::reverse(llvm::seq<unsigned>(rank))), dimNames);
 
-  return combineCtaAndCgaAndEnsureExpectedShape(ctaLayout, mma.getCTALayout(),
-                                                shape);
+  // It's weird that this is order [0,1] when MMAv2's warpsPerCTA is [1,0], but
+  // this really does seem to be correct.
+  ctaLayout *= identityND(S("warp"), mma.getWarpsPerCTA(), /*order=*/{0, 1},
+                          {S("dim0"), S("dim1")})
+                   .transposeOuts(ctaLayout.getOutDimNames());
+
+  return combineCtaCgaWithShape(ctaLayout, mma.getCTALayout(), shape);
 }
 
 } // anonymous namespace
