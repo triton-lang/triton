@@ -30,6 +30,12 @@ namespace mlir::triton::gpu {
 //
 LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
 
+// Returns true iff the given layout can be converted to a LinearLayout.  If
+// this returns false, calling toLinearLayout(layout) will assert.
+//
+// TODO(jlebar): Remove this once all legacy layouts are supported.
+bool toLinearLayoutIsSupported(Attribute layout);
+
 // TODO(jlebar): Helpers to convert a flattened shared layout to vector loads of
 // size n, in banks of size k, etc.
 

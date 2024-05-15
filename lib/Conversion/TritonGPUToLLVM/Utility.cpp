@@ -208,18 +208,9 @@ std::optional<SmallVector<SmallVector<Value>>>
 emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
                               const TargetInfoBase &target, Attribute layout,
                               RankedTensorType type, bool withCTAOffset) {
-  auto mma = dyn_cast<NvidiaMmaEncodingAttr>(layout);
-  if (isa<BlockedEncodingAttr>(layout) ||
-      (mma && (mma.isAmpere() || mma.isHopper()))) {
+  if (triton::gpu::toLinearLayoutIsSupported(layout)) {
     MLIRContext *ctx = rewriter.getContext();
     auto shape = type.getShape();
-    Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = i32_val(triton::gpu::getWarpSize(layout));
-    Value laneId = urem(threadId, warpSize);
-    Value warpId = udiv(threadId, warpSize);
-    Value blockId =
-        withCTAOffset ? target.getClusterCTAId(rewriter, loc) : i32_val(0);
-    unsigned rank = shape.size();
 
     LinearLayout ll = triton::gpu::toLinearLayout(shape, layout);
 
@@ -229,6 +220,14 @@ emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
     StringAttr kLane = str_attr("lane");
     StringAttr kWarp = str_attr("warp");
     StringAttr kBlock = str_attr("block");
+
+    Value threadId = getThreadId(rewriter, loc);
+    Value threadsPerWarp = i32_val(ll.getInDimSize(kLane));
+    Value laneId = urem(threadId, threadsPerWarp);
+    Value warpId = udiv(threadId, threadsPerWarp);
+    Value blockId =
+        withCTAOffset ? target.getClusterCTAId(rewriter, loc) : i32_val(0);
+    unsigned rank = shape.size();
     SmallVector<SmallVector<Value>> ret;
     for (unsigned reg = 0; reg < ll.getInDimSize(str_attr("register")); reg++) {
       auto idxs = applyLinearLayout(loc, rewriter, ll,

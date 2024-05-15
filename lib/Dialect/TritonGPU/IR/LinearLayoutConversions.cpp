@@ -1,3 +1,4 @@
+#include <set>
 #include <vector>
 
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -11,6 +12,9 @@
 #include "llvm/Support/MathExtras.h"
 
 namespace mlir::triton::gpu {
+
+LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
+
 namespace {
 
 // We use the following nomenclature in this file.
@@ -400,7 +404,74 @@ LinearLayout hopperMmaToLinearLayout(ArrayRef<int64_t> shape,
   return combineCtaCgaWithShape(ctaLayout, mma.getCTALayout(), shape);
 }
 
+LinearLayout toLinearLayout(ArrayRef<int64_t> shape, SliceEncodingAttr slice) {
+  MLIRContext *ctx = slice.getContext();
+
+  // First compute the linear layout for this layout's parent.
+  SmallVector<int64_t> parentShape(shape);
+  parentShape.insert(parentShape.begin() + slice.getDim(), 1);
+  LinearLayout parent =
+      triton::gpu::toLinearLayout(parentShape, slice.getParent());
+
+  // Remove dimension slice.getDim() from the parent layout in 3 steps.
+  //
+  //  1. Construct a layout `transform` from parent-out-dims to slice-out-dims
+  //     that removes the relevant out-dim.
+  //  2. Compute linearSlice = parent.compose(transform).  Now linearSlice maps
+  //     from parent in-dims to slice out-dims.
+  //  3. Remove duplicate registers from linearSlice.  (Technically this is
+  //     optional -- we should be able to rely on llvm and ptxas to do this for
+  //     us.  But it's necessary for us to match the legacy emitIndices code.)
+  auto outDimNames = standardOutDimNames(ctx, shape.size() + 1);
+  LinearLayout transform = LinearLayout::empty();
+  for (auto [idx, outDim] : llvm::enumerate(parent.getOutDimNames())) {
+    if (idx == slice.getDim()) {
+      // Because we're multiplying by all zeros, we could replace outDimNames[0]
+      // with any other valid out-dim; the layout will be the same.
+      transform *= LinearLayout::zeros1D(parent.getOutDimSize(outDim), outDim,
+                                         outDimNames[0]);
+    } else {
+      transform *= LinearLayout::identity1D(
+          parent.getOutDimSize(outDim), outDim,
+          outDimNames[idx - (idx < slice.getDim() ? 0 : 1)]);
+    }
+  }
+  LinearLayout linearSlice = parent.compose(transform);
+
+  // Along the register dim, remove repeated bases and bases that are all 0.
+  // (Technically we should probably do something with linearly-independent
+  // bases instead of searching for unique ones, but in practice registers'
+  // bases are always powers of 2 when converting from legacy layouts, and
+  // anyway our main goal isn't to remove all possible registers, but rather
+  // just to match the behavior of legacy emitIndices.)
+  std::set<std::vector<int>> seenBases;
+  seenBases.insert(std::vector<int>(linearSlice.getNumOutDims(), 0));
+  std::vector<std::vector<int>> newRegBases;
+
+  auto bases = linearSlice.getBases();
+  for (const auto &basis : bases[S("register")]) {
+    if (seenBases.insert(basis).second) {
+      newRegBases.push_back(basis);
+    }
+  }
+  bases[S("register")] = newRegBases;
+  return LinearLayout(std::move(bases), linearSlice.getOutDimNames());
+}
+
 } // anonymous namespace
+
+bool toLinearLayoutIsSupported(Attribute layout) {
+  if (isa<BlockedEncodingAttr>(layout)) {
+    return true;
+  }
+  if (auto mma = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
+    return mma.isAmpere() || mma.isHopper();
+  }
+  if (auto slice = dyn_cast<SliceEncodingAttr>(layout)) {
+    return toLinearLayoutIsSupported(slice.getParent());
+  }
+  return false;
+}
 
 LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
   if (auto blocked = dyn_cast<BlockedEncodingAttr>(layout)) {
@@ -413,6 +484,9 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
     if (mma.isHopper()) {
       return hopperMmaToLinearLayout(shape, mma);
     }
+  }
+  if (auto slice = dyn_cast<SliceEncodingAttr>(layout)) {
+    return toLinearLayout(shape, slice);
   }
 
   // TODO(jlebar): Other layouts
