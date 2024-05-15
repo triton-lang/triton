@@ -32,10 +32,10 @@ def is_hip():
     return not is_interpreter() and \
         triton.runtime.driver.active.get_current_target().backend == "hip"
 
-
-def is_hip_mi300():
-    target = triton.runtime.driver.active.get_current_target()
-    return target.backend == 'hip' and target.arch == 'gfx942'
+def get_arch():
+    if is_interpreter():
+        return ""
+    return triton.runtime.driver.active.get_current_target().arch
 
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
@@ -3107,8 +3107,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             pytest.skip("kpack too large for K")
         if not is_hip() and kpack == 2:
             pytest.skip("Skip duplicated tests on nv path")
-        if not is_hip() and (M, N, K) == (16, 16, 8):
-            pytest.skip("Unsupported dot sizes on nv path")
+        if "gfx9" not in get_arch() and (M, N, K) == (16, 16, 8):
+            pytest.skip("Unsupported dot sizes on non-gfx9 path")
 
     torch.backends.cuda.matmul.allow_tf32 = input_precision == "tf32"
 
@@ -5163,7 +5163,7 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
             pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
 
         ## TODO: Figure out why block size (128, 256, 128) fails on MI300
-        if is_hip_mi300() and BLOCK_M == 128:
+        if ("gfx94" in get_arch()) and BLOCK_M == 128:
             pytest.skip('BLOCK size (128, 256, 128) fails on MI300')
 
     check_type_supported(in_type_str, device)
