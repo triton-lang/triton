@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm --llvm-optimize-for-nvvm-target | FileCheck %s
 
 // CHECK-LABEL: dedup_by_constancy_full
-// CHECK-COUNT-5: llvm.add
+// CHECK-COUNT-2: llvm.add
 // CHECK-NOT: llvm.add
 // CHECK: llvm.icmp "slt"
 // CHECK-NOT: llvm.icmp "slt"
@@ -36,7 +36,7 @@ module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 1 : 
 // -----
 
 // CHECK-LABEL: dedup_by_constancy_partial
-// CHECK-COUNT-8: llvm.add
+// CHECK-COUNT-4: llvm.add
 // CHECK-NOT: llvm.add
 // CHECK: llvm.icmp "slt"
 // CHECK-NOT: llvm.icmp "slt"

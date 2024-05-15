@@ -1,5 +1,6 @@
 #include "TritonNVIDIAGPUToLLVM/Passes.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Patterns.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -15,6 +16,55 @@ namespace triton {
 } // namespace mlir
 
 namespace {
+
+using namespace mlir;
+using namespace triton;
+using namespace triton::gpu;
+
+// Loading from Hopper shared memory layout to dot operand is not supported. We
+// need to break it down and use a different shared layout. This would mostly
+// happen when TMAs are used with MMAV2 and will cause poor performance.
+class DecomposeLocalLoadToDotOperand
+    : public OpRewritePattern<triton::gpu::LocalLoadOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(triton::gpu::LocalLoadOp op,
+                                PatternRewriter &rewriter) const override {
+
+    auto dstDotOp = dyn_cast<triton::gpu::DotOperandEncodingAttr>(
+        op.getType().getEncoding());
+    auto sharedEncoding =
+        cast<SharedEncodingAttr>(op.getSrc().getType().getEncoding());
+    if (!dstDotOp || !sharedEncoding.getHasLeadingOffset())
+      return failure();
+    RankedTensorType type = op.getType();
+    auto parentEnc = dstDotOp.getParent();
+    int numWarps = triton::gpu::getNumWarpsPerCTA(parentEnc);
+    int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
+        op->getParentOfType<ModuleOp>());
+    int numCTAs = triton::gpu::getNumCTAs(parentEnc);
+    auto blockEncoding = getDefaultBlockedEncoding(
+        op.getContext(), type.getShape(), numWarps, threadsPerWarp, numCTAs);
+    auto tmpType = RankedTensorType::get(type.getShape(), type.getElementType(),
+                                         blockEncoding);
+    Value load =
+        rewriter.create<LocalLoadOp>(op.getLoc(), tmpType, op.getSrc());
+    auto newSharedDescTy = triton::MemDescType::get(
+        type.getShape(), type.getElementType(),
+        triton::gpu::SharedEncodingAttr::get(
+            op.getContext(), dstDotOp, type.getShape(),
+            triton::gpu::getOrder(parentEnc),
+            triton::gpu::getCTALayout(parentEnc), type.getElementType()));
+    auto tmp = rewriter.create<triton::gpu::LocalAllocOp>(
+        op.getLoc(), newSharedDescTy, load);
+    auto newConvert =
+        rewriter.create<triton::gpu::LocalLoadOp>(op.getLoc(), type, tmp);
+    rewriter.replaceOp(op, newConvert);
+    return success();
+  }
+};
+
 struct DecomposeUnsupportedConversions
     : public mlir::triton::impl::DecomposeUnsupportedNVIDIAConversionsBase<
           DecomposeUnsupportedConversions> {
@@ -24,6 +74,12 @@ struct DecomposeUnsupportedConversions
     triton::gpu::decomposeTensorCoreToDotLayoutConversion<
         triton::gpu::NvidiaMmaEncodingAttr>(mod, isMmaToDotShortcut);
     triton::gpu::decomposeBlockedToDotLayoutConversion(mod);
+
+    mlir::RewritePatternSet patterns(&getContext());
+    patterns.add<DecomposeLocalLoadToDotOperand>(&getContext());
+    if (mlir::applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed()) {
+      signalPassFailure();
+    }
   }
 };
 } // namespace

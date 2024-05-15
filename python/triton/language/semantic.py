@@ -944,7 +944,7 @@ def _canonicalize_boundary_check(boundary_check, block_shape):
 def _load_block_pointer(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder):
     # Load by a block pointer: `pointer_type<block_type<>>`
     # Block pointer can not have `mask` and `other` arguments
-    if mask or other:
+    if mask is not None or other is not None:
         raise ValueError("`mask` and `other` arguments cannot be specified for loading block pointers")
 
     elt_ty = ptr.type.element_ty.element_ty
@@ -969,7 +969,7 @@ def _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_
         raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.load`")
 
     # Check `mask`, `other`, `boundary_check`, and `padding` arguments
-    if not mask and other:
+    if mask is None and other is not None:
         raise ValueError("`other` cannot be provided without `mask`")
     if padding or boundary_check:
         raise ValueError("`padding_option` or `boundary_check` argument is not supported for loading a tensor of"
@@ -1013,7 +1013,7 @@ def _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_
         dst_ty = elt_ty
 
     # Build IR
-    if not mask:
+    if mask is None:
         return tl.tensor(builder.create_load(ptr.handle, cache, eviction, is_volatile), dst_ty)
     else:
         return tl.tensor(

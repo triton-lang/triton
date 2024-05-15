@@ -214,4 +214,16 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global",
   }];
 }
 
+def TTNG_TMAStoreWait : TTNG_Op<"async_tma_store_wait"> {
+  let summary = "wait until all the inputs are read.";
+  let arguments = (ins I32Attr:$pendings);
+  let description = [{
+    Wait until all the read operations are done from the associated store operations.
+    This is needed before the shared memory can be written to.
+  }];
+
+  let assemblyFormat = "attr-dict";
+}
+
+
 #endif
