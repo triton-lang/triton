@@ -128,7 +128,7 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
       auto outerLoop = dyn_cast<scf::ForOp>(forOp->getParentOp());
       int loopNumStages = getNumStagesOrDefault(forOp);
       bool pipelined = pipelineLoop(forOp, loopNumStages);
-      if (pipelined && outerLoop)
+      if (pipelined && outerLoop && getNumStagesOrDefault(outerLoop) > 1)
         outerLoops.insert(outerLoop);
     }
 

@@ -165,13 +165,11 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
       Value ptr = getMemAccessPtr(curr);
       if (!ptr)
         return;
-      // We only convert `tensor<tt.ptr<>>` or `tt.ptr<tensor<>>` load/store
-      bool isPtrTensor = false, isTensorPointer = false;
+      // We only convert `tensor<tt.ptr<>>` load/store
+      bool isPtrTensor = false;
       if (auto tensorType = dyn_cast<RankedTensorType>(ptr.getType()))
         isPtrTensor = isa<PointerType>(tensorType.getElementType());
-      if (auto ptrType = dyn_cast<PointerType>(ptr.getType()))
-        isTensorPointer = isa<RankedTensorType>(ptrType.getPointeeType());
-      if (!isPtrTensor && !isTensorPointer)
+      if (!isPtrTensor)
         return;
       auto mod = curr->getParentOfType<ModuleOp>();
       int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
