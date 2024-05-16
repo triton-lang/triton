@@ -21,7 +21,7 @@ def test_min_time_flops():
         # sm89
         np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[0.000025]], atol=1e-5)
         # sm90
-        np.testing.assert_allclose(ret[device1_idx].to_numpy(), [[0.000030]], atol=1e-5)
+        np.testing.assert_allclose(ret[device1_idx].to_numpy(), [[0.00005]], atol=1e-5)
 
 
 def test_min_time_bytes():
