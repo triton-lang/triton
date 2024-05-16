@@ -3,6 +3,7 @@
 
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
@@ -407,52 +408,59 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, SliceEncodingAttr slice) {
   // First compute the linear layout for this layout's parent.
   SmallVector<int64_t> parentShape(shape);
   parentShape.insert(parentShape.begin() + slice.getDim(), 1);
-  LinearLayout parent =
+  LinearLayout parentLL =
       triton::gpu::toLinearLayout(parentShape, slice.getParent());
 
-  // Remove dimension slice.getDim() from the parent layout in 3 steps.
+  // Remove dimension slice.getDim() from the parent layout.
   //
   //  1. Construct a layout `transform` from parent-out-dims to slice-out-dims
   //     that removes the relevant out-dim.
   //  2. Compute linearSlice = parent.compose(transform).  Now linearSlice maps
   //     from parent in-dims to slice out-dims.
-  //  3. Remove duplicate registers from linearSlice.  (Technically this is
-  //     optional -- we should be able to rely on llvm and ptxas to do this for
-  //     us.  But it's necessary for us to match the legacy emitIndices code.)
+  //  3. Fix up duplicate registers introduced by slicing.
   auto outDimNames = standardOutDimNames(ctx, shape.size() + 1);
   LinearLayout transform = LinearLayout::empty();
-  for (auto [idx, outDim] : llvm::enumerate(parent.getOutDimNames())) {
+  for (auto [idx, outDim] : llvm::enumerate(parentLL.getOutDimNames())) {
     if (idx == slice.getDim()) {
       // Because we're multiplying by all zeros, we could replace outDimNames[0]
       // with any other valid out-dim; the layout will be the same.
-      transform *= LinearLayout::zeros1D(parent.getOutDimSize(outDim), outDim,
+      transform *= LinearLayout::zeros1D(parentLL.getOutDimSize(outDim), outDim,
                                          outDimNames[0]);
     } else {
       transform *= LinearLayout::identity1D(
-          parent.getOutDimSize(outDim), outDim,
+          parentLL.getOutDimSize(outDim), outDim,
           outDimNames[idx - (idx < slice.getDim() ? 0 : 1)]);
     }
   }
-  LinearLayout linearSlice = parent.compose(transform);
+  LinearLayout sliceLL = parentLL.compose(transform);
 
-  // Along the register dim, remove repeated bases and bases that are all 0.
-  // (Technically we should probably do something with linearly-independent
-  // bases instead of searching for unique ones, but in practice registers'
-  // bases are always powers of 2 when converting from legacy layouts, and
-  // anyway our main goal isn't to remove all possible registers, but rather
-  // just to match the behavior of legacy emitIndices.)
-  std::set<std::vector<int>> seenBases;
-  seenBases.insert(std::vector<int>(linearSlice.getNumOutDims(), 0));
+  // Step 3: Along the "register" dim, remove any all-zero bases.
+  auto bases = sliceLL.getBases();
   std::vector<std::vector<int>> newRegBases;
-
-  auto bases = linearSlice.getBases();
   for (const auto &basis : bases[S("register")]) {
-    if (seenBases.insert(basis).second) {
+    if (llvm::any_of(basis, [](int b) { return b != 0; })) {
       newRegBases.push_back(basis);
     }
   }
   bases[S("register")] = newRegBases;
-  return LinearLayout(std::move(bases), linearSlice.getOutDimNames());
+
+  LinearLayout ret = LinearLayout(std::move(bases), sliceLL.getOutDimNames());
+
+  // Match a hack in the legacy code that ensures that the number of registers
+  // matches getTotalElemsPerThread.  Yup: We just removed all the zeros, now
+  // we're (maybe) adding some back.  :)
+  //
+  // TODO(jlebar): Once getTotalElemsPerThread uses LLs instead of the existing
+  // legacy code, I think we can remove this.
+  int expectedNumRegisters = getTotalElemsPerThread(RankedTensorType::get(
+      shape, IntegerType::get(ctx, 32) /*dummy type*/, slice));
+  if (ret.getInDimSize(S("register")) != expectedNumRegisters) {
+    int extraZeros = expectedNumRegisters / ret.getInDimSize(S("register"));
+    // Our use of "dim0" here is arbitrary; because we're adding zeros, any
+    // output dimension would work.
+    ret *= LinearLayout::zeros1D(extraZeros, S("register"), S("dim0"));
+  }
+  return ret;
 }
 
 } // anonymous namespace

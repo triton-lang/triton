@@ -450,6 +450,16 @@ TEST_F(LinearLayoutConversionsTest, SliceOfBlocked) {
                          {S("dim0")}));
 }
 
+TEST_F(LinearLayoutConversionsTest, SliceWithShape1) {
+  auto parent = blocked({1, 4}, {8, 4}, {2, 2}, {1, 1}, {1, 1}, {0, 1}, {1, 0});
+  EXPECT_EQ(toLinearLayout({1}, slice(parent, 0)),
+            LinearLayout({{S("register"), {{0}, {0}, {0}, {0}}},
+                          {S("lane"), {{0}}},
+                          {S("warp"), {{0}}},
+                          {S("block"), {{0}}}},
+                         {S("dim0")}));
+}
+
 TEST_F(LinearLayoutConversionsTest, SliceOfMmaV2) {
   auto parent = mma(2, 0, {16, 8}, {2, 2}, {1, 1}, {1, 1}, {0, 1});
   EXPECT_EQ(toLinearLayout({16}, slice(parent, 0)),

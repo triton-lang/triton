@@ -1288,7 +1288,6 @@ INSTANTIATE_TEST_SUITE_P(TestCases, SliceVsLinearLayoutsTest,
                                      .sliceDim = 0,
                                      .parent =
                                          BlockedLegacyVsLinearLayoutsTestParams{
-                                             .shape = {}, // ignored
                                              .sizePerThread = {2, 4},
                                              .threadsPerWarp = {4, 2},
                                              .warpsPerCTA = {2, 2},
@@ -1303,7 +1302,6 @@ INSTANTIATE_TEST_SUITE_P(TestCases, SliceVsLinearLayoutsTest,
                                      .sliceDim = 1,
                                      .parent =
                                          BlockedLegacyVsLinearLayoutsTestParams{
-                                             .shape = {}, // ignored
                                              .sizePerThread = {2, 4},
                                              .threadsPerWarp = {4, 2},
                                              .warpsPerCTA = {2, 2},
@@ -1313,12 +1311,83 @@ INSTANTIATE_TEST_SUITE_P(TestCases, SliceVsLinearLayoutsTest,
                                              .CTAOrder = {1, 0},
                                          },
                                  },
+
+                                 {
+                                     .shape = {32},
+                                     .sliceDim = 1,
+                                     .parent =
+                                         BlockedLegacyVsLinearLayoutsTestParams{
+                                             .sizePerThread = {1, 1},
+                                             .threadsPerWarp = {32, 1},
+                                             .warpsPerCTA = {4, 1},
+                                             .order = {0, 1},
+                                             .CTAsPerCGA = {1, 1},
+                                             .CTASplitNum = {1, 1},
+                                             .CTAOrder = {1, 0},
+                                         },
+                                 },
+                                 {
+                                     .shape = {32},
+                                     .sliceDim = 0,
+                                     .parent =
+                                         BlockedLegacyVsLinearLayoutsTestParams{
+                                             .sizePerThread = {1, 1},
+                                             .threadsPerWarp = {32, 1},
+                                             .warpsPerCTA = {4, 1},
+                                             .order = {0, 1},
+                                             .CTAsPerCGA = {1, 1},
+                                             .CTASplitNum = {1, 1},
+                                             .CTAOrder = {1, 0},
+                                         },
+                                 },
+                                 {
+                                     .shape = {32},
+                                     .sliceDim = 1,
+                                     .parent =
+                                         BlockedLegacyVsLinearLayoutsTestParams{
+                                             .sizePerThread = {1, 4},
+                                             .threadsPerWarp = {8, 4},
+                                             .warpsPerCTA = {2, 2},
+                                             .order = {0, 1},
+                                             .CTAsPerCGA = {1, 1},
+                                             .CTASplitNum = {1, 1},
+                                             .CTAOrder = {1, 0},
+                                         },
+                                 },
+                                 {
+                                     .shape = {32},
+                                     .sliceDim = 0,
+                                     .parent =
+                                         BlockedLegacyVsLinearLayoutsTestParams{
+                                             .sizePerThread = {1, 4},
+                                             .threadsPerWarp = {8, 4},
+                                             .warpsPerCTA = {2, 2},
+                                             .order = {0, 1},
+                                             .CTAsPerCGA = {1, 1},
+                                             .CTASplitNum = {1, 1},
+                                             .CTAOrder = {1, 0},
+                                         },
+                                 },
+                                 {
+                                     .shape = {1},
+                                     .sliceDim = 0,
+                                     .parent =
+                                         BlockedLegacyVsLinearLayoutsTestParams{
+                                             .sizePerThread = {1, 4},
+                                             .threadsPerWarp = {8, 4},
+                                             .warpsPerCTA = {2, 2},
+                                             .order = {0, 1},
+                                             .CTAsPerCGA = {1, 1},
+                                             .CTASplitNum = {1, 1},
+                                             .CTAOrder = {1, 0},
+                                         },
+                                 },
+
                                  {
                                      .shape = {16},
                                      .sliceDim = 0,
                                      .parent =
                                          NvidiaMmaVsLinearLayoutsTestParams{
-                                             .shape = {}, // ignored
                                              .versionMajor = 2,
                                              .versionMinor = 0,
                                              .warpsPerCTA = {2, 2},
@@ -1333,7 +1402,6 @@ INSTANTIATE_TEST_SUITE_P(TestCases, SliceVsLinearLayoutsTest,
                                      .sliceDim = 0,
                                      .parent =
                                          NvidiaMmaVsLinearLayoutsTestParams{
-                                             .shape = {}, // ignored
                                              .versionMajor = 2,
                                              .versionMinor = 0,
                                              .warpsPerCTA = {2, 2},
@@ -1348,7 +1416,6 @@ INSTANTIATE_TEST_SUITE_P(TestCases, SliceVsLinearLayoutsTest,
                                      .sliceDim = 1,
                                      .parent =
                                          NvidiaMmaVsLinearLayoutsTestParams{
-                                             .shape = {}, // ignored
                                              .versionMajor = 2,
                                              .versionMinor = 0,
                                              .warpsPerCTA = {2, 2},
@@ -1363,7 +1430,6 @@ INSTANTIATE_TEST_SUITE_P(TestCases, SliceVsLinearLayoutsTest,
                                      .sliceDim = 1,
                                      .parent =
                                          NvidiaMmaVsLinearLayoutsTestParams{
-                                             .shape = {}, // ignored
                                              .versionMajor = 2,
                                              .versionMinor = 0,
                                              .warpsPerCTA = {2, 2},
