@@ -36,12 +36,12 @@
 
 // -----
 
-// expected-error@+2 {{}}
+// expected-error@+2 {{triton_gpu.dot_op kWidth parameter supports only 16 for WMMA parent}}
 #wmma = #triton_gpu.amd_wmma<{warpsPerCTA = [1, 4]}>
 #dot_op = #triton_gpu.dot_op<{opIdx = 1, parent = #wmma}>
 
 // -----
 
-// expected-error@+2 {{}}
+// expected-error@+2 {{triton_gpu.dot_op kWidth parameter supports only 16 for WMMA parent}}
 #wmma = #triton_gpu.amd_wmma<{warpsPerCTA = [1, 4]}>
 #dot_op = #triton_gpu.dot_op<{opIdx = 1, parent = #wmma, kWidth = 8}>
