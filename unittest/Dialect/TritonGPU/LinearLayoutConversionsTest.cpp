@@ -238,7 +238,26 @@ TEST_F(LinearLayoutConversionsTest, BlockedOrder) {
                     {S("dim0"), S("dim1")}));
 }
 
-// TODO: More MMAv2 tests
+TEST_F(LinearLayoutConversionsTest, Blocked4D) {
+  auto ll = toLinearLayout({2, 1, 1, 1},
+                           blocked({1, 1, 1, 4}, {2, 1, 1, 16}, {1, 2, 4, 1},
+                                   {1, 1, 1, 1}, {1, 1, 1, 1}, {3, 0, 1, 2},
+                                   {3, 2, 1, 0}));
+  EXPECT_EQ(ll, LinearLayout(
+                    {
+                        {S("register"), {{0, 0, 0, 0}, {0, 0, 0, 0}}},
+                        {S("lane"),
+                         {{0, 0, 0, 0},
+                          {0, 0, 0, 0},
+                          {0, 0, 0, 0},
+                          {0, 0, 0, 0},
+                          {1, 0, 0, 0}}},
+                        {S("warp"), {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}},
+                        {S("block"), {}},
+                    },
+                    {S("dim0"), S("dim1"), S("dim2"), S("dim3")}));
+}
+
 TEST_F(LinearLayoutConversionsTest, MMAv2_32x32) {
   EXPECT_EQ(toLinearLayout({32, 32},
                            mma(2, 0, {16, 8}, {1, 1}, {1, 1}, {1, 1}, {0, 1})),
@@ -453,11 +472,26 @@ TEST_F(LinearLayoutConversionsTest, SliceOfBlocked) {
 TEST_F(LinearLayoutConversionsTest, SliceWithShape1) {
   auto parent = blocked({1, 4}, {8, 4}, {2, 2}, {1, 1}, {1, 1}, {0, 1}, {1, 0});
   EXPECT_EQ(toLinearLayout({1}, slice(parent, 0)),
-            LinearLayout({{S("register"), {{0}, {0}, {0}, {0}}},
-                          {S("lane"), {{0}}},
-                          {S("warp"), {{0}}},
-                          {S("block"), {{0}}}},
+            LinearLayout({{S("register"), {{0}, {0}}},
+                          {S("lane"), {{0}, {0}, {0}, {0}, {0}}},
+                          {S("warp"), {{0}, {0}}},
+                          {S("block"), {}}},
                          {S("dim0")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, Slice4D) {
+  auto parent = blocked({1, 1, 1, 4}, {2, 1, 1, 16}, {1, 2, 4, 1}, {1, 1, 1, 1},
+                        {1, 1, 1, 1}, {3, 0, 1, 2}, {3, 2, 1, 0});
+  EXPECT_EQ(toLinearLayout({2, 1, 1}, slice(parent, 3)),
+            LinearLayout(
+                {
+                    {S("register"), {}},
+                    {S("lane"),
+                     {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0}, {1, 0, 0}}},
+                    {S("warp"), {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}}},
+                    {S("block"), {}},
+                },
+                {S("dim0"), S("dim1"), S("dim2")}));
 }
 
 TEST_F(LinearLayoutConversionsTest, SliceOfMmaV2) {
