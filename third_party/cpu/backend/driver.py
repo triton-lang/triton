@@ -1,3 +1,4 @@
+from triton.backends.compiler import GPUTarget
 from triton.backends.driver import CPUDriverBase
 
 # ------------------------
@@ -60,7 +61,8 @@ class CPUDriver(CPUDriverBase):
 
     def get_current_target(self):
         # Capability and warp size are zeros for CPU.
-        return ("cpu", 0, 0)
+        # TODO: GPUTarget naming isn't obviously good.
+        return GPUTarget("cpu", 0, 0)
 
     @staticmethod
     def is_active():

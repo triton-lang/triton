@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from triton._C.libtriton import cpu, ir, llvm, passes
-from triton.backends.compiler import BaseBackend
+from triton.backends.compiler import BaseBackend, GPUTarget
 
 
 @dataclass(frozen=True)
@@ -35,8 +35,8 @@ class CPUOptions:
 class CPUBackend(BaseBackend):
 
     @staticmethod
-    def supports_target(target: tuple):
-        return target[0] == "cpu"
+    def supports_target(target: GPUTarget):
+        return target.backend == "cpu"
 
     def __init__(self, target: tuple) -> None:
         super().__init__(target)

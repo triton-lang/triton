@@ -39,7 +39,7 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
 
     for (size_t i = 0; i < op.getNumOperands(); i++) {
       auto elems = unpackLLElements(loc, adaptor.getOperands()[i], rewriter);
-      if (op.getOperand(i).getType().dyn_cast<RankedTensorType>()) {
+      if (dyn_cast<RankedTensorType>(op.getOperand(i).getType())) {
         llvm_unreachable("Not implemented for tensor types");
       }
 
@@ -61,7 +61,7 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
   std::string getFormatSubstr(Value value, bool hex = false,
                               std::optional<int> width = std::nullopt) const {
     Type type = value.getType();
-    if (type.isa<LLVM::LLVMPointerType>()) {
+    if (isa<LLVM::LLVMPointerType>(type)) {
       return "%p";
     }
     // Hex is "0x%0nx" or "0x%0nllx", where n is the number of hex digits in the
