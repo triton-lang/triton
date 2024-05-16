@@ -292,7 +292,7 @@ def compile(src, target=None, options=None):
         if use_ttgir_loc and ext == "ttgir":
             ttgir_full_name = fn_cache_manager.get_file(ir_filename)
             next_module.create_location_snapshot(ttgir_full_name)
-            print(f"re-parse ttgir with {ttgir_full_name}")
+            print(f"Create new locations for {ttgir_full_name}")
         module = next_module
     # write-back metadata
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
