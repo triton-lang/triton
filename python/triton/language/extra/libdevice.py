@@ -1,5 +1,5 @@
-from .cuda import libdevice as cuda_libdevice
-from .hip import libdevice as hip_libdevice
+from .cuda import libdevice_impl as cuda_libdevice
+from .hip import libdevice_impl as hip_libdevice
 from triton.language import core
 from functools import wraps
 from typing import TypeVar

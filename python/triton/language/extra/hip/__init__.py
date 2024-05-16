@@ -1,3 +1,3 @@
-from . import libdevice
+from . import libdevice_impl
 
-__all__ = ["libdevice"]
+__all__ = ["libdevice_impl"]
