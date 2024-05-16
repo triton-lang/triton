@@ -114,17 +114,22 @@ public:
     EndTime,
     Invocations,
     Duration,
+    DeviceId,
+    DeviceType,
     Count,
   };
 
   KernelMetric() : Metric(MetricKind::Kernel, kernelMetricKind::Count) {}
 
-  KernelMetric(uint64_t startTime, uint64_t endTime, uint64_t invocations)
+  KernelMetric(uint64_t startTime, uint64_t endTime, uint64_t invocations,
+               uint64_t deviceId, uint64_t deviceType)
       : KernelMetric() {
     this->values[StartTime] = startTime;
     this->values[EndTime] = endTime;
     this->values[Invocations] = invocations;
     this->values[Duration] = endTime - startTime;
+    this->values[DeviceId] = deviceId;
+    this->values[DeviceType] = deviceType;
   }
 
   virtual const std::string getName() const { return "KernelMetric"; }
@@ -139,10 +144,8 @@ private:
   const static inline bool AGGREGABLE[kernelMetricKind::Count] = {false, false,
                                                                   true, true};
   const static inline std::string VALUE_NAMES[kernelMetricKind::Count] = {
-      "StartTime (ns)",
-      "EndTime (ns)",
-      "Count",
-      "Time (ns)",
+      "StartTime (ns)", "EndTime (ns)", "Count",
+      "Time (ns)",      "DeviceId",     "DeviceType",
   };
 };
 
