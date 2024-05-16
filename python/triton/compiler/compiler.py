@@ -291,7 +291,6 @@ def compile(src, target=None, options=None):
         # use an env variable to parse ttgir from file
         if use_ttgir_loc and ext == "ttgir":
             ttgir_full_name = fn_cache_manager.get_file(ir_filename)
-            next_module = parse(ttgir_full_name, ext, context)
             next_module.create_location_snapshot(ttgir_full_name)
             print(f"re-parse ttgir with {ttgir_full_name}")
         module = next_module
