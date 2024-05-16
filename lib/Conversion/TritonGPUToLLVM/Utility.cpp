@@ -111,6 +111,7 @@ getMNCoords(Value thread, Location loc, ConversionPatternRewriter &rewriter,
   return coords; // {M,N} in row-major
 }
 } // namespace SharedToDotOperandMMAv1
+
 namespace mlir {
 
 namespace triton::gpu {
@@ -244,6 +245,117 @@ emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
     ret.push_back(llvm::to_vector(llvm::make_second_range(idxs)));
   }
 
+  return ret;
+}
+
+// elemLlvmTy should be dstTy's element type converted to an LLVM-dialect type.
+std::optional<SmallVector<Value>> loadSharedToRegistersUsingLinearLayouts(
+    RankedTensorType dstTy, MemDescType srcTy, Type elemLlvmTy,
+    SharedMemoryObject smemObj, Location loc, RewriterBase &rewriter,
+    const TargetInfoBase &target) {
+  MLIRContext *ctx = rewriter.getContext();
+
+  auto shape = dstTy.getShape();
+  int rank = shape.size();
+
+  StringAttr kBlock = str_attr("block");
+  StringAttr kRegister = str_attr("register");
+  StringAttr kLane = str_attr("lane");
+  StringAttr kWarp = str_attr("warp");
+
+  std::optional<LinearLayout> regLayout =
+      triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
+  std::optional<LinearLayout> sharedLayout = triton::gpu::toLinearLayout(
+      shape, srcTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
+  if (!regLayout.has_value() || !sharedLayout.has_value()) {
+    return std::nullopt;
+  }
+  auto sharedOrder = triton::gpu::getOrder(srcTy.getEncoding());
+
+  // sharedLayout's in-dims are currently (offset, block).  Reshape to
+  // (offsetX1, offsetX2, ..., block) so that we can apply the N-dimensional
+  // strides from smemObj.  (The offsetX's appear in minor-to-major order.)
+  SmallVector<std::pair<StringAttr, int32_t>> multiDimSharedSize;
+  for (int i = 0; i < rank; i++) {
+    int dim = sharedOrder[i];
+    multiDimSharedSize.push_back(
+        {str_attr("offset" + std::to_string(dim)), shape[dim]});
+  }
+  multiDimSharedSize.push_back({kBlock, sharedLayout->getInDimSize(kBlock)});
+  sharedLayout = sharedLayout->reshapeIns(multiDimSharedSize);
+
+  // regToSharedLayout maps from (register, lane, warp, block) to (offsetX1,
+  // ..., offsetXN, block), where the offsetX's are in minor-to-major order.
+  LinearLayout regToSharedLayout = regLayout->invertAndCompose(*sharedLayout);
+
+  // TODO(jlebar): We don't currently support loading from shared memory in a
+  // different CTA.  We'd need to emit `mapa.shared::cluster` instructions.
+  if (regToSharedLayout.getInDimSize(kBlock) !=
+      regToSharedLayout.getOutDimSize(kBlock)) {
+    return std::nullopt;
+  }
+  for (int i = 1; i < regToSharedLayout.getInDimSize(kBlock); i *= 2) {
+    auto idx = llvm::to_vector(llvm::make_second_range(regToSharedLayout.apply(
+        {{kRegister, 0}, {kLane, 0}, {kWarp, 0}, {kBlock, i}})));
+    auto offsets = ArrayRef(idx).drop_back(1);
+    int32_t block = idx.back();
+    if (!llvm::all_of(offsets, [&](auto offset) { return offset == 0; }) ||
+        block != i) {
+      return std::nullopt;
+    }
+  }
+
+  // Determine how many consecutive registers map to consecutive shmem elements
+  // in out-dimension offsetN.  This is our load instruction's vector width.
+  //
+  // It's OK if the vector width we choose here is wider than the hardware
+  // supports; LLVM will legalize it.
+  //
+  // TODO(jlebar): smemObj.strides() are Values, but most of them are usually
+  // integer constants.  We could add those constant strides to the LL, and then
+  // before calling getNumConsecutiveInOut(), we could flatten consecutive
+  // out-dims which have known strides.  This would allow us to vectorize across
+  // multiple shmem out dimensions where possible.
+  const int vecElems = regToSharedLayout.getNumConsecutiveInOut();
+
+  // Reorder strides according to `order`.  This way they match the
+  // multi-dimensional offsets in regToSharedLayout.
+  SmallVector<Value> shmemStrides =
+      applyPermutation(smemObj.getStrides(), sharedOrder);
+
+  Value threadId = getThreadId(rewriter, loc);
+  Value threadsPerWarp = i32_val(regToSharedLayout.getInDimSize(kLane));
+  Value laneId = urem(threadId, threadsPerWarp);
+  Value warpId = udiv(threadId, threadsPerWarp);
+
+  int numElems = regToSharedLayout.getInDimSize(kRegister);
+  auto vecTy = vec_ty(elemLlvmTy, vecElems);
+  auto ptrTy = ptr_ty(ctx, /*addressSpace=*/3);
+  Value zero = i32_val(0);
+  SmallVector<Value> ret;
+  for (int i = 0; i < numElems / vecElems; i++) {
+    // Get the address to load.  The multi-dim address is (offsetX1, ...,
+    // offsetXN, block), where the offsets appear in minor-to-major order, and
+    // we drop_end to drop block, which we know from above will be 0.
+    auto multiDimShmemOffset =
+        llvm::to_vector(llvm::drop_end(llvm::make_second_range(
+            applyLinearLayout(loc, rewriter, regToSharedLayout,
+                              {{kRegister, i32_val(i * vecElems)},
+                               {kLane, laneId},
+                               {kWarp, warpId},
+                               {kBlock, zero}}))));
+
+    Value shmemOffset = dot(rewriter, loc, multiDimShmemOffset, shmemStrides);
+    auto vecAddr = gep(ptrTy, elemLlvmTy, smemObj.getBase(), shmemOffset);
+    vecAddr.setInbounds(true);
+
+    auto vecVal = load(vecTy, vecAddr);
+    vecVal.setAlignment(vecElems * elemLlvmTy.getIntOrFloatBitWidth() / 8);
+
+    for (int v = 0; v < vecElems; v++) {
+      ret.push_back(extract_element(elemLlvmTy, vecVal, i32_val(v)));
+    }
+  }
   return ret;
 }
 

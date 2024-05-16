@@ -16,16 +16,17 @@ namespace {
 
 // We use the following nomenclature in this file.
 //
-//  - ctaLayout: A layout for one block, i.e. input dims (register, lane, warp).
-//  - cgaLayout: Arrangement of multiple blocks, i.e. input dims (block).
+//  - ctaLayout: A layout for one block, i.e. input dims [register, lane, warp]
+//    for register layouts, and input dims [offset] for shared layouts.
+//  - cgaLayout: Arrangement of multiple blocks, i.e. input dims [block].
 //
 // Note that this is inconsistent with the type name CTALayoutAttr.  That type
 // is equivalent to our cgaLayout.
 //
-// IMO the type name is wrong.  If we tried to be consistent anyway, then we'd
-// have to rename ctaLayout to "warpLayout".  I think that's more confusing than
-// being inconsistent about "cgaLayout", especially when we have to consider the
-// size of the warpLayout (surely that's not the "warpSize").
+// IMO the name CTALayoutAttr is wrong.  If we tried to be consistent anyway,
+// then we'd have to rename ctaLayout to "warpLayout".  I think that's more
+// confusing than being inconsistent about "cgaLayout", especially when we have
+// to consider the size of the warpLayout (surely that's not the "warpSize").
 
 #define S(v) StringAttr::get(ctx, (v))
 
@@ -215,12 +216,23 @@ LinearLayout ensureLayoutNotLargerThan(
   // This is just a consequence of how legacy layouts work: We only put the same
   // tensor element into two different blocks as a last resort, only after all
   // the registers in all the lanes in all the warps in a block already have the
-  // same tensor element.
+  // same tensor element.  (Or, for shared layouts, only after all values in
+  // smem within a block have the same value.)
+  //
+  // inDimNames combines the in dims for register and shared layouts; that's OK
+  // because we skip in-dims that aren't present.  So we'll iterate over
+  // {blocked, register, lane, warp} or {blocked, offset}.
   SmallVector<StringAttr> inDimNames = {
+      // for both register and shared layouts
       S("block"),
+
+      // for register layouts
       S("register"),
       S("lane"),
       S("warp"),
+
+      // for shared layouts
+      S("offset"),
   };
 
   LinearLayout ret = layout;
@@ -231,8 +243,6 @@ LinearLayout ensureLayoutNotLargerThan(
       continue;
     }
     assert(actualSize % desiredSize == 0);
-    // TODO: We claim this is invariant to the order of dims, so can we get rid
-    // of llvm::reverse?
     for (StringAttr inDimName : llvm::reverse(inDimNames)) {
       if (ret.hasInDim(inDimName)) {
         ret = shrinkCodomain(ret, inDimName, outDimName, desiredSize);
@@ -245,7 +255,8 @@ LinearLayout ensureLayoutNotLargerThan(
 
 // For each out-dim d, ensure the layout's out-size (i.e. its codomain) is no
 // smaller than shape[d].  Do this by increasing the size of the layout's inputs
-// along the "register" dimension.
+// along its most-minor dimension ("register" for register layouts, "offset" for
+// shared layouts).
 //
 // This function is invariant to the order of the layout's input dimensions, but
 // it cares about the order of the output dims, which should be minor-to-major.
@@ -258,15 +269,15 @@ LinearLayout ensureLayoutNotSmallerThan(
   }
 
   MLIRContext *ctx = shape.begin()->first.getContext();
-  StringAttr kRegister = S("register");
+  StringAttr kDim = *layout.getInDimNames().begin();
+  assert(kDim == "register" || kDim == "offset");
 
   LinearLayout ret = layout;
   for (StringAttr outDimName : layout.getOutDimNames()) {
     int32_t actualSize = layout.getOutDimSize(outDimName);
     int32_t desiredSize = shape.lookup(outDimName);
     assert(actualSize > desiredSize || desiredSize % actualSize == 0);
-    ret *= LinearLayout::identity1D(desiredSize / actualSize, kRegister,
-                                    outDimName);
+    ret *= LinearLayout::identity1D(desiredSize / actualSize, kDim, outDimName);
     assert(ret.getOutDimSize(outDimName) >= desiredSize);
   }
   return ret;
@@ -398,8 +409,8 @@ LinearLayout hopperMmaToLinearLayout(ArrayRef<int64_t> shape,
   return combineCtaCgaWithShape(ctaLayout, mma.getCTALayout(), shape);
 }
 
-std::optional<LinearLayout> toLinearLayout(ArrayRef<int64_t> shape,
-                                           SliceEncodingAttr slice) {
+std::optional<LinearLayout> sliceToLinearLayout(ArrayRef<int64_t> shape,
+                                                SliceEncodingAttr slice) {
   MLIRContext *ctx = slice.getContext();
 
   // First compute the linear layout for this layout's parent.
@@ -463,10 +474,127 @@ std::optional<LinearLayout> toLinearLayout(ArrayRef<int64_t> shape,
   return ret;
 }
 
+LinearLayout sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
+                                                 SharedEncodingAttr shared) {
+  assert(!shared.getHasLeadingOffset());
+
+  MLIRContext *ctx = shared.getContext();
+  int rank = shape.size();
+  if (rank == 1) {
+    return combineCtaCgaWithShape(
+        LinearLayout::identity1D(shape[0], S("offset"), S("dim0")),
+        shared.getCTALayout(), shape);
+  }
+
+  auto outDimNames = standardOutDimNames(ctx, rank);
+
+  // Construct bases for the 2 most minor dimensions of the layout.  These are
+  // the dims that get swizzled.
+  assert(shape.size() >= 2);
+  int colDim = shared.getOrder()[0];
+  int rowDim = shared.getOrder()[1];
+  int numCols = shape[colDim];
+  int numRows = shape[rowDim];
+  StringAttr colDimName = outDimNames[colDim];
+  StringAttr rowDimName = outDimNames[rowDim];
+
+  std::vector<std::vector<int>> bases2D;
+  for (int logCol = 0; logCol < llvm::Log2_32(numCols); logCol++) {
+    bases2D.push_back({0, 1 << logCol});
+  }
+  for (int logRow = 0; logRow < llvm::Log2_32(numRows); logRow++) {
+    int row = 1 << logRow;
+    int vec = shared.getVec();
+    int perPhase = shared.getPerPhase();
+    int maxPhase = shared.getMaxPhase();
+    bases2D.push_back({row, vec * ((row / perPhase) % maxPhase)});
+  }
+  LinearLayout ctaLayout =
+      LinearLayout({{S("offset"), bases2D}}, {rowDimName, colDimName});
+
+  // Add the remaining dimensions.
+  for (int i = 2; i < rank; i++) {
+    int dim = shared.getOrder()[i];
+    ctaLayout *=
+        LinearLayout::identity1D(shape[dim], S("offset"), outDimNames[dim]);
+  }
+
+  return combineCtaCgaWithShape(ctaLayout, shared.getCTALayout(), shape);
+}
+
+LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
+                                               SharedEncodingAttr shared,
+                                               int32_t elemBitWidth) {
+  assert(shared.getHasLeadingOffset());
+
+  MLIRContext *ctx = shared.getContext();
+  int rank = shape.size();
+  if (rank == 1) {
+    // TODO: Not sure if this is correct.
+    return combineCtaCgaWithShape(
+        LinearLayout::identity1D(shape[0], S("offset"), S("dim0")),
+        shared.getCTALayout(), shape);
+  }
+
+  int tileWidthBytes;
+  if (shared.getPerPhase() == 4 && shared.getMaxPhase() == 2) {
+    tileWidthBytes = 32;
+  } else if (shared.getPerPhase() == 2 && shared.getMaxPhase() == 4) {
+    tileWidthBytes = 64;
+  } else if (shared.getPerPhase() == 1 && shared.getMaxPhase() == 8) {
+    tileWidthBytes = 128;
+  } else {
+    llvm::errs()
+        << "Illegal shared encoding.  If hasLeadingOffset is true, "
+           "then (perPhase, maxPhase) must be either (4,2), (2,4), or (1,8): "
+        << shared << "\n";
+    llvm_unreachable("Illegal shared encoding");
+  }
+
+  auto outDimNames = standardOutDimNames(ctx, rank);
+
+  // Construct bases for a the layout's 2-dimensional tile.
+  assert(shape.size() >= 2);
+  int colDim = shared.getOrder()[0];
+  int rowDim = shared.getOrder()[1];
+
+  int tileRows = 8;
+  int tileCols = 8 * tileWidthBytes / elemBitWidth;
+
+  StringAttr colDimName = outDimNames[colDim];
+  StringAttr rowDimName = outDimNames[rowDim];
+
+  std::vector<std::vector<int>> bases2D;
+  for (int logCol = 0; logCol < llvm::Log2_32(tileCols); logCol++) {
+    bases2D.push_back({0, 1 << logCol});
+  }
+  for (int logRow = 0; logRow < llvm::Log2_32(tileRows); logRow++) {
+    int row = 1 << logRow;
+    // TODO: Add tests for this.
+    // TODO: Does this mean shared.vec must be 1?
+    int vec = 8 * 16 / elemBitWidth;
+    int perPhase = shared.getPerPhase();
+    int maxPhase = shared.getMaxPhase();
+    bases2D.push_back({row, vec * ((row / perPhase) % maxPhase)});
+  }
+  LinearLayout tileLayout =
+      LinearLayout({{S("offset"), bases2D}}, {rowDimName, colDimName});
+
+  // Add the remaining dimensions.
+  for (int i = 2; i < rank; i++) {
+    int dim = shared.getOrder()[i];
+    tileLayout *=
+        LinearLayout::identity1D(shape[dim], S("offset"), outDimNames[dim]);
+  }
+
+  return combineCtaCgaWithShape(tileLayout, shared.getCTALayout(), shape);
+}
+
 } // anonymous namespace
 
-std::optional<LinearLayout> toLinearLayout(ArrayRef<int64_t> shape,
-                                           Attribute layout) {
+std::optional<LinearLayout>
+toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
+               std::optional<int32_t> elemBitWidth /*= std::nullopt*/) {
   if (auto blocked = dyn_cast<BlockedEncodingAttr>(layout)) {
     return blockedToLinearLayout(shape, blocked);
   }
@@ -479,7 +607,15 @@ std::optional<LinearLayout> toLinearLayout(ArrayRef<int64_t> shape,
     }
   }
   if (auto slice = dyn_cast<SliceEncodingAttr>(layout)) {
-    return toLinearLayout(shape, slice);
+    return sliceToLinearLayout(shape, slice);
+  }
+  if (auto shared = dyn_cast<SharedEncodingAttr>(layout)) {
+    if (shared.getHasLeadingOffset()) {
+      assert(elemBitWidth.has_value());
+      return sharedToLinearLayoutLeadingOffset(shape, shared, *elemBitWidth);
+    } else {
+      return sharedToLinearLayoutNoLeadingOffset(shape, shared);
+    }
   }
 
   // TODO(jlebar): Other layouts
