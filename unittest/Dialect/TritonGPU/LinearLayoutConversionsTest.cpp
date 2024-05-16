@@ -39,6 +39,10 @@ public:
         CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd), instrShape);
   }
 
+  SliceEncodingAttr slice(Attribute parent, int dim) {
+    return SliceEncodingAttr::get(&ctx, dim, parent);
+  }
+
   StringAttr S(StringRef str) { return StringAttr::get(&ctx, str); }
 
 protected:
@@ -428,6 +432,50 @@ TEST_F(LinearLayoutConversionsTest, MMAv3_4x4Warps) {
                           {S("warp"), {{16, 0}, {32, 0}, {0, 16}, {0, 0}}},
                           {S("block"), {}}},
                          {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, SliceOfBlocked) {
+  auto parent = blocked({2, 4}, {4, 2}, {2, 2}, {2, 2}, {2, 2}, {1, 0}, {1, 0});
+  EXPECT_EQ(toLinearLayout({128}, slice(parent, 0)),
+            LinearLayout({{S("register"), {{1}, {2}, {16}, {32}}},
+                          {S("lane"), {{4}, {0}, {0}}},
+                          {S("warp"), {{8}, {0}}},
+                          {S("block"), {{64}, {0}}}},
+                         {S("dim0")}));
+  EXPECT_EQ(toLinearLayout({128}, slice(parent, 1)),
+            LinearLayout({{S("register"), {{1}, {16}, {32}}},
+                          {S("lane"), {{0}, {2}, {4}}},
+                          {S("warp"), {{0}, {8}}},
+                          {S("block"), {{0}, {64}}}},
+                         {S("dim0")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, SliceOfMmaV2) {
+  auto parent = mma(2, 0, {16, 8}, {2, 2}, {1, 1}, {1, 1}, {0, 1});
+  EXPECT_EQ(toLinearLayout({16}, slice(parent, 0)),
+            LinearLayout({{S("register"), {{1}}},
+                          {S("lane"), {{2}, {4}, {0}, {0}, {0}}},
+                          {S("warp"), {{8}, {0}}},
+                          {S("block"), {}}},
+                         {S("dim0")}));
+  EXPECT_EQ(toLinearLayout({128}, slice(parent, 0)),
+            LinearLayout({{S("register"), {{1}, {16}, {32}, {64}}},
+                          {S("lane"), {{2}, {4}, {0}, {0}, {0}}},
+                          {S("warp"), {{8}, {0}}},
+                          {S("block"), {}}},
+                         {S("dim0")}));
+  EXPECT_EQ(toLinearLayout({8}, slice(parent, 1)),
+            LinearLayout({{S("register"), {{4}}},
+                          {S("lane"), {{0}, {0}, {1}, {2}, {0}}},
+                          {S("warp"), {{0}, {0}}},
+                          {S("block"), {}}},
+                         {S("dim0")}));
+  EXPECT_EQ(toLinearLayout({128}, slice(parent, 1)),
+            LinearLayout({{S("register"), {{8}, {32}, {64}}},
+                          {S("lane"), {{0}, {0}, {1}, {2}, {4}}},
+                          {S("warp"), {{0}, {16}}},
+                          {S("block"), {}}},
+                         {S("dim0")}));
 }
 
 } // anonymous namespace

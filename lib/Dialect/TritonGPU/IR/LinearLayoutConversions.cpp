@@ -346,9 +346,6 @@ LinearLayout ampereMmaToLinearLayout(ArrayRef<int64_t> shape,
   assert(mma.getInstrShape().size() == rank);
   assert((rank == 2 && mma.getInstrShape() == ArrayRef<unsigned>({16, 8})) ||
          (rank == 3 && mma.getInstrShape() == ArrayRef<unsigned>({1, 16, 8})));
-  for (int i = 0; i < mma.getInstrShape().size(); i++) {
-    assert(shape[i] >= mma.getInstrShape()[i]);
-  }
 
   MLIRContext *ctx = mma.getContext();
   SmallVector<StringAttr> dimNames = standardOutDimNames(ctx, rank);
