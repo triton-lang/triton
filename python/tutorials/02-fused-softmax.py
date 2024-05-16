@@ -130,9 +130,6 @@ def softmax(x):
     # Allocate output
     y = torch.empty_like(x)
 
-    # Allocate output
-    y = torch.empty_like(x)
-
     # pre-compile kernel to get register usage and compute thread occupancy.
     kernel, num_programs = kernels.get(BLOCK_SIZE, (None, 0))
     if kernel is None:
