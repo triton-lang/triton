@@ -138,14 +138,19 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     for (Value value : op->getOperands()) {
       for (auto bufferId : allocation->getBufferIds(value)) {
         if (bufferId != Allocation::InvalidBufferId) {
-          if (isa<triton::gpu::AsyncCopyGlobalToLocalOp>(op)) {
-            // Global -> shared memory
-            curBlockInfo.syncWriteIntervals.insert(
-                allocation->getAllocatedInterval(bufferId));
-          } else {
-            // ConvertLayoutOp: shared memory -> registers
-            curBlockInfo.syncReadIntervals.insert(
-                allocation->getAllocatedInterval(bufferId));
+          MemoryEffectOpInterface memIF(op);
+          SmallVector<MemoryEffects::EffectInstance> effects;
+          memIF.getEffects(effects);
+          for (const auto &effect : effects) {
+            if (isa<MemoryEffects::Write>(effect.getEffect())) {
+              // Global -> shared memory
+              curBlockInfo.syncWriteIntervals.insert(
+                  allocation->getAllocatedInterval(bufferId));
+            } else if (isa<MemoryEffects::Read>(effect.getEffect())) {
+              // ConvertLayoutOp: shared memory -> registers
+              curBlockInfo.syncReadIntervals.insert(
+                  allocation->getAllocatedInterval(bufferId));
+            }
           }
         }
       }

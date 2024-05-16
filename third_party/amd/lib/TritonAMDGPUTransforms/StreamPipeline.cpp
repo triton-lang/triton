@@ -9,6 +9,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/Support/Debug.h"
 
 //===----------------------------------------------------------------------===//
 // This file implements stream software pipelining for loops. The implementation
@@ -770,11 +771,11 @@ void LoopPipeliner::storeNextBuffer(OpBuilder &builder) {
   for (auto *loadOp : validLoads) {
     Value loadVal = nextMapping.lookup(loadOp->getResult(0));
     // then store regs -> shared
+    auto ttLoadOp = cast<triton::LoadOp>(loadOp);
     Value storeBuf =
         pplForOp.getRegionIterArgs()[bufferIdx + nextBuffers.size()];
-    auto alloc = builder.create<ttg::LocalAllocOp>(loadOp->getLoc(),
-                                                   storeBuf.getType(), loadVal);
-    nextBuffers.push_back(alloc);
+    builder.create<ttg::LocalStoreOp>(loadOp->getLoc(), loadVal, storeBuf);
+    nextBuffers.push_back(storeBuf);
   }
 
   // Some values have not been used by any ops in the loop body
