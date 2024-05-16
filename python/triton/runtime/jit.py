@@ -629,7 +629,7 @@ class JITFunction(KernelInterface[T]):
 
             # The CPU launcher will provide the grid ids directly to the kernel.
             # Note that this design is interim and subject to change.
-            if target[0] == 'cpu':
+            if target.backend == 'cpu':
                 signature["__grid0"] = 'i32'
                 signature["__grid1"] = 'i32'
                 signature["__grid2"] = 'i32'

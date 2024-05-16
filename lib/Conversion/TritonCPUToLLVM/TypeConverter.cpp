@@ -24,7 +24,7 @@ Type TritonCPUToLLVMTypeConverter::convertTritonPointerType(
     triton::PointerType type) {
   auto ctx = type.getContext();
   auto pointeeType = type.getPointeeType();
-  if (pointeeType.isa<RankedTensorType>()) {
+  if (isa<RankedTensorType>(pointeeType)) {
     llvm_unreachable("Not implemented");
   }
   return LLVM::LLVMPointerType::get(ctx, type.getAddressSpace());
