@@ -62,8 +62,8 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createReduceDataDuplicationPass);
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
                      createAllocateSharedMemoryPass);
-  ADD_PASS_WRAPPER_0("add_fold_tensor_select_into_if",
-                     createFoldTensorSelectIntoIfPass);
+  ADD_PASS_WRAPPER_0("add_ombine_tensor_select_and_if",
+                     createCombineTensorSelectAndIfPass);
 }
 
 void init_triton_passes_convert(py::module &&m) {
