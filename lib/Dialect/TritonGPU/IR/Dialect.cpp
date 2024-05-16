@@ -2790,6 +2790,9 @@ void LocalAllocOp::getEffects(
     return;
   effects.emplace_back(MemoryEffects::Allocate::get(),
                        mlir::triton::gpu::SharedMemory::get());
+  if (getSrc())
+    effects.emplace_back(MemoryEffects::Write::get(),
+                         mlir::triton::gpu::SharedMemory::get());
 }
 
 LogicalResult MemDescSubviewOp::verify() {
