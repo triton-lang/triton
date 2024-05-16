@@ -1002,46 +1002,49 @@ LogicalResult DotOperandEncodingAttr::verify(
     ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
     unsigned opIdx, Attribute parent, unsigned kWidth) {
   if (opIdx != 0 && opIdx != 1) {
-    return emitError() << "DotOperandEncodingAttr::opIdx can be 0 or 1, got: "
-                       << opIdx;
+    return emitError()
+           << "triton_gpu.dot_op opIdx paramenter can be 0 or 1, got: "
+           << opIdx;
   }
   if (!parent) {
-    return emitError()
-           << "DotOperandEncodingAttr::parent attribute cannot be null";
+    return emitError() << "triton_gpu.dot_op parent paramenter cannot be null";
   }
   if (auto parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
     if (kWidth != 0 && !parentAttr.isAmpere())
-      return emitError() << "DotOperandEncodingAttr::kWidth can only be "
+      return emitError() << "triton_gpu.dot_op kWidth parameter can only be "
                             "non-zero for Ampere MMA parent";
     if (kWidth == 0 && parentAttr.isAmpere())
-      return emitError() << "DotOperandEncodingAttr::kWidth is mandatory for "
-                            "Ampere MMA parent";
+      return emitError()
+             << "triton_gpu.dot_op kWidth parameter is mandatory for "
+                "Ampere MMA parent";
     return success();
   }
 
   if (auto parentAttr = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
     // TODO: remove this condition if new values are supported
     if (kWidth != 16)
-      return emitError() << "DotOperandEncodingAttr::kWidth currently supports "
+      return emitError() << "triton_gpu.dot_op kWidth parameter supports "
                             "only 16 for WMMA parent";
     return success();
   }
 
   if (auto parentAttr = mlir::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
     if (kWidth == 0)
-      return emitError() << "DotOperandEncodingAttr::kWidth is mandatory for "
-                            "the MFMA parent";
+      return emitError()
+             << "triton_gpu.dot_op kWidth parameter is mandatory for "
+                "MFMA parent";
     return success();
   }
 
   if (auto parentAttr = mlir::dyn_cast<BlockedEncodingAttr>(parent)) {
     if (kWidth != 0)
-      return emitError() << "DotOperandEncodingAttr::kWidth is not supported "
-                            "for Blocked layout";
+      return emitError()
+             << "triton_gpu.dot_op kWidth parameter is not supported "
+                "for Blocked layout";
     return success();
   }
 
-  return emitError() << "DotOperandEncodingAttr unexpected parent layout: "
+  return emitError() << "triton_gpu.dot_op unexpected parent layout: "
                      << parent;
 }
 
