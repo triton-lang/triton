@@ -136,7 +136,7 @@ def parse(metrics, filename, include, exclude, threshold, depth):
             # TODO: generalize to support multiple metrics
             query = ["*", {metrics[0]: f">= {threshold}"}]
             gf = gf.filter(query, squash=True)
-        print(gf.tree(metric_column=metrics, expand_name=True, depth=depth))
+        print(gf.tree(metric_column=metrics, expand_name=True, depth=depth, render_header=False))
 
 
 def show_metrics(file_name):
