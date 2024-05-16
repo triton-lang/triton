@@ -118,3 +118,16 @@ tt.func public @load_tensors_two_types(%arg0: !tt.ptr<f32> {tt.divisibility = 16
 }
 
 }
+
+// -----
+
+// COM: Reproducer for issue #3866
+// CHECK-LABEL: @test_3866
+// CHECK: tt.load {{.*}} : !tt.ptr<tensor<64x16xf16>
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
+  tt.func public @test_3866(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i64) {
+    %0 = tt.make_tensor_ptr %arg0, [%arg2, %arg2], [%arg2, %arg2], [%arg1, %arg1] {order = array<i32: 1, 0>} : <tensor<64x16xf16>>
+    %1 = tt.load %0 : !tt.ptr<tensor<64x16xf16>>
+    tt.return
+  }
+}

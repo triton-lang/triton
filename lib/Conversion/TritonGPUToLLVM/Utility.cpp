@@ -3,6 +3,7 @@
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "llvm/ADT/STLExtras.h"
 
@@ -192,7 +193,7 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
       Value bit = and_(idx, i32_val(1 << i));
       Value bit_is_zero = icmp_eq(bit, zero);
       for (auto &[outDimName, outIdx] : outIndices) {
-        int32_t basis = layout.getBasis(inDimName, outDimName, i);
+        int32_t basis = layout.getBasis(inDimName, i, outDimName);
         if (basis == 0)
           continue;
         outIdx = xor_(outIdx, select(bit_is_zero, zero, i32_val(basis)));
@@ -207,7 +208,9 @@ std::optional<SmallVector<SmallVector<Value>>>
 emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
                               const TargetInfoBase &target, Attribute layout,
                               RankedTensorType type, bool withCTAOffset) {
-  if (isa<BlockedEncodingAttr>(layout)) {
+  auto mma = dyn_cast<NvidiaMmaEncodingAttr>(layout);
+  if (isa<BlockedEncodingAttr>(layout) ||
+      (mma && (mma.isAmpere() || mma.isHopper()))) {
     MLIRContext *ctx = rewriter.getContext();
     auto shape = type.getShape();
     Value threadId = getThreadId(rewriter, loc);
@@ -218,10 +221,6 @@ emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
         withCTAOffset ? target.getClusterCTAId(rewriter, loc) : i32_val(0);
     unsigned rank = shape.size();
 
-    SmallVector<StringAttr> outDimsLogicalOrder;
-    for (unsigned k = 0; k < rank; ++k) {
-      outDimsLogicalOrder.push_back(str_attr("dim" + Twine(k)));
-    }
     LinearLayout ll = triton::gpu::toLinearLayout(shape, layout);
 
     // TODO(jlebar): We could add strong typing if we wanted; for now this is

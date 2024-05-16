@@ -486,19 +486,20 @@ static bool supportWMMAGranularity(int m, int n, int k) {
 static bool supportWMMATypes(Type a, Type b, Type c, Type d) {
   if (a != b || c != d)
     return false;
+  auto aWidth = a.getIntOrFloatBitWidth();
+  auto cWidth = c.getIntOrFloatBitWidth();
   if (a.isIntOrIndex()) {
     if (!c.isIntOrIndex())
       return false;
-    auto aWidth = a.getIntOrFloatBitWidth();
-    auto cWidth = c.getIntOrFloatBitWidth();
     bool aValid = a.isUnsignedInteger() && aWidth <= 8;
     bool cValid = cWidth <= 32;
     return aValid && cValid;
-  } else if (isa<FloatType>(a)) {
+  } else if (isa<FloatType>(a) && isa<FloatType>(c)) {
     if (a.isBF16())
       return c.isBF16() || c.isF32();
     if (a.isF16())
       return c.isF16() || c.isF32();
+    return aWidth <= cWidth;
   }
   return false;
 }
