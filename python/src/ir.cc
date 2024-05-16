@@ -474,7 +474,9 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_location_snapshot",
            [](ModuleOp &self, const std::string &fileName) -> void {
-             generateLocationsFromIR(llvm::nulls(), fileName, self, {});
+             generateLocationsFromIR(/*raw_ostream=*/llvm::nulls(),
+                                     /*fileName=*/fileName,
+                                     /*op=*/self, /*flags=*/{});
            })
       .def("walk",
            [](ModuleOp &self, const std::function<void(Operation *)> &fn) {
