@@ -67,6 +67,7 @@ exclude: |
   (?x)(
     ^include/triton/external/|
     ^third_party/amd/backend/include/hip/|
+    ^third_party/amd/backend/include/roctracer/|
     ^third_party/amd/backend/lib/|
     ^third_party/nvidia/backend/include/cuda.h|
     ^third_party/f2reduce
