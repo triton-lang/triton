@@ -32,8 +32,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: tma_copy_global_to_local
   // CHECK: elect.sync
-  // CHECK: "@$0 mbarrier.arrive.expect_tx.shared.b64 _, [$1], 65536;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
-  // CHECK: nvvm.barrier0
   // CHECK: "@$0 cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes [$1], [$2, {$3, $4}], [$5];", "b,r,l,r,r,r" {{.*}} : (i1, !llvm.ptr<3>, !llvm.ptr<1>, i32, i32, !llvm.ptr<3>) -> !llvm.void
   // CHECK-NOT: cp.async.bulk.tensor.2d.shared
   // CHECK: return
@@ -66,6 +64,18 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   // CHECK: "cp.async.bulk.wait_group.read 0x0;", ""  : () -> !llvm.void
   tt.func @async_tma_store_wait() {
     triton_nvidia_gpu.async_tma_store_wait {pendings = 0 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+#shared0 = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
+  // CHECK-LABEL: expect_barrier
+  // CHECK: @$0 mbarrier.arrive.expect_tx.shared.b64 _, [$1], 16384;
+  tt.func @expect_barrier(%barrier: !tt.memdesc<1xi64, #shared0, mutable>, %pred: i1) {
+    triton_nvidia_gpu.barrier_expect %barrier, 16384, %pred : <1xi64, #shared0, mutable>
     tt.return
   }
 }

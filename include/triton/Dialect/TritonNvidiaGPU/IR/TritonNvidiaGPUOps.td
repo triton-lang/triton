@@ -138,6 +138,26 @@ def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [MemoryEffects<[MemWrite<Shar
     let assemblyFormat = "$alloc attr-dict `:` type($alloc)";
 }
 
+def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
+  MemoryEffects<[MemRead<GlobalMemory>, MemWrite<SharedMemory>]>]> {
+  let summary = "Signal a barrier of an expected number of bytes to be copied.";
+
+  let description = [{
+    This signal the barrier that `size` bytes are expected to be copied. The
+    associated barrier wait will block until the expected number of bytes are copied.
+  }];
+
+  let hasVerifier = 1;
+  let arguments = (
+    ins TT_MemDescType:$alloc,
+    I32Attr:$size,
+    I1:$pred
+  );
+
+  let assemblyFormat = [{
+    $alloc `,` $size attr-dict `,` $pred `:` type($alloc)
+  }];
+}
 
 def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", []> {
     let summary = "wait until the mbarrier phase completes.";

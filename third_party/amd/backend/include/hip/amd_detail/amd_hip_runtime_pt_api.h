@@ -153,7 +153,7 @@ hipError_t hipStreamSynchronize_spt(hipStream_t stream);
 
 hipError_t hipStreamGetPriority_spt(hipStream_t stream, int* priority);
 
-hipError_t hipStreamWaitEvent_spt(hipStream_t stream, hipEvent_t event, unsigned int flags);
+hipError_t hipStreamWaitEvent_spt(hipStream_t stream, hipEvent_t event, unsigned int flags __dparm(0));
 
 hipError_t hipStreamGetFlags_spt(hipStream_t stream, unsigned int* flags);
 

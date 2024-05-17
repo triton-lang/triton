@@ -61,6 +61,13 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     copyOp.getPredMutable().assign(mask);
     return op;
   }
+  if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
+    rewriter.setInsertionPoint(expectOp);
+    Value mask = getPredMask(rewriter, expectOp.getPred().getType(),
+                             expectOp.getPred(), pred);
+    expectOp.getPredMutable().assign(mask);
+    return op;
+  }
 
   assert("don't know how to predicate this op" && false);
   return op;

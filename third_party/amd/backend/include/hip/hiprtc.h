@@ -67,34 +67,37 @@ typedef enum hiprtcResult {
  */
 
 typedef enum hiprtcJIT_option {
-  HIPRTC_JIT_MAX_REGISTERS = 0,  ///< Maximum registers
-  HIPRTC_JIT_THREADS_PER_BLOCK,  ///< Thread per block
-  HIPRTC_JIT_WALL_TIME,  ///< Time from aall clock
-  HIPRTC_JIT_INFO_LOG_BUFFER,  ///< Log buffer info
-  HIPRTC_JIT_INFO_LOG_BUFFER_SIZE_BYTES,  ///< Log buffer size in bytes
-  HIPRTC_JIT_ERROR_LOG_BUFFER,  ///< Log buffer error
-  HIPRTC_JIT_ERROR_LOG_BUFFER_SIZE_BYTES,  ///< Log buffer size in bytes
-  HIPRTC_JIT_OPTIMIZATION_LEVEL,  ///< Optimization level
-  HIPRTC_JIT_TARGET_FROM_HIPCONTEXT,  ///< 
+  HIPRTC_JIT_MAX_REGISTERS = 0,  ///< Maximum registers may be used in a thread, passed to compiler
+  HIPRTC_JIT_THREADS_PER_BLOCK,  ///< Number of thread per block
+  HIPRTC_JIT_WALL_TIME,  ///< Value for total wall clock time
+  HIPRTC_JIT_INFO_LOG_BUFFER,  ///< Pointer to the buffer with logged information
+  HIPRTC_JIT_INFO_LOG_BUFFER_SIZE_BYTES,  ///< Size of the buffer in bytes for logged info
+  HIPRTC_JIT_ERROR_LOG_BUFFER,  ///< Pointer to the buffer with logged error(s)
+  HIPRTC_JIT_ERROR_LOG_BUFFER_SIZE_BYTES,  ///< Size of the buffer in bytes for logged error(s)
+  HIPRTC_JIT_OPTIMIZATION_LEVEL,  ///< Value of optimization level for generated codes
+  HIPRTC_JIT_TARGET_FROM_HIPCONTEXT,  ///< The target context, which is the default
   HIPRTC_JIT_TARGET,  ///< JIT target
   HIPRTC_JIT_FALLBACK_STRATEGY,  ///< Fallback strategy
   HIPRTC_JIT_GENERATE_DEBUG_INFO,  ///< Generate debug information
-  HIPRTC_JIT_LOG_VERBOSE,  ///< Log verbose
-  HIPRTC_JIT_GENERATE_LINE_INFO,  ///< Generate line information
-  HIPRTC_JIT_CACHE_MODE,  ///< Cache mode
-  HIPRTC_JIT_NEW_SM3X_OPT,  ///< New SM3X option
-  HIPRTC_JIT_FAST_COMPILE,  ///< Fast compile
-  HIPRTC_JIT_GLOBAL_SYMBOL_NAMES,  ///< Global symbol names
-  HIPRTC_JIT_GLOBAL_SYMBOL_ADDRESS,  ///< Global symbol address
-  HIPRTC_JIT_GLOBAL_SYMBOL_COUNT,  ///< Global symbol count
-  HIPRTC_JIT_LTO,  ///< LTO
-  HIPRTC_JIT_FTZ,  ///< FTZ
-  HIPRTC_JIT_PREC_DIV,  ///< Prec_VIV
-  HIPRTC_JIT_PREC_SQRT,  ///< PREC_SQRT
-  HIPRTC_JIT_FMA,  ///< FMA
+  HIPRTC_JIT_LOG_VERBOSE,  ///< Generate log verbose
+  HIPRTC_JIT_GENERATE_LINE_INFO,  ///< Generate line number information
+  HIPRTC_JIT_CACHE_MODE,  ///< Set cache mode
+  HIPRTC_JIT_NEW_SM3X_OPT,  ///< @deprecated  New SM3X option.
+  HIPRTC_JIT_FAST_COMPILE,  ///< Set fast compile
+  HIPRTC_JIT_GLOBAL_SYMBOL_NAMES,  ///< Array of device symbol names to be relocated to the host
+  HIPRTC_JIT_GLOBAL_SYMBOL_ADDRESS,  ///< Array of host addresses to be relocated to the device
+  HIPRTC_JIT_GLOBAL_SYMBOL_COUNT,  ///< Number of symbol count.
+  HIPRTC_JIT_LTO,  ///< @deprecated  Enable link-time optimization for device code
+  HIPRTC_JIT_FTZ,  ///< @deprecated  Set single-precision denormals.
+  HIPRTC_JIT_PREC_DIV,  ///< @deprecated  Set single-precision floating-point division and
+                        ///< reciprocals
+  HIPRTC_JIT_PREC_SQRT,  ///< @deprecated  Set single-precision floating-point square root
+  HIPRTC_JIT_FMA,  ///< @deprecated  Enable floating-point multiplies and adds/subtracts operations
   HIPRTC_JIT_NUM_OPTIONS,  ///< Number of options
-  HIPRTC_JIT_IR_TO_ISA_OPT_EXT = 10000,  ///< AMD only. Linker options to be passed on to
-  HIPRTC_JIT_IR_TO_ISA_OPT_COUNT_EXT,    ///< AMD only. Count of linker options
+  HIPRTC_JIT_IR_TO_ISA_OPT_EXT = 10000,  ///< Linker options to be passed on to compiler
+                                         /// @note  Only supported for the AMD platform.
+  HIPRTC_JIT_IR_TO_ISA_OPT_COUNT_EXT,    ///< Count of linker options to be passed on to
+                                         ///< compiler  @note  Only supported for the AMD platform
 } hiprtcJIT_option;
 
 /**
@@ -108,7 +111,7 @@ typedef enum hiprtcJITInputType {
   HIPRTC_JIT_INPUT_LIBRARY,  ///< Input library
   HIPRTC_JIT_INPUT_NVVM,  ///< Input NVVM
   HIPRTC_JIT_NUM_LEGACY_INPUT_TYPES,  ///< Number of legacy input type
-  HIPRTC_JIT_INPUT_LLVM_BITCODE = 100,  ///< LLVM bitcode
+  HIPRTC_JIT_INPUT_LLVM_BITCODE = 100,  ///< LLVM bitcode or IR assembly
   HIPRTC_JIT_INPUT_LLVM_BUNDLED_BITCODE = 101,  ///< LLVM bundled bitcode
   HIPRTC_JIT_INPUT_LLVM_ARCHIVES_OF_BUNDLED_BITCODE = 102,  ///< LLVM archives of boundled bitcode
   HIPRTC_JIT_NUM_INPUT_TYPES = (HIPRTC_JIT_NUM_LEGACY_INPUT_TYPES + 3)

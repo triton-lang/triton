@@ -939,16 +939,6 @@ struct AsyncTMACopyGlobalToLocalOpConversion
         op.getResult().getType().getElementType().getIntOrFloatBitWidth() / 8;
     int totalNumElements = product(op.getResult().getType().getShape());
     int64_t size = totalNumElements * elementSizeInBytes;
-    ::mlir::triton::PTXBuilder ptxBuilder;
-    auto &arrive = *ptxBuilder.create<>(
-        "@$0 mbarrier.arrive.expect_tx.shared.b64 _, [$1], " +
-        std::to_string(size) + ";");
-    arrive({ptxBuilder.newOperand(pred, "b"),
-            ptxBuilder.newOperand(barrierMemObj.getBase(), "r")},
-           /*onlyAttachMLIRArgs=*/true);
-    ptxBuilder.launch(rewriter, loc, voidTy);
-
-    barrier();
 
     int innerBlockSize = op.getResult().getType().getShape().back();
     int contigDimSizeInByte = innerBlockSize * elementSizeInBytes;
