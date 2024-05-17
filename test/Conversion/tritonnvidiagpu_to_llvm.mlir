@@ -35,6 +35,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   // CHECK: "@$0 mbarrier.arrive.expect_tx.shared.b64 _, [$1], 65536;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
   // CHECK: nvvm.barrier0
   // CHECK: "@$0 cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes [$1], [$2, {$3, $4}], [$5];", "b,r,l,r,r,r" {{.*}} : (i1, !llvm.ptr<3>, !llvm.ptr<1>, i32, i32, !llvm.ptr<3>) -> !llvm.void
+  // CHECK-NOT: cp.async.bulk.tensor.2d.shared
+  // CHECK: return
   tt.func @tma_copy_global_to_local(%tma: !tt.ptr<i64>, %alloc: !tt.memdesc<128x128xf32, #shared1>, %x: i32, %barrier: !tt.memdesc<1xi64, #shared0>, %pred: i1) {
     triton_nvidia_gpu.async_tma_copy_global_to_local %tma[%x, %x] %alloc, %barrier, %pred : !tt.ptr<i64>, !tt.memdesc<1xi64, #shared0> -> !tt.memdesc<128x128xf32, #shared1>
     tt.return
@@ -48,6 +50,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   // CHECK-LABEL: tma_copy_local_to_global
   // CHECK: elect.sync
   // CHECK: "@$0 cp.async.bulk.tensor.2d.global.shared::cta.bulk_group [$1, {$2, $3}], [$4];", "b,l,r,r,r" {{.*}} : (i1, !llvm.ptr<1>, i32, i32, !llvm.ptr<3>) -> !llvm.void
+  // CHECK-NOT: cp.async.bulk.tensor.2d.global.shared::cta.bulk_group
   // CHECK: cp.async.bulk.commit_group
   tt.func @tma_copy_local_to_global(%tma: !tt.ptr<i64>, %alloc: !tt.memdesc<128x128xf32, #shared1>, %x: i32) {
     triton_nvidia_gpu.async_tma_copy_local_to_global %tma[%x, %x] %alloc : <i64>, <128x128xf32, #shared1>

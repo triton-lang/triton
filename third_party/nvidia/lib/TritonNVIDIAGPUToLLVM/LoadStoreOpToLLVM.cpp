@@ -924,8 +924,13 @@ struct AsyncTMACopyGlobalToLocalOpConversion
         loc, adaptor.getResult(), llvmElemTy, rewriter);
     auto voidTy = void_ty(op->getContext());
     auto id = getThreadId(rewriter, loc);
-    Value pred = icmp_eq(id, i32_val(0));
-    pred = and_(pred, adaptor.getPred());
+
+    auto mod = op->getParentOfType<ModuleOp>();
+    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    Value warpID = udiv(id, i32_val(warpSize));
+    warpID = LLVM::NVIDIA::shuffleIdx(loc, rewriter, warpID, 0);
+    Value pred = adaptor.getPred();
     // Select just one thread for the TMA copy. This also helps the compiler to
     // figure out that the op is uniform.
     pred = and_(pred, LLVM::NVIDIA::createElectPredicate(loc, rewriter));
@@ -957,13 +962,21 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html#group__CUDA__TENSOR__MEMORY_1ga7c7d2aaac9e49294304e755e6f341d7
     // We clamp the block size and the codegen will emit multiple copy
     // operations.
-    for (int copyIdx = 0; copyIdx < numCopies; copyIdx++) {
+    for (int copyIdx = 0; copyIdx < numCopies; copyIdx += numWarps) {
+      int numWarpsToCopy = std::min(numCopies - copyIdx, numWarps);
+      if (numWarpsToCopy == 1)
+        warpID = i32_val(0);
+      Value boxPred =
+          and_(pred, icmp_ult(id, i32_val(numWarpsToCopy * warpSize)));
       ::mlir::triton::PTXBuilder ptxBuilderTMA;
       Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-      Value shMemPtr = gep(elemPtrTy, llvmElemTy, dstMemObj.getBase(),
-                           i32_val(copyIdx * (totalNumElements / numCopies)));
+      Value copyIdxVal = add(warpID, i32_val(copyIdx));
+      Value shMemOffset =
+          mul(copyIdxVal, i32_val(totalNumElements / numCopies));
+      Value shMemPtr =
+          gep(elemPtrTy, llvmElemTy, dstMemObj.getBase(), shMemOffset);
       SmallVector<PTXBuilder::Operand *> operands = {
-          ptxBuilderTMA.newOperand(pred, "b"),
+          ptxBuilderTMA.newOperand(boxPred, "b"),
           ptxBuilderTMA.newOperand(shMemPtr, "r"),
           ptxBuilderTMA.newOperand(adaptor.getDescPtr(), "l")};
       std::string tmaInst =
@@ -973,8 +986,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       for (int i = 0; i < rank; i++) {
         Value coord = adaptor.getCoord()[rank - i - 1];
         if (i == 0) {
-          int offset = copyIdx * (128 / elementSizeInBytes);
-          coord = add(coord, i32_val(offset));
+          Value offset = mul(copyIdxVal, i32_val(128 / elementSizeInBytes));
+          coord = add(coord, offset);
         }
         operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
         tmaInst += "$" + std::to_string(operandIdx++);
@@ -1009,15 +1022,19 @@ struct AsyncTMACopyLocalToGlobalOpConversion
         loc, adaptor.getSrc(), llvmElemTy, rewriter);
     auto voidTy = void_ty(op->getContext());
     auto id = getThreadId(rewriter, loc);
-    Value pred = icmp_eq(id, i32_val(0));
     // Select just one thread for the TMA copy. This also helps the compiler to
     // figure out that the op is uniform.
-    pred = and_(pred, LLVM::NVIDIA::createElectPredicate(loc, rewriter));
+    Value pred = LLVM::NVIDIA::createElectPredicate(loc, rewriter);
     int elementSizeInBytes =
         op.getSrc().getType().getElementType().getIntOrFloatBitWidth() / 8;
     int totalNumElements = product(op.getSrc().getType().getShape());
     int64_t size = totalNumElements * elementSizeInBytes;
 
+    auto mod = op->getParentOfType<ModuleOp>();
+    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    Value warpID = udiv(id, i32_val(warpSize));
+    warpID = LLVM::NVIDIA::shuffleIdx(loc, rewriter, warpID, 0);
     int innerBlockSize = op.getSrc().getType().getShape().back();
     int contigDimSizeInByte = innerBlockSize * elementSizeInBytes;
     int numCopies = 1;
@@ -1030,13 +1047,21 @@ struct AsyncTMACopyLocalToGlobalOpConversion
     // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html#group__CUDA__TENSOR__MEMORY_1ga7c7d2aaac9e49294304e755e6f341d7
     // We clamp the block size and the codegen will emit multiple copy
     // operations.
-    for (int copyIdx = 0; copyIdx < numCopies; copyIdx++) {
+    for (int copyIdx = 0; copyIdx < numCopies; copyIdx += numWarps) {
+      int numWarpsToCopy = std::min(numCopies - copyIdx, numWarps);
+      if (numWarpsToCopy == 1)
+        warpID = i32_val(0);
+      Value boxPred =
+          and_(pred, icmp_ult(id, i32_val(numWarpsToCopy * warpSize)));
       ::mlir::triton::PTXBuilder ptxBuilderTMA;
       Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-      Value shMemPtr = gep(elemPtrTy, llvmElemTy, dstMemObj.getBase(),
-                           i32_val(copyIdx * (totalNumElements / numCopies)));
+      Value copyIdxVal = add(warpID, i32_val(copyIdx));
+      Value shMemOffset =
+          mul(copyIdxVal, i32_val(totalNumElements / numCopies));
+      Value shMemPtr =
+          gep(elemPtrTy, llvmElemTy, dstMemObj.getBase(), shMemOffset);
       SmallVector<PTXBuilder::Operand *> operands = {
-          ptxBuilderTMA.newOperand(pred, "b"),
+          ptxBuilderTMA.newOperand(boxPred, "b"),
           ptxBuilderTMA.newOperand(adaptor.getDescPtr(), "l")};
       std::string tmaInst = "@$0 cp.async.bulk.tensor." + std::to_string(rank) +
                             "d.global.shared::cta.bulk_group [$1, {";
@@ -1044,8 +1069,8 @@ struct AsyncTMACopyLocalToGlobalOpConversion
       for (int i = 0; i < rank; i++) {
         Value coord = adaptor.getCoord()[rank - i - 1];
         if (i == 0) {
-          int offset = copyIdx * (128 / elementSizeInBytes);
-          coord = add(coord, i32_val(offset));
+          Value offset = mul(copyIdxVal, i32_val(128 / elementSizeInBytes));
+          coord = add(coord, offset);
         }
         operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
         tmaInst += "$" + std::to_string(operandIdx++);
