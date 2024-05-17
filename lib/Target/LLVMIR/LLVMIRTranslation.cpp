@@ -36,6 +36,8 @@
 #include "llvm/Linker/Linker.h"
 #include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/PassPlugin.h"
+
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/SourceMgr.h"
@@ -116,6 +118,18 @@ makeOptimizingPipeline(unsigned optLevel, unsigned sizeLevel,
 
     PassBuilder pb(targetMachine, tuningOptions);
 
+    std::string pluginFile = mlir::triton::tools::getenv("AMDGCN_INSTRUMENTATION_LIB");
+    if (!pluginFile.empty()) {
+        llvm::errs() << "Adding AMDGCN instrumentation pass to Triton pipeline" << "\n";
+        auto passPlugin = llvm::PassPlugin::Load(pluginFile);
+        if (!passPlugin) {
+                llvm::Error Err = passPlugin.takeError();
+                llvm::errs() << "ERROR: " << Err << "\n";
+                consumeError(std::move(Err));
+        }
+        passPlugin->registerPassBuilderCallbacks(pb);
+    }
+    
     pb.registerModuleAnalyses(mam);
     pb.registerCGSCCAnalyses(cgam);
     pb.registerFunctionAnalyses(fam);
@@ -418,15 +432,6 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module,
       return nullptr;
   }
 
-  auto optPipeline = makeOptimizingPipeline(
-      /*optLevel=*/3, /*sizeLevel=*/0,
-      /*targetMachine=*/nullptr);
-
-  if (auto err = optPipeline(llvmModule.get())) {
-    llvm::errs() << "Failed to optimize LLVM IR " << err << "\n";
-    return nullptr;
-  }
-
   const int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(module);
   const int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(module);
   const int threadsPerCTA = numWarps * warpSize;
@@ -436,6 +441,15 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module,
     if (it != nvvmMetadata.end())
       amendLLVMFunc(&func, it->second, target, threadsPerCTA, wavesPerEU);
   }
+
+  auto optPipeline = makeOptimizingPipeline(
+      /*optLevel=*/3, /*sizeLevel=*/0,
+      /*targetMachine=*/nullptr);
+
+  if (auto err = optPipeline(llvmModule.get())) {
+    llvm::errs() << "Failed to optimize LLVM IR " << err << "\n";
+    return nullptr;
+  }  
 
   return llvmModule;
 }
