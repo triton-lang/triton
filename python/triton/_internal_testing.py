@@ -70,6 +70,11 @@ def get_arch():
     return "" if target is None else str(target.arch)
 
 
+def is_cpu():
+    return not is_interpreter() and \
+        triton.runtime.driver.active.get_current_target().backend == "cpu"
+
+
 def numpy_random(shape, dtype_str, rs: Optional[RandomState] = None, low=None, high=None):
     """
     Override `rs` if you're calling this function twice and don't want the same
