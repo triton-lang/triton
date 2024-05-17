@@ -1,3 +1,4 @@
+#include "mlir/IR/Dominance.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -21,6 +22,7 @@ public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
+    DominanceInfo dom(m);
 
     // Go over the arith.select ops, look if there is an if
     // with the same condition.
@@ -47,30 +49,21 @@ public:
       if (selectToIf.count(selectOp) > 0) {
         continue;
       }
-      // If needs to be dominated by the select. Since the select is in the
-      // same block as the if, we can just check the order of the operations.
-      if (!selectOp->isBeforeInBlock(ifOp)) {
+
+      // If needs to be dominated by the select.
+      if (!dom.dominates(selectOp.getOperation(), ifOp.getOperation())) {
         continue;
       }
-      // If needs to dominate all the select's uses.
-      bool allUsesDominated = true;
+      // If needs to dominate all the select's users.
+      bool allUsersDominated = true;
       for (auto user : selectOp.getResult().getUsers()) {
-        if (ifOp->isAncestor(user)) {
-          // Select used by something in the `if` itself.
-          allUsesDominated = false;
-          break;
-        }
-        if (user->getBlock() != selectOp->getBlock()) {
-          // Used outside the block, but not in `if`, means it's dominated.
-          continue;
-        }
-        if (!ifOp->isBeforeInBlock(user)) {
-          allUsesDominated = false;
+        if (!dom.dominates(ifOp, user)) {
+          allUsersDominated = false;
           break;
         }
       }
 
-      if (allUsesDominated) {
+      if (allUsersDominated) {
         selectToIf[selectOp] = ifOp;
       }
     }
