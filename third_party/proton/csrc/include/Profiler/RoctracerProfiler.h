@@ -11,8 +11,8 @@
 namespace proton {
 
 class RoctracerProfiler : public Profiler,
-                      public OpInterface,
-                      public Singleton<RoctracerProfiler> {
+                          public OpInterface,
+                          public Singleton<RoctracerProfiler> {
 public:
   RoctracerProfiler() = default;
   virtual ~RoctracerProfiler() = default;
@@ -42,8 +42,9 @@ protected:
   void doStop() override;
 
 private:
-  static void api_callback(uint32_t domain, uint32_t cid, const void* callback_data, void* arg);
-  static void activity_callback(const char* begin, const char* end, void* arg);
+  static void api_callback(uint32_t domain, uint32_t cid,
+                           const void *callback_data, void *arg);
+  static void activity_callback(const char *begin, const char *end, void *arg);
   static void processActivity(std::map<uint32_t, size_t> &correlation,
                               std::set<Data *> &dataSet,
                               const roctracer_record_t *activity);
@@ -90,7 +91,8 @@ private:
     }
   };
 
-  static inline thread_local RoctracerState roctracerState{RoctracerProfiler::instance()};
+  static inline thread_local RoctracerState roctracerState{
+      RoctracerProfiler::instance()};
 };
 
 } // namespace proton
